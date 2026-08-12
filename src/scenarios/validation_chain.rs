@@ -23,9 +23,15 @@ use crate::context::E2eContext;
 use super::assessment::{self, AssessmentSpec};
 use super::common;
 use super::validation_loop::suffix;
-use super::{CleanupFuture, EvaluationFuture, ExecutionPolicy, ScenarioObservation, ScenarioSpec};
+use super::{
+    CapturedDeliverable, CleanupFuture, DeliverableCaptureFuture, EvaluationFuture,
+    ExecutionPolicy, MaterializedScenario, ProvenanceEvidence, ScenarioCase, ScenarioObservation,
+    ScenarioSpec,
+};
 
 pub const ID: &str = "validation_chain";
+const VERSION: u32 = 4;
+const DELIVERABLE_ID: &str = "validation_chain_result";
 
 const HOOK_TYPE: &str = "harness::hook::post-turn";
 const BROKEN_VALIDATOR_SKIPPED: AssessmentSpec = AssessmentSpec::hard_gated(
@@ -59,12 +65,43 @@ fn broken_fn(run_id: &str) -> String {
 }
 
 pub fn scenario(run_id: &str) -> ScenarioSpec {
+    scenario_for_case(run_id)
+}
+
+pub fn materialize(namespace: &str, seed: u64) -> anyhow::Result<MaterializedScenario> {
+    let case = ScenarioCase::new(
+        ID,
+        VERSION,
+        seed,
+        json!({
+            "database": "primary",
+            "expected_rows": 3,
+            "expected_marker": 1,
+            "validators": [
+                { "priority": 5, "behavior": "fail_open" },
+                { "priority": 10, "label": "CHAIN-A" },
+                { "priority": 20, "label": "CHAIN-B" }
+            ],
+            "expected_nudges": ["CHAIN-A", "CHAIN-B"],
+        }),
+        super::validation_loop::validation_profile(),
+        super::validation_loop::validation_capabilities(),
+        deliverable_contract(),
+    )?;
+    Ok(MaterializedScenario {
+        spec: scenario_for_case(namespace),
+        case,
+        capture: Some(capture),
+    })
+}
+
+fn scenario_for_case(run_id: &str) -> ScenarioSpec {
     let table = table(run_id);
     let scope = scope(run_id);
     let broken = broken_fn(run_id);
     ScenarioSpec {
         id: ID,
-        version: 3,
+        version: VERSION,
         prompt: format!(
             "You are testing a CHAIN of validators on your own session. Follow the steps \
              exactly.\n\n\
@@ -114,6 +151,71 @@ pub fn scenario(run_id: &str) -> ScenarioSpec {
         evaluate,
         cleanup: Some(cleanup),
     }
+}
+
+fn capture<'a>(
+    context: &'a E2eContext,
+    observation: &'a ScenarioObservation,
+    run_id: &'a str,
+) -> DeliverableCaptureFuture<'a> {
+    Box::pin(async move {
+        let table = table(run_id);
+        let rows = context
+            .trigger_value(
+                "database::query",
+                json!({ "db": "primary", "sql": format!("SELECT COUNT(*) AS n FROM {table}") }),
+            )
+            .await?
+            .pointer("/rows/0/n")
+            .and_then(Value::as_u64)
+            .unwrap_or(0);
+        let marker = common::state_value(
+            context
+                .trigger(
+                    "state::get",
+                    json!({ "scope": scope(run_id), "key": "marker" }),
+                )
+                .await?,
+        );
+        let invariants =
+            super::captured_gate_invariants(evaluate(context, observation, run_id).await?);
+        Ok(vec![CapturedDeliverable {
+            id: DELIVERABLE_ID.to_string(),
+            kind: "validation_chain_result".to_string(),
+            content: json!({
+                "rows": rows,
+                "marker": marker,
+                "validation_nudges": nudge_texts(&observation.transcript),
+                "response": observation.response,
+            }),
+            invariants,
+            provenance: vec![
+                ProvenanceEvidence {
+                    kind: "database_relation".to_string(),
+                    source_id: format!("primary/{table}"),
+                    relation: "captured_chain_rows".to_string(),
+                },
+                ProvenanceEvidence {
+                    kind: "state_location".to_string(),
+                    source_id: format!("{}/marker", scope(run_id)),
+                    relation: "captured_chain_marker".to_string(),
+                },
+            ],
+        }])
+    })
+}
+
+fn deliverable_contract() -> super::DeliverableContract {
+    super::validation_loop::validation_contract(
+        DELIVERABLE_ID,
+        "validation_chain_result",
+        json!({
+            "type": "object",
+            "required": ["rows", "marker", "validation_nudges", "response"],
+            "additionalProperties": true
+        }),
+        ASSESSMENTS,
+    )
 }
 
 fn evaluate<'a>(

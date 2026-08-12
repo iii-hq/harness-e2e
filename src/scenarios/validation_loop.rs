@@ -16,9 +16,16 @@ use crate::context::E2eContext;
 
 use super::assessment::{self, AssessmentSpec};
 use super::common;
-use super::{CleanupFuture, EvaluationFuture, ExecutionPolicy, ScenarioObservation, ScenarioSpec};
+use super::{
+    ArtifactExpectation, CapturedDeliverable, CleanupFuture, ComplexityProfile,
+    DeliverableCaptureFuture, DeliverableContract, EvaluationFuture, ExecutionPolicy,
+    InvariantSpec, MaterializedScenario, ProvenanceEvidence, ScenarioCase, ScenarioObservation,
+    ScenarioSpec,
+};
 
 pub const ID: &str = "validation_loop";
+const VERSION: u32 = 4;
+const DELIVERABLE_ID: &str = "validation_result";
 
 const HOOK_TYPE: &str = "harness::hook::post-turn";
 /// Goal: more than 6 rows; 4-row batches → exactly one denial, pass at 8.
@@ -42,10 +49,37 @@ const LOOP_EVIDENCE: AssessmentSpec = AssessmentSpec::hard_gated(
 const ASSESSMENTS: &[AssessmentSpec] = &[GOAL_REACHED, VALIDATOR_DISCIPLINE, LOOP_EVIDENCE];
 
 pub fn scenario(run_id: &str) -> ScenarioSpec {
+    scenario_for_case(run_id)
+}
+
+pub fn materialize(namespace: &str, seed: u64) -> anyhow::Result<MaterializedScenario> {
+    let case = ScenarioCase::new(
+        ID,
+        VERSION,
+        seed,
+        json!({
+            "database": "primary",
+            "rows_per_attempt": 4,
+            "threshold": THRESHOLD,
+            "expected_rows": EXPECTED_ROWS,
+            "minimum_nudges": 1,
+        }),
+        validation_profile(),
+        validation_capabilities(),
+        deliverable_contract(),
+    )?;
+    Ok(MaterializedScenario {
+        spec: scenario_for_case(namespace),
+        case,
+        capture: Some(capture),
+    })
+}
+
+fn scenario_for_case(run_id: &str) -> ScenarioSpec {
     let table = table(run_id);
     ScenarioSpec {
         id: ID,
-        version: 3,
+        version: VERSION,
         prompt: format!(
             "You are testing a self-installed validation loop. Follow these steps exactly.\n\n\
              Step 1 — prepare the goal table. Call database::execute (db \"primary\") twice: first \
@@ -137,6 +171,106 @@ fn evaluate<'a>(
             )?,
         ]))
     })
+}
+
+fn capture<'a>(
+    context: &'a E2eContext,
+    observation: &'a ScenarioObservation,
+    run_id: &'a str,
+) -> DeliverableCaptureFuture<'a> {
+    Box::pin(async move {
+        let table = table(run_id);
+        let rows = row_count(context, &table).await?;
+        let nudges = common::validation_nudges(&observation.transcript);
+        let invariants =
+            super::captured_gate_invariants(evaluate(context, observation, run_id).await?);
+        Ok(vec![CapturedDeliverable {
+            id: DELIVERABLE_ID.to_string(),
+            kind: "validation_result".to_string(),
+            content: json!({
+                "rows": rows,
+                "threshold": THRESHOLD,
+                "validation_nudges": nudges,
+                "response": observation.response,
+            }),
+            invariants,
+            provenance: vec![
+                ProvenanceEvidence {
+                    kind: "database_relation".to_string(),
+                    source_id: format!("primary/{table}"),
+                    relation: "validated_row_count".to_string(),
+                },
+                ProvenanceEvidence {
+                    kind: "session".to_string(),
+                    source_id: observation.metrics.root_session_id.clone(),
+                    relation: "captured_validation_loop".to_string(),
+                },
+            ],
+        }])
+    })
+}
+
+fn deliverable_contract() -> DeliverableContract {
+    validation_contract(
+        DELIVERABLE_ID,
+        "validation_result",
+        json!({
+            "type": "object",
+            "required": ["rows", "threshold", "validation_nudges", "response"],
+            "additionalProperties": true
+        }),
+        ASSESSMENTS,
+    )
+}
+
+pub(super) fn validation_profile() -> ComplexityProfile {
+    ComplexityProfile {
+        planning_depth: 2,
+        dependency_depth: 2,
+        external_systems: 1,
+        state_transitions: 4,
+        validation_loops: 2,
+        artifact_count: 1,
+        coordination_edges: 1,
+        ambiguity_level: 3,
+        ..ComplexityProfile::default()
+    }
+}
+
+pub(super) fn validation_capabilities() -> Vec<String> {
+    vec![
+        "e2e::control-plane-v1".to_string(),
+        "iii::functions".to_string(),
+        "iii::database".to_string(),
+        "iii::state".to_string(),
+        "iii::triggers".to_string(),
+    ]
+}
+
+pub(super) fn validation_contract(
+    artifact_id: &str,
+    kind: &str,
+    schema: Value,
+    assessments: &[AssessmentSpec],
+) -> DeliverableContract {
+    DeliverableContract {
+        artifacts: vec![ArtifactExpectation {
+            id: artifact_id.to_string(),
+            kind: kind.to_string(),
+            media_type: "application/json".to_string(),
+            schema,
+            max_size_bytes: 65_536,
+        }],
+        invariants: assessments
+            .iter()
+            .map(|assessment| InvariantSpec {
+                id: assessment.id().to_string(),
+                description: assessment.description().to_string(),
+            })
+            .collect(),
+        provenance_required: true,
+        capture_before_cleanup: true,
+    }
 }
 
 fn loop_evidence_points(nudges: usize, converged_exactly: bool) -> u8 {

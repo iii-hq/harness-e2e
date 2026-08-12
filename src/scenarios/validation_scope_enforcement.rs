@@ -23,9 +23,15 @@ use crate::context::E2eContext;
 use super::assessment::{self, AssessmentSpec};
 use super::common;
 use super::validation_loop::suffix;
-use super::{CleanupFuture, EvaluationFuture, ExecutionPolicy, ScenarioObservation, ScenarioSpec};
+use super::{
+    CapturedDeliverable, CleanupFuture, DeliverableCaptureFuture, EvaluationFuture,
+    ExecutionPolicy, MaterializedScenario, ProvenanceEvidence, ScenarioCase, ScenarioObservation,
+    ScenarioSpec,
+};
 
 pub const ID: &str = "validation_scope_enforcement";
+const VERSION: u32 = 4;
+const DELIVERABLE_ID: &str = "scope_enforcement_record";
 
 const HOOK_TYPE: &str = "harness::hook::post-turn";
 const FOREIGN_SCOPE_REFUSED: AssessmentSpec = AssessmentSpec::hard_gated(
@@ -51,10 +57,42 @@ fn scope(run_id: &str) -> String {
 }
 
 pub fn scenario(run_id: &str) -> ScenarioSpec {
+    scenario_for_case(run_id)
+}
+
+pub fn materialize(namespace: &str, seed: u64) -> anyhow::Result<MaterializedScenario> {
+    let case = ScenarioCase::new(
+        ID,
+        VERSION,
+        seed,
+        json!({
+            "foreign_session": "someone-elses-session-1",
+            "marker_key": "marker",
+            "expected_nudges": 1,
+            "expected_marker": null,
+            "completion_marker": "TEARDOWN COMPLETE",
+        }),
+        super::validation_loop::validation_profile(),
+        vec![
+            "e2e::control-plane-v1".to_string(),
+            "iii::functions".to_string(),
+            "iii::state".to_string(),
+            "iii::triggers".to_string(),
+        ],
+        deliverable_contract(),
+    )?;
+    Ok(MaterializedScenario {
+        spec: scenario_for_case(namespace),
+        case,
+        capture: Some(capture),
+    })
+}
+
+fn scenario_for_case(run_id: &str) -> ScenarioSpec {
     let scope = scope(run_id);
     ScenarioSpec {
         id: ID,
-        version: 3,
+        version: VERSION,
         prompt: format!(
             "You are testing the security boundaries of self-registered validators. Follow the \
              steps exactly and report what actually happens.\n\n\
@@ -92,6 +130,64 @@ pub fn scenario(run_id: &str) -> ScenarioSpec {
         evaluate,
         cleanup: Some(cleanup),
     }
+}
+
+fn capture<'a>(
+    context: &'a E2eContext,
+    observation: &'a ScenarioObservation,
+    run_id: &'a str,
+) -> DeliverableCaptureFuture<'a> {
+    Box::pin(async move {
+        let marker = common::state_value(
+            context
+                .trigger(
+                    "state::get",
+                    json!({ "scope": scope(run_id), "key": "marker" }),
+                )
+                .await?,
+        );
+        let invariants =
+            super::captured_gate_invariants(evaluate(context, observation, run_id).await?);
+        Ok(vec![CapturedDeliverable {
+            id: DELIVERABLE_ID.to_string(),
+            kind: "security_validation_record".to_string(),
+            content: json!({
+                "marker": marker,
+                "validation_nudges": common::validation_nudges(&observation.transcript),
+                "out_of_scope_error_observed": common::transcript_contains(
+                    &observation.transcript,
+                    "out of scope"
+                ),
+                "response": observation.response,
+            }),
+            invariants,
+            provenance: vec![
+                ProvenanceEvidence {
+                    kind: "state_location".to_string(),
+                    source_id: format!("{}/marker", scope(run_id)),
+                    relation: "verified_absent_after_teardown".to_string(),
+                },
+                ProvenanceEvidence {
+                    kind: "session".to_string(),
+                    source_id: observation.metrics.root_session_id.clone(),
+                    relation: "captured_scope_enforcement".to_string(),
+                },
+            ],
+        }])
+    })
+}
+
+fn deliverable_contract() -> super::DeliverableContract {
+    super::validation_loop::validation_contract(
+        DELIVERABLE_ID,
+        "security_validation_record",
+        json!({
+            "type": "object",
+            "required": ["marker", "validation_nudges", "out_of_scope_error_observed", "response"],
+            "additionalProperties": true
+        }),
+        ASSESSMENTS,
+    )
 }
 
 fn evaluate<'a>(

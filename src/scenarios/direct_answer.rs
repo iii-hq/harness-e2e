@@ -1,9 +1,30 @@
 use serde_json::json;
 
 use super::common;
-use super::{CriterionSpec, ExecutionPolicy, ScenarioSpec};
+use super::{
+    ComplexityProfile, CriterionSpec, DeliverableContract, ExecutionPolicy, MaterializedScenario,
+    ScenarioCase, ScenarioSpec,
+};
 
 pub const ID: &str = "direct_answer";
+
+pub fn materialize(namespace: &str, seed: u64) -> anyhow::Result<MaterializedScenario> {
+    let spec = scenario(namespace);
+    let case = ScenarioCase::new(
+        ID,
+        spec.version,
+        seed,
+        json!({ "variant": "canonical" }),
+        ComplexityProfile::default(),
+        vec!["e2e::control-plane-v1".to_string()],
+        DeliverableContract::default(),
+    )?;
+    Ok(MaterializedScenario {
+        spec,
+        case,
+        capture: None,
+    })
+}
 
 pub fn scenario(_run_id: &str) -> ScenarioSpec {
     ScenarioSpec {

@@ -235,6 +235,18 @@ pub struct CriterionAward {
     pub reason: String,
 }
 
+fn captured_gate_invariants(objective: ObjectiveEvaluation) -> Vec<CapturedInvariant> {
+    objective
+        .hard_gates
+        .into_iter()
+        .map(|gate| CapturedInvariant {
+            id: gate.id,
+            passed: gate.passed,
+            reason: gate.reason,
+        })
+        .collect()
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema, ValueEnum)]
 #[serde(rename_all = "snake_case")]
 pub enum ScenarioId {
@@ -366,6 +378,7 @@ impl ScenarioId {
 
     pub fn materialize(self, namespace: &str, seed: u64) -> Result<MaterializedScenario> {
         let materialized = match self {
+            Self::DirectAnswer => direct_answer::materialize(namespace, seed)?,
             Self::PersistentState => persistent_state::materialize(namespace, seed)?,
             Self::ReactiveAutomation => reactive_automation::materialize(namespace, seed)?,
             Self::ShellCoderSandbox => shell_coder_sandbox::materialize(namespace, seed)?,
@@ -380,6 +393,13 @@ impl ScenarioId {
             Self::SubagentValidationFailure => {
                 subagent_validation_failure::materialize(namespace, seed)?
             }
+            Self::ValidationLoop => validation_loop::materialize(namespace, seed)?,
+            Self::CustomValidator => custom_validator::materialize(namespace, seed)?,
+            Self::ValidationSelfRepair => validation_self_repair::materialize(namespace, seed)?,
+            Self::ValidationScopeEnforcement => {
+                validation_scope_enforcement::materialize(namespace, seed)?
+            }
+            Self::ValidationChain => validation_chain::materialize(namespace, seed)?,
             Self::Coordination1 => {
                 coordination::materialize(coordination::Rung::One, namespace, seed)?
             }
@@ -395,23 +415,6 @@ impl ScenarioId {
             Self::Coordination5 => {
                 coordination::materialize(coordination::Rung::Five, namespace, seed)?
             }
-            _ => {
-                let spec = self.spec(namespace);
-                let case = ScenarioCase::new(
-                    spec.id,
-                    spec.version,
-                    seed,
-                    serde_json::json!({ "variant": "canonical" }),
-                    self.complexity_profile(),
-                    self.required_capabilities(),
-                    DeliverableContract::default(),
-                )?;
-                MaterializedScenario {
-                    spec,
-                    case,
-                    capture: None,
-                }
-            }
         };
         materialized.validate()?;
         Ok(materialized)
@@ -421,114 +424,6 @@ impl ScenarioId {
         // Stable FNV-1a keeps canonical cases reproducible without tying their
         // identity to a particular execution or retry attempt.
         stable_seed(self.as_str())
-    }
-
-    fn complexity_profile(self) -> ComplexityProfile {
-        match self {
-            Self::DirectAnswer => ComplexityProfile::default(),
-            Self::PersistentState => ComplexityProfile {
-                planning_depth: 1,
-                external_systems: 1,
-                state_transitions: 2,
-                artifact_count: 1,
-                ..ComplexityProfile::default()
-            },
-            Self::MechanicalReaction | Self::ReactiveAutomation | Self::TimerWake => {
-                ComplexityProfile {
-                    planning_depth: 2,
-                    dependency_depth: 1,
-                    external_systems: 1,
-                    state_transitions: 3,
-                    wake_cycles: 1,
-                    artifact_count: 1,
-                    ..ComplexityProfile::default()
-                }
-            }
-            Self::ShellCoderSandbox => ComplexityProfile {
-                planning_depth: 2,
-                dependency_depth: 1,
-                external_systems: 1,
-                state_transitions: 2,
-                artifact_count: 2,
-                ambiguity_level: 2,
-                ..ComplexityProfile::default()
-            },
-            Self::ResearchPipeline | Self::ReceivingOperation => ComplexityProfile {
-                planning_depth: 3,
-                dependency_depth: 2,
-                parallel_branches: 2,
-                external_systems: 1,
-                state_transitions: 5,
-                wake_cycles: 1,
-                artifact_count: 2,
-                coordination_edges: 2,
-                ambiguity_level: 3,
-                ..ComplexityProfile::default()
-            },
-            Self::ValidationLoop
-            | Self::CustomValidator
-            | Self::ValidationSelfRepair
-            | Self::ValidationScopeEnforcement
-            | Self::ValidationChain => ComplexityProfile {
-                planning_depth: 2,
-                dependency_depth: 2,
-                external_systems: 1,
-                state_transitions: 4,
-                validation_loops: 2,
-                artifact_count: 1,
-                coordination_edges: 1,
-                ambiguity_level: 3,
-                ..ComplexityProfile::default()
-            },
-            Self::SubagentValidation
-            | Self::MultiSubagentValidation
-            | Self::SubagentValidationFailure => ComplexityProfile {
-                planning_depth: 3,
-                dependency_depth: 3,
-                parallel_branches: if matches!(self, Self::MultiSubagentValidation) {
-                    2
-                } else {
-                    1
-                },
-                external_systems: 2,
-                state_transitions: 6,
-                wake_cycles: 1,
-                validation_loops: 2,
-                artifact_count: 1,
-                coordination_edges: 4,
-                ambiguity_level: 4,
-            },
-            Self::Coordination1
-            | Self::Coordination2
-            | Self::Coordination3
-            | Self::Coordination4
-            | Self::Coordination5 => {
-                unreachable!("coordination scenarios use their materialized profiles")
-            }
-        }
-    }
-
-    fn required_capabilities(self) -> Vec<String> {
-        let mut capabilities = vec!["e2e::control-plane-v1".to_string()];
-        if !matches!(self, Self::DirectAnswer) {
-            capabilities.push("iii::functions".to_string());
-        }
-        if matches!(
-            self,
-            Self::ResearchPipeline
-                | Self::ReceivingOperation
-                | Self::SubagentValidation
-                | Self::MultiSubagentValidation
-                | Self::SubagentValidationFailure
-                | Self::Coordination1
-                | Self::Coordination2
-                | Self::Coordination3
-                | Self::Coordination4
-                | Self::Coordination5
-        ) {
-            capabilities.push("e2e::subagents".to_string());
-        }
-        capabilities
     }
 }
 
@@ -694,6 +589,46 @@ mod tests {
                     .contains(&"e2e::subagents".to_string()),
                 "{scenario:?}"
             );
+        }
+    }
+
+    #[test]
+    fn every_non_atomic_scenario_has_a_reproducible_deliverable_contract() {
+        for scenario in ScenarioId::ALL {
+            let first = scenario.materialize("attempt-a", 313).unwrap();
+            let retry = scenario.materialize("attempt-b", 313).unwrap();
+            assert_eq!(first.case.case_id, retry.case.case_id, "{scenario:?}");
+            assert_eq!(first.case.inputs, retry.case.inputs, "{scenario:?}");
+            assert_eq!(
+                first.case.inputs_sha256, retry.case.inputs_sha256,
+                "{scenario:?}"
+            );
+
+            if scenario == ScenarioId::DirectAnswer {
+                assert_eq!(first.case.complexity.tier, domain::ComplexityTier::L0Atomic);
+                assert!(first.case.deliverable_contract.artifacts.is_empty());
+                assert!(first.capture.is_none());
+                continue;
+            }
+
+            assert!(
+                first.case.complexity.tier != domain::ComplexityTier::L0Atomic,
+                "{scenario:?}"
+            );
+            assert_eq!(
+                usize::from(first.case.complexity.profile.artifact_count),
+                first.case.deliverable_contract.artifacts.len(),
+                "{scenario:?}"
+            );
+            assert!(first.capture.is_some(), "{scenario:?}");
+            assert!(
+                first.case.deliverable_contract.capture_before_cleanup,
+                "{scenario:?}"
+            );
+            for artifact in &first.case.deliverable_contract.artifacts {
+                jsonschema::JSONSchema::compile(&artifact.schema)
+                    .unwrap_or_else(|error| panic!("{scenario:?} invalid schema: {error}"));
+            }
         }
     }
 

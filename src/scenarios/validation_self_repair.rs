@@ -25,9 +25,15 @@ use super::assessment::{self, AssessmentSpec};
 use super::common;
 use super::custom_validator::{HookEnvelope, HookVerdict};
 use super::validation_loop::suffix;
-use super::{CleanupFuture, EvaluationFuture, ExecutionPolicy, ScenarioObservation, ScenarioSpec};
+use super::{
+    CapturedDeliverable, CleanupFuture, DeliverableCaptureFuture, EvaluationFuture,
+    ExecutionPolicy, MaterializedScenario, ProvenanceEvidence, ScenarioCase, ScenarioObservation,
+    ScenarioSpec,
+};
 
 pub const ID: &str = "validation_self_repair";
+const VERSION: u32 = 4;
+const DELIVERABLE_ID: &str = "repaired_dataset";
 
 const HOOK_TYPE: &str = "harness::hook::post-turn";
 const REQUIRED_NAMES: [&str; 4] = ["alpha", "beta", "gamma", "delta"];
@@ -159,11 +165,49 @@ fn setup<'a>(context: &'a E2eContext, run_id: &'a str) -> CleanupFuture<'a> {
 }
 
 pub fn scenario(run_id: &str) -> ScenarioSpec {
+    scenario_for_case(run_id)
+}
+
+pub fn materialize(namespace: &str, seed: u64) -> anyhow::Result<MaterializedScenario> {
+    let case = ScenarioCase::new(
+        ID,
+        VERSION,
+        seed,
+        json!({
+            "database": "primary",
+            "required_names": REQUIRED_NAMES,
+            "seed_rows": [
+                { "name": "alpha", "amount": 10 },
+                { "name": "beta", "amount": -5 },
+                { "name": "gamma", "amount": 30 },
+                { "name": "beta", "amount": 7 },
+                { "name": "delta", "amount": 200 }
+            ],
+            "invariants": ["positive_amounts", "unique_names", "required_names_present"],
+            "maximum_repair_rounds": 2,
+        }),
+        super::validation_loop::validation_profile(),
+        vec![
+            "e2e::control-plane-v1".to_string(),
+            "iii::functions".to_string(),
+            "iii::database".to_string(),
+            "iii::triggers".to_string(),
+        ],
+        deliverable_contract(),
+    )?;
+    Ok(MaterializedScenario {
+        spec: scenario_for_case(namespace),
+        case,
+        capture: Some(capture),
+    })
+}
+
+fn scenario_for_case(run_id: &str) -> ScenarioSpec {
     let auditor = function_id(run_id);
     let table = table(run_id);
     ScenarioSpec {
         id: ID,
-        version: 3,
+        version: VERSION,
         prompt: format!(
             "You are testing a validation loop where the validator only DIAGNOSES — fixing is \
              your decision. Follow the setup steps exactly; after that, think for yourself.\n\n\
@@ -206,6 +250,68 @@ pub fn scenario(run_id: &str) -> ScenarioSpec {
         evaluate,
         cleanup: Some(cleanup),
     }
+}
+
+fn capture<'a>(
+    context: &'a E2eContext,
+    observation: &'a ScenarioObservation,
+    run_id: &'a str,
+) -> DeliverableCaptureFuture<'a> {
+    Box::pin(async move {
+        let table = table(run_id);
+        let rows = fetch_rows(context.client(), &table)
+            .await
+            .unwrap_or_default();
+        let remaining = violations(&rows);
+        let nudges = nudge_texts(&observation.transcript);
+        let invariants =
+            super::captured_gate_invariants(evaluate(context, observation, run_id).await?);
+        Ok(vec![CapturedDeliverable {
+            id: DELIVERABLE_ID.to_string(),
+            kind: "database_rows".to_string(),
+            content: json!({
+                "rows": rows
+                    .iter()
+                    .map(|(name, amount)| json!({ "name": name, "amount": amount }))
+                    .collect::<Vec<_>>(),
+                "remaining_violations": remaining,
+                "validation_nudges": nudges,
+                "response": observation.response,
+            }),
+            invariants,
+            provenance: vec![
+                ProvenanceEvidence {
+                    kind: "database_relation".to_string(),
+                    source_id: format!("primary/{table}"),
+                    relation: "captured_repaired_rows".to_string(),
+                },
+                ProvenanceEvidence {
+                    kind: "function".to_string(),
+                    source_id: function_id(run_id),
+                    relation: "audited_each_attempt".to_string(),
+                },
+            ],
+        }])
+    })
+}
+
+fn deliverable_contract() -> super::DeliverableContract {
+    super::validation_loop::validation_contract(
+        DELIVERABLE_ID,
+        "database_rows",
+        json!({
+            "type": "object",
+            "required": ["rows", "remaining_violations", "validation_nudges", "response"],
+            "properties": {
+                "rows": { "type": "array" },
+                "remaining_violations": { "type": "array" },
+                "validation_nudges": { "type": "array" },
+                "response": { "type": "string" }
+            },
+            "additionalProperties": false
+        }),
+        ASSESSMENTS,
+    )
 }
 
 fn evaluate<'a>(

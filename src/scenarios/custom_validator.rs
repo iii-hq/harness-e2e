@@ -19,16 +19,22 @@
 
 use iii_sdk::RegisterFunction;
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
+use serde_json::{json, Value};
 
 use crate::context::E2eContext;
 
 use super::assessment::{self, AssessmentSpec};
 use super::common;
 use super::validation_loop::suffix;
-use super::{CleanupFuture, EvaluationFuture, ExecutionPolicy, ScenarioObservation, ScenarioSpec};
+use super::{
+    CapturedDeliverable, CleanupFuture, DeliverableCaptureFuture, EvaluationFuture,
+    ExecutionPolicy, MaterializedScenario, ProvenanceEvidence, ScenarioCase, ScenarioObservation,
+    ScenarioSpec,
+};
 
 pub const ID: &str = "custom_validator";
+const VERSION: u32 = 4;
+const DELIVERABLE_ID: &str = "custom_validation_result";
 
 const HOOK_TYPE: &str = "harness::hook::post-turn";
 /// What the harness puts in the envelope's `point` — the hook's INPUT NAME,
@@ -145,10 +151,40 @@ fn setup<'a>(context: &'a E2eContext, run_id: &'a str) -> CleanupFuture<'a> {
 }
 
 pub fn scenario(run_id: &str) -> ScenarioSpec {
+    scenario_for_case(run_id)
+}
+
+pub fn materialize(namespace: &str, seed: u64) -> anyhow::Result<MaterializedScenario> {
+    let case = ScenarioCase::new(
+        ID,
+        VERSION,
+        seed,
+        json!({
+            "hook_type": HOOK_TYPE,
+            "hook_point": HOOK_POINT,
+            "acceptance_tokens": TOKENS,
+            "expected_denials": 2,
+        }),
+        super::validation_loop::validation_profile(),
+        vec![
+            "e2e::control-plane-v1".to_string(),
+            "iii::functions".to_string(),
+            "iii::triggers".to_string(),
+        ],
+        deliverable_contract(),
+    )?;
+    Ok(MaterializedScenario {
+        spec: scenario_for_case(namespace),
+        case,
+        capture: Some(capture),
+    })
+}
+
+fn scenario_for_case(run_id: &str) -> ScenarioSpec {
     let validator = function_id(run_id);
     ScenarioSpec {
         id: ID,
-        version: 3,
+        version: VERSION,
         prompt: format!(
             "You are testing a validation loop driven by a custom validator function. Follow \
              these steps exactly.\n\n\
@@ -180,6 +216,53 @@ pub fn scenario(run_id: &str) -> ScenarioSpec {
         evaluate,
         cleanup: None,
     }
+}
+
+fn capture<'a>(
+    context: &'a E2eContext,
+    observation: &'a ScenarioObservation,
+    run_id: &'a str,
+) -> DeliverableCaptureFuture<'a> {
+    Box::pin(async move {
+        let nudges = nudge_texts(&observation.transcript);
+        let invariants =
+            super::captured_gate_invariants(evaluate(context, observation, run_id).await?);
+        Ok(vec![CapturedDeliverable {
+            id: DELIVERABLE_ID.to_string(),
+            kind: "validation_transcript".to_string(),
+            content: json!({
+                "acceptance_tokens": TOKENS,
+                "validation_nudges": nudges,
+                "response": observation.response,
+            }),
+            invariants,
+            provenance: vec![
+                ProvenanceEvidence {
+                    kind: "function".to_string(),
+                    source_id: function_id(run_id),
+                    relation: "issued_custom_verdicts".to_string(),
+                },
+                ProvenanceEvidence {
+                    kind: "session".to_string(),
+                    source_id: observation.metrics.root_session_id.clone(),
+                    relation: "captured_validation_transcript".to_string(),
+                },
+            ],
+        }])
+    })
+}
+
+fn deliverable_contract() -> super::DeliverableContract {
+    super::validation_loop::validation_contract(
+        DELIVERABLE_ID,
+        "validation_transcript",
+        json!({
+            "type": "object",
+            "required": ["acceptance_tokens", "validation_nudges", "response"],
+            "additionalProperties": true
+        }),
+        ASSESSMENTS,
+    )
 }
 
 fn evaluate<'a>(
