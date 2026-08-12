@@ -30,6 +30,8 @@ rust-embed = { version = "8", features = ["include-exclude"] }
 url = "2"
 sha2 = "0.10"
 jsonschema = { version = "0.18", default-features = false }
+base64 = "0.22"
+async-trait = "0.1"
 
 [dev-dependencies]
 tempfile = "3"

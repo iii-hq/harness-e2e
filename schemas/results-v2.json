@@ -57,6 +57,19 @@
     "passed": {
       "type": "boolean"
     },
+    "redaction": {
+      "default": {
+        "policy_version": 1,
+        "redacted_fields": 0,
+        "redacted_values": 0,
+        "rules": []
+      },
+      "allOf": [
+        {
+          "$ref": "#/definitions/RedactionReport"
+        }
+      ]
+    },
     "scenarios": {
       "type": "array",
       "items": {
@@ -1139,6 +1152,39 @@
         },
         "source_id": {
           "type": "string"
+        }
+      }
+    },
+    "RedactionReport": {
+      "type": "object",
+      "required": [
+        "policy_version",
+        "redacted_fields",
+        "redacted_values",
+        "rules"
+      ],
+      "properties": {
+        "policy_version": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0.0
+        },
+        "redacted_fields": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0.0
+        },
+        "redacted_values": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0.0
+        },
+        "rules": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "uniqueItems": true
         }
       }
     },

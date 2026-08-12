@@ -1,0 +1,19 @@
+providers:
+  local:
+    data_dir: ${HARNESS_E2E_RUN_DIR}/storage
+
+# These are private worker-facing aliases. Production maps the same aliases to
+# private S3, GCS, or R2 buckets through the storage worker configuration.
+buckets:
+  e2e-temporary:
+    provider: local
+    bucket: e2e-temporary
+  e2e-pull-request:
+    provider: local
+    bucket: e2e-pull-request
+  e2e-longitudinal:
+    provider: local
+    bucket: e2e-longitudinal
+  e2e-canonical:
+    provider: local
+    bucket: e2e-canonical

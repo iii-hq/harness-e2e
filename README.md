@@ -49,8 +49,15 @@ cargo run --locked --bin e2e-worker -- \
 
 The worker exposes `e2e::run`, `e2e::status`, `e2e::cancel`,
 `e2e::results-get`, `e2e::results-list`, `e2e::compare`,
-`e2e::scenarios-list`, `e2e::baseline-promote`, and `e2e::baseline-get`.
+`e2e::scenarios-list`, `e2e::baseline-promote`, `e2e::baseline-get`,
+`e2e::archive`, `e2e::archive-head`, `e2e::archive-restore`,
+`e2e::history-list`, and `e2e::retention-sweep`.
 Subject policies deny `e2e::*`.
+
+Durable artifacts are chunked through `storage::*`, while longitudinal series
+are ingested through `database::*`. The runner has no S3, GCS, R2, SQL-driver,
+or Harness dependency. See [docs/durable-history.md](docs/durable-history.md)
+for retention, deployment, integrity, and recovery details.
 
 ## Repository boundaries
 

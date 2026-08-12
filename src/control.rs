@@ -15,6 +15,11 @@ use sha2::{Digest, Sha256};
 use tokio::sync::{mpsc, watch, Mutex, RwLock};
 
 use crate::context::E2eContext;
+use crate::durable::{
+    ArchiveHeadResponse, ArchiveResponse, ArchiveRestoreResponse, DurableArchiveReference,
+    DurableHistory, HistoryListRequest, RetentionClass, RetentionSweepRequest, ARCHIVE_HEAD_ID,
+    ARCHIVE_ID, ARCHIVE_RESTORE_ID, HISTORY_LIST_ID, RETENTION_SWEEP_ID,
+};
 use crate::judge::JudgeConfig;
 use crate::longitudinal::{self, ComparisonPolicy, ComparisonResponse, PromotedBaselineIdentity};
 use crate::report::{E2eManifestV2, E2eReport};
@@ -25,7 +30,7 @@ use crate::suite::{
 };
 
 pub const CONTROL_CONTRACT_NAME: &str = "e2e-control-plane";
-pub const CONTROL_CONTRACT_VERSION: u32 = 2;
+pub const CONTROL_CONTRACT_VERSION: u32 = 3;
 pub const RUN_ID: &str = "e2e::run";
 pub const STATUS_ID: &str = "e2e::status";
 pub const CANCEL_ID: &str = "e2e::cancel";
@@ -122,6 +127,8 @@ pub struct ExecutionRecord {
     pub report: Option<E2eReport>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub manifest: Option<E2eManifestV2>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub archive: Option<DurableArchiveReference>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -200,6 +207,13 @@ pub struct ResultsGetResponse {
     pub result_path: Option<String>,
     pub report: Option<E2eReport>,
     pub manifest: Option<E2eManifestV2>,
+    pub archive: Option<DurableArchiveReference>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct ArchiveExecutionRequest {
+    pub execution_id: String,
+    pub retention_class: RetentionClass,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
@@ -300,6 +314,7 @@ struct ControlPlaneInner {
     admission: Mutex<()>,
     records: RwLock<HashMap<String, ExecutionRecord>>,
     cancellations: Mutex<HashMap<String, watch::Sender<bool>>>,
+    durable: DurableHistory,
 }
 
 fn default_lane() -> String {
@@ -326,6 +341,7 @@ impl ControlPlane {
     pub async fn new(iii: IIIClient, url: String, output_root: PathBuf) -> Result<Self> {
         let control = Self {
             inner: Arc::new(ControlPlaneInner {
+                durable: DurableHistory::from_client(iii.clone()),
                 iii,
                 url,
                 output_root,
@@ -339,6 +355,90 @@ impl ControlPlane {
     }
 
     pub fn register(&self) {
+        register_function(
+            &self.inner.iii,
+            ARCHIVE_ID,
+            "Persist a completed execution through private iii storage and idempotent history.",
+            {
+                let control = self.clone();
+                RegisterFunction::new_async(move |request: ArchiveExecutionRequest| {
+                    let control = control.clone();
+                    async move { control.archive(request).await.map_err(handler_error) }
+                })
+            },
+        );
+        register_function(
+            &self.inner.iii,
+            ARCHIVE_HEAD_ID,
+            "Verify availability and immutable metadata for an archived execution.",
+            {
+                let control = self.clone();
+                RegisterFunction::new_async(move |request: ExecutionRequest| {
+                    let control = control.clone();
+                    async move {
+                        control
+                            .archive_head(&request.execution_id)
+                            .await
+                            .map_err(handler_error)
+                    }
+                })
+            },
+        );
+        register_function(
+            &self.inner.iii,
+            ARCHIVE_RESTORE_ID,
+            "Restore and verify an archived execution from its immutable manifest.",
+            {
+                let control = self.clone();
+                RegisterFunction::new_async(move |request: ExecutionRequest| {
+                    let control = control.clone();
+                    async move {
+                        control
+                            .archive_restore(&request.execution_id)
+                            .await
+                            .map_err(handler_error)
+                    }
+                })
+            },
+        );
+        register_function(
+            &self.inner.iii,
+            HISTORY_LIST_ID,
+            "List hash-validated E2E history records from the iii database worker.",
+            {
+                let control = self.clone();
+                RegisterFunction::new_async(move |request: HistoryListRequest| {
+                    let control = control.clone();
+                    async move {
+                        control
+                            .inner
+                            .durable
+                            .history_list(request)
+                            .await
+                            .map_err(handler_error)
+                    }
+                })
+            },
+        );
+        register_function(
+            &self.inner.iii,
+            RETENTION_SWEEP_ID,
+            "Delete expired E2E objects and tombstone their history records.",
+            {
+                let control = self.clone();
+                RegisterFunction::new_async(move |request: RetentionSweepRequest| {
+                    let control = control.clone();
+                    async move {
+                        control
+                            .inner
+                            .durable
+                            .retention_sweep(request)
+                            .await
+                            .map_err(handler_error)
+                    }
+                })
+            },
+        );
         register_function(
             &self.inner.iii,
             RUN_ID,
@@ -517,6 +617,7 @@ impl ControlPlane {
             result_path: None,
             report: None,
             manifest: None,
+            archive: None,
         };
         self.persist_record(record).await?;
         self.transition(
@@ -716,7 +817,52 @@ impl ControlPlane {
             result_path: record.result_path,
             report: record.report,
             manifest: record.manifest,
+            archive: record.archive,
         })
+    }
+
+    async fn archive(&self, request: ArchiveExecutionRequest) -> Result<ArchiveResponse> {
+        let record = self.record(&request.execution_id).await?;
+        if record.phase != ExecutionPhase::Completed {
+            bail!("only a completed execution can be archived");
+        }
+        let report = record
+            .report
+            .as_ref()
+            .context("completed execution has no report")?;
+        let output = self.inner.output_root.join(&record.execution_id);
+        let response = self
+            .inner
+            .durable
+            .archive(&output, report, request.retention_class)
+            .await?;
+        let archive = response.archive.clone();
+        self.update_record(&request.execution_id, move |record| {
+            record.archive = Some(archive);
+        })
+        .await?;
+        Ok(response)
+    }
+
+    async fn archive_head(&self, execution_id: &str) -> Result<ArchiveHeadResponse> {
+        let archive = self
+            .record(execution_id)
+            .await?
+            .archive
+            .context("execution has not been archived")?;
+        self.inner.durable.head(archive).await
+    }
+
+    async fn archive_restore(&self, execution_id: &str) -> Result<ArchiveRestoreResponse> {
+        let archive = self
+            .record(execution_id)
+            .await?
+            .archive
+            .context("execution has not been archived")?;
+        self.inner
+            .durable
+            .restore(archive, &self.inner.output_root.join("restored"))
+            .await
     }
 
     async fn results_list(&self, request: ResultsListRequest) -> Result<ResultsListResponse> {

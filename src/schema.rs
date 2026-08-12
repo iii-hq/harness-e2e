@@ -2,6 +2,7 @@ use schemars::gen::SchemaSettings;
 use schemars::schema::{RootSchema, Schema};
 use schemars::JsonSchema;
 
+use crate::durable::{DurableArchiveManifest, HistoryRecord};
 use crate::report::{E2eManifestV2, E2eReport};
 
 pub fn results_v2() -> RootSchema {
@@ -44,6 +45,14 @@ pub fn manifest_v2() -> RootSchema {
     versioned_root_schema_for::<E2eManifestV2>(2)
 }
 
+pub fn durable_archive_v1() -> RootSchema {
+    versioned_root_schema_for::<DurableArchiveManifest>(1)
+}
+
+pub fn history_record_v1() -> RootSchema {
+    versioned_root_schema_for::<HistoryRecord>(1)
+}
+
 fn versioned_root_schema_for<T: JsonSchema>(version: u32) -> RootSchema {
     let mut root = SchemaSettings::draft07()
         .into_generator()
@@ -82,6 +91,16 @@ mod tests {
     #[test]
     fn manifest_v2_schema_matches_snapshot() {
         assert_snapshot("manifest-v2.json", &manifest_v2());
+    }
+
+    #[test]
+    fn durable_archive_v1_schema_matches_snapshot() {
+        assert_snapshot("durable-archive-v1.json", &durable_archive_v1());
+    }
+
+    #[test]
+    fn history_record_v1_schema_matches_snapshot() {
+        assert_snapshot("history-record-v1.json", &history_record_v1());
     }
 
     fn assert_snapshot(name: &str, schema: &impl Serialize) {

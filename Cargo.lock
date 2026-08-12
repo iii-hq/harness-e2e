@@ -622,7 +622,9 @@ name = "harness-e2e"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "async-trait",
  "axum",
+ "base64",
  "chrono",
  "clap",
  "iii-sdk",

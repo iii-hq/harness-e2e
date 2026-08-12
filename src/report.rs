@@ -1242,6 +1242,8 @@ pub struct E2eReport {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub engine_revision: Option<String>,
     pub passed: bool,
+    #[serde(default)]
+    pub redaction: crate::redaction::RedactionReport,
     pub scenarios: Vec<E2eScenarioReport>,
 }
 
@@ -1266,6 +1268,7 @@ impl E2eReport {
             judge_protocol,
             engine_revision,
             passed,
+            redaction: crate::redaction::RedactionReport::default(),
             scenarios,
         }
     }
@@ -1281,6 +1284,7 @@ impl E2eReport {
             }
         }
         manifest.validate().context("validate E2E manifest")?;
+        self.redact_sensitive_evidence()?;
         self.materialize_evidence(output)?;
         let manifest_reference = artifact::write_json(
             output,
@@ -1409,6 +1413,47 @@ impl E2eReport {
         Ok(())
     }
 
+    fn redact_sensitive_evidence(&mut self) -> Result<()> {
+        let policy = crate::redaction::RedactionPolicy::from_environment();
+        let mut redaction = crate::redaction::RedactionReport::default();
+        for scenario in &mut self.scenarios {
+            for run in &mut scenario.runs {
+                redact_string(&policy, &mut redaction, &mut run.prompt);
+                if let Some(transcript) = &mut run.transcript {
+                    redaction.merge(policy.redact_value(transcript));
+                }
+                redact_attempt_annotations(
+                    &policy,
+                    &mut redaction,
+                    &mut run.failures,
+                    &mut run.hard_gates,
+                    &mut run.criteria,
+                    &mut run.dimensions,
+                    &mut run.deliverables,
+                );
+                scan_deliverable_content(&policy, &run.deliverables)?;
+                for retry in &mut run.retry_attempts {
+                    if let Some(transcript) = &mut retry.transcript {
+                        redaction.merge(policy.redact_value(transcript));
+                    }
+                    redact_attempt_annotations(
+                        &policy,
+                        &mut redaction,
+                        &mut retry.failures,
+                        &mut [],
+                        &mut [],
+                        &mut retry.dimensions,
+                        &mut retry.deliverables,
+                    );
+                    scan_deliverable_content(&policy, &retry.deliverables)?;
+                }
+            }
+        }
+        self.redaction = redaction;
+        policy.assert_clean(&serde_json::to_vec(&self).context("scan E2E report")?)?;
+        Ok(())
+    }
+
     fn legacy_v1_value(&self) -> Result<Value> {
         let mut value = serde_json::to_value(self).context("serialize legacy E2E results")?;
         let object = value
@@ -1419,6 +1464,7 @@ impl E2eReport {
             "execution",
             "system_under_test",
             "manifest",
+            "redaction",
         ] {
             object.remove(field);
         }
@@ -1536,6 +1582,66 @@ where
             "{label} does not match its declared schema: {}",
             errors.join("; ")
         );
+    }
+    Ok(())
+}
+
+fn redact_string(
+    policy: &crate::redaction::RedactionPolicy,
+    report: &mut crate::redaction::RedactionReport,
+    value: &mut String,
+) {
+    let (sanitized, nested) = policy.redact_text(value);
+    *value = sanitized;
+    report.merge(nested);
+}
+
+fn redact_attempt_annotations(
+    policy: &crate::redaction::RedactionPolicy,
+    redaction: &mut crate::redaction::RedactionReport,
+    failures: &mut [FailureRecord],
+    hard_gates: &mut [HardGateReport],
+    criteria: &mut [CriterionReport],
+    dimensions: &mut [DimensionReport],
+    deliverables: &mut [DeliverableReport],
+) {
+    for failure in failures {
+        redact_string(policy, redaction, &mut failure.message);
+    }
+    for gate in hard_gates {
+        redact_string(policy, redaction, &mut gate.reason);
+    }
+    for criterion in criteria {
+        redact_string(policy, redaction, &mut criterion.reason);
+    }
+    for dimension in dimensions {
+        redaction.merge(policy.redact_value(&mut dimension.signals));
+    }
+    for deliverable in deliverables {
+        redaction.merge(policy.redact_value(&mut deliverable.preview));
+        for invariant in &mut deliverable.invariants {
+            redact_string(policy, redaction, &mut invariant.reason);
+        }
+        for provenance in &mut deliverable.provenance {
+            redact_string(policy, redaction, &mut provenance.source_id);
+            redact_string(policy, redaction, &mut provenance.relation);
+        }
+    }
+}
+
+fn scan_deliverable_content(
+    policy: &crate::redaction::RedactionPolicy,
+    deliverables: &[DeliverableReport],
+) -> Result<()> {
+    for deliverable in deliverables {
+        policy
+            .assert_clean(&serde_json::to_vec(&deliverable.content)?)
+            .with_context(|| {
+                format!(
+                    "deliverable '{}' contains secret material and cannot be persisted",
+                    deliverable.id
+                )
+            })?;
     }
     Ok(())
 }
