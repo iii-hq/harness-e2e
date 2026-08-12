@@ -374,6 +374,12 @@ impl ScenarioId {
             Self::TimerWake => timer_wake::materialize(namespace, seed)?,
             Self::ReceivingOperation => receiving_operation::materialize(namespace, seed)?,
             Self::SubagentValidation => subagent_validation::materialize(namespace, seed)?,
+            Self::MultiSubagentValidation => {
+                multi_subagent_validation::materialize(namespace, seed)?
+            }
+            Self::SubagentValidationFailure => {
+                subagent_validation_failure::materialize(namespace, seed)?
+            }
             Self::Coordination1 => {
                 coordination::materialize(coordination::Rung::One, namespace, seed)?
             }
@@ -657,6 +663,35 @@ mod tests {
                     .invariants
                     .iter()
                     .all(|invariant| !invariant.description.trim().is_empty()),
+                "{scenario:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn validated_delegation_cases_publish_success_and_failure_deliverables() {
+        for scenario in [
+            ScenarioId::SubagentValidation,
+            ScenarioId::MultiSubagentValidation,
+            ScenarioId::SubagentValidationFailure,
+        ] {
+            let materialized = scenario.materialize("delegation", 211).unwrap();
+            assert_eq!(
+                materialized.case.complexity.tier,
+                domain::ComplexityTier::L4Coordinated,
+                "{scenario:?}"
+            );
+            assert_eq!(
+                usize::from(materialized.case.complexity.profile.artifact_count),
+                materialized.case.deliverable_contract.artifacts.len(),
+                "{scenario:?}"
+            );
+            assert!(materialized.capture.is_some(), "{scenario:?}");
+            assert!(
+                materialized
+                    .case
+                    .required_capabilities
+                    .contains(&"e2e::subagents".to_string()),
                 "{scenario:?}"
             );
         }

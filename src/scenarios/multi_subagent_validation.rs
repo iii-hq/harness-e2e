@@ -17,9 +17,16 @@ use crate::context::E2eContext;
 use super::assessment::{self, AssessmentSpec};
 use super::common;
 use super::validation_loop::suffix;
-use super::{CleanupFuture, EvaluationFuture, ExecutionPolicy, ScenarioObservation, ScenarioSpec};
+use super::{
+    ArtifactExpectation, CapturedDeliverable, CapturedInvariant, CleanupFuture, ComplexityProfile,
+    DeliverableCaptureFuture, DeliverableContract, EvaluationFuture, ExecutionPolicy,
+    InvariantSpec, MaterializedScenario, ProvenanceEvidence, ScenarioCase, ScenarioObservation,
+    ScenarioSpec,
+};
 
 pub const ID: &str = "multi_subagent_validation";
+const VERSION: u32 = 4;
+const DELIVERABLE_ID: &str = "validated_children_result";
 
 const HOOK_TYPE: &str = "harness::hook::post-turn";
 const THRESHOLD: u64 = 6;
@@ -43,13 +50,59 @@ const FAN_IN_REPORT: AssessmentSpec = AssessmentSpec::hard_gated(
 const ASSESSMENTS: &[AssessmentSpec] = &[CHILDREN_GOAL, ORCHESTRATION_DISCIPLINE, FAN_IN_REPORT];
 
 pub fn scenario(run_id: &str) -> ScenarioSpec {
+    scenario_for_case(run_id)
+}
+
+pub fn materialize(namespace: &str, seed: u64) -> anyhow::Result<MaterializedScenario> {
+    let case = ScenarioCase::new(
+        ID,
+        VERSION,
+        seed,
+        json!({
+            "database": "primary",
+            "writers": WRITERS,
+            "initial_rows_per_attempt": 4,
+            "threshold": THRESHOLD,
+            "expected_rows_per_writer": EXPECTED_ROWS,
+            "minimum_validation_nudges": 1,
+        }),
+        ComplexityProfile {
+            planning_depth: 3,
+            dependency_depth: 3,
+            parallel_branches: 2,
+            external_systems: 2,
+            state_transitions: 6,
+            wake_cycles: 1,
+            validation_loops: 2,
+            artifact_count: 1,
+            coordination_edges: 4,
+            ambiguity_level: 4,
+        },
+        vec![
+            "e2e::control-plane-v1".to_string(),
+            "iii::functions".to_string(),
+            "iii::database".to_string(),
+            "iii::state".to_string(),
+            "iii::triggers".to_string(),
+            "e2e::subagents".to_string(),
+        ],
+        deliverable_contract(),
+    )?;
+    Ok(MaterializedScenario {
+        spec: scenario_for_case(namespace),
+        case,
+        capture: Some(capture),
+    })
+}
+
+fn scenario_for_case(run_id: &str) -> ScenarioSpec {
     let table = table(run_id);
     let scope = scope(run_id);
     let child_1 = child_session(run_id, 1);
     let child_2 = child_session(run_id, 2);
     ScenarioSpec {
         id: ID,
-        version: 3,
+        version: VERSION,
         prompt: format!(
             "You orchestrate TWO validated sub-agents in parallel. You never poll and never judge \
              work yourself: per-child validators gate every child reply, and verdict wakes drive \
@@ -201,6 +254,151 @@ fn evaluate<'a>(
             FAN_IN_REPORT.full_or_zero(reported, "expected the exact report line"),
         ]))
     })
+}
+
+fn capture<'a>(
+    context: &'a E2eContext,
+    observation: &'a ScenarioObservation,
+    run_id: &'a str,
+) -> DeliverableCaptureFuture<'a> {
+    Box::pin(async move {
+        let table = table(run_id);
+        let mut rows = [0_u64; 2];
+        let mut verdicts = [0_u64; 2];
+        let mut child_nudges = [0_usize; 2];
+        for (index, writer) in WRITERS.iter().enumerate() {
+            rows[index] = context
+                .trigger_value(
+                    "database::query",
+                    json!({ "db": "primary", "sql": format!(
+                        "SELECT COUNT(*) AS n FROM {table} WHERE writer = '{writer}'"
+                    ) }),
+                )
+                .await?
+                .pointer("/rows/0/n")
+                .and_then(Value::as_u64)
+                .unwrap_or(0);
+            verdicts[index] = common::state_value(
+                context
+                    .trigger(
+                        "state::get",
+                        json!({ "scope": scope(run_id), "key": format!("verdict-{writer}") }),
+                    )
+                    .await?,
+            )
+            .as_u64()
+            .unwrap_or(0);
+            child_nudges[index] = context
+                .transcript(&child_session(run_id, index + 1))
+                .await
+                .ok()
+                .as_ref()
+                .map(common::validation_nudges)
+                .unwrap_or(0);
+        }
+        let calls = common::function_calls(&observation.transcript);
+        let validator_count = calls
+            .iter()
+            .filter(|call| {
+                call.function_id == "engine::register_trigger"
+                    && call.arguments.get("trigger_type").and_then(Value::as_str) == Some(HOOK_TYPE)
+            })
+            .count();
+        let first_spawn = calls
+            .iter()
+            .position(|call| call.function_id == "harness::spawn");
+        let registrations_before_spawn = first_spawn
+            .map(|spawn| {
+                calls[..spawn]
+                    .iter()
+                    .filter(|call| call.function_id == "engine::register_trigger")
+                    .count()
+            })
+            .unwrap_or(0);
+        let exact_result = rows.iter().all(|count| *count == EXPECTED_ROWS)
+            && verdicts.iter().all(|count| *count > THRESHOLD);
+        let orchestration = validator_count == 2
+            && first_spawn.is_some()
+            && registrations_before_spawn >= 4
+            && child_nudges.iter().all(|nudges| *nudges >= 1);
+        let reported = observation.response.contains("ALL CHILDREN VALIDATED")
+            && observation.response.contains("ORCHESTRATION DONE");
+
+        Ok(vec![CapturedDeliverable {
+            id: DELIVERABLE_ID.to_string(),
+            kind: "validated_children_result".to_string(),
+            content: json!({
+                "writers": WRITERS,
+                "rows": rows,
+                "verdicts": verdicts,
+                "validation_nudges": child_nudges,
+                "report": observation.response,
+            }),
+            invariants: vec![
+                CapturedInvariant {
+                    id: CHILDREN_GOAL.id().to_string(),
+                    passed: exact_result,
+                    reason: format!("rows={rows:?}, verdicts={verdicts:?}"),
+                },
+                CapturedInvariant {
+                    id: ORCHESTRATION_DISCIPLINE.id().to_string(),
+                    passed: orchestration,
+                    reason: format!(
+                        "validators={validator_count}, registrations_before_spawn={registrations_before_spawn}, nudges={child_nudges:?}"
+                    ),
+                },
+                CapturedInvariant {
+                    id: FAN_IN_REPORT.id().to_string(),
+                    passed: reported,
+                    reason: "final response checked for the fan-in completion markers".to_string(),
+                },
+            ],
+            provenance: vec![
+                ProvenanceEvidence {
+                    kind: "database_relation".to_string(),
+                    source_id: format!("primary/{table}"),
+                    relation: "captured_validated_rows".to_string(),
+                },
+                ProvenanceEvidence {
+                    kind: "state_scope".to_string(),
+                    source_id: scope(run_id),
+                    relation: "captured_validator_verdicts".to_string(),
+                },
+            ],
+        }])
+    })
+}
+
+fn deliverable_contract() -> DeliverableContract {
+    DeliverableContract {
+        artifacts: vec![ArtifactExpectation {
+            id: DELIVERABLE_ID.to_string(),
+            kind: "validated_children_result".to_string(),
+            media_type: "application/json".to_string(),
+            schema: json!({
+                "type": "object",
+                "required": ["writers", "rows", "verdicts", "validation_nudges", "report"],
+                "properties": {
+                    "writers": { "type": "array", "minItems": 2, "maxItems": 2 },
+                    "rows": { "type": "array", "minItems": 2, "maxItems": 2 },
+                    "verdicts": { "type": "array", "minItems": 2, "maxItems": 2 },
+                    "validation_nudges": { "type": "array", "minItems": 2, "maxItems": 2 },
+                    "report": { "type": "string" }
+                },
+                "additionalProperties": false
+            }),
+            max_size_bytes: 32_768,
+        }],
+        invariants: ASSESSMENTS
+            .iter()
+            .map(|assessment| InvariantSpec {
+                id: assessment.id().to_string(),
+                description: assessment.description().to_string(),
+            })
+            .collect(),
+        provenance_required: true,
+        capture_before_cleanup: true,
+    }
 }
 
 fn children_goal_points(goal: bool, rows: &[u64; 2]) -> u8 {
