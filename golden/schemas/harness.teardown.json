@@ -1,0 +1,42 @@
+{
+  "function_id": "harness::teardown",
+  "metadata": {
+    "contract": {
+      "capabilities": [
+        "teardown"
+      ],
+      "name": "harness-control-plane",
+      "version": 1
+    },
+    "internal": true
+  },
+  "request_schema": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "properties": {
+      "root_session_id": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "root_session_id"
+    ],
+    "title": "TeardownRequestV1",
+    "type": "object"
+  },
+  "response_schema": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "additionalProperties": false,
+    "properties": {
+      "removed": {
+        "format": "uint64",
+        "minimum": 0.0,
+        "type": "integer"
+      }
+    },
+    "required": [
+      "removed"
+    ],
+    "title": "TeardownResponseV1",
+    "type": "object"
+  }
+}

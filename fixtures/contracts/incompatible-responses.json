@@ -1,0 +1,17 @@
+{
+  "send": {
+    "session_id": "e2e_case",
+    "turn_id": "turn_1"
+  },
+  "metrics": {
+    "root_session_id": "e2e_case",
+    "complete": true,
+    "totals": {
+      "sessions": 1,
+      "turns": "one",
+      "function_calls": 0,
+      "function_call_errors": 0
+    },
+    "by_session": []
+  }
+}

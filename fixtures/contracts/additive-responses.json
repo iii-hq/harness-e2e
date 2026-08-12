@@ -1,0 +1,33 @@
+{
+  "send": {
+    "session_id": "e2e_case",
+    "turn_id": "turn_1",
+    "accepted": true,
+    "future_delivery_mode": "immediate"
+  },
+  "metrics": {
+    "root_session_id": "e2e_case",
+    "complete": true,
+    "totals": {
+      "sessions": 1,
+      "turns": 1,
+      "function_calls": 0,
+      "function_call_errors": 0,
+      "future_token_class": 12
+    },
+    "by_session": [
+      {
+        "session_id": "e2e_case",
+        "parent_session_id": null,
+        "depth": 0,
+        "turns": 1,
+        "function_calls": 0,
+        "function_call_errors": 0,
+        "future_lifecycle_state": "settled"
+      }
+    ],
+    "future_aggregate": {
+      "reused_work": 0
+    }
+  }
+}

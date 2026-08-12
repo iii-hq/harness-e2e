@@ -1,0 +1,230 @@
+name: Harness E2E shadow
+
+on:
+  workflow_call:
+    inputs:
+      source_repository:
+        type: string
+        required: true
+      source_revision:
+        type: string
+        required: true
+      source_run_id:
+        type: string
+        required: true
+      primary_results_run_id:
+        type: string
+        required: true
+      subject_artifact_name:
+        type: string
+        required: true
+      primary_results_artifact_name:
+        type: string
+        required: true
+      execute_live:
+        type: boolean
+        default: false
+      lane:
+        type: string
+        default: shadow
+    secrets:
+      cross_repository_token:
+        required: true
+  workflow_dispatch:
+    inputs:
+      source_repository:
+        description: owner/repository containing the source run
+        required: true
+        default: iii-hq/workers
+      source_revision:
+        description: Full immutable source SHA
+        required: true
+      source_run_id:
+        description: Source Actions run id
+        required: true
+      primary_results_run_id:
+        description: Source Actions run id containing the internal results
+        required: true
+      subject_artifact_name:
+        required: true
+        default: harness-e2e-subject
+      primary_results_artifact_name:
+        required: true
+        default: harness-e2e-primary-results
+      execute_live:
+        description: Run only after trusted-revision authorization
+        type: boolean
+        default: false
+      lane:
+        required: true
+        default: shadow
+
+permissions:
+  contents: read
+
+jobs:
+  verify-input:
+    if: endsWith(github.workflow_ref, '@refs/heads/main')
+    runs-on: ubuntu-latest
+    outputs:
+      trusted_revision: ${{ steps.trust.outputs.trusted_revision }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+      - name: Validate immutable identities
+        env:
+          SOURCE_REPOSITORY: ${{ inputs.source_repository }}
+          SOURCE_REVISION: ${{ inputs.source_revision }}
+        run: |
+          [[ "$SOURCE_REPOSITORY" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]]
+          [[ "$SOURCE_REVISION" =~ ^[0-9a-f]{40}$ ]]
+      - name: Download subject artifact without executing it
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ inputs.subject_artifact_name }}
+          path: incoming/subject
+          repository: ${{ inputs.source_repository }}
+          run-id: ${{ inputs.source_run_id }}
+          github-token: ${{ secrets.cross_repository_token }}
+      - name: Verify and safely extract subject artifact
+        run: |
+          python3 scripts/verify_subject_artifact.py \
+            --manifest incoming/subject/subject-manifest.json \
+            --archive incoming/subject/subject.tar \
+            --extract-dir verified/subject \
+            --summary verified/verification.json
+          cp incoming/subject/subject-manifest.json verified/subject-manifest.json
+          test "$(jq -r .repository incoming/subject/subject-manifest.json)" = '${{ inputs.source_repository }}'
+          test "$(jq -r .revision incoming/subject/subject-manifest.json)" = '${{ inputs.source_revision }}'
+      - name: Authorize only revisions reachable from the default branch
+        id: trust
+        env:
+          GH_TOKEN: ${{ secrets.cross_repository_token }}
+          SOURCE_REPOSITORY: ${{ inputs.source_repository }}
+          SOURCE_REVISION: ${{ inputs.source_revision }}
+        run: |
+          default_branch=$(gh api "repos/$SOURCE_REPOSITORY" --jq .default_branch)
+          default_sha=$(gh api "repos/$SOURCE_REPOSITORY/branches/$default_branch" --jq .commit.sha)
+          status=$(gh api "repos/$SOURCE_REPOSITORY/compare/$SOURCE_REVISION...$default_sha" --jq .status)
+          if [[ "$status" == ahead || "$status" == identical ]]; then
+            echo 'trusted_revision=true' >> "$GITHUB_OUTPUT"
+          else
+            echo 'trusted_revision=false' >> "$GITHUB_OUTPUT"
+          fi
+      - uses: actions/upload-artifact@v4
+        with:
+          name: verified-subject-${{ inputs.source_revision }}
+          path: verified
+          retention-days: 1
+          if-no-files-found: error
+
+  untrusted-classification:
+    needs: verify-input
+    if: inputs.execute_live && (needs.verify-input.outputs.trusted_revision != 'true' || !endsWith(github.workflow_ref, '@refs/heads/main'))
+    runs-on: ubuntu-latest
+    steps:
+      - name: Classify without exposing live credentials
+        run: |
+          mkdir -p result
+          jq -n \
+            --arg repository '${{ inputs.source_repository }}' \
+            --arg revision '${{ inputs.source_revision }}' \
+            '{schema_version:1,status:"unsupported",phase:"authorization",repository:$repository,revision:$revision,reason:"live shadow is restricted to revisions reachable from the default branch"}' \
+            > result/shadow-classification.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: harness-e2e-shadow-classification
+          path: result
+
+  live-shadow:
+    needs: verify-input
+    if: inputs.execute_live && needs.verify-input.outputs.trusted_revision == 'true' && endsWith(github.workflow_ref, '@refs/heads/main')
+    runs-on: ubuntu-latest
+    environment: harness-e2e-trusted
+    outputs:
+      equivalent: ${{ steps.parity.outputs.equivalent }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo build --locked --release --bin e2e-worker
+      - uses: actions/download-artifact@v4
+        with:
+          name: verified-subject-${{ inputs.source_revision }}
+          path: verified
+      - uses: actions/download-artifact@v4
+        with:
+          name: ${{ inputs.primary_results_artifact_name }}
+          path: primary
+          repository: ${{ inputs.source_repository }}
+          run-id: ${{ inputs.primary_results_run_id }}
+          github-token: ${{ secrets.cross_repository_token }}
+      - name: Require an environment-owned launcher
+        run: |
+          test -x /opt/iii-harness-e2e/run-trusted-shadow
+          /opt/iii-harness-e2e/run-trusted-shadow \
+            --subject-manifest verified/subject-manifest.json \
+            --subject-root verified/subject \
+            --e2e-bin target/release/e2e-worker \
+            --lane '${{ inputs.lane }}' \
+            --output shadow
+      - name: Compare stable semantics
+        id: parity
+        run: |
+          python3 scripts/compare_shadow_results.py \
+            --primary primary/results-v2.json \
+            --shadow shadow/results-v2.json \
+            --output shadow/shadow-parity.json
+          echo "equivalent=$(jq -r .equivalent shadow/shadow-parity.json)" >> "$GITHUB_OUTPUT"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: harness-e2e-shadow-${{ inputs.source_revision }}
+          path: shadow
+          retention-days: 30
+
+  publish-check:
+    needs: [verify-input, untrusted-classification, live-shadow]
+    if: always() && endsWith(github.workflow_ref, '@refs/heads/main')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Publish an advisory check on the source revision
+        env:
+          GH_TOKEN: ${{ secrets.cross_repository_token }}
+          SOURCE_REPOSITORY: ${{ inputs.source_repository }}
+          SOURCE_REVISION: ${{ inputs.source_revision }}
+          VERIFY_RESULT: ${{ needs.verify-input.result }}
+          LIVE_RESULT: ${{ needs.live-shadow.result }}
+          EQUIVALENT: ${{ needs.live-shadow.outputs.equivalent }}
+          EXECUTE_LIVE: ${{ inputs.execute_live }}
+        run: |
+          conclusion=neutral
+          title='Shadow input verified'
+          summary='The subject artifact passed immutable contract validation. Live shadow execution was not requested.'
+          if [[ "$VERIFY_RESULT" != success ]]; then
+            title='Shadow infrastructure failure'
+            summary='Subject artifact download or verification failed. No scenario result was classified.'
+          elif [[ "$EXECUTE_LIVE" == true && "$LIVE_RESULT" == success && "$EQUIVALENT" == true ]]; then
+            conclusion=success
+            title='Shadow parity matched'
+            summary='The external runner produced equivalent contract, deliverable, structural, and outcome evidence.'
+          elif [[ "$EXECUTE_LIVE" == true && "$LIVE_RESULT" == success ]]; then
+            title='Shadow parity differs'
+            summary='The advisory shadow result differs. Inspect the retained shadow-parity artifact and seeds.'
+          elif [[ "$EXECUTE_LIVE" == true ]]; then
+            title='Shadow execution not eligible or unavailable'
+            summary='The trusted-revision or protected E2E ref gate prevented execution, or shadow infrastructure failed. No product regression is inferred.'
+          fi
+          details_url="https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          jq -n \
+            --arg name 'Harness E2E shadow' \
+            --arg head_sha "$SOURCE_REVISION" \
+            --arg conclusion "$conclusion" \
+            --arg title "$title" \
+            --arg summary "$summary" \
+            --arg details_url "$details_url" \
+            '{name:$name,head_sha:$head_sha,status:"completed",conclusion:$conclusion,details_url:$details_url,output:{title:$title,summary:$summary}}' \
+            > check.json
+          gh api --method POST "repos/$SOURCE_REPOSITORY/check-runs" --input check.json

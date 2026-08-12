@@ -1,0 +1,54 @@
+{
+  "send": {
+    "session_id": "e2e_case",
+    "turn_id": "turn_1",
+    "accepted": true
+  },
+  "status": {
+    "session_id": "e2e_case",
+    "turn_id": "turn_1",
+    "status": "completed",
+    "step": 1,
+    "turn_count": 1,
+    "max_turns": 8,
+    "pending_function_calls": [],
+    "children": [],
+    "queued": [],
+    "expects_wake": false
+  },
+  "session_tree": {
+    "root_session_id": "e2e_case",
+    "sessions": [
+      {
+        "session_id": "e2e_case"
+      }
+    ],
+    "complete": true
+  },
+  "metrics": {
+    "root_session_id": "e2e_case",
+    "complete": true,
+    "totals": {
+      "sessions": 1,
+      "turns": 1,
+      "function_calls": 0,
+      "function_call_errors": 0
+    },
+    "by_session": [
+      {
+        "session_id": "e2e_case",
+        "parent_session_id": null,
+        "depth": 0,
+        "turns": 1,
+        "function_calls": 0,
+        "function_call_errors": 0
+      }
+    ]
+  },
+  "stop": {
+    "stopping": true
+  },
+  "teardown": {
+    "removed": 0
+  }
+}

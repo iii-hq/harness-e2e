@@ -1,0 +1,10 @@
+/target/
+__pycache__/
+*.pyc
+/.cache/
+/.env
+artifacts/
+local-runs/
+dashboard/data.js
+dashboard/executions.js
+dashboard/runs/

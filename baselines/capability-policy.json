@@ -1,0 +1,11 @@
+{
+  "schema_version": 1,
+  "policy_version": 1,
+  "minimum_sample_size": 5,
+  "tail_minimum_sample_size": 20,
+  "minimum_deliverable_success_rate": 0.9,
+  "minimum_structural_integrity_rate": 0.95,
+  "maximum_technical_failure_rate": 0.02,
+  "maximum_p95_cost_usd": null,
+  "maximum_p95_wall_time_ms": null
+}
