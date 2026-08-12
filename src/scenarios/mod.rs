@@ -367,6 +367,10 @@ impl ScenarioId {
     pub fn materialize(self, namespace: &str, seed: u64) -> Result<MaterializedScenario> {
         let materialized = match self {
             Self::PersistentState => persistent_state::materialize(namespace, seed)?,
+            Self::ReactiveAutomation => reactive_automation::materialize(namespace, seed)?,
+            Self::MechanicalReaction => mechanical_reaction::materialize(namespace, seed)?,
+            Self::TimerWake => timer_wake::materialize(namespace, seed)?,
+            Self::ReceivingOperation => receiving_operation::materialize(namespace, seed)?,
             Self::SubagentValidation => subagent_validation::materialize(namespace, seed)?,
             Self::Coordination1 => {
                 coordination::materialize(coordination::Rung::One, namespace, seed)?
@@ -600,6 +604,35 @@ mod tests {
         );
         assert!(state.case.deliverable_contract.capture_before_cleanup);
         assert!(coordination.case.deliverable_contract.provenance_required);
+    }
+
+    #[test]
+    fn automation_and_state_scenarios_publish_reproducible_deliverable_cases() {
+        for scenario in [
+            ScenarioId::ReactiveAutomation,
+            ScenarioId::MechanicalReaction,
+            ScenarioId::TimerWake,
+            ScenarioId::ReceivingOperation,
+        ] {
+            let first = scenario.materialize("attempt-a", 91).unwrap();
+            let retry = scenario.materialize("attempt-b", 91).unwrap();
+            assert_eq!(first.case.case_id, retry.case.case_id, "{scenario:?}");
+            assert_eq!(first.case.inputs, retry.case.inputs, "{scenario:?}");
+            assert_eq!(
+                usize::from(first.case.complexity.profile.artifact_count),
+                first.case.deliverable_contract.artifacts.len(),
+                "{scenario:?}"
+            );
+            assert!(first.capture.is_some(), "{scenario:?}");
+            assert!(
+                first.case.deliverable_contract.capture_before_cleanup,
+                "{scenario:?}"
+            );
+            assert!(
+                first.case.deliverable_contract.provenance_required,
+                "{scenario:?}"
+            );
+        }
     }
 
     #[test]

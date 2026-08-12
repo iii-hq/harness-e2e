@@ -7,11 +7,16 @@ use crate::context::E2eContext;
 
 use super::assessment::{self, AssessmentSpec};
 use super::{
-    common, CleanupFuture, EvaluationFuture, ExecutionPolicy, ObjectiveEvaluation,
-    ScenarioObservation, ScenarioSpec,
+    common, ArtifactExpectation, CapturedDeliverable, CapturedInvariant, CleanupFuture,
+    ComplexityProfile, DeliverableCaptureFuture, DeliverableContract, EvaluationFuture,
+    ExecutionPolicy, InvariantSpec, MaterializedScenario, ObjectiveEvaluation, ProvenanceEvidence,
+    ScenarioCase, ScenarioObservation, ScenarioSpec,
 };
 
 pub const ID: &str = "receiving_operation";
+const VERSION: u32 = 5;
+const DATABASE_DELIVERABLE_ID: &str = "receiving_database";
+const COORDINATION_DELIVERABLE_ID: &str = "receiving_coordination";
 
 const DATABASE: &str = "primary";
 const SUPPLIERS: [&str; 3] = ["acme", "globex", "initech"];
@@ -62,10 +67,54 @@ const ASSESSMENTS: &[AssessmentSpec] = &[
 ];
 
 pub fn scenario(run_id: &str) -> ScenarioSpec {
+    scenario_for_case(run_id)
+}
+
+pub fn materialize(namespace: &str, seed: u64) -> anyhow::Result<MaterializedScenario> {
+    let case = ScenarioCase::new(
+        ID,
+        VERSION,
+        seed,
+        json!({
+            "database": DATABASE,
+            "suppliers": SUPPLIERS,
+            "expected_shipments": expected_shipment_values(),
+            "expected_ledger": expected_ledger_values(),
+            "expected_completion_rows": 1,
+        }),
+        ComplexityProfile {
+            planning_depth: 3,
+            dependency_depth: 2,
+            parallel_branches: 3,
+            external_systems: 1,
+            state_transitions: 5,
+            wake_cycles: 1,
+            artifact_count: 2,
+            coordination_edges: 3,
+            ambiguity_level: 3,
+            ..ComplexityProfile::default()
+        },
+        vec![
+            "e2e::control-plane-v1".to_string(),
+            "iii::functions".to_string(),
+            "iii::database".to_string(),
+            "iii::triggers".to_string(),
+            "e2e::subagents".to_string(),
+        ],
+        deliverable_contract(),
+    )?;
+    Ok(MaterializedScenario {
+        spec: scenario_for_case(namespace),
+        case,
+        capture: Some(capture),
+    })
+}
+
+fn scenario_for_case(run_id: &str) -> ScenarioSpec {
     let names = Names::new(run_id);
     ScenarioSpec {
         id: ID,
-        version: 4,
+        version: VERSION,
         prompt: prompt(&names),
         filesystem_root: None,
         execution: ExecutionPolicy {
@@ -317,6 +366,240 @@ fn evaluate<'a>(
             ),
         ]))
     })
+}
+
+fn capture<'a>(
+    context: &'a E2eContext,
+    observation: &'a ScenarioObservation,
+    run_id: &'a str,
+) -> DeliverableCaptureFuture<'a> {
+    Box::pin(async move {
+        let names = Names::new(run_id);
+        let database_available = context.function_exists("database::query").await?
+            && available_databases(context).await?.contains(DATABASE);
+        let objects = if database_available {
+            database_objects(context, &names).await?
+        } else {
+            BTreeMap::new()
+        };
+        let shipments = if objects.contains_key(&names.shipments) {
+            shipment_rows(context, &names.shipments).await?
+        } else {
+            BTreeMap::new()
+        };
+        let ledger = if objects.contains_key(&names.ledger) {
+            ledger_rows(context, &names.ledger).await?
+        } else {
+            BTreeMap::new()
+        };
+        let couriers = if objects.contains_key(&names.couriers) {
+            courier_rows(context, &names.couriers).await?
+        } else {
+            BTreeMap::new()
+        };
+        let completion_rows = if objects.contains_key(&names.completion) {
+            count_rows(context, &names.completion).await?
+        } else {
+            0
+        };
+        let shipments_match = numeric_map_matches(&shipments, &expected_shipments());
+        let ledger_matches_expected = ledger_matches(&ledger, &expected_ledger());
+        let ledger_matches_source = ledger_from_shipments(&shipments)
+            .is_some_and(|direct| ledger_matches(&ledger, &direct));
+        let couriers_done = SUPPLIERS.iter().all(|supplier| {
+            couriers.get(*supplier).is_some_and(|status| {
+                matches!(
+                    status.to_ascii_lowercase().as_str(),
+                    "done" | "finished" | "complete" | "completed"
+                )
+            })
+        }) && couriers.len() == SUPPLIERS.len();
+
+        let sessions_in_tree = observation
+            .metrics
+            .by_session
+            .iter()
+            .map(|session| session.session_id.clone())
+            .collect::<BTreeSet<_>>();
+        let couriers_in_tree = names.courier_sessions.iter().all(|expected| {
+            observation.metrics.by_session.iter().any(|session| {
+                session.session_id == *expected
+                    && session.parent_session_id.as_deref() == Some(names.root_session.as_str())
+                    && session.depth == 1
+            })
+        }) && observation.metrics.by_session.len() == SUPPLIERS.len() + 1;
+        let trigger_records = common::trigger_fired_records(&observation.transcript);
+        let completion_wakes = trigger_records
+            .iter()
+            .filter(|record| {
+                matches!(
+                    record.get("target").and_then(Value::as_str),
+                    Some("harness::send" | "notify")
+                )
+            })
+            .count();
+        let completion_notices = notification_entries(&observation.transcript)
+            .into_iter()
+            .filter(|(_, text)| text.contains(&names.completion))
+            .count();
+
+        Ok(vec![
+            CapturedDeliverable {
+                id: DATABASE_DELIVERABLE_ID.to_string(),
+                kind: "database_snapshot".to_string(),
+                content: json!({
+                    "shipments": shipment_values(&shipments),
+                    "ledger": ledger_values(&ledger),
+                    "couriers": courier_values(&couriers),
+                    "completion_rows": completion_rows,
+                }),
+                invariants: vec![
+                    CapturedInvariant {
+                        id: "shipments_exact".to_string(),
+                        passed: shipments_match,
+                        reason: format!("captured {} shipment row(s)", shipments.len()),
+                    },
+                    CapturedInvariant {
+                        id: "ledger_exact".to_string(),
+                        passed: ledger_matches_expected && ledger_matches_source,
+                        reason: format!(
+                            "expected={ledger_matches_expected}, source={ledger_matches_source}"
+                        ),
+                    },
+                    CapturedInvariant {
+                        id: "couriers_complete".to_string(),
+                        passed: couriers_done,
+                        reason: format!("captured {} courier row(s)", couriers.len()),
+                    },
+                    CapturedInvariant {
+                        id: "single_completion".to_string(),
+                        passed: completion_rows == 1,
+                        reason: format!("captured {completion_rows} completion row(s)"),
+                    },
+                ],
+                provenance: [
+                    names.shipments.as_str(),
+                    names.ledger.as_str(),
+                    names.couriers.as_str(),
+                    names.completion.as_str(),
+                ]
+                .into_iter()
+                .map(|relation| ProvenanceEvidence {
+                    kind: "database_relation".to_string(),
+                    source_id: format!("{DATABASE}/{relation}"),
+                    relation: "captured_before_cleanup".to_string(),
+                })
+                .collect(),
+            },
+            CapturedDeliverable {
+                id: COORDINATION_DELIVERABLE_ID.to_string(),
+                kind: "session_tree_summary".to_string(),
+                content: json!({
+                    "root_session_id": names.root_session.clone(),
+                    "courier_sessions": names.courier_sessions.clone(),
+                    "sessions_in_tree": sessions_in_tree,
+                    "completion_wakes": completion_wakes,
+                    "completion_notices": completion_notices,
+                }),
+                invariants: vec![
+                    CapturedInvariant {
+                        id: "courier_tree_complete".to_string(),
+                        passed: couriers_in_tree,
+                        reason: format!(
+                            "expected {} courier children; observed {} total sessions",
+                            SUPPLIERS.len(),
+                            observation.metrics.by_session.len()
+                        ),
+                    },
+                    CapturedInvariant {
+                        id: "single_database_wake".to_string(),
+                        passed: completion_wakes == 1 && completion_notices == 1,
+                        reason: format!(
+                            "completion_wakes={completion_wakes}, completion_notices={completion_notices}"
+                        ),
+                    },
+                ],
+                provenance: vec![ProvenanceEvidence {
+                    kind: "session_tree".to_string(),
+                    source_id: names.root_session,
+                    relation: "coordinated_couriers".to_string(),
+                }],
+            },
+        ])
+    })
+}
+
+fn deliverable_contract() -> DeliverableContract {
+    DeliverableContract {
+        artifacts: vec![
+            ArtifactExpectation {
+                id: DATABASE_DELIVERABLE_ID.to_string(),
+                kind: "database_snapshot".to_string(),
+                media_type: "application/json".to_string(),
+                schema: json!({
+                    "type": "object",
+                    "required": ["shipments", "ledger", "couriers", "completion_rows"],
+                    "properties": {
+                        "shipments": { "type": "array" },
+                        "ledger": { "type": "array" },
+                        "couriers": { "type": "array" },
+                        "completion_rows": { "type": "integer", "minimum": 0 }
+                    },
+                    "additionalProperties": false
+                }),
+                max_size_bytes: 65_536,
+            },
+            ArtifactExpectation {
+                id: COORDINATION_DELIVERABLE_ID.to_string(),
+                kind: "session_tree_summary".to_string(),
+                media_type: "application/json".to_string(),
+                schema: json!({
+                    "type": "object",
+                    "required": ["root_session_id", "courier_sessions", "sessions_in_tree", "completion_wakes", "completion_notices"],
+                    "properties": {
+                        "root_session_id": { "type": "string", "minLength": 1 },
+                        "courier_sessions": { "type": "array", "minItems": 3, "maxItems": 3 },
+                        "sessions_in_tree": { "type": "array", "minItems": 1 },
+                        "completion_wakes": { "type": "integer", "minimum": 0 },
+                        "completion_notices": { "type": "integer", "minimum": 0 }
+                    },
+                    "additionalProperties": false
+                }),
+                max_size_bytes: 32_768,
+            },
+        ],
+        invariants: vec![
+            InvariantSpec {
+                id: "shipments_exact".to_string(),
+                description: "All corrected supplier shipments match the materialized case."
+                    .to_string(),
+            },
+            InvariantSpec {
+                id: "ledger_exact".to_string(),
+                description: "The live ledger matches both expected totals and source rows."
+                    .to_string(),
+            },
+            InvariantSpec {
+                id: "couriers_complete".to_string(),
+                description: "Every supplier courier records a terminal status.".to_string(),
+            },
+            InvariantSpec {
+                id: "single_completion".to_string(),
+                description: "The database contains exactly one completion signal.".to_string(),
+            },
+            InvariantSpec {
+                id: "courier_tree_complete".to_string(),
+                description: "Exactly three direct courier children appear in the session tree."
+                    .to_string(),
+            },
+            InvariantSpec {
+                id: "single_database_wake".to_string(),
+                description: "One database notification wakes the root exactly once.".to_string(),
+            },
+        ],
+        provenance_required: true,
+        capture_before_cleanup: true,
+    }
 }
 
 fn missing_database() -> ObjectiveEvaluation {
@@ -867,12 +1150,53 @@ fn expected_shipments() -> BTreeMap<(String, i64), f64> {
     .collect()
 }
 
+fn shipment_values(shipments: &BTreeMap<(String, i64), f64>) -> Vec<Value> {
+    shipments
+        .iter()
+        .map(|((supplier, sequence), value)| {
+            json!({
+                "supplier": supplier,
+                "seq": sequence,
+                "value": value,
+            })
+        })
+        .collect()
+}
+
+fn expected_shipment_values() -> Vec<Value> {
+    shipment_values(&expected_shipments())
+}
+
 fn expected_ledger() -> BTreeMap<String, (i64, f64)> {
     BTreeMap::from([
         ("acme".to_string(), (3, 19.0)),
         ("globex".to_string(), (3, 15.0)),
         ("initech".to_string(), (3, 16.0)),
     ])
+}
+
+fn ledger_values(ledger: &BTreeMap<String, (i64, f64)>) -> Vec<Value> {
+    ledger
+        .iter()
+        .map(|(supplier, (shipment_count, total_value))| {
+            json!({
+                "supplier": supplier,
+                "shipment_count": shipment_count,
+                "total_value": total_value,
+            })
+        })
+        .collect()
+}
+
+fn expected_ledger_values() -> Vec<Value> {
+    ledger_values(&expected_ledger())
+}
+
+fn courier_values(couriers: &BTreeMap<String, String>) -> Vec<Value> {
+    couriers
+        .iter()
+        .map(|(supplier, status)| json!({ "supplier": supplier, "status": status }))
+        .collect()
 }
 
 fn ledger_from_shipments(

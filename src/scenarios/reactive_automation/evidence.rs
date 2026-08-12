@@ -1,10 +1,11 @@
 use std::collections::{BTreeMap, BTreeSet};
 
+use serde::Serialize;
 use serde_json::Value;
 
 pub(super) type Totals = BTreeMap<String, (i64, f64)>;
 
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Serialize)]
 pub(super) struct Evidence {
     pub(super) existing_tables: BTreeSet<String>,
     pub(super) writer_spawns: WriterSpawnEvidence,
@@ -25,7 +26,7 @@ pub(super) struct Evidence {
     pub(super) active_run_triggers: usize,
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Serialize)]
 pub(super) struct WriterSpawnEvidence {
     pub(super) call_count: usize,
     pub(super) session_ids: BTreeSet<String>,
@@ -34,7 +35,7 @@ pub(super) struct WriterSpawnEvidence {
     pub(super) sessions_in_tree: BTreeSet<String>,
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Serialize)]
 pub(super) struct WatchEvidence {
     pub(super) first_writer_spawn: Option<usize>,
     pub(super) trigger_catalog: Option<usize>,
@@ -43,7 +44,7 @@ pub(super) struct WatchEvidence {
     pub(super) completion_wake: Option<usize>,
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Serialize)]
 pub(super) struct OrderSummary {
     pub(super) rows_written: Option<i64>,
     pub(super) distinct_ids: Option<i64>,
@@ -52,13 +53,13 @@ pub(super) struct OrderSummary {
     pub(super) missing_created_at: Option<i64>,
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Serialize)]
 pub(super) struct WriterStatus {
     pub(super) writer: Option<String>,
     pub(super) status: Option<String>,
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Serialize)]
 pub(super) struct FinalReport {
     pub(super) run_id: Option<String>,
     pub(super) watch_mechanism: Option<String>,

@@ -6,12 +6,20 @@ mod prompt;
 mod queries;
 
 use crate::context::E2eContext;
+use serde_json::json;
 
 use super::assessment::{self, AssessmentSpec};
-use super::{EvaluationFuture, ExecutionPolicy, ScenarioObservation, ScenarioSpec};
+use super::{
+    ArtifactExpectation, CapturedDeliverable, CapturedInvariant, ComplexityProfile,
+    DeliverableCaptureFuture, DeliverableContract, EvaluationFuture, ExecutionPolicy,
+    InvariantSpec, MaterializedScenario, ProvenanceEvidence, ScenarioCase, ScenarioObservation,
+    ScenarioSpec,
+};
 use names::ScenarioNames;
 
 pub const ID: &str = "reactive_automation";
+const VERSION: u32 = 5;
+const DELIVERABLE_ID: &str = "reactive_run_snapshot";
 pub(super) const EXPECTED_WRITERS: usize = 3;
 pub(super) const ORDERS_PER_WRITER: i64 = 5;
 pub(super) const EXPECTED_ORDERS: i64 = EXPECTED_WRITERS as i64 * ORDERS_PER_WRITER;
@@ -51,10 +59,55 @@ const ASSESSMENTS: &[AssessmentSpec] = &[
 ];
 
 pub fn scenario(run_id: &str) -> ScenarioSpec {
+    scenario_for_case(run_id)
+}
+
+pub fn materialize(namespace: &str, seed: u64) -> anyhow::Result<MaterializedScenario> {
+    let case = ScenarioCase::new(
+        ID,
+        VERSION,
+        seed,
+        json!({
+            "database": "primary",
+            "writer_count": EXPECTED_WRITERS,
+            "orders_per_writer": ORDERS_PER_WRITER,
+            "expected_orders": EXPECTED_ORDERS,
+            "aggregation": "per_writer_count_and_sum",
+        }),
+        ComplexityProfile {
+            planning_depth: 3,
+            dependency_depth: 3,
+            parallel_branches: EXPECTED_WRITERS as u8,
+            external_systems: 2,
+            state_transitions: 6,
+            wake_cycles: 2,
+            artifact_count: 1,
+            coordination_edges: 4,
+            ambiguity_level: 4,
+            ..ComplexityProfile::default()
+        },
+        vec![
+            "e2e::control-plane-v1".to_string(),
+            "iii::functions".to_string(),
+            "iii::database".to_string(),
+            "iii::state".to_string(),
+            "iii::triggers".to_string(),
+            "e2e::subagents".to_string(),
+        ],
+        deliverable_contract(),
+    )?;
+    Ok(MaterializedScenario {
+        spec: scenario_for_case(namespace),
+        case,
+        capture: Some(capture),
+    })
+}
+
+fn scenario_for_case(run_id: &str) -> ScenarioSpec {
     let names = ScenarioNames::new(run_id);
     ScenarioSpec {
         id: ID,
-        version: 4,
+        version: VERSION,
         prompt: prompt::build(&names, STUCK_WATCHDOG_SECONDS),
         filesystem_root: None,
         execution: ExecutionPolicy {
@@ -85,4 +138,79 @@ fn evaluate<'a>(
         let evidence = queries::collect(context, observation, &names).await?;
         Ok(evaluate::score(&evidence, &names))
     })
+}
+
+fn capture<'a>(
+    context: &'a E2eContext,
+    observation: &'a ScenarioObservation,
+    run_id: &'a str,
+) -> DeliverableCaptureFuture<'a> {
+    Box::pin(async move {
+        let names = ScenarioNames::new(run_id);
+        let evidence = if context.function_exists("database::query").await? {
+            queries::collect(context, observation, &names).await?
+        } else {
+            evidence::Evidence::default()
+        };
+        let objective = evaluate::score(&evidence, &names);
+        let invariants = objective
+            .hard_gates
+            .into_iter()
+            .map(|gate| CapturedInvariant {
+                id: gate.id,
+                passed: gate.passed,
+                reason: gate.reason,
+            })
+            .collect();
+        let content = serde_json::to_value(&evidence)?;
+        Ok(vec![CapturedDeliverable {
+            id: DELIVERABLE_ID.to_string(),
+            kind: "database_run_snapshot".to_string(),
+            content,
+            invariants,
+            provenance: vec![
+                ProvenanceEvidence {
+                    kind: "database_relation".to_string(),
+                    source_id: format!("primary/{}", names.report),
+                    relation: "captured_final_report".to_string(),
+                },
+                ProvenanceEvidence {
+                    kind: "session_tree".to_string(),
+                    source_id: observation.metrics.root_session_id.clone(),
+                    relation: "captured_parallel_topology".to_string(),
+                },
+            ],
+        }])
+    })
+}
+
+fn deliverable_contract() -> DeliverableContract {
+    DeliverableContract {
+        artifacts: vec![ArtifactExpectation {
+            id: DELIVERABLE_ID.to_string(),
+            kind: "database_run_snapshot".to_string(),
+            media_type: "application/json".to_string(),
+            schema: json!({
+                "type": "object",
+                "required": [
+                    "existing_tables", "writer_spawns", "watch", "order_summary",
+                    "writers", "direct_totals", "stored_totals", "reports",
+                    "aggregate_deliveries", "completion_wake_delivered",
+                    "report_wake_delivered", "finalizer_spawn_count",
+                    "finalizer_in_tree", "active_run_triggers"
+                ],
+                "additionalProperties": true
+            }),
+            max_size_bytes: 131_072,
+        }],
+        invariants: ASSESSMENTS
+            .iter()
+            .map(|assessment| InvariantSpec {
+                id: assessment.id().to_string(),
+                description: assessment.description().to_string(),
+            })
+            .collect(),
+        provenance_required: true,
+        capture_before_cleanup: true,
+    }
 }

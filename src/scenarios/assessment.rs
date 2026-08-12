@@ -67,6 +67,14 @@ impl AssessmentSpec {
         self.weight
     }
 
+    pub(super) const fn id(self) -> &'static str {
+        self.id
+    }
+
+    pub(super) const fn description(self) -> &'static str {
+        self.description
+    }
+
     pub(super) fn full_or_zero(
         self,
         satisfied: bool,

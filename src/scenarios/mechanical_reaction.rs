@@ -4,10 +4,15 @@ use crate::context::E2eContext;
 
 use super::assessment::{self, AssessmentSpec};
 use super::{
-    common, CleanupFuture, EvaluationFuture, ExecutionPolicy, ScenarioObservation, ScenarioSpec,
+    common, ArtifactExpectation, CapturedDeliverable, CapturedInvariant, CleanupFuture,
+    ComplexityProfile, DeliverableCaptureFuture, DeliverableContract, EvaluationFuture,
+    ExecutionPolicy, InvariantSpec, MaterializedScenario, ProvenanceEvidence, ScenarioCase,
+    ScenarioObservation, ScenarioSpec,
 };
 
 pub const ID: &str = "mechanical_reaction";
+const VERSION: u32 = 4;
+const DELIVERABLE_ID: &str = "mechanical_mirror";
 
 const SOURCE_KEY: &str = "source";
 const MIRROR_KEY: &str = "mirror";
@@ -39,11 +44,51 @@ const ASSESSMENTS: &[AssessmentSpec] = &[
 ];
 
 pub fn scenario(run_id: &str) -> ScenarioSpec {
+    scenario_for_case(run_id, super::stable_seed(ID))
+}
+
+pub fn materialize(namespace: &str, seed: u64) -> anyhow::Result<MaterializedScenario> {
+    let source = source_value(seed);
+    let case = ScenarioCase::new(
+        ID,
+        VERSION,
+        seed,
+        json!({
+            "source_key": SOURCE_KEY,
+            "mirror_key": MIRROR_KEY,
+            "source": source,
+            "event_into": "/value",
+        }),
+        ComplexityProfile {
+            planning_depth: 2,
+            dependency_depth: 1,
+            external_systems: 1,
+            state_transitions: 3,
+            wake_cycles: 1,
+            artifact_count: 1,
+            ..ComplexityProfile::default()
+        },
+        vec![
+            "e2e::control-plane-v1".to_string(),
+            "iii::functions".to_string(),
+            "iii::state".to_string(),
+            "iii::triggers".to_string(),
+        ],
+        deliverable_contract(),
+    )?;
+    Ok(MaterializedScenario {
+        spec: scenario_for_case(namespace, seed),
+        case,
+        capture: Some(capture),
+    })
+}
+
+fn scenario_for_case(run_id: &str, seed: u64) -> ScenarioSpec {
     let names = Names::new(run_id);
-    let source = source_value(run_id);
+    let source = source_value(seed);
     ScenarioSpec {
         id: ID,
-        version: 3,
+        version: VERSION,
         prompt: format!(
             r#"Test a zero-token mechanical reaction in isolated state scope `{scope}`.
 
@@ -91,7 +136,12 @@ fn evaluate<'a>(
 ) -> EvaluationFuture<'a> {
     Box::pin(async move {
         let names = Names::new(run_id);
-        let source = source_value(run_id);
+        let source = observation
+            .case
+            .inputs
+            .get("source")
+            .cloned()
+            .unwrap_or(Value::Null);
         let mirror = common::state_value(
             context
                 .trigger_value(
@@ -197,6 +247,119 @@ fn evaluate<'a>(
     })
 }
 
+fn capture<'a>(
+    context: &'a E2eContext,
+    observation: &'a ScenarioObservation,
+    run_id: &'a str,
+) -> DeliverableCaptureFuture<'a> {
+    Box::pin(async move {
+        let names = Names::new(run_id);
+        let source = observation
+            .case
+            .inputs
+            .get("source")
+            .cloned()
+            .unwrap_or(Value::Null);
+        let mirror = common::state_value(
+            context
+                .trigger_value(
+                    "state::get",
+                    json!({ "scope": names.scope, "key": MIRROR_KEY }),
+                )
+                .await?,
+        );
+        let records = common::trigger_fired_records(&observation.transcript);
+        let call_records = records
+            .iter()
+            .filter(|record| record.get("target").and_then(Value::as_str) == Some("state::set"))
+            .collect::<Vec<_>>();
+        let wake_records = records
+            .iter()
+            .filter(|record| record.get("target").and_then(Value::as_str) == Some("harness::send"))
+            .collect::<Vec<_>>();
+        let zero_token_delivery =
+            call_records.len() == 1 && call_records[0].get("payload").is_some();
+        let root_owned_wake = wake_records.len() == 1
+            && wake_records[0].get("retired").and_then(Value::as_bool) == Some(true)
+            && observation.metrics.totals.sessions == 1;
+
+        Ok(vec![CapturedDeliverable {
+            id: DELIVERABLE_ID.to_string(),
+            kind: "state_event_mirror".to_string(),
+            content: mirror.clone(),
+            invariants: vec![
+                CapturedInvariant {
+                    id: "matches_source_event".to_string(),
+                    passed: valid_mirror(&mirror, &names, &source),
+                    reason: "captured mirror compared with the materialized source event"
+                        .to_string(),
+                },
+                CapturedInvariant {
+                    id: "zero_token_delivery".to_string(),
+                    passed: zero_token_delivery,
+                    reason: format!(
+                        "observed {} state::set trigger delivery record(s)",
+                        call_records.len()
+                    ),
+                },
+                CapturedInvariant {
+                    id: "root_owned_wake".to_string(),
+                    passed: root_owned_wake,
+                    reason: format!(
+                        "wake_records={}, sessions={}",
+                        wake_records.len(),
+                        observation.metrics.totals.sessions
+                    ),
+                },
+            ],
+            provenance: vec![ProvenanceEvidence {
+                kind: "state_location".to_string(),
+                source_id: format!("{}/{}", names.scope, MIRROR_KEY),
+                relation: "captured_after_mechanical_delivery".to_string(),
+            }],
+        }])
+    })
+}
+
+fn deliverable_contract() -> DeliverableContract {
+    DeliverableContract {
+        artifacts: vec![ArtifactExpectation {
+            id: DELIVERABLE_ID.to_string(),
+            kind: "state_event_mirror".to_string(),
+            media_type: "application/json".to_string(),
+            schema: json!({
+                "type": "object",
+                "required": ["scope", "key", "new_value", "event_type"],
+                "properties": {
+                    "scope": { "type": "string" },
+                    "key": { "const": SOURCE_KEY },
+                    "new_value": { "type": "object" },
+                    "event_type": { "type": "string", "pattern": "^state:" }
+                },
+                "additionalProperties": true
+            }),
+            max_size_bytes: 16_384,
+        }],
+        invariants: vec![
+            InvariantSpec {
+                id: "matches_source_event".to_string(),
+                description: "The mirror preserves the complete materialized source event."
+                    .to_string(),
+            },
+            InvariantSpec {
+                id: "zero_token_delivery".to_string(),
+                description: "One mechanical trigger delivery created the mirror.".to_string(),
+            },
+            InvariantSpec {
+                id: "root_owned_wake".to_string(),
+                description: "The one-shot mirror wake resumed only the root session.".to_string(),
+            },
+        ],
+        provenance_required: true,
+        capture_before_cleanup: true,
+    }
+}
+
 fn is_mirror_wake(call: &common::ObservedFunctionCall, names: &Names) -> bool {
     call.function_id == "engine::register_trigger"
         && call.arguments.get("trigger_type").and_then(Value::as_str) == Some("state")
@@ -275,8 +438,8 @@ fn valid_mirror(mirror: &Value, names: &Names, source: &Value) -> bool {
             .is_some_and(|event_type| event_type.starts_with("state:"))
 }
 
-fn source_value(run_id: &str) -> Value {
-    json!({ "message": "mirror me", "run_id": run_id })
+fn source_value(seed: u64) -> Value {
+    json!({ "message": "mirror me", "case_seed": seed })
 }
 
 fn cleanup<'a>(context: &'a E2eContext, run_id: &'a str) -> CleanupFuture<'a> {
