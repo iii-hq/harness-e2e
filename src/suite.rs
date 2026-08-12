@@ -22,7 +22,8 @@ use crate::scenarios::{
     ScenarioDeliverableCapture, ScenarioId, ScenarioObservation, ScenarioSpec,
 };
 use crate::wire::{
-    FunctionPolicy, MessageInput, Model, SendOptions, SendRequest, SendResponse, SessionInit,
+    ControlPlaneEvidence, FunctionPolicy, MessageInput, Model, SendOptions, SendRequest,
+    SendResponse, SessionInit,
 };
 
 const MAX_RUNS: u32 = 20;
@@ -165,6 +166,13 @@ pub async fn run_suite(config: SuiteRunConfig) -> Result<SuiteRunOutcome> {
             let definition = scenario_id
                 .materialize("validation", seed)
                 .with_context(|| format!("materialize scenario {}", scenario_id.as_str()))?;
+            preflight_case(
+                &context,
+                &control_plane,
+                config.allow_legacy_control_plane,
+                &definition.case,
+            )
+            .await?;
             let mut runs = Vec::with_capacity(config.runs as usize);
             for repetition in 0..config.runs {
                 tracing::info!(
@@ -250,6 +258,43 @@ pub async fn run_suite(config: SuiteRunConfig) -> Result<SuiteRunOutcome> {
         manifest,
         report_path,
     })
+}
+
+async fn preflight_case(
+    context: &E2eContext,
+    expected: &ControlPlaneEvidence,
+    allow_legacy_control_plane: bool,
+    case: &ScenarioCase,
+) -> Result<()> {
+    let observed = context
+        .preflight_control_plane(allow_legacy_control_plane)
+        .await
+        .with_context(|| {
+            format!(
+                "preflight Harness control-plane contract before case {}",
+                case.case_id
+            )
+        })?;
+    ensure_control_plane_unchanged(expected, &observed).with_context(|| {
+        format!(
+            "control-plane contract changed before case {}",
+            case.case_id
+        )
+    })
+}
+
+fn ensure_control_plane_unchanged(
+    expected: &ControlPlaneEvidence,
+    observed: &ControlPlaneEvidence,
+) -> Result<()> {
+    let expected_sha = crate::artifact::sha256_value(expected)?;
+    let observed_sha = crate::artifact::sha256_value(observed)?;
+    if expected_sha != observed_sha {
+        bail!(
+            "control-plane fingerprint changed from {expected_sha} to {observed_sha} during the suite"
+        );
+    }
+    Ok(())
 }
 
 async fn emit_phase(control: Option<&SuiteControl>, phase: SuitePhase) -> Result<()> {
@@ -1141,6 +1186,39 @@ fn criterion_reports(spec: &ScenarioSpec, awards: Vec<CriterionAward>) -> Vec<Cr
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn control_plane(hash: &str) -> ControlPlaneEvidence {
+        ControlPlaneEvidence {
+            name: "harness-control-plane".into(),
+            version: 1,
+            functions: vec![crate::wire::FunctionContractEvidence {
+                function_id: "harness::send".into(),
+                contract: serde_json::json!({"version": 1}),
+                request_schema: serde_json::json!({"type": "object"}),
+                response_schema: serde_json::json!({"type": "object"}),
+                sha256: hash.into(),
+            }],
+        }
+    }
+
+    #[test]
+    fn per_case_preflight_rejects_control_plane_drift() {
+        let expected = control_plane(
+            "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        );
+        let same = control_plane(
+            "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        );
+        let changed = control_plane(
+            "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        );
+
+        ensure_control_plane_unchanged(&expected, &same).unwrap();
+        assert!(ensure_control_plane_unchanged(&expected, &changed)
+            .unwrap_err()
+            .to_string()
+            .contains("fingerprint changed"));
+    }
     use crate::report::HardGateReport;
     use crate::scenarios::{CriterionSpec, ExecutionPolicy, ScenarioEvaluator};
 
