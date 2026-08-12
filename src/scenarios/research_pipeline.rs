@@ -6,10 +6,16 @@ use crate::context::E2eContext;
 
 use super::assessment::{self, AssessmentSpec};
 use super::{
-    common, CleanupFuture, EvaluationFuture, ExecutionPolicy, ScenarioObservation, ScenarioSpec,
+    common, ArtifactExpectation, CapturedDeliverable, CapturedInvariant, CleanupFuture,
+    ComplexityProfile, DeliverableCaptureFuture, DeliverableContract, EvaluationFuture,
+    ExecutionPolicy, InvariantSpec, MaterializedScenario, ProvenanceEvidence, ScenarioCase,
+    ScenarioObservation, ScenarioSpec,
 };
 
 pub const ID: &str = "research_pipeline";
+const VERSION: u32 = 4;
+const ANALYSIS_DELIVERABLE_ID: &str = "analyst_outputs";
+const BRIEF_DELIVERABLE_ID: &str = "research_brief";
 
 const ARTICLE_URL: &str = "https://en.wikipedia.org/wiki/Cache_replacement_policies";
 const ARTICLE_KEY: &str = "article";
@@ -45,10 +51,56 @@ const ASSESSMENTS: &[AssessmentSpec] = &[
 ];
 
 pub fn scenario(run_id: &str) -> ScenarioSpec {
+    scenario_for_case(run_id)
+}
+
+pub fn materialize(namespace: &str, seed: u64) -> anyhow::Result<MaterializedScenario> {
+    let case = ScenarioCase::new(
+        ID,
+        VERSION,
+        seed,
+        json!({
+            "source_url": ARTICLE_URL,
+            "source_title": "Cache replacement policies",
+            "article_char_range": [MIN_ARTICLE_CHARS, MAX_ARTICLE_CHARS],
+            "summary_bullets": 5,
+            "minimum_facts": 5,
+            "analyst_roles": ["summarizer", "fact-extractor"],
+        }),
+        ComplexityProfile {
+            planning_depth: 3,
+            dependency_depth: 2,
+            parallel_branches: 2,
+            external_systems: 2,
+            state_transitions: 5,
+            wake_cycles: 2,
+            artifact_count: 2,
+            coordination_edges: 2,
+            ambiguity_level: 3,
+            ..ComplexityProfile::default()
+        },
+        vec![
+            "e2e::control-plane-v1".to_string(),
+            "iii::functions".to_string(),
+            "iii::state".to_string(),
+            "iii::triggers".to_string(),
+            "iii::web".to_string(),
+            "e2e::subagents".to_string(),
+        ],
+        deliverable_contract(),
+    )?;
+    Ok(MaterializedScenario {
+        spec: scenario_for_case(namespace),
+        case,
+        capture: Some(capture),
+    })
+}
+
+fn scenario_for_case(run_id: &str) -> ScenarioSpec {
     let names = Names::new(run_id);
     ScenarioSpec {
         id: ID,
-        version: 3,
+        version: VERSION,
         prompt: prompt(&names),
         filesystem_root: None,
         execution: ExecutionPolicy {
@@ -63,6 +115,185 @@ pub fn scenario(run_id: &str) -> ScenarioSpec {
         setup: None,
         evaluate,
         cleanup: Some(cleanup),
+    }
+}
+
+fn capture<'a>(
+    context: &'a E2eContext,
+    observation: &'a ScenarioObservation,
+    run_id: &'a str,
+) -> DeliverableCaptureFuture<'a> {
+    Box::pin(async move {
+        let names = Names::new(run_id);
+        let article = get_state(context, &names.scope, ARTICLE_KEY).await?;
+        let summary = get_state(context, &names.scope, SUMMARY_KEY).await?;
+        let facts = get_state(context, &names.scope, FACTS_KEY).await?;
+        let analyst_sessions = observation
+            .metrics
+            .by_session
+            .iter()
+            .filter(|session| {
+                session.depth == 1
+                    && session.parent_session_id.as_deref() == Some(names.root_session.as_str())
+            })
+            .map(|session| session.session_id.clone())
+            .collect::<Vec<_>>();
+        let mut written_keys = BTreeSet::new();
+        let mut leaf_discipline = analyst_sessions.len() == 2;
+        for session_id in &analyst_sessions {
+            let transcript = context.transcript(session_id).await?;
+            let calls = common::function_calls(&transcript);
+            let writes = calls
+                .iter()
+                .filter(|call| call.function_id == "state::set")
+                .collect::<Vec<_>>();
+            leaf_discipline &= writes.len() == 1
+                && calls.iter().all(|call| {
+                    call.function_id == "state::set"
+                        || call.function_id.starts_with("engine::functions::")
+                });
+            if let Some(key) = writes
+                .first()
+                .and_then(|write| write.arguments.get("key"))
+                .and_then(Value::as_str)
+            {
+                written_keys.insert(key.to_string());
+            }
+        }
+        let direct_analyst_provenance = leaf_discipline
+            && written_keys == BTreeSet::from([SUMMARY_KEY.to_string(), FACTS_KEY.to_string()]);
+        let active_bindings = common::active_binding_count(context, &names.root_session).await?;
+
+        Ok(vec![
+            CapturedDeliverable {
+                id: ANALYSIS_DELIVERABLE_ID.to_string(),
+                kind: "state_bundle".to_string(),
+                content: json!({
+                    "summary": summary,
+                    "facts": facts,
+                }),
+                invariants: vec![
+                    CapturedInvariant {
+                        id: "source_traceable".to_string(),
+                        passed: valid_article(&article),
+                        reason: format!(
+                            "captured source article with {} content character(s)",
+                            article
+                                .get("content")
+                                .and_then(Value::as_str)
+                                .map(str::chars)
+                                .map(Iterator::count)
+                                .unwrap_or(0)
+                        ),
+                    },
+                    CapturedInvariant {
+                        id: "analyst_outputs_valid".to_string(),
+                        passed: valid_summary(&summary) && valid_facts(&facts),
+                        reason: "summary and facts compared with their semantic contracts"
+                            .to_string(),
+                    },
+                    CapturedInvariant {
+                        id: "direct_analyst_provenance".to_string(),
+                        passed: direct_analyst_provenance,
+                        reason: format!(
+                            "observed {} direct analyst session(s) writing keys {:?}",
+                            analyst_sessions.len(),
+                            written_keys
+                        ),
+                    },
+                ],
+                provenance: [SUMMARY_KEY, FACTS_KEY]
+                    .into_iter()
+                    .map(|key| ProvenanceEvidence {
+                        kind: "state_location".to_string(),
+                        source_id: format!("{}/{}", names.scope, key),
+                        relation: "written_by_analyst".to_string(),
+                    })
+                    .collect(),
+            },
+            CapturedDeliverable {
+                id: BRIEF_DELIVERABLE_ID.to_string(),
+                kind: "markdown_report".to_string(),
+                content: json!({ "content": observation.response }),
+                invariants: vec![
+                    CapturedInvariant {
+                        id: "merged_brief_complete".to_string(),
+                        passed: response_merges(&observation.response, &summary, &facts),
+                        reason: "final brief checked for every analyst output".to_string(),
+                    },
+                    CapturedInvariant {
+                        id: "bindings_retired".to_string(),
+                        passed: active_bindings == 0,
+                        reason: format!("observed {active_bindings} active binding(s)"),
+                    },
+                ],
+                provenance: vec![ProvenanceEvidence {
+                    kind: "session".to_string(),
+                    source_id: names.root_session,
+                    relation: "merged_after_barrier".to_string(),
+                }],
+            },
+        ])
+    })
+}
+
+fn deliverable_contract() -> DeliverableContract {
+    DeliverableContract {
+        artifacts: vec![
+            ArtifactExpectation {
+                id: ANALYSIS_DELIVERABLE_ID.to_string(),
+                kind: "state_bundle".to_string(),
+                media_type: "application/json".to_string(),
+                schema: json!({
+                    "type": "object",
+                    "required": ["summary", "facts"],
+                    "properties": {
+                        "summary": { "type": ["object", "null"] },
+                        "facts": { "type": ["object", "null"] }
+                    },
+                    "additionalProperties": false
+                }),
+                max_size_bytes: 65_536,
+            },
+            ArtifactExpectation {
+                id: BRIEF_DELIVERABLE_ID.to_string(),
+                kind: "markdown_report".to_string(),
+                media_type: "application/json".to_string(),
+                schema: json!({
+                    "type": "object",
+                    "required": ["content"],
+                    "properties": { "content": { "type": "string" } },
+                    "additionalProperties": false
+                }),
+                max_size_bytes: 131_072,
+            },
+        ],
+        invariants: vec![
+            InvariantSpec {
+                id: "source_traceable".to_string(),
+                description: "The analyst bundle remains traceable to a valid captured source."
+                    .to_string(),
+            },
+            InvariantSpec {
+                id: "analyst_outputs_valid".to_string(),
+                description: "Summary and facts satisfy their declared output shapes.".to_string(),
+            },
+            InvariantSpec {
+                id: "direct_analyst_provenance".to_string(),
+                description: "Two direct leaf analysts produced the two state artifacts."
+                    .to_string(),
+            },
+            InvariantSpec {
+                id: "merged_brief_complete".to_string(),
+                description: "The final brief includes every analyst output verbatim.".to_string(),
+            },
+            InvariantSpec {
+                id: "bindings_retired".to_string(),
+                description: "No research binding remains active after the merge.".to_string(),
+            },
+        ],
+        provenance_required: true,
+        capture_before_cleanup: true,
     }
 }
 

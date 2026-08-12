@@ -368,6 +368,8 @@ impl ScenarioId {
         let materialized = match self {
             Self::PersistentState => persistent_state::materialize(namespace, seed)?,
             Self::ReactiveAutomation => reactive_automation::materialize(namespace, seed)?,
+            Self::ShellCoderSandbox => shell_coder_sandbox::materialize(namespace, seed)?,
+            Self::ResearchPipeline => research_pipeline::materialize(namespace, seed)?,
             Self::MechanicalReaction => mechanical_reaction::materialize(namespace, seed)?,
             Self::TimerWake => timer_wake::materialize(namespace, seed)?,
             Self::ReceivingOperation => receiving_operation::materialize(namespace, seed)?,
@@ -630,6 +632,31 @@ mod tests {
             );
             assert!(
                 first.case.deliverable_contract.provenance_required,
+                "{scenario:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn production_scenarios_capture_each_declared_artifact() {
+        for scenario in [ScenarioId::ShellCoderSandbox, ScenarioId::ResearchPipeline] {
+            let first = scenario.materialize("attempt-a", 127).unwrap();
+            let retry = scenario.materialize("attempt-b", 127).unwrap();
+            assert_eq!(first.case.case_id, retry.case.case_id, "{scenario:?}");
+            assert_eq!(first.case.inputs, retry.case.inputs, "{scenario:?}");
+            assert_eq!(
+                usize::from(first.case.complexity.profile.artifact_count),
+                first.case.deliverable_contract.artifacts.len(),
+                "{scenario:?}"
+            );
+            assert!(first.capture.is_some(), "{scenario:?}");
+            assert!(
+                first
+                    .case
+                    .deliverable_contract
+                    .invariants
+                    .iter()
+                    .all(|invariant| !invariant.description.trim().is_empty()),
                 "{scenario:?}"
             );
         }

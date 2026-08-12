@@ -7,10 +7,16 @@ use crate::context::E2eContext;
 
 use super::assessment::{self, AssessmentSpec};
 use super::{
-    common, CleanupFuture, EvaluationFuture, ExecutionPolicy, ScenarioObservation, ScenarioSpec,
+    common, ArtifactExpectation, CapturedDeliverable, CapturedInvariant, CleanupFuture,
+    ComplexityProfile, DeliverableCaptureFuture, DeliverableContract, EvaluationFuture,
+    ExecutionPolicy, InvariantSpec, MaterializedScenario, ProvenanceEvidence, ScenarioCase,
+    ScenarioObservation, ScenarioSpec,
 };
 
 pub const ID: &str = "shell_coder_sandbox";
+const VERSION: u32 = 4;
+const CODE_DELIVERABLE_ID: &str = "verified_code_file";
+const EXECUTION_DELIVERABLE_ID: &str = "execution_evidence";
 const DRAFT_NAME: &str = "draft_check.py";
 const FINAL_NAME: &str = "checks/check.py";
 const DRAFT_SCRIPT: &str = "values = [2, 3, 5, 7]\nprint(\"host-check:draft\")\n";
@@ -59,10 +65,58 @@ const ASSESSMENTS: &[AssessmentSpec] = &[
 ];
 
 pub fn scenario(run_id: &str) -> ScenarioSpec {
+    scenario_for_case(run_id)
+}
+
+pub fn materialize(namespace: &str, seed: u64) -> anyhow::Result<MaterializedScenario> {
+    let case = ScenarioCase::new(
+        ID,
+        VERSION,
+        seed,
+        json!({
+            "draft_path": DRAFT_NAME,
+            "final_path": FINAL_NAME,
+            "draft_content": DRAFT_SCRIPT,
+            "final_content": FINAL_SCRIPT,
+            "host_stdout": HOST_STDOUT,
+            "sandbox_stdout": SANDBOX_STDOUT,
+            "sandbox_resources": {
+                "cpus": 1,
+                "memory_mb": 256,
+                "network": false,
+            },
+        }),
+        ComplexityProfile {
+            planning_depth: 2,
+            dependency_depth: 1,
+            external_systems: 2,
+            state_transitions: 8,
+            artifact_count: 2,
+            ambiguity_level: 2,
+            ..ComplexityProfile::default()
+        },
+        vec![
+            "e2e::control-plane-v1".to_string(),
+            "iii::functions".to_string(),
+            "iii::registry".to_string(),
+            "iii::coder".to_string(),
+            "iii::shell".to_string(),
+            "iii::sandbox".to_string(),
+        ],
+        deliverable_contract(),
+    )?;
+    Ok(MaterializedScenario {
+        spec: scenario_for_case(namespace),
+        case,
+        capture: Some(capture),
+    })
+}
+
+fn scenario_for_case(run_id: &str) -> ScenarioSpec {
     let sandbox_name = sandbox_name(run_id);
     ScenarioSpec {
         id: ID,
-        version: 3,
+        version: VERSION,
         prompt: format!(
             "Perform this verification entirely in the current workspace and in the stated order.\n\n\
              1. Add the `shell` worker from the public registry and wait for that add operation to \
@@ -105,6 +159,171 @@ pub fn scenario(run_id: &str) -> ScenarioSpec {
         setup: None,
         evaluate,
         cleanup: Some(cleanup),
+    }
+}
+
+fn capture<'a>(
+    _context: &'a E2eContext,
+    observation: &'a ScenarioObservation,
+    run_id: &'a str,
+) -> DeliverableCaptureFuture<'a> {
+    Box::pin(async move {
+        let root = workspace_root(run_id);
+        let final_path = root.join(FINAL_NAME);
+        let final_content = std::fs::read_to_string(&final_path).ok();
+        let calls = common::function_calls(&observation.transcript);
+        let coder_workflow_observed = calls.iter().any(|call| call.function_id == "coder::info")
+            && calls.iter().any(|call| is_exact_create(call, &root))
+            && calls.iter().any(|call| is_exact_update(call, &root))
+            && calls.iter().any(|call| is_exact_move(call, &root))
+            && calls.iter().any(|call| is_exact_read(call, &root))
+            && calls_are_ordered(
+                &calls,
+                &[
+                    "coder::info",
+                    "coder::create-file",
+                    "coder::update-file",
+                    "coder::move",
+                    "coder::read-file",
+                ],
+            );
+        let host_stdout =
+            observed_successful_output(&observation.transcript, "shell::exec", HOST_STDOUT);
+        let sandbox_stdout =
+            observed_successful_output(&observation.transcript, "sandbox::exec", SANDBOX_STDOUT);
+        let sandbox = sandbox_evidence(&observation.transcript, &calls, &sandbox_name(run_id));
+
+        Ok(vec![
+            CapturedDeliverable {
+                id: CODE_DELIVERABLE_ID.to_string(),
+                kind: "code_file".to_string(),
+                content: json!({
+                    "path": FINAL_NAME,
+                    "content": final_content,
+                }),
+                invariants: vec![
+                    CapturedInvariant {
+                        id: "exact_final_content".to_string(),
+                        passed: final_content.as_deref() == Some(FINAL_SCRIPT),
+                        reason: format!("captured {}", final_path.display()),
+                    },
+                    CapturedInvariant {
+                        id: "coder_workflow_observed".to_string(),
+                        passed: coder_workflow_observed,
+                        reason: "dedicated coder operations were observed in the required order"
+                            .to_string(),
+                    },
+                ],
+                provenance: vec![ProvenanceEvidence {
+                    kind: "filesystem_path".to_string(),
+                    source_id: final_path.display().to_string(),
+                    relation: "captured_before_workspace_cleanup".to_string(),
+                }],
+            },
+            CapturedDeliverable {
+                id: EXECUTION_DELIVERABLE_ID.to_string(),
+                kind: "execution_result".to_string(),
+                content: json!({
+                    "host_stdout": host_stdout,
+                    "sandbox_stdout": sandbox_stdout,
+                    "sandbox": {
+                        "sandbox_id": sandbox.sandbox_id,
+                        "create_request": sandbox.create_request,
+                        "created": sandbox.created,
+                        "executed": sandbox.executed,
+                        "listed": sandbox.listed,
+                        "stopped": sandbox.stopped,
+                        "ordered": sandbox.ordered,
+                    },
+                }),
+                invariants: vec![
+                    CapturedInvariant {
+                        id: "host_output_exact".to_string(),
+                        passed: host_stdout.as_deref() == Some(HOST_STDOUT),
+                        reason: format!("expected exact host stdout `{HOST_STDOUT}`"),
+                    },
+                    CapturedInvariant {
+                        id: "sandbox_output_exact".to_string(),
+                        passed: sandbox_stdout.as_deref() == Some(SANDBOX_STDOUT),
+                        reason: format!("expected exact sandbox stdout `{SANDBOX_STDOUT}`"),
+                    },
+                    CapturedInvariant {
+                        id: "sandbox_lifecycle_complete".to_string(),
+                        passed: sandbox.complete(),
+                        reason: sandbox.summary(),
+                    },
+                ],
+                provenance: vec![ProvenanceEvidence {
+                    kind: "sandbox".to_string(),
+                    source_id: sandbox_name(run_id),
+                    relation: "executed_and_stopped".to_string(),
+                }],
+            },
+        ])
+    })
+}
+
+fn deliverable_contract() -> DeliverableContract {
+    DeliverableContract {
+        artifacts: vec![
+            ArtifactExpectation {
+                id: CODE_DELIVERABLE_ID.to_string(),
+                kind: "code_file".to_string(),
+                media_type: "application/json".to_string(),
+                schema: json!({
+                    "type": "object",
+                    "required": ["path", "content"],
+                    "properties": {
+                        "path": { "const": FINAL_NAME },
+                        "content": { "type": ["string", "null"] }
+                    },
+                    "additionalProperties": false
+                }),
+                max_size_bytes: 16_384,
+            },
+            ArtifactExpectation {
+                id: EXECUTION_DELIVERABLE_ID.to_string(),
+                kind: "execution_result".to_string(),
+                media_type: "application/json".to_string(),
+                schema: json!({
+                    "type": "object",
+                    "required": ["host_stdout", "sandbox_stdout", "sandbox"],
+                    "properties": {
+                        "host_stdout": { "type": ["string", "null"] },
+                        "sandbox_stdout": { "type": ["string", "null"] },
+                        "sandbox": { "type": "object" }
+                    },
+                    "additionalProperties": false
+                }),
+                max_size_bytes: 16_384,
+            },
+        ],
+        invariants: vec![
+            InvariantSpec {
+                id: "exact_final_content".to_string(),
+                description: "The final code file has the exact requested content.".to_string(),
+            },
+            InvariantSpec {
+                id: "coder_workflow_observed".to_string(),
+                description: "Dedicated coder operations created, updated, moved, and read it."
+                    .to_string(),
+            },
+            InvariantSpec {
+                id: "host_output_exact".to_string(),
+                description: "Host execution produced the exact expected stdout.".to_string(),
+            },
+            InvariantSpec {
+                id: "sandbox_output_exact".to_string(),
+                description: "Sandbox execution produced the exact expected stdout.".to_string(),
+            },
+            InvariantSpec {
+                id: "sandbox_lifecycle_complete".to_string(),
+                description: "The isolated sandbox completed its full ordered lifecycle."
+                    .to_string(),
+            },
+        ],
+        provenance_required: true,
+        capture_before_cleanup: true,
     }
 }
 
@@ -497,6 +716,19 @@ fn successful_output(transcript: &Value, function_id: &str, expected: &str) -> b
     function_results(transcript, function_id)
         .into_iter()
         .any(|message| successful_output_result(message, expected))
+}
+
+fn observed_successful_output(
+    transcript: &Value,
+    function_id: &str,
+    expected: &str,
+) -> Option<String> {
+    function_results(transcript, function_id)
+        .into_iter()
+        .find(|message| successful_output_result(message, expected))?
+        .pointer("/details/stdout")
+        .and_then(Value::as_str)
+        .map(|stdout| stdout.trim().to_string())
 }
 
 fn successful_output_result(message: &Value, expected: &str) -> bool {
