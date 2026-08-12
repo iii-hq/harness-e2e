@@ -1,0 +1,19 @@
+{
+  "schema_version": 1,
+  "profile_id": "weekly-l4-recovery",
+  "seed": 40401,
+  "expected_outcome": "recovered",
+  "delayed_calls": [
+    {
+      "target": "harness::send",
+      "delay_ms": 750,
+      "occurrences": 1
+    }
+  ],
+  "fail_first_attempt": [
+    "coordination-child-2"
+  ],
+  "duplicate_events": true,
+  "out_of_order_results": true,
+  "max_work_amplification": 3.5
+}

@@ -20,6 +20,9 @@ use crate::durable::{
     DurableHistory, HistoryListRequest, RetentionClass, RetentionSweepRequest, ARCHIVE_HEAD_ID,
     ARCHIVE_ID, ARCHIVE_RESTORE_ID, HISTORY_LIST_ID, RETENTION_SWEEP_ID,
 };
+use crate::fault::{
+    ExpectedTerminalOutcome, FaultEvaluation, FaultJournal, FaultPlan, FaultProfile,
+};
 use crate::judge::JudgeConfig;
 use crate::longitudinal::{self, ComparisonPolicy, ComparisonResponse, PromotedBaselineIdentity};
 use crate::report::{E2eManifestV2, E2eReport};
@@ -30,7 +33,7 @@ use crate::suite::{
 };
 
 pub const CONTROL_CONTRACT_NAME: &str = "e2e-control-plane";
-pub const CONTROL_CONTRACT_VERSION: u32 = 3;
+pub const CONTROL_CONTRACT_VERSION: u32 = 4;
 pub const RUN_ID: &str = "e2e::run";
 pub const STATUS_ID: &str = "e2e::status";
 pub const CANCEL_ID: &str = "e2e::cancel";
@@ -40,6 +43,8 @@ pub const COMPARE_ID: &str = "e2e::compare";
 pub const SCENARIOS_LIST_ID: &str = "e2e::scenarios-list";
 pub const BASELINE_PROMOTE_ID: &str = "e2e::baseline-promote";
 pub const BASELINE_GET_ID: &str = "e2e::baseline-get";
+pub const FAULT_PLAN_ID: &str = "e2e::fault-plan";
+pub const FAULT_EVALUATE_ID: &str = "e2e::fault-evaluate";
 
 const RECORD_SCOPE: &str = "harness_e2e_execution_v1";
 const BASELINE_SCOPE: &str = "harness_e2e_baseline_v1";
@@ -216,6 +221,19 @@ pub struct ArchiveExecutionRequest {
     pub retention_class: RetentionClass,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct FaultPlanRequest {
+    pub profile: FaultProfile,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct FaultEvaluateRequest {
+    pub execution_id: String,
+    pub profile: FaultProfile,
+    pub plan: FaultPlan,
+    pub journal: FaultJournal,
+}
+
 #[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
 pub struct ResultsListRequest {
     #[serde(default)]
@@ -355,6 +373,26 @@ impl ControlPlane {
     }
 
     pub fn register(&self) {
+        register_function(
+            &self.inner.iii,
+            FAULT_PLAN_ID,
+            "Materialize a deterministic, versioned fault plan for a protected supervisor.",
+            RegisterFunction::new_async(move |request: FaultPlanRequest| async move {
+                request.profile.materialize().map_err(handler_error)
+            }),
+        );
+        register_function(
+            &self.inner.iii,
+            FAULT_EVALUATE_ID,
+            "Classify a protected supervisor's fault journal against canonical execution evidence.",
+            {
+                let control = self.clone();
+                RegisterFunction::new_async(move |request: FaultEvaluateRequest| {
+                    let control = control.clone();
+                    async move { control.fault_evaluate(request).await.map_err(handler_error) }
+                })
+            },
+        );
         register_function(
             &self.inner.iii,
             ARCHIVE_ID,
@@ -819,6 +857,28 @@ impl ControlPlane {
             manifest: record.manifest,
             archive: record.archive,
         })
+    }
+
+    async fn fault_evaluate(&self, request: FaultEvaluateRequest) -> Result<FaultEvaluation> {
+        let record = self.record(&request.execution_id).await?;
+        if !record.phase.terminal() {
+            bail!("fault evaluation requires a terminal execution");
+        }
+        match request.profile.expected_outcome {
+            ExpectedTerminalOutcome::Recovered if record.phase == ExecutionPhase::Cancelled => {
+                bail!("a recovered fault profile cannot evaluate a cancelled execution");
+            }
+            ExpectedTerminalOutcome::Cancelled if record.phase != ExecutionPhase::Cancelled => {
+                bail!("a cancellation fault profile requires a cancelled execution");
+            }
+            _ => {}
+        }
+        FaultEvaluation::evaluate(
+            &request.profile,
+            &request.plan,
+            &request.journal,
+            record.report.as_ref(),
+        )
     }
 
     async fn archive(&self, request: ArchiveExecutionRequest) -> Result<ArchiveResponse> {

@@ -1,0 +1,140 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "FaultJournal",
+  "type": "object",
+  "required": [
+    "actions",
+    "cancellation_observed",
+    "cleanup_completed",
+    "completed_at",
+    "execution_id",
+    "lane",
+    "profile_sha256",
+    "schema_version",
+    "started_at"
+  ],
+  "properties": {
+    "actions": {
+      "type": "array",
+      "items": {
+        "$ref": "#/definitions/FaultObservation"
+      }
+    },
+    "cancellation_observed": {
+      "type": "boolean"
+    },
+    "cleanup_completed": {
+      "type": "boolean"
+    },
+    "cleanup_evidence": {
+      "default": {},
+      "type": "object",
+      "additionalProperties": {
+        "type": "string"
+      }
+    },
+    "completed_at": {
+      "type": "string"
+    },
+    "execution_id": {
+      "type": "string"
+    },
+    "infrastructure_failures": {
+      "default": [],
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "lane": {
+      "type": "string"
+    },
+    "observed_work_amplification": {
+      "type": [
+        "number",
+        "null"
+      ],
+      "format": "double"
+    },
+    "profile_sha256": {
+      "type": "string"
+    },
+    "results_sha256": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "schema_version": {
+      "type": "integer",
+      "format": "uint32",
+      "enum": [
+        1
+      ],
+      "minimum": 0.0
+    },
+    "started_at": {
+      "type": "string"
+    }
+  },
+  "additionalProperties": false,
+  "definitions": {
+    "FaultActionKind": {
+      "type": "string",
+      "enum": [
+        "delay_call",
+        "fail_first_attempt",
+        "duplicate_event",
+        "child_timeout",
+        "transient_disconnect",
+        "out_of_order_result",
+        "cancel_execution"
+      ]
+    },
+    "FaultObservation": {
+      "type": "object",
+      "required": [
+        "action_id",
+        "kind",
+        "status"
+      ],
+      "properties": {
+        "action_id": {
+          "type": "string"
+        },
+        "applied_at": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "detail": {
+          "default": "",
+          "type": "string"
+        },
+        "kind": {
+          "$ref": "#/definitions/FaultActionKind"
+        },
+        "recovered_at": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "status": {
+          "$ref": "#/definitions/FaultObservationStatus"
+        }
+      },
+      "additionalProperties": false
+    },
+    "FaultObservationStatus": {
+      "type": "string",
+      "enum": [
+        "recovered",
+        "unrecovered",
+        "not_triggered",
+        "injector_failed"
+      ]
+    }
+  }
+}

@@ -1,0 +1,109 @@
+name: Harness E2E canonical gate
+
+on:
+  workflow_call:
+    inputs:
+      source_repository:
+        type: string
+        required: true
+      source_revision:
+        type: string
+        required: true
+      source_run_id:
+        type: string
+        required: true
+      e2e_revision:
+        type: string
+        required: true
+      evidence_artifact_name:
+        type: string
+        required: true
+      required_stage:
+        type: string
+        required: true
+    secrets:
+      cross_repository_token:
+        required: true
+    outputs:
+      eligible:
+        value: ${{ jobs.validate.outputs.eligible }}
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    if: endsWith(github.workflow_ref, '@refs/heads/main')
+    runs-on: [self-hosted, harness-e2e]
+    environment: harness-e2e-trusted
+    outputs:
+      eligible: ${{ steps.result.outputs.eligible }}
+    steps:
+      - name: Validate immutable request identity
+        env:
+          SOURCE_REPOSITORY: ${{ inputs.source_repository }}
+          SOURCE_REVISION: ${{ inputs.source_revision }}
+          SOURCE_RUN_ID: ${{ inputs.source_run_id }}
+          E2E_REVISION: ${{ inputs.e2e_revision }}
+          REQUIRED_STAGE: ${{ inputs.required_stage }}
+        run: |
+          [[ "$SOURCE_REPOSITORY" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]]
+          [[ "$SOURCE_REVISION" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$SOURCE_RUN_ID" =~ ^[0-9]+$ ]]
+          [[ "$E2E_REVISION" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$REQUIRED_STAGE" =~ ^(pull_request|main|daily|release|legacy_removal)$ ]]
+      - name: Authorize the exact E2E revision
+        env:
+          GH_TOKEN: ${{ secrets.cross_repository_token }}
+          E2E_REVISION: ${{ inputs.e2e_revision }}
+        run: |
+          default_branch=$(gh api repos/iii-hq/harness-e2e --jq .default_branch)
+          default_sha=$(gh api "repos/iii-hq/harness-e2e/branches/$default_branch" --jq .commit.sha)
+          status=$(gh api "repos/iii-hq/harness-e2e/compare/$E2E_REVISION...$default_sha" --jq .status)
+          [[ "$status" == ahead || "$status" == identical ]]
+      - uses: actions/checkout@v4
+        with:
+          repository: iii-hq/harness-e2e
+          ref: ${{ inputs.e2e_revision }}
+          token: ${{ secrets.cross_repository_token }}
+      - uses: actions/download-artifact@v4
+        with:
+          name: ${{ inputs.evidence_artifact_name }}
+          path: incoming
+          repository: ${{ inputs.source_repository }}
+          run-id: ${{ inputs.source_run_id }}
+          github-token: ${{ secrets.cross_repository_token }}
+      - name: Resolve live immutable evidence through iii
+        env:
+          SOURCE_REVISION: ${{ inputs.source_revision }}
+          E2E_REVISION: ${{ inputs.e2e_revision }}
+        run: |
+          test -f incoming/cutover-evidence.json
+          test ! -L incoming/cutover-evidence.json
+          test -x /opt/iii-harness-e2e/resolve-cutover-evidence
+          /opt/iii-harness-e2e/resolve-cutover-evidence \
+            --candidate incoming/cutover-evidence.json \
+            --subject-revision "$SOURCE_REVISION" \
+            --e2e-revision "$E2E_REVISION" \
+            --output verified-cutover-evidence.json
+      - name: Enforce ordered cutover policy
+        id: result
+        env:
+          REQUIRED_STAGE: ${{ inputs.required_stage }}
+        run: |
+          python3 scripts/validate_cutover.py \
+            --policy policies/cutover-v1.json \
+            --evidence verified-cutover-evidence.json \
+            --require-stage "$REQUIRED_STAGE" \
+            --output cutover-evaluation.json
+          echo 'eligible=true' >> "$GITHUB_OUTPUT"
+      - name: Retain the gate decision
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: canonical-gate-${{ inputs.required_stage }}-${{ inputs.source_revision }}
+          path: |
+            verified-cutover-evidence.json
+            cutover-evaluation.json
+          retention-days: 30
+          if-no-files-found: warn

@@ -1,0 +1,29 @@
+{
+  "schema_version": 1,
+  "profile_id": "weekly-l5-cancellation",
+  "seed": 50502,
+  "expected_outcome": "cancelled",
+  "delayed_calls": [
+    {
+      "target": "coordination-child-3",
+      "delay_ms": 5000,
+      "occurrences": 1
+    }
+  ],
+  "fail_first_attempt": [
+    "coordination-child-2"
+  ],
+  "duplicate_events": true,
+  "child_timeout_ms": 20000,
+  "transient_disconnect": {
+    "target": "subject-transport",
+    "after_action": "first-child-started",
+    "duration_ms": 1500
+  },
+  "out_of_order_results": true,
+  "cancellation": {
+    "after_action": "fail-first-observed",
+    "grace_period_ms": 30000
+  },
+  "max_work_amplification": 3.0
+}

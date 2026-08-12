@@ -3,6 +3,7 @@ use schemars::schema::{RootSchema, Schema};
 use schemars::JsonSchema;
 
 use crate::durable::{DurableArchiveManifest, HistoryRecord};
+use crate::fault::{FaultEvaluation, FaultJournal, FaultPlan, FaultProfile};
 use crate::report::{E2eManifestV2, E2eReport};
 
 pub fn results_v2() -> RootSchema {
@@ -53,6 +54,22 @@ pub fn history_record_v1() -> RootSchema {
     versioned_root_schema_for::<HistoryRecord>(1)
 }
 
+pub fn fault_profile_v1() -> RootSchema {
+    versioned_root_schema_for::<FaultProfile>(1)
+}
+
+pub fn fault_plan_v1() -> RootSchema {
+    versioned_root_schema_for::<FaultPlan>(1)
+}
+
+pub fn fault_journal_v1() -> RootSchema {
+    versioned_root_schema_for::<FaultJournal>(1)
+}
+
+pub fn fault_evaluation_v1() -> RootSchema {
+    versioned_root_schema_for::<FaultEvaluation>(1)
+}
+
 fn versioned_root_schema_for<T: JsonSchema>(version: u32) -> RootSchema {
     let mut root = SchemaSettings::draft07()
         .into_generator()
@@ -101,6 +118,18 @@ mod tests {
     #[test]
     fn history_record_v1_schema_matches_snapshot() {
         assert_snapshot("history-record-v1.json", &history_record_v1());
+    }
+
+    #[test]
+    fn fault_schemas_match_snapshots() {
+        for (name, schema) in [
+            ("fault-profile-v1.json", fault_profile_v1()),
+            ("fault-plan-v1.json", fault_plan_v1()),
+            ("fault-journal-v1.json", fault_journal_v1()),
+            ("fault-evaluation-v1.json", fault_evaluation_v1()),
+        ] {
+            assert_snapshot(name, &schema);
+        }
     }
 
     fn assert_snapshot(name: &str, schema: &impl Serialize) {

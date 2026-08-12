@@ -52,12 +52,20 @@ The worker exposes `e2e::run`, `e2e::status`, `e2e::cancel`,
 `e2e::scenarios-list`, `e2e::baseline-promote`, `e2e::baseline-get`,
 `e2e::archive`, `e2e::archive-head`, `e2e::archive-restore`,
 `e2e::history-list`, and `e2e::retention-sweep`.
+Fault supervisors use `e2e::fault-plan` and `e2e::fault-evaluate` so plan
+materialization and recovery classification stay on the same iii control plane.
 Subject policies deny `e2e::*`.
 
 Durable artifacts are chunked through `storage::*`, while longitudinal series
 are ingested through `database::*`. The runner has no S3, GCS, R2, SQL-driver,
 or Harness dependency. See [docs/durable-history.md](docs/durable-history.md)
 for retention, deployment, integrity, and recovery details.
+
+Weekly Stress materializes versioned fault plans and evaluates journals from a
+protected supervisor. See [docs/fault-injection.md](docs/fault-injection.md).
+Lane promotion and legacy removal are governed by
+[`policies/cutover-v1.json`](policies/cutover-v1.json) and the
+[incident/rollback runbook](docs/incident-and-rollback.md).
 
 ## Repository boundaries
 

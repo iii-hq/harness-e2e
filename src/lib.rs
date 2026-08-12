@@ -4,6 +4,7 @@ pub mod context;
 pub mod control;
 pub mod dashboard;
 pub mod durable;
+pub mod fault;
 pub mod identity;
 pub mod judge;
 pub mod longitudinal;

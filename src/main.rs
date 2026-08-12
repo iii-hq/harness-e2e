@@ -3,6 +3,7 @@ use std::path::PathBuf;
 use anyhow::{bail, Context, Result};
 use clap::{Args, Parser, Subcommand};
 use harness_e2e::dashboard;
+use harness_e2e::fault::{FaultEvaluation, FaultJournal, FaultPlan, FaultProfile};
 use harness_e2e::judge::JudgeConfig;
 use harness_e2e::report::E2eReport;
 use harness_e2e::scenarios::{self, ScenarioId};
@@ -29,6 +30,10 @@ enum Command {
     /// Run E2E scenarios and compare local executions in a browser.
     #[command(alias = "serve")]
     Dashboard(dashboard::DashboardArgs),
+    /// Materialize an immutable, deterministic fault plan for a protected supervisor.
+    FaultPlan(FaultPlanArgs),
+    /// Classify observed recovery from a protected supervisor's fault journal.
+    FaultEvaluate(FaultEvaluateArgs),
 }
 
 #[derive(Debug, Args)]
@@ -103,6 +108,40 @@ struct ReportArgs {
     verbose: bool,
 }
 
+#[derive(Debug, Args)]
+struct FaultPlanArgs {
+    /// Versioned FaultProfile JSON.
+    #[arg(long)]
+    profile: PathBuf,
+
+    /// Destination for the materialized FaultPlan JSON.
+    #[arg(long)]
+    output: PathBuf,
+}
+
+#[derive(Debug, Args)]
+struct FaultEvaluateArgs {
+    /// Versioned FaultProfile JSON.
+    #[arg(long)]
+    profile: PathBuf,
+
+    /// Materialized FaultPlan JSON given to the protected supervisor.
+    #[arg(long)]
+    plan: PathBuf,
+
+    /// FaultJournal JSON written by the protected supervisor.
+    #[arg(long)]
+    journal: PathBuf,
+
+    /// Canonical results-v2.json or its containing directory. Omit for cancellation drills.
+    #[arg(long)]
+    results: Option<PathBuf>,
+
+    /// Destination for the FaultEvaluation JSON.
+    #[arg(long)]
+    output: PathBuf,
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
     tracing_subscriber::fmt()
@@ -124,7 +163,39 @@ async fn main() -> Result<()> {
         Command::Run(args) => run(args).await,
         Command::Report(args) => report(args),
         Command::Dashboard(args) => dashboard::serve(args).await,
+        Command::FaultPlan(args) => fault_plan(args),
+        Command::FaultEvaluate(args) => fault_evaluate(args),
     }
+}
+
+fn fault_plan(args: FaultPlanArgs) -> Result<()> {
+    let profile = FaultProfile::read(&args.profile)?;
+    let plan = profile.materialize()?;
+    plan.write(&args.output)?;
+    println!("{}", args.output.display());
+    Ok(())
+}
+
+fn fault_evaluate(args: FaultEvaluateArgs) -> Result<()> {
+    let profile = FaultProfile::read(&args.profile)?;
+    let plan = FaultPlan::read(&args.plan)?;
+    let journal = FaultJournal::read(&args.journal)?;
+    let report = args
+        .results
+        .as_deref()
+        .map(E2eReport::read_from)
+        .transpose()?
+        .map(|(report, _)| report);
+    let evaluation = FaultEvaluation::evaluate(&profile, &plan, &journal, report.as_ref())?;
+    evaluation.write(&args.output)?;
+    println!("{}", args.output.display());
+    if !evaluation.passed() {
+        bail!(
+            "fault recovery classified as {:?}",
+            evaluation.classification
+        );
+    }
+    Ok(())
 }
 
 async fn models(args: ModelsArgs) -> Result<()> {
@@ -290,5 +361,40 @@ mod tests {
             panic!("expected report command");
         };
         assert_eq!(args.input, PathBuf::from("target/e2e"));
+    }
+
+    #[test]
+    fn fault_commands_require_explicit_evidence_paths() {
+        let cli = Cli::try_parse_from([
+            "harness-e2e",
+            "fault-plan",
+            "--profile",
+            "profile.json",
+            "--output",
+            "plan.json",
+        ])
+        .unwrap();
+        let Command::FaultPlan(args) = cli.command else {
+            panic!("expected fault-plan command");
+        };
+        assert_eq!(args.profile, PathBuf::from("profile.json"));
+
+        let cli = Cli::try_parse_from([
+            "harness-e2e",
+            "fault-evaluate",
+            "--profile",
+            "profile.json",
+            "--plan",
+            "plan.json",
+            "--journal",
+            "journal.json",
+            "--output",
+            "evaluation.json",
+        ])
+        .unwrap();
+        let Command::FaultEvaluate(args) = cli.command else {
+            panic!("expected fault-evaluate command");
+        };
+        assert!(args.results.is_none());
     }
 }
