@@ -350,7 +350,12 @@
     );
     return {
       schemaVersion: Number(raw.schema_version) || 1,
-      mode: raw.mode === "local" ? "local" : "published",
+      mode:
+        raw.mode === "local"
+          ? "local"
+          : raw.mode === "observed"
+            ? "observed"
+            : "published",
       lastUpdate: raw.last_update || benchmarkData?.lastUpdate || "",
       repoUrl: raw.repo_url || benchmarkData?.repoUrl || "",
       preview: Boolean(globalThis.HARNESS_BENCHMARK_PREVIEW),

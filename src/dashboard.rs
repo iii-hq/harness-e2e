@@ -30,6 +30,10 @@ pub struct DashboardArgs {
     /// Directory that owns local run metadata, logs, and reports.
     #[arg(long, default_value = "target/harness-e2e-local-runs")]
     pub runs_dir: PathBuf,
+
+    /// Present retained reports without exposing local execution endpoints.
+    #[arg(long)]
+    pub view_only: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -377,19 +381,36 @@ mod tests {
     }
 
     #[test]
-    fn local_store_accepts_only_native_metadata_owned_runs() {
+    fn local_store_accepts_native_and_control_plane_runs() {
         let root = tempfile::tempdir().unwrap();
-        let legacy = root.path().join("legacy-import");
-        write_report(&legacy.join("results"));
-        assert!(load_execution_summaries(root.path()).unwrap().is_empty());
+        let control = root.path().join("execution");
+        write_report(&control);
 
         let metadata = metadata();
         let native = root.path().join(&metadata.id);
         write_metadata(&native, &metadata).unwrap();
         write_report(&native.join("results"));
         let summaries = load_execution_summaries(root.path()).unwrap();
-        assert_eq!(summaries.len(), 1);
-        assert_eq!(summaries[0]["id"], metadata.id);
+        assert_eq!(summaries.len(), 2);
+        assert!(summaries.iter().any(|summary| {
+            summary["id"] == "execution"
+                && summary["label"] == "e2e::* control-plane run"
+                && summary["status"] == "passed"
+        }));
+        assert!(summaries.iter().any(|summary| summary["id"] == metadata.id));
+    }
+
+    #[test]
+    fn dashboard_accepts_safe_local_and_control_plane_execution_ids() {
+        assert!(super::presenter::validate_execution_id("local-20260807T120000-abcdef12").is_ok());
+        assert!(
+            super::presenter::validate_execution_id("d0be4cb7dcf8561079b673d735715060").is_ok()
+        );
+        assert!(super::presenter::validate_execution_id("../results").is_err());
+        assert!(
+            super::presenter::validate_execution_id("d0be4cb7dcf8561079b673d735715060/extra")
+                .is_err()
+        );
     }
 
     #[test]

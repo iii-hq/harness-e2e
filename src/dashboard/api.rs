@@ -15,7 +15,7 @@ use super::presenter::{
     execution_detail_value, load_execution_summaries, repository_url, validate_execution_id,
     MAX_EXECUTIONS,
 };
-use super::store::{read_metadata, read_report};
+use super::store::read_stored_run;
 use super::{ApiError, DashboardArgs, RunRequest, RunSnapshot};
 use crate::context::E2eContext;
 use crate::scenarios::ScenarioId;
@@ -25,6 +25,7 @@ const MAX_REQUEST_BYTES: usize = 64 * 1024;
 #[derive(Clone)]
 struct AppState {
     controller: Arc<Controller>,
+    view_only: bool,
 }
 
 #[derive(Debug, Deserialize)]
@@ -37,19 +38,25 @@ pub(super) async fn serve(args: DashboardArgs) -> Result<()> {
         bail!("dashboard --listen must use a loopback address; use SSH port forwarding for remote access");
     }
     let listen = args.listen;
+    let view_only = args.view_only;
     let state = AppState {
         controller: Controller::new(args)?,
+        view_only,
     };
     let app = Router::new()
-        .route("/api/local/run", get(run_snapshot).post(start_run))
-        .route("/api/local/run/cancel", axum::routing::post(cancel_run))
-        .route("/api/local/catalog", get(catalog))
         .route("/data.js", get(benchmark_data))
         .route("/executions.js", get(execution_manifest))
         .route("/runs/:id", get(execution_detail))
-        .fallback(get(static_asset))
-        .layer(axum::extract::DefaultBodyLimit::max(MAX_REQUEST_BYTES))
-        .with_state(state);
+        .fallback(get(static_asset));
+    let app = if view_only {
+        app
+    } else {
+        app.route("/api/local/run", get(run_snapshot).post(start_run))
+            .route("/api/local/run/cancel", axum::routing::post(cancel_run))
+            .route("/api/local/catalog", get(catalog))
+    }
+    .layer(axum::extract::DefaultBodyLimit::max(MAX_REQUEST_BYTES))
+    .with_state(state);
 
     let listener = tokio::net::TcpListener::bind(listen)
         .await
@@ -162,7 +169,7 @@ async fn execution_manifest(State(state): State<AppState>) -> Result<Response, A
         "window.HARNESS_EXECUTIONS = {};\n",
         json!({
             "schema_version": 4,
-            "mode": "local",
+            "mode": if state.view_only { "observed" } else { "local" },
             "last_update": last_update,
             "repo_url": repository_url(),
             "retention": { "summaries": MAX_EXECUTIONS, "details": MAX_EXECUTIONS },
@@ -181,19 +188,17 @@ async fn execution_detail(
         .to_string();
     validate_execution_id(&id).map_err(ApiError::bad_request)?;
     let run_dir = state.controller.runs_dir().join(&id);
-    let metadata = read_metadata(&run_dir)
+    let run = read_stored_run(&run_dir)
         .map_err(ApiError::internal)?
         .ok_or_else(|| ApiError {
             status: StatusCode::NOT_FOUND,
             message: "execution not found".into(),
         })?;
-    let report = read_report(&run_dir)
-        .map_err(ApiError::internal)?
-        .ok_or_else(|| ApiError {
-            status: StatusCode::NOT_FOUND,
-            message: "execution report not found".into(),
-        })?;
-    execution_detail_value(&metadata, &report)
+    let report = run.report.ok_or_else(|| ApiError {
+        status: StatusCode::NOT_FOUND,
+        message: "execution report not found".into(),
+    })?;
+    execution_detail_value(&run.metadata, &report)
         .map(Json)
         .map_err(ApiError::internal)
 }

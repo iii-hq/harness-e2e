@@ -522,12 +522,13 @@ fn stack_identity(system: Option<&crate::identity::SystemUnderTestIdentity>) -> 
 }
 
 pub(super) fn validate_execution_id(value: &str) -> std::result::Result<(), String> {
-    if value.starts_with("local-")
+    let local_id = value.starts_with("local-")
         && value.len() <= 80
         && value
             .chars()
-            .all(|character| character.is_ascii_alphanumeric() || character == '-')
-    {
+            .all(|character| character.is_ascii_alphanumeric() || character == '-');
+    let control_plane_id = value.len() == 32 && value.bytes().all(|byte| byte.is_ascii_hexdigit());
+    if local_id || control_plane_id {
         Ok(())
     } else {
         Err("invalid execution id".into())

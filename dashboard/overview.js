@@ -9,6 +9,7 @@
     benchmarkData,
   );
   const isLocal = history.mode === "local";
+  const isObserved = history.mode === "observed";
   const state = {
     matrixCount: 14,
     page: 1,
@@ -1360,8 +1361,12 @@
   }
 
   async function initialize() {
-    elements.preview.hidden = !(history.preview || isLocal);
-    elements.preview.textContent = isLocal ? "Local data" : "Preview data";
+    elements.preview.hidden = !(history.preview || isLocal || isObserved);
+    elements.preview.textContent = isLocal
+      ? "Local data"
+      : isObserved
+        ? "Observed reports"
+        : "Preview data";
     if (isLocal) {
       elements.syncLabel.textContent = "Last completed";
       elements.emptyTitle.textContent = "No local executions yet";
@@ -1372,6 +1377,12 @@
       elements.localRunner.hidden = false;
       elements.commitHeading.hidden = true;
       elements.search.placeholder = "Search label, run, or date";
+    } else if (isObserved) {
+      elements.syncLabel.textContent = "Last completed";
+      elements.actionsLink.textContent = "View repository ↗";
+      elements.footerSummary.textContent =
+        "Harness E2E · observed control-plane reports";
+      elements.search.placeholder = "Search scenario, run, commit, or date";
     }
     const lastUpdate = history.lastUpdate || history.executions[0]?.completed_at;
     if (lastUpdate) {

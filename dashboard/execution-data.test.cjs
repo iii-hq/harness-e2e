@@ -239,6 +239,14 @@ test("defaults execution history to published mode", () => {
   );
 });
 
+test("preserves observed report mode without enabling the local runner", () => {
+  const history = mergeExecutionHistory(
+    { mode: "observed", executions: [] },
+    { releases: [] },
+  );
+  assert.equal(history.mode, "observed");
+});
+
 test("keeps workflow attempts distinct and newest first", () => {
   const history = mergeExecutionHistory(
     {

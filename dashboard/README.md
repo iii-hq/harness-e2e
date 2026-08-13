@@ -8,8 +8,8 @@ for metric trends. `executions.js` indexes workflow attempts, and
 Start the local dashboard from the repository root:
 
 ```bash
-cargo build --locked --manifest-path harness/Cargo.toml -p harness-e2e
-harness/target/debug/harness-e2e dashboard
+cargo build --locked --bin harness-e2e
+target/debug/harness-e2e dashboard
 ```
 
 The dashboard can now execute one or more scenarios against the Harness already
@@ -21,6 +21,21 @@ and technical retries remain under **Advanced options** with safe defaults. Use
 runs only one experiment at a time, streams its log, indexes the resulting
 `results.json`, and keeps run metadata and logs under
 `target/harness-e2e-local-runs/`.
+
+To present runs submitted through the asynchronous `e2e::*` worker, point the
+dashboard directly at that worker's output root. Canonical control-plane run
+directories are discovered from their embedded execution identity and do not
+need dashboard-specific metadata:
+
+```bash
+target/debug/harness-e2e dashboard \
+  --view-only \
+  --runs-dir target/e2e-demo/runs
+```
+
+`--view-only` labels the data as observed reports, hides the direct local
+runner, and does not register its run, cancel, or catalog HTTP endpoints. This
+is the presentation mode for executions submitted through `e2e::*`.
 
 The dashboard executes itself as an isolated child process, so changing and
 restarting the Harness never recompiles the E2E client. `serve` is an alias for

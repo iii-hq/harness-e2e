@@ -26,18 +26,34 @@ node --test dashboard/*.test.cjs
 List the versioned, materialized scenarios:
 
 ```bash
-cargo run --locked -- list
+cargo run --locked --bin harness-e2e -- list
 ```
 
 Run against an existing stack:
 
 ```bash
-cargo run --locked -- run \
+cargo run --locked --bin harness-e2e -- run \
   --url ws://127.0.0.1:49134 \
   --model codex/gpt-5.6-luna \
   --provider openai-codex \
   --scenario coordination.1
 ```
+
+## Real control-plane demo
+
+With an iii stack already running, exercise the complete asynchronous
+`e2e::*` path using a real coordination scenario:
+
+```bash
+HARNESS_E2E_WORKERS_REPOSITORY=iii-hq/workers \
+HARNESS_E2E_WORKERS_REVISION=<full-subject-git-sha> \
+  ./scripts/demo_e2e_control_plane.sh
+```
+
+Use `--catalog-only` for a no-model smoke check. If the running Harness predates
+the versioned wire metadata, use `--allow-legacy-control-plane` only for the
+documented migration window. See [docs/demo.md](docs/demo.md) for the expected
+flow and retained evidence.
 
 Start the asynchronous worker:
 
