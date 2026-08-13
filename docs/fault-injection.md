@@ -29,7 +29,7 @@ Materialize a plan with:
 
 ```bash
 cargo run --locked -- fault-plan \
-  --profile profiles/weekly-l5-recovery.json \
+  --profile config/profiles/weekly-l5-recovery.json \
   --output target/fault-plan.json
 ```
 
@@ -37,7 +37,7 @@ Evaluate the supervisor journal with:
 
 ```bash
 cargo run --locked -- fault-evaluate \
-  --profile profiles/weekly-l5-recovery.json \
+  --profile config/profiles/weekly-l5-recovery.json \
   --plan target/fault-plan.json \
   --journal target/fault-journal.json \
   --results target/results \

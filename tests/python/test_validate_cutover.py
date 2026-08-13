@@ -2,7 +2,11 @@ import copy
 import datetime as dt
 import json
 import pathlib
+import sys
 import unittest
+
+ROOT = pathlib.Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(ROOT / "scripts"))
 
 from validate_cutover import CutoverError, evaluate_cutover, validate_policy
 
@@ -99,7 +103,7 @@ def evidence():
 
 class CutoverValidationTests(unittest.TestCase):
     def test_checked_in_policy_is_valid(self):
-        path = pathlib.Path(__file__).parent.parent / "policies" / "cutover-v1.json"
+        path = ROOT / "config" / "policies" / "cutover-v1.json"
         validate_policy(json.loads(path.read_text(encoding="utf-8")))
 
     def test_policy_requires_ordered_lanes_and_iii_contract(self):

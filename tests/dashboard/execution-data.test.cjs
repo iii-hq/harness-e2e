@@ -22,7 +22,7 @@ const {
   scenarioMetricRows,
   scenarioMetricsFromDetail,
   scenarioContract,
-} = require("./execution-data.js");
+} = require("../../dashboard/execution-data.js");
 
 function execution(overrides = {}) {
   return {

@@ -8,7 +8,7 @@ const {
   messageText,
   normalizeTranscript,
   summarizeTranscript,
-} = require("./execution-transcript.js");
+} = require("../../dashboard/execution-transcript.js");
 
 test("shows the wrapped function name instead of agent_trigger", () => {
   const wrappedArguments = {

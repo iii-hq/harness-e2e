@@ -4,19 +4,29 @@ const fs = require("node:fs");
 const path = require("node:path");
 const vm = require("node:vm");
 
-const root = __dirname;
-const index = fs.readFileSync(path.join(root, "index.html"), "utf8");
-const execution = fs.readFileSync(path.join(root, "execution.html"), "utf8");
-const executionScript = fs.readFileSync(path.join(root, "execution.js"), "utf8");
-const sampleExecutions = fs.readFileSync(
-  path.join(root, "sample-executions.js"),
+const repositoryRoot = path.join(__dirname, "..", "..");
+const dashboardRoot = path.join(repositoryRoot, "dashboard");
+const index = fs.readFileSync(path.join(dashboardRoot, "index.html"), "utf8");
+const execution = fs.readFileSync(
+  path.join(dashboardRoot, "execution.html"),
   "utf8",
 );
-const overview = fs.readFileSync(path.join(root, "overview.js"), "utf8");
-const localRunner = fs.readFileSync(path.join(root, "local-runner.js"), "utf8");
-const styles = fs.readFileSync(path.join(root, "styles.css"), "utf8");
+const executionScript = fs.readFileSync(
+  path.join(dashboardRoot, "execution.js"),
+  "utf8",
+);
+const sampleExecutions = fs.readFileSync(
+  path.join(dashboardRoot, "sample-executions.js"),
+  "utf8",
+);
+const overview = fs.readFileSync(path.join(dashboardRoot, "overview.js"), "utf8");
+const localRunner = fs.readFileSync(
+  path.join(dashboardRoot, "local-runner.js"),
+  "utf8",
+);
+const styles = fs.readFileSync(path.join(dashboardRoot, "styles.css"), "utf8");
 const publisher = fs.readFileSync(
-  path.join(root, "..", "scripts", "publish_harness_e2e_dashboard.py"),
+  path.join(repositoryRoot, "scripts", "publish_harness_e2e_dashboard.py"),
   "utf8",
 );
 
@@ -147,7 +157,10 @@ test("keeps the completed runner log inside a padded local panel", () => {
 
 test("keeps comparison content padded with contained long values", () => {
   assert.match(index, /href="\.\/compare\.html/);
-  const compare = fs.readFileSync(path.join(root, "compare.html"), "utf8");
+  const compare = fs.readFileSync(
+    path.join(dashboardRoot, "compare.html"),
+    "utf8",
+  );
   assert.match(compare, /id="compare-content" class="compare-content"/);
   assert.match(styles, /\.compare-content\s*>\s*\.panel\s*\{[^}]*padding:\s*28px 30px;[^}]*overflow:\s*hidden;/s);
   assert.match(styles, /\.compare-selection-card h2\s*\{[^}]*overflow-wrap:\s*anywhere;/s);

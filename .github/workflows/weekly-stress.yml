@@ -58,7 +58,7 @@ jobs:
         run: |
           [[ "$REPETITIONS" =~ ^[0-9]+$ ]] && (( REPETITIONS >= 1 && REPETITIONS <= 20 ))
           [[ "$SOAK_MINUTES" =~ ^[0-9]+$ ]] && (( SOAK_MINUTES >= 0 && SOAK_MINUTES <= 180 ))
-          profile_path="profiles/${PROFILE}.json"
+          profile_path="config/profiles/${PROFILE}.json"
           root="stress/${PROFILE}"
           mkdir -p "$root"
           target/release/harness-e2e fault-plan \

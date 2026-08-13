@@ -73,7 +73,7 @@ When generated data is absent, the pages load their sample fixtures and label
 the view as preview data. Test both data contracts with:
 
 ```bash
-node --test dashboard/*.test.cjs
+node --test tests/dashboard/*.test.cjs
 ```
 
 Metric names are stable identifiers:

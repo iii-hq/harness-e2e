@@ -869,7 +869,7 @@ mod tests {
 
     #[test]
     fn checked_in_weekly_profiles_are_valid_and_materializable() {
-        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("profiles");
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("config/profiles");
         for name in [
             "weekly-l4-recovery.json",
             "weekly-l5-recovery.json",

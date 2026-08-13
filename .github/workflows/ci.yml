@@ -34,5 +34,5 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 22
-      - run: node --test dashboard/*.test.cjs
-      - run: python3 -m unittest discover -s scripts -p 'test_*.py'
+      - run: node --test tests/dashboard/*.test.cjs
+      - run: python3 -m unittest discover -s tests/python -p 'test_*.py'

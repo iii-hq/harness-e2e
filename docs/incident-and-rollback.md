@@ -6,12 +6,12 @@ shadow-only. Every lane publishes results v2 with the `e2e::run` entrypoint,
 full source and E2E revisions, execution identity, and an available immutable
 `iii-storage://` archive reference.
 
-`policies/cutover-v1.json` is the reviewable policy. Runtime evidence is
+`config/policies/cutover-v1.json` is the reviewable policy. Runtime evidence is
 validated with:
 
 ```bash
 python3 scripts/validate_cutover.py \
-  --policy policies/cutover-v1.json \
+  --policy config/policies/cutover-v1.json \
   --evidence cutover-evidence.json \
   --require-stage daily \
   --output cutover-evaluation.json

@@ -20,7 +20,8 @@ Build and validate the repository:
 ```bash
 cargo test --locked --all-targets
 cargo clippy --locked --all-targets -- -D warnings
-node --test dashboard/*.test.cjs
+node --test tests/dashboard/*.test.cjs
+python3 -m unittest discover -s tests/python -p 'test_*.py'
 ```
 
 List the versioned, materialized scenarios:
@@ -80,15 +81,18 @@ for retention, deployment, integrity, and recovery details.
 Weekly Stress materializes versioned fault plans and evaluates journals from a
 protected supervisor. See [docs/fault-injection.md](docs/fault-injection.md).
 Lane promotion and legacy removal are governed by
-[`policies/cutover-v1.json`](policies/cutover-v1.json) and the
+[`config/policies/cutover-v1.json`](config/policies/cutover-v1.json) and the
 [incident/rollback runbook](docs/incident-and-rollback.md).
 
 ## Repository boundaries
 
 - `src/` owns the runner, local wire adapters, scenarios, evaluation,
   longitudinal comparison, and the E2E control worker.
-- `fixtures/`, `golden/`, and `baselines/` contain only small reviewed inputs
-  and canonical expectations.
+- `config/` owns reviewed baselines, cutover policies, fault profiles, and
+  standalone stack configuration.
+- `tests/` owns test-only fixtures, golden wire schemas, and the Node/Python
+  validation suites.
+- `schemas/` contains the public contracts for generated E2E artifacts.
 - `dashboard/` contains the static capability dashboard.
 - generated reports, transcripts, logs, and deliverables stay outside Git.
 

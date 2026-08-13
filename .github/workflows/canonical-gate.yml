@@ -92,7 +92,7 @@ jobs:
           REQUIRED_STAGE: ${{ inputs.required_stage }}
         run: |
           python3 scripts/validate_cutover.py \
-            --policy policies/cutover-v1.json \
+            --policy config/policies/cutover-v1.json \
             --evidence verified-cutover-evidence.json \
             --require-stage "$REQUIRED_STAGE" \
             --output cutover-evaluation.json

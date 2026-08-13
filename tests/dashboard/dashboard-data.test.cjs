@@ -8,7 +8,7 @@ const {
   parseMetricName,
   scenarioSummary,
   subjectSummary,
-} = require("./dashboard-data.js");
+} = require("../../dashboard/dashboard-data.js");
 
 function record(date, value, name, extra = {}) {
   return {

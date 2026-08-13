@@ -904,12 +904,16 @@ mod tests {
     fn current_harness_catalog_satisfies_the_runner_contract() {
         let raw = serde_json::json!({
             "functions": [
-                schema_fixture(include_str!("../golden/schemas/harness.send.json")),
-                schema_fixture(include_str!("../golden/schemas/harness.status.json")),
-                schema_fixture(include_str!("../golden/schemas/harness.session-tree.json")),
-                schema_fixture(include_str!("../golden/schemas/harness.metrics.json")),
-                schema_fixture(include_str!("../golden/schemas/harness.stop.json")),
-                schema_fixture(include_str!("../golden/schemas/harness.teardown.json")),
+                schema_fixture(include_str!("../tests/golden/schemas/harness.send.json")),
+                schema_fixture(include_str!("../tests/golden/schemas/harness.status.json")),
+                schema_fixture(include_str!(
+                    "../tests/golden/schemas/harness.session-tree.json"
+                )),
+                schema_fixture(include_str!("../tests/golden/schemas/harness.metrics.json")),
+                schema_fixture(include_str!("../tests/golden/schemas/harness.stop.json")),
+                schema_fixture(include_str!(
+                    "../tests/golden/schemas/harness.teardown.json"
+                )),
             ]
         });
         validate_control_plane(&raw, false).unwrap();
@@ -919,12 +923,24 @@ mod tests {
     fn legacy_mode_still_validates_schemas_when_contract_metadata_is_absent() {
         let raw = serde_json::json!({
             "functions": [
-                legacy_schema_fixture(include_str!("../golden/schemas/harness.send.json")),
-                legacy_schema_fixture(include_str!("../golden/schemas/harness.status.json")),
-                legacy_schema_fixture(include_str!("../golden/schemas/harness.session-tree.json")),
-                legacy_schema_fixture(include_str!("../golden/schemas/harness.metrics.json")),
-                legacy_schema_fixture(include_str!("../golden/schemas/harness.stop.json")),
-                legacy_schema_fixture(include_str!("../golden/schemas/harness.teardown.json")),
+                legacy_schema_fixture(include_str!(
+                    "../tests/golden/schemas/harness.send.json"
+                )),
+                legacy_schema_fixture(include_str!(
+                    "../tests/golden/schemas/harness.status.json"
+                )),
+                legacy_schema_fixture(include_str!(
+                    "../tests/golden/schemas/harness.session-tree.json"
+                )),
+                legacy_schema_fixture(include_str!(
+                    "../tests/golden/schemas/harness.metrics.json"
+                )),
+                legacy_schema_fixture(include_str!(
+                    "../tests/golden/schemas/harness.stop.json"
+                )),
+                legacy_schema_fixture(include_str!(
+                    "../tests/golden/schemas/harness.teardown.json"
+                )),
             ]
         });
         validate_control_plane(&raw, true).unwrap();
@@ -934,9 +950,10 @@ mod tests {
 
     #[test]
     fn response_types_decode_the_valid_contract_fixture() {
-        let fixtures: Value =
-            serde_json::from_str(include_str!("../fixtures/contracts/valid-responses.json"))
-                .unwrap();
+        let fixtures: Value = serde_json::from_str(include_str!(
+            "../tests/fixtures/contracts/valid-responses.json"
+        ))
+        .unwrap();
         let send: SendResponse = serde_json::from_value(fixtures["send"].clone()).unwrap();
         let status: StatusReport = serde_json::from_value(fixtures["status"].clone()).unwrap();
         let tree: SessionTreeResponseV1 =
@@ -958,7 +975,7 @@ mod tests {
     #[test]
     fn response_types_accept_additive_fields_and_preserve_the_raw_payload() {
         let fixtures: Value = serde_json::from_str(include_str!(
-            "../fixtures/contracts/additive-responses.json"
+            "../tests/fixtures/contracts/additive-responses.json"
         ))
         .unwrap();
         let response: SendResponse = serde_json::from_value(fixtures["send"].clone()).unwrap();
@@ -995,7 +1012,7 @@ mod tests {
     #[test]
     fn response_types_reject_missing_or_invalid_required_fields() {
         let fixtures: Value = serde_json::from_str(include_str!(
-            "../fixtures/contracts/incompatible-responses.json"
+            "../tests/fixtures/contracts/incompatible-responses.json"
         ))
         .unwrap();
         let missing = serde_json::from_value::<SendResponse>(fixtures["send"].clone())
@@ -1015,17 +1032,21 @@ mod tests {
 
     #[test]
     fn preflight_reports_an_incompatible_schema_field() {
-        let mut send = schema_fixture(include_str!("../golden/schemas/harness.send.json"));
+        let mut send = schema_fixture(include_str!("../tests/golden/schemas/harness.send.json"));
         send["response_schema"]["properties"]["accepted"]["type"] =
             Value::String("string".to_string());
         let raw = serde_json::json!({
             "functions": [
                 send,
-                schema_fixture(include_str!("../golden/schemas/harness.status.json")),
-                schema_fixture(include_str!("../golden/schemas/harness.session-tree.json")),
-                schema_fixture(include_str!("../golden/schemas/harness.metrics.json")),
-                schema_fixture(include_str!("../golden/schemas/harness.stop.json")),
-                schema_fixture(include_str!("../golden/schemas/harness.teardown.json")),
+                schema_fixture(include_str!("../tests/golden/schemas/harness.status.json")),
+                schema_fixture(include_str!(
+                    "../tests/golden/schemas/harness.session-tree.json"
+                )),
+                schema_fixture(include_str!("../tests/golden/schemas/harness.metrics.json")),
+                schema_fixture(include_str!("../tests/golden/schemas/harness.stop.json")),
+                schema_fixture(include_str!(
+                    "../tests/golden/schemas/harness.teardown.json"
+                )),
             ]
         });
         let error = format!("{:#}", validate_control_plane(&raw, false).unwrap_err());

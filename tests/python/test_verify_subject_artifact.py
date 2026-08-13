@@ -4,9 +4,13 @@ import hashlib
 import io
 import json
 from pathlib import Path
+import sys
 import tarfile
 import tempfile
 import unittest
+
+ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(ROOT / "scripts"))
 
 import verify_subject_artifact as verifier
 
