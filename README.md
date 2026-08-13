@@ -98,6 +98,21 @@ Contract compatibility is established at runtime from
 `engine::functions::list` and `engine::functions::info`; the checked-in schemas
 are parity fixtures, not a linked product API.
 
+## Observation
+
+The runner waits for a session tree to finish by binding
+`harness::turn-completed` to an internal sink (`e2e::on-turn-completed`) before
+`harness::send`. That sink is not a control-plane verb: it is not registered
+with `e2e::run` / `e2e::status` / `e2e::cancel`, and it does not appear in
+`e2e::scenarios-list`. Subject policies already deny `e2e::*`.
+
+A 15s watchdog samples `harness::metrics` and one root `harness::status` for
+stuck detection, heartbeat logs, and `e2e::cancel`. If the trigger type is
+missing from `engine::triggers::list`, the run is unsupported infrastructure —
+there is no silent fallback to polling `harness::status` or `harness::metrics`.
+After the tree completes, the runner still collects terminal status, metrics,
+transcripts, and deliverables.
+
 ## Subject artifacts
 
 Cross-repository executions accept a subject manifest matching

@@ -1,68 +1,29 @@
+use std::sync::Mutex;
 use std::time::Duration;
 
 use anyhow::{anyhow, bail, Context, Result};
+use async_trait::async_trait;
 use iii_sdk::protocol::TriggerRequest;
 use iii_sdk::runtime::WorkerMetadata;
-use iii_sdk::{register_worker, IIIClient, InitOptions};
+use iii_sdk::{register_worker, IIIClient, InitOptions, RegisterFunction};
 use serde::de::DeserializeOwned;
 use serde::Serialize;
 use serde_json::{json, Value};
 use tokio::sync::watch;
 
+use crate::observe::{self, ObserveHub, TreeObserver};
 use crate::wire::{
     self, ControlPlaneEvidence, SessionMetricsResponseV1, SessionTreeResponseV1, StatusReport,
-    StopResponse, TeardownResponseV1, TurnStatus,
+    StopResponse, TeardownResponseV1, TurnCompletedEvent, TurnStatus,
 };
 
 pub const INVOCATION_TIMEOUT: Duration = Duration::from_secs(120);
-const POLL_INTERVAL: Duration = Duration::from_millis(100);
-const METRICS_POLL_INTERVAL: Duration = Duration::from_secs(1);
 const PROGRESS_SAMPLE_INTERVAL: Duration = Duration::from_secs(15);
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct RootProgress {
-    turn_id: Option<String>,
-    status: TurnStatus,
-    step: u64,
-    pending_function_calls: usize,
-    children: usize,
-    queued_messages: usize,
-    expects_wake: bool,
-}
-
-impl From<&StatusReport> for RootProgress {
-    fn from(status: &StatusReport) -> Self {
-        Self {
-            turn_id: status.turn_id.clone(),
-            status: status.status,
-            step: status.step,
-            pending_function_calls: status.pending_function_calls.len(),
-            children: status.children.len(),
-            queued_messages: status.queued.len(),
-            expects_wake: status.expects_wake,
-        }
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct MetricsProgress {
-    sessions: u64,
-    function_calls: u64,
-    function_call_errors: u64,
-}
-
-impl From<&SessionMetricsResponseV1> for MetricsProgress {
-    fn from(metrics: &SessionMetricsResponseV1) -> Self {
-        Self {
-            sessions: metrics.totals.sessions,
-            function_calls: metrics.totals.function_calls,
-            function_call_errors: metrics.totals.function_call_errors,
-        }
-    }
-}
 
 pub struct E2eContext {
     client: IIIClient,
+    hub: ObserveHub,
+    binding_id: Mutex<Option<String>>,
 }
 
 pub struct RuntimeVersions {
@@ -79,7 +40,11 @@ impl E2eContext {
     }
 
     pub(crate) fn from_client(client: IIIClient) -> Self {
-        Self { client }
+        Self {
+            client,
+            hub: ObserveHub::new(),
+            binding_id: Mutex::new(None),
+        }
     }
 }
 
@@ -99,8 +64,13 @@ impl E2eContext {
                 ..InitOptions::default()
             },
         );
-        let context = Self { client };
+        let context = Self {
+            client,
+            hub: ObserveHub::new(),
+            binding_id: Mutex::new(None),
+        };
         context.wait_until_ready().await?;
+        context.register_observation_sink();
         Ok(context)
     }
 
@@ -177,162 +147,77 @@ impl E2eContext {
         Ok(RuntimeVersions { engine, harness })
     }
 
-    pub async fn wait_for_turn(
+    pub async fn bind_turn_completed(&self) -> Result<()> {
+        self.unbind_turn_completed().await.ok();
+        self.hub.drain();
+        let listed = self
+            .trigger_value(
+                "engine::triggers::list",
+                json!({ "include_internal": true }),
+            )
+            .await
+            .context("discover harness::turn-completed trigger type")?;
+        if !observe::turn_completed_available(&listed) {
+            return Err(observe::missing_turn_completed_trigger());
+        }
+        let response = self
+            .trigger_value(
+                "engine::register_trigger",
+                json!({
+                    "trigger_type": observe::TURN_COMPLETED_TRIGGER,
+                    "function_id": observe::SINK_FUNCTION_ID,
+                    "config": {},
+                }),
+            )
+            .await
+            .context("bind harness::turn-completed")?;
+        let id = observe::binding_id(&response)?;
+        *self.lock_binding() = Some(id);
+        Ok(())
+    }
+
+    pub async fn unbind_turn_completed(&self) -> Result<()> {
+        let id = self.lock_binding().clone();
+        let Some(id) = id else {
+            return Ok(());
+        };
+        self.trigger_value(
+            "engine::unregister_trigger",
+            json!({
+                "id": id,
+                "trigger_type": observe::TURN_COMPLETED_TRIGGER,
+            }),
+        )
+        .await
+        .context("unbind harness::turn-completed")?;
+        self.lock_binding().take();
+        self.hub.drain();
+        Ok(())
+    }
+
+    pub async fn wait_for_tree(
         &self,
         scenario_id: &str,
         session_id: &str,
-        initial_turn_id: &str,
         stuck_timeout: Duration,
-        progress_interval: Option<Duration>,
+        log_heartbeat: bool,
         cancellation: Option<&watch::Receiver<bool>>,
-    ) -> Result<StatusReport> {
-        let started = tokio::time::Instant::now();
-        let mut last_progress = started;
-        let mut next_sample = started;
-        let mut next_progress = progress_interval.map(|interval| started + interval);
-        let mut active_turn_id = initial_turn_id.to_string();
-        let mut root_progress = None;
-        let mut metrics_progress = None;
-        loop {
-            ensure_not_cancelled(cancellation)?;
-            let status: Option<StatusReport> = self
-                .trigger("harness::status", json!({ "session_id": session_id }))
-                .await?;
-            if let Some(status) = status {
-                if let Some(turn_id) = &status.turn_id {
-                    active_turn_id.clone_from(turn_id);
-                }
-                if session_is_terminal(&status)? {
-                    return Ok(status);
-                }
-                let observed = RootProgress::from(&status);
-                if root_progress.as_ref() != Some(&observed) {
-                    root_progress = Some(observed);
-                    last_progress = tokio::time::Instant::now();
-                }
-                if progress_due(&mut next_progress, progress_interval) {
-                    tracing::info!(
-                        scenario = scenario_id,
-                        session_id,
-                        elapsed_seconds = started.elapsed().as_secs(),
-                        inactive_seconds = last_progress.elapsed().as_secs(),
-                        status = ?status.status,
-                        step = status.step,
-                        turns = status.turn_count,
-                        max_turns = status.max_turns,
-                        pending_functions = status.pending_function_calls.len(),
-                        children = status.children.len(),
-                        queued_messages = status.queued.len(),
-                        expects_wake = status.expects_wake,
-                        "E2E scenario progress"
-                    );
-                }
-            }
-            let now = tokio::time::Instant::now();
-            if now >= next_sample {
-                match self.metrics(session_id).await {
-                    Ok(metrics) => {
-                        let observed = MetricsProgress::from(&metrics);
-                        if metrics_progress.as_ref() != Some(&observed) {
-                            metrics_progress = Some(observed);
-                            last_progress = tokio::time::Instant::now();
-                        }
-                    }
-                    Err(error) => tracing::debug!(
-                        scenario = scenario_id,
-                        session_id,
-                        %error,
-                        "could not sample E2E progress metrics"
-                    ),
-                }
-                next_sample = tokio::time::Instant::now() + PROGRESS_SAMPLE_INTERVAL;
-            }
-            if last_progress.elapsed() >= stuck_timeout {
-                self.stop_session_tree(session_id).await;
-                bail!(
-                    "scenario {scenario_id} made no observable progress for {}s while waiting for \
-                     session {session_id} (last active turn {active_turn_id})",
-                    stuck_timeout.as_secs()
-                );
-            }
-            tokio::time::sleep(POLL_INTERVAL).await;
-        }
+    ) -> Result<SessionMetricsResponseV1> {
+        observe::wait_until_complete(
+            self,
+            scenario_id,
+            session_id,
+            stuck_timeout,
+            PROGRESS_SAMPLE_INTERVAL,
+            log_heartbeat,
+            cancellation,
+        )
+        .await
     }
 
     pub async fn metrics(&self, session_id: &str) -> Result<SessionMetricsResponseV1> {
         self.trigger("harness::metrics", json!({ "root_session_id": session_id }))
             .await
-    }
-
-    pub async fn wait_for_complete_metrics(
-        &self,
-        scenario_id: &str,
-        session_id: &str,
-        stuck_timeout: Duration,
-        progress_interval: Option<Duration>,
-        cancellation: Option<&watch::Receiver<bool>>,
-    ) -> Result<SessionMetricsResponseV1> {
-        let started = tokio::time::Instant::now();
-        let mut last_progress = started;
-        let mut metrics_progress = None;
-        let mut next_progress = progress_interval.map(|interval| started + interval);
-        loop {
-            ensure_not_cancelled(cancellation)?;
-            let remaining = stuck_timeout.saturating_sub(last_progress.elapsed());
-            if remaining.is_zero() {
-                self.stop_session_tree(session_id).await;
-                bail!(
-                    "scenario {scenario_id} made no observable progress for {}s while waiting \
-                     for the complete session tree {session_id}",
-                    stuck_timeout.as_secs()
-                );
-            }
-            let metrics = match tokio::time::timeout(remaining, self.metrics(session_id)).await {
-                Ok(result) => result?,
-                Err(_) => {
-                    self.stop_session_tree(session_id).await;
-                    bail!(
-                        "scenario {scenario_id} made no observable progress for {}s while waiting \
-                         for the complete session tree {session_id}",
-                        stuck_timeout.as_secs()
-                    );
-                }
-            };
-            if metrics.complete {
-                return Ok(metrics);
-            }
-            let observed = MetricsProgress::from(&metrics);
-            if metrics_progress.as_ref() != Some(&observed) {
-                metrics_progress = Some(observed);
-                last_progress = tokio::time::Instant::now();
-            }
-            if progress_due(&mut next_progress, progress_interval) {
-                let tree = self
-                    .trigger::<_, SessionTreeResponseV1>(
-                        "harness::session-tree",
-                        json!({ "root_session_id": session_id }),
-                    )
-                    .await;
-                match tree {
-                    Ok(tree) => tracing::info!(
-                        scenario = scenario_id,
-                        session_id,
-                        elapsed_seconds = started.elapsed().as_secs(),
-                        inactive_seconds = last_progress.elapsed().as_secs(),
-                        sessions = tree.sessions.len(),
-                        tree_complete = tree.complete,
-                        "waiting for descendant sessions to finish"
-                    ),
-                    Err(error) => tracing::debug!(
-                        scenario = scenario_id,
-                        session_id,
-                        %error,
-                        "could not collect progress for descendant sessions"
-                    ),
-                }
-            }
-            tokio::time::sleep(METRICS_POLL_INTERVAL.min(remaining)).await;
-        }
     }
 
     pub async fn transcript(&self, session_id: &str) -> Result<Value> {
@@ -457,28 +342,56 @@ impl E2eContext {
             Err(_) => bail!("{function_id}: no response within {}ms", outer.as_millis()),
         }
     }
+
+    fn register_observation_sink(&self) {
+        let hub = self.hub.clone();
+        self.client.register_function(
+            observe::SINK_FUNCTION_ID,
+            RegisterFunction::new_async(move |payload: Value| {
+                let hub = hub.clone();
+                async move {
+                    match serde_json::from_value::<TurnCompletedEvent>(payload) {
+                        Ok(event) => hub.push(event),
+                        Err(error) => tracing::warn!(
+                            %error,
+                            "ignored malformed harness::turn-completed payload"
+                        ),
+                    }
+                    Ok::<observe::SinkAck, iii_sdk::errors::Error>(observe::SinkAck {
+                        accepted: true,
+                    })
+                }
+            })
+            .description("Internal harness::turn-completed sink for E2E session-tree observation.")
+            .metadata(json!({ "internal": true })),
+        );
+    }
+
+    fn lock_binding(&self) -> std::sync::MutexGuard<'_, Option<String>> {
+        self.binding_id
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
 }
 
-fn ensure_not_cancelled(cancellation: Option<&watch::Receiver<bool>>) -> Result<()> {
-    if cancellation.is_some_and(|receiver| *receiver.borrow()) {
-        bail!("E2E execution was cancelled");
+#[async_trait]
+impl TreeObserver for E2eContext {
+    async fn next_turn_completed(&self, timeout: Duration) -> Option<TurnCompletedEvent> {
+        self.hub.wait_event(timeout).await
     }
-    Ok(())
-}
 
-fn progress_due(
-    next_progress: &mut Option<tokio::time::Instant>,
-    interval: Option<Duration>,
-) -> bool {
-    let Some(next) = *next_progress else {
-        return false;
-    };
-    let now = tokio::time::Instant::now();
-    if now < next {
-        return false;
+    async fn pull_metrics(&self, root_session_id: &str) -> Result<SessionMetricsResponseV1> {
+        self.metrics(root_session_id).await
     }
-    *next_progress = interval.map(|interval| now + interval);
-    true
+
+    async fn pull_root_status(&self, root_session_id: &str) -> Result<Option<StatusReport>> {
+        self.trigger("harness::status", json!({ "session_id": root_session_id }))
+            .await
+    }
+
+    async fn stop_tree(&self, root_session_id: &str) {
+        self.stop_session_tree(root_session_id).await;
+    }
 }
 
 fn function_ids(listed: &Value) -> impl Iterator<Item = &str> {
@@ -494,6 +407,7 @@ fn function_ids(listed: &Value) -> impl Iterator<Item = &str> {
         })
 }
 
+#[allow(dead_code)]
 fn session_is_terminal(status: &StatusReport) -> Result<bool> {
     match status.status {
         TurnStatus::Completed => Ok(!status.expects_wake),

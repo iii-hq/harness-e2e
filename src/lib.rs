@@ -8,6 +8,7 @@ pub mod fault;
 pub mod identity;
 pub mod judge;
 pub mod longitudinal;
+mod observe;
 pub mod redaction;
 pub mod report;
 pub mod scenarios;

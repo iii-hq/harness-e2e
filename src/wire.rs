@@ -208,6 +208,19 @@ pub struct StatusReportV1 {
 pub type StatusReport = Observed<StatusReportV1>;
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct TurnCompletedEventV1 {
+    pub session_id: String,
+    pub turn_id: String,
+    pub status: TurnStatus,
+    #[serde(default)]
+    pub terminal: bool,
+    #[serde(default)]
+    pub result_error: Option<String>,
+}
+
+pub type TurnCompletedEvent = Observed<TurnCompletedEventV1>;
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct SessionTreeNodeV1 {
     pub session_id: String,
 }
@@ -956,6 +969,27 @@ mod tests {
             serde_json::from_value(fixtures["metrics"].clone()).unwrap();
         assert_eq!(metrics.totals.turns, 1);
         assert_eq!(serde_json::to_value(&metrics).unwrap(), fixtures["metrics"]);
+    }
+
+    #[test]
+    fn turn_completed_event_ignores_unknown_fields_and_keeps_raw() {
+        let raw = serde_json::json!({
+            "session_id": "e2e_root",
+            "turn_id": "turn-1",
+            "status": "completed",
+            "terminal": true,
+            "timestamp": 1_700_000_000_000i64,
+            "parent_session_id": "parent",
+            "result": { "text": "ok" },
+            "extra_consumer_field": { "nested": true }
+        });
+        let event: TurnCompletedEvent = serde_json::from_value(raw.clone()).unwrap();
+        assert_eq!(event.session_id, "e2e_root");
+        assert_eq!(event.turn_id, "turn-1");
+        assert_eq!(event.status, TurnStatus::Completed);
+        assert!(event.terminal);
+        assert_eq!(event.result_error, None);
+        assert_eq!(serde_json::to_value(&event).unwrap(), raw);
     }
 
     #[test]

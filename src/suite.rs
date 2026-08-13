@@ -23,7 +23,7 @@ use crate::scenarios::{
 };
 use crate::wire::{
     ControlPlaneEvidence, FunctionPolicy, MessageInput, Model, SendOptions, SendRequest,
-    SendResponse, SessionInit,
+    SendResponse, SessionInit, StatusReport,
 };
 
 const MAX_RUNS: u32 = 20;
@@ -533,6 +533,16 @@ async fn run_once(context: &E2eContext, request: AttemptRequest<'_>) -> E2eRunRe
             format!("persist cleanup checkpoint: {error:#}"),
         );
     }
+    if let Err(error) = context.unbind_turn_completed().await {
+        report.push_failure(
+            RunStatus::InfrastructureError,
+            FailurePhase::Cleanup,
+            format!(
+                "scenario '{}': unbind harness::turn-completed failed: {error:#}",
+                spec.id
+            ),
+        );
+    }
     if let Err(error) = context.teardown(&session_id).await {
         report.push_failure(
             RunStatus::InfrastructureError,
@@ -717,6 +727,10 @@ async fn execute(
         .map_err(|error| infrastructure_failure(FailurePhase::Execute, error.to_string()))?;
     ensure_not_cancelled(control)
         .map_err(|error| infrastructure_failure(FailurePhase::Execute, error.to_string()))?;
+    context
+        .bind_turn_completed()
+        .await
+        .map_err(|error| infrastructure_failure(FailurePhase::Execute, error.to_string()))?;
     let response: SendResponse = context
         .trigger(
             "harness::send",
@@ -756,30 +770,12 @@ async fn execute(
         ));
     }
 
-    let terminal_status = match context
-        .wait_for_turn(
-            spec.id,
-            session_id,
-            &response.turn_id,
-            stuck_timeout,
-            progress_interval,
-            control.map(|control| &control.cancellation),
-        )
-        .await
-    {
-        Ok(status) => status,
-        Err(error) => {
-            capture_partial_observation(context, session_id, report).await;
-            return Err(subject_failure(FailurePhase::Execute, error.to_string()));
-        }
-    };
-    report.terminal_status = Some(terminal_status);
     let metrics = match context
-        .wait_for_complete_metrics(
+        .wait_for_tree(
             spec.id,
             session_id,
             stuck_timeout,
-            progress_interval,
+            progress_interval.is_some(),
             control.map(|control| &control.cancellation),
         )
         .await
@@ -787,9 +783,27 @@ async fn execute(
         Ok(metrics) => metrics,
         Err(error) => {
             capture_partial_observation(context, session_id, report).await;
+            return Err(subject_failure(FailurePhase::Execute, error.to_string()));
+        }
+    };
+    let terminal_status = match context
+        .trigger::<_, Option<StatusReport>>("harness::status", json!({ "session_id": session_id }))
+        .await
+    {
+        Ok(Some(status)) => status,
+        Ok(None) => {
+            capture_partial_observation(context, session_id, report).await;
+            return Err(collection_failure(
+                FailurePhase::Collect,
+                format!("harness::status returned no report for {session_id}"),
+            ));
+        }
+        Err(error) => {
+            capture_partial_observation(context, session_id, report).await;
             return Err(collection_failure(FailurePhase::Collect, error.to_string()));
         }
     };
+    report.terminal_status = Some(terminal_status);
     emit_phase(control, SuitePhase::Collecting)
         .await
         .map_err(|error| infrastructure_failure(FailurePhase::Collect, error.to_string()))?;
