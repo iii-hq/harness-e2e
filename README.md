@@ -49,6 +49,17 @@ cargo build --locked --bin harness-e2e
 target/debug/harness-e2e dashboard
 ```
 
+When the running Harness does not yet publish versioned `metadata.contract`
+entries, enable the temporary legacy compatibility mode through the environment:
+
+```bash
+HARNESS_E2E_ALLOW_LEGACY_CONTROL_PLANE=true \
+  cargo run --locked --bin harness-e2e -- dashboard
+```
+
+The E2E processes started by the dashboard inherit this setting. Prefer the
+strict default once the Harness publishes the versioned control-plane metadata.
+
 The server listens on `0.0.0.0:4173` by default. Open
 `http://localhost:4173/index.html` on the same machine, or replace `localhost`
 with the machine's address when accessing it remotely. Use `--listen
