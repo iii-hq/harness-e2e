@@ -12,6 +12,10 @@ cargo build --locked --bin harness-e2e
 target/debug/harness-e2e dashboard
 ```
 
+The server listens on `0.0.0.0:4173` by default. Open
+`http://localhost:4173/index.html` on the same machine, or replace `localhost`
+with the machine's address when accessing it remotely.
+
 The dashboard can now execute one or more scenarios against the Harness already
 running at `III_URL`. It discovers registered provider/model pairs from that
 stack and scenario ids from the same E2E binary. The primary form only asks for an
@@ -53,15 +57,12 @@ rows and open **Compare selected**. The comparison always remains available;
 different subjects, run counts, scenario sets, and behavioral contracts are
 shown as warnings instead of blocking the comparison.
 
-The listener is deliberately restricted to loopback. Over SSH, forward it with:
-
-```bash
-ssh -L 4173:127.0.0.1:4173 user@host
-```
-
-Use `--listen 127.0.0.1:PORT` to select another port and `--runs-dir` to select
-another local history. The WebSocket URL is accessed on the host by the runner
-and does not need a browser-side port forward.
+Use `--listen 0.0.0.0:PORT` to select another port and `--runs-dir` to select
+another local history. Local mode exposes controls that can start and cancel E2E
+runs, so expose the port only on a trusted network. Use `--listen
+127.0.0.1:4173` to restrict access to the local machine. The WebSocket URL is
+accessed on the host by the runner and does not need to be reachable by the
+browser.
 
 To preview the sample fixtures instead, serve `dashboard` directly:
 

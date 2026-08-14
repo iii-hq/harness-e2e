@@ -19,8 +19,8 @@ const LOCAL_SCHEMA_VERSION: u32 = 1;
 
 #[derive(Debug, Clone, Args)]
 pub struct DashboardArgs {
-    /// Loopback address used by the local dashboard.
-    #[arg(long, default_value = "127.0.0.1:4173")]
+    /// Address used by the local dashboard.
+    #[arg(long, default_value = "0.0.0.0:4173")]
     pub listen: SocketAddr,
 
     /// WebSocket URL of the running Harness stack.

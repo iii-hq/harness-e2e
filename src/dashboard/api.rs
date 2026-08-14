@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result};
 use axum::extract::{Path as AxumPath, Query, State};
 use axum::http::StatusCode;
 use axum::response::Response;
@@ -34,9 +34,6 @@ struct CatalogQuery {
 }
 
 pub(super) async fn serve(args: DashboardArgs) -> Result<()> {
-    if !args.listen.ip().is_loopback() {
-        bail!("dashboard --listen must use a loopback address; use SSH port forwarding for remote access");
-    }
     let listen = args.listen;
     let view_only = args.view_only;
     let state = AppState {

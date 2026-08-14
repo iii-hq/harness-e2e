@@ -40,6 +40,26 @@ cargo run --locked --bin harness-e2e -- run \
   --scenario coordination.1
 ```
 
+## Dashboard
+
+Build and start the dashboard from the repository root:
+
+```bash
+cargo build --locked --bin harness-e2e
+target/debug/harness-e2e dashboard
+```
+
+The server listens on `0.0.0.0:4173` by default. Open
+`http://localhost:4173/index.html` on the same machine, or replace `localhost`
+with the machine's address when accessing it remotely. Use `--listen
+0.0.0.0:PORT` to select another port, `III_URL` to select the running Harness
+stack, and `--runs-dir` to select another local history directory.
+
+Local mode exposes controls that can start and cancel E2E runs, so expose the
+port only on a trusted network. Use `--listen 127.0.0.1:4173` when access should
+remain local. See [dashboard/README.md](dashboard/README.md) for view-only mode
+and the complete dashboard behavior.
+
 ## Real control-plane demo
 
 With an iii stack already running, exercise the complete asynchronous

@@ -336,7 +336,7 @@ mod tests {
             let Command::Dashboard(args) = cli.command else {
                 panic!("expected dashboard command");
             };
-            assert_eq!(args.listen.to_string(), "127.0.0.1:4173");
+            assert_eq!(args.listen.to_string(), "0.0.0.0:4173");
             assert_eq!(args.url, "ws://127.0.0.1:49134");
             assert!(!args.view_only);
         }
