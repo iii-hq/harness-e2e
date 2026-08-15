@@ -264,7 +264,7 @@ export function ExecutionPage({ executionId }: { executionId: string }) {
                   <h2 id="overview-heading" className={detailHeading}>
                     Overview
                   </h2>
-                  <details className={detailDisclosure}>
+                  <details className={detailDisclosure} open>
                     <summary className={disclosureSummary}>
                       <span
                         id="overview-digest"
