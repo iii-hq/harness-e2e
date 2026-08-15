@@ -186,6 +186,10 @@ export function OverviewPage({ activeView }: { activeView: WorkspaceView }) {
                     <span>Choose</span>
                   </summary>
                   <div className="local-model-popover">
+                    <div className="local-model-sheet-heading">
+                      <strong>Choose subject model</strong>
+                      <span>Tap outside to close</span>
+                    </div>
                     <div className="local-model-search">
                       <input
                         id="local-subject-search"
@@ -275,6 +279,10 @@ export function OverviewPage({ activeView }: { activeView: WorkspaceView }) {
                         <span>Choose</span>
                       </summary>
                       <div className="local-model-popover">
+                        <div className="local-model-sheet-heading">
+                          <strong>Choose judge model</strong>
+                          <span>Tap outside to close</span>
+                        </div>
                         <div className="local-model-search">
                           <input
                             id="local-judge-search"

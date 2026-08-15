@@ -12,6 +12,7 @@ const testsPage = read("src", "pages", "TestsPage.tsx");
 const executionPage = read("src", "pages", "ExecutionPage.tsx");
 const sectionNav = read("src", "components", "SectionNav.tsx");
 const dataSource = read("src", "lib", "dashboard-data-source.ts");
+const testCatalogView = read("src", "lib", "test-catalog-view.ts");
 const legacyLoader = read("src", "hooks", "useLegacyPage.ts");
 const overviewScript = read("public", "overview.js");
 const executionScript = read("public", "execution.js");
@@ -46,6 +47,11 @@ test("renders one version selector and lazy evidence surface per test", () => {
   assert.match(testsPage, /Retained evidence/);
   assert.match(testsPage, /result\?\.compatibility === 'compatible'/);
   assert.match(testsPage, /n=\{summary\.scored_runs\} scored/);
+  assert.match(testsPage, /No retained evidence for/);
+  assert.match(testsPage, /prefetchedCatalog/);
+  assert.match(testCatalogView, /sortCatalogRows/);
+  assert.match(testCatalogView, /compatibility === 'contract_changed'/);
+  assert.match(testCatalogView, /compatibility === 'missing_side'/);
   assert.doesNotMatch(testsPage, /overall|baseline/i);
 });
 
@@ -107,9 +113,14 @@ test("discovers local models lazily and keeps advanced runner knobs contained", 
   assert.match(localRunner, /function positionModelPicker\(picker\)/);
   assert.match(localRunner, /popoverRect\.height > availableBelow/);
   assert.match(localRunner, /local-model-picker-up/);
+  assert.match(overviewPage, /Choose judge model/);
   assert.match(
     styles,
     /\.local-model-picker\.local-model-picker-up \.local-model-popover\s*\{[^}]*bottom:\s*calc\(100% \+ 6px\)/s,
+  );
+  assert.match(
+    styles,
+    /@media \(max-width: 560px\)[\s\S]*\.local-model-popover[\s\S]*position:\s*fixed/s,
   );
 });
 

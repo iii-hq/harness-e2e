@@ -23,10 +23,17 @@ import type {
   EvaluatedVersionsResponse,
   TestCatalogRow,
   TestSideSummary,
+  TestsListResponse,
   TestVersionResult,
 } from '@/lib/test-catalog'
-
-type ResultFilter = 'all' | 'passed' | 'issues' | 'missing' | 'incompatible'
+import {
+  comparisonUtility,
+  hasRetainedEvidence,
+  isMoreUsefulComparison,
+  matchesResultFilter,
+  type ResultFilter,
+  sortCatalogRows,
+} from '@/lib/test-catalog-view'
 
 const inputClass =
   'min-h-11 w-full rounded-lg border border-line bg-panel-raised px-3 text-sm text-ink outline-none transition focus:border-brand focus:ring-2 focus:ring-brand-soft'
@@ -105,23 +112,6 @@ function compatibilityLabel(result: TestVersionResult | null) {
     contract_changed: 'Cases or contract changed',
     contract_conflict: 'Contract conflict',
   }[result.compatibility]
-}
-
-function matchesResultFilter(row: TestCatalogRow, filter: ResultFilter) {
-  if (filter === 'all') return true
-  const result = row.result
-  if (filter === 'missing') return !result?.from || !result?.to
-  if (filter === 'incompatible') {
-    return Boolean(result && result.compatibility !== 'compatible')
-  }
-  const to = result?.to
-  if (!to) return false
-  const hasIssues =
-    to.outcomes.hard_gate_failed +
-      to.outcomes.technical_failed +
-      to.outcomes.infra_failed >
-    0
-  return filter === 'issues' ? hasIssues : !hasIssues
 }
 
 function negateDelta(result: TestVersionResult | null) {
@@ -240,6 +230,10 @@ export function TestsPage({
   const versionOverrides = useRef(new Map<string, number>())
   const rowRequestCounter = useRef(0)
   const rowRequestSequences = useRef(new Map<string, number>())
+  const prefetchedCatalog = useRef(new Map<string, TestsListResponse>())
+  const recommendationAttempts = useRef(new Set<string>())
+  const automaticSelection = useRef(!initialFrom && !initialTo)
+  const evaluatedRevision = useRef('')
   const comparisonContext = useRef('')
   const selectedCohort = useRef('')
   const selectedFromVersion = useRef('')
@@ -259,6 +253,7 @@ export function TestsPage({
   const [rowErrors, setRowErrors] = useState<Record<string, string>>({})
   const [expanded, setExpanded] = useState<Set<string>>(new Set())
   const [detailsLoaded, setDetailsLoaded] = useState<Set<string>>(new Set())
+  const [comparisonNotice, setComparisonNotice] = useState('')
   const [reloadKey, setReloadKey] = useState(0)
   const comparisonKey = `${cohortId}:${fromVersionId}:${toVersionId}`
   comparisonContext.current = comparisonKey
@@ -332,6 +327,11 @@ export function TestsPage({
       const bridge = await getDashboardDataBridge()
       bridgeRef.current = bridge
       const data = await bridge.listEvaluatedVersions()
+      if (evaluatedRevision.current !== data.revision) {
+        evaluatedRevision.current = data.revision
+        prefetchedCatalog.current.clear()
+        recommendationAttempts.current.clear()
+      }
       setEvaluated(data)
       chooseVersions(
         data,
@@ -440,6 +440,17 @@ export function TestsPage({
     [cohortId, fromVersionId, toVersionId],
   )
 
+  const versions = useMemo(
+    () =>
+      evaluated?.versions.filter((version) => version.cohort_id === cohortId) ??
+      [],
+    [evaluated, cohortId],
+  )
+  const versionById = useMemo(
+    () => new Map(versions.map((version) => [version.id, version])),
+    [versions],
+  )
+
   useEffect(() => {
     void reloadKey
     const bridge = bridgeRef.current
@@ -447,42 +458,117 @@ export function TestsPage({
     let active = true
     setLoading(true)
     setError(null)
-    bridge
-      .listTests({
+
+    const listCatalog = (fromId: string, toId: string) =>
+      bridge.listTests({
         limit: 100,
         cohort_id: cohortId,
-        from_version_id: fromVersionId || undefined,
-        to_version_id: toVersionId || undefined,
+        from_version_id: fromId || undefined,
+        to_version_id: toId || undefined,
       })
-      .then(async (response) => {
-        if (!active) return
-        let next = response.rows
-        if (fromVersionId && toVersionId) {
-          next = await Promise.all(
-            next.map(async (row) => {
-              const override = versionOverrides.current.get(row.test_id)
-              if (
-                !override ||
-                override === row.selected_version ||
-                !row.available_versions.some(
-                  (item) => item.version === override,
-                )
-              ) {
-                return row
+
+    const applyVersionOverrides = async (response: TestsListResponse) => {
+      let next = response.rows
+      if (!fromVersionId || !toVersionId) return next
+      next = await Promise.all(
+        next.map(async (row) => {
+          const override = versionOverrides.current.get(row.test_id)
+          if (
+            !override ||
+            override === row.selected_version ||
+            !row.available_versions.some((item) => item.version === override)
+          ) {
+            return row
+          }
+          const result = await bridge.getTestVersion({
+            test_id: row.test_id,
+            test_version: override,
+            cohort_id: cohortId,
+            from_version_id: fromVersionId,
+            to_version_id: toVersionId,
+          })
+          return { ...row, selected_version: override, result }
+        }),
+      )
+      return next
+    }
+
+    const load = async () => {
+      const cached = prefetchedCatalog.current.get(comparisonKey)
+      if (cached) prefetchedCatalog.current.delete(comparisonKey)
+      const response = cached ?? (await listCatalog(fromVersionId, toVersionId))
+      if (!active) return
+
+      const latestVersionId = versions[0]?.id
+      const recommendationKey = `${evaluated?.revision ?? ''}:${cohortId}:${toVersionId}`
+      if (
+        automaticSelection.current &&
+        fromVersionId &&
+        toVersionId &&
+        toVersionId === latestVersionId &&
+        versions.length > 2 &&
+        !recommendationAttempts.current.has(recommendationKey)
+      ) {
+        recommendationAttempts.current.add(recommendationKey)
+        const alternatives = versions.filter(
+          (version) =>
+            version.id !== fromVersionId && version.id !== toVersionId,
+        )
+        const candidates = await Promise.all(
+          alternatives.map(async (version) => {
+            try {
+              return {
+                fromVersionId: version.id,
+                response: await listCatalog(version.id, toVersionId),
               }
-              const result = await bridge.getTestVersion({
-                test_id: row.test_id,
-                test_version: override,
-                cohort_id: cohortId,
-                from_version_id: fromVersionId,
-                to_version_id: toVersionId,
-              })
-              return { ...row, selected_version: override, result }
-            }),
+            } catch {
+              return null
+            }
+          }),
+        )
+        if (!active || !automaticSelection.current) return
+        let best = { fromVersionId, response }
+        let bestUtility = comparisonUtility(response.rows)
+        for (const candidate of candidates) {
+          if (!candidate) continue
+          const utility = comparisonUtility(candidate.response.rows)
+          if (isMoreUsefulComparison(utility, bestUtility)) {
+            best = candidate
+            bestUtility = utility
+          }
+        }
+        if (best.fromVersionId !== fromVersionId) {
+          const nextKey = `${cohortId}:${best.fromVersionId}:${toVersionId}`
+          prefetchedCatalog.current.set(nextKey, best.response)
+          setComparisonNotice(
+            bestUtility.comparable > 0
+              ? `Selected the closest retained version with ${bestUtility.comparable} comparable test${bestUtility.comparable === 1 ? '' : 's'}.`
+              : 'Selected the retained version with the most shared evidence.',
+          )
+          setFromVersionId(best.fromVersionId)
+          return
+        }
+        if (bestUtility.comparable === 0) {
+          setComparisonNotice(
+            'No shared canonical cases were found for the latest system version. One-sided evidence remains available below.',
           )
         }
-        if (active) setRows(next)
-      })
+      }
+      if (
+        automaticSelection.current &&
+        versions.length <= 2 &&
+        comparisonUtility(response.rows).comparable === 0
+      ) {
+        setComparisonNotice(
+          'No shared canonical cases were found for this cohort. One-sided evidence remains available below.',
+        )
+      }
+
+      const next = await applyVersionOverrides(response)
+      if (active) setRows(next)
+    }
+
+    load()
       .catch((cause) => {
         if (active) {
           setError(cause instanceof Error ? cause : new Error(String(cause)))
@@ -494,25 +580,25 @@ export function TestsPage({
     return () => {
       active = false
     }
-  }, [cohortId, fromVersionId, toVersionId, reloadKey])
+  }, [
+    cohortId,
+    comparisonKey,
+    evaluated?.revision,
+    fromVersionId,
+    reloadKey,
+    toVersionId,
+    versions,
+  ])
 
-  const versions = useMemo(
-    () =>
-      evaluated?.versions.filter((version) => version.cohort_id === cohortId) ??
-      [],
-    [evaluated, cohortId],
-  )
-  const versionById = useMemo(
-    () => new Map(versions.map((version) => [version.id, version])),
-    [versions],
-  )
   const filteredRows = useMemo(() => {
     const normalizedQuery = query.trim().toLowerCase()
-    return rows.filter(
-      (row) =>
-        (!normalizedQuery ||
-          row.test_id.toLowerCase().includes(normalizedQuery)) &&
-        matchesResultFilter(row, resultFilter),
+    return sortCatalogRows(
+      rows.filter(
+        (row) =>
+          (!normalizedQuery ||
+            row.test_id.toLowerCase().includes(normalizedQuery)) &&
+          matchesResultFilter(row, resultFilter),
+      ),
     )
   }, [rows, query, resultFilter])
   const compatibleCount = rows.filter(
@@ -523,6 +609,8 @@ export function TestsPage({
   ).length
 
   const updateCohort = (nextCohort: string) => {
+    automaticSelection.current = true
+    setComparisonNotice('')
     setCohortId(nextCohort)
     const nextVersions = evaluated?.versions.filter(
       (version) => version.cohort_id === nextCohort,
@@ -535,6 +623,8 @@ export function TestsPage({
 
   const swapVersions = () => {
     if (!fromVersionId || !toVersionId) return
+    automaticSelection.current = false
+    setComparisonNotice('')
     setFromVersionId(toVersionId)
     setToVersionId(fromVersionId)
     setRows((current) =>
@@ -553,6 +643,7 @@ export function TestsPage({
   }
 
   const toggleDetails = (row: TestCatalogRow) => {
+    if (!hasRetainedEvidence(row)) return
     const opening = !expanded.has(row.test_id)
     setExpanded((current) => {
       const next = new Set(current)
@@ -565,13 +656,34 @@ export function TestsPage({
     }
   }
 
+  const selectFromVersion = (versionId: string) => {
+    automaticSelection.current = false
+    setComparisonNotice('')
+    setFromVersionId(versionId)
+  }
+
+  const selectToVersion = (versionId: string) => {
+    automaticSelection.current = false
+    setComparisonNotice('')
+    setToVersionId(versionId)
+  }
+
+  const compactModel = (model: string) => model.split('/').at(-1) || model
+
   const cohortLabel = (cohort: CohortDescriptor) => {
+    const judge = cohort.judge_model
+      ? `judge ${compactModel(cohort.judge_model)}`
+      : 'automatic judge'
+    return `${compactModel(cohort.subject_model)} · ${cohort.lane} · ${judge}`
+  }
+
+  const cohortDetail = (cohort: CohortDescriptor) => {
     const judge = cohort.judge_model
       ? `judge ${cohort.judge_provider}/${cohort.judge_model}${
           cohort.judge_protocol ? ` (${cohort.judge_protocol})` : ''
         }`
-      : 'no judge'
-    return `${cohort.subject_provider}/${cohort.subject_model} · ${cohort.lane} · ${judge}`
+      : 'automatic judge'
+    return `subject ${cohort.subject_provider}/${cohort.subject_model} · ${cohort.lane} · ${judge}`
   }
 
   const versionLabel = (versionId: string) => {
@@ -585,6 +697,9 @@ export function TestsPage({
       ? `${version.label} · ${version.id.slice(-6)}`
       : version.label
   }
+  const activeCohort = evaluated?.cohorts.find(
+    (cohort) => cohort.id === cohortId,
+  )
 
   return (
     <>
@@ -657,7 +772,11 @@ export function TestsPage({
               </p>
             </div>
             <span
-              className="comparison-verdict comparison-verdict-eligible"
+              className={`comparison-verdict ${
+                compatibleCount > 0
+                  ? 'comparison-verdict-eligible'
+                  : 'comparison-verdict-exploratory'
+              }`}
               aria-live="polite"
             >
               {fromVersionId && toVersionId
@@ -671,6 +790,7 @@ export function TestsPage({
               <select
                 className={inputClass}
                 value={cohortId}
+                title={activeCohort ? cohortDetail(activeCohort) : undefined}
                 onChange={(event) => updateCohort(event.target.value)}
               >
                 {(evaluated?.cohorts ?? []).map((cohort) => (
@@ -679,6 +799,14 @@ export function TestsPage({
                   </option>
                 ))}
               </select>
+              {activeCohort && (
+                <span
+                  className="truncate font-normal text-ink-muted"
+                  title={cohortDetail(activeCohort)}
+                >
+                  {cohortDetail(activeCohort)}
+                </span>
+              )}
             </label>
             <label className="grid gap-2 text-xs font-semibold text-ink-muted">
               System version A
@@ -686,7 +814,7 @@ export function TestsPage({
                 className={inputClass}
                 value={fromVersionId}
                 disabled={versions.length < 2}
-                onChange={(event) => setFromVersionId(event.target.value)}
+                onChange={(event) => selectFromVersion(event.target.value)}
               >
                 {versions.length < 2 && (
                   <option value="">Waiting for history</option>
@@ -717,7 +845,7 @@ export function TestsPage({
                 className={inputClass}
                 value={toVersionId}
                 disabled={versions.length === 0}
-                onChange={(event) => setToVersionId(event.target.value)}
+                onChange={(event) => selectToVersion(event.target.value)}
               >
                 {versions.length === 0 && (
                   <option value="">No retained version</option>
@@ -734,6 +862,14 @@ export function TestsPage({
               </select>
             </label>
           </div>
+          {comparisonNotice && (
+            <p
+              className="m-0 border-t border-line px-5 py-3 text-xs text-ink-muted"
+              role="status"
+            >
+              {comparisonNotice}
+            </p>
+          )}
         </section>
 
         <section className="panel mt-5" aria-labelledby="test-catalog-title">
@@ -786,7 +922,7 @@ export function TestsPage({
                 <option value="passed">Passing in B</option>
                 <option value="issues">Issues in B</option>
                 <option value="missing">Missing side</option>
-                <option value="incompatible">Changed cases or contracts</option>
+                <option value="changed">Changed cases or contracts</option>
               </select>
             </label>
           </div>
@@ -956,6 +1092,8 @@ function TestRows({
   onVersion: (row: TestCatalogRow, version: number) => void
   onToggle: (row: TestCatalogRow) => void
 }) {
+  const evidenceAvailable = hasRetainedEvidence(row)
+  const testName = displayTestName(row.test_id)
   return (
     <>
       <tr className="border-b border-line align-middle hover:bg-panel-subtle">
@@ -1002,17 +1140,31 @@ function TestRows({
         </td>
         <td className="px-4 py-4">
           <button
-            className="flex min-h-11 items-center gap-2 rounded-lg border border-line px-3 text-xs font-semibold text-ink hover:border-line-strong"
+            className="flex min-h-11 items-center gap-2 rounded-lg border border-line px-3 text-xs font-semibold text-ink hover:border-line-strong disabled:cursor-not-allowed disabled:border-line disabled:text-ink-muted disabled:opacity-60"
             type="button"
             aria-expanded={expanded}
+            aria-label={
+              evidenceAvailable
+                ? `${expanded ? 'Hide' : 'Inspect'} evidence for ${testName}`
+                : `No retained evidence for ${testName}`
+            }
+            disabled={!evidenceAvailable || loading}
             onClick={() => onToggle(row)}
           >
-            {loading ? 'Loading…' : expanded ? 'Hide' : 'Inspect'}
-            <ChevronDown
-              className={`transition ${expanded ? 'rotate-180' : ''}`}
-              size={14}
-              aria-hidden="true"
-            />
+            {loading
+              ? 'Loading…'
+              : !evidenceAvailable
+                ? 'No evidence'
+                : expanded
+                  ? 'Hide'
+                  : 'Inspect'}
+            {evidenceAvailable && (
+              <ChevronDown
+                className={`transition ${expanded ? 'rotate-180' : ''}`}
+                size={14}
+                aria-hidden="true"
+              />
+            )}
           </button>
         </td>
       </tr>
@@ -1061,6 +1213,8 @@ function TestCard({
   onToggle: (row: TestCatalogRow) => void
 }) {
   const delta = row.result?.delta.score ?? null
+  const evidenceAvailable = hasRetainedEvidence(row)
+  const testName = displayTestName(row.test_id)
   return (
     <article className="grid gap-4 rounded-xl border border-line bg-panel-raised p-4">
       <div className="flex items-start justify-between gap-3">
@@ -1098,13 +1252,21 @@ function TestCard({
           className="button"
           type="button"
           aria-expanded={expanded}
+          aria-label={
+            evidenceAvailable
+              ? `${expanded ? 'Hide' : 'Inspect'} evidence for ${testName}`
+              : `No retained evidence for ${testName}`
+          }
+          disabled={!evidenceAvailable || loading}
           onClick={() => onToggle(row)}
         >
           {loading
             ? 'Loading…'
-            : expanded
-              ? 'Hide evidence'
-              : 'Inspect evidence'}
+            : !evidenceAvailable
+              ? 'No evidence'
+              : expanded
+                ? 'Hide evidence'
+                : 'Inspect evidence'}
         </button>
       </div>
       {error && (
