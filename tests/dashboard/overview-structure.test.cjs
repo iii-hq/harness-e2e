@@ -136,6 +136,26 @@ test("restores the per-run chat transcript surface", () => {
   assert.match(sampleExecutions, /traces:\s*\{/);
 });
 
+test("keeps execution detail and history inside the evidence workspace", () => {
+  assert.match(execution, /className="execution-summary grid/);
+  assert.match(execution, /className="detail-context-grid grid/);
+  assert.match(execution, /03 · Diagnostic workspace/);
+  assert.match(executionScript, /scenario-detail-card\.is-focused/);
+  assert.match(index, /id="scenario-history-current"/);
+  assert.match(index, /id="scenario-history-baseline"/);
+  assert.match(index, /id="scenario-history-delta"/);
+  assert.match(index, /className="scenario-history-ledger group/);
+  assert.match(overview, /renderScenarioHistorySummary/);
+  assert.match(styles, /@import "tailwindcss" important/);
+  assert.match(styles, /@theme inline/);
+  assert.match(
+    execution,
+    /grid-cols-\[minmax\(0,1\.35fr\)_minmax\(420px,0\.65fr\)\]/,
+  );
+  assert.match(index, /scenario-history-summary mt-5/);
+  assert.doesNotMatch(styles, /Execution evidence workspace/);
+});
+
 test("uses the delta meaning to color efficiency sparklines", () => {
   assert.match(overview, /const efficiencyTrendColors =/);
   assert.match(overview, /efficiencyTrendColors\[meta\.css\]/);

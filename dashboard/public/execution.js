@@ -48,6 +48,27 @@
     workflowLink: document.querySelector("#workflow-link"),
     workflowRuntime: document.querySelector("#workflow-runtime"),
   };
+  const ui = {
+    configCard:
+      "config-card rounded-none border-0 border-t border-line bg-transparent px-0 py-[18px] [&_dl]:grid-cols-2 [&_h3]:mb-4 [&_h3]:[overflow-wrap:anywhere]",
+    configFacts: "config-facts mt-0 grid grid-cols-2 gap-x-[18px] max-[560px]:grid-cols-1",
+    configGrid: "config-grid mt-0 grid grid-cols-1 gap-0",
+    detailMetric:
+      "detail-metric rounded-none border-0 border-r border-b border-line bg-transparent",
+    metadataItem:
+      "metadata-item grid min-h-[68px] min-w-0 gap-[7px] rounded-none border-0 border-t border-line bg-transparent px-0 py-3.5",
+    metadataLabel:
+      "text-[0.61rem] font-semibold tracking-[0.055em] text-ink-muted uppercase",
+    metadataValue:
+      "overflow-hidden text-ellipsis text-[0.73rem] leading-[1.45] font-[570] text-ink-soft no-underline",
+    metricGrid:
+      "grid grid-cols-4 gap-0 overflow-hidden rounded-[7px] border border-line max-[840px]:grid-cols-2 max-[560px]:grid-cols-1",
+    scenarioBody: "scenario-detail-body border-t border-line px-[18px] pt-0 pb-[18px]",
+    scenarioCard:
+      "scenario-detail-card scroll-mt-[84px] rounded-[7px] border border-line bg-transparent transition-[border-color,background,box-shadow] duration-150 open:bg-panel-faint target:border-brand target:border-l-[3px] target:border-l-brand target:bg-brand-soft target:shadow-[inset_0_0_0_1px_rgba(199,255,74,0.035)] [&.is-focused]:border-brand [&.is-focused]:border-l-[3px] [&.is-focused]:border-l-brand [&.is-focused]:bg-brand-soft [&.is-focused]:shadow-[inset_0_0_0_1px_rgba(199,255,74,0.035)]",
+    scenarioSummary:
+      "scenario-summary-row grid min-h-[72px] list-none grid-cols-[minmax(200px,1fr)_auto_auto_auto_auto_auto] items-center gap-[18px] px-[18px] py-3.5 max-[560px]:grid-cols-[minmax(0,1fr)_auto_auto] max-[560px]:[&>.scenario-summary-stat]:hidden",
+  };
 
   function escapeHtml(value) {
     return String(value ?? "")
@@ -168,16 +189,16 @@
 
   function metadataItem(label, value, options = {}) {
     const content = options.href
-      ? `<a href="${escapeHtml(options.href)}">${escapeHtml(value)} <span aria-hidden="true">↗</span></a>`
-      : `<strong${options.mono ? ' class="mono"' : ""}>${escapeHtml(value)}</strong>`;
-    return `<div class="metadata-item"><span>${escapeHtml(label)}</span>${content}</div>`;
+      ? `<a class="${ui.metadataValue}" href="${escapeHtml(options.href)}">${escapeHtml(value)} <span aria-hidden="true">↗</span></a>`
+      : `<strong class="${ui.metadataValue}${options.mono ? " mono font-mono" : ""}">${escapeHtml(value)}</strong>`;
+    return `<div class="${ui.metadataItem}"><span class="${ui.metadataLabel}">${escapeHtml(label)}</span>${content}</div>`;
   }
 
   function renderHeader() {
     const meta = statusMeta(execution.status);
     const runLabel = execution.run_id || execution.id;
     elements.breadcrumb.textContent = `Run ${runLabel}`;
-    elements.title.textContent = `Run ${runLabel}`;
+    elements.title.textContent = runLabel;
     elements.status.className = `status-pill status-${meta.css}`;
     elements.status.textContent = meta.label;
     elements.availability.className =
@@ -271,7 +292,7 @@
     )
       .map(
         (subject) => `
-          <article class="config-card">
+          <article class="${ui.configCard}">
             <span>Subject</span>
             <h3>${escapeHtml(subject.provider)}/${escapeHtml(subject.model)}</h3>
             <dl>
@@ -287,7 +308,7 @@
     const judgeCards = [...judges.values()]
       .map(
         (judge) => `
-          <article class="config-card">
+          <article class="${ui.configCard}">
             <span>Judge</span>
             <h3>${escapeHtml(judge.provider)}/${escapeHtml(judge.model)}</h3>
             <dl>
@@ -326,8 +347,8 @@
       .filter(Boolean)
       .join(" · ");
     elements.configuration.innerHTML = `
-      <div class="config-grid">${subjectCards}${judgeCards}</div>
-      <div class="config-facts">
+      <div class="${ui.configGrid}">${subjectCards}${judgeCards}</div>
+      <div class="${ui.configFacts}">
         ${metadataItem("Engine revision", revisions.join(", ") || "Unknown", { mono: true })}
         ${metadataItem("Judge protocol", protocols.join(", ") || "Unknown")}
         ${metadataItem("Requested runs", execution.requested_runs ?? "Unknown")}
@@ -338,7 +359,7 @@
 
   function scenarioSummaryRow(options) {
     return `
-      <summary class="scenario-summary-row">
+      <summary class="${ui.scenarioSummary}">
         <span class="scenario-summary-copy">
           <strong>${escapeHtml(options.title)}</strong>
           <small>${escapeHtml(options.subjectLabel)}</small>
@@ -368,7 +389,7 @@
     const anchor = scenarioAnchor(subject.id, scenario.id);
     const open = scenario.passed === false || options.soleScenario;
     return `
-      <details id="${escapeHtml(anchor)}" class="scenario-detail-card" ${open ? "open" : ""}>
+      <details id="${escapeHtml(anchor)}" class="${ui.scenarioCard}" ${open ? "open" : ""}>
         ${scenarioSummaryRow({
           title: titleCase(scenario.id),
           subjectLabel: `${subject.provider}/${subject.model}`,
@@ -380,8 +401,8 @@
           statusCss: meta.css,
           statusLabel: meta.label,
         })}
-        <div class="scenario-detail-body">
-          <div class="scenario-detail-metrics">
+        <div class="${ui.scenarioBody}">
+          <div class="scenario-detail-metrics ${ui.metricGrid}">
             ${metricBlock("Median score", compactNumber(scenario.median_score, 1))}
             ${metricBlock("Pass rate", formatPercent(typeof scenario.pass_rate === "number" ? scenario.pass_rate * 100 : null))}
             ${metricBlock("Cost", formatCurrency(scenario.total_cost_usd))}
@@ -401,7 +422,7 @@
 
   function metricBlock(label, value, caption = "") {
     return `
-      <div class="detail-metric">
+      <div class="${ui.detailMetric}">
         <span>${escapeHtml(label)}</span>
         <strong>${escapeHtml(value)}</strong>
         ${caption ? `<small>${escapeHtml(caption)}</small>` : ""}
@@ -529,7 +550,7 @@
     const judge = run.judge_usage || {};
     const cost = run.cost || {};
     return `
-      <div class="usage-grid">
+      <div class="usage-grid ${ui.metricGrid}">
         ${metricBlock("Sessions", compactNumber(totals.sessions, 0))}
         ${metricBlock("Turns", compactNumber(totals.turns, 0))}
         ${metricBlock("Function calls", compactNumber(totals.function_calls, 0))}
@@ -933,7 +954,7 @@
       ? run.transcript.messages
       : [];
     container.innerHTML = `
-      <div class="run-overview">
+      <div class="run-overview ${ui.metricGrid}">
         ${metricBlock("Score", compactNumber(run.score, 1))}
         ${metricBlock("Runtime", formatDuration((run.wall_time_ms || 0) / 1000))}
         ${metricBlock("Total cost", formatCurrency(run.cost?.total_usd))}
@@ -1004,7 +1025,7 @@
     );
     const open = !scenario.passed || failingRun || options.soleScenario;
     return `
-      <details id="${escapeHtml(anchor)}" class="scenario-detail-card" ${open ? "open" : ""}>
+      <details id="${escapeHtml(anchor)}" class="${ui.scenarioCard}" ${open ? "open" : ""}>
         ${scenarioSummaryRow({
           title: titleCase(scenario.scenario_id),
           subjectLabel: `${report.subject.provider}/${report.subject.model}`,
@@ -1016,8 +1037,8 @@
           statusCss: meta.css,
           statusLabel: meta.label,
         })}
-        <div class="scenario-detail-body">
-        <div class="scenario-detail-metrics">
+        <div class="${ui.scenarioBody}">
+        <div class="scenario-detail-metrics ${ui.metricGrid}">
           ${metricBlock("Median score", compactNumber(aggregate.median_score, 1))}
           ${metricBlock("Pass rate", formatPercent(
             typeof aggregate.pass_rate === "number" ? aggregate.pass_rate * 100 : null,
@@ -1274,6 +1295,11 @@
     if (!anchorId) return;
     const target = document.getElementById(anchorId);
     if (!target) return;
+    document
+      .querySelectorAll(".scenario-detail-card.is-focused")
+      .forEach((scenario) => scenario.classList.remove("is-focused"));
+    const focusedScenario = target.closest(".scenario-detail-card");
+    focusedScenario?.classList.add("is-focused");
     // Open the target and every collapsed ancestor so deep links land on
     // rendered content; opening fires toggle, which drives the lazy renderers.
     let node = target.closest("details");

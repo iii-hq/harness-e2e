@@ -4,7 +4,34 @@
 @import "@fontsource/chivo-mono/400.css";
 @import "@fontsource/chivo-mono/500.css";
 @import "@fontsource/chivo-mono/600.css";
-@import "tailwindcss";
+@import "tailwindcss" important;
+
+@theme inline {
+  --color-canvas: var(--bg);
+  --color-panel: var(--surface);
+  --color-panel-raised: var(--surface-raised);
+  --color-panel-soft: var(--surface-soft);
+  --color-panel-faint: rgba(var(--contrast-rgb), 0.012);
+  --color-panel-quiet: rgba(var(--contrast-rgb), 0.01);
+  --color-panel-subtle: rgba(var(--contrast-rgb), 0.018);
+  --color-line: var(--line);
+  --color-line-strong: var(--line-strong);
+  --color-ink: var(--text);
+  --color-ink-soft: var(--text-soft);
+  --color-ink-muted: var(--text-muted);
+  --color-brand: var(--accent);
+  --color-brand-soft: var(--accent-soft);
+  --color-info: var(--accent-blue);
+  --color-warning: var(--warning);
+  --color-danger: var(--danger);
+  --color-success: var(--success);
+  --color-glass: var(--glass);
+  --color-app-backdrop: var(--backdrop);
+  --font-mono:
+    "Chivo Mono", ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas,
+    monospace;
+  --shadow-panel: var(--shadow);
+}
 
 :root {
   color-scheme: dark;

@@ -176,13 +176,20 @@
     previous: document.querySelector("#previous-page"),
     search: document.querySelector("#execution-search"),
     scenarioHistoryBody: document.querySelector("#scenario-history-body"),
+    scenarioHistoryBaseline: document.querySelector("#scenario-history-baseline"),
     scenarioHistoryChart: document.querySelector("#scenario-history-chart"),
     scenarioHistoryClose: document.querySelector("#scenario-history-close"),
     scenarioHistoryContext: document.querySelector("#scenario-history-context"),
+    scenarioHistoryCurrent: document.querySelector("#scenario-history-current"),
+    scenarioHistoryDelta: document.querySelector("#scenario-history-delta"),
     scenarioHistoryDescription: document.querySelector(
       "#scenario-history-description",
     ),
     scenarioHistoryDialog: document.querySelector("#scenario-history-dialog"),
+    scenarioHistoryMetricTitle: document.querySelector(
+      "#scenario-history-metric-title",
+    ),
+    scenarioHistorySamples: document.querySelector("#scenario-history-samples"),
     scenarioHistoryTitle: document.querySelector("#scenario-history-title"),
     syncLabel: document.querySelector("#sync-label"),
     status: document.querySelector("#status-filter"),
@@ -1426,6 +1433,49 @@
     });
   }
 
+  function renderScenarioHistorySummary(entries, metricId, row) {
+    const definition = scenarioMetricDefinitions[metricId];
+    const values = entries
+      .map((entry) => entry.metric?.averages?.[metricId])
+      .filter((value) => typeof value === "number" && Number.isFinite(value));
+    const current = values.at(-1);
+    const baseline = row.baseline?.[metricId];
+    const delta =
+      typeof current === "number" &&
+      typeof baseline === "number" &&
+      Number.isFinite(baseline) &&
+      baseline !== 0
+        ? ((current - baseline) / Math.abs(baseline)) * 100
+        : null;
+
+    elements.scenarioHistoryCurrent.textContent =
+      typeof current === "number"
+        ? formatScenarioHistoryValue(metricId, current)
+        : "—";
+    elements.scenarioHistoryBaseline.textContent =
+      typeof baseline === "number"
+        ? formatScenarioHistoryValue(metricId, baseline)
+        : "—";
+    elements.scenarioHistoryDelta.textContent =
+      typeof delta === "number" && Number.isFinite(delta)
+        ? `${delta < 0 ? "↓" : delta > 0 ? "↑" : ""}${compactNumber(
+            Math.abs(delta),
+            1,
+          )}%`
+        : "—";
+    elements.scenarioHistoryDelta.classList.remove(
+      "text-success",
+      "text-danger",
+    );
+    if (typeof delta === "number" && delta < 0) {
+      elements.scenarioHistoryDelta.classList.add("text-success");
+    } else if (typeof delta === "number" && delta > 0) {
+      elements.scenarioHistoryDelta.classList.add("text-danger");
+    }
+    elements.scenarioHistorySamples.textContent = compactNumber(values.length, 0);
+    elements.scenarioHistoryMetricTitle.textContent = `${definition.label} over time`;
+  }
+
   function renderScenarioHistory() {
     const row = state.scenarioHistoryRow;
     if (!row) return;
@@ -1440,14 +1490,14 @@
         ? "removed from current suite"
         : `current contract v${row.scenarioVersion}`
     }`;
-    elements.scenarioHistoryDescription.textContent =
-      `${definition.description} Lines break when the scenario contract changes.`;
+    elements.scenarioHistoryDescription.textContent = definition.description;
     document.querySelectorAll("[data-history-metric]").forEach((button) => {
       const active = button.dataset.historyMetric === metricId;
       button.classList.toggle("active", active);
       button.setAttribute("aria-selected", String(active));
       button.tabIndex = active ? 0 : -1;
     });
+    renderScenarioHistorySummary(entries, metricId, row);
     renderScenarioHistoryChart(entries, metricId, row);
     renderScenarioHistoryTable(entries, metricId, row);
   }

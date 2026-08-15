@@ -4,6 +4,13 @@ import { SectionNav, type WorkspaceView } from '@/components/SectionNav'
 import { ThemeToggle } from '@/components/ThemeToggle'
 import { useLegacyPage } from '@/hooks/useLegacyPage'
 
+const historyKicker =
+  'section-kicker mb-[7px] font-mono text-[0.61rem] font-semibold tracking-[0.055em] text-ink-muted'
+const historyTab =
+  'min-h-[30px] shrink-0 whitespace-nowrap rounded-[5px] border-0 bg-transparent px-2.5 text-ink-muted hover:bg-ink hover:text-canvas [&.active]:bg-ink [&.active]:text-canvas'
+const historyStat =
+  'grid min-w-0 gap-[5px] border-r border-line bg-panel-quiet px-[18px] py-4 [&>small]:text-[0.6rem] [&>small]:text-ink-muted [&>span]:text-[0.59rem] [&>span]:font-bold [&>span]:tracking-[0.065em] [&>span]:text-ink-muted [&>span]:uppercase [&>strong]:overflow-hidden [&>strong]:text-ellipsis [&>strong]:whitespace-nowrap [&>strong]:text-[clamp(1.25rem,2vw,1.7rem)] [&>strong]:font-[570] [&>strong]:tracking-[-0.04em]'
+
 function initialWorkspaceView(): WorkspaceView {
   const view = new URLSearchParams(window.location.search).get('view')
   if (view === 'scenarios' || view === 'capability' || view === 'executions') {
@@ -989,20 +996,30 @@ export function OverviewPage() {
 
         <dialog
           id="scenario-history-dialog"
-          className="scenario-history-dialog"
+          className="scenario-history-dialog max-h-[94dvh] w-[min(1120px,calc(100%-32px))] rounded-[10px] border border-line-strong border-t-[3px] border-t-info bg-panel shadow-panel backdrop:bg-app-backdrop backdrop:backdrop-blur-[5px]"
+          aria-labelledby="scenario-history-title"
+          aria-describedby="scenario-history-context scenario-history-description"
         >
-          <div className="scenario-history-shell">
-            <header className="scenario-history-header">
+          <div className="scenario-history-shell max-h-[calc(94dvh-3px)] overflow-y-auto p-0 overscroll-contain">
+            <header className="scenario-history-header sticky top-0 z-[3] flex items-start justify-between gap-6 border-b border-line bg-panel/95 px-7 pt-6 pb-5 backdrop-blur-[18px] max-[560px]:px-[18px] max-[560px]:pt-5 max-[560px]:pb-[17px]">
               <div>
-                <div className="section-kicker">Scenario history</div>
-                <h2 id="scenario-history-title">Scenario</h2>
-                <p id="scenario-history-context">
+                <div className={historyKicker}>Scenario history</div>
+                <h2
+                  id="scenario-history-title"
+                  className="m-0 text-[clamp(1.45rem,2.4vw,2rem)] font-[570] tracking-[-0.035em]"
+                >
+                  Scenario
+                </h2>
+                <p
+                  id="scenario-history-context"
+                  className="mt-2 font-mono text-[0.62rem] text-ink-muted"
+                >
                   Execution-by-execution efficiency.
                 </p>
               </div>
               <button
                 id="scenario-history-close"
-                className="scenario-history-close"
+                className="dialog-close scenario-history-close bg-transparent"
                 type="button"
                 aria-label="Close scenario history"
               >
@@ -1010,77 +1027,168 @@ export function OverviewPage() {
               </button>
             </header>
 
-            <div
-              className="scenario-history-tabs"
-              role="tablist"
-              aria-label="Scenario metric"
-            >
-              <button type="button" role="tab" data-history-metric="cost_usd">
-                Cost
-              </button>
-              <button type="button" role="tab" data-history-metric="tokens">
-                Tokens
-              </button>
-              <button
-                type="button"
-                role="tab"
-                data-history-metric="duration_seconds"
+            <div className="scenario-history-toolbar grid grid-cols-[auto_minmax(0,1fr)] items-center gap-4 px-7 pt-5 max-[560px]:gap-2 max-[560px]:px-[18px] max-[560px]:pt-4">
+              <span className="text-[0.6rem] font-bold tracking-[0.07em] text-ink-muted uppercase">
+                Metric
+              </span>
+              <div
+                className="scenario-history-tabs m-0 flex w-fit max-w-full flex-nowrap gap-0.5 overflow-x-auto rounded-[7px] border border-line bg-panel-subtle p-[3px] [scrollbar-width:thin]"
+                role="tablist"
+                aria-label="Scenario metric"
               >
-                Duration
-              </button>
-              <button
-                type="button"
-                role="tab"
-                data-history-metric="function_calls"
-              >
-                Function calls
-              </button>
-              <button
-                type="button"
-                role="tab"
-                data-history-metric="function_call_errors"
-              >
-                Function errors
-              </button>
-              <button
-                type="button"
-                role="tab"
-                data-history-metric="work_amplification"
-              >
-                Work amplification
-              </button>
-              <button
-                type="button"
-                role="tab"
-                data-history-metric="effective_fan_out"
-              >
-                Effective fan-out
-              </button>
+                <button
+                  className={historyTab}
+                  type="button"
+                  role="tab"
+                  data-history-metric="cost_usd"
+                >
+                  Cost
+                </button>
+                <button
+                  className={historyTab}
+                  type="button"
+                  role="tab"
+                  data-history-metric="tokens"
+                >
+                  Tokens
+                </button>
+                <button
+                  className={historyTab}
+                  type="button"
+                  role="tab"
+                  data-history-metric="duration_seconds"
+                >
+                  Duration
+                </button>
+                <button
+                  className={historyTab}
+                  type="button"
+                  role="tab"
+                  data-history-metric="function_calls"
+                >
+                  Function calls
+                </button>
+                <button
+                  className={historyTab}
+                  type="button"
+                  role="tab"
+                  data-history-metric="function_call_errors"
+                >
+                  Function errors
+                </button>
+                <button
+                  className={historyTab}
+                  type="button"
+                  role="tab"
+                  data-history-metric="work_amplification"
+                >
+                  Work amplification
+                </button>
+                <button
+                  className={historyTab}
+                  type="button"
+                  role="tab"
+                  data-history-metric="effective_fan_out"
+                >
+                  Effective fan-out
+                </button>
+              </div>
             </div>
             <p
               id="scenario-history-description"
-              className="scenario-history-description"
+              className="scenario-history-description mt-2.5 mr-7 ml-7 max-w-[820px] leading-[1.55] text-ink-muted max-[560px]:mr-[18px] max-[560px]:ml-[18px]"
             ></p>
-            <div
-              id="scenario-history-chart"
-              className="scenario-history-chart"
-              aria-live="polite"
-            ></div>
 
-            <div className="table-wrap scenario-history-table-wrap">
-              <table className="scenario-history-table">
-                <thead>
-                  <tr>
-                    <th scope="col">Execution</th>
-                    <th scope="col">Value</th>
-                    <th scope="col">Delta</th>
-                    <th scope="col">Outcome</th>
-                    <th scope="col">Contract</th>
-                  </tr>
-                </thead>
-                <tbody id="scenario-history-body"></tbody>
-              </table>
-            </div>
+            <section
+              className="scenario-history-summary mt-5 mr-7 ml-7 grid grid-cols-4 overflow-hidden rounded-[7px] border border-line max-[840px]:grid-cols-2 max-[560px]:mr-[18px] max-[560px]:ml-[18px]"
+              aria-label="Selected metric summary"
+            >
+              <div className={`${historyStat} max-[840px]:border-b`}>
+                <span>Current</span>
+                <strong id="scenario-history-current">—</strong>
+                <small>latest collected value</small>
+              </div>
+              <div
+                className={`${historyStat} max-[840px]:border-r-0 max-[840px]:border-b`}
+              >
+                <span>Baseline</span>
+                <strong id="scenario-history-baseline">—</strong>
+                <small>comparable contract</small>
+              </div>
+              <div className={historyStat}>
+                <span>Delta</span>
+                <strong id="scenario-history-delta">—</strong>
+                <small>current vs baseline</small>
+              </div>
+              <div className={`${historyStat} border-r-0`}>
+                <span>Evidence</span>
+                <strong id="scenario-history-samples">—</strong>
+                <small>values retained</small>
+              </div>
+            </section>
+
+            <section
+              className="scenario-history-visual mt-6 mr-7 ml-7 border-t border-line pt-5 max-[560px]:mr-[18px] max-[560px]:ml-[18px]"
+              aria-label="Metric trend"
+            >
+              <div className="scenario-history-visual-heading flex items-end justify-between gap-6 max-[560px]:flex-col max-[560px]:items-start max-[560px]:gap-[7px]">
+                <div>
+                  <div className={`${historyKicker} mb-1.5 text-[0.59rem]`}>
+                    Trend
+                  </div>
+                  <h3
+                    id="scenario-history-metric-title"
+                    className="m-0 text-base font-[590]"
+                  >
+                    Metric over time
+                  </h3>
+                </div>
+                <span className="text-[0.63rem] text-ink-muted">
+                  Contract changes break the line
+                </span>
+              </div>
+              <div
+                id="scenario-history-chart"
+                className="scenario-history-chart mt-3 min-h-[330px] rounded-none border-0 bg-transparent p-0 max-[560px]:min-h-[250px]"
+                aria-live="polite"
+              ></div>
+            </section>
+
+            <details
+              className="scenario-history-ledger group mt-5 mr-7 mb-7 ml-7 overflow-hidden rounded-[7px] border border-line max-[560px]:mr-[18px] max-[560px]:ml-[18px]"
+              open
+            >
+              <summary className="flex min-h-[58px] cursor-pointer list-none items-center justify-between bg-panel-faint px-4 py-2.5">
+                <span className="grid gap-[3px]">
+                  <strong className="text-[0.75rem] font-semibold">
+                    Execution ledger
+                  </strong>
+                  <small className="text-[0.61rem] text-ink-muted">
+                    Immutable values behind this trend
+                  </small>
+                </span>
+                <span
+                  className="section-chevron group-open:rotate-180"
+                  aria-hidden="true"
+                >
+                  ⌄
+                </span>
+              </summary>
+              <div className="table-wrap scenario-history-table-wrap mt-0 border-t border-line">
+                <table className="scenario-history-table">
+                  <thead>
+                    <tr>
+                      <th scope="col">Execution</th>
+                      <th scope="col">Value</th>
+                      <th scope="col">Delta</th>
+                      <th scope="col">Outcome</th>
+                      <th scope="col">Contract</th>
+                    </tr>
+                  </thead>
+                  <tbody id="scenario-history-body"></tbody>
+                </table>
+              </div>
+            </details>
           </div>
         </dialog>
       </main>
