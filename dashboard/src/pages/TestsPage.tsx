@@ -454,7 +454,7 @@ export function TestsPage({
   useEffect(() => {
     void reloadKey
     const bridge = bridgeRef.current
-    if (!bridge || !cohortId) return
+    if (!bridge) return
     let active = true
     setLoading(true)
     setError(null)
@@ -462,7 +462,7 @@ export function TestsPage({
     const listCatalog = (fromId: string, toId: string) =>
       bridge.listTests({
         limit: 100,
-        cohort_id: cohortId,
+        cohort_id: cohortId || undefined,
         from_version_id: fromId || undefined,
         to_version_id: toId || undefined,
       })
@@ -555,6 +555,7 @@ export function TestsPage({
         }
       }
       if (
+        cohortId &&
         automaticSelection.current &&
         versions.length <= 2 &&
         comparisonUtility(response.rows).comparable === 0
@@ -720,10 +721,18 @@ export function TestsPage({
           </span>
         </a>
         <nav className="topbar-actions" aria-label="Dashboard actions">
-          <a className="button button-primary" href={hashForWorkspace()}>
+          <a
+            className="button button-primary"
+            href={hashForWorkspace()}
+            data-mobile-label="New"
+          >
             ＋ New execution
           </a>
-          <a className="button button-secondary" href={hashForCoverage()}>
+          <a
+            className="button button-secondary"
+            href={hashForCoverage()}
+            data-mobile-label="Coverage"
+          >
             Coverage
           </a>
           <ThemeToggle />
@@ -780,7 +789,7 @@ export function TestsPage({
               aria-live="polite"
             >
               {fromVersionId && toVersionId
-                ? `${compatibleCount} comparable tests`
+                ? `${compatibleCount} comparable test${compatibleCount === 1 ? '' : 's'}`
                 : 'Waiting for two system versions'}
             </span>
           </div>
@@ -791,8 +800,12 @@ export function TestsPage({
                 className={inputClass}
                 value={cohortId}
                 title={activeCohort ? cohortDetail(activeCohort) : undefined}
+                disabled={(evaluated?.cohorts.length ?? 0) === 0}
                 onChange={(event) => updateCohort(event.target.value)}
               >
+                {(evaluated?.cohorts.length ?? 0) === 0 && (
+                  <option value="">No evaluated cohort yet</option>
+                )}
                 {(evaluated?.cohorts ?? []).map((cohort) => (
                   <option key={cohort.id} value={cohort.id}>
                     {cohortLabel(cohort)}
@@ -971,9 +984,15 @@ export function TestsPage({
             </div>
           ) : filteredRows.length === 0 ? (
             <div className="empty-state m-4">
-              <h3>No tests match this view</h3>
+              <h3>
+                {rows.length === 0
+                  ? 'No tests are registered yet'
+                  : 'No tests match this view'}
+              </h3>
               <p>
-                Clear the search or result filter, or create a new execution.
+                {rows.length === 0
+                  ? 'Create an execution to publish the first test evidence.'
+                  : 'Clear the search or result filter to see the full catalog.'}
               </p>
               <a className="button button-primary" href={hashForWorkspace()}>
                 New execution

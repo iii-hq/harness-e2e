@@ -63,6 +63,10 @@ test("normalizes execution status and availability", () => {
   assert.equal(normalized.id, "99");
   assert.equal(normalized.status, "infra_failed");
   assert.equal(normalized.availability, "unavailable");
+  assert.equal(
+    normalizeExecution({ status: "cancelling", subjects: [] }).status,
+    "cancelling",
+  );
 });
 
 test("normalizes schema 2 failures with blocking precedence", () => {

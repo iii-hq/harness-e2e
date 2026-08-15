@@ -305,6 +305,7 @@ select {
 .brand {
   display: inline-flex;
   align-items: center;
+  min-height: 44px;
   color: var(--text);
   text-decoration: none;
 }
@@ -334,6 +335,9 @@ select {
 .text-link,
 .release-link,
 footer a {
+  display: inline-flex;
+  align-items: center;
+  min-height: 40px;
   color: var(--text-soft);
   font-size: 0.82rem;
   text-decoration: none;
@@ -2415,7 +2419,7 @@ footer {
   display: flex;
   align-items: center;
   gap: 8px;
-  min-height: 38px;
+  min-height: 44px;
   padding: 0 8px;
   color: var(--text-soft);
   cursor: pointer;
@@ -2465,7 +2469,7 @@ footer {
   justify-content: space-between;
   gap: 12px;
   width: 100%;
-  min-height: 34px;
+  min-height: 40px;
   padding: 6px 9px;
   border: 0;
   border-radius: 7px;
@@ -3035,7 +3039,7 @@ footer {
 }
 
 .pagination button {
-  min-height: 34px;
+  min-height: 44px;
   padding: 0 12px;
   border: 1px solid var(--line);
   border-radius: 8px;
@@ -3066,6 +3070,9 @@ footer {
 }
 
 .breadcrumbs a {
+  display: inline-flex;
+  align-items: center;
+  min-height: 32px;
   color: var(--text-soft);
   text-decoration: none;
 }
@@ -5950,6 +5957,77 @@ footer {
   .capability-table-wrap,
   .efficiency-table-wrap {
     overflow: visible;
+  }
+
+  .executions-panel .table-wrap {
+    overflow: visible;
+  }
+
+  .execution-table {
+    display: block;
+    width: 100%;
+    min-width: 0;
+  }
+
+  .execution-table thead {
+    display: none;
+  }
+
+  .execution-table tbody {
+    display: grid;
+    gap: 8px;
+  }
+
+  .execution-table tr {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    overflow: hidden;
+    padding: 14px;
+    border: 1px solid var(--line);
+    border-radius: 7px;
+    background: rgba(var(--contrast-rgb), 0.012);
+  }
+
+  .execution-table td {
+    display: grid;
+    gap: 4px;
+    min-width: 0;
+    padding: 10px 0;
+    border: 0;
+    color: var(--text-soft);
+    text-align: left;
+    white-space: normal;
+  }
+
+  .execution-table td::before {
+    color: var(--text-muted);
+    content: attr(data-label);
+    font-size: 0.56rem;
+    font-weight: 700;
+    letter-spacing: 0.07em;
+    text-transform: uppercase;
+  }
+
+  .execution-table td:first-child {
+    grid-column: 1 / -1;
+    border-bottom: 1px solid var(--line);
+  }
+
+  .execution-table .table-empty {
+    display: block;
+    grid-column: 1 / -1;
+    border-bottom: 0;
+  }
+
+  .execution-evidence-cell {
+    max-width: none;
+  }
+
+  .execution-evidence-cell > span:first-child,
+  .execution-table-stack small {
+    overflow: visible;
+    text-overflow: clip;
+    white-space: normal;
   }
 
   .capability-table,

@@ -170,6 +170,10 @@
     if (typeof job?.log_offset === "number") logOffset = job.log_offset;
     const active = ["running", "cancelling"].includes(job?.status);
     jobActive = active;
+    if (active) {
+      elements.scenarioPicker.open = false;
+      elements.advanced.open = false;
+    }
     setControls(active || submitting);
     setSubmitState(submitting ? "starting" : active ? job.status : "idle");
     elements.cancel.hidden = !active;
@@ -592,6 +596,8 @@
           seed: values.get("seed") ? Number(values.get("seed")) : null,
         };
         submitting = true;
+        elements.scenarioPicker.open = false;
+        elements.advanced.open = false;
         setSubmitState("starting");
         setControls(true);
         elements.runStatus.textContent = "Starting…";

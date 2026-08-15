@@ -463,7 +463,7 @@ export function OverviewPage({ activeView }: { activeView: WorkspaceView }) {
                   <strong id="latest-health-availability">—</strong>
                 </span>
                 <span>
-                  <small>Completed</small>
+                  <small id="latest-health-time-label">Completed</small>
                   <strong id="latest-health-completed">—</strong>
                 </span>
               </section>

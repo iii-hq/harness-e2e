@@ -23,6 +23,7 @@
     tableTotal:
       Number(window.HARNESS_EXECUTIONS?.total) || history.executions.length,
     tableLoading: false,
+    tableError: "",
   };
   let tableLoadSequence = 0;
   let searchTimer = null;
@@ -60,6 +61,7 @@
     latestLane: document.querySelector("#latest-health-lane"),
     latestStatus: document.querySelector("#latest-health-status"),
     latestSummary: document.querySelector("#latest-health-summary"),
+    latestTimeLabel: document.querySelector("#latest-health-time-label"),
     latestTitle: document.querySelector("#latest-health-title"),
     latestWorkflowLink: document.querySelector("#latest-workflow-link"),
     localRunnerClose: document.querySelector("#close-local-runner"),
@@ -157,6 +159,7 @@
       incomplete: { label: "Incomplete", short: "–", css: "incomplete" },
       cancelled: { label: "Cancelled", short: "○", css: "cancelled" },
       running: { label: "Running", short: "•", css: "running" },
+      cancelling: { label: "Cancelling", short: "•", css: "running" },
     }[status] || { label: "Unknown", short: "?", css: "incomplete" };
   }
 
@@ -177,16 +180,25 @@
     const expected = health.expectedReports;
     const received = health.receivedReports;
     const hasReportDenominator = typeof expected === "number" && expected > 0;
+    const active = ["running", "cancelling"].includes(health.status);
 
     elements.latestStatus.className = `status-pill status-${meta.css}`;
     elements.latestStatus.textContent = meta.label;
     elements.latestTitle.textContent =
-      health.status === "passed"
+      active
+        ? health.status === "cancelling"
+          ? "Cancellation is in progress"
+          : "Execution is still running"
+        : health.status === "passed"
         ? "Latest execution passed"
         : health.availability === "unavailable"
           ? "Execution stopped before report evidence"
           : `${meta.label} needs attention`;
-    elements.latestSummary.textContent = hasReportDenominator
+    elements.latestSummary.textContent = active
+      ? hasReportDenominator
+        ? `${compactNumber(received, 0)} of ${compactNumber(expected, 0)} expected reports received so far. Results will update as scenarios complete.`
+        : "Report evidence will appear as scenarios complete. Quality and reliability remain pending while this execution is active."
+      : hasReportDenominator
       ? `${compactNumber(received, 0)} of ${compactNumber(expected, 0)} expected reports received. ${dataLabel(health.availability)} is retained for this execution.`
       : health.availability === "unavailable"
         ? "No scenario denominator is available, so quality and reliability metrics remain unknown instead of being shown as zero."
@@ -194,6 +206,7 @@
     elements.latestIdentity.textContent = health.identity;
     elements.latestLane.textContent = titleCase(health.lane);
     elements.latestAvailability.textContent = dataLabel(health.availability);
+    elements.latestTimeLabel.textContent = active ? "Started" : "Completed";
     elements.latestCompleted.textContent = formatDate(
       latest.completed_at || latest.started_at,
       true,
@@ -220,6 +233,11 @@
       signalMessage.textContent =
         health.firstFailure.message || "Open the execution for diagnostic evidence.";
       elements.latestFirstFailure.classList.add("has-failure");
+    } else if (active) {
+      signalTitle.textContent = "Waiting for report evidence";
+      signalMessage.textContent =
+        "No blocking failure has been reported. Open the execution to follow live progress.";
+      elements.latestFirstFailure.classList.remove("has-failure");
     } else if (health.status === "passed") {
       signalTitle.textContent = "No blocking failure in the latest execution";
       signalMessage.textContent = "Efficiency can be reviewed, subject to cohort compatibility and evidence depth.";
@@ -406,6 +424,9 @@
     page.forEach((execution) => {
       const row = document.createElement("tr");
       const meta = statusMeta(execution.status);
+      const executionActive = ["running", "cancelling"].includes(
+        execution.status,
+      );
       const commit = execution.source?.sha || "";
       const subjectLabels = (execution.subjects || []).map(
         (subject) => `${subject.provider}/${subject.model}`,
@@ -425,6 +446,8 @@
       const firstFailure = execution.first_failure?.message || "";
       const evidencePreview = firstFailure
         ? firstFailure
+        : executionActive
+          ? "Waiting for report evidence"
         : hasFailureEvidence
           ? failures
             ? `${failures} blocking event${failures === 1 ? "" : "s"}`
@@ -438,7 +461,7 @@
         : `run ${execution.run_id || execution.id}`;
       const commitCell = isLocal
         ? ""
-        : `<td>${
+        : `<td data-label="Commit">${
             commit
               ? `<a class="commit-link" href="${escapeHtml(
                   safeUrl(
@@ -448,7 +471,7 @@
               : "—"
           }</td>`;
       row.innerHTML = `
-        <td>
+        <td data-label="Execution">
           <div class="execution-identity-cell">
             <div class="release-cell">
             <a href="${escapeHtml(detailUrl(execution))}">${escapeHtml(
@@ -458,34 +481,34 @@
             </div>
           </div>
         </td>
-        <td><span class="table-status status-${meta.css}">${meta.label}</span></td>
+        <td data-label="Result"><span class="table-status status-${meta.css}">${meta.label}</span></td>
         ${commitCell}
-        <td title="${escapeHtml(subjectLabels.join(", "))}">${escapeHtml(
+        <td data-label="Subject" title="${escapeHtml(subjectLabels.join(", "))}">${escapeHtml(
           subjectLabels.length === 1
             ? subjectLabels[0]
             : subjectLabels.length
               ? `${subjectLabels.length} subjects`
               : "—",
         )}</td>
-        <td>
+        <td data-label="Scope">
           <div class="execution-table-stack">
             <strong>${scope}</strong>
             <small>${formatPercent(execution.totals?.report_coverage)} coverage</small>
           </div>
         </td>
-        <td>
+        <td data-label="Outcome">
           <div class="execution-table-stack">
             <strong>${formatPercent(execution.totals?.scenario_pass_rate)}</strong>
-            <small>${failures ? `${failures} blocking event${failures === 1 ? "" : "s"}` : "No blocking events"}</small>
+            <small>${executionActive ? "Pending report evidence" : hasFailureEvidence ? failures ? `${failures} blocking event${failures === 1 ? "" : "s"}` : "No blocking events" : "Reliability unavailable"}</small>
           </div>
         </td>
-        <td>
+        <td data-label="Efficiency">
           <div class="execution-table-stack">
             <strong>${formatCurrency(execution.totals?.total_cost_usd)}</strong>
             <small>${formatDuration(execution.totals?.wall_time_seconds)} · ${compactNumber(execution.totals?.total_tokens, 0)} tokens</small>
           </div>
         </td>
-        <td>
+        <td data-label="Evidence">
           <div class="execution-evidence-cell ${failures ? "text-fail" : ""}" title="${escapeHtml(evidencePreview)}">
             <span>${escapeHtml(evidencePreview)}</span>
             <span class="data-badge data-${escapeHtml(execution.availability)}">${escapeHtml(dataLabel(execution.availability))}</span>
@@ -497,11 +520,12 @@
     if (!page.length) {
       const row = document.createElement("tr");
       row.innerHTML =
-        `<td class="table-empty" colspan="${isLocal ? 7 : 8}">${state.tableLoading ? "Loading executions…" : "No executions match these filters."}</td>`;
+        `<td class="table-empty" colspan="${isLocal ? 7 : 8}">${state.tableLoading ? "Loading executions…" : state.tableError ? escapeHtml(state.tableError) : "No executions match these filters."}</td>`;
       elements.body.append(row);
     }
-    elements.count.textContent =
-      `${total} execution${total === 1 ? "" : "s"}`;
+    elements.count.textContent = state.tableError
+      ? `Refresh failed · ${total} cached execution${total === 1 ? "" : "s"}`
+      : `${total} execution${total === 1 ? "" : "s"}`;
     elements.pageLabel.textContent = `Page ${state.page} of ${pageCount}`;
     elements.previous.disabled = state.tableLoading || state.page === 1;
     elements.next.disabled = state.tableLoading || state.page === pageCount;
@@ -514,7 +538,7 @@
     }
     const sequence = ++tableLoadSequence;
     state.tableLoading = true;
-    state.tableExecutions = [];
+    state.tableError = "";
     renderTable();
     try {
       const manifest = await window.HarnessDashboardData.listExecutions({
@@ -531,8 +555,8 @@
       state.tableTotal = Number(manifest.total) || 0;
     } catch (_error) {
       if (sequence !== tableLoadSequence) return;
-      state.tableExecutions = [];
-      state.tableTotal = 0;
+      state.tableError =
+        "Executions could not be refreshed. Showing the last available data.";
     } finally {
       if (sequence === tableLoadSequence) {
         state.tableLoading = false;
@@ -553,6 +577,9 @@
   }
 
   async function initialize() {
+    const latestActive = ["running", "cancelling"].includes(
+      history.executions[0]?.status,
+    );
     elements.preview.hidden = !(history.preview || isLocal || isObserved);
     elements.preview.textContent = isLocal
       ? "Local data"
@@ -560,7 +587,7 @@
         ? "Observed reports"
         : "Preview data";
     if (isLocal) {
-      elements.syncLabel.textContent = "Last completed";
+      elements.syncLabel.textContent = latestActive ? "Last started" : "Last completed";
       elements.emptyTitle.textContent = "No local executions yet";
       elements.emptyDescription.textContent =
         "Use New execution to create the first local experiment.";
@@ -571,7 +598,7 @@
       elements.commitHeading.hidden = true;
       elements.search.placeholder = "Search label, run, or date";
     } else if (isObserved) {
-      elements.syncLabel.textContent = "Last completed";
+      elements.syncLabel.textContent = latestActive ? "Last started" : "Last completed";
       elements.actionsLink.textContent = "View repository ↗";
       elements.footerSummary.textContent =
         "Harness E2E · observed control-plane reports";
@@ -630,6 +657,19 @@
     });
     if (isLocal) window.HarnessLocalRunner.initialize();
     render();
+
+    const refreshTableForCurrentRoute = () => {
+      const route = window.HarnessDashboardRoutes.current();
+      if (
+        remotePaging &&
+        route.page === "overview" &&
+        route.view === "executions"
+      ) {
+        void loadRemoteTablePage();
+      }
+    };
+    window.addEventListener("hashchange", refreshTableForCurrentRoute);
+    refreshTableForCurrentRoute();
   }
 
   initialize();

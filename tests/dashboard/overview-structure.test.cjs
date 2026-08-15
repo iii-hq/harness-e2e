@@ -67,6 +67,39 @@ test("uses iii reads incrementally and preserves semantic errors", () => {
   assert.match(dataSource, /runtime\.functions\.execution_get/);
   assert.match(dataSource, /limit: runtime\.page_size/);
   assert.match(overviewScript, /HarnessDashboardData\.listExecutions/);
+  assert.match(testsPage, /cohort_id: cohortId \|\| undefined/);
+  assert.match(testsPage, /if \(!bridge\) return/);
+});
+
+test("keeps active executions pending instead of presenting them as failures", () => {
+  assert.match(overviewScript, /Execution is still running/);
+  assert.match(overviewScript, /Waiting for report evidence/);
+  assert.match(overviewScript, /active \? "Started" : "Completed"/);
+  assert.match(executionScript, /No scenario report has been published yet/);
+  assert.match(
+    executionScript,
+    /execution\.status === "passed" \|\| active/,
+  );
+});
+
+test("keeps the execution ledger and transcript usable on narrow screens", () => {
+  for (const label of [
+    "Execution",
+    "Result",
+    "Subject",
+    "Scope",
+    "Outcome",
+    "Efficiency",
+    "Evidence",
+  ]) {
+    assert.match(overviewScript, new RegExp(`data-label="${label}"`));
+  }
+  assert.match(
+    styles,
+    /@media \(max-width: 760px\)[\s\S]*\.execution-table thead\s*\{[^}]*display:\s*none/s,
+  );
+  assert.match(executionPage, /max-\[560px\]:w-screen/);
+  assert.match(executionPage, /max-\[560px\]:h-dvh/);
 });
 
 test("publishes a compact index and lazy per-test shards without a suite score", () => {
@@ -114,6 +147,8 @@ test("discovers local models lazily and keeps advanced runner knobs contained", 
   assert.match(localRunner, /popoverRect\.height > availableBelow/);
   assert.match(localRunner, /local-model-picker-up/);
   assert.match(overviewPage, /Choose judge model/);
+  assert.match(localRunner, /elements\.scenarioPicker\.open = false/);
+  assert.match(localRunner, /elements\.advanced\.open = false/);
   assert.match(
     styles,
     /\.local-model-picker\.local-model-picker-up \.local-model-popover\s*\{[^}]*bottom:\s*calc\(100% \+ 6px\)/s,
@@ -122,6 +157,12 @@ test("discovers local models lazily and keeps advanced runner knobs contained", 
     styles,
     /@media \(max-width: 560px\)[\s\S]*\.local-model-popover[\s\S]*position:\s*fixed/s,
   );
+});
+
+test("gives mobile test actions distinct labels", () => {
+  assert.match(testsPage, /data-mobile-label="New"/);
+  assert.match(testsPage, /data-mobile-label="Coverage"/);
+  assert.match(testsPage, /comparable test\$\{compatibleCount === 1/);
 });
 
 test("loads local runner code only for local manifests", () => {

@@ -112,10 +112,13 @@ export const dashboardRoutes: DashboardRoutes = {
   coverage: hashForCoverage,
 }
 
-function routeIdentity(route: DashboardRoute): string {
+export function routeRenderIdentity(route: DashboardRoute): string {
   if (route.page === 'execution') return `${route.page}:${route.executionId}`
   if (route.page === 'compare') {
     return `${route.page}:${route.left ?? ''}:${route.right ?? ''}`
+  }
+  if (route.page === 'overview') {
+    return route.view === 'tests' ? 'overview:tests' : 'overview:workspace'
   }
   return route.page
 }
@@ -149,7 +152,7 @@ export function useHashRoute(): [DashboardRoute, (targetHash: string) => void] {
       // Each coarse page still has an isolated legacy renderer. A document
       // reload keeps those renderers single-instanced while the hash router
       // owns the public URL and overview/anchor navigation stays client-side.
-      if (routeIdentity(next) !== routeIdentity(routeRef.current)) {
+      if (routeRenderIdentity(next) !== routeRenderIdentity(routeRef.current)) {
         window.location.reload()
         return
       }

@@ -147,6 +147,9 @@
       return { label: "Passed", css: "pass" };
     }
     if (normalized === "running") return { label: "Running", css: "running" };
+    if (normalized === "cancelling") {
+      return { label: "Cancelling", css: "running" };
+    }
     if (normalized === "cancelled") return { label: "Cancelled", css: "cancelled" };
     if (
       normalized === "failed" ||
@@ -1125,6 +1128,7 @@
     const availableReports = (detail?.reports || []).filter(
       (record) => record?.available && record.report,
     );
+    const active = ["running", "cancelling"].includes(execution.status);
     if (availableReports.length) {
       const runCount = availableReports.reduce(
         (total, record) =>
@@ -1147,8 +1151,9 @@
       attachRunRenderers();
       return;
     }
-    elements.scenarioIntro.textContent =
-      execution.availability === "aggregate"
+    elements.scenarioIntro.textContent = active
+      ? "Execution is still running. Scenario evidence will appear as reports complete."
+      : execution.availability === "aggregate"
         ? "The complete report expired after 30 executions. Historical aggregate metrics remain available."
         : "This workflow did not produce a complete benchmark report.";
     const aggregateCount = execution.subjects.reduce(
@@ -1165,8 +1170,9 @@
       )
       .join("");
     if (!elements.scenarioDetails.children.length) {
-      elements.scenarioDetails.innerHTML =
-        '<div class="clean-state">No scenario data was produced. Open the workflow for build and infrastructure diagnostics.</div>';
+      elements.scenarioDetails.innerHTML = active
+        ? '<div class="clean-state">No scenario report has been published yet. This view will update when evidence arrives.</div>'
+        : '<div class="clean-state">No scenario data was produced. Open the workflow for build and infrastructure diagnostics.</div>';
     }
   }
 
@@ -1196,7 +1202,12 @@
   function renderFailures() {
     const groups = window.HarnessExecutionData.groupRunFailures(detail?.reports);
     const count = blockingFailures();
-    if (!groups.length && count === 0 && execution.status === "passed") {
+    const active = ["running", "cancelling"].includes(execution.status);
+    if (
+      !groups.length &&
+      count === 0 &&
+      (execution.status === "passed" || active)
+    ) {
       elements.failureBox.hidden = true;
       return;
     }

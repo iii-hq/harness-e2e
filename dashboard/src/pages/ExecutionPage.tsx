@@ -366,7 +366,7 @@ export function ExecutionPage({ executionId }: { executionId: string }) {
 
         <dialog
           id="session-transcript-dialog"
-          className="session-transcript-dialog h-[min(920px,calc(100dvh-24px))] w-[min(1120px,calc(100%-32px))] rounded-[10px] border border-line-strong border-t-[3px] border-t-info bg-panel shadow-panel backdrop:bg-app-backdrop backdrop:backdrop-blur-[5px]"
+          className="session-transcript-dialog h-[min(760px,calc(100dvh-48px))] w-[min(1120px,calc(100%-32px))] rounded-[10px] border border-line-strong border-t-[3px] border-t-info bg-panel shadow-panel backdrop:bg-app-backdrop backdrop:backdrop-blur-[5px] max-[560px]:m-0 max-[560px]:h-dvh max-[560px]:w-screen max-[560px]:max-w-none max-[560px]:rounded-none max-[560px]:border-0"
           aria-labelledby="session-transcript-title"
         >
           <div className="session-transcript-shell flex h-full min-h-0 flex-col">

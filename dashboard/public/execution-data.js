@@ -118,6 +118,7 @@
       "incomplete",
       "cancelled",
       "running",
+      "cancelling",
     ];
     if (semanticStatuses.includes(value)) return value;
     if (value === "pass" || value === "success") return "passed";
@@ -451,7 +452,7 @@
       return "×";
     }
     if (status === "cancelled") return "○";
-    if (status === "running") return "•";
+    if (status === "running" || status === "cancelling") return "•";
     if (status !== "passed") return "–";
 
     const score = numberOrNull(cell?.median_score);

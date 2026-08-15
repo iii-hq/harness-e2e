@@ -5,6 +5,7 @@ import {
   hashForExecution,
   hashForWorkspace,
   routeFromHash,
+  routeRenderIdentity,
 } from '@/hooks/use-hash-route'
 
 describe('dashboard hash routes', () => {
@@ -45,5 +46,17 @@ describe('dashboard hash routes', () => {
     })
     expect(hashForCoverage()).toBe('#/coverage')
     expect(routeFromHash('#main')).toBeNull()
+  })
+
+  it('reloads only when navigation swaps the legacy workspace renderer', () => {
+    expect(routeRenderIdentity({ page: 'overview', view: 'overview' })).toBe(
+      'overview:workspace',
+    )
+    expect(routeRenderIdentity({ page: 'overview', view: 'executions' })).toBe(
+      'overview:workspace',
+    )
+    expect(routeRenderIdentity({ page: 'overview', view: 'tests' })).toBe(
+      'overview:tests',
+    )
   })
 })

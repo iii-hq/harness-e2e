@@ -21,6 +21,10 @@ export default defineConfig({
     allowedHosts: true,
     proxy: {
       '/api': dashboardBackend,
+      '/ws': {
+        target: dashboardBackend,
+        ws: true,
+      },
       '/runs': dashboardBackend,
       '/data.js': dashboardBackend,
       '/executions.js': dashboardBackend,
