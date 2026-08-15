@@ -1100,6 +1100,7 @@ mod tests {
             engine_revision: None,
             passed: true,
             redaction: Default::default(),
+            assessment_contract: None,
             scenarios: vec![scenario],
         }
     }

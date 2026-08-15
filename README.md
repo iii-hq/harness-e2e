@@ -153,6 +153,11 @@ Contract compatibility is established at runtime from
 `engine::functions::list` and `engine::functions::info`; the checked-in schemas
 are parity fixtures, not a linked product API.
 
+The versioned assessment and on-demand analysis boundary is documented in
+[docs/assessment-result-contract.md](docs/assessment-result-contract.md).
+Normal execution remains on results v2 until its producer tickets populate the
+v3 contract; v3 readers and compatibility projections are available now.
+
 ## Observation
 
 The runner waits for a session tree to finish by binding

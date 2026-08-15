@@ -8,6 +8,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::artifact::{self, ArtifactReference};
+use crate::assessment::AssessmentContract;
 use crate::identity::{ExecutionIdentity, SystemUnderTestIdentity};
 use crate::scenarios::{
     CapturedDeliverable, CapturedInvariant, ExecutionPolicy, ProvenanceEvidence, ScenarioCase,
@@ -21,6 +22,7 @@ use crate::wire::{ControlPlaneEvidence, Model, SessionMetricsResponseV1, StatusR
 mod summary;
 
 pub const RESULTS_SCHEMA_VERSION: u32 = 2;
+pub const LATEST_RESULTS_SCHEMA_VERSION: u32 = 3;
 pub const MANIFEST_SCHEMA_VERSION: u32 = 2;
 
 fn legacy_schema_version() -> u32 {
@@ -1244,6 +1246,8 @@ pub struct E2eReport {
     pub passed: bool,
     #[serde(default)]
     pub redaction: crate::redaction::RedactionReport,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub assessment_contract: Option<AssessmentContract>,
     pub scenarios: Vec<E2eScenarioReport>,
 }
 
@@ -1269,6 +1273,7 @@ impl E2eReport {
             engine_revision,
             passed,
             redaction: crate::redaction::RedactionReport::default(),
+            assessment_contract: None,
             scenarios,
         }
     }
@@ -1276,7 +1281,7 @@ impl E2eReport {
     pub fn write_to(&mut self, output: &Path, manifest: &E2eManifestV2) -> Result<PathBuf> {
         fs::create_dir_all(output)
             .with_context(|| format!("create report directory {}", output.display()))?;
-        for name in ["results-v2.json", "results.json"] {
+        for name in ["results-v3.json", "results-v2.json", "results.json"] {
             let path = output.join(name);
             if path.is_file() {
                 fs::remove_file(&path)
@@ -1294,22 +1299,52 @@ impl E2eReport {
             manifest,
         )?;
         self.manifest = Some(manifest_reference);
-        self.validate_v2(manifest, output)
-            .context("validate E2E results")?;
         validate_against_schema(&schema::manifest_v2(), manifest, "manifest v2")?;
-        validate_against_schema(&schema::results_v2(), self, "results v2")?;
-
-        let legacy_path = output.join("results.json");
-        write_json_value(&legacy_path, &self.legacy_v1_value()?)?;
-        let canonical_path = output.join("results-v2.json");
-        write_json_value(&canonical_path, self)?;
-        Ok(canonical_path)
+        match self.schema_version {
+            RESULTS_SCHEMA_VERSION => {
+                if self.assessment_contract.is_some() {
+                    bail!("results v2 cannot carry the v3 assessment contract");
+                }
+                self.validate_versioned(manifest, output, RESULTS_SCHEMA_VERSION)
+                    .context("validate E2E results v2")?;
+                validate_against_schema(&schema::results_v2(), self, "results v2")?;
+                write_json_value(&output.join("results.json"), &self.legacy_v1_value()?)?;
+                let canonical_path = output.join("results-v2.json");
+                write_json_value(&canonical_path, self)?;
+                Ok(canonical_path)
+            }
+            LATEST_RESULTS_SCHEMA_VERSION => {
+                let contract = self
+                    .assessment_contract
+                    .as_ref()
+                    .context("results v3 are missing assessment_contract")?;
+                contract.validate(self)?;
+                self.validate_versioned(manifest, output, LATEST_RESULTS_SCHEMA_VERSION)
+                    .context("validate E2E results v3")?;
+                validate_against_schema(&schema::results_v3(), self, "results v3")?;
+                let legacy_v2 = self.legacy_v2_value()?;
+                validate_against_schema(
+                    &schema::results_v2(),
+                    &legacy_v2,
+                    "results v2 projection",
+                )?;
+                write_json_value(&output.join("results.json"), &self.legacy_v1_value()?)?;
+                write_json_value(&output.join("results-v2.json"), &legacy_v2)?;
+                let canonical_path = output.join("results-v3.json");
+                write_json_value(&canonical_path, self)?;
+                Ok(canonical_path)
+            }
+            version => bail!("cannot write unsupported E2E results schema {version}"),
+        }
     }
 
     pub fn read_from(input: &Path) -> Result<(Self, PathBuf)> {
         let path = if input.is_dir() {
+            let latest = input.join("results-v3.json");
             let canonical = input.join("results-v2.json");
-            if canonical.is_file() {
+            if latest.is_file() {
+                latest
+            } else if canonical.is_file() {
                 canonical
             } else {
                 input.join("results.json")
@@ -1322,15 +1357,33 @@ impl E2eReport {
             .with_context(|| format!("decode E2E report {}", path.display()))?;
         let report: Self = serde_json::from_value(value.clone())
             .with_context(|| format!("decode typed E2E report {}", path.display()))?;
-        if !matches!(report.schema_version, 1 | RESULTS_SCHEMA_VERSION) {
+        if !matches!(
+            report.schema_version,
+            1 | RESULTS_SCHEMA_VERSION | LATEST_RESULTS_SCHEMA_VERSION
+        ) {
             bail!(
                 "unsupported E2E results schema {} in {}",
                 report.schema_version,
                 path.display()
             );
         }
-        if report.schema_version == RESULTS_SCHEMA_VERSION {
-            validate_against_schema(&schema::results_v2(), &value, "results v2")?;
+        if matches!(
+            report.schema_version,
+            RESULTS_SCHEMA_VERSION | LATEST_RESULTS_SCHEMA_VERSION
+        ) {
+            if report.schema_version == RESULTS_SCHEMA_VERSION {
+                if report.assessment_contract.is_some() {
+                    bail!("results v2 cannot carry the v3 assessment contract");
+                }
+                validate_against_schema(&schema::results_v2(), &value, "results v2")?;
+            } else {
+                validate_against_schema(&schema::results_v3(), &value, "results v3")?;
+                report
+                    .assessment_contract
+                    .as_ref()
+                    .context("results v3 are missing assessment_contract")?
+                    .validate(&report)?;
+            }
             let output = path
                 .parent()
                 .context("results path has no parent directory")?;
@@ -1344,17 +1397,22 @@ impl E2eReport {
             let manifest: E2eManifestV2 = serde_json::from_value(manifest_value)
                 .with_context(|| format!("decode typed manifest {}", manifest_path.display()))?;
             manifest.validate()?;
-            report.validate_v2(&manifest, output)?;
+            report.validate_versioned(&manifest, output, report.schema_version)?;
         }
         Ok((report, path))
     }
 
-    fn validate_v2(&self, manifest: &E2eManifestV2, output: &Path) -> Result<()> {
-        if self.schema_version != RESULTS_SCHEMA_VERSION {
+    fn validate_versioned(
+        &self,
+        manifest: &E2eManifestV2,
+        output: &Path,
+        expected_version: u32,
+    ) -> Result<()> {
+        if self.schema_version != expected_version {
             bail!(
                 "results schema version {} is unsupported; expected {}",
                 self.schema_version,
-                RESULTS_SCHEMA_VERSION
+                expected_version
             );
         }
         let execution = self
@@ -1387,7 +1445,7 @@ impl E2eReport {
             let case = scenario
                 .case
                 .as_ref()
-                .context("v2 scenario is missing its materialized case")?;
+                .context("versioned scenario is missing its materialized case")?;
             case.validate()?;
             if scenario.case_id != case.case_id
                 || scenario.scenario_id != case.scenario_id
@@ -1449,13 +1507,20 @@ impl E2eReport {
                 }
             }
         }
+        if let Some(contract) = &mut self.assessment_contract {
+            let mut value = serde_json::to_value(&*contract)
+                .context("serialize assessment contract before redaction")?;
+            redaction.merge(policy.redact_value(&mut value));
+            *contract = serde_json::from_value(value)
+                .context("decode assessment contract after redaction")?;
+        }
         self.redaction = redaction;
         policy.assert_clean(&serde_json::to_vec(&self).context("scan E2E report")?)?;
         Ok(())
     }
 
     fn legacy_v1_value(&self) -> Result<Value> {
-        let mut value = serde_json::to_value(self).context("serialize legacy E2E results")?;
+        let mut value = self.legacy_v2_value()?;
         let object = value
             .as_object_mut()
             .context("E2E results must serialize as an object")?;
@@ -1495,6 +1560,19 @@ impl E2eReport {
                 }
             }
         }
+        Ok(value)
+    }
+
+    fn legacy_v2_value(&self) -> Result<Value> {
+        let mut value = serde_json::to_value(self).context("serialize results v2 projection")?;
+        let object = value
+            .as_object_mut()
+            .context("E2E results must serialize as an object")?;
+        object.insert(
+            "schema_version".to_string(),
+            Value::from(RESULTS_SCHEMA_VERSION),
+        );
+        object.remove("assessment_contract");
         Ok(value)
     }
 
@@ -1939,6 +2017,10 @@ mod tests {
     use std::collections::BTreeMap;
 
     use super::*;
+    use crate::assessment::{
+        AiFinalAssessment, EffectiveStatus, RunAssessmentContract, SystemStatus,
+        ASSESSMENT_CONTRACT_VERSION,
+    };
     use crate::identity::StackIdentity;
     use crate::scenarios::{ArtifactExpectation, InvariantSpec};
     use crate::wire::{
@@ -2336,6 +2418,118 @@ mod tests {
     }
 
     #[test]
+    fn v3_write_preserves_frozen_v2_and_v1_projections() {
+        let output = tempfile::tempdir().unwrap();
+        let mut report = report(vec![aggregate(vec![run(100, true)])]);
+        let run_id = report.scenarios[0].runs[0].run_id.clone();
+        let attempt_id = report.scenarios[0].runs[0].attempt_id.clone();
+        report.schema_version = LATEST_RESULTS_SCHEMA_VERSION;
+        report.assessment_contract = Some(AssessmentContract {
+            contract_version: ASSESSMENT_CONTRACT_VERSION,
+            runs: vec![RunAssessmentContract {
+                run_id,
+                attempt_id,
+                system_status: SystemStatus::Passed,
+                assessments: Vec::new(),
+                assets: Vec::new(),
+                ai_final_assessment: AiFinalAssessment::not_evaluated(
+                    "final assessment is implemented by MOT-4447",
+                ),
+                effective_status: EffectiveStatus::Passed,
+            }],
+        });
+
+        let path = report.write_to(output.path(), &manifest()).unwrap();
+        assert_eq!(path, output.path().join("results-v3.json"));
+        assert!(output.path().join("results-v2.json").is_file());
+        assert!(output.path().join("results.json").is_file());
+
+        let (decoded, selected) = E2eReport::read_from(output.path()).unwrap();
+        assert_eq!(selected, output.path().join("results-v3.json"));
+        assert_eq!(decoded.schema_version, LATEST_RESULTS_SCHEMA_VERSION);
+        decoded
+            .assessment_contract
+            .as_ref()
+            .unwrap()
+            .validate(&decoded)
+            .unwrap();
+
+        let v2: Value =
+            serde_json::from_slice(&std::fs::read(output.path().join("results-v2.json")).unwrap())
+                .unwrap();
+        assert_eq!(v2["schema_version"], RESULTS_SCHEMA_VERSION);
+        assert!(v2.get("assessment_contract").is_none());
+        let v1: Value =
+            serde_json::from_slice(&std::fs::read(output.path().join("results.json")).unwrap())
+                .unwrap();
+        assert!(v1.get("schema_version").is_none());
+        assert!(v1.get("assessment_contract").is_none());
+    }
+
+    #[test]
+    fn v3_contract_cannot_override_the_run_system_status() {
+        let output = tempfile::tempdir().unwrap();
+        let mut report = report(vec![aggregate(vec![run(100, true)])]);
+        let run_id = report.scenarios[0].runs[0].run_id.clone();
+        let attempt_id = report.scenarios[0].runs[0].attempt_id.clone();
+        report.schema_version = LATEST_RESULTS_SCHEMA_VERSION;
+        report.assessment_contract = Some(AssessmentContract {
+            contract_version: ASSESSMENT_CONTRACT_VERSION,
+            runs: vec![RunAssessmentContract {
+                run_id,
+                attempt_id,
+                system_status: SystemStatus::HardGateFailed,
+                assessments: Vec::new(),
+                assets: Vec::new(),
+                ai_final_assessment: AiFinalAssessment::not_evaluated("not evaluated"),
+                effective_status: EffectiveStatus::HardGateFailed,
+            }],
+        });
+
+        let error = report.write_to(output.path(), &manifest()).unwrap_err();
+        assert!(error.to_string().contains("differs from E2E run status"));
+    }
+
+    #[test]
+    fn v3_contract_rejects_dangling_evidence_references() {
+        let output = tempfile::tempdir().unwrap();
+        let mut report = report(vec![aggregate(vec![run(0, false)])]);
+        let fixture: Value = serde_json::from_str(include_str!(
+            "../tests/fixtures/results/results-v3-assessment-contract.json"
+        ))
+        .unwrap();
+        let mut contract: AssessmentContract =
+            serde_json::from_value(fixture["assessment_contract"].clone()).unwrap();
+        contract.runs[0].run_id = report.scenarios[0].runs[0].run_id.clone();
+        contract.runs[0].attempt_id = report.scenarios[0].runs[0].attempt_id.clone();
+        report.schema_version = LATEST_RESULTS_SCHEMA_VERSION;
+        report.assessment_contract = Some(contract);
+
+        let error = report.write_to(output.path(), &manifest()).unwrap_err();
+        assert!(error
+            .to_string()
+            .contains("assessment evidence 'transcript' is not present"));
+    }
+
+    #[test]
+    fn v2_read_rejects_v3_assessment_fields() {
+        let output = tempfile::tempdir().unwrap();
+        let mut report = report(vec![aggregate(vec![run(100, true)])]);
+        let path = report.write_to(output.path(), &manifest()).unwrap();
+        let mut value: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        value.as_object_mut().unwrap().insert(
+            "assessment_contract".into(),
+            serde_json::json!({"contract_version": 1, "runs": []}),
+        );
+        std::fs::write(&path, serde_json::to_vec_pretty(&value).unwrap()).unwrap();
+
+        let error = E2eReport::read_from(&path).unwrap_err();
+        assert!(error
+            .to_string()
+            .contains("results v2 cannot carry the v3 assessment contract"));
+    }
+
+    #[test]
     fn deliverable_survives_cleanup_failure_as_a_verified_artifact() {
         let output = tempfile::tempdir().unwrap();
         let contract = DeliverableContract {
@@ -2493,6 +2687,9 @@ mod tests {
         assert_eq!(report.schema_version, 1);
         assert!(report.execution.is_none());
         assert!(report.system_under_test.is_none());
+        let normalized = AssessmentContract::normalize(&report);
+        assert_eq!(normalized.contract_version, ASSESSMENT_CONTRACT_VERSION);
+        assert!(normalized.runs.is_empty());
     }
 
     fn model() -> ModelArtifact {

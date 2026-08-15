@@ -1,0 +1,16 @@
+{
+  "schema_version": 2,
+  "scenarios": [
+    {
+      "scenario_id": "direct_answer",
+      "runs": [
+        {
+          "run_id": "legacy-run",
+          "attempt_id": "legacy-attempt",
+          "attempt_number": 1,
+          "status": "hard_gate_failed"
+        }
+      ]
+    }
+  ]
+}

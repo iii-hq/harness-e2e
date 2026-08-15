@@ -1,0 +1,198 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "AnalysisResponse",
+  "type": "object",
+  "required": [
+    "analyzer",
+    "input_sha256",
+    "schema_version"
+  ],
+  "properties": {
+    "analyzer": {
+      "$ref": "#/definitions/AnalyzerIdentity"
+    },
+    "facts": {
+      "type": "array",
+      "items": {
+        "$ref": "#/definitions/AnalysisFact"
+      }
+    },
+    "input_sha256": {
+      "type": "string"
+    },
+    "interpretations": {
+      "type": "array",
+      "items": {
+        "$ref": "#/definitions/AnalysisInterpretation"
+      }
+    },
+    "limitations": {
+      "type": "array",
+      "items": {
+        "$ref": "#/definitions/AnalysisLimitation"
+      }
+    },
+    "opportunities": {
+      "type": "array",
+      "items": {
+        "$ref": "#/definitions/AnalysisOpportunity"
+      }
+    },
+    "schema_version": {
+      "type": "integer",
+      "format": "uint32",
+      "enum": [
+        1
+      ],
+      "minimum": 0.0
+    }
+  },
+  "definitions": {
+    "AnalysisFact": {
+      "type": "object",
+      "required": [
+        "evidence",
+        "summary"
+      ],
+      "properties": {
+        "evidence": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/EvidenceReference"
+          }
+        },
+        "summary": {
+          "type": "string"
+        }
+      }
+    },
+    "AnalysisInterpretation": {
+      "type": "object",
+      "required": [
+        "confidence",
+        "evidence",
+        "summary"
+      ],
+      "properties": {
+        "confidence": {
+          "type": "number",
+          "format": "double"
+        },
+        "evidence": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/EvidenceReference"
+          }
+        },
+        "summary": {
+          "type": "string"
+        }
+      }
+    },
+    "AnalysisLimitation": {
+      "type": "object",
+      "required": [
+        "summary"
+      ],
+      "properties": {
+        "evidence": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/EvidenceReference"
+          }
+        },
+        "summary": {
+          "type": "string"
+        }
+      }
+    },
+    "AnalysisOpportunity": {
+      "type": "object",
+      "required": [
+        "evidence",
+        "expected_impact",
+        "priority",
+        "summary",
+        "validation_method"
+      ],
+      "properties": {
+        "evidence": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/EvidenceReference"
+          }
+        },
+        "expected_impact": {
+          "type": "string"
+        },
+        "priority": {
+          "type": "integer",
+          "format": "uint8",
+          "minimum": 0.0
+        },
+        "summary": {
+          "type": "string"
+        },
+        "validation_method": {
+          "type": "string"
+        }
+      }
+    },
+    "AnalyzerIdentity": {
+      "type": "object",
+      "required": [
+        "analyzer",
+        "analyzer_version",
+        "input_sha256",
+        "prompt_version"
+      ],
+      "properties": {
+        "analyzer": {
+          "type": "string"
+        },
+        "analyzer_version": {
+          "type": "string"
+        },
+        "input_sha256": {
+          "type": "string"
+        },
+        "model": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "prompt_version": {
+          "type": "string"
+        },
+        "provider": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      }
+    },
+    "EvidenceReference": {
+      "type": "object",
+      "required": [
+        "artifact_id",
+        "artifact_sha256"
+      ],
+      "properties": {
+        "artifact_id": {
+          "type": "string"
+        },
+        "artifact_sha256": {
+          "type": "string"
+        },
+        "locator": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      }
+    }
+  }
+}

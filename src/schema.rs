@@ -2,23 +2,30 @@ use schemars::gen::SchemaSettings;
 use schemars::schema::{RootSchema, Schema};
 use schemars::JsonSchema;
 
+use crate::assessment::{AnalysisBundle, AnalysisResponse};
 use crate::durable::{DurableArchiveManifest, HistoryRecord};
 use crate::fault::{FaultEvaluation, FaultJournal, FaultPlan, FaultProfile};
 use crate::report::{E2eManifestV2, E2eReport};
 
 pub fn results_v2() -> RootSchema {
-    let mut root = versioned_root_schema_for::<E2eReport>(2);
+    serde_json::from_str(include_str!("../schemas/results-v2.json"))
+        .expect("frozen results v2 schema is valid")
+}
+
+pub fn results_v3() -> RootSchema {
+    let mut root = versioned_root_schema_for::<E2eReport>(3);
     let object = root
         .schema
         .object
         .as_mut()
-        .expect("results v2 schema has an object root");
+        .expect("results v3 schema has an object root");
     object.required.extend(
         [
             "schema_version",
             "execution",
             "system_under_test",
             "manifest",
+            "assessment_contract",
         ]
         .into_iter()
         .map(str::to_string),
@@ -26,7 +33,7 @@ pub fn results_v2() -> RootSchema {
     let scenario = root
         .definitions
         .get_mut("E2eScenarioReport")
-        .expect("results v2 schema declares E2eScenarioReport");
+        .expect("results v3 schema declares E2eScenarioReport");
     let Schema::Object(scenario) = scenario else {
         panic!("E2eScenarioReport has an object schema")
     };
@@ -38,8 +45,16 @@ pub fn results_v2() -> RootSchema {
     root.schema
         .metadata()
         .title
-        .replace("E2eResultsV2".to_string());
+        .replace("E2eResultsV3".to_string());
     root
+}
+
+pub fn analysis_bundle_v1() -> RootSchema {
+    versioned_root_schema_for::<AnalysisBundle>(1)
+}
+
+pub fn analysis_response_v1() -> RootSchema {
+    versioned_root_schema_for::<AnalysisResponse>(1)
 }
 
 pub fn manifest_v2() -> RootSchema {
@@ -103,6 +118,17 @@ mod tests {
     #[test]
     fn results_v2_schema_matches_snapshot() {
         assert_snapshot("results-v2.json", &results_v2());
+    }
+
+    #[test]
+    fn results_v3_schema_matches_snapshot() {
+        assert_snapshot("results-v3.json", &results_v3());
+    }
+
+    #[test]
+    fn analysis_schemas_match_snapshots() {
+        assert_snapshot("analysis-bundle-v1.json", &analysis_bundle_v1());
+        assert_snapshot("analysis-response-v1.json", &analysis_response_v1());
     }
 
     #[test]
