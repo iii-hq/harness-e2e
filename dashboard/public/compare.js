@@ -15,6 +15,7 @@
     metrics: document.querySelector("#compare-metrics"),
     scenarios: document.querySelector("#compare-scenarios"),
     selection: document.querySelector("#compare-selection"),
+    verdict: document.querySelector("#compare-verdict"),
     warnings: document.querySelector("#compare-warnings"),
   };
 
@@ -90,7 +91,7 @@
     const label = execution.label || date(execution.completed_at);
     return `
       <article class="compare-selection-card">
-        <span>Execution ${side}</span>
+        <span>${side === "A" ? "Baseline A" : "Candidate B"}</span>
         <h2>${escapeHtml(label)}</h2>
         <div class="compare-selection-meta">
           <small>${escapeHtml(date(execution.completed_at))}</small>
@@ -148,6 +149,14 @@
 
   const comparison = api.compareExecutions(left, right);
   elements.content.hidden = false;
+  const eligible = comparison.compatibility === "eligible";
+  elements.verdict.className =
+    `comparison-verdict comparison-verdict-${eligible ? "eligible" : "exploratory"}`;
+  elements.verdict.textContent = eligible
+    ? "Regression eligible"
+    : comparison.compatibility === "legacy_unverified"
+      ? "Exploratory · identity unavailable"
+      : "Exploratory only";
   elements.selection.innerHTML =
     selectionCard(comparison.left, "A") + selectionCard(comparison.right, "B");
   elements.warnings.innerHTML = comparison.warnings
@@ -165,7 +174,9 @@
       values: (item) => ({
         left: blockingFailures(item.left),
         right: blockingFailures(item.right),
-        delta: blockingFailures(item.right) - blockingFailures(item.left),
+        delta: item.comparable
+          ? blockingFailures(item.right) - blockingFailures(item.left)
+          : null,
       }),
     },
     { label: "Tokens", format: (value) => number(value, 0), lowerIsBetter: true, values: (item) => item.totals.total_tokens },

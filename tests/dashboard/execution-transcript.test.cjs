@@ -1,5 +1,6 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
+const { loadBrowserModule } = require("./load-browser-module.cjs");
 
 const {
   displayFunctionArguments,
@@ -8,7 +9,7 @@ const {
   messageText,
   normalizeTranscript,
   summarizeTranscript,
-} = require("../../dashboard/execution-transcript.js");
+} = loadBrowserModule("dashboard/public/execution-transcript.js");
 
 test("shows the wrapped function name instead of agent_trigger", () => {
   const wrappedArguments = {

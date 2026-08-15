@@ -1,9 +1,24 @@
 # Harness E2E benchmark dashboard
 
-This static shell replaces the generic benchmark-action index at
-`dev/harness-e2e/`. The workflow-generated `data.js` remains the source of truth
-for metric trends. `executions.js` indexes workflow attempts, and
-`runs/<execution-id>.json` supplies the retained execution report.
+This React application replaces the generic benchmark-action index. It uses the
+same frontend stack as `workers/console`: React 19, strict TypeScript, Vite,
+Tailwind CSS, Biome, Vitest, and pnpm. The workflow-generated `data.js` remains
+the source of truth for metric trends. `executions.js` indexes workflow attempts,
+and `runs/<execution-id>.json` supplies the retained execution report.
+
+Install, validate, and run the frontend with hot reload:
+
+```bash
+pnpm install --frozen-lockfile
+pnpm typecheck
+pnpm lint
+pnpm test
+pnpm dev
+```
+
+The dev server listens on `0.0.0.0:5173` and proxies dashboard APIs to
+`http://127.0.0.1:4173` by default. Set `HARNESS_E2E_DASHBOARD_URL` when the Rust
+server uses a different origin.
 
 Start the local dashboard from the repository root:
 
@@ -45,8 +60,8 @@ The dashboard executes itself as an isolated child process, so changing and
 restarting the Harness never recompiles the E2E client. `serve` is an alias for
 `dashboard`; neither command has a Cargo fallback.
 
-`local-runner.js` owns the browser-side execution controls and is loaded only
-when `executions.js` declares `mode: "local"`. The Pages publisher always emits
+The React boot loader activates local execution controls only when
+`executions.js` declares `mode: "local"`. The Pages publisher always emits
 `mode: "published"`, so the published dashboard keeps using only its static
 history and never calls the loopback execution APIs.
 
@@ -64,16 +79,20 @@ runs, so expose the port only on a trusted network. Use `--listen
 accessed on the host by the runner and does not need to be reachable by the
 browser.
 
-To preview the sample fixtures instead, serve `dashboard` directly:
+To preview the sample fixtures without a Rust backend, build and serve the Vite
+bundle:
 
 ```bash
-python3 -m http.server 4173 --directory dashboard
+pnpm build
+pnpm preview
 ```
 
 When generated data is absent, the pages load their sample fixtures and label
-the view as preview data. Test both data contracts with:
+the view as preview data. Test the React application and both data contracts
+with:
 
 ```bash
+pnpm test
 node --test tests/dashboard/*.test.cjs
 ```
 

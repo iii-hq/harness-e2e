@@ -1,5 +1,6 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
+const { loadBrowserModule } = require("./load-browser-module.cjs");
 
 const {
   buildEfficiencyOverview,
@@ -22,7 +23,7 @@ const {
   scenarioMetricRows,
   scenarioMetricsFromDetail,
   scenarioContract,
-} = require("../../dashboard/execution-data.js");
+} = loadBrowserModule("dashboard/public/execution-data.js");
 
 function execution(overrides = {}) {
   return {
@@ -748,6 +749,44 @@ test("compares efficiency only within the same scenario contract", () => {
   assert.equal(overview.metrics.tokens.comparableCurrent, 90);
   assert.equal(overview.metrics.tokens.comparableBaseline, 100);
   assert.equal(overview.metrics.tokens.delta, -10);
+});
+
+test("keeps unavailable efficiency totals unknown instead of summing them to zero", () => {
+  const scenarioMetric = (tokens) => ({
+    subject_id: "glm",
+    scenario_id: "direct_answer",
+    scenario_version: 2,
+    contract_fingerprint: "same-contract",
+    averages: {
+      tokens,
+      cost_usd: null,
+      duration_seconds: 8,
+      function_call_errors: 0,
+    },
+  });
+  const comparableExecution = (id, tokens) =>
+    execution({
+      id,
+      scenario_metrics: [scenarioMetric(tokens)],
+      subjects: [
+        {
+          id: "glm",
+          model: "glm-5.2",
+          provider: "zai",
+          scenarios: [{ id: "direct_answer", passed: true, status: "passed" }],
+        },
+      ],
+    });
+
+  const overview = buildEfficiencyOverview([
+    comparableExecution("latest", 90),
+    comparableExecution("baseline", 100),
+  ]);
+
+  assert.equal(overview.metrics.cost_usd.operational, null);
+  assert.equal(overview.metrics.cost_usd.comparableCurrent, null);
+  assert.equal(overview.metrics.cost_usd.comparableBaseline, null);
+  assert.equal(overview.metrics.cost_usd.delta, null);
 });
 
 test("groupRunFailures returns empty for missing or empty reports", () => {

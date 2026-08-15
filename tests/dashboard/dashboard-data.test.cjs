@@ -1,5 +1,6 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
+const { loadBrowserModule } = require("./load-browser-module.cjs");
 
 const {
   filterSnapshots,
@@ -8,7 +9,7 @@ const {
   parseMetricName,
   scenarioSummary,
   subjectSummary,
-} = require("../../dashboard/dashboard-data.js");
+} = loadBrowserModule("dashboard/public/dashboard-data.js");
 
 function record(date, value, name, extra = {}) {
   return {

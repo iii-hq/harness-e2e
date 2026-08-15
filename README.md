@@ -18,6 +18,11 @@ subject artifact or an already-running iii stack.
 Build and validate the repository:
 
 ```bash
+pnpm --dir dashboard install --frozen-lockfile
+pnpm --dir dashboard typecheck
+pnpm --dir dashboard lint
+pnpm --dir dashboard test
+pnpm --dir dashboard build
 cargo test --locked --all-targets
 cargo clippy --locked --all-targets -- -D warnings
 node --test tests/dashboard/*.test.cjs
@@ -48,6 +53,13 @@ Build and start the dashboard from the repository root:
 cargo build --locked --bin harness-e2e
 target/debug/harness-e2e dashboard
 ```
+
+The Rust build follows the same embedded-SPA contract as `workers/console`: it
+builds the React bundle with pnpm when `dashboard/dist/` is missing or stale,
+then embeds the Vite output in the binary. Node and pnpm must be available on
+`PATH`. For frontend development with HMR, use `pnpm --dir dashboard dev`; the
+Vite server proxies runtime data and local-run APIs to the Rust dashboard on
+port 4173.
 
 When the running Harness does not yet publish versioned `metadata.contract`
 entries, enable the temporary legacy compatibility mode through the environment:
@@ -124,7 +136,8 @@ Lane promotion and legacy removal are governed by
 - `tests/` owns test-only fixtures, golden wire schemas, and the Node/Python
   validation suites.
 - `schemas/` contains the public contracts for generated E2E artifacts.
-- `dashboard/` contains the static capability dashboard.
+- `dashboard/` contains the React, TypeScript, Vite, and Tailwind capability
+  dashboard embedded in the Rust binary.
 - generated reports, transcripts, logs, and deliverables stay outside Git.
 
 The crate may depend on the iii SDK and generic libraries. It must not declare

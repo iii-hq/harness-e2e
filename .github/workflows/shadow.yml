@@ -152,6 +152,16 @@ jobs:
           repository: iii-hq/harness-e2e
           ref: main
           token: ${{ secrets.cross_repository_token }}
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11.13.1
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: dashboard/pnpm-lock.yaml
+      - run: pnpm --dir dashboard install --frozen-lockfile
+      - run: pnpm --dir dashboard build
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - run: cargo build --locked --release --bin e2e-worker

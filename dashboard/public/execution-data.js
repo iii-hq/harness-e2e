@@ -785,22 +785,27 @@
     const comparableRows = rows.filter(
       (row) => row.lifecycle === "comparable" && row.outcome.passed,
     );
+    const sumAvailableMetric = (metricRows, valueForRow) => {
+      const values = metricRows
+        .map((row) => numberOrNull(valueForRow(row)))
+        .filter((value) => value !== null);
+      return values.length
+        ? values.reduce((total, value) => total + value, 0)
+        : null;
+    };
     const metrics = Object.fromEntries(
       SCENARIO_METRIC_IDS.map((metricId) => {
-        const operational = operationalRows.reduce(
-          (total, row) =>
-            total + (numberOrNull(row.current?.averages?.[metricId]) || 0),
-          0,
+        const operational = sumAvailableMetric(
+          operationalRows,
+          (row) => row.current?.averages?.[metricId],
         );
-        const comparableCurrent = comparableRows.reduce(
-          (total, row) =>
-            total + (numberOrNull(row.current?.averages?.[metricId]) || 0),
-          0,
+        const comparableCurrent = sumAvailableMetric(
+          comparableRows,
+          (row) => row.current?.averages?.[metricId],
         );
-        const comparableBaseline = comparableRows.reduce(
-          (total, row) =>
-            total + (numberOrNull(row.baseline?.[metricId]) || 0),
-          0,
+        const comparableBaseline = sumAvailableMetric(
+          comparableRows,
+          (row) => row.baseline?.[metricId],
         );
         return [
           metricId,

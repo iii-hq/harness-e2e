@@ -20,6 +20,7 @@
     scenarioHistoryRow: null,
     scenarioHistoryMetric: "cost_usd",
     comparison: [],
+    comparisonLimitReached: false,
   };
   const efficiencyTrendColors = {
     improved: "var(--success)",
@@ -145,6 +146,19 @@
     efficiencyStatus: document.querySelector("#efficiency-status"),
     efficiencyStatusCaption: document.querySelector("#efficiency-status-caption"),
     lastUpdate: document.querySelector("#last-update"),
+    latestAvailability: document.querySelector("#latest-health-availability"),
+    latestCompleted: document.querySelector("#latest-health-completed"),
+    latestDetailLink: document.querySelector("#latest-detail-link"),
+    latestFirstFailure: document.querySelector("#latest-first-failure"),
+    latestIdentity: document.querySelector("#latest-health-identity"),
+    latestLane: document.querySelector("#latest-health-lane"),
+    latestStatus: document.querySelector("#latest-health-status"),
+    latestSummary: document.querySelector("#latest-health-summary"),
+    latestTitle: document.querySelector("#latest-health-title"),
+    latestWorkflowLink: document.querySelector("#latest-workflow-link"),
+    localRunnerClose: document.querySelector("#close-local-runner"),
+    localRunnerDialog: document.querySelector("#local-runner-dialog"),
+    localRunnerOpen: document.querySelector("#open-local-runner"),
     localRunner: document.querySelector("#local-runner"),
     matrix: document.querySelector("#health-matrix"),
     next: document.querySelector("#next-page"),
@@ -166,6 +180,13 @@
     comparisonBar: document.querySelector("#comparison-bar"),
     comparisonCount: document.querySelector("#comparison-count"),
     comparisonLink: document.querySelector("#comparison-link"),
+    overviewComparisonLeft: document.querySelector("#overview-comparison-left"),
+    overviewComparisonMetrics: document.querySelector("#overview-comparison-metrics"),
+    overviewComparisonOpen: document.querySelector("#overview-comparison-open"),
+    overviewComparisonRight: document.querySelector("#overview-comparison-right"),
+    overviewComparisonSummary: document.querySelector("#overview-comparison-summary"),
+    overviewComparisonSwap: document.querySelector("#overview-comparison-swap"),
+    overviewComparisonVerdict: document.querySelector("#overview-comparison-verdict"),
   };
 
   function escapeHtml(value) {
@@ -286,19 +307,289 @@
     );
   }
 
+  function renderLatestHealth() {
+    const latest = history.executions[0];
+    if (!latest) return;
+    const health = executionApi.latestHealthModel(latest);
+    const meta = statusMeta(health.status);
+    const expected = health.expectedReports;
+    const received = health.receivedReports;
+    const hasReportDenominator = typeof expected === "number" && expected > 0;
+
+    elements.latestStatus.className = `status-pill status-${meta.css}`;
+    elements.latestStatus.textContent = meta.label;
+    elements.latestTitle.textContent =
+      health.status === "passed"
+        ? "Latest execution passed"
+        : health.availability === "unavailable"
+          ? "Execution stopped before report evidence"
+          : `${meta.label} needs attention`;
+    elements.latestSummary.textContent = hasReportDenominator
+      ? `${compactNumber(received, 0)} of ${compactNumber(expected, 0)} expected reports received. ${dataLabel(health.availability)} is retained for this execution.`
+      : health.availability === "unavailable"
+        ? "No scenario denominator is available, so quality and reliability metrics remain unknown instead of being shown as zero."
+        : `${dataLabel(health.availability)} is retained; report completeness was not published.`;
+    elements.latestIdentity.textContent = health.identity;
+    elements.latestLane.textContent = titleCase(health.lane);
+    elements.latestAvailability.textContent = dataLabel(health.availability);
+    elements.latestCompleted.textContent = formatDate(
+      latest.completed_at || latest.started_at,
+      true,
+    );
+    elements.latestDetailLink.href = detailUrl(latest);
+
+    const workflowUrl = safeUrl(health.workflowUrl);
+    elements.latestWorkflowLink.hidden = !workflowUrl;
+    if (workflowUrl) elements.latestWorkflowLink.href = workflowUrl;
+
+    const signalIcon = document.createElement("span");
+    signalIcon.className = "latest-signal-icon";
+    signalIcon.setAttribute("aria-hidden", "true");
+    signalIcon.textContent = health.firstFailure ? "!" : health.status === "passed" ? "✓" : "i";
+    const signalCopy = document.createElement("div");
+    const signalTitle = document.createElement("strong");
+    const signalMessage = document.createElement("p");
+    if (health.firstFailure) {
+      signalTitle.textContent =
+        health.firstFailure.step_name ||
+        health.firstFailure.phase ||
+        health.firstFailure.kind ||
+        "First actionable failure";
+      signalMessage.textContent =
+        health.firstFailure.message || "Open the execution for diagnostic evidence.";
+      elements.latestFirstFailure.classList.add("has-failure");
+    } else if (health.status === "passed") {
+      signalTitle.textContent = "No blocking failure in the latest execution";
+      signalMessage.textContent = "Efficiency can be reviewed, subject to cohort compatibility and evidence depth.";
+      elements.latestFirstFailure.classList.remove("has-failure");
+    } else {
+      signalTitle.textContent = "No structured first failure was retained";
+      signalMessage.textContent = "Open the execution detail or workflow log for the earliest actionable signal.";
+      elements.latestFirstFailure.classList.add("has-failure");
+    }
+    signalCopy.append(signalTitle, signalMessage);
+    elements.latestFirstFailure.replaceChildren(signalIcon, signalCopy);
+  }
+
   function renderKpis() {
     const latest = history.executions[0];
     if (!latest) return;
     elements.kpiPassRate.textContent = formatPercent(
       latest.totals?.scenario_pass_rate,
     );
+    const expectedReports = latest.totals?.expected_reports;
     elements.kpiCoverage.textContent =
-      `${formatPercent(latest.totals?.report_coverage)} report coverage`;
+      typeof expectedReports === "number" && expectedReports > 0
+        ? `${formatPercent(latest.totals?.report_coverage)} report coverage`
+        : "No report denominator";
     elements.kpiScore.textContent = compactNumber(latest.totals?.average_score, 1);
-    elements.kpiFailures.textContent = compactNumber(failureCount(latest), 0);
+    const reliabilityFields = [
+      latest.totals?.hard_gate_failures,
+      latest.totals?.technical_failures,
+      latest.totals?.missing_reports,
+    ];
+    elements.kpiFailures.textContent = reliabilityFields.some(
+      (value) => typeof value === "number" && Number.isFinite(value),
+    )
+      ? compactNumber(failureCount(latest), 0)
+      : "—";
     elements.kpiCost.textContent = formatCurrency(latest.totals?.total_cost_usd);
     elements.kpiRuntime.textContent =
-      `${formatDuration(latest.totals?.wall_time_seconds)} model runtime`;
+      typeof latest.totals?.wall_time_seconds === "number"
+        ? `${formatDuration(latest.totals.wall_time_seconds)} model runtime`
+        : "Runtime not reported";
+  }
+
+  function comparisonOptionLabel(execution) {
+    const label = execution.label || formatDate(execution.completed_at, true);
+    const subject = execution.subjects?.[0];
+    const subjectLabel = subject
+      ? `${subject.provider || "unknown"}/${subject.model || "unknown"}`
+      : "no subject";
+    return `${label} · ${statusMeta(execution.status).label} · ${subjectLabel}`;
+  }
+
+  function appendExecutionOptions(select, selectedId) {
+    select.replaceChildren(
+      ...history.executions.map((execution) => {
+        const option = document.createElement("option");
+        option.value = execution.id;
+        option.textContent = comparisonOptionLabel(execution);
+        option.selected = execution.id === selectedId;
+        return option;
+      }),
+    );
+  }
+
+  function comparisonDeltaText(values, formatter, lowerIsBetter, comparable) {
+    if (!comparable) return { text: "Delta disabled", css: "unavailable" };
+    if (
+      typeof values.left !== "number" ||
+      typeof values.right !== "number" ||
+      typeof values.delta !== "number"
+    ) {
+      return { text: "Not reported", css: "unavailable" };
+    }
+    if (values.delta === 0) return { text: "No change", css: "neutral" };
+    const improved = lowerIsBetter ? values.delta < 0 : values.delta > 0;
+    return {
+      text: `${values.delta > 0 ? "+" : ""}${formatter(values.delta)} B−A`,
+      css: improved ? "improved" : "regressed",
+    };
+  }
+
+  function comparisonMetricCard(definition, comparison) {
+    const values = definition.values(comparison);
+    const delta = comparisonDeltaText(
+      values,
+      definition.format,
+      definition.lowerIsBetter,
+      comparison.comparable,
+    );
+    const card = document.createElement("article");
+    card.className = "overview-comparison-metric";
+    const label = document.createElement("span");
+    label.textContent = definition.label;
+    const sides = document.createElement("div");
+    sides.className = "overview-comparison-values";
+    const left = document.createElement("strong");
+    left.textContent = definition.format(values.left);
+    const arrow = document.createElement("small");
+    arrow.textContent = "→";
+    const right = document.createElement("strong");
+    right.textContent = definition.format(values.right);
+    sides.append(left, arrow, right);
+    const deltaNode = document.createElement("small");
+    deltaNode.className = `comparison-metric-delta delta-${delta.css}`;
+    deltaNode.textContent = delta.text;
+    card.append(label, sides, deltaNode);
+    return card;
+  }
+
+  function renderOverviewComparison() {
+    const left = executionApi.findExecution(
+      history,
+      elements.overviewComparisonLeft.value,
+    );
+    const right = executionApi.findExecution(
+      history,
+      elements.overviewComparisonRight.value,
+    );
+    const ready = left && right && left.id !== right.id;
+    elements.overviewComparisonOpen.setAttribute("aria-disabled", String(!ready));
+    elements.overviewComparisonSwap.disabled = !ready;
+    if (!ready) {
+      elements.overviewComparisonVerdict.className =
+        "comparison-verdict comparison-verdict-unavailable";
+      elements.overviewComparisonVerdict.textContent =
+        history.executions.length < 2 ? "Need two executions" : "Choose different executions";
+      elements.overviewComparisonSummary.textContent =
+        "Select two retained executions to compare their outcome guardrails and efficiency.";
+      elements.overviewComparisonMetrics.replaceChildren();
+      elements.overviewComparisonOpen.href = "./compare.html";
+      return;
+    }
+
+    const comparison = executionApi.compareExecutions(left, right);
+    const eligible = comparison.compatibility === "eligible";
+    elements.overviewComparisonVerdict.className =
+      `comparison-verdict comparison-verdict-${eligible ? "eligible" : "exploratory"}`;
+    elements.overviewComparisonVerdict.textContent = eligible
+      ? "Regression eligible"
+      : comparison.compatibility === "legacy_unverified"
+        ? "Exploratory · identity unavailable"
+        : "Exploratory only";
+    const comparableScenarios = comparison.scenarios.filter(
+      (scenario) => scenario.comparable,
+    ).length;
+    elements.overviewComparisonSummary.textContent = eligible
+      ? `${comparableScenarios} scenario${comparableScenarios === 1 ? "" : "s"} share the same comparison contract. Deltas describe candidate B relative to baseline A.`
+      : comparison.warnings[0] ||
+        "The selected executions remain side by side, but improvement and regression labels are disabled.";
+    elements.overviewComparisonOpen.href =
+      `./compare.html?left=${encodeURIComponent(left.id)}&right=${encodeURIComponent(right.id)}`;
+
+    const blockingFailures = (execution) => {
+      const totals = execution.totals || {};
+      const fields = [
+        totals.hard_gate_failures,
+        totals.technical_failures,
+        totals.missing_reports,
+      ];
+      return fields.some((value) => typeof value === "number")
+        ? fields.reduce((total, value) => total + Number(value || 0), 0)
+        : null;
+    };
+    const metricDefinitions = [
+      {
+        label: "Pass rate",
+        format: formatPercent,
+        lowerIsBetter: false,
+        values: (item) => item.totals.scenario_pass_rate,
+      },
+      {
+        label: "Quality score",
+        format: (value) => compactNumber(value, 1),
+        lowerIsBetter: false,
+        values: (item) => item.totals.average_score,
+      },
+      {
+        label: "Blocking failures",
+        format: (value) => compactNumber(value, 0),
+        lowerIsBetter: true,
+        values: (item) => {
+          const leftValue = blockingFailures(item.left);
+          const rightValue = blockingFailures(item.right);
+          return {
+            left: leftValue,
+            right: rightValue,
+            delta:
+              item.comparable && leftValue !== null && rightValue !== null
+                ? rightValue - leftValue
+                : null,
+          };
+        },
+      },
+      {
+        label: "Tokens",
+        format: (value) => compactNumber(value, 0),
+        lowerIsBetter: true,
+        values: (item) => item.totals.total_tokens,
+      },
+      {
+        label: "Cost",
+        format: formatCurrency,
+        lowerIsBetter: true,
+        values: (item) => item.totals.total_cost_usd,
+      },
+      {
+        label: "Runtime",
+        format: formatDuration,
+        lowerIsBetter: true,
+        values: (item) => item.totals.wall_time_seconds,
+      },
+    ];
+    elements.overviewComparisonMetrics.replaceChildren(
+      ...metricDefinitions.map((definition) =>
+        comparisonMetricCard(definition, comparison),
+      ),
+    );
+  }
+
+  function initializeOverviewComparison() {
+    const candidate = history.executions[0] || null;
+    const baseline = candidate
+      ? history.executions
+          .slice(1)
+          .find((execution) =>
+            executionApi.compareExecutions(execution, candidate).comparable,
+          ) || history.executions[1] || null
+      : null;
+    appendExecutionOptions(elements.overviewComparisonLeft, baseline?.id || "");
+    appendExecutionOptions(elements.overviewComparisonRight, candidate?.id || "");
+    elements.overviewComparisonLeft.disabled = history.executions.length < 2;
+    elements.overviewComparisonRight.disabled = history.executions.length < 2;
+    renderOverviewComparison();
   }
 
   function tierLabel(value) {
@@ -579,12 +870,14 @@
     const latest = history.executions[0];
     if (latest) {
       const status = statusMeta(latest.status);
+      const latestReference = String(latest.run_id || latest.id || "unknown");
       elements.efficiencyStatus.textContent = status.label;
       elements.efficiencyStatus.className =
         `efficiency-result-value text-${status.css}`;
       elements.efficiencyStatusCaption.textContent =
-        `${formatDate(latest.completed_at, true)} · run ${latest.run_id || latest.id}` +
+        `${formatDate(latest.completed_at, true)} · run ${latestReference.slice(0, 8)}` +
         (latest.attempt > 1 ? ` · attempt ${latest.attempt}` : "");
+      elements.efficiencyStatusCaption.title = latestReference;
     }
     const overview = executionApi.buildEfficiencyOverview(history.executions);
     if (!overview.latest) {
@@ -592,11 +885,6 @@
         '<tr><td colspan="7" class="table-empty">Waiting for complete efficiency reports.</td></tr>';
       return;
     }
-    elements.efficiencyRunLabel.textContent =
-      `Run ${overview.latest.run_id || overview.latest.id} · ${formatDate(
-        overview.latest.completed_at,
-        true,
-      )}`;
     const cards = [
       {
         metricId: "cost_usd",
@@ -634,20 +922,47 @@
     const cohortRows = overview.rows.filter(
       (row) => row.lifecycle === "comparable" && row.outcome.passed,
     );
+    const maximumHistory = Math.max(
+      0,
+      ...cohortRows.map((row) => Number(row.historyCount) || 0),
+    );
+    elements.efficiencyRunLabel.textContent = cohortRows.length
+      ? `${cohortRows.length} comparable scenario${cohortRows.length === 1 ? "" : "s"} · up to ${maximumHistory} prior execution${maximumHistory === 1 ? "" : "s"}`
+      : "No compatible baseline cohort";
+    elements.efficiencyRunLabel.removeAttribute("title");
     cards.forEach((card) => {
       const metric = overview.metrics[card.metricId];
       // Value, delta, and sparkline must all read the same population; fall
       // back to the full-suite total only while no cohort exists yet.
-      card.value.textContent = card.format(
-        cohortRows.length ? metric?.comparableCurrent : metric?.operational,
-      );
-      const meta = deltaMeta(metric?.delta);
-      card.delta.textContent = meta.label;
-      card.delta.className = `efficiency-delta delta-${meta.css}`;
+      const currentValue = cohortRows.length
+        ? metric?.comparableCurrent
+        : metric?.operational;
+      card.value.textContent = card.format(currentValue);
       const baselineValue =
         cohortRows.length && typeof metric?.comparableBaseline === "number"
           ? metric.comparableBaseline
           : null;
+      const meta =
+        typeof currentValue !== "number"
+          ? {
+              label:
+                card.metricId === "cost_usd"
+                  ? "Not reported by provider"
+                  : "Not reported",
+              css: "neutral",
+            }
+          : baselineValue === null
+            ? { label: "Collecting comparable baseline", css: "neutral" }
+            : currentValue === baselineValue
+              ? { label: "No change vs baseline median", css: "neutral" }
+              : card.metricId === "function_call_errors" && baselineValue === 0
+                ? {
+                    label: `↑ ${compactNumber(currentValue, 1)} vs zero baseline`,
+                    css: "regressed",
+                  }
+                : deltaMeta(metric?.delta);
+      card.delta.textContent = meta.label;
+      card.delta.className = `efficiency-delta delta-${meta.css}`;
       card.baseline.textContent =
         baselineValue === null ? "" : `baseline ${card.format(baselineValue)}`;
       renderEfficiencySparkline(
@@ -1229,14 +1544,12 @@
   }
 
   function renderComparisonBar() {
-    if (!isLocal) {
-      elements.comparisonBar.hidden = true;
-      return;
-    }
     elements.comparisonBar.hidden = false;
     const count = state.comparison.length;
     elements.comparisonCount.textContent =
-      count === 0
+      state.comparisonLimitReached
+        ? "Two selected · clear one before adding another"
+        : count === 0
         ? "Select two executions"
         : count === 1
           ? "1 of 2 executions selected"
@@ -1250,9 +1563,13 @@
 
   function toggleComparison(executionId, checked) {
     state.comparison = state.comparison.filter((id) => id !== executionId);
+    state.comparisonLimitReached = false;
     if (checked) {
-      if (state.comparison.length === 2) state.comparison.shift();
-      state.comparison.push(executionId);
+      if (state.comparison.length === 2) {
+        state.comparisonLimitReached = true;
+      } else {
+        state.comparison.push(executionId);
+      }
     }
     renderTable();
   }
@@ -1272,20 +1589,37 @@
         (subject) => `${subject.provider}/${subject.model}`,
       );
       const failures = failureCount(execution);
+      const hasFailureEvidence = [
+        execution.totals?.hard_gate_failures,
+        execution.totals?.technical_failures,
+        execution.totals?.missing_reports,
+      ].some((value) => typeof value === "number" && Number.isFinite(value));
+      const expectedReports = execution.totals?.expected_reports;
+      const receivedReports = execution.totals?.received_reports;
+      const scope =
+        typeof expectedReports === "number" && typeof receivedReports === "number"
+          ? `${compactNumber(receivedReports, 0)}/${compactNumber(expectedReports, 0)}`
+          : "—";
+      const firstFailure = execution.first_failure?.message || "";
+      const evidencePreview = firstFailure
+        ? firstFailure
+        : hasFailureEvidence
+          ? failures
+            ? `${failures} blocking event${failures === 1 ? "" : "s"}`
+            : "No blocking events"
+          : "No structured report signal";
       const trigger =
         execution.event === "workflow_dispatch" ? "manual" : execution.event || "unknown";
       const primaryLabel = execution.label || formatDate(execution.completed_at, true);
       const secondaryLabel = execution.label
         ? `${formatDate(execution.completed_at, true)} · run ${execution.run_id || execution.id}`
         : `run ${execution.run_id || execution.id}`;
-      const comparisonControl = isLocal
-        ? `<label class="execution-compare-control">
+      const comparisonControl = `<label class="execution-compare-control">
             <input type="checkbox" data-compare-id="${escapeHtml(execution.id)}" ${
               state.comparison.includes(execution.id) ? "checked" : ""
             }>
             <span class="visually-hidden">Select ${escapeHtml(primaryLabel)} for comparison</span>
-          </label>`
-        : "";
+          </label>`;
       const commitCell = isLocal
         ? ""
         : `<td>${
@@ -1318,16 +1652,30 @@
               ? `${subjectLabels.length} subjects`
               : "—",
         )}</td>
-        <td>${formatPercent(execution.totals?.scenario_pass_rate)}</td>
-        <td>${compactNumber(execution.totals?.average_score, 1)}</td>
-        <td class="${failures ? "text-fail" : ""}">${compactNumber(failures, 0)}</td>
-        <td>${compactNumber(execution.totals?.total_tokens, 0)}</td>
-        <td>${compactNumber(execution.totals?.function_calls, 0)}</td>
-        <td>${formatCurrency(execution.totals?.total_cost_usd)}</td>
-        <td>${formatDuration(execution.totals?.wall_time_seconds)}</td>
-        <td><span class="data-badge data-${escapeHtml(
-          execution.availability,
-        )}">${escapeHtml(dataLabel(execution.availability))}</span></td>
+        <td>
+          <div class="execution-table-stack">
+            <strong>${scope}</strong>
+            <small>${formatPercent(execution.totals?.report_coverage)} coverage</small>
+          </div>
+        </td>
+        <td>
+          <div class="execution-table-stack">
+            <strong>${formatPercent(execution.totals?.scenario_pass_rate)}</strong>
+            <small>score ${compactNumber(execution.totals?.average_score, 1)}</small>
+          </div>
+        </td>
+        <td>
+          <div class="execution-table-stack">
+            <strong>${formatCurrency(execution.totals?.total_cost_usd)}</strong>
+            <small>${formatDuration(execution.totals?.wall_time_seconds)} · ${compactNumber(execution.totals?.total_tokens, 0)} tokens</small>
+          </div>
+        </td>
+        <td>
+          <div class="execution-evidence-cell ${failures ? "text-fail" : ""}" title="${escapeHtml(evidencePreview)}">
+            <span>${escapeHtml(evidencePreview)}</span>
+            <span class="data-badge data-${escapeHtml(execution.availability)}">${escapeHtml(dataLabel(execution.availability))}</span>
+          </div>
+        </td>
       `;
       row.querySelector("[data-compare-id]")?.addEventListener("change", (event) => {
         toggleComparison(execution.id, event.currentTarget.checked);
@@ -1337,7 +1685,7 @@
     if (!page.length) {
       const row = document.createElement("tr");
       row.innerHTML =
-        `<td class="table-empty" colspan="${isLocal ? 11 : 12}">No executions match these filters.</td>`;
+        `<td class="table-empty" colspan="${isLocal ? 7 : 8}">No executions match these filters.</td>`;
       elements.body.append(row);
     }
     elements.count.textContent =
@@ -1353,6 +1701,7 @@
     elements.empty.hidden = hasData;
     elements.content.hidden = !hasData;
     if (!hasData) return;
+    renderLatestHealth();
     renderKpis();
     renderCapability();
     renderEfficiency();
@@ -1361,6 +1710,17 @@
   }
 
   async function initialize() {
+    [
+      ".latest-evidence",
+      ".overview-comparison",
+      ".health-panel",
+      ".efficiency-overview",
+      ".capability-panel",
+      ".executions-panel",
+    ].forEach((selector) => {
+      const section = elements.content.querySelector(selector);
+      if (section) elements.content.append(section);
+    });
     elements.preview.hidden = !(history.preview || isLocal || isObserved);
     elements.preview.textContent = isLocal
       ? "Local data"
@@ -1371,10 +1731,11 @@
       elements.syncLabel.textContent = "Last completed";
       elements.emptyTitle.textContent = "No local executions yet";
       elements.emptyDescription.textContent =
-        "Run an E2E experiment above to create the first local execution.";
+        "Use New execution to create the first local experiment.";
       elements.actionsLink.textContent = "View repository ↗";
       elements.footerSummary.textContent = "Harness E2E · local execution history";
       elements.localRunner.hidden = false;
+      elements.localRunnerOpen.hidden = false;
       elements.commitHeading.hidden = true;
       elements.search.placeholder = "Search label, run, or date";
     } else if (isObserved) {
@@ -1397,6 +1758,31 @@
           : `${repo.replace(/\/$/, "")}/actions/workflows/harness-e2e-daily.yml`;
       }
     }
+    elements.localRunnerOpen.addEventListener("click", () => {
+      if (isLocal) elements.localRunnerDialog.showModal();
+    });
+    elements.localRunnerClose.addEventListener("click", () => {
+      elements.localRunnerDialog.close();
+    });
+    elements.localRunnerDialog.addEventListener("click", (event) => {
+      if (event.target === elements.localRunnerDialog) {
+        elements.localRunnerDialog.close();
+      }
+    });
+    elements.overviewComparisonLeft.addEventListener(
+      "change",
+      renderOverviewComparison,
+    );
+    elements.overviewComparisonRight.addEventListener(
+      "change",
+      renderOverviewComparison,
+    );
+    elements.overviewComparisonSwap.addEventListener("click", () => {
+      const left = elements.overviewComparisonLeft.value;
+      elements.overviewComparisonLeft.value = elements.overviewComparisonRight.value;
+      elements.overviewComparisonRight.value = left;
+      renderOverviewComparison();
+    });
     elements.scenarioHistoryClose.addEventListener("click", () => {
       elements.scenarioHistoryDialog.close();
     });
@@ -1448,10 +1834,12 @@
       state.page += 1;
       renderTable();
     });
+    initializeOverviewComparison();
     if (isLocal) window.HarnessLocalRunner.initialize();
     render();
     await hydrateExecutionMetrics();
     renderEfficiency();
+    renderOverviewComparison();
     renderTable();
   }
 
