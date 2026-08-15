@@ -785,7 +785,7 @@ export function TestsPage({
             </span>
           </div>
           <div className="grid gap-4 border-t border-line p-5 lg:grid-cols-[minmax(180px,1fr)_minmax(220px,1.3fr)_44px_minmax(220px,1.3fr)]">
-            <label className="grid gap-2 text-xs font-semibold text-ink-muted">
+            <label className="grid content-start gap-2 text-xs font-semibold text-ink-muted">
               Evaluation cohort
               <select
                 className={inputClass}
@@ -808,7 +808,7 @@ export function TestsPage({
                 </span>
               )}
             </label>
-            <label className="grid gap-2 text-xs font-semibold text-ink-muted">
+            <label className="grid content-start gap-2 text-xs font-semibold text-ink-muted">
               System version A
               <select
                 className={inputClass}
@@ -831,7 +831,7 @@ export function TestsPage({
               </select>
             </label>
             <button
-              className="mt-auto flex min-h-11 min-w-11 items-center justify-center rounded-lg border border-line bg-panel-raised text-ink hover:border-line-strong disabled:cursor-not-allowed disabled:opacity-40"
+              className="flex h-11 min-w-11 items-center justify-center rounded-lg border border-line bg-panel-raised text-ink hover:border-line-strong disabled:cursor-not-allowed disabled:opacity-40 lg:mt-6"
               type="button"
               aria-label="Swap system versions A and B"
               disabled={!fromVersionId || !toVersionId}
@@ -839,7 +839,7 @@ export function TestsPage({
             >
               <ArrowLeftRight size={17} aria-hidden="true" />
             </button>
-            <label className="grid gap-2 text-xs font-semibold text-ink-muted">
+            <label className="grid content-start gap-2 text-xs font-semibold text-ink-muted">
               System version B
               <select
                 className={inputClass}
