@@ -61,7 +61,7 @@ export function ExecutionPage({ executionId }: { executionId: string }) {
         className="page-shell detail-shell w-[min(1420px,calc(100%-48px))] pt-[30px] max-[840px]:w-[min(1420px,calc(100%-30px))]"
       >
         <nav
-          className="breadcrumbs mb-5 font-mono text-[0.64rem]"
+          className="breadcrumbs mb-5 items-center font-mono text-[0.64rem]"
           aria-label="Breadcrumb"
         >
           <a href={hashForWorkspace()}>Executions</a>
