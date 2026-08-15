@@ -415,7 +415,7 @@ impl DashboardReadModel {
                 descriptor.execution_count > 0 || entry.current_version == Some(descriptor.version)
             })
             .collect::<Vec<_>>();
-        available_versions.sort_by(|left, right| right.version.cmp(&left.version));
+        available_versions.sort_by_key(|entry| std::cmp::Reverse(entry.version));
         let selected_version = select_version(
             entry,
             request.cohort_id.as_deref(),
@@ -889,7 +889,7 @@ fn median(mut values: Vec<f64>) -> Option<f64> {
     }
     values.sort_by(f64::total_cmp);
     let midpoint = values.len() / 2;
-    Some(if values.len() % 2 == 0 {
+    Some(if values.len().is_multiple_of(2) {
         (values[midpoint - 1] + values[midpoint]) / 2.0
     } else {
         values[midpoint]
