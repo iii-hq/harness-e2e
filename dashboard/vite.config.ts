@@ -16,16 +16,6 @@ export default defineConfig({
       '@': path.resolve(root, 'src'),
     },
   },
-  build: {
-    rollupOptions: {
-      input: {
-        index: path.resolve(root, 'index.html'),
-        execution: path.resolve(root, 'execution.html'),
-        compare: path.resolve(root, 'compare.html'),
-        coverage: path.resolve(root, 'coverage/index.html'),
-      },
-    },
-  },
   server: {
     host: '0.0.0.0',
     allowedHosts: true,

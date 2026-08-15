@@ -30,8 +30,14 @@ target/debug/harness-e2e dashboard
 ```
 
 The server listens on `0.0.0.0:4173` by default. Open
-`http://localhost:4173/index.html` on the same machine, or replace `localhost`
+`http://localhost:4173/#/overview` on the same machine, or replace `localhost`
 with the machine's address when accessing it remotely.
+
+The dashboard uses the same dependency-free hash-routing pattern as Console.
+Canonical routes are `#/overview`, `#/scenarios`, `#/capability`,
+`#/executions`, `#/execution/<id>`, `#/compare/<baseline>/<candidate>`, and
+`#/coverage`; all application views are served by the single `index.html`
+entry point.
 
 The dashboard can now execute one or more scenarios against the Harness already
 running at `III_URL`. It discovers registered provider/model pairs from that

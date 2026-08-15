@@ -6,9 +6,9 @@
   const history = {
     executions: (manifest.executions || []).map(api.normalizeExecution),
   };
-  const parameters = new URLSearchParams(window.location.search);
-  const left = api.findExecution(history, parameters.get("left") || "");
-  const right = api.findExecution(history, parameters.get("right") || "");
+  const route = window.HarnessDashboardRoutes.current();
+  const left = api.findExecution(history, route.page === "compare" ? route.left || "" : "");
+  const right = api.findExecution(history, route.page === "compare" ? route.right || "" : "");
   const elements = {
     content: document.querySelector("#compare-content"),
     empty: document.querySelector("#compare-empty"),
@@ -99,7 +99,7 @@
           <small>${escapeHtml(status(execution.status))}</small>
           <small>${number(execution.requested_runs, 0)} run${execution.requested_runs === 1 ? "" : "s"}</small>
         </div>
-        <a class="text-link" href="./execution.html?id=${encodeURIComponent(execution.id)}">Open diagnostic detail →</a>
+        <a class="text-link" href="${window.HarnessDashboardRoutes.execution(execution.id)}">Open diagnostic detail →</a>
       </article>`;
   }
 

@@ -73,7 +73,7 @@ The E2E processes started by the dashboard inherit this setting. Prefer the
 strict default once the Harness publishes the versioned control-plane metadata.
 
 The server listens on `0.0.0.0:4173` by default. Open
-`http://localhost:4173/index.html` on the same machine, or replace `localhost`
+`http://localhost:4173/#/overview` on the same machine, or replace `localhost`
 with the machine's address when accessing it remotely. Use `--listen
 0.0.0.0:PORT` to select another port, `III_URL` to select the running Harness
 stack, and `--runs-dir` to select another local history directory.

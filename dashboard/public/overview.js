@@ -225,8 +225,10 @@
   }
 
   function detailUrl(execution, row = null) {
-    const query = `./execution.html?id=${encodeURIComponent(execution.id)}`;
-    return row ? `${query}#${scenarioAnchor(row.subjectId, row.scenarioId)}` : query;
+    return window.HarnessDashboardRoutes.execution(
+      execution.id,
+      row ? scenarioAnchor(row.subjectId, row.scenarioId) : null,
+    );
   }
 
   function scenarioAnchor(subjectId, scenarioId) {
@@ -510,7 +512,7 @@
       elements.overviewComparisonSummary.textContent =
         "Select two retained executions to compare their outcome guardrails and efficiency.";
       elements.overviewComparisonMetrics.replaceChildren();
-      elements.overviewComparisonOpen.href = "./compare.html";
+      elements.overviewComparisonOpen.href = window.HarnessDashboardRoutes.compare();
       return;
     }
 
@@ -530,8 +532,10 @@
       ? `${comparableScenarios} scenario${comparableScenarios === 1 ? "" : "s"} share the same comparison contract. Deltas describe candidate B relative to baseline A.`
       : comparison.warnings[0] ||
         "The selected executions remain side by side, but improvement and regression labels are disabled.";
-    elements.overviewComparisonOpen.href =
-      `./compare.html?left=${encodeURIComponent(left.id)}&right=${encodeURIComponent(right.id)}`;
+    elements.overviewComparisonOpen.href = window.HarnessDashboardRoutes.compare(
+      left.id,
+      right.id,
+    );
 
     const blockingFailures = (execution) => {
       const totals = execution.totals || {};
@@ -1627,8 +1631,8 @@
     const ready = count === 2;
     elements.comparisonLink.setAttribute("aria-disabled", String(!ready));
     elements.comparisonLink.href = ready
-      ? `./compare.html?left=${encodeURIComponent(state.comparison[0])}&right=${encodeURIComponent(state.comparison[1])}`
-      : "./compare.html";
+      ? window.HarnessDashboardRoutes.compare(state.comparison[0], state.comparison[1])
+      : window.HarnessDashboardRoutes.compare();
   }
 
   function toggleComparison(executionId, checked) {

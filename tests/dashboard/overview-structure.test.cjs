@@ -210,6 +210,18 @@ test("uses the native local-run contract without import compatibility", () => {
   );
 });
 
+test("shows immediate progress while a local E2E run starts", () => {
+  assert.match(index, /id="local-run-submit-idle"/);
+  assert.match(index, /id="local-run-submit-loading"/);
+  assert.match(index, /id="local-run-progress"/);
+  assert.match(localRunner, /function setSubmitState\(state = "idle"\)/);
+  assert.match(localRunner, /setAttribute\("aria-busy", String\(busy\)\)/);
+  assert.match(
+    localRunner,
+    /submitting = true;[\s\S]*setSubmitState\("starting"\);[\s\S]*setControls\(true\);[\s\S]*await global\.HarnessDashboardData\.startRun/,
+  );
+});
+
 test("loads the local runner only for native local manifests", () => {
   assert.match(
     loader,
@@ -251,7 +263,7 @@ test("keeps the completed runner log inside a padded local panel", () => {
 });
 
 test("keeps comparison content padded with contained long values", () => {
-  assert.match(index, /href="\.\/compare\.html/);
+  assert.match(index, /hashForComparison\(\)/);
   const compare = fs.readFileSync(
     path.join(dashboardRoot, "src", "pages", "ComparePage.tsx"),
     "utf8",

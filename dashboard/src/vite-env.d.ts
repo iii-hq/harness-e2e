@@ -1,5 +1,6 @@
 /// <reference types="vite/client" />
 
+import type { DashboardRoutes } from '@/hooks/use-hash-route'
 import type {
   DashboardDataBridge,
   ExecutionManifest,
@@ -15,6 +16,7 @@ declare global {
     HarnessAnsiLog?: unknown
     HarnessBenchmarkData?: unknown
     HarnessDashboardData?: DashboardDataBridge
+    HarnessDashboardRoutes: DashboardRoutes
     HarnessExecutionData?: unknown
     HarnessExecutionTranscript?: unknown
     HarnessLocalRunner?: unknown

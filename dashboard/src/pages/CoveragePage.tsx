@@ -1,5 +1,6 @@
 import { LegacyLoadError } from '@/components/LegacyLoadError'
 import { ThemeToggle } from '@/components/ThemeToggle'
+import { hashForWorkspace } from '@/hooks/use-hash-route'
 import { useLegacyPage } from '@/hooks/useLegacyPage'
 
 export function CoveragePage() {
@@ -29,14 +30,14 @@ export function CoveragePage() {
           <ThemeToggle />
           <a
             className="button button-secondary"
-            href="../index.html"
+            href={hashForWorkspace()}
             data-mobile-label="Runs"
           >
             Executions
           </a>
           <a
             className="button button-secondary"
-            href="../coverage-trend/"
+            href="./coverage-trend/"
             data-mobile-label="Trend"
           >
             Trend
@@ -88,7 +89,7 @@ export function CoveragePage() {
             <div className="coverage-links">
               <a
                 className="button button-secondary"
-                href="./integration/index.html"
+                href="./coverage/integration/index.html"
                 data-report
                 hidden
               >
@@ -107,7 +108,7 @@ export function CoveragePage() {
             <div className="coverage-links">
               <a
                 className="button button-secondary"
-                href="./e2e/index.html"
+                href="./coverage/e2e/index.html"
                 data-report
                 hidden
               >

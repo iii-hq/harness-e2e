@@ -8,7 +8,9 @@
     window.HARNESS_EXECUTIONS,
     benchmark,
   );
-  const executionId = new URLSearchParams(window.location.search).get("id") || "";
+  const routes = window.HarnessDashboardRoutes;
+  const initialRoute = routes.current();
+  const executionId = initialRoute.page === "execution" ? initialRoute.executionId : "";
   const execution = window.HarnessExecutionData.findExecution(history, executionId);
   let detail = null;
 
@@ -1185,7 +1187,7 @@
         ? `${first.gateId}: ${first.message}`
         : `${titleCase(first.phase)}: ${first.message}`;
     return `
-      <a class="failure-chip" href="#${escapeHtml(anchor)}">
+      <a class="failure-chip" href="${escapeHtml(routes.execution(executionId, anchor))}" data-anchor="${escapeHtml(anchor)}">
         <span class="table-status status-fail">${group.items.length} issue${group.items.length === 1 ? "" : "s"}</span>
         <strong>${escapeHtml(titleCase(group.scenarioId))} · run ${group.runIndex + 1}</strong>
         <span class="failure-chip-message">${escapeHtml(truncateText(preview, 140))}</span>
@@ -1252,7 +1254,7 @@
     }
     const link = document.createElement("a");
     link.className = "button";
-    link.href = "#raw-data";
+    link.href = routes.execution(executionId, "raw-data");
     link.download = `${execution.id}.json`;
     link.textContent = "Download available JSON";
     link.addEventListener("click", () => {
@@ -1314,19 +1316,25 @@
 
   function attachAnchorNavigation() {
     window.addEventListener("hashchange", () => {
-      revealAnchor(window.location.hash.slice(1));
+      const route = routes.current();
+      if (route.page === "execution" && route.executionId === executionId) {
+        revealAnchor(route.anchor);
+      }
     });
     // Same-hash re-clicks do not fire hashchange; handle triage links directly.
     elements.failureSummary.addEventListener("click", (event) => {
       const link = event.target.closest('a[href^="#"]');
-      if (link) revealAnchor(link.getAttribute("href").slice(1));
+      if (link) revealAnchor(link.dataset.anchor);
     });
   }
 
   function reveal() {
     elements.loading.hidden = true;
     elements.content.hidden = false;
-    requestAnimationFrame(() => revealAnchor(window.location.hash.slice(1)));
+    requestAnimationFrame(() => {
+      const route = routes.current();
+      revealAnchor(route.page === "execution" ? route.anchor : null);
+    });
   }
 
   async function initialize() {

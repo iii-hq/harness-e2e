@@ -22,8 +22,8 @@ type CoverageDocument = {
   }
 }
 
-function assetRoot(page: PageName) {
-  return page === 'coverage' ? '../' : './'
+function assetRoot(_page: PageName) {
+  return './'
 }
 
 function scriptUrl(page: PageName, path: string) {
@@ -49,6 +49,10 @@ async function loadExecutionManifest(page: PageName) {
   window.HARNESS_EXECUTIONS ??= undefined
   await loadScript(page, 'executions.js', false)
   if (!window.HARNESS_EXECUTIONS) {
+    if (!window.HarnessBenchmarkData) {
+      await loadBenchmarkData(page)
+      await loadScript(page, 'dashboard-data.js')
+    }
     await loadScript(page, 'sample-executions.js')
   }
 }

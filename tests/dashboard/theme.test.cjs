@@ -7,17 +7,11 @@ const repositoryRoot = path.join(__dirname, "..", "..");
 const dashboardRoot = path.join(repositoryRoot, "dashboard");
 
 test("sets the stored or system theme before React renders", () => {
-  for (const relativePath of [
-    "index.html",
-    "compare.html",
-    "execution.html",
-    path.join("coverage", "index.html"),
-  ]) {
-    const html = fs.readFileSync(path.join(dashboardRoot, relativePath), "utf8");
-    assert.match(html, /localStorage\.getItem\('harness-e2e-theme'\)/);
-    assert.match(html, /prefers-color-scheme: dark/);
-    assert.match(html, /document\.documentElement\.dataset\.theme = theme/);
-  }
+  const html = fs.readFileSync(path.join(dashboardRoot, "index.html"), "utf8");
+  assert.match(html, /localStorage\.getItem\('harness-e2e-theme'\)/);
+  assert.match(html, /prefers-color-scheme: dark/);
+  assert.match(html, /document\.documentElement\.dataset\.theme = theme/);
+  assert.doesNotMatch(html, /data-page=/);
 });
 
 test("uses the shared React theme control on every dashboard page", () => {

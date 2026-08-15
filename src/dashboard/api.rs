@@ -78,7 +78,7 @@ pub(super) async fn serve(args: DashboardArgs) -> Result<()> {
     let listener = tokio::net::TcpListener::bind(listen)
         .await
         .with_context(|| format!("bind dashboard on {listen}"))?;
-    println!("dashboard: http://{listen}/index.html");
+    println!("dashboard: http://{listen}/#/overview");
     println!("press Ctrl+C to stop");
     axum::serve(listener, app)
         .with_graceful_shutdown(async {

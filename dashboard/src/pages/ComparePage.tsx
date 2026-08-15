@@ -1,5 +1,6 @@
 import { LegacyLoadError } from '@/components/LegacyLoadError'
 import { ThemeToggle } from '@/components/ThemeToggle'
+import { hashForWorkspace } from '@/hooks/use-hash-route'
 import { useLegacyPage } from '@/hooks/useLegacyPage'
 
 export function ComparePage() {
@@ -17,7 +18,7 @@ export function ComparePage() {
       <header className="topbar">
         <a
           className="brand"
-          href="./index.html"
+          href={hashForWorkspace()}
           aria-label="Harness E2E dashboard"
         >
           <span className="brand-copy">
@@ -27,7 +28,11 @@ export function ComparePage() {
         </a>
         <nav className="topbar-actions" aria-label="Comparison actions">
           <ThemeToggle />
-          <a className="button" href="./index.html" data-mobile-label="Back">
+          <a
+            className="button"
+            href={hashForWorkspace()}
+            data-mobile-label="Back"
+          >
             ← All executions
           </a>
         </nav>

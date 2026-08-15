@@ -1,8 +1,4 @@
-export type WorkspaceView =
-  | 'overview'
-  | 'scenarios'
-  | 'capability'
-  | 'executions'
+import type { WorkspaceView } from '@/hooks/use-hash-route'
 
 const views: Array<{
   id: WorkspaceView

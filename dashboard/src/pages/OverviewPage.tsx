@@ -1,7 +1,13 @@
-import { useEffect, useState } from 'react'
 import { LegacyLoadError } from '@/components/LegacyLoadError'
-import { SectionNav, type WorkspaceView } from '@/components/SectionNav'
+import { SectionNav } from '@/components/SectionNav'
 import { ThemeToggle } from '@/components/ThemeToggle'
+import {
+  hashForComparison,
+  hashForCoverage,
+  hashForExecution,
+  hashForWorkspace,
+  type WorkspaceView,
+} from '@/hooks/use-hash-route'
 import { useLegacyPage } from '@/hooks/useLegacyPage'
 
 const historyKicker =
@@ -11,35 +17,11 @@ const historyTab =
 const historyStat =
   'grid min-w-0 gap-[5px] border-r border-line bg-panel-quiet px-[18px] py-4 [&>small]:text-[0.6rem] [&>small]:text-ink-muted [&>span]:text-[0.59rem] [&>span]:font-bold [&>span]:tracking-[0.065em] [&>span]:text-ink-muted [&>span]:uppercase [&>strong]:overflow-hidden [&>strong]:text-ellipsis [&>strong]:whitespace-nowrap [&>strong]:text-[clamp(1.25rem,2vw,1.7rem)] [&>strong]:font-[570] [&>strong]:tracking-[-0.04em]'
 
-function initialWorkspaceView(): WorkspaceView {
-  const view = new URLSearchParams(window.location.search).get('view')
-  if (view === 'scenarios' || view === 'capability' || view === 'executions') {
-    return view
-  }
-  if (window.location.hash === '#scenarios') return 'scenarios'
-  if (window.location.hash === '#capability') return 'capability'
-  if (window.location.hash === '#executions') return 'executions'
-  return 'overview'
-}
-
-export function OverviewPage() {
+export function OverviewPage({ activeView }: { activeView: WorkspaceView }) {
   const error = useLegacyPage('overview')
-  const [activeView, setActiveView] =
-    useState<WorkspaceView>(initialWorkspaceView)
-
-  useEffect(() => {
-    const onPopState = () => setActiveView(initialWorkspaceView())
-    window.addEventListener('popstate', onPopState)
-    return () => window.removeEventListener('popstate', onPopState)
-  }, [])
 
   const selectView = (view: WorkspaceView) => {
-    setActiveView(view)
-    const url = new URL(window.location.href)
-    if (view === 'overview') url.searchParams.delete('view')
-    else url.searchParams.set('view', view)
-    url.hash = ''
-    window.history.pushState(null, '', url)
+    window.location.hash = hashForWorkspace(view)
     document.querySelector('.section-nav')?.scrollIntoView({
       block: 'start',
       behavior: 'smooth',
@@ -80,7 +62,7 @@ export function OverviewPage() {
           </button>
           <a
             className="button button-secondary"
-            href="./coverage/"
+            href={hashForCoverage()}
             data-mobile-label="Coverage"
           >
             Coverage
@@ -359,10 +341,30 @@ export function OverviewPage() {
               <div className="local-run-actions">
                 <button
                   id="local-run-submit"
-                  className="button local-run-submit"
+                  className="button local-run-submit min-w-[190px] justify-center disabled:pointer-events-none disabled:cursor-wait disabled:opacity-85 disabled:hover:translate-y-0"
                   type="submit"
+                  aria-busy="false"
                 >
-                  Run selected E2E
+                  <span
+                    id="local-run-submit-idle"
+                    className="inline-flex items-center gap-2"
+                  >
+                    Run selected E2E
+                  </span>
+                  <span
+                    id="local-run-submit-loading"
+                    className="inline-flex items-center gap-2"
+                    hidden
+                    aria-hidden="true"
+                  >
+                    <span
+                      className="size-3.5 animate-spin rounded-full border-2 border-current border-r-transparent"
+                      aria-hidden="true"
+                    ></span>
+                    <span id="local-run-submit-loading-label">
+                      Starting E2E…
+                    </span>
+                  </span>
                 </button>
                 <button
                   id="local-run-cancel"
@@ -373,6 +375,19 @@ export function OverviewPage() {
                   Cancel
                 </button>
               </div>
+              <p
+                id="local-run-progress"
+                className="col-span-full m-0 flex items-center justify-end gap-2 text-right text-[0.7rem] text-ink-muted"
+                role="status"
+                aria-live="polite"
+                hidden
+              >
+                <span
+                  className="size-1.5 animate-pulse rounded-full bg-brand"
+                  aria-hidden="true"
+                ></span>
+                <span id="local-run-progress-text"></span>
+              </p>
             </form>
             <p
               id="local-run-error"
@@ -472,14 +487,14 @@ export function OverviewPage() {
                 <a
                   id="latest-detail-link"
                   className="button button-primary"
-                  href="./execution.html"
+                  href={hashForExecution('')}
                 >
                   Open execution
                 </a>
                 <a
                   id="latest-workflow-link"
                   className="button"
-                  href="./index.html"
+                  href={hashForWorkspace()}
                   hidden
                 >
                   Open workflow ↗
@@ -577,7 +592,7 @@ export function OverviewPage() {
               <a
                 id="overview-comparison-open"
                 className="button"
-                href="./compare.html"
+                href={hashForComparison()}
                 aria-disabled="true"
               >
                 Open full comparison →
@@ -955,7 +970,7 @@ export function OverviewPage() {
               <a
                 id="comparison-link"
                 className="button"
-                href="./compare.html"
+                href={hashForComparison()}
                 aria-disabled="true"
               >
                 Compare selected

@@ -1,3 +1,4 @@
+import { currentDashboardRoute } from '@/hooks/use-hash-route'
 import { getDashboardIiiClient } from '@/lib/iii-client'
 
 type JsonObject = Record<string, unknown>
@@ -70,9 +71,10 @@ export async function loadRuntimeExecutionData(
     return true
   }
 
-  const parameters = new URLSearchParams(window.location.search)
+  const route = currentDashboardRoute()
   if (page === 'execution') {
-    const executionId = parameters.get('id')?.trim()
+    const executionId =
+      route.page === 'execution' ? route.executionId.trim() : ''
     if (!executionId) return false
     const bundle = await getExecution(runtime, executionId)
     window.HARNESS_EXECUTIONS = bundle.manifest
@@ -83,7 +85,7 @@ export async function loadRuntimeExecutionData(
     return true
   }
 
-  const ids = [parameters.get('left'), parameters.get('right')]
+  const ids = (route.page === 'compare' ? [route.left, route.right] : [])
     .map((value) => value?.trim())
     .filter((value): value is string => Boolean(value))
   if (new Set(ids).size !== 2) {

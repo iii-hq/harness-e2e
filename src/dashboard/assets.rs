@@ -54,16 +54,17 @@ mod tests {
     use super::*;
 
     #[test]
-    fn bundle_contains_every_public_page() {
-        for path in [
-            "index.html",
-            "execution.html",
-            "compare.html",
-            "coverage/index.html",
-        ] {
+    fn bundle_contains_single_page_application() {
+        for path in ["index.html"] {
             assert!(
                 DashboardAssets::get(path).is_some(),
                 "dashboard bundle is missing {path}"
+            );
+        }
+        for obsolete in ["execution.html", "compare.html", "coverage/index.html"] {
+            assert!(
+                DashboardAssets::get(obsolete).is_none(),
+                "dashboard bundle still contains obsolete page {obsolete}"
             );
         }
         assert!(

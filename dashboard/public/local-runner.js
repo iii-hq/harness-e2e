@@ -13,6 +13,8 @@
     runError: document.querySelector("#local-run-error"),
     runLog: document.querySelector("#local-run-log"),
     runLogShell: document.querySelector("#local-run-log-shell"),
+    runProgress: document.querySelector("#local-run-progress"),
+    runProgressText: document.querySelector("#local-run-progress-text"),
     runStatus: document.querySelector("#local-run-status"),
     scenarioAll: document.querySelector("#local-scenario-all"),
     scenarioNone: document.querySelector("#local-scenario-none"),
@@ -29,6 +31,9 @@
     judgeSearch: document.querySelector("#local-judge-search"),
     judgeSummary: document.querySelector("#local-judge-summary"),
     submit: document.querySelector("#local-run-submit"),
+    submitIdle: document.querySelector("#local-run-submit-idle"),
+    submitLoading: document.querySelector("#local-run-submit-loading"),
+    submitLoadingLabel: document.querySelector("#local-run-submit-loading-label"),
   };
 
   const modelPickers = [
@@ -60,6 +65,7 @@
   let logExecutionId = "";
   let logOffset = 0;
   let renderedLog = "";
+  let submitting = false;
 
   function renderRunLog(value) {
     const tokens = global.HarnessAnsiLog?.tokenizeAnsiLog(value) || [
@@ -95,8 +101,32 @@
     if (url) elements.connectionUrl.textContent = url;
   }
 
+  function setSubmitState(state = "idle") {
+    const busy = ["starting", "running", "cancelling"].includes(state);
+    const copy = {
+      starting: {
+        button: "Starting E2E…",
+        progress: "Sending the execution request to Harness…",
+      },
+      running: {
+        button: "E2E running…",
+        progress: "Execution started. Live runner output will appear below.",
+      },
+      cancelling: {
+        button: "Cancelling…",
+        progress: "Cancellation requested. Waiting for the runner to stop…",
+      },
+    }[state];
+    elements.submit.dataset.state = state;
+    elements.submit.setAttribute("aria-busy", String(busy));
+    elements.submitIdle.hidden = busy;
+    elements.submitLoading.hidden = !busy;
+    elements.submitLoadingLabel.textContent = copy?.button || "Starting E2E…";
+    elements.runProgress.hidden = !copy;
+    elements.runProgressText.textContent = copy?.progress || "";
+  }
+
   function setControls(active) {
-    jobActive = active;
     for (const field of elements.form.elements) {
       if (field !== elements.cancel) field.disabled = active;
     }
@@ -139,7 +169,9 @@
     if (job?.log) renderedLog += job.log;
     if (typeof job?.log_offset === "number") logOffset = job.log_offset;
     const active = ["running", "cancelling"].includes(job?.status);
-    setControls(active);
+    jobActive = active;
+    setControls(active || submitting);
+    setSubmitState(submitting ? "starting" : active ? job.status : "idle");
     elements.cancel.hidden = !active;
     elements.runError.hidden = !job?.error;
     elements.runError.textContent = job?.error || "";
@@ -391,7 +423,8 @@
       selected === inputs.length
         ? `All ${inputs.length} scenarios`
         : `${selected} of ${inputs.length} scenarios`;
-    elements.submit.disabled = jobActive || !catalogReady || selected === 0;
+    elements.submit.disabled =
+      jobActive || submitting || !catalogReady || selected === 0;
   }
 
   function fillScenarios(scenarios) {
@@ -462,7 +495,7 @@
     elements.catalogIndicator.className = "local-connection-dot";
     catalogLoading = true;
     catalogReady = false;
-    setControls(jobActive);
+    setControls(jobActive || submitting);
     try {
       const query = new URLSearchParams({ url });
       const catalog = global.HarnessDashboardData?.getCatalog
@@ -485,7 +518,7 @@
       elements.advanced.open = true;
     } finally {
       catalogLoading = false;
-      setControls(jobActive);
+      setControls(jobActive || submitting);
       updateScenarioSummary();
     }
   }
@@ -558,15 +591,25 @@
           technical_retries: Number(values.get("technical_retries")),
           seed: values.get("seed") ? Number(values.get("seed")) : null,
         };
-        renderJob(
+        submitting = true;
+        setSubmitState("starting");
+        setControls(true);
+        elements.runStatus.textContent = "Starting…";
+        const response =
           global.HarnessDashboardData?.startRun
             ? await global.HarnessDashboardData.startRun(request)
             : await api("./api/local/run", {
                 method: "POST",
                 body: JSON.stringify(request),
-              }),
-        );
+              });
+        submitting = false;
+        renderJob(response);
       } catch (error) {
+        submitting = false;
+        jobActive = false;
+        setSubmitState("idle");
+        setControls(false);
+        updateScenarioSummary();
         elements.runError.hidden = false;
         elements.runError.textContent = error.message;
         elements.runStatus.textContent = "Could not start";

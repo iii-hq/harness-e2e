@@ -1,5 +1,6 @@
 import { LegacyLoadError } from '@/components/LegacyLoadError'
 import { ThemeToggle } from '@/components/ThemeToggle'
+import { hashForExecution, hashForWorkspace } from '@/hooks/use-hash-route'
 import { useLegacyPage } from '@/hooks/useLegacyPage'
 
 const evidenceKicker =
@@ -19,13 +20,13 @@ const detailKpiValue =
 const detailNavItem =
   'flex min-h-[52px] min-w-0 items-center gap-2.5 rounded-none border-r border-line px-4 text-left text-ink-muted no-underline hover:bg-panel-soft hover:text-ink focus-visible:bg-panel-soft focus-visible:text-ink focus-visible:outline-none max-[840px]:min-h-12 max-[840px]:px-3'
 
-export function ExecutionPage() {
+export function ExecutionPage({ executionId }: { executionId: string }) {
   const error = useLegacyPage('execution')
 
   return (
     <>
       <LegacyLoadError error={error} />
-      <a className="skip-link" href="#main">
+      <a className="skip-link" href={hashForExecution(executionId, 'main')}>
         Skip to execution details
       </a>
       <div className="ambient ambient-one hidden" aria-hidden="true"></div>
@@ -63,7 +64,7 @@ export function ExecutionPage() {
           className="breadcrumbs mb-5 font-mono text-[0.64rem]"
           aria-label="Breadcrumb"
         >
-          <a href="./index.html">Executions</a>
+          <a href={hashForWorkspace()}>Executions</a>
           <span aria-hidden="true">/</span>
           <span id="breadcrumb-run">Run</span>
         </nav>
@@ -84,7 +85,7 @@ export function ExecutionPage() {
           <p id="detail-error-message">
             This execution is not present in the retained history.
           </p>
-          <a className="button" href="./index.html">
+          <a className="button" href={hashForWorkspace()}>
             Back to executions
           </a>
         </section>
@@ -214,7 +215,7 @@ export function ExecutionPage() {
             >
               <span className="visually-hidden">On this execution</span>
               <a
-                href="#overview"
+                href={hashForExecution(executionId, 'overview')}
                 className={`${detailNavItem} max-[560px]:border-b`}
               >
                 <span className="font-mono text-[0.6rem]" aria-hidden="true">
@@ -225,7 +226,7 @@ export function ExecutionPage() {
                 </strong>
               </a>
               <a
-                href="#configuration"
+                href={hashForExecution(executionId, 'configuration')}
                 className={`${detailNavItem} max-[560px]:border-r-0 max-[560px]:border-b`}
               >
                 <span className="font-mono text-[0.6rem]" aria-hidden="true">
@@ -235,7 +236,10 @@ export function ExecutionPage() {
                   Stack
                 </strong>
               </a>
-              <a href="#scenarios" className={detailNavItem}>
+              <a
+                href={hashForExecution(executionId, 'scenarios')}
+                className={detailNavItem}
+              >
                 <span className="font-mono text-[0.6rem]" aria-hidden="true">
                   03
                 </span>
@@ -243,7 +247,10 @@ export function ExecutionPage() {
                   Scenarios
                 </strong>
               </a>
-              <a href="#raw-data" className={`${detailNavItem} border-r-0`}>
+              <a
+                href={hashForExecution(executionId, 'raw-data')}
+                className={`${detailNavItem} border-r-0`}
+              >
                 <span className="font-mono text-[0.6rem]" aria-hidden="true">
                   04
                 </span>
@@ -402,7 +409,7 @@ export function ExecutionPage() {
 
       <footer>
         <span>Harness E2E · public execution report</span>
-        <a href="./index.html">Back to all executions</a>
+        <a href={hashForWorkspace()}>Back to all executions</a>
       </footer>
     </>
   )
