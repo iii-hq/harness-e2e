@@ -58,8 +58,8 @@ The Rust build follows the same embedded-SPA contract as `workers/console`: it
 builds the React bundle with pnpm when `dashboard/dist/` is missing or stale,
 then embeds the Vite output in the binary. Node and pnpm must be available on
 `PATH`. For frontend development with HMR, use `pnpm --dir dashboard dev`; the
-Vite server proxies runtime data and local-run APIs to the Rust dashboard on
-port 4173.
+Vite server proxies runtime data, the scoped iii WebSocket, and local-run APIs
+to the Rust dashboard on port 4173.
 
 When the running Harness does not yet publish versioned `metadata.contract`
 entries, enable the temporary legacy compatibility mode through the environment:
@@ -77,6 +77,13 @@ The server listens on `0.0.0.0:4173` by default. Open
 with the machine's address when accessing it remotely. Use `--listen
 0.0.0.0:PORT` to select another port, `III_URL` to select the running Harness
 stack, and `--runs-dir` to select another local history directory.
+
+Local mode loads data incrementally through iii: 25 compact summaries on the
+first overview page, one complete report when an execution is opened, only the
+selected pair for comparison, and the model/scenario catalog when the run dialog
+opens. Server-side filtering and cursor pagination keep history growth out of
+the initial payload. Static published and `--view-only` presentations preserve
+the generated-file fallback.
 
 Local mode exposes controls that can start and cancel E2E runs, so expose the
 port only on a trusted network. Use `--listen 127.0.0.1:4173` when access should

@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
-use axum::extract::{Path as AxumPath, Query, State};
+use axum::extract::{FromRef, Path as AxumPath, Query, State};
 use axum::http::StatusCode;
 use axum::response::Response;
 use axum::routing::get;
@@ -10,15 +10,16 @@ use serde::Deserialize;
 use serde_json::{json, Value};
 
 use super::assets::{javascript_response, static_asset};
+use super::bus::{
+    self, CatalogRequest, ExecutionBundle, ExecutionGetRequest, ExecutionListRequest,
+    ExecutionListResponse, RunStatusRequest,
+};
 use super::controller::{validate_stack_url, Controller};
 use super::presenter::{
-    execution_detail_value, load_execution_summaries, repository_url, validate_execution_id,
-    MAX_EXECUTIONS,
+    execution_detail_value, repository_url, validate_execution_id, MAX_EXECUTIONS,
 };
 use super::store::read_stored_run;
 use super::{ApiError, DashboardArgs, RunRequest, RunSnapshot};
-use crate::context::E2eContext;
-use crate::scenarios::ScenarioId;
 
 const MAX_REQUEST_BYTES: usize = 64 * 1024;
 
@@ -26,6 +27,13 @@ const MAX_REQUEST_BYTES: usize = 64 * 1024;
 struct AppState {
     controller: Arc<Controller>,
     view_only: bool,
+    engine_url: Arc<String>,
+}
+
+impl FromRef<AppState> for Arc<String> {
+    fn from_ref(state: &AppState) -> Self {
+        state.engine_url.clone()
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -36,19 +44,31 @@ struct CatalogQuery {
 pub(super) async fn serve(args: DashboardArgs) -> Result<()> {
     let listen = args.listen;
     let view_only = args.view_only;
+    let engine_url = Arc::new(args.url.clone());
+    let iii = (!view_only).then(|| bus::connect(&engine_url));
+    let events = iii.as_deref().map(bus::DashboardEvents::register);
+    let controller = Controller::new(args, events)?;
+    if let Some(iii) = iii.as_deref() {
+        bus::register_functions(iii, controller.clone());
+    }
     let state = AppState {
-        controller: Controller::new(args)?,
+        controller,
         view_only,
+        engine_url,
     };
     let app = Router::new()
         .route("/data.js", get(benchmark_data))
         .route("/executions.js", get(execution_manifest))
         .route("/runs/:id", get(execution_detail))
+        .route("/api/dashboard", get(dashboard_config))
+        .route("/api/dashboard/executions", get(execution_page))
+        .route("/api/dashboard/executions/:id", get(execution_bundle))
         .fallback(get(static_asset));
     let app = if view_only {
         app
     } else {
-        app.route("/api/local/run", get(run_snapshot).post(start_run))
+        app.route("/ws", get(super::proxy::ws_proxy))
+            .route("/api/local/run", get(run_snapshot).post(start_run))
             .route("/api/local/run/cancel", axum::routing::post(cancel_run))
             .route("/api/local/catalog", get(catalog))
     }
@@ -66,13 +86,63 @@ pub(super) async fn serve(args: DashboardArgs) -> Result<()> {
         })
         .await
         .context("serve local dashboard")?;
+    if let Some(iii) = iii {
+        iii.shutdown_async().await;
+    }
     Ok(())
 }
 
-async fn run_snapshot(State(state): State<AppState>) -> Result<Json<RunSnapshot>, ApiError> {
+async fn dashboard_config(State(state): State<AppState>) -> Json<Value> {
+    Json(json!({
+        "mode": if state.view_only { "observed" } else { "local" },
+        "transport": if state.view_only { "static" } else { "iii" },
+        "page_size": 25,
+        "functions": {
+            "executions_list": bus::EXECUTIONS_LIST,
+            "execution_get": bus::EXECUTION_GET,
+            "catalog_get": bus::CATALOG_GET,
+            "run_status": bus::RUN_STATUS,
+            "run_start": bus::RUN_START,
+            "run_cancel": bus::RUN_CANCEL,
+            "changed_trigger": bus::CHANGED_TRIGGER,
+        }
+    }))
+}
+
+async fn execution_page(
+    State(state): State<AppState>,
+    Query(request): Query<ExecutionListRequest>,
+) -> Result<Json<ExecutionListResponse>, ApiError> {
+    let mut response = bus::execution_list(&state.controller, request)
+        .await
+        .map_err(ApiError::internal)?;
+    if state.view_only {
+        response.mode = "observed".into();
+    }
+    Ok(Json(response))
+}
+
+async fn execution_bundle(
+    State(state): State<AppState>,
+    AxumPath(id): AxumPath<String>,
+) -> Result<Json<ExecutionBundle>, ApiError> {
+    let mut response =
+        bus::execution_bundle(&state.controller, ExecutionGetRequest { execution_id: id })
+            .await
+            .map_err(ApiError::internal)?;
+    if state.view_only {
+        response.manifest.mode = "observed".into();
+    }
+    Ok(Json(response))
+}
+
+async fn run_snapshot(
+    State(state): State<AppState>,
+    Query(request): Query<RunStatusRequest>,
+) -> Result<Json<RunSnapshot>, ApiError> {
     state
         .controller
-        .snapshot()
+        .snapshot(request.after)
         .await
         .map(Json)
         .map_err(ApiError::internal)
@@ -85,7 +155,7 @@ async fn start_run(
     state.controller.start(request).await?;
     let snapshot = state
         .controller
-        .snapshot()
+        .snapshot(Some(0))
         .await
         .map_err(ApiError::internal)?;
     Ok((StatusCode::ACCEPTED, Json(snapshot)))
@@ -97,7 +167,7 @@ async fn cancel_run(
     state.controller.cancel().await?;
     let snapshot = state
         .controller
-        .snapshot()
+        .snapshot(None)
         .await
         .map_err(ApiError::internal)?;
     Ok((StatusCode::ACCEPTED, Json(snapshot)))
@@ -111,43 +181,10 @@ async fn catalog(
         .url
         .unwrap_or_else(|| state.controller.default_url().to_string());
     validate_stack_url(&url).map_err(|error| ApiError::bad_request(error.to_string()))?;
-    let context = E2eContext::connect(&url)
+    bus::catalog(&state.controller, CatalogRequest { url: Some(url) }, None)
         .await
-        .map_err(ApiError::internal)?;
-    if !context
-        .function_exists("harness::send")
-        .await
-        .map_err(ApiError::internal)?
-    {
-        context.shutdown().await;
-        return Err(ApiError::bad_request(
-            "connected iii stack does not expose harness::send",
-        ));
-    }
-    if !context
-        .function_exists("router::models::list")
-        .await
-        .map_err(ApiError::internal)?
-    {
-        context.shutdown().await;
-        return Err(ApiError::bad_request(
-            "connected Harness stack does not expose router::models::list; start its llm-router",
-        ));
-    }
-    let models = crate::catalog::list(&context, None)
-        .await
-        .map_err(ApiError::internal);
-    context.shutdown().await;
-    let models = models?;
-    if models.is_empty() {
-        return Err(ApiError::bad_request(
-            "the running Harness has no registered models",
-        ));
-    }
-    let scenarios: Vec<_> = ScenarioId::ALL.iter().map(|value| value.as_str()).collect();
-    Ok(Json(
-        json!({ "url": url, "models": models, "scenarios": scenarios }),
-    ))
+        .map(Json)
+        .map_err(ApiError::internal)
 }
 
 async fn benchmark_data() -> Response {
@@ -155,8 +192,11 @@ async fn benchmark_data() -> Response {
 }
 
 async fn execution_manifest(State(state): State<AppState>) -> Result<Response, ApiError> {
-    let executions =
-        load_execution_summaries(state.controller.runs_dir()).map_err(ApiError::internal)?;
+    let executions = state
+        .controller
+        .execution_summaries()
+        .await
+        .map_err(ApiError::internal)?;
     let last_update = executions
         .first()
         .and_then(|value| value.get("completed_at"))
@@ -170,7 +210,7 @@ async fn execution_manifest(State(state): State<AppState>) -> Result<Response, A
             "last_update": last_update,
             "repo_url": repository_url(),
             "retention": { "summaries": MAX_EXECUTIONS, "details": MAX_EXECUTIONS },
-            "executions": executions,
+            "executions": executions.as_ref(),
         })
     )))
 }

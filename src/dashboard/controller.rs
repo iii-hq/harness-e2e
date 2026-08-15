@@ -5,14 +5,17 @@ use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use anyhow::{bail, Context, Result};
 use chrono::{SecondsFormat, Utc};
+use serde_json::Value;
 use tokio::process::{Child, Command};
-use tokio::sync::Mutex;
+use tokio::sync::{Mutex, RwLock};
 use url::Url;
 
+use super::bus::DashboardEvents;
+use super::presenter::load_execution_summaries;
 use super::store::{read_report, recover_interrupted_runs, write_metadata};
 use super::{
     ApiError, DashboardArgs, Defaults, JobStatus, JobView, RunMetadata, RunRequest, RunSnapshot,
@@ -21,6 +24,7 @@ use super::{
 use crate::scenarios::ScenarioId;
 
 const MAX_LOG_TAIL_BYTES: u64 = 256 * 1024;
+const MAX_LOG_CHUNK_BYTES: u64 = 64 * 1024;
 
 struct ControllerState {
     job: Option<RunMetadata>,
@@ -32,10 +36,15 @@ pub(super) struct Controller {
     executable: PathBuf,
     defaults: Defaults,
     state: Mutex<ControllerState>,
+    summaries: RwLock<Option<Arc<Vec<Value>>>>,
+    events: Option<Arc<DashboardEvents>>,
 }
 
 impl Controller {
-    pub(super) fn new(args: DashboardArgs) -> Result<Arc<Self>> {
+    pub(super) fn new(
+        args: DashboardArgs,
+        events: Option<Arc<DashboardEvents>>,
+    ) -> Result<Arc<Self>> {
         validate_stack_url(&args.url)?;
         fs::create_dir_all(&args.runs_dir)
             .with_context(|| format!("create {}", args.runs_dir.display()))?;
@@ -59,6 +68,8 @@ impl Controller {
                 job: None,
                 child: None,
             }),
+            summaries: RwLock::new(None),
+            events,
         }))
     }
 
@@ -70,18 +81,48 @@ impl Controller {
         &self.defaults.url
     }
 
-    pub(super) async fn snapshot(&self) -> Result<RunSnapshot> {
+    pub(super) async fn snapshot(&self, after: Option<u64>) -> Result<RunSnapshot> {
         let metadata = self.state.lock().await.job.clone();
         let job = metadata
             .map(|metadata| {
-                let log = read_log_tail(&self.runs_dir.join(&metadata.id).join("run.log"))?;
-                Ok::<_, anyhow::Error>(JobView { metadata, log })
+                let log = read_log_chunk(&self.runs_dir.join(&metadata.id).join("run.log"), after)?;
+                Ok::<_, anyhow::Error>(JobView {
+                    metadata,
+                    log: log.content,
+                    log_from: log.from,
+                    log_offset: log.offset,
+                    log_truncated: log.truncated,
+                })
             })
             .transpose()?;
         Ok(RunSnapshot {
             job,
             defaults: self.defaults.clone(),
         })
+    }
+
+    pub(super) async fn execution_summaries(&self) -> Result<Arc<Vec<Value>>> {
+        if let Some(values) = self.summaries.read().await.as_ref() {
+            return Ok(values.clone());
+        }
+        let runs_dir = self.runs_dir.clone();
+        let values = Arc::new(
+            tokio::task::spawn_blocking(move || load_execution_summaries(&runs_dir))
+                .await
+                .map_err(|error| anyhow::anyhow!("load execution summaries task: {error}"))??,
+        );
+        *self.summaries.write().await = Some(values.clone());
+        Ok(values)
+    }
+
+    async fn invalidate_summaries(&self) {
+        self.summaries.write().await.take();
+    }
+
+    async fn emit_change(&self, kind: &str, execution_id: &str) {
+        if let Some(events) = &self.events {
+            events.emit(kind, execution_id).await;
+        }
     }
 
     pub(super) async fn start(self: &Arc<Self>, mut request: RunRequest) -> Result<(), ApiError> {
@@ -127,6 +168,9 @@ impl Controller {
         state.child = Some(child);
         drop(state);
 
+        self.invalidate_summaries().await;
+        self.emit_change("started", &id).await;
+
         let controller = Arc::clone(self);
         tokio::spawn(async move { controller.monitor(id).await });
         Ok(())
@@ -146,11 +190,15 @@ impl Controller {
         }
         let job = state.job.as_mut().expect("job checked above");
         job.status = JobStatus::Cancelling;
-        write_metadata(&self.runs_dir.join(id), job).map_err(ApiError::internal)?;
+        write_metadata(&self.runs_dir.join(&id), job).map_err(ApiError::internal)?;
+        drop(state);
+        self.invalidate_summaries().await;
+        self.emit_change("cancelling", &id).await;
         Ok(())
     }
 
     async fn monitor(self: Arc<Self>, id: String) {
+        let mut last_progress = Instant::now();
         loop {
             tokio::time::sleep(Duration::from_millis(250)).await;
             let finished = {
@@ -171,7 +219,13 @@ impl Controller {
                     None => None,
                 }
             };
-            let Some(result) = finished else { continue };
+            let Some(result) = finished else {
+                if last_progress.elapsed() >= Duration::from_secs(1) {
+                    self.emit_change("progress", &id).await;
+                    last_progress = Instant::now();
+                }
+                continue;
+            };
             let mut state = self.state.lock().await;
             let Some(job) = state.job.as_mut().filter(|job| job.id == id) else {
                 return;
@@ -203,6 +257,9 @@ impl Controller {
             if let Err(error) = write_metadata(&self.runs_dir.join(&id), job) {
                 tracing::error!(%error, %id, "write local E2E metadata");
             }
+            drop(state);
+            self.invalidate_summaries().await;
+            self.emit_change("finished", &id).await;
             return;
         }
     }
@@ -295,14 +352,38 @@ pub(super) fn validate_stack_url(value: &str) -> Result<()> {
     Ok(())
 }
 
-fn read_log_tail(path: &Path) -> Result<String> {
+struct LogChunk {
+    content: String,
+    from: u64,
+    offset: u64,
+    truncated: bool,
+}
+
+fn read_log_chunk(path: &Path, after: Option<u64>) -> Result<LogChunk> {
     if !path.is_file() {
-        return Ok(String::new());
+        return Ok(LogChunk {
+            content: String::new(),
+            from: 0,
+            offset: 0,
+            truncated: false,
+        });
     }
     let mut file = File::open(path)?;
     let length = file.metadata()?.len();
-    file.seek(SeekFrom::Start(length.saturating_sub(MAX_LOG_TAIL_BYTES)))?;
+    let requested = after.unwrap_or_else(|| length.saturating_sub(MAX_LOG_TAIL_BYTES));
+    let bounded = if after.is_some() {
+        length.saturating_sub(MAX_LOG_CHUNK_BYTES)
+    } else {
+        length.saturating_sub(MAX_LOG_TAIL_BYTES)
+    };
+    let from = requested.min(length).max(bounded);
+    file.seek(SeekFrom::Start(from))?;
     let mut bytes = Vec::new();
     file.read_to_end(&mut bytes)?;
-    Ok(String::from_utf8_lossy(&bytes).into_owned())
+    Ok(LogChunk {
+        content: String::from_utf8_lossy(&bytes).into_owned(),
+        from,
+        offset: length,
+        truncated: from > requested,
+    })
 }

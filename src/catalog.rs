@@ -1,4 +1,6 @@
 use anyhow::{Context, Result};
+use iii_sdk::protocol::TriggerRequest;
+use iii_sdk::IIIClient;
 use serde::{Deserialize, Serialize};
 
 use crate::context::E2eContext;
@@ -22,14 +24,36 @@ pub struct CatalogModel {
 }
 
 pub async fn list(context: &E2eContext, provider: Option<&str>) -> Result<Vec<CatalogModel>> {
-    let mut response: ModelsListResponse = context
+    let response: ModelsListResponse = context
         .trigger("router::models::list", ModelsListRequest { provider })
         .await
         .context("list models from the running stack")?;
+    Ok(sorted_models(response))
+}
+
+pub(crate) async fn list_with_client(
+    client: &IIIClient,
+    provider: Option<&str>,
+) -> Result<Vec<CatalogModel>> {
+    let payload = serde_json::to_value(ModelsListRequest { provider })?;
+    let value = client
+        .trigger(TriggerRequest {
+            function_id: "router::models::list".into(),
+            payload,
+            action: None,
+            timeout_ms: Some(15_000),
+        })
+        .await
+        .context("list models from the running stack")?;
+    let response: ModelsListResponse = serde_json::from_value(value)?;
+    Ok(sorted_models(response))
+}
+
+fn sorted_models(mut response: ModelsListResponse) -> Vec<CatalogModel> {
     response.models.sort_unstable_by(|left, right| {
         (&left.provider, &left.id).cmp(&(&right.provider, &right.id))
     });
-    Ok(response.models)
+    response.models
 }
 
 pub fn summary(models: &[CatalogModel]) -> String {

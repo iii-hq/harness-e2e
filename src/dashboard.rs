@@ -1,7 +1,9 @@
 mod api;
 mod assets;
+mod bus;
 mod controller;
 mod presenter;
+mod proxy;
 mod store;
 
 use std::net::SocketAddr;
@@ -12,6 +14,7 @@ use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::Json;
 use clap::Args;
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
@@ -36,7 +39,7 @@ pub struct DashboardArgs {
     pub view_only: bool,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, JsonSchema)]
 struct Defaults {
     url: String,
     model: String,
@@ -48,7 +51,7 @@ struct Defaults {
     seed: Option<u64>,
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
 struct RunRequest {
     #[serde(default)]
     label: String,
@@ -66,7 +69,7 @@ struct RunRequest {
     seed: Option<u64>,
 }
 
-#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, JsonSchema, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 enum JobStatus {
     Running,
@@ -82,7 +85,7 @@ impl JobStatus {
     }
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
 struct RunMetadata {
     schema_version: u32,
     id: String,
@@ -95,14 +98,17 @@ struct RunMetadata {
     request: RunRequest,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, JsonSchema)]
 struct JobView {
     #[serde(flatten)]
     metadata: RunMetadata,
     log: String,
+    log_from: u64,
+    log_offset: u64,
+    log_truncated: bool,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, JsonSchema)]
 struct RunSnapshot {
     job: Option<JobView>,
     defaults: Defaults,

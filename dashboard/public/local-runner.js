@@ -56,6 +56,10 @@
   let jobActive = false;
   let defaults = {};
   let initialized = false;
+  let liveUpdates = false;
+  let logExecutionId = "";
+  let logOffset = 0;
+  let renderedLog = "";
 
   function renderRunLog(value) {
     const tokens = global.HarnessAnsiLog?.tokenizeAnsiLog(value) || [
@@ -124,14 +128,24 @@
   function renderJob(response) {
     applyDefaults(response?.defaults);
     const job = response?.job;
+    if (!job || job.id !== logExecutionId || Number(job.log_from) < logOffset) {
+      logExecutionId = job?.id || "";
+      logOffset = 0;
+      renderedLog = "";
+    }
+    if (job?.log_truncated) {
+      renderedLog = "[Earlier runner output omitted]\n";
+    }
+    if (job?.log) renderedLog += job.log;
+    if (typeof job?.log_offset === "number") logOffset = job.log_offset;
     const active = ["running", "cancelling"].includes(job?.status);
     setControls(active);
     elements.cancel.hidden = !active;
     elements.runError.hidden = !job?.error;
     elements.runError.textContent = job?.error || "";
-    elements.runLogShell.hidden = !job?.log;
-    renderRunLog(job?.log || "");
-    if (job?.log && active) elements.runLogShell.open = true;
+    elements.runLogShell.hidden = !renderedLog;
+    renderRunLog(renderedLog);
+    if (renderedLog && active) elements.runLogShell.open = true;
     elements.runStatus.textContent = !job
       ? "Ready"
       : {
@@ -143,7 +157,9 @@
         }[job.status] || job.status;
     if (active) {
       clearTimeout(pollTimer);
-      pollTimer = setTimeout(refreshJob, 1_000);
+      // iii change events are the primary beat. A slow fallback keeps a run
+      // observable if the engine does not expose the custom trigger type.
+      pollTimer = setTimeout(refreshJob, liveUpdates ? 10_000 : 1_000);
     } else if (job?.status === "completed" && job.id) {
       const reloadKey = "harness-e2e-local-last-reload";
       if (sessionStorage.getItem(reloadKey) !== job.id) {
@@ -168,7 +184,9 @@
 
   async function refreshJob() {
     try {
-      const response = await api("./api/local/run");
+      const response = global.HarnessDashboardData?.getRunSnapshot
+        ? await global.HarnessDashboardData.getRunSnapshot(logOffset)
+        : await api(`./api/local/run?after=${logOffset}`);
       renderJob(response);
       return response;
     } catch (error) {
@@ -447,7 +465,9 @@
     setControls(jobActive);
     try {
       const query = new URLSearchParams({ url });
-      const catalog = await api(`./api/local/catalog?${query}`);
+      const catalog = global.HarnessDashboardData?.getCatalog
+        ? await global.HarnessDashboardData.getCatalog(url)
+        : await api(`./api/local/catalog?${query}`);
       fillModelSelect(elements.subject, catalog.models);
       fillModelSelect(elements.judge, catalog.models, { includeAutomatic: true });
       fillScenarios(catalog.scenarios);
@@ -526,22 +546,25 @@
         if (!scenarios.length) throw new Error("Select at least one scenario.");
         localStorage.setItem("harness-e2e-local-subject", modelKey(subject));
         elements.runError.hidden = true;
+        const request = {
+          label: values.get("label"),
+          url: values.get("url"),
+          model: subject.model,
+          provider: subject.provider,
+          judge_model: judge?.model || "",
+          judge_provider: judge?.provider || "",
+          scenarios,
+          runs: Number(values.get("runs")),
+          technical_retries: Number(values.get("technical_retries")),
+          seed: values.get("seed") ? Number(values.get("seed")) : null,
+        };
         renderJob(
-          await api("./api/local/run", {
-            method: "POST",
-            body: JSON.stringify({
-              label: values.get("label"),
-              url: values.get("url"),
-              model: subject.model,
-              provider: subject.provider,
-              judge_model: judge?.model || "",
-              judge_provider: judge?.provider || "",
-              scenarios,
-              runs: Number(values.get("runs")),
-              technical_retries: Number(values.get("technical_retries")),
-              seed: values.get("seed") ? Number(values.get("seed")) : null,
-            }),
-          }),
+          global.HarnessDashboardData?.startRun
+            ? await global.HarnessDashboardData.startRun(request)
+            : await api("./api/local/run", {
+                method: "POST",
+                body: JSON.stringify(request),
+              }),
         );
       } catch (error) {
         elements.runError.hidden = false;
@@ -552,10 +575,12 @@
     elements.cancel.addEventListener("click", async () => {
       try {
         renderJob(
-          await api("./api/local/run/cancel", {
-            method: "POST",
-            body: "{}",
-          }),
+          global.HarnessDashboardData?.cancelRun
+            ? await global.HarnessDashboardData.cancelRun()
+            : await api("./api/local/run/cancel", {
+                method: "POST",
+                body: "{}",
+              }),
         );
       } catch (error) {
         elements.runError.hidden = false;
@@ -576,8 +601,22 @@
       updateScenarioSummary();
     });
     elements.scenarioOptions.addEventListener("change", updateScenarioSummary);
-    refreshJob().then(refreshCatalog);
+    if (global.HarnessDashboardData?.subscribeRunChanges) {
+      global.HarnessDashboardData
+        .subscribeRunChanges(() => refreshJob())
+        .then(() => {
+          liveUpdates = true;
+        })
+        .catch(() => {
+          liveUpdates = false;
+        });
+    }
+    refreshJob();
   }
 
-  global.HarnessLocalRunner = { initialize };
+  function open() {
+    if (!catalogReady && !catalogLoading) refreshCatalog();
+  }
+
+  global.HarnessLocalRunner = { initialize, open };
 })(window);

@@ -14,6 +14,9 @@ importers:
       '@fontsource/inter':
         specifier: ^5.2.8
         version: 5.3.0
+      iii-browser-sdk:
+        specifier: ^0.21.6
+        version: 0.21.8
       lucide-react:
         specifier: ^1.16.0
         version: 1.31.0(react@19.2.8)
@@ -436,6 +439,9 @@ packages:
 
   graceful-fs@4.2.11:
     resolution: {integrity: sha512-RbJ5/jmFcNNCcDV5o9eTnBLJ/HszWV0P73bc+Ff4nS/rJj+YaS6IGyiOL0VoBYX+l1Wrl3k63h/KrH+nhJ0XvQ==}
+
+  iii-browser-sdk@0.21.8:
+    resolution: {integrity: sha512-MfP5E29Vps/bpZyWzBkWdgi7FdmKMg7S+3/CzzGamiSi8at2IqF1md/TVZdXwi0C5c38hqrlHa+D4YOs0MM60A==}
 
   jiti@2.7.0:
     resolution: {integrity: sha512-AC/7JofJvZGrrneWNaEnJeOLUx+JlGt7tNa0wZiRPT4MY1wmfKjt2+6O2p2uz2+skll8OZZmJMNqeke7kKbNgQ==}
@@ -1043,6 +1049,8 @@ snapshots:
     optional: true
 
   graceful-fs@4.2.11: {}
+
+  iii-browser-sdk@0.21.8: {}
 
   jiti@2.7.0: {}
 

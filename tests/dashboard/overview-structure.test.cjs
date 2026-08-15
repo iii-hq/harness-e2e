@@ -41,6 +41,10 @@ const loader = fs.readFileSync(
   path.join(dashboardRoot, "src", "hooks", "useLegacyPage.ts"),
   "utf8",
 );
+const dataSource = fs.readFileSync(
+  path.join(dashboardRoot, "src", "lib", "dashboard-data-source.ts"),
+  "utf8",
+);
 const publisher = fs.readFileSync(
   path.join(repositoryRoot, "scripts", "publish_harness_e2e_dashboard.py"),
   "utf8",
@@ -194,6 +198,23 @@ test("loads the local runner only for native local manifests", () => {
   assert.match(overview, /if \(isLocal\) window\.HarnessLocalRunner\.initialize\(\)/);
   assert.doesNotMatch(overview, /api\/local|local-run-form|local-run-cancel/);
   assert.match(publisher, /"mode": "published"/);
+});
+
+test("loads local execution data on demand through the scoped iii surface", () => {
+  assert.match(loader, /await loadRuntimeExecutionData\(page\)/);
+  assert.match(dataSource, /limit: runtime\.page_size/);
+  assert.match(dataSource, /runtime\.functions\.execution_get/);
+  assert.match(dataSource, /limit: 2,[\s\S]*ids,/);
+  assert.match(dataSource, /runtime\.functions\.catalog_get/);
+  assert.match(dataSource, /runtime\.functions\.changed_trigger/);
+  assert.match(
+    overview,
+    /const remotePaging = Boolean\([\s\S]*HarnessDashboardData\?\.remotePaging/,
+  );
+  assert.match(overview, /HarnessDashboardData\.listExecutions/);
+  assert.match(localRunner, /HarnessLocalRunner = \{ initialize, open \}/);
+  assert.match(localRunner, /getCatalog/);
+  assert.doesNotMatch(localRunner, /refreshJob\(\)\.then\(refreshCatalog\)/);
 });
 
 test("keeps the completed runner log inside a padded local panel", () => {

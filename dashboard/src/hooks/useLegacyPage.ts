@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import { loadRuntimeExecutionData } from '@/lib/dashboard-data-source'
 
 type PageName = 'overview' | 'execution' | 'compare' | 'coverage'
 
@@ -50,6 +51,16 @@ async function loadExecutionManifest(page: PageName) {
   if (!window.HARNESS_EXECUTIONS) {
     await loadScript(page, 'sample-executions.js')
   }
+}
+
+async function loadExecutionData(page: 'overview' | 'execution' | 'compare') {
+  try {
+    if (await loadRuntimeExecutionData(page)) return
+  } catch {
+    // The local iii surface and its HTTP fallback may both be unavailable.
+    // Retained/static data remains a valid read-only source.
+  }
+  await loadExecutionManifest(page)
 }
 
 async function loadBenchmarkData(page: PageName) {
@@ -108,7 +119,7 @@ async function bootLegacyPage(page: PageName) {
 
   if (page === 'compare') {
     await loadScript(page, 'execution-data.js')
-    await loadExecutionManifest(page)
+    await loadExecutionData(page)
     await loadScript(page, 'compare.js')
     return
   }
@@ -119,7 +130,7 @@ async function bootLegacyPage(page: PageName) {
   if (page === 'execution') {
     await loadScript(page, 'execution-transcript.js')
   }
-  await loadExecutionManifest(page)
+  await loadExecutionData(page)
 
   if (page === 'overview' && window.HARNESS_EXECUTIONS?.mode === 'local') {
     await loadScript(page, 'ansi-log.js')

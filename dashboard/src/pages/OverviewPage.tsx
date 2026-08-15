@@ -156,7 +156,7 @@ export function OverviewPage() {
                   aria-hidden="true"
                 ></span>
                 <span id="local-catalog-status">
-                  Discovering the running Harness…
+                  Catalog loads when this dialog opens
                 </span>
                 <code id="local-connection-url"></code>
               </div>

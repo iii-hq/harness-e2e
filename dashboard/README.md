@@ -3,8 +3,10 @@
 This React application replaces the generic benchmark-action index. It uses the
 same frontend stack as `workers/console`: React 19, strict TypeScript, Vite,
 Tailwind CSS, Biome, Vitest, and pnpm. The workflow-generated `data.js` remains
-the source of truth for metric trends. `executions.js` indexes workflow attempts,
-and `runs/<execution-id>.json` supplies the retained execution report.
+the source of truth for metric trends. Published and view-only builds keep the
+static `executions.js` index and `runs/<execution-id>.json` reports. Local mode
+uses a scoped iii data surface so the browser requests only the execution page,
+report, catalog, or unread log suffix it currently needs.
 
 Install, validate, and run the frontend with hot reload:
 
@@ -33,13 +35,22 @@ with the machine's address when accessing it remotely.
 
 The dashboard can now execute one or more scenarios against the Harness already
 running at `III_URL`. It discovers registered provider/model pairs from that
-stack and scenario ids from the same E2E binary. The primary form only asks for an
-optional label, a subject model, and scenarios; URL, judge override, run count,
-and technical retries remain under **Advanced options** with safe defaults. Use
-**Refresh catalog** after restarting the Harness or changing its URL. The binary
-runs only one experiment at a time, streams its log, indexes the resulting
-`results.json`, and keeps run metadata and logs under
-`target/harness-e2e-local-runs/`.
+stack and scenario ids from the same E2E binary only when the execution dialog
+opens. The primary form only asks for an optional label, a subject model, and
+scenarios; URL, judge override, run count, and technical retries remain under
+**Advanced options** with safe defaults. Use **Refresh catalog** after restarting
+the Harness or changing its URL. The binary runs only one experiment at a time,
+streams incremental log chunks, indexes the resulting `results.json`, and keeps
+run metadata and logs under `target/harness-e2e-local-runs/`.
+
+Local data follows the Console architecture: the React shell opens one lazy
+WebSocket to the Rust server, which proxies only the dashboard's allow-listed iii
+functions and change trigger. The initial overview receives at most 25 compact
+summaries; filters, search, and subsequent pages execute on the server. An
+execution page fetches one summary plus one report, and comparison fetches only
+the selected pair. Change signals invalidate the relevant view, with low-rate
+polling retained as a recovery path. The original same-origin HTTP endpoints are
+fallbacks when the WebSocket is temporarily unavailable.
 
 To present runs submitted through the asynchronous `e2e::*` worker, point the
 dashboard directly at that worker's output root. Canonical control-plane run
@@ -60,10 +71,11 @@ The dashboard executes itself as an isolated child process, so changing and
 restarting the Harness never recompiles the E2E client. `serve` is an alias for
 `dashboard`; neither command has a Cargo fallback.
 
-The React boot loader activates local execution controls only when
-`executions.js` declares `mode: "local"`. The Pages publisher always emits
+The React boot loader activates local execution controls only when the runtime
+descriptor reports `mode: "local"`. If the runtime surface is unavailable it
+falls back to `executions.js`; the Pages publisher always emits
 `mode: "published"`, so the published dashboard keeps using only its static
-history and never calls the loopback execution APIs.
+history and never calls the local execution APIs.
 
 The execution label is optional and intentionally descriptive only. The local
 dashboard does not inspect or record Harness code changes: restart or modify the
@@ -74,10 +86,11 @@ shown as warnings instead of blocking the comparison.
 
 Use `--listen 0.0.0.0:PORT` to select another port and `--runs-dir` to select
 another local history. Local mode exposes controls that can start and cancel E2E
-runs, so expose the port only on a trusted network. Use `--listen
-127.0.0.1:4173` to restrict access to the local machine. The WebSocket URL is
-accessed on the host by the runner and does not need to be reachable by the
-browser.
+runs. Its `/ws` route is intentionally restricted to the dashboard read/run
+functions and browser callbacks, but it is not an authentication boundary:
+expose the port only on a trusted network. Use `--listen 127.0.0.1:4173` to
+restrict access to the local machine. The Harness WebSocket URL is accessed on
+the host by the runner and does not need to be reachable by the browser.
 
 To preview the sample fixtures without a Rust backend, build and serve the Vite
 bundle:

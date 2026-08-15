@@ -10,6 +10,9 @@
   );
   const isLocal = history.mode === "local";
   const isObserved = history.mode === "observed";
+  const remotePaging = Boolean(
+    isLocal && window.HarnessDashboardData?.remotePaging,
+  );
   const state = {
     matrixCount: 14,
     page: 1,
@@ -21,7 +24,13 @@
     scenarioHistoryMetric: "cost_usd",
     comparison: [],
     comparisonLimitReached: false,
+    tableExecutions: history.executions,
+    tableTotal:
+      Number(window.HARNESS_EXECUTIONS?.total) || history.executions.length,
+    tableLoading: false,
   };
+  let tableLoadSequence = 0;
+  let searchTimer = null;
   const efficiencyTrendColors = {
     improved: "var(--success)",
     regressed: "var(--danger)",
@@ -1586,10 +1595,13 @@
   }
 
   function renderTable() {
-    const filtered = executionApi.filterExecutions(history.executions, state);
-    const pageCount = Math.max(1, Math.ceil(filtered.length / state.pageSize));
+    const filtered = remotePaging
+      ? state.tableExecutions
+      : executionApi.filterExecutions(history.executions, state);
+    const total = remotePaging ? state.tableTotal : filtered.length;
+    const pageCount = Math.max(1, Math.ceil(total / state.pageSize));
     state.page = Math.min(state.page, pageCount);
-    const start = (state.page - 1) * state.pageSize;
+    const start = remotePaging ? 0 : (state.page - 1) * state.pageSize;
     const page = filtered.slice(start, start + state.pageSize);
     elements.body.replaceChildren();
     page.forEach((execution) => {
@@ -1696,15 +1708,49 @@
     if (!page.length) {
       const row = document.createElement("tr");
       row.innerHTML =
-        `<td class="table-empty" colspan="${isLocal ? 7 : 8}">No executions match these filters.</td>`;
+        `<td class="table-empty" colspan="${isLocal ? 7 : 8}">${state.tableLoading ? "Loading executions…" : "No executions match these filters."}</td>`;
       elements.body.append(row);
     }
     elements.count.textContent =
-      `${filtered.length} execution${filtered.length === 1 ? "" : "s"}`;
+      `${total} execution${total === 1 ? "" : "s"}`;
     elements.pageLabel.textContent = `Page ${state.page} of ${pageCount}`;
-    elements.previous.disabled = state.page === 1;
-    elements.next.disabled = state.page === pageCount;
+    elements.previous.disabled = state.tableLoading || state.page === 1;
+    elements.next.disabled = state.tableLoading || state.page === pageCount;
     renderComparisonBar();
+  }
+
+  async function loadRemoteTablePage() {
+    if (!remotePaging) {
+      renderTable();
+      return;
+    }
+    const sequence = ++tableLoadSequence;
+    state.tableLoading = true;
+    state.tableExecutions = [];
+    renderTable();
+    try {
+      const manifest = await window.HarnessDashboardData.listExecutions({
+        cursor: String((state.page - 1) * state.pageSize),
+        limit: state.pageSize,
+        query: state.query,
+        status: state.status,
+        event: state.event,
+      });
+      if (sequence !== tableLoadSequence) return;
+      state.tableExecutions = (manifest.executions || []).map(
+        executionApi.normalizeExecution,
+      );
+      state.tableTotal = Number(manifest.total) || 0;
+    } catch (_error) {
+      if (sequence !== tableLoadSequence) return;
+      state.tableExecutions = [];
+      state.tableTotal = 0;
+    } finally {
+      if (sequence === tableLoadSequence) {
+        state.tableLoading = false;
+        renderTable();
+      }
+    }
   }
 
   function render() {
@@ -1759,7 +1805,10 @@
       }
     }
     elements.localRunnerOpen.addEventListener("click", () => {
-      if (isLocal) elements.localRunnerDialog.showModal();
+      if (isLocal) {
+        window.HarnessLocalRunner?.open?.();
+        elements.localRunnerDialog.showModal();
+      }
     });
     elements.localRunnerClose.addEventListener("click", () => {
       elements.localRunnerDialog.close();
@@ -1814,25 +1863,26 @@
     elements.search.addEventListener("input", () => {
       state.query = elements.search.value;
       state.page = 1;
-      renderTable();
+      clearTimeout(searchTimer);
+      searchTimer = setTimeout(loadRemoteTablePage, remotePaging ? 220 : 0);
     });
     elements.status.addEventListener("change", () => {
       state.status = elements.status.value;
       state.page = 1;
-      renderTable();
+      loadRemoteTablePage();
     });
     elements.event.addEventListener("change", () => {
       state.event = elements.event.value;
       state.page = 1;
-      renderTable();
+      loadRemoteTablePage();
     });
     elements.previous.addEventListener("click", () => {
       state.page = Math.max(1, state.page - 1);
-      renderTable();
+      loadRemoteTablePage();
     });
     elements.next.addEventListener("click", () => {
       state.page += 1;
-      renderTable();
+      loadRemoteTablePage();
     });
     initializeOverviewComparison();
     if (isLocal) window.HarnessLocalRunner.initialize();
