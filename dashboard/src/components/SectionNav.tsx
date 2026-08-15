@@ -13,10 +13,10 @@ const views: Array<{
     description: 'Current signal and regression gate',
   },
   {
-    id: 'scenarios',
+    id: 'tests',
     index: '02',
-    label: 'Scenarios',
-    description: 'Outcome matrix and scenario economics',
+    label: 'Tests',
+    description: 'Versioned results across evaluated systems',
   },
   {
     id: 'capability',

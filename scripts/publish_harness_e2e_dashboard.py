@@ -4,12 +4,13 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 5
 MANIFEST_PREFIX = "window.HARNESS_EXECUTIONS = "
 FAILURE_CONCLUSIONS = {
     "action_required",
@@ -806,11 +807,6 @@ def build_summary(
         for scenario in subject.get("scenarios", [])
         if isinstance(scenario, dict)
     ]
-    scores = [
-        score
-        for scenario in scenarios
-        if (score := optional_number(scenario.get("median_score"))) is not None
-    ]
     expected_reports = sum_subject_counts(valid_subjects, "expected_reports")
     received_reports = sum_subject_counts(valid_subjects, "received_reports")
     passed_scenarios = (
@@ -904,7 +900,6 @@ def build_summary(
                 if expected_reports and passed_scenarios is not None
                 else None
             ),
-            "average_score": sum(scores) / len(scores) if scores else None,
             "total_cost_usd": sum_complete(subject_costs),
             "wall_time_seconds": sum_complete(subject_wall_times),
             "hard_gate_failures": hard_gate_failures,
@@ -924,6 +919,383 @@ def sort_key(execution: dict[str, Any]) -> tuple[str, int]:
         or ""
     )
     return str(timestamp), int(execution.get("attempt") or 0)
+
+
+def _sha256_json(value: Any) -> str:
+    encoded = json.dumps(
+        value,
+        ensure_ascii=False,
+        separators=(",", ":"),
+        sort_keys=True,
+    ).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def _median(values: list[float]) -> float | None:
+    if not values:
+        return None
+    ordered = sorted(values)
+    midpoint = len(ordered) // 2
+    if len(ordered) % 2:
+        return ordered[midpoint]
+    return (ordered[midpoint - 1] + ordered[midpoint]) / 2
+
+
+def _evaluated_version(system: Any) -> tuple[str, str, str] | None:
+    if not isinstance(system, dict) or not isinstance(system.get("stack"), dict):
+        return None
+    stack = system["stack"]
+    mode = str(stack.get("mode") or "")
+    identity = {
+        "stack": stack,
+        "engine_version": system.get("engine_version"),
+        "engine_revision": system.get("engine_revision"),
+        "harness_version": system.get("harness_version"),
+        "contract_hashes": system.get("contract_hashes", {}),
+    }
+    if mode == "source":
+        revision = str(stack.get("workers_revision") or "")
+        label = f"Source {revision[:12]}" if revision else "Source revision"
+    elif mode == "registry":
+        versions = stack.get("stack_versions", {})
+        labels = (
+            [f"{worker}@{version}" for worker, version in sorted(versions.items())[:2]]
+            if isinstance(versions, dict)
+            else []
+        )
+        digest = str(stack.get("stack_lock_digest") or "")
+        label = " · ".join(labels) or f"Registry {digest[:12]}"
+    else:
+        return None
+    return _sha256_json(identity), mode, label
+
+
+def _scenario_status(scenario: dict[str, Any]) -> str:
+    aggregate = scenario.get("aggregate", {})
+    if not isinstance(aggregate, dict):
+        aggregate = {}
+    if int(optional_number(aggregate.get("technical_failures")) or 0) > 0:
+        return "technical_failed"
+    if int(optional_number(aggregate.get("hard_gate_failures")) or 0) > 0:
+        return "hard_gate_failed"
+    return "passed" if scenario.get("passed") else "infra_failed"
+
+
+def _static_run_metrics(run: dict[str, Any]) -> dict[str, Any]:
+    status = str(run.get("status") or "infrastructure_error")
+    return {
+        "score": optional_number(run.get("score")),
+        "cost_usd": run_metric(run, "cost_usd"),
+        "tokens": run_metric(run, "tokens"),
+        "duration_seconds": run_metric(run, "duration_seconds"),
+        "status": status,
+    }
+
+
+def _side_summary(
+    evaluated_version_id: str,
+    observations: list[dict[str, Any]],
+) -> dict[str, Any]:
+    runs = [run for observation in observations for run in observation["runs"]]
+    scores = [value for run in runs if (value := run["score"]) is not None]
+    costs = [value for run in runs if (value := run["cost_usd"]) is not None]
+    tokens = [value for run in runs if (value := run["tokens"]) is not None]
+    durations = [
+        value for run in runs if (value := run["duration_seconds"]) is not None
+    ]
+    outcomes = {
+        "passed": sum(run["status"] == "passed" for run in runs),
+        "hard_gate_failed": sum(
+            run["status"] == "hard_gate_failed" for run in runs
+        ),
+        "technical_failed": sum(
+            run["status"] in {"subject_error", "judge_error", "resource_limit"}
+            for run in runs
+        ),
+        "infra_failed": sum(
+            run["status"] == "infrastructure_error" for run in runs
+        ),
+    }
+    return {
+        "evaluated_version_id": evaluated_version_id,
+        "execution_count": len({item["execution_id"] for item in observations}),
+        "total_runs": len(runs),
+        "scored_runs": len(scores),
+        "case_count": len({item["case_id"] for item in observations}),
+        "median_score": _median(scores),
+        "pass_rate": outcomes["passed"] / len(runs) if runs else None,
+        "median_cost_usd": _median(costs),
+        "median_tokens": _median(tokens),
+        "median_duration_seconds": _median(durations),
+        "outcomes": outcomes,
+        "samples": {
+            "score": len(scores),
+            "cost_usd": len(costs),
+            "tokens": len(tokens),
+            "duration_seconds": len(durations),
+        },
+    }
+
+
+def build_static_test_catalog(
+    site_dir: Path,
+    executions: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """Build a compact catalog plus lazy per-test evidence shards for Pages."""
+    cohorts: dict[str, dict[str, Any]] = {}
+    versions: dict[tuple[str, str], dict[str, Any]] = {}
+    version_execution_ids: dict[tuple[str, str], set[str]] = {}
+    observations: dict[tuple[str, int], list[dict[str, Any]]] = {}
+
+    for execution in executions:
+        detail_path = execution.get("detail_path")
+        if not isinstance(detail_path, str) or not detail_path.startswith("runs/"):
+            continue
+        detail = load_json(site_dir / detail_path)
+        if detail is None:
+            continue
+        reports = detail.get("reports", [])
+        if not isinstance(reports, list):
+            continue
+        for report_entry in reports:
+            if not isinstance(report_entry, dict) or not report_entry.get("available"):
+                continue
+            report = report_entry.get("report")
+            if not isinstance(report, dict):
+                continue
+            subject = report.get("subject", {})
+            judge = report.get("judge", {})
+            if not isinstance(subject, dict):
+                continue
+            if not isinstance(judge, dict):
+                judge = {}
+            report_execution = report.get("execution")
+            lane = str(
+                (
+                    report_execution.get("lane")
+                    if isinstance(report_execution, dict)
+                    else None
+                )
+                or detail.get("lane")
+                or execution.get("lane")
+                or "daily"
+            )
+            cohort_value = {
+                "lane": lane,
+                "subject_provider": str(subject.get("provider") or ""),
+                "subject_model": str(subject.get("model") or ""),
+                "judge_provider": str(judge.get("provider") or "") or None,
+                "judge_model": str(judge.get("model") or "") or None,
+                "judge_protocol": str(report.get("judge_protocol") or "") or None,
+            }
+            cohort_id = _sha256_json(cohort_value)
+            cohorts.setdefault(cohort_id, {"id": cohort_id, **cohort_value})
+            evaluated = _evaluated_version(report.get("system_under_test"))
+            if evaluated is None:
+                continue
+            evaluated_id, stack_mode, label = evaluated
+            version_key = (cohort_id, evaluated_id)
+            completed_at = str(execution.get("completed_at") or "")
+            descriptor = versions.setdefault(
+                version_key,
+                {
+                    "id": evaluated_id,
+                    "cohort_id": cohort_id,
+                    "label": label,
+                    "stack_mode": stack_mode,
+                    "completed_at": completed_at,
+                    "execution_count": 0,
+                },
+            )
+            descriptor["completed_at"] = max(
+                str(descriptor["completed_at"]), completed_at
+            )
+            version_execution_ids.setdefault(version_key, set()).add(
+                str(execution.get("id") or "")
+            )
+            scenarios = report.get("scenarios", [])
+            if not isinstance(scenarios, list):
+                continue
+            for scenario in scenarios:
+                if not isinstance(scenario, dict):
+                    continue
+                test_id = str(
+                    scenario.get("scenario_id")
+                    or report_entry.get("scenario_id")
+                    or ""
+                )
+                if not test_id:
+                    continue
+                test_version = int(optional_number(scenario.get("scenario_version")) or 1)
+                case_id = str(scenario.get("case_id") or f"{test_id}:v{test_version}")
+                contract_sha256 = _sha256_json(
+                    {
+                        "scenario_id": test_id,
+                        "scenario_version": test_version,
+                        "case": scenario.get("case"),
+                        "execution_policy": scenario.get("execution_policy", {}),
+                    }
+                )
+                raw_runs = scenario.get("runs", [])
+                runs = [
+                    _static_run_metrics(run)
+                    for run in raw_runs
+                    if isinstance(run, dict)
+                ] if isinstance(raw_runs, list) else []
+                observations.setdefault((test_id, test_version), []).append(
+                    {
+                        "execution_id": str(execution.get("id") or ""),
+                        "evaluated_version_id": evaluated_id,
+                        "cohort_id": cohort_id,
+                        "completed_at": completed_at,
+                        "case_id": case_id,
+                        "contract_sha256": contract_sha256,
+                        "status": _scenario_status(scenario),
+                        "runs": runs,
+                    }
+                )
+
+    for key, descriptor in versions.items():
+        descriptor["execution_count"] = len(version_execution_ids.get(key, set()))
+    revision = _sha256_json(
+        [
+            {
+                "id": execution.get("id"),
+                "completed_at": execution.get("completed_at"),
+                "status": execution.get("status"),
+            }
+            for execution in executions
+        ]
+    )
+    tests_dir = site_dir / "tests"
+    data_dir = tests_dir / "data"
+    data_dir.mkdir(parents=True, exist_ok=True)
+    rows_by_test: dict[str, dict[str, Any]] = {}
+    retained_shards: set[str] = set()
+    for (test_id, test_version), test_observations in sorted(observations.items()):
+        shard_name = f"{_sha256_json([test_id, test_version])}.json"
+        shard_path = f"./tests/data/{shard_name}"
+        retained_shards.add(shard_name)
+        public_observations = []
+        for observation in test_observations:
+            scores = [
+                run["score"]
+                for run in observation["runs"]
+                if run["score"] is not None
+            ]
+            public_observations.append(
+                {
+                    key: observation[key]
+                    for key in (
+                        "execution_id",
+                        "evaluated_version_id",
+                        "completed_at",
+                        "case_id",
+                        "contract_sha256",
+                        "status",
+                    )
+                }
+                | {
+                    "median_score": _median(scores),
+                    "run_count": len(observation["runs"]),
+                    "scored_runs": len(scores),
+                }
+            )
+        (data_dir / shard_name).write_text(
+            json.dumps(
+                {
+                    "test_id": test_id,
+                    "test_version": test_version,
+                    "observations": public_observations,
+                },
+                indent=2,
+                sort_keys=True,
+            )
+            + "\n"
+        )
+        row = rows_by_test.setdefault(
+            test_id,
+            {
+                "test_id": test_id,
+                "lifecycle": "active",
+                "current_version": test_version,
+                "available_versions": [],
+                "selected_version": test_version,
+                "result": None,
+                "version_results": {},
+                "shards": {},
+            },
+        )
+        row["current_version"] = max(row["current_version"], test_version)
+        row["selected_version"] = row["current_version"]
+        row["shards"][str(test_version)] = shard_path
+        row["available_versions"].append(
+            {
+                "version": test_version,
+                "execution_count": len(
+                    {item["execution_id"] for item in test_observations}
+                ),
+                "run_count": sum(len(item["runs"]) for item in test_observations),
+                "last_seen": max(
+                    (item["completed_at"] for item in test_observations),
+                    default=None,
+                ),
+            }
+        )
+        sides: dict[str, Any] = {}
+        grouped_sides: dict[str, list[dict[str, Any]]] = {}
+        for observation in test_observations:
+            grouped_sides.setdefault(observation["evaluated_version_id"], []).append(
+                observation
+            )
+        for evaluated_id, side_observations in grouped_sides.items():
+            contracts: dict[str, str | None] = {}
+            for observation in side_observations:
+                case_id = observation["case_id"]
+                contract = observation["contract_sha256"]
+                contracts[case_id] = (
+                    None
+                    if case_id in contracts and contracts[case_id] != contract
+                    else contract
+                )
+            sides[evaluated_id] = {
+                "summary": _side_summary(evaluated_id, side_observations),
+                "contracts": dict(sorted(contracts.items())),
+            }
+        row["version_results"][str(test_version)] = {"sides": sides}
+
+    for candidate in data_dir.glob("*.json"):
+        if candidate.name not in retained_shards:
+            candidate.unlink()
+    rows = sorted(rows_by_test.values(), key=lambda row: row["test_id"])
+    for row in rows:
+        row["available_versions"].sort(
+            key=lambda descriptor: descriptor["version"], reverse=True
+        )
+    evaluated_versions = sorted(
+        versions.values(),
+        key=lambda descriptor: (descriptor["completed_at"], descriptor["id"]),
+        reverse=True,
+    )
+    catalog = {
+        "evaluated_versions": {
+            "schema_version": SCHEMA_VERSION,
+            "revision": revision,
+            "cohorts": sorted(cohorts.values(), key=lambda cohort: cohort["id"]),
+            "versions": evaluated_versions,
+        },
+        "tests": {
+            "schema_version": SCHEMA_VERSION,
+            "revision": revision,
+            "rows": rows,
+            "total": len(rows),
+            "next_cursor": None,
+        },
+    }
+    (tests_dir / "index.json").write_text(
+        json.dumps(catalog, indent=2, sort_keys=True, ensure_ascii=False) + "\n"
+    )
+    return catalog
 
 
 def _metadata_from_summary(execution: dict[str, Any]) -> dict[str, Any]:
@@ -1094,6 +1466,8 @@ def publish(
     for candidate in runs_dir.glob("*.json"):
         if f"runs/{candidate.name}" not in retained_paths:
             candidate.unlink()
+
+    build_static_test_catalog(site_dir, executions)
 
     updated = {
         "schema_version": SCHEMA_VERSION,

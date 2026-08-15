@@ -1,10 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 
-export type WorkspaceView =
-  | 'overview'
-  | 'scenarios'
-  | 'capability'
-  | 'executions'
+export type WorkspaceView = 'overview' | 'tests' | 'capability' | 'executions'
 
 export type DashboardRoute =
   | { page: 'overview'; view: WorkspaceView }
@@ -22,7 +18,7 @@ export type DashboardRoutes = {
 
 const workspaceViews = new Set<WorkspaceView>([
   'overview',
-  'scenarios',
+  'tests',
   'capability',
   'executions',
 ])
@@ -54,6 +50,9 @@ export function routeFromHash(rawHash: string): DashboardRoute | null {
     .map(decodeSegment)
   const [head, ...rest] = segments
 
+  if (head === 'scenarios') {
+    return { page: 'overview', view: 'tests' }
+  }
   if (workspaceViews.has(head as WorkspaceView)) {
     return { page: 'overview', view: head as WorkspaceView }
   }

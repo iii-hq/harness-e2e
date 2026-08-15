@@ -18,6 +18,10 @@ use super::controller::{validate_stack_url, Controller};
 use super::presenter::{
     execution_detail_value, repository_url, validate_execution_id, MAX_EXECUTIONS,
 };
+use super::read_model::{
+    EvaluatedVersionsRequest, EvaluatedVersionsResponse, TestVersionGetRequest, TestVersionResult,
+    TestsListRequest, TestsListResponse,
+};
 use super::store::read_stored_run;
 use super::{ApiError, DashboardArgs, RunRequest, RunSnapshot};
 
@@ -63,6 +67,9 @@ pub(super) async fn serve(args: DashboardArgs) -> Result<()> {
         .route("/api/dashboard", get(dashboard_config))
         .route("/api/dashboard/executions", get(execution_page))
         .route("/api/dashboard/executions/:id", get(execution_bundle))
+        .route("/api/dashboard/evaluated-versions", get(evaluated_versions))
+        .route("/api/dashboard/tests", get(tests_page))
+        .route("/api/dashboard/test-version", get(test_version))
         .fallback(get(static_asset));
     let app = if view_only {
         app
@@ -100,6 +107,9 @@ async fn dashboard_config(State(state): State<AppState>) -> Json<Value> {
         "functions": {
             "executions_list": bus::EXECUTIONS_LIST,
             "execution_get": bus::EXECUTION_GET,
+            "evaluated_versions_list": bus::EVALUATED_VERSIONS_LIST,
+            "tests_list": bus::TESTS_LIST,
+            "test_version_get": bus::TEST_VERSION_GET,
             "catalog_get": bus::CATALOG_GET,
             "run_status": bus::RUN_STATUS,
             "run_start": bus::RUN_START,
@@ -107,6 +117,53 @@ async fn dashboard_config(State(state): State<AppState>) -> Json<Value> {
             "changed_trigger": bus::CHANGED_TRIGGER,
         }
     }))
+}
+
+async fn evaluated_versions(
+    State(state): State<AppState>,
+    Query(request): Query<EvaluatedVersionsRequest>,
+) -> Result<Json<EvaluatedVersionsResponse>, ApiError> {
+    bus::evaluated_versions(&state.controller, request)
+        .await
+        .map(Json)
+        .map_err(dashboard_read_error)
+}
+
+async fn tests_page(
+    State(state): State<AppState>,
+    Query(request): Query<TestsListRequest>,
+) -> Result<Json<TestsListResponse>, ApiError> {
+    bus::tests_list(&state.controller, request)
+        .await
+        .map(Json)
+        .map_err(dashboard_read_error)
+}
+
+async fn test_version(
+    State(state): State<AppState>,
+    Query(request): Query<TestVersionGetRequest>,
+) -> Result<Json<TestVersionResult>, ApiError> {
+    bus::test_version_get(&state.controller, request)
+        .await
+        .map(Json)
+        .map_err(dashboard_read_error)
+}
+
+fn dashboard_read_error(error: anyhow::Error) -> ApiError {
+    let message = error.to_string();
+    if message.starts_with("unknown ") {
+        ApiError::not_found(message)
+    } else if message.contains("cursor is stale") {
+        ApiError::conflict(message)
+    } else if message.contains("cursor is invalid")
+        || message.contains("limit must be")
+        || message.contains("comparison requires")
+        || message.contains("test id and version are required")
+    {
+        ApiError::bad_request(message)
+    } else {
+        ApiError::internal(message)
+    }
 }
 
 async fn execution_page(
@@ -205,7 +262,7 @@ async fn execution_manifest(State(state): State<AppState>) -> Result<Response, A
     Ok(javascript_response(format!(
         "window.HARNESS_EXECUTIONS = {};\n",
         json!({
-            "schema_version": 4,
+            "schema_version": super::read_model::DASHBOARD_SCHEMA_VERSION,
             "mode": if state.view_only { "observed" } else { "local" },
             "last_update": last_update,
             "repo_url": repository_url(),

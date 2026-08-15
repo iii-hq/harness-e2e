@@ -116,8 +116,8 @@ cargo run --locked --bin e2e-worker -- \
 
 The worker exposes `e2e::run`, `e2e::status`, `e2e::cancel`,
 `e2e::results-get`, `e2e::results-list`, `e2e::compare`,
-`e2e::scenarios-list`, `e2e::baseline-promote`, `e2e::baseline-get`,
-`e2e::archive`, `e2e::archive-head`, `e2e::archive-restore`,
+`e2e::scenarios-list`, `e2e::archive`, `e2e::archive-head`,
+`e2e::archive-restore`,
 `e2e::history-list`, and `e2e::retention-sweep`.
 Fault supervisors use `e2e::fault-plan` and `e2e::fault-evaluate` so plan
 materialization and recovery classification stay on the same iii control plane.
@@ -138,7 +138,7 @@ Lane promotion and legacy removal are governed by
 
 - `src/` owns the runner, local wire adapters, scenarios, evaluation,
   longitudinal comparison, and the E2E control worker.
-- `config/` owns reviewed baselines, cutover policies, fault profiles, and
+- `config/` owns reviewed comparison and cutover policies, fault profiles, and
   standalone stack configuration.
 - `tests/` owns test-only fixtures, golden wire schemas, and the Node/Python
   validation suites.
@@ -184,9 +184,10 @@ the source repository, revision, E2E ref, and credential boundary are approved.
 
 Every completed execution records the subject and E2E revisions, observed wire
 contracts, scenario version, materialized inputs, seed, policies, artifacts,
-and raw structural evidence. `e2e::compare` accepts only an immutable promoted
-baseline and writes a unique `comparisons/<comparison-id>/e2e-delta.json` plus
-`e2e-summary.md`.
+and raw structural evidence. `e2e::compare` accepts two distinct completed
+execution ids (`from_execution_id` and `to_execution_id`) and writes a unique
+`comparisons/<comparison-id>/e2e-delta.json` plus `e2e-summary.md`. Numeric
+deltas remain disabled when the case set or canonical contract differs.
 
 Deliverable, structural, technical, cost, latency, turns, retries, and work
 amplification deltas remain independent. A tier is not declared reliable until

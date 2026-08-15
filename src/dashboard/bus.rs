@@ -16,6 +16,10 @@ use super::controller::Controller;
 use super::presenter::{
     execution_detail_value, repository_url, validate_execution_id, MAX_EXECUTIONS,
 };
+use super::read_model::{
+    EvaluatedVersionsRequest, EvaluatedVersionsResponse, TestVersionGetRequest, TestVersionResult,
+    TestsListRequest, TestsListResponse,
+};
 use super::store::read_stored_run;
 use super::RunRequest;
 use crate::context::E2eContext;
@@ -23,6 +27,9 @@ use crate::scenarios::ScenarioId;
 
 pub(super) const EXECUTIONS_LIST: &str = "e2e::dashboard::executions-list";
 pub(super) const EXECUTION_GET: &str = "e2e::dashboard::execution-get";
+pub(super) const EVALUATED_VERSIONS_LIST: &str = "e2e::dashboard::evaluated-versions-list";
+pub(super) const TESTS_LIST: &str = "e2e::dashboard::tests-list";
+pub(super) const TEST_VERSION_GET: &str = "e2e::dashboard::test-version-get";
 pub(super) const CATALOG_GET: &str = "e2e::dashboard::catalog-get";
 pub(super) const RUN_STATUS: &str = "e2e::dashboard::run-status";
 pub(super) const RUN_START: &str = "e2e::dashboard::run-start";
@@ -31,7 +38,7 @@ pub(super) const CHANGED_TRIGGER: &str = "e2e::dashboard::changed";
 pub(super) const BROWSER_FUNCTION_PREFIX: &str = "iii::harness-e2e-dashboard::";
 
 const CONTRACT_NAME: &str = "harness-e2e-dashboard";
-const CONTRACT_VERSION: u32 = 1;
+const CONTRACT_VERSION: u32 = 2;
 const DEFAULT_PAGE_SIZE: u16 = 25;
 
 #[derive(Debug, Clone, Default, Deserialize, Serialize, JsonSchema)]
@@ -250,6 +257,54 @@ pub(super) fn register_functions(iii: &IIIClient, controller: Arc<Controller>) {
     );
     register(
         iii,
+        EVALUATED_VERSIONS_LIST,
+        "List immutable evaluated-system versions and their exact evaluation cohorts.",
+        {
+            let controller = controller.clone();
+            RegisterFunction::new_async(move |request: EvaluatedVersionsRequest| {
+                let controller = controller.clone();
+                async move {
+                    evaluated_versions(&controller, request)
+                        .await
+                        .map_err(handler_error)
+                }
+            })
+        },
+    );
+    register(
+        iii,
+        TESTS_LIST,
+        "List the versioned test catalog with compact A/B results and stable pagination.",
+        {
+            let controller = controller.clone();
+            RegisterFunction::new_async(move |request: TestsListRequest| {
+                let controller = controller.clone();
+                async move {
+                    tests_list(&controller, request)
+                        .await
+                        .map_err(handler_error)
+                }
+            })
+        },
+    );
+    register(
+        iii,
+        TEST_VERSION_GET,
+        "Read one test version across two immutable evaluated-system versions.",
+        {
+            let controller = controller.clone();
+            RegisterFunction::new_async(move |request: TestVersionGetRequest| {
+                let controller = controller.clone();
+                async move {
+                    test_version_get(&controller, request)
+                        .await
+                        .map_err(handler_error)
+                }
+            })
+        },
+    );
+    register(
+        iii,
         CATALOG_GET,
         "Read models and scenarios when the execution dialog opens.",
         {
@@ -393,7 +448,7 @@ pub(super) async fn execution_list(
         .unwrap_or_default()
         .to_string();
     Ok(ExecutionListResponse {
-        schema_version: 4,
+        schema_version: super::read_model::DASHBOARD_SCHEMA_VERSION,
         mode: "local".into(),
         last_update,
         repo_url: repository_url(),
@@ -432,6 +487,27 @@ pub(super) async fn execution_bundle(
     let report = run.report.context("execution report not found")?;
     let detail = execution_detail_value(&run.metadata, &report)?;
     Ok(ExecutionBundle { manifest, detail })
+}
+
+pub(super) async fn evaluated_versions(
+    controller: &Controller,
+    request: EvaluatedVersionsRequest,
+) -> Result<EvaluatedVersionsResponse> {
+    Ok(controller.read_model().await?.evaluated_versions(request))
+}
+
+pub(super) async fn tests_list(
+    controller: &Controller,
+    request: TestsListRequest,
+) -> Result<TestsListResponse> {
+    controller.read_model().await?.tests_list(request)
+}
+
+pub(super) async fn test_version_get(
+    controller: &Controller,
+    request: TestVersionGetRequest,
+) -> Result<TestVersionResult> {
+    controller.read_model().await?.test_version_get(request)
 }
 
 pub(super) async fn catalog(

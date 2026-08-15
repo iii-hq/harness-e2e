@@ -1,0 +1,125 @@
+{
+  "evaluated_versions": {
+    "schema_version": 5,
+    "revision": "preview-v5",
+    "cohorts": [
+      {
+        "id": "preview-cohort",
+        "lane": "preview",
+        "subject_provider": "zai",
+        "subject_model": "glm-5.2",
+        "judge_provider": "openai",
+        "judge_model": "gpt-5.4",
+        "judge_protocol": "plain-json"
+      }
+    ],
+    "versions": [
+      {
+        "id": "preview-system-b",
+        "cohort_id": "preview-cohort",
+        "label": "Source bbbbbbbbbbbb",
+        "stack_mode": "source",
+        "completed_at": "2026-08-15T12:00:00Z",
+        "execution_count": 1
+      },
+      {
+        "id": "preview-system-a",
+        "cohort_id": "preview-cohort",
+        "label": "Source aaaaaaaaaaaa",
+        "stack_mode": "source",
+        "completed_at": "2026-08-14T12:00:00Z",
+        "execution_count": 1
+      }
+    ]
+  },
+  "tests": {
+    "schema_version": 5,
+    "revision": "preview-v5",
+    "rows": [
+      {
+        "test_id": "direct_answer",
+        "lifecycle": "active",
+        "current_version": 1,
+        "available_versions": [
+          {
+            "version": 1,
+            "execution_count": 2,
+            "run_count": 6,
+            "last_seen": "2026-08-15T12:00:00Z"
+          }
+        ],
+        "selected_version": 1,
+        "result": null,
+        "shards": {
+          "1": "./tests/data/direct-answer-v1.json"
+        },
+        "version_results": {
+          "1": {
+            "sides": {
+              "preview-system-a": {
+                "summary": {
+                  "evaluated_version_id": "preview-system-a",
+                  "execution_count": 1,
+                  "total_runs": 3,
+                  "scored_runs": 3,
+                  "case_count": 1,
+                  "median_score": 84,
+                  "pass_rate": 0.6666666667,
+                  "median_cost_usd": 0.12,
+                  "median_tokens": 1840,
+                  "median_duration_seconds": 18.4,
+                  "outcomes": {
+                    "passed": 2,
+                    "hard_gate_failed": 1,
+                    "technical_failed": 0,
+                    "infra_failed": 0
+                  },
+                  "samples": {
+                    "score": 3,
+                    "cost_usd": 3,
+                    "tokens": 3,
+                    "duration_seconds": 3
+                  }
+                },
+                "contracts": {
+                  "direct_answer:v1:seed-8": "preview-contract"
+                }
+              },
+              "preview-system-b": {
+                "summary": {
+                  "evaluated_version_id": "preview-system-b",
+                  "execution_count": 1,
+                  "total_runs": 3,
+                  "scored_runs": 3,
+                  "case_count": 1,
+                  "median_score": 92,
+                  "pass_rate": 1,
+                  "median_cost_usd": 0.1,
+                  "median_tokens": 1620,
+                  "median_duration_seconds": 15.1,
+                  "outcomes": {
+                    "passed": 3,
+                    "hard_gate_failed": 0,
+                    "technical_failed": 0,
+                    "infra_failed": 0
+                  },
+                  "samples": {
+                    "score": 3,
+                    "cost_usd": 3,
+                    "tokens": 3,
+                    "duration_seconds": 3
+                  }
+                },
+                "contracts": {
+                  "direct_answer:v1:seed-8": "preview-contract"
+                }
+              }
+            }
+          }
+        }
+      }
+    ],
+    "total": 1,
+    "next_cursor": null
+  }
+}

@@ -38,7 +38,6 @@
     runtime: document.querySelector("#detail-runtime"),
     scenarioDetails: document.querySelector("#scenario-details"),
     scenarioIntro: document.querySelector("#scenario-intro"),
-    score: document.querySelector("#detail-score"),
     status: document.querySelector("#execution-status"),
     subtitle: document.querySelector("#execution-subtitle"),
     transcriptBody: document.querySelector("#session-transcript-body"),
@@ -228,7 +227,6 @@
     elements.passRate.textContent = formatPercent(totals.scenario_pass_rate);
     elements.coverage.textContent =
       `${formatPercent(totals.report_coverage)} report coverage`;
-    elements.score.textContent = compactNumber(totals.average_score, 1);
     elements.cost.textContent = formatCurrency(totals.total_cost_usd);
     elements.runtime.textContent = formatDuration(totals.wall_time_seconds);
     elements.workflowRuntime.textContent =

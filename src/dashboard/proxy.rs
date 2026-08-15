@@ -10,8 +10,9 @@ use tokio_tungstenite::tungstenite::protocol::{CloseFrame as TungCloseFrame, Web
 use tokio_tungstenite::tungstenite::Message as TungMessage;
 
 use super::bus::{
-    BROWSER_FUNCTION_PREFIX, CATALOG_GET, CHANGED_TRIGGER, EXECUTIONS_LIST, EXECUTION_GET,
-    RUN_CANCEL, RUN_START, RUN_STATUS,
+    BROWSER_FUNCTION_PREFIX, CATALOG_GET, CHANGED_TRIGGER, EVALUATED_VERSIONS_LIST,
+    EXECUTIONS_LIST, EXECUTION_GET, RUN_CANCEL, RUN_START, RUN_STATUS, TESTS_LIST,
+    TEST_VERSION_GET,
 };
 
 #[derive(Default)]
@@ -158,7 +159,15 @@ fn filter_browser_text(text: &str, policy: &mut BrowserPolicy) -> Option<String>
 fn allowed_invocation(id: &str) -> bool {
     matches!(
         id,
-        EXECUTIONS_LIST | EXECUTION_GET | CATALOG_GET | RUN_STATUS | RUN_START | RUN_CANCEL
+        EXECUTIONS_LIST
+            | EXECUTION_GET
+            | EVALUATED_VERSIONS_LIST
+            | TESTS_LIST
+            | TEST_VERSION_GET
+            | CATALOG_GET
+            | RUN_STATUS
+            | RUN_START
+            | RUN_CANCEL
     )
 }
 

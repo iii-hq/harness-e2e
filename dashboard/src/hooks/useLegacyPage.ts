@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { loadRuntimeExecutionData } from '@/lib/dashboard-data-source'
 
-type PageName = 'overview' | 'execution' | 'compare' | 'coverage'
+type PageName = 'overview' | 'execution' | 'coverage'
 
 type CoverageLines = {
   count?: number
@@ -57,7 +57,7 @@ async function loadExecutionManifest(page: PageName) {
   }
 }
 
-async function loadExecutionData(page: 'overview' | 'execution' | 'compare') {
+async function loadExecutionData(page: 'overview' | 'execution') {
   try {
     if (await loadRuntimeExecutionData(page)) return
   } catch {
@@ -118,13 +118,6 @@ async function bootLegacyPage(page: PageName) {
     window.HARNESS_COVERAGE = undefined
     await loadScript(page, 'coverage/summary.js', false)
     renderCoverage()
-    return
-  }
-
-  if (page === 'compare') {
-    await loadScript(page, 'execution-data.js')
-    await loadExecutionData(page)
-    await loadScript(page, 'compare.js')
     return
   }
 

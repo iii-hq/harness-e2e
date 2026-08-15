@@ -24,4 +24,4 @@ declare global {
   }
 }
 
-type LegacyPageName = 'overview' | 'execution' | 'compare' | 'coverage'
+type LegacyPageName = 'overview' | 'execution' | 'coverage'

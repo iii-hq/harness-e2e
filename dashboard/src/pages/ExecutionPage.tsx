@@ -165,7 +165,7 @@ export function ExecutionPage({ executionId }: { executionId: string }) {
             </div>
 
             <section
-              className="kpi-grid detail-kpis m-0 grid grid-cols-2 gap-0 border-l border-line bg-panel-faint max-[1120px]:border-t max-[1120px]:border-l-0 max-[560px]:grid-cols-1"
+              className="kpi-grid detail-kpis m-0 grid grid-cols-3 gap-0 border-l border-line bg-panel-faint max-[1120px]:border-t max-[1120px]:border-l-0 max-[760px]:grid-cols-1"
               aria-label="Execution metrics"
             >
               <article
@@ -180,15 +180,8 @@ export function ExecutionPage({ executionId }: { executionId: string }) {
                 </div>
                 <div className="kpi-orbit" aria-hidden="true"></div>
               </article>
-              <article className={`${detailKpi} border-r-0`}>
-                <div className="kpi-label">Quality score</div>
-                <div id="detail-score" className={detailKpiValue}>
-                  —
-                </div>
-                <div className="kpi-delta">Mean of scenario medians</div>
-              </article>
               <article
-                className={`${detailKpi} border-b-0 max-[560px]:border-b`}
+                className={`${detailKpi} border-b-0 max-[760px]:border-b`}
               >
                 <div className="kpi-label">Model cost</div>
                 <div id="detail-cost" className={detailKpiValue}>

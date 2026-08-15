@@ -4,6 +4,7 @@ mod bus;
 mod controller;
 mod presenter;
 mod proxy;
+mod read_model;
 mod store;
 
 use std::net::SocketAddr;
@@ -135,6 +136,13 @@ impl ApiError {
         }
     }
 
+    fn not_found(message: impl Into<String>) -> Self {
+        Self {
+            status: StatusCode::NOT_FOUND,
+            message: message.into(),
+        }
+    }
+
     fn internal(error: impl std::fmt::Display) -> Self {
         Self {
             status: StatusCode::INTERNAL_SERVER_ERROR,
@@ -164,6 +172,7 @@ mod tests {
     use super::presenter::{
         contract_fingerprint, execution_detail_value, execution_summary, load_execution_summaries,
     };
+    use super::read_model::{DashboardReadModel, EvaluatedVersionsRequest, TestsListRequest};
     use super::store::{read_metadata, write_metadata};
     use super::*;
     use crate::identity::{ExecutionIdentity, StackIdentity, SystemUnderTestIdentity};
@@ -182,7 +191,7 @@ mod tests {
 
     fn request() -> RunRequest {
         RunRequest {
-            label: " baseline ".into(),
+            label: " first run ".into(),
             url: "ws://127.0.0.1:49134".into(),
             model: "model".into(),
             provider: "provider".into(),
@@ -288,7 +297,7 @@ mod tests {
         RunMetadata {
             schema_version: LOCAL_SCHEMA_VERSION,
             id: "local-20260807T120000-abcdef12".into(),
-            label: "baseline".into(),
+            label: "first run".into(),
             status: JobStatus::Completed,
             started_at: "2026-08-07T12:00:00Z".into(),
             completed_at: "2026-08-07T12:00:02Z".into(),
@@ -302,7 +311,7 @@ mod tests {
     fn validates_and_normalizes_run_requests() {
         let mut value = request();
         validate_request(&mut value).unwrap();
-        assert_eq!(value.label, "baseline");
+        assert_eq!(value.label, "first run");
         value.url = "https://example.com".into();
         assert!(validate_request(&mut value).is_err());
     }
@@ -330,6 +339,7 @@ mod tests {
         let report = report();
         let summary = execution_summary(&metadata(), Some(&report)).unwrap();
         assert_eq!(summary["status"], "passed");
+        assert!(summary["totals"].get("average_score").is_none());
         assert_eq!(summary["run_id"], "execution");
         assert_eq!(summary["lane"], "local");
         assert_eq!(summary["stack"]["mode"], "source");
@@ -404,6 +414,129 @@ mod tests {
                 && summary["status"] == "passed"
         }));
         assert!(summaries.iter().any(|summary| summary["id"] == metadata.id));
+    }
+
+    #[test]
+    fn versioned_test_catalog_pools_raw_scores_and_keeps_evidence_lazy() {
+        let root = tempfile::tempdir().unwrap();
+        for (index, (revision, scores)) in [
+            (
+                "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                vec![10, 100, 100],
+            ),
+            ("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", vec![80, 90]),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let mut value = report();
+            let execution = value.execution.as_mut().unwrap();
+            execution.execution_id = format!("execution-{index}");
+            execution.completed_at = format!("2026-08-0{}T12:00:02Z", index + 7);
+            let completed_at = execution.completed_at.clone();
+            if let StackIdentity::Source {
+                workers_revision, ..
+            } = &mut value.system_under_test.as_mut().unwrap().stack
+            {
+                *workers_revision = revision.into();
+            }
+            let runs = scores
+                .into_iter()
+                .enumerate()
+                .map(|(run_index, score)| {
+                    let mut run = E2eRunReport::new(
+                        format!("run-{index}-{run_index}"),
+                        format!("attempt-{run_index}"),
+                        1,
+                        format!("session-{index}-{run_index}"),
+                        "prompt".into(),
+                    );
+                    run.status = RunStatus::Passed;
+                    run.score = Some(score);
+                    run.wall_time_ms = 1_000 + u64::from(score);
+                    run
+                })
+                .collect();
+            value.scenarios = vec![E2eScenarioReport::aggregate(
+                "direct_answer",
+                1,
+                ExecutionPolicy {
+                    max_turns: 1,
+                    max_output_tokens: Some(10),
+                    max_total_tokens: 100,
+                    stuck_timeout_seconds: 10,
+                },
+                runs,
+            )];
+
+            let mut run_metadata = metadata();
+            run_metadata.id = format!("local-version-{index}");
+            run_metadata.completed_at = completed_at;
+            let run_dir = root.path().join(&run_metadata.id);
+            write_metadata(&run_dir, &run_metadata).unwrap();
+            let manifest = manifest(&value);
+            value.write_to(&run_dir.join("results"), &manifest).unwrap();
+        }
+
+        let model = DashboardReadModel::load(root.path()).unwrap();
+        let evaluated = model.evaluated_versions(EvaluatedVersionsRequest::default());
+        assert_eq!(evaluated.cohorts.len(), 1);
+        assert_eq!(evaluated.versions.len(), 2);
+        let cohort_id = evaluated.cohorts[0].id.clone();
+        let from = evaluated
+            .versions
+            .iter()
+            .find(|version| version.label.contains("aaaaaaaaaaaa"))
+            .unwrap()
+            .id
+            .clone();
+        let to = evaluated
+            .versions
+            .iter()
+            .find(|version| version.label.contains("bbbbbbbbbbbb"))
+            .unwrap()
+            .id
+            .clone();
+        let catalog = model
+            .tests_list(TestsListRequest {
+                limit: Some(100),
+                cohort_id: Some(cohort_id.clone()),
+                from_version_id: Some(from.clone()),
+                to_version_id: Some(to.clone()),
+                ..TestsListRequest::default()
+            })
+            .unwrap();
+        let row = catalog
+            .rows
+            .iter()
+            .find(|row| row.test_id == "direct_answer")
+            .unwrap();
+        let result = row.result.as_ref().unwrap();
+        assert_eq!(result.from.as_ref().unwrap().median_score, Some(100.0));
+        assert_eq!(result.to.as_ref().unwrap().median_score, Some(85.0));
+        assert_eq!(result.delta.score, Some(-15.0));
+        assert!(result.from_observations.is_empty());
+        assert!(result.to_observations.is_empty());
+
+        let detail = model
+            .test_version_get(super::read_model::TestVersionGetRequest {
+                test_id: "direct_answer".into(),
+                test_version: 1,
+                cohort_id,
+                from_version_id: from,
+                to_version_id: to,
+            })
+            .unwrap();
+        assert_eq!(detail.from_observations.len(), 1);
+        assert_eq!(detail.to_observations.len(), 1);
+        assert!(model
+            .tests_list(TestsListRequest {
+                cursor: Some("stale:1".into()),
+                ..TestsListRequest::default()
+            })
+            .unwrap_err()
+            .to_string()
+            .contains("stale"));
     }
 
     #[test]

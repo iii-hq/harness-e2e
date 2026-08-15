@@ -42,8 +42,8 @@ JSON alone can never authorize a cutover or release.
    exists. A retry gets a new attempt identity and preserves the failed attempt.
 6. If cleanup is incomplete, isolate the ephemeral namespace and run the
    environment-owned compensation procedure before any new attempt.
-7. Compare against the immutable promoted baseline only after identity and
-   policy eligibility pass.
+7. Compare two immutable completed versions only after identity and policy
+   eligibility pass; do not calculate deltas across changed case contracts.
 
 ## Rollback while the legacy window is open
 

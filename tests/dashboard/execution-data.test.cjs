@@ -3,9 +3,6 @@ const assert = require("node:assert/strict");
 const { loadBrowserModule } = require("./load-browser-module.cjs");
 
 const {
-  buildEfficiencyOverview,
-  cohortMetricSparkline,
-  compareExecutions,
   contractFingerprint,
   executionEfficiencyTotalsFromDetail,
   executionsWithinDays,
@@ -19,8 +16,6 @@ const {
   mergeExecutionHistory,
   normalizeExecution,
   normalizeScenarioStatus,
-  scenarioMetricSeries,
-  scenarioMetricRows,
   scenarioMetricsFromDetail,
   scenarioContract,
 } = loadBrowserModule("dashboard/public/execution-data.js");
@@ -37,7 +32,7 @@ function execution(overrides = {}) {
     source: { sha: "a".repeat(40), ref: "main" },
     availability: "full",
     detail_path: "runs/123-1.json",
-    totals: { average_score: 92, scenario_pass_rate: 100 },
+    totals: { scenario_pass_rate: 100 },
     subjects: [
       {
         id: "glm",
@@ -68,82 +63,6 @@ test("normalizes execution status and availability", () => {
   assert.equal(normalized.id, "99");
   assert.equal(normalized.status, "infra_failed");
   assert.equal(normalized.availability, "unavailable");
-});
-
-test("rejects deltas for incompatible execution contracts", () => {
-  const left = execution({
-    id: "left",
-    requested_runs: 1,
-    scenario_metrics: [
-      {
-        subject_id: "glm",
-        scenario_id: "direct_answer",
-        contract_fingerprint: "contract-a",
-        averages: { tokens: 100, duration_seconds: 10, cost_usd: 0.2 },
-      },
-    ],
-    totals: { average_score: 80, scenario_pass_rate: 100, total_tokens: 100 },
-  });
-  const right = execution({
-    id: "right",
-    requested_runs: 2,
-    subjects: [
-      ...execution().subjects,
-      {
-        id: "other",
-        model: "gpt-5",
-        provider: "openai",
-        scenarios: [
-          {
-            id: "persistent_state",
-            passed: false,
-            status: "infra_failed",
-            median_score: 45,
-            pass_rate: 0,
-          },
-        ],
-      },
-    ],
-    scenario_metrics: [
-      {
-        subject_id: "glm",
-        scenario_id: "direct_answer",
-        contract_fingerprint: "contract-b",
-        averages: { tokens: 120, duration_seconds: 8, cost_usd: 0.15 },
-      },
-    ],
-    totals: { average_score: 70, scenario_pass_rate: 50, total_tokens: 120 },
-  });
-
-  const comparison = compareExecutions(left, right);
-
-  assert.equal(comparison.left.id, "left");
-  assert.equal(comparison.right.id, "right");
-  assert.equal(comparison.totals.total_tokens.delta, null);
-  assert.equal(comparison.scenarios[0].contract, "changed");
-  assert.equal(comparison.scenarios[0].deltas.duration_seconds, null);
-  assert.equal(comparison.scenarios.length, 2);
-  assert.equal(comparison.comparable, false);
-  assert.equal(comparison.compatibility, "legacy_unverified");
-  assert.deepEqual(comparison.warnings, [
-    "The executions use different subject sets.",
-    "Stack mode is unavailable; compatibility is not verifiable.",
-    "The executions requested a different number of runs.",
-    "1 scenario is present in only one execution.",
-    "1 shared scenario contract differs.",
-  ]);
-});
-
-test("rejects comparisons between source and registry stacks", () => {
-  const left = execution({ stack: { mode: "source" } });
-  const right = execution({ stack: { mode: "registry" } });
-
-  const comparison = compareExecutions(left, right);
-
-  assert.equal(comparison.comparable, false);
-  assert.equal(comparison.compatibility, "ineligible");
-  assert.equal(comparison.scenarios[0].deltas.tokens, null);
-  assert.match(comparison.warnings[0], /Stack modes are incompatible/);
 });
 
 test("normalizes schema 2 failures with blocking precedence", () => {
@@ -404,7 +323,6 @@ test("derives aggregate legacy entries from benchmark snapshots", () => {
   });
 
   assert.equal(history.executions[0].availability, "aggregate");
-  assert.equal(history.executions[0].totals.average_score, 90);
   assert.equal(history.executions[0].subjects[0].scenarios[0].id, "direct_answer");
 });
 
@@ -513,280 +431,6 @@ test("derives per-scenario run averages from a full execution detail", () => {
       },
     },
   ]);
-});
-
-test("averages scenario metrics with equal weight per execution", () => {
-  const rows = scenarioMetricRows([
-    execution({
-      id: "first",
-      scenario_metrics: [
-        {
-          scenario_id: "direct_answer",
-          run_count: 3,
-          averages: { tokens: 100, cost_usd: 0.2, turns: 4 },
-          samples: { tokens: 3, cost_usd: 3, turns: 3 },
-        },
-      ],
-    }),
-    execution({
-      id: "second",
-      scenario_metrics: [
-        {
-          scenario_id: "direct_answer",
-          run_count: 2,
-          averages: { tokens: 300, cost_usd: null, turns: 8 },
-          samples: { tokens: 2, cost_usd: 0, turns: 2 },
-        },
-      ],
-    }),
-  ]);
-
-  assert.equal(rows[0].averages.tokens, 200);
-  assert.equal(rows[0].averages.cost_usd, 0.2);
-  assert.equal(rows[0].averages.turns, 6);
-  assert.equal(rows[0].executionCount, 2);
-  assert.equal(rows[0].executionSamples.tokens, 2);
-  assert.equal(rows[0].executionSamples.cost_usd, 1);
-  assert.equal(rows[0].runCount, 5);
-  assert.equal(rows[0].runSamples.tokens, 5);
-});
-
-test("keeps scenario metrics as one point per workflow execution", () => {
-  const series = scenarioMetricSeries(
-    [
-      execution({
-        id: "newer",
-        run_id: "200",
-        completed_at: "2026-07-30T12:00:00Z",
-        scenario_metrics: [
-          {
-            scenario_id: "direct_answer",
-            averages: { tokens: 300 },
-            samples: { tokens: 3 },
-          },
-        ],
-      }),
-      execution({
-        id: "older",
-        run_id: "100",
-        completed_at: "2026-07-29T12:00:00Z",
-        scenario_metrics: [
-          {
-            scenario_id: "direct_answer",
-            averages: { tokens: 100 },
-            samples: { tokens: 2 },
-          },
-          {
-            scenario_id: "persistent_state",
-            averages: { tokens: 200 },
-            samples: { tokens: 2 },
-          },
-        ],
-      }),
-    ],
-    "tokens",
-  );
-
-  assert.deepEqual(
-    series.map((item) => ({
-      scenarioId: item.scenarioId,
-      executionIds: item.points.map((point) => point.executionId),
-      values: item.points.map((point) => point.value),
-    })),
-    [
-      {
-        scenarioId: "direct_answer",
-        executionIds: ["older", "newer"],
-        values: [100, 300],
-      },
-      {
-        scenarioId: "persistent_state",
-        executionIds: ["older"],
-        values: [200],
-      },
-    ],
-  );
-  assert.equal(
-    scenarioMetricSeries(
-      [execution({ scenario_metrics: series.map(() => null) })],
-      "tokens",
-      "missing",
-    ).length,
-    0,
-  );
-});
-
-test("cohort sparkline sums matching contracts and skips partial executions", () => {
-  const cohortRow = {
-    subjectId: "glm",
-    scenarioId: "direct_answer",
-    fingerprint: "fp1",
-    lifecycle: "comparable",
-  };
-  const metric = (fingerprint, tokens) => ({
-    subject_id: "glm",
-    scenario_id: "direct_answer",
-    contract_fingerprint: fingerprint,
-    averages: { tokens },
-  });
-
-  const points = cohortMetricSparkline(
-    [
-      execution({ id: "no-value", scenario_metrics: [metric("fp1", null)] }),
-      execution({ id: "newer", scenario_metrics: [metric("fp1", 300)] }),
-      execution({ id: "changed-contract", scenario_metrics: [metric("fp2", 999)] }),
-      execution({ id: "no-metrics", scenario_metrics: [] }),
-      execution({ id: "older", scenario_metrics: [metric("fp1", 100)] }),
-    ],
-    [cohortRow],
-    "tokens",
-  );
-
-  assert.deepEqual(points, [
-    { executionId: "older", value: 100, timestamp: "2026-07-29T06:10:00Z" },
-    { executionId: "newer", value: 300, timestamp: "2026-07-29T06:10:00Z" },
-  ]);
-  assert.deepEqual(cohortMetricSparkline([execution()], [], "tokens"), []);
-});
-
-test("compares efficiency only within the same scenario contract", () => {
-  const metric = (
-    scenarioId,
-    fingerprint,
-    tokens,
-    cost,
-    duration,
-    errors = 0,
-  ) => ({
-    subject_id: "glm",
-    scenario_id: scenarioId,
-    scenario_version: fingerprint === "v2" ? 2 : 1,
-    contract_fingerprint: fingerprint,
-    run_count: 3,
-    averages: {
-      tokens,
-      cost_usd: cost,
-      duration_seconds: duration,
-      function_calls: 2,
-      function_call_errors: errors,
-      sessions: 1,
-      turns: 2,
-    },
-    samples: {},
-  });
-  const withScenarios = (id, scenarioMetrics, scenarios) =>
-    execution({
-      id,
-      completed_at:
-        id === "latest" ? "2026-07-30T12:00:00Z" : "2026-07-29T12:00:00Z",
-      scenario_metrics: scenarioMetrics,
-      subjects: [
-        {
-          id: "glm",
-          model: "glm-5.2",
-          provider: "zai",
-          scenarios: scenarios.map(([scenarioId, passed]) => ({
-            id: scenarioId,
-            passed,
-            status: passed ? "passed" : "hard_gate_failed",
-            hard_gate_failures: passed ? 0 : 1,
-            technical_failures: 0,
-          })),
-        },
-      ],
-    });
-
-  const overview = buildEfficiencyOverview(
-    [
-      withScenarios(
-      "latest",
-      [
-        metric("stable", "v1", 90, 0.9, 8),
-        metric("changed", "v2", 80, 0.8, 7),
-        metric("new_case", "v1", 20, 0.2, 2),
-        metric("failed", "v1", 30, 0.3, 3, 1),
-      ],
-      [
-        ["stable", true],
-        ["changed", true],
-        ["new_case", true],
-        ["failed", false],
-      ],
-    ),
-      withScenarios(
-      "previous",
-      [
-        metric("stable", "v1", 100, 1, 10),
-        metric("changed", "v1", 70, 0.7, 6),
-        metric("retired", "v1", 40, 0.4, 4),
-        metric("failed", "v1", 40, 0.4, 4),
-      ],
-      [
-        ["stable", true],
-        ["changed", true],
-        ["retired", true],
-        ["failed", true],
-      ],
-      ),
-    ],
-    { minimumHistory: 1 },
-  );
-
-  assert.equal(overview.rows.find((row) => row.scenarioId === "stable").trend, "improving");
-  assert.equal(overview.rows.find((row) => row.scenarioId === "changed").lifecycle, "changed");
-  assert.equal(overview.rows.find((row) => row.scenarioId === "new_case").lifecycle, "new");
-  assert.equal(overview.rows.find((row) => row.scenarioId === "retired").lifecycle, "retired");
-  assert.equal(
-    overview.rows.find((row) => row.scenarioId === "failed").trend,
-    "non_comparable",
-  );
-  assert.equal(overview.counts.comparable, 1);
-  assert.equal(overview.counts.new, 1);
-  assert.equal(overview.counts.changed, 1);
-  assert.equal(overview.counts.retired, 1);
-  assert.equal(overview.counts.nonComparable, 1);
-  assert.equal(overview.metrics.tokens.operational, 220);
-  assert.equal(overview.metrics.tokens.comparableCurrent, 90);
-  assert.equal(overview.metrics.tokens.comparableBaseline, 100);
-  assert.equal(overview.metrics.tokens.delta, -10);
-});
-
-test("keeps unavailable efficiency totals unknown instead of summing them to zero", () => {
-  const scenarioMetric = (tokens) => ({
-    subject_id: "glm",
-    scenario_id: "direct_answer",
-    scenario_version: 2,
-    contract_fingerprint: "same-contract",
-    averages: {
-      tokens,
-      cost_usd: null,
-      duration_seconds: 8,
-      function_call_errors: 0,
-    },
-  });
-  const comparableExecution = (id, tokens) =>
-    execution({
-      id,
-      scenario_metrics: [scenarioMetric(tokens)],
-      subjects: [
-        {
-          id: "glm",
-          model: "glm-5.2",
-          provider: "zai",
-          scenarios: [{ id: "direct_answer", passed: true, status: "passed" }],
-        },
-      ],
-    });
-
-  const overview = buildEfficiencyOverview([
-    comparableExecution("latest", 90),
-    comparableExecution("baseline", 100),
-  ]);
-
-  assert.equal(overview.metrics.cost_usd.operational, null);
-  assert.equal(overview.metrics.cost_usd.comparableCurrent, null);
-  assert.equal(overview.metrics.cost_usd.comparableBaseline, null);
-  assert.equal(overview.metrics.cost_usd.delta, null);
 });
 
 test("groupRunFailures returns empty for missing or empty reports", () => {

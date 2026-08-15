@@ -12,7 +12,11 @@ describe('dashboard hash routes', () => {
     expect(routeFromHash('')).toEqual({ page: 'overview', view: 'overview' })
     expect(routeFromHash('#/scenarios')).toEqual({
       page: 'overview',
-      view: 'scenarios',
+      view: 'tests',
+    })
+    expect(routeFromHash('#/tests')).toEqual({
+      page: 'overview',
+      view: 'tests',
     })
     expect(hashForWorkspace('executions')).toBe('#/executions')
   })
@@ -33,11 +37,11 @@ describe('dashboard hash routes', () => {
   })
 
   it('routes comparisons and coverage from the single entry point', () => {
-    const comparison = hashForComparison('baseline/a', 'candidate b')
+    const comparison = hashForComparison('version/a', 'version b')
     expect(routeFromHash(comparison)).toEqual({
       page: 'compare',
-      left: 'baseline/a',
-      right: 'candidate b',
+      left: 'version/a',
+      right: 'version b',
     })
     expect(hashForCoverage()).toBe('#/coverage')
     expect(routeFromHash('#main')).toBeNull()

@@ -17,7 +17,7 @@ test("sets the stored or system theme before React renders", () => {
 test("uses the shared React theme control on every dashboard page", () => {
   for (const page of [
     "OverviewPage.tsx",
-    "ComparePage.tsx",
+    "TestsPage.tsx",
     "ExecutionPage.tsx",
     "CoveragePage.tsx",
   ]) {

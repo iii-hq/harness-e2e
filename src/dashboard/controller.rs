@@ -15,7 +15,7 @@ use tokio::sync::{Mutex, RwLock};
 use url::Url;
 
 use super::bus::DashboardEvents;
-use super::presenter::load_execution_summaries;
+use super::read_model::DashboardReadModel;
 use super::store::{read_report, recover_interrupted_runs, write_metadata};
 use super::{
     ApiError, DashboardArgs, Defaults, JobStatus, JobView, RunMetadata, RunRequest, RunSnapshot,
@@ -36,7 +36,7 @@ pub(super) struct Controller {
     executable: PathBuf,
     defaults: Defaults,
     state: Mutex<ControllerState>,
-    summaries: RwLock<Option<Arc<Vec<Value>>>>,
+    read_model: RwLock<Option<Arc<DashboardReadModel>>>,
     events: Option<Arc<DashboardEvents>>,
 }
 
@@ -68,7 +68,7 @@ impl Controller {
                 job: None,
                 child: None,
             }),
-            summaries: RwLock::new(None),
+            read_model: RwLock::new(None),
             events,
         }))
     }
@@ -102,21 +102,25 @@ impl Controller {
     }
 
     pub(super) async fn execution_summaries(&self) -> Result<Arc<Vec<Value>>> {
-        if let Some(values) = self.summaries.read().await.as_ref() {
-            return Ok(values.clone());
+        Ok(Arc::new(self.read_model().await?.summaries.clone()))
+    }
+
+    pub(super) async fn read_model(&self) -> Result<Arc<DashboardReadModel>> {
+        if let Some(model) = self.read_model.read().await.as_ref() {
+            return Ok(model.clone());
         }
         let runs_dir = self.runs_dir.clone();
-        let values = Arc::new(
-            tokio::task::spawn_blocking(move || load_execution_summaries(&runs_dir))
+        let model = Arc::new(
+            tokio::task::spawn_blocking(move || DashboardReadModel::load(&runs_dir))
                 .await
-                .map_err(|error| anyhow::anyhow!("load execution summaries task: {error}"))??,
+                .map_err(|error| anyhow::anyhow!("load dashboard read model task: {error}"))??,
         );
-        *self.summaries.write().await = Some(values.clone());
-        Ok(values)
+        *self.read_model.write().await = Some(model.clone());
+        Ok(model)
     }
 
     async fn invalidate_summaries(&self) {
-        self.summaries.write().await.take();
+        self.read_model.write().await.take();
     }
 
     async fn emit_change(&self, kind: &str, execution_id: &str) {

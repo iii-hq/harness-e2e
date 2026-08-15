@@ -350,7 +350,7 @@ footer a:hover {
   display: inline-flex;
   align-items: center;
   gap: 8px;
-  min-height: 38px;
+  min-height: 44px;
   padding: 0 14px;
   border: 1px solid var(--line-strong);
   border-radius: 9px;
@@ -1450,31 +1450,6 @@ footer {
   font-size: 0.64rem;
 }
 
-.efficiency-baseline {
-  display: grid;
-  justify-items: end;
-  gap: 4px;
-  text-align: right;
-}
-
-.efficiency-baseline > span {
-  color: var(--text-muted);
-  font-size: 0.58rem;
-  font-weight: 750;
-  letter-spacing: 0.09em;
-  text-transform: uppercase;
-}
-
-.efficiency-baseline strong {
-  font-size: 0.72rem;
-  font-weight: 650;
-}
-
-.efficiency-baseline small {
-  color: var(--text-muted);
-  font-size: 0.64rem;
-}
-
 .efficiency-card-grid {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
@@ -1549,22 +1524,6 @@ footer {
   stroke-width: 2;
   stroke-linecap: round;
   stroke-linejoin: round;
-  vector-effect: non-scaling-stroke;
-}
-
-.efficiency-baseline-value {
-  display: block;
-  margin-top: 4px;
-  color: var(--text-muted);
-  font-size: 12px;
-  font-variant-numeric: tabular-nums;
-}
-
-.efficiency-sparkline-baseline {
-  stroke: var(--text-muted);
-  stroke-width: 1;
-  stroke-dasharray: 3 3;
-  opacity: 0.6;
   vector-effect: non-scaling-stroke;
 }
 
@@ -4542,11 +4501,6 @@ footer {
     justify-items: start;
   }
 
-  .efficiency-baseline {
-    justify-items: start;
-    text-align: left;
-  }
-
   .efficiency-heading-meta {
     width: 100%;
     justify-content: space-between;
@@ -5276,8 +5230,8 @@ footer {
 .dialog-close {
   display: grid;
   place-items: center;
-  width: 34px;
-  height: 34px;
+  width: 44px;
+  height: 44px;
   border: 1px solid var(--line);
   border-radius: 9px;
   background: transparent;
@@ -5467,7 +5421,7 @@ footer {
   }
 
   .theme-toggle {
-    min-width: 38px;
+    min-width: 44px;
   }
 
   .local-runner-dialog {

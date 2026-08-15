@@ -5,10 +5,10 @@ import {
   dashboardRoutes,
   useHashRoute,
 } from '@/hooks/use-hash-route'
-import { ComparePage } from '@/pages/ComparePage'
 import { CoveragePage } from '@/pages/CoveragePage'
 import { ExecutionPage } from '@/pages/ExecutionPage'
 import { OverviewPage } from '@/pages/OverviewPage'
+import { TestsPage } from '@/pages/TestsPage'
 import './index.css'
 
 const root = document.querySelector<HTMLElement>('#root')
@@ -21,10 +21,13 @@ function RoutedPage({ route }: { route: DashboardRoute }) {
     case 'execution':
       return <ExecutionPage executionId={route.executionId} />
     case 'compare':
-      return <ComparePage />
+      return <TestsPage initialFrom={route.left} initialTo={route.right} />
     case 'coverage':
       return <CoveragePage />
     case 'overview':
+      if (route.view === 'tests') {
+        return <TestsPage />
+      }
       return <OverviewPage activeView={route.view} />
   }
 }
@@ -34,7 +37,7 @@ function App() {
   useEffect(() => {
     document.title =
       {
-        compare: 'Compare Harness E2E executions',
+        compare: 'Compare Harness E2E system versions',
         coverage: 'Harness stack coverage',
         execution: 'Harness E2E execution detail',
         overview: 'Harness E2E executions',

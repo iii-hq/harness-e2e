@@ -1,9 +1,11 @@
 use std::env;
+#[cfg(test)]
 use std::path::Path;
 
 use anyhow::Result;
 use serde_json::{json, Value};
 
+#[cfg(test)]
 use super::store::load_runs;
 use super::{JobStatus, RunMetadata};
 use crate::identity::StackIdentity;
@@ -12,6 +14,7 @@ use crate::report::{E2eReport, E2eRunReport, E2eScenarioReport};
 
 pub(super) const MAX_EXECUTIONS: usize = 100;
 
+#[cfg(test)]
 pub(super) fn load_execution_summaries(runs_dir: &Path) -> Result<Vec<Value>> {
     let mut values = Vec::new();
     for run in load_runs(runs_dir)? {
@@ -107,12 +110,6 @@ pub(super) fn execution_summary(
         .map(|scenario| scenario.aggregate.cost.total_usd)
         .collect();
     let total_cost_usd = sum_complete(&costs);
-    let scores: Vec<_> = report
-        .scenarios
-        .iter()
-        .filter_map(|scenario| scenario.aggregate.median_score)
-        .collect();
-    let average_score = mean(&scores);
     let expected = report.scenarios.len();
     let passed = report
         .scenarios
@@ -176,7 +173,6 @@ pub(super) fn execution_summary(
             "report_coverage": 100.0,
             "passed_scenarios": passed,
             "scenario_pass_rate": if expected == 0 { 0.0 } else { passed as f64 / expected as f64 * 100.0 },
-            "average_score": average_score,
             "total_cost_usd": total_cost_usd,
             "wall_time_seconds": wall_time_seconds,
             "hard_gate_failures": hard_gate_failures,

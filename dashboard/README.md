@@ -2,11 +2,11 @@
 
 This React application replaces the generic benchmark-action index. It uses the
 same frontend stack as `workers/console`: React 19, strict TypeScript, Vite,
-Tailwind CSS, Biome, Vitest, and pnpm. The workflow-generated `data.js` remains
-the source of truth for metric trends. Published and view-only builds keep the
-static `executions.js` index and `runs/<execution-id>.json` reports. Local mode
-uses a scoped iii data surface so the browser requests only the execution page,
-report, catalog, or unread log suffix it currently needs.
+Tailwind CSS, Biome, Vitest, and pnpm. Published builds keep the static execution
+index, split test catalog, lazy per-test evidence shards, and
+`runs/<execution-id>.json` reports. Local mode uses a scoped iii data surface so
+the browser requests only the execution page, test result, report, catalog, or
+unread log suffix it currently needs.
 
 Install, validate, and run the frontend with hot reload:
 
@@ -34,10 +34,10 @@ The server listens on `0.0.0.0:4173` by default. Open
 with the machine's address when accessing it remotely.
 
 The dashboard uses the same dependency-free hash-routing pattern as Console.
-Canonical routes are `#/overview`, `#/scenarios`, `#/capability`,
-`#/executions`, `#/execution/<id>`, `#/compare/<baseline>/<candidate>`, and
-`#/coverage`; all application views are served by the single `index.html`
-entry point.
+Canonical routes are `#/overview`, `#/tests`, `#/capability`, `#/executions`,
+`#/execution/<id>`, and `#/coverage`. The old `#/scenarios` route redirects to
+Tests, while `#/compare/<from>/<to>` remains a deep link into the same versioned
+Tests view. All views use the single `index.html` entry point.
 
 The dashboard can now execute one or more scenarios against the Harness already
 running at `III_URL`. It discovers registered provider/model pairs from that
@@ -53,10 +53,13 @@ Local data follows the Console architecture: the React shell opens one lazy
 WebSocket to the Rust server, which proxies only the dashboard's allow-listed iii
 functions and change trigger. The initial overview receives at most 25 compact
 summaries; filters, search, and subsequent pages execute on the server. An
-execution page fetches one summary plus one report, and comparison fetches only
-the selected pair. Change signals invalidate the relevant view, with low-rate
-polling retained as a recovery path. The original same-origin HTTP endpoints are
-fallbacks when the WebSocket is temporarily unavailable.
+execution page fetches one summary plus one report. Tests first loads immutable
+system-version and cohort descriptors, then one compact row per test. Changing
+a row's test version calls `e2e::dashboard::test-version-get`; retained
+observations load only when that row is expanded. The backend builds one cached
+read model from retained reports, pools raw run scores, and invalidates it on run
+changes. Same-origin HTTP mirrors the iii functions and is used only when the
+iii transport is unavailable.
 
 To present runs submitted through the asynchronous `e2e::*` worker, point the
 dashboard directly at that worker's output root. Canonical control-plane run
@@ -84,11 +87,11 @@ falls back to `executions.js`; the Pages publisher always emits
 history and never calls the local execution APIs.
 
 The execution label is optional and intentionally descriptive only. The local
-dashboard does not inspect or record Harness code changes: restart or modify the
-Harness however you want, run another experiment, then select any two execution
-rows and open **Compare selected**. The comparison always remains available;
-different subjects, run counts, scenario sets, and behavioral contracts are
-shown as warnings instead of blocking the comparison.
+dashboard does not infer a system version from that label: it uses the immutable
+source revision or registry stack lock captured in results-v2. Tests compares
+system version A with B inside one exact evaluation cohort. Each row keeps its
+own contract-version selector. Changed case sets and contracts remain visible
+side by side, but their numeric deltas are disabled.
 
 Use `--listen 0.0.0.0:PORT` to select another port and `--runs-dir` to select
 another local history. Local mode exposes controls that can start and cancel E2E
@@ -125,7 +128,8 @@ The execution index retains 100 workflow attempts. The latest 30 also retain the
 complete execution report: per-run prompts, transcripts, criteria, metrics,
 costs, retries, hard gates, traces, and failure evidence. Each publish updates
 the retained report metadata and removes unreferenced run files before deploying
-Pages.
+Pages. It also emits `tests/index.json` for compact version/test metadata and one
+`tests/data/<digest>.json` evidence shard per retained test version.
 
 Each full execution summary also carries compact per-scenario averages for
 tokens, wall time, cost, function calls, function-call errors, sessions, and
@@ -133,14 +137,8 @@ turns. Tokens mean input plus output; cache-read tokens are already represented
 in input usage and are not added again. The execution table also exposes exact
 total tokens and function calls for every retained diagnostic report.
 
-Operational health is the primary overview. Efficiency appears after the latest
-status, completeness, first actionable failure, KPIs, and scenario matrix. Its
-cards show current suite totals, while deltas use only successful scenarios with the same subject,
-scenario id, and behavioral contract fingerprint. New and changed scenarios
-collect five comparable executions before receiving a trend verdict. Removed
-scenarios remain visible as historical rows and never count as an efficiency
-gain. Contract changes start a new baseline instead of joining incompatible data.
-Select any scenario in the efficiency table to compare that scenario execution
-by execution. The modal switches between cost, tokens, duration, function calls,
-and function errors, marks contract boundaries, and links each point to its full
-execution details.
+Operational health remains the primary overview. Quality is never collapsed
+into a suite-wide score. The Tests view is the comparison surface: it shows
+pooled raw-run score, sample size, pass rate, outcome classes, cost, tokens, and
+runtime for each test/version/system-version tuple. Technical and infrastructure
+failures remain explicit outcomes and are never converted into zero scores.
