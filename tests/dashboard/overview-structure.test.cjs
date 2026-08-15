@@ -154,6 +154,13 @@ test("discovers local models and scenarios while keeping runner knobs advanced",
   assert.match(localRunner, /normalizedSearch\(button\.dataset\.search\)/);
   assert.match(localRunner, /providerGroup\.open = query/);
   assert.match(localRunner, /Automatic · use subject model/);
+  assert.match(localRunner, /function positionModelPicker\(picker\)/);
+  assert.match(localRunner, /popoverRect\.height > availableBelow/);
+  assert.match(localRunner, /local-model-picker-up/);
+  assert.match(
+    styles,
+    /\.local-model-picker\.local-model-picker-up \.local-model-popover\s*\{[^}]*bottom:\s*calc\(100% \+ 6px\)/s,
+  );
   assert.match(localRunner, /input\.checked = previous\.has\(scenarioId\)/);
   assert.doesNotMatch(localRunner, /const selectAll/);
   assert.doesNotMatch(localRunner, /scenarioPicker\.addEventListener\("toggle"/);

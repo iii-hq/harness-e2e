@@ -399,6 +399,44 @@
     updateScenarioSummary();
   }
 
+  function positionModelPicker(picker) {
+    const dialog = picker.picker.closest("dialog");
+    const popover = picker.picker.querySelector(
+      ":scope > .local-model-popover",
+    );
+    if (!dialog || !popover) return;
+
+    picker.picker.classList.remove("local-model-picker-up");
+    picker.options.style.removeProperty("max-height");
+
+    const dialogRect = dialog.getBoundingClientRect();
+    const pickerRect = picker.picker.getBoundingClientRect();
+    const popoverRect = popover.getBoundingClientRect();
+    const optionsRect = picker.options.getBoundingClientRect();
+    const viewportTop = Math.max(0, dialogRect.top);
+    const viewportBottom = Math.min(global.innerHeight, dialogRect.bottom);
+    const edgeGap = 10;
+    const availableAbove = Math.max(
+      0,
+      pickerRect.top - viewportTop - edgeGap,
+    );
+    const availableBelow = Math.max(
+      0,
+      viewportBottom - pickerRect.bottom - edgeGap,
+    );
+    const openUp =
+      popoverRect.height > availableBelow && availableAbove > availableBelow;
+    const available = openUp ? availableAbove : availableBelow;
+    const popoverChrome = Math.max(0, popoverRect.height - optionsRect.height);
+    const optionsMaxHeight = Math.max(
+      72,
+      Math.min(310, Math.floor(available - popoverChrome)),
+    );
+
+    picker.picker.classList.toggle("local-model-picker-up", openUp);
+    picker.options.style.maxHeight = `${optionsMaxHeight}px`;
+  }
+
   async function refreshCatalog() {
     const url = formField("url")?.value || defaults.url || "";
     elements.connectionUrl.textContent = url;
@@ -464,7 +502,15 @@
         modelPickers.forEach((other) => {
           if (other !== picker) other.picker.open = false;
         });
-        requestAnimationFrame(() => picker.search.focus());
+        requestAnimationFrame(() => {
+          positionModelPicker(picker);
+          picker.search.focus({ preventScroll: true });
+        });
+      });
+    });
+    global.addEventListener("resize", () => {
+      modelPickers.forEach((picker) => {
+        if (picker.picker.open) positionModelPicker(picker);
       });
     });
     elements.form.addEventListener("submit", async (event) => {

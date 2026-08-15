@@ -2375,6 +2375,11 @@ footer {
   box-shadow: var(--shadow);
 }
 
+.local-model-picker.local-model-picker-up .local-model-popover {
+  top: auto;
+  bottom: calc(100% + 6px);
+}
+
 .local-model-search {
   padding: 10px 12px;
   border-bottom: 1px solid var(--line);
