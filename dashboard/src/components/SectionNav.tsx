@@ -1,27 +1,62 @@
-import {
-  Activity,
-  ChartNoAxesCombined,
-  GitCompare,
-  History,
-  ListTree,
-} from 'lucide-react'
+export type WorkspaceView =
+  | 'overview'
+  | 'scenarios'
+  | 'capability'
+  | 'executions'
 
-const sections = [
-  { href: '#latest-evidence', label: 'Health', Icon: Activity },
-  { href: '#comparison', label: 'Compare', Icon: GitCompare },
-  { href: '#capability', label: 'Capability', Icon: ListTree },
-  { href: '#efficiency', label: 'Efficiency', Icon: ChartNoAxesCombined },
-  { href: '#executions', label: 'Executions', Icon: History },
+const views: Array<{
+  id: WorkspaceView
+  index: string
+  label: string
+  description: string
+}> = [
+  {
+    id: 'overview',
+    index: '01',
+    label: 'Overview',
+    description: 'Current signal and regression gate',
+  },
+  {
+    id: 'scenarios',
+    index: '02',
+    label: 'Scenarios',
+    description: 'Outcome matrix and scenario economics',
+  },
+  {
+    id: 'capability',
+    index: '03',
+    label: 'Capability',
+    description: 'Evidence-backed complexity frontier',
+  },
+  {
+    id: 'executions',
+    index: '04',
+    label: 'Executions',
+    description: 'Immutable run ledger',
+  },
 ]
 
-export function SectionNav() {
+type SectionNavProps = {
+  activeView: WorkspaceView
+  onViewChange: (view: WorkspaceView) => void
+}
+
+export function SectionNav({ activeView, onViewChange }: SectionNavProps) {
   return (
-    <nav className="section-nav" aria-label="Workspace sections">
-      {sections.map(({ href, label, Icon }) => (
-        <a key={href} href={href}>
-          <Icon size={15} strokeWidth={1.8} aria-hidden="true" />
-          {label}
-        </a>
+    <nav className="section-nav" aria-label="Evidence workspace views">
+      {views.map(({ id, index, label, description }) => (
+        <button
+          key={id}
+          id={`workspace-view-${id}`}
+          className={activeView === id ? 'active' : undefined}
+          type="button"
+          aria-current={activeView === id ? 'page' : undefined}
+          title={description}
+          onClick={() => onViewChange(id)}
+        >
+          <span aria-hidden="true">{index}</span>
+          <strong>{label}</strong>
+        </button>
       ))}
     </nav>
   )

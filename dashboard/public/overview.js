@@ -393,7 +393,15 @@
     )
       ? compactNumber(failureCount(latest), 0)
       : "—";
-    elements.kpiCost.textContent = formatCurrency(latest.totals?.total_cost_usd);
+    const hasModelCost =
+      typeof latest.totals?.total_cost_usd === "number" &&
+      Number.isFinite(latest.totals.total_cost_usd);
+    elements.kpiCost.textContent = hasModelCost
+      ? formatCurrency(latest.totals.total_cost_usd)
+      : "Not reported";
+    elements.kpiCost
+      .closest(".kpi-card")
+      ?.classList.toggle("is-unavailable", !hasModelCost);
     elements.kpiRuntime.textContent =
       typeof latest.totals?.wall_time_seconds === "number"
         ? `${formatDuration(latest.totals.wall_time_seconds)} model runtime`
@@ -682,25 +690,25 @@
             }`
           : "—";
       row.innerHTML = `
-        <td><strong>${escapeHtml(tierLabel(tier.tier))}</strong></td>
-        <td>${escapeHtml(compactNumber(tier.sample_size, 0))}</td>
-        <td>${escapeHtml(rateWithInterval(tier.deliverable_success))}</td>
-        <td>${escapeHtml(rateWithInterval(tier.structural_integrity))}</td>
-        <td>${escapeHtml(rateWithInterval(tier.technical_failure))}</td>
-        <td>${escapeHtml(
+        <td data-label="Tier"><strong>${escapeHtml(tierLabel(tier.tier))}</strong></td>
+        <td data-label="Runs">${escapeHtml(compactNumber(tier.sample_size, 0))}</td>
+        <td data-label="Deliverable">${escapeHtml(rateWithInterval(tier.deliverable_success))}</td>
+        <td data-label="Structure">${escapeHtml(rateWithInterval(tier.structural_integrity))}</td>
+        <td data-label="Technical failures">${escapeHtml(rateWithInterval(tier.technical_failure))}</td>
+        <td data-label="Flaky rate">${escapeHtml(
           typeof tier.flaky_rate === "number"
             ? formatPercent(tier.flaky_rate * 100)
             : "—",
         )}</td>
-        <td>${escapeHtml(
+        <td data-label="p95 latency">${escapeHtml(
           typeof tier.p95_wall_time_ms === "number"
             ? formatDuration(tier.p95_wall_time_ms / 1000)
             : "—",
         )}</td>
-        <td>${escapeHtml(formatCurrency(tier.p95_cost_usd))}</td>
-        <td>${escapeHtml(formatCurrency(tier.cost_per_successful_deliverable))}</td>
-        <td>${escapeHtml(amplification)}</td>
-        <td><span class="table-status status-${status.css}" title="${escapeHtml(
+        <td data-label="p95 cost">${escapeHtml(formatCurrency(tier.p95_cost_usd))}</td>
+        <td data-label="Cost / success">${escapeHtml(formatCurrency(tier.cost_per_successful_deliverable))}</td>
+        <td data-label="Work amplification">${escapeHtml(amplification)}</td>
+        <td data-label="Status"><span class="table-status status-${status.css}" title="${escapeHtml(
           (tier.reasons || []).join("; "),
         )}">${escapeHtml(status.label)}</span></td>
       `;
@@ -963,6 +971,9 @@
                 : deltaMeta(metric?.delta);
       card.delta.textContent = meta.label;
       card.delta.className = `efficiency-delta delta-${meta.css}`;
+      card.value
+        .closest(".efficiency-card")
+        ?.classList.toggle("is-unavailable", typeof currentValue !== "number");
       card.baseline.textContent =
         baselineValue === null ? "" : `baseline ${card.format(baselineValue)}`;
       renderEfficiencySparkline(
@@ -1013,18 +1024,18 @@
             row.scenarioVersion,
           )}</small></button>
         </th>
-        <td>${efficiencyCell(row, "cost_usd", formatCurrency)}</td>
-        <td>${efficiencyCell(row, "tokens", (value) =>
+        <td data-label="Cost">${efficiencyCell(row, "cost_usd", formatCurrency)}</td>
+        <td data-label="Tokens">${efficiencyCell(row, "tokens", (value) =>
           compactNumber(value, 0),
         )}</td>
-        <td>${efficiencyCell(row, "duration_seconds", formatDuration)}</td>
-        <td>${efficiencyCell(row, "function_calls", (value) =>
+        <td data-label="Duration">${efficiencyCell(row, "duration_seconds", formatDuration)}</td>
+        <td data-label="Calls">${efficiencyCell(row, "function_calls", (value) =>
           compactNumber(value, 1),
         )}</td>
-        <td>${efficiencyCell(row, "function_call_errors", (value) =>
+        <td data-label="Errors">${efficiencyCell(row, "function_call_errors", (value) =>
           compactNumber(value, 1),
         )}</td>
-        <td><span class="efficiency-trend trend-${trend.css}">${escapeHtml(
+        <td data-label="Trend"><span class="efficiency-trend trend-${trend.css}">${escapeHtml(
           trend.label,
         )}</span></td>
       `;
@@ -1710,17 +1721,6 @@
   }
 
   async function initialize() {
-    [
-      ".latest-evidence",
-      ".overview-comparison",
-      ".health-panel",
-      ".efficiency-overview",
-      ".capability-panel",
-      ".executions-panel",
-    ].forEach((selector) => {
-      const section = elements.content.querySelector(selector);
-      if (section) elements.content.append(section);
-    });
     elements.preview.hidden = !(history.preview || isLocal || isObserved);
     elements.preview.textContent = isLocal
       ? "Local data"

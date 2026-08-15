@@ -9,6 +9,10 @@ const index = fs.readFileSync(
   path.join(dashboardRoot, "src", "pages", "OverviewPage.tsx"),
   "utf8",
 );
+const sectionNav = fs.readFileSync(
+  path.join(dashboardRoot, "src", "components", "SectionNav.tsx"),
+  "utf8",
+);
 const execution = fs.readFileSync(
   path.join(dashboardRoot, "src", "pages", "ExecutionPage.tsx"),
   "utf8",
@@ -42,7 +46,7 @@ const publisher = fs.readFileSync(
   "utf8",
 );
 
-test("places latest health and comparison before deeper evidence surfaces", () => {
+test("organizes evidence into focused workspace views", () => {
   const latest = index.indexOf('className="panel latest-health"');
   const comparison = index.indexOf('className="panel overview-comparison"');
   const matrix = index.indexOf('className="panel health-panel"');
@@ -57,10 +61,16 @@ test("places latest health and comparison before deeper evidence surfaces", () =
   assert.ok(matrix >= 0);
   assert.ok(executions >= 0);
   assert.match(overview, /executionApi\.latestHealthModel\(latest\)/);
-  assert.match(
-    overview,
-    /"\.latest-evidence",[\s\S]*"\.overview-comparison",[\s\S]*"\.health-panel",[\s\S]*"\.efficiency-overview",[\s\S]*"\.capability-panel",[\s\S]*"\.executions-panel"/,
-  );
+  for (const view of ["overview", "scenarios", "capability", "executions"]) {
+    assert.match(sectionNav, new RegExp(`id: '${view}'`));
+  }
+  assert.match(index, /data-active-view=\{activeView\}/);
+  assert.match(index, /data-workspace-view="overview"/);
+  assert.match(index, /data-workspace-view="scenarios"/);
+  assert.match(index, /data-workspace-view="capability"/);
+  assert.match(index, /data-workspace-view="executions"/);
+  assert.match(index, /id="scenario-efficiency"/);
+  assert.doesNotMatch(overview, /elements\.content\.append\(section\)/);
   assert.match(overview, /No report denominator/);
 });
 

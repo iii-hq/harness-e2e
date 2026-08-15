@@ -1,10 +1,43 @@
+import { useEffect, useState } from 'react'
 import { LegacyLoadError } from '@/components/LegacyLoadError'
-import { SectionNav } from '@/components/SectionNav'
+import { SectionNav, type WorkspaceView } from '@/components/SectionNav'
 import { ThemeToggle } from '@/components/ThemeToggle'
 import { useLegacyPage } from '@/hooks/useLegacyPage'
 
+function initialWorkspaceView(): WorkspaceView {
+  const view = new URLSearchParams(window.location.search).get('view')
+  if (view === 'scenarios' || view === 'capability' || view === 'executions') {
+    return view
+  }
+  if (window.location.hash === '#scenarios') return 'scenarios'
+  if (window.location.hash === '#capability') return 'capability'
+  if (window.location.hash === '#executions') return 'executions'
+  return 'overview'
+}
+
 export function OverviewPage() {
   const error = useLegacyPage('overview')
+  const [activeView, setActiveView] =
+    useState<WorkspaceView>(initialWorkspaceView)
+
+  useEffect(() => {
+    const onPopState = () => setActiveView(initialWorkspaceView())
+    window.addEventListener('popstate', onPopState)
+    return () => window.removeEventListener('popstate', onPopState)
+  }, [])
+
+  const selectView = (view: WorkspaceView) => {
+    setActiveView(view)
+    const url = new URL(window.location.href)
+    if (view === 'overview') url.searchParams.delete('view')
+    else url.searchParams.set('view', view)
+    url.hash = ''
+    window.history.pushState(null, '', url)
+    document.querySelector('.section-nav')?.scrollIntoView({
+      block: 'start',
+      behavior: 'smooth',
+    })
+  }
 
   return (
     <>
@@ -64,10 +97,10 @@ export function OverviewPage() {
               <span className="live-dot" aria-hidden="true"></span>
               Harness E2E
             </div>
-            <h1 id="page-title">Evidence workspace</h1>
+            <h1 id="page-title">Harness evidence</h1>
             <p>
-              Current health, comparable changes, scenario evidence, and the
-              complete execution trail.
+              Know what passed, what changed, and why before trusting a
+              benchmark.
             </p>
           </div>
           <div className="sync-block">
@@ -78,7 +111,7 @@ export function OverviewPage() {
           </div>
         </section>
 
-        <SectionNav />
+        <SectionNav activeView={activeView} onViewChange={selectView} />
 
         <dialog id="local-runner-dialog" className="local-runner-dialog">
           <div className="local-runner-dialog-header">
@@ -365,17 +398,19 @@ export function OverviewPage() {
           </p>
         </section>
 
-        <div id="overview-content">
+        <div id="overview-content" data-active-view={activeView}>
           <section
             id="latest-evidence"
             className="latest-evidence"
+            data-workspace-view="overview"
+            hidden={activeView !== 'overview'}
             aria-labelledby="latest-health-heading"
           >
             <article className="panel latest-health">
               <div className="latest-health-heading">
                 <div>
-                  <div className="section-kicker">Latest evidence</div>
-                  <h2 id="latest-health-heading">Current execution health</h2>
+                  <div className="section-kicker">01 / Current signal</div>
+                  <h2 id="latest-health-heading">Latest execution</h2>
                 </div>
                 <span
                   id="latest-health-status"
@@ -489,17 +524,17 @@ export function OverviewPage() {
           <section
             id="comparison"
             className="panel overview-comparison"
+            data-workspace-view="overview"
+            hidden={activeView !== 'overview'}
             aria-labelledby="overview-comparison-heading"
           >
             <div className="panel-heading comparison-heading">
               <div>
-                <div className="section-kicker">Compare with baseline</div>
-                <h2 id="overview-comparison-heading">
-                  Compatible evidence first
-                </h2>
+                <div className="section-kicker">02 / Regression gate</div>
+                <h2 id="overview-comparison-heading">Baseline → candidate</h2>
                 <p className="trend-description">
-                  Regression deltas are shown only when stack mode, subject set,
-                  run count, scenarios, and behavioral contracts are compatible.
+                  Deltas unlock only when stack, subjects, runs, scenarios, and
+                  behavioral contracts match.
                 </p>
               </div>
               <span
@@ -558,18 +593,17 @@ export function OverviewPage() {
           <section
             id="capability"
             className="panel capability-panel"
+            data-workspace-view="capability"
+            hidden={activeView !== 'capability'}
             aria-labelledby="capability-heading"
           >
             <div className="panel-heading">
               <div>
-                <div className="section-kicker">Capability frontier</div>
-                <h2 id="capability-heading">
-                  Complexity supported by evidence
-                </h2>
+                <div className="section-kicker">Evidence frontier</div>
+                <h2 id="capability-heading">Proven complexity</h2>
                 <p className="trend-description">
-                  Rates remain independent. Confidence intervals and sample
-                  sizes stay visible; a reliable tier additionally requires
-                  explicit p95 cost and wall-time budgets.
+                  Confidence, sample depth, cost, and latency determine how far
+                  the Harness can be trusted.
                 </p>
               </div>
               <div className="capability-revision">
@@ -633,17 +667,17 @@ export function OverviewPage() {
           <section
             id="efficiency"
             className="panel efficiency-overview"
+            data-workspace-view="overview"
+            hidden={activeView !== 'overview'}
             aria-labelledby="efficiency-overview-heading"
           >
             <div className="panel-heading efficiency-heading">
               <div>
-                <div className="section-kicker">Primary view</div>
-                <h2 id="efficiency-overview-heading">Efficiency overview</h2>
+                <div className="section-kicker">03 / Comparable cohort</div>
+                <h2 id="efficiency-overview-heading">Cost and work</h2>
                 <p className="trend-description">
-                  Every figure below — value, delta, and trend — reads the
-                  comparable cohort: scenarios whose contract is unchanged and
-                  whose latest run passed. New, changed, and missing scenarios
-                  are counted in the guardrail and excluded here.
+                  Only passed scenarios with unchanged contracts enter this
+                  baseline. Drift remains visible in the guardrail.
                 </p>
               </div>
               <div className="efficiency-heading-meta">
@@ -751,7 +785,25 @@ export function OverviewPage() {
                 Waiting for comparable scenarios
               </span>
             </div>
+          </section>
 
+          <section
+            id="scenario-efficiency"
+            className="panel scenario-efficiency-panel"
+            data-workspace-view="scenarios"
+            hidden={activeView !== 'scenarios'}
+            aria-labelledby="scenario-efficiency-heading"
+          >
+            <div className="panel-heading">
+              <div>
+                <div className="section-kicker">Scenario economics</div>
+                <h2 id="scenario-efficiency-heading">Work by scenario</h2>
+                <p className="trend-description">
+                  Inspect current values, contract drift, and comparable
+                  baselines for each scenario.
+                </p>
+              </div>
+            </div>
             <div className="table-wrap efficiency-table-wrap">
               <table className="efficiency-table">
                 <thead>
@@ -771,16 +823,18 @@ export function OverviewPage() {
           </section>
 
           <section
+            id="scenarios"
             className="panel health-panel"
+            data-workspace-view="scenarios"
+            hidden={activeView !== 'scenarios'}
             aria-labelledby="health-heading"
           >
             <div className="panel-heading">
               <div>
-                <div className="section-kicker">Execution by execution</div>
-                <h2 id="health-heading">Scenario health matrix</h2>
+                <div className="section-kicker">Scenario map</div>
+                <h2 id="health-heading">Outcome matrix</h2>
                 <p className="trend-description">
-                  Columns are workflow attempts. Select a cell to inspect that
-                  execution and scenario.
+                  Read outcomes across attempts; select any cell for evidence.
                 </p>
               </div>
               <fieldset className="range-toggle">
@@ -838,12 +892,14 @@ export function OverviewPage() {
           <section
             id="executions"
             className="panel executions-panel"
+            data-workspace-view="executions"
+            hidden={activeView !== 'executions'}
             aria-labelledby="executions-heading"
           >
             <div className="panel-heading executions-heading">
               <div>
-                <div className="section-kicker">Audit trail</div>
-                <h2 id="executions-heading">All executions</h2>
+                <div className="section-kicker">Run ledger</div>
+                <h2 id="executions-heading">Execution history</h2>
               </div>
               <span id="execution-count" className="coverage-note">
                 0 executions
