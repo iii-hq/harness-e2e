@@ -631,7 +631,7 @@ impl ControlPlane {
         } else {
             unique_scenarios(&request.scenarios)
         };
-        let judge = judge_config(&request, &scenarios);
+        let judge = Some(judge_config(&request));
         let outcome = run_suite(SuiteRunConfig {
             url: self.inner.url.clone(),
             subject: SubjectConfig {
@@ -1196,14 +1196,8 @@ fn lane_budget(lane: &str) -> LaneBudget {
     }
 }
 
-fn judge_config(request: &RunRequest, scenarios: &[ScenarioId]) -> Option<JudgeConfig> {
-    let required = scenarios
-        .iter()
-        .any(|scenario| scenario.spec("judge-check").needs_judge());
-    if !required && request.judge_model.is_none() && request.judge_provider.is_none() {
-        return None;
-    }
-    Some(JudgeConfig {
+fn judge_config(request: &RunRequest) -> JudgeConfig {
+    JudgeConfig {
         model: request
             .judge_model
             .clone()
@@ -1212,7 +1206,7 @@ fn judge_config(request: &RunRequest, scenarios: &[ScenarioId]) -> Option<JudgeC
             .judge_provider
             .clone()
             .unwrap_or_else(|| request.provider.clone()),
-    })
+    }
 }
 
 fn unique_scenarios(scenarios: &[ScenarioId]) -> Vec<ScenarioId> {

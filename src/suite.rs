@@ -8,9 +8,12 @@ use serde_json::json;
 use tokio::sync::{mpsc, oneshot, watch};
 use uuid::Uuid;
 
+use crate::artifact;
 use crate::assessment::{
-    AnalyzerIdentity, AnalyzerUsage, AssessmentOutcome, AssessmentResult, AssessmentScore,
-    AssessmentTarget, AssessmentTargetKind,
+    AiAssessmentAvailability, AiFinalAssessment, AnalyzerIdentity, AnalyzerUsage,
+    AssessmentOutcome, AssessmentResult, AssessmentScore, AssessmentTarget, AssessmentTargetKind,
+    EvidenceReference, FinalAssessmentCleanup, FinalAssessmentExcerpt, FinalAssessmentInput,
+    FinalAssessmentMetric, FinalAssessmentSubject, SystemStatus,
 };
 use crate::asset::{self, AssetCaptureLimits};
 use crate::context::E2eContext;
@@ -153,11 +156,18 @@ pub async fn run_suite(config: SuiteRunConfig) -> Result<SuiteRunOutcome> {
         .await
         .context("resolve subject model")?;
     let judge_model = match config.judge.as_ref() {
-        Some(judge) => Some(
-            resolve_model(&context, &judge.model, &judge.provider)
-                .await
-                .context("resolve judge model")?,
-        ),
+        Some(judge) => match resolve_model(&context, &judge.model, &judge.provider).await {
+            Ok(model) => Some(model),
+            Err(error) => {
+                tracing::warn!(
+                    provider = judge.provider,
+                    model = judge.model,
+                    error = %format!("{error:#}"),
+                    "configured analyzer is unavailable; preserving execution and recording advisory unavailability"
+                );
+                None
+            }
+        },
         None => None,
     };
     emit_phase(config.control.as_ref(), SuitePhase::Materializing).await?;
@@ -213,7 +223,6 @@ pub async fn run_suite(config: SuiteRunConfig) -> Result<SuiteRunOutcome> {
         }
     }
 
-    context.shutdown().await;
     let completed_at = Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true);
     let execution = ExecutionIdentity {
         execution_id,
@@ -249,12 +258,446 @@ pub async fn run_suite(config: SuiteRunConfig) -> Result<SuiteRunOutcome> {
     );
     emit_phase(config.control.as_ref(), SuitePhase::Finalizing).await?;
     ensure_not_cancelled(config.control.as_ref())?;
+    // Persist a complete objective result and immutable evidence before invoking
+    // the complementary analyzer. A provider failure can therefore never erase
+    // the completed execution.
+    report.write_to(&config.output, &manifest)?;
+    evaluate_final_assessments(&context, config.judge.as_ref(), &config.output, &mut report)
+        .await?;
     let report_path = report.write_to(&config.output, &manifest)?;
+    context.shutdown().await;
     Ok(SuiteRunOutcome {
         report,
         manifest,
         report_path,
     })
+}
+
+const MAX_FINAL_ASSESSMENT_ITEMS: usize = 12;
+const MAX_FINAL_ASSESSMENT_TEXT_CHARS: usize = 500;
+const MAX_FINAL_ASSESSMENT_EVIDENCE_ITEMS: usize = 4;
+const MAX_FINAL_ASSESSMENT_VALUE_ITEMS: usize = 16;
+const MAX_FINAL_ASSESSMENT_VALUE_DEPTH: usize = 4;
+const MAX_FINAL_ASSESSMENT_VALUE_BYTES: usize = 4 * 1024;
+
+async fn evaluate_final_assessments(
+    context: &E2eContext,
+    judge_config: Option<&JudgeConfig>,
+    output: &std::path::Path,
+    report: &mut E2eReport,
+) -> Result<()> {
+    for scenario_index in 0..report.scenarios.len() {
+        for run_index in 0..report.scenarios[scenario_index].runs.len() {
+            let (run_id, attempt_id, input) = {
+                let scenario = &report.scenarios[scenario_index];
+                let run = &scenario.runs[run_index];
+                let contract = report
+                    .assessment_contract
+                    .runs
+                    .iter()
+                    .find(|candidate| {
+                        candidate.run_id == run.run_id && candidate.attempt_id == run.attempt_id
+                    })
+                    .with_context(|| {
+                        format!(
+                            "missing preliminary assessment contract for '{}:{}'",
+                            run.run_id, run.attempt_id
+                        )
+                    })?;
+                (
+                    run.run_id.clone(),
+                    run.attempt_id.clone(),
+                    final_assessment_input(&report.execution.execution_id, scenario, run, contract),
+                )
+            };
+            if let Err(error) = input.validate() {
+                attach_final_assessment(
+                    report,
+                    scenario_index,
+                    run_index,
+                    &run_id,
+                    &attempt_id,
+                    None,
+                    0,
+                    None,
+                    judge_config.is_some(),
+                    failed_unprepared_final_assessment(format!(
+                        "final_assessment_input_invalid: {error:#}"
+                    )),
+                )?;
+                continue;
+            }
+            let input_reference = match artifact::write_json(
+                output,
+                &PathBuf::from("evidence")
+                    .join(&run_id)
+                    .join(&attempt_id)
+                    .join("final-assessment-input.json"),
+                "final-assessment-input",
+                "final_assessment_input",
+                &input,
+            ) {
+                Ok(reference) => reference,
+                Err(error) => {
+                    attach_final_assessment(
+                        report,
+                        scenario_index,
+                        run_index,
+                        &run_id,
+                        &attempt_id,
+                        None,
+                        0,
+                        None,
+                        judge_config.is_some(),
+                        failed_unprepared_final_assessment(format!(
+                            "final_assessment_input_persistence_failed: {error:#}"
+                        )),
+                    )?;
+                    continue;
+                }
+            };
+
+            let (assessment, attempts, usage) = match judge_config {
+                Some(config) => {
+                    let outcome = judge::evaluate_final_assessment(context, config, &input).await?;
+                    (outcome.assessment, outcome.attempts, outcome.usage)
+                }
+                None => (unavailable_final_assessment(&input)?, 0, None),
+            };
+
+            attach_final_assessment(
+                report,
+                scenario_index,
+                run_index,
+                &run_id,
+                &attempt_id,
+                Some(input_reference),
+                attempts,
+                usage.as_ref(),
+                judge_config.is_some(),
+                assessment,
+            )?;
+        }
+        report.scenarios[scenario_index].refresh_aggregate()?;
+    }
+    report.passed =
+        !report.scenarios.is_empty() && report.scenarios.iter().all(|scenario| scenario.passed);
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+fn attach_final_assessment(
+    report: &mut E2eReport,
+    scenario_index: usize,
+    run_index: usize,
+    run_id: &str,
+    attempt_id: &str,
+    input_reference: Option<crate::artifact::ArtifactReference>,
+    attempts: u8,
+    usage: Option<&crate::report::ModelUsageReport>,
+    judge_expected: bool,
+    assessment: AiFinalAssessment,
+) -> Result<()> {
+    {
+        let run = &mut report.scenarios[scenario_index].runs[run_index];
+        run.final_assessment_input = input_reference;
+        accumulate_judge_telemetry(run, attempts, usage);
+        run.update_cost(judge_expected);
+    }
+    report
+        .assessment_contract
+        .set_final_assessment(run_id, attempt_id, assessment)
+}
+
+fn failed_unprepared_final_assessment(reason: String) -> AiFinalAssessment {
+    AiFinalAssessment {
+        availability: AiAssessmentAvailability::Failed,
+        result: None,
+        analyzer: None,
+        analyzer_usage: None,
+        reason: Some(reason),
+    }
+}
+
+fn unavailable_final_assessment(input: &FinalAssessmentInput) -> Result<AiFinalAssessment> {
+    let assessment = AiFinalAssessment {
+        availability: AiAssessmentAvailability::Unavailable,
+        result: None,
+        analyzer: Some(AnalyzerIdentity {
+            analyzer: "final-assessment".into(),
+            provider: None,
+            model: None,
+            input_sha256: input.sha256()?,
+        }),
+        analyzer_usage: None,
+        reason: Some(
+            "final_assessment_unavailable: no analyzer provider and model were configured".into(),
+        ),
+    };
+    assessment.validate()?;
+    Ok(assessment)
+}
+
+fn final_assessment_input(
+    execution_id: &str,
+    scenario: &E2eScenarioReport,
+    run: &E2eRunReport,
+    contract: &crate::assessment::RunAssessmentContract,
+) -> FinalAssessmentInput {
+    let mut limitations = vec![
+        "Raw transcript content is excluded; only immutable transcript evidence identity is supplied."
+            .into(),
+        "Generated asset content is excluded; only validated assessment summaries and immutable evidence identities are supplied."
+            .into(),
+    ];
+    let mut assessments = contract
+        .assessments
+        .iter()
+        .take(MAX_FINAL_ASSESSMENT_ITEMS)
+        .cloned()
+        .map(|mut assessment| {
+            assessment.summary = bounded_text(&assessment.summary);
+            assessment
+                .evidence
+                .truncate(MAX_FINAL_ASSESSMENT_EVIDENCE_ITEMS);
+            assessment
+        })
+        .collect::<Vec<_>>();
+    if contract.assessments.len() > assessments.len() {
+        limitations.push(format!(
+            "Only the first {} per-requirement assessments were included.",
+            assessments.len()
+        ));
+    }
+    let mut assets = contract
+        .assets
+        .iter()
+        .take(MAX_FINAL_ASSESSMENT_ITEMS)
+        .cloned()
+        .map(|mut asset| {
+            asset.validation.summary = bounded_text(&asset.validation.summary);
+            asset
+                .validation
+                .evidence
+                .truncate(MAX_FINAL_ASSESSMENT_EVIDENCE_ITEMS);
+            asset.qualitative_assessment.summary =
+                bounded_text(&asset.qualitative_assessment.summary);
+            asset
+                .qualitative_assessment
+                .evidence
+                .truncate(MAX_FINAL_ASSESSMENT_EVIDENCE_ITEMS);
+            asset
+        })
+        .collect::<Vec<_>>();
+    if contract.assets.len() > assets.len() {
+        limitations.push(format!(
+            "Only the first {} asset assessments were included.",
+            assets.len()
+        ));
+    }
+    let dimensions = run
+        .dimensions
+        .iter()
+        .take(MAX_FINAL_ASSESSMENT_ITEMS)
+        .cloned()
+        .map(|mut dimension| {
+            dimension.signals = bounded_json(&dimension.signals, 0);
+            dimension
+        })
+        .collect();
+    let failures = run
+        .failures
+        .iter()
+        .take(MAX_FINAL_ASSESSMENT_ITEMS)
+        .cloned()
+        .map(|mut failure| {
+            failure.message = bounded_text(&failure.message);
+            failure
+        })
+        .collect::<Vec<_>>();
+    if run.failures.len() > failures.len() {
+        limitations.push(format!(
+            "Only the first {} execution failures were included.",
+            failures.len()
+        ));
+    }
+    let cleanup_failures = failures
+        .iter()
+        .filter(|failure| failure.phase == FailurePhase::Cleanup)
+        .map(|failure| failure.message.clone())
+        .collect::<Vec<_>>();
+    let excerpts = run
+        .evidence
+        .iter()
+        .filter(|reference| reference.kind == "transcript")
+        .take(2)
+        .map(|reference| FinalAssessmentExcerpt {
+            kind: "transcript".into(),
+            summary: "A sanitized transcript is available as immutable evidence; its raw content was not sent to the final analyzer."
+                .into(),
+            evidence: EvidenceReference::from(reference),
+        })
+        .collect();
+
+    FinalAssessmentInput {
+        subject: FinalAssessmentSubject {
+            execution_id: execution_id.to_string(),
+            run_id: run.run_id.clone(),
+            attempt_id: run.attempt_id.clone(),
+            scenario_id: scenario.scenario_id.clone(),
+            scenario_version: scenario.scenario_version,
+            case_id: scenario.case_id.clone(),
+            system_status: SystemStatus::from(run.status),
+        },
+        assessments: std::mem::take(&mut assessments),
+        assets: std::mem::take(&mut assets),
+        dimensions,
+        failures,
+        metrics: final_assessment_metrics(scenario, run),
+        cleanup: FinalAssessmentCleanup {
+            succeeded: cleanup_failures.is_empty(),
+            failures: cleanup_failures,
+        },
+        excerpts,
+        limitations,
+    }
+}
+
+fn final_assessment_metrics(
+    scenario: &E2eScenarioReport,
+    run: &E2eRunReport,
+) -> Vec<FinalAssessmentMetric> {
+    let mut metrics = Vec::new();
+    push_final_metric(
+        &mut metrics,
+        "wall_time",
+        Some(run.wall_time_ms as f64),
+        "ms",
+    );
+    push_final_metric(
+        &mut metrics,
+        "objective_score",
+        run.score.map(f64::from),
+        "points",
+    );
+    push_final_metric(&mut metrics, "subject_cost", run.cost.subject_usd, "usd");
+    push_final_metric(&mut metrics, "judge_cost", run.cost.judge_usd, "usd");
+    if let Some(efficiency) = &run.efficiency {
+        push_final_metric(
+            &mut metrics,
+            "function_calls",
+            efficiency.function_calls.map(|value| value as f64),
+            "count",
+        );
+        push_final_metric(
+            &mut metrics,
+            "function_call_errors",
+            efficiency.function_call_errors.map(|value| value as f64),
+            "count",
+        );
+        push_final_metric(
+            &mut metrics,
+            "validation_retries",
+            efficiency.validation_retries.map(|value| value as f64),
+            "count",
+        );
+        push_final_metric(
+            &mut metrics,
+            "work_amplification",
+            efficiency.work_amplification,
+            "ratio",
+        );
+        push_final_metric(
+            &mut metrics,
+            "technical_attempts",
+            Some(f64::from(efficiency.technical_attempts)),
+            "count",
+        );
+    }
+    let robustness = &scenario.aggregate.robustness;
+    push_final_metric(
+        &mut metrics,
+        "robustness_sample_size",
+        Some(f64::from(robustness.sample_size)),
+        "count",
+    );
+    push_final_metric(
+        &mut metrics,
+        "technical_failure_rate",
+        robustness.technical_failure_rate,
+        "ratio",
+    );
+    push_final_metric(&mut metrics, "flaky_rate", robustness.flaky_rate, "ratio");
+    metrics
+}
+
+fn push_final_metric(
+    metrics: &mut Vec<FinalAssessmentMetric>,
+    id: &str,
+    value: Option<f64>,
+    unit: &str,
+) {
+    if let Some(value) = value.filter(|value| value.is_finite()) {
+        metrics.push(FinalAssessmentMetric {
+            id: id.into(),
+            value,
+            unit: unit.into(),
+        });
+    }
+}
+
+fn bounded_text(value: &str) -> String {
+    let mut bounded = value
+        .chars()
+        .take(MAX_FINAL_ASSESSMENT_TEXT_CHARS)
+        .collect::<String>();
+    if value.chars().count() > MAX_FINAL_ASSESSMENT_TEXT_CHARS {
+        bounded.push('…');
+    }
+    bounded
+}
+
+fn bounded_json(value: &serde_json::Value, depth: usize) -> serde_json::Value {
+    let bounded = bounded_json_inner(value, depth);
+    if serde_json::to_vec(&bounded)
+        .is_ok_and(|encoded| encoded.len() <= MAX_FINAL_ASSESSMENT_VALUE_BYTES)
+    {
+        bounded
+    } else {
+        serde_json::json!({
+            "omitted": true,
+            "reason": "bounded final assessment signal exceeded 4096 bytes",
+            "sha256": artifact::sha256_value(value).ok(),
+        })
+    }
+}
+
+fn bounded_json_inner(value: &serde_json::Value, depth: usize) -> serde_json::Value {
+    if depth >= MAX_FINAL_ASSESSMENT_VALUE_DEPTH {
+        return serde_json::Value::String("[omitted at depth limit]".into());
+    }
+    match value {
+        serde_json::Value::String(value) => serde_json::Value::String(bounded_text(value)),
+        serde_json::Value::Array(values) => serde_json::Value::Array(
+            values
+                .iter()
+                .take(MAX_FINAL_ASSESSMENT_VALUE_ITEMS)
+                .map(|value| bounded_json_inner(value, depth + 1))
+                .collect(),
+        ),
+        serde_json::Value::Object(values) => {
+            let mut entries = values.iter().collect::<Vec<_>>();
+            entries.sort_by(|left, right| left.0.cmp(right.0));
+            serde_json::Value::Object(
+                entries
+                    .into_iter()
+                    .take(MAX_FINAL_ASSESSMENT_VALUE_ITEMS)
+                    .map(|(key, value)| (key.clone(), bounded_json_inner(value, depth + 1)))
+                    .collect(),
+            )
+        }
+        value => value.clone(),
+    }
 }
 
 async fn preflight_case(
@@ -2030,6 +2473,70 @@ mod tests {
             "scenario exceeded its deadline",
         );
         assert!(!is_retryable_technical_failure(&budget));
+    }
+
+    #[test]
+    fn final_input_excludes_raw_content_and_keeps_stable_evidence_identity() {
+        let mut run = test_run_report();
+        run.status = RunStatus::Passed;
+        run.prompt = "secret prompt content that must not reach the analyzer".into();
+        run.transcript = Some(serde_json::json!({
+            "messages": ["secret transcript content that must not reach the analyzer"]
+        }));
+        run.evidence.push(crate::artifact::ArtifactReference {
+            id: "transcript".into(),
+            kind: "transcript".into(),
+            path: "evidence/run/attempt/transcript.json".into(),
+            sha256: format!("sha256:{}", "a".repeat(64)),
+            size_bytes: 42,
+            media_type: "application/json".into(),
+        });
+        run.dimensions = vec![crate::report::DimensionReport {
+            dimension: EvaluationDimension::Efficiency,
+            passed: None,
+            signals: serde_json::json!({
+                "deep": {"one": {"two": {"three": "deep content must be omitted"}}}
+            }),
+        }];
+        let scenario = E2eScenarioReport::aggregate(
+            "direct_answer",
+            2,
+            ExecutionPolicy {
+                max_turns: 1,
+                max_output_tokens: Some(100),
+                max_total_tokens: 100,
+                stuck_timeout_seconds: 1,
+            },
+            vec![run],
+        );
+        let run = &scenario.runs[0];
+        let contract = crate::assessment::RunAssessmentContract {
+            run_id: run.run_id.clone(),
+            attempt_id: run.attempt_id.clone(),
+            system_status: SystemStatus::Passed,
+            assessments: Vec::new(),
+            assets: Vec::new(),
+            ai_final_assessment: AiFinalAssessment::not_evaluated("preliminary persistence"),
+            effective_status: crate::assessment::EffectiveStatus::Passed,
+        };
+
+        let input = final_assessment_input("execution-1", &scenario, run, &contract);
+        input.validate().unwrap();
+        let encoded = serde_json::to_string(&input).unwrap();
+        assert!(!encoded.contains("secret prompt content"));
+        assert!(!encoded.contains("secret transcript content"));
+        assert!(!encoded.contains("deep content must be omitted"));
+        assert_eq!(input.excerpts[0].evidence.artifact_id, "transcript");
+
+        let unavailable = unavailable_final_assessment(&input).unwrap();
+        assert_eq!(
+            unavailable.availability,
+            AiAssessmentAvailability::Unavailable
+        );
+        assert_eq!(
+            unavailable.analyzer.unwrap().input_sha256,
+            input.sha256().unwrap()
+        );
     }
 
     fn test_run_report() -> E2eRunReport {

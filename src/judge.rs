@@ -8,8 +8,9 @@ use serde_json::{json, Value};
 
 use crate::artifact;
 use crate::assessment::{
-    AnalyzerIdentity, AnalyzerUsage, AssessmentOutcome, AssessmentResult, AssessmentScore,
-    AssetAssessmentResult,
+    AiAssessmentAvailability, AiFinalAssessment, AnalyzerIdentity, AnalyzerUsage,
+    AssessmentOutcome, AssessmentResult, AssessmentScore, AssetAssessmentResult,
+    FinalAssessmentInput, FinalAssessmentResult,
 };
 use crate::context::E2eContext;
 use crate::report::{DeliverableReport, ModelUsageReport};
@@ -23,6 +24,13 @@ const ASSET_SYSTEM_PROMPT: &str = "You are an impartial generated-asset quality 
 Assess only the bounded, sanitized previews and immutable evidence identities supplied. \
 Do not infer content outside that evidence. Return exactly one JSON object, without Markdown \
 or explanatory text.";
+const FINAL_ASSESSMENT_SYSTEM_PROMPT: &str =
+    "You are an impartial execution-level quality analyst. \
+Assess only the supplied sanitized, bounded facts and immutable evidence identities. \
+The system_status is authoritative: your advisory conclusion must never hide, replace, or promote \
+an objective, technical, infrastructure, or resource failure. Keep factual observations in facts; \
+keep interpretations in strengths and concerns; keep actions in recommendation; explicitly state \
+evidence limitations. Return exactly one JSON object, without Markdown or explanatory text.";
 pub const JUDGE_PROTOCOL: &str = "assessment-json";
 const MAX_JUDGE_ATTEMPTS: u8 = 3;
 
@@ -100,6 +108,12 @@ pub enum JudgeEvaluation {
 
 pub struct AssetJudgeOutcome {
     pub results: Vec<AssessmentResult>,
+    pub attempts: u8,
+    pub usage: Option<ModelUsageReport>,
+}
+
+pub struct FinalJudgeOutcome {
+    pub assessment: AiFinalAssessment,
     pub attempts: u8,
     pub usage: Option<ModelUsageReport>,
 }
@@ -427,6 +441,125 @@ you inspected. Use this object shape and replace only scores, confidence, and su
     unreachable!("asset judge attempt loop always returns")
 }
 
+pub async fn evaluate_final_assessment(
+    context: &E2eContext,
+    config: &JudgeConfig,
+    input: &FinalAssessmentInput,
+) -> Result<FinalJudgeOutcome> {
+    let input_sha256 = input.sha256()?;
+    let analyzer = analyzer_identity("final-assessment", config, input_sha256);
+    let mut seen_evidence = HashSet::new();
+    let evidence = input
+        .evidence_references()
+        .into_iter()
+        .filter(|reference| seen_evidence.insert((*reference).clone()))
+        .cloned()
+        .collect::<Vec<_>>();
+    let response_template = json!({
+        "verdict": "pass_with_concerns",
+        "quality_score": 0,
+        "confidence": 0.0,
+        "summary": "concise overall advisory conclusion",
+        "facts": ["objective observation copied from the supplied input"],
+        "strengths": ["evidence-grounded positive interpretation"],
+        "concerns": ["evidence-grounded risk or quality concern"],
+        "recommendation": "one concrete next action",
+        "limitations": ["what the bounded evidence cannot establish"],
+        "evidence": evidence,
+    });
+    let prompt = format!(
+        "Assess this completed execution:\n{}\n\n\
+Your response must satisfy this JSON Schema:\n{}\n\n\
+Use only pass, pass_with_concerns, fail, or inconclusive for verdict. quality_score must be an \
+integer from 0 through 100 and confidence a number from 0 through 1. Include at least one fact. \
+Every evidence entry must exactly copy an immutable identity from the supplied input; do not \
+invent or alter artifact ids, hashes, or locators. If evidence identities are available, cite at \
+least one. Use this exact object shape and replace only the example conclusions:\n{}",
+        serde_json::to_string(input).context("serialize final assessment input")?,
+        serde_json::to_string(&final_assessment_response_schema())
+            .context("serialize final assessment response schema")?,
+        serde_json::to_string(&response_template)
+            .context("serialize final assessment response template")?,
+    );
+    let mut attempt_prompt = prompt.clone();
+    let mut attempt_usage = Vec::new();
+    let started = Instant::now();
+
+    for attempt in 1..=MAX_JUDGE_ATTEMPTS {
+        let response = match invoke(
+            context,
+            config,
+            FINAL_ASSESSMENT_SYSTEM_PROMPT,
+            &attempt_prompt,
+            8_192,
+        )
+        .await
+        {
+            Ok(response) => response,
+            Err(error) => {
+                let latency_ms = elapsed_ms(started);
+                let usage = aggregate_usage(&attempt_usage);
+                let kind = classify_invocation_failure(&error);
+                return Ok(FinalJudgeOutcome {
+                    assessment: failed_final_assessment(
+                        kind,
+                        format!("invoke final assessment attempt {attempt}: {error:#}"),
+                        analyzer,
+                        analyzer_usage(usage.as_ref(), latency_ms),
+                    ),
+                    attempts: attempt,
+                    usage,
+                });
+            }
+        };
+        attempt_usage.push(response_usage(&response));
+        let response_text = assistant_text(&response);
+        match parse_final_assessment_response(&response_text)
+            .and_then(|result| validate_final_assessment_response(input, result))
+        {
+            Ok(result) => {
+                let latency_ms = elapsed_ms(started);
+                let usage = aggregate_usage(&attempt_usage);
+                let assessment = AiFinalAssessment {
+                    availability: AiAssessmentAvailability::Available,
+                    result: Some(result),
+                    analyzer: Some(analyzer),
+                    analyzer_usage: Some(analyzer_usage(usage.as_ref(), latency_ms)),
+                    reason: None,
+                };
+                assessment.validate()?;
+                return Ok(FinalJudgeOutcome {
+                    assessment,
+                    attempts: attempt,
+                    usage,
+                });
+            }
+            Err(error) if attempt < MAX_JUDGE_ATTEMPTS => {
+                attempt_prompt = repair_prompt(&prompt, &error, &response_text, attempt);
+            }
+            Err(error) => {
+                let latency_ms = elapsed_ms(started);
+                let usage = aggregate_usage(&attempt_usage);
+                return Ok(FinalJudgeOutcome {
+                    assessment: failed_final_assessment(
+                        JudgeFailureKind::MalformedOutput,
+                        format!(
+                            "invalid final assessment after {attempt} attempts: {error:#}; response: {}",
+                            response_excerpt(&response_text)
+                        ),
+                        analyzer,
+                        analyzer_usage(usage.as_ref(), latency_ms),
+                    ),
+                    attempts: attempt,
+                    usage,
+                });
+            }
+        }
+    }
+
+    unreachable!("final assessment attempt loop always returns")
+}
+
 async fn invoke(
     context: &E2eContext,
     config: &JudgeConfig,
@@ -543,6 +676,68 @@ fn parse_asset_response(text: &str) -> Result<AssetJudgeResponse> {
         .filter(|end| *end >= start)
         .ok_or_else(|| anyhow!("asset judge response contains no complete JSON object"))?;
     serde_json::from_str(&text[start..=end]).context("asset judge returned invalid JSON")
+}
+
+fn parse_final_assessment_response(text: &str) -> Result<FinalAssessmentResult> {
+    let start = text
+        .find('{')
+        .ok_or_else(|| anyhow!("final assessment response contains no JSON object"))?;
+    let end = text
+        .rfind('}')
+        .filter(|end| *end >= start)
+        .ok_or_else(|| anyhow!("final assessment response contains no complete JSON object"))?;
+    serde_json::from_str(&text[start..=end]).context("final assessment returned invalid JSON")
+}
+
+fn validate_final_assessment_response(
+    input: &FinalAssessmentInput,
+    result: FinalAssessmentResult,
+) -> Result<FinalAssessmentResult> {
+    result.validate()?;
+    let allowed = input
+        .evidence_references()
+        .into_iter()
+        .cloned()
+        .collect::<HashSet<_>>();
+    let observed = result.evidence.iter().cloned().collect::<HashSet<_>>();
+    if observed.len() != result.evidence.len() {
+        bail!("final assessment repeated an evidence identity");
+    }
+    if !allowed.is_empty() && observed.is_empty() {
+        bail!("final assessment omitted all available evidence identities");
+    }
+    if let Some(reference) = observed
+        .iter()
+        .find(|reference| !allowed.contains(*reference))
+    {
+        bail!(
+            "final assessment cited unknown evidence '{}:{}'",
+            reference.artifact_id,
+            reference.artifact_sha256
+        );
+    }
+    Ok(result)
+}
+
+fn failed_final_assessment(
+    kind: JudgeFailureKind,
+    message: String,
+    analyzer: AnalyzerIdentity,
+    analyzer_usage: AnalyzerUsage,
+) -> AiFinalAssessment {
+    AiFinalAssessment {
+        availability: match kind {
+            JudgeFailureKind::Unavailable => AiAssessmentAvailability::Unavailable,
+            JudgeFailureKind::MalformedOutput => AiAssessmentAvailability::Malformed,
+            JudgeFailureKind::Timeout | JudgeFailureKind::Infrastructure => {
+                AiAssessmentAvailability::Failed
+            }
+        },
+        result: None,
+        analyzer: Some(analyzer),
+        analyzer_usage: Some(analyzer_usage),
+        reason: Some(format!("{}: {message}", kind.code())),
+    }
 }
 
 fn validate_asset_response(
@@ -793,6 +988,65 @@ fn asset_response_schema() -> Value {
     })
 }
 
+fn final_assessment_response_schema() -> Value {
+    json!({
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+            "verdict", "quality_score", "confidence", "summary", "facts", "strengths",
+            "concerns", "recommendation", "limitations", "evidence"
+        ],
+        "properties": {
+            "verdict": {
+                "type": "string",
+                "enum": ["pass", "pass_with_concerns", "fail", "inconclusive"]
+            },
+            "quality_score": { "type": "integer", "minimum": 0, "maximum": 100 },
+            "confidence": { "type": "number", "minimum": 0, "maximum": 1 },
+            "summary": { "type": "string", "minLength": 1, "maxLength": 1500 },
+            "facts": {
+                "type": "array",
+                "minItems": 1,
+                "maxItems": 12,
+                "items": { "type": "string", "minLength": 1, "maxLength": 1000 }
+            },
+            "strengths": {
+                "type": "array",
+                "maxItems": 8,
+                "items": { "type": "string", "minLength": 1, "maxLength": 1000 }
+            },
+            "concerns": {
+                "type": "array",
+                "maxItems": 8,
+                "items": { "type": "string", "minLength": 1, "maxLength": 1000 }
+            },
+            "recommendation": { "type": "string", "minLength": 1, "maxLength": 1500 },
+            "limitations": {
+                "type": "array",
+                "maxItems": 8,
+                "items": { "type": "string", "minLength": 1, "maxLength": 1000 }
+            },
+            "evidence": {
+                "type": "array",
+                "maxItems": 32,
+                "items": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": ["artifact_id", "artifact_sha256"],
+                    "properties": {
+                        "artifact_id": { "type": "string", "minLength": 1 },
+                        "artifact_sha256": {
+                            "type": "string",
+                            "pattern": "^sha256:[0-9a-f]{64}$"
+                        },
+                        "locator": { "type": "string", "minLength": 1 }
+                    }
+                }
+            }
+        }
+    })
+}
+
 fn analyzer_identity(
     analyzer: &str,
     config: &JudgeConfig,
@@ -1004,6 +1258,106 @@ mod tests {
         assert!(results[0].summary.starts_with("judge_malformed_output:"));
         assert_eq!(results[0].evidence, asset.validation.evidence);
         results[0].validate().unwrap();
+    }
+
+    fn final_input() -> FinalAssessmentInput {
+        let evidence = crate::assessment::EvidenceReference {
+            artifact_id: "transcript".into(),
+            artifact_sha256: format!("sha256:{}", "e".repeat(64)),
+            locator: None,
+        };
+        FinalAssessmentInput {
+            subject: crate::assessment::FinalAssessmentSubject {
+                execution_id: "execution-1".into(),
+                run_id: "run-1".into(),
+                attempt_id: "attempt-1".into(),
+                scenario_id: "direct_answer".into(),
+                scenario_version: 2,
+                case_id: "case-1".into(),
+                system_status: crate::assessment::SystemStatus::Passed,
+            },
+            assessments: Vec::new(),
+            assets: Vec::new(),
+            dimensions: Vec::new(),
+            failures: Vec::new(),
+            metrics: vec![crate::assessment::FinalAssessmentMetric {
+                id: "objective_score".into(),
+                value: 100.0,
+                unit: "points".into(),
+            }],
+            cleanup: crate::assessment::FinalAssessmentCleanup {
+                succeeded: true,
+                failures: Vec::new(),
+            },
+            excerpts: vec![crate::assessment::FinalAssessmentExcerpt {
+                kind: "transcript".into(),
+                summary: "Sanitized transcript identity only.".into(),
+                evidence,
+            }],
+            limitations: vec!["Raw transcript content was excluded.".into()],
+        }
+    }
+
+    fn final_result(evidence: crate::assessment::EvidenceReference) -> FinalAssessmentResult {
+        FinalAssessmentResult {
+            verdict: crate::assessment::AiVerdict::Pass,
+            quality_score: 94,
+            confidence: 0.91,
+            summary: "The objective execution passed with strong evidence.".into(),
+            facts: vec!["The persisted system status is passed.".into()],
+            strengths: vec!["The deterministic result is complete.".into()],
+            concerns: Vec::new(),
+            recommendation: "Keep the current hard gates.".into(),
+            limitations: vec!["Raw transcript content was not analyzed.".into()],
+            evidence: vec![evidence],
+        }
+    }
+
+    #[test]
+    fn final_assessment_accepts_only_exact_persisted_evidence() {
+        let input = final_input();
+        input.validate().unwrap();
+        let evidence = input.excerpts[0].evidence.clone();
+        let validated =
+            validate_final_assessment_response(&input, final_result(evidence.clone())).unwrap();
+        assert_eq!(validated.evidence, [evidence]);
+
+        let mut unknown = input.excerpts[0].evidence.clone();
+        unknown.artifact_sha256 = format!("sha256:{}", "f".repeat(64));
+        assert!(validate_final_assessment_response(&input, final_result(unknown)).is_err());
+    }
+
+    #[test]
+    fn final_assessment_failures_have_explicit_availability() {
+        for (kind, expected) in [
+            (
+                JudgeFailureKind::Unavailable,
+                AiAssessmentAvailability::Unavailable,
+            ),
+            (
+                JudgeFailureKind::MalformedOutput,
+                AiAssessmentAvailability::Malformed,
+            ),
+            (JudgeFailureKind::Timeout, AiAssessmentAvailability::Failed),
+            (
+                JudgeFailureKind::Infrastructure,
+                AiAssessmentAvailability::Failed,
+            ),
+        ] {
+            let assessment = failed_final_assessment(
+                kind,
+                "test failure".into(),
+                AnalyzerIdentity {
+                    analyzer: "final-assessment".into(),
+                    provider: Some("provider".into()),
+                    model: Some("model".into()),
+                    input_sha256: format!("sha256:{}", "a".repeat(64)),
+                },
+                AnalyzerUsage::default(),
+            );
+            assert_eq!(assessment.availability, expected);
+            assessment.validate().unwrap();
+        }
     }
 
     #[test]

@@ -1002,6 +1002,7 @@ mod tests {
             assessment_results: Vec::new(),
             asset_assessments: Vec::new(),
             asset_capture_manifest: None,
+            final_assessment_input: None,
             asset_redaction: Default::default(),
         };
         let scenario = E2eScenarioReport {

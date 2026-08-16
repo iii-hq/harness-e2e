@@ -136,7 +136,8 @@
             }
           ]
         }
-      }
+      },
+      "additionalProperties": false
     },
     "AiVerdict": {
       "type": "string",
@@ -1265,9 +1266,14 @@
     "FinalAssessmentResult": {
       "type": "object",
       "required": [
+        "concerns",
         "confidence",
+        "evidence",
+        "facts",
+        "limitations",
         "quality_score",
         "recommendation",
+        "strengths",
         "summary",
         "verdict"
       ],
@@ -1286,6 +1292,12 @@
           "type": "array",
           "items": {
             "$ref": "#/definitions/EvidenceReference"
+          }
+        },
+        "facts": {
+          "type": "array",
+          "items": {
+            "type": "string"
           }
         },
         "limitations": {
@@ -1314,7 +1326,8 @@
         "verdict": {
           "$ref": "#/definitions/AiVerdict"
         }
-      }
+      },
+      "additionalProperties": false
     },
     "HardGateReport": {
       "type": "object",

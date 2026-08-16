@@ -92,7 +92,7 @@ impl AssessmentScore {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
 pub struct EvidenceReference {
     pub artifact_id: String,
     pub artifact_sha256: String,
@@ -231,8 +231,19 @@ impl AssessmentResult {
             );
         }
         validate_confidence(self.confidence, "assessment confidence")?;
+        let mut evidence_ids = BTreeSet::new();
         for evidence in &self.evidence {
             evidence.validate()?;
+            if !evidence_ids.insert((
+                evidence.artifact_id.as_str(),
+                evidence.artifact_sha256.as_str(),
+                evidence.locator.as_deref(),
+            )) {
+                bail!(
+                    "assessment '{}' repeats an evidence identity",
+                    self.criterion_id
+                );
+            }
         }
         if let Some(analyzer) = &self.analyzer {
             analyzer.validate()?;
@@ -310,8 +321,19 @@ impl AssetValidationResult {
     fn validate(&self) -> Result<()> {
         required(&self.asset_id, "asset validation id")?;
         required(&self.summary, "asset validation summary")?;
+        let mut evidence_ids = BTreeSet::new();
         for evidence in &self.evidence {
             evidence.validate()?;
+            if !evidence_ids.insert((
+                evidence.artifact_id.as_str(),
+                evidence.artifact_sha256.as_str(),
+                evidence.locator.as_deref(),
+            )) {
+                bail!(
+                    "asset validation '{}' repeats an evidence identity",
+                    self.asset_id
+                );
+            }
         }
         Ok(())
     }
@@ -398,39 +420,198 @@ pub enum AiVerdict {
     Inconclusive,
 }
 
+const MAX_FINAL_ASSESSMENT_INPUT_BYTES: usize = 64 * 1024;
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct FinalAssessmentSubject {
+    pub execution_id: String,
+    pub run_id: String,
+    pub attempt_id: String,
+    pub scenario_id: String,
+    pub scenario_version: u32,
+    pub case_id: String,
+    pub system_status: SystemStatus,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct FinalAssessmentMetric {
+    pub id: String,
+    pub value: f64,
+    pub unit: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct FinalAssessmentExcerpt {
+    pub kind: String,
+    pub summary: String,
+    pub evidence: EvidenceReference,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct FinalAssessmentCleanup {
+    pub succeeded: bool,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub failures: Vec<String>,
+}
+
+/// Sanitized, bounded, and reproducible input for the automatic per-run AI
+/// assessment. Raw transcripts and generated asset contents are deliberately
+/// absent; the analyzer receives only their immutable evidence identities.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct FinalAssessmentInput {
+    pub subject: FinalAssessmentSubject,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub assessments: Vec<AssessmentResult>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub assets: Vec<AssetAssessmentResult>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub dimensions: Vec<DimensionReport>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub failures: Vec<FailureRecord>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub metrics: Vec<FinalAssessmentMetric>,
+    pub cleanup: FinalAssessmentCleanup,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub excerpts: Vec<FinalAssessmentExcerpt>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub limitations: Vec<String>,
+}
+
+impl FinalAssessmentInput {
+    pub fn validate(&self) -> Result<()> {
+        required(&self.subject.execution_id, "final assessment execution id")?;
+        required(&self.subject.run_id, "final assessment run id")?;
+        required(&self.subject.attempt_id, "final assessment attempt id")?;
+        required(&self.subject.scenario_id, "final assessment scenario id")?;
+        required(&self.subject.case_id, "final assessment case id")?;
+        if self.subject.scenario_version == 0 {
+            bail!("final assessment scenario version must be positive");
+        }
+        for assessment in &self.assessments {
+            assessment.validate()?;
+        }
+        for asset in &self.assets {
+            asset.validate()?;
+        }
+        let mut metric_ids = BTreeSet::new();
+        for metric in &self.metrics {
+            required(&metric.id, "final assessment metric id")?;
+            required(&metric.unit, "final assessment metric unit")?;
+            if !metric.value.is_finite() {
+                bail!("final assessment metric '{}' must be finite", metric.id);
+            }
+            if !metric_ids.insert(metric.id.as_str()) {
+                bail!("final assessment repeats metric '{}'", metric.id);
+            }
+        }
+        for failure in &self.failures {
+            required(&failure.message, "final assessment failure summary")?;
+        }
+        for failure in &self.cleanup.failures {
+            required(failure, "final assessment cleanup failure")?;
+        }
+        if self.cleanup.succeeded != self.cleanup.failures.is_empty() {
+            bail!("final assessment cleanup outcome differs from its failure list");
+        }
+        for excerpt in &self.excerpts {
+            required(&excerpt.kind, "final assessment excerpt kind")?;
+            required(&excerpt.summary, "final assessment excerpt summary")?;
+            excerpt.evidence.validate()?;
+        }
+        for limitation in &self.limitations {
+            required(limitation, "final assessment input limitation")?;
+        }
+        let encoded = serde_json::to_vec(self).context("serialize final assessment input")?;
+        if encoded.len() > MAX_FINAL_ASSESSMENT_INPUT_BYTES {
+            bail!(
+                "final assessment input is {} bytes; maximum is {}",
+                encoded.len(),
+                MAX_FINAL_ASSESSMENT_INPUT_BYTES
+            );
+        }
+        Ok(())
+    }
+
+    pub fn sha256(&self) -> Result<String> {
+        self.validate()?;
+        artifact::sha256_value(self)
+    }
+
+    pub fn evidence_references(&self) -> Vec<&EvidenceReference> {
+        let mut references = self
+            .assessments
+            .iter()
+            .flat_map(|assessment| &assessment.evidence)
+            .collect::<Vec<_>>();
+        for asset in &self.assets {
+            references.extend(&asset.validation.evidence);
+            references.extend(&asset.qualitative_assessment.evidence);
+        }
+        references.extend(self.excerpts.iter().map(|excerpt| &excerpt.evidence));
+        references
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct FinalAssessmentResult {
     pub verdict: AiVerdict,
     pub quality_score: u8,
     pub confidence: f64,
     pub summary: String,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub facts: Vec<String>,
     pub strengths: Vec<String>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub concerns: Vec<String>,
     pub recommendation: String,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub limitations: Vec<String>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub evidence: Vec<EvidenceReference>,
 }
 
 impl FinalAssessmentResult {
-    fn validate(&self) -> Result<()> {
+    pub fn validate(&self) -> Result<()> {
         if self.quality_score > 100 {
             bail!("final AI quality score must be in 0..=100");
         }
         validate_confidence(Some(self.confidence), "final AI confidence")?;
         required(&self.summary, "final AI summary")?;
         required(&self.recommendation, "final AI recommendation")?;
+        if self.facts.is_empty() {
+            bail!("final AI assessment requires at least one factual observation");
+        }
+        for fact in &self.facts {
+            required(fact, "final AI fact")?;
+        }
+        for strength in &self.strengths {
+            required(strength, "final AI strength")?;
+        }
+        for concern in &self.concerns {
+            required(concern, "final AI concern")?;
+        }
+        for limitation in &self.limitations {
+            required(limitation, "final AI limitation")?;
+        }
+        let mut evidence_ids = BTreeSet::new();
         for evidence in &self.evidence {
             evidence.validate()?;
+            if !evidence_ids.insert((
+                evidence.artifact_id.as_str(),
+                evidence.artifact_sha256.as_str(),
+                evidence.locator.as_deref(),
+            )) {
+                bail!("final AI assessment repeats an evidence identity");
+            }
         }
         Ok(())
     }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct AiFinalAssessment {
     pub availability: AiAssessmentAvailability,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -471,6 +652,9 @@ impl AiFinalAssessment {
                     .as_ref()
                     .context("available final AI assessment has no analyzer identity")?
                     .validate()?;
+                if self.reason.is_some() {
+                    bail!("available final AI assessment cannot have an unavailability reason");
+                }
             }
             AiAssessmentAvailability::Unavailable
             | AiAssessmentAvailability::Malformed
@@ -490,6 +674,10 @@ impl AiFinalAssessment {
                 if self.result.is_some() {
                     bail!("non-evaluated final AI assessment cannot contain a result");
                 }
+                required(
+                    self.reason.as_deref().unwrap_or_default(),
+                    "final AI non-evaluation reason",
+                )?;
                 if let Some(analyzer) = &self.analyzer {
                     analyzer.validate()?;
                 }
@@ -607,6 +795,17 @@ pub struct AssessmentContract {
 
 impl AssessmentContract {
     pub fn from_assessment_evidence(report: &E2eReport) -> Self {
+        let previous = report
+            .assessment_contract
+            .runs
+            .iter()
+            .map(|run| {
+                (
+                    (run.run_id.as_str(), run.attempt_id.as_str()),
+                    run.ai_final_assessment.clone(),
+                )
+            })
+            .collect::<BTreeMap<_, _>>();
         Self {
             runs: report
                 .scenarios
@@ -614,9 +813,14 @@ impl AssessmentContract {
                 .flat_map(|scenario| &scenario.runs)
                 .map(|run| {
                     let system_status = SystemStatus::from(run.status);
-                    let ai_final_assessment = AiFinalAssessment::not_evaluated(
-                        "final AI assessment is owned by MOT-4447",
-                    );
+                    let ai_final_assessment = previous
+                        .get(&(run.run_id.as_str(), run.attempt_id.as_str()))
+                        .cloned()
+                        .unwrap_or_else(|| {
+                            AiFinalAssessment::not_evaluated(
+                                "final AI assessment has not been evaluated",
+                            )
+                        });
                     RunAssessmentContract {
                         run_id: run.run_id.clone(),
                         attempt_id: run.attempt_id.clone(),
@@ -632,6 +836,25 @@ impl AssessmentContract {
                 })
                 .collect(),
         }
+    }
+
+    pub fn set_final_assessment(
+        &mut self,
+        run_id: &str,
+        attempt_id: &str,
+        assessment: AiFinalAssessment,
+    ) -> Result<()> {
+        assessment.validate()?;
+        let run = self
+            .runs
+            .iter_mut()
+            .find(|run| run.run_id == run_id && run.attempt_id == attempt_id)
+            .with_context(|| {
+                format!("cannot attach final AI assessment to unknown run '{run_id}:{attempt_id}'")
+            })?;
+        run.effective_status = derive_effective_status(run.system_status, &assessment);
+        run.ai_final_assessment = assessment;
+        run.validate()
     }
 
     pub fn validate(&self, report: &E2eReport) -> Result<()> {
@@ -972,30 +1195,35 @@ mod tests {
         }
     }
 
-    #[test]
-    fn objective_failures_cannot_be_promoted_by_ai() {
-        let ai = AiFinalAssessment {
+    fn available_ai(verdict: AiVerdict) -> AiFinalAssessment {
+        AiFinalAssessment {
             availability: AiAssessmentAvailability::Available,
             result: Some(FinalAssessmentResult {
-                verdict: AiVerdict::Pass,
-                quality_score: 100,
-                confidence: 1.0,
-                summary: "Excellent qualitative output.".into(),
-                strengths: vec!["clear".into()],
-                concerns: vec![],
-                recommendation: "ship".into(),
-                limitations: vec![],
-                evidence: vec![],
+                verdict,
+                quality_score: 88,
+                confidence: 0.9,
+                summary: "Evidence-grounded advisory conclusion.".into(),
+                facts: vec!["The objective execution completed.".into()],
+                strengths: vec!["The observed result was internally coherent.".into()],
+                concerns: Vec::new(),
+                recommendation: "Retain the objective checks as the release gate.".into(),
+                limitations: vec!["Only bounded persisted evidence was analyzed.".into()],
+                evidence: Vec::new(),
             }),
             analyzer: Some(AnalyzerIdentity {
-                analyzer: "final".into(),
+                analyzer: "final-assessment".into(),
                 provider: Some("provider".into()),
                 model: Some("model".into()),
                 input_sha256: format!("sha256:{}", "a".repeat(64)),
             }),
             analyzer_usage: None,
             reason: None,
-        };
+        }
+    }
+
+    #[test]
+    fn objective_failures_cannot_be_promoted_by_ai() {
+        let ai = available_ai(AiVerdict::Pass);
 
         for (system, expected) in [
             (
@@ -1020,6 +1248,26 @@ mod tests {
         ai.validate().unwrap();
         assert_eq!(
             derive_effective_status(SystemStatus::Passed, &ai),
+            EffectiveStatus::Passed
+        );
+    }
+
+    #[test]
+    fn advisory_concerns_only_qualify_a_system_pass() {
+        for verdict in [
+            AiVerdict::PassWithConcerns,
+            AiVerdict::Fail,
+            AiVerdict::Inconclusive,
+        ] {
+            let ai = available_ai(verdict);
+            ai.validate().unwrap();
+            assert_eq!(
+                derive_effective_status(SystemStatus::Passed, &ai),
+                EffectiveStatus::PassedWithConcerns
+            );
+        }
+        assert_eq!(
+            derive_effective_status(SystemStatus::Passed, &available_ai(AiVerdict::Pass)),
             EffectiveStatus::Passed
         );
     }

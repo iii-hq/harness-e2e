@@ -49,3 +49,33 @@ Before persistence, assessment summaries and asset conclusions pass through
 the same redaction policy as the report. Executed criterion results are then
 bound to the immutable transcript artifact; qualitative asset results remain
 bound to their captured asset artifact.
+
+## Automatic final assessment
+
+After cleanup, the runner first persists the complete objective result and its
+redacted evidence. It then creates one `final-assessment-input.json` artifact
+for every completed run. That input is capped at 64 KiB and contains scenario
+and attempt identity, system status, per-assessment and asset conclusions,
+evaluation dimensions, selected numeric metrics, robustness signals, failures,
+cleanup outcome, and stable transcript evidence references. Raw transcripts,
+scenario prompts, and generated asset contents are never sent to the final
+analyzer.
+
+The configured judge analyzes this persisted input and returns an advisory
+verdict, 0–100 quality score, confidence, summary, factual observations,
+strengths, concerns, recommendation, limitations, and exact evidence
+identities. Provider/model identity, canonical input SHA-256, latency, token
+usage, and cost are persisted with the result. The input artifact makes the
+hash and evidence boundary directly auditable.
+
+Final analysis is automatic even for scenarios whose individual checks are
+fully deterministic; when no explicit judge is supplied, the subject
+provider/model is used. Unavailable providers, timeouts, malformed output, and
+transport failures become explicit advisory availability states after the
+objective result has already been persisted. They do not erase the execution
+or change `system_status`.
+
+No prompt or payload version is recorded. The current contract is singular;
+only `scenario_version` is versioned. Reproducibility comes from scenario
+identity, the persisted bounded input, its canonical SHA-256, and the exact
+provider/model identity.

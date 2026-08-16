@@ -335,6 +335,9 @@ pub struct E2eRunReport {
     pub asset_capture_manifest: Option<ArtifactReference>,
     #[serde(skip)]
     #[schemars(skip)]
+    pub final_assessment_input: Option<ArtifactReference>,
+    #[serde(skip)]
+    #[schemars(skip)]
     pub asset_redaction: crate::redaction::RedactionReport,
 }
 
@@ -372,6 +375,7 @@ impl E2eRunReport {
             assessment_results: Vec::new(),
             asset_assessments: Vec::new(),
             asset_capture_manifest: None,
+            final_assessment_input: None,
             asset_redaction: crate::redaction::RedactionReport::default(),
         }
     }
@@ -402,7 +406,7 @@ impl E2eRunReport {
             .metrics
             .as_ref()
             .and_then(|metrics| metrics.totals.cost_usd);
-        let judge_skipped = !judge_expected || self.status == RunStatus::HardGateFailed;
+        let judge_skipped = !judge_expected;
         let judge_usd = if judge_skipped {
             Some(0.0)
         } else {
@@ -1074,6 +1078,16 @@ impl E2eScenarioReport {
             runs,
         }
     }
+
+    pub fn refresh_aggregate(&mut self) -> Result<()> {
+        let case = self
+            .case
+            .take()
+            .context("cannot refresh scenario aggregate without a materialized case")?;
+        let runs = std::mem::take(&mut self.runs);
+        *self = Self::aggregate_case(case, self.execution_policy, runs);
+        Ok(())
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -1350,6 +1364,7 @@ impl E2eReport {
                         metrics: run.metrics.as_ref(),
                         deliverables: &mut run.deliverables,
                         asset_capture_manifest: run.asset_capture_manifest.as_ref(),
+                        final_assessment_input: run.final_assessment_input.as_ref(),
                         references: &mut run.evidence,
                     },
                 )?;
@@ -1365,6 +1380,7 @@ impl E2eReport {
                             metrics: attempt.metrics.as_ref(),
                             deliverables: &mut attempt.deliverables,
                             asset_capture_manifest: attempt.asset_capture_manifest.as_ref(),
+                            final_assessment_input: None,
                             references: &mut attempt.evidence,
                         },
                     )?;
@@ -1523,6 +1539,7 @@ struct AttemptEvidence<'a> {
     metrics: Option<&'a SessionMetricsResponse>,
     deliverables: &'a mut [DeliverableReport],
     asset_capture_manifest: Option<&'a ArtifactReference>,
+    final_assessment_input: Option<&'a ArtifactReference>,
     references: &'a mut Vec<ArtifactReference>,
 }
 
@@ -1537,6 +1554,7 @@ fn materialize_attempt_evidence(
         metrics,
         deliverables,
         asset_capture_manifest,
+        final_assessment_input,
         references,
     } = evidence;
     let root = PathBuf::from("evidence").join(run_id).join(attempt_id);
@@ -1561,6 +1579,10 @@ fn materialize_attempt_evidence(
     if let Some(manifest) = asset_capture_manifest {
         manifest.verify(output)?;
         references.push(manifest.clone());
+    }
+    if let Some(input) = final_assessment_input {
+        input.verify(output)?;
+        references.push(input.clone());
     }
     let deliverable_root = PathBuf::from("deliverables").join(run_id).join(attempt_id);
     for deliverable in deliverables {

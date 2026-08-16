@@ -32,6 +32,13 @@ are not converted into a low score or a technical failure. System failures
 always take precedence; AI output cannot promote or overwrite a hard-gate,
 subject, judge, resource-limit, or infrastructure failure.
 
+The automatic final result separates factual observations (`facts`) from
+interpretive strengths and concerns, the recommended action, and explicit
+limitations. Its cited artifact identities must be an exact subset of the
+bounded persisted input. A passing system run can become
+`passed_with_concerns`; every objective or technical failure keeps its original
+effective status regardless of the AI verdict or quality score.
+
 ## On-demand analysis
 
 `AnalysisBundle` is the evidence-grounded input and `AnalysisResponse` binds
