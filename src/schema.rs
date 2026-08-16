@@ -6,35 +6,20 @@ use crate::assessment::{AnalysisBundle, AnalysisResponse};
 use crate::asset::AssetCaptureManifest;
 use crate::durable::{DurableArchiveManifest, HistoryRecord};
 use crate::fault::{FaultEvaluation, FaultJournal, FaultPlan, FaultProfile};
-use crate::report::{E2eManifestV2, E2eReport};
+use crate::report::{E2eManifest, E2eReport};
 
-pub fn results_v2() -> RootSchema {
-    serde_json::from_str(include_str!("../schemas/results-v2.json"))
-        .expect("frozen results v2 schema is valid")
-}
-
-pub fn results_v3() -> RootSchema {
-    let mut root = versioned_root_schema_for::<E2eReport>(3);
+pub fn results() -> RootSchema {
+    let mut root = root_schema_for::<E2eReport>();
     let object = root
         .schema
         .object
         .as_mut()
-        .expect("results v3 schema has an object root");
-    object.required.extend(
-        [
-            "schema_version",
-            "execution",
-            "system_under_test",
-            "manifest",
-            "assessment_contract",
-        ]
-        .into_iter()
-        .map(str::to_string),
-    );
+        .expect("results schema has an object root");
+    object.required.insert("manifest".to_string());
     let scenario = root
         .definitions
         .get_mut("E2eScenarioReport")
-        .expect("results v3 schema declares E2eScenarioReport");
+        .expect("results schema declares E2eScenarioReport");
     let Schema::Object(scenario) = scenario else {
         panic!("E2eScenarioReport has an object schema")
     };
@@ -46,69 +31,54 @@ pub fn results_v3() -> RootSchema {
     root.schema
         .metadata()
         .title
-        .replace("E2eResultsV3".to_string());
+        .replace("E2eResults".to_string());
     root
 }
 
-pub fn analysis_bundle_v1() -> RootSchema {
-    versioned_root_schema_for::<AnalysisBundle>(1)
+pub fn analysis_bundle() -> RootSchema {
+    root_schema_for::<AnalysisBundle>()
 }
 
-pub fn analysis_response_v1() -> RootSchema {
-    versioned_root_schema_for::<AnalysisResponse>(1)
+pub fn analysis_response() -> RootSchema {
+    root_schema_for::<AnalysisResponse>()
 }
 
-pub fn asset_capture_v1() -> RootSchema {
-    versioned_root_schema_for::<AssetCaptureManifest>(1)
+pub fn asset_capture() -> RootSchema {
+    root_schema_for::<AssetCaptureManifest>()
 }
 
-pub fn manifest_v2() -> RootSchema {
-    versioned_root_schema_for::<E2eManifestV2>(2)
+pub fn manifest() -> RootSchema {
+    root_schema_for::<E2eManifest>()
 }
 
-pub fn durable_archive_v1() -> RootSchema {
-    versioned_root_schema_for::<DurableArchiveManifest>(1)
+pub fn durable_archive() -> RootSchema {
+    root_schema_for::<DurableArchiveManifest>()
 }
 
-pub fn history_record_v1() -> RootSchema {
-    versioned_root_schema_for::<HistoryRecord>(1)
+pub fn history_record() -> RootSchema {
+    root_schema_for::<HistoryRecord>()
 }
 
-pub fn fault_profile_v1() -> RootSchema {
-    versioned_root_schema_for::<FaultProfile>(1)
+pub fn fault_profile() -> RootSchema {
+    root_schema_for::<FaultProfile>()
 }
 
-pub fn fault_plan_v1() -> RootSchema {
-    versioned_root_schema_for::<FaultPlan>(1)
+pub fn fault_plan() -> RootSchema {
+    root_schema_for::<FaultPlan>()
 }
 
-pub fn fault_journal_v1() -> RootSchema {
-    versioned_root_schema_for::<FaultJournal>(1)
+pub fn fault_journal() -> RootSchema {
+    root_schema_for::<FaultJournal>()
 }
 
-pub fn fault_evaluation_v1() -> RootSchema {
-    versioned_root_schema_for::<FaultEvaluation>(1)
+pub fn fault_evaluation() -> RootSchema {
+    root_schema_for::<FaultEvaluation>()
 }
 
-fn versioned_root_schema_for<T: JsonSchema>(version: u32) -> RootSchema {
-    let mut root = SchemaSettings::draft07()
+fn root_schema_for<T: JsonSchema>() -> RootSchema {
+    SchemaSettings::draft07()
         .into_generator()
-        .into_root_schema_for::<T>();
-    let properties = root
-        .schema
-        .object
-        .as_mut()
-        .expect("versioned E2E schema has an object root");
-    let version_schema = properties
-        .properties
-        .get_mut("schema_version")
-        .expect("versioned E2E schema declares schema_version");
-    let Schema::Object(version_schema) = version_schema else {
-        panic!("versioned E2E schema has a typed schema_version")
-    };
-    version_schema.metadata().default = None;
-    version_schema.enum_values = Some(vec![serde_json::json!(version)]);
-    root
+        .into_root_schema_for::<T>()
 }
 
 #[cfg(test)]
@@ -121,48 +91,43 @@ mod tests {
     use super::*;
 
     #[test]
-    fn results_v2_schema_matches_snapshot() {
-        assert_snapshot("results-v2.json", &results_v2());
-    }
-
-    #[test]
-    fn results_v3_schema_matches_snapshot() {
-        assert_snapshot("results-v3.json", &results_v3());
+    fn results_schema_matches_snapshot() {
+        assert_snapshot("results.json", &results());
     }
 
     #[test]
     fn analysis_schemas_match_snapshots() {
-        assert_snapshot("analysis-bundle-v1.json", &analysis_bundle_v1());
-        assert_snapshot("analysis-response-v1.json", &analysis_response_v1());
+        assert_snapshot("analysis-bundle.json", &analysis_bundle());
+        assert_snapshot("analysis-response.json", &analysis_response());
     }
 
     #[test]
     fn asset_capture_schema_matches_snapshot() {
-        assert_snapshot("asset-capture-v1.json", &asset_capture_v1());
+        assert_snapshot("asset-capture.json", &asset_capture());
     }
 
     #[test]
-    fn manifest_v2_schema_matches_snapshot() {
-        assert_snapshot("manifest-v2.json", &manifest_v2());
+    fn manifest_schema_matches_snapshot() {
+        assert_snapshot("manifest.json", &manifest());
     }
 
     #[test]
-    fn durable_archive_v1_schema_matches_snapshot() {
-        assert_snapshot("durable-archive-v1.json", &durable_archive_v1());
+    fn durable_archive_schema_matches_snapshot() {
+        assert_snapshot("durable-archive.json", &durable_archive());
     }
 
     #[test]
-    fn history_record_v1_schema_matches_snapshot() {
-        assert_snapshot("history-record-v1.json", &history_record_v1());
+    fn history_record_schema_matches_snapshot() {
+        assert_snapshot("history-record.json", &history_record());
     }
 
     #[test]
     fn fault_schemas_match_snapshots() {
         for (name, schema) in [
-            ("fault-profile-v1.json", fault_profile_v1()),
-            ("fault-plan-v1.json", fault_plan_v1()),
-            ("fault-journal-v1.json", fault_journal_v1()),
-            ("fault-evaluation-v1.json", fault_evaluation_v1()),
+            ("fault-profile.json", fault_profile()),
+            ("fault-plan.json", fault_plan()),
+            ("fault-journal.json", fault_journal()),
+            ("fault-evaluation.json", fault_evaluation()),
         ] {
             assert_snapshot(name, &schema);
         }

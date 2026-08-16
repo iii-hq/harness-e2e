@@ -16,15 +16,13 @@ use sha2::{Digest, Sha256};
 use crate::artifact;
 use crate::identity::StackIdentity;
 use crate::redaction::{RedactionPolicy, RedactionReport};
-use crate::report::{E2eReport, RESULTS_SCHEMA_VERSION};
+use crate::report::E2eReport;
 
 pub const ARCHIVE_ID: &str = "e2e::archive";
 pub const ARCHIVE_HEAD_ID: &str = "e2e::archive-head";
 pub const ARCHIVE_RESTORE_ID: &str = "e2e::archive-restore";
 pub const RETENTION_SWEEP_ID: &str = "e2e::retention-sweep";
 pub const HISTORY_LIST_ID: &str = "e2e::history-list";
-pub const DURABLE_CONTRACT_VERSION: u32 = 1;
-
 const STORAGE_PUT: &str = "storage::putObject";
 const STORAGE_GET: &str = "storage::getObject";
 const STORAGE_HEAD: &str = "storage::headObject";
@@ -32,7 +30,7 @@ const STORAGE_DELETE: &str = "storage::deleteObject";
 const DATABASE_EXECUTE: &str = "database::execute";
 const DATABASE_QUERY: &str = "database::query";
 const CHUNK_BYTES: usize = 6 * 1024 * 1024;
-const HISTORY_TABLE: &str = "harness_e2e_history_v1";
+const HISTORY_TABLE: &str = "harness_e2e_history";
 
 #[derive(
     Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, JsonSchema,
@@ -133,8 +131,8 @@ pub struct DurableObject {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct DurableArchiveManifest {
-    pub schema_version: u32,
     pub archive_id: String,
     pub execution_id: String,
     pub identity_sha256: String,
@@ -145,8 +143,8 @@ pub struct DurableArchiveManifest {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
 pub struct DurableArchiveReference {
-    pub schema_version: u32,
     pub archive_id: String,
     pub execution_id: String,
     pub identity_sha256: String,
@@ -158,14 +156,13 @@ pub struct DurableArchiveReference {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct HistoryRecord {
-    pub schema_version: u32,
     pub ingestion_id: String,
     pub identity_sha256: String,
     pub execution_id: String,
     pub lane: String,
     pub occurred_at: String,
-    pub results_schema_version: u32,
     pub subject_provider: String,
     pub subject_model: String,
     pub passed: bool,
@@ -297,17 +294,8 @@ impl DurableHistory {
         report: &E2eReport,
         retention_class: RetentionClass,
     ) -> Result<ArchiveResponse> {
-        let execution = report
-            .execution
-            .as_ref()
-            .context("only results v2 can be archived")?;
-        let system = report
-            .system_under_test
-            .as_ref()
-            .context("results have no canonical system identity")?;
-        if report.schema_version != RESULTS_SCHEMA_VERSION {
-            bail!("only results schema v{RESULTS_SCHEMA_VERSION} can be archived");
-        }
+        let execution = &report.execution;
+        let system = &report.system_under_test;
         system.validate()?;
         let identity_sha256 = artifact::sha256_value(system)?;
         let archive_id = archive_id(report, retention_class)?;
@@ -320,8 +308,7 @@ impl DurableHistory {
             .map(|duration| (completed_at + duration).to_rfc3339_opts(SecondsFormat::Millis, true));
         let bucket = self.config.bucket(retention_class);
         let prefix = format!(
-            "e2e/v{}/{}/{}/{}",
-            DURABLE_CONTRACT_VERSION,
+            "e2e/{}/{}/{}",
             retention_class.key(),
             digest_component(&identity_sha256),
             archive_id
@@ -391,7 +378,6 @@ impl DurableHistory {
             });
         }
         let manifest = DurableArchiveManifest {
-            schema_version: DURABLE_CONTRACT_VERSION,
             archive_id: archive_id.clone(),
             execution_id: execution.execution_id.clone(),
             identity_sha256: identity_sha256.clone(),
@@ -420,8 +406,7 @@ impl DurableHistory {
             )
             .await?;
         let backup_key = format!(
-            "e2e-manifest-backups/v{}/{}/manifest-{}.json",
-            DURABLE_CONTRACT_VERSION,
+            "e2e-manifest-backups/{}/manifest-{}.json",
             archive_id,
             digest_component(&manifest_sha)
         );
@@ -435,7 +420,6 @@ impl DurableHistory {
             )
             .await?;
         let archive = DurableArchiveReference {
-            schema_version: DURABLE_CONTRACT_VERSION,
             archive_id,
             execution_id: execution.execution_id.clone(),
             identity_sha256,
@@ -899,16 +883,9 @@ impl DurableHistory {
 }
 
 fn archive_id(report: &E2eReport, retention: RetentionClass) -> Result<String> {
-    let execution = report
-        .execution
-        .as_ref()
-        .context("results have no execution")?;
-    let system = report
-        .system_under_test
-        .as_ref()
-        .context("results have no system identity")?;
+    let execution = &report.execution;
+    let system = &report.system_under_test;
     let digest = artifact::sha256_value(&json!({
-        "contract_version": DURABLE_CONTRACT_VERSION,
         "execution": execution,
         "system": system,
         "retention": retention,
@@ -917,14 +894,8 @@ fn archive_id(report: &E2eReport, retention: RetentionClass) -> Result<String> {
 }
 
 fn history_record(report: &E2eReport, archive: DurableArchiveReference) -> Result<HistoryRecord> {
-    let execution = report
-        .execution
-        .as_ref()
-        .context("results have no execution")?;
-    let system = report
-        .system_under_test
-        .as_ref()
-        .context("results have no system identity")?;
+    let execution = &report.execution;
+    let system = &report.system_under_test;
     let (stack_mode, subject_revision) = match &system.stack {
         StackIdentity::Source {
             workers_revision, ..
@@ -934,13 +905,11 @@ fn history_record(report: &E2eReport, archive: DurableArchiveReference) -> Resul
         } => ("registry".to_string(), stack_lock_digest.clone()),
     };
     let record = HistoryRecord {
-        schema_version: DURABLE_CONTRACT_VERSION,
         ingestion_id: archive.archive_id.clone(),
         identity_sha256: archive.identity_sha256.clone(),
         execution_id: execution.execution_id.clone(),
         lane: execution.lane.clone(),
         occurred_at: execution.completed_at.clone(),
-        results_schema_version: report.schema_version,
         subject_provider: report.subject.provider.clone(),
         subject_model: report.subject.model.clone(),
         passed: report.passed,
@@ -956,11 +925,6 @@ fn history_record(report: &E2eReport, archive: DurableArchiveReference) -> Resul
 }
 
 fn validate_history_record(record: &HistoryRecord) -> Result<()> {
-    if record.schema_version != DURABLE_CONTRACT_VERSION
-        || record.results_schema_version != RESULTS_SCHEMA_VERSION
-    {
-        bail!("unsupported history record schema");
-    }
     if record.ingestion_id != record.archive.archive_id
         || record.execution_id != record.archive.execution_id
         || record.identity_sha256 != record.archive.identity_sha256
@@ -973,8 +937,7 @@ fn validate_history_record(record: &HistoryRecord) -> Result<()> {
 }
 
 fn validate_archive_reference(reference: &DurableArchiveReference) -> Result<()> {
-    if reference.schema_version != DURABLE_CONTRACT_VERSION
-        || reference.archive_id.len() != 32
+    if reference.archive_id.len() != 32
         || !reference
             .archive_id
             .bytes()
@@ -995,8 +958,8 @@ fn validate_archive_reference(reference: &DurableArchiveReference) -> Result<()>
 }
 
 fn validate_manifest(manifest: &DurableArchiveManifest) -> Result<()> {
-    if manifest.schema_version != DURABLE_CONTRACT_VERSION || manifest.objects.is_empty() {
-        bail!("invalid or empty durable archive manifest");
+    if manifest.objects.is_empty() {
+        bail!("empty durable archive manifest");
     }
     for object in &manifest.objects {
         safe_path(&object.relative_path)?;
@@ -1244,7 +1207,6 @@ mod tests {
         let caller = Arc::new(FakeCaller::default());
         let history = DurableHistory::with_caller(caller.clone(), config());
         let archive = DurableArchiveReference {
-            schema_version: 1,
             archive_id: "a".repeat(32),
             execution_id: "execution".into(),
             identity_sha256: format!("sha256:{}", "b".repeat(64)),

@@ -1,12 +1,8 @@
 (function renderHarnessExecutionDetail() {
   "use strict";
 
-  const benchmark = window.HarnessBenchmarkData.normalizeBenchmarkData(
-    window.BENCHMARK_DATA,
-  );
   const history = window.HarnessExecutionData.mergeExecutionHistory(
     window.HARNESS_EXECUTIONS,
-    benchmark,
   );
   const routes = window.HarnessDashboardRoutes;
   const initialRoute = routes.current();

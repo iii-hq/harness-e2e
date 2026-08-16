@@ -19,7 +19,6 @@ use super::read_model::DashboardReadModel;
 use super::store::{read_report, recover_interrupted_runs, write_metadata};
 use super::{
     ApiError, DashboardArgs, Defaults, JobStatus, JobView, RunMetadata, RunRequest, RunSnapshot,
-    LOCAL_SCHEMA_VERSION,
 };
 use crate::scenarios::ScenarioId;
 
@@ -157,7 +156,6 @@ impl Controller {
             .spawn()
             .map_err(ApiError::internal)?;
         let metadata = RunMetadata {
-            schema_version: LOCAL_SCHEMA_VERSION,
             id: id.clone(),
             label: request.label.clone(),
             status: JobStatus::Running,

@@ -20,17 +20,9 @@ use crate::scenarios::{
 #[cfg(test)]
 use crate::scenarios::{ComplexityProfile, DeliverableContract};
 use crate::schema;
-use crate::wire::{ControlPlaneEvidence, Model, SessionMetricsResponseV1, StatusReport};
+use crate::wire::{ControlPlaneEvidence, Model, SessionMetricsResponse, StatusReport};
 
 mod summary;
-
-pub const RESULTS_SCHEMA_VERSION: u32 = 2;
-pub const LATEST_RESULTS_SCHEMA_VERSION: u32 = 3;
-pub const MANIFEST_SCHEMA_VERSION: u32 = 2;
-
-fn legacy_schema_version() -> u32 {
-    1
-}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
@@ -53,31 +45,17 @@ pub enum FailureDomain {
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct FailureRecord {
-    #[serde(default = "legacy_failure_domain")]
     pub domain: FailureDomain,
     pub phase: FailurePhase,
     pub message: String,
 }
 
-fn legacy_failure_domain() -> FailureDomain {
-    FailureDomain::E2eInfrastructure
-}
-
-fn default_attempt_number() -> u32 {
-    1
-}
-
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct HardGateReport {
     pub id: String,
-    #[serde(default = "default_structural_dimension")]
     pub dimension: EvaluationDimension,
     pub passed: bool,
     pub reason: String,
-}
-
-fn default_structural_dimension() -> EvaluationDimension {
-    EvaluationDimension::StructuralIntegrity
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -165,7 +143,6 @@ pub struct CostReport {
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
 pub struct ObservedComplexityReport {
-    pub policy_version: u32,
     pub planning_depth: Option<u64>,
     pub dependency_depth: Option<u64>,
     pub parallel_branches: Option<u64>,
@@ -182,7 +159,6 @@ pub struct ObservedComplexityReport {
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct EfficiencyReport {
-    pub policy_version: u32,
     pub wall_time_ms: u64,
     pub root_turns: Option<u64>,
     pub child_turns: Option<u64>,
@@ -254,9 +230,7 @@ impl RunStatus {
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct RetryAttemptReport {
     pub run_id: String,
-    #[serde(default)]
     pub attempt_id: String,
-    #[serde(default = "default_attempt_number")]
     pub attempt_number: u32,
     pub session_id: String,
     pub wall_time_ms: u64,
@@ -265,7 +239,7 @@ pub struct RetryAttemptReport {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub transcript: Option<Value>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub metrics: Option<SessionMetricsResponseV1>,
+    pub metrics: Option<SessionMetricsResponse>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub evidence: Vec<ArtifactReference>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -317,9 +291,7 @@ impl From<&E2eRunReport> for RetryAttemptReport {
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct E2eRunReport {
     pub run_id: String,
-    #[serde(default)]
     pub attempt_id: String,
-    #[serde(default = "default_attempt_number")]
     pub attempt_number: u32,
     pub session_id: String,
     pub prompt: String,
@@ -331,7 +303,7 @@ pub struct E2eRunReport {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub transcript: Option<Value>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub metrics: Option<SessionMetricsResponseV1>,
+    pub metrics: Option<SessionMetricsResponse>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub judge_attempts: Option<u8>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -469,7 +441,6 @@ impl E2eRunReport {
                 unavailable.insert(field.into(), "terminal Harness metrics unavailable".into());
             }
             self.efficiency = Some(EfficiencyReport {
-                policy_version: work.policy_version,
                 wall_time_ms: self.wall_time_ms,
                 root_turns: None,
                 child_turns: None,
@@ -626,7 +597,6 @@ impl E2eRunReport {
             effective_fan_out,
         );
         self.efficiency = Some(EfficiencyReport {
-            policy_version: work.policy_version,
             wall_time_ms: self.wall_time_ms,
             root_turns: Some(root_turns),
             child_turns: Some(child_turns),
@@ -808,7 +778,6 @@ fn unavailable_complexity() -> ObservedComplexityReport {
     .map(|field| (field.into(), "terminal observation unavailable".into()))
     .collect();
     ObservedComplexityReport {
-        policy_version: 1,
         unavailable,
         ..ObservedComplexityReport::default()
     }
@@ -866,7 +835,7 @@ fn observed_parallel_spawns(transcript: Option<&Value>) -> Option<u64> {
 }
 
 fn observed_complexity(
-    metrics: &SessionMetricsResponseV1,
+    metrics: &SessionMetricsResponse,
     transcript: Option<&Value>,
     artifact_count: u64,
     validation_retries: Option<u64>,
@@ -945,7 +914,6 @@ fn observed_complexity(
         );
     }
     ObservedComplexityReport {
-        policy_version: 1,
         planning_depth: None,
         dependency_depth: Some(dependency_depth),
         parallel_branches: Some(effective_fan_out),
@@ -1133,8 +1101,8 @@ impl From<Model> for ModelArtifact {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
-pub struct E2eManifestV2 {
-    pub schema_version: u32,
+#[serde(deny_unknown_fields)]
+pub struct E2eManifest {
     pub execution: ExecutionIdentity,
     pub system_under_test: SystemUnderTestIdentity,
     pub subject: ModelArtifact,
@@ -1143,15 +1111,8 @@ pub struct E2eManifestV2 {
     pub control_plane: ControlPlaneEvidence,
 }
 
-impl E2eManifestV2 {
+impl E2eManifest {
     pub fn validate(&self) -> Result<()> {
-        if self.schema_version != MANIFEST_SCHEMA_VERSION {
-            bail!(
-                "manifest schema version {} is unsupported; expected {}",
-                self.schema_version,
-                MANIFEST_SCHEMA_VERSION
-            );
-        }
         self.execution.validate()?;
         self.system_under_test.validate()?;
         if self.control_plane.functions.is_empty() {
@@ -1162,14 +1123,11 @@ impl E2eManifestV2 {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct E2eReport {
-    #[serde(default = "legacy_schema_version")]
-    pub schema_version: u32,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub execution: Option<ExecutionIdentity>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub system_under_test: Option<SystemUnderTestIdentity>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub execution: ExecutionIdentity,
+    pub system_under_test: SystemUnderTestIdentity,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub manifest: Option<ArtifactReference>,
     pub subject: ModelArtifact,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -1181,8 +1139,7 @@ pub struct E2eReport {
     pub passed: bool,
     #[serde(default)]
     pub redaction: crate::redaction::RedactionReport,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub assessment_contract: Option<AssessmentContract>,
+    pub assessment_contract: AssessmentContract,
     pub scenarios: Vec<E2eScenarioReport>,
 }
 
@@ -1197,10 +1154,9 @@ impl E2eReport {
         scenarios: Vec<E2eScenarioReport>,
     ) -> Self {
         let passed = !scenarios.is_empty() && scenarios.iter().all(|scenario| scenario.passed);
-        Self {
-            schema_version: RESULTS_SCHEMA_VERSION,
-            execution: Some(execution),
-            system_under_test: Some(system_under_test),
+        let mut report = Self {
+            execution,
+            system_under_test,
             manifest: None,
             subject,
             judge,
@@ -1208,24 +1164,20 @@ impl E2eReport {
             engine_revision,
             passed,
             redaction: crate::redaction::RedactionReport::default(),
-            assessment_contract: None,
+            assessment_contract: AssessmentContract { runs: Vec::new() },
             scenarios,
-        }
+        };
+        report.assessment_contract = AssessmentContract::from_assessment_evidence(&report);
+        report
     }
 
-    pub fn write_to(&mut self, output: &Path, manifest: &E2eManifestV2) -> Result<PathBuf> {
+    pub fn write_to(&mut self, output: &Path, manifest: &E2eManifest) -> Result<PathBuf> {
         fs::create_dir_all(output)
             .with_context(|| format!("create report directory {}", output.display()))?;
-        for name in ["results-v3.json", "results-v2.json", "results.json"] {
-            let path = output.join(name);
-            if path.is_file() {
-                fs::remove_file(&path)
-                    .with_context(|| format!("remove stale result {}", path.display()))?;
-            }
-        }
         manifest.validate().context("validate E2E manifest")?;
         self.redact_sensitive_evidence()?;
         self.materialize_evidence(output)?;
+        self.assessment_contract = AssessmentContract::from_assessment_evidence(self);
         let manifest_reference = artifact::write_json(
             output,
             Path::new("manifest.json"),
@@ -1234,135 +1186,50 @@ impl E2eReport {
             manifest,
         )?;
         self.manifest = Some(manifest_reference);
-        validate_against_schema(&schema::manifest_v2(), manifest, "manifest v2")?;
-        match self.schema_version {
-            RESULTS_SCHEMA_VERSION => {
-                if self.assessment_contract.is_some() {
-                    bail!("results v2 cannot carry the v3 assessment contract");
-                }
-                self.validate_versioned(manifest, output, RESULTS_SCHEMA_VERSION)
-                    .context("validate E2E results v2")?;
-                validate_against_schema(&schema::results_v2(), self, "results v2")?;
-                write_json_value(&output.join("results.json"), &self.legacy_v1_value()?)?;
-                let canonical_path = output.join("results-v2.json");
-                write_json_value(&canonical_path, self)?;
-                Ok(canonical_path)
-            }
-            LATEST_RESULTS_SCHEMA_VERSION => {
-                let contract = self
-                    .assessment_contract
-                    .as_ref()
-                    .context("results v3 are missing assessment_contract")?;
-                contract.validate(self)?;
-                self.validate_versioned(manifest, output, LATEST_RESULTS_SCHEMA_VERSION)
-                    .context("validate E2E results v3")?;
-                validate_against_schema(&schema::results_v3(), self, "results v3")?;
-                let legacy_v2 = self.legacy_v2_value()?;
-                validate_against_schema(
-                    &schema::results_v2(),
-                    &legacy_v2,
-                    "results v2 projection",
-                )?;
-                write_json_value(&output.join("results.json"), &self.legacy_v1_value()?)?;
-                write_json_value(&output.join("results-v2.json"), &legacy_v2)?;
-                let canonical_path = output.join("results-v3.json");
-                write_json_value(&canonical_path, self)?;
-                Ok(canonical_path)
-            }
-            version => bail!("cannot write unsupported E2E results schema {version}"),
-        }
+        validate_against_schema(&schema::manifest(), manifest, "manifest")?;
+        self.assessment_contract.validate(self)?;
+        self.validate(manifest, output)
+            .context("validate E2E results")?;
+        validate_against_schema(&schema::results(), self, "results")?;
+        let path = output.join("results.json");
+        write_json_value(&path, self)?;
+        Ok(path)
     }
 
     pub fn read_from(input: &Path) -> Result<(Self, PathBuf)> {
         let path = if input.is_dir() {
-            let latest = input.join("results-v3.json");
-            let canonical = input.join("results-v2.json");
-            if latest.is_file() {
-                latest
-            } else if canonical.is_file() {
-                canonical
-            } else {
-                input.join("results.json")
-            }
+            input.join("results.json")
         } else {
             input.to_path_buf()
         };
         let bytes = fs::read(&path).with_context(|| format!("read {}", path.display()))?;
-        let value: Value = serde_json::from_slice(&bytes)
-            .with_context(|| format!("decode E2E report {}", path.display()))?;
-        let report: Self = serde_json::from_value(value.clone())
+        let report: Self = serde_json::from_slice(&bytes)
             .with_context(|| format!("decode typed E2E report {}", path.display()))?;
-        if !matches!(
-            report.schema_version,
-            1 | RESULTS_SCHEMA_VERSION | LATEST_RESULTS_SCHEMA_VERSION
-        ) {
-            bail!(
-                "unsupported E2E results schema {} in {}",
-                report.schema_version,
-                path.display()
-            );
-        }
-        if matches!(
-            report.schema_version,
-            RESULTS_SCHEMA_VERSION | LATEST_RESULTS_SCHEMA_VERSION
-        ) {
-            if report.schema_version == RESULTS_SCHEMA_VERSION {
-                if report.assessment_contract.is_some() {
-                    bail!("results v2 cannot carry the v3 assessment contract");
-                }
-                validate_against_schema(&schema::results_v2(), &value, "results v2")?;
-            } else {
-                validate_against_schema(&schema::results_v3(), &value, "results v3")?;
-                report
-                    .assessment_contract
-                    .as_ref()
-                    .context("results v3 are missing assessment_contract")?
-                    .validate(&report)?;
-            }
-            let output = path
-                .parent()
-                .context("results path has no parent directory")?;
-            let manifest_path = output.join("manifest.json");
-            let manifest_value: Value = serde_json::from_slice(
-                &fs::read(&manifest_path)
-                    .with_context(|| format!("read {}", manifest_path.display()))?,
-            )
-            .with_context(|| format!("decode {}", manifest_path.display()))?;
-            validate_against_schema(&schema::manifest_v2(), &manifest_value, "manifest v2")?;
-            let manifest: E2eManifestV2 = serde_json::from_value(manifest_value)
-                .with_context(|| format!("decode typed manifest {}", manifest_path.display()))?;
-            manifest.validate()?;
-            report.validate_versioned(&manifest, output, report.schema_version)?;
-        }
+        validate_against_schema(&schema::results(), &report, "results")?;
+        report.assessment_contract.validate(&report)?;
+        let output = path
+            .parent()
+            .context("results path has no parent directory")?;
+        let manifest_path = output.join("manifest.json");
+        let manifest: E2eManifest = serde_json::from_slice(
+            &fs::read(&manifest_path)
+                .with_context(|| format!("read {}", manifest_path.display()))?,
+        )
+        .with_context(|| format!("decode {}", manifest_path.display()))?;
+        validate_against_schema(&schema::manifest(), &manifest, "manifest")?;
+        manifest.validate()?;
+        report.validate(&manifest, output)?;
         Ok((report, path))
     }
 
-    fn validate_versioned(
-        &self,
-        manifest: &E2eManifestV2,
-        output: &Path,
-        expected_version: u32,
-    ) -> Result<()> {
-        if self.schema_version != expected_version {
-            bail!(
-                "results schema version {} is unsupported; expected {}",
-                self.schema_version,
-                expected_version
-            );
-        }
-        let execution = self
-            .execution
-            .as_ref()
-            .context("results are missing execution identity")?;
-        if execution.execution_id != manifest.execution.execution_id {
+    fn validate(&self, manifest: &E2eManifest, output: &Path) -> Result<()> {
+        if self.execution.execution_id != manifest.execution.execution_id {
             bail!("results and manifest execution identities differ");
         }
-        let system = self
-            .system_under_test
-            .as_ref()
-            .context("results are missing system identity")?;
-        system.validate()?;
-        if serde_json::to_value(system)? != serde_json::to_value(&manifest.system_under_test)? {
+        self.system_under_test.validate()?;
+        if serde_json::to_value(&self.system_under_test)?
+            != serde_json::to_value(&manifest.system_under_test)?
+        {
             bail!("results and manifest system identities differ");
         }
         let reference = self
@@ -1380,7 +1247,7 @@ impl E2eReport {
             let case = scenario
                 .case
                 .as_ref()
-                .context("versioned scenario is missing its materialized case")?;
+                .context("scenario is missing its materialized case")?;
             case.validate()?;
             if scenario.case_id != case.case_id
                 || scenario.scenario_id != case.scenario_id
@@ -1456,73 +1323,14 @@ impl E2eReport {
                 }
             }
         }
-        if let Some(contract) = &mut self.assessment_contract {
-            let mut value = serde_json::to_value(&*contract)
-                .context("serialize assessment contract before redaction")?;
-            redaction.merge(policy.redact_value(&mut value));
-            *contract = serde_json::from_value(value)
-                .context("decode assessment contract after redaction")?;
-        }
+        let mut value = serde_json::to_value(&self.assessment_contract)
+            .context("serialize assessment contract before redaction")?;
+        redaction.merge(policy.redact_value(&mut value));
+        self.assessment_contract =
+            serde_json::from_value(value).context("decode assessment contract after redaction")?;
         self.redaction = redaction;
         policy.assert_clean(&serde_json::to_vec(&self).context("scan E2E report")?)?;
         Ok(())
-    }
-
-    fn legacy_v1_value(&self) -> Result<Value> {
-        let mut value = self.legacy_v2_value()?;
-        let object = value
-            .as_object_mut()
-            .context("E2E results must serialize as an object")?;
-        for field in [
-            "schema_version",
-            "execution",
-            "system_under_test",
-            "manifest",
-            "redaction",
-        ] {
-            object.remove(field);
-        }
-        let scenarios = object
-            .get_mut("scenarios")
-            .and_then(Value::as_array_mut)
-            .context("E2E results scenarios must be an array")?;
-        for scenario in scenarios {
-            let scenario = scenario
-                .as_object_mut()
-                .context("E2E scenario must be an object")?;
-            scenario.remove("case_id");
-            scenario.remove("case");
-            let runs = scenario
-                .get_mut("runs")
-                .and_then(Value::as_array_mut)
-                .context("E2E scenario runs must be an array")?;
-            for run in runs {
-                remove_v2_attempt_fields(run)?;
-                if let Some(retries) = run.get_mut("retry_attempts").and_then(Value::as_array_mut) {
-                    for retry in retries {
-                        remove_v2_attempt_fields(retry)?;
-                        if let Some(retry) = retry.as_object_mut() {
-                            retry.remove("transcript");
-                            retry.remove("metrics");
-                        }
-                    }
-                }
-            }
-        }
-        Ok(value)
-    }
-
-    fn legacy_v2_value(&self) -> Result<Value> {
-        let mut value = serde_json::to_value(self).context("serialize results v2 projection")?;
-        let object = value
-            .as_object_mut()
-            .context("E2E results must serialize as an object")?;
-        object.insert(
-            "schema_version".to_string(),
-            Value::from(RESULTS_SCHEMA_VERSION),
-        );
-        object.remove("assessment_contract");
-        Ok(value)
     }
 
     fn materialize_evidence(&mut self, output: &Path) -> Result<()> {
@@ -1566,37 +1374,6 @@ impl E2eReport {
         }
         Ok(())
     }
-}
-
-fn remove_v2_attempt_fields(value: &mut Value) -> Result<()> {
-    let object = value
-        .as_object_mut()
-        .context("E2E attempt must be an object")?;
-    for field in [
-        "attempt_id",
-        "attempt_number",
-        "evidence",
-        "deliverables",
-        "dimensions",
-        "efficiency",
-    ] {
-        object.remove(field);
-    }
-    if let Some(failures) = object.get_mut("failures").and_then(Value::as_array_mut) {
-        for failure in failures {
-            if let Some(failure) = failure.as_object_mut() {
-                failure.remove("domain");
-            }
-        }
-    }
-    if let Some(gates) = object.get_mut("hard_gates").and_then(Value::as_array_mut) {
-        for gate in gates {
-            if let Some(gate) = gate.as_object_mut() {
-                gate.remove("dimension");
-            }
-        }
-    }
-    Ok(())
 }
 
 fn validate_against_schema<T>(
@@ -1743,7 +1520,7 @@ fn validate_retry_identity(run: &E2eRunReport, attempt: &RetryAttemptReport) -> 
 
 struct AttemptEvidence<'a> {
     transcript: Option<&'a Value>,
-    metrics: Option<&'a SessionMetricsResponseV1>,
+    metrics: Option<&'a SessionMetricsResponse>,
     deliverables: &'a mut [DeliverableReport],
     asset_capture_manifest: Option<&'a ArtifactReference>,
     references: &'a mut Vec<ArtifactReference>,
@@ -2036,15 +1813,14 @@ mod tests {
 
     use super::*;
     use crate::assessment::{
-        AiFinalAssessment, AssessmentKind, AssessmentOutcome, AssessmentPolicy, AssessmentScore,
-        AssessmentSource, AssessmentTarget, EffectiveStatus, RunAssessmentContract, SystemStatus,
-        ASSESSMENT_CONTRACT_VERSION,
+        AssessmentKind, AssessmentOutcome, AssessmentPolicy, AssessmentScore, AssessmentSource,
+        AssessmentTarget,
     };
     use crate::identity::StackIdentity;
     use crate::scenarios::{ArtifactExpectation, InvariantSpec};
     use crate::wire::{
-        ControlPlaneEvidence, FunctionContractEvidence, SessionMetricsResponseV1, StatusReport,
-        CONTROL_PLANE_CONTRACT_NAME, CONTROL_PLANE_CONTRACT_VERSION,
+        ControlPlaneEvidence, FunctionContractEvidence, SessionMetricsResponse, StatusReport,
+        CONTROL_PLANE_CONTRACT_NAME,
     };
 
     const TEST_DIGEST: &str =
@@ -2074,19 +1850,17 @@ mod tests {
         }
     }
 
-    fn manifest() -> E2eManifestV2 {
-        E2eManifestV2 {
-            schema_version: MANIFEST_SCHEMA_VERSION,
+    fn manifest() -> E2eManifest {
+        E2eManifest {
             execution: execution(),
             system_under_test: system(),
             subject: model(),
             judge: None,
             control_plane: ControlPlaneEvidence {
                 name: CONTROL_PLANE_CONTRACT_NAME.into(),
-                version: CONTROL_PLANE_CONTRACT_VERSION,
                 functions: vec![FunctionContractEvidence {
                     function_id: "harness::status".into(),
-                    contract: serde_json::json!({"name": CONTROL_PLANE_CONTRACT_NAME, "version": 1}),
+                    contract: serde_json::json!({"name": CONTROL_PLANE_CONTRACT_NAME}),
                     request_schema: serde_json::json!({"type": "object"}),
                     response_schema: serde_json::json!({"type": "object"}),
                     sha256: TEST_DIGEST.into(),
@@ -2302,7 +2076,6 @@ mod tests {
         }]}));
 
         attempt.update_efficiency(WorkExpectation {
-            policy_version: 1,
             minimum_expected_work: 10,
         });
 
@@ -2324,7 +2097,6 @@ mod tests {
     #[test]
     fn retry_efficiency_and_cost_include_every_technical_attempt() {
         let work = WorkExpectation {
-            policy_version: 1,
             minimum_expected_work: 10,
         };
         let mut failed = run(0, false);
@@ -2408,7 +2180,7 @@ mod tests {
     }
 
     #[test]
-    fn v2_write_materializes_manifest_and_hashed_evidence() {
+    fn write_materializes_the_single_result_and_hashed_evidence() {
         let output = tempfile::tempdir().unwrap();
         let mut run = run(100, true);
         run.transcript = Some(serde_json::json!({"messages": ["done"]}));
@@ -2436,8 +2208,9 @@ mod tests {
         let mut report = report(vec![aggregate(vec![run])]);
 
         let path = report.write_to(output.path(), &manifest()).unwrap();
-        assert_eq!(path, output.path().join("results-v2.json"));
-        assert!(output.path().join("results.json").is_file());
+        assert_eq!(path, output.path().join("results.json"));
+        assert!(!output.path().join("results-v2.json").exists());
+        assert!(!output.path().join("results-v3.json").exists());
         assert!(output.path().join("manifest.json").is_file());
         let evidence = &report.scenarios[0].runs[0].evidence;
         assert_eq!(evidence.len(), 1);
@@ -2450,129 +2223,43 @@ mod tests {
         let contract = AssessmentContract::from_assessment_evidence(&report);
         assert_eq!(contract.runs[0].assessments, vec![assessment.clone()]);
         let (decoded, _) = E2eReport::read_from(output.path()).unwrap();
-        assert_eq!(decoded.schema_version, RESULTS_SCHEMA_VERSION);
-        let (legacy, _) = E2eReport::read_from(&output.path().join("results.json")).unwrap();
-        assert_eq!(legacy.schema_version, 1);
-        assert!(legacy.execution.is_none());
-        let legacy_value: Value =
+        decoded.assessment_contract.validate(&decoded).unwrap();
+        let value: Value =
             serde_json::from_slice(&std::fs::read(output.path().join("results.json")).unwrap())
                 .unwrap();
-        assert!(legacy_value.get("schema_version").is_none());
-        assert!(legacy_value["scenarios"][0]["runs"][0]
-            .get("attempt_id")
-            .is_none());
+        assert!(value.get("schema_version").is_none());
+        assert!(value.get("assessment_contract").is_some());
+        assert!(value["scenarios"][0]["runs"][0].get("attempt_id").is_some());
     }
 
     #[test]
-    fn v3_write_preserves_frozen_v2_and_v1_projections() {
-        let output = tempfile::tempdir().unwrap();
-        let mut report = report(vec![aggregate(vec![run(100, true)])]);
-        let run_id = report.scenarios[0].runs[0].run_id.clone();
-        let attempt_id = report.scenarios[0].runs[0].attempt_id.clone();
-        report.schema_version = LATEST_RESULTS_SCHEMA_VERSION;
-        report.assessment_contract = Some(AssessmentContract {
-            contract_version: ASSESSMENT_CONTRACT_VERSION,
-            runs: vec![RunAssessmentContract {
-                run_id,
-                attempt_id,
-                system_status: SystemStatus::Passed,
-                assessments: Vec::new(),
-                assets: Vec::new(),
-                ai_final_assessment: AiFinalAssessment::not_evaluated(
-                    "final assessment is implemented by MOT-4447",
-                ),
-                effective_status: EffectiveStatus::Passed,
-            }],
-        });
-
-        let path = report.write_to(output.path(), &manifest()).unwrap();
-        assert_eq!(path, output.path().join("results-v3.json"));
-        assert!(output.path().join("results-v2.json").is_file());
-        assert!(output.path().join("results.json").is_file());
-
-        let (decoded, selected) = E2eReport::read_from(output.path()).unwrap();
-        assert_eq!(selected, output.path().join("results-v3.json"));
-        assert_eq!(decoded.schema_version, LATEST_RESULTS_SCHEMA_VERSION);
-        decoded
-            .assessment_contract
-            .as_ref()
-            .unwrap()
-            .validate(&decoded)
-            .unwrap();
-
-        let v2: Value =
-            serde_json::from_slice(&std::fs::read(output.path().join("results-v2.json")).unwrap())
-                .unwrap();
-        assert_eq!(v2["schema_version"], RESULTS_SCHEMA_VERSION);
-        assert!(v2.get("assessment_contract").is_none());
-        let v1: Value =
-            serde_json::from_slice(&std::fs::read(output.path().join("results.json")).unwrap())
-                .unwrap();
-        assert!(v1.get("schema_version").is_none());
-        assert!(v1.get("assessment_contract").is_none());
-    }
-
-    #[test]
-    fn v3_contract_cannot_override_the_run_system_status() {
-        let output = tempfile::tempdir().unwrap();
-        let mut report = report(vec![aggregate(vec![run(100, true)])]);
-        let run_id = report.scenarios[0].runs[0].run_id.clone();
-        let attempt_id = report.scenarios[0].runs[0].attempt_id.clone();
-        report.schema_version = LATEST_RESULTS_SCHEMA_VERSION;
-        report.assessment_contract = Some(AssessmentContract {
-            contract_version: ASSESSMENT_CONTRACT_VERSION,
-            runs: vec![RunAssessmentContract {
-                run_id,
-                attempt_id,
-                system_status: SystemStatus::HardGateFailed,
-                assessments: Vec::new(),
-                assets: Vec::new(),
-                ai_final_assessment: AiFinalAssessment::not_evaluated("not evaluated"),
-                effective_status: EffectiveStatus::HardGateFailed,
-            }],
-        });
-
-        let error = report.write_to(output.path(), &manifest()).unwrap_err();
-        assert!(error.to_string().contains("differs from E2E run status"));
-    }
-
-    #[test]
-    fn v3_contract_rejects_dangling_evidence_references() {
+    fn assessment_status_is_derived_from_the_run() {
         let output = tempfile::tempdir().unwrap();
         let mut report = report(vec![aggregate(vec![run(0, false)])]);
-        let fixture: Value = serde_json::from_str(include_str!(
-            "../tests/fixtures/results/results-v3-assessment-contract.json"
-        ))
-        .unwrap();
-        let mut contract: AssessmentContract =
-            serde_json::from_value(fixture["assessment_contract"].clone()).unwrap();
-        contract.runs[0].run_id = report.scenarios[0].runs[0].run_id.clone();
-        contract.runs[0].attempt_id = report.scenarios[0].runs[0].attempt_id.clone();
-        report.schema_version = LATEST_RESULTS_SCHEMA_VERSION;
-        report.assessment_contract = Some(contract);
+        report.write_to(output.path(), &manifest()).unwrap();
 
-        let error = report.write_to(output.path(), &manifest()).unwrap_err();
-        assert!(error
-            .to_string()
-            .contains("assessment evidence 'transcript' is not present"));
+        let (decoded, _) = E2eReport::read_from(output.path()).unwrap();
+        assert_eq!(
+            decoded.assessment_contract.runs[0].system_status,
+            crate::assessment::SystemStatus::HardGateFailed
+        );
+        assert_eq!(
+            decoded.assessment_contract.runs[0].effective_status,
+            crate::assessment::EffectiveStatus::HardGateFailed
+        );
     }
 
     #[test]
-    fn v2_read_rejects_v3_assessment_fields() {
+    fn read_rejects_versioned_payloads() {
         let output = tempfile::tempdir().unwrap();
         let mut report = report(vec![aggregate(vec![run(100, true)])]);
         let path = report.write_to(output.path(), &manifest()).unwrap();
         let mut value: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
-        value.as_object_mut().unwrap().insert(
-            "assessment_contract".into(),
-            serde_json::json!({"contract_version": 1, "runs": []}),
-        );
+        value["schema_version"] = serde_json::json!(3);
         std::fs::write(&path, serde_json::to_vec_pretty(&value).unwrap()).unwrap();
 
         let error = E2eReport::read_from(&path).unwrap_err();
-        assert!(error
-            .to_string()
-            .contains("results v2 cannot carry the v3 assessment contract"));
+        assert!(format!("{error:#}").contains("unknown field `schema_version`"));
     }
 
     #[test]
@@ -2661,12 +2348,12 @@ mod tests {
         assert!(decoded.scenarios[0].runs[0].deliverables[0]
             .artifact
             .is_some());
-        let legacy: Value =
+        let persisted: Value =
             serde_json::from_slice(&std::fs::read(output.path().join("results.json")).unwrap())
                 .unwrap();
-        assert!(legacy["scenarios"][0]["runs"][0]
+        assert!(persisted["scenarios"][0]["runs"][0]
             .get("deliverables")
-            .is_none());
+            .is_some());
     }
 
     #[test]
@@ -2761,13 +2448,12 @@ mod tests {
             },
             vec![attempt],
         )]);
-        report.schema_version = LATEST_RESULTS_SCHEMA_VERSION;
-        report.assessment_contract = Some(AssessmentContract::from_asset_evidence(&report));
+        report.assessment_contract = AssessmentContract::from_assessment_evidence(&report);
         report.write_to(output.path(), &manifest()).unwrap();
 
         assert!(output.path().join(captured_path).is_file());
         let (decoded, _) = E2eReport::read_from(output.path()).unwrap();
-        let asset = &decoded.assessment_contract.unwrap().runs[0].assets[0];
+        let asset = &decoded.assessment_contract.runs[0].assets[0];
         assert_eq!(
             asset.validation.outcome,
             crate::assessment::AssetValidationOutcome::RemovedDuringCleanup
@@ -2839,29 +2525,6 @@ mod tests {
         assert!(!reports[0].passed());
     }
 
-    #[test]
-    fn v1_results_remain_readable_with_absent_v2_identity() {
-        let output = tempfile::tempdir().unwrap();
-        let value = serde_json::json!({
-            "subject": model(),
-            "passed": false,
-            "scenarios": []
-        });
-        std::fs::write(
-            output.path().join("results.json"),
-            serde_json::to_vec(&value).unwrap(),
-        )
-        .unwrap();
-
-        let (report, _) = E2eReport::read_from(output.path()).unwrap();
-        assert_eq!(report.schema_version, 1);
-        assert!(report.execution.is_none());
-        assert!(report.system_under_test.is_none());
-        let normalized = AssessmentContract::normalize(&report);
-        assert_eq!(normalized.contract_version, ASSESSMENT_CONTRACT_VERSION);
-        assert!(normalized.runs.is_empty());
-    }
-
     fn model() -> ModelArtifact {
         ModelArtifact {
             model: "model".into(),
@@ -2873,7 +2536,7 @@ mod tests {
         }
     }
 
-    fn metrics() -> SessionMetricsResponseV1 {
+    fn metrics() -> SessionMetricsResponse {
         serde_json::from_value(serde_json::json!({
             "root_session_id": "root",
             "complete": true,

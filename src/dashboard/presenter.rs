@@ -118,10 +118,11 @@ pub(super) fn execution_summary(
         .count();
     let status = semantic_status(report.passed, hard_gate_failures, technical_failures);
     let totals = efficiency_totals(report);
-    let execution_identity = report.execution.as_ref();
-    let system = report.system_under_test.as_ref();
+    let execution_identity = &report.execution;
+    let system = &report.system_under_test;
     let engine_revision = system
-        .and_then(|value| value.engine_revision.as_ref())
+        .engine_revision
+        .as_ref()
         .or(report.engine_revision.as_ref());
     let subject = json!({
         "id": subject_id,
@@ -145,24 +146,24 @@ pub(super) fn execution_summary(
     Ok(json!({
         "id": metadata.id,
         "label": metadata.label,
-        "run_id": execution_identity.map(|value| value.execution_id.as_str()).unwrap_or(metadata.id.as_str()),
+        "run_id": execution_identity.execution_id,
         "attempt": 1,
         "workflow_name": "Harness E2E Local",
         "workflow_url": null,
         "event": "local",
         "actor": actor(),
-        "started_at": execution_identity.map(|value| value.started_at.as_str()).unwrap_or(metadata.started_at.as_str()),
-        "completed_at": execution_identity.map(|value| value.completed_at.as_str()).unwrap_or(metadata.completed_at.as_str()),
+        "started_at": execution_identity.started_at,
+        "completed_at": execution_identity.completed_at,
         "conclusion": if hard_gate_failures > 0 || technical_failures > 0 { "failure" } else { "success" },
         "status": status,
         "availability": "full",
         "detail_path": format!("runs/{}.json", metadata.id),
         "generated_at": generated_at,
-        "lane": execution_identity.map(|value| value.lane.as_str()).unwrap_or("local"),
+        "lane": execution_identity.lane,
         "execution": execution,
-        "release": release_identity(system),
-        "source": source_identity(system),
-        "stack": stack_identity(system),
+        "release": release_identity(Some(system)),
+        "source": source_identity(Some(system)),
+        "stack": stack_identity(Some(system)),
         "requested_runs": metadata.request.runs,
         "subjects": [subject],
         "scenario_metrics": scenario_metrics(&subject_id, report),
@@ -420,8 +421,8 @@ fn first_failure(report: &E2eReport) -> Value {
 }
 
 fn execution_identity(metadata: &RunMetadata, report: Option<&E2eReport>) -> Value {
-    let report_identity = report.and_then(|value| value.execution.as_ref());
-    let system = report.and_then(|value| value.system_under_test.as_ref());
+    let report_identity = report.map(|value| &value.execution);
+    let system = report.map(|value| &value.system_under_test);
     let (head_sha, repository) = match system.map(|value| &value.stack) {
         Some(StackIdentity::Source {
             workers_repository,

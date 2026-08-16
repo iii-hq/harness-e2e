@@ -1,4 +1,3 @@
-import copy
 import datetime as dt
 import json
 import pathlib
@@ -19,11 +18,10 @@ NOW = dt.datetime(2026, 8, 12, tzinfo=dt.timezone.utc)
 
 def policy():
     return {
-        "schema_version": 1,
         "lane_order": ["pull_request", "main", "daily", "release"],
         "canonical": {
             "entrypoint": "e2e::run",
-            "results_schema_version": 2,
+            "results_file": "results.json",
             "archive_scheme": "iii-storage",
             "required_identity_fields": [
                 "execution_id",
@@ -33,20 +31,15 @@ def policy():
             ],
         },
         "minimum_shadow_windows": 3,
-        "rollback_window_days": 14,
-        "legacy": {
-            "workflow": ".github/workflows/_harness-e2e.yml",
-            "immutable_tag_prefix": "refs/tags/e2e-legacy-",
-        },
     }
 
 
-def lane(name, mode="new_path"):
+def lane(name, mode="canonical"):
     return {
         "lane": name,
         "mode": mode,
         "entrypoint": "e2e::run",
-        "results_schema_version": 2,
+        "results_file": "results.json",
         "identity": {
             "execution_id": f"execution-{name}",
             "lane": name,
@@ -63,7 +56,6 @@ def lane(name, mode="new_path"):
 
 def evidence():
     return {
-        "schema_version": 1,
         "subject_revision": SHA_A,
         "e2e_revision": SHA_B,
         "lanes": [lane(name) for name in policy()["lane_order"]],
@@ -78,32 +70,12 @@ def evidence():
             }
             for sequence, seed in enumerate((8008, 8009, 8010), start=1)
         ],
-        "consumers": [
-            {
-                "id": "release-gate",
-                "active": True,
-                "entrypoint": "e2e::run",
-                "results_schema_version": 2,
-            }
-        ],
-        "rollback": {
-            "legacy_ref": "refs/tags/e2e-legacy-2026-08",
-            "legacy_revision": "d" * 40,
-            "window_started_at": "2026-07-01T00:00:00Z",
-            "window_ends_at": "2026-07-15T00:00:00Z",
-            "drill": {
-                "executed_at": "2026-07-10T00:00:00Z",
-                "succeeded": True,
-                "restored_entrypoint": ".github/workflows/_harness-e2e.yml",
-                "evidence_sha256": "e" * 64,
-            },
-        },
     }
 
 
 class CutoverValidationTests(unittest.TestCase):
     def test_checked_in_policy_is_valid(self):
-        path = ROOT / "config" / "policies" / "cutover-v1.json"
+        path = ROOT / "config" / "policies" / "cutover.json"
         validate_policy(json.loads(path.read_text(encoding="utf-8")))
 
     def test_policy_requires_ordered_lanes_and_iii_contract(self):
@@ -129,7 +101,7 @@ class CutoverValidationTests(unittest.TestCase):
         value["lanes"][1]["mode"] = "shadow"
         result = evaluate_cutover(policy(), value, "daily", NOW)
         self.assertFalse(result["eligible"])
-        self.assertIn("lane main has not cut over to the new path", result["reasons"])
+        self.assertIn("lane main has not promoted the canonical path", result["reasons"])
 
     def test_shadow_parity_must_be_consecutive(self):
         value = evidence()
@@ -150,32 +122,16 @@ class CutoverValidationTests(unittest.TestCase):
             result["reasons"],
         )
 
-    def test_legacy_removal_requires_elapsed_window_drill_and_no_consumers(self):
-        result = evaluate_cutover(policy(), evidence(), "legacy_removal", NOW)
-        self.assertTrue(result["eligible"])
+    def test_versioned_policy_and_evidence_are_rejected(self):
+        versioned_policy = policy()
+        versioned_policy["schema_version"] = 1
+        with self.assertRaises(CutoverError):
+            validate_policy(versioned_policy)
 
-        invalid = evidence()
-        invalid["consumers"].append(
-            {
-                "id": "old-daily",
-                "active": True,
-                "entrypoint": "legacy-binary",
-                "results_schema_version": 1,
-            }
-        )
-        invalid["rollback"]["drill"]["succeeded"] = False
-        result = evaluate_cutover(policy(), invalid, "legacy_removal", NOW)
-        self.assertFalse(result["eligible"])
-        self.assertTrue(any("old-daily" in reason for reason in result["reasons"]))
-        self.assertIn("rollback simulation has not succeeded", result["reasons"])
-
-    def test_legacy_removal_rejects_an_open_rollback_window(self):
-        invalid = copy.deepcopy(evidence())
-        invalid["rollback"]["window_started_at"] = "2026-08-01T00:00:00Z"
-        invalid["rollback"]["window_ends_at"] = "2026-08-15T00:00:00Z"
-        result = evaluate_cutover(policy(), invalid, "legacy_removal", NOW)
-        self.assertFalse(result["eligible"])
-        self.assertIn("rollback window has not elapsed", result["reasons"])
+        versioned_evidence = evidence()
+        versioned_evidence["schema_version"] = 1
+        with self.assertRaises(CutoverError):
+            evaluate_cutover(policy(), versioned_evidence, "release", NOW)
 
 
 if __name__ == "__main__":

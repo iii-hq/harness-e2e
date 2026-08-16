@@ -9,8 +9,7 @@
     "captured_before_cleanup",
     "limits",
     "reconciled_after_cleanup",
-    "run_id",
-    "schema_version"
+    "run_id"
   ],
   "properties": {
     "assets": {
@@ -46,16 +45,9 @@
     },
     "run_id": {
       "type": "string"
-    },
-    "schema_version": {
-      "type": "integer",
-      "format": "uint32",
-      "enum": [
-        1
-      ],
-      "minimum": 0.0
     }
   },
+  "additionalProperties": false,
   "definitions": {
     "ArtifactReference": {
       "type": "object",

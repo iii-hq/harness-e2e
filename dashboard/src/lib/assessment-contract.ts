@@ -1,6 +1,3 @@
-export const assessmentContractVersion = 1
-export const latestResultsSchemaVersion = 3
-
 export type AssessmentKind =
   | 'required_check'
   | 'signal'
@@ -36,10 +33,8 @@ export type EvidenceReference = {
 
 export type AnalyzerIdentity = {
   analyzer: string
-  analyzer_version: string
   provider?: string
   model?: string
-  prompt_version: string
   input_sha256: string
 }
 
@@ -126,12 +121,10 @@ export type RunAssessmentContract = {
 }
 
 export type AssessmentContract = {
-  contract_version: number
   runs: RunAssessmentContract[]
 }
 
 export type AnalysisBundle = {
-  schema_version: number
   scope: 'execution' | 'test' | 'comparison'
   input_sha256: string
   subjects: Array<{
@@ -159,7 +152,6 @@ export type AnalysisBundle = {
 }
 
 export type AnalysisResponse = {
-  schema_version: number
   input_sha256: string
   analyzer: AnalyzerIdentity
   facts?: Array<{ summary: string; evidence: EvidenceReference[] }>
@@ -180,66 +172,31 @@ export type AnalysisResponse = {
 
 export class AssessmentContractError extends Error {}
 
-export function normalizeAssessmentContract(
-  result: unknown,
-): AssessmentContract {
+export function readAssessmentContract(result: unknown): AssessmentContract {
   if (!isRecord(result)) {
     throw new AssessmentContractError('E2E result must be an object')
   }
-  const schemaVersion =
-    typeof result.schema_version === 'number' ? result.schema_version : 1
-  if (schemaVersion === latestResultsSchemaVersion) {
-    const contract = result.assessment_contract
-    if (!isRecord(contract)) {
-      throw new AssessmentContractError(
-        'results v3 require assessment_contract',
-      )
-    }
-    if (contract.contract_version !== assessmentContractVersion) {
-      throw new AssessmentContractError(
-        'unsupported assessment contract version',
-      )
-    }
-    if (!Array.isArray(contract.runs)) {
-      throw new AssessmentContractError(
-        'assessment_contract.runs must be an array',
-      )
-    }
-    validateRunIdentities(contract.runs)
-    return contract as unknown as AssessmentContract
-  }
-  if (schemaVersion !== 1 && schemaVersion !== 2) {
+  if ('schema_version' in result) {
     throw new AssessmentContractError(
-      `unsupported results schema version ${schemaVersion}`,
+      'versioned E2E payloads are not supported',
     )
   }
-
-  const normalizedRuns: RunAssessmentContract[] = []
-  const scenarios = Array.isArray(result.scenarios) ? result.scenarios : []
-  scenarios.forEach((scenario, scenarioIndex) => {
-    if (!isRecord(scenario) || !Array.isArray(scenario.runs)) return
-    scenario.runs.forEach((run, runIndex) => {
-      if (!isRecord(run)) return
-      const attemptNumber =
-        typeof run.attempt_number === 'number' ? run.attempt_number : 1
-      normalizedRuns.push({
-        run_id:
-          nonemptyString(run.run_id) ??
-          `legacy-run-${scenarioIndex}-${runIndex}`,
-        attempt_id:
-          nonemptyString(run.attempt_id) ?? `legacy-attempt-${attemptNumber}`,
-        system_status: 'unavailable',
-        assessments: [],
-        assets: [],
-        ai_final_assessment: {
-          availability: 'not_evaluated',
-          reason: 'legacy result does not contain the assessment contract',
-        },
-        effective_status: 'unavailable',
-      })
-    })
-  })
-  return { contract_version: assessmentContractVersion, runs: normalizedRuns }
+  const contract = result.assessment_contract
+  if (!isRecord(contract)) {
+    throw new AssessmentContractError('results require assessment_contract')
+  }
+  if ('contract_version' in contract) {
+    throw new AssessmentContractError(
+      'versioned assessment contracts are not supported',
+    )
+  }
+  if (!Array.isArray(contract.runs)) {
+    throw new AssessmentContractError(
+      'assessment_contract.runs must be an array',
+    )
+  }
+  validateRunIdentities(contract.runs)
+  return contract as unknown as AssessmentContract
 }
 
 function validateRunIdentities(runs: unknown[]) {

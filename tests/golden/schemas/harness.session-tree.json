@@ -5,8 +5,7 @@
       "capabilities": [
         "session-tree"
       ],
-      "name": "harness-control-plane",
-      "version": 1
+      "name": "harness-control-plane"
     }
   },
   "request_schema": {

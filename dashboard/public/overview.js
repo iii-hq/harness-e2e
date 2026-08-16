@@ -4,10 +4,7 @@
   const benchmarkApi = window.HarnessBenchmarkData;
   const executionApi = window.HarnessExecutionData;
   const benchmarkData = benchmarkApi.normalizeBenchmarkData(window.BENCHMARK_DATA);
-  const history = executionApi.mergeExecutionHistory(
-    window.HARNESS_EXECUTIONS,
-    benchmarkData,
-  );
+  const history = executionApi.mergeExecutionHistory(window.HARNESS_EXECUTIONS);
   const isLocal = history.mode === "local";
   const isObserved = history.mode === "observed";
   const remotePaging = Boolean(
@@ -32,7 +29,6 @@
     body: document.querySelector("#execution-body"),
     capabilityBody: document.querySelector("#capability-body"),
     capabilityPolicy: document.querySelector("#capability-policy"),
-    capabilityPolicyVersion: document.querySelector("#capability-policy-version"),
     capabilityReliableReason: document.querySelector("#capability-reliable-reason"),
     capabilityReliableTier: document.querySelector("#capability-reliable-tier"),
     capabilityRevision: document.querySelector("#capability-revision"),
@@ -320,9 +316,6 @@
     const revision = latest?.source?.sha || latest?.stack?.lock_digest || "Unknown";
     elements.capabilityRevision.textContent = String(revision).slice(0, 16);
     elements.capabilityRevision.title = String(revision);
-    elements.capabilityPolicyVersion.textContent = capability?.policy?.policy_version
-      ? `v${capability.policy.policy_version}`
-      : "—";
     elements.capabilityReliableTier.textContent = capability?.highest_reliable_tier
       ? tierLabel(capability.highest_reliable_tier)
       : "Not established";

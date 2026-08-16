@@ -13,8 +13,6 @@
     "lane",
     "occurred_at",
     "passed",
-    "results_schema_version",
-    "schema_version",
     "stack_mode",
     "subject_model",
     "subject_provider",
@@ -53,19 +51,6 @@
     "passed": {
       "type": "boolean"
     },
-    "results_schema_version": {
-      "type": "integer",
-      "format": "uint32",
-      "minimum": 0.0
-    },
-    "schema_version": {
-      "type": "integer",
-      "format": "uint32",
-      "enum": [
-        1
-      ],
-      "minimum": 0.0
-    },
     "stack_mode": {
       "type": "string"
     },
@@ -79,6 +64,7 @@
       "type": "string"
     }
   },
+  "additionalProperties": false,
   "definitions": {
     "DurableArchiveReference": {
       "type": "object",
@@ -89,8 +75,7 @@
         "identity_sha256",
         "manifest",
         "manifest_backup",
-        "retention_class",
-        "schema_version"
+        "retention_class"
       ],
       "properties": {
         "archive_id": {
@@ -119,13 +104,9 @@
         },
         "retention_class": {
           "$ref": "#/definitions/RetentionClass"
-        },
-        "schema_version": {
-          "type": "integer",
-          "format": "uint32",
-          "minimum": 0.0
         }
-      }
+      },
+      "additionalProperties": false
     },
     "RetentionClass": {
       "type": "string",

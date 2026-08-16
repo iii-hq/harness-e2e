@@ -1,11 +1,10 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://github.com/iii-hq/harness-e2e/schemas/subject-artifact-v1.json",
-  "title": "Harness E2E subject artifact v1",
+  "$id": "https://github.com/iii-hq/harness-e2e/schemas/subject-artifact.json",
+  "title": "Harness E2E subject artifact",
   "type": "object",
   "additionalProperties": false,
   "required": [
-    "schema_version",
     "repository",
     "revision",
     "created_at",
@@ -14,7 +13,6 @@
     "entrypoints"
   ],
   "properties": {
-    "schema_version": { "const": 1 },
     "repository": {
       "type": "string",
       "pattern": "^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$"

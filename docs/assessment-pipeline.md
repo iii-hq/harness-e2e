@@ -8,21 +8,18 @@ materializes exactly one `AssessmentResult` for every declaration, including an
 explicit `not_evaluated` or `unavailable` result when execution cannot reach the
 assessment.
 
-The producer is intentionally shadow-only in this change. Results are retained
-on each in-memory attempt and consumed by
-`AssessmentContract::from_assessment_evidence`; normal execution continues to
-publish results v2 until MOT-4448 activates v3 aggregation and publication.
+Results are retained on each attempt and materialized directly into the current
+`assessment_contract` in `results.json`.
 
 ## Deterministic and judge results
 
 Required checks retain `hard_gate` policy and their declared dimension. Signals
 retain `advisory` policy. A failed hard gate remains failed even when it earned
 partial points, while the score is preserved as independent evidence. Judge
-criteria are always advisory and use the versioned `criterion-rubric-v1` input
-and `criterion-assessment-v1` prompt.
+criteria are always advisory and use the current criterion rubric and prompt.
 
-Successful judge results record provider, model, analyzer and prompt versions,
-the canonical input SHA-256, per-criterion confidence, aggregate attempt
+Successful judge results record provider, model, analyzer name, the canonical
+input SHA-256, per-criterion confidence, aggregate attempt
 latency, input/output tokens, and cost. Judge execution failures never replace
 an already materialized deterministic result. They become scoreless advisory
 states with one stable classification prefix:
@@ -36,8 +33,8 @@ states with one stable classification prefix:
 
 When a judge is configured, captured assets with both an immutable evidence
 reference and a bounded sanitized preview are reviewed as one bounded batch.
-The input identifies `asset-quality-rubric-v1` and `asset-quality-v1`, and its
-canonical hash is recorded in every analyzer identity. The analyzer can only
+The input identifies the current asset-quality rubric, and its canonical hash
+is recorded in every analyzer identity. The analyzer can only
 score the supplied preview and must return every inspected artifact id and
 SHA-256 exactly. Missing, added, or changed evidence identities make the whole
 advisory response malformed.

@@ -23,13 +23,7 @@ const ASSET_SYSTEM_PROMPT: &str = "You are an impartial generated-asset quality 
 Assess only the bounded, sanitized previews and immutable evidence identities supplied. \
 Do not infer content outside that evidence. Return exactly one JSON object, without Markdown \
 or explanatory text.";
-pub const JUDGE_PROTOCOL: &str = "assessment-json-v2";
-pub const CRITERION_ANALYZER_VERSION: &str = "1";
-pub const CRITERION_PROMPT_VERSION: &str = "criterion-assessment-v1";
-pub const CRITERION_RUBRIC_VERSION: &str = "criterion-rubric-v1";
-pub const ASSET_ANALYZER_VERSION: &str = "1";
-pub const ASSET_PROMPT_VERSION: &str = "asset-quality-v1";
-pub const ASSET_RUBRIC_VERSION: &str = "asset-quality-rubric-v1";
+pub const JUDGE_PROTOCOL: &str = "assessment-json";
 const MAX_JUDGE_ATTEMPTS: u8 = 3;
 
 #[derive(Debug, Clone)]
@@ -173,8 +167,6 @@ pub async fn evaluate(
         })
         .collect();
     let input = json!({
-        "prompt_version": CRITERION_PROMPT_VERSION,
-        "rubric_version": CRITERION_RUBRIC_VERSION,
         "task_prompt": spec.prompt,
         "assistant_answer": answer,
         "reference": reference,
@@ -205,13 +197,7 @@ Use this exact object shape and replace only the scores and explanatory text:\n{
     let mut attempt_usage = Vec::new();
     let started = Instant::now();
     let input_sha256 = artifact::sha256_value(&input).context("hash criterion judge input")?;
-    let analyzer = analyzer_identity(
-        "criterion-assessment",
-        CRITERION_ANALYZER_VERSION,
-        CRITERION_PROMPT_VERSION,
-        config,
-        input_sha256,
-    );
+    let analyzer = analyzer_identity("criterion-assessment", config, input_sha256);
 
     for attempt in 1..=MAX_JUDGE_ATTEMPTS {
         let response =
@@ -316,8 +302,6 @@ pub async fn evaluate_asset_quality(
     }
 
     let input = json!({
-        "prompt_version": ASSET_PROMPT_VERSION,
-        "rubric_version": ASSET_RUBRIC_VERSION,
         "rubric": {
             "possible": 100,
             "dimensions": [
@@ -363,13 +347,7 @@ you inspected. Use this object shape and replace only scores, confidence, and su
             .context("serialize asset judge response template")?,
     );
     let input_sha256 = artifact::sha256_value(&input).context("hash asset judge input")?;
-    let analyzer = analyzer_identity(
-        "asset-quality",
-        ASSET_ANALYZER_VERSION,
-        ASSET_PROMPT_VERSION,
-        config,
-        input_sha256,
-    );
+    let analyzer = analyzer_identity("asset-quality", config, input_sha256);
     let mut attempt_prompt = prompt.clone();
     let mut attempt_usage = Vec::new();
     let started = Instant::now();
@@ -817,17 +795,13 @@ fn asset_response_schema() -> Value {
 
 fn analyzer_identity(
     analyzer: &str,
-    analyzer_version: &str,
-    prompt_version: &str,
     config: &JudgeConfig,
     input_sha256: String,
 ) -> AnalyzerIdentity {
     AnalyzerIdentity {
         analyzer: analyzer.to_string(),
-        analyzer_version: analyzer_version.to_string(),
         provider: Some(config.provider.clone()),
         model: Some(config.model.clone()),
-        prompt_version: prompt_version.to_string(),
         input_sha256,
     }
 }
@@ -931,10 +905,8 @@ mod tests {
     fn test_analyzer() -> AnalyzerIdentity {
         AnalyzerIdentity {
             analyzer: "asset-quality".into(),
-            analyzer_version: ASSET_ANALYZER_VERSION.into(),
             provider: Some("provider".into()),
             model: Some("model".into()),
-            prompt_version: ASSET_PROMPT_VERSION.into(),
             input_sha256: format!("sha256:{}", "a".repeat(64)),
         }
     }
@@ -986,8 +958,8 @@ mod tests {
         assert_eq!(results[0].confidence, Some(0.82));
         assert_eq!(results[0].evidence, asset.validation.evidence);
         assert_eq!(
-            results[0].analyzer.as_ref().unwrap().prompt_version,
-            ASSET_PROMPT_VERSION
+            results[0].analyzer.as_ref().unwrap().analyzer,
+            "asset-quality"
         );
         results[0].validate().unwrap();
     }

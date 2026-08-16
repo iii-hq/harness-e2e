@@ -53,10 +53,10 @@ function execution(overrides = {}) {
   };
 }
 
-test("normalizes execution status and availability", () => {
+test("keeps only current execution statuses and availability", () => {
   const normalized = normalizeExecution({
     id: 99,
-    status: "failure",
+    status: "infra_failed",
     subjects: [],
   });
 
@@ -69,43 +69,9 @@ test("normalizes execution status and availability", () => {
   );
 });
 
-test("normalizes schema 2 failures with blocking precedence", () => {
-  assert.equal(
-    normalizeExecution({
-      status: "failed",
-      conclusion: "failure",
-      totals: {},
-      subjects: [{ passed: false }],
-    }).status,
-    "infra_failed",
-  );
-  assert.equal(
-    normalizeExecution({
-      status: "failed",
-      conclusion: "success",
-      totals: { technical_failures: 1, hard_gate_failures: 1 },
-      subjects: [{ passed: false }],
-    }).status,
-    "technical_failed",
-  );
-  assert.equal(
-    normalizeExecution({
-      status: "failed",
-      conclusion: "failure",
-      totals: { hard_gate_failures: 1 },
-      subjects: [{ passed: false }],
-    }).status,
-    "hard_gate_failed",
-  );
-  assert.equal(
-    normalizeExecution({
-      status: "failed",
-      conclusion: "success",
-      totals: {},
-      subjects: [{ passed: false }],
-    }).status,
-    "infra_failed",
-  );
+test("rejects removed status aliases", () => {
+  assert.equal(normalizeExecution({ status: "failed" }).status, "incomplete");
+  assert.equal(normalizeExecution({ status: "success" }).status, "incomplete");
 });
 
 test("builds the latest health identity, completeness, and compact first failure", () => {
@@ -143,12 +109,10 @@ test("keeps unavailable latest health counts null", () => {
 test("merges manifest executions and finds a retained detail", () => {
   const history = mergeExecutionHistory(
     {
-      schema_version: 2,
       mode: "local",
       last_update: "2026-07-29T06:10:00Z",
       executions: [execution()],
     },
-    { snapshots: [] },
   );
 
   assert.equal(history.executions.length, 1);
@@ -158,7 +122,7 @@ test("merges manifest executions and finds a retained detail", () => {
 
 test("defaults execution history to published mode", () => {
   assert.equal(
-    mergeExecutionHistory({ executions: [] }, { snapshots: [] }).mode,
+    mergeExecutionHistory({ executions: [] }).mode,
     "published",
   );
 });
@@ -166,7 +130,6 @@ test("defaults execution history to published mode", () => {
 test("preserves observed report mode without enabling the local runner", () => {
   const history = mergeExecutionHistory(
     { mode: "observed", executions: [] },
-    { releases: [] },
   );
   assert.equal(history.mode, "observed");
 });
@@ -183,7 +146,6 @@ test("keeps workflow attempts distinct and newest first", () => {
         }),
       ],
     },
-    { snapshots: [] },
   );
 
   assert.deepEqual(
@@ -287,47 +249,6 @@ test("normalizes scenario outcomes with the shared blocking precedence", () => {
     "hard_gate_failed",
   );
   assert.equal(normalizeScenarioStatus({ passed: true }), "passed");
-});
-
-test("derives aggregate legacy entries from benchmark snapshots", () => {
-  const history = mergeExecutionHistory(null, {
-    lastUpdate: 1,
-    snapshots: [
-      {
-        id: "daily::legacy",
-        date: Date.UTC(2026, 6, 28, 6),
-        lane: "daily",
-        execution: {},
-        workflowUrl: "https://github.com/iii-hq/workers/actions/runs/legacy",
-        source: { sha: "c".repeat(40), ref: "main" },
-        subjects: {
-          glm: {
-            id: "glm",
-            model: "glm-5.2",
-            provider: "zai",
-            passed: true,
-            metrics: {
-              quality: {
-                direct_answer: {
-                  median_score: { value: 90, passed: true, status: "passed" },
-                  pass_rate: { value: 100, passed: true, status: "passed" },
-                },
-                suite: {
-                  scenario_pass_rate: { value: 100 },
-                  report_coverage: { value: 100 },
-                },
-              },
-              reliability: { suite: {} },
-              efficiency: { suite: {} },
-            },
-          },
-        },
-      },
-    ],
-  });
-
-  assert.equal(history.executions[0].availability, "aggregate");
-  assert.equal(history.executions[0].subjects[0].scenarios[0].id, "direct_answer");
 });
 
 test("derives per-scenario run averages from a full execution detail", () => {

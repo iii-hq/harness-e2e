@@ -1,5 +1,4 @@
 {
-  "schema_version": 1,
   "profile_id": "weekly-l4-recovery",
   "seed": 40401,
   "expected_outcome": "recovered",

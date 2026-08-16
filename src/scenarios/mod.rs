@@ -12,7 +12,7 @@ use serde_json::Value;
 use crate::assessment::{AssessmentKind, AssessmentPolicy, AssessmentSource};
 use crate::context::E2eContext;
 use crate::report::HardGateReport;
-use crate::wire::SessionMetricsResponseV1;
+use crate::wire::SessionMetricsResponse;
 
 mod assessment;
 pub mod common;
@@ -306,7 +306,7 @@ impl ScenarioSpec {
 
 pub struct ScenarioObservation {
     pub case: ScenarioCase,
-    pub metrics: SessionMetricsResponseV1,
+    pub metrics: SessionMetricsResponse,
     pub transcript: Value,
     pub response: String,
     pub deliverables: Vec<CapturedDeliverable>,
@@ -721,7 +721,7 @@ mod tests {
     }
 
     #[test]
-    fn validation_rejects_a_zero_contract_version() {
+    fn validation_rejects_a_zero_scenario_version() {
         let mut spec = ScenarioId::PersistentState.spec("run");
         spec.version = 0;
 

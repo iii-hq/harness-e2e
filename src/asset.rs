@@ -18,7 +18,6 @@ use crate::redaction::{RedactionPolicy, RedactionReport};
 use crate::report::{DeliverableReport, EvaluationDimension};
 use crate::scenarios::{CapturedDeliverable, ProvenanceEvidence, ScenarioCase};
 
-pub const ASSET_CAPTURE_SCHEMA_VERSION: u32 = 1;
 pub const DEFAULT_MAX_CAPTURED_ASSETS: usize = 64;
 pub const DEFAULT_MAX_CAPTURE_BYTES: u64 = 16 * 1024 * 1024;
 pub const DEFAULT_MAX_PREVIEW_BYTES: usize = 1_024;
@@ -74,8 +73,8 @@ pub struct AssetEvidenceEntry {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct AssetCaptureManifest {
-    pub schema_version: u32,
     pub run_id: String,
     pub attempt_id: String,
     pub captured_at: String,
@@ -602,7 +601,6 @@ pub fn persist_before_cleanup(
         })
         .collect::<Result<Vec<_>>>()?;
     let manifest = AssetCaptureManifest {
-        schema_version: ASSET_CAPTURE_SCHEMA_VERSION,
         run_id: run_id.to_string(),
         attempt_id: attempt_id.to_string(),
         captured_at: Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true),
@@ -617,7 +615,7 @@ pub fn persist_before_cleanup(
         &PathBuf::from("evidence")
             .join(run_id)
             .join(attempt_id)
-            .join("asset-capture-v1.json"),
+            .join("asset-capture.json"),
         "asset_capture",
         "asset_capture_manifest",
         &manifest,
@@ -686,7 +684,7 @@ pub fn persist_after_cleanup(
         .context("pre-cleanup asset capture manifest has no parent directory")?;
     artifact::write_json(
         output,
-        &root.join("asset-reconciliation-v1.json"),
+        &root.join("asset-reconciliation.json"),
         "asset_reconciliation",
         "asset_capture_manifest",
         &manifest,

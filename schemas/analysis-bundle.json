@@ -4,7 +4,6 @@
   "type": "object",
   "required": [
     "input_sha256",
-    "schema_version",
     "scope",
     "subjects"
   ],
@@ -60,14 +59,6 @@
         "$ref": "#/definitions/AnalysisMetric"
       }
     },
-    "schema_version": {
-      "type": "integer",
-      "format": "uint32",
-      "enum": [
-        1
-      ],
-      "minimum": 0.0
-    },
     "scope": {
       "$ref": "#/definitions/AnalysisScope"
     },
@@ -78,6 +69,7 @@
       }
     }
   },
+  "additionalProperties": false,
   "definitions": {
     "AnalysisExcerpt": {
       "type": "object",
@@ -171,15 +163,10 @@
       "type": "object",
       "required": [
         "analyzer",
-        "analyzer_version",
-        "input_sha256",
-        "prompt_version"
+        "input_sha256"
       ],
       "properties": {
         "analyzer": {
-          "type": "string"
-        },
-        "analyzer_version": {
           "type": "string"
         },
         "input_sha256": {
@@ -191,16 +178,14 @@
             "null"
           ]
         },
-        "prompt_version": {
-          "type": "string"
-        },
         "provider": {
           "type": [
             "string",
             "null"
           ]
         }
-      }
+      },
+      "additionalProperties": false
     },
     "AnalyzerUsage": {
       "type": "object",
@@ -569,17 +554,13 @@
     "FailureRecord": {
       "type": "object",
       "required": [
+        "domain",
         "message",
         "phase"
       ],
       "properties": {
         "domain": {
-          "default": "e2e_infrastructure",
-          "allOf": [
-            {
-              "$ref": "#/definitions/FailureDomain"
-            }
-          ]
+          "$ref": "#/definitions/FailureDomain"
         },
         "message": {
           "type": "string"

@@ -7,7 +7,6 @@
     "expected_outcome",
     "profile_id",
     "profile_sha256",
-    "schema_version",
     "seed"
   ],
   "properties": {
@@ -25,14 +24,6 @@
     },
     "profile_sha256": {
       "type": "string"
-    },
-    "schema_version": {
-      "type": "integer",
-      "format": "uint32",
-      "enum": [
-        1
-      ],
-      "minimum": 0.0
     },
     "seed": {
       "type": "integer",

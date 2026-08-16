@@ -262,7 +262,6 @@ async fn execution_manifest(State(state): State<AppState>) -> Result<Response, A
     Ok(javascript_response(format!(
         "window.HARNESS_EXECUTIONS = {};\n",
         json!({
-            "schema_version": super::read_model::DASHBOARD_SCHEMA_VERSION,
             "mode": if state.view_only { "observed" } else { "local" },
             "last_update": last_update,
             "repo_url": repository_url(),

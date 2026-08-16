@@ -5,7 +5,6 @@
   "required": [
     "max_work_amplification",
     "profile_id",
-    "schema_version",
     "seed"
   ],
   "properties": {
@@ -65,14 +64,6 @@
     },
     "profile_id": {
       "type": "string"
-    },
-    "schema_version": {
-      "type": "integer",
-      "format": "uint32",
-      "enum": [
-        1
-      ],
-      "minimum": 0.0
     },
     "seed": {
       "type": "integer",

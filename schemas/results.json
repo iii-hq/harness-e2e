@@ -1,6 +1,6 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
-  "title": "E2eResultsV3",
+  "title": "E2eResults",
   "type": "object",
   "required": [
     "assessment_contract",
@@ -8,20 +8,12 @@
     "manifest",
     "passed",
     "scenarios",
-    "schema_version",
     "subject",
     "system_under_test"
   ],
   "properties": {
     "assessment_contract": {
-      "anyOf": [
-        {
-          "$ref": "#/definitions/AssessmentContract"
-        },
-        {
-          "type": "null"
-        }
-      ]
+      "$ref": "#/definitions/AssessmentContract"
     },
     "engine_revision": {
       "type": [
@@ -30,14 +22,7 @@
       ]
     },
     "execution": {
-      "anyOf": [
-        {
-          "$ref": "#/definitions/ExecutionIdentity"
-        },
-        {
-          "type": "null"
-        }
-      ]
+      "$ref": "#/definitions/ExecutionIdentity"
     },
     "judge": {
       "anyOf": [
@@ -70,7 +55,6 @@
     },
     "redaction": {
       "default": {
-        "policy_version": 1,
         "redacted_fields": 0,
         "redacted_values": 0,
         "rules": []
@@ -87,28 +71,14 @@
         "$ref": "#/definitions/E2eScenarioReport"
       }
     },
-    "schema_version": {
-      "type": "integer",
-      "format": "uint32",
-      "enum": [
-        3
-      ],
-      "minimum": 0.0
-    },
     "subject": {
       "$ref": "#/definitions/ModelArtifact"
     },
     "system_under_test": {
-      "anyOf": [
-        {
-          "$ref": "#/definitions/SystemUnderTestIdentity"
-        },
-        {
-          "type": "null"
-        }
-      ]
+      "$ref": "#/definitions/SystemUnderTestIdentity"
     }
   },
+  "additionalProperties": false,
   "definitions": {
     "AiAssessmentAvailability": {
       "type": "string",
@@ -181,15 +151,10 @@
       "type": "object",
       "required": [
         "analyzer",
-        "analyzer_version",
-        "input_sha256",
-        "prompt_version"
+        "input_sha256"
       ],
       "properties": {
         "analyzer": {
-          "type": "string"
-        },
-        "analyzer_version": {
           "type": "string"
         },
         "input_sha256": {
@@ -201,16 +166,14 @@
             "null"
           ]
         },
-        "prompt_version": {
-          "type": "string"
-        },
         "provider": {
           "type": [
             "string",
             "null"
           ]
         }
-      }
+      },
+      "additionalProperties": false
     },
     "AnalyzerUsage": {
       "type": "object",
@@ -311,22 +274,17 @@
     "AssessmentContract": {
       "type": "object",
       "required": [
-        "contract_version",
         "runs"
       ],
       "properties": {
-        "contract_version": {
-          "type": "integer",
-          "format": "uint32",
-          "minimum": 0.0
-        },
         "runs": {
           "type": "array",
           "items": {
             "$ref": "#/definitions/RunAssessmentContract"
           }
         }
-      }
+      },
+      "additionalProperties": false
     },
     "AssessmentKind": {
       "type": "string",
@@ -563,16 +521,10 @@
     "ComplexityClassification": {
       "type": "object",
       "required": [
-        "policy_version",
         "profile",
         "tier"
       ],
       "properties": {
-        "policy_version": {
-          "type": "integer",
-          "format": "uint32",
-          "minimum": 0.0
-        },
         "profile": {
           "$ref": "#/definitions/ComplexityProfile"
         },
@@ -828,6 +780,8 @@
     "E2eRunReport": {
       "type": "object",
       "required": [
+        "attempt_id",
+        "attempt_number",
         "cost",
         "criteria",
         "hard_gates",
@@ -839,11 +793,9 @@
       ],
       "properties": {
         "attempt_id": {
-          "default": "",
           "type": "string"
         },
         "attempt_number": {
-          "default": 1,
           "type": "integer",
           "format": "uint32",
           "minimum": 0.0
@@ -918,7 +870,7 @@
         "metrics": {
           "anyOf": [
             {
-              "$ref": "#/definitions/SessionMetricsResponseBodyV1"
+              "$ref": "#/definitions/SessionMetricsPayload"
             },
             {
               "type": "null"
@@ -1028,7 +980,6 @@
       "required": [
         "minimum_expected_work",
         "observed_complexity",
-        "policy_version",
         "technical_attempts",
         "wall_time_ms"
       ],
@@ -1118,11 +1069,6 @@
             "null"
           ],
           "format": "uint64",
-          "minimum": 0.0
-        },
-        "policy_version": {
-          "type": "integer",
-          "format": "uint32",
           "minimum": 0.0
         },
         "root_turns": {
@@ -1300,17 +1246,13 @@
     "FailureRecord": {
       "type": "object",
       "required": [
+        "domain",
         "message",
         "phase"
       ],
       "properties": {
         "domain": {
-          "default": "e2e_infrastructure",
-          "allOf": [
-            {
-              "$ref": "#/definitions/FailureDomain"
-            }
-          ]
+          "$ref": "#/definitions/FailureDomain"
         },
         "message": {
           "type": "string"
@@ -1377,18 +1319,14 @@
     "HardGateReport": {
       "type": "object",
       "required": [
+        "dimension",
         "id",
         "passed",
         "reason"
       ],
       "properties": {
         "dimension": {
-          "default": "structural_integrity",
-          "allOf": [
-            {
-              "$ref": "#/definitions/EvaluationDimension"
-            }
-          ]
+          "$ref": "#/definitions/EvaluationDimension"
         },
         "id": {
           "type": "string"
@@ -1509,9 +1447,6 @@
     },
     "ObservedComplexityReport": {
       "type": "object",
-      "required": [
-        "policy_version"
-      ],
       "properties": {
         "ambiguity_level": {
           "type": [
@@ -1569,11 +1504,6 @@
           "format": "uint64",
           "minimum": 0.0
         },
-        "policy_version": {
-          "type": "integer",
-          "format": "uint32",
-          "minimum": 0.0
-        },
         "state_transitions": {
           "type": [
             "integer",
@@ -1628,17 +1558,11 @@
     "RedactionReport": {
       "type": "object",
       "required": [
-        "policy_version",
         "redacted_fields",
         "redacted_values",
         "rules"
       ],
       "properties": {
-        "policy_version": {
-          "type": "integer",
-          "format": "uint32",
-          "minimum": 0.0
-        },
         "redacted_fields": {
           "type": "integer",
           "format": "uint32",
@@ -1661,6 +1585,8 @@
     "RetryAttemptReport": {
       "type": "object",
       "required": [
+        "attempt_id",
+        "attempt_number",
         "cost",
         "failures",
         "run_id",
@@ -1670,11 +1596,9 @@
       ],
       "properties": {
         "attempt_id": {
-          "default": "",
           "type": "string"
         },
         "attempt_number": {
-          "default": 1,
           "type": "integer",
           "format": "uint32",
           "minimum": 0.0
@@ -1719,7 +1643,7 @@
         "metrics": {
           "anyOf": [
             {
-              "$ref": "#/definitions/SessionMetricsResponseBodyV1"
+              "$ref": "#/definitions/SessionMetricsPayload"
             },
             {
               "type": "null"
@@ -2000,7 +1924,7 @@
         }
       }
     },
-    "SessionMetricsResponseBodyV1": {
+    "SessionMetricsPayload": {
       "type": "object",
       "required": [
         "by_session",
@@ -2012,7 +1936,7 @@
         "by_session": {
           "type": "array",
           "items": {
-            "$ref": "#/definitions/SessionUsageV1"
+            "$ref": "#/definitions/SessionUsage"
           }
         },
         "complete": {
@@ -2022,125 +1946,14 @@
           "type": "string"
         },
         "totals": {
-          "$ref": "#/definitions/SessionUsageTotalsV1"
+          "$ref": "#/definitions/SessionUsageTotals"
         },
         "traces": {
           "default": null
         }
       }
     },
-    "SessionUsageTotalsV1": {
-      "type": "object",
-      "required": [
-        "function_call_errors",
-        "function_calls",
-        "sessions",
-        "turns"
-      ],
-      "properties": {
-        "cache_read_tokens": {
-          "default": null,
-          "type": [
-            "integer",
-            "null"
-          ],
-          "format": "uint64",
-          "minimum": 0.0
-        },
-        "cache_write_tokens": {
-          "default": null,
-          "type": [
-            "integer",
-            "null"
-          ],
-          "format": "uint64",
-          "minimum": 0.0
-        },
-        "cost_usd": {
-          "default": null,
-          "type": [
-            "number",
-            "null"
-          ],
-          "format": "double"
-        },
-        "function_call_errors": {
-          "type": "integer",
-          "format": "uint64",
-          "minimum": 0.0
-        },
-        "function_calls": {
-          "type": "integer",
-          "format": "uint64",
-          "minimum": 0.0
-        },
-        "input_tokens": {
-          "default": null,
-          "type": [
-            "integer",
-            "null"
-          ],
-          "format": "uint64",
-          "minimum": 0.0
-        },
-        "output_tokens": {
-          "default": null,
-          "type": [
-            "integer",
-            "null"
-          ],
-          "format": "uint64",
-          "minimum": 0.0
-        },
-        "reasoning_tokens": {
-          "default": null,
-          "type": [
-            "integer",
-            "null"
-          ],
-          "format": "uint64",
-          "minimum": 0.0
-        },
-        "sessions": {
-          "type": "integer",
-          "format": "uint64",
-          "minimum": 0.0
-        },
-        "transient_resumes": {
-          "default": null,
-          "type": [
-            "integer",
-            "null"
-          ],
-          "format": "uint64",
-          "minimum": 0.0
-        },
-        "turns": {
-          "type": "integer",
-          "format": "uint64",
-          "minimum": 0.0
-        },
-        "validation_retries": {
-          "default": null,
-          "type": [
-            "integer",
-            "null"
-          ],
-          "format": "uint64",
-          "minimum": 0.0
-        },
-        "wake_resumes": {
-          "default": null,
-          "type": [
-            "integer",
-            "null"
-          ],
-          "format": "uint64",
-          "minimum": 0.0
-        }
-      }
-    },
-    "SessionUsageV1": {
+    "SessionUsage": {
       "type": "object",
       "required": [
         "depth",
@@ -2230,6 +2043,117 @@
         },
         "session_id": {
           "type": "string"
+        },
+        "transient_resumes": {
+          "default": null,
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "turns": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "validation_retries": {
+          "default": null,
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "wake_resumes": {
+          "default": null,
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0.0
+        }
+      }
+    },
+    "SessionUsageTotals": {
+      "type": "object",
+      "required": [
+        "function_call_errors",
+        "function_calls",
+        "sessions",
+        "turns"
+      ],
+      "properties": {
+        "cache_read_tokens": {
+          "default": null,
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "cache_write_tokens": {
+          "default": null,
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "cost_usd": {
+          "default": null,
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double"
+        },
+        "function_call_errors": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "function_calls": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "input_tokens": {
+          "default": null,
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "output_tokens": {
+          "default": null,
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "reasoning_tokens": {
+          "default": null,
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "sessions": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
         },
         "transient_resumes": {
           "default": null,
@@ -2371,18 +2295,12 @@
     "WorkExpectation": {
       "type": "object",
       "required": [
-        "minimum_expected_work",
-        "policy_version"
+        "minimum_expected_work"
       ],
       "properties": {
         "minimum_expected_work": {
           "type": "integer",
           "format": "uint64",
-          "minimum": 0.0
-        },
-        "policy_version": {
-          "type": "integer",
-          "format": "uint32",
           "minimum": 0.0
         }
       }

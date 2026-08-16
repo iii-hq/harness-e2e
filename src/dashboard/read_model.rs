@@ -13,7 +13,6 @@ use crate::identity::StackIdentity;
 use crate::report::{E2eRunReport, E2eScenarioReport, RunStatus};
 use crate::scenarios::ScenarioId;
 
-pub(super) const DASHBOARD_SCHEMA_VERSION: u32 = 5;
 const DEFAULT_PAGE_SIZE: u16 = 25;
 
 #[derive(Debug, Clone, Default, Deserialize, JsonSchema)]
@@ -70,7 +69,6 @@ pub(super) struct EvaluatedVersionDescriptor {
 
 #[derive(Debug, Clone, Serialize, JsonSchema)]
 pub(super) struct EvaluatedVersionsResponse {
-    pub schema_version: u32,
     pub revision: String,
     pub cohorts: Vec<CohortDescriptor>,
     pub versions: Vec<EvaluatedVersionDescriptor>,
@@ -161,7 +159,6 @@ pub(super) struct TestCatalogRow {
 
 #[derive(Debug, Clone, Serialize, JsonSchema)]
 pub(super) struct TestsListResponse {
-    pub schema_version: u32,
     pub revision: String,
     pub rows: Vec<TestCatalogRow>,
     pub total: usize,
@@ -254,11 +251,7 @@ impl DashboardReadModel {
         let Some(report) = stored.report.as_ref() else {
             return Ok(());
         };
-        let lane = report
-            .execution
-            .as_ref()
-            .map(|execution| execution.lane.clone())
-            .unwrap_or_else(|| "local".into());
+        let lane = report.execution.lane.clone();
         let cohort = CohortDescriptor {
             id: String::new(),
             lane,
@@ -347,7 +340,6 @@ impl DashboardReadModel {
                 .then_with(|| left.id.cmp(&right.id))
         });
         EvaluatedVersionsResponse {
-            schema_version: DASHBOARD_SCHEMA_VERSION,
             revision: self.revision.clone(),
             cohorts,
             versions,
@@ -391,7 +383,6 @@ impl DashboardReadModel {
             .collect::<Vec<_>>();
         let end = offset.saturating_add(rows.len());
         Ok(TestsListResponse {
-            schema_version: DASHBOARD_SCHEMA_VERSION,
             revision: self.revision.clone(),
             rows,
             total,
@@ -582,9 +573,7 @@ fn evaluated_version(
     cohort_id: &str,
     completed_at: &str,
 ) -> Result<Option<EvaluatedVersionDescriptor>> {
-    let Some(system) = report.system_under_test.as_ref() else {
-        return Ok(None);
-    };
+    let system = &report.system_under_test;
     let (stack_mode, label) = match &system.stack {
         StackIdentity::Source {
             workers_revision, ..

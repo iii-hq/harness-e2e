@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Validate ordered Harness E2E cutover and immutable rollback evidence."""
+"""Validate ordered Harness E2E lane-promotion evidence."""
 
 from __future__ import annotations
 
@@ -14,7 +14,7 @@ from typing import Any
 
 FULL_SHA = re.compile(r"^[0-9a-f]{40}$")
 SHA256 = re.compile(r"^(?:sha256:)?[0-9a-f]{64}$")
-VALID_MODES = {"legacy", "shadow", "new_path"}
+VALID_MODES = {"shadow", "canonical"}
 
 
 class CutoverError(ValueError):
@@ -41,16 +41,16 @@ def parse_time(value: Any, label: str) -> dt.datetime:
 
 
 def validate_policy(policy: dict[str, Any]) -> None:
-    if policy.get("schema_version") != 1:
-        raise CutoverError("cutover policy must use schema_version 1")
+    if "schema_version" in policy:
+        raise CutoverError("versioned cutover policies are not supported")
     lanes = policy.get("lane_order")
     if lanes != ["pull_request", "main", "daily", "release"]:
         raise CutoverError("lane_order must preserve pull_request, main, daily, release")
     canonical = policy.get("canonical") or {}
     if canonical.get("entrypoint") != "e2e::run":
         raise CutoverError("canonical entrypoint must be e2e::run")
-    if canonical.get("results_schema_version") != 2:
-        raise CutoverError("canonical results schema must be version 2")
+    if canonical.get("results_file") != "results.json":
+        raise CutoverError("canonical results file must be results.json")
     if canonical.get("archive_scheme") != "iii-storage":
         raise CutoverError("canonical archives must use iii-storage")
     required = canonical.get("required_identity_fields")
@@ -58,13 +58,6 @@ def validate_policy(policy: dict[str, Any]) -> None:
         raise CutoverError("canonical identity field policy is incomplete")
     if not isinstance(policy.get("minimum_shadow_windows"), int) or policy["minimum_shadow_windows"] < 3:
         raise CutoverError("minimum_shadow_windows must be at least 3")
-    if not isinstance(policy.get("rollback_window_days"), int) or policy["rollback_window_days"] < 1:
-        raise CutoverError("rollback_window_days must be positive")
-    legacy = policy.get("legacy") or {}
-    if not str(legacy.get("workflow", "")).startswith(".github/workflows/"):
-        raise CutoverError("legacy workflow must be an explicit workflow path")
-    if not str(legacy.get("immutable_tag_prefix", "")).startswith("refs/tags/"):
-        raise CutoverError("legacy rollback prefix must require an immutable tag")
 
 
 def evaluate_cutover(
@@ -74,8 +67,8 @@ def evaluate_cutover(
     evaluated_at: dt.datetime | None = None,
 ) -> dict[str, Any]:
     validate_policy(policy)
-    if evidence.get("schema_version") != 1:
-        raise CutoverError("cutover evidence must use schema_version 1")
+    if "schema_version" in evidence:
+        raise CutoverError("versioned cutover evidence is not supported")
     evaluated_at = evaluated_at or dt.datetime.now(dt.timezone.utc)
     if evaluated_at.tzinfo is None:
         raise CutoverError("evaluated_at must include a timezone")
@@ -87,8 +80,7 @@ def evaluate_cutover(
         raise CutoverError("e2e_revision must be a full immutable Git SHA")
 
     lane_order: list[str] = policy["lane_order"]
-    stages = lane_order + ["legacy_removal"]
-    if required_stage not in stages:
+    if required_stage not in lane_order:
         raise CutoverError(f"unsupported required stage {required_stage!r}")
     raw_lanes = evidence.get("lanes")
     if not isinstance(raw_lanes, list):
@@ -159,12 +151,12 @@ def evaluate_cutover(
             f"{policy['minimum_shadow_windows']} required"
         )
 
-    target_index = lane_order.index(required_stage) if required_stage in lane_order else len(lane_order) - 1
+    target_index = lane_order.index(required_stage)
     for index, lane_id in enumerate(lane_order):
         lane = lanes[lane_id]
-        if index <= target_index and lane.get("mode") != "new_path":
-            reasons.append(f"lane {lane_id} has not cut over to the new path")
-        if lane.get("mode") in {"shadow", "new_path"}:
+        if index <= target_index and lane.get("mode") != "canonical":
+            reasons.append(f"lane {lane_id} has not promoted the canonical path")
+        if lane.get("mode") in VALID_MODES:
             reasons.extend(
                 validate_canonical_lane(
                     policy,
@@ -174,11 +166,7 @@ def evaluate_cutover(
                 )
             )
 
-    if required_stage == "legacy_removal":
-        reasons.extend(validate_legacy_removal(policy, evidence, lanes, evaluated_at))
-
     result = {
-        "schema_version": 1,
         "required_stage": required_stage,
         "evaluated_at": evaluated_at.isoformat().replace("+00:00", "Z"),
         "eligible": not reasons,
@@ -207,8 +195,8 @@ def validate_canonical_lane(
     canonical = policy["canonical"]
     if lane.get("entrypoint") != canonical["entrypoint"]:
         reasons.append(f"lane {lane_id} does not use e2e::run")
-    if lane.get("results_schema_version") != canonical["results_schema_version"]:
-        reasons.append(f"lane {lane_id} does not publish canonical results v2")
+    if lane.get("results_file") != canonical["results_file"]:
+        reasons.append(f"lane {lane_id} does not publish results.json")
     identity = lane.get("identity")
     if not isinstance(identity, dict):
         reasons.append(f"lane {lane_id} has no canonical identity")
@@ -241,70 +229,13 @@ def validate_canonical_lane(
     return reasons
 
 
-def validate_legacy_removal(
-    policy: dict[str, Any],
-    evidence: dict[str, Any],
-    lanes: dict[str, dict[str, Any]],
-    evaluated_at: dt.datetime,
-) -> list[str]:
-    reasons: list[str] = []
-    if any(lane.get("mode") != "new_path" for lane in lanes.values()):
-        reasons.append("all lanes must use the new path before legacy removal")
-    consumers = evidence.get("consumers")
-    if not isinstance(consumers, list) or not consumers:
-        return reasons + ["active-consumer inventory is missing"]
-    if any(not isinstance(consumer, dict) for consumer in consumers):
-        return reasons + ["active-consumer inventory contains an invalid entry"]
-    active_legacy = [
-        str(consumer.get("id", "unknown"))
-        for consumer in consumers
-        if consumer.get("active") is True
-        and (
-            consumer.get("entrypoint") != policy["canonical"]["entrypoint"]
-            or consumer.get("results_schema_version") != policy["canonical"]["results_schema_version"]
-        )
-    ]
-    if active_legacy:
-        reasons.append("active legacy consumers remain: " + ", ".join(sorted(active_legacy)))
-    rollback = evidence.get("rollback")
-    if not isinstance(rollback, dict):
-        return reasons + ["rollback evidence is missing"]
-    prefix = policy["legacy"]["immutable_tag_prefix"]
-    if not str(rollback.get("legacy_ref", "")).startswith(prefix):
-        reasons.append("legacy rollback ref is not the required immutable tag")
-    if not isinstance(rollback.get("legacy_revision"), str) or not FULL_SHA.fullmatch(
-        rollback["legacy_revision"]
-    ):
-        reasons.append("legacy rollback revision must be a full Git SHA")
-    started = parse_time(rollback.get("window_started_at"), "rollback.window_started_at")
-    ends = parse_time(rollback.get("window_ends_at"), "rollback.window_ends_at")
-    required_end = started + dt.timedelta(days=policy["rollback_window_days"])
-    if ends < required_end:
-        reasons.append("rollback window is shorter than policy")
-    if evaluated_at < ends:
-        reasons.append("rollback window has not elapsed")
-    drill = rollback.get("drill")
-    if not isinstance(drill, dict) or drill.get("succeeded") is not True:
-        reasons.append("rollback simulation has not succeeded")
-    else:
-        drill_at = parse_time(drill.get("executed_at"), "rollback.drill.executed_at")
-        if drill_at < started or drill_at > evaluated_at:
-            reasons.append("rollback simulation is outside the observed rollback window")
-        if drill.get("restored_entrypoint") != policy["legacy"]["workflow"]:
-            reasons.append("rollback simulation did not restore the declared legacy workflow")
-        digest = drill.get("evidence_sha256")
-        if not isinstance(digest, str) or not SHA256.fullmatch(digest):
-            reasons.append("rollback simulation has no immutable evidence hash")
-    return reasons
-
-
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--policy", type=pathlib.Path, required=True)
     parser.add_argument("--evidence", type=pathlib.Path, required=True)
     parser.add_argument(
         "--require-stage",
-        choices=["pull_request", "main", "daily", "release", "legacy_removal"],
+        choices=["pull_request", "main", "daily", "release"],
         required=True,
     )
     parser.add_argument("--output", type=pathlib.Path, required=True)

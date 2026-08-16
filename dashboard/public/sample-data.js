@@ -149,7 +149,6 @@
     const resolvedPassed = passed ?? releasePassed(release);
     const runId = String(Math.floor(release.date / 1000));
     return JSON.stringify({
-      schema_version: 2,
       execution: {
         id: `${runId}-1`,
         run_id: runId,

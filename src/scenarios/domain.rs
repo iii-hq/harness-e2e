@@ -5,9 +5,6 @@ use serde_json::Value;
 
 use crate::artifact::sha256_value;
 
-pub const COMPLEXITY_POLICY_VERSION: u32 = 1;
-pub const WORK_EXPECTATION_POLICY_VERSION: u32 = 1;
-
 pub fn stable_seed(id: &str) -> u64 {
     id.bytes().fold(0xcbf29ce484222325, |hash, byte| {
         (hash ^ u64::from(byte)).wrapping_mul(0x100000001b3)
@@ -41,7 +38,6 @@ pub enum ComplexityTier {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct ComplexityClassification {
-    pub policy_version: u32,
     pub tier: ComplexityTier,
     pub profile: ComplexityProfile,
 }
@@ -73,11 +69,7 @@ impl ComplexityClassification {
         } else {
             ComplexityTier::L0Atomic
         };
-        Self {
-            policy_version: COMPLEXITY_POLICY_VERSION,
-            tier,
-            profile,
-        }
+        Self { tier, profile }
     }
 }
 
@@ -167,7 +159,6 @@ pub struct ScenarioCase {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct WorkExpectation {
-    pub policy_version: u32,
     pub minimum_expected_work: u64,
 }
 
@@ -183,7 +174,6 @@ impl ScenarioCase {
     ) -> Result<Self> {
         let scenario_id = scenario_id.into();
         let work = WorkExpectation {
-            policy_version: WORK_EXPECTATION_POLICY_VERSION,
             minimum_expected_work: minimum_expected_work(profile),
         };
         let case = Self {
@@ -225,14 +215,10 @@ impl ScenarioCase {
         if sha256_value(&self.inputs)? != self.inputs_sha256 {
             bail!("scenario case inputs do not match inputs_sha256");
         }
-        if self.complexity.policy_version != COMPLEXITY_POLICY_VERSION
-            || self.complexity != ComplexityClassification::derive(self.complexity.profile)
-        {
+        if self.complexity != ComplexityClassification::derive(self.complexity.profile) {
             bail!("scenario case complexity classification is inconsistent");
         }
-        if self.work.policy_version != WORK_EXPECTATION_POLICY_VERSION
-            || self.work.minimum_expected_work == 0
-        {
+        if self.work.minimum_expected_work == 0 {
             bail!("scenario case minimum work expectation is invalid");
         }
         if self

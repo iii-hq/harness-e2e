@@ -7,10 +7,6 @@ use serde::{Deserialize, Serialize};
 use crate::artifact::{self, ArtifactReference};
 use crate::report::{DimensionReport, E2eReport, FailureRecord, RunStatus};
 
-pub const ASSESSMENT_CONTRACT_VERSION: u32 = 1;
-pub const ANALYSIS_BUNDLE_SCHEMA_VERSION: u32 = 1;
-pub const ANALYSIS_RESPONSE_SCHEMA_VERSION: u32 = 1;
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum AssessmentKind {
@@ -130,22 +126,19 @@ impl From<&ArtifactReference> for EvidenceReference {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct AnalyzerIdentity {
     pub analyzer: String,
-    pub analyzer_version: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub provider: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub model: Option<String>,
-    pub prompt_version: String,
     pub input_sha256: String,
 }
 
 impl AnalyzerIdentity {
     pub fn validate(&self) -> Result<()> {
         required(&self.analyzer, "analyzer id")?;
-        required(&self.analyzer_version, "analyzer version")?;
-        required(&self.prompt_version, "analyzer prompt version")?;
         validate_sha256(&self.input_sha256, "analyzer input hash")?;
         if self
             .provider
@@ -544,21 +537,6 @@ pub struct RunAssessmentContract {
 }
 
 impl RunAssessmentContract {
-    fn legacy(run_id: String, attempt_id: String) -> Self {
-        let ai_final_assessment = AiFinalAssessment::not_evaluated(
-            "legacy result does not contain the assessment contract",
-        );
-        Self {
-            run_id,
-            attempt_id,
-            system_status: SystemStatus::Unavailable,
-            assessments: Vec::new(),
-            assets: Vec::new(),
-            effective_status: EffectiveStatus::Unavailable,
-            ai_final_assessment,
-        }
-    }
-
     fn validate(&self) -> Result<()> {
         required(&self.run_id, "assessment run id")?;
         required(&self.attempt_id, "assessment attempt id")?;
@@ -622,15 +600,14 @@ impl RunAssessmentContract {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct AssessmentContract {
-    pub contract_version: u32,
     pub runs: Vec<RunAssessmentContract>,
 }
 
 impl AssessmentContract {
     pub fn from_assessment_evidence(report: &E2eReport) -> Self {
         Self {
-            contract_version: ASSESSMENT_CONTRACT_VERSION,
             runs: report
                 .scenarios
                 .iter()
@@ -657,50 +634,7 @@ impl AssessmentContract {
         }
     }
 
-    /// Compatibility name retained for MOT-4445 callers. The builder now also
-    /// consumes the per-assessment evidence produced by MOT-4446.
-    pub fn from_asset_evidence(report: &E2eReport) -> Self {
-        Self::from_assessment_evidence(report)
-    }
-
-    pub fn normalize(report: &E2eReport) -> Self {
-        report.assessment_contract.clone().unwrap_or_else(|| Self {
-            contract_version: ASSESSMENT_CONTRACT_VERSION,
-            runs: report
-                .scenarios
-                .iter()
-                .enumerate()
-                .flat_map(|(scenario_index, scenario)| {
-                    scenario
-                        .runs
-                        .iter()
-                        .enumerate()
-                        .map(move |(run_index, run)| {
-                            let run_id = if run.run_id.trim().is_empty() {
-                                format!("legacy-run-{scenario_index}-{run_index}")
-                            } else {
-                                run.run_id.clone()
-                            };
-                            let attempt_id = if run.attempt_id.trim().is_empty() {
-                                format!("legacy-attempt-{}", run.attempt_number)
-                            } else {
-                                run.attempt_id.clone()
-                            };
-                            RunAssessmentContract::legacy(run_id, attempt_id)
-                        })
-                })
-                .collect(),
-        })
-    }
-
     pub fn validate(&self, report: &E2eReport) -> Result<()> {
-        if self.contract_version != ASSESSMENT_CONTRACT_VERSION {
-            bail!(
-                "assessment contract version {} is unsupported; expected {}",
-                self.contract_version,
-                ASSESSMENT_CONTRACT_VERSION
-            );
-        }
         let expected = report
             .scenarios
             .iter()
@@ -808,8 +742,8 @@ pub struct AnalysisExcerpt {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct AnalysisBundle {
-    pub schema_version: u32,
     pub scope: AnalysisScope,
     pub input_sha256: String,
     pub subjects: Vec<AnalysisSubject>,
@@ -833,9 +767,6 @@ pub struct AnalysisBundle {
 
 impl AnalysisBundle {
     pub fn validate(&self) -> Result<()> {
-        if self.schema_version != ANALYSIS_BUNDLE_SCHEMA_VERSION {
-            bail!("unsupported AnalysisBundle schema version");
-        }
         validate_sha256(&self.input_sha256, "analysis bundle input hash")?;
         if self.subjects.is_empty() {
             bail!("analysis bundle requires at least one subject");
@@ -921,8 +852,8 @@ pub struct AnalysisLimitation {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct AnalysisResponse {
-    pub schema_version: u32,
     pub input_sha256: String,
     pub analyzer: AnalyzerIdentity,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -937,9 +868,6 @@ pub struct AnalysisResponse {
 
 impl AnalysisResponse {
     pub fn validate(&self) -> Result<()> {
-        if self.schema_version != ANALYSIS_RESPONSE_SCHEMA_VERSION {
-            bail!("unsupported analysis response schema version");
-        }
         validate_sha256(&self.input_sha256, "analysis response input hash")?;
         self.analyzer.validate()?;
         if self.input_sha256 != self.analyzer.input_sha256 {
@@ -1061,10 +989,8 @@ mod tests {
             }),
             analyzer: Some(AnalyzerIdentity {
                 analyzer: "final".into(),
-                analyzer_version: "1".into(),
                 provider: Some("provider".into()),
                 model: Some("model".into()),
-                prompt_version: "1".into(),
                 input_sha256: format!("sha256:{}", "a".repeat(64)),
             }),
             analyzer_usage: None,
@@ -1137,7 +1063,6 @@ mod tests {
     #[test]
     fn analysis_response_is_bound_to_the_canonical_bundle() {
         let mut bundle = AnalysisBundle {
-            schema_version: ANALYSIS_BUNDLE_SCHEMA_VERSION,
             scope: AnalysisScope::Execution,
             input_sha256: format!("sha256:{}", "a".repeat(64)),
             subjects: vec![AnalysisSubject {
@@ -1161,14 +1086,11 @@ mod tests {
         };
         let bundle_sha256 = bundle.sha256().unwrap();
         let response = AnalysisResponse {
-            schema_version: ANALYSIS_RESPONSE_SCHEMA_VERSION,
             input_sha256: bundle_sha256.clone(),
             analyzer: AnalyzerIdentity {
                 analyzer: "manual-analysis".into(),
-                analyzer_version: "1".into(),
                 provider: Some("provider".into()),
                 model: Some("model".into()),
-                prompt_version: "analysis-v1".into(),
                 input_sha256: bundle_sha256,
             },
             facts: Vec::new(),
@@ -1185,15 +1107,14 @@ mod tests {
     }
 
     #[test]
-    fn shared_v3_fixture_decodes_and_validates() {
+    fn shared_result_fixture_decodes_and_validates() {
         let value: serde_json::Value = serde_json::from_str(include_str!(
-            "../tests/fixtures/results/results-v3-assessment-contract.json"
+            "../tests/fixtures/results/results-assessment-contract.json"
         ))
         .unwrap();
         let contract: AssessmentContract =
             serde_json::from_value(value["assessment_contract"].clone()).unwrap();
 
-        assert_eq!(contract.contract_version, ASSESSMENT_CONTRACT_VERSION);
         assert_eq!(contract.runs.len(), 1);
         contract.runs[0].validate().unwrap();
         assert_eq!(

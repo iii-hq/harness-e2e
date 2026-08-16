@@ -1,6 +1,4 @@
 {
-  "schema_version": 1,
-  "policy_version": 1,
   "minimum_sample_size": 5,
   "tail_minimum_sample_size": 20,
   "minimum_deliverable_success_rate": 0.9,

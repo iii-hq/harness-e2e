@@ -1,7 +1,5 @@
 {
-  "schema_version": 3,
   "assessment_contract": {
-    "contract_version": 1,
     "runs": [
       {
         "run_id": "run-1",
@@ -60,10 +58,8 @@
               "summary": "Asset quality was not evaluated because the judge was unavailable.",
               "analyzer": {
                 "analyzer": "asset-quality",
-                "analyzer_version": "1",
                 "provider": "openai",
                 "model": "judge-model",
-                "prompt_version": "asset-quality-v1",
                 "input_sha256": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
               }
             }
@@ -73,10 +69,8 @@
           "availability": "unavailable",
           "analyzer": {
             "analyzer": "final-assessment",
-            "analyzer_version": "1",
             "provider": "openai",
             "model": "judge-model",
-            "prompt_version": "final-v1",
             "input_sha256": "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
           },
           "reason": "The configured provider was unavailable."

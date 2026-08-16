@@ -38,7 +38,6 @@ pub(super) const CHANGED_TRIGGER: &str = "e2e::dashboard::changed";
 pub(super) const BROWSER_FUNCTION_PREFIX: &str = "iii::harness-e2e-dashboard::";
 
 const CONTRACT_NAME: &str = "harness-e2e-dashboard";
-const CONTRACT_VERSION: u32 = 2;
 const DEFAULT_PAGE_SIZE: u16 = 25;
 
 #[derive(Debug, Clone, Default, Deserialize, Serialize, JsonSchema)]
@@ -67,7 +66,6 @@ pub(super) struct Retention {
 
 #[derive(Debug, Clone, Serialize, JsonSchema)]
 pub(super) struct ExecutionListResponse {
-    pub schema_version: u32,
     pub mode: String,
     pub last_update: String,
     pub repo_url: String,
@@ -373,7 +371,6 @@ fn register(iii: &IIIClient, id: &str, description: &str, function: RegisterFunc
             "internal": true,
             "contract": {
                 "name": CONTRACT_NAME,
-                "version": CONTRACT_VERSION,
                 "capability": id.trim_start_matches("e2e::dashboard::"),
             }
         })),
@@ -448,7 +445,6 @@ pub(super) async fn execution_list(
         .unwrap_or_default()
         .to_string();
     Ok(ExecutionListResponse {
-        schema_version: super::read_model::DASHBOARD_SCHEMA_VERSION,
         mode: "local".into(),
         last_update,
         repo_url: repository_url(),

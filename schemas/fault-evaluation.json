@@ -12,8 +12,7 @@
     "profile_id",
     "profile_sha256",
     "reasons",
-    "recovered_actions",
-    "schema_version"
+    "recovered_actions"
   ],
   "properties": {
     "cancellation_observed": {
@@ -72,14 +71,6 @@
         "string",
         "null"
       ]
-    },
-    "schema_version": {
-      "type": "integer",
-      "format": "uint32",
-      "enum": [
-        1
-      ],
-      "minimum": 0.0
     },
     "structural_integrity": {
       "type": [

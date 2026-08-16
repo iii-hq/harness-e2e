@@ -17,9 +17,8 @@ use crate::context::E2eContext;
 use crate::identity::{self, ExecutionIdentity, SystemUnderTestIdentity};
 use crate::judge::{self, JudgeConfig};
 use crate::report::{
-    CriterionReport, E2eManifestV2, E2eReport, E2eRunReport, E2eScenarioReport,
-    EvaluationDimension, FailurePhase, HardGateReport, ModelArtifact, RetryAttemptReport,
-    RunStatus, MANIFEST_SCHEMA_VERSION,
+    CriterionReport, E2eManifest, E2eReport, E2eRunReport, E2eScenarioReport, EvaluationDimension,
+    FailurePhase, HardGateReport, ModelArtifact, RetryAttemptReport, RunStatus,
 };
 use crate::scenarios::common;
 use crate::scenarios::{
@@ -67,13 +66,12 @@ pub struct SuiteRunConfig {
     pub rotating_seeds: Vec<u64>,
     pub technical_retries: u8,
     pub progress_interval: Option<Duration>,
-    pub allow_legacy_control_plane: bool,
     pub control: Option<SuiteControl>,
 }
 
 pub struct SuiteRunOutcome {
     pub report: E2eReport,
-    pub manifest: E2eManifestV2,
+    pub manifest: E2eManifest,
     pub report_path: PathBuf,
 }
 
@@ -138,7 +136,7 @@ pub async fn run_suite(config: SuiteRunConfig) -> Result<SuiteRunOutcome> {
         .await
         .context("connect E2E runner")?;
     let control_plane = context
-        .preflight_control_plane(config.allow_legacy_control_plane)
+        .preflight_control_plane()
         .await
         .context("preflight Harness control-plane contract")?;
     let runtime_versions = context
@@ -171,13 +169,7 @@ pub async fn run_suite(config: SuiteRunConfig) -> Result<SuiteRunOutcome> {
             let definition = scenario_id
                 .materialize("validation", seed)
                 .with_context(|| format!("materialize scenario {}", scenario_id.as_str()))?;
-            preflight_case(
-                &context,
-                &control_plane,
-                config.allow_legacy_control_plane,
-                &definition.case,
-            )
-            .await?;
+            preflight_case(&context, &control_plane, &definition.case).await?;
             let mut runs = Vec::with_capacity(config.runs as usize);
             for repetition in 0..config.runs {
                 tracing::info!(
@@ -236,8 +228,7 @@ pub async fn run_suite(config: SuiteRunConfig) -> Result<SuiteRunOutcome> {
     };
     let subject = ModelArtifact::from(subject_model);
     let judge = judge_model.map(ModelArtifact::from);
-    let manifest = E2eManifestV2 {
-        schema_version: MANIFEST_SCHEMA_VERSION,
+    let manifest = E2eManifest {
         execution: execution.clone(),
         system_under_test: system_under_test.clone(),
         subject: subject.clone(),
@@ -269,18 +260,14 @@ pub async fn run_suite(config: SuiteRunConfig) -> Result<SuiteRunOutcome> {
 async fn preflight_case(
     context: &E2eContext,
     expected: &ControlPlaneEvidence,
-    allow_legacy_control_plane: bool,
     case: &ScenarioCase,
 ) -> Result<()> {
-    let observed = context
-        .preflight_control_plane(allow_legacy_control_plane)
-        .await
-        .with_context(|| {
-            format!(
-                "preflight Harness control-plane contract before case {}",
-                case.case_id
-            )
-        })?;
+    let observed = context.preflight_control_plane().await.with_context(|| {
+        format!(
+            "preflight Harness control-plane contract before case {}",
+            case.case_id
+        )
+    })?;
     ensure_control_plane_unchanged(expected, &observed).with_context(|| {
         format!(
             "control-plane contract changed before case {}",
@@ -1590,10 +1577,9 @@ mod tests {
     fn control_plane(hash: &str) -> ControlPlaneEvidence {
         ControlPlaneEvidence {
             name: "harness-control-plane".into(),
-            version: 1,
             functions: vec![crate::wire::FunctionContractEvidence {
                 function_id: "harness::send".into(),
-                contract: serde_json::json!({"version": 1}),
+                contract: serde_json::json!({"name": "harness-control-plane"}),
                 request_schema: serde_json::json!({"type": "object"}),
                 response_schema: serde_json::json!({"type": "object"}),
                 sha256: hash.into(),
@@ -1752,10 +1738,8 @@ mod tests {
             usage: None,
             analyzer: AnalyzerIdentity {
                 analyzer: "criterion-assessment".into(),
-                analyzer_version: "1".into(),
                 provider: Some("provider".into()),
                 model: Some("model".into()),
-                prompt_version: "criterion-assessment-v1".into(),
                 input_sha256: format!("sha256:{}", "a".repeat(64)),
             },
             analyzer_usage: AnalyzerUsage {

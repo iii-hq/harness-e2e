@@ -16,13 +16,13 @@ For every attempt with a deliverable contract, the runner:
 5. validates kind, JSON Schema, provenance, and declared invariants;
 6. writes bounded asset content under
    `deliverables/<run-id>/<attempt-id>/<asset-id>.json`;
-7. writes `evidence/<run-id>/<attempt-id>/asset-capture-v1.json`; and
+7. writes `evidence/<run-id>/<attempt-id>/asset-capture.json`; and
 8. only then enters teardown and scenario cleanup; then
-9. writes `asset-reconciliation-v1.json` beside the capture manifest with the
+9. writes `asset-reconciliation.json` beside the capture manifest with the
    final lifecycle state and an immutable reference to the pre-cleanup capture.
 
-The manifest follows `schemas/asset-capture-v1.json`. It embeds the canonical
-`AssetValidationResult` from the v3 contract and records the run and attempt
+The manifest follows `schemas/asset-capture.json`. It embeds the canonical
+`AssetValidationResult` and records the run and attempt
 identity, capture timestamp, active limits, expected/unexpected state,
 normalized evidence path, media type, observed size, canonical content hash,
 immutable artifact reference, provenance, bounded preview, validation outcome,
@@ -74,5 +74,4 @@ artifact id and SHA-256. Rejected or absent content carries no fabricated
 evidence reference. MOT-4446 consumes the bounded preview and immutable
 reference for advisory qualitative review when a judge is configured; missing
 evidence remains explicitly `not_evaluated`, and judge unavailability never
-changes deterministic validation. The canonical primary result remains v2
-until MOT-4448 aggregates these sidecars and activates v3 publication.
+changes deterministic validation. The canonical result is `results.json`.
