@@ -8,6 +8,13 @@ index, split test catalog, lazy per-test evidence shards, and
 the browser requests only the execution page, test result, report, catalog, or
 unread log suffix it currently needs.
 
+Local and static modes carry the same assessment summaries and comparison
+identities. Local details join every run to its current assessment contract.
+Static report artifacts use a bounded allowlist and never publish raw prompts,
+transcripts, generated-asset previews, or private artifact paths; they retain
+only approved conclusions, analyzer provenance, and immutable evidence
+references.
+
 Install, validate, and run the frontend with hot reload:
 
 ```bash

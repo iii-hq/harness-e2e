@@ -1,3 +1,5 @@
+import type { AssessmentSummary } from '@/lib/assessment-contract'
+
 export type CohortDescriptor = {
   id: string
   lane: string
@@ -46,18 +48,23 @@ export type TestSideSummary = {
     tokens: number
     duration_seconds: number
   }
+  assessment_summary: AssessmentSummary
 }
 
 export type TestObservation = {
   execution_id: string
   evaluated_version_id: string | null
+  cohort_id: string
   completed_at: string
   case_id: string
   contract_sha256: string
+  assessment_profile_sha256: string
+  analyzer_profile_sha256: string
   status: string
   median_score: number | null
   run_count: number
   scored_runs: number
+  assessment_summary: AssessmentSummary
 }
 
 export type TestVersionResult = {
@@ -68,6 +75,11 @@ export type TestVersionResult = {
     | 'missing_side'
     | 'contract_changed'
     | 'contract_conflict'
+    | 'assessment_changed'
+    | 'assessment_conflict'
+    | 'analyzer_changed'
+    | 'analyzer_conflict'
+  compatibility_reasons: string[]
   from: TestSideSummary | null
   to: TestSideSummary | null
   delta: {

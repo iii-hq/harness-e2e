@@ -1,4 +1,5 @@
 mod api;
+mod assessment_projection;
 mod assets;
 mod bus;
 mod controller;
@@ -339,6 +340,15 @@ mod tests {
             "0123456789abcdef0123456789abcdef01234567"
         );
         assert_eq!(summary["subjects"][0]["engine_revision"], "engine-revision");
+        assert_eq!(summary["assessment_summary"]["run_count"], 1);
+        assert_eq!(
+            summary["assessment_summary"]["ai_availability"]["not_evaluated"],
+            1
+        );
+        assert_eq!(
+            summary["subjects"][0]["scenarios"][0]["assessment_summary"]["run_count"],
+            1
+        );
         assert!(summary["workflow_url"].is_null());
         assert_eq!(
             summary["detail_path"],
@@ -352,6 +362,17 @@ mod tests {
         assert_eq!(
             detail["reports"][0]["report"]["scenarios"][0]["scenario_id"],
             "direct_answer"
+        );
+        assert_eq!(
+            detail["reports"][0]["report"]["assessment_contract"]["runs"]
+                .as_array()
+                .unwrap()
+                .len(),
+            1
+        );
+        assert_eq!(
+            detail["reports"][0]["report"]["scenarios"][0]["runs"][0]["assessment"]["run_id"],
+            "run"
         );
     }
 
@@ -485,6 +506,12 @@ mod tests {
         assert_eq!(result.from.as_ref().unwrap().median_score, Some(100.0));
         assert_eq!(result.to.as_ref().unwrap().median_score, Some(85.0));
         assert_eq!(result.delta.score, Some(-15.0));
+        assert_eq!(result.compatibility, "compatible");
+        assert!(result.compatibility_reasons.is_empty());
+        assert_eq!(
+            result.from.as_ref().unwrap().assessment_summary.run_count,
+            3
+        );
         assert!(result.from_observations.is_empty());
         assert!(result.to_observations.is_empty());
 
@@ -499,6 +526,13 @@ mod tests {
             .unwrap();
         assert_eq!(detail.from_observations.len(), 1);
         assert_eq!(detail.to_observations.len(), 1);
+        assert_eq!(detail.from_observations[0].assessment_summary.run_count, 3);
+        assert!(detail.from_observations[0]
+            .assessment_profile_sha256
+            .starts_with("sha256:"));
+        assert!(detail.from_observations[0]
+            .analyzer_profile_sha256
+            .starts_with("sha256:"));
         assert!(model
             .tests_list(TestsListRequest {
                 cursor: Some("stale:1".into()),

@@ -1,4 +1,9 @@
 import { currentDashboardRoute } from '@/hooks/use-hash-route'
+import type {
+  AssessmentContract,
+  AssessmentSummary,
+  RunAssessmentContract,
+} from '@/lib/assessment-contract'
 import { getDashboardIiiClient } from '@/lib/iii-client'
 import type {
   EvaluatedVersionsResponse,
@@ -13,8 +18,57 @@ import type {
 
 type JsonObject = Record<string, unknown>
 
+export type DashboardScenarioSummary = JsonObject & {
+  id: string
+  assessment_summary: AssessmentSummary
+}
+
+export type DashboardSubjectSummary = JsonObject & {
+  id: string
+  assessment_summary: AssessmentSummary
+  scenarios: DashboardScenarioSummary[]
+}
+
+export type DashboardExecutionSummary = JsonObject & {
+  id: string
+  status: string
+  assessment_summary: AssessmentSummary
+  subjects: DashboardSubjectSummary[]
+}
+
+export type DashboardRunProjection = JsonObject & {
+  run_id: string
+  attempt_id: string
+  assessment: RunAssessmentContract
+}
+
+export type DashboardReportProjection = JsonObject & {
+  assessment_availability?: 'available' | 'unavailable'
+  assessment_contract: AssessmentContract
+  assessment_summary: AssessmentSummary
+  scenarios: Array<
+    JsonObject & {
+      scenario_id: string
+      scenario_version: number
+      assessment_summary: AssessmentSummary
+      runs: DashboardRunProjection[]
+    }
+  >
+}
+
+export type DashboardExecutionDetail = DashboardExecutionSummary & {
+  reports: Array<
+    JsonObject & {
+      subject_id: string
+      scenario_id: string
+      available: boolean
+      report?: DashboardReportProjection
+    }
+  >
+}
+
 export type ExecutionManifest = JsonObject & {
-  executions: JsonObject[]
+  executions: DashboardExecutionSummary[]
   mode?: string
   total?: number
   next_cursor?: string | null
@@ -22,7 +76,7 @@ export type ExecutionManifest = JsonObject & {
 
 type ExecutionBundle = {
   manifest: ExecutionManifest
-  detail: JsonObject
+  detail: DashboardExecutionDetail
 }
 
 type RuntimeConfig = {
@@ -246,9 +300,11 @@ function normalizeBridgeError(cause: unknown) {
   return new Error(String(cause))
 }
 
-type StaticVersionSide = {
+export type StaticVersionSide = {
   summary: TestSideSummary
   contracts: Record<string, string | null>
+  assessment_profiles: Record<string, string | null>
+  analyzer_profiles: Record<string, string | null>
 }
 
 type StaticCatalogRow = TestCatalogRow & {
@@ -302,10 +358,14 @@ function makeStaticBridge(): DashboardDataBridge {
       return {
         ...result,
         from_observations: shard.observations.filter(
-          (item) => item.evaluated_version_id === input.from_version_id,
+          (item) =>
+            item.cohort_id === input.cohort_id &&
+            item.evaluated_version_id === input.from_version_id,
         ),
         to_observations: shard.observations.filter(
-          (item) => item.evaluated_version_id === input.to_version_id,
+          (item) =>
+            item.cohort_id === input.cohort_id &&
+            item.evaluated_version_id === input.to_version_id,
         ),
       }
     },
@@ -325,15 +385,20 @@ function materializeStaticRow(
     row.available_versions.find((version) => {
       const sides = row.version_results[String(version.version)]?.sides ?? {}
       return Boolean(
-        input.from_version_id &&
+        input.cohort_id &&
+          input.from_version_id &&
           input.to_version_id &&
-          sides[input.from_version_id] &&
-          sides[input.to_version_id],
+          sides[staticSideKey(input.cohort_id, input.from_version_id)] &&
+          sides[staticSideKey(input.cohort_id, input.to_version_id)],
       )
     })?.version ??
     row.available_versions.find((version) => {
       const sides = row.version_results[String(version.version)]?.sides ?? {}
-      return Boolean(input.to_version_id && sides[input.to_version_id])
+      return Boolean(
+        input.cohort_id &&
+          input.to_version_id &&
+          sides[staticSideKey(input.cohort_id, input.to_version_id)],
+      )
     })?.version ??
     row.selected_version ??
     row.available_versions[0]?.version ??
@@ -370,9 +435,14 @@ function materializeStaticResult(
       `Unknown test '${input.test_id}' version ${input.test_version}`,
     )
   }
-  const from = version.sides[input.from_version_id] ?? null
-  const to = version.sides[input.to_version_id] ?? null
-  const compatibility = staticCompatibility(from, to)
+  const from =
+    version.sides[staticSideKey(input.cohort_id, input.from_version_id)] ?? null
+  const to =
+    version.sides[staticSideKey(input.cohort_id, input.to_version_id)] ?? null
+  const { compatibility, reasons: compatibility_reasons } = staticCompatibility(
+    from,
+    to,
+  )
   const difference = (left: number | null, right: number | null) =>
     compatibility === 'compatible' && left !== null && right !== null
       ? right - left
@@ -381,6 +451,7 @@ function materializeStaticResult(
     test_id: row.test_id,
     test_version: input.test_version,
     compatibility,
+    compatibility_reasons,
     from: from?.summary ?? null,
     to: to?.summary ?? null,
     delta: {
@@ -406,20 +477,75 @@ function materializeStaticResult(
   }
 }
 
-function staticCompatibility(
+export function staticCompatibility(
   from: StaticVersionSide | null,
   to: StaticVersionSide | null,
-): TestVersionResult['compatibility'] {
-  if (!from || !to) return 'missing_side'
+): {
+  compatibility: TestVersionResult['compatibility']
+  reasons: string[]
+} {
+  if (!from || !to) {
+    return {
+      compatibility: 'missing_side',
+      reasons: ['comparison_side_missing'],
+    }
+  }
   if (
     Object.values(from.contracts).some((value) => value === null) ||
     Object.values(to.contracts).some((value) => value === null)
   ) {
-    return 'contract_conflict'
+    return {
+      compatibility: 'contract_conflict',
+      reasons: ['scenario_contract_conflict'],
+    }
   }
-  return JSON.stringify(from.contracts) === JSON.stringify(to.contracts)
-    ? 'compatible'
-    : 'contract_changed'
+  if (JSON.stringify(from.contracts) !== JSON.stringify(to.contracts)) {
+    return {
+      compatibility: 'contract_changed',
+      reasons: ['scenario_contract_changed'],
+    }
+  }
+  if (
+    Object.values(from.assessment_profiles).some((value) => value === null) ||
+    Object.values(to.assessment_profiles).some((value) => value === null)
+  ) {
+    return {
+      compatibility: 'assessment_conflict',
+      reasons: ['assessment_profile_conflict'],
+    }
+  }
+  if (
+    JSON.stringify(from.assessment_profiles) !==
+    JSON.stringify(to.assessment_profiles)
+  ) {
+    return {
+      compatibility: 'assessment_changed',
+      reasons: ['assessment_profile_changed'],
+    }
+  }
+  if (
+    Object.values(from.analyzer_profiles).some((value) => value === null) ||
+    Object.values(to.analyzer_profiles).some((value) => value === null)
+  ) {
+    return {
+      compatibility: 'analyzer_conflict',
+      reasons: ['analyzer_profile_conflict'],
+    }
+  }
+  if (
+    JSON.stringify(from.analyzer_profiles) !==
+    JSON.stringify(to.analyzer_profiles)
+  ) {
+    return {
+      compatibility: 'analyzer_changed',
+      reasons: ['analyzer_profile_changed'],
+    }
+  }
+  return { compatibility: 'compatible', reasons: [] }
+}
+
+export function staticSideKey(cohortId: string, evaluatedVersionId: string) {
+  return `${cohortId}::${evaluatedVersionId}`
 }
 
 async function getExecution(

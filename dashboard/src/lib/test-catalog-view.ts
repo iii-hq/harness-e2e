@@ -30,7 +30,11 @@ export function matchesResultFilter(row: TestCatalogRow, filter: ResultFilter) {
   if (filter === 'changed') {
     return (
       result?.compatibility === 'contract_changed' ||
-      result?.compatibility === 'contract_conflict'
+      result?.compatibility === 'contract_conflict' ||
+      result?.compatibility === 'assessment_changed' ||
+      result?.compatibility === 'assessment_conflict' ||
+      result?.compatibility === 'analyzer_changed' ||
+      result?.compatibility === 'analyzer_conflict'
     )
   }
   if (!result?.to) return false
