@@ -71,7 +71,8 @@ expected asset. Outcomes distinguish:
 
 Successful and safely malformed/unexpected assets cite the exact immutable
 artifact id and SHA-256. Rejected or absent content carries no fabricated
-evidence reference. The adjacent qualitative asset assessment remains
-`not_evaluated` in memory; MOT-4446 owns that producer. The canonical primary
-result remains v2 until MOT-4448 aggregates these sidecars and activates v3
-publication.
+evidence reference. MOT-4446 consumes the bounded preview and immutable
+reference for advisory qualitative review when a judge is configured; missing
+evidence remains explicitly `not_evaluated`, and judge unavailability never
+changes deterministic validation. The canonical primary result remains v2
+until MOT-4448 aggregates these sidecars and activates v3 publication.

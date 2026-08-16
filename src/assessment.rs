@@ -55,6 +55,19 @@ pub enum AssessmentTargetKind {
     Asset,
 }
 
+/// Canonical assessment metadata retained from the scenario declaration until
+/// the per-attempt result is materialized.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DeclaredAssessment {
+    pub criterion_id: String,
+    pub possible: u8,
+    pub description: String,
+    pub kind: AssessmentKind,
+    pub policy: AssessmentPolicy,
+    pub dimension: crate::report::EvaluationDimension,
+    pub source: AssessmentSource,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct AssessmentTarget {
     pub kind: AssessmentTargetKind,
@@ -103,6 +116,16 @@ impl EvidenceReference {
             bail!("evidence locator cannot be empty when present");
         }
         Ok(())
+    }
+}
+
+impl From<&ArtifactReference> for EvidenceReference {
+    fn from(reference: &ArtifactReference) -> Self {
+        Self {
+            artifact_id: reference.id.clone(),
+            artifact_sha256: reference.sha256.clone(),
+            locator: None,
+        }
     }
 }
 
@@ -237,6 +260,17 @@ impl AssessmentResult {
                 "deterministic assessment '{}' cannot contain AI analyzer metadata",
                 self.criterion_id
             );
+        }
+        if self.policy == AssessmentPolicy::HardGate && self.kind != AssessmentKind::RequiredCheck {
+            bail!(
+                "hard-gated assessment '{}' must be a required check",
+                self.criterion_id
+            );
+        }
+        if self.source != AssessmentSource::Deterministic
+            && self.policy != AssessmentPolicy::Advisory
+        {
+            bail!("AI assessment '{}' must remain advisory", self.criterion_id);
         }
         let execution_was_attempted = !matches!(
             self.outcome,
@@ -594,7 +628,7 @@ pub struct AssessmentContract {
 }
 
 impl AssessmentContract {
-    pub fn from_asset_evidence(report: &E2eReport) -> Self {
+    pub fn from_assessment_evidence(report: &E2eReport) -> Self {
         Self {
             contract_version: ASSESSMENT_CONTRACT_VERSION,
             runs: report
@@ -610,7 +644,7 @@ impl AssessmentContract {
                         run_id: run.run_id.clone(),
                         attempt_id: run.attempt_id.clone(),
                         system_status,
-                        assessments: Vec::new(),
+                        assessments: run.assessment_results.clone(),
                         assets: run.asset_assessments.clone(),
                         effective_status: derive_effective_status(
                             system_status,
@@ -621,6 +655,12 @@ impl AssessmentContract {
                 })
                 .collect(),
         }
+    }
+
+    /// Compatibility name retained for MOT-4445 callers. The builder now also
+    /// consumes the per-assessment evidence produced by MOT-4446.
+    pub fn from_asset_evidence(report: &E2eReport) -> Self {
+        Self::from_assessment_evidence(report)
     }
 
     pub fn normalize(report: &E2eReport) -> Self {

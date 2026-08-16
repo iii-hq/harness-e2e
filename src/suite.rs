@@ -8,6 +8,10 @@ use serde_json::json;
 use tokio::sync::{mpsc, oneshot, watch};
 use uuid::Uuid;
 
+use crate::assessment::{
+    AnalyzerIdentity, AnalyzerUsage, AssessmentOutcome, AssessmentResult, AssessmentScore,
+    AssessmentTarget, AssessmentTargetKind,
+};
 use crate::asset::{self, AssetCaptureLimits};
 use crate::context::E2eContext;
 use crate::identity::{self, ExecutionIdentity, SystemUnderTestIdentity};
@@ -347,14 +351,9 @@ fn validate_config(config: &SuiteRunConfig) -> Result<()> {
     if config.scenarios.is_empty() {
         bail!("at least one scenario is required");
     }
-    let mut needs_judge = false;
     for scenario in &config.scenarios {
         let seed = config.seed.unwrap_or_else(|| scenario.canonical_seed());
-        let materialized = scenario.materialize("validation", seed)?;
-        needs_judge |= materialized.spec.needs_judge();
-    }
-    if needs_judge && config.judge.is_none() {
-        bail!("selected scenarios require --judge-model and --judge-provider");
+        scenario.materialize("validation", seed)?;
     }
     if let Some(judge) = &config.judge {
         if judge.model.trim().is_empty() || judge.provider.trim().is_empty() {
@@ -449,7 +448,7 @@ async fn run_once(context: &E2eContext, request: AttemptRequest<'_>) -> E2eRunRe
                 attempt_id,
                 attempt_number,
                 session_id,
-                spec.prompt,
+                spec.prompt.clone(),
             );
             report.push_failure(
                 RunStatus::InfrastructureError,
@@ -457,6 +456,7 @@ async fn run_once(context: &E2eContext, request: AttemptRequest<'_>) -> E2eRunRe
                 format!("scenario materialization failed: {error:#}"),
             );
             report.wall_time_ms = started.elapsed().as_millis().min(u64::MAX as u128) as u64;
+            ensure_assessment_results(&spec, &mut report);
             report.refresh_dimensions(false);
             return report;
         }
@@ -490,6 +490,7 @@ async fn run_once(context: &E2eContext, request: AttemptRequest<'_>) -> E2eRunRe
             FailurePhase::Setup,
             format!("persist attempt checkpoint: {error:#}"),
         );
+        ensure_assessment_results(&spec, &mut report);
         report.refresh_dimensions(expects_deliverables);
         return report;
     }
@@ -598,13 +599,18 @@ async fn run_once(context: &E2eContext, request: AttemptRequest<'_>) -> E2eRunRe
         }
     }
     report.wall_time_ms = started.elapsed().as_millis().min(u64::MAX as u128) as u64;
+    ensure_assessment_results(&spec, &mut report);
     if report.failures.is_empty() {
         if report.hard_gates.iter().any(|gate| !gate.passed) {
             // Judge-backed scenarios skip the judge on a gate failure, leaving no
             // criterion awards; the run must still enter the aggregate as a score.
             report.score.get_or_insert(0);
             report.finish(RunStatus::HardGateFailed);
-        } else if report.score.is_some() {
+        } else if report.score.is_some()
+            || report.assessment_results.iter().all(|assessment| {
+                assessment.policy == crate::assessment::AssessmentPolicy::Advisory
+            })
+        {
             report.finish(RunStatus::Passed);
         } else {
             report.push_failure(
@@ -617,7 +623,9 @@ async fn run_once(context: &E2eContext, request: AttemptRequest<'_>) -> E2eRunRe
             );
         }
     }
-    report.update_cost(spec.needs_judge());
+    report.update_cost(
+        spec.needs_judge() || (!report.asset_assessments.is_empty() && judge_config.is_some()),
+    );
     report.update_efficiency(case.work);
     report.refresh_dimensions(expects_deliverables);
     if let Err(error) = emit_event(
@@ -979,34 +987,318 @@ async fn execute(
     })?;
     report.hard_gates = objective.hard_gates;
     let mut awards = objective.awards;
+    let mut criterion_judge = CriterionJudgeState::NotRequested;
 
     if spec.needs_judge() && report.hard_gates.iter().all(|gate| gate.passed) {
-        let judge_config = judge_config.ok_or_else(|| {
-            RunFailure::new(
-                RunStatus::InfrastructureError,
-                FailurePhase::Setup,
-                "scenario requires a judge configuration",
-            )
-        })?;
-        match judge::evaluate(context, judge_config, spec, &observation.response).await {
-            Ok(outcome) => {
-                awards = outcome.awards;
-                report.judge_attempts = Some(outcome.attempts);
-                report.judge_usage = outcome.usage;
+        match judge_config {
+            None => {
+                criterion_judge = CriterionJudgeState::Unavailable(
+                    "judge_unavailable: no judge provider and model were configured",
+                );
             }
-            Err(error) => {
-                return Err(RunFailure::new(
-                    RunStatus::JudgeError,
-                    FailurePhase::Evaluate,
-                    format!("scenario '{}' judge evaluation failed: {error:#}", spec.id),
-                ));
+            Some(judge_config) => {
+                match judge::evaluate(context, judge_config, spec, &observation.response)
+                    .await
+                    .map_err(|error| {
+                        RunFailure::new(
+                            RunStatus::InfrastructureError,
+                            FailurePhase::Evaluate,
+                            format!("scenario '{}' prepare judge evaluation: {error:#}", spec.id),
+                        )
+                    })? {
+                    judge::JudgeEvaluation::Completed(outcome) => {
+                        let judge::JudgeOutcome {
+                            awards: judge_awards,
+                            confidences,
+                            attempts,
+                            usage,
+                            analyzer,
+                            analyzer_usage,
+                        } = outcome;
+                        accumulate_judge_telemetry(report, attempts, usage.as_ref());
+                        awards = judge_awards;
+                        criterion_judge = CriterionJudgeState::Completed {
+                            confidences,
+                            analyzer,
+                            usage: analyzer_usage,
+                        };
+                    }
+                    judge::JudgeEvaluation::Failed(failure) => {
+                        accumulate_judge_telemetry(
+                            report,
+                            failure.attempts,
+                            failure.usage.as_ref(),
+                        );
+                        criterion_judge = CriterionJudgeState::Failed(failure);
+                    }
+                }
             }
         }
+    } else if spec.needs_judge() {
+        criterion_judge = CriterionJudgeState::Unavailable(
+            "judge_not_evaluated: objective hard gate failure prevented advisory judging",
+        );
     }
 
     report.criteria = criterion_reports(spec, awards);
+    report.assessment_results = materialize_assessment_results(
+        spec,
+        &report.criteria,
+        &report.hard_gates,
+        &criterion_judge,
+    );
     update_score(report);
+
+    if !report.asset_assessments.is_empty() {
+        match judge_config {
+            Some(judge_config) => {
+                let outcome = judge::evaluate_asset_quality(
+                    context,
+                    judge_config,
+                    &report.deliverables,
+                    &report.asset_assessments,
+                )
+                .await
+                .map_err(|error| {
+                    RunFailure::new(
+                        RunStatus::InfrastructureError,
+                        FailurePhase::Evaluate,
+                        format!("scenario '{}' prepare asset judge: {error:#}", spec.id),
+                    )
+                })?;
+                for (asset, qualitative) in report.asset_assessments.iter_mut().zip(outcome.results)
+                {
+                    asset.qualitative_assessment = qualitative;
+                }
+                accumulate_judge_telemetry(report, outcome.attempts, outcome.usage.as_ref());
+            }
+            None => mark_asset_judge_unavailable(
+                &mut report.asset_assessments,
+                "judge_unavailable: no judge provider and model were configured",
+            ),
+        }
+    }
     Ok(())
+}
+
+enum CriterionJudgeState {
+    NotRequested,
+    Unavailable(&'static str),
+    Completed {
+        confidences: HashMap<String, f64>,
+        analyzer: AnalyzerIdentity,
+        usage: AnalyzerUsage,
+    },
+    Failed(judge::JudgeFailure),
+}
+
+fn ensure_assessment_results(spec: &ScenarioSpec, report: &mut E2eRunReport) {
+    let declared = spec.declared_assessments();
+    let complete = report.assessment_results.len() == declared.len()
+        && report
+            .assessment_results
+            .iter()
+            .zip(&declared)
+            .all(|(result, declaration)| result.criterion_id == declaration.criterion_id);
+    if complete {
+        return;
+    }
+    let reason = report
+        .failures
+        .first()
+        .map(|failure| format!("assessment_not_evaluated: {}", failure.message))
+        .unwrap_or_else(|| {
+            "assessment_not_evaluated: execution did not reach assessment materialization".into()
+        });
+    report.assessment_results = materialize_assessment_results(
+        spec,
+        &report.criteria,
+        &report.hard_gates,
+        &CriterionJudgeState::NotRequested,
+    );
+    for result in &mut report.assessment_results {
+        result.outcome = AssessmentOutcome::NotEvaluated;
+        result.score = None;
+        result.confidence = None;
+        result.summary = reason.clone();
+        result.analyzer = None;
+        result.analyzer_usage = None;
+    }
+}
+
+fn materialize_assessment_results(
+    spec: &ScenarioSpec,
+    criteria: &[CriterionReport],
+    hard_gates: &[HardGateReport],
+    judge_state: &CriterionJudgeState,
+) -> Vec<AssessmentResult> {
+    spec.declared_assessments()
+        .into_iter()
+        .map(|declaration| {
+            let criterion = criteria
+                .iter()
+                .find(|criterion| criterion.id == declaration.criterion_id);
+            let hard_gate_failed = hard_gates
+                .iter()
+                .any(|gate| gate.id == declaration.criterion_id && !gate.passed);
+            let (outcome, score, confidence, summary, analyzer, analyzer_usage) = if declaration
+                .source
+                == crate::assessment::AssessmentSource::Judge
+            {
+                match judge_state {
+                    CriterionJudgeState::Completed {
+                        confidences,
+                        analyzer,
+                        usage,
+                    } => {
+                        let awarded = criterion.and_then(|criterion| criterion.awarded);
+                        (
+                            score_assessment_outcome(
+                                awarded,
+                                declaration.possible,
+                                hard_gate_failed,
+                            ),
+                            awarded.map(|awarded| AssessmentScore {
+                                awarded,
+                                possible: declaration.possible,
+                            }),
+                            confidences.get(&declaration.criterion_id).copied(),
+                            criterion
+                                .map(|criterion| criterion.reason.clone())
+                                .unwrap_or_else(|| "Judge returned no criterion result.".into()),
+                            Some(analyzer.clone()),
+                            Some(usage.clone()),
+                        )
+                    }
+                    CriterionJudgeState::Failed(failure) => (
+                        failure.kind.outcome(),
+                        None,
+                        None,
+                        failure.summary(),
+                        Some(failure.analyzer.clone()),
+                        Some(failure.analyzer_usage.clone()),
+                    ),
+                    CriterionJudgeState::Unavailable(reason) => (
+                        AssessmentOutcome::Unavailable,
+                        None,
+                        None,
+                        (*reason).to_string(),
+                        None,
+                        None,
+                    ),
+                    CriterionJudgeState::NotRequested => (
+                        AssessmentOutcome::NotEvaluated,
+                        None,
+                        None,
+                        "Judge assessment was not requested.".into(),
+                        None,
+                        None,
+                    ),
+                }
+            } else {
+                let awarded = criterion.and_then(|criterion| criterion.awarded);
+                (
+                    score_assessment_outcome(awarded, declaration.possible, hard_gate_failed),
+                    awarded.map(|awarded| AssessmentScore {
+                        awarded,
+                        possible: declaration.possible,
+                    }),
+                    None,
+                    criterion
+                        .map(|criterion| criterion.reason.clone())
+                        .unwrap_or_else(|| "Deterministic assessment was not evaluated.".into()),
+                    None,
+                    None,
+                )
+            };
+            AssessmentResult {
+                criterion_id: declaration.criterion_id.clone(),
+                target: AssessmentTarget {
+                    kind: AssessmentTargetKind::Criterion,
+                    id: declaration.criterion_id,
+                },
+                kind: declaration.kind,
+                policy: declaration.policy,
+                dimension: declaration.dimension,
+                source: declaration.source,
+                outcome,
+                score,
+                confidence,
+                summary,
+                evidence: Vec::new(),
+                analyzer,
+                analyzer_usage,
+            }
+        })
+        .collect()
+}
+
+fn score_assessment_outcome(
+    awarded: Option<u8>,
+    possible: u8,
+    hard_gate_failed: bool,
+) -> AssessmentOutcome {
+    match awarded {
+        None => AssessmentOutcome::NotEvaluated,
+        Some(_) if hard_gate_failed => AssessmentOutcome::Failed,
+        Some(awarded) if awarded == possible => AssessmentOutcome::Passed,
+        Some(0) => AssessmentOutcome::Failed,
+        Some(_) => AssessmentOutcome::Partial,
+    }
+}
+
+fn mark_asset_judge_unavailable(
+    assessments: &mut [crate::assessment::AssetAssessmentResult],
+    reason: &str,
+) {
+    for asset in assessments {
+        if asset.validation.evidence.is_empty() {
+            asset.qualitative_assessment.outcome = AssessmentOutcome::NotEvaluated;
+            asset.qualitative_assessment.summary =
+                "Asset quality was not evaluated because no immutable content evidence was captured."
+                    .into();
+            continue;
+        }
+        asset.qualitative_assessment.outcome = AssessmentOutcome::Unavailable;
+        asset.qualitative_assessment.score = None;
+        asset.qualitative_assessment.confidence = None;
+        asset.qualitative_assessment.summary = reason.to_string();
+        asset.qualitative_assessment.evidence = asset.validation.evidence.clone();
+        asset.qualitative_assessment.analyzer = None;
+        asset.qualitative_assessment.analyzer_usage = None;
+    }
+}
+
+fn accumulate_judge_telemetry(
+    report: &mut E2eRunReport,
+    attempts: u8,
+    usage: Option<&crate::report::ModelUsageReport>,
+) {
+    if attempts > 0 {
+        report.judge_attempts = Some(report.judge_attempts.unwrap_or(0).saturating_add(attempts));
+    }
+    let Some(usage) = usage else {
+        return;
+    };
+    report.judge_usage = Some(match report.judge_usage.take() {
+        None => usage.clone(),
+        Some(existing) => crate::report::ModelUsageReport {
+            input_tokens: sum_usage(existing.input_tokens, usage.input_tokens),
+            output_tokens: sum_usage(existing.output_tokens, usage.output_tokens),
+            cache_read_tokens: sum_usage(existing.cache_read_tokens, usage.cache_read_tokens),
+            cache_write_tokens: sum_usage(existing.cache_write_tokens, usage.cache_write_tokens),
+            reasoning_tokens: sum_usage(existing.reasoning_tokens, usage.reasoning_tokens),
+            cost_usd: existing
+                .cost_usd
+                .zip(usage.cost_usd)
+                .map(|(left, right)| left + right),
+        },
+    });
+}
+
+fn sum_usage(left: Option<u64>, right: Option<u64>) -> Option<u64> {
+    left.zip(right)
+        .and_then(|(left, right)| left.checked_add(right))
 }
 
 fn prepare_filesystem_root(spec: &ScenarioSpec) -> Result<Option<serde_json::Value>, RunFailure> {
@@ -1351,16 +1643,198 @@ mod tests {
                 stuck_timeout_seconds: 1,
             },
             denied_functions: &[],
-            criteria: vec![CriterionSpec {
-                id: "objective",
-                weight: 100,
-                description: "objective",
-            }],
+            criteria: vec![CriterionSpec::advisory_judge("objective", 100, "objective")],
             judge_reference: None,
             setup: None,
             evaluate: evaluator as ScenarioEvaluator,
             cleanup: None,
         }
+    }
+
+    fn mixed_assessment_spec() -> ScenarioSpec {
+        let mut spec = spec();
+        spec.criteria = vec![
+            CriterionSpec::required_deterministic(
+                "required",
+                70,
+                "Required deterministic behavior.",
+                EvaluationDimension::StructuralIntegrity,
+            ),
+            CriterionSpec::advisory_judge("quality", 30, "Advisory judge quality signal."),
+        ];
+        spec.judge_reference = Some(serde_json::json!({"expected": "quality"}));
+        spec
+    }
+
+    #[test]
+    fn materializes_one_result_per_declaration_without_losing_gate_or_partial_score() {
+        let mut spec = spec();
+        spec.criteria = vec![
+            CriterionSpec::required_deterministic(
+                "required",
+                70,
+                "Required deterministic behavior.",
+                EvaluationDimension::StructuralIntegrity,
+            ),
+            CriterionSpec::advisory_deterministic(
+                "signal",
+                30,
+                "Advisory deterministic signal.",
+                EvaluationDimension::Efficiency,
+            ),
+        ];
+        let criteria = vec![
+            CriterionReport {
+                id: "required".into(),
+                possible: 70,
+                awarded: Some(35),
+                reason: "required behavior was incomplete".into(),
+            },
+            CriterionReport {
+                id: "signal".into(),
+                possible: 30,
+                awarded: Some(12),
+                reason: "partial efficiency evidence".into(),
+            },
+        ];
+        let gates = vec![HardGateReport {
+            id: "required".into(),
+            dimension: EvaluationDimension::StructuralIntegrity,
+            passed: false,
+            reason: "required behavior was incomplete".into(),
+        }];
+
+        let results = materialize_assessment_results(
+            &spec,
+            &criteria,
+            &gates,
+            &CriterionJudgeState::NotRequested,
+        );
+
+        assert_eq!(results.len(), 2);
+        assert_eq!(results[0].criterion_id, "required");
+        assert_eq!(
+            results[0].policy,
+            crate::assessment::AssessmentPolicy::HardGate
+        );
+        assert_eq!(results[0].outcome, AssessmentOutcome::Failed);
+        assert_eq!(results[0].score.as_ref().unwrap().awarded, 35);
+        assert_eq!(
+            results[1].policy,
+            crate::assessment::AssessmentPolicy::Advisory
+        );
+        assert_eq!(results[1].dimension, EvaluationDimension::Efficiency);
+        assert_eq!(results[1].outcome, AssessmentOutcome::Partial);
+        assert_eq!(results[1].score.as_ref().unwrap().awarded, 12);
+    }
+
+    #[test]
+    fn malformed_judge_result_is_advisory_and_preserves_deterministic_result() {
+        let spec = mixed_assessment_spec();
+        let criteria = vec![
+            CriterionReport {
+                id: "required".into(),
+                possible: 70,
+                awarded: Some(70),
+                reason: "deterministic evidence passed".into(),
+            },
+            CriterionReport {
+                id: "quality".into(),
+                possible: 30,
+                awarded: None,
+                reason: "not evaluated".into(),
+            },
+        ];
+        let failure = judge::JudgeFailure {
+            kind: judge::JudgeFailureKind::MalformedOutput,
+            message: "response omitted quality".into(),
+            attempts: 3,
+            usage: None,
+            analyzer: AnalyzerIdentity {
+                analyzer: "criterion-assessment".into(),
+                analyzer_version: "1".into(),
+                provider: Some("provider".into()),
+                model: Some("model".into()),
+                prompt_version: "criterion-assessment-v1".into(),
+                input_sha256: format!("sha256:{}", "a".repeat(64)),
+            },
+            analyzer_usage: AnalyzerUsage {
+                latency_ms: Some(10),
+                ..AnalyzerUsage::default()
+            },
+        };
+
+        let results = materialize_assessment_results(
+            &spec,
+            &criteria,
+            &[],
+            &CriterionJudgeState::Failed(failure),
+        );
+
+        assert_eq!(results[0].outcome, AssessmentOutcome::Passed);
+        assert_eq!(results[0].score.as_ref().unwrap().awarded, 70);
+        assert_eq!(results[1].outcome, AssessmentOutcome::Error);
+        assert!(results[1].summary.starts_with("judge_malformed_output:"));
+        assert_eq!(
+            results[1].policy,
+            crate::assessment::AssessmentPolicy::Advisory
+        );
+        results.iter().for_each(|result| result.validate().unwrap());
+    }
+
+    #[test]
+    fn unavailable_judge_is_explicit_without_inventing_a_score() {
+        let spec = mixed_assessment_spec();
+        let criteria = vec![
+            CriterionReport {
+                id: "required".into(),
+                possible: 70,
+                awarded: Some(70),
+                reason: "passed".into(),
+            },
+            CriterionReport {
+                id: "quality".into(),
+                possible: 30,
+                awarded: None,
+                reason: "not evaluated".into(),
+            },
+        ];
+        let results = materialize_assessment_results(
+            &spec,
+            &criteria,
+            &[],
+            &CriterionJudgeState::Unavailable("judge_unavailable: provider was not configured"),
+        );
+
+        assert_eq!(results[1].outcome, AssessmentOutcome::Unavailable);
+        assert!(results[1].score.is_none());
+        assert!(results[1].analyzer.is_none());
+        results[1].validate().unwrap();
+    }
+
+    #[test]
+    fn execution_failure_still_materializes_every_declared_assessment() {
+        let spec = mixed_assessment_spec();
+        let mut report = test_run_report();
+        report.push_failure(
+            RunStatus::InfrastructureError,
+            FailurePhase::Execute,
+            "subject transport failed",
+        );
+
+        ensure_assessment_results(&spec, &mut report);
+
+        assert_eq!(report.assessment_results.len(), spec.criteria.len());
+        assert_eq!(report.assessment_results[0].criterion_id, "required");
+        assert_eq!(report.assessment_results[1].criterion_id, "quality");
+        assert!(report
+            .assessment_results
+            .iter()
+            .all(|result| result.outcome == AssessmentOutcome::NotEvaluated));
+        assert!(report
+            .assessment_results
+            .iter()
+            .all(|result| result.summary.contains("subject transport failed")));
     }
 
     #[test]

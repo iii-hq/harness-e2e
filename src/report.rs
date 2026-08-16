@@ -8,7 +8,10 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::artifact::{self, ArtifactReference};
-use crate::assessment::{AssessmentContract, AssetAssessmentResult};
+use crate::assessment::{
+    AssessmentContract, AssessmentResult, AssessmentTargetKind, AssetAssessmentResult,
+    EvidenceReference,
+};
 use crate::identity::{ExecutionIdentity, SystemUnderTestIdentity};
 use crate::scenarios::{
     CapturedDeliverable, CapturedInvariant, ExecutionPolicy, ProvenanceEvidence, ScenarioCase,
@@ -274,6 +277,9 @@ pub struct RetryAttemptReport {
     pub failures: Vec<FailureRecord>,
     #[serde(skip)]
     #[schemars(skip)]
+    pub assessment_results: Vec<AssessmentResult>,
+    #[serde(skip)]
+    #[schemars(skip)]
     pub asset_assessments: Vec<AssetAssessmentResult>,
     #[serde(skip)]
     #[schemars(skip)]
@@ -300,6 +306,7 @@ impl From<&E2eRunReport> for RetryAttemptReport {
             dimensions: report.dimensions.clone(),
             efficiency: report.efficiency.clone(),
             failures: report.failures.clone(),
+            assessment_results: report.assessment_results.clone(),
             asset_assessments: report.asset_assessments.clone(),
             asset_capture_manifest: report.asset_capture_manifest.clone(),
             asset_redaction: report.asset_redaction.clone(),
@@ -347,6 +354,9 @@ pub struct E2eRunReport {
     pub terminal_status: Option<StatusReport>,
     #[serde(skip)]
     #[schemars(skip)]
+    pub assessment_results: Vec<AssessmentResult>,
+    #[serde(skip)]
+    #[schemars(skip)]
     pub asset_assessments: Vec<AssetAssessmentResult>,
     #[serde(skip)]
     #[schemars(skip)]
@@ -387,6 +397,7 @@ impl E2eRunReport {
             retry_attempts: Vec::new(),
             failures: Vec::new(),
             terminal_status: None,
+            assessment_results: Vec::new(),
             asset_assessments: Vec::new(),
             asset_capture_manifest: None,
             asset_redaction: crate::redaction::RedactionReport::default(),
@@ -1414,6 +1425,12 @@ impl E2eReport {
                     &mut run.dimensions,
                     &mut run.deliverables,
                 );
+                redact_structured_assessments(
+                    &policy,
+                    &mut redaction,
+                    &mut run.assessment_results,
+                    &mut run.asset_assessments,
+                )?;
                 scan_deliverable_content(&policy, &run.deliverables)?;
                 for retry in &mut run.retry_attempts {
                     redaction.merge(retry.asset_redaction.clone());
@@ -1429,6 +1446,12 @@ impl E2eReport {
                         &mut retry.dimensions,
                         &mut retry.deliverables,
                     );
+                    redact_structured_assessments(
+                        &policy,
+                        &mut redaction,
+                        &mut retry.assessment_results,
+                        &mut retry.asset_assessments,
+                    )?;
                     scan_deliverable_content(&policy, &retry.deliverables)?;
                 }
             }
@@ -1522,6 +1545,7 @@ impl E2eReport {
                         references: &mut run.evidence,
                     },
                 )?;
+                bind_assessment_evidence(&mut run.assessment_results, &run.evidence);
                 for attempt in &mut run.retry_attempts {
                     attempt.evidence.clear();
                     materialize_attempt_evidence(
@@ -1536,6 +1560,7 @@ impl E2eReport {
                             references: &mut attempt.evidence,
                         },
                     )?;
+                    bind_assessment_evidence(&mut attempt.assessment_results, &attempt.evidence);
                 }
             }
         }
@@ -1637,6 +1662,25 @@ fn redact_attempt_annotations(
             redact_string(policy, redaction, &mut provenance.relation);
         }
     }
+}
+
+fn redact_structured_assessments(
+    policy: &crate::redaction::RedactionPolicy,
+    redaction: &mut crate::redaction::RedactionReport,
+    assessments: &mut Vec<AssessmentResult>,
+    assets: &mut Vec<AssetAssessmentResult>,
+) -> Result<()> {
+    let mut value = serde_json::to_value(&*assessments)
+        .context("serialize per-assessment results before redaction")?;
+    redaction.merge(policy.redact_value(&mut value));
+    *assessments =
+        serde_json::from_value(value).context("decode per-assessment results after redaction")?;
+
+    let mut value =
+        serde_json::to_value(&*assets).context("serialize asset assessments before redaction")?;
+    redaction.merge(policy.redact_value(&mut value));
+    *assets = serde_json::from_value(value).context("decode asset assessments after redaction")?;
+    Ok(())
 }
 
 fn scan_deliverable_content(
@@ -1753,6 +1797,32 @@ fn materialize_attempt_evidence(
         deliverable.artifact = Some(reference);
     }
     Ok(())
+}
+
+fn bind_assessment_evidence(
+    assessments: &mut [AssessmentResult],
+    references: &[ArtifactReference],
+) {
+    let Some(transcript) = references
+        .iter()
+        .find(|reference| reference.id == "transcript")
+    else {
+        return;
+    };
+    for assessment in assessments {
+        if assessment.target.kind == AssessmentTargetKind::Criterion
+            && assessment.evidence.is_empty()
+            && !matches!(
+                assessment.outcome,
+                crate::assessment::AssessmentOutcome::NotEvaluated
+                    | crate::assessment::AssessmentOutcome::Unavailable
+            )
+        {
+            assessment
+                .evidence
+                .push(EvidenceReference::from(transcript));
+        }
+    }
 }
 
 fn verify_deliverables(output: &Path, deliverables: &[DeliverableReport]) -> Result<()> {
@@ -1966,7 +2036,8 @@ mod tests {
 
     use super::*;
     use crate::assessment::{
-        AiFinalAssessment, EffectiveStatus, RunAssessmentContract, SystemStatus,
+        AiFinalAssessment, AssessmentKind, AssessmentOutcome, AssessmentPolicy, AssessmentScore,
+        AssessmentSource, AssessmentTarget, EffectiveStatus, RunAssessmentContract, SystemStatus,
         ASSESSMENT_CONTRACT_VERSION,
     };
     use crate::identity::StackIdentity;
@@ -2341,6 +2412,27 @@ mod tests {
         let output = tempfile::tempdir().unwrap();
         let mut run = run(100, true);
         run.transcript = Some(serde_json::json!({"messages": ["done"]}));
+        run.assessment_results.push(AssessmentResult {
+            criterion_id: "correctness".into(),
+            target: AssessmentTarget {
+                kind: AssessmentTargetKind::Criterion,
+                id: "correctness".into(),
+            },
+            kind: AssessmentKind::RequiredCheck,
+            policy: AssessmentPolicy::HardGate,
+            dimension: EvaluationDimension::StructuralIntegrity,
+            source: AssessmentSource::Deterministic,
+            outcome: AssessmentOutcome::Passed,
+            score: Some(AssessmentScore {
+                awarded: 100,
+                possible: 100,
+            }),
+            confidence: None,
+            summary: "deterministic evidence passed".into(),
+            evidence: Vec::new(),
+            analyzer: None,
+            analyzer_usage: None,
+        });
         let mut report = report(vec![aggregate(vec![run])]);
 
         let path = report.write_to(output.path(), &manifest()).unwrap();
@@ -2351,6 +2443,12 @@ mod tests {
         assert_eq!(evidence.len(), 1);
         assert!(output.path().join(&evidence[0].path).is_file());
         assert!(evidence[0].sha256.starts_with("sha256:"));
+        let assessment = &report.scenarios[0].runs[0].assessment_results[0];
+        assert_eq!(assessment.evidence.len(), 1);
+        assert_eq!(assessment.evidence[0].artifact_id, "transcript");
+        assert_eq!(assessment.evidence[0].artifact_sha256, evidence[0].sha256);
+        let contract = AssessmentContract::from_assessment_evidence(&report);
+        assert_eq!(contract.runs[0].assessments, vec![assessment.clone()]);
         let (decoded, _) = E2eReport::read_from(output.path()).unwrap();
         assert_eq!(decoded.schema_version, RESULTS_SCHEMA_VERSION);
         let (legacy, _) = E2eReport::read_from(&output.path().join("results.json")).unwrap();

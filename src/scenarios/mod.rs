@@ -9,6 +9,7 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+use crate::assessment::{AssessmentKind, AssessmentPolicy, AssessmentSource};
 use crate::context::E2eContext;
 use crate::report::HardGateReport;
 use crate::wire::SessionMetricsResponseV1;
@@ -59,6 +60,58 @@ pub struct CriterionSpec {
     pub id: &'static str,
     pub weight: u8,
     pub description: &'static str,
+    pub kind: AssessmentKind,
+    pub policy: AssessmentPolicy,
+    pub dimension: crate::report::EvaluationDimension,
+    pub source: AssessmentSource,
+}
+
+impl CriterionSpec {
+    pub const fn required_deterministic(
+        id: &'static str,
+        weight: u8,
+        description: &'static str,
+        dimension: crate::report::EvaluationDimension,
+    ) -> Self {
+        Self {
+            id,
+            weight,
+            description,
+            kind: AssessmentKind::RequiredCheck,
+            policy: AssessmentPolicy::HardGate,
+            dimension,
+            source: AssessmentSource::Deterministic,
+        }
+    }
+
+    pub const fn advisory_deterministic(
+        id: &'static str,
+        weight: u8,
+        description: &'static str,
+        dimension: crate::report::EvaluationDimension,
+    ) -> Self {
+        Self {
+            id,
+            weight,
+            description,
+            kind: AssessmentKind::Signal,
+            policy: AssessmentPolicy::Advisory,
+            dimension,
+            source: AssessmentSource::Deterministic,
+        }
+    }
+
+    pub const fn advisory_judge(id: &'static str, weight: u8, description: &'static str) -> Self {
+        Self {
+            id,
+            weight,
+            description,
+            kind: AssessmentKind::Signal,
+            policy: AssessmentPolicy::Advisory,
+            dimension: crate::report::EvaluationDimension::StructuralIntegrity,
+            source: AssessmentSource::Judge,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -180,6 +233,41 @@ impl ScenarioSpec {
             if criterion.weight == 0 {
                 bail!(
                     "scenario '{}': criterion '{}' has weight=0; expected at least 1",
+                    self.id,
+                    criterion.id
+                );
+            }
+            if criterion.description.trim().is_empty() {
+                bail!(
+                    "scenario '{}': criterion '{}' has an empty description; every assessment must be explainable",
+                    self.id,
+                    criterion.id
+                );
+            }
+            if criterion.kind == AssessmentKind::AssetQuality
+                || criterion.kind == AssessmentKind::AssetValidation
+                || criterion.source == AssessmentSource::AssetAnalyzer
+            {
+                bail!(
+                    "scenario '{}': criterion '{}' uses asset-only assessment metadata",
+                    self.id,
+                    criterion.id
+                );
+            }
+            if criterion.policy == AssessmentPolicy::HardGate
+                && criterion.kind != AssessmentKind::RequiredCheck
+            {
+                bail!(
+                    "scenario '{}': hard-gated criterion '{}' must be a required check",
+                    self.id,
+                    criterion.id
+                );
+            }
+            if criterion.source != AssessmentSource::Deterministic
+                && criterion.policy != AssessmentPolicy::Advisory
+            {
+                bail!(
+                    "scenario '{}': AI-derived criterion '{}' must remain advisory",
                     self.id,
                     criterion.id
                 );
@@ -689,11 +777,11 @@ mod tests {
     #[test]
     fn validation_reports_criterion_values_before_weight_total() {
         let mut spec = ScenarioId::PersistentState.spec("run");
-        spec.criteria = vec![CriterionSpec {
-            id: "durable_result",
-            weight: 0,
-            description: "invalid",
-        }];
+        spec.criteria = vec![CriterionSpec::advisory_judge(
+            "durable_result",
+            0,
+            "invalid",
+        )];
 
         assert_eq!(
             spec.validate().unwrap_err().to_string(),
@@ -705,16 +793,8 @@ mod tests {
     fn validation_reports_duplicate_criterion_indexes() {
         let mut spec = ScenarioId::PersistentState.spec("run");
         spec.criteria = vec![
-            CriterionSpec {
-                id: "duplicate",
-                weight: 50,
-                description: "first",
-            },
-            CriterionSpec {
-                id: "duplicate",
-                weight: 50,
-                description: "second",
-            },
+            CriterionSpec::advisory_judge("duplicate", 50, "first"),
+            CriterionSpec::advisory_judge("duplicate", 50, "second"),
         ];
 
         assert_eq!(
