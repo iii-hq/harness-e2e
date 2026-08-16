@@ -1,0 +1,271 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "AssetCaptureManifest",
+  "type": "object",
+  "required": [
+    "assets",
+    "attempt_id",
+    "captured_at",
+    "captured_before_cleanup",
+    "limits",
+    "reconciled_after_cleanup",
+    "run_id",
+    "schema_version"
+  ],
+  "properties": {
+    "assets": {
+      "type": "array",
+      "items": {
+        "$ref": "#/definitions/AssetEvidenceEntry"
+      }
+    },
+    "attempt_id": {
+      "type": "string"
+    },
+    "captured_at": {
+      "type": "string"
+    },
+    "captured_before_cleanup": {
+      "type": "boolean"
+    },
+    "limits": {
+      "$ref": "#/definitions/AssetCaptureLimits"
+    },
+    "prior_capture": {
+      "anyOf": [
+        {
+          "$ref": "#/definitions/ArtifactReference"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "reconciled_after_cleanup": {
+      "type": "boolean"
+    },
+    "run_id": {
+      "type": "string"
+    },
+    "schema_version": {
+      "type": "integer",
+      "format": "uint32",
+      "enum": [
+        1
+      ],
+      "minimum": 0.0
+    }
+  },
+  "definitions": {
+    "ArtifactReference": {
+      "type": "object",
+      "required": [
+        "id",
+        "kind",
+        "media_type",
+        "path",
+        "sha256",
+        "size_bytes"
+      ],
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "kind": {
+          "type": "string"
+        },
+        "media_type": {
+          "type": "string"
+        },
+        "path": {
+          "type": "string"
+        },
+        "sha256": {
+          "type": "string"
+        },
+        "size_bytes": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        }
+      }
+    },
+    "AssetCaptureLimits": {
+      "type": "object",
+      "required": [
+        "max_assets",
+        "max_preview_bytes",
+        "max_total_bytes"
+      ],
+      "properties": {
+        "max_assets": {
+          "type": "integer",
+          "format": "uint",
+          "minimum": 0.0
+        },
+        "max_preview_bytes": {
+          "type": "integer",
+          "format": "uint",
+          "minimum": 0.0
+        },
+        "max_total_bytes": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        }
+      }
+    },
+    "AssetEvidenceEntry": {
+      "type": "object",
+      "required": [
+        "asset_id",
+        "expected",
+        "preview_truncated",
+        "validation"
+      ],
+      "properties": {
+        "artifact": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ArtifactReference"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "asset_id": {
+          "type": "string"
+        },
+        "content_sha256": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "expected": {
+          "type": "boolean"
+        },
+        "kind": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "media_type": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "normalized_path": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "observed_size_bytes": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "preview": true,
+        "preview_truncated": {
+          "type": "boolean"
+        },
+        "provenance": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/ProvenanceEvidence"
+          }
+        },
+        "validation": {
+          "$ref": "#/definitions/AssetValidationResult"
+        }
+      }
+    },
+    "AssetValidationOutcome": {
+      "type": "string",
+      "enum": [
+        "valid",
+        "invalid",
+        "malformed",
+        "oversized",
+        "not_produced",
+        "unreadable",
+        "unsafe_path",
+        "removed_during_cleanup",
+        "unexpected",
+        "not_evaluated"
+      ]
+    },
+    "AssetValidationResult": {
+      "type": "object",
+      "required": [
+        "asset_id",
+        "outcome",
+        "summary"
+      ],
+      "properties": {
+        "asset_id": {
+          "type": "string"
+        },
+        "evidence": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/EvidenceReference"
+          }
+        },
+        "outcome": {
+          "$ref": "#/definitions/AssetValidationOutcome"
+        },
+        "summary": {
+          "type": "string"
+        }
+      }
+    },
+    "EvidenceReference": {
+      "type": "object",
+      "required": [
+        "artifact_id",
+        "artifact_sha256"
+      ],
+      "properties": {
+        "artifact_id": {
+          "type": "string"
+        },
+        "artifact_sha256": {
+          "type": "string"
+        },
+        "locator": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      }
+    },
+    "ProvenanceEvidence": {
+      "type": "object",
+      "required": [
+        "kind",
+        "relation",
+        "source_id"
+      ],
+      "properties": {
+        "kind": {
+          "type": "string"
+        },
+        "relation": {
+          "type": "string"
+        },
+        "source_id": {
+          "type": "string"
+        }
+      }
+    }
+  }
+}

@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::artifact::{self, ArtifactReference};
-use crate::assessment::AssessmentContract;
+use crate::assessment::{AssessmentContract, AssetAssessmentResult};
 use crate::identity::{ExecutionIdentity, SystemUnderTestIdentity};
 use crate::scenarios::{
     CapturedDeliverable, CapturedInvariant, ExecutionPolicy, ProvenanceEvidence, ScenarioCase,
@@ -125,108 +125,8 @@ pub fn evaluate_deliverables(
     case: &ScenarioCase,
     captured: Vec<CapturedDeliverable>,
 ) -> Result<Vec<DeliverableReport>> {
-    let contract = &case.deliverable_contract;
-    if captured.len() != contract.artifacts.len() {
-        bail!(
-            "scenario '{}' captured {} deliverable(s), contract declares {}",
-            case.scenario_id,
-            captured.len(),
-            contract.artifacts.len()
-        );
-    }
-    let expected_invariants = contract
-        .invariants
-        .iter()
-        .map(|invariant| invariant.id.clone())
-        .collect::<std::collections::HashSet<_>>();
-    let mut observed_artifacts = std::collections::HashSet::new();
-    let mut observed_invariants = std::collections::HashSet::new();
-    let mut reports = Vec::with_capacity(captured.len());
-    for deliverable in captured {
-        if !observed_artifacts.insert(deliverable.id.clone()) {
-            bail!("captured duplicate deliverable '{}'", deliverable.id);
-        }
-        let expectation = contract
-            .artifacts
-            .iter()
-            .find(|artifact| artifact.id == deliverable.id)
-            .with_context(|| format!("captured undeclared deliverable '{}'", deliverable.id))?;
-        if deliverable.kind != expectation.kind {
-            bail!(
-                "deliverable '{}' kind '{}' differs from contract kind '{}'",
-                deliverable.id,
-                deliverable.kind,
-                expectation.kind
-            );
-        }
-        for invariant in &deliverable.invariants {
-            if !expected_invariants.contains(&invariant.id) {
-                bail!(
-                    "deliverable '{}' reported undeclared invariant '{}'",
-                    deliverable.id,
-                    invariant.id
-                );
-            }
-            if !observed_invariants.insert(invariant.id.clone()) {
-                bail!("captured duplicate invariant '{}'", invariant.id);
-            }
-        }
-        let bytes = serde_json::to_vec(&deliverable.content)
-            .with_context(|| format!("serialize deliverable '{}'", deliverable.id))?;
-        if bytes.len() as u64 > expectation.max_size_bytes {
-            bail!(
-                "deliverable '{}' is {} bytes; contract allows at most {}",
-                deliverable.id,
-                bytes.len(),
-                expectation.max_size_bytes
-            );
-        }
-        let validator = jsonschema::JSONSchema::compile(&expectation.schema).map_err(|error| {
-            anyhow::anyhow!(
-                "compile deliverable '{}' JSON Schema: {error}",
-                deliverable.id
-            )
-        })?;
-        let schema_valid = validator.is_valid(&deliverable.content);
-        if deliverable.provenance.iter().any(|evidence| {
-            evidence.kind.trim().is_empty()
-                || evidence.source_id.trim().is_empty()
-                || evidence.relation.trim().is_empty()
-        }) {
-            bail!("deliverable '{}' has invalid provenance", deliverable.id);
-        }
-        let provenance_valid = !contract.provenance_required || !deliverable.provenance.is_empty();
-        reports.push(DeliverableReport {
-            id: deliverable.id,
-            kind: deliverable.kind,
-            media_type: expectation.media_type.clone(),
-            content_sha256: artifact::sha256_value(&deliverable.content)?,
-            content_size_bytes: bytes.len().try_into().unwrap_or(u64::MAX),
-            schema_valid,
-            provenance_valid,
-            invariants: deliverable.invariants,
-            provenance: deliverable.provenance,
-            preview: preview(&deliverable.content),
-            artifact: None,
-            content: deliverable.content,
-        });
-    }
-    if observed_invariants != expected_invariants {
-        bail!("captured deliverable invariants differ from their contract");
-    }
-    Ok(reports)
-}
-
-fn preview(content: &Value) -> Value {
-    let rendered = serde_json::to_string(content).unwrap_or_default();
-    if rendered.len() <= 1_024 {
-        content.clone()
-    } else {
-        Value::String(format!(
-            "{}...",
-            rendered.chars().take(1_024).collect::<String>()
-        ))
-    }
+    crate::asset::evaluate_assets(case, captured, crate::asset::AssetCaptureLimits::default())
+        .map(|evaluation| evaluation.deliverables)
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -372,6 +272,15 @@ pub struct RetryAttemptReport {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub efficiency: Option<EfficiencyReport>,
     pub failures: Vec<FailureRecord>,
+    #[serde(skip)]
+    #[schemars(skip)]
+    pub asset_assessments: Vec<AssetAssessmentResult>,
+    #[serde(skip)]
+    #[schemars(skip)]
+    pub asset_capture_manifest: Option<ArtifactReference>,
+    #[serde(skip)]
+    #[schemars(skip)]
+    pub asset_redaction: crate::redaction::RedactionReport,
 }
 
 impl From<&E2eRunReport> for RetryAttemptReport {
@@ -391,6 +300,9 @@ impl From<&E2eRunReport> for RetryAttemptReport {
             dimensions: report.dimensions.clone(),
             efficiency: report.efficiency.clone(),
             failures: report.failures.clone(),
+            asset_assessments: report.asset_assessments.clone(),
+            asset_capture_manifest: report.asset_capture_manifest.clone(),
+            asset_redaction: report.asset_redaction.clone(),
         }
     }
 }
@@ -433,6 +345,15 @@ pub struct E2eRunReport {
     #[serde(skip)]
     #[schemars(skip)]
     pub terminal_status: Option<StatusReport>,
+    #[serde(skip)]
+    #[schemars(skip)]
+    pub asset_assessments: Vec<AssetAssessmentResult>,
+    #[serde(skip)]
+    #[schemars(skip)]
+    pub asset_capture_manifest: Option<ArtifactReference>,
+    #[serde(skip)]
+    #[schemars(skip)]
+    pub asset_redaction: crate::redaction::RedactionReport,
 }
 
 impl E2eRunReport {
@@ -466,6 +387,9 @@ impl E2eRunReport {
             retry_attempts: Vec::new(),
             failures: Vec::new(),
             terminal_status: None,
+            asset_assessments: Vec::new(),
+            asset_capture_manifest: None,
+            asset_redaction: crate::redaction::RedactionReport::default(),
         }
     }
 
@@ -1473,9 +1397,10 @@ impl E2eReport {
 
     fn redact_sensitive_evidence(&mut self) -> Result<()> {
         let policy = crate::redaction::RedactionPolicy::from_environment();
-        let mut redaction = crate::redaction::RedactionReport::default();
+        let mut redaction = self.redaction.clone();
         for scenario in &mut self.scenarios {
             for run in &mut scenario.runs {
+                redaction.merge(run.asset_redaction.clone());
                 redact_string(&policy, &mut redaction, &mut run.prompt);
                 if let Some(transcript) = &mut run.transcript {
                     redaction.merge(policy.redact_value(transcript));
@@ -1491,6 +1416,7 @@ impl E2eReport {
                 );
                 scan_deliverable_content(&policy, &run.deliverables)?;
                 for retry in &mut run.retry_attempts {
+                    redaction.merge(retry.asset_redaction.clone());
                     if let Some(transcript) = &mut retry.transcript {
                         redaction.merge(policy.redact_value(transcript));
                     }
@@ -1588,10 +1514,13 @@ impl E2eReport {
                     output,
                     &run.run_id,
                     &run.attempt_id,
-                    run.transcript.as_ref(),
-                    run.metrics.as_ref(),
-                    &mut run.deliverables,
-                    &mut run.evidence,
+                    AttemptEvidence {
+                        transcript: run.transcript.as_ref(),
+                        metrics: run.metrics.as_ref(),
+                        deliverables: &mut run.deliverables,
+                        asset_capture_manifest: run.asset_capture_manifest.as_ref(),
+                        references: &mut run.evidence,
+                    },
                 )?;
                 for attempt in &mut run.retry_attempts {
                     attempt.evidence.clear();
@@ -1599,10 +1528,13 @@ impl E2eReport {
                         output,
                         &attempt.run_id,
                         &attempt.attempt_id,
-                        attempt.transcript.as_ref(),
-                        attempt.metrics.as_ref(),
-                        &mut attempt.deliverables,
-                        &mut attempt.evidence,
+                        AttemptEvidence {
+                            transcript: attempt.transcript.as_ref(),
+                            metrics: attempt.metrics.as_ref(),
+                            deliverables: &mut attempt.deliverables,
+                            asset_capture_manifest: attempt.asset_capture_manifest.as_ref(),
+                            references: &mut attempt.evidence,
+                        },
                     )?;
                 }
             }
@@ -1765,15 +1697,27 @@ fn validate_retry_identity(run: &E2eRunReport, attempt: &RetryAttemptReport) -> 
     Ok(())
 }
 
+struct AttemptEvidence<'a> {
+    transcript: Option<&'a Value>,
+    metrics: Option<&'a SessionMetricsResponseV1>,
+    deliverables: &'a mut [DeliverableReport],
+    asset_capture_manifest: Option<&'a ArtifactReference>,
+    references: &'a mut Vec<ArtifactReference>,
+}
+
 fn materialize_attempt_evidence(
     output: &Path,
     run_id: &str,
     attempt_id: &str,
-    transcript: Option<&Value>,
-    metrics: Option<&SessionMetricsResponseV1>,
-    deliverables: &mut [DeliverableReport],
-    references: &mut Vec<ArtifactReference>,
+    evidence: AttemptEvidence<'_>,
 ) -> Result<()> {
+    let AttemptEvidence {
+        transcript,
+        metrics,
+        deliverables,
+        asset_capture_manifest,
+        references,
+    } = evidence;
     let root = PathBuf::from("evidence").join(run_id).join(attempt_id);
     if let Some(transcript) = transcript {
         references.push(artifact::write_json(
@@ -1792,6 +1736,10 @@ fn materialize_attempt_evidence(
             "metrics",
             metrics,
         )?);
+    }
+    if let Some(manifest) = asset_capture_manifest {
+        manifest.verify(output)?;
+        references.push(manifest.clone());
     }
     let deliverable_root = PathBuf::from("deliverables").join(run_id).join(attempt_id);
     for deliverable in deliverables {
@@ -2621,6 +2569,130 @@ mod tests {
         assert!(legacy["scenarios"][0]["runs"][0]
             .get("deliverables")
             .is_none());
+    }
+
+    #[test]
+    fn deterministic_asset_evidence_survives_the_complete_cleanup_lifecycle() {
+        let output = tempfile::tempdir().unwrap();
+        let contract = DeliverableContract {
+            artifacts: vec![ArtifactExpectation {
+                id: "result".into(),
+                kind: "state_value".into(),
+                media_type: "application/json".into(),
+                schema: serde_json::json!({
+                    "type": "object",
+                    "required": ["status"],
+                    "properties": { "status": { "const": "ready" } },
+                    "additionalProperties": false
+                }),
+                max_size_bytes: 1_024,
+            }],
+            invariants: vec![InvariantSpec {
+                id: "ready".into(),
+                description: "The materialized value is ready.".into(),
+            }],
+            provenance_required: true,
+            capture_before_cleanup: true,
+        };
+        let case = ScenarioCase::new(
+            "case",
+            2,
+            7,
+            serde_json::json!({ "status": "ready" }),
+            ComplexityProfile::default(),
+            vec![],
+            contract,
+        )
+        .unwrap();
+        let captured = CapturedDeliverable {
+            id: "result".into(),
+            kind: "state_value".into(),
+            content: serde_json::json!({ "status": "ready" }),
+            invariants: vec![CapturedInvariant {
+                id: "ready".into(),
+                passed: true,
+                reason: "status is ready".into(),
+            }],
+            provenance: vec![ProvenanceEvidence {
+                kind: "function_call".into(),
+                source_id: "call-1".into(),
+                relation: "created".into(),
+            }],
+        };
+        let mut evaluation = crate::asset::evaluate_assets(
+            &case,
+            vec![captured],
+            crate::asset::AssetCaptureLimits::default(),
+        )
+        .unwrap();
+        let capture_manifest =
+            crate::asset::persist_before_cleanup(output.path(), "run", "attempt", &mut evaluation)
+                .unwrap();
+        let captured_path = evaluation.deliverables[0]
+            .artifact
+            .as_ref()
+            .unwrap()
+            .path
+            .clone();
+        std::fs::remove_file(output.path().join(&captured_path)).unwrap();
+        crate::asset::reconcile_after_cleanup(
+            output.path(),
+            &evaluation.deliverables,
+            &mut evaluation.assessments,
+        );
+        let reconciliation_manifest = crate::asset::persist_after_cleanup(
+            output.path(),
+            &capture_manifest,
+            &evaluation.assessments,
+        )
+        .unwrap();
+
+        let mut attempt = run(0, false);
+        attempt.deliverables = evaluation.deliverables;
+        attempt.asset_assessments = evaluation.assessments;
+        attempt.asset_capture_manifest = Some(reconciliation_manifest.clone());
+        attempt.evidence.push(reconciliation_manifest.clone());
+        attempt.asset_redaction = evaluation.redaction;
+        let mut report = report(vec![E2eScenarioReport::aggregate_case(
+            case,
+            ExecutionPolicy {
+                max_turns: 1,
+                max_output_tokens: Some(1),
+                max_total_tokens: 1,
+                stuck_timeout_seconds: 1,
+            },
+            vec![attempt],
+        )]);
+        report.schema_version = LATEST_RESULTS_SCHEMA_VERSION;
+        report.assessment_contract = Some(AssessmentContract::from_asset_evidence(&report));
+        report.write_to(output.path(), &manifest()).unwrap();
+
+        assert!(output.path().join(captured_path).is_file());
+        let (decoded, _) = E2eReport::read_from(output.path()).unwrap();
+        let asset = &decoded.assessment_contract.unwrap().runs[0].assets[0];
+        assert_eq!(
+            asset.validation.outcome,
+            crate::assessment::AssetValidationOutcome::RemovedDuringCleanup
+        );
+        assert_eq!(asset.validation.evidence.len(), 1);
+        assert!(decoded.scenarios[0].runs[0]
+            .evidence
+            .iter()
+            .any(|reference| reference.kind == "asset_capture_manifest"));
+        let reconciliation: crate::asset::AssetCaptureManifest = serde_json::from_slice(
+            &std::fs::read(output.path().join(reconciliation_manifest.path)).unwrap(),
+        )
+        .unwrap();
+        assert!(reconciliation.reconciled_after_cleanup);
+        assert_eq!(
+            reconciliation.assets[0].validation.outcome,
+            crate::assessment::AssetValidationOutcome::RemovedDuringCleanup
+        );
+        reconciliation
+            .prior_capture
+            .unwrap()
+            .verify(output.path())
+            .unwrap();
     }
 
     #[test]

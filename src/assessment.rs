@@ -594,6 +594,35 @@ pub struct AssessmentContract {
 }
 
 impl AssessmentContract {
+    pub fn from_asset_evidence(report: &E2eReport) -> Self {
+        Self {
+            contract_version: ASSESSMENT_CONTRACT_VERSION,
+            runs: report
+                .scenarios
+                .iter()
+                .flat_map(|scenario| &scenario.runs)
+                .map(|run| {
+                    let system_status = SystemStatus::from(run.status);
+                    let ai_final_assessment = AiFinalAssessment::not_evaluated(
+                        "final AI assessment is owned by MOT-4447",
+                    );
+                    RunAssessmentContract {
+                        run_id: run.run_id.clone(),
+                        attempt_id: run.attempt_id.clone(),
+                        system_status,
+                        assessments: Vec::new(),
+                        assets: run.asset_assessments.clone(),
+                        effective_status: derive_effective_status(
+                            system_status,
+                            &ai_final_assessment,
+                        ),
+                        ai_final_assessment,
+                    }
+                })
+                .collect(),
+        }
+    }
+
     pub fn normalize(report: &E2eReport) -> Self {
         report.assessment_contract.clone().unwrap_or_else(|| Self {
             contract_version: ASSESSMENT_CONTRACT_VERSION,

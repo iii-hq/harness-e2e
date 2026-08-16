@@ -3,6 +3,7 @@ use schemars::schema::{RootSchema, Schema};
 use schemars::JsonSchema;
 
 use crate::assessment::{AnalysisBundle, AnalysisResponse};
+use crate::asset::AssetCaptureManifest;
 use crate::durable::{DurableArchiveManifest, HistoryRecord};
 use crate::fault::{FaultEvaluation, FaultJournal, FaultPlan, FaultProfile};
 use crate::report::{E2eManifestV2, E2eReport};
@@ -55,6 +56,10 @@ pub fn analysis_bundle_v1() -> RootSchema {
 
 pub fn analysis_response_v1() -> RootSchema {
     versioned_root_schema_for::<AnalysisResponse>(1)
+}
+
+pub fn asset_capture_v1() -> RootSchema {
+    versioned_root_schema_for::<AssetCaptureManifest>(1)
 }
 
 pub fn manifest_v2() -> RootSchema {
@@ -129,6 +134,11 @@ mod tests {
     fn analysis_schemas_match_snapshots() {
         assert_snapshot("analysis-bundle-v1.json", &analysis_bundle_v1());
         assert_snapshot("analysis-response-v1.json", &analysis_response_v1());
+    }
+
+    #[test]
+    fn asset_capture_schema_matches_snapshot() {
+        assert_snapshot("asset-capture-v1.json", &asset_capture_v1());
     }
 
     #[test]

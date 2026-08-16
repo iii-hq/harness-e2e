@@ -1036,6 +1036,9 @@ mod tests {
             retry_attempts: Vec::new(),
             failures: Vec::new(),
             terminal_status: None,
+            asset_assessments: Vec::new(),
+            asset_capture_manifest: None,
+            asset_redaction: Default::default(),
         };
         let scenario = E2eScenarioReport {
             scenario_id: "coordination.4".into(),

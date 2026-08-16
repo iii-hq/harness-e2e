@@ -24,6 +24,7 @@ The checked-in schemas are:
 - `schemas/results-v3.json`
 - `schemas/analysis-bundle-v1.json`
 - `schemas/analysis-response-v1.json`
+- `schemas/asset-capture-v1.json`
 
 Rust owns the canonical schema and semantic validation. The Python and
 TypeScript compatibility adapters consume the same old/new fixtures so legacy

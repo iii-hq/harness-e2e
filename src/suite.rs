@@ -8,13 +8,14 @@ use serde_json::json;
 use tokio::sync::{mpsc, oneshot, watch};
 use uuid::Uuid;
 
+use crate::asset::{self, AssetCaptureLimits};
 use crate::context::E2eContext;
 use crate::identity::{self, ExecutionIdentity, SystemUnderTestIdentity};
 use crate::judge::{self, JudgeConfig};
 use crate::report::{
-    evaluate_deliverables, CriterionReport, E2eManifestV2, E2eReport, E2eRunReport,
-    E2eScenarioReport, EvaluationDimension, FailurePhase, HardGateReport, ModelArtifact,
-    RetryAttemptReport, RunStatus, MANIFEST_SCHEMA_VERSION,
+    CriterionReport, E2eManifestV2, E2eReport, E2eRunReport, E2eScenarioReport,
+    EvaluationDimension, FailurePhase, HardGateReport, ModelArtifact, RetryAttemptReport,
+    RunStatus, MANIFEST_SCHEMA_VERSION,
 };
 use crate::scenarios::common;
 use crate::scenarios::{
@@ -193,6 +194,7 @@ pub async fn run_suite(config: SuiteRunConfig) -> Result<SuiteRunOutcome> {
                         technical_retries: config.technical_retries,
                         progress_interval: config.progress_interval,
                         control: config.control.as_ref(),
+                        output: &config.output,
                     },
                 )
                 .await;
@@ -420,6 +422,7 @@ struct AttemptRequest<'a> {
     seed: u64,
     progress_interval: Option<Duration>,
     control: Option<&'a SuiteControl>,
+    output: &'a std::path::Path,
 }
 
 async fn run_once(context: &E2eContext, request: AttemptRequest<'_>) -> E2eRunReport {
@@ -432,6 +435,7 @@ async fn run_once(context: &E2eContext, request: AttemptRequest<'_>) -> E2eRunRe
         seed,
         progress_interval,
         control,
+        output,
     } = request;
     let started = Instant::now();
     let attempt_id = Uuid::new_v4().simple().to_string();
@@ -510,6 +514,7 @@ async fn run_once(context: &E2eContext, request: AttemptRequest<'_>) -> E2eRunRe
                 capture,
                 progress_interval,
                 control,
+                output,
             },
             &mut report,
         )
@@ -562,6 +567,36 @@ async fn run_once(context: &E2eContext, request: AttemptRequest<'_>) -> E2eRunRe
             );
         }
     }
+    asset::reconcile_after_cleanup(output, &report.deliverables, &mut report.asset_assessments);
+    if let Some(capture_manifest) = report.asset_capture_manifest.clone() {
+        match asset::persist_after_cleanup(output, &capture_manifest, &report.asset_assessments) {
+            Ok(reconciliation_manifest) => {
+                report.asset_capture_manifest = Some(reconciliation_manifest.clone());
+                report.evidence.push(reconciliation_manifest);
+            }
+            Err(error) => report.push_failure(
+                RunStatus::InfrastructureError,
+                FailurePhase::Cleanup,
+                format!("persist post-cleanup asset reconciliation: {error:#}"),
+            ),
+        }
+    }
+    if report
+        .asset_assessments
+        .iter()
+        .any(|asset| asset.validation.outcome != crate::assessment::AssetValidationOutcome::Valid)
+    {
+        if let Some(gate) = report
+            .hard_gates
+            .iter_mut()
+            .find(|gate| gate.id == "deliverable_contract")
+        {
+            gate.passed = false;
+            gate.reason =
+                "captured asset evidence did not survive deterministic validation and cleanup"
+                    .into();
+        }
+    }
     report.wall_time_ms = started.elapsed().as_millis().min(u64::MAX as u128) as u64;
     if report.failures.is_empty() {
         if report.hard_gates.iter().any(|gate| !gate.passed) {
@@ -611,6 +646,7 @@ struct RetryRequest<'a> {
     technical_retries: u8,
     progress_interval: Option<Duration>,
     control: Option<&'a SuiteControl>,
+    output: &'a std::path::Path,
 }
 
 async fn run_with_technical_retries(
@@ -625,6 +661,7 @@ async fn run_with_technical_retries(
         technical_retries,
         progress_interval,
         control,
+        output,
     } = request;
     let run_id = Uuid::new_v4().simple().to_string();
     let mut retry_attempts = Vec::with_capacity(technical_retries as usize);
@@ -641,6 +678,7 @@ async fn run_with_technical_retries(
                 seed,
                 progress_interval,
                 control,
+                output,
             },
         )
         .await;
@@ -684,6 +722,7 @@ struct ExecutionRequest<'a> {
     capture: Option<ScenarioDeliverableCapture>,
     progress_interval: Option<Duration>,
     control: Option<&'a SuiteControl>,
+    output: &'a std::path::Path,
 }
 
 impl RunFailure {
@@ -711,6 +750,7 @@ async fn execute(
         capture,
         progress_interval,
         control,
+        output,
     } = request;
     let stuck_timeout = Duration::from_secs(spec.execution.stuck_timeout_seconds);
     let filesystem_metadata = prepare_filesystem_root(spec)?;
@@ -825,28 +865,82 @@ async fn execute(
     report.transcript = Some(observation.transcript.clone());
     report.metrics = Some(observation.metrics.clone());
     if let Some(capture) = capture {
-        let captured = capture(context, &observation, run_id)
-            .await
-            .map_err(|error| {
-                RunFailure::new(
+        let captured = match capture(context, &observation, run_id).await {
+            Ok(captured) => captured,
+            Err(error) => {
+                let mut message = format!(
+                    "scenario '{}' asset capture was unreadable: {error:#}",
+                    spec.id
+                );
+                let mut evaluation = asset::failed_capture_evaluation(
+                    case,
+                    crate::assessment::AssetValidationOutcome::Unreadable,
+                    &message,
+                );
+                match asset::persist_before_cleanup(
+                    output,
+                    &report.run_id,
+                    &report.attempt_id,
+                    &mut evaluation,
+                ) {
+                    Ok(manifest) => {
+                        report.asset_capture_manifest = Some(manifest.clone());
+                        report.evidence.push(manifest);
+                    }
+                    Err(persist_error) => {
+                        message.push_str(&format!(
+                            "; persist unreadable asset inventory: {persist_error:#}"
+                        ));
+                    }
+                }
+                report.asset_assessments = evaluation.assessments;
+                report.asset_redaction.merge(evaluation.redaction);
+                return Err(RunFailure::new(
+                    RunStatus::InfrastructureError,
+                    FailurePhase::Collect,
+                    message,
+                ));
+            }
+        };
+        let mut evaluation =
+            asset::evaluate_assets(case, captured.clone(), AssetCaptureLimits::default()).map_err(
+                |error| {
+                    RunFailure::new(
+                        RunStatus::InfrastructureError,
+                        FailurePhase::Evaluate,
+                        format!(
+                            "scenario '{}' deterministic asset validation failed: {error:#}",
+                            spec.id
+                        ),
+                    )
+                },
+            )?;
+        let manifest = match asset::persist_before_cleanup(
+            output,
+            &report.run_id,
+            &report.attempt_id,
+            &mut evaluation,
+        ) {
+            Ok(manifest) => manifest,
+            Err(error) => {
+                report.deliverables = evaluation.deliverables;
+                report.asset_assessments = evaluation.assessments;
+                report.asset_redaction.merge(evaluation.redaction);
+                return Err(RunFailure::new(
                     RunStatus::InfrastructureError,
                     FailurePhase::Collect,
                     format!(
-                        "scenario '{}' deliverable capture failed: {error:#}",
+                        "scenario '{}' persist asset evidence before cleanup: {error:#}",
                         spec.id
                     ),
-                )
-            })?;
-        report.deliverables = evaluate_deliverables(case, captured.clone()).map_err(|error| {
-            RunFailure::new(
-                RunStatus::InfrastructureError,
-                FailurePhase::Evaluate,
-                format!(
-                    "scenario '{}' deliverable contract failed: {error:#}",
-                    spec.id
-                ),
-            )
-        })?;
+                ));
+            }
+        };
+        report.deliverables = evaluation.deliverables;
+        report.asset_assessments = evaluation.assessments;
+        report.asset_redaction.merge(evaluation.redaction);
+        report.asset_capture_manifest = Some(manifest.clone());
+        report.evidence.push(manifest);
         observation.deliverables = captured;
     }
     emit_phase(control, SuitePhase::Evaluating)
@@ -862,17 +956,17 @@ async fn execute(
             )
         })?;
     if !case.deliverable_contract.artifacts.is_empty() {
-        let passed = report
-            .deliverables
-            .iter()
-            .all(|deliverable| deliverable.passed());
+        let passed = !report.asset_assessments.is_empty()
+            && report.asset_assessments.iter().all(|asset| {
+                asset.validation.outcome == crate::assessment::AssetValidationOutcome::Valid
+            });
         objective.hard_gates.push(HardGateReport {
             id: "deliverable_contract".to_string(),
             dimension: EvaluationDimension::Deliverable,
             passed,
             reason: format!(
-                "captured {} deliverable(s); schema, invariants, and provenance valid={passed}",
-                report.deliverables.len()
+                "captured {} asset validation result(s); deterministic contract valid={passed}",
+                report.asset_assessments.len()
             ),
         });
     }

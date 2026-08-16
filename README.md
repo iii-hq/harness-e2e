@@ -155,8 +155,14 @@ are parity fixtures, not a linked product API.
 
 The versioned assessment and on-demand analysis boundary is documented in
 [docs/assessment-result-contract.md](docs/assessment-result-contract.md).
-Normal execution remains on results v2 until its producer tickets populate the
-v3 contract; v3 readers and compatibility projections are available now.
+Results v3 is activated only when a producer populates the assessment contract;
+v3 readers and compatibility projections are available independently.
+
+Deterministic, pre-cleanup asset capture and its explicit safety limits are
+documented in [docs/asset-evidence.md](docs/asset-evidence.md). Capture writes a
+versioned sidecar containing the canonical deterministic validation portion;
+the primary result remains v2 until MOT-4448 activates v3 aggregation and
+publication.
 
 ## Observation
 
