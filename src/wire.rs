@@ -11,8 +11,6 @@ use serde_json::Value;
 
 use crate::artifact::sha256_value;
 
-pub const CONTROL_PLANE_CONTRACT_NAME: &str = "harness-control-plane";
-
 /// A normalized view of a wire response together with the exact payload that
 /// produced it. Consumers evaluate the typed view, while reports serialize the
 /// original payload so additive fields are not discarded.
@@ -333,7 +331,6 @@ pub type Model = Observed<CatalogModelPayload>;
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct FunctionContractEvidence {
     pub function_id: String,
-    pub contract: Value,
     pub request_schema: Value,
     pub response_schema: Value,
     pub sha256: String,
@@ -341,7 +338,6 @@ pub struct FunctionContractEvidence {
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct ControlPlaneEvidence {
-    pub name: String,
     pub functions: Vec<FunctionContractEvidence>,
 }
 
@@ -378,7 +374,6 @@ struct SchemaField {
 #[derive(Clone, Copy)]
 struct FunctionRequirement {
     function_id: &'static str,
-    capability: &'static str,
     request: &'static [SchemaField],
     response: &'static [SchemaField],
 }
@@ -625,37 +620,31 @@ const TEARDOWN_RESPONSE: &[SchemaField] = &[SchemaField {
 const CONTROL_PLANE: &[FunctionRequirement] = &[
     FunctionRequirement {
         function_id: "harness::send",
-        capability: "send",
         request: SEND_REQUEST,
         response: SEND_RESPONSE,
     },
     FunctionRequirement {
         function_id: "harness::status",
-        capability: "status",
         request: STATUS_REQUEST,
         response: STATUS_RESPONSE,
     },
     FunctionRequirement {
         function_id: "harness::session-tree",
-        capability: "session-tree",
         request: ROOT_SESSION_REQUEST,
         response: TREE_RESPONSE,
     },
     FunctionRequirement {
         function_id: "harness::metrics",
-        capability: "metrics",
         request: ROOT_SESSION_REQUEST,
         response: METRICS_RESPONSE,
     },
     FunctionRequirement {
         function_id: "harness::stop",
-        capability: "stop",
         request: STATUS_REQUEST,
         response: STOP_RESPONSE,
     },
     FunctionRequirement {
         function_id: "harness::teardown",
-        capability: "teardown",
         request: ROOT_SESSION_REQUEST,
         response: TEARDOWN_RESPONSE,
     },
@@ -692,11 +681,6 @@ pub fn validate_control_plane(raw: &Value) -> Result<ControlPlaneEvidence> {
                 requirement.function_id
             );
         }
-        validate_metadata(detail, requirement)?;
-        let contract = serde_json::json!({
-            "name": CONTROL_PLANE_CONTRACT_NAME,
-            "capabilities": [requirement.capability],
-        });
         validate_schema(detail, "request_schema", requirement.request)
             .with_context(|| format!("{} request contract", requirement.function_id))?;
         validate_schema(detail, "response_schema", requirement.response)
@@ -704,56 +688,19 @@ pub fn validate_control_plane(raw: &Value) -> Result<ControlPlaneEvidence> {
         let request_schema = detail["request_schema"].clone();
         let response_schema = detail["response_schema"].clone();
         let sha256 = sha256_value(&serde_json::json!({
-            "contract": contract,
             "request_schema": request_schema,
             "response_schema": response_schema,
         }))?;
         observed.push(FunctionContractEvidence {
             function_id: requirement.function_id.to_string(),
-            contract,
             request_schema,
             response_schema,
             sha256,
         });
     }
     Ok(ControlPlaneEvidence {
-        name: CONTROL_PLANE_CONTRACT_NAME.to_string(),
         functions: observed,
     })
-}
-
-fn validate_metadata(detail: &Value, requirement: &FunctionRequirement) -> Result<()> {
-    let contract = detail
-        .pointer("/metadata/contract")
-        .with_context(|| format!("{} has no metadata.contract", requirement.function_id))?;
-    let name = contract.get("name").and_then(Value::as_str);
-    if name != Some(CONTROL_PLANE_CONTRACT_NAME) {
-        bail!(
-            "{} advertises contract name {:?}; expected {CONTROL_PLANE_CONTRACT_NAME}",
-            requirement.function_id,
-            name
-        );
-    }
-    let capabilities = contract
-        .get("capabilities")
-        .and_then(Value::as_array)
-        .with_context(|| {
-            format!(
-                "{} metadata.contract is missing capabilities[]",
-                requirement.function_id
-            )
-        })?;
-    if !capabilities
-        .iter()
-        .any(|capability| capability.as_str() == Some(requirement.capability))
-    {
-        bail!(
-            "{} does not advertise required capability {}",
-            requirement.function_id,
-            requirement.capability
-        );
-    }
-    Ok(())
 }
 
 fn validate_schema(detail: &Value, key: &str, fields: &[SchemaField]) -> Result<()> {

@@ -1820,7 +1820,6 @@ mod tests {
     use crate::scenarios::{ArtifactExpectation, InvariantSpec};
     use crate::wire::{
         ControlPlaneEvidence, FunctionContractEvidence, SessionMetricsResponse, StatusReport,
-        CONTROL_PLANE_CONTRACT_NAME,
     };
 
     const TEST_DIGEST: &str =
@@ -1857,10 +1856,8 @@ mod tests {
             subject: model(),
             judge: None,
             control_plane: ControlPlaneEvidence {
-                name: CONTROL_PLANE_CONTRACT_NAME.into(),
                 functions: vec![FunctionContractEvidence {
                     function_id: "harness::status".into(),
-                    contract: serde_json::json!({"name": CONTROL_PLANE_CONTRACT_NAME}),
                     request_schema: serde_json::json!({"type": "object"}),
                     response_schema: serde_json::json!({"type": "object"}),
                     sha256: TEST_DIGEST.into(),

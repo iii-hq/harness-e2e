@@ -61,8 +61,9 @@ then embeds the Vite output in the binary. Node and pnpm must be available on
 Vite server proxies runtime data, the scoped iii WebSocket, and local-run APIs
 to the Rust dashboard on port 4173.
 
-The running Harness must publish current `metadata.contract` entries. Missing
-contract metadata fails preflight; no compatibility mode is available.
+The running Harness must publish request and response schemas compatible with
+the current typed surface. Missing or incompatible fields fail preflight; no
+payload-version compatibility mode is available.
 
 The server listens on `0.0.0.0:4173` by default. Open
 `http://localhost:4173/#/overview` on the same machine, or replace `localhost`

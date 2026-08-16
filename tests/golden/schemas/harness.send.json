@@ -1,12 +1,6 @@
 {
   "function_id": "harness::send",
   "metadata": {
-    "contract": {
-      "capabilities": [
-        "send"
-      ],
-      "name": "harness-control-plane"
-    },
     "internal": true
   },
   "request_schema": {

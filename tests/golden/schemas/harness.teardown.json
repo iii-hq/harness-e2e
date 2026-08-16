@@ -1,12 +1,6 @@
 {
   "function_id": "harness::teardown",
   "metadata": {
-    "contract": {
-      "capabilities": [
-        "teardown"
-      ],
-      "name": "harness-control-plane"
-    },
     "internal": true
   },
   "request_schema": {

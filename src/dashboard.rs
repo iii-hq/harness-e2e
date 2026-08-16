@@ -180,9 +180,7 @@ mod tests {
         RunStatus,
     };
     use crate::scenarios::ExecutionPolicy;
-    use crate::wire::{
-        ControlPlaneEvidence, FunctionContractEvidence, CONTROL_PLANE_CONTRACT_NAME,
-    };
+    use crate::wire::{ControlPlaneEvidence, FunctionContractEvidence};
 
     const TEST_DIGEST: &str =
         "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
@@ -271,10 +269,8 @@ mod tests {
             subject: report.subject.clone(),
             judge: report.judge.clone(),
             control_plane: ControlPlaneEvidence {
-                name: CONTROL_PLANE_CONTRACT_NAME.into(),
                 functions: vec![FunctionContractEvidence {
                     function_id: "harness::status".into(),
-                    contract: json!({"name": CONTROL_PLANE_CONTRACT_NAME}),
                     request_schema: json!({"type": "object"}),
                     response_schema: json!({"type": "object"}),
                     sha256: TEST_DIGEST.into(),

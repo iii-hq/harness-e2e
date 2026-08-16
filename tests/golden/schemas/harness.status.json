@@ -1,13 +1,5 @@
 {
   "function_id": "harness::status",
-  "metadata": {
-    "contract": {
-      "capabilities": [
-        "status"
-      ],
-      "name": "harness-control-plane"
-    }
-  },
   "request_schema": {
     "$schema": "http://json-schema.org/draft-07/schema#",
     "properties": {

@@ -37,8 +37,7 @@
     "ControlPlaneEvidence": {
       "type": "object",
       "required": [
-        "functions",
-        "name"
+        "functions"
       ],
       "properties": {
         "functions": {
@@ -46,9 +45,6 @@
           "items": {
             "$ref": "#/definitions/FunctionContractEvidence"
           }
-        },
-        "name": {
-          "type": "string"
         }
       }
     },
@@ -78,14 +74,12 @@
     "FunctionContractEvidence": {
       "type": "object",
       "required": [
-        "contract",
         "function_id",
         "request_schema",
         "response_schema",
         "sha256"
       ],
       "properties": {
-        "contract": true,
         "function_id": {
           "type": "string"
         },

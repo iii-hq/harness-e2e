@@ -49,8 +49,9 @@ HARNESS_E2E_WORKERS_REVISION=<full-subject-git-sha> \
   ./scripts/demo_e2e_control_plane.sh
 ```
 
-The running Harness must publish the current contract metadata. Missing
-metadata fails preflight; no compatibility mode or inferred contract exists.
+The running Harness must publish request and response schemas compatible with
+the current typed surface. Missing or incompatible fields fail preflight; no
+payload-version compatibility mode exists.
 
 Select another materialized case or model with environment variables:
 

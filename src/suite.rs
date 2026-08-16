@@ -1576,10 +1576,8 @@ mod tests {
 
     fn control_plane(hash: &str) -> ControlPlaneEvidence {
         ControlPlaneEvidence {
-            name: "harness-control-plane".into(),
             functions: vec![crate::wire::FunctionContractEvidence {
                 function_id: "harness::send".into(),
-                contract: serde_json::json!({"name": "harness-control-plane"}),
                 request_schema: serde_json::json!({"type": "object"}),
                 response_schema: serde_json::json!({"type": "object"}),
                 sha256: hash.into(),
