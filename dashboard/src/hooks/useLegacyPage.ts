@@ -142,6 +142,10 @@ function boot(page: PageName) {
   return window.__HARNESS_REACT_BOOT__[page]
 }
 
+export function loadLegacyPage(page: PageName) {
+  return boot(page)
+}
+
 export function useLegacyPage(page: PageName) {
   const [error, setError] = useState<Error | null>(null)
 

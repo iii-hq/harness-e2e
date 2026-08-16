@@ -119,6 +119,10 @@ test("keeps execution score attached to scenario evidence only", () => {
   assert.match(executionScript, /scenario-detail-card\.is-focused/);
   assert.match(executionPage, /session-transcript-dialog/);
   assert.match(executionScript, /openConversationDialog/);
+  assert.match(executionPage, /AssessmentWorkspace/);
+  assert.match(executionPage, /Objective results, advisory interpretations/);
+  assert.match(executionScript, /harness:execution-detail-ready/);
+  assert.match(executionScript, /HARNESS_EXECUTION_DETAILS\[execution\.id\]/);
 });
 
 test("offers every semantic execution status as a filter", () => {

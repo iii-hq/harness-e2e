@@ -1351,19 +1351,45 @@
       elements.errorMessage.textContent = executionId
         ? `Execution ${executionId} is outside the retained 100-run history.`
         : "The execution URL does not include a run id.";
+      window.dispatchEvent(
+        new CustomEvent("harness:execution-detail-ready", {
+          detail: {
+            executionId,
+            detail: null,
+            availability: "unavailable",
+            error: elements.errorMessage.textContent,
+          },
+        }),
+      );
       return;
     }
     renderHeader();
     renderKpis();
     renderMetadata();
+    let detailError = "";
     try {
       detail = await loadDetail();
     } catch (error) {
+      detailError = error.message;
       execution.availability = execution.subjects.length ? "aggregate" : "unavailable";
       elements.availability.className = `data-badge data-${execution.availability}`;
       elements.availability.textContent = "Aggregate fallback";
       elements.scenarioIntro.textContent = error.message;
     }
+    if (detail) {
+      window.HARNESS_EXECUTION_DETAILS ??= {};
+      window.HARNESS_EXECUTION_DETAILS[execution.id] = detail;
+    }
+    window.dispatchEvent(
+      new CustomEvent("harness:execution-detail-ready", {
+        detail: {
+          executionId: execution.id,
+          detail,
+          availability: execution.availability,
+          error: detailError,
+        },
+      }),
+    );
     renderConfiguration();
     renderScenarios();
     renderFailures();

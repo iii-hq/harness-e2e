@@ -1,3 +1,4 @@
+import { AssessmentWorkspace } from '@/components/AssessmentWorkspace'
 import { LegacyLoadError } from '@/components/LegacyLoadError'
 import { ThemeToggle } from '@/components/ThemeToggle'
 import { hashForExecution, hashForWorkspace } from '@/hooks/use-hash-route'
@@ -203,7 +204,7 @@ export function ExecutionPage({ executionId }: { executionId: string }) {
 
           <div className="detail-layout mt-[18px] block">
             <nav
-              className="detail-index sticky top-3 z-20 mb-4 grid grid-cols-4 gap-0 overflow-hidden rounded-[9px] border border-line-strong bg-glass p-0 shadow-[0_12px_30px_rgba(0,0,0,0.12)] backdrop-blur-[18px] max-[560px]:static max-[560px]:grid-cols-2"
+              className="detail-index sticky top-3 z-20 mb-4 grid grid-cols-5 gap-0 overflow-hidden rounded-[9px] border border-line-strong bg-glass p-0 shadow-[0_12px_30px_rgba(0,0,0,0.12)] backdrop-blur-[18px] max-[840px]:static max-[840px]:grid-cols-2"
               aria-label="Execution evidence sections"
             >
               <span className="visually-hidden">On this execution</span>
@@ -230,11 +231,22 @@ export function ExecutionPage({ executionId }: { executionId: string }) {
                 </strong>
               </a>
               <a
-                href={hashForExecution(executionId, 'scenarios')}
-                className={detailNavItem}
+                href={hashForExecution(executionId, 'assessments')}
+                className={`${detailNavItem} max-[840px]:border-b`}
               >
                 <span className="font-mono text-[0.6rem]" aria-hidden="true">
                   03
+                </span>
+                <strong className="overflow-hidden text-ellipsis whitespace-nowrap text-[0.74rem] font-semibold">
+                  Assessments
+                </strong>
+              </a>
+              <a
+                href={hashForExecution(executionId, 'scenarios')}
+                className={`${detailNavItem} max-[840px]:border-r-0 max-[840px]:border-b`}
+              >
+                <span className="font-mono text-[0.6rem]" aria-hidden="true">
+                  04
                 </span>
                 <strong className="overflow-hidden text-ellipsis whitespace-nowrap text-[0.74rem] font-semibold">
                   Scenarios
@@ -245,7 +257,7 @@ export function ExecutionPage({ executionId }: { executionId: string }) {
                 className={`${detailNavItem} border-r-0`}
               >
                 <span className="font-mono text-[0.6rem]" aria-hidden="true">
-                  04
+                  05
                 </span>
                 <strong className="overflow-hidden text-ellipsis whitespace-nowrap text-[0.74rem] font-semibold">
                   Source
@@ -313,6 +325,30 @@ export function ExecutionPage({ executionId }: { executionId: string }) {
               </div>
 
               <section
+                id="assessments"
+                className={`${detailPanel} detail-section-assessments border-l-brand`}
+                aria-labelledby="assessments-heading"
+              >
+                <div className="detail-section-heading flex items-end justify-between gap-8 max-[840px]:flex-col max-[840px]:items-start max-[840px]:gap-2.5">
+                  <div>
+                    <div className={evidenceKicker}>
+                      03 · Explainable assessment contract
+                    </div>
+                    <h2 id="assessments-heading" className={detailHeading}>
+                      System outcome and AI conclusions
+                    </h2>
+                  </div>
+                  <p className="section-description m-0 max-w-[560px] text-right max-[840px]:text-left">
+                    Objective results, advisory interpretations, and evidence
+                    remain separate throughout this view.
+                  </p>
+                </div>
+                <div className="mt-[22px]">
+                  <AssessmentWorkspace executionId={executionId} />
+                </div>
+              </section>
+
+              <section
                 id="scenarios"
                 className={`${detailPanel} detail-section-scenarios border-l-brand`}
                 aria-labelledby="scenarios-heading"
@@ -320,7 +356,7 @@ export function ExecutionPage({ executionId }: { executionId: string }) {
                 <div className="detail-section-heading flex items-end justify-between gap-8 max-[840px]:flex-col max-[840px]:items-start max-[840px]:gap-2.5">
                   <div>
                     <div className={evidenceKicker}>
-                      03 · Diagnostic workspace
+                      04 · Diagnostic workspace
                     </div>
                     <h2 id="scenarios-heading" className={detailHeading}>
                       Scenarios and runs
@@ -342,7 +378,7 @@ export function ExecutionPage({ executionId }: { executionId: string }) {
                 className={`${detailPanel} detail-section-raw border-l-line-strong bg-panel-faint`}
                 aria-labelledby="raw-heading"
               >
-                <div className={evidenceKicker}>04 · Source record</div>
+                <div className={evidenceKicker}>05 · Source record</div>
                 <h2 id="raw-heading" className={detailHeading}>
                   Raw data
                 </h2>

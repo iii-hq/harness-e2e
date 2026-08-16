@@ -48,7 +48,7 @@ export type TestSideSummary = {
     tokens: number
     duration_seconds: number
   }
-  assessment_summary: AssessmentSummary
+  assessment_summary?: AssessmentSummary
 }
 
 export type TestObservation = {
@@ -64,7 +64,7 @@ export type TestObservation = {
   median_score: number | null
   run_count: number
   scored_runs: number
-  assessment_summary: AssessmentSummary
+  assessment_summary?: AssessmentSummary
 }
 
 export type TestVersionResult = {

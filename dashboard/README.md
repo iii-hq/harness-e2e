@@ -15,6 +15,13 @@ transcripts, generated-asset previews, or private artifact paths; they retain
 only approved conclusions, analyzer provenance, and immutable evidence
 references.
 
+Execution details present the assessment contract in three explicit layers:
+the objective system outcome, the advisory AI conclusion, and the canonical
+effective status. The assessment matrix can be filtered by failures, confidence,
+availability, asset involvement, or AI evaluation. Every conclusion retains its
+criterion or analyzer identity and links to the immutable evidence register;
+missing and legacy assessment data is shown as unavailable rather than inferred.
+
 Install, validate, and run the frontend with hot reload:
 
 ```bash

@@ -14,6 +14,7 @@ import {
   hashForExecution,
   hashForWorkspace,
 } from '@/hooks/use-hash-route'
+import { summarizeAssessmentContract } from '@/lib/assessment-contract'
 import {
   type DashboardDataBridge,
   getDashboardDataBridge,
@@ -28,6 +29,7 @@ import type {
 } from '@/lib/test-catalog'
 import {
   comparisonUtility,
+  comparisonWarnings,
   hasRetainedEvidence,
   isMoreUsefulComparison,
   matchesResultFilter,
@@ -81,17 +83,44 @@ function summaryStatus(summary: TestSideSummary | null) {
   return { label: 'Passed', tone: 'text-success border-success/30' }
 }
 
-function SideResult({ summary }: { summary: TestSideSummary | null }) {
+export function SideResult({ summary }: { summary: TestSideSummary | null }) {
   const status = summaryStatus(summary)
   if (!summary) {
     return <span className="text-sm text-ink-muted">Not run</span>
   }
+  const assessments =
+    summary.assessment_summary ?? summarizeAssessmentContract({ runs: [] })
+  const aiVerdict =
+    assessments.ai_verdicts.fail > 0
+      ? 'Fail'
+      : assessments.ai_verdicts.pass_with_concerns > 0
+        ? 'Pass with concerns'
+        : assessments.ai_verdicts.pass > 0
+          ? 'Pass'
+          : assessments.ai_verdicts.inconclusive > 0
+            ? 'Inconclusive'
+            : assessments.ai_availability.available > 0
+              ? 'Available'
+              : 'Unavailable'
+  const effectiveStatus =
+    assessments.effective_statuses.hard_gate_failed > 0
+      ? 'Hard gate failed'
+      : assessments.effective_statuses.subject_error > 0 ||
+          assessments.effective_statuses.judge_error > 0 ||
+          assessments.effective_statuses.infrastructure_error > 0 ||
+          assessments.effective_statuses.resource_limit > 0
+        ? 'Technical failure'
+        : assessments.effective_statuses.passed_with_concerns > 0
+          ? 'Passed with concerns'
+          : assessments.effective_statuses.passed > 0
+            ? 'Passed'
+            : 'Unavailable'
   return (
     <div className="grid gap-1.5">
       <span
         className={`w-fit rounded-full border px-2 py-1 text-[0.65rem] font-semibold ${status.tone}`}
       >
-        {status.label}
+        System: {status.label}
       </span>
       <strong className="text-base font-semibold tracking-[-0.03em] text-ink">
         {formatNumber(summary.median_score)}
@@ -99,6 +128,13 @@ function SideResult({ summary }: { summary: TestSideSummary | null }) {
       </strong>
       <span className="font-mono text-[0.64rem] text-ink-muted">
         n={summary.scored_runs} scored · {summary.total_runs} total
+      </span>
+      <span className="text-[0.66rem] text-ink-muted">AI: {aiVerdict}</span>
+      <span className="text-[0.66rem] text-ink-muted">
+        Effective: {effectiveStatus}
+      </span>
+      <span className="text-[0.66rem] text-ink-muted">
+        {assessments.evidence_reference_count} evidence references
       </span>
     </div>
   )
@@ -148,8 +184,26 @@ function RowDetails({ result }: { result: TestVersionResult | null }) {
     ...result.from_observations.map((item) => ({ ...item, side: 'A' })),
     ...result.to_observations.map((item) => ({ ...item, side: 'B' })),
   ]
+  const warnings = comparisonWarnings(result)
   return (
     <div className="grid gap-5">
+      {warnings.length > 0 && (
+        <div
+          className="grid gap-2 rounded-lg border border-warning/30 bg-warning/5 p-4"
+          role="alert"
+        >
+          <div className="flex items-center gap-2 text-sm font-semibold text-warning">
+            <AlertTriangle size={16} aria-hidden="true" /> Comparison disabled
+          </div>
+          <ul className="m-0 grid gap-2 pl-5 text-sm text-ink-soft">
+            {warnings.map((warning) => (
+              <li key={`${warning.title}:${warning.detail}`}>
+                <strong>{warning.title}.</strong> {warning.detail}
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
       <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
         {[
           [
@@ -211,6 +265,13 @@ function RowDetails({ result }: { result: TestVersionResult | null }) {
                     {observation.case_id} · score{' '}
                     {formatNumber(observation.median_score)} · n=
                     {observation.scored_runs}
+                  </small>
+                  <small className="mt-1 block text-ink-muted">
+                    {observation.assessment_summary?.assessment_count ?? 0}{' '}
+                    assessments ·{' '}
+                    {observation.assessment_summary?.evidence_reference_count ??
+                      0}{' '}
+                    evidence references
                   </small>
                 </span>
                 <ExternalLink size={15} aria-hidden="true" />
@@ -781,7 +842,8 @@ export function TestsPage({
               <h2 id="comparison-controls-title">System version A → B</h2>
               <p className="trend-description">
                 Deltas are enabled only for the same cohort, test version,
-                cases, and canonical contracts.
+                cases, canonical contracts, assessment profile, and analyzer
+                profile. Cross-cohort comparisons are never combined.
               </p>
             </div>
             <span
@@ -939,7 +1001,9 @@ export function TestsPage({
                 <option value="passed">Passing in B</option>
                 <option value="issues">Issues in B</option>
                 <option value="missing">Missing side</option>
-                <option value="changed">Changed cases or contracts</option>
+                <option value="changed">
+                  Incompatible contract, assessment, or analyzer
+                </option>
               </select>
             </label>
           </div>
