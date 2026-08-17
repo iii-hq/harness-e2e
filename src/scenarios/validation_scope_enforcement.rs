@@ -159,7 +159,8 @@ fn capture<'a>(
                     "out of scope"
                 ),
                 "response": observation.response,
-            }),
+            })
+            .into(),
             invariants,
             provenance: vec![
                 ProvenanceEvidence {

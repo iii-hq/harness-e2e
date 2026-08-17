@@ -277,7 +277,8 @@ fn capture<'a>(
                 "remaining_violations": remaining,
                 "validation_nudges": nudges,
                 "response": observation.response,
-            }),
+            })
+            .into(),
             invariants,
             provenance: vec![
                 ProvenanceEvidence {

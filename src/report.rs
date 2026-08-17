@@ -14,13 +14,19 @@ use crate::assessment::{
 };
 use crate::identity::{ExecutionIdentity, SystemUnderTestIdentity};
 use crate::scenarios::{
-    CapturedDeliverable, CapturedInvariant, ExecutionPolicy, ProvenanceEvidence, ScenarioCase,
-    WorkExpectation,
+    CapturedDeliverable, CapturedDeliverableContent, CapturedInvariant, ExecutionPolicy,
+    ProvenanceEvidence, ScenarioCase, WorkExpectation,
 };
 #[cfg(test)]
 use crate::scenarios::{ComplexityProfile, DeliverableContract};
 use crate::schema;
 use crate::wire::{ControlPlaneEvidence, Model, SessionMetricsResponse, StatusReport};
+use crate::workflow::{
+    ActivationPolicy, DependencyPolicy, PortValueKind, TypedPortValue, WorkflowAssetReport,
+    WorkflowAttemptReport, WorkflowCheckpointV1, WorkflowEvaluationOutcome,
+    WorkflowEvaluationResult, WorkflowFailurePhase, WorkflowGateResult, WorkflowStepFailure,
+    WorkflowStepReport, WorkflowStepStatus,
+};
 
 mod summary;
 
@@ -80,6 +86,7 @@ pub struct DeliverableReport {
     pub id: String,
     pub kind: String,
     pub media_type: String,
+    pub content_format: DeliverableContentFormat,
     pub content_sha256: String,
     pub content_size_bytes: u64,
     pub schema_valid: bool,
@@ -91,7 +98,14 @@ pub struct DeliverableReport {
     pub artifact: Option<ArtifactReference>,
     #[serde(skip)]
     #[schemars(skip)]
-    pub content: Value,
+    pub content: CapturedDeliverableContent,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum DeliverableContentFormat {
+    Json,
+    TextUtf8,
 }
 
 impl DeliverableReport {
@@ -1123,6 +1137,8 @@ pub struct E2eManifest {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub judge: Option<ModelArtifact>,
     pub control_plane: ControlPlaneEvidence,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub worker_contracts: Vec<ObservedWorkerContract>,
 }
 
 impl E2eManifest {
@@ -1132,13 +1148,34 @@ impl E2eManifest {
         if self.control_plane.functions.is_empty() {
             bail!("manifest control plane cannot be empty");
         }
+        let mut observed = HashSet::new();
+        for contract in &self.worker_contracts {
+            if contract.function_id.trim().is_empty() {
+                bail!("manifest worker contract function_id cannot be empty");
+            }
+            if !observed.insert(contract.function_id.as_str()) {
+                bail!(
+                    "manifest has duplicate worker contract '{}'",
+                    contract.function_id
+                );
+            }
+        }
         Ok(())
     }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ObservedWorkerContract {
+    pub function_id: String,
+    pub request_schema_sha256: String,
+    pub response_schema_sha256: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct E2eReport {
+    pub schema_version: u32,
     pub execution: ExecutionIdentity,
     pub system_under_test: SystemUnderTestIdentity,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -1155,6 +1192,8 @@ pub struct E2eReport {
     pub redaction: crate::redaction::RedactionReport,
     pub assessment_contract: AssessmentContract,
     pub scenarios: Vec<E2eScenarioReport>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub workflow_runs: Vec<WorkflowAttemptReport>,
 }
 
 impl E2eReport {
@@ -1169,6 +1208,7 @@ impl E2eReport {
     ) -> Self {
         let passed = !scenarios.is_empty() && scenarios.iter().all(|scenario| scenario.passed);
         let mut report = Self {
+            schema_version: 2,
             execution,
             system_under_test,
             manifest: None,
@@ -1180,17 +1220,55 @@ impl E2eReport {
             redaction: crate::redaction::RedactionReport::default(),
             assessment_contract: AssessmentContract { runs: Vec::new() },
             scenarios,
+            workflow_runs: Vec::new(),
         };
         report.assessment_contract = AssessmentContract::from_assessment_evidence(&report);
         report
     }
 
+    pub fn new_workflows(
+        execution: ExecutionIdentity,
+        system_under_test: SystemUnderTestIdentity,
+        subject: ModelArtifact,
+        engine_revision: Option<String>,
+        workflow_runs: Vec<WorkflowAttemptReport>,
+    ) -> Self {
+        let mut terminal_attempts = BTreeMap::new();
+        for attempt in &workflow_runs {
+            let replace = terminal_attempts.get(&attempt.run_id).is_none_or(
+                |current: &&WorkflowAttemptReport| attempt.attempt_number > current.attempt_number,
+            );
+            if replace {
+                terminal_attempts.insert(attempt.run_id.clone(), attempt);
+            }
+        }
+        let passed = !terminal_attempts.is_empty()
+            && terminal_attempts.values().all(|attempt| attempt.passed);
+        Self {
+            schema_version: 2,
+            execution,
+            system_under_test,
+            manifest: None,
+            subject,
+            judge: None,
+            judge_protocol: None,
+            engine_revision,
+            passed,
+            redaction: crate::redaction::RedactionReport::default(),
+            assessment_contract: AssessmentContract { runs: Vec::new() },
+            scenarios: Vec::new(),
+            workflow_runs,
+        }
+    }
+
     pub fn write_to(&mut self, output: &Path, manifest: &E2eManifest) -> Result<PathBuf> {
+        self.schema_version = 2;
         fs::create_dir_all(output)
             .with_context(|| format!("create report directory {}", output.display()))?;
         manifest.validate().context("validate E2E manifest")?;
         self.redact_sensitive_evidence()?;
         self.materialize_evidence(output)?;
+        self.materialize_legacy_workflows(output)?;
         self.assessment_contract = AssessmentContract::from_assessment_evidence(self);
         let manifest_reference = artifact::write_json(
             output,
@@ -1217,7 +1295,17 @@ impl E2eReport {
             input.to_path_buf()
         };
         let bytes = fs::read(&path).with_context(|| format!("read {}", path.display()))?;
-        let report: Self = serde_json::from_slice(&bytes)
+        let mut value: Value = serde_json::from_slice(&bytes)
+            .with_context(|| format!("decode E2E report {}", path.display()))?;
+        let version = value.get("schema_version").and_then(Value::as_u64);
+        match version {
+            None => {
+                normalize_unversioned_v1(&mut value)?;
+            }
+            Some(2) => {}
+            Some(version) => bail!("unsupported results schema_version {version}; expected 2"),
+        }
+        let report: Self = serde_json::from_value(value)
             .with_context(|| format!("decode typed E2E report {}", path.display()))?;
         validate_against_schema(&schema::results(), &report, "results")?;
         report.assessment_contract.validate(&report)?;
@@ -1237,6 +1325,9 @@ impl E2eReport {
     }
 
     fn validate(&self, manifest: &E2eManifest, output: &Path) -> Result<()> {
+        if self.schema_version != 2 {
+            bail!("results schema_version must be 2");
+        }
         if self.execution.execution_id != manifest.execution.execution_id {
             bail!("results and manifest execution identities differ");
         }
@@ -1281,6 +1372,30 @@ impl E2eReport {
                         reference.verify(output)?;
                     }
                     verify_deliverables(output, &attempt.deliverables)?;
+                }
+            }
+        }
+        for workflow in &self.workflow_runs {
+            if workflow.workflow_id.trim().is_empty()
+                || workflow.workflow_sha256.trim().is_empty()
+                || workflow.run_id.trim().is_empty()
+                || workflow.attempt_id.trim().is_empty()
+            {
+                bail!("workflow run identity fields cannot be empty");
+            }
+            workflow.checkpoint.verify(output)?;
+            for step in &workflow.steps {
+                for asset in &step.assets {
+                    asset.artifact.verify(output)?;
+                    if asset.artifact.sha256 != asset.content_sha256
+                        || asset.artifact.size_bytes != asset.size_bytes
+                    {
+                        bail!(
+                            "workflow asset '{}.{}' differs from its immutable reference",
+                            step.node_id,
+                            asset.id
+                        );
+                    }
                 }
             }
         }
@@ -1337,6 +1452,38 @@ impl E2eReport {
                 }
             }
         }
+        for workflow in &mut self.workflow_runs {
+            for step in &mut workflow.steps {
+                redaction.merge(step.redaction.clone());
+                for output in step.outputs.values_mut() {
+                    redaction.merge(policy.redact_value(&mut output.value));
+                }
+                if let Some(transcript) = &mut step.transcript {
+                    redaction.merge(policy.redact_value(transcript));
+                }
+                if let Some(metrics) = &mut step.metrics {
+                    redaction.merge(policy.redact_value(metrics));
+                }
+                for asset in &mut step.assets {
+                    redaction.merge(policy.redact_value(&mut asset.preview));
+                }
+                for gate in &mut step.hard_gates {
+                    redact_string(&policy, &mut redaction, &mut gate.reason);
+                }
+                for evaluation in &mut step.evaluations {
+                    redact_string(&policy, &mut redaction, &mut evaluation.summary);
+                }
+                for failure in &mut step.failures {
+                    redact_string(&policy, &mut redaction, &mut failure.message);
+                }
+                if let Some(reason) = &mut step.skip_reason {
+                    redact_string(&policy, &mut redaction, reason);
+                }
+            }
+            for criterion in &mut workflow.criteria {
+                redact_string(&policy, &mut redaction, &mut criterion.summary);
+            }
+        }
         let mut value = serde_json::to_value(&self.assessment_contract)
             .context("serialize assessment contract before redaction")?;
         redaction.merge(policy.redact_value(&mut value));
@@ -1389,6 +1536,205 @@ impl E2eReport {
             }
         }
         Ok(())
+    }
+
+    fn materialize_legacy_workflows(&mut self, output: &Path) -> Result<()> {
+        self.workflow_runs.retain(|workflow| {
+            workflow
+                .steps
+                .first()
+                .is_none_or(|step| step.step_type != "legacy.scenario")
+        });
+        for scenario in &self.scenarios {
+            let workflow_sha256 = artifact::sha256_value(&serde_json::json!({
+                "adapter": "legacy.scenario@1",
+                "scenario_id": scenario.scenario_id,
+                "scenario_version": scenario.scenario_version,
+                "case": scenario.case,
+                "execution_policy": scenario.execution_policy,
+            }))?;
+            for run in &scenario.runs {
+                let status = match run.status {
+                    RunStatus::Passed => WorkflowStepStatus::Succeeded,
+                    RunStatus::HardGateFailed => WorkflowStepStatus::HardGateFailed,
+                    _ => WorkflowStepStatus::Failed,
+                };
+                let assets = run
+                    .deliverables
+                    .iter()
+                    .map(|deliverable| {
+                        let artifact = deliverable.artifact.clone().with_context(|| {
+                            format!(
+                                "legacy deliverable '{}' is not materialized",
+                                deliverable.id
+                            )
+                        })?;
+                        Ok(WorkflowAssetReport {
+                            id: deliverable.id.clone(),
+                            namespaced_id: format!("scenario.{}", deliverable.id),
+                            kind: deliverable.kind.clone(),
+                            media_type: deliverable.media_type.clone(),
+                            content_sha256: artifact.sha256.clone(),
+                            size_bytes: artifact.size_bytes,
+                            preview: deliverable.preview.clone(),
+                            preview_truncated: false,
+                            artifact,
+                        })
+                    })
+                    .collect::<Result<Vec<_>>>()?;
+                let step = WorkflowStepReport {
+                    node_id: "scenario".into(),
+                    step_type: "legacy.scenario".into(),
+                    step_version: 1,
+                    required: true,
+                    dependencies: Vec::new(),
+                    dependency_policy: DependencyPolicy::Succeeded,
+                    activation: ActivationPolicy::Always,
+                    status,
+                    started_at: Some(self.execution.started_at.clone()),
+                    completed_at: Some(self.execution.completed_at.clone()),
+                    duration_ms: run.wall_time_ms,
+                    harness_session_id: Some(run.session_id.clone()),
+                    outputs: BTreeMap::from([(
+                        "completed".into(),
+                        TypedPortValue {
+                            kind: PortValueKind::Boolean,
+                            value: Value::Bool(matches!(
+                                run.status,
+                                RunStatus::Passed | RunStatus::HardGateFailed
+                            )),
+                        },
+                    )]),
+                    transcript: run.transcript.clone(),
+                    metrics: run.metrics.as_ref().map(serde_json::to_value).transpose()?,
+                    cost_usd: run.cost.subject_usd,
+                    assets,
+                    hard_gates: run
+                        .hard_gates
+                        .iter()
+                        .map(|gate| WorkflowGateResult {
+                            id: gate.id.clone(),
+                            passed: gate.passed,
+                            reason: gate.reason.clone(),
+                            evidence_ids: Vec::new(),
+                        })
+                        .collect(),
+                    evaluations: run
+                        .criteria
+                        .iter()
+                        .map(|criterion| WorkflowEvaluationResult {
+                            id: criterion.id.clone(),
+                            outcome: match criterion.awarded {
+                                Some(awarded) if awarded == criterion.possible => {
+                                    WorkflowEvaluationOutcome::Passed
+                                }
+                                Some(_) => WorkflowEvaluationOutcome::Failed,
+                                None => WorkflowEvaluationOutcome::NotEvaluated,
+                            },
+                            summary: criterion.reason.clone(),
+                            score: criterion.awarded.map(f64::from),
+                            evidence_ids: Vec::new(),
+                        })
+                        .collect(),
+                    failures: run
+                        .failures
+                        .iter()
+                        .map(|failure| WorkflowStepFailure {
+                            phase: match failure.phase {
+                                FailurePhase::Setup => WorkflowFailurePhase::Preflight,
+                                FailurePhase::Execute => WorkflowFailurePhase::Execute,
+                                FailurePhase::Collect => WorkflowFailurePhase::Capture,
+                                FailurePhase::Evaluate => WorkflowFailurePhase::Evaluate,
+                                FailurePhase::Cleanup => WorkflowFailurePhase::Cleanup,
+                            },
+                            message: failure.message.clone(),
+                            technical: run.status.is_technical_failure(),
+                        })
+                        .collect(),
+                    skip_reason: None,
+                    redaction: run.asset_redaction.clone(),
+                };
+                let checkpoint = WorkflowCheckpointV1 {
+                    schema_version: 1,
+                    workflow_id: scenario.scenario_id.clone(),
+                    workflow_sha256: workflow_sha256.clone(),
+                    run_id: run.run_id.clone(),
+                    attempt_id: run.attempt_id.clone(),
+                    updated_at: self.execution.completed_at.clone(),
+                    terminal_nodes: vec!["scenario".into()],
+                    active_nodes: Vec::new(),
+                    steps: vec![step.clone()],
+                };
+                let checkpoint = artifact::write_json(
+                    output,
+                    &PathBuf::from("checkpoints")
+                        .join(&run.run_id)
+                        .join(&run.attempt_id)
+                        .join("workflow-checkpoint.json"),
+                    "workflow-checkpoint",
+                    "workflow_checkpoint",
+                    &checkpoint,
+                )?;
+                self.workflow_runs.push(WorkflowAttemptReport {
+                    workflow_id: scenario.scenario_id.clone(),
+                    workflow_scenario_version: scenario.scenario_version,
+                    workflow_sha256: workflow_sha256.clone(),
+                    run_id: run.run_id.clone(),
+                    attempt_id: run.attempt_id.clone(),
+                    attempt_number: run.attempt_number,
+                    started_at: self.execution.started_at.clone(),
+                    completed_at: self.execution.completed_at.clone(),
+                    duration_ms: run.wall_time_ms,
+                    passed: run.status == RunStatus::Passed,
+                    technical_failure: run.status.is_technical_failure(),
+                    steps: vec![step],
+                    criteria: Vec::new(),
+                    aggregate_cost_usd: run.cost.total_usd,
+                    checkpoint,
+                });
+            }
+        }
+        Ok(())
+    }
+}
+
+fn normalize_unversioned_v1(value: &mut Value) -> Result<()> {
+    value
+        .as_object_mut()
+        .context("legacy E2E report must have an object root")?
+        .insert("schema_version".into(), Value::from(2));
+    let Some(scenarios) = value.get_mut("scenarios").and_then(Value::as_array_mut) else {
+        return Ok(());
+    };
+    for scenario in scenarios {
+        let Some(runs) = scenario.get_mut("runs").and_then(Value::as_array_mut) else {
+            continue;
+        };
+        for run in runs {
+            normalize_v1_deliverables(run);
+            if let Some(retries) = run.get_mut("retry_attempts").and_then(Value::as_array_mut) {
+                for retry in retries {
+                    normalize_v1_deliverables(retry);
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+fn normalize_v1_deliverables(attempt: &mut Value) {
+    let Some(deliverables) = attempt
+        .get_mut("deliverables")
+        .and_then(Value::as_array_mut)
+    else {
+        return;
+    };
+    for deliverable in deliverables {
+        if let Some(object) = deliverable.as_object_mut() {
+            object
+                .entry("content_format")
+                .or_insert_with(|| Value::String("json".into()));
+        }
     }
 }
 
@@ -1481,14 +1827,16 @@ fn scan_deliverable_content(
     deliverables: &[DeliverableReport],
 ) -> Result<()> {
     for deliverable in deliverables {
-        policy
-            .assert_clean(&serde_json::to_vec(&deliverable.content)?)
-            .with_context(|| {
-                format!(
-                    "deliverable '{}' contains secret material and cannot be persisted",
-                    deliverable.id
-                )
-            })?;
+        let bytes = match &deliverable.content {
+            CapturedDeliverableContent::Json(value) => serde_json::to_vec(value)?,
+            CapturedDeliverableContent::TextUtf8(value) => value.as_bytes().to_vec(),
+        };
+        policy.assert_clean(&bytes).with_context(|| {
+            format!(
+                "deliverable '{}' contains secret material and cannot be persisted",
+                deliverable.id
+            )
+        })?;
     }
     Ok(())
 }
@@ -1586,13 +1934,23 @@ fn materialize_attempt_evidence(
     }
     let deliverable_root = PathBuf::from("deliverables").join(run_id).join(attempt_id);
     for deliverable in deliverables {
-        let reference = artifact::write_json(
-            output,
-            &deliverable_root.join(format!("{}.json", deliverable.id)),
-            deliverable.id.clone(),
-            deliverable.kind.clone(),
-            &deliverable.content,
-        )?;
+        let reference = match &deliverable.content {
+            CapturedDeliverableContent::Json(value) => artifact::write_json(
+                output,
+                &deliverable_root.join(format!("{}.json", deliverable.id)),
+                deliverable.id.clone(),
+                deliverable.kind.clone(),
+                value,
+            )?,
+            CapturedDeliverableContent::TextUtf8(value) => artifact::write_bytes(
+                output,
+                &deliverable_root.join(format!("{}.txt", deliverable.id)),
+                deliverable.id.clone(),
+                deliverable.kind.clone(),
+                deliverable.media_type.clone(),
+                value.as_bytes(),
+            )?,
+        };
         deliverable.artifact = Some(reference);
     }
     Ok(())
@@ -1631,12 +1989,22 @@ fn verify_deliverables(output: &Path, deliverables: &[DeliverableReport]) -> Res
             .as_ref()
             .with_context(|| format!("deliverable '{}' is missing its artifact", deliverable.id))?;
         reference.verify(output)?;
-        let content: Value = serde_json::from_slice(
-            &fs::read(output.join(&reference.path))
-                .with_context(|| format!("read deliverable artifact {}", reference.path))?,
-        )
-        .with_context(|| format!("decode deliverable artifact {}", reference.path))?;
-        if artifact::sha256_value(&content)? != deliverable.content_sha256 {
+        let bytes = fs::read(output.join(&reference.path))
+            .with_context(|| format!("read deliverable artifact {}", reference.path))?;
+        let observed_hash = match deliverable.content_format {
+            DeliverableContentFormat::Json => {
+                let content: Value = serde_json::from_slice(&bytes)
+                    .with_context(|| format!("decode deliverable artifact {}", reference.path))?;
+                artifact::sha256_value(&content)?
+            }
+            DeliverableContentFormat::TextUtf8 => {
+                std::str::from_utf8(&bytes).with_context(|| {
+                    format!("decode UTF-8 deliverable artifact {}", reference.path)
+                })?;
+                artifact::sha256_bytes(&bytes)
+            }
+        };
+        if observed_hash != deliverable.content_sha256 {
             bail!(
                 "deliverable '{}' content hash does not match its artifact",
                 deliverable.id
@@ -1836,7 +2204,7 @@ mod tests {
     use super::*;
     use crate::assessment::{
         AssessmentKind, AssessmentOutcome, AssessmentPolicy, AssessmentScore, AssessmentSource,
-        AssessmentTarget,
+        AssessmentTarget, SystemStatus,
     };
     use crate::identity::StackIdentity;
     use crate::scenarios::{ArtifactExpectation, InvariantSpec};
@@ -1885,6 +2253,7 @@ mod tests {
                     sha256: TEST_DIGEST.into(),
                 }],
             },
+            worker_contracts: Vec::new(),
         }
     }
 
@@ -2246,7 +2615,7 @@ mod tests {
         let value: Value =
             serde_json::from_slice(&std::fs::read(output.path().join("results.json")).unwrap())
                 .unwrap();
-        assert!(value.get("schema_version").is_none());
+        assert_eq!(value.get("schema_version"), Some(&serde_json::json!(2)));
         assert!(value.get("assessment_contract").is_some());
         assert!(value["scenarios"][0]["runs"][0].get("attempt_id").is_some());
     }
@@ -2269,16 +2638,119 @@ mod tests {
     }
 
     #[test]
-    fn read_rejects_versioned_payloads() {
+    fn read_accepts_unversioned_v1_and_rejects_unknown_versions() {
         let output = tempfile::tempdir().unwrap();
         let mut report = report(vec![aggregate(vec![run(100, true)])]);
         let path = report.write_to(output.path(), &manifest()).unwrap();
         let mut value: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        value.as_object_mut().unwrap().remove("schema_version");
+        std::fs::write(&path, serde_json::to_vec_pretty(&value).unwrap()).unwrap();
+        let (legacy, _) = E2eReport::read_from(&path).unwrap();
+        assert_eq!(legacy.schema_version, 2);
+
         value["schema_version"] = serde_json::json!(3);
         std::fs::write(&path, serde_json::to_vec_pretty(&value).unwrap()).unwrap();
 
         let error = E2eReport::read_from(&path).unwrap_err();
-        assert!(format!("{error:#}").contains("unknown field `schema_version`"));
+        assert!(format!("{error:#}").contains("unsupported results schema_version 3"));
+    }
+
+    #[test]
+    fn unversioned_v1_deliverables_default_to_json_during_normalization() {
+        let mut value = serde_json::json!({
+            "scenarios": [{
+                "runs": [{
+                    "deliverables": [{"id": "legacy"}],
+                    "retry_attempts": [{"deliverables": [{"id": "retry"}]}]
+                }]
+            }]
+        });
+        normalize_unversioned_v1(&mut value).unwrap();
+        assert_eq!(value["schema_version"], 2);
+        assert_eq!(
+            value["scenarios"][0]["runs"][0]["deliverables"][0]["content_format"],
+            "json"
+        );
+        assert_eq!(
+            value["scenarios"][0]["runs"][0]["retry_attempts"][0]["deliverables"][0]
+                ["content_format"],
+            "json"
+        );
+    }
+
+    #[test]
+    fn native_workflow_gates_and_evaluations_are_aggregated_into_the_assessment_contract() {
+        let step = WorkflowStepReport {
+            node_id: "assess".into(),
+            step_type: "test.assess".into(),
+            step_version: 1,
+            required: true,
+            dependencies: Vec::new(),
+            dependency_policy: DependencyPolicy::Succeeded,
+            activation: ActivationPolicy::Always,
+            status: WorkflowStepStatus::HardGateFailed,
+            started_at: Some("2026-08-12T12:00:00Z".into()),
+            completed_at: Some("2026-08-12T12:00:01Z".into()),
+            duration_ms: 1_000,
+            harness_session_id: None,
+            outputs: BTreeMap::new(),
+            transcript: None,
+            metrics: None,
+            cost_usd: None,
+            assets: Vec::new(),
+            hard_gates: vec![WorkflowGateResult {
+                id: "valid".into(),
+                passed: false,
+                reason: "deterministic validation failed".into(),
+                evidence_ids: Vec::new(),
+            }],
+            evaluations: vec![WorkflowEvaluationResult {
+                id: "quality".into(),
+                outcome: WorkflowEvaluationOutcome::Advisory,
+                summary: "half of the advisory signals matched".into(),
+                score: Some(0.5),
+                evidence_ids: Vec::new(),
+            }],
+            failures: Vec::new(),
+            skip_reason: None,
+            redaction: crate::redaction::RedactionReport::default(),
+        };
+        let checkpoint = ArtifactReference {
+            id: "checkpoint".into(),
+            kind: "workflow_checkpoint".into(),
+            path: "checkpoint.json".into(),
+            sha256: TEST_DIGEST.into(),
+            size_bytes: 1,
+            media_type: "application/json".into(),
+        };
+        let mut report = report(Vec::new());
+        report.workflow_runs.push(WorkflowAttemptReport {
+            workflow_id: "workflow.test".into(),
+            workflow_scenario_version: 1,
+            workflow_sha256: TEST_DIGEST.into(),
+            run_id: "workflow-run".into(),
+            attempt_id: "workflow-attempt".into(),
+            attempt_number: 1,
+            started_at: "2026-08-12T12:00:00Z".into(),
+            completed_at: "2026-08-12T12:00:01Z".into(),
+            duration_ms: 1_000,
+            passed: false,
+            technical_failure: false,
+            steps: vec![step],
+            criteria: Vec::new(),
+            aggregate_cost_usd: None,
+            checkpoint,
+        });
+
+        let contract = AssessmentContract::from_assessment_evidence(&report);
+        contract.validate(&report).unwrap();
+        assert_eq!(contract.runs.len(), 1);
+        assert_eq!(contract.runs[0].system_status, SystemStatus::HardGateFailed);
+        assert_eq!(contract.runs[0].assessments.len(), 2);
+        assert_eq!(
+            contract.runs[0].assessments[1].outcome,
+            AssessmentOutcome::Partial
+        );
     }
 
     #[test]
@@ -2322,7 +2794,7 @@ mod tests {
         let captured = CapturedDeliverable {
             id: "result".into(),
             kind: "state_value".into(),
-            content: serde_json::json!({ "status": "ready" }),
+            content: serde_json::json!({ "status": "ready" }).into(),
             invariants: vec![CapturedInvariant {
                 id: "ready".into(),
                 passed: true,
@@ -2411,7 +2883,7 @@ mod tests {
         let captured = CapturedDeliverable {
             id: "result".into(),
             kind: "state_value".into(),
-            content: serde_json::json!({ "status": "ready" }),
+            content: serde_json::json!({ "status": "ready" }).into(),
             invariants: vec![CapturedInvariant {
                 id: "ready".into(),
                 passed: true,
@@ -2529,7 +3001,7 @@ mod tests {
             vec![CapturedDeliverable {
                 id: "result".into(),
                 kind: "json".into(),
-                content: serde_json::json!("wrong shape"),
+                content: serde_json::json!("wrong shape").into(),
                 invariants: vec![CapturedInvariant {
                     id: "correct".into(),
                     passed: false,

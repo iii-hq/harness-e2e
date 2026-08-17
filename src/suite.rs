@@ -243,6 +243,7 @@ pub async fn run_suite(config: SuiteRunConfig) -> Result<SuiteRunOutcome> {
         subject: subject.clone(),
         judge: judge.clone(),
         control_plane,
+        worker_contracts: Vec::new(),
     };
     let mut report = E2eReport::new(
         execution,

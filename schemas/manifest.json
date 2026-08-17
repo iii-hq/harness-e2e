@@ -30,6 +30,12 @@
     },
     "system_under_test": {
       "$ref": "#/definitions/SystemUnderTestIdentity"
+    },
+    "worker_contracts": {
+      "type": "array",
+      "items": {
+        "$ref": "#/definitions/ObservedWorkerContract"
+      }
     }
   },
   "additionalProperties": false,
@@ -128,6 +134,26 @@
           ]
         }
       }
+    },
+    "ObservedWorkerContract": {
+      "type": "object",
+      "required": [
+        "function_id",
+        "request_schema_sha256",
+        "response_schema_sha256"
+      ],
+      "properties": {
+        "function_id": {
+          "type": "string"
+        },
+        "request_schema_sha256": {
+          "type": "string"
+        },
+        "response_schema_sha256": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
     },
     "StackIdentity": {
       "oneOf": [

@@ -8,6 +8,7 @@ mod presenter;
 mod proxy;
 mod read_model;
 mod store;
+mod workflows;
 
 use std::net::SocketAddr;
 use std::path::PathBuf;
@@ -76,6 +77,10 @@ struct RunRequest {
     seed: Option<u64>,
     #[serde(default)]
     plan_context: Option<plans::PlanContext>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    workflow_definition: Option<crate::workflow::WorkflowDefinitionV1>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    workflow_hash: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, Deserialize, Serialize, JsonSchema, PartialEq, Eq)]
@@ -210,6 +215,8 @@ mod tests {
             technical_retries: 1,
             seed: Some(42),
             plan_context: None,
+            workflow_definition: None,
+            workflow_hash: None,
         }
     }
 
@@ -289,6 +296,7 @@ mod tests {
                     sha256: TEST_DIGEST.into(),
                 }],
             },
+            worker_contracts: Vec::new(),
         }
     }
 

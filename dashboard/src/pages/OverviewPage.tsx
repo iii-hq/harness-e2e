@@ -6,6 +6,7 @@ import {
   hashForExecution,
   hashForNewPlan,
   hashForPlans,
+  hashForWorkflows,
   hashForWorkspace,
   type WorkspaceView,
 } from '@/hooks/use-hash-route'
@@ -809,6 +810,11 @@ export function OverviewPage({ activeView }: { activeView: WorkspaceView }) {
           {bridge?.mode === 'local' && (
             <a className="button button-primary" href={hashForNewPlan()}>
               ＋ New local plan
+            </a>
+          )}
+          {bridge?.mode === 'local' && (
+            <a className="button button-secondary" href={hashForWorkflows()}>
+              Workflows
             </a>
           )}
           {bridge?.mode === 'local' && (

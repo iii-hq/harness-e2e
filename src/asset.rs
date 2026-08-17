@@ -15,8 +15,10 @@ use crate::assessment::{
     AssetValidationResult, EvidenceReference,
 };
 use crate::redaction::{RedactionPolicy, RedactionReport};
-use crate::report::{DeliverableReport, EvaluationDimension};
-use crate::scenarios::{CapturedDeliverable, ProvenanceEvidence, ScenarioCase};
+use crate::report::{DeliverableContentFormat, DeliverableReport, EvaluationDimension};
+use crate::scenarios::{
+    CapturedDeliverable, CapturedDeliverableContent, ProvenanceEvidence, ScenarioCase,
+};
 
 pub const DEFAULT_MAX_CAPTURED_ASSETS: usize = 64;
 pub const DEFAULT_MAX_CAPTURE_BYTES: u64 = 16 * 1024 * 1024;
@@ -156,7 +158,7 @@ fn evaluate_assets_with_policy(
     for mut candidate in captured.into_iter().take(limits.max_assets) {
         let expected = expectations.get(candidate.id.as_str()).copied();
         let expected_asset = expected.is_some();
-        let raw_bytes = serde_json::to_vec(&candidate.content)
+        let raw_bytes = encoded_content(&candidate.content)
             .with_context(|| format!("serialize captured asset '{}'", candidate.id))?;
         let observed_size = u64::try_from(raw_bytes.len()).unwrap_or(u64::MAX);
 
@@ -285,18 +287,31 @@ fn evaluate_assets_with_policy(
                     observed_kind, expectation.kind
                 ));
             }
-            let validator =
-                jsonschema::JSONSchema::compile(&expectation.schema).map_err(|error| {
-                    anyhow::anyhow!(
-                        "compile asset '{}' JSON Schema for scenario '{}': {error}",
-                        candidate.id,
-                        case.scenario_id
-                    )
-                })?;
-            schema_valid = validator.is_valid(&candidate.content);
+            schema_valid = match &candidate.content {
+                CapturedDeliverableContent::Json(content) => {
+                    let validator =
+                        jsonschema::JSONSchema::compile(&expectation.schema).map_err(|error| {
+                            anyhow::anyhow!(
+                                "compile asset '{}' JSON Schema for scenario '{}': {error}",
+                                candidate.id,
+                                case.scenario_id
+                            )
+                        })?;
+                    (expectation.media_type == "application/json"
+                        || expectation.media_type.ends_with("+json"))
+                        && validator.is_valid(content)
+                }
+                CapturedDeliverableContent::TextUtf8(_) => {
+                    expectation.media_type.starts_with("text/")
+                        && expectation
+                            .media_type
+                            .to_ascii_lowercase()
+                            .contains("utf-8")
+                }
+            };
             if !schema_valid {
                 outcome = AssetValidationOutcome::Malformed;
-                reasons.push("content does not match the declared JSON Schema".into());
+                reasons.push("content does not match the declared format, MIME, or schema".into());
             }
         } else {
             reasons.push("asset is not declared by the scenario contract".into());
@@ -319,7 +334,16 @@ fn evaluate_assets_with_policy(
             reasons.push("required provenance is missing".into());
         }
 
-        redaction.merge(policy.redact_value(&mut candidate.content));
+        match &mut candidate.content {
+            CapturedDeliverableContent::Json(content) => {
+                redaction.merge(policy.redact_value(content));
+            }
+            CapturedDeliverableContent::TextUtf8(content) => {
+                let (sanitized, nested) = policy.redact_text(content);
+                *content = sanitized;
+                redaction.merge(nested);
+            }
+        }
         for invariant in &mut candidate.invariants {
             let observed_invariant_id = invariant.id.clone();
             let (invariant_id, nested) = policy.redact_text(&invariant.id);
@@ -367,11 +391,11 @@ fn evaluate_assets_with_policy(
             }
         }
 
-        let sanitized_bytes = serde_json::to_vec(&candidate.content)
+        let sanitized_bytes = encoded_content(&candidate.content)
             .with_context(|| format!("serialize sanitized asset '{}'", candidate.id))?;
         let content_size_bytes = u64::try_from(sanitized_bytes.len()).unwrap_or(u64::MAX);
         let (preview, preview_truncated) =
-            bounded_preview(&candidate.content, limits.max_preview_bytes);
+            bounded_content_preview(&candidate.content, limits.max_preview_bytes);
 
         let summary = if outcome == AssetValidationOutcome::Valid {
             "Asset passed deterministic type, schema, size, provenance, and invariant checks."
@@ -386,7 +410,11 @@ fn evaluate_assets_with_policy(
             media_type: expected
                 .map(|asset| asset.media_type.clone())
                 .unwrap_or_else(|| "application/json".into()),
-            content_sha256: artifact::sha256_value(&candidate.content)?,
+            content_format: match &candidate.content {
+                CapturedDeliverableContent::Json(_) => DeliverableContentFormat::Json,
+                CapturedDeliverableContent::TextUtf8(_) => DeliverableContentFormat::TextUtf8,
+            },
+            content_sha256: content_sha256(&candidate.content)?,
             content_size_bytes,
             schema_valid,
             provenance_valid,
@@ -538,13 +566,7 @@ pub fn persist_before_cleanup(
 ) -> Result<ArtifactReference> {
     let deliverable_root = PathBuf::from("deliverables").join(run_id).join(attempt_id);
     for report in &mut evaluation.deliverables {
-        let reference = artifact::write_json(
-            output,
-            &deliverable_root.join(format!("{}.json", report.id)),
-            report.id.clone(),
-            report.kind.clone(),
-            &report.content,
-        )?;
+        let reference = persist_deliverable(output, &deliverable_root, report)?;
         report.artifact = Some(reference);
     }
 
@@ -794,6 +816,60 @@ fn bounded_preview(content: &Value, limit: usize) -> (Value, bool) {
     (Value::String(format!("{}...", &rendered[..end])), true)
 }
 
+fn encoded_content(content: &CapturedDeliverableContent) -> Result<Vec<u8>> {
+    match content {
+        CapturedDeliverableContent::Json(value) => serde_json::to_vec(value).context("encode JSON"),
+        CapturedDeliverableContent::TextUtf8(value) => Ok(value.as_bytes().to_vec()),
+    }
+}
+
+fn content_sha256(content: &CapturedDeliverableContent) -> Result<String> {
+    match content {
+        CapturedDeliverableContent::Json(value) => artifact::sha256_value(value),
+        CapturedDeliverableContent::TextUtf8(value) => Ok(artifact::sha256_bytes(value.as_bytes())),
+    }
+}
+
+fn bounded_content_preview(content: &CapturedDeliverableContent, limit: usize) -> (Value, bool) {
+    match content {
+        CapturedDeliverableContent::Json(value) => bounded_preview(value, limit),
+        CapturedDeliverableContent::TextUtf8(value) => {
+            if value.len() <= limit {
+                return (Value::String(value.clone()), false);
+            }
+            let mut end = limit;
+            while !value.is_char_boundary(end) {
+                end -= 1;
+            }
+            (Value::String(format!("{}…", &value[..end])), true)
+        }
+    }
+}
+
+fn persist_deliverable(
+    output: &Path,
+    root: &Path,
+    report: &DeliverableReport,
+) -> Result<ArtifactReference> {
+    match &report.content {
+        CapturedDeliverableContent::Json(value) => artifact::write_json(
+            output,
+            &root.join(format!("{}.json", report.id)),
+            report.id.clone(),
+            report.kind.clone(),
+            value,
+        ),
+        CapturedDeliverableContent::TextUtf8(value) => artifact::write_bytes(
+            output,
+            &root.join(format!("{}.txt", report.id)),
+            report.id.clone(),
+            report.kind.clone(),
+            report.media_type.clone(),
+            value.as_bytes(),
+        ),
+    }
+}
+
 fn safe_asset_id(value: &str) -> bool {
     !value.is_empty()
         && value
@@ -840,7 +916,33 @@ mod tests {
         CapturedDeliverable {
             id: id.into(),
             kind: "json".into(),
-            content,
+            content: content.into(),
+            invariants: vec![CapturedInvariant {
+                id: "correct".into(),
+                passed: true,
+                reason: "correct".into(),
+            }],
+            provenance: vec![ProvenanceEvidence {
+                kind: "function_call".into(),
+                source_id: "call-1".into(),
+                relation: "created".into(),
+            }],
+        }
+    }
+
+    fn text_case(media_type: &str, max_size_bytes: u64) -> ScenarioCase {
+        let mut scenario = case(max_size_bytes);
+        scenario.deliverable_contract.artifacts[0].kind = "text".into();
+        scenario.deliverable_contract.artifacts[0].media_type = media_type.into();
+        scenario.deliverable_contract.artifacts[0].schema = serde_json::json!({});
+        scenario
+    }
+
+    fn captured_text(content: &str) -> CapturedDeliverable {
+        CapturedDeliverable {
+            id: "result".into(),
+            kind: "text".into(),
+            content: CapturedDeliverableContent::TextUtf8(content.into()),
             invariants: vec![CapturedInvariant {
                 id: "correct".into(),
                 passed: true,
@@ -931,6 +1033,50 @@ mod tests {
             .validation
             .summary
             .contains("invariant 'correct' failed"));
+    }
+
+    #[test]
+    fn text_assets_require_utf8_text_mime_and_persist_redacted_bytes() {
+        let output = tempfile::tempdir().unwrap();
+        let mut evaluation = evaluate_assets_with_policy(
+            &text_case("text/plain; charset=utf-8", 4_096),
+            vec![captured_text("password=do-not-persist\nOlá")],
+            AssetCaptureLimits {
+                max_preview_bytes: 20,
+                ..AssetCaptureLimits::default()
+            },
+            RedactionPolicy::with_known_values(["do-not-persist".into()]),
+        )
+        .unwrap();
+
+        assert_eq!(
+            evaluation.assessments[0].validation.outcome,
+            AssetValidationOutcome::Valid
+        );
+        assert_eq!(
+            evaluation.deliverables[0].content_format,
+            DeliverableContentFormat::TextUtf8
+        );
+        let manifest =
+            persist_before_cleanup(output.path(), "run", "attempt", &mut evaluation).unwrap();
+        let artifact = evaluation.deliverables[0].artifact.as_ref().unwrap();
+        assert!(artifact.path.ends_with("result.txt"));
+        assert_eq!(artifact.media_type, "text/plain; charset=utf-8");
+        let persisted = std::fs::read_to_string(output.path().join(&artifact.path)).unwrap();
+        assert!(!persisted.contains("do-not-persist"));
+        assert!(persisted.contains("[REDACTED]"));
+        assert!(output.path().join(manifest.path).is_file());
+
+        let malformed = evaluate_assets(
+            &text_case("text/plain", 4_096),
+            vec![captured_text("plain text")],
+            AssetCaptureLimits::default(),
+        )
+        .unwrap();
+        assert_eq!(
+            malformed.assessments[0].validation.outcome,
+            AssetValidationOutcome::Malformed
+        );
     }
 
     #[test]

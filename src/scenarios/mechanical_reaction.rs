@@ -286,7 +286,7 @@ fn capture<'a>(
         Ok(vec![CapturedDeliverable {
             id: DELIVERABLE_ID.to_string(),
             kind: "state_event_mirror".to_string(),
-            content: mirror.clone(),
+            content: mirror.clone().into(),
             invariants: vec![
                 CapturedInvariant {
                     id: "matches_source_event".to_string(),

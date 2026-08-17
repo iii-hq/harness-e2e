@@ -232,7 +232,8 @@ fn capture<'a>(
             content: json!({
                 "scenario_id": observation.case.scenario_id.as_str(),
                 "review": observation.response.as_str(),
-            }),
+            })
+            .into(),
             invariants: super::captured_gate_invariants(objective),
             provenance: vec![ProvenanceEvidence {
                 kind: "session".to_string(),

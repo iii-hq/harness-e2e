@@ -166,7 +166,7 @@ fn capture<'a>(
         Ok(vec![CapturedDeliverable {
             id: DELIVERABLE_ID.to_string(),
             kind: "database_run_snapshot".to_string(),
-            content,
+            content: content.into(),
             invariants,
             provenance: vec![
                 ProvenanceEvidence {

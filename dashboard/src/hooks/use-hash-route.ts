@@ -11,6 +11,7 @@ export type DashboardRoute =
   | { page: 'plan-create' }
   | { page: 'plan-detail'; planId: string }
   | { page: 'coverage' }
+  | { page: 'workflows'; workflowId: string | null }
 
 export type DashboardRoutes = {
   current: () => DashboardRoute
@@ -22,6 +23,7 @@ export type DashboardRoutes = {
   newPlan: () => string
   plan: (planId: string) => string
   coverage: () => string
+  workflows: (workflowId?: string | null) => string
 }
 
 const workspaceViews = new Set<WorkspaceView>([
@@ -87,6 +89,9 @@ export function routeFromHash(rawHash: string): DashboardRoute | null {
     return { page: 'plan-detail', planId: rest[0] }
   }
   if (head === 'coverage') return { page: 'coverage' }
+  if (head === 'workflows') {
+    return { page: 'workflows', workflowId: rest[0] ?? null }
+  }
   return null
 }
 
@@ -136,6 +141,10 @@ export function hashForPlan(planId: string): string {
   return `#/plans/${encodeSegment(planId)}`
 }
 
+export function hashForWorkflows(workflowId: string | null = null): string {
+  return workflowId ? `#/workflows/${encodeSegment(workflowId)}` : '#/workflows'
+}
+
 export const dashboardRoutes: DashboardRoutes = {
   current: currentDashboardRoute,
   workspace: hashForWorkspace,
@@ -146,6 +155,7 @@ export const dashboardRoutes: DashboardRoutes = {
   newPlan: hashForNewPlan,
   plan: hashForPlan,
   coverage: hashForCoverage,
+  workflows: hashForWorkflows,
 }
 
 export function routeRenderIdentity(route: DashboardRoute): string {
@@ -156,6 +166,9 @@ export function routeRenderIdentity(route: DashboardRoute): string {
   if (route.page === 'test-history') return `${route.page}:${route.testId}`
   if (route.page === 'plan-detail') return `${route.page}:${route.planId}`
   if (route.page === 'plan-create') return route.page
+  if (route.page === 'workflows') {
+    return `${route.page}:${route.workflowId ?? ''}`
+  }
   if (route.page === 'overview') {
     return route.view === 'tests' ? 'overview:tests' : 'overview:workspace'
   }

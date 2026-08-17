@@ -1046,6 +1046,7 @@ mod tests {
             runs: vec![run],
         };
         E2eReport {
+            schema_version: 2,
             execution: crate::identity::ExecutionIdentity {
                 execution_id: "execution-1".into(),
                 lane: "weekly-stress".into(),
@@ -1083,6 +1084,7 @@ mod tests {
             redaction: Default::default(),
             assessment_contract: crate::assessment::AssessmentContract { runs: Vec::new() },
             scenarios: vec![scenario],
+            workflow_runs: Vec::new(),
         }
     }
 

@@ -11,7 +11,7 @@ use serde::Serialize;
 use serde_json::{json, Value};
 use tokio::sync::watch;
 
-use crate::observe::{self, ObserveHub, TreeObserver};
+use crate::observe::{self, ObserveHub, ObserveSubscription, TreeObserver};
 use crate::wire::{
     self, ControlPlaneEvidence, SessionMetricsResponse, SessionTreeResponse, StatusReport,
     StopResponse, TeardownResponse, TurnCompletedEvent, TurnStatus,
@@ -200,8 +200,12 @@ impl E2eContext {
         log_heartbeat: bool,
         cancellation: Option<&watch::Receiver<bool>>,
     ) -> Result<SessionMetricsResponse> {
+        let observer = ContextTreeObserver {
+            context: self,
+            subscription: self.hub.subscribe(),
+        };
         observe::wait_until_complete(
-            self,
+            &observer,
             scenario_id,
             session_id,
             stuck_timeout,
@@ -371,23 +375,29 @@ impl E2eContext {
     }
 }
 
+struct ContextTreeObserver<'a> {
+    context: &'a E2eContext,
+    subscription: ObserveSubscription,
+}
+
 #[async_trait]
-impl TreeObserver for E2eContext {
+impl TreeObserver for ContextTreeObserver<'_> {
     async fn next_turn_completed(&self, timeout: Duration) -> Option<TurnCompletedEvent> {
-        self.hub.wait_event(timeout).await
+        self.subscription.wait_event(timeout).await
     }
 
     async fn pull_metrics(&self, root_session_id: &str) -> Result<SessionMetricsResponse> {
-        self.metrics(root_session_id).await
+        self.context.metrics(root_session_id).await
     }
 
     async fn pull_root_status(&self, root_session_id: &str) -> Result<Option<StatusReport>> {
-        self.trigger("harness::status", json!({ "session_id": root_session_id }))
+        self.context
+            .trigger("harness::status", json!({ "session_id": root_session_id }))
             .await
     }
 
     async fn stop_tree(&self, root_session_id: &str) {
-        self.stop_session_tree(root_session_id).await;
+        self.context.stop_session_tree(root_session_id).await;
     }
 }
 

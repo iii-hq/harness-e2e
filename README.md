@@ -61,6 +61,10 @@ then embeds the Vite output in the binary. Node and pnpm must be available on
 Vite server proxies runtime data, the scoped iii WebSocket, and local-run APIs
 to the Rust dashboard on port 4173.
 
+Versioned multi-step DAGs, the local `#/workflows` editor, result schema v2 and
+the complete local `security-scan.full` scenario are documented in
+[docs/workflows.md](docs/workflows.md).
+
 The running Harness must publish request and response schemas compatible with
 the current typed surface. Missing or incompatible fields fail preflight; no
 payload-version compatibility mode is available.

@@ -24,6 +24,9 @@ use super::read_model::{
     TestVersionGetRequest, TestVersionResult, TestsListRequest, TestsListResponse,
 };
 use super::store::read_stored_run;
+use super::workflows::{
+    self, WorkflowDraft, WorkflowDraftWriteRequest, WorkflowExecuteRequest, WorkflowValidateRequest,
+};
 use super::{ApiError, DashboardArgs, RunRequest, RunSnapshot};
 
 const MAX_REQUEST_BYTES: usize = 64 * 1024;
@@ -86,6 +89,29 @@ pub(super) async fn serve(args: DashboardArgs) -> Result<()> {
                 "/api/dashboard/plans/:id/runs",
                 axum::routing::post(plan_run),
             )
+            .route(
+                "/api/dashboard/workflows",
+                get(workflow_catalog).post(workflow_create),
+            )
+            .route(
+                "/api/dashboard/workflows/validate",
+                axum::routing::post(workflow_validate),
+            )
+            .route(
+                "/api/dashboard/workflows/:id",
+                get(workflow_get)
+                    .patch(workflow_update)
+                    .delete(workflow_delete),
+            )
+            .route(
+                "/api/dashboard/workflows/:id/duplicate",
+                axum::routing::post(workflow_duplicate),
+            )
+            .route(
+                "/api/dashboard/workflows/:id/run",
+                axum::routing::post(workflow_run),
+            )
+            .route("/api/dashboard/workflow-runs/:id", get(workflow_run_detail))
     }
     .layer(axum::extract::DefaultBodyLimit::max(MAX_REQUEST_BYTES))
     .with_state(state);
@@ -128,9 +154,149 @@ async fn dashboard_config(State(state): State<AppState>) -> Json<Value> {
             "plan_create": bus::PLAN_CREATE,
             "plan_update": bus::PLAN_UPDATE,
             "plan_run_start": bus::PLAN_RUN_START,
+            "workflows": "/api/dashboard/workflows",
             "changed_trigger": bus::CHANGED_TRIGGER,
         }
     }))
+}
+
+async fn workflow_catalog(
+    State(state): State<AppState>,
+) -> Result<Json<workflows::WorkflowCatalogResponse>, ApiError> {
+    workflows::catalog(state.controller.runs_dir(), state.view_only)
+        .map(Json)
+        .map_err(ApiError::internal)
+}
+
+async fn workflow_get(
+    State(state): State<AppState>,
+    AxumPath(id): AxumPath<String>,
+) -> Result<Json<WorkflowDraft>, ApiError> {
+    workflows::get_draft(state.controller.runs_dir(), &id)
+        .map(Json)
+        .map_err(|error| ApiError::not_found(error.to_string()))
+}
+
+async fn workflow_create(
+    State(state): State<AppState>,
+    Json(request): Json<WorkflowDraftWriteRequest>,
+) -> Result<(StatusCode, Json<WorkflowDraft>), ApiError> {
+    let draft = workflows::create_draft(state.controller.runs_dir(), request)
+        .map_err(|error| ApiError::bad_request(format!("{error:#}")))?;
+    Ok((StatusCode::CREATED, Json(draft)))
+}
+
+async fn workflow_update(
+    State(state): State<AppState>,
+    AxumPath(id): AxumPath<String>,
+    Json(request): Json<WorkflowDraftWriteRequest>,
+) -> Result<Json<WorkflowDraft>, ApiError> {
+    workflows::update_draft(state.controller.runs_dir(), &id, request)
+        .map(Json)
+        .map_err(|error| {
+            if error.to_string().contains("changed since") {
+                ApiError::conflict(error.to_string())
+            } else {
+                ApiError::bad_request(format!("{error:#}"))
+            }
+        })
+}
+
+async fn workflow_duplicate(
+    State(state): State<AppState>,
+    AxumPath(id): AxumPath<String>,
+) -> Result<(StatusCode, Json<WorkflowDraft>), ApiError> {
+    let draft = workflows::duplicate_draft(state.controller.runs_dir(), &id)
+        .map_err(|error| ApiError::bad_request(format!("{error:#}")))?;
+    Ok((StatusCode::CREATED, Json(draft)))
+}
+
+async fn workflow_delete(
+    State(state): State<AppState>,
+    AxumPath(id): AxumPath<String>,
+) -> Result<StatusCode, ApiError> {
+    workflows::delete_draft(state.controller.runs_dir(), &id).map_err(ApiError::internal)?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+async fn workflow_validate(
+    Json(request): Json<WorkflowValidateRequest>,
+) -> Result<Json<Value>, ApiError> {
+    let hash = workflows::validate_definition(&request.definition)
+        .map_err(|error| ApiError::bad_request(format!("{error:#}")))?;
+    Ok(Json(json!({"valid": true, "definition_sha256": hash})))
+}
+
+async fn workflow_run(
+    State(state): State<AppState>,
+    AxumPath(id): AxumPath<String>,
+    Json(request): Json<WorkflowExecuteRequest>,
+) -> Result<(StatusCode, Json<RunSnapshot>), ApiError> {
+    let draft = workflows::get_draft(state.controller.runs_dir(), &id)
+        .map_err(|error| ApiError::not_found(error.to_string()))?;
+    if draft.definition_sha256 != request.expected_definition_sha256 {
+        return Err(ApiError::conflict(
+            "draft changed after validation; validate the current definition before running",
+        ));
+    }
+    state
+        .controller
+        .start(RunRequest {
+            _caller_worker_id: None,
+            label: draft.label,
+            url: request.url,
+            model: request.model,
+            provider: request.provider,
+            judge_model: String::new(),
+            judge_provider: String::new(),
+            scenarios: Vec::new(),
+            runs: 1,
+            technical_retries: 0,
+            seed: None,
+            plan_context: None,
+            workflow_definition: Some(draft.definition),
+            workflow_hash: Some(draft.definition_sha256),
+        })
+        .await?;
+    let snapshot = state
+        .controller
+        .snapshot(Some(0))
+        .await
+        .map_err(ApiError::internal)?;
+    Ok((StatusCode::ACCEPTED, Json(snapshot)))
+}
+
+async fn workflow_run_detail(
+    State(state): State<AppState>,
+    AxumPath(id): AxumPath<String>,
+) -> Result<Json<Value>, ApiError> {
+    validate_execution_id(&id).map_err(ApiError::bad_request)?;
+    let run = read_stored_run(&state.controller.runs_dir().join(&id))
+        .map_err(ApiError::internal)?
+        .ok_or_else(|| ApiError::not_found("workflow execution not found"))?;
+    if let Some(report) = run.report {
+        return Ok(Json(json!({
+            "execution_id": id,
+            "passed": report.passed,
+            "workflow_runs": report.workflow_runs,
+        })));
+    }
+    let checkpoint =
+        workflows::latest_checkpoint(&state.controller.runs_dir().join(&id).join("results"))
+            .map_err(ApiError::internal)?
+            .ok_or_else(|| ApiError::not_found("workflow checkpoint is not available yet"))?;
+    Ok(Json(json!({
+        "execution_id": id,
+        "passed": Value::Null,
+        "workflow_runs": [{
+            "workflow_id": checkpoint.workflow_id,
+            "workflow_sha256": checkpoint.workflow_sha256,
+            "run_id": checkpoint.run_id,
+            "attempt_id": checkpoint.attempt_id,
+            "active_nodes": checkpoint.active_nodes,
+            "steps": checkpoint.steps,
+        }],
+    })))
 }
 
 async fn plans_list(State(state): State<AppState>) -> Result<Json<Value>, ApiError> {

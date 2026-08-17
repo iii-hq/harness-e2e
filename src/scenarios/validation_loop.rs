@@ -192,7 +192,8 @@ fn capture<'a>(
                 "threshold": THRESHOLD,
                 "validation_nudges": nudges,
                 "response": observation.response,
-            }),
+            })
+            .into(),
             invariants,
             provenance: vec![
                 ProvenanceEvidence {

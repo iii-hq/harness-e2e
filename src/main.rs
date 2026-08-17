@@ -8,6 +8,10 @@ use harness_e2e::judge::JudgeConfig;
 use harness_e2e::report::E2eReport;
 use harness_e2e::scenarios::{self, ScenarioId};
 use harness_e2e::suite::{run_suite, SubjectConfig, SuiteRunConfig};
+use harness_e2e::workflow::{
+    harness_descriptor, run_workflow_suite, security_scan, StepCatalog, WorkflowDefinitionV1,
+    WorkflowRunConfig,
+};
 
 #[derive(Debug, Parser)]
 #[command(name = "harness-e2e", about = "Run real-stack quality scenarios")]
@@ -34,6 +38,61 @@ enum Command {
     FaultPlan(FaultPlanArgs),
     /// Classify observed recovery from a protected supervisor's fault journal.
     FaultEvaluate(FaultEvaluateArgs),
+    /// Inspect, validate, or execute versioned multi-step workflows.
+    Workflow(WorkflowArgs),
+}
+
+#[derive(Debug, Args)]
+struct WorkflowArgs {
+    #[command(subcommand)]
+    command: WorkflowCommand,
+}
+
+#[derive(Debug, Subcommand)]
+enum WorkflowCommand {
+    /// List canonical workflows from a directory.
+    List(WorkflowListArgs),
+    /// Validate one workflow against the code-defined step catalog.
+    Validate(WorkflowFileArgs),
+    /// Execute one canonical workflow against a local stack.
+    Run(WorkflowRunArgs),
+}
+
+#[derive(Debug, Args)]
+struct WorkflowListArgs {
+    #[arg(long, default_value = "config/workflows")]
+    directory: PathBuf,
+}
+
+#[derive(Debug, Args)]
+struct WorkflowFileArgs {
+    #[arg(long)]
+    file: PathBuf,
+}
+
+#[derive(Debug, Args)]
+struct WorkflowRunArgs {
+    #[arg(long)]
+    file: PathBuf,
+
+    #[arg(long, env = "III_URL", default_value = "ws://127.0.0.1:49134")]
+    url: String,
+
+    #[arg(long, env = "HARNESS_E2E_MODEL")]
+    model: String,
+
+    #[arg(long, env = "HARNESS_E2E_PROVIDER")]
+    provider: String,
+
+    #[arg(
+        long,
+        env = "HARNESS_E2E_OUTPUT",
+        default_value = "target/e2e-workflow"
+    )]
+    output: PathBuf,
+
+    #[arg(long, default_value = "local-workflow")]
+    lane: String,
 }
 
 #[derive(Debug, Args)]
@@ -161,7 +220,79 @@ async fn main() -> Result<()> {
         Command::Dashboard(args) => dashboard::serve(args).await,
         Command::FaultPlan(args) => fault_plan(args),
         Command::FaultEvaluate(args) => fault_evaluate(args),
+        Command::Workflow(args) => workflow(args).await,
     }
+}
+
+async fn workflow(args: WorkflowArgs) -> Result<()> {
+    match args.command {
+        WorkflowCommand::List(args) => {
+            let mut definitions = Vec::new();
+            for entry in std::fs::read_dir(&args.directory)
+                .with_context(|| format!("read {}", args.directory.display()))?
+            {
+                let path = entry?.path();
+                if path.extension().and_then(|extension| extension.to_str()) != Some("json") {
+                    continue;
+                }
+                let definition = read_workflow(&path)?;
+                definitions.push(serde_json::json!({
+                    "id": definition.id,
+                    "scenario_version": definition.scenario_version,
+                    "path": path,
+                }));
+            }
+            definitions.sort_by(|left, right| left["id"].as_str().cmp(&right["id"].as_str()));
+            println!("{}", serde_json::to_string_pretty(&definitions)?);
+            Ok(())
+        }
+        WorkflowCommand::Validate(args) => {
+            let definition = read_workflow(&args.file)?;
+            let catalog = validation_catalog()?;
+            let materialized = definition.validate(&catalog)?;
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&serde_json::json!({
+                    "valid": true,
+                    "id": materialized.definition.id,
+                    "sha256": materialized.sha256,
+                    "topological_order": materialized.topological_order,
+                }))?
+            );
+            Ok(())
+        }
+        WorkflowCommand::Run(args) => {
+            let definition = read_workflow(&args.file)?;
+            let outcome = run_workflow_suite(WorkflowRunConfig {
+                url: args.url,
+                model: args.model,
+                provider: args.provider,
+                output: args.output,
+                definitions: vec![definition],
+                lane: args.lane,
+            })
+            .await?;
+            println!("{}", outcome.report_path.display());
+            if !outcome.report.passed {
+                bail!("workflow completed with failing required gates");
+            }
+            Ok(())
+        }
+    }
+}
+
+fn read_workflow(path: &std::path::Path) -> Result<WorkflowDefinitionV1> {
+    let bytes = std::fs::read(path).with_context(|| format!("read {}", path.display()))?;
+    serde_json::from_slice(&bytes).with_context(|| format!("decode workflow {}", path.display()))
+}
+
+fn validation_catalog() -> Result<StepCatalog> {
+    let mut catalog = StepCatalog::new();
+    catalog.register_descriptor(harness_descriptor()?)?;
+    for descriptor in security_scan::descriptors_only() {
+        catalog.register_descriptor(descriptor)?;
+    }
+    Ok(catalog)
 }
 
 fn fault_plan(args: FaultPlanArgs) -> Result<()> {

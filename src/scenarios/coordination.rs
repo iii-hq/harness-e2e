@@ -515,7 +515,7 @@ fn capture<'a>(
         Ok(vec![CapturedDeliverable {
             id: DELIVERABLE_ID.to_string(),
             kind: "state_bundle".to_string(),
-            content: content.clone(),
+            content: content.clone().into(),
             invariants: vec![
                 CapturedInvariant {
                     id: "matches_materialized_case".to_string(),

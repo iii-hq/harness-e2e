@@ -26,8 +26,16 @@ pub struct ObserveHub {
 }
 
 struct ObserveHubInner {
-    events: Mutex<VecDeque<TurnCompletedEvent>>,
+    events: Mutex<VecDeque<(u64, TurnCompletedEvent)>>,
+    next_sequence: Mutex<u64>,
     notify: Notify,
+}
+
+const MAX_RETAINED_EVENTS: usize = 4_096;
+
+pub struct ObserveSubscription {
+    inner: Arc<ObserveHubInner>,
+    cursor: Mutex<u64>,
 }
 
 impl ObserveHub {
@@ -35,39 +43,93 @@ impl ObserveHub {
         Self {
             inner: Arc::new(ObserveHubInner {
                 events: Mutex::new(VecDeque::new()),
+                next_sequence: Mutex::new(0),
                 notify: Notify::new(),
             }),
         }
     }
 
     pub fn push(&self, event: TurnCompletedEvent) {
-        self.lock_events().push_back(event);
-        self.inner.notify.notify_one();
+        let sequence = {
+            let mut next = self
+                .inner
+                .next_sequence
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            let sequence = *next;
+            *next = next.saturating_add(1);
+            sequence
+        };
+        let mut events = self.lock_events();
+        events.push_back((sequence, event));
+        while events.len() > MAX_RETAINED_EVENTS {
+            events.pop_front();
+        }
+        drop(events);
+        self.inner.notify.notify_waiters();
     }
 
     pub fn drain(&self) {
         self.lock_events().clear();
     }
 
-    pub async fn wait_event(&self, timeout: Duration) -> Option<TurnCompletedEvent> {
-        if let Some(event) = self.pop() {
-            return Some(event);
-        }
-        match tokio::time::timeout(timeout, self.inner.notify.notified()).await {
-            Ok(()) => self.pop(),
-            Err(_) => None,
+    pub fn subscribe(&self) -> ObserveSubscription {
+        let cursor = self
+            .lock_events()
+            .front()
+            .map(|(sequence, _)| *sequence)
+            .unwrap_or_else(|| {
+                *self
+                    .inner
+                    .next_sequence
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner())
+            });
+        ObserveSubscription {
+            inner: self.inner.clone(),
+            cursor: Mutex::new(cursor),
         }
     }
 
-    fn pop(&self) -> Option<TurnCompletedEvent> {
-        self.lock_events().pop_front()
-    }
-
-    fn lock_events(&self) -> std::sync::MutexGuard<'_, VecDeque<TurnCompletedEvent>> {
+    fn lock_events(&self) -> std::sync::MutexGuard<'_, VecDeque<(u64, TurnCompletedEvent)>> {
         self.inner
             .events
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+}
+
+impl ObserveSubscription {
+    pub async fn wait_event(&self, timeout: Duration) -> Option<TurnCompletedEvent> {
+        let deadline = tokio::time::Instant::now() + timeout;
+        loop {
+            let notified = self.inner.notify.notified();
+            if let Some(event) = self.next_retained() {
+                return Some(event);
+            }
+            let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+            if remaining.is_zero() || tokio::time::timeout(remaining, notified).await.is_err() {
+                return None;
+            }
+        }
+    }
+
+    fn next_retained(&self) -> Option<TurnCompletedEvent> {
+        let events = self
+            .inner
+            .events
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let mut cursor = self
+            .cursor
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if let Some((first, _)) = events.front() {
+            *cursor = (*cursor).max(*first);
+        }
+        let (sequence, event) = events.iter().find(|(sequence, _)| *sequence >= *cursor)?;
+        *cursor = sequence.saturating_add(1);
+        Some(event.clone())
     }
 }
 
@@ -129,6 +191,7 @@ struct ObserveMachine {
 
 enum EventKind {
     Duplicate,
+    Unrelated,
     Progress,
     RootFailed { message: String },
 }
@@ -145,6 +208,9 @@ impl ObserveMachine {
         let key = (event.session_id.clone(), event.turn_id.clone());
         if !self.seen.insert(key) {
             return EventKind::Duplicate;
+        }
+        if event.session_id != self.root_session_id {
+            return EventKind::Unrelated;
         }
         if event.session_id == self.root_session_id
             && matches!(event.status, TurnStatus::Failed | TurnStatus::Cancelled)
@@ -250,7 +316,7 @@ pub(crate) async fn wait_until_complete<O: TreeObserver>(
 
         if let Some(event) = event {
             match machine.classify(&event) {
-                EventKind::Duplicate => continue,
+                EventKind::Duplicate | EventKind::Unrelated => continue,
                 EventKind::RootFailed { message } => bail!("{message}"),
                 EventKind::Progress => {
                     last_progress = tokio::time::Instant::now();
@@ -338,6 +404,7 @@ mod tests {
 
     struct Injected {
         hub: ObserveHub,
+        subscription: ObserveSubscription,
         metrics: Mutex<SessionMetricsResponse>,
         status: Mutex<StatusReport>,
         stopped: AtomicBool,
@@ -346,8 +413,10 @@ mod tests {
 
     impl Injected {
         fn new(metrics: SessionMetricsResponse, status: StatusReport) -> Self {
+            let hub = ObserveHub::new();
             Self {
-                hub: ObserveHub::new(),
+                subscription: hub.subscribe(),
+                hub,
                 metrics: Mutex::new(metrics),
                 status: Mutex::new(status),
                 stopped: AtomicBool::new(false),
@@ -367,7 +436,7 @@ mod tests {
     #[async_trait]
     impl TreeObserver for Injected {
         async fn next_turn_completed(&self, timeout: Duration) -> Option<TurnCompletedEvent> {
-            self.hub.wait_event(timeout).await
+            self.subscription.wait_event(timeout).await
         }
 
         async fn pull_metrics(&self, _root_session_id: &str) -> Result<SessionMetricsResponse> {
@@ -496,6 +565,65 @@ mod tests {
             "sub-2"
         );
         assert!(binding_id(&json!({})).is_err());
+    }
+
+    #[tokio::test]
+    async fn concurrent_session_subscribers_receive_the_same_broadcast_without_cross_attribution() {
+        let hub = ObserveHub::new();
+        let first = hub.subscribe();
+        let second = hub.subscribe();
+        hub.push(event(
+            "session-a",
+            "turn-a",
+            TurnStatus::Completed,
+            true,
+            None,
+        ));
+        hub.push(event(
+            "session-b",
+            "turn-b",
+            TurnStatus::Completed,
+            true,
+            None,
+        ));
+
+        let first_events = [
+            first.wait_event(Duration::from_millis(20)).await.unwrap(),
+            first.wait_event(Duration::from_millis(20)).await.unwrap(),
+        ];
+        let second_events = [
+            second.wait_event(Duration::from_millis(20)).await.unwrap(),
+            second.wait_event(Duration::from_millis(20)).await.unwrap(),
+        ];
+        assert_eq!(
+            first_events
+                .iter()
+                .map(|event| (event.session_id.as_str(), event.turn_id.as_str()))
+                .collect::<Vec<_>>(),
+            second_events
+                .iter()
+                .map(|event| (event.session_id.as_str(), event.turn_id.as_str()))
+                .collect::<Vec<_>>()
+        );
+
+        let mut session_a = ObserveMachine::new("session-a");
+        let mut session_b = ObserveMachine::new("session-b");
+        assert!(matches!(
+            session_a.classify(&first_events[0]),
+            EventKind::Progress
+        ));
+        assert!(matches!(
+            session_a.classify(&first_events[1]),
+            EventKind::Unrelated
+        ));
+        assert!(matches!(
+            session_b.classify(&second_events[0]),
+            EventKind::Unrelated
+        ));
+        assert!(matches!(
+            session_b.classify(&second_events[1]),
+            EventKind::Progress
+        ));
     }
 
     #[tokio::test]

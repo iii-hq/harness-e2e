@@ -322,7 +322,8 @@ fn capture<'a>(
                 "wake_index": wake_index,
                 "spawn_index": spawn_index,
                 "report": observation.response,
-            }),
+            })
+            .into(),
             invariants: vec![
                 CapturedInvariant {
                     id: BOUNDED_FAILURE.id().to_string(),

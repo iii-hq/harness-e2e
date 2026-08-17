@@ -116,6 +116,8 @@ fn observed_metadata(run_dir: &Path, report: &E2eReport) -> Result<RunMetadata> 
             technical_retries: 0,
             seed,
             plan_context: None,
+            workflow_definition: None,
+            workflow_hash: None,
         },
         plan_context: None,
     })

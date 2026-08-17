@@ -452,7 +452,8 @@ fn capture<'a>(
                     "ledger": ledger_values(&ledger),
                     "couriers": courier_values(&couriers),
                     "completion_rows": completion_rows,
-                }),
+                })
+                .into(),
                 invariants: vec![
                     CapturedInvariant {
                         id: "shipments_exact".to_string(),
@@ -500,7 +501,8 @@ fn capture<'a>(
                     "sessions_in_tree": sessions_in_tree,
                     "completion_wakes": completion_wakes,
                     "completion_notices": completion_notices,
-                }),
+                })
+                .into(),
                 invariants: vec![
                     CapturedInvariant {
                         id: "courier_tree_complete".to_string(),

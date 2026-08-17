@@ -333,7 +333,8 @@ fn capture<'a>(
                 "verdicts": verdicts,
                 "validation_nudges": child_nudges,
                 "report": observation.response,
-            }),
+            })
+            .into(),
             invariants: vec![
                 CapturedInvariant {
                     id: CHILDREN_GOAL.id().to_string(),

@@ -246,7 +246,7 @@ fn capture<'a>(
         Ok(vec![CapturedDeliverable {
             id: DELIVERABLE_ID.to_string(),
             kind: "state_value".to_string(),
-            content: observed.clone(),
+            content: observed.clone().into(),
             invariants: vec![
                 CapturedInvariant {
                     id: "matches_expected_result".to_string(),

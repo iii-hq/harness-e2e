@@ -265,6 +265,13 @@ impl Controller {
         let stdout = File::create(&log_path).map_err(ApiError::internal)?;
         let stderr = stdout.try_clone().map_err(ApiError::internal)?;
 
+        if let Some(definition) = &request.workflow_definition {
+            let mut bytes = serde_json::to_vec_pretty(definition).map_err(ApiError::internal)?;
+            bytes.push(b'\n');
+            artifact::write_atomic(&run_dir.join("workflow-definition.json"), &bytes)
+                .map_err(ApiError::internal)?;
+        }
+
         let mut command = build_run_command(&self.executable, &request, &output_dir);
         command.kill_on_drop(true);
         let child = command
@@ -335,8 +342,27 @@ impl Controller {
             return Err(ApiError::conflict("no E2E execution is running"));
         }
         let id = job.id.clone();
+        let workflow = job.request.workflow_definition.is_some();
         if let Some(child) = state.child.as_mut() {
-            child.start_kill().map_err(ApiError::internal)?;
+            if workflow {
+                let pid = child
+                    .id()
+                    .ok_or_else(|| ApiError::conflict("workflow runner has no process id"))?;
+                let status = Command::new("kill")
+                    .arg("-INT")
+                    .arg("--")
+                    .arg(pid.to_string())
+                    .status()
+                    .await
+                    .map_err(ApiError::internal)?;
+                if !status.success() {
+                    return Err(ApiError::internal(anyhow::anyhow!(
+                        "could not interrupt workflow runner process {pid}"
+                    )));
+                }
+            } else {
+                child.start_kill().map_err(ApiError::internal)?;
+            }
         }
         let job = state.job.as_mut().expect("job checked above");
         job.status = JobStatus::Cancelling;
@@ -546,6 +572,29 @@ pub(super) fn build_run_command(
     output_dir: &Path,
 ) -> Command {
     let mut command = Command::new(executable);
+    if request.workflow_definition.is_some() {
+        command
+            .arg("workflow")
+            .arg("run")
+            .arg("--file")
+            .arg(
+                output_dir
+                    .parent()
+                    .expect("workflow output has a run directory")
+                    .join("workflow-definition.json"),
+            )
+            .arg("--url")
+            .arg(&request.url)
+            .arg("--model")
+            .arg(&request.model)
+            .arg("--provider")
+            .arg(&request.provider)
+            .arg("--output")
+            .arg(output_dir)
+            .arg("--lane")
+            .arg("local-workflow");
+        return command;
+    }
     command
         .arg("run")
         .arg("--url")
@@ -590,6 +639,17 @@ pub(super) fn validate_request(request: &mut RunRequest) -> std::result::Result<
         if value.is_empty() || value.len() > 200 || value.chars().any(char::is_control) {
             return Err(format!("{name} is invalid"));
         }
+    }
+    if let Some(definition) = &request.workflow_definition {
+        if !request.scenarios.is_empty() {
+            return Err("workflow executions cannot also select legacy scenarios".into());
+        }
+        let observed = super::workflows::validate_definition(definition)
+            .map_err(|error| format!("workflow is invalid: {error:#}"))?;
+        if request.workflow_hash.as_deref() != Some(observed.as_str()) {
+            return Err("workflow hash does not match the validated definition".into());
+        }
+        return Ok(());
     }
     if !(1..=20).contains(&request.runs) {
         return Err("runs must be between 1 and 20".into());

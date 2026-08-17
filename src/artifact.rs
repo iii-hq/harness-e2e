@@ -122,7 +122,7 @@ where
     Ok(sha256_bytes(&bytes))
 }
 
-fn sha256_bytes(bytes: &[u8]) -> String {
+pub fn sha256_bytes(bytes: &[u8]) -> String {
     format!("sha256:{:x}", Sha256::digest(bytes))
 }
 
