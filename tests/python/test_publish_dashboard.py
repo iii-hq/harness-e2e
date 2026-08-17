@@ -15,6 +15,7 @@ from publish_harness_e2e_dashboard import (
     _assessment_summary,
     build_static_test_catalog,
     complete_public_detail,
+    publish,
 )
 
 
@@ -175,6 +176,27 @@ def contains_key(value: object, forbidden: str) -> bool:
 
 
 class PublishDashboardTests(unittest.TestCase):
+    def test_publish_writes_json_manifest_and_removes_legacy_runtime_artifact(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            site = Path(directory)
+            (site / "executions.js").write_text(
+                "window.HARNESS_EXECUTIONS = {\"executions\": []};\n"
+            )
+            updated = publish(
+                site,
+                snapshot_path=None,
+                detail_path=None,
+                metadata=metadata("json-manifest"),
+                repo_url="https://example.test/repo",
+                max_summaries=10,
+                max_details=2,
+            )
+
+            manifest_path = site / "executions.json"
+            self.assertEqual(json.loads(manifest_path.read_text()), updated)
+            self.assertFalse((site / "executions.js").exists())
+            self.assertEqual(updated["executions"][0]["availability"], "unavailable")
+
     def test_shared_assessment_projection_fixture(self) -> None:
         fixture = json.loads(
             (ROOT / "tests/fixtures/results/results-assessment-contract.json").read_text()

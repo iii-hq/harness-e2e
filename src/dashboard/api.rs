@@ -15,12 +15,13 @@ use super::bus::{
     ExecutionListResponse, RunStatusRequest,
 };
 use super::controller::{validate_stack_url, Controller};
+use super::plans::{LocalPlan, PlanCreateRequest, PlanRunRequest, PlanUpdateRequest};
 use super::presenter::{
     execution_detail_value, repository_url, validate_execution_id, MAX_EXECUTIONS,
 };
 use super::read_model::{
-    EvaluatedVersionsRequest, EvaluatedVersionsResponse, TestVersionGetRequest, TestVersionResult,
-    TestsListRequest, TestsListResponse,
+    EvaluatedVersionsRequest, EvaluatedVersionsResponse, TestHistoryRequest, TestHistoryResponse,
+    TestVersionGetRequest, TestVersionResult, TestsListRequest, TestsListResponse,
 };
 use super::store::read_stored_run;
 use super::{ApiError, DashboardArgs, RunRequest, RunSnapshot};
@@ -62,7 +63,7 @@ pub(super) async fn serve(args: DashboardArgs) -> Result<()> {
     };
     let app = Router::new()
         .route("/data.js", get(benchmark_data))
-        .route("/executions.js", get(execution_manifest))
+        .route("/executions.json", get(execution_manifest))
         .route("/runs/:id", get(execution_detail))
         .route("/api/dashboard", get(dashboard_config))
         .route("/api/dashboard/executions", get(execution_page))
@@ -70,6 +71,7 @@ pub(super) async fn serve(args: DashboardArgs) -> Result<()> {
         .route("/api/dashboard/evaluated-versions", get(evaluated_versions))
         .route("/api/dashboard/tests", get(tests_page))
         .route("/api/dashboard/test-version", get(test_version))
+        .route("/api/dashboard/tests/:test_id/history", get(test_history))
         .fallback(get(static_asset));
     let app = if view_only {
         app
@@ -78,6 +80,12 @@ pub(super) async fn serve(args: DashboardArgs) -> Result<()> {
             .route("/api/local/run", get(run_snapshot).post(start_run))
             .route("/api/local/run/cancel", axum::routing::post(cancel_run))
             .route("/api/local/catalog", get(catalog))
+            .route("/api/dashboard/plans", get(plans_list).post(plan_create))
+            .route("/api/dashboard/plans/:id", get(plan_get).patch(plan_update))
+            .route(
+                "/api/dashboard/plans/:id/runs",
+                axum::routing::post(plan_run),
+            )
     }
     .layer(axum::extract::DefaultBodyLimit::max(MAX_REQUEST_BYTES))
     .with_state(state);
@@ -110,13 +118,65 @@ async fn dashboard_config(State(state): State<AppState>) -> Json<Value> {
             "evaluated_versions_list": bus::EVALUATED_VERSIONS_LIST,
             "tests_list": bus::TESTS_LIST,
             "test_version_get": bus::TEST_VERSION_GET,
+            "test_history_get": bus::TEST_HISTORY_GET,
             "catalog_get": bus::CATALOG_GET,
             "run_status": bus::RUN_STATUS,
             "run_start": bus::RUN_START,
             "run_cancel": bus::RUN_CANCEL,
+            "plans_list": bus::PLANS_LIST,
+            "plan_get": bus::PLAN_GET,
+            "plan_create": bus::PLAN_CREATE,
+            "plan_update": bus::PLAN_UPDATE,
+            "plan_run_start": bus::PLAN_RUN_START,
             "changed_trigger": bus::CHANGED_TRIGGER,
         }
     }))
+}
+
+async fn plans_list(State(state): State<AppState>) -> Result<Json<Value>, ApiError> {
+    let plans = state
+        .controller
+        .list_plans()
+        .await
+        .map_err(ApiError::internal)?;
+    Ok(Json(json!({ "mode": "local", "plans": plans })))
+}
+
+async fn plan_get(
+    State(state): State<AppState>,
+    AxumPath(id): AxumPath<String>,
+) -> Result<Json<LocalPlan>, ApiError> {
+    state
+        .controller
+        .get_plan(&id)
+        .await
+        .map(Json)
+        .map_err(|error| ApiError::not_found(error.to_string()))
+}
+
+async fn plan_create(
+    State(state): State<AppState>,
+    Json(request): Json<PlanCreateRequest>,
+) -> Result<(StatusCode, Json<LocalPlan>), ApiError> {
+    let plan = state.controller.create_plan(request).await?;
+    Ok((StatusCode::CREATED, Json(plan)))
+}
+
+async fn plan_update(
+    State(state): State<AppState>,
+    AxumPath(id): AxumPath<String>,
+    Json(request): Json<PlanUpdateRequest>,
+) -> Result<Json<LocalPlan>, ApiError> {
+    state.controller.update_plan(&id, request).await.map(Json)
+}
+
+async fn plan_run(
+    State(state): State<AppState>,
+    AxumPath(id): AxumPath<String>,
+    Json(request): Json<PlanRunRequest>,
+) -> Result<(StatusCode, Json<LocalPlan>), ApiError> {
+    let plan = state.controller.start_plan(&id, request.role).await?;
+    Ok((StatusCode::ACCEPTED, Json(plan)))
 }
 
 async fn evaluated_versions(
@@ -149,6 +209,23 @@ async fn test_version(
         .map_err(dashboard_read_error)
 }
 
+async fn test_history(
+    State(state): State<AppState>,
+    AxumPath(test_id): AxumPath<String>,
+    Query(mut request): Query<TestHistoryRequest>,
+) -> Result<Json<TestHistoryResponse>, ApiError> {
+    if state.view_only {
+        return Err(ApiError::not_found(
+            "test metric history is available only in the local dashboard",
+        ));
+    }
+    request.test_id = test_id;
+    bus::test_history(&state.controller, request)
+        .await
+        .map(Json)
+        .map_err(dashboard_read_error)
+}
+
 fn dashboard_read_error(error: anyhow::Error) -> ApiError {
     let message = error.to_string();
     if message.starts_with("unknown ") {
@@ -159,6 +236,9 @@ fn dashboard_read_error(error: anyhow::Error) -> ApiError {
         || message.contains("limit must be")
         || message.contains("comparison requires")
         || message.contains("test id and version are required")
+        || message.contains("test id is required")
+        || message.contains("history cursor")
+        || message.contains("history list limit")
     {
         ApiError::bad_request(message)
     } else {
@@ -248,7 +328,7 @@ async fn benchmark_data() -> Response {
     javascript_response("window.BENCHMARK_DATA = {};\n".into())
 }
 
-async fn execution_manifest(State(state): State<AppState>) -> Result<Response, ApiError> {
+async fn execution_manifest(State(state): State<AppState>) -> Result<Json<Value>, ApiError> {
     let executions = state
         .controller
         .execution_summaries()
@@ -259,16 +339,13 @@ async fn execution_manifest(State(state): State<AppState>) -> Result<Response, A
         .and_then(|value| value.get("completed_at"))
         .and_then(Value::as_str)
         .unwrap_or_default();
-    Ok(javascript_response(format!(
-        "window.HARNESS_EXECUTIONS = {};\n",
-        json!({
-            "mode": if state.view_only { "observed" } else { "local" },
-            "last_update": last_update,
-            "repo_url": repository_url(),
-            "retention": { "summaries": MAX_EXECUTIONS, "details": MAX_EXECUTIONS },
-            "executions": executions.as_ref(),
-        })
-    )))
+    Ok(Json(json!({
+        "mode": if state.view_only { "observed" } else { "local" },
+        "last_update": last_update,
+        "repo_url": repository_url(),
+        "retention": { "summaries": MAX_EXECUTIONS, "details": MAX_EXECUTIONS },
+        "executions": executions.as_ref(),
+    })))
 }
 
 async fn execution_detail(

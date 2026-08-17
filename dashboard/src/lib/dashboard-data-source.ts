@@ -1,4 +1,3 @@
-import { currentDashboardRoute } from '@/hooks/use-hash-route'
 import type {
   AssessmentContract,
   AssessmentSummary,
@@ -8,6 +7,8 @@ import { getDashboardIiiClient } from '@/lib/iii-client'
 import type {
   EvaluatedVersionsResponse,
   TestCatalogRow,
+  TestHistoryInput,
+  TestHistoryResponse,
   TestObservation,
   TestSideSummary,
   TestsListInput,
@@ -16,30 +17,192 @@ import type {
   TestVersionResult,
 } from '@/lib/test-catalog'
 
-type JsonObject = Record<string, unknown>
+export type JsonObject = Record<string, unknown>
+
+export type LocalPlanState =
+  | 'draft'
+  | 'baseline_running'
+  | 'baseline_ready'
+  | 'candidate_running'
+  | 'comparison_ready'
+
+export type LocalPlan = {
+  schema_version: number
+  id: string
+  label: string
+  purpose: string
+  created_at: string
+  updated_at: string
+  state: LocalPlanState
+  locked: boolean
+  scope_hash: string
+  policy_hash: string
+  url: string
+  model: string
+  provider: string
+  judge_model: string
+  judge_provider: string
+  scenarios: Array<{
+    scenario_id: string
+    scenario_version: number
+    case_id: string
+    seed: number
+    inputs_sha256: string
+    contract_sha256: string
+    complexity_tier: string
+  }>
+  scenario_ids: string[]
+  runs: number
+  technical_retries: number
+  seed: number | null
+  baseline_execution_id: string | null
+  candidate_execution_ids: string[]
+  incomplete_execution_ids: string[]
+  last_attempt_id: string | null
+}
+
+export type LocalPlansResponse = {
+  mode: 'local'
+  plans: LocalPlan[]
+}
+
+export type ExecutionTotals = JsonObject & {
+  expected_reports?: number | null
+  received_reports?: number | null
+  missing_reports?: number | null
+  passed_scenarios?: number | null
+  hard_gate_failures?: number | null
+  technical_failures?: number | null
+  infra_failures?: number | null
+  resource_limit_failures?: number | null
+  scenario_pass_rate?: number | null
+  report_coverage?: number | null
+  total_cost_usd?: number | null
+  wall_time_seconds?: number | null
+  workflow_duration_seconds?: number | null
+  total_tokens?: number | null
+  function_calls?: number | null
+  function_call_errors?: number | null
+}
+
+export type DashboardModelIdentity = JsonObject & {
+  id?: string
+  model?: string
+  provider?: string
+  judge?: DashboardModelIdentity | null
+}
 
 export type DashboardScenarioSummary = JsonObject & {
   id: string
-  assessment_summary: AssessmentSummary
+  scenario_version?: number
+  case_id?: string
+  status?: string
+  passed?: boolean
+  pass_rate?: number | null
+  median_score?: number | null
+  hard_gate_failures?: number | null
+  technical_failures?: number | null
+  wall_time_seconds?: number | null
+  total_cost_usd?: number | null
+  assessment_summary?: AssessmentSummary
+}
+
+export type DashboardScenarioMetricSummary = JsonObject & {
+  scenario_id: string
+  scenario_version?: number
+  subject_id?: string
+  contract_fingerprint?: string
+  run_count?: number
+  averages?: JsonObject & {
+    cost_usd?: number | null
+    duration_seconds?: number | null
+    function_call_errors?: number | null
+    function_calls?: number | null
+    tokens?: number | null
+    work_amplification?: number | null
+  }
+  samples?: JsonObject & {
+    cost_usd?: number | null
+    duration_seconds?: number | null
+    function_call_errors?: number | null
+    function_calls?: number | null
+    tokens?: number | null
+    work_amplification?: number | null
+  }
 }
 
 export type DashboardSubjectSummary = JsonObject & {
   id: string
-  assessment_summary: AssessmentSummary
+  model?: string
+  provider?: string
+  judge?: DashboardModelIdentity | null
+  assessment_summary?: AssessmentSummary
   scenarios: DashboardScenarioSummary[]
 }
 
 export type DashboardExecutionSummary = JsonObject & {
   id: string
+  label?: string
+  run_id?: string
+  attempt?: number
   status: string
-  assessment_summary: AssessmentSummary
+  started_at?: string
+  completed_at?: string
+  generated_at?: string
+  workflow_name?: string
+  workflow_url?: string | null
+  event?: string
+  actor?: string
+  conclusion?: string
+  availability?: 'full' | 'aggregate' | 'unavailable' | string
+  source?: JsonObject
+  release?: JsonObject
+  lane?: string
   subjects: DashboardSubjectSummary[]
+  scenario_metrics?: DashboardScenarioMetricSummary[]
+  totals?: ExecutionTotals
+  assessment_summary?: AssessmentSummary
+}
+
+export type DashboardRunMetricTotals = JsonObject & {
+  input_tokens?: number | null
+  output_tokens?: number | null
+  cache_read_tokens?: number | null
+  cache_write_tokens?: number | null
+  reasoning_tokens?: number | null
+  function_calls?: number | null
+  function_call_errors?: number | null
+  sessions?: number | null
+  turns?: number | null
+}
+
+export type DashboardRunMetrics = JsonObject & {
+  totals?: DashboardRunMetricTotals | null
+}
+
+export type DashboardRunCost = JsonObject & {
+  total_usd?: number | null
+}
+
+export type DashboardRunEfficiency = JsonObject & {
+  wall_time_ms?: number | null
+  total_tokens?: number | null
+  function_calls?: number | null
+  function_call_errors?: number | null
+  sessions?: number | null
+  turns?: number | null
 }
 
 export type DashboardRunProjection = JsonObject & {
   run_id: string
   attempt_id: string
   assessment: RunAssessmentContract
+  transcript?: JsonObject
+  status?: string
+  wall_time_ms?: number | null
+  metrics?: DashboardRunMetrics | null
+  cost?: DashboardRunCost | null
+  efficiency?: DashboardRunEfficiency | null
 }
 
 export type DashboardReportProjection = JsonObject & {
@@ -50,7 +213,14 @@ export type DashboardReportProjection = JsonObject & {
     JsonObject & {
       scenario_id: string
       scenario_version: number
-      assessment_summary: AssessmentSummary
+      assessment_summary?: AssessmentSummary
+      status?: string
+      passed?: boolean
+      pass_rate?: number | null
+      median_score?: number | null
+      hard_gate_failures?: number
+      technical_failures?: number
+      aggregate?: JsonObject
       runs: DashboardRunProjection[]
     }
   >
@@ -74,7 +244,7 @@ export type ExecutionManifest = JsonObject & {
   next_cursor?: string | null
 }
 
-type ExecutionBundle = {
+export type ExecutionBundle = {
   manifest: ExecutionManifest
   detail: DashboardExecutionDetail
 }
@@ -89,10 +259,16 @@ type RuntimeConfig = {
     evaluated_versions_list: string
     tests_list: string
     test_version_get: string
+    test_history_get: string
     catalog_get: string
     run_status: string
     run_start: string
     run_cancel: string
+    plans_list: string
+    plan_get: string
+    plan_create: string
+    plan_update: string
+    plan_run_start: string
     changed_trigger: string
   }
 }
@@ -107,13 +283,21 @@ export type ExecutionListInput = {
 }
 
 export type DashboardDataBridge = {
+  mode: 'local' | 'observed' | 'published'
   remotePaging: boolean
   listExecutions(input?: ExecutionListInput): Promise<ExecutionManifest>
+  getExecution(executionId: string): Promise<DashboardExecutionDetail>
   listEvaluatedVersions(input?: {
     cohort_id?: string
   }): Promise<EvaluatedVersionsResponse>
   listTests(input?: TestsListInput): Promise<TestsListResponse>
   getTestVersion(input: TestVersionInput): Promise<TestVersionResult>
+  getTestHistory(input: TestHistoryInput): Promise<TestHistoryResponse>
+  listPlans(): Promise<LocalPlansResponse>
+  getPlan(planId: string): Promise<LocalPlan>
+  createPlan(request: JsonObject): Promise<LocalPlan>
+  updatePlan(planId: string, request: JsonObject): Promise<LocalPlan>
+  startPlan(planId: string, role: 'baseline' | 'candidate'): Promise<LocalPlan>
   getCatalog(url?: string): Promise<JsonObject>
   getRunSnapshot(after?: number): Promise<JsonObject>
   startRun(request: JsonObject): Promise<JsonObject>
@@ -125,40 +309,6 @@ export type DashboardDataBridge = {
 
 let runtimePromise: Promise<RuntimeConfig | null> | null = null
 let bridgePromise: Promise<DashboardDataBridge | null> | null = null
-
-export async function loadRuntimeExecutionData(
-  page: 'overview' | 'execution',
-): Promise<boolean> {
-  const runtime = await runtimeConfig()
-  if (runtime?.mode !== 'local') return false
-  const bridge = await dashboardBridge(runtime)
-  if (!bridge) return false
-  window.HarnessDashboardData = bridge
-
-  if (page === 'overview') {
-    window.HARNESS_EXECUTIONS = await bridge.listExecutions({
-      cursor: '0',
-      limit: runtime.page_size,
-    })
-    return true
-  }
-
-  const route = currentDashboardRoute()
-  if (page === 'execution') {
-    const executionId =
-      route.page === 'execution' ? route.executionId.trim() : ''
-    if (!executionId) return false
-    const bundle = await getExecution(runtime, executionId)
-    window.HARNESS_EXECUTIONS = bundle.manifest
-    window.HARNESS_EXECUTION_DETAILS = {
-      ...(window.HARNESS_EXECUTION_DETAILS ?? {}),
-      [executionId]: bundle.detail,
-    }
-    return true
-  }
-
-  return false
-}
 
 async function dashboardBridge(
   runtime: RuntimeConfig,
@@ -214,8 +364,11 @@ function makeBridge(runtime: RuntimeConfig): DashboardDataBridge {
     )
 
   return {
+    mode: runtime.mode,
     remotePaging: true,
     listExecutions,
+    getExecution: (executionId) =>
+      getExecution(runtime, executionId).then((bundle) => bundle.detail),
     listEvaluatedVersions: (input = {}) =>
       cachedCall<EvaluatedVersionsResponse>(
         runtime.functions.evaluated_versions_list,
@@ -231,6 +384,49 @@ function makeBridge(runtime: RuntimeConfig): DashboardDataBridge {
         runtime.functions.test_version_get,
         input,
         () => httpTestVersion(input),
+      ),
+    getTestHistory: (input) =>
+      cachedCall<TestHistoryResponse>(
+        runtime.functions.test_history_get,
+        input as unknown as JsonObject,
+        () => httpTestHistory(input),
+      ),
+    listPlans: () =>
+      call<LocalPlansResponse>(runtime.functions.plans_list, {}, () =>
+        httpJson<LocalPlansResponse>('./api/dashboard/plans'),
+      ),
+    getPlan: (planId) =>
+      call<LocalPlan>(runtime.functions.plan_get, { plan_id: planId }, () =>
+        httpJson<LocalPlan>(
+          `./api/dashboard/plans/${encodeURIComponent(planId)}`,
+        ),
+      ),
+    createPlan: (request) =>
+      call<LocalPlan>(runtime.functions.plan_create, request, () =>
+        httpJson<LocalPlan>('./api/dashboard/plans', {
+          method: 'POST',
+          body: JSON.stringify(request),
+        }),
+      ),
+    updatePlan: (planId, request) =>
+      call<LocalPlan>(
+        runtime.functions.plan_update,
+        { ...request, plan_id: planId },
+        () =>
+          httpJson<LocalPlan>(
+            `./api/dashboard/plans/${encodeURIComponent(planId)}`,
+            { method: 'PATCH', body: JSON.stringify(request) },
+          ),
+      ),
+    startPlan: (planId, role) =>
+      call<LocalPlan>(
+        runtime.functions.plan_run_start,
+        { plan_id: planId, role },
+        () =>
+          httpJson<LocalPlan>(
+            `./api/dashboard/plans/${encodeURIComponent(planId)}/runs`,
+            { method: 'POST', body: JSON.stringify({ role }) },
+          ),
       ),
     getCatalog: (url) =>
       call(runtime.functions.catalog_get, url ? { url } : {}, () =>
@@ -331,8 +527,23 @@ function makeStaticBridge(): DashboardDataBridge {
     return staticTestIndexPromise
   }
   return {
+    mode: 'published',
     remotePaging: false,
-    listExecutions: async () => ({ executions: [] }),
+    listExecutions: async (input = {}) => {
+      const manifest = await staticExecutionManifest()
+      return filterStaticExecutions(manifest, input)
+    },
+    getExecution: async (executionId) => {
+      const manifest = await staticExecutionManifest()
+      const summary = manifest.executions.find(
+        (candidate) => candidate.id === executionId,
+      )
+      if (!summary) throw new Error(`Unknown execution '${executionId}'`)
+      if (!summary.detail_path) {
+        return { ...summary, reports: [] }
+      }
+      return httpJson<DashboardExecutionDetail>(String(summary.detail_path))
+    },
     listEvaluatedVersions: async () => (await staticIndex()).evaluated_versions,
     listTests: async (input = {}) => {
       const source = (await staticIndex()).tests
@@ -368,6 +579,26 @@ function makeStaticBridge(): DashboardDataBridge {
             item.evaluated_version_id === input.to_version_id,
         ),
       }
+    },
+    getTestHistory: async () => {
+      throw new Error(
+        'Test metric history is available only in the local dashboard',
+      )
+    },
+    listPlans: async () => {
+      throw new Error('Local plans are available only in the local dashboard')
+    },
+    getPlan: async () => {
+      throw new Error('Local plans are available only in the local dashboard')
+    },
+    createPlan: async () => {
+      throw new Error('Local plans are available only in the local dashboard')
+    },
+    updatePlan: async () => {
+      throw new Error('Local plans are available only in the local dashboard')
+    },
+    startPlan: async () => {
+      throw new Error('Local plans are available only in the local dashboard')
     },
     getCatalog: () => Promise.reject(new Error('Catalog unavailable')),
     getRunSnapshot: () => Promise.reject(new Error('Runner unavailable')),
@@ -552,6 +783,11 @@ async function getExecution(
   runtime: RuntimeConfig,
   executionId: string,
 ): Promise<ExecutionBundle> {
+  if (runtime.transport === 'static') {
+    return httpJson<ExecutionBundle>(
+      `./api/dashboard/executions/${encodeURIComponent(executionId)}`,
+    )
+  }
   try {
     const client = await getDashboardIiiClient()
     return await client.trigger<ExecutionBundle>(
@@ -565,6 +801,61 @@ async function getExecution(
     return httpJson(
       `./api/dashboard/executions/${encodeURIComponent(executionId)}`,
     )
+  }
+}
+
+let staticExecutionManifestPromise: Promise<ExecutionManifest> | null = null
+
+function staticExecutionManifest() {
+  staticExecutionManifestPromise ??=
+    httpJson<ExecutionManifest>('./executions.json')
+  return staticExecutionManifestPromise
+}
+
+function filterStaticExecutions(
+  manifest: ExecutionManifest,
+  input: ExecutionListInput,
+): ExecutionManifest {
+  const query = input.query?.trim().toLowerCase() ?? ''
+  const executions = manifest.executions.filter((execution) => {
+    if (
+      input.status &&
+      input.status !== 'all' &&
+      execution.status !== input.status
+    ) {
+      return false
+    }
+    if (
+      input.event &&
+      input.event !== 'all' &&
+      execution.event !== input.event
+    ) {
+      return false
+    }
+    if (input.ids?.length && !input.ids.includes(execution.id)) return false
+    if (!query) return true
+    return [
+      execution.label,
+      execution.id,
+      execution.run_id,
+      execution.completed_at,
+      execution.started_at,
+      execution.source?.sha,
+      execution.source?.ref,
+    ]
+      .filter(Boolean)
+      .join(' ')
+      .toLowerCase()
+      .includes(query)
+  })
+  const offset = Number(input.cursor) || 0
+  const limit = input.limit && input.limit > 0 ? input.limit : executions.length
+  return {
+    ...manifest,
+    executions: executions.slice(offset, offset + limit),
+    total: executions.length,
+    next_cursor:
+      offset + limit < executions.length ? String(offset + limit) : null,
   }
 }
 
@@ -612,6 +903,13 @@ function httpTests(input: TestsListInput) {
 function httpTestVersion(input: TestVersionInput) {
   return httpJson<TestVersionResult>(
     `./api/dashboard/test-version${queryString(input)}`,
+  )
+}
+
+function httpTestHistory(input: TestHistoryInput) {
+  const { test_id, ...queryInput } = input
+  return httpJson<TestHistoryResponse>(
+    `./api/dashboard/tests/${encodeURIComponent(test_id)}/history${queryString(queryInput)}`,
   )
 }
 

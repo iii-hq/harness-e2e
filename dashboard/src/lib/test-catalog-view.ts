@@ -1,4 +1,4 @@
-import type { TestCatalogRow } from '@/lib/test-catalog'
+import type { TestCatalogRow, TestVersionResult } from '@/lib/test-catalog'
 
 export type ResultFilter = 'all' | 'passed' | 'issues' | 'missing' | 'changed'
 
@@ -6,6 +6,106 @@ export type ComparisonUtility = {
   comparable: number
   evidenceOnBothSides: number
   evidenceRows: number
+}
+
+export type ComparisonWarning = {
+  title: string
+  detail: string
+}
+
+const REASON_WARNINGS: Record<string, ComparisonWarning> = {
+  comparison_side_missing: {
+    title: 'Evidence is missing on one side',
+    detail:
+      'A delta would compare unlike samples, so only the retained side is shown.',
+  },
+  scenario_contract_changed: {
+    title: 'Scenario contract changed',
+    detail:
+      'The canonical cases, scenario schema/version, or execution policy differ between versions. Scores and deltas are not comparable.',
+  },
+  scenario_contract_conflict: {
+    title: 'Scenario contract conflict',
+    detail:
+      'At least one side contains conflicting case or scenario identities. Resolve the retained evidence before comparing.',
+  },
+  assessment_profile_changed: {
+    title: 'Assessment profile changed',
+    detail:
+      'The scenario version or assessment definition differs. Scenario version is the compatibility boundary for prompt and rubric changes.',
+  },
+  assessment_profile_conflict: {
+    title: 'Assessment profile conflict',
+    detail:
+      'At least one side contains multiple assessment definitions for the same scenario version.',
+  },
+  analyzer_profile_changed: {
+    title: 'Analyzer profile changed',
+    detail:
+      'The analyzer, provider, or model differs between versions. AI conclusions are shown but their score delta is disabled.',
+  },
+  analyzer_profile_conflict: {
+    title: 'Analyzer profile conflict',
+    detail:
+      'At least one side contains multiple analyzer, provider, or model identities for the same test version.',
+  },
+  cohort_changed: {
+    title: 'Evaluation cohort changed',
+    detail:
+      'Subject, judge, model, protocol, or lane identity differs. Cross-cohort deltas are not valid.',
+  },
+  missing_side: {
+    title: 'Evidence is missing on one side',
+    detail:
+      'A delta would compare unlike samples, so only the retained side is shown.',
+  },
+  contract_changed: {
+    title: 'Scenario contract changed',
+    detail:
+      'The canonical cases, scenario schema/version, or execution policy differ between versions. Scores and deltas are not comparable.',
+  },
+  contract_conflict: {
+    title: 'Scenario contract conflict',
+    detail:
+      'At least one side contains conflicting case or scenario identities. Resolve the retained evidence before comparing.',
+  },
+  assessment_changed: {
+    title: 'Assessment profile changed',
+    detail:
+      'The scenario version or assessment definition differs. Scenario version is the compatibility boundary for prompt and rubric changes.',
+  },
+  assessment_conflict: {
+    title: 'Assessment profile conflict',
+    detail:
+      'At least one side contains multiple assessment definitions for the same scenario version.',
+  },
+  analyzer_changed: {
+    title: 'Analyzer profile changed',
+    detail:
+      'The analyzer, provider, or model differs between versions. AI conclusions are shown but their score delta is disabled.',
+  },
+  analyzer_conflict: {
+    title: 'Analyzer profile conflict',
+    detail:
+      'At least one side contains multiple analyzer, provider, or model identities for the same test version.',
+  },
+}
+
+export function comparisonWarnings(
+  result: TestVersionResult | null,
+): ComparisonWarning[] {
+  if (!result || result.compatibility === 'compatible') return []
+  const reasons =
+    result.compatibility_reasons.length > 0
+      ? result.compatibility_reasons
+      : [result.compatibility]
+  return reasons.map(
+    (reason) =>
+      REASON_WARNINGS[reason] ?? {
+        title: 'Comparison is incompatible',
+        detail: `The retained data reported ${reason.replaceAll('_', ' ')}. No delta is calculated.`,
+      },
+  )
 }
 
 function hasIssuesInB(row: TestCatalogRow) {

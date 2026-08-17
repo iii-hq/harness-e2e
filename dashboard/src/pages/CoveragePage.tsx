@@ -35,13 +35,6 @@ export function CoveragePage() {
           >
             Executions
           </a>
-          <a
-            className="button button-secondary"
-            href="./coverage-trend/"
-            data-mobile-label="Trend"
-          >
-            Trend
-          </a>
         </nav>
       </header>
 

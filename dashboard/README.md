@@ -15,6 +15,13 @@ transcripts, generated-asset previews, or private artifact paths; they retain
 only approved conclusions, analyzer provenance, and immutable evidence
 references.
 
+Execution details present the assessment contract in three explicit layers:
+the objective system outcome, the advisory AI conclusion, and the canonical
+effective status. The assessment matrix can be filtered by failures, confidence,
+availability, asset involvement, or AI evaluation. Every conclusion retains its
+criterion or analyzer identity and links to the immutable evidence register;
+missing and legacy assessment data is shown as unavailable rather than inferred.
+
 Install, validate, and run the frontend with hot reload:
 
 ```bash
@@ -89,7 +96,7 @@ restarting the Harness never recompiles the E2E client. `serve` is an alias for
 
 The React boot loader activates local execution controls only when the runtime
 descriptor reports `mode: "local"`. If the runtime surface is unavailable it
-falls back to `executions.js`; the Pages publisher always emits
+falls back to `executions.json`; the Pages publisher always emits
 `mode: "published"`, so the published dashboard keeps using only its static
 history and never calls the local execution APIs.
 

@@ -1,0 +1,1619 @@
+import { useCallback, useEffect, useMemo, useState } from 'react'
+import { ProviderModelDropdown } from '@/components/ProviderModelDropdown'
+import { ThemeToggle } from '@/components/ThemeToggle'
+import {
+  hashForExecution,
+  hashForNewPlan,
+  hashForPlan,
+  hashForPlans,
+  hashForWorkspace,
+} from '@/hooks/use-hash-route'
+import {
+  type DashboardDataBridge,
+  type DashboardExecutionDetail,
+  type DashboardExecutionSummary,
+  getDashboardDataBridge,
+  type JsonObject,
+  type LocalPlan,
+} from '@/lib/dashboard-data-source'
+import {
+  buildExecutionPresentation,
+  formatDate,
+  titleCase,
+} from '@/lib/execution-view'
+import {
+  buildPlanComparison,
+  formatPlanMetricDelta,
+  formatPlanMetricValue,
+  loadExecutionSummaries,
+  metricById,
+  PLAN_DETAIL_METRICS,
+  type PlanComparison,
+  type PlanMetricComparison,
+  type PlanScenarioComparison,
+  type PlanVerdict,
+} from '@/lib/plan-comparison'
+
+type Model = { provider: string; model: string }
+type Catalog = { url: string; models: Model[]; scenarios: string[] }
+
+function modelKey(model: Model) {
+  return [model.provider, model.model].join('\n')
+}
+
+function modelGroups(models: Model[]) {
+  const groups = new Map<string, Model[]>()
+  for (const model of models) {
+    const entries = groups.get(model.provider) ?? []
+    if (!entries.some((entry) => entry.model === model.model))
+      entries.push(model)
+    groups.set(model.provider, entries)
+  }
+  return [...groups.entries()]
+    .sort(([left], [right]) => left.localeCompare(right))
+    .map(([provider, entries]) => ({
+      provider,
+      models: entries.sort((left, right) =>
+        left.model.localeCompare(right.model),
+      ),
+    }))
+}
+
+function catalogValue(value: JsonObject): Catalog {
+  const models = Array.isArray(value.models)
+    ? value.models.flatMap((candidate) => {
+        if (!candidate || typeof candidate !== 'object') return []
+        const item = candidate as JsonObject
+        return typeof item.provider === 'string' &&
+          typeof item.model === 'string'
+          ? [{ provider: item.provider, model: item.model }]
+          : []
+      })
+    : []
+  return {
+    url: typeof value.url === 'string' ? value.url : '',
+    models,
+    scenarios: Array.isArray(value.scenarios)
+      ? value.scenarios.filter(
+          (item): item is string => typeof item === 'string',
+        )
+      : [],
+  }
+}
+
+function errorText(cause: unknown) {
+  return cause instanceof Error ? cause.message : String(cause)
+}
+
+function scenarioName(scenario: string) {
+  return scenario
+    .replace(/[_.]+/g, ' ')
+    .replace(/\b\w/g, (character) => character.toUpperCase())
+}
+
+function stateLabel(plan: LocalPlan) {
+  if (
+    plan.locked &&
+    plan.state === 'draft' &&
+    plan.incomplete_execution_ids.length
+  )
+    return 'Baseline attempt incomplete · retry available'
+  return plan.state.replaceAll('_', ' ')
+}
+
+type PlanRunRole = 'baseline' | 'candidate'
+
+type PlanRunFeedback = {
+  role: PlanRunRole
+  phase: 'starting' | 'running' | 'error'
+  message: string
+  executionId: string | null
+}
+
+type PlanNextAction = {
+  title: string
+  detail: string
+  role: PlanRunRole | null
+  actionLabel: string
+  executionId: string | null
+  state: 'ready' | 'running' | 'complete'
+}
+
+function roleLabel(role: PlanRunRole) {
+  return role === 'baseline' ? 'Baseline' : 'Candidate'
+}
+
+function isRoleRunning(plan: LocalPlan, role: PlanRunRole) {
+  return plan.state === `${role}_running`
+}
+
+function nextPlanAction(plan: LocalPlan): PlanNextAction {
+  if (isRoleRunning(plan, 'baseline')) {
+    return {
+      title: 'Baseline is running',
+      detail:
+        'The locked scope is executing. Wait for its report before starting a candidate.',
+      role: null,
+      actionLabel: 'View active execution',
+      executionId: plan.last_attempt_id,
+      state: 'running',
+    }
+  }
+  if (isRoleRunning(plan, 'candidate')) {
+    return {
+      title: 'Candidate is running',
+      detail:
+        'The same locked scope is executing against the captured baseline. This page refreshes automatically.',
+      role: null,
+      actionLabel: 'View active execution',
+      executionId: plan.last_attempt_id,
+      state: 'running',
+    }
+  }
+  if (!plan.baseline_execution_id) {
+    const retry = plan.incomplete_execution_ids.length > 0
+    return {
+      title: retry ? 'Retry the baseline' : 'Capture the baseline',
+      detail: retry
+        ? 'The previous attempt did not produce a report. Retry the same locked scope.'
+        : 'Run this scope before the Harness change. Starting it freezes the scope, seeds and policy.',
+      role: 'baseline',
+      actionLabel: retry ? 'Retry baseline' : 'Run baseline',
+      executionId: null,
+      state: 'ready',
+    }
+  }
+  if (plan.candidate_execution_ids.length > 0) {
+    const latestCandidate = plan.candidate_execution_ids.at(-1) ?? null
+    return {
+      title: 'Candidate results are ready',
+      detail:
+        'Review the latest execution first. You can run another candidate later with this same locked scope.',
+      role: 'candidate',
+      actionLabel: 'View latest candidate',
+      executionId: latestCandidate,
+      state: 'complete',
+    }
+  }
+  return {
+    title: 'Run the candidate',
+    detail:
+      'Make the Harness change, then rerun this exact scope to produce a local comparison.',
+    role: 'candidate',
+    actionLabel: 'Run candidate',
+    executionId: null,
+    state: 'ready',
+  }
+}
+
+export function PlanLifecycle({
+  plan,
+  starting,
+  feedback,
+  onStart,
+}: {
+  plan: LocalPlan
+  starting: PlanRunRole | null
+  feedback: PlanRunFeedback | null
+  onStart: (role: PlanRunRole) => void
+}) {
+  const runningRole: PlanRunRole | null = isRoleRunning(plan, 'baseline')
+    ? 'baseline'
+    : isRoleRunning(plan, 'candidate')
+      ? 'candidate'
+      : null
+  const activeFeedback =
+    feedback && feedback.phase !== 'running' ? feedback : null
+  const nextAction = nextPlanAction(plan)
+  const canStart =
+    nextAction.role !== null && starting === null && runningRole === null
+
+  return (
+    <section
+      className="panel plan-panel-composite plan-lifecycle-panel"
+      aria-labelledby="plan-lifecycle-title"
+    >
+      <div className="panel-heading plan-panel-heading">
+        <div>
+          <div className="section-kicker">Execution controls</div>
+          <h2 id="plan-lifecycle-title">Plan actions</h2>
+        </div>
+        {plan.locked && <span className="status-pill status-pass">Locked</span>}
+      </div>
+      <div
+        className={`plan-next-action plan-next-action-${nextAction.state}`}
+        aria-live="polite"
+      >
+        <div>
+          <span className="section-kicker">Next action</span>
+          <h3>{nextAction.title}</h3>
+          <p>{nextAction.detail}</p>
+        </div>
+        <div className="plan-next-action-controls">
+          {nextAction.executionId ? (
+            <a
+              className="button button-primary"
+              href={hashForExecution(nextAction.executionId)}
+            >
+              {nextAction.actionLabel}
+            </a>
+          ) : nextAction.role ? (
+            <button
+              className="button button-primary"
+              type="button"
+              onClick={() => onStart(nextAction.role as PlanRunRole)}
+              disabled={!canStart}
+            >
+              {starting === nextAction.role
+                ? `Starting ${roleLabel(nextAction.role).toLowerCase()}…`
+                : nextAction.actionLabel}
+            </button>
+          ) : null}
+          {nextAction.state === 'complete' && (
+            <>
+              {plan.baseline_execution_id && (
+                <a
+                  className="button button-secondary"
+                  href={hashForExecution(plan.baseline_execution_id)}
+                >
+                  View baseline execution
+                </a>
+              )}
+              <button
+                className="button button-secondary"
+                type="button"
+                onClick={() => onStart('candidate')}
+                disabled={starting !== null || runningRole !== null}
+              >
+                Run another candidate
+              </button>
+            </>
+          )}
+        </div>
+      </div>
+      {activeFeedback && (
+        <div
+          className={`plan-run-feedback plan-run-feedback-${activeFeedback.phase}`}
+          role={activeFeedback.phase === 'error' ? 'alert' : 'status'}
+          aria-live="polite"
+        >
+          <span aria-hidden="true">
+            {activeFeedback.phase === 'error' ? '!' : '•'}
+          </span>
+          <div>
+            <strong>{activeFeedback.message}</strong>
+            {activeFeedback.executionId && (
+              <a href={hashForExecution(activeFeedback.executionId)}>
+                Open active execution →
+              </a>
+            )}
+          </div>
+        </div>
+      )}
+    </section>
+  )
+}
+
+const planVerdictPresentation: Record<
+  PlanVerdict,
+  { label: string; tone: string }
+> = {
+  improved: { label: 'Improved', tone: 'status-pass' },
+  stable: { label: 'Stable', tone: 'status-neutral' },
+  regressed: { label: 'Regressed', tone: 'status-fail' },
+  inconclusive: { label: 'Inconclusive', tone: 'status-incomplete' },
+}
+
+function executionStatus(
+  summary: DashboardExecutionSummary | null,
+  fallback: 'running' | 'incomplete' | null = null,
+) {
+  if (!summary) {
+    return fallback === 'running'
+      ? { label: 'Running', tone: 'status-incomplete' }
+      : fallback === 'incomplete'
+        ? { label: 'Incomplete', tone: 'status-incomplete' }
+        : { label: 'Unavailable', tone: 'status-neutral' }
+  }
+  const state = buildExecutionPresentation(summary).attention
+  if (state === 'passed') return { label: 'Passed', tone: 'status-pass' }
+  if (state === 'needs_attention')
+    return { label: 'Needs attention', tone: 'status-fail' }
+  if (state === 'running' || state === 'cancelling')
+    return { label: titleCase(state), tone: 'status-incomplete' }
+  return { label: titleCase(state), tone: 'status-neutral' }
+}
+
+function summaryMetric(
+  summary: DashboardExecutionSummary | null,
+  id: 'pass_rate' | 'quality' | 'tokens' | 'duration' | 'cost',
+) {
+  if (!summary) return 'Not reported'
+  const metric = metricById(buildPlanComparison(summary, summary), id)
+  return metric ? formatPlanMetricValue(metric, 'baseline') : 'Not reported'
+}
+
+type ExecutionHistoryRow = {
+  id: string
+  role: 'baseline' | 'candidate' | 'attempt'
+  label: string
+  detail: string
+  summary: DashboardExecutionSummary | null
+  fallback: 'running' | 'incomplete' | null
+  candidateNumber: number | null
+}
+
+function executionHistoryRows(
+  plan: LocalPlan,
+  summaries: Record<string, DashboardExecutionSummary>,
+): ExecutionHistoryRow[] {
+  const rows: ExecutionHistoryRow[] = []
+  const retained = new Set<string>()
+  if (plan.baseline_execution_id) {
+    retained.add(plan.baseline_execution_id)
+    rows.push({
+      id: plan.baseline_execution_id,
+      role: 'baseline',
+      label: 'Baseline',
+      detail: 'Locked reference',
+      summary: summaries[plan.baseline_execution_id] ?? null,
+      fallback: null,
+      candidateNumber: null,
+    })
+  }
+  if (
+    plan.last_attempt_id &&
+    ['baseline_running', 'candidate_running'].includes(plan.state)
+  ) {
+    retained.add(plan.last_attempt_id)
+    const baselineRun = plan.state === 'baseline_running'
+    rows.push({
+      id: plan.last_attempt_id,
+      role: baselineRun ? 'baseline' : 'candidate',
+      label: baselineRun ? 'Baseline in progress' : 'Candidate in progress',
+      detail: 'Active execution',
+      summary: summaries[plan.last_attempt_id] ?? null,
+      fallback: 'running',
+      candidateNumber: null,
+    })
+  }
+  for (
+    let index = plan.candidate_execution_ids.length - 1;
+    index >= 0;
+    index--
+  ) {
+    const id = plan.candidate_execution_ids[index]
+    retained.add(id)
+    rows.push({
+      id,
+      role: 'candidate',
+      label: `Candidate #${index + 1}`,
+      detail: index === plan.candidate_execution_ids.length - 1 ? 'Latest' : '',
+      summary: summaries[id] ?? null,
+      fallback: null,
+      candidateNumber: index + 1,
+    })
+  }
+  for (const id of [...plan.incomplete_execution_ids].reverse()) {
+    if (retained.has(id)) continue
+    rows.push({
+      id,
+      role: 'attempt',
+      label: 'Incomplete attempt',
+      detail: 'Excluded from comparison',
+      summary: summaries[id] ?? null,
+      fallback: 'incomplete',
+      candidateNumber: null,
+    })
+  }
+  return rows
+}
+
+export function selectedPlanCandidate(
+  current: string | null,
+  pinned: boolean,
+  candidateIds: string[],
+) {
+  if (pinned && current && candidateIds.includes(current)) return current
+  return candidateIds.at(-1) ?? null
+}
+
+export function PlanExecutionHistory({
+  plan,
+  summaries,
+  selectedCandidateId,
+  onSelectCandidate,
+  loading,
+  error = null,
+}: {
+  plan: LocalPlan
+  summaries: Record<string, DashboardExecutionSummary>
+  selectedCandidateId: string | null
+  onSelectCandidate: (id: string) => void
+  loading: boolean
+  error?: string | null
+}) {
+  const rows = executionHistoryRows(plan, summaries)
+  return (
+    <section
+      className="panel plan-panel-composite plan-execution-history-panel"
+      aria-labelledby="plan-execution-history-title"
+    >
+      <div className="panel-heading plan-panel-heading">
+        <div>
+          <div className="section-kicker">Execution history</div>
+          <h2 id="plan-execution-history-title">Runs in this plan</h2>
+          <p>
+            The baseline is fixed. Select any completed candidate to compare its
+            retained evidence.
+          </p>
+        </div>
+        <span className="coverage-note">
+          {loading
+            ? 'Loading…'
+            : `${rows.length} execution${rows.length === 1 ? '' : 's'}`}
+        </span>
+      </div>
+      {error && (
+        <div className="plan-panel-section plan-history-error" role="status">
+          Execution summaries could not be loaded. Retained IDs and report links
+          remain available. <span>{error}</span>
+        </div>
+      )}
+      {rows.length === 0 ? (
+        <div className="plan-panel-section plan-panel-empty">
+          <strong>No execution has started</strong>
+          <p>Capture the baseline to begin this plan history.</p>
+        </div>
+      ) : (
+        <div className="plan-execution-table-wrap">
+          <table className="plan-execution-table">
+            <thead>
+              <tr>
+                <th scope="col">Execution</th>
+                <th scope="col">Date</th>
+                <th scope="col">Result</th>
+                <th scope="col">Pass rate</th>
+                <th scope="col">Quality</th>
+                <th scope="col">Tokens</th>
+                <th scope="col">Duration</th>
+                <th scope="col">Cost</th>
+                <th scope="col">Actions</th>
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map((row) => {
+                const status = executionStatus(row.summary, row.fallback)
+                const selected = row.id === selectedCandidateId
+                return (
+                  <tr
+                    className={selected ? 'is-selected' : undefined}
+                    key={`${row.role}:${row.id}`}
+                  >
+                    <th scope="row" data-label="Execution">
+                      <strong>{row.label}</strong>
+                      <span>{row.detail}</span>
+                      <code title={row.id}>{row.id}</code>
+                    </th>
+                    <td data-label="Date">
+                      <time>
+                        {row.summary?.completed_at
+                          ? formatDate(row.summary.completed_at)
+                          : row.fallback === 'running'
+                            ? 'Running now'
+                            : 'Date unavailable'}
+                      </time>
+                    </td>
+                    <td data-label="Result">
+                      <span className={`status-pill ${status.tone}`}>
+                        {status.label}
+                      </span>
+                    </td>
+                    <td data-label="Pass rate">
+                      {summaryMetric(row.summary, 'pass_rate')}
+                    </td>
+                    <td data-label="Quality">
+                      {summaryMetric(row.summary, 'quality')}
+                    </td>
+                    <td data-label="Tokens">
+                      {summaryMetric(row.summary, 'tokens')}
+                    </td>
+                    <td data-label="Duration">
+                      {summaryMetric(row.summary, 'duration')}
+                    </td>
+                    <td data-label="Cost">
+                      {summaryMetric(row.summary, 'cost')}
+                    </td>
+                    <td data-label="Actions">
+                      <div className="plan-execution-actions">
+                        {row.candidateNumber !== null && (
+                          <button
+                            className="button button-secondary"
+                            type="button"
+                            aria-pressed={selected}
+                            onClick={() => onSelectCandidate(row.id)}
+                          >
+                            {selected ? 'Comparing' : 'Compare with baseline'}
+                          </button>
+                        )}
+                        <a
+                          className="plan-execution-report-link"
+                          href={hashForExecution(row.id)}
+                        >
+                          View report
+                        </a>
+                      </div>
+                    </td>
+                  </tr>
+                )
+              })}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </section>
+  )
+}
+
+function ComparisonMetricCard({ metric }: { metric: PlanMetricComparison }) {
+  return (
+    <article className="plan-comparison-metric-card">
+      <span>{metric.label}</span>
+      <div className="plan-comparison-metric-values">
+        <span>
+          <small>Baseline</small>
+          <strong>{formatPlanMetricValue(metric, 'baseline')}</strong>
+        </span>
+        <i aria-hidden="true">→</i>
+        <span>
+          <small>Candidate</small>
+          <strong>{formatPlanMetricValue(metric, 'candidate')}</strong>
+        </span>
+      </div>
+      <b className={`metric-tone-${metric.tone}`}>
+        {formatPlanMetricDelta(metric)}
+      </b>
+    </article>
+  )
+}
+
+function ScenarioMetric({
+  scenario,
+  id,
+}: {
+  scenario: PlanScenarioComparison
+  id: 'pass_rate' | 'quality' | 'tokens' | 'duration'
+}) {
+  const metric = scenario.metrics.find((item) => item.id === id)
+  if (!metric) return <span>Not reported</span>
+  return (
+    <span className="plan-scenario-metric">
+      <span>
+        {formatPlanMetricValue(metric, 'baseline')} →{' '}
+        {formatPlanMetricValue(metric, 'candidate')}
+      </span>
+      <small className={`metric-tone-${metric.tone}`}>
+        {formatPlanMetricDelta(metric)}
+      </small>
+    </span>
+  )
+}
+
+function PlanScenarioComparisonTable({
+  scenarios,
+}: {
+  scenarios: PlanScenarioComparison[]
+}) {
+  if (scenarios.length === 0) return null
+  return (
+    <div className="plan-scenario-comparison">
+      <div className="plan-scenario-comparison-heading">
+        <div>
+          <div className="section-kicker">Test breakdown</div>
+          <h3>Comparable scope by test</h3>
+        </div>
+        <span>{scenarios.length} tests</span>
+      </div>
+      <div className="plan-scenario-table-wrap">
+        <table className="plan-scenario-table">
+          <thead>
+            <tr>
+              <th scope="col">Test</th>
+              <th scope="col">Objective result</th>
+              <th scope="col">Pass rate</th>
+              <th scope="col">Quality</th>
+              <th scope="col">Tokens</th>
+              <th scope="col">Duration</th>
+            </tr>
+          </thead>
+          <tbody>
+            {scenarios.map((scenario) => (
+              <tr key={scenario.id}>
+                <th scope="row" data-label="Test">
+                  <strong>{scenarioName(scenario.id)}</strong>
+                  <code>{scenario.id}</code>
+                  {!scenario.compatible && <small>{scenario.reason}</small>}
+                </th>
+                <td data-label="Objective result">
+                  <span>
+                    {titleCase(scenario.baseline_status)} →{' '}
+                    {titleCase(scenario.candidate_status)}
+                  </span>
+                </td>
+                <td data-label="Pass rate">
+                  <ScenarioMetric scenario={scenario} id="pass_rate" />
+                </td>
+                <td data-label="Quality">
+                  <ScenarioMetric scenario={scenario} id="quality" />
+                </td>
+                <td data-label="Tokens">
+                  <ScenarioMetric scenario={scenario} id="tokens" />
+                </td>
+                <td data-label="Duration">
+                  <ScenarioMetric scenario={scenario} id="duration" />
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  )
+}
+
+export function PlanComparisonPanel({
+  comparison,
+  baselineExecutionId,
+  candidateExecutionId,
+  candidateNumber,
+  loading,
+  error,
+}: {
+  comparison: PlanComparison | null
+  baselineExecutionId: string | null
+  candidateExecutionId: string | null
+  candidateNumber: number | null
+  loading: boolean
+  error: string | null
+}) {
+  if (!baselineExecutionId || !candidateExecutionId) {
+    return (
+      <section className="panel plan-panel-padded plan-comparison-empty">
+        <div className="section-kicker">Execution comparison</div>
+        <h2>Baseline vs candidate</h2>
+        <p>
+          Complete a baseline and at least one candidate to calculate objective
+          and directional deltas.
+        </p>
+      </section>
+    )
+  }
+  if (loading) {
+    return (
+      <section className="panel plan-panel-padded" aria-live="polite">
+        <div className="section-kicker">Execution comparison</div>
+        <h2>Loading baseline and candidate…</h2>
+      </section>
+    )
+  }
+  if (error || !comparison) {
+    return (
+      <section className="panel plan-panel-padded" role="alert">
+        <div className="section-kicker">Execution comparison</div>
+        <h2>Comparison unavailable</h2>
+        <p>{error || 'The retained execution details could not be read.'}</p>
+      </section>
+    )
+  }
+  const verdict = planVerdictPresentation[comparison.verdict]
+  return (
+    <section
+      className={`panel plan-panel-composite plan-comparison-panel plan-comparison-${comparison.verdict}`}
+      aria-labelledby="plan-comparison-title"
+      aria-live="polite"
+      tabIndex={-1}
+    >
+      <div className="panel-heading plan-panel-heading">
+        <div>
+          <div className="section-kicker">Execution comparison</div>
+          <h2 id="plan-comparison-title">
+            Baseline vs Candidate #{candidateNumber ?? '—'}
+          </h2>
+          <strong className="plan-comparison-headline">
+            {comparison.headline}
+          </strong>
+          <p>{comparison.detail}</p>
+        </div>
+        <span className={`status-pill ${verdict.tone}`}>{verdict.label}</span>
+      </div>
+      <div className="plan-comparison-provenance plan-panel-section">
+        <a href={hashForExecution(baselineExecutionId)}>
+          <span>Baseline</span>
+          <code>{baselineExecutionId}</code>
+        </a>
+        <i aria-hidden="true">→</i>
+        <a href={hashForExecution(candidateExecutionId)}>
+          <span>Candidate #{candidateNumber ?? '—'}</span>
+          <code>{candidateExecutionId}</code>
+        </a>
+      </div>
+      <div className="plan-comparison-metrics plan-panel-section">
+        {PLAN_DETAIL_METRICS.map((id) => {
+          const metric = metricById(comparison, id)
+          return metric ? (
+            <ComparisonMetricCard key={id} metric={metric} />
+          ) : null
+        })}
+      </div>
+      <div className="plan-panel-section">
+        <PlanScenarioComparisonTable scenarios={comparison.scenarios} />
+      </div>
+    </section>
+  )
+}
+
+function PlanHeader({ local = true }: { local?: boolean }) {
+  return (
+    <header className="topbar">
+      <a
+        className="brand"
+        href={hashForWorkspace()}
+        aria-label="Harness E2E dashboard"
+      >
+        <span className="brand-copy">
+          <strong>iii</strong>
+          <span>Harness benchmarks</span>
+        </span>
+      </a>
+      <nav className="topbar-actions" aria-label="Plan actions">
+        <a
+          className="button button-secondary"
+          href={hashForWorkspace()}
+          data-mobile-label="Overview"
+        >
+          Overview
+        </a>
+        <a
+          className="button button-secondary"
+          href={hashForPlans()}
+          data-mobile-label="Plans"
+        >
+          Plans
+        </a>
+        {local && (
+          <a
+            className="button button-secondary"
+            href={hashForWorkspace('tests')}
+            data-mobile-label="Tests"
+          >
+            Test catalog
+          </a>
+        )}
+        <ThemeToggle />
+      </nav>
+    </header>
+  )
+}
+
+export function LocalPlanCreatePage() {
+  const [bridge, setBridge] = useState<DashboardDataBridge | null>(null)
+  const [catalog, setCatalog] = useState<Catalog | null>(null)
+  const [label, setLabel] = useState('')
+  const [purpose, setPurpose] = useState('')
+  const [url, setUrl] = useState('')
+  const [subject, setSubject] = useState('')
+  const [judge, setJudge] = useState('')
+  const [scenarios, setScenarios] = useState<string[]>([])
+  const [testQuery, setTestQuery] = useState('')
+  const [runs, setRuns] = useState('1')
+  const [technicalRetries, setTechnicalRetries] = useState('1')
+  const [seed, setSeed] = useState('')
+  const [loading, setLoading] = useState(true)
+  const [submitting, setSubmitting] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+
+  useEffect(() => {
+    let cancelled = false
+    void getDashboardDataBridge()
+      .then(async (next) => {
+        if (cancelled) return
+        setBridge(next)
+        if (next.mode !== 'local')
+          throw new Error(
+            'Local plans are available only in the local dashboard',
+          )
+        const loaded = catalogValue(await next.getCatalog())
+        if (cancelled) return
+        setCatalog(loaded)
+        setUrl(loaded.url)
+        setSubject(
+          loaded.models[0]
+            ? `${loaded.models[0].provider}\n${loaded.models[0].model}`
+            : '',
+        )
+      })
+      .catch((cause) => {
+        if (!cancelled) setError(errorText(cause))
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [])
+
+  const selectedSubject = catalog?.models.find(
+    (item) => `${item.provider}\n${item.model}` === subject,
+  )
+  const selectedJudge = catalog?.models.find(
+    (item) => `${item.provider}\n${item.model}` === judge,
+  )
+  const groupedModels = useMemo(
+    () => modelGroups(catalog?.models ?? []),
+    [catalog],
+  )
+  const visibleScenarios = useMemo(() => {
+    const query = testQuery.trim().toLocaleLowerCase()
+    const all = catalog?.scenarios ?? []
+    if (!query) return all
+    return all.filter((scenario) =>
+      `${scenario} ${scenarioName(scenario)}`
+        .toLocaleLowerCase()
+        .includes(query),
+    )
+  }, [catalog?.scenarios, testQuery])
+  const runsPerTest = Math.max(1, Number(runs) || 1)
+  const retryCount = Math.max(0, Number(technicalRetries) || 0)
+  const plannedRuns = scenarios.length * runsPerTest
+  const hasPlanLabel = label.trim().length > 0
+  const canCreate =
+    !loading &&
+    !submitting &&
+    Boolean(selectedSubject) &&
+    scenarios.length > 0 &&
+    hasPlanLabel
+
+  const toggleScenario = (scenario: string, checked: boolean) => {
+    setScenarios((current) => {
+      if (checked)
+        return current.includes(scenario) ? current : [...current, scenario]
+      return current.filter((item) => item !== scenario)
+    })
+  }
+
+  const selectVisibleScenarios = () => {
+    setScenarios((current) => [
+      ...current,
+      ...visibleScenarios.filter((scenario) => !current.includes(scenario)),
+    ])
+  }
+
+  const create = async (event: React.FormEvent<HTMLFormElement>) => {
+    event.preventDefault()
+    if (
+      bridge?.mode !== 'local' ||
+      !selectedSubject ||
+      scenarios.length === 0 ||
+      !hasPlanLabel
+    ) {
+      setError(
+        'Add a plan label, choose an execution model and select at least one test.',
+      )
+      return
+    }
+    setSubmitting(true)
+    setError(null)
+    try {
+      const plan = await bridge.createPlan({
+        label: label.trim(),
+        purpose: purpose.trim(),
+        url,
+        model: selectedSubject.model,
+        provider: selectedSubject.provider,
+        judge_model: selectedJudge?.model ?? '',
+        judge_provider: selectedJudge?.provider ?? '',
+        scenarios,
+        runs: runsPerTest,
+        technical_retries: retryCount,
+        seed: seed ? Number(seed) : null,
+      })
+      window.location.hash = hashForPlan(plan.id)
+    } catch (cause) {
+      setError(errorText(cause))
+    } finally {
+      setSubmitting(false)
+    }
+  }
+
+  return (
+    <>
+      <a className="skip-link" href="#plan-create-main">
+        Skip to plan creation
+      </a>
+      <PlanHeader />
+      <main
+        id="plan-create-main"
+        className="page-shell overview-shell plan-create-shell"
+      >
+        <section className="page-heading" aria-labelledby="plan-create-title">
+          <div>
+            <div className="eyebrow">
+              <span className="live-dot" aria-hidden="true" />
+              Local evidence plan
+            </div>
+            <h1 id="plan-create-title">Create a focused local plan</h1>
+            <p>
+              Capture only the tests that matter for this change. The baseline
+              locks this scope; every candidate will reuse it exactly.
+            </p>
+          </div>
+          <div className="sync-block">
+            <span>Evidence default</span>
+            <strong>1 run / test</strong>
+          </div>
+        </section>
+        {error && (
+          <section className="empty-state" role="alert">
+            <h2>Plan cannot be created</h2>
+            <p>{error}</p>
+          </section>
+        )}
+        <section className="panel plan-form-panel">
+          <form className="plan-form" onSubmit={create}>
+            <section
+              className="plan-form-section"
+              aria-labelledby="plan-intent-title"
+            >
+              <div className="plan-form-section-heading">
+                <span>01</span>
+                <div>
+                  <h2 id="plan-intent-title">What are you validating?</h2>
+                  <p>
+                    A short label makes this local evidence easy to find again.
+                  </p>
+                </div>
+              </div>
+              <div className="plan-form-fields plan-form-intent-fields">
+                <label>
+                  <span>Plan label</span>
+                  <input
+                    value={label}
+                    required
+                    maxLength={120}
+                    placeholder="Before harness change"
+                    onChange={(event) => setLabel(event.target.value)}
+                  />
+                </label>
+                <label>
+                  <span>
+                    Purpose <small>optional</small>
+                  </span>
+                  <textarea
+                    value={purpose}
+                    rows={2}
+                    placeholder="Validate the loop-engineering change"
+                    onChange={(event) => setPurpose(event.target.value)}
+                  />
+                </label>
+              </div>
+            </section>
+            <section
+              className="plan-form-section"
+              aria-labelledby="plan-execution-title"
+            >
+              <div className="plan-form-section-heading">
+                <span>02</span>
+                <div>
+                  <h2 id="plan-execution-title">Execution setup</h2>
+                  <p>The subject and judge are recorded with the plan.</p>
+                </div>
+              </div>
+              <div className="plan-form-fields plan-form-execution-fields">
+                <label className="plan-url-field">
+                  <span>iii WebSocket URL</span>
+                  <input
+                    required
+                    value={url}
+                    onChange={(event) => setUrl(event.target.value)}
+                  />
+                </label>
+                <div>
+                  <span>Execution model</span>
+                  <ProviderModelDropdown
+                    required
+                    ariaLabel="Execution model"
+                    value={subject}
+                    disabled={loading}
+                    onChange={setSubject}
+                    groups={groupedModels.map((group) => ({
+                      provider: group.provider,
+                      models: group.models.map((item) => ({
+                        label: item.model,
+                        value: modelKey(item),
+                      })),
+                    }))}
+                    placeholder="Choose a model"
+                  />
+                </div>
+                <div>
+                  <span>
+                    Judge model <small>optional</small>
+                  </span>
+                  <ProviderModelDropdown
+                    ariaLabel="Judge model"
+                    value={judge}
+                    disabled={loading}
+                    onChange={setJudge}
+                    groups={groupedModels.map((group) => ({
+                      provider: group.provider,
+                      models: group.models.map((item) => ({
+                        label: item.model,
+                        value: modelKey(item),
+                      })),
+                    }))}
+                    placeholder="Use default judge"
+                  />
+                </div>
+              </div>
+            </section>
+            <fieldset className="plan-scope-field">
+              <legend>
+                <span>03</span>
+                Tests <small>choose the smallest useful scope</small>
+              </legend>
+              <div className="plan-scope-intro">
+                <div>
+                  <h2>Build the test scope</h2>
+                  <p>
+                    Start empty. Search for the behaviors touched by your
+                    change, then select only those tests.
+                  </p>
+                </div>
+                <output aria-live="polite">
+                  <strong>{scenarios.length}</strong>
+                  <span>
+                    {scenarios.length === 1
+                      ? 'test selected'
+                      : 'tests selected'}
+                    {' · '}
+                    {plannedRuns} logical {plannedRuns === 1 ? 'run' : 'runs'}
+                  </span>
+                </output>
+              </div>
+              <div className="plan-scope-controls">
+                <label className="plan-test-search">
+                  <span>Find a test</span>
+                  <input
+                    type="search"
+                    value={testQuery}
+                    placeholder="Search by name or id"
+                    onChange={(event) => setTestQuery(event.target.value)}
+                  />
+                </label>
+                <div className="plan-scope-actions">
+                  <button
+                    type="button"
+                    onClick={selectVisibleScenarios}
+                    disabled={visibleScenarios.length === 0}
+                  >
+                    Select visible ({visibleScenarios.length})
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setScenarios([])}
+                    disabled={scenarios.length === 0}
+                  >
+                    Clear selection
+                  </button>
+                </div>
+              </div>
+              <div className="plan-test-options">
+                {visibleScenarios.map((scenario) => {
+                  const selected = scenarios.includes(scenario)
+                  return (
+                    <label
+                      className={`plan-test-option${selected ? ' is-selected' : ''}`}
+                      key={scenario}
+                    >
+                      <input
+                        type="checkbox"
+                        checked={selected}
+                        onChange={(event) =>
+                          toggleScenario(scenario, event.target.checked)
+                        }
+                      />
+                      <span className="plan-test-option-copy">
+                        <strong>{scenarioName(scenario)}</strong>
+                        <code>{scenario}</code>
+                      </span>
+                    </label>
+                  )
+                })}
+                {!visibleScenarios.length && (
+                  <p className="plan-test-empty">
+                    No tests match “{testQuery}”. Try another name or clear the
+                    search.
+                  </p>
+                )}
+              </div>
+              <p className="plan-scope-note">
+                The scope becomes immutable when the baseline starts. Technical
+                retries do not add evidence samples.
+              </p>
+            </fieldset>
+            <details className="plan-advanced">
+              <summary>
+                <span className="plan-advanced-summary-copy">
+                  <span>Optional controls</span>
+                  <strong>Sampling and retries</strong>
+                  <small>
+                    Keep the default unless you deliberately need more local
+                    evidence.
+                  </small>
+                </span>
+                <span className="plan-advanced-summary-meta">
+                  {runsPerTest} {runsPerTest === 1 ? 'run' : 'runs'} / test ·{' '}
+                  {retryCount} {retryCount === 1 ? 'retry' : 'retries'}
+                </span>
+              </summary>
+              <div className="plan-advanced-body">
+                <p className="plan-advanced-intro">
+                  Runs create logical evidence samples. Retries only recover a
+                  technical failure and never increase the evidence count.
+                </p>
+                <div className="plan-advanced-grid">
+                  <label className="plan-advanced-control">
+                    <span>
+                      <strong>Runs per test</strong>
+                      <small>default: 1</small>
+                    </span>
+                    <p>
+                      Increase only when you want repeatable local evidence.
+                    </p>
+                    <input
+                      type="number"
+                      min="1"
+                      max="20"
+                      value={runs}
+                      onChange={(event) => setRuns(event.target.value)}
+                    />
+                  </label>
+                  <label className="plan-advanced-control">
+                    <span>
+                      <strong>Technical retries</strong>
+                      <small>default: 1</small>
+                    </span>
+                    <p>Retries a technical failure without adding a sample.</p>
+                    <input
+                      type="number"
+                      min="0"
+                      max="3"
+                      value={technicalRetries}
+                      onChange={(event) =>
+                        setTechnicalRetries(event.target.value)
+                      }
+                    />
+                  </label>
+                  <label className="plan-advanced-control">
+                    <span>
+                      <strong>Seed</strong>
+                      <small>optional</small>
+                    </span>
+                    <p>Leave blank to resolve the canonical case seeds.</p>
+                    <input
+                      type="number"
+                      min="0"
+                      placeholder="Canonical"
+                      value={seed}
+                      onChange={(event) => setSeed(event.target.value)}
+                    />
+                  </label>
+                </div>
+              </div>
+            </details>
+            <div className="plan-form-actions">
+              <p
+                id="plan-create-requirements"
+                className="plan-create-requirements"
+              >
+                {hasPlanLabel && scenarios.length > 0
+                  ? 'Ready to create a draft. The scope stays editable until you start the baseline.'
+                  : `Before creating: ${hasPlanLabel ? 'select at least one test' : 'add a plan label'}${hasPlanLabel || scenarios.length === 0 ? '' : ' and select at least one test'}.`}
+              </p>
+              <a className="button" href={hashForPlans()}>
+                Cancel
+              </a>
+              <button
+                className="button button-primary"
+                type="submit"
+                disabled={!canCreate}
+                aria-describedby="plan-create-requirements"
+              >
+                {submitting ? 'Creating…' : 'Create draft plan'}
+              </button>
+            </div>
+          </form>
+        </section>
+      </main>
+      <footer>
+        <span>Harness E2E · local plans</span>
+        <a href={hashForWorkspace()}>Back to home</a>
+      </footer>
+    </>
+  )
+}
+
+export function LocalPlanDetailPage({ planId }: { planId: string }) {
+  const [bridge, setBridge] = useState<DashboardDataBridge | null>(null)
+  const [plan, setPlan] = useState<LocalPlan | null>(null)
+  const [executionSummaries, setExecutionSummaries] = useState<
+    Record<string, DashboardExecutionSummary>
+  >({})
+  const [historyLoading, setHistoryLoading] = useState(false)
+  const [historyError, setHistoryError] = useState<string | null>(null)
+  const [selectedCandidateId, setSelectedCandidateId] = useState<string | null>(
+    null,
+  )
+  const [candidateSelectionPinned, setCandidateSelectionPinned] =
+    useState(false)
+  const [baselineDetail, setBaselineDetail] =
+    useState<DashboardExecutionDetail | null>(null)
+  const [candidateDetail, setCandidateDetail] =
+    useState<DashboardExecutionDetail | null>(null)
+  const [comparisonLoading, setComparisonLoading] = useState(false)
+  const [comparisonError, setComparisonError] = useState<string | null>(null)
+  const [loadError, setLoadError] = useState<string | null>(null)
+  const [loading, setLoading] = useState(true)
+  const [starting, setStarting] = useState<PlanRunRole | null>(null)
+  const [runFeedback, setRunFeedback] = useState<PlanRunFeedback | null>(null)
+
+  const load = useCallback(async () => {
+    const next = bridge ?? (await getDashboardDataBridge())
+    setBridge(next)
+    if (next.mode !== 'local')
+      throw new Error('Local plans are available only in the local dashboard')
+    setPlan(await next.getPlan(planId))
+  }, [bridge, planId])
+
+  useEffect(() => {
+    void load()
+      .catch((cause) => setLoadError(errorText(cause)))
+      .finally(() => setLoading(false))
+  }, [load])
+  useEffect(() => {
+    if (
+      !plan ||
+      !['baseline_running', 'candidate_running'].includes(plan.state)
+    )
+      return
+    const timer = window.setInterval(() => {
+      void load().catch(() => undefined)
+    }, 2_000)
+    return () => window.clearInterval(timer)
+  }, [load, plan])
+
+  const executionIds = useMemo(
+    () =>
+      [
+        plan?.baseline_execution_id ?? '',
+        ...(plan?.candidate_execution_ids ?? []),
+        ...(plan?.incomplete_execution_ids ?? []),
+        plan?.last_attempt_id ?? '',
+      ].filter(Boolean),
+    [
+      plan?.baseline_execution_id,
+      plan?.candidate_execution_ids,
+      plan?.incomplete_execution_ids,
+      plan?.last_attempt_id,
+    ],
+  )
+
+  useEffect(() => {
+    if (!bridge || !plan) return
+    let cancelled = false
+    setHistoryLoading(true)
+    setHistoryError(null)
+    setSelectedCandidateId((current) =>
+      selectedPlanCandidate(
+        current,
+        candidateSelectionPinned,
+        plan.candidate_execution_ids,
+      ),
+    )
+    void loadExecutionSummaries(bridge.listExecutions, executionIds)
+      .then((summaries) => {
+        if (cancelled) return
+        setExecutionSummaries(summaries)
+      })
+      .catch((cause) => {
+        if (cancelled) return
+        setExecutionSummaries({})
+        setHistoryError(errorText(cause))
+      })
+      .finally(() => {
+        if (!cancelled) setHistoryLoading(false)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [bridge, candidateSelectionPinned, executionIds, plan])
+
+  useEffect(() => {
+    const baselineId = plan?.baseline_execution_id ?? null
+    if (!bridge || !baselineId || !selectedCandidateId) {
+      setBaselineDetail(null)
+      setCandidateDetail(null)
+      setComparisonError(null)
+      setComparisonLoading(false)
+      return
+    }
+    let cancelled = false
+    setComparisonLoading(true)
+    setComparisonError(null)
+    void Promise.all([
+      bridge.getExecution(baselineId),
+      bridge.getExecution(selectedCandidateId),
+    ])
+      .then(([baseline, candidate]) => {
+        if (cancelled) return
+        setBaselineDetail(baseline)
+        setCandidateDetail(candidate)
+      })
+      .catch((cause) => {
+        if (cancelled) return
+        setBaselineDetail(null)
+        setCandidateDetail(null)
+        setComparisonError(errorText(cause))
+      })
+      .finally(() => {
+        if (!cancelled) setComparisonLoading(false)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [bridge, plan?.baseline_execution_id, selectedCandidateId])
+
+  const start = async (role: PlanRunRole) => {
+    if (!bridge || !plan) return
+    setStarting(role)
+    if (role === 'candidate') setCandidateSelectionPinned(false)
+    setRunFeedback({
+      role,
+      phase: 'starting',
+      message: `Starting ${roleLabel(role).toLowerCase()}…`,
+      executionId: null,
+    })
+    try {
+      const nextPlan = await bridge.startPlan(plan.id, role)
+      setPlan(nextPlan)
+      setRunFeedback({
+        role,
+        phase: 'running',
+        message: isRoleRunning(nextPlan, role)
+          ? `${roleLabel(role)} is running. This page refreshes automatically while the report is collected.`
+          : `${roleLabel(role)} started. Check the execution detail for the latest report.`,
+        executionId: nextPlan.last_attempt_id,
+      })
+    } catch (cause) {
+      setRunFeedback({
+        role,
+        phase: 'error',
+        message: `Could not start ${roleLabel(role).toLowerCase()}: ${errorText(cause)}`,
+        executionId: null,
+      })
+    } finally {
+      setStarting(null)
+    }
+  }
+
+  const readiness = useMemo(() => {
+    if (!plan)
+      return {
+        label: 'Loading',
+        tone: 'status-incomplete',
+        detail: 'Reading the local plan.',
+      }
+    if (isRoleRunning(plan, 'baseline'))
+      return {
+        label: 'Baseline in progress',
+        tone: 'status-incomplete',
+        detail:
+          'The baseline is running; candidate actions stay unavailable until its report is complete.',
+      }
+    if (isRoleRunning(plan, 'candidate'))
+      return {
+        label: 'Candidate in progress',
+        tone: 'status-incomplete',
+        detail: 'The locked scope is running against the captured baseline.',
+      }
+    if (!plan.baseline_execution_id)
+      return {
+        label:
+          plan.incomplete_execution_ids.length > 0
+            ? 'Baseline retry available'
+            : 'Baseline required',
+        tone: 'status-incomplete',
+        detail:
+          plan.incomplete_execution_ids.length > 0
+            ? 'The last attempt did not produce a report; retry the same locked scope.'
+            : 'The scope is defined but no completed baseline report exists.',
+      }
+    if (plan.candidate_execution_ids.length > 0)
+      return {
+        label: 'Comparison available',
+        tone: 'status-neutral',
+        detail:
+          'Candidate reports are ready to inspect against the locked baseline.',
+      }
+    if (plan.incomplete_execution_ids.length)
+      return {
+        label: 'Candidate retry available',
+        tone: 'status-neutral',
+        detail:
+          'An incomplete attempt is retained for diagnosis, but it does not block a retry or count as comparison evidence.',
+      }
+    return {
+      label: 'Scope ready',
+      tone: 'status-neutral',
+      detail:
+        'Baseline and locked scope are structurally ready for a candidate.',
+    }
+  }, [plan])
+
+  const comparison = useMemo(() => {
+    if (!plan?.baseline_execution_id || !selectedCandidateId) return null
+    const detailsMatch =
+      baselineDetail?.id === plan.baseline_execution_id &&
+      candidateDetail?.id === selectedCandidateId
+    const baseline = detailsMatch
+      ? baselineDetail
+      : executionSummaries[plan.baseline_execution_id]
+    const candidate = detailsMatch
+      ? candidateDetail
+      : executionSummaries[selectedCandidateId]
+    return buildPlanComparison(
+      baseline,
+      candidate,
+      detailsMatch
+        ? { baseline: baselineDetail, candidate: candidateDetail }
+        : undefined,
+    )
+  }, [
+    baselineDetail,
+    candidateDetail,
+    executionSummaries,
+    plan?.baseline_execution_id,
+    selectedCandidateId,
+  ])
+  const selectedCandidateNumber =
+    plan && selectedCandidateId
+      ? plan.candidate_execution_ids.indexOf(selectedCandidateId) + 1
+      : null
+  const selectCandidate = (id: string) => {
+    setCandidateSelectionPinned(true)
+    setCandidateDetail(null)
+    setComparisonError(null)
+    setComparisonLoading(true)
+    setSelectedCandidateId(id)
+    window.requestAnimationFrame(() => {
+      const panel = document
+        .getElementById('plan-comparison-title')
+        ?.closest<HTMLElement>('section')
+      panel?.focus()
+      panel?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+    })
+  }
+
+  return (
+    <>
+      <a className="skip-link" href="#plan-detail-main">
+        Skip to plan detail
+      </a>
+      <PlanHeader />
+      <main
+        id="plan-detail-main"
+        className="page-shell overview-shell plan-detail-shell"
+      >
+        {loading && (
+          <section className="panel plan-panel-padded">
+            <p className="table-empty">Loading plan…</p>
+          </section>
+        )}
+        {loadError && !plan && (
+          <section className="empty-state" role="alert">
+            <h2>Plan unavailable</h2>
+            <p>{loadError}</p>
+            <a className="button" href={hashForNewPlan()}>
+              Create another plan
+            </a>
+          </section>
+        )}
+        {plan && (
+          <>
+            <section
+              className="page-heading"
+              aria-labelledby="plan-detail-title"
+            >
+              <div>
+                <div className="eyebrow">
+                  <span className="live-dot" aria-hidden="true" />
+                  Local plan · {stateLabel(plan)}
+                </div>
+                <h1 id="plan-detail-title">{plan.label || plan.id}</h1>
+                <p>
+                  {plan.purpose ||
+                    'Explicit local baseline and candidate scope.'}
+                </p>
+              </div>
+              <div className="sync-block">
+                <span>Scope state</span>
+                <strong>
+                  {plan.locked ? 'Locked after baseline' : 'Editable draft'}
+                </strong>
+              </div>
+            </section>
+            <section className="plan-status-grid">
+              <article className="panel plan-status-card">
+                <div className="section-kicker">Comparison readiness</div>
+                <strong className={`status-pill ${readiness.tone}`}>
+                  {readiness.label}
+                </strong>
+                <p>{readiness.detail}</p>
+                <small>
+                  Statistical maturity is reported separately; it does not block
+                  a local baseline.
+                </small>
+              </article>
+              <article className="panel plan-status-card">
+                <div className="section-kicker">Scope snapshot</div>
+                <strong>
+                  {plan.scenarios.length} tests · {plan.runs} run
+                  {plan.runs === 1 ? '' : 's'} each
+                </strong>
+                <p>
+                  {plan.model} · {plan.provider}
+                </p>
+                <small>
+                  {plan.judge_model
+                    ? `Judge: ${plan.judge_provider} · ${plan.judge_model}`
+                    : 'Judge: default policy'}
+                </small>
+              </article>
+            </section>
+            <PlanComparisonPanel
+              comparison={comparison}
+              baselineExecutionId={plan.baseline_execution_id}
+              candidateExecutionId={selectedCandidateId}
+              candidateNumber={
+                selectedCandidateNumber && selectedCandidateNumber > 0
+                  ? selectedCandidateNumber
+                  : null
+              }
+              loading={comparisonLoading}
+              error={comparisonError}
+            />
+            <PlanExecutionHistory
+              plan={plan}
+              summaries={executionSummaries}
+              selectedCandidateId={selectedCandidateId}
+              onSelectCandidate={selectCandidate}
+              loading={historyLoading}
+              error={historyError}
+            />
+            <PlanLifecycle
+              plan={plan}
+              starting={starting}
+              feedback={runFeedback}
+              onStart={(role) => void start(role)}
+            />
+          </>
+        )}
+      </main>
+      <footer>
+        <span>Harness E2E · local plan detail</span>
+        <a href={hashForPlans()}>Back to plans</a>
+      </footer>
+    </>
+  )
+}

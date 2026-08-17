@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import type { TestCatalogRow, TestSideSummary } from '@/lib/test-catalog'
 import {
   comparisonUtility,
+  comparisonWarnings,
   hasRetainedEvidence,
   isMoreUsefulComparison,
   matchesResultFilter,
@@ -164,5 +165,27 @@ describe('versioned test catalog view', () => {
     const useful = comparisonUtility([comparable, oneSided])
     expect(isMoreUsefulComparison(useful, weak)).toBe(true)
     expect(isMoreUsefulComparison(weak, useful)).toBe(false)
+  })
+
+  it('explains assessment and analyzer incompatibilities without a score delta', () => {
+    if (!comparable.result) throw new Error('missing fixture result')
+    const result = {
+      ...comparable.result,
+      compatibility: 'assessment_changed' as const,
+      compatibility_reasons: [
+        'assessment_profile_changed',
+        'analyzer_profile_changed',
+      ],
+    }
+    expect(comparisonWarnings(result)).toEqual([
+      expect.objectContaining({
+        title: 'Assessment profile changed',
+        detail: expect.stringContaining('prompt and rubric'),
+      }),
+      expect.objectContaining({
+        title: 'Analyzer profile changed',
+        detail: expect.stringContaining('provider, or model'),
+      }),
+    ])
   })
 })

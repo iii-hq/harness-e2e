@@ -3,6 +3,7 @@ mod assessment_projection;
 mod assets;
 mod bus;
 mod controller;
+mod plans;
 mod presenter;
 mod proxy;
 mod read_model;
@@ -54,6 +55,11 @@ struct Defaults {
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 struct RunRequest {
+    // iii adds this routing metadata when a browser/worker invokes the
+    // function. It is accepted at the boundary but never persisted.
+    #[serde(rename = "_caller_worker_id", default, skip_serializing)]
+    #[schemars(skip)]
+    pub(super) _caller_worker_id: Option<String>,
     #[serde(default)]
     label: String,
     url: String,
@@ -68,6 +74,8 @@ struct RunRequest {
     technical_retries: u8,
     #[serde(default)]
     seed: Option<u64>,
+    #[serde(default)]
+    plan_context: Option<plans::PlanContext>,
 }
 
 #[derive(Debug, Clone, Copy, Deserialize, Serialize, JsonSchema, PartialEq, Eq)]
@@ -97,6 +105,8 @@ struct RunMetadata {
     returncode: Option<i32>,
     error: String,
     request: RunRequest,
+    #[serde(default)]
+    plan_context: Option<plans::PlanContext>,
 }
 
 #[derive(Debug, Serialize, JsonSchema)]
@@ -188,6 +198,7 @@ mod tests {
 
     fn request() -> RunRequest {
         RunRequest {
+            _caller_worker_id: None,
             label: " first run ".into(),
             url: "ws://127.0.0.1:49134".into(),
             model: "model".into(),
@@ -198,6 +209,7 @@ mod tests {
             runs: 1,
             technical_retries: 1,
             seed: Some(42),
+            plan_context: None,
         }
     }
 
@@ -296,6 +308,7 @@ mod tests {
             returncode: Some(0),
             error: String::new(),
             request: request(),
+            plan_context: None,
         }
     }
 
@@ -306,6 +319,18 @@ mod tests {
         assert_eq!(value.label, "first run");
         value.url = "https://example.com".into();
         assert!(validate_request(&mut value).is_err());
+    }
+
+    #[test]
+    fn accepts_engine_caller_metadata_without_persisting_it() {
+        let mut value = serde_json::to_value(request()).expect("request should serialize");
+        value["_caller_worker_id"] = serde_json::json!("browser-worker");
+        let decoded: RunRequest =
+            serde_json::from_value(value).expect("engine metadata should be accepted");
+        assert_eq!(decoded._caller_worker_id.as_deref(), Some("browser-worker"));
+
+        let serialized = serde_json::to_value(decoded).expect("request should serialize");
+        assert!(serialized.get("_caller_worker_id").is_none());
     }
 
     #[test]
@@ -421,6 +446,15 @@ mod tests {
         .enumerate()
         {
             let mut value = report();
+            value.judge = Some(ModelArtifact {
+                model: "judge-model".into(),
+                provider: "judge-provider".into(),
+                context_window: 100,
+                max_output_tokens: 10,
+                supports_tools: Some(false),
+                supports_vision: Some(false),
+            });
+            value.judge_protocol = Some("json".into());
             let execution = &mut value.execution;
             execution.execution_id = format!("execution-{index}");
             execution.completed_at = format!("2026-08-0{}T12:00:02Z", index + 7);
@@ -541,6 +575,105 @@ mod tests {
             .unwrap_err()
             .to_string()
             .contains("stale"));
+
+        let history = model
+            .test_history(super::read_model::TestHistoryRequest {
+                test_id: "direct_answer".into(),
+                test_version: None,
+                limit: Some(1),
+                ..super::read_model::TestHistoryRequest::default()
+            })
+            .unwrap();
+        assert_eq!(history.test_version, 1);
+        assert_eq!(history.total, 2);
+        assert_eq!(history.observations.len(), 1);
+        assert!(history.next_cursor.is_some());
+        assert_eq!(history.series.len(), 2);
+        assert_eq!(history.subject_models.len(), 1);
+        assert_eq!(history.subject_models[0].provider, "provider");
+        assert_eq!(history.subject_models[0].models, vec!["model"]);
+        assert_eq!(history.judge_models.len(), 1);
+        assert_eq!(history.judge_models[0].provider, "judge-provider");
+        assert_eq!(history.judge_models[0].models, vec!["judge-model"]);
+        assert_ne!(
+            history.series[0].system_version_id,
+            history.series[1].system_version_id
+        );
+        assert_eq!(history.observations[0].median_tokens, None);
+        assert!(history.observations[0].median_duration_seconds.is_some());
+        assert_eq!(
+            history.observations[0].harness_revision.as_deref(),
+            Some("0123456789abcdef0123456789abcdef01234567")
+        );
+        assert_eq!(
+            history.observations[0].system_revision.as_deref(),
+            Some("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb")
+        );
+        let filtered = model
+            .test_history(super::read_model::TestHistoryRequest {
+                test_id: "direct_answer".into(),
+                test_version: Some(1),
+                case_id: Some(history.observations[0].case_id.clone()),
+                subject_provider: Some("provider".into()),
+                subject_model: Some("model".into()),
+                judge_provider: Some("judge-provider".into()),
+                judge_model: Some("judge-model".into()),
+                result: Some("passed".into()),
+                ..super::read_model::TestHistoryRequest::default()
+            })
+            .unwrap();
+        assert_eq!(filtered.total, 2);
+        let no_matching_judge = model
+            .test_history(super::read_model::TestHistoryRequest {
+                test_id: "direct_answer".into(),
+                judge_provider: Some("other-provider".into()),
+                ..super::read_model::TestHistoryRequest::default()
+            })
+            .unwrap();
+        assert_eq!(no_matching_judge.total, 0);
+    }
+
+    #[test]
+    fn metric_history_keeps_contracts_in_separate_series() {
+        let root = tempfile::tempdir().unwrap();
+        for (index, max_turns) in [(0, 1), (1, 2)] {
+            let mut value = report();
+            value.execution.execution_id = format!("execution-contract-{index}");
+            value.execution.completed_at = format!("2026-08-0{}T12:00:02Z", index + 7);
+            value.scenarios[0].execution_policy.max_turns = max_turns;
+
+            let mut run_metadata = metadata();
+            run_metadata.id = format!("local-contract-{index}");
+            run_metadata.completed_at = value.execution.completed_at.clone();
+            let run_dir = root.path().join(&run_metadata.id);
+            write_metadata(&run_dir, &run_metadata).unwrap();
+            let manifest = manifest(&value);
+            value.write_to(&run_dir.join("results"), &manifest).unwrap();
+        }
+
+        let model = DashboardReadModel::load(root.path()).unwrap();
+        let history = model
+            .test_history(super::read_model::TestHistoryRequest {
+                test_id: "direct_answer".into(),
+                limit: Some(100),
+                ..super::read_model::TestHistoryRequest::default()
+            })
+            .unwrap();
+
+        assert_eq!(history.total, 2);
+        assert_eq!(history.series.len(), 2);
+        assert_eq!(
+            history
+                .series
+                .iter()
+                .map(|series| series.execution_count)
+                .collect::<Vec<_>>(),
+            vec![1, 1]
+        );
+        assert_ne!(
+            history.observations[0].contract_sha256,
+            history.observations[1].contract_sha256
+        );
     }
 
     #[test]

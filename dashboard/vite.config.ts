@@ -27,7 +27,7 @@ export default defineConfig({
       },
       '/runs': dashboardBackend,
       '/data.js': dashboardBackend,
-      '/executions.js': dashboardBackend,
+      '/executions.json': dashboardBackend,
     },
   },
   test: {

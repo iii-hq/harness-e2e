@@ -191,6 +191,14 @@ execution ids (`from_execution_id` and `to_execution_id`) and writes a unique
 deltas remain disabled when the case set or canonical contract differs.
 
 Deliverable, structural, technical, cost, latency, turns, retries, and work
-amplification deltas remain independent. A tier is not declared reliable until
-minimum sample size, quality thresholds, and explicit p95 cost and wall-time
-budgets all pass.
+amplification deltas remain independent. A tier is repeatable after five local
+runs satisfy the deliverable, structural, and technical thresholds. Cost and
+wall-time are governed primarily by relative regressions against a compatible
+baseline: p95 with twenty complete samples, otherwise the local median.
+Absolute p95 budgets are optional and configured per scenario when a scenario
+has a fixed operational ceiling.
+
+`scenario_budgets` maps a scenario id to optional
+`maximum_p95_cost_usd` and `maximum_p95_wall_time_ms` limits. An absent entry
+means that no absolute ceiling applies; it does not prevent the tier from being
+classified as repeatable.

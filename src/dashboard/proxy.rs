@@ -11,8 +11,8 @@ use tokio_tungstenite::tungstenite::Message as TungMessage;
 
 use super::bus::{
     BROWSER_FUNCTION_PREFIX, CATALOG_GET, CHANGED_TRIGGER, EVALUATED_VERSIONS_LIST,
-    EXECUTIONS_LIST, EXECUTION_GET, RUN_CANCEL, RUN_START, RUN_STATUS, TESTS_LIST,
-    TEST_VERSION_GET,
+    EXECUTIONS_LIST, EXECUTION_GET, PLANS_LIST, PLAN_CREATE, PLAN_GET, PLAN_RUN_START, PLAN_UPDATE,
+    RUN_CANCEL, RUN_START, RUN_STATUS, TESTS_LIST, TEST_HISTORY_GET, TEST_VERSION_GET,
 };
 
 #[derive(Default)]
@@ -164,7 +164,13 @@ fn allowed_invocation(id: &str) -> bool {
             | EVALUATED_VERSIONS_LIST
             | TESTS_LIST
             | TEST_VERSION_GET
+            | TEST_HISTORY_GET
             | CATALOG_GET
+            | PLANS_LIST
+            | PLAN_GET
+            | PLAN_CREATE
+            | PLAN_UPDATE
+            | PLAN_RUN_START
             | RUN_STATUS
             | RUN_START
             | RUN_CANCEL
@@ -224,6 +230,21 @@ mod tests {
         let allowed =
             format!(r#"{{"type":"invokefunction","function_id":"{EXECUTIONS_LIST}","data":{{}}}}"#);
         assert!(filter_browser_text(&allowed, &mut policy).is_some());
+        for function_id in [
+            TEST_HISTORY_GET,
+            PLANS_LIST,
+            PLAN_GET,
+            PLAN_CREATE,
+            PLAN_UPDATE,
+            PLAN_RUN_START,
+        ] {
+            let allowed =
+                format!(r#"{{"type":"invokefunction","function_id":"{function_id}","data":{{}}}}"#);
+            assert!(
+                filter_browser_text(&allowed, &mut policy).is_some(),
+                "{function_id} should be allowed"
+            );
+        }
         assert!(filter_browser_text(
             r#"{"type":"invokefunction","function_id":"shell::exec","data":{}}"#,
             &mut policy,
