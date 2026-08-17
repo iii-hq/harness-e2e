@@ -25,7 +25,7 @@ use crate::fault::{
 };
 use crate::judge::JudgeConfig;
 use crate::longitudinal::{self, ComparisonPolicy, ComparisonResponse};
-use crate::report::{E2eManifestV2, E2eReport};
+use crate::report::{E2eManifest, E2eReport};
 use crate::scenarios::{ComplexityProfile, DeliverableContract, ScenarioId};
 use crate::suite::{
     run_suite, SubjectConfig, SuiteControl, SuiteEvent, SuiteEventEnvelope, SuitePhase,
@@ -33,7 +33,6 @@ use crate::suite::{
 };
 
 pub const CONTROL_CONTRACT_NAME: &str = "e2e-control-plane";
-pub const CONTROL_CONTRACT_VERSION: u32 = 5;
 pub const RUN_ID: &str = "e2e::run";
 pub const STATUS_ID: &str = "e2e::status";
 pub const CANCEL_ID: &str = "e2e::cancel";
@@ -44,8 +43,7 @@ pub const SCENARIOS_LIST_ID: &str = "e2e::scenarios-list";
 pub const FAULT_PLAN_ID: &str = "e2e::fault-plan";
 pub const FAULT_EVALUATE_ID: &str = "e2e::fault-evaluate";
 
-const RECORD_SCOPE: &str = "harness_e2e_execution_v1";
-const EXECUTION_ID_NAMESPACE_VERSION: u32 = 4;
+const RECORD_SCOPE: &str = "harness_e2e_execution";
 const MAX_IDEMPOTENCY_KEY_BYTES: usize = 256;
 const MAX_CONCURRENT_EXECUTIONS: usize = 4;
 
@@ -109,8 +107,8 @@ pub struct ActiveAttempt {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct ExecutionRecord {
-    pub schema_version: u32,
     pub execution_id: String,
     pub idempotency_key: String,
     pub phase: ExecutionPhase,
@@ -129,12 +127,13 @@ pub struct ExecutionRecord {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub report: Option<E2eReport>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub manifest: Option<E2eManifestV2>,
+    pub manifest: Option<E2eManifest>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub archive: Option<DurableArchiveReference>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct RunRequest {
     pub idempotency_key: String,
     #[serde(default = "default_lane")]
@@ -157,13 +156,10 @@ pub struct RunRequest {
     pub technical_retries: u8,
     #[serde(default = "default_progress_interval_seconds")]
     pub progress_interval_seconds: u64,
-    #[serde(default)]
-    pub allow_legacy_control_plane: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct LaneBudget {
-    pub policy_version: u32,
     pub max_cases: u16,
     pub max_runs_per_case: u32,
     pub max_technical_retries: u8,
@@ -209,7 +205,7 @@ pub struct ResultsGetResponse {
     pub phase: ExecutionPhase,
     pub result_path: Option<String>,
     pub report: Option<E2eReport>,
-    pub manifest: Option<E2eManifestV2>,
+    pub manifest: Option<E2eManifest>,
     pub archive: Option<DurableArchiveReference>,
 }
 
@@ -564,7 +560,6 @@ impl ControlPlane {
 
         let now = now();
         let record = ExecutionRecord {
-            schema_version: CONTROL_CONTRACT_VERSION,
             execution_id: execution_id.clone(),
             idempotency_key: request.idempotency_key.clone(),
             phase: ExecutionPhase::Requested,
@@ -636,7 +631,7 @@ impl ControlPlane {
         } else {
             unique_scenarios(&request.scenarios)
         };
-        let judge = judge_config(&request, &scenarios);
+        let judge = Some(judge_config(&request));
         let outcome = run_suite(SuiteRunConfig {
             url: self.inner.url.clone(),
             subject: SubjectConfig {
@@ -652,7 +647,6 @@ impl ControlPlane {
             technical_retries: request.technical_retries,
             progress_interval: (request.progress_interval_seconds > 0)
                 .then(|| Duration::from_secs(request.progress_interval_seconds)),
-            allow_legacy_control_plane: request.allow_legacy_control_plane,
             control: Some(SuiteControl {
                 execution_id: execution_id.clone(),
                 lane: request.lane.clone(),
@@ -983,7 +977,7 @@ impl ControlPlane {
         phase: ExecutionPhase,
         error: String,
         report: Option<E2eReport>,
-        manifest: Option<E2eManifestV2>,
+        manifest: Option<E2eManifest>,
         result_path: Option<String>,
     ) -> Result<()> {
         self.update_record(execution_id, move |record| {
@@ -1083,7 +1077,6 @@ fn register_function(iii: &IIIClient, id: &str, description: &str, registration:
             "internal": true,
             "contract": {
                 "name": CONTROL_CONTRACT_NAME,
-                "version": CONTROL_CONTRACT_VERSION,
                 "capabilities": [id.trim_start_matches("e2e::")],
             }
         })),
@@ -1095,10 +1088,7 @@ fn handler_error(error: anyhow::Error) -> Error {
 }
 
 fn execution_id_for_key(idempotency_key: &str) -> String {
-    let digest = Sha256::digest(
-        format!("{CONTROL_CONTRACT_NAME}:v{EXECUTION_ID_NAMESPACE_VERSION}:{idempotency_key}")
-            .as_bytes(),
-    );
+    let digest = Sha256::digest(format!("{CONTROL_CONTRACT_NAME}:{idempotency_key}").as_bytes());
     format!("{:x}", digest)[..32].to_string()
 }
 
@@ -1199,7 +1189,6 @@ fn lane_budget(lane: &str) -> LaneBudget {
             (24, 1, 1, 10_000)
         };
     LaneBudget {
-        policy_version: 2,
         max_cases,
         max_runs_per_case,
         max_technical_retries,
@@ -1207,14 +1196,8 @@ fn lane_budget(lane: &str) -> LaneBudget {
     }
 }
 
-fn judge_config(request: &RunRequest, scenarios: &[ScenarioId]) -> Option<JudgeConfig> {
-    let required = scenarios
-        .iter()
-        .any(|scenario| scenario.spec("judge-check").needs_judge());
-    if !required && request.judge_model.is_none() && request.judge_provider.is_none() {
-        return None;
-    }
-    Some(JudgeConfig {
+fn judge_config(request: &RunRequest) -> JudgeConfig {
+    JudgeConfig {
         model: request
             .judge_model
             .clone()
@@ -1223,7 +1206,7 @@ fn judge_config(request: &RunRequest, scenarios: &[ScenarioId]) -> Option<JudgeC
             .judge_provider
             .clone()
             .unwrap_or_else(|| request.provider.clone()),
-    })
+    }
 }
 
 fn unique_scenarios(scenarios: &[ScenarioId]) -> Vec<ScenarioId> {
@@ -1324,7 +1307,6 @@ mod tests {
             rotating_seeds: Vec::new(),
             technical_retries: 1,
             progress_interval_seconds: 15,
-            allow_legacy_control_plane: false,
         }
     }
 
@@ -1395,11 +1377,10 @@ mod tests {
     }
 
     #[test]
-    fn execution_identity_namespace_remains_stable_across_contract_changes() {
-        assert_eq!(EXECUTION_ID_NAMESPACE_VERSION, 4);
+    fn execution_identity_is_stable_for_the_same_idempotency_key() {
         assert_eq!(
             execution_id_for_key("release:123:case"),
-            "9846f803ee7e5f980bacc84ab8295654"
+            "5d26613d37528e723253324a6bf5bd97"
         );
     }
 }

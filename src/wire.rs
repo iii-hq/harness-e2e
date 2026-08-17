@@ -11,9 +11,6 @@ use serde_json::Value;
 
 use crate::artifact::sha256_value;
 
-pub const CONTROL_PLANE_CONTRACT_NAME: &str = "harness-control-plane";
-pub const CONTROL_PLANE_CONTRACT_VERSION: u64 = 1;
-
 /// A normalized view of a wire response together with the exact payload that
 /// produced it. Consumers evaluate the typed view, while reports serialize the
 /// original payload so additive fields are not discarded.
@@ -157,7 +154,7 @@ pub struct SendRequest {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
-pub struct SendResponseV1 {
+pub struct SendResponsePayload {
     pub session_id: String,
     pub turn_id: String,
     pub accepted: bool,
@@ -169,7 +166,7 @@ pub struct SendResponseV1 {
     pub deduplicated: Option<bool>,
 }
 
-pub type SendResponse = Observed<SendResponseV1>;
+pub type SendResponse = Observed<SendResponsePayload>;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
@@ -182,7 +179,7 @@ pub enum TurnStatus {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
-pub struct StatusReportV1 {
+pub struct StatusReportPayload {
     pub session_id: String,
     pub turn_id: Option<String>,
     pub status: TurnStatus,
@@ -205,10 +202,10 @@ pub struct StatusReportV1 {
     pub transient_resumes: u32,
 }
 
-pub type StatusReport = Observed<StatusReportV1>;
+pub type StatusReport = Observed<StatusReportPayload>;
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
-pub struct TurnCompletedEventV1 {
+pub struct TurnCompletedPayload {
     pub session_id: String,
     pub turn_id: String,
     pub status: TurnStatus,
@@ -218,38 +215,38 @@ pub struct TurnCompletedEventV1 {
     pub result_error: Option<String>,
 }
 
-pub type TurnCompletedEvent = Observed<TurnCompletedEventV1>;
+pub type TurnCompletedEvent = Observed<TurnCompletedPayload>;
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
-pub struct SessionTreeNodeV1 {
+pub struct SessionTreeNode {
     pub session_id: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
-pub struct SessionTreeResponseBodyV1 {
+pub struct SessionTreePayload {
     pub root_session_id: String,
-    pub sessions: Vec<SessionTreeNodeV1>,
+    pub sessions: Vec<SessionTreeNode>,
     pub complete: bool,
 }
 
-pub type SessionTreeResponseV1 = Observed<SessionTreeResponseBodyV1>;
+pub type SessionTreeResponse = Observed<SessionTreePayload>;
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
-pub struct StopResponseV1 {
+pub struct StopPayload {
     pub stopping: bool,
 }
 
-pub type StopResponse = Observed<StopResponseV1>;
+pub type StopResponse = Observed<StopPayload>;
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
-pub struct TeardownResponseBodyV1 {
+pub struct TeardownPayload {
     pub removed: u64,
 }
 
-pub type TeardownResponseV1 = Observed<TeardownResponseBodyV1>;
+pub type TeardownResponse = Observed<TeardownPayload>;
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
-pub struct SessionUsageTotalsV1 {
+pub struct SessionUsageTotals {
     pub sessions: u64,
     pub turns: u64,
     pub function_calls: u64,
@@ -275,7 +272,7 @@ pub struct SessionUsageTotalsV1 {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
-pub struct SessionUsageV1 {
+pub struct SessionUsage {
     pub session_id: String,
     #[serde(default)]
     pub parent_session_id: Option<String>,
@@ -306,19 +303,19 @@ pub struct SessionUsageV1 {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
-pub struct SessionMetricsResponseBodyV1 {
+pub struct SessionMetricsPayload {
     pub root_session_id: String,
     pub complete: bool,
-    pub totals: SessionUsageTotalsV1,
-    pub by_session: Vec<SessionUsageV1>,
+    pub totals: SessionUsageTotals,
+    pub by_session: Vec<SessionUsage>,
     #[serde(default)]
     pub traces: Option<Value>,
 }
 
-pub type SessionMetricsResponseV1 = Observed<SessionMetricsResponseBodyV1>;
+pub type SessionMetricsResponse = Observed<SessionMetricsPayload>;
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
-pub struct CatalogModelV1 {
+pub struct CatalogModelPayload {
     pub id: String,
     pub provider: String,
     pub context_window: u64,
@@ -329,12 +326,11 @@ pub struct CatalogModelV1 {
     pub supports_vision: Option<bool>,
 }
 
-pub type Model = Observed<CatalogModelV1>;
+pub type Model = Observed<CatalogModelPayload>;
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct FunctionContractEvidence {
     pub function_id: String,
-    pub contract: Value,
     pub request_schema: Value,
     pub response_schema: Value,
     pub sha256: String,
@@ -342,8 +338,6 @@ pub struct FunctionContractEvidence {
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct ControlPlaneEvidence {
-    pub name: String,
-    pub version: u64,
     pub functions: Vec<FunctionContractEvidence>,
 }
 
@@ -380,7 +374,6 @@ struct SchemaField {
 #[derive(Clone, Copy)]
 struct FunctionRequirement {
     function_id: &'static str,
-    capability: &'static str,
     request: &'static [SchemaField],
     response: &'static [SchemaField],
 }
@@ -627,37 +620,31 @@ const TEARDOWN_RESPONSE: &[SchemaField] = &[SchemaField {
 const CONTROL_PLANE: &[FunctionRequirement] = &[
     FunctionRequirement {
         function_id: "harness::send",
-        capability: "send",
         request: SEND_REQUEST,
         response: SEND_RESPONSE,
     },
     FunctionRequirement {
         function_id: "harness::status",
-        capability: "status",
         request: STATUS_REQUEST,
         response: STATUS_RESPONSE,
     },
     FunctionRequirement {
         function_id: "harness::session-tree",
-        capability: "session-tree",
         request: ROOT_SESSION_REQUEST,
         response: TREE_RESPONSE,
     },
     FunctionRequirement {
         function_id: "harness::metrics",
-        capability: "metrics",
         request: ROOT_SESSION_REQUEST,
         response: METRICS_RESPONSE,
     },
     FunctionRequirement {
         function_id: "harness::stop",
-        capability: "stop",
         request: STATUS_REQUEST,
         response: STOP_RESPONSE,
     },
     FunctionRequirement {
         function_id: "harness::teardown",
-        capability: "teardown",
         request: ROOT_SESSION_REQUEST,
         response: TEARDOWN_RESPONSE,
     },
@@ -669,10 +656,7 @@ pub fn control_plane_function_ids() -> impl Iterator<Item = &'static str> {
         .map(|requirement| requirement.function_id)
 }
 
-pub fn validate_control_plane(
-    raw: &Value,
-    allow_legacy_metadata: bool,
-) -> Result<ControlPlaneEvidence> {
+pub fn validate_control_plane(raw: &Value) -> Result<ControlPlaneEvidence> {
     let functions = raw
         .get("functions")
         .and_then(Value::as_array)
@@ -697,20 +681,6 @@ pub fn validate_control_plane(
                 requirement.function_id
             );
         }
-        let contract = if detail.pointer("/metadata/contract").is_some() || !allow_legacy_metadata {
-            validate_metadata(detail, requirement)?;
-            detail
-                .pointer("/metadata/contract")
-                .cloned()
-                .context("validated contract metadata disappeared")?
-        } else {
-            serde_json::json!({
-                "name": CONTROL_PLANE_CONTRACT_NAME,
-                "version": CONTROL_PLANE_CONTRACT_VERSION,
-                "capabilities": [requirement.capability],
-                "legacy_metadata": true,
-            })
-        };
         validate_schema(detail, "request_schema", requirement.request)
             .with_context(|| format!("{} request contract", requirement.function_id))?;
         validate_schema(detail, "response_schema", requirement.response)
@@ -718,66 +688,19 @@ pub fn validate_control_plane(
         let request_schema = detail["request_schema"].clone();
         let response_schema = detail["response_schema"].clone();
         let sha256 = sha256_value(&serde_json::json!({
-            "contract": contract,
             "request_schema": request_schema,
             "response_schema": response_schema,
         }))?;
         observed.push(FunctionContractEvidence {
             function_id: requirement.function_id.to_string(),
-            contract,
             request_schema,
             response_schema,
             sha256,
         });
     }
     Ok(ControlPlaneEvidence {
-        name: CONTROL_PLANE_CONTRACT_NAME.to_string(),
-        version: CONTROL_PLANE_CONTRACT_VERSION,
         functions: observed,
     })
-}
-
-fn validate_metadata(detail: &Value, requirement: &FunctionRequirement) -> Result<()> {
-    let contract = detail
-        .pointer("/metadata/contract")
-        .with_context(|| format!("{} has no metadata.contract", requirement.function_id))?;
-    let name = contract.get("name").and_then(Value::as_str);
-    if name != Some(CONTROL_PLANE_CONTRACT_NAME) {
-        bail!(
-            "{} advertises contract name {:?}; expected {CONTROL_PLANE_CONTRACT_NAME}",
-            requirement.function_id,
-            name
-        );
-    }
-    let version = contract.get("version").and_then(Value::as_u64);
-    if version != Some(CONTROL_PLANE_CONTRACT_VERSION) {
-        bail!(
-            "{} advertises contract version {:?}; expected {}",
-            requirement.function_id,
-            version,
-            CONTROL_PLANE_CONTRACT_VERSION
-        );
-    }
-    let capabilities = contract
-        .get("capabilities")
-        .and_then(Value::as_array)
-        .with_context(|| {
-            format!(
-                "{} metadata.contract is missing capabilities[]",
-                requirement.function_id
-            )
-        })?;
-    if !capabilities
-        .iter()
-        .any(|capability| capability.as_str() == Some(requirement.capability))
-    {
-        bail!(
-            "{} does not advertise required capability {}",
-            requirement.function_id,
-            requirement.capability
-        );
-    }
-    Ok(())
 }
 
 fn validate_schema(detail: &Value, key: &str, fields: &[SchemaField]) -> Result<()> {
@@ -916,36 +839,7 @@ mod tests {
                 )),
             ]
         });
-        validate_control_plane(&raw, false).unwrap();
-    }
-
-    #[test]
-    fn legacy_mode_still_validates_schemas_when_contract_metadata_is_absent() {
-        let raw = serde_json::json!({
-            "functions": [
-                legacy_schema_fixture(include_str!(
-                    "../tests/golden/schemas/harness.send.json"
-                )),
-                legacy_schema_fixture(include_str!(
-                    "../tests/golden/schemas/harness.status.json"
-                )),
-                legacy_schema_fixture(include_str!(
-                    "../tests/golden/schemas/harness.session-tree.json"
-                )),
-                legacy_schema_fixture(include_str!(
-                    "../tests/golden/schemas/harness.metrics.json"
-                )),
-                legacy_schema_fixture(include_str!(
-                    "../tests/golden/schemas/harness.stop.json"
-                )),
-                legacy_schema_fixture(include_str!(
-                    "../tests/golden/schemas/harness.teardown.json"
-                )),
-            ]
-        });
-        validate_control_plane(&raw, true).unwrap();
-        let strict_error = format!("{:#}", validate_control_plane(&raw, false).unwrap_err());
-        assert!(strict_error.contains("metadata.contract"));
+        validate_control_plane(&raw).unwrap();
     }
 
     #[test]
@@ -956,12 +850,12 @@ mod tests {
         .unwrap();
         let send: SendResponse = serde_json::from_value(fixtures["send"].clone()).unwrap();
         let status: StatusReport = serde_json::from_value(fixtures["status"].clone()).unwrap();
-        let tree: SessionTreeResponseV1 =
+        let tree: SessionTreeResponse =
             serde_json::from_value(fixtures["session_tree"].clone()).unwrap();
-        let metrics: SessionMetricsResponseV1 =
+        let metrics: SessionMetricsResponse =
             serde_json::from_value(fixtures["metrics"].clone()).unwrap();
         let stop: StopResponse = serde_json::from_value(fixtures["stop"].clone()).unwrap();
-        let teardown: TeardownResponseV1 =
+        let teardown: TeardownResponse =
             serde_json::from_value(fixtures["teardown"].clone()).unwrap();
 
         assert!(send.accepted);
@@ -982,7 +876,7 @@ mod tests {
         assert!(response.accepted);
         assert_eq!(serde_json::to_value(&response).unwrap(), fixtures["send"]);
 
-        let metrics: SessionMetricsResponseV1 =
+        let metrics: SessionMetricsResponse =
             serde_json::from_value(fixtures["metrics"].clone()).unwrap();
         assert_eq!(metrics.totals.turns, 1);
         assert_eq!(serde_json::to_value(&metrics).unwrap(), fixtures["metrics"]);
@@ -1020,10 +914,9 @@ mod tests {
             .to_string();
         assert!(missing.contains("accepted"), "unexpected error: {missing}");
 
-        let invalid =
-            serde_json::from_value::<SessionMetricsResponseV1>(fixtures["metrics"].clone())
-                .unwrap_err()
-                .to_string();
+        let invalid = serde_json::from_value::<SessionMetricsResponse>(fixtures["metrics"].clone())
+            .unwrap_err()
+            .to_string();
         assert!(
             invalid.contains("expected u64"),
             "unexpected error: {invalid}"
@@ -1049,7 +942,7 @@ mod tests {
                 )),
             ]
         });
-        let error = format!("{:#}", validate_control_plane(&raw, false).unwrap_err());
+        let error = format!("{:#}", validate_control_plane(&raw).unwrap_err());
         assert!(error.contains("accepted"), "unexpected error: {error}");
         assert!(error.contains("boolean"), "unexpected error: {error}");
     }
@@ -1058,12 +951,6 @@ mod tests {
         let mut fixture: Value = serde_json::from_str(source).unwrap();
         fixture["worker_name"] = Value::String("harness".to_string());
         fixture["registered_triggers"] = Value::Array(Vec::new());
-        fixture
-    }
-
-    fn legacy_schema_fixture(source: &str) -> Value {
-        let mut fixture = schema_fixture(source);
-        fixture["metadata"] = serde_json::json!({ "internal": true });
         fixture
     }
 }

@@ -19,8 +19,6 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
-const LOCAL_SCHEMA_VERSION: u32 = 1;
-
 #[derive(Debug, Clone, Args)]
 pub struct DashboardArgs {
     /// Address used by the local dashboard.
@@ -53,6 +51,7 @@ struct Defaults {
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 struct RunRequest {
     #[serde(default)]
     label: String,
@@ -87,8 +86,8 @@ impl JobStatus {
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 struct RunMetadata {
-    schema_version: u32,
     id: String,
     label: String,
     status: JobStatus,
@@ -173,18 +172,15 @@ mod tests {
         contract_fingerprint, execution_detail_value, execution_summary, load_execution_summaries,
     };
     use super::read_model::{DashboardReadModel, EvaluatedVersionsRequest, TestsListRequest};
-    use super::store::{read_metadata, write_metadata};
+    use super::store::write_metadata;
     use super::*;
     use crate::identity::{ExecutionIdentity, StackIdentity, SystemUnderTestIdentity};
     use crate::report::{
-        CostReport, E2eManifestV2, E2eReport, E2eRunReport, E2eScenarioReport, ModelArtifact,
-        RunStatus, MANIFEST_SCHEMA_VERSION,
+        CostReport, E2eManifest, E2eReport, E2eRunReport, E2eScenarioReport, ModelArtifact,
+        RunStatus,
     };
     use crate::scenarios::ExecutionPolicy;
-    use crate::wire::{
-        ControlPlaneEvidence, FunctionContractEvidence, CONTROL_PLANE_CONTRACT_NAME,
-        CONTROL_PLANE_CONTRACT_VERSION,
-    };
+    use crate::wire::{ControlPlaneEvidence, FunctionContractEvidence};
 
     const TEST_DIGEST: &str =
         "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
@@ -266,19 +262,15 @@ mod tests {
         )
     }
 
-    fn manifest(report: &E2eReport) -> E2eManifestV2 {
-        E2eManifestV2 {
-            schema_version: MANIFEST_SCHEMA_VERSION,
-            execution: report.execution.clone().unwrap(),
-            system_under_test: report.system_under_test.clone().unwrap(),
+    fn manifest(report: &E2eReport) -> E2eManifest {
+        E2eManifest {
+            execution: report.execution.clone(),
+            system_under_test: report.system_under_test.clone(),
             subject: report.subject.clone(),
             judge: report.judge.clone(),
             control_plane: ControlPlaneEvidence {
-                name: CONTROL_PLANE_CONTRACT_NAME.into(),
-                version: CONTROL_PLANE_CONTRACT_VERSION,
                 functions: vec![FunctionContractEvidence {
                     function_id: "harness::status".into(),
-                    contract: json!({"name": CONTROL_PLANE_CONTRACT_NAME, "version": 1}),
                     request_schema: json!({"type": "object"}),
                     response_schema: json!({"type": "object"}),
                     sha256: TEST_DIGEST.into(),
@@ -295,7 +287,6 @@ mod tests {
 
     fn metadata() -> RunMetadata {
         RunMetadata {
-            schema_version: LOCAL_SCHEMA_VERSION,
             id: "local-20260807T120000-abcdef12".into(),
             label: "first run".into(),
             status: JobStatus::Completed,
@@ -365,27 +356,6 @@ mod tests {
     }
 
     #[test]
-    fn legacy_results_keep_unknown_identity_fields_null() {
-        let mut value = serde_json::to_value(report()).unwrap();
-        let object = value.as_object_mut().unwrap();
-        object.remove("schema_version");
-        object.remove("execution");
-        object.remove("system_under_test");
-        object.remove("manifest");
-        object.remove("engine_revision");
-        let legacy: E2eReport = serde_json::from_value(value).unwrap();
-
-        let summary = execution_summary(&metadata(), Some(&legacy)).unwrap();
-        assert_eq!(legacy.schema_version, 1);
-        assert!(summary["source"]["sha"].is_null());
-        assert!(summary["source"]["repository"].is_null());
-        assert!(summary["release"]["stack_versions"].is_null());
-        assert!(summary["stack"]["mode"].is_null());
-        assert!(summary["subjects"][0]["engine_revision"].is_null());
-        assert!(summary["execution"]["head_sha"].is_null());
-    }
-
-    #[test]
     fn contract_fingerprint_matches_the_browser_implementation() {
         let value = json!({
             "case_id": "direct_answer:canonical",
@@ -430,13 +400,13 @@ mod tests {
         .enumerate()
         {
             let mut value = report();
-            let execution = value.execution.as_mut().unwrap();
+            let execution = &mut value.execution;
             execution.execution_id = format!("execution-{index}");
             execution.completed_at = format!("2026-08-0{}T12:00:02Z", index + 7);
             let completed_at = execution.completed_at.clone();
             if let StackIdentity::Source {
                 workers_revision, ..
-            } = &mut value.system_under_test.as_mut().unwrap().stack
+            } = &mut value.system_under_test.stack
             {
                 *workers_revision = revision.into();
             }
@@ -550,16 +520,5 @@ mod tests {
             super::presenter::validate_execution_id("d0be4cb7dcf8561079b673d735715060/extra")
                 .is_err()
         );
-    }
-
-    #[test]
-    fn local_store_rejects_unknown_schema_versions() {
-        let root = tempfile::tempdir().unwrap();
-        let run = root.path().join("local-20260807T120000-abcdef12");
-        let mut metadata = metadata();
-        metadata.schema_version = LOCAL_SCHEMA_VERSION + 1;
-        write_metadata(&run, &metadata).unwrap();
-        let error = read_metadata(&run).unwrap_err();
-        assert!(error.to_string().contains("unsupported local run schema"));
     }
 }

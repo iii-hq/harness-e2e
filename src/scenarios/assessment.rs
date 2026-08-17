@@ -1,8 +1,9 @@
 use anyhow::{bail, Result};
 
+use crate::assessment::{AssessmentKind, AssessmentPolicy, AssessmentSource, DeclaredAssessment};
 use crate::report::{EvaluationDimension, HardGateReport};
 
-use super::{CriterionAward, CriterionSpec, ObjectiveEvaluation};
+use super::{CriterionAward, CriterionSpec, ObjectiveEvaluation, ScenarioSpec};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum GatePolicy {
@@ -153,11 +154,49 @@ impl AssessmentSpec {
     }
 
     fn criterion(self) -> CriterionSpec {
+        let declaration = self.declaration();
         CriterionSpec {
             id: self.id,
             weight: self.weight,
             description: self.description,
+            kind: declaration.kind,
+            policy: declaration.policy,
+            dimension: declaration.dimension,
+            source: declaration.source,
         }
+    }
+
+    fn declaration(self) -> DeclaredAssessment {
+        let (kind, policy) = match self.gate_policy {
+            GatePolicy::HardGated => (AssessmentKind::RequiredCheck, AssessmentPolicy::HardGate),
+            GatePolicy::ScoreOnly => (AssessmentKind::Signal, AssessmentPolicy::Advisory),
+        };
+        DeclaredAssessment {
+            criterion_id: self.id.to_string(),
+            possible: self.weight,
+            description: self.description.to_string(),
+            kind,
+            policy,
+            dimension: self.dimension,
+            source: AssessmentSource::Deterministic,
+        }
+    }
+}
+
+impl ScenarioSpec {
+    pub(crate) fn declared_assessments(&self) -> Vec<DeclaredAssessment> {
+        self.criteria
+            .iter()
+            .map(|criterion| DeclaredAssessment {
+                criterion_id: criterion.id.to_string(),
+                possible: criterion.weight,
+                description: criterion.description.to_string(),
+                kind: criterion.kind,
+                policy: criterion.policy,
+                dimension: criterion.dimension,
+                source: criterion.source,
+            })
+            .collect()
     }
 }
 
@@ -241,9 +280,14 @@ mod tests {
         assert_eq!(criteria[0].id, "required");
         assert_eq!(criteria[0].weight, 70);
         assert_eq!(criteria[0].description, "A required outcome.");
+        assert_eq!(criteria[0].kind, AssessmentKind::RequiredCheck);
+        assert_eq!(criteria[0].policy, AssessmentPolicy::HardGate);
+        assert_eq!(criteria[0].source, AssessmentSource::Deterministic);
         assert_eq!(criteria[1].id, "signal");
         assert_eq!(criteria[1].weight, 30);
         assert_eq!(criteria[1].description, "A quality signal.");
+        assert_eq!(criteria[1].kind, AssessmentKind::Signal);
+        assert_eq!(criteria[1].policy, AssessmentPolicy::Advisory);
         assert_eq!(
             criteria
                 .iter()

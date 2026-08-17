@@ -12,8 +12,6 @@ use crate::report::{
 };
 use crate::scenarios::ComplexityTier;
 
-pub const COMPARISON_POLICY_VERSION: u32 = 1;
-pub const CAPABILITY_POLICY_VERSION: u32 = 1;
 const MINIMUM_ROBUSTNESS_SAMPLE: usize = 5;
 const MINIMUM_TAIL_SAMPLE: usize = 20;
 
@@ -42,7 +40,6 @@ impl Default for RegressionThresholds {
 
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct CapabilityPolicy {
-    pub policy_version: u32,
     pub minimum_sample_size: u32,
     pub tail_minimum_sample_size: u32,
     pub minimum_deliverable_success_rate: f64,
@@ -55,7 +52,6 @@ pub struct CapabilityPolicy {
 impl Default for CapabilityPolicy {
     fn default() -> Self {
         Self {
-            policy_version: CAPABILITY_POLICY_VERSION,
             minimum_sample_size: MINIMUM_ROBUSTNESS_SAMPLE as u32,
             tail_minimum_sample_size: MINIMUM_TAIL_SAMPLE as u32,
             minimum_deliverable_success_rate: 0.90,
@@ -249,9 +245,7 @@ pub struct CapabilityFrontier {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct ComparisonSummary {
-    pub schema_version: u32,
     pub comparison_id: String,
-    pub policy_version: u32,
     pub from_execution_id: String,
     pub to_execution_id: String,
     pub from_revision: Option<String>,
@@ -407,9 +401,7 @@ pub fn compare_reports(
         && cohort.excluded_cases.is_empty()
         && regressions.iter().all(|signal| !signal.blocking);
     let mut summary = ComparisonSummary {
-        schema_version: 2,
         comparison_id: String::new(),
-        policy_version: COMPARISON_POLICY_VERSION,
         from_execution_id: from_execution_id.into(),
         to_execution_id: to_execution_id.into(),
         from_revision: revision(from),
@@ -470,24 +462,17 @@ pub fn write_comparison(
 fn execution_identity(lane: &str, report: &E2eReport) -> ExecutionCohortIdentity {
     ExecutionCohortIdentity {
         lane: lane.into(),
-        stack_mode: report
-            .system_under_test
-            .as_ref()
-            .map(|system| match system.stack {
-                StackIdentity::Source { .. } => "source",
-                StackIdentity::Registry { .. } => "registry",
-            })
-            .unwrap_or("unknown")
-            .into(),
+        stack_mode: match &report.system_under_test.stack {
+            StackIdentity::Source { .. } => "source",
+            StackIdentity::Registry { .. } => "registry",
+        }
+        .into(),
         subject_provider: report.subject.provider.clone(),
         subject_model: report.subject.model.clone(),
         judge_provider: report.judge.as_ref().map(|judge| judge.provider.clone()),
         judge_model: report.judge.as_ref().map(|judge| judge.model.clone()),
         judge_protocol: report.judge_protocol.clone(),
-        e2e_repository: report
-            .system_under_test
-            .as_ref()
-            .map(|system| system.e2e_repository.clone()),
+        e2e_repository: Some(report.system_under_test.e2e_repository.clone()),
     }
 }
 
@@ -1170,7 +1155,7 @@ fn tier_rank(tier: ComplexityTier) -> u8 {
 }
 
 fn revision(report: &E2eReport) -> Option<String> {
-    report.system_under_test.as_ref().and_then(system_revision)
+    system_revision(&report.system_under_test)
 }
 
 fn system_revision(system: &SystemUnderTestIdentity) -> Option<String> {

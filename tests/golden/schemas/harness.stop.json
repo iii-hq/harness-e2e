@@ -1,13 +1,6 @@
 {
   "function_id": "harness::stop",
   "metadata": {
-    "contract": {
-      "capabilities": [
-        "stop"
-      ],
-      "name": "harness-control-plane",
-      "version": 1
-    },
     "internal": true
   },
   "request_schema": {

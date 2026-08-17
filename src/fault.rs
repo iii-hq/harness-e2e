@@ -11,11 +11,6 @@ use sha2::{Digest, Sha256};
 use crate::artifact;
 use crate::report::{E2eReport, EvaluationDimension};
 
-pub const FAULT_PROFILE_SCHEMA_VERSION: u32 = 1;
-pub const FAULT_PLAN_SCHEMA_VERSION: u32 = 1;
-pub const FAULT_JOURNAL_SCHEMA_VERSION: u32 = 1;
-pub const FAULT_EVALUATION_SCHEMA_VERSION: u32 = 1;
-
 const MAX_DELAY_MS: u64 = 120_000;
 const MAX_DISCONNECT_MS: u64 = 300_000;
 const MAX_ACTIONS: usize = 64;
@@ -67,7 +62,6 @@ fn default_cancel_grace_ms() -> u64 {
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct FaultProfile {
-    pub schema_version: u32,
     pub profile_id: String,
     pub seed: u64,
     #[serde(default = "default_expected_outcome")]
@@ -99,13 +93,6 @@ impl FaultProfile {
     }
 
     pub fn validate(&self) -> Result<()> {
-        if self.schema_version != FAULT_PROFILE_SCHEMA_VERSION {
-            bail!(
-                "fault profile schema version {} is unsupported; expected {}",
-                self.schema_version,
-                FAULT_PROFILE_SCHEMA_VERSION
-            );
-        }
         validate_identifier(&self.profile_id, "profile_id")?;
         if !self.max_work_amplification.is_finite() || self.max_work_amplification < 1.0 {
             bail!("max_work_amplification must be finite and at least 1.0");
@@ -239,7 +226,6 @@ impl FaultProfile {
             .map(|(index, action)| action.finish(index as u32 + 1, &profile_sha256))
             .collect();
         Ok(FaultPlan {
-            schema_version: FAULT_PLAN_SCHEMA_VERSION,
             profile_id: self.profile_id.clone(),
             profile_sha256,
             seed: self.seed,
@@ -292,7 +278,6 @@ pub struct FaultAction {
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct FaultPlan {
-    pub schema_version: u32,
     pub profile_id: String,
     pub profile_sha256: String,
     pub seed: u64,
@@ -310,12 +295,6 @@ impl FaultPlan {
     }
 
     pub fn validate(&self) -> Result<()> {
-        if self.schema_version != FAULT_PLAN_SCHEMA_VERSION {
-            bail!(
-                "unsupported fault plan schema version {}",
-                self.schema_version
-            );
-        }
         validate_identifier(&self.profile_id, "profile_id")?;
         validate_sha256(&self.profile_sha256, "profile_sha256")?;
         if self.actions.is_empty() || self.actions.len() > MAX_ACTIONS {
@@ -411,7 +390,6 @@ pub struct FaultObservation {
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct FaultJournal {
-    pub schema_version: u32,
     pub execution_id: String,
     pub lane: String,
     pub profile_sha256: String,
@@ -438,12 +416,6 @@ impl FaultJournal {
     }
 
     pub fn validate(&self) -> Result<()> {
-        if self.schema_version != FAULT_JOURNAL_SCHEMA_VERSION {
-            bail!(
-                "unsupported fault journal schema version {}",
-                self.schema_version
-            );
-        }
         validate_identifier(&self.execution_id, "execution_id")?;
         validate_identifier(&self.lane, "lane")?;
         validate_sha256(&self.profile_sha256, "profile_sha256")?;
@@ -512,7 +484,6 @@ pub enum RecoveryClassification {
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct FaultEvaluation {
-    pub schema_version: u32,
     pub execution_id: String,
     pub profile_id: String,
     pub profile_sha256: String,
@@ -607,10 +578,7 @@ impl FaultEvaluation {
         let mut results_sha256 = None;
         let mut report_work_amplification = None;
         if let Some(report) = report {
-            let execution = report
-                .execution
-                .as_ref()
-                .context("fault evaluation requires canonical execution identity in results v2")?;
+            let execution = &report.execution;
             if execution.execution_id != journal.execution_id {
                 bail!("fault journal and results execution ids differ");
             }
@@ -687,7 +655,6 @@ impl FaultEvaluation {
             reasons.push("all planned perturbations recovered within policy".into());
         }
         Ok(Self {
-            schema_version: FAULT_EVALUATION_SCHEMA_VERSION,
             execution_id: journal.execution_id.clone(),
             profile_id: profile.profile_id.clone(),
             profile_sha256,
@@ -809,14 +776,12 @@ mod tests {
     use crate::report::{
         CostReport, DimensionReport, E2eRunReport, E2eScenarioReport, EfficiencyReport,
         ModelArtifact, ObservedComplexityReport, RobustnessReport, RunStatus, ScenarioAggregate,
-        RESULTS_SCHEMA_VERSION,
     };
     use crate::scenarios::ExecutionPolicy;
     use serde_json::json;
 
     fn profile() -> FaultProfile {
         FaultProfile {
-            schema_version: 1,
             profile_id: "weekly-l5-recovery".into(),
             seed: 44,
             expected_outcome: ExpectedTerminalOutcome::Recovered,
@@ -951,7 +916,6 @@ mod tests {
         });
         let plan = profile.materialize().unwrap();
         let mut journal = FaultJournal {
-            schema_version: 1,
             execution_id: "stress-cancel-1".into(),
             lane: "weekly-stress".into(),
             profile_sha256: profile.sha256().unwrap(),
@@ -1010,7 +974,6 @@ mod tests {
                 },
             ],
             efficiency: Some(EfficiencyReport {
-                policy_version: 1,
                 wall_time_ms: 10,
                 root_turns: Some(1),
                 child_turns: Some(1),
@@ -1036,6 +999,11 @@ mod tests {
             retry_attempts: Vec::new(),
             failures: Vec::new(),
             terminal_status: None,
+            assessment_results: Vec::new(),
+            asset_assessments: Vec::new(),
+            asset_capture_manifest: None,
+            final_assessment_input: None,
+            asset_redaction: Default::default(),
         };
         let scenario = E2eScenarioReport {
             scenario_id: "coordination.4".into(),
@@ -1078,14 +1046,27 @@ mod tests {
             runs: vec![run],
         };
         E2eReport {
-            schema_version: RESULTS_SCHEMA_VERSION,
-            execution: Some(crate::identity::ExecutionIdentity {
+            execution: crate::identity::ExecutionIdentity {
                 execution_id: "execution-1".into(),
                 lane: "weekly-stress".into(),
                 started_at: "2026-08-12T10:00:00Z".into(),
                 completed_at: "2026-08-12T10:01:00Z".into(),
-            }),
-            system_under_test: None,
+            },
+            system_under_test: crate::identity::SystemUnderTestIdentity {
+                stack: crate::identity::StackIdentity::Source {
+                    workers_repository: "iii-hq/workers".into(),
+                    workers_revision: "0123456789abcdef0123456789abcdef01234567".into(),
+                },
+                engine_version: "engine".into(),
+                engine_revision: None,
+                harness_version: "harness".into(),
+                e2e_repository: "iii-hq/harness-e2e".into(),
+                e2e_revision: "0123456789abcdef0123456789abcdef01234567".into(),
+                contract_hashes: BTreeMap::from([(
+                    "harness::send".into(),
+                    format!("sha256:{}", "a".repeat(64)),
+                )]),
+            },
             manifest: None,
             subject: ModelArtifact {
                 model: "model".into(),
@@ -1100,14 +1081,14 @@ mod tests {
             engine_revision: None,
             passed: true,
             redaction: Default::default(),
+            assessment_contract: crate::assessment::AssessmentContract { runs: Vec::new() },
             scenarios: vec![scenario],
         }
     }
 
     fn recovered_journal(plan: &FaultPlan, report: &E2eReport) -> FaultJournal {
         FaultJournal {
-            schema_version: 1,
-            execution_id: report.execution.as_ref().unwrap().execution_id.clone(),
+            execution_id: report.execution.execution_id.clone(),
             lane: "weekly-stress".into(),
             profile_sha256: plan.profile_sha256.clone(),
             started_at: "2026-08-12T10:00:00Z".into(),

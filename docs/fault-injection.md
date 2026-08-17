@@ -5,7 +5,7 @@ evaluates perturbations, while an environment-owned supervisor applies them.
 This boundary prevents code from a source artifact or pull request from gaining
 host, network, provider, or storage credentials.
 
-## Versioned evidence
+## Evidence contracts
 
 Each attempt has four immutable JSON documents:
 

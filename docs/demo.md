@@ -21,7 +21,7 @@ build trusted e2e-worker
   -> admit e2e::run
   -> poll e2e::status
   -> retrieve e2e::results-get
-  -> retain results-v2.json, manifest, transcript, evidence, and deliverables
+  -> retain results.json, manifest, transcript, evidence, and deliverables
 ```
 
 The subject sees Harness functions, not the `e2e::*` supervisor surface. The
@@ -49,19 +49,9 @@ HARNESS_E2E_WORKERS_REVISION=<full-subject-git-sha> \
   ./scripts/demo_e2e_control_plane.sh
 ```
 
-Strict mode requires the versioned Harness wire metadata introduced by the
-contract-surface change. During a coordinated migration, an older running stack
-can be exercised through the explicit compatibility window:
-
-```bash
-HARNESS_E2E_WORKERS_REPOSITORY=iii-hq/workers \
-HARNESS_E2E_WORKERS_REVISION=<full-subject-git-sha> \
-  ./scripts/demo_e2e_control_plane.sh --allow-legacy-control-plane
-```
-
-That flag relaxes only the wire-metadata preflight. Scenario execution,
-deliverable validation, lifecycle gates, evidence capture, and cleanup remain
-real.
+The running Harness must publish request and response schemas compatible with
+the current typed surface. Missing or incompatible fields fail preflight; no
+payload-version compatibility mode exists.
 
 Select another materialized case or model with environment variables:
 
@@ -72,7 +62,7 @@ E2E_PROVIDER=openai-codex \
 E2E_SEED=4404 \
 HARNESS_E2E_WORKERS_REPOSITORY=iii-hq/workers \
 HARNESS_E2E_WORKERS_REVISION=<full-subject-git-sha> \
-./scripts/demo_e2e_control_plane.sh --allow-legacy-control-plane
+./scripts/demo_e2e_control_plane.sh
 ```
 
 ## Evidence to show
@@ -87,8 +77,8 @@ During the demo, point out these checkpoints:
 3. `e2e::status` exposes real phase transitions and the active attempt/session.
 4. `e2e::results-get` returns the canonical report and immutable artifact
    references only after terminal completion.
-5. The run directory contains `results-v2.json`, its compatibility projection,
-   the manifest, raw evidence, transcripts, and captured deliverables.
+5. The run directory contains `results.json`, the manifest, raw evidence,
+   transcripts, and captured deliverables.
 
 The script exits non-zero when the asynchronous operation completes but the
 evaluated scenario does not pass. This distinction prevents a healthy control

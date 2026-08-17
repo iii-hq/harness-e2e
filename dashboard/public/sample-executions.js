@@ -5,8 +5,92 @@
   const benchmark = window.HarnessBenchmarkData.normalizeBenchmarkData(
     window.BENCHMARK_DATA,
   );
-  const derived = executionApi.mergeExecutionHistory(null, benchmark);
-  const executions = derived.executions.map((execution, index) => {
+  function metric(subject, category, scenarioId, metricId) {
+    return subject?.metrics?.[category]?.[scenarioId]?.[metricId]?.value ?? null;
+  }
+
+  const previewExecutions = (benchmark.snapshots || []).map((snapshot) => {
+    const subjects = Object.values(snapshot.subjects || {}).map((subject) => {
+      const scenarioIds = new Set();
+      Object.values(subject.metrics || {}).forEach((category) => {
+        Object.keys(category || {}).forEach((scenarioId) => {
+          if (scenarioId !== "suite") scenarioIds.add(scenarioId);
+        });
+      });
+      const scenarios = [...scenarioIds].sort().map((scenarioId) => {
+        const score = subject.metrics?.quality?.[scenarioId]?.median_score;
+        const passRate = subject.metrics?.quality?.[scenarioId]?.pass_rate;
+        const passed = score?.passed ?? passRate?.passed ?? false;
+        return {
+          id: scenarioId,
+          status: passed ? "passed" : "hard_gate_failed",
+          passed,
+          median_score: score?.value ?? null,
+          pass_rate: passRate?.value == null ? null : passRate.value / 100,
+          hard_gate_failures:
+            metric(subject, "reliability", scenarioId, "hard_gate_failures") ?? 0,
+          technical_failures:
+            metric(subject, "reliability", scenarioId, "technical_failures") ?? 0,
+          retries: metric(subject, "reliability", scenarioId, "retry_attempts") ?? 0,
+          total_cost_usd:
+            metric(subject, "efficiency", scenarioId, "total_cost_usd"),
+          wall_time_seconds:
+            metric(subject, "efficiency", scenarioId, "wall_time_seconds"),
+        };
+      });
+      return {
+        id: subject.id,
+        model: subject.model,
+        provider: subject.provider,
+        judge: subject.judge || {},
+        engine_revision: subject.engineRevision || "",
+        passed: Boolean(subject.passed),
+        expected_reports: scenarios.length,
+        received_reports: scenarios.length,
+        scenario_pass_rate:
+          (metric(subject, "quality", "suite", "scenario_pass_rate") ?? 0) / 100,
+        report_coverage:
+          (metric(subject, "quality", "suite", "report_coverage") ?? 0) / 100,
+        hard_gate_failures:
+          metric(subject, "reliability", "suite", "hard_gate_failures") ?? 0,
+        technical_failures:
+          metric(subject, "reliability", "suite", "technical_failures") ?? 0,
+        retry_attempts:
+          metric(subject, "reliability", "suite", "retry_attempts") ?? 0,
+        total_cost_usd: metric(subject, "efficiency", "suite", "total_cost_usd"),
+        wall_time_seconds:
+          metric(subject, "efficiency", "suite", "wall_time_seconds"),
+        scenarios,
+      };
+    });
+    const scenarios = subjects.flatMap((subject) => subject.scenarios);
+    const passed = subjects.length > 0 && subjects.every((subject) => subject.passed);
+    return {
+      id: snapshot.execution?.id || snapshot.id,
+      run_id: snapshot.execution?.run_id || "",
+      status: passed ? "passed" : "hard_gate_failed",
+      completed_at: snapshot.generatedAt || new Date(snapshot.date).toISOString(),
+      started_at: snapshot.generatedAt || new Date(snapshot.date).toISOString(),
+      lane: snapshot.lane,
+      source: snapshot.source,
+      release: snapshot.release,
+      subjects,
+      totals: {
+        expected_reports: scenarios.length,
+        received_reports: scenarios.length,
+        passed_scenarios: scenarios.filter((scenario) => scenario.passed).length,
+        hard_gate_failures: subjects.reduce(
+          (total, subject) => total + subject.hard_gate_failures,
+          0,
+        ),
+        technical_failures: subjects.reduce(
+          (total, subject) => total + subject.technical_failures,
+          0,
+        ),
+      },
+    };
+  });
+  const executions = previewExecutions.map((execution, index) => {
     const runId = execution.run_id || String(30490000000 - index * 731);
     const id = execution.id || `${runId}-1`;
     return {
@@ -251,7 +335,6 @@
       });
     });
     return {
-      schema_version: 3,
       execution: execution.execution,
       generated_at: execution.completed_at,
       lane: execution.lane,
@@ -275,7 +358,6 @@
   );
 
   window.HARNESS_EXECUTIONS = {
-    schema_version: 3,
     last_update: executions[0]?.completed_at,
     repo_url: "https://github.com/iii-hq/workers",
     retention: { summaries: 100, details: 30 },

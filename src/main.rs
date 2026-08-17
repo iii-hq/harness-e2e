@@ -89,10 +89,6 @@ struct RunArgs {
     )]
     progress_interval_seconds: u64,
 
-    /// Accept a pre-versioned Harness catalog during shadow/parity runs.
-    #[arg(long, env = "HARNESS_E2E_ALLOW_LEGACY_CONTROL_PLANE")]
-    allow_legacy_control_plane: bool,
-
     /// Run only the selected scenario. Repeat to select more than one.
     #[arg(long, value_enum)]
     scenario: Vec<ScenarioId>,
@@ -110,7 +106,7 @@ struct ReportArgs {
 
 #[derive(Debug, Args)]
 struct FaultPlanArgs {
-    /// Versioned FaultProfile JSON.
+    /// FaultProfile JSON.
     #[arg(long)]
     profile: PathBuf,
 
@@ -121,7 +117,7 @@ struct FaultPlanArgs {
 
 #[derive(Debug, Args)]
 struct FaultEvaluateArgs {
-    /// Versioned FaultProfile JSON.
+    /// FaultProfile JSON.
     #[arg(long)]
     profile: PathBuf,
 
@@ -133,7 +129,7 @@ struct FaultEvaluateArgs {
     #[arg(long)]
     journal: PathBuf,
 
-    /// Canonical results-v2.json or its containing directory. Omit for cancellation drills.
+    /// Canonical results.json or its containing directory. Omit for cancellation drills.
     #[arg(long)]
     results: Option<PathBuf>,
 
@@ -232,14 +228,11 @@ async fn run(args: RunArgs) -> Result<()> {
         model: args.model,
         provider: args.provider,
     };
-    let judge = judge_config(
+    let judge = Some(judge_config(
         &subject,
         args.judge_model,
         args.judge_provider,
-        selected_scenarios
-            .iter()
-            .any(|scenario| scenario.spec("judge-check").needs_judge()),
-    );
+    ));
     let outcome = run_suite(SuiteRunConfig {
         url: args.url,
         subject,
@@ -252,7 +245,6 @@ async fn run(args: RunArgs) -> Result<()> {
         technical_retries: args.technical_retries,
         progress_interval: (args.progress_interval_seconds > 0)
             .then(|| std::time::Duration::from_secs(args.progress_interval_seconds)),
-        allow_legacy_control_plane: args.allow_legacy_control_plane,
         control: None,
     })
     .await
@@ -271,15 +263,11 @@ fn judge_config(
     subject: &SubjectConfig,
     model: Option<String>,
     provider: Option<String>,
-    required: bool,
-) -> Option<JudgeConfig> {
-    if !required && model.is_none() && provider.is_none() {
-        return None;
-    }
-    Some(JudgeConfig {
+) -> JudgeConfig {
+    JudgeConfig {
         model: model.unwrap_or_else(|| subject.model.clone()),
         provider: provider.unwrap_or_else(|| subject.provider.clone()),
-    })
+    }
 }
 
 #[cfg(test)]
@@ -348,16 +336,14 @@ mod tests {
     }
 
     #[test]
-    fn judge_defaults_to_the_subject_when_required() {
+    fn final_analyzer_defaults_to_the_subject_for_every_run() {
         let subject = SubjectConfig {
             model: "model".into(),
             provider: "provider".into(),
         };
-        let judge = judge_config(&subject, None, None, true).unwrap();
+        let judge = judge_config(&subject, None, None);
         assert_eq!(judge.model, subject.model);
         assert_eq!(judge.provider, subject.provider);
-
-        assert!(judge_config(&subject, None, None, false).is_none());
     }
 
     #[test]

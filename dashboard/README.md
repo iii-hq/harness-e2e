@@ -36,7 +36,7 @@ with the machine's address when accessing it remotely.
 The dashboard uses the same dependency-free hash-routing pattern as Console.
 Canonical routes are `#/overview`, `#/tests`, `#/capability`, `#/executions`,
 `#/execution/<id>`, and `#/coverage`. The old `#/scenarios` route redirects to
-Tests, while `#/compare/<from>/<to>` remains a deep link into the same versioned
+Tests, while `#/compare/<from>/<to>` remains a deep link into the same
 Tests view. All views use the single `index.html` entry point.
 
 The dashboard can now execute one or more scenarios against the Harness already
@@ -88,9 +88,9 @@ history and never calls the local execution APIs.
 
 The execution label is optional and intentionally descriptive only. The local
 dashboard does not infer a system version from that label: it uses the immutable
-source revision or registry stack lock captured in results-v2. Tests compares
+source revision or registry stack lock captured in `results.json`. Tests compares
 system version A with B inside one exact evaluation cohort. Each row keeps its
-own contract-version selector. Changed case sets and contracts remain visible
+own scenario-version selector. Changed case sets and contracts remain visible
 side by side, but their numeric deltas are disabled.
 
 Use `--listen 0.0.0.0:PORT` to select another port and `--runs-dir` to select

@@ -1,14 +1,5 @@
 {
   "function_id": "harness::metrics",
-  "metadata": {
-    "contract": {
-      "capabilities": [
-        "metrics"
-      ],
-      "name": "harness-control-plane",
-      "version": 1
-    }
-  },
   "request_schema": {
     "$schema": "http://json-schema.org/draft-07/schema#",
     "properties": {

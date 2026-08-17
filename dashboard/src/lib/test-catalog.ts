@@ -18,7 +18,6 @@ export type EvaluatedVersion = {
 }
 
 export type EvaluatedVersionsResponse = {
-  schema_version: number
   revision: string
   cohorts: CohortDescriptor[]
   versions: EvaluatedVersion[]
@@ -96,7 +95,6 @@ export type TestCatalogRow = {
 }
 
 export type TestsListResponse = {
-  schema_version: number
   revision: string
   rows: TestCatalogRow[]
   total: number

@@ -10,7 +10,6 @@
     "execution_id",
     "lane",
     "profile_sha256",
-    "schema_version",
     "started_at"
   ],
   "properties": {
@@ -64,14 +63,6 @@
         "string",
         "null"
       ]
-    },
-    "schema_version": {
-      "type": "integer",
-      "format": "uint32",
-      "enum": [
-        1
-      ],
-      "minimum": 0.0
     },
     "started_at": {
       "type": "string"

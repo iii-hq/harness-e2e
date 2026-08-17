@@ -1,5 +1,4 @@
 {
-  "schema_version": 1,
   "lane_order": [
     "pull_request",
     "main",
@@ -8,7 +7,7 @@
   ],
   "canonical": {
     "entrypoint": "e2e::run",
-    "results_schema_version": 2,
+    "results_file": "results.json",
     "archive_scheme": "iii-storage",
     "required_identity_fields": [
       "execution_id",
@@ -17,10 +16,5 @@
       "e2e_revision"
     ]
   },
-  "minimum_shadow_windows": 3,
-  "rollback_window_days": 14,
-  "legacy": {
-    "workflow": ".github/workflows/_harness-e2e.yml",
-    "immutable_tag_prefix": "refs/tags/e2e-legacy-"
-  }
+  "minimum_shadow_windows": 3
 }

@@ -29,7 +29,7 @@ node --test tests/dashboard/*.test.cjs
 python3 -m unittest discover -s tests/python -p 'test_*.py'
 ```
 
-List the versioned, materialized scenarios:
+List the materialized scenarios and their scenario versions:
 
 ```bash
 cargo run --locked --bin harness-e2e -- list
@@ -61,16 +61,9 @@ then embeds the Vite output in the binary. Node and pnpm must be available on
 Vite server proxies runtime data, the scoped iii WebSocket, and local-run APIs
 to the Rust dashboard on port 4173.
 
-When the running Harness does not yet publish versioned `metadata.contract`
-entries, enable the temporary legacy compatibility mode through the environment:
-
-```bash
-HARNESS_E2E_ALLOW_LEGACY_CONTROL_PLANE=true \
-  cargo run --locked --bin harness-e2e -- dashboard
-```
-
-The E2E processes started by the dashboard inherit this setting. Prefer the
-strict default once the Harness publishes the versioned control-plane metadata.
+The running Harness must publish request and response schemas compatible with
+the current typed surface. Missing or incompatible fields fail preflight; no
+payload-version compatibility mode is available.
 
 The server listens on `0.0.0.0:4173` by default. Open
 `http://localhost:4173/#/overview` on the same machine, or replace `localhost`
@@ -101,10 +94,8 @@ HARNESS_E2E_WORKERS_REVISION=<full-subject-git-sha> \
   ./scripts/demo_e2e_control_plane.sh
 ```
 
-Use `--catalog-only` for a no-model smoke check. If the running Harness predates
-the versioned wire metadata, use `--allow-legacy-control-plane` only for the
-documented migration window. See [docs/demo.md](docs/demo.md) for the expected
-flow and retained evidence.
+Use `--catalog-only` for a no-model smoke check. See
+[docs/demo.md](docs/demo.md) for the expected flow and retained evidence.
 
 Start the asynchronous worker:
 
@@ -128,10 +119,10 @@ are ingested through `database::*`. The runner has no S3, GCS, R2, SQL-driver,
 or Harness dependency. See [docs/durable-history.md](docs/durable-history.md)
 for retention, deployment, integrity, and recovery details.
 
-Weekly Stress materializes versioned fault plans and evaluates journals from a
+Weekly Stress materializes deterministic fault plans and evaluates journals from a
 protected supervisor. See [docs/fault-injection.md](docs/fault-injection.md).
-Lane promotion and legacy removal are governed by
-[`config/policies/cutover-v1.json`](config/policies/cutover-v1.json) and the
+Lane promotion is governed by
+[`config/policies/cutover.json`](config/policies/cutover.json) and the
 [incident/rollback runbook](docs/incident-and-rollback.md).
 
 ## Repository boundaries
@@ -153,6 +144,16 @@ Contract compatibility is established at runtime from
 `engine::functions::list` and `engine::functions::info`; the checked-in schemas
 are parity fixtures, not a linked product API.
 
+The assessment and on-demand analysis boundary is documented in
+[docs/assessment-result-contract.md](docs/assessment-result-contract.md).
+Payloads have one current shape and are written only to `results.json`; scenario
+contracts are the only versioned domain.
+
+Deterministic, pre-cleanup asset capture and its explicit safety limits are
+documented in [docs/asset-evidence.md](docs/asset-evidence.md). Capture writes an
+unversioned sidecar containing the canonical deterministic validation portion,
+which is aggregated into `results.json`.
+
 ## Observation
 
 The runner waits for a session tree to finish by binding
@@ -171,7 +172,7 @@ transcripts, and deliverables.
 ## Subject artifacts
 
 Cross-repository executions accept a subject manifest matching
-`schemas/subject-artifact-v1.json`. The archive and every declared file are
+`schemas/subject-artifact.json`. The archive and every declared file are
 verified before use. Mutable URLs, shortened Git revisions, unexpected archive
 paths, and digest mismatches are rejected.
 

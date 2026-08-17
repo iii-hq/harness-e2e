@@ -15,7 +15,6 @@ import evaluate_shadow_windows as windows
 
 def report(execution_id: str, e2e_revision: str = "1" * 40) -> dict:
     return {
-        "schema_version": 2,
         "execution": {"execution_id": execution_id},
         "system_under_test": {
             "stack": {

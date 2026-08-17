@@ -14,23 +14,11 @@ const DEFAULT_SECRET_ENV_NAMES: &[&str] = &[
     "CLOUDFLARE_API_TOKEN",
 ];
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct RedactionReport {
-    pub policy_version: u32,
     pub redacted_values: u32,
     pub redacted_fields: u32,
     pub rules: BTreeSet<String>,
-}
-
-impl Default for RedactionReport {
-    fn default() -> Self {
-        Self {
-            policy_version: 1,
-            redacted_values: 0,
-            redacted_fields: 0,
-            rules: BTreeSet::new(),
-        }
-    }
 }
 
 impl RedactionReport {
@@ -86,7 +74,6 @@ impl RedactionPolicy {
 
     pub fn redact_value(&self, value: &mut Value) -> RedactionReport {
         let mut report = RedactionReport {
-            policy_version: 1,
             ..RedactionReport::default()
         };
         redact_value(self, value, &mut report);
@@ -123,7 +110,6 @@ impl RedactionPolicy {
         Ok((
             bytes.to_vec(),
             RedactionReport {
-                policy_version: 1,
                 ..Default::default()
             },
         ))
@@ -144,7 +130,6 @@ impl RedactionPolicy {
     pub fn redact_text(&self, text: &str) -> (String, RedactionReport) {
         let mut sanitized = text.to_string();
         let mut report = RedactionReport {
-            policy_version: 1,
             ..Default::default()
         };
         for secret in &self.known_values {

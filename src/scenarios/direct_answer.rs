@@ -40,28 +40,28 @@ pub fn scenario(_run_id: &str) -> ScenarioSpec {
         },
         denied_functions: &[],
         criteria: vec![
-            CriterionSpec {
-                id: "correctness",
-                weight: 50,
-                description: "Full credit: authentication framed as proving who you are and \
+            CriterionSpec::advisory_judge(
+                "correctness",
+                50,
+                "Full credit: authentication framed as proving who you are and \
 authorization as what you may do, with no conflation. Half: both defined but the \
 contrast is muddled or partially wrong. Zero: definitions swapped, merged, or \
 incorrect.",
-            },
-            CriterionSpec {
-                id: "clarity",
-                weight: 30,
-                description: "Full credit: plain everyday language a non-technical reader \
+            ),
+            CriterionSpec::advisory_judge(
+                "clarity",
+                30,
+                "Full credit: plain everyday language a non-technical reader \
 follows, any technical term immediately explained. Half: mostly clear but leans on \
 unexplained jargon. Zero: jargon-heavy or confusing.",
-            },
-            CriterionSpec {
-                id: "instruction_adherence",
-                weight: 20,
-                description: "Full credit: a direct answer in one or two sentences with no \
+            ),
+            CriterionSpec::advisory_judge(
+                "instruction_adherence",
+                20,
+                "Full credit: a direct answer in one or two sentences with no \
 preamble or lists. Half: correct content but three sentences or noticeable padding. \
 Zero: far over length or the answer is buried.",
-            },
+            ),
         ],
         judge_reference: Some(json!({
             "authentication": "verifies who a user or system is",

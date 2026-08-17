@@ -8,8 +8,7 @@
     "execution_id",
     "identity_sha256",
     "objects",
-    "retention_class",
-    "schema_version"
+    "retention_class"
   ],
   "properties": {
     "archive_id": {
@@ -38,16 +37,9 @@
     },
     "retention_class": {
       "$ref": "#/definitions/RetentionClass"
-    },
-    "schema_version": {
-      "type": "integer",
-      "format": "uint32",
-      "enum": [
-        1
-      ],
-      "minimum": 0.0
     }
   },
+  "additionalProperties": false,
   "definitions": {
     "DurableChunk": {
       "type": "object",
@@ -109,17 +101,11 @@
     "RedactionReport": {
       "type": "object",
       "required": [
-        "policy_version",
         "redacted_fields",
         "redacted_values",
         "rules"
       ],
       "properties": {
-        "policy_version": {
-          "type": "integer",
-          "format": "uint32",
-          "minimum": 0.0
-        },
         "redacted_fields": {
           "type": "integer",
           "format": "uint32",

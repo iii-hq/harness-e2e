@@ -10,7 +10,6 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-SCHEMA_VERSION = 5
 MANIFEST_PREFIX = "window.HARNESS_EXECUTIONS = "
 FAILURE_CONCLUSIONS = {
     "action_required",
@@ -39,7 +38,7 @@ def load_json(path: Path | None) -> dict[str, Any] | None:
 
 def load_manifest(path: Path) -> dict[str, Any]:
     if not path.is_file():
-        return {"schema_version": SCHEMA_VERSION, "executions": []}
+        return {"executions": []}
     text = path.read_text().strip()
     if not text.startswith(MANIFEST_PREFIX) or not text.endswith(";"):
         raise PublishError(f"{path} is not a Harness execution manifest")
@@ -592,21 +591,11 @@ def complete_public_detail(
 ) -> dict[str, Any]:
     """Restore and annotate the complete execution report for the Pages site."""
     public_detail = json.loads(json.dumps(detail))
-    public_detail["schema_version"] = SCHEMA_VERSION
     execution_metadata = public_detail.get("execution", {})
     if not isinstance(execution_metadata, dict):
         execution_metadata = {}
     public_detail["execution"] = {**execution_metadata, **metadata}
     return public_detail
-
-
-def compact_public_detail(
-    detail: dict[str, Any],
-    metadata: dict[str, Any],
-) -> dict[str, Any]:
-    """Compatibility alias for callers using the previous projection name."""
-    return complete_public_detail(detail, metadata)
-
 
 def elapsed_seconds(started_at: str, completed_at: str) -> float | None:
     if not started_at or not completed_at:
@@ -1279,13 +1268,11 @@ def build_static_test_catalog(
     )
     catalog = {
         "evaluated_versions": {
-            "schema_version": SCHEMA_VERSION,
             "revision": revision,
             "cohorts": sorted(cohorts.values(), key=lambda cohort: cohort["id"]),
             "versions": evaluated_versions,
         },
         "tests": {
-            "schema_version": SCHEMA_VERSION,
             "revision": revision,
             "rows": rows,
             "total": len(rows),
@@ -1470,7 +1457,6 @@ def publish(
     build_static_test_catalog(site_dir, executions)
 
     updated = {
-        "schema_version": SCHEMA_VERSION,
         "mode": "published",
         "last_update": metadata["completed_at"] or metadata["started_at"],
         "repo_url": repo_url,

@@ -583,7 +583,7 @@ export function OverviewPage({ activeView }: { activeView: WorkspaceView }) {
               </article>
               <article className="capability-card">
                 <div className="kpi-label">Policy</div>
-                <strong id="capability-policy-version">—</strong>
+                <strong>Current</strong>
                 <small id="capability-policy">Independent thresholds</small>
               </article>
             </section>

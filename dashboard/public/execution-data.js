@@ -95,21 +95,7 @@
     };
   }
 
-  function metricValue(subject, category, scenarioId, metricId) {
-    return subject?.metrics?.[category]?.[scenarioId]?.[metricId]?.value ?? null;
-  }
-
-  function listLegacyScenarios(subject) {
-    const scenarios = new Set();
-    for (const category of Object.values(subject?.metrics || {})) {
-      for (const scenarioId of Object.keys(category || {})) {
-        if (scenarioId !== "suite") scenarios.add(scenarioId);
-      }
-    }
-    return [...scenarios].sort();
-  }
-
-  function normalizeStatus(value, execution = {}) {
+  function normalizeStatus(value) {
     const semanticStatuses = [
       "passed",
       "hard_gate_failed",
@@ -121,18 +107,6 @@
       "cancelling",
     ];
     if (semanticStatuses.includes(value)) return value;
-    if (value === "pass" || value === "success") return "passed";
-    if (value === "cancelled") return "cancelled";
-
-    // Schema 2 collapsed every complete non-pass into `failed`. Reconstruct
-    // the semantic outcome from its retained blocking counters.
-    if (value === "fail" || value === "failed" || value === "failure") {
-      const totals = execution?.totals || {};
-      if (Number(totals.missing_reports || 0) > 0) return "incomplete";
-      if (Number(totals.technical_failures || 0) > 0) return "technical_failed";
-      if (Number(totals.hard_gate_failures || 0) > 0) return "hard_gate_failed";
-      return "infra_failed";
-    }
     return "incomplete";
   }
 
@@ -164,7 +138,7 @@
       label: String(execution.label || ""),
       run_id: String(execution.run_id || ""),
       attempt: Number(execution.attempt) || 1,
-      status: normalizeStatus(execution.status, execution),
+      status: normalizeStatus(execution.status),
       conclusion: String(execution.conclusion || ""),
       event: String(execution.event || ""),
       actor: String(execution.actor || ""),
@@ -195,153 +169,26 @@
     };
   }
 
-  function legacySubject(subject) {
-    const scenarios = listLegacyScenarios(subject).map((scenarioId) => {
-      const score = subject.metrics?.quality?.[scenarioId]?.median_score;
-      const passRate = subject.metrics?.quality?.[scenarioId]?.pass_rate;
-      const scenario = {
-        id: scenarioId,
-        status: score?.status || passRate?.status || "unknown",
-        passed: score?.passed ?? passRate?.passed ?? false,
-        median_score: score?.value ?? null,
-        pass_rate: passRate?.value === null || passRate?.value === undefined
-          ? null
-          : passRate.value / 100,
-        hard_gate_failures:
-          metricValue(subject, "reliability", scenarioId, "hard_gate_failures") ?? 0,
-        technical_failures:
-          metricValue(subject, "reliability", scenarioId, "technical_failures") ?? 0,
-        retries: metricValue(subject, "reliability", scenarioId, "retry_attempts") ?? 0,
-        total_cost_usd:
-          metricValue(subject, "efficiency", scenarioId, "total_cost_usd"),
-        wall_time_seconds:
-          metricValue(subject, "efficiency", scenarioId, "wall_time_seconds"),
-      };
-      return { ...scenario, status: normalizeScenarioStatus(scenario) };
-    });
-    return {
-      id: subject.id,
-      model: subject.model,
-      provider: subject.provider,
-      judge: subject.judge || {},
-      engine_revision: subject.engineRevision || "",
-      passed: Boolean(subject.passed),
-      expected_reports: scenarios.length,
-      received_reports: scenarios.filter((scenario) => scenario.status !== "incomplete")
-        .length,
-      scenario_pass_rate:
-        (metricValue(subject, "quality", "suite", "scenario_pass_rate") ?? 0) / 100,
-      report_coverage:
-        (metricValue(subject, "quality", "suite", "report_coverage") ?? 0) / 100,
-      hard_gate_failures:
-        metricValue(subject, "reliability", "suite", "hard_gate_failures") ?? 0,
-      technical_failures:
-        metricValue(subject, "reliability", "suite", "technical_failures") ?? 0,
-      retry_attempts:
-        metricValue(subject, "reliability", "suite", "retry_attempts") ?? 0,
-      total_cost_usd:
-        metricValue(subject, "efficiency", "suite", "total_cost_usd"),
-      wall_time_seconds:
-        metricValue(subject, "efficiency", "suite", "wall_time_seconds"),
-      scenarios,
-    };
-  }
-
-  function legacyExecution(snapshot) {
-    const subjects = Object.values(snapshot.subjects || {}).map(legacySubject);
-    const scenarios = subjects.flatMap((subject) => subject.scenarios);
-    const expected = subjects.reduce(
-      (total, subject) => total + Number(subject.expected_reports || 0),
-      0,
-    );
-    const received = subjects.reduce(
-      (total, subject) => total + Number(subject.received_reports || 0),
-      0,
-    );
-    const complete = expected > 0 && expected === received;
-    const passed = complete && subjects.every((subject) => subject.passed);
-    const executionId = snapshot.execution?.id || snapshot.id;
-    const runId = snapshot.execution?.run_id || "";
-    return normalizeExecution({
-      id: executionId,
-      run_id: runId,
-      attempt: snapshot.execution?.attempt || 1,
-      workflow_url: snapshot.workflowUrl,
-      started_at: snapshot.generatedAt || new Date(snapshot.date).toISOString(),
-      completed_at: snapshot.generatedAt || new Date(snapshot.date).toISOString(),
-      event: snapshot.execution?.event || "legacy",
-      actor: snapshot.execution?.actor || "",
-      conclusion: passed ? "success" : "failure",
-      status: complete ? (passed ? "passed" : "failed") : "incomplete",
-      availability: "aggregate",
-      detail_path: null,
-      generated_at: snapshot.generatedAt,
-      lane: snapshot.lane,
-      source: snapshot.source,
-      release: snapshot.release,
-      subjects,
-      totals: {
-        expected_reports: expected,
-        received_reports: received,
-        report_coverage: expected ? (received / expected) * 100 : 0,
-        passed_scenarios: scenarios.filter((scenario) => scenario.passed).length,
-        scenario_pass_rate: expected
-          ? (scenarios.filter((scenario) => scenario.passed).length / expected) * 100
-          : 0,
-        total_cost_usd: subjects.every(
-          (subject) => numberOrNull(subject.total_cost_usd) !== null,
-        )
-          ? subjects.reduce((total, subject) => total + subject.total_cost_usd, 0)
-          : null,
-        wall_time_seconds: subjects.every(
-          (subject) => numberOrNull(subject.wall_time_seconds) !== null,
-        )
-          ? subjects.reduce((total, subject) => total + subject.wall_time_seconds, 0)
-          : null,
-        hard_gate_failures: subjects.reduce(
-          (total, subject) => total + Number(subject.hard_gate_failures || 0),
-          0,
-        ),
-        technical_failures: subjects.reduce(
-          (total, subject) => total + Number(subject.technical_failures || 0),
-          0,
-        ),
-        missing_reports: Math.max(0, expected - received),
-        retries: subjects.reduce(
-          (total, subject) => total + Number(subject.retry_attempts || 0),
-          0,
-        ),
-      },
-    });
-  }
-
-  function mergeExecutionHistory(manifest, benchmarkData) {
+  function mergeExecutionHistory(manifest) {
     const raw = manifest && typeof manifest === "object" ? manifest : {};
-    const byId = new Map(
+    const executions =
       (Array.isArray(raw.executions) ? raw.executions : [])
         .map(normalizeExecution)
         .filter((entry) => entry.id)
-        .map((entry) => [entry.id, entry]),
-    );
-    for (const snapshot of benchmarkData?.snapshots || []) {
-      const id = snapshot.execution?.id || snapshot.id;
-      if (!byId.has(id)) byId.set(id, legacyExecution(snapshot));
-    }
-    const executions = [...byId.values()].sort(
+        .sort(
       (left, right) =>
         Date.parse(right.completed_at || right.started_at || 0) -
         Date.parse(left.completed_at || left.started_at || 0),
     );
     return {
-      schemaVersion: Number(raw.schema_version) || 1,
       mode:
         raw.mode === "local"
           ? "local"
           : raw.mode === "observed"
             ? "observed"
             : "published",
-      lastUpdate: raw.last_update || benchmarkData?.lastUpdate || "",
-      repoUrl: raw.repo_url || benchmarkData?.repoUrl || "",
+      lastUpdate: raw.last_update || "",
+      repoUrl: raw.repo_url || "",
       preview: Boolean(globalThis.HARNESS_BENCHMARK_PREVIEW),
       retention: raw.retention || { summaries: 100, details: 30 },
       executions,
@@ -610,7 +457,6 @@
     findExecution,
     groupRunFailures,
     latestHealthModel,
-    legacyExecution,
     matrixCell,
     matrixCellLabel,
     matrixRows,

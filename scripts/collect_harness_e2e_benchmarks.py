@@ -12,9 +12,6 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-SCHEMA_VERSION = 2
-
-
 class CollectionError(ValueError):
     """Raised when E2E benchmark inputs are malformed or contradictory."""
 
@@ -279,11 +276,8 @@ def validate_report(
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     if not isinstance(report, dict):
         raise CollectionError(f"{path} must contain an object")
-    schema_version = report.get("schema_version", 1)
-    if schema_version not in (1, 2):
-        raise CollectionError(
-            f"{path}: unsupported results schema version {schema_version}"
-        )
+    if "schema_version" in report:
+        raise CollectionError(f"{path}: versioned results payloads are not supported")
     report_subject = report.get("subject")
     if not isinstance(report_subject, dict):
         raise CollectionError(f"{path}: subject must be an object")
@@ -300,18 +294,17 @@ def validate_report(
     scenario = scenarios[0]
     if not isinstance(scenario, dict) or scenario.get("scenario_id") != scenario_id:
         raise CollectionError(f"{path}: scenario id does not match {scenario_id}")
-    if schema_version == 2:
-        validate_v2_identity(
-            report,
-            config=config,
-            scenario=scenario,
-            path=path,
-            deployment=deployment,
-        )
+    validate_identity(
+        report,
+        config=config,
+        scenario=scenario,
+        path=path,
+        deployment=deployment,
+    )
     return report, scenario
 
 
-def validate_v2_identity(
+def validate_identity(
     report: dict[str, Any],
     *,
     config: CollectionConfig,
@@ -321,7 +314,7 @@ def validate_v2_identity(
 ) -> None:
     execution = report.get("execution")
     if not isinstance(execution, dict):
-        raise CollectionError(f"{path}: results v2 requires execution identity")
+        raise CollectionError(f"{path}: results require execution identity")
     for field in ("execution_id", "lane", "started_at", "completed_at"):
         require_string(execution.get(field), f"{path}: execution.{field}")
     if execution["lane"] != config.lane:
@@ -331,7 +324,7 @@ def validate_v2_identity(
 
     system = report.get("system_under_test")
     if not isinstance(system, dict):
-        raise CollectionError(f"{path}: results v2 requires system_under_test")
+        raise CollectionError(f"{path}: results require system_under_test")
     stack = system.get("stack")
     if not isinstance(stack, dict) or stack.get("mode") != config.stack_mode:
         observed = stack.get("mode") if isinstance(stack, dict) else None
@@ -381,16 +374,16 @@ def validate_v2_identity(
 
     manifest_reference = report.get("manifest")
     if not isinstance(manifest_reference, dict):
-        raise CollectionError(f"{path}: results v2 requires a manifest reference")
+        raise CollectionError(f"{path}: results require a manifest reference")
     manifest_path = verify_artifact_reference(
         manifest_reference, root=path.parent, label=f"{path}: manifest"
     )
     manifest = load_json(manifest_path)
-    if not isinstance(manifest, dict) or manifest.get("schema_version") != 2:
-        raise CollectionError(f"{manifest_path}: expected manifest schema version 2")
+    if not isinstance(manifest, dict) or "schema_version" in manifest:
+        raise CollectionError(f"{manifest_path}: expected the unversioned manifest payload")
     for field in ("execution", "system_under_test", "subject", "judge"):
         if manifest.get(field) != report.get(field):
-            raise CollectionError(f"{manifest_path}: {field} differs from results v2")
+            raise CollectionError(f"{manifest_path}: {field} differs from results")
     control_plane = manifest.get("control_plane")
     if not isinstance(control_plane, dict) or not isinstance(
         control_plane.get("functions"), list
@@ -476,10 +469,6 @@ def validate_scenario_case(scenario: dict[str, Any], *, path: Path) -> dict[str,
     ):
         raise CollectionError(f"{path}: scenario.case complexity is invalid")
     require_string(complexity.get("tier"), f"{path}: scenario.case.complexity.tier")
-    require_number(
-        complexity.get("policy_version"),
-        f"{path}: scenario.case.complexity.policy_version",
-    )
     profile = complexity["profile"]
     profile_fields = (
         "planning_depth",
@@ -499,7 +488,7 @@ def validate_scenario_case(scenario: dict[str, Any], *, path: Path) -> dict[str,
         )
         if not value.is_integer() or value < 0:
             raise CollectionError(f"{path}: complexity field {field} is invalid")
-    if complexity.get("policy_version") != 1 or complexity.get("tier") != complexity_tier(profile):
+    if complexity.get("tier") != complexity_tier(profile):
         raise CollectionError(f"{path}: scenario.case complexity classification differs")
     capabilities = case.get("required_capabilities")
     if (
@@ -715,11 +704,7 @@ def verify_artifact_reference(
 def result_path(context_path: Path | None) -> Path | None:
     if context_path is None:
         return None
-    for name in ("results-v2.json", "results.json"):
-        candidate = context_path.parent / name
-        if candidate.is_file():
-            return candidate
-    return context_path.parent / "results-v2.json"
+    return context_path.parent / "results.json"
 
 
 def collect(
@@ -774,7 +759,6 @@ def collect(
             if deployment is not None and release_metadata not in release_observations:
                 release_observations.append(release_metadata)
             base_extra: dict[str, Any] = {
-                "schema_version": SCHEMA_VERSION,
                 "execution": execution,
                 "lane": config.lane,
                 "generated_at": config.generated_at,
@@ -862,29 +846,28 @@ def collect(
                 path=report_path,
                 deployment=deployment,
             )
-            if report.get("schema_version", 1) == 2:
-                report_execution_id = report["execution"]["execution_id"]
-                if report_execution_id in result_execution_ids:
-                    raise CollectionError(
-                        f"{report_path}: duplicate result execution id "
-                        f"{report_execution_id}"
-                    )
-                result_execution_ids.add(report_execution_id)
-                contract = (
-                    scenario.get("case_id"),
-                    scenario.get("scenario_version"),
-                    compact_extra(scenario.get("case", {})),
-                    compact_extra(scenario.get("execution_policy", {})),
+            report_execution_id = report["execution"]["execution_id"]
+            if report_execution_id in result_execution_ids:
+                raise CollectionError(
+                    f"{report_path}: duplicate result execution id "
+                    f"{report_execution_id}"
                 )
-                previous = scenario_contracts.setdefault(scenario_id, contract)
-                if previous != contract:
-                    raise CollectionError(
-                        f"{report_path}: scenario contract is incompatible with "
-                        "another report"
-                    )
-                system = report["system_under_test"]
-                if system not in system_observations:
-                    system_observations.append(system)
+            result_execution_ids.add(report_execution_id)
+            contract = (
+                scenario.get("case_id"),
+                scenario.get("scenario_version"),
+                compact_extra(scenario.get("case", {})),
+                compact_extra(scenario.get("execution_policy", {})),
+            )
+            previous = scenario_contracts.setdefault(scenario_id, contract)
+            if previous != contract:
+                raise CollectionError(
+                    f"{report_path}: scenario contract is incompatible with "
+                    "another report"
+                )
+            system = report["system_under_test"]
+            if system not in system_observations:
+                system_observations.append(system)
             execution_report = {
                 "subject_id": subject["id"],
                 "scenario_id": scenario_id,
@@ -1163,7 +1146,6 @@ def collect(
         if len(stack_observations) == 1:
             suite_stack = stack_observations[0]
         suite_extra = {
-            "schema_version": SCHEMA_VERSION,
             "execution": execution,
             "lane": config.lane,
             "generated_at": config.generated_at,
@@ -1309,7 +1291,6 @@ def collect(
     if len(stack_observations) == 1:
         snapshot_stack = stack_observations[0]
     snapshot = {
-        "schema_version": SCHEMA_VERSION,
         "execution": execution,
         "generated_at": config.generated_at,
         "lane": config.lane,

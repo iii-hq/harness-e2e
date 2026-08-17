@@ -13,8 +13,8 @@ use tokio::sync::watch;
 
 use crate::observe::{self, ObserveHub, TreeObserver};
 use crate::wire::{
-    self, ControlPlaneEvidence, SessionMetricsResponseV1, SessionTreeResponseV1, StatusReport,
-    StopResponse, TeardownResponseV1, TurnCompletedEvent, TurnStatus,
+    self, ControlPlaneEvidence, SessionMetricsResponse, SessionTreeResponse, StatusReport,
+    StopResponse, TeardownResponse, TurnCompletedEvent, TurnStatus,
 };
 
 pub const INVOCATION_TIMEOUT: Duration = Duration::from_secs(120);
@@ -103,10 +103,7 @@ impl E2eContext {
         Ok(exists)
     }
 
-    pub async fn preflight_control_plane(
-        &self,
-        allow_legacy_metadata: bool,
-    ) -> Result<ControlPlaneEvidence> {
+    pub async fn preflight_control_plane(&self) -> Result<ControlPlaneEvidence> {
         let function_ids = wire::control_plane_function_ids().collect::<Vec<_>>();
         let info = self
             .trigger_value(
@@ -115,7 +112,7 @@ impl E2eContext {
             )
             .await
             .context("discover Harness control-plane contracts")?;
-        wire::validate_control_plane(&info, allow_legacy_metadata)
+        wire::validate_control_plane(&info)
     }
 
     pub async fn runtime_versions(&self) -> Result<RuntimeVersions> {
@@ -202,7 +199,7 @@ impl E2eContext {
         stuck_timeout: Duration,
         log_heartbeat: bool,
         cancellation: Option<&watch::Receiver<bool>>,
-    ) -> Result<SessionMetricsResponseV1> {
+    ) -> Result<SessionMetricsResponse> {
         observe::wait_until_complete(
             self,
             scenario_id,
@@ -215,7 +212,7 @@ impl E2eContext {
         .await
     }
 
-    pub async fn metrics(&self, session_id: &str) -> Result<SessionMetricsResponseV1> {
+    pub async fn metrics(&self, session_id: &str) -> Result<SessionMetricsResponse> {
         self.trigger("harness::metrics", json!({ "root_session_id": session_id }))
             .await
     }
@@ -268,7 +265,7 @@ impl E2eContext {
     async fn stop_session_tree(&self, root_session_id: &str) {
         let tree = tokio::time::timeout(
             Duration::from_secs(5),
-            self.trigger::<_, SessionTreeResponseV1>(
+            self.trigger::<_, SessionTreeResponse>(
                 "harness::session-tree",
                 json!({ "root_session_id": root_session_id }),
             ),
@@ -284,7 +281,7 @@ impl E2eContext {
     }
 
     pub async fn teardown(&self, root_session_id: &str) -> Result<u64> {
-        let response: TeardownResponseV1 = self
+        let response: TeardownResponse = self
             .trigger(
                 "harness::teardown",
                 json!({ "root_session_id": root_session_id }),
@@ -380,7 +377,7 @@ impl TreeObserver for E2eContext {
         self.hub.wait_event(timeout).await
     }
 
-    async fn pull_metrics(&self, root_session_id: &str) -> Result<SessionMetricsResponseV1> {
+    async fn pull_metrics(&self, root_session_id: &str) -> Result<SessionMetricsResponse> {
         self.metrics(root_session_id).await
     }
 
@@ -435,7 +432,7 @@ mod tests {
         expects_wake: bool,
         result_error: Option<&str>,
     ) -> StatusReport {
-        StatusReport::from_normalized(crate::wire::StatusReportV1 {
+        StatusReport::from_normalized(crate::wire::StatusReportPayload {
             session_id: "session".to_string(),
             turn_id: Some(turn_id.to_string()),
             status,

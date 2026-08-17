@@ -1,17 +1,20 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
-  "title": "E2eResultsV2",
+  "title": "E2eResults",
   "type": "object",
   "required": [
+    "assessment_contract",
     "execution",
     "manifest",
     "passed",
     "scenarios",
-    "schema_version",
     "subject",
     "system_under_test"
   ],
   "properties": {
+    "assessment_contract": {
+      "$ref": "#/definitions/AssessmentContract"
+    },
     "engine_revision": {
       "type": [
         "string",
@@ -19,14 +22,7 @@
       ]
     },
     "execution": {
-      "anyOf": [
-        {
-          "$ref": "#/definitions/ExecutionIdentity"
-        },
-        {
-          "type": "null"
-        }
-      ]
+      "$ref": "#/definitions/ExecutionIdentity"
     },
     "judge": {
       "anyOf": [
@@ -59,7 +55,6 @@
     },
     "redaction": {
       "default": {
-        "policy_version": 1,
         "redacted_fields": 0,
         "redacted_values": 0,
         "rules": []
@@ -76,29 +71,147 @@
         "$ref": "#/definitions/E2eScenarioReport"
       }
     },
-    "schema_version": {
-      "type": "integer",
-      "format": "uint32",
-      "enum": [
-        2
-      ],
-      "minimum": 0.0
-    },
     "subject": {
       "$ref": "#/definitions/ModelArtifact"
     },
     "system_under_test": {
-      "anyOf": [
-        {
-          "$ref": "#/definitions/SystemUnderTestIdentity"
-        },
-        {
-          "type": "null"
-        }
-      ]
+      "$ref": "#/definitions/SystemUnderTestIdentity"
     }
   },
+  "additionalProperties": false,
   "definitions": {
+    "AiAssessmentAvailability": {
+      "type": "string",
+      "enum": [
+        "not_requested",
+        "not_evaluated",
+        "available",
+        "unavailable",
+        "malformed",
+        "failed"
+      ]
+    },
+    "AiFinalAssessment": {
+      "type": "object",
+      "required": [
+        "availability"
+      ],
+      "properties": {
+        "analyzer": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/AnalyzerIdentity"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "analyzer_usage": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/AnalyzerUsage"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "availability": {
+          "$ref": "#/definitions/AiAssessmentAvailability"
+        },
+        "reason": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "result": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/FinalAssessmentResult"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "AiVerdict": {
+      "type": "string",
+      "enum": [
+        "pass",
+        "pass_with_concerns",
+        "fail",
+        "inconclusive"
+      ]
+    },
+    "AnalyzerIdentity": {
+      "type": "object",
+      "required": [
+        "analyzer",
+        "input_sha256"
+      ],
+      "properties": {
+        "analyzer": {
+          "type": "string"
+        },
+        "input_sha256": {
+          "type": "string"
+        },
+        "model": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "provider": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "AnalyzerUsage": {
+      "type": "object",
+      "properties": {
+        "cost_usd": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double"
+        },
+        "input_tokens": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "latency_ms": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "output_tokens": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0.0
+        }
+      }
+    },
     "ArtifactExpectation": {
       "type": "object",
       "required": [
@@ -159,6 +272,234 @@
         }
       }
     },
+    "AssessmentContract": {
+      "type": "object",
+      "required": [
+        "runs"
+      ],
+      "properties": {
+        "runs": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/RunAssessmentContract"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "AssessmentKind": {
+      "type": "string",
+      "enum": [
+        "required_check",
+        "signal",
+        "asset_validation",
+        "asset_quality"
+      ]
+    },
+    "AssessmentOutcome": {
+      "type": "string",
+      "enum": [
+        "passed",
+        "failed",
+        "partial",
+        "not_evaluated",
+        "unavailable",
+        "error"
+      ]
+    },
+    "AssessmentPolicy": {
+      "type": "string",
+      "enum": [
+        "hard_gate",
+        "advisory"
+      ]
+    },
+    "AssessmentResult": {
+      "type": "object",
+      "required": [
+        "criterion_id",
+        "dimension",
+        "kind",
+        "outcome",
+        "policy",
+        "source",
+        "summary",
+        "target"
+      ],
+      "properties": {
+        "analyzer": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/AnalyzerIdentity"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "analyzer_usage": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/AnalyzerUsage"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "confidence": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double"
+        },
+        "criterion_id": {
+          "type": "string"
+        },
+        "dimension": {
+          "$ref": "#/definitions/EvaluationDimension"
+        },
+        "evidence": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/EvidenceReference"
+          }
+        },
+        "kind": {
+          "$ref": "#/definitions/AssessmentKind"
+        },
+        "outcome": {
+          "$ref": "#/definitions/AssessmentOutcome"
+        },
+        "policy": {
+          "$ref": "#/definitions/AssessmentPolicy"
+        },
+        "score": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/AssessmentScore"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "source": {
+          "$ref": "#/definitions/AssessmentSource"
+        },
+        "summary": {
+          "type": "string"
+        },
+        "target": {
+          "$ref": "#/definitions/AssessmentTarget"
+        }
+      }
+    },
+    "AssessmentScore": {
+      "type": "object",
+      "required": [
+        "awarded",
+        "possible"
+      ],
+      "properties": {
+        "awarded": {
+          "type": "integer",
+          "format": "uint8",
+          "minimum": 0.0
+        },
+        "possible": {
+          "type": "integer",
+          "format": "uint8",
+          "minimum": 0.0
+        }
+      }
+    },
+    "AssessmentSource": {
+      "type": "string",
+      "enum": [
+        "deterministic",
+        "judge",
+        "asset_analyzer"
+      ]
+    },
+    "AssessmentTarget": {
+      "type": "object",
+      "required": [
+        "id",
+        "kind"
+      ],
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "kind": {
+          "$ref": "#/definitions/AssessmentTargetKind"
+        }
+      }
+    },
+    "AssessmentTargetKind": {
+      "type": "string",
+      "enum": [
+        "criterion",
+        "asset"
+      ]
+    },
+    "AssetAssessmentResult": {
+      "type": "object",
+      "required": [
+        "qualitative_assessment",
+        "validation"
+      ],
+      "properties": {
+        "qualitative_assessment": {
+          "$ref": "#/definitions/AssessmentResult"
+        },
+        "validation": {
+          "$ref": "#/definitions/AssetValidationResult"
+        }
+      }
+    },
+    "AssetValidationOutcome": {
+      "type": "string",
+      "enum": [
+        "valid",
+        "invalid",
+        "malformed",
+        "oversized",
+        "not_produced",
+        "unreadable",
+        "unsafe_path",
+        "removed_during_cleanup",
+        "unexpected",
+        "not_evaluated"
+      ]
+    },
+    "AssetValidationResult": {
+      "type": "object",
+      "required": [
+        "asset_id",
+        "outcome",
+        "summary"
+      ],
+      "properties": {
+        "asset_id": {
+          "type": "string"
+        },
+        "evidence": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/EvidenceReference"
+          }
+        },
+        "outcome": {
+          "$ref": "#/definitions/AssetValidationOutcome"
+        },
+        "summary": {
+          "type": "string"
+        }
+      }
+    },
     "CapturedInvariant": {
       "type": "object",
       "required": [
@@ -181,16 +522,10 @@
     "ComplexityClassification": {
       "type": "object",
       "required": [
-        "policy_version",
         "profile",
         "tier"
       ],
       "properties": {
-        "policy_version": {
-          "type": "integer",
-          "format": "uint32",
-          "minimum": 0.0
-        },
         "profile": {
           "$ref": "#/definitions/ComplexityProfile"
         },
@@ -446,6 +781,8 @@
     "E2eRunReport": {
       "type": "object",
       "required": [
+        "attempt_id",
+        "attempt_number",
         "cost",
         "criteria",
         "hard_gates",
@@ -457,11 +794,9 @@
       ],
       "properties": {
         "attempt_id": {
-          "default": "",
           "type": "string"
         },
         "attempt_number": {
-          "default": 1,
           "type": "integer",
           "format": "uint32",
           "minimum": 0.0
@@ -536,7 +871,7 @@
         "metrics": {
           "anyOf": [
             {
-              "$ref": "#/definitions/SessionMetricsResponseBodyV1"
+              "$ref": "#/definitions/SessionMetricsPayload"
             },
             {
               "type": "null"
@@ -628,12 +963,24 @@
         }
       }
     },
+    "EffectiveStatus": {
+      "type": "string",
+      "enum": [
+        "unavailable",
+        "passed",
+        "passed_with_concerns",
+        "hard_gate_failed",
+        "subject_error",
+        "judge_error",
+        "resource_limit",
+        "infrastructure_error"
+      ]
+    },
     "EfficiencyReport": {
       "type": "object",
       "required": [
         "minimum_expected_work",
         "observed_complexity",
-        "policy_version",
         "technical_attempts",
         "wall_time_ms"
       ],
@@ -725,11 +1072,6 @@
           "format": "uint64",
           "minimum": 0.0
         },
-        "policy_version": {
-          "type": "integer",
-          "format": "uint32",
-          "minimum": 0.0
-        },
         "root_turns": {
           "type": [
             "integer",
@@ -804,6 +1146,27 @@
         "robustness",
         "e2e_infrastructure"
       ]
+    },
+    "EvidenceReference": {
+      "type": "object",
+      "required": [
+        "artifact_id",
+        "artifact_sha256"
+      ],
+      "properties": {
+        "artifact_id": {
+          "type": "string"
+        },
+        "artifact_sha256": {
+          "type": "string"
+        },
+        "locator": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      }
     },
     "ExecutionIdentity": {
       "type": "object",
@@ -884,17 +1247,13 @@
     "FailureRecord": {
       "type": "object",
       "required": [
+        "domain",
         "message",
         "phase"
       ],
       "properties": {
         "domain": {
-          "default": "e2e_infrastructure",
-          "allOf": [
-            {
-              "$ref": "#/definitions/FailureDomain"
-            }
-          ]
+          "$ref": "#/definitions/FailureDomain"
         },
         "message": {
           "type": "string"
@@ -904,21 +1263,83 @@
         }
       }
     },
+    "FinalAssessmentResult": {
+      "type": "object",
+      "required": [
+        "concerns",
+        "confidence",
+        "evidence",
+        "facts",
+        "limitations",
+        "quality_score",
+        "recommendation",
+        "strengths",
+        "summary",
+        "verdict"
+      ],
+      "properties": {
+        "concerns": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "confidence": {
+          "type": "number",
+          "format": "double"
+        },
+        "evidence": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/EvidenceReference"
+          }
+        },
+        "facts": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "limitations": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "quality_score": {
+          "type": "integer",
+          "format": "uint8",
+          "minimum": 0.0
+        },
+        "recommendation": {
+          "type": "string"
+        },
+        "strengths": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "summary": {
+          "type": "string"
+        },
+        "verdict": {
+          "$ref": "#/definitions/AiVerdict"
+        }
+      },
+      "additionalProperties": false
+    },
     "HardGateReport": {
       "type": "object",
       "required": [
+        "dimension",
         "id",
         "passed",
         "reason"
       ],
       "properties": {
         "dimension": {
-          "default": "structural_integrity",
-          "allOf": [
-            {
-              "$ref": "#/definitions/EvaluationDimension"
-            }
-          ]
+          "$ref": "#/definitions/EvaluationDimension"
         },
         "id": {
           "type": "string"
@@ -1039,9 +1460,6 @@
     },
     "ObservedComplexityReport": {
       "type": "object",
-      "required": [
-        "policy_version"
-      ],
       "properties": {
         "ambiguity_level": {
           "type": [
@@ -1099,11 +1517,6 @@
           "format": "uint64",
           "minimum": 0.0
         },
-        "policy_version": {
-          "type": "integer",
-          "format": "uint32",
-          "minimum": 0.0
-        },
         "state_transitions": {
           "type": [
             "integer",
@@ -1158,17 +1571,11 @@
     "RedactionReport": {
       "type": "object",
       "required": [
-        "policy_version",
         "redacted_fields",
         "redacted_values",
         "rules"
       ],
       "properties": {
-        "policy_version": {
-          "type": "integer",
-          "format": "uint32",
-          "minimum": 0.0
-        },
         "redacted_fields": {
           "type": "integer",
           "format": "uint32",
@@ -1191,6 +1598,8 @@
     "RetryAttemptReport": {
       "type": "object",
       "required": [
+        "attempt_id",
+        "attempt_number",
         "cost",
         "failures",
         "run_id",
@@ -1200,11 +1609,9 @@
       ],
       "properties": {
         "attempt_id": {
-          "default": "",
           "type": "string"
         },
         "attempt_number": {
-          "default": 1,
           "type": "integer",
           "format": "uint32",
           "minimum": 0.0
@@ -1249,7 +1656,7 @@
         "metrics": {
           "anyOf": [
             {
-              "$ref": "#/definitions/SessionMetricsResponseBodyV1"
+              "$ref": "#/definitions/SessionMetricsPayload"
             },
             {
               "type": "null"
@@ -1362,6 +1769,45 @@
             "null"
           ],
           "format": "double"
+        }
+      }
+    },
+    "RunAssessmentContract": {
+      "type": "object",
+      "required": [
+        "ai_final_assessment",
+        "attempt_id",
+        "effective_status",
+        "run_id",
+        "system_status"
+      ],
+      "properties": {
+        "ai_final_assessment": {
+          "$ref": "#/definitions/AiFinalAssessment"
+        },
+        "assessments": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/AssessmentResult"
+          }
+        },
+        "assets": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/AssetAssessmentResult"
+          }
+        },
+        "attempt_id": {
+          "type": "string"
+        },
+        "effective_status": {
+          "$ref": "#/definitions/EffectiveStatus"
+        },
+        "run_id": {
+          "type": "string"
+        },
+        "system_status": {
+          "$ref": "#/definitions/SystemStatus"
         }
       }
     },
@@ -1491,7 +1937,7 @@
         }
       }
     },
-    "SessionMetricsResponseBodyV1": {
+    "SessionMetricsPayload": {
       "type": "object",
       "required": [
         "by_session",
@@ -1503,7 +1949,7 @@
         "by_session": {
           "type": "array",
           "items": {
-            "$ref": "#/definitions/SessionUsageV1"
+            "$ref": "#/definitions/SessionUsage"
           }
         },
         "complete": {
@@ -1513,125 +1959,14 @@
           "type": "string"
         },
         "totals": {
-          "$ref": "#/definitions/SessionUsageTotalsV1"
+          "$ref": "#/definitions/SessionUsageTotals"
         },
         "traces": {
           "default": null
         }
       }
     },
-    "SessionUsageTotalsV1": {
-      "type": "object",
-      "required": [
-        "function_call_errors",
-        "function_calls",
-        "sessions",
-        "turns"
-      ],
-      "properties": {
-        "cache_read_tokens": {
-          "default": null,
-          "type": [
-            "integer",
-            "null"
-          ],
-          "format": "uint64",
-          "minimum": 0.0
-        },
-        "cache_write_tokens": {
-          "default": null,
-          "type": [
-            "integer",
-            "null"
-          ],
-          "format": "uint64",
-          "minimum": 0.0
-        },
-        "cost_usd": {
-          "default": null,
-          "type": [
-            "number",
-            "null"
-          ],
-          "format": "double"
-        },
-        "function_call_errors": {
-          "type": "integer",
-          "format": "uint64",
-          "minimum": 0.0
-        },
-        "function_calls": {
-          "type": "integer",
-          "format": "uint64",
-          "minimum": 0.0
-        },
-        "input_tokens": {
-          "default": null,
-          "type": [
-            "integer",
-            "null"
-          ],
-          "format": "uint64",
-          "minimum": 0.0
-        },
-        "output_tokens": {
-          "default": null,
-          "type": [
-            "integer",
-            "null"
-          ],
-          "format": "uint64",
-          "minimum": 0.0
-        },
-        "reasoning_tokens": {
-          "default": null,
-          "type": [
-            "integer",
-            "null"
-          ],
-          "format": "uint64",
-          "minimum": 0.0
-        },
-        "sessions": {
-          "type": "integer",
-          "format": "uint64",
-          "minimum": 0.0
-        },
-        "transient_resumes": {
-          "default": null,
-          "type": [
-            "integer",
-            "null"
-          ],
-          "format": "uint64",
-          "minimum": 0.0
-        },
-        "turns": {
-          "type": "integer",
-          "format": "uint64",
-          "minimum": 0.0
-        },
-        "validation_retries": {
-          "default": null,
-          "type": [
-            "integer",
-            "null"
-          ],
-          "format": "uint64",
-          "minimum": 0.0
-        },
-        "wake_resumes": {
-          "default": null,
-          "type": [
-            "integer",
-            "null"
-          ],
-          "format": "uint64",
-          "minimum": 0.0
-        }
-      }
-    },
-    "SessionUsageV1": {
+    "SessionUsage": {
       "type": "object",
       "required": [
         "depth",
@@ -1756,6 +2091,117 @@
         }
       }
     },
+    "SessionUsageTotals": {
+      "type": "object",
+      "required": [
+        "function_call_errors",
+        "function_calls",
+        "sessions",
+        "turns"
+      ],
+      "properties": {
+        "cache_read_tokens": {
+          "default": null,
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "cache_write_tokens": {
+          "default": null,
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "cost_usd": {
+          "default": null,
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double"
+        },
+        "function_call_errors": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "function_calls": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "input_tokens": {
+          "default": null,
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "output_tokens": {
+          "default": null,
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "reasoning_tokens": {
+          "default": null,
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "sessions": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "transient_resumes": {
+          "default": null,
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "turns": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "validation_retries": {
+          "default": null,
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "wake_resumes": {
+          "default": null,
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0.0
+        }
+      }
+    },
     "StackIdentity": {
       "oneOf": [
         {
@@ -1807,6 +2253,18 @@
         }
       ]
     },
+    "SystemStatus": {
+      "type": "string",
+      "enum": [
+        "unavailable",
+        "passed",
+        "hard_gate_failed",
+        "subject_error",
+        "judge_error",
+        "resource_limit",
+        "infrastructure_error"
+      ]
+    },
     "SystemUnderTestIdentity": {
       "type": "object",
       "required": [
@@ -1850,18 +2308,12 @@
     "WorkExpectation": {
       "type": "object",
       "required": [
-        "minimum_expected_work",
-        "policy_version"
+        "minimum_expected_work"
       ],
       "properties": {
         "minimum_expected_work": {
           "type": "integer",
           "format": "uint64",
-          "minimum": 0.0
-        },
-        "policy_version": {
-          "type": "integer",
-          "format": "uint32",
           "minimum": 0.0
         }
       }
