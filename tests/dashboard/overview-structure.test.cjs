@@ -157,6 +157,9 @@ test('migrates runner and transcript behavior to React components', () => {
   assert.match(runner, /cancelRun/)
   assert.match(runner, /subscribeRunChanges/)
   assert.match(runner, /aria-live/)
+  assert.match(runner, /function trapDialogFocus/)
+  assert.match(runner, /getClientRects\(\)\.length > 0/)
+  assert.match(runner, /onKeyDownCapture=\{trapDialogFocus\}/)
   assert.match(transcript, /normalizeTranscript/)
   assert.match(transcript, /session-transcript-dialog/)
   assert.match(transcript, /conversation-shell/)
@@ -173,6 +176,14 @@ test('keeps an empty local execution label serializable and its action visible',
   assert.match(
     styles,
     /\.local-runner-dialog \{[\s\S]*grid-template-rows: auto minmax\(0, 1fr\) auto/,
+  )
+  assert.match(
+    styles,
+    /\.local-runner-dialog:not\(\[open\]\) \{\s*display: none;/,
+  )
+  assert.match(
+    styles,
+    /\.local-advanced:not\(\[open\]\) \.local-advanced-grid \{\s*display: none;/,
   )
   assert.match(
     styles,

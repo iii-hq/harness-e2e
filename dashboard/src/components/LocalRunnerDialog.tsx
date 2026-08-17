@@ -96,6 +96,28 @@ function errorMessage(cause: unknown) {
   return cause instanceof Error ? cause.message : String(cause)
 }
 
+function trapDialogFocus(event: React.KeyboardEvent<HTMLDialogElement>) {
+  if (event.key !== 'Tab') return
+  const focusable = [
+    ...event.currentTarget.querySelectorAll<HTMLElement>(
+      'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), summary, [tabindex]:not([tabindex="-1"])',
+    ),
+  ].filter((element) => !element.hidden && element.getClientRects().length > 0)
+  if (focusable.length === 0) return
+
+  const activeIndex = focusable.indexOf(document.activeElement as HTMLElement)
+  const next = event.shiftKey
+    ? activeIndex <= 0
+      ? focusable.at(-1)
+      : undefined
+    : activeIndex === -1 || activeIndex === focusable.length - 1
+      ? focusable[0]
+      : undefined
+  if (!next) return
+  event.preventDefault()
+  next.focus()
+}
+
 function statusLabel(status: string | undefined) {
   return (
     {
@@ -259,6 +281,7 @@ export function LocalRunnerDialog({
       ref={dialogRef}
       className="local-runner-dialog"
       onClose={onClose}
+      onKeyDownCapture={trapDialogFocus}
       aria-labelledby="local-runner-title"
     >
       <div className="local-runner-dialog-header">

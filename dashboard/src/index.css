@@ -2666,6 +2666,10 @@ footer {
   padding: 4px 12px 12px;
 }
 
+.local-advanced:not([open]) .local-advanced-grid {
+  display: none;
+}
+
 .local-run-actions {
   display: flex;
   align-items: center;
@@ -6009,6 +6013,10 @@ footer {
   background: var(--surface);
   box-shadow: var(--shadow);
   color: var(--text);
+}
+
+.local-runner-dialog:not([open]) {
+  display: none;
 }
 
 .local-runner-dialog::backdrop {
