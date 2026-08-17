@@ -138,7 +138,7 @@ function comparisonRange(
     : 'Not reported'
 }
 
-function PlanComparisonSummary({
+export function PlanComparisonSummary({
   plan,
   baseline,
   candidate,
