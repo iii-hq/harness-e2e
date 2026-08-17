@@ -573,6 +573,18 @@ function FinalAiCard({ run }: { run: AssessmentRunView }) {
         </div>
       )}
       <div className="grid w-full gap-5 p-4">
+        <section className="grid gap-2 lg:col-span-2">
+          <h5 className="m-0 text-[0.62rem] font-semibold uppercase tracking-[0.06em] text-ink-muted">
+            AI recommended next steps
+          </h5>
+          <p className="m-0 text-xs text-ink-muted">
+            Advisory guidance from the AI assessment. The objective system
+            outcome remains authoritative.
+          </p>
+          <p className="m-0 border-l-2 border-brand pl-3 text-sm leading-5 text-ink-soft">
+            {result.recommendation || buildHarnessRecommendation(run)}
+          </p>
+        </section>
         <section
           className="grid w-full gap-2 lg:col-span-2"
           aria-labelledby={narrativeId}
@@ -589,18 +601,6 @@ function FinalAiCard({ run }: { run: AssessmentRunView }) {
             </p>
           </div>
           <AiNarrativeTabs narrativeId={narrativeId} result={result} />
-        </section>
-        <section className="grid gap-2 lg:col-span-2">
-          <h5 className="m-0 text-[0.62rem] font-semibold uppercase tracking-[0.06em] text-ink-muted">
-            Next run plan
-          </h5>
-          <p className="m-0 text-xs text-ink-muted">
-            Harness and test remediation only; the objective system outcome
-            remains authoritative.
-          </p>
-          <p className="m-0 border-l-2 border-brand pl-3 text-sm leading-5 text-ink-soft">
-            {buildHarnessRecommendation(run)}
-          </p>
         </section>
         <section className="grid gap-2 lg:col-span-2">
           <h5 className="m-0 text-[0.62rem] font-semibold uppercase tracking-[0.06em] text-ink-muted">
@@ -635,6 +635,8 @@ function AssessmentDetailContent({
 
   return (
     <div className="grid gap-5">
+      <FinalAiCard run={run} />
+
       <section aria-labelledby={`${safeId(run.key)}-outcome`}>
         <div className="mb-3 flex items-center gap-2">
           {objectiveFailure ? (
@@ -755,8 +757,6 @@ function AssessmentDetailContent({
         </div>
         <AssessmentMatrix entries={entries} />
       </section>
-
-      <FinalAiCard run={run} />
     </div>
   )
 }

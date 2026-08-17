@@ -142,8 +142,15 @@ describe('assessment workspace component', () => {
     expect(rendered).not.toContain('text-bg')
     expect(rendered.match(/role="tab"/g)).toHaveLength(4)
     expect(rendered).toContain('role="tabpanel"')
-    expect(rendered).toContain('Next run plan')
-    expect(rendered).toContain('Harness and test remediation only')
+    expect(detailHtml).toContain('AI recommended next steps')
+    expect(detailHtml).toContain('Advisory guidance from the AI assessment')
+    expect(detailHtml).toContain('Fix the objective gate before release.')
+    expect(detailHtml.indexOf('Advisory AI conclusion')).toBeLessThan(
+      detailHtml.indexOf('AI recommended next steps'),
+    )
+    expect(detailHtml.indexOf('AI recommended next steps')).toBeLessThan(
+      detailHtml.indexOf('Outcome boundaries'),
+    )
     expect(rendered).toContain('Chat')
     expect(rendered).toContain('data-transcript-action=')
     expect(html).toContain('pointer-events-none absolute right-4 bottom-3')
