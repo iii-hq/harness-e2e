@@ -171,6 +171,8 @@ test('exposes plan execution history and baseline comparison controls', () => {
   assert.match(plansPage, /Not reported/)
   assert.match(planPage, /Runs in this plan/)
   assert.match(planPage, /Compare with baseline/)
+  assert.match(planPage, /scrollIntoView\(\{ behavior: 'smooth'/)
+  assert.match(planPage, /aria-live="polite"/)
   assert.match(planPage, /Baseline vs Candidate/)
   assert.match(planPage, /PLAN_DETAIL_METRICS/)
   assert.match(planPage, /Test breakdown/)
