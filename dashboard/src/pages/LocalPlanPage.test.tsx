@@ -172,9 +172,12 @@ describe('local plan execution comparison', () => {
         selectedCandidateId="candidate-2"
         onVisualBaselineChange={() => undefined}
         onToggleCandidate={() => undefined}
-        onSelectCandidate={() => undefined}
         loading={false}
       />,
+    )
+    const tableHtml = html.slice(
+      html.indexOf('<table'),
+      html.indexOf('</table>') + '</table>'.length,
     )
 
     expect(html.indexOf('Baseline')).toBeLessThan(html.indexOf('Candidate #2'))
@@ -194,9 +197,11 @@ describe('local plan execution comparison', () => {
     expect(html).toContain('Higher is better')
     expect(html).toContain('Lower is better')
     expect(html).toContain('--plan-execution-column-count:3')
-    expect(html).toContain('Reference')
-    expect(html).toContain('View details')
-    expect(html).toContain('Viewing details')
+    expect(tableHtml).not.toMatch(/reference/i)
+    expect(tableHtml).not.toMatch(/improved/i)
+    expect(tableHtml).not.toContain('View details')
+    expect(tableHtml).not.toContain('Viewing details')
+    expect(tableHtml).not.toContain('View report')
     expect(html).toContain('-100 · -10.0%')
     expect(html).toContain('+100 · +10.0%')
     expect(html).toMatch(
@@ -204,7 +209,6 @@ describe('local plan execution comparison', () => {
     )
     expect(html).toContain('Winner')
     expect(html).toContain('Non-comparable attempts')
-    expect(html).toContain('aria-pressed="true"')
     expect(html).toContain('View report')
   })
 
@@ -280,7 +284,6 @@ describe('local plan execution comparison', () => {
         selectedCandidateId="baseline-1"
         onVisualBaselineChange={() => undefined}
         onToggleCandidate={() => undefined}
-        onSelectCandidate={() => undefined}
         loading={false}
       />,
     )

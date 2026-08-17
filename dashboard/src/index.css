@@ -9166,7 +9166,6 @@ footer {
   min-height: 3.35rem;
   align-content: start;
   gap: 0.22rem;
-  margin-bottom: 0.65rem;
 }
 
 .plan-execution-column-title strong {
@@ -9184,12 +9183,10 @@ footer {
   white-space: nowrap;
 }
 
-.plan-execution-column-header > .status-pill {
-  margin-bottom: 0.75rem;
-}
-
 .plan-execution-metric {
   display: grid;
+  min-height: 2.05rem;
+  align-content: start;
   gap: 0.25rem;
 }
 
@@ -9233,25 +9230,6 @@ footer {
   letter-spacing: 0.045em;
   line-height: 1;
   text-transform: uppercase;
-}
-
-.plan-execution-actions {
-  display: flex;
-  min-height: 36px;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: 0.7rem;
-}
-
-.plan-execution-actions .button {
-  min-height: 36px;
-  white-space: nowrap;
-}
-
-.plan-execution-actions .button[aria-pressed="true"] {
-  border-color: color-mix(in srgb, var(--accent) 45%, var(--line));
-  background: var(--accent-soft);
-  color: var(--accent);
 }
 
 .plan-execution-table thead th:first-child,
@@ -9313,13 +9291,6 @@ footer {
 .plan-non-comparable li a {
   color: var(--text-soft);
   text-underline-offset: 3px;
-}
-
-.plan-execution-report-link {
-  color: var(--text-soft);
-  text-decoration-thickness: 1px;
-  text-underline-offset: 3px;
-  white-space: nowrap;
 }
 
 .plan-scenario-metric {
@@ -9573,10 +9544,6 @@ footer {
     font-weight: 700;
     letter-spacing: 0.05em;
     text-transform: uppercase;
-  }
-
-  .plan-execution-actions {
-    align-items: flex-start;
   }
 
   .plan-non-comparable li {

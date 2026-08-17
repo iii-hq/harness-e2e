@@ -359,7 +359,7 @@ function executionHistoryRows(
       id: plan.baseline_execution_id,
       role: 'baseline',
       label: 'Baseline',
-      detail: 'Locked reference',
+      detail: '',
       summary: summaries[plan.baseline_execution_id] ?? null,
       fallback: null,
       candidateNumber: null,
@@ -458,7 +458,6 @@ export function PlanExecutionHistory({
   selectedCandidateId,
   onVisualBaselineChange,
   onToggleCandidate,
-  onSelectCandidate,
   loading,
   error = null,
 }: {
@@ -469,7 +468,6 @@ export function PlanExecutionHistory({
   selectedCandidateId: string | null
   onVisualBaselineChange: (id: string) => void
   onToggleCandidate: (id: string, selected: boolean) => void
-  onSelectCandidate: (id: string) => void
   loading: boolean
   error?: string | null
 }) {
@@ -501,11 +499,6 @@ export function PlanExecutionHistory({
       isVisualBaseline,
       rowComparison,
       metricSource: rowComparison ?? snapshot,
-      status: isVisualBaseline
-        ? { label: 'Reference', tone: 'status-neutral' }
-        : rowComparison
-          ? planVerdictPresentation[rowComparison.verdict]
-          : executionStatus(row.summary, row.fallback),
       selected: row.id === selectedCandidateId,
     }
   })
@@ -607,7 +600,7 @@ export function PlanExecutionHistory({
                 <tr>
                   <th scope="col">Metric</th>
                   {comparisonColumns.map(
-                    ({ row, isVisualBaseline, status, selected }) => (
+                    ({ row, isVisualBaseline, selected }) => (
                       <th
                         className={[
                           'plan-execution-column-header',
@@ -633,27 +626,6 @@ export function PlanExecutionHistory({
                               .join(' · ')}
                           </span>
                           <code title={row.id}>{row.id}</code>
-                        </div>
-                        <span className={`status-pill ${status.tone}`}>
-                          {status.label}
-                        </span>
-                        <div className="plan-execution-actions">
-                          {!isVisualBaseline && (
-                            <button
-                              className="button button-secondary"
-                              type="button"
-                              aria-pressed={selected}
-                              onClick={() => onSelectCandidate(row.id)}
-                            >
-                              {selected ? 'Viewing details' : 'View details'}
-                            </button>
-                          )}
-                          <a
-                            className="plan-execution-report-link"
-                            href={hashForExecution(row.id)}
-                          >
-                            View report
-                          </a>
                         </div>
                       </th>
                     ),
@@ -726,17 +698,16 @@ export function PlanExecutionHistory({
                                     </span>
                                   )}
                                 </span>
-                                {column.isVisualBaseline ? (
-                                  <small>Reference</small>
-                                ) : column.rowComparison ? (
+                                {!column.isVisualBaseline &&
+                                column.rowComparison ? (
                                   <small
                                     className={`metric-tone-${metric.tone}`}
                                   >
                                     {formatPlanMetricDelta(metric)}
                                   </small>
-                                ) : (
+                                ) : !column.isVisualBaseline ? (
                                   <small>Not comparable</small>
-                                )}
+                                ) : null}
                               </span>
                             ) : (
                               'Not reported'
@@ -1482,8 +1453,6 @@ export function LocalPlanDetailPage({ planId }: { planId: string }) {
   const [selectedCandidateId, setSelectedCandidateId] = useState<string | null>(
     null,
   )
-  const [candidateSelectionPinned, setCandidateSelectionPinned] =
-    useState(false)
   const [baselineDetail, setBaselineDetail] =
     useState<DashboardExecutionDetail | null>(null)
   const [candidateDetail, setCandidateDetail] =
@@ -1558,13 +1527,9 @@ export function LocalPlanDetailPage({ planId }: { planId: string }) {
 
   useEffect(() => {
     setSelectedCandidateId((current) =>
-      selectedPlanCandidate(
-        current,
-        candidateSelectionPinned,
-        comparisonCandidateIds,
-      ),
+      selectedPlanCandidate(current, false, comparisonCandidateIds),
     )
-  }, [candidateSelectionPinned, comparisonCandidateIds])
+  }, [comparisonCandidateIds])
 
   useEffect(() => {
     if (!bridge || !plan) return
@@ -1627,7 +1592,6 @@ export function LocalPlanDetailPage({ planId }: { planId: string }) {
   const start = async (role: PlanRunRole) => {
     if (!bridge || !plan) return
     setStarting(role)
-    if (role === 'candidate') setCandidateSelectionPinned(false)
     setRunFeedback({
       role,
       phase: 'starting',
@@ -1747,7 +1711,6 @@ export function LocalPlanDetailPage({ planId }: { planId: string }) {
         candidateId !== id && !excludedComparisonIds.includes(candidateId),
     )
     setVisualBaselineOverride(id === plan.baseline_execution_id ? null : id)
-    setCandidateSelectionPinned(false)
     setSelectedCandidateId((current) =>
       current && current !== id && availableCandidates.includes(current)
         ? current
@@ -1766,27 +1729,12 @@ export function LocalPlanDetailPage({ planId }: { planId: string }) {
           : [...current, id],
     )
     if (!selected && selectedCandidateId === id) {
-      setCandidateSelectionPinned(false)
       setSelectedCandidateId(
         comparisonCandidateIds
           .filter((candidateId) => candidateId !== id)
           .at(-1) ?? null,
       )
     }
-  }
-  const selectCandidate = (id: string) => {
-    setCandidateSelectionPinned(true)
-    setCandidateDetail(null)
-    setComparisonError(null)
-    setComparisonLoading(true)
-    setSelectedCandidateId(id)
-    window.requestAnimationFrame(() => {
-      const panel = document
-        .getElementById('plan-comparison-title')
-        ?.closest<HTMLElement>('section')
-      panel?.focus()
-      panel?.scrollIntoView({ behavior: 'smooth', block: 'start' })
-    })
   }
 
   return (
@@ -1873,7 +1821,6 @@ export function LocalPlanDetailPage({ planId }: { planId: string }) {
               selectedCandidateId={selectedCandidateId}
               onVisualBaselineChange={changeVisualBaseline}
               onToggleCandidate={toggleComparisonCandidate}
-              onSelectCandidate={selectCandidate}
               loading={historyLoading}
               error={historyError}
             />
