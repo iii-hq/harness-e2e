@@ -92,6 +92,7 @@ fn observed_metadata(run_dir: &Path, report: &E2eReport) -> Result<RunMetadata> 
         returncode: Some(0),
         error: String::new(),
         request: super::RunRequest {
+            _caller_worker_id: None,
             label: "e2e::* control-plane run".into(),
             url: String::new(),
             model: report.subject.model.clone(),
@@ -114,11 +115,14 @@ fn observed_metadata(run_dir: &Path, report: &E2eReport) -> Result<RunMetadata> 
             runs: requested_runs,
             technical_retries: 0,
             seed,
+            plan_context: None,
         },
+        plan_context: None,
     })
 }
 
-pub(super) fn recover_interrupted_runs(runs_dir: &Path) -> Result<()> {
+pub(super) fn recover_interrupted_runs(runs_dir: &Path) -> Result<Vec<RunMetadata>> {
+    let mut recovered = Vec::new();
     for entry in fs::read_dir(runs_dir)? {
         let entry = entry?;
         if !entry.file_type()?.is_dir() {
@@ -132,9 +136,10 @@ pub(super) fn recover_interrupted_runs(runs_dir: &Path) -> Result<()> {
             metadata.completed_at = Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true);
             metadata.error = "dashboard stopped before the runner completed".into();
             write_metadata(&entry.path(), &metadata)?;
+            recovered.push(metadata);
         }
     }
-    Ok(())
+    Ok(recovered)
 }
 
 pub(super) fn load_runs(runs_dir: &Path) -> Result<Vec<StoredRun>> {

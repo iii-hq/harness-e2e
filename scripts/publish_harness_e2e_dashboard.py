@@ -6,11 +6,13 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
+import tempfile
 from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-MANIFEST_PREFIX = "window.HARNESS_EXECUTIONS = "
+MANIFEST_FILENAME = "executions.json"
 FAILURE_CONCLUSIONS = {
     "action_required",
     "failure",
@@ -24,6 +26,29 @@ MAX_PUBLIC_TEXT_CHARS = 2_000
 
 class PublishError(ValueError):
     """Raised when dashboard publication inputs are unsafe or malformed."""
+
+
+def write_text_atomic(path: Path, text: str) -> None:
+    """Replace a published artifact atomically within its destination directory."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, temporary_name = tempfile.mkstemp(
+        prefix=f".{path.name}.", suffix=".tmp", dir=path.parent
+    )
+    temporary_path = Path(temporary_name)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as temporary:
+            temporary.write(text)
+            temporary.flush()
+            os.fsync(temporary.fileno())
+        os.replace(temporary_path, path)
+    finally:
+        temporary_path.unlink(missing_ok=True)
+
+
+def write_json_atomic(path: Path, value: dict[str, Any]) -> None:
+    write_text_atomic(
+        path, json.dumps(value, indent=2, sort_keys=True, ensure_ascii=False) + "\n"
+    )
 
 
 def load_json(path: Path | None) -> dict[str, Any] | None:
@@ -42,10 +67,8 @@ def load_manifest(path: Path) -> dict[str, Any]:
     if not path.is_file():
         return {"executions": []}
     text = path.read_text().strip()
-    if not text.startswith(MANIFEST_PREFIX) or not text.endswith(";"):
-        raise PublishError(f"{path} is not a Harness execution manifest")
     try:
-        value = json.loads(text[len(MANIFEST_PREFIX) : -1])
+        value = json.loads(text)
     except json.JSONDecodeError as exc:
         raise PublishError(f"cannot decode {path}: {exc}") from exc
     if not isinstance(value, dict) or not isinstance(value.get("executions"), list):
@@ -1917,7 +1940,7 @@ def migrate_retained_details(
             retained,
             _metadata_from_summary(execution),
         )
-        candidate.write_text(json.dumps(public_detail, indent=2, sort_keys=True) + "\n")
+        write_json_atomic(candidate, public_detail)
 
 
 def publish(
@@ -1936,7 +1959,8 @@ def publish(
     site_dir.mkdir(parents=True, exist_ok=True)
     runs_dir = site_dir / "runs"
     runs_dir.mkdir(parents=True, exist_ok=True)
-    manifest_path = site_dir / "executions.js"
+    manifest_path = site_dir / MANIFEST_FILENAME
+    legacy_manifest_path = site_dir / "executions.js"
     manifest = load_manifest(manifest_path)
     migrate_retained_details(site_dir, manifest)
     raw_snapshot = load_json(snapshot_path)
@@ -2000,9 +2024,7 @@ def publish(
         efficiency_totals = build_execution_efficiency_totals(detail)
         public_detail = complete_public_detail(detail, metadata)
         relative_detail_path = f"runs/{metadata['id']}.json"
-        (site_dir / relative_detail_path).write_text(
-            json.dumps(public_detail, indent=2, sort_keys=True) + "\n"
-        )
+        write_json_atomic(site_dir / relative_detail_path, public_detail)
         summary["availability"] = "full"
         summary["detail_path"] = relative_detail_path
         summary["scenario_metrics"] = scenario_metrics
@@ -2055,11 +2077,8 @@ def publish(
         },
         "executions": executions,
     }
-    manifest_path.write_text(
-        MANIFEST_PREFIX
-        + json.dumps(updated, indent=2, sort_keys=True, ensure_ascii=False)
-        + ";\n"
-    )
+    write_json_atomic(manifest_path, updated)
+    legacy_manifest_path.unlink(missing_ok=True)
     return updated
 
 

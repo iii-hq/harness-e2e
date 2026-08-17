@@ -1,43 +1,561 @@
+import { useEffect, useMemo, useState } from 'react'
 import { AssessmentWorkspace } from '@/components/AssessmentWorkspace'
-import { LegacyLoadError } from '@/components/LegacyLoadError'
 import { ThemeToggle } from '@/components/ThemeToggle'
+import { TranscriptDialog } from '@/components/TranscriptDialog'
 import { hashForExecution, hashForWorkspace } from '@/hooks/use-hash-route'
-import { useLegacyPage } from '@/hooks/useLegacyPage'
+import {
+  type AssessmentRunMetrics,
+  type AssessmentRunView,
+  aggregateAssessmentMetrics,
+  buildAssessmentWorkspace,
+} from '@/lib/assessment-view'
+import {
+  type DashboardExecutionDetail,
+  type DashboardExecutionSummary,
+  getDashboardDataBridge,
+} from '@/lib/dashboard-data-source'
+import {
+  buildExecutionPresentation,
+  categoryLabel,
+  categoryMessage,
+  type ExecutionPresentation,
+  formatDate,
+  formatDuration,
+  formatPercent,
+  titleCase,
+} from '@/lib/execution-view'
 
-const evidenceKicker =
-  'section-kicker mb-2 font-mono text-[0.61rem] font-semibold tracking-[0.055em] text-ink-muted'
+type DetailSection = 'summary' | 'results' | 'technical'
+
 const detailPanel =
   'detail-section scroll-mt-[82px] overflow-hidden rounded-[10px] border border-line-strong border-l-[3px] bg-panel px-7 py-[26px] max-[560px]:px-[18px] max-[560px]:py-[22px]'
 const detailHeading =
   'm-0 text-[clamp(1.35rem,2vw,1.85rem)] font-[570] tracking-[-0.045em]'
-const detailDisclosure =
-  'section-disclosure -mx-7 -mb-[26px] mt-5 rounded-none border-0 border-t border-line bg-panel-quiet max-[560px]:-mx-[18px] max-[560px]:-mb-[22px]'
-const disclosureSummary =
-  'flex min-h-[54px] list-none items-center justify-between gap-4 px-7 py-3.5 max-[560px]:px-[18px]'
-const detailKpi =
-  'kpi-card min-h-[166px] rounded-none border-0 border-r border-b border-line bg-transparent p-[22px] max-[560px]:min-h-[138px] max-[560px]:border-r-0'
-const detailKpiValue =
-  'kpi-value mt-[26px] text-[clamp(2rem,3.2vw,3rem)] font-[540]'
-const detailNavItem =
-  'flex min-h-[52px] min-w-0 items-center gap-2.5 rounded-none border-r border-line px-4 text-left text-ink-muted no-underline hover:bg-panel-soft hover:text-ink focus-visible:bg-panel-soft focus-visible:text-ink focus-visible:outline-none max-[840px]:min-h-12 max-[840px]:px-3'
 
-export function ExecutionPage({ executionId }: { executionId: string }) {
-  const error = useLegacyPage('execution')
+function sectionFromAnchor(anchor: string | null | undefined): DetailSection {
+  if (
+    anchor === 'results' ||
+    anchor === 'assessments' ||
+    anchor === 'scenarios'
+  )
+    return 'results'
+  if (anchor === 'evidence' || anchor === 'raw-data') return 'technical'
+  if (anchor === 'technical' || anchor === 'configuration') return 'technical'
+  return 'summary'
+}
 
+function summaryFromDetail(
+  detail: DashboardExecutionDetail,
+  fallback?: DashboardExecutionSummary,
+): DashboardExecutionSummary {
+  const nested =
+    detail.execution && typeof detail.execution === 'object'
+      ? detail.execution
+      : {}
+  return {
+    ...(fallback ?? {}),
+    ...detail,
+    id:
+      detail.id ||
+      fallback?.id ||
+      String((nested as Record<string, unknown>).id ?? ''),
+    label:
+      detail.label ||
+      fallback?.label ||
+      String((nested as Record<string, unknown>).label ?? ''),
+    status: detail.status || fallback?.status || 'incomplete',
+    subjects: detail.subjects ?? fallback?.subjects ?? [],
+  }
+}
+
+function modelNames(presentation: ExecutionPresentation['subjects']) {
+  return presentation.length
+    ? presentation.map((model) => `${model.provider}/${model.model}`).join(', ')
+    : 'Not reported'
+}
+
+function friendlyModelName(model: string) {
+  const compact = model.slice(model.lastIndexOf('/') + 1)
+  const readable = compact
+    .replace(/^gpt-/i, 'GPT-')
+    .replace(
+      /[-_]+([a-z])/gi,
+      (_, letter: string) => ` ${letter.toUpperCase()}`,
+    )
+  return readable.charAt(0).toUpperCase() + readable.slice(1)
+}
+
+function ModelIdentityCard({
+  label,
+  models,
+}: {
+  label: string
+  models: ExecutionPresentation['subjects']
+}) {
+  return (
+    <div className="min-w-0 rounded-lg border border-line bg-panel-faint px-3 py-2.5">
+      <div className="section-kicker">{label}</div>
+      {models.length ? (
+        models.map((model) => (
+          <div
+            key={`${model.provider}/${model.model}`}
+            className="mt-1 min-w-0"
+          >
+            <strong
+              className="block break-words text-sm text-ink"
+              title={`${model.provider}/${model.model}`}
+            >
+              {friendlyModelName(model.model)}
+            </strong>
+            {model.provider && (
+              <code className="mt-0.5 block break-all text-[0.59rem] text-ink-muted">
+                {model.provider}
+              </code>
+            )}
+          </div>
+        ))
+      ) : (
+        <strong className="mt-1 block text-sm text-ink-muted">
+          Not reported
+        </strong>
+      )}
+    </div>
+  )
+}
+
+function StatusPill({ presentation }: { presentation: ExecutionPresentation }) {
+  const tone =
+    presentation.attention === 'passed'
+      ? 'status-pass'
+      : presentation.attention === 'needs_attention'
+        ? 'status-fail'
+        : 'status-incomplete'
+  const label =
+    presentation.attention === 'passed'
+      ? 'Passed'
+      : presentation.attention === 'needs_attention'
+        ? 'Needs attention'
+        : titleCase(presentation.attention)
+  return <span className={`status-pill ${tone}`}>{label}</span>
+}
+
+function MetricCard({
+  label,
+  value,
+  caption,
+}: {
+  label: string
+  value: string
+  caption: string
+}) {
+  return (
+    <article className="kpi-card min-h-0 rounded-none border-0 border-r border-b border-line bg-transparent p-[22px] max-[760px]:border-r-0">
+      <div className="kpi-label">{label}</div>
+      <div className="kpi-value mt-5 text-[clamp(1.8rem,3vw,2.8rem)]">
+        {value}
+      </div>
+      <div className="kpi-delta">{caption}</div>
+    </article>
+  )
+}
+
+function SummaryMetric({
+  label,
+  value,
+  caption,
+}: {
+  label: string
+  value: string
+  caption: string
+}) {
+  return (
+    <div className="rounded-lg border border-line bg-panel-subtle p-3">
+      <small className="section-kicker">{label}</small>
+      <strong className="mt-2 block text-lg font-semibold text-ink">
+        {value}
+      </strong>
+      <span className="mt-1 block text-xs text-ink-muted">{caption}</span>
+    </div>
+  )
+}
+
+type SummaryExecutionMetrics = {
+  totalTokens: number | null
+  functionCalls: number | null
+  functionErrors: number | null
+  durationSeconds: number | null
+  runCount: number
+}
+
+function finiteMetric(value: unknown): number | null {
+  return typeof value === 'number' && Number.isFinite(value) ? value : null
+}
+
+function buildSummaryExecutionMetrics(
+  presentation: ExecutionPresentation,
+  aggregate: AssessmentRunMetrics,
+  runCount: number,
+): SummaryExecutionMetrics {
+  const totals = presentation.execution.totals
+  const reportedRuns =
+    runCount || presentation.receivedReports || presentation.breakdown.total
+  return {
+    totalTokens: finiteMetric(totals?.total_tokens) ?? aggregate.totalTokens,
+    functionCalls:
+      finiteMetric(totals?.function_calls) ?? aggregate.functionCalls,
+    functionErrors:
+      finiteMetric(totals?.function_call_errors) ??
+      aggregate.functionCallErrors,
+    durationSeconds:
+      presentation.workflowRuntimeSeconds ??
+      presentation.modelRuntimeSeconds ??
+      (aggregate.durationMs === null ? null : aggregate.durationMs / 1000),
+    runCount: reportedRuns,
+  }
+}
+
+function SummarySection({
+  presentation,
+  metrics,
+}: {
+  presentation: ExecutionPresentation
+  metrics: SummaryExecutionMetrics
+}) {
+  const issue = presentation.primaryIssue
+  return (
+    <section
+      id="summary"
+      className={`${detailPanel} border-l-brand`}
+      aria-labelledby="summary-heading"
+    >
+      <div className="section-kicker mb-2">01 · Summary</div>
+      <div className="flex flex-wrap items-start justify-between gap-4">
+        <div>
+          <h2 id="summary-heading" className={detailHeading}>
+            {presentation.label}
+          </h2>
+          <p className="mt-3 max-w-3xl text-sm leading-6 text-ink-muted">
+            {presentation.attention === 'passed'
+              ? 'All retained scenarios passed their objective system checks.'
+              : issue
+                ? `${categoryLabel(issue.category)} is the first actionable signal in this execution.`
+                : 'The execution is still collecting enough evidence for a definitive result.'}
+          </p>
+        </div>
+        <StatusPill presentation={presentation} />
+      </div>
+      <div className="mt-6 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+        <div className="rounded-lg border border-line bg-panel-subtle p-3">
+          <small className="section-kicker">Subject</small>
+          <strong className="mt-2 block break-words text-sm text-ink">
+            {modelNames(presentation.subjects)}
+          </strong>
+        </div>
+        <div className="rounded-lg border border-line bg-panel-subtle p-3">
+          <small className="section-kicker">Judge</small>
+          <strong className="mt-2 block break-words text-sm text-ink">
+            {modelNames(presentation.judges)}
+          </strong>
+        </div>
+        <div className="rounded-lg border border-line bg-panel-subtle p-3">
+          <small className="section-kicker">Completed</small>
+          <strong className="mt-2 block text-sm text-ink">
+            {formatDate(presentation.completedAt)}
+          </strong>
+        </div>
+        <div className="rounded-lg border border-line bg-panel-subtle p-3">
+          <small className="section-kicker">Action</small>
+          <strong className="mt-2 block text-sm text-ink">
+            {issue ? 'Investigate results' : 'Review results'}
+          </strong>
+        </div>
+      </div>
+      <div className="mt-5">
+        <div className="section-kicker">Execution indicators</div>
+        <div className="mt-2 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+          <SummaryMetric
+            label="Total tokens"
+            value={
+              metrics.totalTokens === null
+                ? 'Not reported'
+                : Math.round(metrics.totalTokens).toLocaleString('en-US')
+            }
+            caption={`${metrics.runCount} diagnostic runs`}
+          />
+          <SummaryMetric
+            label="Function calls"
+            value={
+              metrics.functionCalls === null
+                ? 'Not reported'
+                : Math.round(metrics.functionCalls).toLocaleString('en-US')
+            }
+            caption="Subject execution calls"
+          />
+          <SummaryMetric
+            label="Workflow duration"
+            value={formatDuration(metrics.durationSeconds)}
+            caption="End-to-end execution time"
+          />
+          <SummaryMetric
+            label="Function errors"
+            value={
+              metrics.functionErrors === null
+                ? 'Not reported'
+                : Math.round(metrics.functionErrors).toLocaleString('en-US')
+            }
+            caption="Calls that returned errors"
+          />
+        </div>
+      </div>
+      {issue && (
+        <div className="mt-5 rounded-lg border border-danger/25 bg-danger/5 p-4">
+          <div>
+            <strong className="block text-sm text-ink">
+              {categoryMessage(issue.category, issue.count)}
+            </strong>
+            <span className="mt-1 block text-sm text-ink-muted">
+              Objective system outcomes remain authoritative over advisory AI
+              conclusions.
+            </span>
+          </div>
+        </div>
+      )}
+    </section>
+  )
+}
+
+function ResultsSection({
+  detail,
+  onTranscript,
+}: {
+  detail: DashboardExecutionDetail
+  onTranscript: (run: AssessmentRunView, title: string) => void
+}) {
+  const runCount = (detail.reports ?? []).reduce(
+    (total, record) =>
+      total +
+      (record.report?.scenarios ?? []).reduce(
+        (scenarioTotal, scenario) =>
+          scenarioTotal + (scenario.runs?.length ?? 0),
+        0,
+      ),
+    0,
+  )
+  return (
+    <section
+      id="results"
+      className={`${detailPanel} border-l-brand`}
+      aria-labelledby="results-heading"
+    >
+      <div className="section-kicker mb-2">02 · Results</div>
+      <div className="flex flex-wrap items-end justify-between gap-4">
+        <div>
+          <h2 id="results-heading" className={detailHeading}>
+            Scenarios and assessments
+          </h2>
+          <p className="mt-2 max-w-2xl text-sm leading-6 text-ink-muted">
+            Objective outcomes, advisory interpretations, and run-level evidence
+            stay distinct while sharing one diagnostic flow.
+          </p>
+        </div>
+        <span className="coverage-note">{runCount} diagnostic runs</span>
+      </div>
+      <div className="mt-6">
+        <AssessmentWorkspace detail={detail} onTranscript={onTranscript} />
+      </div>
+    </section>
+  )
+}
+
+function TechnicalSection({
+  detail,
+  presentation,
+}: {
+  detail: DashboardExecutionDetail
+  presentation: ExecutionPresentation
+}) {
+  const technical = {
+    id: detail.id,
+    run_id: detail.run_id,
+    attempt: detail.attempt,
+    status: detail.status,
+    source: detail.source,
+    release: detail.release,
+    event: detail.event,
+    actor: detail.actor,
+    started_at: presentation.startedAt,
+    completed_at: presentation.completedAt,
+    availability: detail.availability,
+  }
+  return (
+    <section
+      id="technical"
+      className={`${detailPanel} border-l-line-strong bg-panel-faint`}
+      aria-labelledby="technical-heading"
+    >
+      <div className="section-kicker mb-2">03 · Technical</div>
+      <h2 id="technical-heading" className={detailHeading}>
+        Provenance and raw fields
+      </h2>
+      <p className="mt-2 max-w-2xl text-sm leading-6 text-ink-muted">
+        Internal identifiers remain available for reproducibility without
+        carrying the first-read experience.
+      </p>
+      <div className="mt-5 grid gap-2 sm:grid-cols-2">
+        {Object.entries(technical).map(([key, value]) => (
+          <div key={key} className="rounded-lg border border-line bg-panel p-3">
+            <small className="section-kicker">{key.replaceAll('_', ' ')}</small>
+            <code className="mt-2 block break-all text-xs text-ink-soft">
+              {typeof value === 'object'
+                ? JSON.stringify(value)
+                : String(value ?? 'Not reported')}
+            </code>
+          </div>
+        ))}
+      </div>
+      <details className="mt-5 rounded-lg border border-line bg-panel-subtle">
+        <summary className="min-h-11 cursor-pointer px-4 py-3 text-sm font-semibold">
+          Preview raw JSON
+        </summary>
+        <pre className="max-h-[560px] overflow-auto border-t border-line p-4 text-xs text-ink-muted">
+          {JSON.stringify(detail, null, 2)}
+        </pre>
+      </details>
+    </section>
+  )
+}
+
+export function ExecutionPage({
+  executionId,
+  anchor,
+}: {
+  executionId: string
+  anchor?: string | null
+}) {
+  const [summary, setSummary] = useState<DashboardExecutionSummary | null>(null)
+  const [detail, setDetail] = useState<DashboardExecutionDetail | null>(null)
+  const [error, setError] = useState<string | null>(null)
+  const [transcript, setTranscript] = useState<{
+    run: AssessmentRunView
+    title: string
+  } | null>(null)
+  const [section, setSection] = useState<DetailSection>(
+    sectionFromAnchor(anchor),
+  )
+
+  useEffect(() => {
+    setSection(sectionFromAnchor(anchor))
+    if (anchor)
+      window.requestAnimationFrame(() =>
+        document
+          .getElementById(sectionFromAnchor(anchor))
+          ?.scrollIntoView({ block: 'start' }),
+      )
+  }, [anchor])
+
+  useEffect(() => {
+    let active = true
+    setError(null)
+    setDetail(null)
+    void (async () => {
+      try {
+        const nextBridge = await getDashboardDataBridge()
+        const manifest = await nextBridge.listExecutions({
+          ids: [executionId],
+          limit: 1,
+        })
+        const nextSummary = manifest.executions[0] ?? null
+        const nextDetail = await nextBridge.getExecution(executionId)
+        if (!active) return
+        setSummary(nextSummary ?? summaryFromDetail(nextDetail))
+        setDetail(nextDetail)
+      } catch (cause) {
+        if (active)
+          setError(cause instanceof Error ? cause.message : String(cause))
+      }
+    })()
+    return () => {
+      active = false
+    }
+  }, [executionId])
+
+  const presentation = useMemo(
+    () => (summary ? buildExecutionPresentation(summary) : null),
+    [summary],
+  )
+  const assessmentModel = useMemo(
+    () => buildAssessmentWorkspace(detail),
+    [detail],
+  )
+  const summaryMetrics = useMemo(
+    () =>
+      presentation
+        ? buildSummaryExecutionMetrics(
+            presentation,
+            aggregateAssessmentMetrics(assessmentModel.runs),
+            assessmentModel.runs.length,
+          )
+        : null,
+    [assessmentModel.runs, presentation],
+  )
+
+  useEffect(() => {
+    if (anchor || !presentation) return
+    const initialSection: DetailSection =
+      presentation.attention === 'needs_attention' ? 'results' : 'summary'
+    setSection(initialSection)
+    if (initialSection === 'results')
+      window.requestAnimationFrame(() =>
+        document
+          .getElementById(initialSection)
+          ?.scrollIntoView({ block: 'start' }),
+      )
+  }, [anchor, presentation])
+
+  if (error)
+    return (
+      <>
+        <a className="skip-link" href={hashForWorkspace()}>
+          Back to executions
+        </a>
+        <main id="main" className="page-shell detail-shell">
+          <section className="empty-state" role="alert">
+            <div className="empty-icon" aria-hidden="true">
+              !
+            </div>
+            <h1>Execution not found</h1>
+            <p>{error}</p>
+            <a className="button" href={hashForWorkspace()}>
+              Back to executions
+            </a>
+          </section>
+        </main>
+      </>
+    )
+  if (!detail || !presentation)
+    return (
+      <main id="main" className="page-shell detail-shell">
+        <section className="detail-loading" aria-busy="true">
+          Loading execution report…
+        </section>
+      </main>
+    )
+
+  const navigation: Array<{ id: DetailSection; label: string }> = [
+    { id: 'summary', label: 'Summary' },
+    { id: 'results', label: 'Results' },
+    { id: 'technical', label: 'Technical' },
+  ]
   return (
     <>
-      <LegacyLoadError error={error} />
-      <a className="skip-link" href={hashForExecution(executionId, 'main')}>
+      <a className="skip-link" href={hashForExecution(executionId, section)}>
         Skip to execution details
       </a>
-      <div className="ambient ambient-one hidden" aria-hidden="true"></div>
-      <div className="ambient ambient-two hidden" aria-hidden="true"></div>
-
       <header className="topbar min-h-[68px]">
         <a
           className="brand"
-          href="https://github.com/iii-hq/workers"
-          aria-label="iii workers"
+          href="https://github.com/iii-hq/harness-e2e"
+          aria-label="iii Harness E2E"
         >
           <span className="brand-copy">
             <strong>iii</strong>
@@ -47,16 +565,13 @@ export function ExecutionPage({ executionId }: { executionId: string }) {
         <nav className="topbar-actions" aria-label="Execution actions">
           <ThemeToggle />
           <a
-            id="workflow-link"
             className="button button-secondary"
-            href="https://github.com/iii-hq/workers/actions"
-            data-mobile-label="Workflow"
+            href="https://github.com/iii-hq/harness-e2e/actions"
           >
             Open workflow <span aria-hidden="true">↗</span>
           </a>
         </nav>
       </header>
-
       <main
         id="main"
         className="page-shell detail-shell w-[min(1420px,calc(100%-48px))] pt-[30px] max-[840px]:w-[min(1420px,calc(100%-30px))]"
@@ -67,375 +582,121 @@ export function ExecutionPage({ executionId }: { executionId: string }) {
         >
           <a href={hashForWorkspace()}>Executions</a>
           <span aria-hidden="true">/</span>
-          <span id="breadcrumb-run">Run</span>
+          <span>{presentation.label}</span>
         </nav>
-
         <section
-          id="detail-loading"
-          className="detail-loading"
-          aria-live="polite"
+          id="detail-summary"
+          className="execution-summary grid grid-cols-[minmax(0,1.35fr)_minmax(420px,0.65fr)] overflow-hidden rounded-[10px] border border-line-strong border-t-[3px] border-t-brand bg-panel max-[1120px]:grid-cols-1"
+          aria-labelledby="execution-heading"
         >
-          Loading execution data…
-        </section>
-
-        <section id="detail-error" className="empty-state" hidden>
-          <div className="empty-icon" aria-hidden="true">
-            !
+          <div className="execution-summary-main min-w-0 p-[30px] max-[560px]:px-[18px] max-[560px]:py-[22px]">
+            <div className="eyebrow mb-3">
+              <span className="live-dot" aria-hidden="true" />
+              Execution report
+            </div>
+            <h1
+              id="execution-heading"
+              className="m-0 max-w-full break-words text-[clamp(2rem,4vw,3.6rem)] leading-[0.98] font-[550]"
+            >
+              {presentation.label}
+            </h1>
+            <fieldset className="m-0 mt-4 grid max-w-3xl gap-2 border-0 p-0 sm:grid-cols-2">
+              <legend className="sr-only">Execution models</legend>
+              <ModelIdentityCard
+                label="Subject"
+                models={presentation.subjects}
+              />
+              <ModelIdentityCard label="Judge" models={presentation.judges} />
+            </fieldset>
+            <div className="mt-5 flex flex-wrap gap-2">
+              <StatusPill presentation={presentation} />
+              <span className="data-badge">
+                {detail.availability === 'full'
+                  ? 'Diagnostic detail'
+                  : detail.availability === 'aggregate'
+                    ? 'Aggregate'
+                    : 'No report'}
+              </span>
+            </div>
           </div>
-          <h1>Execution not found</h1>
-          <p id="detail-error-message">
-            This execution is not present in the retained history.
-          </p>
-          <a className="button" href={hashForWorkspace()}>
-            Back to executions
-          </a>
-        </section>
-
-        <div id="detail-content" hidden>
           <section
-            className="execution-summary grid grid-cols-[minmax(0,1.35fr)_minmax(420px,0.65fr)] overflow-hidden rounded-[10px] border border-line-strong border-t-[3px] border-t-brand bg-panel max-[1120px]:grid-cols-1"
-            aria-labelledby="execution-heading"
+            className="kpi-grid detail-kpis m-0 grid grid-cols-2 gap-0 border-l border-line bg-panel-faint max-[1120px]:border-t max-[1120px]:border-l-0 max-[760px]:grid-cols-1"
+            aria-label="Execution metrics"
           >
-            <div className="execution-summary-main min-w-0 p-[30px] max-[560px]:px-[18px] max-[560px]:py-[22px]">
-              <header className="execution-header grid content-start items-start justify-stretch gap-[18px] p-0">
-                <div>
-                  <div className="eyebrow mb-3">
-                    <span className="live-dot" aria-hidden="true"></span>
-                    Execution evidence
-                  </div>
-                  <div className="execution-title-row">
-                    <h1
-                      id="execution-heading"
-                      className="grid max-w-full gap-3 text-[clamp(2rem,4vw,3.6rem)] leading-[0.98] font-[550] max-[560px]:text-[clamp(1.8rem,12vw,2.7rem)]"
-                    >
-                      <span>Execution</span>
-                      <code
-                        id="execution-title"
-                        className="overflow-hidden text-ellipsis whitespace-nowrap font-mono text-[clamp(0.82rem,1.35vw,1.05rem)] leading-[1.35] font-medium tracking-[-0.025em] text-ink-soft"
-                      >
-                        Run
-                      </code>
-                    </h1>
-                  </div>
-                  <p
-                    id="execution-subtitle"
-                    className="mt-3.5 text-ink-muted"
-                  ></p>
-                </div>
-                <div className="execution-summary-meta flex flex-wrap items-center gap-2">
-                  <span
-                    id="execution-status"
-                    className="status-pill status-incomplete"
-                  >
-                    Loading
-                  </span>
-                  <span id="availability-badge" className="data-badge">
-                    Unknown data
-                  </span>
-                </div>
-                <div
-                  id="execution-actions"
-                  className="execution-actions justify-start"
-                ></div>
-              </header>
-
-              <section
-                id="detail-failures"
-                className="detail-alert mt-6 grid grid-cols-[minmax(190px,0.45fr)_minmax(0,1fr)] gap-6 rounded-none border-0 border-t border-t-[rgba(255,120,111,0.28)] bg-transparent pt-4 max-[560px]:grid-cols-1 [&_.failure-chip]:rounded-none [&_.failure-chip]:border-0 [&_.failure-chip]:border-b [&_.failure-chip]:border-line [&_.failure-chip]:bg-transparent [&_.failure-chip]:px-0 [&_.failure-chip]:py-2 [&_.failure-groups]:gap-1.5"
-                hidden
-                aria-labelledby="failures-title"
-              >
-                <div className="detail-alert-heading flex items-start gap-[11px]">
-                  <span
-                    className="latest-signal-icon text-danger"
-                    aria-hidden="true"
-                  >
-                    !
-                  </span>
-                  <div>
-                    <div className="section-kicker mb-[5px] text-danger">
-                      Needs attention
-                    </div>
-                    <h2 id="failures-title" className="text-[0.84rem] text-ink">
-                      Execution failures
-                    </h2>
-                  </div>
-                </div>
-                <div id="failure-summary"></div>
-              </section>
-            </div>
-
-            <section
-              className="kpi-grid detail-kpis m-0 grid grid-cols-3 gap-0 border-l border-line bg-panel-faint max-[1120px]:border-t max-[1120px]:border-l-0 max-[760px]:grid-cols-1"
-              aria-label="Execution metrics"
-            >
-              <article
-                className={`${detailKpi} kpi-primary bg-[radial-gradient(circle_at_100%_0,rgba(199,255,74,0.09),transparent_48%)]`}
-              >
-                <div className="kpi-label">Scenario pass rate</div>
-                <div id="detail-pass-rate" className={detailKpiValue}>
-                  —
-                </div>
-                <div id="detail-coverage" className="kpi-delta">
-                  —
-                </div>
-                <div className="kpi-orbit" aria-hidden="true"></div>
-              </article>
-              <article
-                className={`${detailKpi} border-b-0 max-[760px]:border-b`}
-              >
-                <div className="kpi-label">Model cost</div>
-                <div id="detail-cost" className={detailKpiValue}>
-                  —
-                </div>
-                <div className="kpi-delta">Subject and judge</div>
-              </article>
-              <article className={`${detailKpi} border-r-0 border-b-0`}>
-                <div className="kpi-label">Model runtime</div>
-                <div id="detail-runtime" className={detailKpiValue}>
-                  —
-                </div>
-                <div id="workflow-runtime" className="kpi-delta">
-                  —
-                </div>
-              </article>
-            </section>
+            <MetricCard
+              label="Scenario pass rate"
+              value={formatPercent(presentation.passRate)}
+              caption={`${formatPercent(presentation.coverage)} coverage`}
+            />
+            <MetricCard
+              label="Model runtime"
+              value={formatDuration(presentation.modelRuntimeSeconds)}
+              caption={
+                presentation.workflowRuntimeSeconds !== null
+                  ? `${formatDuration(presentation.workflowRuntimeSeconds)} workflow`
+                  : 'Workflow duration not reported'
+              }
+            />
+            <MetricCard
+              label="Results"
+              value={String(presentation.breakdown.total || '—')}
+              caption={`${presentation.breakdown.issues} requiring attention`}
+            />
+            <MetricCard
+              label="Evidence"
+              value={String(assessmentModel.runs.length)}
+              caption="Assessment runs retained"
+            />
           </section>
-
-          <div className="detail-layout mt-[18px] block">
-            <nav
-              className="detail-index sticky top-3 z-20 mb-4 grid grid-cols-5 gap-0 overflow-hidden rounded-[9px] border border-line-strong bg-glass p-0 shadow-[0_12px_30px_rgba(0,0,0,0.12)] backdrop-blur-[18px] max-[840px]:static max-[840px]:grid-cols-2"
-              aria-label="Execution evidence sections"
-            >
-              <span className="visually-hidden">On this execution</span>
-              <a
-                href={hashForExecution(executionId, 'overview')}
-                className={`${detailNavItem} max-[560px]:border-b`}
-              >
-                <span className="font-mono text-[0.6rem]" aria-hidden="true">
-                  01
-                </span>
-                <strong className="overflow-hidden text-ellipsis whitespace-nowrap text-[0.74rem] font-semibold">
-                  Context
-                </strong>
-              </a>
-              <a
-                href={hashForExecution(executionId, 'configuration')}
-                className={`${detailNavItem} max-[560px]:border-r-0 max-[560px]:border-b`}
-              >
-                <span className="font-mono text-[0.6rem]" aria-hidden="true">
-                  02
-                </span>
-                <strong className="overflow-hidden text-ellipsis whitespace-nowrap text-[0.74rem] font-semibold">
-                  Stack
-                </strong>
-              </a>
-              <a
-                href={hashForExecution(executionId, 'assessments')}
-                className={`${detailNavItem} max-[840px]:border-b`}
-              >
-                <span className="font-mono text-[0.6rem]" aria-hidden="true">
-                  03
-                </span>
-                <strong className="overflow-hidden text-ellipsis whitespace-nowrap text-[0.74rem] font-semibold">
-                  Assessments
-                </strong>
-              </a>
-              <a
-                href={hashForExecution(executionId, 'scenarios')}
-                className={`${detailNavItem} max-[840px]:border-r-0 max-[840px]:border-b`}
-              >
-                <span className="font-mono text-[0.6rem]" aria-hidden="true">
-                  04
-                </span>
-                <strong className="overflow-hidden text-ellipsis whitespace-nowrap text-[0.74rem] font-semibold">
-                  Scenarios
-                </strong>
-              </a>
-              <a
-                href={hashForExecution(executionId, 'raw-data')}
-                className={`${detailNavItem} border-r-0`}
-              >
-                <span className="font-mono text-[0.6rem]" aria-hidden="true">
-                  05
-                </span>
-                <strong className="overflow-hidden text-ellipsis whitespace-nowrap text-[0.74rem] font-semibold">
-                  Source
-                </strong>
-              </a>
-            </nav>
-
-            <div className="detail-main grid min-w-0 gap-4">
-              <div className="detail-context-grid grid grid-cols-[minmax(0,0.85fr)_minmax(0,1.15fr)] gap-4 max-[1120px]:grid-cols-1">
-                <section
-                  id="overview"
-                  className={`${detailPanel} detail-section-context border-l-info`}
-                  aria-labelledby="overview-heading"
-                >
-                  <div className={evidenceKicker}>01 · Execution context</div>
-                  <h2 id="overview-heading" className={detailHeading}>
-                    Overview
-                  </h2>
-                  <details className={detailDisclosure} open>
-                    <summary className={disclosureSummary}>
-                      <span
-                        id="overview-digest"
-                        className="section-digest overflow-hidden text-ellipsis whitespace-nowrap"
-                      >
-                        Loading…
-                      </span>
-                      <span className="section-chevron" aria-hidden="true">
-                        ⌄
-                      </span>
-                    </summary>
-                    <div
-                      id="metadata-grid"
-                      className="metadata-grid mt-0 grid grid-cols-2 gap-x-6 px-7 pb-6 max-[560px]:grid-cols-1 max-[560px]:px-[18px] max-[560px]:pb-[18px]"
-                    ></div>
-                  </details>
-                </section>
-
-                <section
-                  id="configuration"
-                  className={`${detailPanel} detail-section-configuration border-l-ink-muted`}
-                  aria-labelledby="configuration-heading"
-                >
-                  <div className={evidenceKicker}>02 · Resolved stack</div>
-                  <h2 id="configuration-heading" className={detailHeading}>
-                    Configuration
-                  </h2>
-                  <details className={detailDisclosure}>
-                    <summary className={disclosureSummary}>
-                      <span
-                        id="configuration-digest"
-                        className="section-digest overflow-hidden text-ellipsis whitespace-nowrap"
-                      >
-                        Loading…
-                      </span>
-                      <span className="section-chevron" aria-hidden="true">
-                        ⌄
-                      </span>
-                    </summary>
-                    <div
-                      id="configuration-content"
-                      className="px-7 pb-6 max-[560px]:px-[18px] max-[560px]:pb-[18px]"
-                    ></div>
-                  </details>
-                </section>
-              </div>
-
-              <section
-                id="assessments"
-                className={`${detailPanel} detail-section-assessments border-l-brand`}
-                aria-labelledby="assessments-heading"
-              >
-                <div className="detail-section-heading flex items-end justify-between gap-8 max-[840px]:flex-col max-[840px]:items-start max-[840px]:gap-2.5">
-                  <div>
-                    <div className={evidenceKicker}>
-                      03 · Explainable assessment contract
-                    </div>
-                    <h2 id="assessments-heading" className={detailHeading}>
-                      System outcome and AI conclusions
-                    </h2>
-                  </div>
-                  <p className="section-description m-0 max-w-[560px] text-right max-[840px]:text-left">
-                    Objective results, advisory interpretations, and evidence
-                    remain separate throughout this view.
-                  </p>
-                </div>
-                <div className="mt-[22px]">
-                  <AssessmentWorkspace executionId={executionId} />
-                </div>
-              </section>
-
-              <section
-                id="scenarios"
-                className={`${detailPanel} detail-section-scenarios border-l-brand`}
-                aria-labelledby="scenarios-heading"
-              >
-                <div className="detail-section-heading flex items-end justify-between gap-8 max-[840px]:flex-col max-[840px]:items-start max-[840px]:gap-2.5">
-                  <div>
-                    <div className={evidenceKicker}>
-                      04 · Diagnostic workspace
-                    </div>
-                    <h2 id="scenarios-heading" className={detailHeading}>
-                      Scenarios and runs
-                    </h2>
-                  </div>
-                  <p
-                    id="scenario-intro"
-                    className="section-description m-0 max-w-[520px] text-right max-[840px]:text-left"
-                  ></p>
-                </div>
-                <div
-                  id="scenario-details"
-                  className="scenario-details mt-[22px] grid gap-2"
-                ></div>
-              </section>
-
-              <section
-                id="raw-data"
-                className={`${detailPanel} detail-section-raw border-l-line-strong bg-panel-faint`}
-                aria-labelledby="raw-heading"
-              >
-                <div className={evidenceKicker}>05 · Source record</div>
-                <h2 id="raw-heading" className={detailHeading}>
-                  Raw data
-                </h2>
-                <p className="section-description">
-                  The structured views above preserve the source report. Use the
-                  raw record for fields that do not yet have a dedicated
-                  visualization.
-                </p>
-                <div id="raw-actions" className="raw-actions"></div>
-                <details
-                  id="raw-preview"
-                  className="raw-details border-t border-line pt-2.5"
-                >
-                  <summary>Preview JSON</summary>
-                  <pre id="raw-json"></pre>
-                </details>
-              </section>
-            </div>
-          </div>
-        </div>
-
-        <dialog
-          id="session-transcript-dialog"
-          className="session-transcript-dialog h-[min(760px,calc(100dvh-48px))] w-[min(1120px,calc(100%-32px))] rounded-[10px] border border-line-strong border-t-[3px] border-t-info bg-panel shadow-panel backdrop:bg-app-backdrop backdrop:backdrop-blur-[5px] max-[560px]:m-0 max-[560px]:h-dvh max-[560px]:w-screen max-[560px]:max-w-none max-[560px]:rounded-none max-[560px]:border-0"
-          aria-labelledby="session-transcript-title"
+        </section>
+        <nav
+          className="detail-index hidden sticky top-3 z-20 mb-4 mt-[18px] grid-cols-3 gap-0 overflow-hidden rounded-[9px] border border-line-strong bg-glass p-0 shadow-[0_12px_30px_rgba(0,0,0,0.12)] backdrop-blur-[18px] max-[840px]:static max-[840px]:grid max-[560px]:grid-cols-2"
+          aria-label="Execution detail sections"
         >
-          <div className="session-transcript-shell flex h-full min-h-0 flex-col">
-            <header className="session-transcript-header flex items-start justify-between gap-6 border-b border-line bg-panel px-[26px] pt-[22px] pb-[18px]">
-              <div>
-                <div className={`${evidenceKicker} mb-[7px]`}>
-                  Run evidence · Transcript
-                </div>
-                <h2
-                  id="session-transcript-title"
-                  className="m-0 text-[1.35rem] font-[570] tracking-[-0.025em]"
-                >
-                  Execution conversation
-                </h2>
-                <p id="session-transcript-context"></p>
-              </div>
-              <button
-                id="session-transcript-close"
-                className="dialog-close session-transcript-close bg-transparent"
-                type="button"
-                aria-label="Close session transcript"
-              >
-                ×
-              </button>
-            </header>
-            <div
-              id="session-transcript-body"
-              className="session-transcript-body min-h-0 flex-1 overflow-hidden bg-panel [&_.conversation-shell]:bg-panel [&_.conversation-toolbar]:bg-panel-subtle"
-            ></div>
-          </div>
-        </dialog>
+          {navigation.map((item, index) => (
+            <a
+              key={item.id}
+              href={hashForExecution(executionId, item.id)}
+              className={`flex min-h-[52px] items-center gap-2.5 border-r border-line px-4 text-left no-underline ${section === item.id ? 'bg-panel-soft text-ink' : 'text-ink-muted hover:bg-panel-soft hover:text-ink'}`}
+              aria-current={section === item.id ? 'page' : undefined}
+            >
+              <span className="font-mono text-[0.6rem]" aria-hidden="true">
+                0{index + 1}
+              </span>
+              <strong className="text-[0.74rem] font-semibold">
+                {item.label}
+              </strong>
+            </a>
+          ))}
+        </nav>
+        <div className="detail-main grid min-w-0 gap-4">
+          <SummarySection
+            presentation={presentation}
+            metrics={
+              summaryMetrics ?? {
+                totalTokens: null,
+                functionCalls: null,
+                functionErrors: null,
+                durationSeconds: null,
+                runCount: 0,
+              }
+            }
+          />
+          <ResultsSection
+            detail={detail}
+            onTranscript={(run, title) => setTranscript({ run, title })}
+          />
+          <TechnicalSection detail={detail} presentation={presentation} />
+        </div>
       </main>
-
+      {transcript && (
+        <TranscriptDialog
+          title={transcript.title}
+          messages={transcript.run.transcript?.messages}
+          open
+          onClose={() => setTranscript(null)}
+        />
+      )}
       <footer>
         <span>Harness E2E · public execution report</span>
         <a href={hashForWorkspace()}>Back to all executions</a>

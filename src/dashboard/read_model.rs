@@ -51,6 +51,32 @@ pub(super) struct TestVersionGetRequest {
     pub to_version_id: String,
 }
 
+#[derive(Debug, Clone, Default, Deserialize, JsonSchema)]
+pub(super) struct TestHistoryRequest {
+    #[serde(default)]
+    pub test_id: String,
+    #[serde(default)]
+    pub test_version: Option<u32>,
+    #[serde(default)]
+    pub case_id: Option<String>,
+    #[serde(default)]
+    pub subject_provider: Option<String>,
+    #[serde(default)]
+    pub subject_model: Option<String>,
+    #[serde(default)]
+    pub judge_provider: Option<String>,
+    #[serde(default)]
+    pub judge_model: Option<String>,
+    #[serde(default)]
+    pub system_version_id: Option<String>,
+    #[serde(default)]
+    pub result: Option<String>,
+    #[serde(default)]
+    pub cursor: Option<String>,
+    #[serde(default)]
+    pub limit: Option<u16>,
+}
+
 #[derive(Debug, Clone, Serialize, JsonSchema)]
 pub(super) struct CohortDescriptor {
     pub id: String,
@@ -101,6 +127,7 @@ pub(super) struct MetricSamples {
     pub cost_usd: usize,
     pub tokens: usize,
     pub duration_seconds: usize,
+    pub turns: usize,
 }
 
 #[derive(Debug, Clone, Serialize, JsonSchema)]
@@ -143,6 +170,83 @@ pub(super) struct TestObservation {
     pub run_count: usize,
     pub scored_runs: usize,
     pub assessment_summary: AssessmentSummary,
+    pub scenario_version: u32,
+    pub seed: Option<u64>,
+    pub system_version_id: Option<String>,
+    pub system_label: String,
+    pub stack_mode: String,
+    pub harness_revision: Option<String>,
+    pub system_revision: Option<String>,
+    pub engine_revision: Option<String>,
+    pub subject_provider: String,
+    pub subject_model: String,
+    pub judge_provider: Option<String>,
+    pub judge_model: Option<String>,
+    pub judge_protocol: Option<String>,
+    pub median_cost_usd: Option<f64>,
+    pub median_tokens: Option<f64>,
+    pub median_duration_seconds: Option<f64>,
+    pub median_turns: Option<f64>,
+}
+
+#[derive(Debug, Clone, Serialize, JsonSchema)]
+pub(super) struct HistorySeries {
+    pub id: String,
+    pub case_id: String,
+    pub scenario_version: u32,
+    pub seed: Option<u64>,
+    pub contract_sha256: String,
+    pub assessment_profile_sha256: String,
+    pub analyzer_profile_sha256: String,
+    pub system_version_id: Option<String>,
+    pub system_label: String,
+    pub stack_mode: String,
+    pub harness_revision: Option<String>,
+    pub system_revision: Option<String>,
+    pub engine_revision: Option<String>,
+    pub subject_provider: String,
+    pub subject_model: String,
+    pub judge_provider: Option<String>,
+    pub judge_model: Option<String>,
+    pub judge_protocol: Option<String>,
+    pub cohort_id: String,
+    pub execution_count: usize,
+    pub run_count: usize,
+    pub median_score: Option<f64>,
+    pub median_cost_usd: Option<f64>,
+    pub median_tokens: Option<f64>,
+    pub median_duration_seconds: Option<f64>,
+    pub median_turns: Option<f64>,
+}
+
+#[derive(Debug, Clone, Serialize, JsonSchema)]
+pub(super) struct HistorySystem {
+    pub id: String,
+    pub label: String,
+}
+
+/// Models are exposed as provider groups so a model name is never ambiguous
+/// when two providers offer the same model identifier.
+#[derive(Debug, Clone, Serialize, JsonSchema)]
+pub(super) struct HistoryModelGroup {
+    pub provider: String,
+    pub models: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, JsonSchema)]
+pub(super) struct TestHistoryResponse {
+    pub test_id: String,
+    pub test_version: u32,
+    pub available_versions: Vec<VersionDescriptor>,
+    pub cases: Vec<String>,
+    pub subjects: Vec<String>,
+    pub subject_models: Vec<HistoryModelGroup>,
+    pub judge_models: Vec<HistoryModelGroup>,
+    pub systems: Vec<HistorySystem>,
+    pub series: Vec<HistorySeries>,
+    pub observations: Vec<TestObservation>,
+    pub total: usize,
+    pub next_cursor: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, JsonSchema)]
@@ -181,7 +285,8 @@ struct RunMetrics {
     score: Option<f64>,
     cost_usd: Option<f64>,
     tokens: Option<f64>,
-    duration_seconds: f64,
+    duration_seconds: Option<f64>,
+    turns: Option<f64>,
     status: RunStatus,
     assessment: RunAssessmentContract,
 }
@@ -197,6 +302,18 @@ struct Observation {
     assessment_profile_sha256: String,
     analyzer_profile_sha256: String,
     status: String,
+    scenario_version: u32,
+    seed: Option<u64>,
+    system_label: String,
+    stack_mode: String,
+    harness_revision: Option<String>,
+    system_revision: Option<String>,
+    engine_revision: Option<String>,
+    subject_provider: String,
+    subject_model: String,
+    judge_provider: Option<String>,
+    judge_model: Option<String>,
+    judge_protocol: Option<String>,
     runs: Vec<RunMetrics>,
 }
 
@@ -335,6 +452,24 @@ impl DashboardReadModel {
                     Ok(run_metrics(run, assessment))
                 })
                 .collect::<Result<Vec<_>>>()?;
+            let (system_label, stack_mode, system_revision, engine_revision) = evaluated
+                .as_ref()
+                .map(|value| {
+                    (
+                        value.label.clone(),
+                        value.stack_mode.clone(),
+                        system_revision(report),
+                        report.system_under_test.engine_revision.clone(),
+                    )
+                })
+                .unwrap_or_else(|| {
+                    (
+                        "Unknown system".into(),
+                        "unknown".into(),
+                        system_revision(report),
+                        report.system_under_test.engine_revision.clone(),
+                    )
+                });
             version.observations.push(Observation {
                 execution_id: stored.metadata.id.clone(),
                 evaluated_version_id: evaluated.as_ref().map(|value| value.id.clone()),
@@ -345,6 +480,18 @@ impl DashboardReadModel {
                 assessment_profile_sha256,
                 analyzer_profile_sha256,
                 status: scenario_status(scenario).into(),
+                scenario_version: scenario.scenario_version,
+                seed: scenario.case.as_ref().map(|case| case.seed),
+                system_label,
+                stack_mode,
+                harness_revision: Some(report.system_under_test.e2e_revision.clone()),
+                system_revision,
+                engine_revision,
+                subject_provider: report.subject.provider.clone(),
+                subject_model: report.subject.model.clone(),
+                judge_provider: report.judge.as_ref().map(|judge| judge.provider.clone()),
+                judge_model: report.judge.as_ref().map(|judge| judge.model.clone()),
+                judge_protocol: report.judge_protocol.clone(),
                 runs,
             });
         }
@@ -519,6 +666,132 @@ impl DashboardReadModel {
         )
     }
 
+    pub(super) fn test_history(&self, request: TestHistoryRequest) -> Result<TestHistoryResponse> {
+        if request.test_id.trim().is_empty() {
+            bail!("test id is required");
+        }
+        let entry = self
+            .tests
+            .get(&request.test_id)
+            .with_context(|| format!("unknown test '{}'", request.test_id))?;
+        let test_version = request
+            .test_version
+            .or_else(|| {
+                entry.current_version.filter(|version| {
+                    entry
+                        .versions
+                        .get(version)
+                        .is_some_and(|value| !value.observations.is_empty())
+                })
+            })
+            .or_else(|| {
+                entry
+                    .versions
+                    .iter()
+                    .rev()
+                    .find(|(_, value)| !value.observations.is_empty())
+                    .map(|(version, _)| *version)
+            })
+            .or(entry.current_version)
+            .or_else(|| entry.versions.keys().max().copied())
+            .context("test has no version")?;
+        let version = entry.versions.get(&test_version).with_context(|| {
+            format!("unknown test '{}' version {test_version}", request.test_id)
+        })?;
+        let mut observations = version
+            .observations
+            .iter()
+            .filter(|observation| history_matches(observation, &request))
+            .collect::<Vec<_>>();
+        observations.sort_by(|left, right| {
+            right
+                .completed_at
+                .cmp(&left.completed_at)
+                .then_with(|| right.execution_id.cmp(&left.execution_id))
+        });
+        let total = observations.len();
+        let offset = parse_history_cursor(request.cursor.as_deref(), &self.revision)?;
+        let limit = request.limit.unwrap_or(DEFAULT_PAGE_SIZE);
+        if limit == 0 || usize::from(limit) > MAX_EXECUTIONS {
+            bail!("history list limit must be between 1 and {MAX_EXECUTIONS}");
+        }
+        let page = observations
+            .iter()
+            .skip(offset)
+            .take(usize::from(limit))
+            .map(public_observation)
+            .collect::<Vec<_>>();
+        let end = offset.saturating_add(page.len());
+        let mut series = BTreeMap::<String, Vec<&Observation>>::new();
+        for observation in observations {
+            let key = history_series_key(observation);
+            series.entry(key).or_default().push(observation);
+        }
+        let series = series
+            .into_iter()
+            .map(|(id, observations)| history_series(id, &observations))
+            .collect();
+        let mut cases = version
+            .observations
+            .iter()
+            .map(|observation| observation.case_id.clone())
+            .collect::<BTreeSet<_>>();
+        let mut subjects = BTreeSet::new();
+        let mut subject_models = BTreeMap::<String, BTreeSet<String>>::new();
+        let mut judge_models = BTreeMap::<String, BTreeSet<String>>::new();
+        let mut systems = BTreeMap::new();
+        for observation in &version.observations {
+            if history_matches(observation, &request) {
+                cases.insert(observation.case_id.clone());
+                subjects.insert(format!(
+                    "{}/{}",
+                    observation.subject_provider, observation.subject_model
+                ));
+                subject_models
+                    .entry(observation.subject_provider.clone())
+                    .or_default()
+                    .insert(observation.subject_model.clone());
+                if let (Some(provider), Some(model)) = (
+                    observation.judge_provider.as_ref(),
+                    observation.judge_model.as_ref(),
+                ) {
+                    judge_models
+                        .entry(provider.clone())
+                        .or_default()
+                        .insert(model.clone());
+                }
+                let id = observation
+                    .evaluated_version_id
+                    .clone()
+                    .unwrap_or_else(|| observation.system_label.clone());
+                systems
+                    .entry(id)
+                    .or_insert_with(|| observation.system_label.clone());
+            }
+        }
+        Ok(TestHistoryResponse {
+            test_id: request.test_id,
+            test_version,
+            available_versions: entry
+                .versions
+                .iter()
+                .map(|(version, value)| version_descriptor(*version, value, None))
+                .collect(),
+            cases: cases.into_iter().collect(),
+            subjects: subjects.into_iter().collect(),
+            subject_models: history_model_groups(subject_models),
+            judge_models: history_model_groups(judge_models),
+            systems: systems
+                .into_iter()
+                .map(|(id, label)| HistorySystem { id, label })
+                .collect(),
+            series,
+            observations: page,
+            total,
+            next_cursor: (end < total).then(|| format!("{}:{end}", self.revision)),
+        })
+    }
+
     fn validate_comparison_context(
         &self,
         cohort_id: &str,
@@ -691,7 +964,18 @@ fn run_metrics(run: &E2eRunReport, assessment: &RunAssessmentContract) -> RunMet
         score: run.score.map(f64::from),
         cost_usd: run.cost.total_usd,
         tokens,
-        duration_seconds: run.wall_time_ms as f64 / 1_000.0,
+        duration_seconds: (run.wall_time_ms > 0).then(|| run.wall_time_ms as f64 / 1_000.0),
+        turns: run
+            .efficiency
+            .as_ref()
+            .and_then(|efficiency| efficiency.root_turns.zip(efficiency.child_turns))
+            .map(|(root, child)| (root + child) as f64)
+            .or_else(|| {
+                run.metrics.as_ref().and_then(|metrics| {
+                    (metrics.complete && metrics.totals.turns > 0)
+                        .then_some(metrics.totals.turns as f64)
+                })
+            }),
         status: run.status,
         assessment: assessment.clone(),
     }
@@ -796,7 +1080,7 @@ fn side_summary(
     let tokens = runs.iter().filter_map(|run| run.tokens).collect::<Vec<_>>();
     let durations = runs
         .iter()
-        .map(|run| run.duration_seconds)
+        .filter_map(|run| run.duration_seconds)
         .collect::<Vec<_>>();
     let outcomes = OutcomeCounts {
         passed: runs
@@ -846,6 +1130,7 @@ fn side_summary(
             cost_usd: costs.len(),
             tokens: tokens.len(),
             duration_seconds: durations.len(),
+            turns: runs.iter().filter(|run| run.turns.is_some()).count(),
         },
         assessment_summary: summarize(runs.iter().map(|run| &run.assessment)),
     })
@@ -934,6 +1219,26 @@ fn public_observation(observation: &&Observation) -> TestObservation {
         .iter()
         .filter_map(|run| run.score)
         .collect::<Vec<_>>();
+    let costs = observation
+        .runs
+        .iter()
+        .filter_map(|run| run.cost_usd)
+        .collect::<Vec<_>>();
+    let tokens = observation
+        .runs
+        .iter()
+        .filter_map(|run| run.tokens)
+        .collect::<Vec<_>>();
+    let durations = observation
+        .runs
+        .iter()
+        .filter_map(|run| run.duration_seconds)
+        .collect::<Vec<_>>();
+    let turns = observation
+        .runs
+        .iter()
+        .filter_map(|run| run.turns)
+        .collect::<Vec<_>>();
     TestObservation {
         execution_id: observation.execution_id.clone(),
         evaluated_version_id: observation.evaluated_version_id.clone(),
@@ -948,6 +1253,176 @@ fn public_observation(observation: &&Observation) -> TestObservation {
         run_count: observation.runs.len(),
         scored_runs: scores.len(),
         assessment_summary: summarize(observation.runs.iter().map(|run| &run.assessment)),
+        scenario_version: observation.scenario_version,
+        seed: observation.seed,
+        system_version_id: observation.evaluated_version_id.clone(),
+        system_label: observation.system_label.clone(),
+        system_revision: observation.system_revision.clone(),
+        stack_mode: observation.stack_mode.clone(),
+        harness_revision: observation.harness_revision.clone(),
+        engine_revision: observation.engine_revision.clone(),
+        subject_provider: observation.subject_provider.clone(),
+        subject_model: observation.subject_model.clone(),
+        judge_provider: observation.judge_provider.clone(),
+        judge_model: observation.judge_model.clone(),
+        judge_protocol: observation.judge_protocol.clone(),
+        median_cost_usd: median(costs),
+        median_tokens: median(tokens),
+        median_duration_seconds: median(durations),
+        median_turns: median(turns),
+    }
+}
+
+fn history_matches(observation: &Observation, request: &TestHistoryRequest) -> bool {
+    request
+        .case_id
+        .as_deref()
+        .is_none_or(|value| value == observation.case_id)
+        && request
+            .subject_provider
+            .as_deref()
+            .is_none_or(|value| value == observation.subject_provider)
+        && request
+            .subject_model
+            .as_deref()
+            .is_none_or(|value| value == observation.subject_model)
+        && request
+            .judge_provider
+            .as_deref()
+            .is_none_or(|value| observation.judge_provider.as_deref() == Some(value))
+        && request
+            .judge_model
+            .as_deref()
+            .is_none_or(|value| observation.judge_model.as_deref() == Some(value))
+        && request
+            .system_version_id
+            .as_deref()
+            .is_none_or(|value| observation.evaluated_version_id.as_deref() == Some(value))
+        && request
+            .result
+            .as_deref()
+            .is_none_or(|value| value.eq_ignore_ascii_case(&observation.status))
+}
+
+fn history_model_groups(groups: BTreeMap<String, BTreeSet<String>>) -> Vec<HistoryModelGroup> {
+    groups
+        .into_iter()
+        .map(|(provider, models)| HistoryModelGroup {
+            provider,
+            models: models.into_iter().collect(),
+        })
+        .collect()
+}
+
+fn history_series_key(observation: &Observation) -> String {
+    // Keep this key aligned with the identity boundary used by the metric
+    // history. A test/case can legitimately be rerun with a different
+    // contract (inputs or execution policy), and a cohort alone does not
+    // capture that distinction. Likewise, retaining the optional seed and
+    // report identity fields prevents an unknown value from being silently
+    // merged with a known one when older reports are mixed in.
+    let scenario_version = observation.scenario_version.to_string();
+    let seed = observation
+        .seed
+        .map(|seed| seed.to_string())
+        .unwrap_or_else(|| "unknown-seed".into());
+    [
+        scenario_version.as_str(),
+        observation.case_id.as_str(),
+        observation.contract_sha256.as_str(),
+        seed.as_str(),
+        observation.cohort_id.as_str(),
+        observation
+            .evaluated_version_id
+            .as_deref()
+            .unwrap_or_default(),
+        observation.stack_mode.as_str(),
+        observation.system_revision.as_deref().unwrap_or_default(),
+        observation.harness_revision.as_deref().unwrap_or_default(),
+        observation.engine_revision.as_deref().unwrap_or_default(),
+        observation.assessment_profile_sha256.as_str(),
+        observation.analyzer_profile_sha256.as_str(),
+        observation.subject_provider.as_str(),
+        observation.subject_model.as_str(),
+        observation.judge_provider.as_deref().unwrap_or_default(),
+        observation.judge_model.as_deref().unwrap_or_default(),
+        observation.judge_protocol.as_deref().unwrap_or_default(),
+    ]
+    .join("::")
+}
+
+fn history_series(id: String, observations: &[&Observation]) -> HistorySeries {
+    let runs = observations
+        .iter()
+        .flat_map(|observation| observation.runs.iter())
+        .collect::<Vec<_>>();
+    let scores = runs.iter().filter_map(|run| run.score).collect::<Vec<_>>();
+    let costs = runs
+        .iter()
+        .filter_map(|run| run.cost_usd)
+        .collect::<Vec<_>>();
+    let tokens = runs.iter().filter_map(|run| run.tokens).collect::<Vec<_>>();
+    let durations = runs
+        .iter()
+        .filter_map(|run| run.duration_seconds)
+        .collect::<Vec<_>>();
+    let turns = runs.iter().filter_map(|run| run.turns).collect::<Vec<_>>();
+    let first = observations.first().expect("history series is non-empty");
+    HistorySeries {
+        id,
+        case_id: first.case_id.clone(),
+        scenario_version: first.scenario_version,
+        seed: first.seed,
+        contract_sha256: first.contract_sha256.clone(),
+        assessment_profile_sha256: first.assessment_profile_sha256.clone(),
+        analyzer_profile_sha256: first.analyzer_profile_sha256.clone(),
+        system_version_id: first.evaluated_version_id.clone(),
+        system_label: first.system_label.clone(),
+        stack_mode: first.stack_mode.clone(),
+        harness_revision: first.harness_revision.clone(),
+        system_revision: first.system_revision.clone(),
+        engine_revision: first.engine_revision.clone(),
+        subject_provider: first.subject_provider.clone(),
+        subject_model: first.subject_model.clone(),
+        judge_provider: first.judge_provider.clone(),
+        judge_model: first.judge_model.clone(),
+        judge_protocol: first.judge_protocol.clone(),
+        cohort_id: first.cohort_id.clone(),
+        execution_count: observations
+            .iter()
+            .map(|observation| observation.execution_id.as_str())
+            .collect::<BTreeSet<_>>()
+            .len(),
+        run_count: runs.len(),
+        median_score: median(scores),
+        median_cost_usd: median(costs),
+        median_tokens: median(tokens),
+        median_duration_seconds: median(durations),
+        median_turns: median(turns),
+    }
+}
+
+fn parse_history_cursor(cursor: Option<&str>, revision: &str) -> Result<usize> {
+    let Some(cursor) = cursor.filter(|value| !value.is_empty()) else {
+        return Ok(0);
+    };
+    let (cursor_revision, offset) = cursor
+        .rsplit_once(':')
+        .context("history cursor is invalid")?;
+    if cursor_revision != revision {
+        bail!("history cursor is stale; reload the first page");
+    }
+    offset.parse().context("history cursor is invalid")
+}
+
+fn system_revision(report: &crate::report::E2eReport) -> Option<String> {
+    match &report.system_under_test.stack {
+        StackIdentity::Source {
+            workers_revision, ..
+        } => Some(workers_revision.clone()),
+        StackIdentity::Registry {
+            stack_lock_digest, ..
+        } => Some(stack_lock_digest.clone()),
     }
 }
 

@@ -13,12 +13,13 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
 use super::controller::Controller;
+use super::plans::{PlanCreateRequest, PlanRunRequest, PlanUpdateRequest};
 use super::presenter::{
     execution_detail_value, repository_url, validate_execution_id, MAX_EXECUTIONS,
 };
 use super::read_model::{
-    EvaluatedVersionsRequest, EvaluatedVersionsResponse, TestVersionGetRequest, TestVersionResult,
-    TestsListRequest, TestsListResponse,
+    EvaluatedVersionsRequest, EvaluatedVersionsResponse, TestHistoryRequest, TestHistoryResponse,
+    TestVersionGetRequest, TestVersionResult, TestsListRequest, TestsListResponse,
 };
 use super::store::read_stored_run;
 use super::RunRequest;
@@ -30,7 +31,13 @@ pub(super) const EXECUTION_GET: &str = "e2e::dashboard::execution-get";
 pub(super) const EVALUATED_VERSIONS_LIST: &str = "e2e::dashboard::evaluated-versions-list";
 pub(super) const TESTS_LIST: &str = "e2e::dashboard::tests-list";
 pub(super) const TEST_VERSION_GET: &str = "e2e::dashboard::test-version-get";
+pub(super) const TEST_HISTORY_GET: &str = "e2e::dashboard::test-history-get";
 pub(super) const CATALOG_GET: &str = "e2e::dashboard::catalog-get";
+pub(super) const PLANS_LIST: &str = "e2e::dashboard::plans-list";
+pub(super) const PLAN_GET: &str = "e2e::dashboard::plan-get";
+pub(super) const PLAN_CREATE: &str = "e2e::dashboard::plan-create";
+pub(super) const PLAN_UPDATE: &str = "e2e::dashboard::plan-update";
+pub(super) const PLAN_RUN_START: &str = "e2e::dashboard::plan-run-start";
 pub(super) const RUN_STATUS: &str = "e2e::dashboard::run-status";
 pub(super) const RUN_START: &str = "e2e::dashboard::run-start";
 pub(super) const RUN_CANCEL: &str = "e2e::dashboard::run-cancel";
@@ -303,6 +310,104 @@ pub(super) fn register_functions(iii: &IIIClient, controller: Arc<Controller>) {
     );
     register(
         iii,
+        TEST_HISTORY_GET,
+        "Read local metric history for one test version, with provider-grouped execution and judge models, without comparison actions.",
+        {
+            let controller = controller.clone();
+            RegisterFunction::new_async(move |request: TestHistoryRequest| {
+                let controller = controller.clone();
+                async move {
+                    test_history(&controller, request)
+                        .await
+                        .map_err(handler_error)
+                }
+            })
+        },
+    );
+    register(
+        iii,
+        PLANS_LIST,
+        "List local plans and their baseline/candidate lifecycle.",
+        {
+            let controller = controller.clone();
+            RegisterFunction::new_async(move |_request: Value| {
+                let controller = controller.clone();
+                async move {
+                    let plans = controller.list_plans().await.map_err(handler_error)?;
+                    Ok(json!({ "mode": "local", "plans": plans }))
+                }
+            })
+        },
+    );
+    register(iii, PLAN_GET, "Read one local plan.", {
+        let controller = controller.clone();
+        RegisterFunction::new_async(move |request: Value| {
+            let controller = controller.clone();
+            async move {
+                let id = request
+                    .get("plan_id")
+                    .and_then(Value::as_str)
+                    .ok_or_else(|| handler_error("plan_id is required"))?;
+                controller.get_plan(id).await.map_err(handler_error)
+            }
+        })
+    });
+    register(
+        iii,
+        PLAN_CREATE,
+        "Create a draft local plan with an explicit small test scope.",
+        {
+            let controller = controller.clone();
+            RegisterFunction::new_async(move |request: PlanCreateRequest| {
+                let controller = controller.clone();
+                async move {
+                    controller
+                        .create_plan(request)
+                        .await
+                        .map_err(|error| Error::Handler(error.message))
+                }
+            })
+        },
+    );
+    register(iii, PLAN_UPDATE, "Update an unlocked local plan.", {
+        let controller = controller.clone();
+        RegisterFunction::new_async(move |request: PlanUpdateRequest| {
+            let controller = controller.clone();
+            async move {
+                let id = request
+                    .plan_id
+                    .clone()
+                    .ok_or_else(|| handler_error("plan_id is required"))?;
+                controller
+                    .update_plan(&id, request)
+                    .await
+                    .map_err(|error| Error::Handler(error.message))
+            }
+        })
+    });
+    register(
+        iii,
+        PLAN_RUN_START,
+        "Start a baseline or candidate from a locked local plan.",
+        {
+            let controller = controller.clone();
+            RegisterFunction::new_async(move |request: PlanRunRequest| {
+                let controller = controller.clone();
+                async move {
+                    let id = request
+                        .plan_id
+                        .as_deref()
+                        .ok_or_else(|| handler_error("plan_id is required"))?;
+                    controller
+                        .start_plan(id, request.role)
+                        .await
+                        .map_err(|error| Error::Handler(error.message))
+                }
+            })
+        },
+    );
+    register(
+        iii,
         CATALOG_GET,
         "Read models and scenarios when the execution dialog opens.",
         {
@@ -504,6 +609,13 @@ pub(super) async fn test_version_get(
     request: TestVersionGetRequest,
 ) -> Result<TestVersionResult> {
     controller.read_model().await?.test_version_get(request)
+}
+
+pub(super) async fn test_history(
+    controller: &Controller,
+    request: TestHistoryRequest,
+) -> Result<TestHistoryResponse> {
+    controller.read_model().await?.test_history(request)
 }
 
 pub(super) async fn catalog(

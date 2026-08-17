@@ -29,8 +29,12 @@ const FINAL_ASSESSMENT_SYSTEM_PROMPT: &str =
 Assess only the supplied sanitized, bounded facts and immutable evidence identities. \
 The system_status is authoritative: your advisory conclusion must never hide, replace, or promote \
 an objective, technical, infrastructure, or resource failure. Keep factual observations in facts; \
-keep interpretations in strengths and concerns; keep actions in recommendation; explicitly state \
-evidence limitations. Return exactly one JSON object, without Markdown or explanatory text.";
+keep interpretations in strengths and concerns; make recommendation exclusively a concrete \
+harness or test remediation plan for the next execution (collection, serialization, fixtures, \
+scenario gates, provider transport, resource budgets, or assessment schema). Never recommend \
+shipping, changing product behavior, trusting or ignoring the AI, or making a model-quality \
+decision. Explicitly state evidence limitations. Return exactly one JSON object, without Markdown \
+or explanatory text.";
 pub const JUDGE_PROTOCOL: &str = "assessment-json";
 const MAX_JUDGE_ATTEMPTS: u8 = 3;
 
@@ -463,7 +467,7 @@ pub async fn evaluate_final_assessment(
         "facts": ["objective observation copied from the supplied input"],
         "strengths": ["evidence-grounded positive interpretation"],
         "concerns": ["evidence-grounded risk or quality concern"],
-        "recommendation": "one concrete next action",
+        "recommendation": "one concrete harness/test action for the next execution",
         "limitations": ["what the bounded evidence cannot establish"],
         "evidence": evidence,
     });
@@ -474,7 +478,9 @@ Use only pass, pass_with_concerns, fail, or inconclusive for verdict. quality_sc
 integer from 0 through 100 and confidence a number from 0 through 1. Include at least one fact. \
 Every evidence entry must exactly copy an immutable identity from the supplied input; do not \
 invent or alter artifact ids, hashes, or locators. If evidence identities are available, cite at \
-least one. Use this exact object shape and replace only the example conclusions:\n{}",
+least one. The recommendation must be a harness/test remediation step for the next execution, \
+never a release, product, or model-quality recommendation. Use this exact object shape and replace \
+only the example conclusions:\n{}",
         serde_json::to_string(input).context("serialize final assessment input")?,
         serde_json::to_string(&final_assessment_response_schema())
             .context("serialize final assessment response schema")?,

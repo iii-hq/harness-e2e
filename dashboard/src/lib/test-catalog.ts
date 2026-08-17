@@ -47,8 +47,77 @@ export type TestSideSummary = {
     cost_usd: number
     tokens: number
     duration_seconds: number
+    turns?: number
   }
   assessment_summary?: AssessmentSummary
+}
+
+export type TestHistoryInput = {
+  test_id: string
+  test_version?: number
+  case_id?: string
+  subject_provider?: string
+  subject_model?: string
+  judge_provider?: string
+  judge_model?: string
+  system_version_id?: string
+  result?: string
+  cursor?: string
+  limit?: number
+}
+
+export type HistorySeries = {
+  id: string
+  case_id: string
+  scenario_version: number
+  seed: number | null
+  contract_sha256: string
+  assessment_profile_sha256: string
+  analyzer_profile_sha256: string
+  system_version_id: string | null
+  system_label: string
+  stack_mode: string
+  harness_revision: string | null
+  system_revision: string | null
+  engine_revision: string | null
+  subject_provider: string
+  subject_model: string
+  judge_provider: string | null
+  judge_model: string | null
+  judge_protocol: string | null
+  cohort_id: string
+  execution_count: number
+  run_count: number
+  median_score: number | null
+  median_cost_usd: number | null
+  median_tokens: number | null
+  median_duration_seconds: number | null
+  median_turns: number | null
+}
+
+export type HistorySystem = {
+  id: string
+  label: string
+}
+
+export type HistoryModelGroup = {
+  provider: string
+  models: string[]
+}
+
+export type TestHistoryResponse = {
+  test_id: string
+  test_version: number
+  available_versions: TestCatalogRow['available_versions']
+  cases: string[]
+  subjects: string[]
+  subject_models: HistoryModelGroup[]
+  judge_models: HistoryModelGroup[]
+  systems: HistorySystem[]
+  series: HistorySeries[]
+  observations: TestObservation[]
+  total: number
+  next_cursor: string | null
 }
 
 export type TestObservation = {
@@ -65,6 +134,23 @@ export type TestObservation = {
   run_count: number
   scored_runs: number
   assessment_summary?: AssessmentSummary
+  scenario_version?: number
+  seed?: number | null
+  system_version_id?: string | null
+  system_label?: string
+  stack_mode?: string
+  harness_revision?: string | null
+  system_revision?: string | null
+  engine_revision?: string | null
+  subject_provider?: string
+  subject_model?: string
+  judge_provider?: string | null
+  judge_model?: string | null
+  judge_protocol?: string | null
+  median_cost_usd?: number | null
+  median_tokens?: number | null
+  median_duration_seconds?: number | null
+  median_turns?: number | null
 }
 
 export type TestVersionResult = {

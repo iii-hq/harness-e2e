@@ -3,6 +3,10 @@ import {
   hashForComparison,
   hashForCoverage,
   hashForExecution,
+  hashForNewPlan,
+  hashForPlan,
+  hashForPlans,
+  hashForTestHistory,
   hashForWorkspace,
   routeFromHash,
   routeRenderIdentity,
@@ -46,6 +50,22 @@ describe('dashboard hash routes', () => {
     })
     expect(hashForCoverage()).toBe('#/coverage')
     expect(routeFromHash('#main')).toBeNull()
+  })
+
+  it('keeps local plans and test metric history as independent routes', () => {
+    expect(hashForTestHistory('direct/answer')).toBe('#/tests/direct%2Fanswer')
+    expect(routeFromHash('#/tests/direct%2Fanswer')).toEqual({
+      page: 'test-history',
+      testId: 'direct/answer',
+    })
+    expect(hashForPlans()).toBe('#/plans')
+    expect(routeFromHash(hashForPlans())).toEqual({ page: 'plans' })
+    expect(hashForNewPlan()).toBe('#/plans/new')
+    expect(routeFromHash(hashForNewPlan())).toEqual({ page: 'plan-create' })
+    expect(routeFromHash(hashForPlan('plan/one'))).toEqual({
+      page: 'plan-detail',
+      planId: 'plan/one',
+    })
   })
 
   it('reloads only when navigation swaps the legacy workspace renderer', () => {

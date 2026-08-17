@@ -1,0 +1,831 @@
+import { useEffect, useMemo, useRef, useState } from 'react'
+import { AssessmentWorkspace } from '@/components/AssessmentWorkspace'
+import { ProviderModelDropdown } from '@/components/ProviderModelDropdown'
+import { ThemeToggle } from '@/components/ThemeToggle'
+import {
+  hashForExecution,
+  hashForPlans,
+  hashForWorkspace,
+} from '@/hooks/use-hash-route'
+import {
+  type DashboardExecutionDetail,
+  getDashboardDataBridge,
+} from '@/lib/dashboard-data-source'
+import type {
+  HistoryModelGroup,
+  TestHistoryResponse,
+  TestObservation,
+} from '@/lib/test-catalog'
+
+function modelSelection(provider: string, model: string) {
+  return JSON.stringify([provider, model])
+}
+
+function parseModelSelection(value: string) {
+  if (!value) return null
+  try {
+    const parsed = JSON.parse(value) as unknown
+    if (
+      Array.isArray(parsed) &&
+      parsed.length === 2 &&
+      typeof parsed[0] === 'string' &&
+      typeof parsed[1] === 'string'
+    ) {
+      return { provider: parsed[0], model: parsed[1] }
+    }
+  } catch {
+    // A malformed selection is treated as no filter.
+  }
+  return null
+}
+
+function modelGroups(
+  history: TestHistoryResponse | null,
+  role: 'subject' | 'judge',
+): HistoryModelGroup[] {
+  const configured =
+    role === 'subject' ? history?.subject_models : history?.judge_models
+  if (configured?.length) return configured
+  if (!history) return []
+
+  const groups = new Map<string, Set<string>>()
+  for (const observation of history.observations) {
+    const provider =
+      role === 'subject'
+        ? observation.subject_provider
+        : observation.judge_provider
+    const model =
+      role === 'subject' ? observation.subject_model : observation.judge_model
+    if (!provider || !model) continue
+    const models = groups.get(provider) ?? new Set<string>()
+    models.add(model)
+    groups.set(provider, models)
+  }
+
+  if (role === 'subject' && groups.size === 0) {
+    for (const subject of history.subjects ?? []) {
+      const separator = subject.indexOf('/')
+      if (separator < 1) continue
+      const provider = subject.slice(0, separator)
+      const model = subject.slice(separator + 1)
+      const models = groups.get(provider) ?? new Set<string>()
+      models.add(model)
+      groups.set(provider, models)
+    }
+  }
+
+  return [...groups.entries()]
+    .sort(([left], [right]) => left.localeCompare(right))
+    .map(([provider, models]) => ({
+      provider,
+      models: [...models].sort((left, right) => left.localeCompare(right)),
+    }))
+}
+
+function median(values: Array<number | null | undefined>) {
+  const known = values
+    .filter(
+      (value): value is number => value !== null && Number.isFinite(value),
+    )
+    .sort((left, right) => left - right)
+  if (known.length === 0) return null
+  const middle = Math.floor(known.length / 2)
+  return known.length % 2
+    ? known[middle]
+    : (known[middle - 1] + known[middle]) / 2
+}
+
+function formatCost(value: number | null | undefined) {
+  if (value === null || value === undefined || !Number.isFinite(value))
+    return 'Unknown'
+  return `$${value.toFixed(2)}`
+}
+
+function formatDuration(value: number | null | undefined) {
+  if (value === null || value === undefined || !Number.isFinite(value))
+    return 'Unknown'
+  const rounded = Math.max(0, Math.round(value))
+  return (
+    String(Math.floor(rounded / 60)) +
+    'm ' +
+    String(rounded % 60).padStart(2, '0') +
+    's'
+  )
+}
+
+function formatTokens(value: number | null | undefined) {
+  if (value === null || value === undefined || !Number.isFinite(value))
+    return 'Unknown'
+  if (Math.abs(value) >= 1000) {
+    return `${(value / 1000).toFixed(1).replace(/\.0$/, '')}k`
+  }
+  return Math.round(value).toLocaleString()
+}
+
+function formatDate(value: string) {
+  if (!value) return 'Not completed'
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return 'Unknown date'
+  return new Intl.DateTimeFormat(undefined, {
+    month: 'short',
+    day: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+  }).format(date)
+}
+
+function formatStatus(status: string) {
+  const labels: Record<string, string> = {
+    passed: 'Passed',
+    hard_gate_failed: 'Hard gate failed',
+    technical_failed: 'Technical failure',
+    infra_failed: 'Infrastructure failure',
+  }
+  return (
+    labels[status] ??
+    status
+      .replace(/[_-]+/g, ' ')
+      .replace(/\b\w/g, (letter) => letter.toUpperCase())
+  )
+}
+
+function statusClass(status: string) {
+  if (status === 'passed') return 'tmh-status-pass'
+  if (status === 'hard_gate_failed' || status === 'infra_failed')
+    return 'tmh-status-fail'
+  return 'tmh-status-tech'
+}
+
+function shortHash(value: string | null | undefined) {
+  if (!value) return 'Unknown'
+  const hash = value.replace(/^sha256:/, '')
+  if (hash.length <= 16) return `sha256:${hash}`
+  return `sha256:${hash.slice(0, 8)}…${hash.slice(-6)}`
+}
+
+function contractSummary(observations: TestObservation[]) {
+  const contracts = [
+    ...new Set(
+      observations
+        .map((observation) => observation.contract_sha256)
+        .filter(Boolean),
+    ),
+  ]
+  if (contracts.length === 0) return 'Unknown'
+  if (contracts.length > 1) return 'Multiple contracts'
+  return shortHash(contracts[0])
+}
+
+function modelLabel(provider?: string | null, model?: string | null) {
+  if (!provider && !model) return 'Unknown model'
+  return [provider, model].filter(Boolean).join('/') || 'Unknown model'
+}
+
+function systemSummary(observation: TestObservation) {
+  if (observation.stack_mode === 'source') return 'Local source'
+  if (observation.stack_mode === 'registry') return 'Registry stack'
+  return 'Local environment'
+}
+
+function visibleLabel(count: number) {
+  return `${String(count)} visible ${count === 1 ? 'execution' : 'executions'}`
+}
+
+function knownMetricCount(values: Array<number | null | undefined>) {
+  return values.filter(
+    (value) => value !== null && value !== undefined && Number.isFinite(value),
+  ).length
+}
+
+function metricCaption(known: number, total: number, metric: string) {
+  if (known === 0) return `no ${metric} records`
+  if (known === total)
+    return `median across ${total} visible ${total === 1 ? 'execution' : 'executions'}`
+  return `median across ${known} of ${total} executions`
+}
+
+function logicalRunLabel(count: number) {
+  return `${String(count)} logical ${count === 1 ? 'run' : 'runs'}`
+}
+
+function ExecutionDetailsDialog({
+  observation,
+  testVersion,
+  onClose,
+}: {
+  observation: TestObservation
+  testVersion: number | undefined
+  onClose: () => void
+}) {
+  const dialogRef = useRef<HTMLDialogElement>(null)
+  const [detail, setDetail] = useState<DashboardExecutionDetail | null>(null)
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState<string | null>(null)
+
+  useEffect(() => {
+    const dialog = dialogRef.current
+    if (dialog && !dialog.open) dialog.showModal()
+  }, [])
+
+  useEffect(() => {
+    let cancelled = false
+    setDetail(null)
+    setError(null)
+    setLoading(true)
+    void getDashboardDataBridge()
+      .then((bridge) => bridge.getExecution(observation.execution_id))
+      .then((next) => {
+        if (!cancelled) setDetail(next)
+      })
+      .catch((cause) => {
+        if (!cancelled)
+          setError(cause instanceof Error ? cause.message : String(cause))
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [observation.execution_id])
+
+  const version = observation.scenario_version ?? testVersion
+  const availableReports = detail?.reports.filter(
+    (report) => report.available,
+  ).length
+
+  return (
+    <dialog
+      ref={dialogRef}
+      className="tmh-execution-dialog"
+      onClose={onClose}
+      aria-labelledby="tmh-execution-dialog-title"
+    >
+      <div className="tmh-execution-dialog-shell">
+        <header className="tmh-execution-dialog-header">
+          <div>
+            <span className="tmh-label">Execution details</span>
+            <h2 id="tmh-execution-dialog-title">
+              {formatDate(observation.completed_at)}
+            </h2>
+            <p>
+              {version ? `Test v${String(version)}` : 'Test version unknown'} ·{' '}
+              {logicalRunLabel(observation.run_count)}
+            </p>
+          </div>
+          <button
+            className="tmh-dialog-close"
+            type="button"
+            onClick={onClose}
+            aria-label="Close execution details"
+          >
+            ×
+          </button>
+        </header>
+
+        <div className="tmh-execution-dialog-body">
+          <section className="tmh-execution-dialog-overview">
+            <div>
+              <span className="tmh-label">Result</span>
+              <strong
+                className={`tmh-status ${statusClass(observation.status)}`}
+              >
+                {formatStatus(observation.status)}
+              </strong>
+              <small>
+                {observation.median_score === null ||
+                observation.median_score === undefined
+                  ? 'Score unknown'
+                  : `Score ${observation.median_score.toFixed(2)}`}
+              </small>
+            </div>
+            <div>
+              <span className="tmh-label">Execution model</span>
+              <strong>
+                {modelLabel(
+                  observation.subject_provider,
+                  observation.subject_model,
+                )}
+              </strong>
+            </div>
+            <div>
+              <span className="tmh-label">Judge</span>
+              <strong>
+                {modelLabel(
+                  observation.judge_provider,
+                  observation.judge_model,
+                )}
+              </strong>
+              <small>{observation.judge_protocol ?? 'Protocol unknown'}</small>
+            </div>
+            <div>
+              <span className="tmh-label">Environment</span>
+              <strong>{systemSummary(observation)}</strong>
+            </div>
+          </section>
+
+          <section
+            className="tmh-execution-dialog-metrics"
+            aria-label="Execution metrics"
+          >
+            <div>
+              <span>Cost</span>
+              <strong>{formatCost(observation.median_cost_usd)}</strong>
+            </div>
+            <div>
+              <span>Duration</span>
+              <strong>
+                {formatDuration(observation.median_duration_seconds)}
+              </strong>
+            </div>
+            <div>
+              <span>Tokens</span>
+              <strong>{formatTokens(observation.median_tokens)}</strong>
+            </div>
+            <div>
+              <span>Turns</span>
+              <strong>
+                {observation.median_turns === null ||
+                observation.median_turns === undefined
+                  ? 'Unknown'
+                  : Math.round(observation.median_turns).toLocaleString()}
+              </strong>
+            </div>
+          </section>
+
+          <section className="tmh-execution-dialog-report">
+            <div className="tmh-execution-dialog-report-heading">
+              <div>
+                <span className="tmh-label">Execution report</span>
+                <h3>Scenario assessments</h3>
+              </div>
+              {detail && (
+                <span className="tmh-visible-count">
+                  {String(availableReports ?? 0)} available{' '}
+                  {(availableReports ?? 0) === 1 ? 'report' : 'reports'}
+                </span>
+              )}
+            </div>
+            {loading ? (
+              <p className="tmh-dialog-message" role="status">
+                Loading execution report…
+              </p>
+            ) : error ? (
+              <p className="tmh-dialog-message tmh-dialog-error" role="alert">
+                {error}
+              </p>
+            ) : (
+              <AssessmentWorkspace detail={detail} />
+            )}
+          </section>
+        </div>
+
+        <footer className="tmh-execution-dialog-footer">
+          <a
+            className="tmh-detail-link"
+            href={hashForExecution(observation.execution_id)}
+          >
+            Open full execution report
+          </a>
+          <button className="tmh-detail-button" type="button" onClick={onClose}>
+            Close
+          </button>
+        </footer>
+      </div>
+    </dialog>
+  )
+}
+
+export function TestHistoryPage({ testId }: { testId: string }) {
+  const [history, setHistory] = useState<TestHistoryResponse | null>(null)
+  const [version, setVersion] = useState<number | undefined>()
+  const [executionModel, setExecutionModel] = useState('')
+  const [judgeModel, setJudgeModel] = useState('')
+  const [system, setSystem] = useState('')
+  const [result, setResult] = useState('')
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState<string | null>(null)
+  const [selectedObservation, setSelectedObservation] =
+    useState<TestObservation | null>(null)
+
+  useEffect(() => {
+    let cancelled = false
+    setLoading(true)
+    setError(null)
+    void getDashboardDataBridge()
+      .then((next) => {
+        if (cancelled) return
+        if (next.mode !== 'local') {
+          throw new Error(
+            'Test metric history is available only in the local dashboard',
+          )
+        }
+        const execution = parseModelSelection(executionModel)
+        const judge = parseModelSelection(judgeModel)
+        return next.getTestHistory({
+          test_id: testId,
+          test_version: version,
+          subject_provider: execution?.provider,
+          subject_model: execution?.model,
+          judge_provider: judge?.provider,
+          judge_model: judge?.model,
+          system_version_id: system || undefined,
+          result: result || undefined,
+          limit: 100,
+        })
+      })
+      .then((data) => {
+        if (!cancelled && data) setHistory(data)
+      })
+      .catch((cause) => {
+        if (!cancelled)
+          setError(cause instanceof Error ? cause.message : String(cause))
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [executionModel, judgeModel, result, system, testId, version])
+
+  const executionModelGroups = useMemo(
+    () => modelGroups(history, 'subject'),
+    [history],
+  )
+  const judgeModelGroups = useMemo(
+    () => modelGroups(history, 'judge'),
+    [history],
+  )
+
+  const observations = history?.observations ?? []
+  const costs = observations.map((item) => item.median_cost_usd)
+  const durations = observations.map((item) => item.median_duration_seconds)
+  const tokens = observations.map((item) => item.median_tokens)
+  const turns = observations.map((item) => item.median_turns)
+  const summaryCost = median(costs)
+  const summaryDuration = median(durations)
+  const summaryTokens = median(tokens)
+  const summaryTurns = median(turns)
+  const latestVersion = history?.available_versions.find(
+    (item) => item.version === history.test_version,
+  )
+  const knownPassed = observations.filter(
+    (item) => item.status === 'passed',
+  ).length
+
+  return (
+    <div id="test-metrics-history-proposal" className="tmh-page">
+      <header className="topbar">
+        <a
+          className="brand"
+          href={hashForWorkspace()}
+          aria-label="Harness E2E dashboard"
+        >
+          <span className="brand-copy">
+            <strong>iii</strong>
+            <span>Harness benchmarks</span>
+          </span>
+        </a>
+        <nav className="topbar-actions" aria-label="Test history actions">
+          <a
+            className="button button-secondary"
+            href={hashForWorkspace()}
+            data-mobile-label="Overview"
+          >
+            Overview
+          </a>
+          <a
+            className="button button-secondary"
+            href={hashForWorkspace('tests')}
+            data-mobile-label="Tests"
+          >
+            Test catalog
+          </a>
+          <a
+            className="button button-secondary"
+            href={hashForPlans()}
+            data-mobile-label="Plans"
+          >
+            Plans
+          </a>
+          <ThemeToggle />
+        </nav>
+      </header>
+
+      <main className="tmh-main" id="test-history-main">
+        <p className="tmh-breadcrumb">
+          <a href={hashForWorkspace('tests')}>Tests</a> / <span>{testId}</span>
+        </p>
+        <h1>{testId}</h1>
+        <p className="tmh-subtitle">
+          Inspect how this test&apos;s result, cost, duration, token usage, and
+          turns changed across retained local executions.
+        </p>
+
+        <div className="tmh-identity">
+          <div className="tmh-identity-item">
+            <span className="tmh-label">Current version</span>
+            <strong>
+              {history?.test_version ? `v${history.test_version}` : 'Unknown'}
+            </strong>
+          </div>
+          <div className="tmh-identity-item">
+            <span className="tmh-label">Complexity</span>
+            <strong>Not recorded</strong>
+          </div>
+          <div className="tmh-identity-item">
+            <span className="tmh-label">Contract</span>
+            <code>{contractSummary(observations)}</code>
+          </div>
+          <div className="tmh-identity-item">
+            <span className="tmh-label">Retained</span>
+            <strong>
+              {latestVersion?.execution_count ?? history?.total ?? 0} executions
+            </strong>
+          </div>
+        </div>
+
+        <section className="tmh-panel" aria-labelledby="tmh-history-title">
+          <header className="tmh-panel-head">
+            <div>
+              <h2 id="tmh-history-title">Metric history</h2>
+              <p>Filters change only the evidence series shown below.</p>
+            </div>
+            <span className="tmh-visible-count">
+              {loading
+                ? 'Loading executions…'
+                : visibleLabel(observations.length)}
+            </span>
+          </header>
+
+          <div className="tmh-filters">
+            <label className="tmh-field">
+              Test version
+              <select
+                value={version ?? ''}
+                onChange={(event) =>
+                  setVersion(
+                    event.target.value ? Number(event.target.value) : undefined,
+                  )
+                }
+              >
+                <option value="">Current / latest</option>
+                {(history?.available_versions ?? []).map((item) => (
+                  <option key={item.version} value={item.version}>
+                    v{item.version}
+                    {item.version === history?.test_version ? ' · current' : ''}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <div className="tmh-field">
+              Execution model
+              <ProviderModelDropdown
+                groups={executionModelGroups}
+                value={executionModel}
+                onChange={setExecutionModel}
+                optionValue={modelSelection}
+                placeholder="All execution models"
+                ariaLabel="Execution model"
+              />
+            </div>
+            <div className="tmh-field">
+              Judge model
+              <ProviderModelDropdown
+                groups={judgeModelGroups}
+                value={judgeModel}
+                onChange={setJudgeModel}
+                optionValue={modelSelection}
+                placeholder="All judge models"
+                ariaLabel="Judge model"
+              />
+            </div>
+            <label className="tmh-field">
+              System revision
+              <select
+                value={system}
+                onChange={(event) => setSystem(event.target.value)}
+              >
+                <option value="">All revisions</option>
+                {(history?.systems ?? []).map((item) => (
+                  <option key={item.id} value={item.id}>
+                    {item.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className="tmh-field">
+              Result
+              <select
+                value={result}
+                onChange={(event) => setResult(event.target.value)}
+              >
+                <option value="">All results</option>
+                <option value="passed">Passed</option>
+                <option value="hard_gate_failed">Hard gate failed</option>
+                <option value="technical_failed">Technical failure</option>
+                <option value="infra_failed">Infrastructure failure</option>
+              </select>
+            </label>
+          </div>
+
+          {error ? (
+            <div className="tmh-empty tmh-error" role="alert">
+              <strong>History unavailable</strong>
+              <span>{error}</span>
+            </div>
+          ) : loading ? (
+            <div className="tmh-empty" role="status">
+              Loading metric history…
+            </div>
+          ) : (
+            <>
+              <div className="tmh-metric-summary">
+                <div className="tmh-metric">
+                  <span>Successful runs</span>
+                  <strong>
+                    {observations.length
+                      ? `${String(knownPassed)} / ${observations.length}`
+                      : '—'}
+                  </strong>
+                  <small>objective result</small>
+                </div>
+                <div className="tmh-metric">
+                  <span>Median cost</span>
+                  <strong>{formatCost(summaryCost)}</strong>
+                  <small>
+                    {metricCaption(
+                      knownMetricCount(costs),
+                      observations.length,
+                      'cost',
+                    )}
+                  </small>
+                </div>
+                <div className="tmh-metric">
+                  <span>Median duration</span>
+                  <strong>{formatDuration(summaryDuration)}</strong>
+                  <small>
+                    {metricCaption(
+                      knownMetricCount(durations),
+                      observations.length,
+                      'duration',
+                    )}
+                  </small>
+                </div>
+                <div className="tmh-metric">
+                  <span>Median tokens</span>
+                  <strong>{formatTokens(summaryTokens)}</strong>
+                  <small>
+                    {metricCaption(
+                      knownMetricCount(tokens),
+                      observations.length,
+                      'token',
+                    )}
+                  </small>
+                </div>
+                <div className="tmh-metric">
+                  <span>Median turns</span>
+                  <strong>
+                    {summaryTurns === null
+                      ? 'Unknown'
+                      : Math.round(summaryTurns).toLocaleString()}
+                  </strong>
+                  <small>
+                    {metricCaption(
+                      knownMetricCount(turns),
+                      observations.length,
+                      'turn',
+                    )}
+                  </small>
+                </div>
+              </div>
+
+              <p className="tmh-series-note">
+                <strong>Descriptive median:</strong> values summarize the
+                visible execution records. Use a local plan or system comparison
+                to inspect a baseline/candidate delta. Missing metrics stay
+                unknown.
+              </p>
+
+              <table aria-label={`Metric history for ${testId}`}>
+                <thead>
+                  <tr>
+                    <th scope="col" style={{ width: '17%' }}>
+                      Execution
+                    </th>
+                    <th scope="col" style={{ width: '24%' }}>
+                      Model and system
+                    </th>
+                    <th scope="col" style={{ width: '16%' }}>
+                      Result
+                    </th>
+                    <th scope="col" style={{ width: '11%' }}>
+                      Cost
+                    </th>
+                    <th scope="col" style={{ width: '12%' }}>
+                      Duration
+                    </th>
+                    <th scope="col" style={{ width: '11%' }}>
+                      Tokens
+                    </th>
+                    <th scope="col" style={{ width: '9%' }}>
+                      Turns
+                    </th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {observations.map((item) => (
+                    <tr
+                      className="tmh-metric-row"
+                      key={
+                        item.execution_id +
+                        ':' +
+                        item.case_id +
+                        ':' +
+                        item.contract_sha256
+                      }
+                    >
+                      <td data-label="Execution">
+                        <strong>{formatDate(item.completed_at)}</strong>
+                        <small>
+                          Test v
+                          {item.scenario_version ??
+                            history?.test_version ??
+                            '—'}{' '}
+                          · {logicalRunLabel(item.run_count)}
+                        </small>
+                      </td>
+                      <td data-label="Model and system">
+                        <strong>
+                          {modelLabel(
+                            item.subject_provider,
+                            item.subject_model,
+                          )}
+                        </strong>
+                        <small>
+                          {systemSummary(item)} · judge{' '}
+                          {modelLabel(item.judge_provider, item.judge_model)}
+                          {' · '}
+                          {item.judge_protocol ?? 'protocol unknown'}
+                        </small>
+                      </td>
+                      <td data-label="Result">
+                        <span
+                          className={`tmh-status ${statusClass(item.status)}`}
+                        >
+                          {formatStatus(item.status)}
+                        </span>
+                        <small>
+                          {item.median_score === null ||
+                          item.median_score === undefined
+                            ? 'Score unknown'
+                            : `Score ${item.median_score.toFixed(2)}`}
+                        </small>
+                        <button
+                          className="tmh-detail-button"
+                          type="button"
+                          onClick={() => setSelectedObservation(item)}
+                          aria-label={`Open execution details from ${formatDate(item.completed_at)}`}
+                        >
+                          View details
+                        </button>
+                      </td>
+                      <td data-label="Cost">
+                        {formatCost(item.median_cost_usd)}
+                      </td>
+                      <td data-label="Duration">
+                        {formatDuration(item.median_duration_seconds)}
+                      </td>
+                      <td data-label="Tokens">
+                        {formatTokens(item.median_tokens)}
+                      </td>
+                      <td data-label="Turns">
+                        {item.median_turns === null ||
+                        item.median_turns === undefined
+                          ? 'Unknown'
+                          : Math.round(item.median_turns).toLocaleString()}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+              {!observations.length && (
+                <div className="tmh-empty" style={{ display: 'block' }}>
+                  No executions match these filters.
+                </div>
+              )}
+            </>
+          )}
+        </section>
+      </main>
+      {selectedObservation && (
+        <ExecutionDetailsDialog
+          observation={selectedObservation}
+          testVersion={history?.test_version}
+          onClose={() => setSelectedObservation(null)}
+        />
+      )}
+    </div>
+  )
+}

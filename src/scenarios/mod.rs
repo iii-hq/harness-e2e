@@ -23,6 +23,7 @@ mod domain;
 pub mod mechanical_reaction;
 pub mod multi_subagent_validation;
 pub mod persistent_state;
+pub mod pr_review_regressions;
 pub mod reactive_automation;
 pub mod receiving_operation;
 pub mod research_pipeline;
@@ -385,10 +386,25 @@ pub enum ScenarioId {
     #[serde(rename = "coordination.5")]
     #[value(name = "coordination.5")]
     Coordination5,
+    #[serde(rename = "pr_review.token_takeover")]
+    #[value(name = "pr_review.token_takeover")]
+    PrReviewTokenTakeover,
+    #[serde(rename = "pr_review.reconnect_sweep")]
+    #[value(name = "pr_review.reconnect_sweep")]
+    PrReviewReconnectSweep,
+    #[serde(rename = "pr_review.asset_retry_ack")]
+    #[value(name = "pr_review.asset_retry_ack")]
+    PrReviewAssetRetryAck,
+    #[serde(rename = "pr_review.presence_reconnect")]
+    #[value(name = "pr_review.presence_reconnect")]
+    PrReviewPresenceReconnect,
+    #[serde(rename = "pr_review.prompt_provenance")]
+    #[value(name = "pr_review.prompt_provenance")]
+    PrReviewPromptProvenance,
 }
 
 impl ScenarioId {
-    pub const ALL: [Self; 21] = [
+    pub const ALL: [Self; 26] = [
         Self::DirectAnswer,
         Self::PersistentState,
         Self::ReactiveAutomation,
@@ -410,6 +426,11 @@ impl ScenarioId {
         Self::Coordination3,
         Self::Coordination4,
         Self::Coordination5,
+        Self::PrReviewTokenTakeover,
+        Self::PrReviewReconnectSweep,
+        Self::PrReviewAssetRetryAck,
+        Self::PrReviewPresenceReconnect,
+        Self::PrReviewPromptProvenance,
     ];
 
     pub fn as_str(self) -> &'static str {
@@ -435,6 +456,11 @@ impl ScenarioId {
             Self::Coordination3 => coordination::ID_3,
             Self::Coordination4 => coordination::ID_4,
             Self::Coordination5 => coordination::ID_5,
+            Self::PrReviewTokenTakeover => pr_review_regressions::TOKEN_TAKEOVER_ID,
+            Self::PrReviewReconnectSweep => pr_review_regressions::RECONNECT_SWEEP_ID,
+            Self::PrReviewAssetRetryAck => pr_review_regressions::ASSET_RETRY_ACK_ID,
+            Self::PrReviewPresenceReconnect => pr_review_regressions::PRESENCE_RECONNECT_ID,
+            Self::PrReviewPromptProvenance => pr_review_regressions::PROMPT_PROVENANCE_ID,
         }
     }
 
@@ -461,6 +487,26 @@ impl ScenarioId {
             Self::Coordination3 => coordination::scenario(coordination::Rung::Three, run_id),
             Self::Coordination4 => coordination::scenario(coordination::Rung::Four, run_id),
             Self::Coordination5 => coordination::scenario(coordination::Rung::Five, run_id),
+            Self::PrReviewTokenTakeover => pr_review_regressions::scenario(
+                pr_review_regressions::ReviewCase::TokenTakeover,
+                run_id,
+            ),
+            Self::PrReviewReconnectSweep => pr_review_regressions::scenario(
+                pr_review_regressions::ReviewCase::ReconnectSweep,
+                run_id,
+            ),
+            Self::PrReviewAssetRetryAck => pr_review_regressions::scenario(
+                pr_review_regressions::ReviewCase::AssetRetryAck,
+                run_id,
+            ),
+            Self::PrReviewPresenceReconnect => pr_review_regressions::scenario(
+                pr_review_regressions::ReviewCase::PresenceReconnect,
+                run_id,
+            ),
+            Self::PrReviewPromptProvenance => pr_review_regressions::scenario(
+                pr_review_regressions::ReviewCase::PromptProvenance,
+                run_id,
+            ),
         }
     }
 
@@ -503,6 +549,31 @@ impl ScenarioId {
             Self::Coordination5 => {
                 coordination::materialize(coordination::Rung::Five, namespace, seed)?
             }
+            Self::PrReviewTokenTakeover => pr_review_regressions::materialize(
+                pr_review_regressions::ReviewCase::TokenTakeover,
+                namespace,
+                seed,
+            )?,
+            Self::PrReviewReconnectSweep => pr_review_regressions::materialize(
+                pr_review_regressions::ReviewCase::ReconnectSweep,
+                namespace,
+                seed,
+            )?,
+            Self::PrReviewAssetRetryAck => pr_review_regressions::materialize(
+                pr_review_regressions::ReviewCase::AssetRetryAck,
+                namespace,
+                seed,
+            )?,
+            Self::PrReviewPresenceReconnect => pr_review_regressions::materialize(
+                pr_review_regressions::ReviewCase::PresenceReconnect,
+                namespace,
+                seed,
+            )?,
+            Self::PrReviewPromptProvenance => pr_review_regressions::materialize(
+                pr_review_regressions::ReviewCase::PromptProvenance,
+                namespace,
+                seed,
+            )?,
         };
         materialized.validate()?;
         Ok(materialized)
@@ -533,7 +604,7 @@ mod tests {
 
     use super::*;
     #[test]
-    fn registry_contains_twenty_one_unique_valid_scenarios() {
+    fn registry_contains_twenty_six_unique_valid_scenarios() {
         let mut ids = HashSet::new();
         for scenario in ScenarioId::ALL {
             assert!(ids.insert(scenario.as_str()));
@@ -542,7 +613,7 @@ mod tests {
                 .materialize("run", scenario.canonical_seed())
                 .unwrap();
         }
-        assert_eq!(ids.len(), 21);
+        assert_eq!(ids.len(), 26);
     }
 
     #[test]

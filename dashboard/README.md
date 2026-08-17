@@ -96,7 +96,7 @@ restarting the Harness never recompiles the E2E client. `serve` is an alias for
 
 The React boot loader activates local execution controls only when the runtime
 descriptor reports `mode: "local"`. If the runtime surface is unavailable it
-falls back to `executions.js`; the Pages publisher always emits
+falls back to `executions.json`; the Pages publisher always emits
 `mode: "published"`, so the published dashboard keeps using only its static
 history and never calls the local execution APIs.
 

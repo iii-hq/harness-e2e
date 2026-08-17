@@ -1,7 +1,4 @@
 import { useEffect, useState } from 'react'
-import { loadRuntimeExecutionData } from '@/lib/dashboard-data-source'
-
-type PageName = 'overview' | 'execution' | 'coverage'
 
 type CoverageLines = {
   count?: number
@@ -22,18 +19,10 @@ type CoverageDocument = {
   }
 }
 
-function assetRoot(_page: PageName) {
-  return './'
-}
-
-function scriptUrl(page: PageName, path: string) {
-  return new URL(`${assetRoot(page)}${path}`, window.location.href).href
-}
-
-function loadScript(page: PageName, path: string, required = true) {
+function loadScript(path: string, required = true) {
   return new Promise<boolean>((resolve, reject) => {
     const script = document.createElement('script')
-    script.src = scriptUrl(page, path)
+    script.src = new URL(path, window.location.href).href
     script.dataset.dashboardAsset = path
     script.onload = () => resolve(true)
     script.onerror = () => {
@@ -43,36 +32,6 @@ function loadScript(page: PageName, path: string, required = true) {
     }
     document.head.append(script)
   })
-}
-
-async function loadExecutionManifest(page: PageName) {
-  window.HARNESS_EXECUTIONS ??= undefined
-  await loadScript(page, 'executions.js', false)
-  if (!window.HARNESS_EXECUTIONS) {
-    if (!window.HarnessBenchmarkData) {
-      await loadBenchmarkData(page)
-      await loadScript(page, 'dashboard-data.js')
-    }
-    await loadScript(page, 'sample-executions.js')
-  }
-}
-
-async function loadExecutionData(page: 'overview' | 'execution') {
-  try {
-    if (await loadRuntimeExecutionData(page)) return
-  } catch {
-    // The local iii surface and its HTTP fallback may both be unavailable.
-    // Retained/static data remains a valid read-only source.
-  }
-  await loadExecutionManifest(page)
-}
-
-async function loadBenchmarkData(page: PageName) {
-  window.BENCHMARK_DATA ??= undefined
-  await loadScript(page, 'data.js', false)
-  if (!window.BENCHMARK_DATA) {
-    await loadScript(page, 'sample-data.js')
-  }
 }
 
 function renderCoverage() {
@@ -113,45 +72,27 @@ function renderCoverage() {
   renderCard('card-e2e', suites.e2e)
 }
 
-async function bootLegacyPage(page: PageName) {
-  if (page === 'coverage') {
-    window.HARNESS_COVERAGE = undefined
-    await loadScript(page, 'coverage/summary.js', false)
-    renderCoverage()
-    return
-  }
-
-  await loadBenchmarkData(page)
-  await loadScript(page, 'dashboard-data.js')
-  await loadScript(page, 'execution-data.js')
-  if (page === 'execution') {
-    await loadScript(page, 'execution-transcript.js')
-  }
-  await loadExecutionData(page)
-
-  if (page === 'overview' && window.HARNESS_EXECUTIONS?.mode === 'local') {
-    await loadScript(page, 'ansi-log.js')
-    await loadScript(page, 'local-runner.js')
-  }
-  await loadScript(page, page === 'overview' ? 'overview.js' : 'execution.js')
+async function bootCoverage() {
+  window.HARNESS_COVERAGE = undefined
+  await loadScript('./coverage/summary.js', false)
+  renderCoverage()
 }
 
-function boot(page: PageName) {
+export function loadLegacyPage(page: 'coverage') {
+  if (page !== 'coverage') {
+    return Promise.reject(new Error(`Legacy page '${page}' was removed`))
+  }
   window.__HARNESS_REACT_BOOT__ ??= {}
-  window.__HARNESS_REACT_BOOT__[page] ??= bootLegacyPage(page)
-  return window.__HARNESS_REACT_BOOT__[page]
+  window.__HARNESS_REACT_BOOT__.coverage ??= bootCoverage()
+  return window.__HARNESS_REACT_BOOT__.coverage
 }
 
-export function loadLegacyPage(page: PageName) {
-  return boot(page)
-}
-
-export function useLegacyPage(page: PageName) {
+export function useLegacyPage(page: 'coverage') {
   const [error, setError] = useState<Error | null>(null)
 
   useEffect(() => {
     let active = true
-    boot(page).catch((cause: unknown) => {
+    loadLegacyPage(page).catch((cause: unknown) => {
       if (!active) return
       setError(cause instanceof Error ? cause : new Error(String(cause)))
     })

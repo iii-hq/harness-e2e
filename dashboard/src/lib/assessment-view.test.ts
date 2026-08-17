@@ -5,8 +5,10 @@ import type {
   RunAssessmentContract,
 } from '@/lib/assessment-contract'
 import {
+  aggregateAssessmentMetrics,
   assessmentFilterCounts,
   buildAssessmentWorkspace,
+  buildHarnessRecommendation,
   matchesAssessmentFilter,
 } from '@/lib/assessment-view'
 import type { DashboardExecutionDetail } from '@/lib/dashboard-data-source'
@@ -138,6 +140,72 @@ describe('assessment presentation model', () => {
     expect(model.runs[0].finalAssessment.result?.verdict).toBe('pass')
   })
 
+  it('projects run-level token, function, and duration metrics', () => {
+    const input = detail(contract())
+    const report = input.reports[0].report
+    if (!report) throw new Error('test report is missing')
+    report.scenarios[0].runs[0] = {
+      ...report.scenarios[0].runs[0],
+      wall_time_ms: 62294,
+      metrics: {
+        totals: {
+          input_tokens: 21296,
+          output_tokens: 1372,
+          cache_read_tokens: 161280,
+          reasoning_tokens: 706,
+          function_calls: 14,
+          function_call_errors: 0,
+          sessions: 1,
+          turns: 16,
+        },
+      },
+    }
+    expect(buildAssessmentWorkspace(input).runs[0].metrics).toEqual({
+      totalTokens: 22668,
+      inputTokens: 21296,
+      outputTokens: 1372,
+      cacheReadTokens: 161280,
+      cacheWriteTokens: null,
+      reasoningTokens: 706,
+      functionCalls: 14,
+      functionCallErrors: 0,
+      durationMs: 62294,
+      sessions: 1,
+      turns: 16,
+    })
+  })
+
+  it('aggregates run metrics for the execution summary', () => {
+    const model = buildAssessmentWorkspace(detail(contract()))
+    const first = {
+      ...model.runs[0],
+      metrics: {
+        ...model.runs[0].metrics,
+        totalTokens: 120,
+        functionCalls: 7,
+        functionCallErrors: 1,
+        durationMs: 1500,
+      },
+    }
+    const second = {
+      ...first,
+      key: 'second-run',
+      metrics: {
+        ...first.metrics,
+        totalTokens: 80,
+        functionCalls: 3,
+        functionCallErrors: 2,
+        durationMs: 2500,
+      },
+    }
+    expect(aggregateAssessmentMetrics([first, second])).toMatchObject({
+      totalTokens: 200,
+      functionCalls: 10,
+      functionCallErrors: 3,
+      durationMs: 4000,
+    })
+  })
+
   it('keeps an objective failure prominent when advisory AI passes', () => {
     const model = buildAssessmentWorkspace(
       detail(
@@ -149,6 +217,33 @@ describe('assessment presentation model', () => {
     )
     expect(model.runs[0].hasAiDisagreement).toBe(true)
     expect(model.runs[0].systemStatus).toBe('hard_gate_failed')
+  })
+
+  it('derives next-run guidance from authoritative harness status', () => {
+    const infrastructure = buildAssessmentWorkspace(
+      detail(
+        contract({
+          system_status: 'infrastructure_error',
+          effective_status: 'infrastructure_error',
+        }),
+      ),
+    ).runs[0]
+    expect(buildHarnessRecommendation(infrastructure)).toMatch(
+      /collection or serialization path/i,
+    )
+
+    const resource = buildAssessmentWorkspace(
+      detail(
+        contract({
+          system_status: 'resource_limit',
+          effective_status: 'resource_limit',
+        }),
+      ),
+    ).runs[0]
+    expect(buildHarnessRecommendation(resource)).toMatch(/resource footprint/i)
+
+    const passing = buildAssessmentWorkspace(detail(contract())).runs[0]
+    expect(buildHarnessRecommendation(passing)).toMatch(/comparable scenario/i)
   })
 
   it('preserves technical failures without translating them into quality failures', () => {

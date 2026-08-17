@@ -7,7 +7,6 @@ import {
   Search,
 } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { SectionNav } from '@/components/SectionNav'
 import { ThemeToggle } from '@/components/ThemeToggle'
 import {
   hashForCoverage,
@@ -824,13 +823,6 @@ export function TestsPage({
             </strong>
           </div>
         </section>
-
-        <SectionNav
-          activeView="tests"
-          onViewChange={(view) => {
-            window.location.hash = hashForWorkspace(view)
-          }}
-        />
 
         <section
           className="panel overflow-visible"

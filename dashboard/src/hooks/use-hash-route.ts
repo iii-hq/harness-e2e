@@ -6,6 +6,10 @@ export type DashboardRoute =
   | { page: 'overview'; view: WorkspaceView }
   | { page: 'execution'; executionId: string; anchor: string | null }
   | { page: 'compare'; left: string | null; right: string | null }
+  | { page: 'test-history'; testId: string }
+  | { page: 'plans' }
+  | { page: 'plan-create' }
+  | { page: 'plan-detail'; planId: string }
   | { page: 'coverage' }
 
 export type DashboardRoutes = {
@@ -13,6 +17,10 @@ export type DashboardRoutes = {
   workspace: (view?: WorkspaceView) => string
   execution: (executionId: string, anchor?: string | null) => string
   compare: (left?: string | null, right?: string | null) => string
+  testHistory: (testId: string) => string
+  plans: () => string
+  newPlan: () => string
+  plan: (planId: string) => string
   coverage: () => string
 }
 
@@ -53,6 +61,9 @@ export function routeFromHash(rawHash: string): DashboardRoute | null {
   if (head === 'scenarios') {
     return { page: 'overview', view: 'tests' }
   }
+  if (head === 'tests' && rest[0]) {
+    return { page: 'test-history', testId: rest[0] }
+  }
   if (workspaceViews.has(head as WorkspaceView)) {
     return { page: 'overview', view: head as WorkspaceView }
   }
@@ -69,6 +80,11 @@ export function routeFromHash(rawHash: string): DashboardRoute | null {
       left: rest[0] ?? null,
       right: rest[1] ?? null,
     }
+  }
+  if (head === 'plans') {
+    if (!rest[0]) return { page: 'plans' }
+    if (rest[0] === 'new') return { page: 'plan-create' }
+    return { page: 'plan-detail', planId: rest[0] }
   }
   if (head === 'coverage') return { page: 'coverage' }
   return null
@@ -104,11 +120,31 @@ export function hashForCoverage(): string {
   return '#/coverage'
 }
 
+export function hashForTestHistory(testId: string): string {
+  return `#/tests/${encodeSegment(testId)}`
+}
+
+export function hashForNewPlan(): string {
+  return '#/plans/new'
+}
+
+export function hashForPlans(): string {
+  return '#/plans'
+}
+
+export function hashForPlan(planId: string): string {
+  return `#/plans/${encodeSegment(planId)}`
+}
+
 export const dashboardRoutes: DashboardRoutes = {
   current: currentDashboardRoute,
   workspace: hashForWorkspace,
   execution: hashForExecution,
   compare: hashForComparison,
+  testHistory: hashForTestHistory,
+  plans: hashForPlans,
+  newPlan: hashForNewPlan,
+  plan: hashForPlan,
   coverage: hashForCoverage,
 }
 
@@ -117,6 +153,9 @@ export function routeRenderIdentity(route: DashboardRoute): string {
   if (route.page === 'compare') {
     return `${route.page}:${route.left ?? ''}:${route.right ?? ''}`
   }
+  if (route.page === 'test-history') return `${route.page}:${route.testId}`
+  if (route.page === 'plan-detail') return `${route.page}:${route.planId}`
+  if (route.page === 'plan-create') return route.page
   if (route.page === 'overview') {
     return route.view === 'tests' ? 'overview:tests' : 'overview:workspace'
   }
