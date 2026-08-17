@@ -1457,13 +1457,19 @@ export function LocalPlanDetailPage({ planId }: { planId: string }) {
 
   const comparison = useMemo(() => {
     if (!plan?.baseline_execution_id || !selectedCandidateId) return null
-    const baseline =
-      baselineDetail ?? executionSummaries[plan.baseline_execution_id]
-    const candidate = candidateDetail ?? executionSummaries[selectedCandidateId]
+    const detailsMatch =
+      baselineDetail?.id === plan.baseline_execution_id &&
+      candidateDetail?.id === selectedCandidateId
+    const baseline = detailsMatch
+      ? baselineDetail
+      : executionSummaries[plan.baseline_execution_id]
+    const candidate = detailsMatch
+      ? candidateDetail
+      : executionSummaries[selectedCandidateId]
     return buildPlanComparison(
       baseline,
       candidate,
-      baselineDetail && candidateDetail
+      detailsMatch
         ? { baseline: baselineDetail, candidate: candidateDetail }
         : undefined,
     )
@@ -1573,6 +1579,9 @@ export function LocalPlanDetailPage({ planId }: { planId: string }) {
               selectedCandidateId={selectedCandidateId}
               onSelectCandidate={(id) => {
                 setCandidateSelectionPinned(true)
+                setCandidateDetail(null)
+                setComparisonError(null)
+                setComparisonLoading(true)
                 setSelectedCandidateId(id)
               }}
               loading={historyLoading}

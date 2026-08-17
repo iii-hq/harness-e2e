@@ -212,6 +212,7 @@ describe('local plan execution comparison', () => {
 
   it('selects the latest candidate automatically and preserves a valid manual selection', () => {
     expect(selectedPlanCandidate(null, false, ['one', 'two'])).toBe('two')
+    expect(selectedPlanCandidate('one', false, ['one', 'two'])).toBe('two')
     expect(selectedPlanCandidate('one', true, ['one', 'two'])).toBe('one')
     expect(selectedPlanCandidate('removed', true, ['one', 'two'])).toBe('two')
   })
