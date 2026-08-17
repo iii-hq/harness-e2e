@@ -94,7 +94,33 @@ export type DashboardModelIdentity = JsonObject & {
 
 export type DashboardScenarioSummary = JsonObject & {
   id: string
+  scenario_version?: number
+  case_id?: string
+  status?: string
+  passed?: boolean
+  pass_rate?: number | null
+  median_score?: number | null
+  hard_gate_failures?: number | null
+  technical_failures?: number | null
+  wall_time_seconds?: number | null
+  total_cost_usd?: number | null
   assessment_summary?: AssessmentSummary
+}
+
+export type DashboardScenarioMetricSummary = JsonObject & {
+  scenario_id: string
+  scenario_version?: number
+  subject_id?: string
+  contract_fingerprint?: string
+  run_count?: number
+  averages?: JsonObject & {
+    cost_usd?: number | null
+    duration_seconds?: number | null
+    function_call_errors?: number | null
+    function_calls?: number | null
+    tokens?: number | null
+    work_amplification?: number | null
+  }
 }
 
 export type DashboardSubjectSummary = JsonObject & {
@@ -125,6 +151,7 @@ export type DashboardExecutionSummary = JsonObject & {
   release?: JsonObject
   lane?: string
   subjects: DashboardSubjectSummary[]
+  scenario_metrics?: DashboardScenarioMetricSummary[]
   totals?: ExecutionTotals
   assessment_summary?: AssessmentSummary
 }

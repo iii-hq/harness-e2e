@@ -10,10 +10,29 @@ import {
 } from '@/hooks/use-hash-route'
 import {
   type DashboardDataBridge,
+  type DashboardExecutionDetail,
+  type DashboardExecutionSummary,
   getDashboardDataBridge,
   type JsonObject,
   type LocalPlan,
 } from '@/lib/dashboard-data-source'
+import {
+  buildExecutionPresentation,
+  formatDate,
+  titleCase,
+} from '@/lib/execution-view'
+import {
+  buildPlanComparison,
+  formatPlanMetricDelta,
+  formatPlanMetricValue,
+  loadExecutionSummaries,
+  metricById,
+  PLAN_DETAIL_METRICS,
+  type PlanComparison,
+  type PlanMetricComparison,
+  type PlanScenarioComparison,
+  type PlanVerdict,
+} from '@/lib/plan-comparison'
 
 type Model = { provider: string; model: string }
 type Catalog = { url: string; models: Model[]; scenarios: string[] }
@@ -191,13 +210,13 @@ export function PlanLifecycle({
 
   return (
     <section
-      className="panel plan-lifecycle-panel"
+      className="panel plan-panel-composite plan-lifecycle-panel"
       aria-labelledby="plan-lifecycle-title"
     >
-      <div className="panel-heading">
+      <div className="panel-heading plan-panel-heading">
         <div>
-          <div className="section-kicker">Execution lifecycle</div>
-          <h2 id="plan-lifecycle-title">Baseline → candidate</h2>
+          <div className="section-kicker">Execution controls</div>
+          <h2 id="plan-lifecycle-title">Plan actions</h2>
         </div>
         {plan.locked && <span className="status-pill status-pass">Locked</span>}
       </div>
@@ -231,14 +250,24 @@ export function PlanLifecycle({
             </button>
           ) : null}
           {nextAction.state === 'complete' && (
-            <button
-              className="button button-secondary"
-              type="button"
-              onClick={() => onStart('candidate')}
-              disabled={starting !== null || runningRole !== null}
-            >
-              Run another candidate
-            </button>
+            <>
+              {plan.baseline_execution_id && (
+                <a
+                  className="button button-secondary"
+                  href={hashForExecution(plan.baseline_execution_id)}
+                >
+                  View baseline execution
+                </a>
+              )}
+              <button
+                className="button button-secondary"
+                type="button"
+                onClick={() => onStart('candidate')}
+                disabled={starting !== null || runningRole !== null}
+              >
+                Run another candidate
+              </button>
+            </>
           )}
         </div>
       </div>
@@ -261,71 +290,457 @@ export function PlanLifecycle({
           </div>
         </div>
       )}
-      <div className="plan-lifecycle">
-        <article
-          className={
-            plan.baseline_execution_id
-              ? 'plan-step complete'
-              : isRoleRunning(plan, 'baseline')
-                ? 'plan-step running'
-                : 'plan-step active'
-          }
-        >
-          <span>01</span>
-          <div>
-            <strong>Baseline</strong>
-            <small>
-              {plan.baseline_execution_id
-                ? 'Completed report captured'
-                : isRoleRunning(plan, 'baseline')
-                  ? 'Collecting the baseline report now'
-                  : 'Run once before the change'}
-            </small>
-            {plan.baseline_execution_id && (
-              <a href={hashForExecution(plan.baseline_execution_id)}>
-                View baseline execution
-              </a>
-            )}
-            {!plan.baseline_execution_id &&
-              isRoleRunning(plan, 'baseline') &&
-              plan.last_attempt_id && (
-                <a href={hashForExecution(plan.last_attempt_id)}>
-                  View active execution
-                </a>
-              )}
-          </div>
-        </article>
-        <article
-          className={
-            plan.candidate_execution_ids.length
-              ? 'plan-step complete'
-              : isRoleRunning(plan, 'candidate')
-                ? 'plan-step running'
-                : 'plan-step'
-          }
-        >
-          <span>02</span>
-          <div>
-            <strong>Candidate</strong>
-            <small>
-              {isRoleRunning(plan, 'candidate')
-                ? 'Collecting the candidate report now'
-                : plan.candidate_execution_ids.length
-                  ? `${plan.candidate_execution_ids.length} candidate run${plan.candidate_execution_ids.length === 1 ? '' : 's'}`
-                  : 'Rerun the locked scope after the change'}
-            </small>
-            {plan.candidate_execution_ids.map((id) => (
-              <a key={id} href={hashForExecution(id)}>
-                View candidate execution
-              </a>
+    </section>
+  )
+}
+
+const planVerdictPresentation: Record<
+  PlanVerdict,
+  { label: string; tone: string }
+> = {
+  improved: { label: 'Improved', tone: 'status-pass' },
+  stable: { label: 'Stable', tone: 'status-neutral' },
+  regressed: { label: 'Regressed', tone: 'status-fail' },
+  inconclusive: { label: 'Inconclusive', tone: 'status-incomplete' },
+}
+
+function executionStatus(
+  summary: DashboardExecutionSummary | null,
+  fallback: 'running' | 'incomplete' | null = null,
+) {
+  if (!summary) {
+    return fallback === 'running'
+      ? { label: 'Running', tone: 'status-incomplete' }
+      : fallback === 'incomplete'
+        ? { label: 'Incomplete', tone: 'status-incomplete' }
+        : { label: 'Unavailable', tone: 'status-neutral' }
+  }
+  const state = buildExecutionPresentation(summary).attention
+  if (state === 'passed') return { label: 'Passed', tone: 'status-pass' }
+  if (state === 'needs_attention')
+    return { label: 'Needs attention', tone: 'status-fail' }
+  if (state === 'running' || state === 'cancelling')
+    return { label: titleCase(state), tone: 'status-incomplete' }
+  return { label: titleCase(state), tone: 'status-neutral' }
+}
+
+function summaryMetric(
+  summary: DashboardExecutionSummary | null,
+  id: 'pass_rate' | 'quality' | 'tokens' | 'duration' | 'cost',
+) {
+  if (!summary) return 'Not reported'
+  const metric = metricById(buildPlanComparison(summary, summary), id)
+  return metric ? formatPlanMetricValue(metric, 'baseline') : 'Not reported'
+}
+
+type ExecutionHistoryRow = {
+  id: string
+  role: 'baseline' | 'candidate' | 'attempt'
+  label: string
+  detail: string
+  summary: DashboardExecutionSummary | null
+  fallback: 'running' | 'incomplete' | null
+  candidateNumber: number | null
+}
+
+function executionHistoryRows(
+  plan: LocalPlan,
+  summaries: Record<string, DashboardExecutionSummary>,
+): ExecutionHistoryRow[] {
+  const rows: ExecutionHistoryRow[] = []
+  const retained = new Set<string>()
+  if (plan.baseline_execution_id) {
+    retained.add(plan.baseline_execution_id)
+    rows.push({
+      id: plan.baseline_execution_id,
+      role: 'baseline',
+      label: 'Baseline',
+      detail: 'Locked reference',
+      summary: summaries[plan.baseline_execution_id] ?? null,
+      fallback: null,
+      candidateNumber: null,
+    })
+  }
+  if (
+    plan.last_attempt_id &&
+    ['baseline_running', 'candidate_running'].includes(plan.state)
+  ) {
+    retained.add(plan.last_attempt_id)
+    const baselineRun = plan.state === 'baseline_running'
+    rows.push({
+      id: plan.last_attempt_id,
+      role: baselineRun ? 'baseline' : 'candidate',
+      label: baselineRun ? 'Baseline in progress' : 'Candidate in progress',
+      detail: 'Active execution',
+      summary: summaries[plan.last_attempt_id] ?? null,
+      fallback: 'running',
+      candidateNumber: null,
+    })
+  }
+  for (
+    let index = plan.candidate_execution_ids.length - 1;
+    index >= 0;
+    index--
+  ) {
+    const id = plan.candidate_execution_ids[index]
+    retained.add(id)
+    rows.push({
+      id,
+      role: 'candidate',
+      label: `Candidate #${index + 1}`,
+      detail: index === plan.candidate_execution_ids.length - 1 ? 'Latest' : '',
+      summary: summaries[id] ?? null,
+      fallback: null,
+      candidateNumber: index + 1,
+    })
+  }
+  for (const id of [...plan.incomplete_execution_ids].reverse()) {
+    if (retained.has(id)) continue
+    rows.push({
+      id,
+      role: 'attempt',
+      label: 'Incomplete attempt',
+      detail: 'Excluded from comparison',
+      summary: summaries[id] ?? null,
+      fallback: 'incomplete',
+      candidateNumber: null,
+    })
+  }
+  return rows
+}
+
+export function selectedPlanCandidate(
+  current: string | null,
+  pinned: boolean,
+  candidateIds: string[],
+) {
+  if (pinned && current && candidateIds.includes(current)) return current
+  return candidateIds.at(-1) ?? null
+}
+
+export function PlanExecutionHistory({
+  plan,
+  summaries,
+  selectedCandidateId,
+  onSelectCandidate,
+  loading,
+  error = null,
+}: {
+  plan: LocalPlan
+  summaries: Record<string, DashboardExecutionSummary>
+  selectedCandidateId: string | null
+  onSelectCandidate: (id: string) => void
+  loading: boolean
+  error?: string | null
+}) {
+  const rows = executionHistoryRows(plan, summaries)
+  return (
+    <section
+      className="panel plan-panel-composite plan-execution-history-panel"
+      aria-labelledby="plan-execution-history-title"
+    >
+      <div className="panel-heading plan-panel-heading">
+        <div>
+          <div className="section-kicker">Execution history</div>
+          <h2 id="plan-execution-history-title">Runs in this plan</h2>
+          <p>
+            The baseline is fixed. Select any completed candidate to compare its
+            retained evidence.
+          </p>
+        </div>
+        <span className="coverage-note">
+          {loading
+            ? 'Loading…'
+            : `${rows.length} execution${rows.length === 1 ? '' : 's'}`}
+        </span>
+      </div>
+      {error && (
+        <div className="plan-panel-section plan-history-error" role="status">
+          Execution summaries could not be loaded. Retained IDs and report links
+          remain available. <span>{error}</span>
+        </div>
+      )}
+      {rows.length === 0 ? (
+        <div className="plan-panel-section plan-panel-empty">
+          <strong>No execution has started</strong>
+          <p>Capture the baseline to begin this plan history.</p>
+        </div>
+      ) : (
+        <div className="plan-execution-table-wrap">
+          <table className="plan-execution-table">
+            <thead>
+              <tr>
+                <th scope="col">Execution</th>
+                <th scope="col">Date</th>
+                <th scope="col">Result</th>
+                <th scope="col">Pass rate</th>
+                <th scope="col">Quality</th>
+                <th scope="col">Tokens</th>
+                <th scope="col">Duration</th>
+                <th scope="col">Cost</th>
+                <th scope="col">Actions</th>
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map((row) => {
+                const status = executionStatus(row.summary, row.fallback)
+                const selected = row.id === selectedCandidateId
+                return (
+                  <tr
+                    className={selected ? 'is-selected' : undefined}
+                    key={`${row.role}:${row.id}`}
+                  >
+                    <th scope="row" data-label="Execution">
+                      <strong>{row.label}</strong>
+                      <span>{row.detail}</span>
+                      <code title={row.id}>{row.id}</code>
+                    </th>
+                    <td data-label="Date">
+                      <time>
+                        {row.summary?.completed_at
+                          ? formatDate(row.summary.completed_at)
+                          : row.fallback === 'running'
+                            ? 'Running now'
+                            : 'Date unavailable'}
+                      </time>
+                    </td>
+                    <td data-label="Result">
+                      <span className={`status-pill ${status.tone}`}>
+                        {status.label}
+                      </span>
+                    </td>
+                    <td data-label="Pass rate">
+                      {summaryMetric(row.summary, 'pass_rate')}
+                    </td>
+                    <td data-label="Quality">
+                      {summaryMetric(row.summary, 'quality')}
+                    </td>
+                    <td data-label="Tokens">
+                      {summaryMetric(row.summary, 'tokens')}
+                    </td>
+                    <td data-label="Duration">
+                      {summaryMetric(row.summary, 'duration')}
+                    </td>
+                    <td data-label="Cost">
+                      {summaryMetric(row.summary, 'cost')}
+                    </td>
+                    <td data-label="Actions">
+                      <div className="plan-execution-actions">
+                        {row.candidateNumber !== null && (
+                          <button
+                            className="button button-secondary"
+                            type="button"
+                            aria-pressed={selected}
+                            onClick={() => onSelectCandidate(row.id)}
+                          >
+                            {selected ? 'Comparing' : 'Compare with baseline'}
+                          </button>
+                        )}
+                        <a
+                          className="plan-execution-report-link"
+                          href={hashForExecution(row.id)}
+                        >
+                          View report
+                        </a>
+                      </div>
+                    </td>
+                  </tr>
+                )
+              })}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </section>
+  )
+}
+
+function ComparisonMetricCard({ metric }: { metric: PlanMetricComparison }) {
+  return (
+    <article className="plan-comparison-metric-card">
+      <span>{metric.label}</span>
+      <div>
+        <small>Baseline</small>
+        <strong>{formatPlanMetricValue(metric, 'baseline')}</strong>
+        <i aria-hidden="true">→</i>
+        <small>Candidate</small>
+        <strong>{formatPlanMetricValue(metric, 'candidate')}</strong>
+      </div>
+      <b className={`metric-tone-${metric.tone}`}>
+        {formatPlanMetricDelta(metric)}
+      </b>
+    </article>
+  )
+}
+
+function ScenarioMetric({
+  scenario,
+  id,
+}: {
+  scenario: PlanScenarioComparison
+  id: 'pass_rate' | 'quality' | 'tokens' | 'duration'
+}) {
+  const metric = scenario.metrics.find((item) => item.id === id)
+  if (!metric) return <span>Not reported</span>
+  return (
+    <span className="plan-scenario-metric">
+      <span>
+        {formatPlanMetricValue(metric, 'baseline')} →{' '}
+        {formatPlanMetricValue(metric, 'candidate')}
+      </span>
+      <small className={`metric-tone-${metric.tone}`}>
+        {formatPlanMetricDelta(metric)}
+      </small>
+    </span>
+  )
+}
+
+function PlanScenarioComparisonTable({
+  scenarios,
+}: {
+  scenarios: PlanScenarioComparison[]
+}) {
+  if (scenarios.length === 0) return null
+  return (
+    <div className="plan-scenario-comparison">
+      <div className="plan-scenario-comparison-heading">
+        <div>
+          <div className="section-kicker">Test breakdown</div>
+          <h3>Comparable scope by test</h3>
+        </div>
+        <span>{scenarios.length} tests</span>
+      </div>
+      <div className="plan-scenario-table-wrap">
+        <table className="plan-scenario-table">
+          <thead>
+            <tr>
+              <th scope="col">Test</th>
+              <th scope="col">Objective result</th>
+              <th scope="col">Pass rate</th>
+              <th scope="col">Quality</th>
+              <th scope="col">Tokens</th>
+              <th scope="col">Duration</th>
+            </tr>
+          </thead>
+          <tbody>
+            {scenarios.map((scenario) => (
+              <tr key={scenario.id}>
+                <th scope="row" data-label="Test">
+                  <strong>{scenarioName(scenario.id)}</strong>
+                  <code>{scenario.id}</code>
+                  {!scenario.compatible && <small>{scenario.reason}</small>}
+                </th>
+                <td data-label="Objective result">
+                  <span>
+                    {titleCase(scenario.baseline_status)} →{' '}
+                    {titleCase(scenario.candidate_status)}
+                  </span>
+                </td>
+                <td data-label="Pass rate">
+                  <ScenarioMetric scenario={scenario} id="pass_rate" />
+                </td>
+                <td data-label="Quality">
+                  <ScenarioMetric scenario={scenario} id="quality" />
+                </td>
+                <td data-label="Tokens">
+                  <ScenarioMetric scenario={scenario} id="tokens" />
+                </td>
+                <td data-label="Duration">
+                  <ScenarioMetric scenario={scenario} id="duration" />
+                </td>
+              </tr>
             ))}
-            {isRoleRunning(plan, 'candidate') && plan.last_attempt_id && (
-              <a href={hashForExecution(plan.last_attempt_id)}>
-                View active execution
-              </a>
-            )}
-          </div>
-        </article>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  )
+}
+
+export function PlanComparisonPanel({
+  comparison,
+  baselineExecutionId,
+  candidateExecutionId,
+  candidateNumber,
+  loading,
+  error,
+}: {
+  comparison: PlanComparison | null
+  baselineExecutionId: string | null
+  candidateExecutionId: string | null
+  candidateNumber: number | null
+  loading: boolean
+  error: string | null
+}) {
+  if (!baselineExecutionId || !candidateExecutionId) {
+    return (
+      <section className="panel plan-panel-padded plan-comparison-empty">
+        <div className="section-kicker">Execution comparison</div>
+        <h2>Baseline vs candidate</h2>
+        <p>
+          Complete a baseline and at least one candidate to calculate objective
+          and directional deltas.
+        </p>
+      </section>
+    )
+  }
+  if (loading) {
+    return (
+      <section className="panel plan-panel-padded" aria-live="polite">
+        <div className="section-kicker">Execution comparison</div>
+        <h2>Loading baseline and candidate…</h2>
+      </section>
+    )
+  }
+  if (error || !comparison) {
+    return (
+      <section className="panel plan-panel-padded" role="alert">
+        <div className="section-kicker">Execution comparison</div>
+        <h2>Comparison unavailable</h2>
+        <p>{error || 'The retained execution details could not be read.'}</p>
+      </section>
+    )
+  }
+  const verdict = planVerdictPresentation[comparison.verdict]
+  return (
+    <section
+      className={`panel plan-panel-composite plan-comparison-panel plan-comparison-${comparison.verdict}`}
+      aria-labelledby="plan-comparison-title"
+    >
+      <div className="panel-heading plan-panel-heading">
+        <div>
+          <div className="section-kicker">Execution comparison</div>
+          <h2 id="plan-comparison-title">
+            Baseline vs Candidate #{candidateNumber ?? '—'}
+          </h2>
+          <strong className="plan-comparison-headline">
+            {comparison.headline}
+          </strong>
+          <p>{comparison.detail}</p>
+        </div>
+        <span className={`status-pill ${verdict.tone}`}>{verdict.label}</span>
+      </div>
+      <div className="plan-comparison-provenance plan-panel-section">
+        <a href={hashForExecution(baselineExecutionId)}>
+          <span>Baseline</span>
+          <code>{baselineExecutionId}</code>
+        </a>
+        <i aria-hidden="true">→</i>
+        <a href={hashForExecution(candidateExecutionId)}>
+          <span>Candidate #{candidateNumber ?? '—'}</span>
+          <code>{candidateExecutionId}</code>
+        </a>
+      </div>
+      <div className="plan-comparison-metrics plan-panel-section">
+        {PLAN_DETAIL_METRICS.map((id) => {
+          const metric = metricById(comparison, id)
+          return metric ? (
+            <ComparisonMetricCard key={id} metric={metric} />
+          ) : null
+        })}
+      </div>
+      <div className="plan-panel-section">
+        <PlanScenarioComparisonTable scenarios={comparison.scenarios} />
       </div>
     </section>
   )
@@ -826,6 +1241,22 @@ export function LocalPlanCreatePage() {
 export function LocalPlanDetailPage({ planId }: { planId: string }) {
   const [bridge, setBridge] = useState<DashboardDataBridge | null>(null)
   const [plan, setPlan] = useState<LocalPlan | null>(null)
+  const [executionSummaries, setExecutionSummaries] = useState<
+    Record<string, DashboardExecutionSummary>
+  >({})
+  const [historyLoading, setHistoryLoading] = useState(false)
+  const [historyError, setHistoryError] = useState<string | null>(null)
+  const [selectedCandidateId, setSelectedCandidateId] = useState<string | null>(
+    null,
+  )
+  const [candidateSelectionPinned, setCandidateSelectionPinned] =
+    useState(false)
+  const [baselineDetail, setBaselineDetail] =
+    useState<DashboardExecutionDetail | null>(null)
+  const [candidateDetail, setCandidateDetail] =
+    useState<DashboardExecutionDetail | null>(null)
+  const [comparisonLoading, setComparisonLoading] = useState(false)
+  const [comparisonError, setComparisonError] = useState<string | null>(null)
   const [loadError, setLoadError] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
   const [starting, setStarting] = useState<PlanRunRole | null>(null)
@@ -856,9 +1287,91 @@ export function LocalPlanDetailPage({ planId }: { planId: string }) {
     return () => window.clearInterval(timer)
   }, [load, plan])
 
+  const executionIds = useMemo(
+    () =>
+      [
+        plan?.baseline_execution_id ?? '',
+        ...(plan?.candidate_execution_ids ?? []),
+        ...(plan?.incomplete_execution_ids ?? []),
+        plan?.last_attempt_id ?? '',
+      ].filter(Boolean),
+    [
+      plan?.baseline_execution_id,
+      plan?.candidate_execution_ids,
+      plan?.incomplete_execution_ids,
+      plan?.last_attempt_id,
+    ],
+  )
+
+  useEffect(() => {
+    if (!bridge || !plan) return
+    let cancelled = false
+    setHistoryLoading(true)
+    setHistoryError(null)
+    void loadExecutionSummaries(bridge.listExecutions, executionIds)
+      .then((summaries) => {
+        if (cancelled) return
+        setExecutionSummaries(summaries)
+        setSelectedCandidateId((current) =>
+          selectedPlanCandidate(
+            current,
+            candidateSelectionPinned,
+            plan.candidate_execution_ids,
+          ),
+        )
+      })
+      .catch((cause) => {
+        if (cancelled) return
+        setExecutionSummaries({})
+        setHistoryError(errorText(cause))
+      })
+      .finally(() => {
+        if (!cancelled) setHistoryLoading(false)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [bridge, candidateSelectionPinned, executionIds, plan])
+
+  useEffect(() => {
+    const baselineId = plan?.baseline_execution_id ?? null
+    if (!bridge || !baselineId || !selectedCandidateId) {
+      setBaselineDetail(null)
+      setCandidateDetail(null)
+      setComparisonError(null)
+      setComparisonLoading(false)
+      return
+    }
+    let cancelled = false
+    setComparisonLoading(true)
+    setComparisonError(null)
+    void Promise.all([
+      bridge.getExecution(baselineId),
+      bridge.getExecution(selectedCandidateId),
+    ])
+      .then(([baseline, candidate]) => {
+        if (cancelled) return
+        setBaselineDetail(baseline)
+        setCandidateDetail(candidate)
+      })
+      .catch((cause) => {
+        if (cancelled) return
+        setBaselineDetail(null)
+        setCandidateDetail(null)
+        setComparisonError(errorText(cause))
+      })
+      .finally(() => {
+        if (!cancelled) setComparisonLoading(false)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [bridge, plan?.baseline_execution_id, selectedCandidateId])
+
   const start = async (role: PlanRunRole) => {
     if (!bridge || !plan) return
     setStarting(role)
+    if (role === 'candidate') setCandidateSelectionPinned(false)
     setRunFeedback({
       role,
       phase: 'starting',
@@ -923,24 +1436,48 @@ export function LocalPlanDetailPage({ planId }: { planId: string }) {
     if (plan.candidate_execution_ids.length > 0)
       return {
         label: 'Comparison available',
-        tone: 'status-pass',
+        tone: 'status-neutral',
         detail:
           'Candidate reports are ready to inspect against the locked baseline.',
       }
     if (plan.incomplete_execution_ids.length)
       return {
         label: 'Candidate retry available',
-        tone: 'status-pass',
+        tone: 'status-neutral',
         detail:
           'An incomplete attempt is retained for diagnosis, but it does not block a retry or count as comparison evidence.',
       }
     return {
       label: 'Scope ready',
-      tone: 'status-pass',
+      tone: 'status-neutral',
       detail:
         'Baseline and locked scope are structurally ready for a candidate.',
     }
   }, [plan])
+
+  const comparison = useMemo(() => {
+    if (!plan?.baseline_execution_id || !selectedCandidateId) return null
+    const baseline =
+      baselineDetail ?? executionSummaries[plan.baseline_execution_id]
+    const candidate = candidateDetail ?? executionSummaries[selectedCandidateId]
+    return buildPlanComparison(
+      baseline,
+      candidate,
+      baselineDetail && candidateDetail
+        ? { baseline: baselineDetail, candidate: candidateDetail }
+        : undefined,
+    )
+  }, [
+    baselineDetail,
+    candidateDetail,
+    executionSummaries,
+    plan?.baseline_execution_id,
+    selectedCandidateId,
+  ])
+  const selectedCandidateNumber =
+    plan && selectedCandidateId
+      ? plan.candidate_execution_ids.indexOf(selectedCandidateId) + 1
+      : null
 
   return (
     <>
@@ -948,9 +1485,12 @@ export function LocalPlanDetailPage({ planId }: { planId: string }) {
         Skip to plan detail
       </a>
       <PlanHeader />
-      <main id="plan-detail-main" className="page-shell overview-shell">
+      <main
+        id="plan-detail-main"
+        className="page-shell overview-shell plan-detail-shell"
+      >
         {loading && (
-          <section className="panel">
+          <section className="panel plan-panel-padded">
             <p className="table-empty">Loading plan…</p>
           </section>
         )}
@@ -1015,30 +1555,35 @@ export function LocalPlanDetailPage({ planId }: { planId: string }) {
                 </small>
               </article>
             </section>
+            <PlanComparisonPanel
+              comparison={comparison}
+              baselineExecutionId={plan.baseline_execution_id}
+              candidateExecutionId={selectedCandidateId}
+              candidateNumber={
+                selectedCandidateNumber && selectedCandidateNumber > 0
+                  ? selectedCandidateNumber
+                  : null
+              }
+              loading={comparisonLoading}
+              error={comparisonError}
+            />
+            <PlanExecutionHistory
+              plan={plan}
+              summaries={executionSummaries}
+              selectedCandidateId={selectedCandidateId}
+              onSelectCandidate={(id) => {
+                setCandidateSelectionPinned(true)
+                setSelectedCandidateId(id)
+              }}
+              loading={historyLoading}
+              error={historyError}
+            />
             <PlanLifecycle
               plan={plan}
               starting={starting}
               feedback={runFeedback}
               onStart={(role) => void start(role)}
             />
-            {plan.incomplete_execution_ids.length > 0 && (
-              <section className="panel">
-                <div className="section-kicker">Incomplete attempts</div>
-                <p className="trend-description">
-                  These executions are retained for diagnosis but are excluded
-                  from comparison and maturity.
-                </p>
-                {plan.incomplete_execution_ids.map((id) => (
-                  <a
-                    className="block text-link"
-                    key={id}
-                    href={hashForExecution(id)}
-                  >
-                    View incomplete execution
-                  </a>
-                ))}
-              </section>
-            )}
           </>
         )}
       </main>

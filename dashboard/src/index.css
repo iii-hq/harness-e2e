@@ -60,6 +60,9 @@
   --radius-md: 16px;
   --radius-lg: 24px;
   --shadow: 0 24px 70px rgba(0, 0, 0, 0.24);
+  --plan-panel-space-y: 24px;
+  --plan-panel-space-x: 28px;
+  --plan-card-space: 16px;
   font-family:
     Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont,
     "Segoe UI", sans-serif;
@@ -634,6 +637,12 @@ a:focus-visible {
   border-color: rgba(255, 209, 102, 0.28);
   background: rgba(255, 209, 102, 0.08);
   color: var(--warning);
+}
+
+.status-neutral {
+  border-color: var(--line-strong);
+  background: var(--surface-raised);
+  color: var(--text-soft);
 }
 
 /* Catalog lifecycle is not an execution outcome: no history is neutral,
@@ -5185,6 +5194,193 @@ footer {
   font-weight: 500;
 }
 
+#test-metrics-history-proposal .tmh-comparison {
+  padding: 18px 20px 20px;
+  border-top: 1px solid var(--tmh-line);
+  background: color-mix(in srgb, var(--tmh-raised) 72%, var(--tmh-surface));
+}
+
+#test-metrics-history-proposal .tmh-comparison-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+#test-metrics-history-proposal .tmh-comparison-head h3 {
+  margin-top: 6px;
+  font-size: 15px;
+  font-weight: 500;
+}
+
+#test-metrics-history-proposal .tmh-comparison-head p,
+#test-metrics-history-proposal .tmh-comparison-message,
+#test-metrics-history-proposal .tmh-comparison-warning {
+  margin-top: 6px;
+  color: var(--tmh-muted);
+  font-size: 10px;
+  line-height: 1.45;
+}
+
+#test-metrics-history-proposal .tmh-clear-comparison,
+#test-metrics-history-proposal .tmh-compare-button {
+  min-height: 28px;
+  padding: 5px 8px;
+  border: 1px solid var(--tmh-line-strong);
+  border-radius: 6px;
+  background: var(--tmh-surface);
+  color: var(--tmh-ink);
+  font:
+    500 9px "SFMono-Regular",
+    Consolas,
+    monospace;
+}
+
+#test-metrics-history-proposal .tmh-clear-comparison:hover,
+#test-metrics-history-proposal .tmh-compare-button:hover {
+  border-color: var(--tmh-accent);
+  color: var(--tmh-accent);
+}
+
+#test-metrics-history-proposal .tmh-clear-comparison:focus-visible,
+#test-metrics-history-proposal .tmh-compare-button:focus-visible {
+  outline: 2px solid var(--tmh-accent);
+  outline-offset: 2px;
+}
+
+#test-metrics-history-proposal .tmh-compare-button.is-selected {
+  border-color: color-mix(in srgb, var(--tmh-accent) 62%, var(--tmh-line));
+  background: color-mix(in srgb, var(--tmh-accent) 8%, var(--tmh-surface));
+  color: var(--tmh-accent);
+}
+
+#test-metrics-history-proposal .tmh-comparison-selection {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+  align-items: center;
+  gap: 10px;
+  margin-top: 14px;
+}
+
+#test-metrics-history-proposal .tmh-comparison-selection > div {
+  min-width: 0;
+  padding: 10px 12px;
+  border: 1px solid var(--tmh-line);
+  border-radius: 7px;
+  background: var(--tmh-surface);
+}
+
+#test-metrics-history-proposal .tmh-comparison-selection span,
+#test-metrics-history-proposal .tmh-comparison-selection strong {
+  display: block;
+}
+
+#test-metrics-history-proposal .tmh-comparison-selection > div > span {
+  color: var(--tmh-muted);
+  font-size: 8px;
+  font-weight: 500;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+#test-metrics-history-proposal .tmh-comparison-selection strong {
+  margin-top: 5px;
+  overflow: hidden;
+  font:
+    500 10px "SFMono-Regular",
+    Consolas,
+    monospace;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+#test-metrics-history-proposal .tmh-comparison-arrow {
+  color: var(--tmh-muted);
+  font-size: 16px;
+}
+
+#test-metrics-history-proposal .tmh-comparison-message strong,
+#test-metrics-history-proposal .tmh-comparison-warning strong {
+  color: var(--tmh-ink);
+  font-weight: 500;
+}
+
+#test-metrics-history-proposal .tmh-comparison-warning {
+  display: grid;
+  gap: 4px;
+  padding: 10px 12px;
+  border: 1px solid color-mix(in srgb, var(--tmh-warning) 38%, var(--tmh-line));
+  border-radius: 7px;
+  background: color-mix(in srgb, var(--tmh-warning) 7%, var(--tmh-surface));
+}
+
+#test-metrics-history-proposal .tmh-comparison-metrics {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  margin-top: 14px;
+  overflow: hidden;
+  border: 1px solid var(--tmh-line);
+  border-radius: 8px;
+  background: var(--tmh-surface);
+}
+
+#test-metrics-history-proposal .tmh-comparison-metric {
+  min-width: 0;
+  padding: 11px 12px;
+}
+
+#test-metrics-history-proposal .tmh-comparison-metric + .tmh-comparison-metric {
+  border-left: 1px solid var(--tmh-line);
+}
+
+#test-metrics-history-proposal .tmh-comparison-metric > span,
+#test-metrics-history-proposal .tmh-comparison-metric > strong,
+#test-metrics-history-proposal .tmh-comparison-metric > em,
+#test-metrics-history-proposal .tmh-comparison-metric small {
+  display: block;
+}
+
+#test-metrics-history-proposal .tmh-comparison-metric > span {
+  color: var(--tmh-muted);
+  font-size: 8px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+#test-metrics-history-proposal .tmh-comparison-metric > strong {
+  margin-top: 7px;
+  font:
+    500 12px "SFMono-Regular",
+    Consolas,
+    monospace;
+}
+
+#test-metrics-history-proposal .tmh-comparison-metric small {
+  margin-top: 3px;
+  color: var(--tmh-muted);
+  font: 400 8px inherit;
+}
+
+#test-metrics-history-proposal .tmh-comparison-metric em {
+  min-height: 13px;
+  margin-top: 9px;
+  font-size: 9px;
+  font-style: normal;
+  font-weight: 500;
+}
+
+#test-metrics-history-proposal .tmh-delta-improved {
+  color: var(--tmh-accent);
+}
+
+#test-metrics-history-proposal .tmh-delta-regressed {
+  color: var(--tmh-danger);
+}
+
+#test-metrics-history-proposal .tmh-delta-neutral {
+  color: var(--tmh-muted);
+}
+
 #test-metrics-history-proposal table {
   width: 100%;
   border-collapse: collapse;
@@ -5278,7 +5474,13 @@ footer {
 }
 
 #test-metrics-history-proposal td .tmh-detail-button {
-  margin-top: 8px;
+  margin: 0;
+}
+
+#test-metrics-history-proposal .tmh-row-actions {
+  display: grid;
+  justify-items: start;
+  gap: 6px;
 }
 
 #test-metrics-history-proposal .tmh-detail-button:hover,
@@ -5490,7 +5692,8 @@ footer {
 @media (max-width: 900px) {
   #test-metrics-history-proposal .tmh-identity,
   #test-metrics-history-proposal .tmh-filters,
-  #test-metrics-history-proposal .tmh-metric-summary {
+  #test-metrics-history-proposal .tmh-metric-summary,
+  #test-metrics-history-proposal .tmh-comparison-metrics {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
@@ -5508,6 +5711,16 @@ footer {
 
   #test-metrics-history-proposal .tmh-metric:nth-child(5) {
     border-left: 0;
+  }
+
+  #test-metrics-history-proposal .tmh-comparison-metric:nth-child(3),
+  #test-metrics-history-proposal .tmh-comparison-metric:nth-child(5) {
+    border-top: 1px solid var(--tmh-line);
+    border-left: 0;
+  }
+
+  #test-metrics-history-proposal .tmh-comparison-metric:nth-child(4) {
+    border-top: 1px solid var(--tmh-line);
   }
 }
 
@@ -5600,14 +5813,35 @@ footer {
   #test-metrics-history-proposal .tmh-identity,
   #test-metrics-history-proposal .tmh-filters,
   #test-metrics-history-proposal .tmh-metric-summary,
-  #test-metrics-history-proposal .tmh-metric-row {
+  #test-metrics-history-proposal .tmh-metric-row,
+  #test-metrics-history-proposal .tmh-comparison-metrics {
     grid-template-columns: 1fr;
   }
 
   #test-metrics-history-proposal .tmh-identity-item + .tmh-identity-item,
-  #test-metrics-history-proposal .tmh-metric + .tmh-metric {
+  #test-metrics-history-proposal .tmh-metric + .tmh-metric,
+  #test-metrics-history-proposal
+    .tmh-comparison-metric
+    + .tmh-comparison-metric {
     border-top: 1px solid var(--tmh-line);
     border-left: 0;
+  }
+
+  #test-metrics-history-proposal .tmh-comparison-head {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  #test-metrics-history-proposal .tmh-clear-comparison {
+    align-self: flex-start;
+  }
+
+  #test-metrics-history-proposal .tmh-comparison-selection {
+    grid-template-columns: 1fr;
+  }
+
+  #test-metrics-history-proposal .tmh-comparison-arrow {
+    display: none;
   }
 
   #test-metrics-history-proposal .tmh-execution-dialog {
@@ -7369,7 +7603,7 @@ footer {
 
 .plans-summary-grid {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 1px;
   margin-top: 1.25rem;
   overflow: hidden;
@@ -7406,19 +7640,25 @@ footer {
   font-size: 0.68rem;
 }
 
+.plans-summary-regressions > strong {
+  color: var(--danger);
+}
+
 .plans-list-panel {
   margin-top: 1.25rem;
+  overflow: hidden;
 }
 
 .plans-list-heading {
   align-items: center;
+  padding: var(--plan-panel-space-y) var(--plan-panel-space-x);
 }
 
 .plans-list-toolbar {
   display: grid;
   grid-template-columns: minmax(0, 1fr) 200px auto;
   gap: 0.65rem;
-  padding: 1rem 1.25rem;
+  padding: var(--plan-card-space) var(--plan-panel-space-x);
   border-top: 1px solid var(--line);
   border-bottom: 1px solid var(--line);
 }
@@ -7441,13 +7681,26 @@ footer {
 .plans-list {
   display: grid;
   gap: 0.75rem;
-  padding: 1.25rem;
+  padding: var(--plan-panel-space-y) var(--plan-panel-space-x);
+}
+
+.plans-comparison-notice {
+  padding: 0.8rem var(--plan-panel-space-x);
+  border-bottom: 1px solid var(--line);
+  background: color-mix(in srgb, var(--warning) 7%, var(--surface));
+  color: var(--text-soft);
+  font-size: 0.72rem;
+  line-height: 1.5;
+}
+
+.plans-comparison-notice span {
+  color: var(--text-muted);
 }
 
 .plan-list-card {
   display: grid;
   gap: 1rem;
-  padding: 1.1rem 1.15rem;
+  padding: var(--plan-card-space);
   border: 1px solid var(--line-strong);
   border-radius: var(--radius-md);
   background: rgba(var(--contrast-rgb), 0.012);
@@ -7459,6 +7712,18 @@ footer {
 .plan-list-card:hover {
   border-color: color-mix(in srgb, var(--accent) 40%, var(--line-strong));
   background: rgba(var(--contrast-rgb), 0.025);
+}
+
+.plan-list-card-improved {
+  border-left: 3px solid var(--success);
+}
+
+.plan-list-card-regressed {
+  border-left: 3px solid var(--danger);
+}
+
+.plan-list-card-inconclusive {
+  border-left: 3px solid var(--warning);
 }
 
 .plan-list-card-header {
@@ -7580,6 +7845,152 @@ footer {
   font-style: normal;
 }
 
+.plan-list-comparison {
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--surface-soft);
+}
+
+.plan-list-comparison > header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: var(--plan-card-space);
+  border-bottom: 1px solid var(--line);
+}
+
+.plan-list-comparison > header > div,
+.plan-list-comparison-empty > div:first-child {
+  display: grid;
+  gap: 0.25rem;
+}
+
+.plan-list-comparison .section-kicker {
+  margin: 0;
+}
+
+.plan-list-comparison > header strong,
+.plan-list-comparison-empty > div:first-child > strong {
+  color: var(--text);
+  font-size: 0.78rem;
+}
+
+.plan-list-comparison-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 1px;
+  background: var(--line);
+}
+
+.plan-list-comparison-metric {
+  display: grid;
+  gap: 0.4rem;
+  min-width: 0;
+  padding: var(--plan-card-space);
+  background: var(--surface);
+}
+
+.plan-list-comparison-metric > span,
+.plan-list-baseline-metrics small {
+  color: var(--text-muted);
+  font-size: 0.58rem;
+  font-weight: 700;
+  letter-spacing: 0.055em;
+  text-transform: uppercase;
+}
+
+.plan-list-comparison-metric > div {
+  display: flex;
+  align-items: baseline;
+  gap: 0.38rem;
+  min-width: 0;
+}
+
+.plan-list-comparison-metric strong {
+  overflow: hidden;
+  color: var(--text);
+  font: 650 0.74rem var(--font-mono);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.plan-list-comparison-metric i {
+  color: var(--text-muted);
+  font-style: normal;
+}
+
+.plan-list-comparison-metric > small {
+  font-size: 0.65rem;
+  font-weight: 650;
+}
+
+.metric-tone-positive {
+  color: var(--success) !important;
+}
+
+.metric-tone-negative {
+  color: var(--warning) !important;
+}
+
+.plan-comparison-regressed .metric-tone-negative,
+.plan-list-comparison-regressed .metric-tone-negative {
+  color: var(--danger) !important;
+}
+
+.metric-tone-neutral,
+.metric-tone-unavailable {
+  color: var(--text-muted) !important;
+}
+
+.plan-list-comparison > p {
+  margin: 0;
+  padding: var(--plan-card-space);
+  color: var(--text-soft);
+  font-size: 0.72rem;
+  line-height: 1.5;
+}
+
+.plan-list-comparison > footer {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.55rem 1.25rem;
+  padding: 0.7rem var(--plan-card-space);
+  border-top: 1px solid var(--line);
+  color: var(--text-muted);
+  font-size: 0.64rem;
+}
+
+.plan-list-comparison > footer strong {
+  color: var(--text-soft);
+}
+
+.plan-list-comparison-empty {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: var(--plan-card-space);
+}
+
+.plan-list-baseline-metrics {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 0.75rem;
+}
+
+.plan-list-baseline-metrics > span {
+  display: grid;
+  gap: 0.2rem;
+  min-width: 72px;
+}
+
+.plan-list-baseline-metrics b {
+  font: 650 0.72rem var(--font-mono);
+}
+
 .plan-list-card-footer {
   display: flex;
   justify-content: space-between;
@@ -7604,7 +8015,7 @@ footer {
   justify-items: start;
   gap: 0.55rem;
   min-height: 190px;
-  padding: 2rem 1.25rem;
+  padding: var(--plan-panel-space-y) var(--plan-panel-space-x);
 }
 
 .plans-empty strong,
@@ -7623,7 +8034,7 @@ footer {
 }
 
 .plans-loading {
-  padding: 2rem 1.25rem;
+  padding: var(--plan-panel-space-y) var(--plan-panel-space-x);
 }
 
 @media (max-width: 960px) {
@@ -7650,6 +8061,11 @@ footer {
     justify-self: start;
     margin: 0.85rem;
   }
+
+  .plans-summary-grid,
+  .plan-list-comparison-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
 }
 
 @media (max-width: 620px) {
@@ -7670,7 +8086,8 @@ footer {
 
   .plans-summary-grid,
   .plans-how-it-works,
-  .plan-list-card-meta {
+  .plan-list-card-meta,
+  .plan-list-comparison-grid {
     grid-template-columns: 1fr;
   }
 
@@ -7695,6 +8112,15 @@ footer {
     justify-content: center;
   }
 
+  .plan-list-comparison-empty {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .plan-list-baseline-metrics {
+    justify-content: flex-start;
+  }
+
   .plan-list-card-footer {
     align-items: flex-start;
     flex-direction: column;
@@ -7712,7 +8138,7 @@ footer {
 }
 
 .plan-form-section {
-  padding: 1.35rem 1.5rem;
+  padding: var(--plan-panel-space-y) var(--plan-panel-space-x);
 }
 
 .plan-form-section + .plan-form-section,
@@ -7826,7 +8252,7 @@ footer {
 .plan-scope-field {
   min-width: 0;
   margin: 0;
-  padding: 0 1.5rem 1.35rem;
+  padding: 0 var(--plan-panel-space-x) var(--plan-panel-space-y);
   border-right: 0;
   border-bottom: 0;
   border-left: 0;
@@ -7837,7 +8263,7 @@ footer {
   align-items: baseline;
   gap: 0.5rem;
   width: 100%;
-  padding: 1.35rem 0 0;
+  padding: var(--plan-panel-space-y) 0 0;
   color: var(--text);
   font-weight: 700;
 }
@@ -8034,7 +8460,7 @@ footer {
   justify-content: space-between;
   gap: 1rem;
   min-height: 72px;
-  padding: 0.9rem 1.5rem;
+  padding: var(--plan-card-space) var(--plan-panel-space-x);
   cursor: pointer;
   list-style: none;
 }
@@ -8091,7 +8517,7 @@ footer {
 }
 
 .plan-advanced-body {
-  padding: 1rem 1.5rem 1.2rem;
+  padding: var(--plan-panel-space-y) var(--plan-panel-space-x);
 }
 
 .plan-advanced-intro {
@@ -8168,7 +8594,7 @@ footer {
   align-items: center;
   justify-content: flex-end;
   gap: 0.75rem;
-  padding: 1.1rem 1.5rem;
+  padding: var(--plan-card-space) var(--plan-panel-space-x);
 }
 
 .plan-create-requirements {
@@ -8190,7 +8616,7 @@ footer {
   display: grid;
   align-content: start;
   gap: 0.65rem;
-  padding: 1.25rem;
+  padding: var(--plan-panel-space-y) var(--plan-panel-space-x);
 }
 
 .plan-status-card p,
@@ -8212,7 +8638,7 @@ footer {
   align-items: center;
   justify-content: space-between;
   gap: 1.25rem;
-  padding: 1rem 1.25rem;
+  padding: var(--plan-panel-space-y) var(--plan-panel-space-x);
   border-top: 1px solid var(--line);
   border-bottom: 1px solid var(--line);
   background: color-mix(in srgb, var(--accent) 5%, var(--surface));
@@ -8271,7 +8697,7 @@ footer {
   display: flex;
   align-items: flex-start;
   gap: 0.65rem;
-  padding: 0.8rem 1.25rem;
+  padding: var(--plan-card-space) var(--plan-panel-space-x);
   border-top: 1px solid var(--line);
   border-bottom: 1px solid var(--line);
   background: var(--surface-soft);
@@ -8357,6 +8783,369 @@ footer {
 
 .plan-step .button {
   justify-self: end;
+}
+
+/* Plan panels opt into one of three explicit spacing contracts: a padded
+   surface, a composed panel whose children own their spacing, or full-bleed
+   table content. This keeps the shared .panel primitive neutral. */
+.plan-panel-padded {
+  padding: var(--plan-panel-space-y) var(--plan-panel-space-x);
+}
+
+.plan-panel-padded h2,
+.plan-panel-padded p,
+.plan-panel-heading p {
+  margin: 0;
+}
+
+.plan-panel-padded p,
+.plan-panel-heading p {
+  color: var(--text-soft);
+  font-size: 0.74rem;
+  line-height: 1.5;
+}
+
+.plan-panel-padded h2 + p {
+  margin-top: 0.55rem;
+}
+
+.plan-panel-composite {
+  overflow: hidden;
+}
+
+.plan-panel-heading,
+.plan-panel-section {
+  padding: var(--plan-panel-space-y) var(--plan-panel-space-x);
+}
+
+.plan-panel-heading {
+  align-items: flex-start;
+}
+
+.plan-panel-heading > div {
+  display: grid;
+  min-width: 0;
+  gap: 0.45rem;
+}
+
+.plan-panel-heading .section-kicker {
+  margin: 0;
+}
+
+.plan-panel-section,
+.plan-execution-table-wrap {
+  border-top: 1px solid var(--line);
+}
+
+.plan-panel-empty {
+  display: grid;
+  min-height: 138px;
+  align-content: center;
+  gap: 0.45rem;
+}
+
+.plan-panel-empty p {
+  margin: 0;
+  color: var(--text-soft);
+  font-size: 0.74rem;
+  line-height: 1.5;
+}
+
+.plan-detail-shell .plan-status-grid {
+  margin-bottom: 1.25rem;
+}
+
+.plan-comparison-empty,
+.plan-comparison-panel,
+.plan-execution-history-panel,
+.plan-lifecycle-panel {
+  margin-top: 1.25rem;
+}
+
+.plan-comparison-empty {
+  border-color: var(--line-strong);
+}
+
+.plan-comparison-improved {
+  border-top-color: var(--success);
+}
+
+.plan-comparison-regressed {
+  border-top-color: var(--danger);
+}
+
+.plan-comparison-inconclusive {
+  border-top-color: var(--warning);
+}
+
+.plan-comparison-provenance {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+  align-items: center;
+  gap: 1rem;
+  background: var(--surface-soft);
+}
+
+.plan-comparison-headline {
+  color: var(--text);
+  font-size: 0.8rem;
+}
+
+.plan-comparison-provenance > a {
+  display: grid;
+  min-width: 0;
+  gap: 0.3rem;
+  text-decoration: none;
+}
+
+.plan-comparison-provenance > a:last-child {
+  justify-items: end;
+  text-align: right;
+}
+
+.plan-comparison-provenance span {
+  color: var(--text-soft);
+  font-size: 0.68rem;
+  font-weight: 700;
+}
+
+.plan-comparison-provenance code {
+  overflow: hidden;
+  max-width: 100%;
+  color: var(--text-muted);
+  font-size: 0.64rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.plan-comparison-provenance i {
+  color: var(--accent);
+  font-style: normal;
+}
+
+.plan-comparison-metrics {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: var(--plan-card-space);
+}
+
+.plan-comparison-metric-card {
+  display: grid;
+  align-content: start;
+  min-width: 0;
+  gap: 0.65rem;
+  padding: var(--plan-card-space);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--surface-raised);
+}
+
+.plan-comparison-metric-card > span {
+  color: var(--text-muted);
+  font-size: 0.61rem;
+  font-weight: 700;
+  letter-spacing: 0.055em;
+  text-transform: uppercase;
+}
+
+.plan-comparison-metric-card > div {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+  align-items: end;
+  gap: 0.24rem 0.5rem;
+}
+
+.plan-comparison-metric-card > div small {
+  color: var(--text-muted);
+  font-size: 0.56rem;
+  text-transform: uppercase;
+}
+
+.plan-comparison-metric-card > div small:nth-of-type(2),
+.plan-comparison-metric-card > div strong:nth-of-type(2) {
+  text-align: right;
+}
+
+.plan-comparison-metric-card > div i {
+  grid-row: 1 / span 2;
+  grid-column: 2;
+  align-self: center;
+  color: var(--text-muted);
+  font-style: normal;
+}
+
+.plan-comparison-metric-card > div strong {
+  overflow: hidden;
+  font: 650 0.76rem var(--font-mono);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.plan-comparison-metric-card > b {
+  font-size: 0.66rem;
+}
+
+.plan-scenario-comparison {
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+}
+
+.plan-scenario-comparison-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: var(--plan-card-space);
+  background: var(--surface-soft);
+}
+
+.plan-scenario-comparison-heading h3,
+.plan-scenario-comparison-heading .section-kicker {
+  margin: 0;
+}
+
+.plan-scenario-comparison-heading h3 {
+  margin-top: 0.35rem;
+  font-size: 0.92rem;
+}
+
+.plan-scenario-comparison-heading > span {
+  color: var(--text-muted);
+  font-size: 0.68rem;
+}
+
+.plan-scenario-table-wrap,
+.plan-execution-table-wrap {
+  width: 100%;
+  overflow-x: auto;
+}
+
+.plan-scenario-table,
+.plan-execution-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.69rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.plan-scenario-table {
+  min-width: 850px;
+}
+
+.plan-execution-table {
+  min-width: 1080px;
+}
+
+.plan-scenario-table th,
+.plan-scenario-table td,
+.plan-execution-table th,
+.plan-execution-table td {
+  padding: 0.9rem var(--plan-card-space);
+  border-top: 1px solid var(--line);
+  text-align: left;
+  vertical-align: top;
+}
+
+.plan-execution-table thead th,
+.plan-scenario-table thead th {
+  border-top: 0;
+  background: var(--surface-soft);
+  color: var(--text-muted);
+  font-size: 0.58rem;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.plan-execution-table tbody tr,
+.plan-scenario-table tbody tr {
+  transition: background 140ms ease;
+}
+
+.plan-execution-table tbody tr:hover,
+.plan-scenario-table tbody tr:hover {
+  background: rgba(var(--contrast-rgb), 0.022);
+}
+
+.plan-execution-table tbody tr.is-selected {
+  background: color-mix(in srgb, var(--accent) 6%, var(--surface));
+  box-shadow: inset 3px 0 0 var(--accent);
+}
+
+.plan-execution-table tbody th,
+.plan-scenario-table tbody th {
+  display: grid;
+  min-width: 180px;
+  gap: 0.22rem;
+}
+
+.plan-execution-table tbody th span,
+.plan-execution-table tbody th time,
+.plan-execution-table tbody th code,
+.plan-scenario-table tbody th code,
+.plan-scenario-table tbody th small {
+  color: var(--text-muted);
+  font-size: 0.61rem;
+  font-weight: 400;
+}
+
+.plan-execution-table tbody td time {
+  color: var(--text-soft);
+  white-space: nowrap;
+}
+
+.plan-execution-table tbody th code {
+  overflow: hidden;
+  max-width: 230px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.plan-execution-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.7rem;
+}
+
+.plan-execution-actions .button {
+  min-height: 36px;
+  white-space: nowrap;
+}
+
+.plan-execution-actions .button[aria-pressed="true"] {
+  border-color: color-mix(in srgb, var(--accent) 45%, var(--line));
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+.plan-execution-report-link {
+  color: var(--text-soft);
+  text-decoration-thickness: 1px;
+  text-underline-offset: 3px;
+  white-space: nowrap;
+}
+
+.plan-scenario-metric {
+  display: grid;
+  gap: 0.22rem;
+  white-space: nowrap;
+}
+
+.plan-scenario-metric small {
+  font-size: 0.61rem;
+  font-weight: 650;
+}
+
+.plan-history-error {
+  background: color-mix(in srgb, var(--warning) 7%, var(--surface));
+  color: var(--text-soft);
+  font-size: 0.72rem;
+  line-height: 1.5;
+}
+
+.plan-history-error span {
+  color: var(--text-muted);
 }
 
 .history-filters {
@@ -8488,6 +9277,10 @@ footer {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
+  .plan-comparison-metrics {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
   .current-work-summary > div:first-child,
   .current-work-summary > .button,
   .history-summary .kpi-card:last-child {
@@ -8536,7 +9329,85 @@ footer {
   }
 }
 
+@media (max-width: 760px) {
+  .plan-execution-table,
+  .plan-scenario-table {
+    min-width: 0;
+  }
+
+  .plan-execution-table thead,
+  .plan-scenario-table thead {
+    display: none;
+  }
+
+  .plan-execution-table tbody,
+  .plan-scenario-table tbody {
+    display: grid;
+    gap: var(--plan-card-space);
+    padding: var(--plan-card-space);
+  }
+
+  .plan-execution-table tbody tr,
+  .plan-scenario-table tbody tr {
+    display: grid;
+    overflow: hidden;
+    border: 1px solid var(--line);
+    border-radius: var(--radius-sm);
+    background: var(--surface);
+  }
+
+  .plan-execution-table tbody tr.is-selected {
+    box-shadow: inset 3px 0 0 var(--accent);
+  }
+
+  .plan-execution-table tbody th,
+  .plan-execution-table tbody td,
+  .plan-scenario-table tbody th,
+  .plan-scenario-table tbody td {
+    display: grid;
+    grid-template-columns: minmax(7.5rem, 0.7fr) minmax(0, 1fr);
+    min-width: 0;
+    gap: 0.75rem;
+    padding: 0.75rem var(--plan-card-space);
+    border-top: 1px solid var(--line);
+    align-items: start;
+  }
+
+  .plan-execution-table tbody th,
+  .plan-scenario-table tbody th {
+    border-top: 0;
+    background: var(--surface-soft);
+  }
+
+  .plan-execution-table tbody th::before,
+  .plan-execution-table tbody td::before,
+  .plan-scenario-table tbody th::before,
+  .plan-scenario-table tbody td::before {
+    grid-row: 1 / span 8;
+    color: var(--text-muted);
+    content: attr(data-label);
+    font-size: 0.57rem;
+    font-weight: 700;
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+  }
+
+  .plan-execution-table tbody th code {
+    max-width: 100%;
+  }
+
+  .plan-execution-actions {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+}
+
 @media (max-width: 560px) {
+  :root {
+    --plan-panel-space-y: 18px;
+    --plan-panel-space-x: 18px;
+  }
+
   .current-work-empty,
   .history-series-card,
   .plan-step {
@@ -8594,10 +9465,9 @@ footer {
 
   .plan-form-section,
   .plan-scope-field,
-  .plan-advanced,
   .plan-form-actions {
-    padding-right: 1rem;
-    padding-left: 1rem;
+    padding-right: var(--plan-panel-space-x);
+    padding-left: var(--plan-panel-space-x);
   }
 
   .plan-form-section-heading {
@@ -8606,8 +9476,8 @@ footer {
 
   .plan-advanced summary {
     align-items: flex-start;
-    padding-right: 1rem;
-    padding-left: 1rem;
+    padding-right: var(--plan-panel-space-x);
+    padding-left: var(--plan-panel-space-x);
   }
 
   .plan-advanced-summary-meta {
@@ -8616,8 +9486,44 @@ footer {
   }
 
   .plan-advanced-body {
-    padding-right: 1rem;
-    padding-left: 1rem;
+    padding-right: var(--plan-panel-space-x);
+    padding-left: var(--plan-panel-space-x);
+  }
+
+  .plan-panel-heading,
+  .plan-comparison-provenance,
+  .plan-scenario-comparison-heading {
+    align-items: flex-start;
+    grid-template-columns: 1fr;
+    flex-direction: column;
+  }
+
+  .plan-comparison-provenance > i {
+    transform: rotate(90deg);
+  }
+
+  .plan-comparison-provenance > a:last-child {
+    justify-items: start;
+    text-align: left;
+  }
+
+  .plan-comparison-metrics {
+    grid-template-columns: 1fr;
+  }
+
+  .plan-execution-table tbody th,
+  .plan-execution-table tbody td,
+  .plan-scenario-table tbody th,
+  .plan-scenario-table tbody td {
+    grid-template-columns: 1fr;
+    gap: 0.4rem;
+  }
+
+  .plan-execution-table tbody th::before,
+  .plan-execution-table tbody td::before,
+  .plan-scenario-table tbody th::before,
+  .plan-scenario-table tbody td::before {
+    grid-row: auto;
   }
 }
 

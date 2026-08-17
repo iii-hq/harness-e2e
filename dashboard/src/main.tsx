@@ -23,7 +23,9 @@ function RoutedPage({ route }: { route: DashboardRoute }) {
     case 'compare':
       return <TestsPage initialFrom={route.left} initialTo={route.right} />
     case 'test-history':
-      return <TestHistoryPage testId={route.testId} />
+      // Reset filters, open detail, and comparison selection when navigating
+      // between two independent test histories.
+      return <TestHistoryPage key={route.testId} testId={route.testId} />
     case 'plans':
       return <PlansPage />
     case 'plan-create':

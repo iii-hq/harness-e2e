@@ -16,6 +16,11 @@ import type {
   TestHistoryResponse,
   TestObservation,
 } from '@/lib/test-catalog'
+import {
+  type ComparedMetric,
+  compareTestObservations,
+  testObservationKey,
+} from '@/lib/test-history-comparison'
 
 function modelSelection(provider: string, model: string) {
   return JSON.stringify([provider, model])
@@ -208,13 +213,180 @@ function logicalRunLabel(count: number) {
   return `${String(count)} logical ${count === 1 ? 'run' : 'runs'}`
 }
 
+type ComparisonMetricKey = 'score' | 'cost' | 'duration' | 'tokens' | 'turns'
+
+function formatMetricValue(metric: ComparisonMetricKey, value: number | null) {
+  if (value === null) return 'Unknown'
+  switch (metric) {
+    case 'score':
+      return value.toFixed(2)
+    case 'cost':
+      return formatCost(value)
+    case 'duration':
+      return formatDuration(value)
+    case 'tokens':
+      return formatTokens(value)
+    case 'turns':
+      return Math.round(value).toLocaleString()
+  }
+}
+
+function formatMetricDelta(metric: ComparisonMetricKey, value: ComparedMetric) {
+  if (value.delta === null) return 'Delta unavailable'
+  const sign = value.delta > 0 ? '+' : value.delta < 0 ? '−' : '±'
+  const absolute = Math.abs(value.delta)
+  const formatted =
+    metric === 'score'
+      ? absolute.toFixed(2)
+      : metric === 'cost'
+        ? formatCost(absolute)
+        : metric === 'duration'
+          ? `${String(Math.round(absolute))}s`
+          : metric === 'tokens'
+            ? formatTokens(absolute)
+            : Math.round(absolute).toLocaleString()
+  const relative =
+    value.relativeDelta === null
+      ? ''
+      : ` · ${
+          value.relativeDelta > 0 ? '+' : value.relativeDelta < 0 ? '−' : '±'
+        }${Math.abs(value.relativeDelta * 100).toFixed(1)}%`
+  return `${sign}${formatted}${relative}`
+}
+
+function deltaTone(metric: ComparisonMetricKey, value: ComparedMetric) {
+  if (value.delta === null || value.delta === 0) return 'tmh-delta-neutral'
+  const improved = metric === 'score' ? value.delta > 0 : value.delta < 0
+  return improved ? 'tmh-delta-improved' : 'tmh-delta-regressed'
+}
+
+function ObservationComparisonPanel({
+  baseline,
+  candidate,
+  onClear,
+}: {
+  baseline: TestObservation | null
+  candidate: TestObservation | null
+  onClear: () => void
+}) {
+  const comparison =
+    baseline && candidate ? compareTestObservations(baseline, candidate) : null
+  const metrics: Array<{ key: ComparisonMetricKey; label: string }> = [
+    { key: 'score', label: 'Score' },
+    { key: 'cost', label: 'Cost' },
+    { key: 'duration', label: 'Duration' },
+    { key: 'tokens', label: 'Tokens' },
+    { key: 'turns', label: 'Turns' },
+  ]
+
+  return (
+    <section
+      className="tmh-comparison"
+      aria-labelledby="tmh-comparison-title"
+      aria-live="polite"
+    >
+      <header className="tmh-comparison-head">
+        <div>
+          <span className="tmh-label">Selected executions</span>
+          <h3 id="tmh-comparison-title">Compare two runs</h3>
+          <p>
+            Select a baseline and candidate from the history below. The
+            comparison never pools separate cases or cohorts.
+          </p>
+        </div>
+        {baseline && (
+          <button
+            className="tmh-clear-comparison"
+            type="button"
+            onClick={onClear}
+          >
+            Clear selection
+          </button>
+        )}
+      </header>
+
+      <div className="tmh-comparison-selection">
+        <div>
+          <span>Baseline</span>
+          {baseline ? (
+            <strong>
+              {formatDate(baseline.completed_at)} ·{' '}
+              {logicalRunLabel(baseline.run_count)}
+            </strong>
+          ) : (
+            <strong>Choose an execution</strong>
+          )}
+        </div>
+        <span className="tmh-comparison-arrow" aria-hidden="true">
+          →
+        </span>
+        <div>
+          <span>Candidate</span>
+          {candidate ? (
+            <strong>
+              {formatDate(candidate.completed_at)} ·{' '}
+              {logicalRunLabel(candidate.run_count)}
+            </strong>
+          ) : (
+            <strong>Choose an execution</strong>
+          )}
+        </div>
+      </div>
+
+      {!baseline ? (
+        <p className="tmh-comparison-message">
+          Select <strong>Set baseline</strong> on the execution to use as the
+          reference point.
+        </p>
+      ) : !candidate ? (
+        <p className="tmh-comparison-message">
+          Now select <strong>Set candidate</strong> to compare its metrics with
+          this baseline.
+        </p>
+      ) : !comparison?.compatible ? (
+        <div className="tmh-comparison-warning" role="status">
+          <strong>These executions are not comparable.</strong>
+          <span>
+            Values remain visible individually, but no delta is interpreted:
+            {comparison?.reasons.join(', ')}.
+          </span>
+        </div>
+      ) : (
+        <div className="tmh-comparison-metrics">
+          {metrics.map(({ key, label }) => {
+            const value = comparison.metrics[key]
+            return (
+              <div className="tmh-comparison-metric" key={key}>
+                <span>{label}</span>
+                <strong>
+                  {formatMetricValue(key, value.baseline)}
+                  <small>baseline</small>
+                </strong>
+                <strong>
+                  {formatMetricValue(key, value.candidate)}
+                  <small>candidate</small>
+                </strong>
+                <em className={deltaTone(key, value)}>
+                  {formatMetricDelta(key, value)}
+                </em>
+              </div>
+            )
+          })}
+        </div>
+      )}
+    </section>
+  )
+}
+
 function ExecutionDetailsDialog({
   observation,
   testVersion,
+  testId,
   onClose,
 }: {
   observation: TestObservation
   testVersion: number | undefined
+  testId: string
   onClose: () => void
 }) {
   const dialogRef = useRef<HTMLDialogElement>(null)
@@ -249,8 +421,20 @@ function ExecutionDetailsDialog({
     }
   }, [observation.execution_id])
 
+  const scopedDetail = useMemo(
+    () =>
+      detail
+        ? {
+            ...detail,
+            reports: detail.reports.filter(
+              (report) => report.scenario_id === testId,
+            ),
+          }
+        : null,
+    [detail, testId],
+  )
   const version = observation.scenario_version ?? testVersion
-  const availableReports = detail?.reports.filter(
+  const availableReports = scopedDetail?.reports.filter(
     (report) => report.available,
   ).length
 
@@ -264,12 +448,12 @@ function ExecutionDetailsDialog({
       <div className="tmh-execution-dialog-shell">
         <header className="tmh-execution-dialog-header">
           <div>
-            <span className="tmh-label">Execution details</span>
-            <h2 id="tmh-execution-dialog-title">
-              {formatDate(observation.completed_at)}
-            </h2>
+            <span className="tmh-label">Test execution details</span>
+            <h2 id="tmh-execution-dialog-title">{testId}</h2>
             <p>
-              {version ? `Test v${String(version)}` : 'Test version unknown'} ·{' '}
+              {formatDate(observation.completed_at)} ·{' '}
+              {version ? `Test v${String(version)}` : 'Test version unknown'}
+              {' · '}
               {logicalRunLabel(observation.run_count)}
             </p>
           </div>
@@ -356,8 +540,8 @@ function ExecutionDetailsDialog({
           <section className="tmh-execution-dialog-report">
             <div className="tmh-execution-dialog-report-heading">
               <div>
-                <span className="tmh-label">Execution report</span>
-                <h3>Scenario assessments</h3>
+                <span className="tmh-label">Test report</span>
+                <h3>Assessment details for this test</h3>
               </div>
               {detail && (
                 <span className="tmh-visible-count">
@@ -375,7 +559,7 @@ function ExecutionDetailsDialog({
                 {error}
               </p>
             ) : (
-              <AssessmentWorkspace detail={detail} />
+              <AssessmentWorkspace detail={scopedDetail} />
             )}
           </section>
         </div>
@@ -407,6 +591,7 @@ export function TestHistoryPage({ testId }: { testId: string }) {
   const [error, setError] = useState<string | null>(null)
   const [selectedObservation, setSelectedObservation] =
     useState<TestObservation | null>(null)
+  const [comparisonKeys, setComparisonKeys] = useState<string[]>([])
 
   useEffect(() => {
     let cancelled = false
@@ -473,6 +658,38 @@ export function TestHistoryPage({ testId }: { testId: string }) {
   const knownPassed = observations.filter(
     (item) => item.status === 'passed',
   ).length
+  const comparisonSelections = comparisonKeys
+    .map((key) => observations.find((item) => testObservationKey(item) === key))
+    .filter((item): item is TestObservation => Boolean(item))
+  const baseline = comparisonSelections[0] ?? null
+  const candidate = comparisonSelections[1] ?? null
+
+  function clearComparison() {
+    setComparisonKeys([])
+  }
+
+  function selectForComparison(observation: TestObservation) {
+    const key = testObservationKey(observation)
+    setComparisonKeys((current) => {
+      const selectedIndex = current.indexOf(key)
+      if (selectedIndex === 0) return current.slice(1)
+      if (selectedIndex === 1) return current.slice(0, 1)
+      if (current.length === 0) return [key]
+      if (current.length === 1) return [...current, key]
+      return [current[0], key]
+    })
+  }
+
+  function comparisonActionLabel(observation: TestObservation) {
+    const selectedIndex = comparisonKeys.indexOf(
+      testObservationKey(observation),
+    )
+    if (selectedIndex === 0) return 'Baseline selected'
+    if (selectedIndex === 1) return 'Candidate selected'
+    if (comparisonKeys.length === 0) return 'Set baseline'
+    if (comparisonKeys.length === 1) return 'Set candidate'
+    return 'Replace candidate'
+  }
 
   return (
     <div id="test-metrics-history-proposal" className="tmh-page">
@@ -564,11 +781,12 @@ export function TestHistoryPage({ testId }: { testId: string }) {
               Test version
               <select
                 value={version ?? ''}
-                onChange={(event) =>
+                onChange={(event) => {
                   setVersion(
                     event.target.value ? Number(event.target.value) : undefined,
                   )
-                }
+                  clearComparison()
+                }}
               >
                 <option value="">Current / latest</option>
                 {(history?.available_versions ?? []).map((item) => (
@@ -584,7 +802,10 @@ export function TestHistoryPage({ testId }: { testId: string }) {
               <ProviderModelDropdown
                 groups={executionModelGroups}
                 value={executionModel}
-                onChange={setExecutionModel}
+                onChange={(next) => {
+                  setExecutionModel(next)
+                  clearComparison()
+                }}
                 optionValue={modelSelection}
                 placeholder="All execution models"
                 ariaLabel="Execution model"
@@ -595,7 +816,10 @@ export function TestHistoryPage({ testId }: { testId: string }) {
               <ProviderModelDropdown
                 groups={judgeModelGroups}
                 value={judgeModel}
-                onChange={setJudgeModel}
+                onChange={(next) => {
+                  setJudgeModel(next)
+                  clearComparison()
+                }}
                 optionValue={modelSelection}
                 placeholder="All judge models"
                 ariaLabel="Judge model"
@@ -605,7 +829,10 @@ export function TestHistoryPage({ testId }: { testId: string }) {
               System revision
               <select
                 value={system}
-                onChange={(event) => setSystem(event.target.value)}
+                onChange={(event) => {
+                  setSystem(event.target.value)
+                  clearComparison()
+                }}
               >
                 <option value="">All revisions</option>
                 {(history?.systems ?? []).map((item) => (
@@ -619,7 +846,10 @@ export function TestHistoryPage({ testId }: { testId: string }) {
               Result
               <select
                 value={result}
-                onChange={(event) => setResult(event.target.value)}
+                onChange={(event) => {
+                  setResult(event.target.value)
+                  clearComparison()
+                }}
               >
                 <option value="">All results</option>
                 <option value="passed">Passed</option>
@@ -703,34 +933,43 @@ export function TestHistoryPage({ testId }: { testId: string }) {
 
               <p className="tmh-series-note">
                 <strong>Descriptive median:</strong> values summarize the
-                visible execution records. Use a local plan or system comparison
-                to inspect a baseline/candidate delta. Missing metrics stay
-                unknown.
+                visible execution records. Select two executions below to
+                inspect a same-scope baseline/candidate delta. Missing metrics
+                stay unknown.
               </p>
+
+              <ObservationComparisonPanel
+                baseline={baseline}
+                candidate={candidate}
+                onClear={clearComparison}
+              />
 
               <table aria-label={`Metric history for ${testId}`}>
                 <thead>
                   <tr>
-                    <th scope="col" style={{ width: '17%' }}>
+                    <th scope="col" style={{ width: '16%' }}>
                       Execution
                     </th>
-                    <th scope="col" style={{ width: '24%' }}>
+                    <th scope="col" style={{ width: '22%' }}>
                       Model and system
                     </th>
-                    <th scope="col" style={{ width: '16%' }}>
+                    <th scope="col" style={{ width: '13%' }}>
                       Result
                     </th>
-                    <th scope="col" style={{ width: '11%' }}>
+                    <th scope="col" style={{ width: '9%' }}>
                       Cost
                     </th>
-                    <th scope="col" style={{ width: '12%' }}>
+                    <th scope="col" style={{ width: '10%' }}>
                       Duration
                     </th>
-                    <th scope="col" style={{ width: '11%' }}>
+                    <th scope="col" style={{ width: '10%' }}>
                       Tokens
                     </th>
-                    <th scope="col" style={{ width: '9%' }}>
+                    <th scope="col" style={{ width: '7%' }}>
                       Turns
+                    </th>
+                    <th scope="col" style={{ width: '13%' }}>
+                      Actions
                     </th>
                   </tr>
                 </thead>
@@ -782,14 +1021,6 @@ export function TestHistoryPage({ testId }: { testId: string }) {
                             ? 'Score unknown'
                             : `Score ${item.median_score.toFixed(2)}`}
                         </small>
-                        <button
-                          className="tmh-detail-button"
-                          type="button"
-                          onClick={() => setSelectedObservation(item)}
-                          aria-label={`Open execution details from ${formatDate(item.completed_at)}`}
-                        >
-                          View details
-                        </button>
                       </td>
                       <td data-label="Cost">
                         {formatCost(item.median_cost_usd)}
@@ -805,6 +1036,28 @@ export function TestHistoryPage({ testId }: { testId: string }) {
                         item.median_turns === undefined
                           ? 'Unknown'
                           : Math.round(item.median_turns).toLocaleString()}
+                      </td>
+                      <td data-label="Actions">
+                        <div className="tmh-row-actions">
+                          <button
+                            className="tmh-detail-button"
+                            type="button"
+                            onClick={() => setSelectedObservation(item)}
+                            aria-label={`Open details for ${testId} from ${formatDate(item.completed_at)}`}
+                          >
+                            View details
+                          </button>
+                          <button
+                            className={`tmh-compare-button${comparisonKeys.includes(testObservationKey(item)) ? ' is-selected' : ''}`}
+                            type="button"
+                            onClick={() => selectForComparison(item)}
+                            aria-pressed={comparisonKeys.includes(
+                              testObservationKey(item),
+                            )}
+                          >
+                            {comparisonActionLabel(item)}
+                          </button>
+                        </div>
                       </td>
                     </tr>
                   ))}
@@ -823,6 +1076,7 @@ export function TestHistoryPage({ testId }: { testId: string }) {
         <ExecutionDetailsDialog
           observation={selectedObservation}
           testVersion={history?.test_version}
+          testId={testId}
           onClose={() => setSelectedObservation(null)}
         />
       )}

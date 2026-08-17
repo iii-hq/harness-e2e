@@ -82,7 +82,7 @@ test('keeps the workspace navigation and versioned test flow', () => {
   assert.doesNotMatch(historyPage, /tmh-topbar|tmh-brand|tmh-context/)
   assert.match(plansPage, /All local plans/)
   assert.match(plansPage, /hashForNewPlan\(\)/)
-  assert.match(plansPage, /Comparison ready/)
+  assert.match(plansPage, /Comparison available/)
 })
 
 test('distinguishes active tests from tests with no execution history', () => {
@@ -103,6 +103,12 @@ test('keeps metric history rows readable and opens details on demand', () => {
   assert.match(historyPage, /Descriptive median/)
   assert.match(historyPage, /metricCaption/)
   assert.match(historyPage, /ExecutionDetailsDialog/)
+  assert.match(historyPage, /reports: detail\.reports\.filter\([\s\S]*scenario_id === testId/)
+  assert.match(historyPage, /Assessment details for this test/)
+  assert.match(historyPage, /Compare two runs/)
+  assert.match(historyPage, /Set baseline/)
+  assert.match(historyPage, /Set candidate/)
+  assert.match(historyPage, /compareTestObservations/)
   assert.match(historyPage, /getExecution\(observation\.execution_id\)/)
   assert.match(historyPage, /View details/)
   assert.match(historyPage, /Open full execution report/)
@@ -133,6 +139,42 @@ test('makes local plan scope selection focused and readable', () => {
   assert.match(planPage, /Runs create logical evidence samples/)
   assert.match(planPage, /plan-advanced-control/)
   assert.doesNotMatch(planPage, /local-scenario-options/)
+})
+
+test('keeps plan panels explicitly padded and comparison content full bleed', () => {
+  const styles = read('src', 'index.css')
+  assert.match(styles, /--plan-panel-space-y: 24px/)
+  assert.match(styles, /--plan-panel-space-x: 28px/)
+  assert.match(styles, /--plan-card-space: 16px/)
+  assert.match(
+    styles,
+    /\.plan-panel-heading,[\s\S]*\.plan-panel-section[\s\S]*padding: var\(--plan-panel-space-y\) var\(--plan-panel-space-x\)/,
+  )
+  assert.match(
+    styles,
+    /\.plans-list-heading[\s\S]*padding: var\(--plan-panel-space-y\) var\(--plan-panel-space-x\)/,
+  )
+  assert.match(
+    styles,
+    /@media \(max-width: 560px\)[\s\S]*--plan-panel-space-y: 18px[\s\S]*--plan-panel-space-x: 18px/,
+  )
+  assert.match(planPage, /panel-heading plan-panel-heading/g)
+  assert.doesNotMatch(planPage, /className="panel-heading"/)
+  assert.match(plansPage, /panel-heading plans-list-heading/)
+  assert.match(planPage, /plan-execution-table-wrap/)
+  assert.match(planPage, /plan-scenario-table-wrap/)
+})
+
+test('exposes plan execution history and baseline comparison controls', () => {
+  assert.match(plansPage, /Latest candidate vs baseline/)
+  assert.match(plansPage, /Objective regressions/)
+  assert.match(plansPage, /Not reported/)
+  assert.match(planPage, /Runs in this plan/)
+  assert.match(planPage, /Compare with baseline/)
+  assert.match(planPage, /Baseline vs Candidate/)
+  assert.match(planPage, /PLAN_DETAIL_METRICS/)
+  assert.match(planPage, /Test breakdown/)
+  assert.match(planPage, /Run another candidate/)
 })
 
 test('uses a typed bridge for local, observed and static execution sources', () => {
