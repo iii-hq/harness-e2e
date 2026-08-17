@@ -1,173 +1,15 @@
 use std::collections::{BTreeSet, HashMap};
-use std::path::PathBuf;
-use std::sync::Arc;
 
 use anyhow::{bail, Context, Result};
-use chrono::{SecondsFormat, Utc};
 use serde_json::{json, Value};
-use uuid::Uuid;
 
 use crate::artifact;
 use crate::context::E2eContext;
-use crate::identity::{self, ExecutionIdentity, SystemUnderTestIdentity};
-use crate::report::{E2eManifest, E2eReport, ModelArtifact, ObservedWorkerContract};
-use crate::wire::Model;
+use crate::report::ObservedWorkerContract;
 
-use super::security_scan::{self, register_security_scan_steps};
-use super::{execute_workflow, StepCatalog, WorkflowDefinitionV1, WorkflowExecutionRequest};
+use super::{StepCatalog, WorkflowDefinitionV1};
 
-pub struct SecurityReviewRunConfig {
-    pub url: String,
-    pub model: String,
-    pub provider: String,
-    pub runs_dir: PathBuf,
-    pub lane: String,
-}
-
-pub struct SecurityReviewRunOutcome {
-    pub report: E2eReport,
-    pub manifest: E2eManifest,
-    pub report_path: PathBuf,
-}
-
-pub async fn run_security_review(
-    config: SecurityReviewRunConfig,
-) -> Result<SecurityReviewRunOutcome> {
-    if config.model.trim().is_empty() || config.provider.trim().is_empty() {
-        bail!("workflow model and provider cannot be empty");
-    }
-    let execution_id = Uuid::new_v4().simple().to_string();
-    let output = config.runs_dir.join(&execution_id).join("results");
-    let started_at = timestamp();
-    let context = Arc::new(
-        E2eContext::connect(&config.url)
-            .await
-            .context("connect workflow runner")?,
-    );
-    let control_plane = context
-        .preflight_control_plane()
-        .await
-        .context("preflight Harness control-plane contract")?;
-    let runtime_versions = context.runtime_versions().await?;
-    let system_under_test = SystemUnderTestIdentity::from_environment(
-        runtime_versions.engine,
-        runtime_versions.harness,
-        &control_plane,
-    )?;
-    let model = resolve_model(&context, &config.model, &config.provider).await?;
-    let subject = ModelArtifact::from(model);
-    let mut catalog = StepCatalog::new();
-    let cleanup_hook = register_security_scan_steps(&mut catalog, context.clone())?;
-    let definition = security_scan::definition();
-    definition.validate(&catalog)?;
-    let worker_contracts =
-        observe_worker_contracts(&context, &catalog, std::slice::from_ref(&definition)).await?;
-    let catalog = Arc::new(catalog);
-    let mut workflow_runs = Vec::new();
-    let run_id = Uuid::new_v4().simple().to_string();
-    for attempt in 0..=definition.limits.technical_retries {
-        context
-            .bind_turn_completed()
-            .await
-            .with_context(|| format!("bind turn observation for workflow '{}'", definition.id))?;
-        let (cancel_sender, cancellation) = tokio::sync::watch::channel(false);
-        let signal_task = tokio::spawn(async move {
-            if tokio::signal::ctrl_c().await.is_ok() {
-                let _ = cancel_sender.send(true);
-            }
-        });
-        let outcome = execute_workflow(
-            &definition,
-            catalog.clone(),
-            WorkflowExecutionRequest {
-                output_dir: output.clone(),
-                run_id: run_id.clone(),
-                attempt_number: u32::from(attempt) + 1,
-                cancellation,
-                cleanup_hook: cleanup_hook.clone(),
-            },
-        )
-        .await;
-        signal_task.abort();
-        let unbind = context.unbind_turn_completed().await;
-        let report = outcome.with_context(|| {
-            format!(
-                "execute workflow '{}' attempt {}",
-                definition.id,
-                attempt + 1
-            )
-        })?;
-        unbind.context("unbind workflow turn observation")?;
-        let retry = report.technical_failure && attempt < definition.limits.technical_retries;
-        workflow_runs.push(report);
-        if !retry {
-            break;
-        }
-    }
-
-    let execution = ExecutionIdentity {
-        execution_id,
-        lane: if config.lane.trim().is_empty() {
-            "local-workflow".into()
-        } else {
-            config.lane
-        },
-        started_at,
-        completed_at: timestamp(),
-    };
-    let manifest = E2eManifest {
-        execution: execution.clone(),
-        system_under_test: system_under_test.clone(),
-        subject: subject.clone(),
-        judge: None,
-        control_plane,
-        worker_contracts,
-    };
-    let mut report = E2eReport::new_workflows(
-        execution,
-        system_under_test,
-        subject,
-        identity::nonempty_env("HARNESS_E2E_ENGINE_REVISION"),
-        workflow_runs,
-    );
-    let report_path = report.write_to(&output, &manifest)?;
-    context.shutdown().await;
-    Ok(SecurityReviewRunOutcome {
-        report,
-        manifest,
-        report_path,
-    })
-}
-
-async fn resolve_model(context: &E2eContext, model: &str, provider: &str) -> Result<Model> {
-    let response = context
-        .trigger_value(
-            "router::models::get",
-            json!({"id": model, "provider": provider}),
-        )
-        .await?;
-    if response.is_null() {
-        bail!("model {provider}/{model} is not registered in the router catalog");
-    }
-    let resolved: Model = serde_json::from_value(
-        response
-            .get("model")
-            .cloned()
-            .context("router::models::get response is missing model")?,
-    )?;
-    if resolved.id != model || resolved.provider != provider {
-        bail!("router resolved a different model identity");
-    }
-    if !context
-        .function_exists(&format!("provider::{provider}::stream"))
-        .await?
-    {
-        bail!("provider::{provider}::stream is unavailable");
-    }
-    Ok(resolved)
-}
-
-async fn observe_worker_contracts(
+pub(crate) async fn observe_worker_contracts(
     context: &E2eContext,
     catalog: &StepCatalog,
     definitions: &[WorkflowDefinitionV1],
@@ -257,8 +99,4 @@ async fn observe_worker_contracts(
             })
         })
         .collect()
-}
-
-fn timestamp() -> String {
-    Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true)
 }

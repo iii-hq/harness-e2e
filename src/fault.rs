@@ -961,6 +961,8 @@ mod tests {
             cost: CostReport::default(),
             evidence: Vec::new(),
             deliverables: Vec::new(),
+            semantic_tests: Vec::new(),
+            scenario_flow: None,
             dimensions: vec![
                 DimensionReport {
                     dimension: EvaluationDimension::Deliverable,
@@ -1084,7 +1086,6 @@ mod tests {
             redaction: Default::default(),
             assessment_contract: crate::assessment::AssessmentContract { runs: Vec::new() },
             scenarios: vec![scenario],
-            workflow_runs: Vec::new(),
         }
     }
 

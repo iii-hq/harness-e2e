@@ -21,12 +21,7 @@ use crate::scenarios::{
 use crate::scenarios::{ComplexityProfile, DeliverableContract};
 use crate::schema;
 use crate::wire::{ControlPlaneEvidence, Model, SessionMetricsResponse, StatusReport};
-use crate::workflow::{
-    ActivationPolicy, DependencyPolicy, PortValueKind, TypedPortValue, WorkflowAssetReport,
-    WorkflowAttemptReport, WorkflowCheckpointV1, WorkflowEvaluationOutcome,
-    WorkflowEvaluationResult, WorkflowFailurePhase, WorkflowGateResult, WorkflowStepFailure,
-    WorkflowStepReport, WorkflowStepStatus,
-};
+use crate::workflow::{WorkflowCleanupReport, WorkflowStepReport};
 
 mod summary;
 
@@ -259,6 +254,10 @@ pub struct RetryAttemptReport {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub deliverables: Vec<DeliverableReport>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub semantic_tests: Vec<WorkflowStepReport>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scenario_flow: Option<ScenarioFlowEvidence>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub dimensions: Vec<DimensionReport>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub efficiency: Option<EfficiencyReport>,
@@ -291,6 +290,8 @@ impl From<&E2eRunReport> for RetryAttemptReport {
             metrics: report.metrics.clone(),
             evidence: report.evidence.clone(),
             deliverables: report.deliverables.clone(),
+            semantic_tests: report.semantic_tests.clone(),
+            scenario_flow: report.scenario_flow.clone(),
             dimensions: report.dimensions.clone(),
             efficiency: report.efficiency.clone(),
             failures: report.failures.clone(),
@@ -327,6 +328,14 @@ pub struct E2eRunReport {
     pub evidence: Vec<ArtifactReference>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub deliverables: Vec<DeliverableReport>,
+    /// Semantic tests executed inside a code-defined composite scenario. Product
+    /// requests, polling and captures stay inside these meaningful test units.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub semantic_tests: Vec<WorkflowStepReport>,
+    /// Evidence-only flow identity emitted by Rust. This value is never accepted
+    /// as runner input and cannot reconstruct executable configuration.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scenario_flow: Option<ScenarioFlowEvidence>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub dimensions: Vec<DimensionReport>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -381,6 +390,8 @@ impl E2eRunReport {
             cost: CostReport::default(),
             evidence: Vec::new(),
             deliverables: Vec::new(),
+            semantic_tests: Vec::new(),
+            scenario_flow: None,
             dimensions: Vec::new(),
             efficiency: None,
             retry_attempts: Vec::new(),
@@ -777,6 +788,15 @@ impl E2eRunReport {
             },
         ];
     }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ScenarioFlowEvidence {
+    pub definition_sha256: String,
+    pub snapshot: Value,
+    pub checkpoint: ArtifactReference,
+    pub cleanup: WorkflowCleanupReport,
 }
 
 fn unavailable_complexity() -> ObservedComplexityReport {
@@ -1192,8 +1212,6 @@ pub struct E2eReport {
     pub redaction: crate::redaction::RedactionReport,
     pub assessment_contract: AssessmentContract,
     pub scenarios: Vec<E2eScenarioReport>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub workflow_runs: Vec<WorkflowAttemptReport>,
 }
 
 impl E2eReport {
@@ -1220,45 +1238,9 @@ impl E2eReport {
             redaction: crate::redaction::RedactionReport::default(),
             assessment_contract: AssessmentContract { runs: Vec::new() },
             scenarios,
-            workflow_runs: Vec::new(),
         };
         report.assessment_contract = AssessmentContract::from_assessment_evidence(&report);
         report
-    }
-
-    pub fn new_workflows(
-        execution: ExecutionIdentity,
-        system_under_test: SystemUnderTestIdentity,
-        subject: ModelArtifact,
-        engine_revision: Option<String>,
-        workflow_runs: Vec<WorkflowAttemptReport>,
-    ) -> Self {
-        let mut terminal_attempts = BTreeMap::new();
-        for attempt in &workflow_runs {
-            let replace = terminal_attempts.get(&attempt.run_id).is_none_or(
-                |current: &&WorkflowAttemptReport| attempt.attempt_number > current.attempt_number,
-            );
-            if replace {
-                terminal_attempts.insert(attempt.run_id.clone(), attempt);
-            }
-        }
-        let passed = !terminal_attempts.is_empty()
-            && terminal_attempts.values().all(|attempt| attempt.passed);
-        Self {
-            schema_version: 2,
-            execution,
-            system_under_test,
-            manifest: None,
-            subject,
-            judge: None,
-            judge_protocol: None,
-            engine_revision,
-            passed,
-            redaction: crate::redaction::RedactionReport::default(),
-            assessment_contract: AssessmentContract { runs: Vec::new() },
-            scenarios: Vec::new(),
-            workflow_runs,
-        }
     }
 
     pub fn write_to(&mut self, output: &Path, manifest: &E2eManifest) -> Result<PathBuf> {
@@ -1268,7 +1250,6 @@ impl E2eReport {
         manifest.validate().context("validate E2E manifest")?;
         self.redact_sensitive_evidence()?;
         self.materialize_evidence(output)?;
-        self.materialize_legacy_workflows(output)?;
         self.assessment_contract = AssessmentContract::from_assessment_evidence(self);
         let manifest_reference = artifact::write_json(
             output,
@@ -1366,36 +1347,22 @@ impl E2eReport {
                     reference.verify(output)?;
                 }
                 verify_deliverables(output, &run.deliverables)?;
+                validate_semantic_evidence(
+                    output,
+                    run.scenario_flow.as_ref(),
+                    &run.semantic_tests,
+                )?;
                 for attempt in &run.retry_attempts {
                     validate_retry_identity(run, attempt)?;
                     for reference in &attempt.evidence {
                         reference.verify(output)?;
                     }
                     verify_deliverables(output, &attempt.deliverables)?;
-                }
-            }
-        }
-        for workflow in &self.workflow_runs {
-            if workflow.workflow_id.trim().is_empty()
-                || workflow.workflow_sha256.trim().is_empty()
-                || workflow.run_id.trim().is_empty()
-                || workflow.attempt_id.trim().is_empty()
-            {
-                bail!("workflow run identity fields cannot be empty");
-            }
-            workflow.checkpoint.verify(output)?;
-            for step in &workflow.steps {
-                for asset in &step.assets {
-                    asset.artifact.verify(output)?;
-                    if asset.artifact.sha256 != asset.content_sha256
-                        || asset.artifact.size_bytes != asset.size_bytes
-                    {
-                        bail!(
-                            "workflow asset '{}.{}' differs from its immutable reference",
-                            step.node_id,
-                            asset.id
-                        );
-                    }
+                    validate_semantic_evidence(
+                        output,
+                        attempt.scenario_flow.as_ref(),
+                        &attempt.semantic_tests,
+                    )?;
                 }
             }
         }
@@ -1428,6 +1395,12 @@ impl E2eReport {
                     &mut run.asset_assessments,
                 )?;
                 scan_deliverable_content(&policy, &run.deliverables)?;
+                redact_semantic_evidence(
+                    &policy,
+                    &mut redaction,
+                    &mut run.scenario_flow,
+                    &mut run.semantic_tests,
+                );
                 for retry in &mut run.retry_attempts {
                     redaction.merge(retry.asset_redaction.clone());
                     if let Some(transcript) = &mut retry.transcript {
@@ -1449,39 +1422,13 @@ impl E2eReport {
                         &mut retry.asset_assessments,
                     )?;
                     scan_deliverable_content(&policy, &retry.deliverables)?;
+                    redact_semantic_evidence(
+                        &policy,
+                        &mut redaction,
+                        &mut retry.scenario_flow,
+                        &mut retry.semantic_tests,
+                    );
                 }
-            }
-        }
-        for workflow in &mut self.workflow_runs {
-            for step in &mut workflow.steps {
-                redaction.merge(step.redaction.clone());
-                for output in step.outputs.values_mut() {
-                    redaction.merge(policy.redact_value(&mut output.value));
-                }
-                if let Some(transcript) = &mut step.transcript {
-                    redaction.merge(policy.redact_value(transcript));
-                }
-                if let Some(metrics) = &mut step.metrics {
-                    redaction.merge(policy.redact_value(metrics));
-                }
-                for asset in &mut step.assets {
-                    redaction.merge(policy.redact_value(&mut asset.preview));
-                }
-                for gate in &mut step.hard_gates {
-                    redact_string(&policy, &mut redaction, &mut gate.reason);
-                }
-                for evaluation in &mut step.evaluations {
-                    redact_string(&policy, &mut redaction, &mut evaluation.summary);
-                }
-                for failure in &mut step.failures {
-                    redact_string(&policy, &mut redaction, &mut failure.message);
-                }
-                if let Some(reason) = &mut step.skip_reason {
-                    redact_string(&policy, &mut redaction, reason);
-                }
-            }
-            for criterion in &mut workflow.criteria {
-                redact_string(&policy, &mut redaction, &mut criterion.summary);
             }
         }
         let mut value = serde_json::to_value(&self.assessment_contract)
@@ -1515,6 +1462,11 @@ impl E2eReport {
                         references: &mut run.evidence,
                     },
                 )?;
+                append_semantic_references(
+                    &mut run.evidence,
+                    run.scenario_flow.as_ref(),
+                    &run.semantic_tests,
+                );
                 bind_assessment_evidence(&mut run.assessment_results, &run.evidence);
                 for attempt in &mut run.retry_attempts {
                     attempt.evidence.clear();
@@ -1531,173 +1483,112 @@ impl E2eReport {
                             references: &mut attempt.evidence,
                         },
                     )?;
+                    append_semantic_references(
+                        &mut attempt.evidence,
+                        attempt.scenario_flow.as_ref(),
+                        &attempt.semantic_tests,
+                    );
                     bind_assessment_evidence(&mut attempt.assessment_results, &attempt.evidence);
                 }
             }
         }
         Ok(())
     }
+}
 
-    fn materialize_legacy_workflows(&mut self, output: &Path) -> Result<()> {
-        self.workflow_runs.retain(|workflow| {
-            workflow
-                .steps
-                .first()
-                .is_none_or(|step| step.step_type != "legacy.scenario")
-        });
-        for scenario in &self.scenarios {
-            let workflow_sha256 = artifact::sha256_value(&serde_json::json!({
-                "adapter": "legacy.scenario@1",
-                "scenario_id": scenario.scenario_id,
-                "scenario_version": scenario.scenario_version,
-                "case": scenario.case,
-                "execution_policy": scenario.execution_policy,
-            }))?;
-            for run in &scenario.runs {
-                let status = match run.status {
-                    RunStatus::Passed => WorkflowStepStatus::Succeeded,
-                    RunStatus::HardGateFailed => WorkflowStepStatus::HardGateFailed,
-                    _ => WorkflowStepStatus::Failed,
-                };
-                let assets = run
-                    .deliverables
-                    .iter()
-                    .map(|deliverable| {
-                        let artifact = deliverable.artifact.clone().with_context(|| {
-                            format!(
-                                "legacy deliverable '{}' is not materialized",
-                                deliverable.id
-                            )
-                        })?;
-                        Ok(WorkflowAssetReport {
-                            id: deliverable.id.clone(),
-                            namespaced_id: format!("scenario.{}", deliverable.id),
-                            kind: deliverable.kind.clone(),
-                            media_type: deliverable.media_type.clone(),
-                            content_sha256: artifact.sha256.clone(),
-                            size_bytes: artifact.size_bytes,
-                            preview: deliverable.preview.clone(),
-                            preview_truncated: false,
-                            artifact,
-                        })
-                    })
-                    .collect::<Result<Vec<_>>>()?;
-                let step = WorkflowStepReport {
-                    node_id: "scenario".into(),
-                    step_type: "legacy.scenario".into(),
-                    step_version: 1,
-                    required: true,
-                    dependencies: Vec::new(),
-                    dependency_policy: DependencyPolicy::Succeeded,
-                    activation: ActivationPolicy::Always,
-                    status,
-                    started_at: Some(self.execution.started_at.clone()),
-                    completed_at: Some(self.execution.completed_at.clone()),
-                    duration_ms: run.wall_time_ms,
-                    harness_session_id: Some(run.session_id.clone()),
-                    outputs: BTreeMap::from([(
-                        "completed".into(),
-                        TypedPortValue {
-                            kind: PortValueKind::Boolean,
-                            value: Value::Bool(matches!(
-                                run.status,
-                                RunStatus::Passed | RunStatus::HardGateFailed
-                            )),
-                        },
-                    )]),
-                    transcript: run.transcript.clone(),
-                    metrics: run.metrics.as_ref().map(serde_json::to_value).transpose()?,
-                    cost_usd: run.cost.subject_usd,
-                    assets,
-                    hard_gates: run
-                        .hard_gates
-                        .iter()
-                        .map(|gate| WorkflowGateResult {
-                            id: gate.id.clone(),
-                            passed: gate.passed,
-                            reason: gate.reason.clone(),
-                            evidence_ids: Vec::new(),
-                        })
-                        .collect(),
-                    evaluations: run
-                        .criteria
-                        .iter()
-                        .map(|criterion| WorkflowEvaluationResult {
-                            id: criterion.id.clone(),
-                            outcome: match criterion.awarded {
-                                Some(awarded) if awarded == criterion.possible => {
-                                    WorkflowEvaluationOutcome::Passed
-                                }
-                                Some(_) => WorkflowEvaluationOutcome::Failed,
-                                None => WorkflowEvaluationOutcome::NotEvaluated,
-                            },
-                            summary: criterion.reason.clone(),
-                            score: criterion.awarded.map(f64::from),
-                            evidence_ids: Vec::new(),
-                        })
-                        .collect(),
-                    failures: run
-                        .failures
-                        .iter()
-                        .map(|failure| WorkflowStepFailure {
-                            phase: match failure.phase {
-                                FailurePhase::Setup => WorkflowFailurePhase::Preflight,
-                                FailurePhase::Execute => WorkflowFailurePhase::Execute,
-                                FailurePhase::Collect => WorkflowFailurePhase::Capture,
-                                FailurePhase::Evaluate => WorkflowFailurePhase::Evaluate,
-                                FailurePhase::Cleanup => WorkflowFailurePhase::Cleanup,
-                            },
-                            message: failure.message.clone(),
-                            technical: run.status.is_technical_failure(),
-                        })
-                        .collect(),
-                    skip_reason: None,
-                    redaction: run.asset_redaction.clone(),
-                };
-                let checkpoint = WorkflowCheckpointV1 {
-                    schema_version: 1,
-                    workflow_id: scenario.scenario_id.clone(),
-                    workflow_sha256: workflow_sha256.clone(),
-                    run_id: run.run_id.clone(),
-                    attempt_id: run.attempt_id.clone(),
-                    flow_snapshot: serde_json::Value::Null,
-                    updated_at: self.execution.completed_at.clone(),
-                    terminal_nodes: vec!["scenario".into()],
-                    active_nodes: Vec::new(),
-                    steps: vec![step.clone()],
-                };
-                let checkpoint = artifact::write_json(
-                    output,
-                    &PathBuf::from("checkpoints")
-                        .join(&run.run_id)
-                        .join(&run.attempt_id)
-                        .join("workflow-checkpoint.json"),
-                    "workflow-checkpoint",
-                    "workflow_checkpoint",
-                    &checkpoint,
-                )?;
-                self.workflow_runs.push(WorkflowAttemptReport {
-                    workflow_id: scenario.scenario_id.clone(),
-                    workflow_scenario_version: scenario.scenario_version,
-                    workflow_sha256: workflow_sha256.clone(),
-                    run_id: run.run_id.clone(),
-                    attempt_id: run.attempt_id.clone(),
-                    attempt_number: run.attempt_number,
-                    started_at: self.execution.started_at.clone(),
-                    completed_at: self.execution.completed_at.clone(),
-                    duration_ms: run.wall_time_ms,
-                    passed: run.status == RunStatus::Passed,
-                    technical_failure: run.status.is_technical_failure(),
-                    flow_snapshot: serde_json::Value::Null,
-                    steps: vec![step],
-                    criteria: Vec::new(),
-                    aggregate_cost_usd: run.cost.total_usd,
-                    checkpoint,
-                    cleanup: crate::workflow::WorkflowCleanupReport::default(),
-                });
+fn validate_semantic_evidence(
+    output: &Path,
+    flow: Option<&ScenarioFlowEvidence>,
+    tests: &[WorkflowStepReport],
+) -> Result<()> {
+    if tests.is_empty() {
+        if flow.is_some() {
+            bail!("scenario flow evidence requires at least one semantic test");
+        }
+        return Ok(());
+    }
+    let flow = flow.context("semantic tests require scenario flow evidence")?;
+    if flow.definition_sha256.trim().is_empty()
+        || flow.snapshot.get("executable").and_then(Value::as_bool) != Some(false)
+    {
+        bail!("scenario flow snapshot must be identified and explicitly non-executable");
+    }
+    flow.checkpoint.verify(output)?;
+    for test in tests {
+        for asset in &test.assets {
+            asset.artifact.verify(output)?;
+            if asset.artifact.sha256 != asset.content_sha256
+                || asset.artifact.size_bytes != asset.size_bytes
+            {
+                bail!(
+                    "semantic test asset '{}.{}' differs from its immutable reference",
+                    test.node_id,
+                    asset.id
+                );
             }
         }
-        Ok(())
+    }
+    Ok(())
+}
+
+fn append_semantic_references(
+    references: &mut Vec<ArtifactReference>,
+    flow: Option<&ScenarioFlowEvidence>,
+    tests: &[WorkflowStepReport],
+) {
+    let candidates = flow.into_iter().map(|flow| &flow.checkpoint).chain(
+        tests
+            .iter()
+            .flat_map(|test| test.assets.iter().map(|asset| &asset.artifact)),
+    );
+    for candidate in candidates {
+        if !references
+            .iter()
+            .any(|reference| reference.id == candidate.id && reference.sha256 == candidate.sha256)
+        {
+            references.push(candidate.clone());
+        }
+    }
+}
+
+fn redact_semantic_evidence(
+    policy: &crate::redaction::RedactionPolicy,
+    redaction: &mut crate::redaction::RedactionReport,
+    flow: &mut Option<ScenarioFlowEvidence>,
+    tests: &mut [WorkflowStepReport],
+) {
+    if let Some(flow) = flow {
+        redaction.merge(policy.redact_value(&mut flow.snapshot));
+        if let Some(failure) = &mut flow.cleanup.failure {
+            redact_string(policy, redaction, failure);
+        }
+    }
+    for test in tests {
+        redaction.merge(test.redaction.clone());
+        for output in test.outputs.values_mut() {
+            redaction.merge(policy.redact_value(&mut output.value));
+        }
+        if let Some(transcript) = &mut test.transcript {
+            redaction.merge(policy.redact_value(transcript));
+        }
+        if let Some(metrics) = &mut test.metrics {
+            redaction.merge(policy.redact_value(metrics));
+        }
+        for asset in &mut test.assets {
+            redaction.merge(policy.redact_value(&mut asset.preview));
+        }
+        for gate in &mut test.hard_gates {
+            redact_string(policy, redaction, &mut gate.reason);
+        }
+        for evaluation in &mut test.evaluations {
+            redact_string(policy, redaction, &mut evaluation.summary);
+        }
+        for failure in &mut test.failures {
+            redact_string(policy, redaction, &mut failure.message);
+        }
+        if let Some(reason) = &mut test.skip_reason {
+            redact_string(policy, redaction, reason);
+        }
     }
 }
 
@@ -2214,6 +2105,10 @@ mod tests {
     use crate::wire::{
         ControlPlaneEvidence, FunctionContractEvidence, SessionMetricsResponse, StatusReport,
     };
+    use crate::workflow::{
+        ActivationPolicy, DependencyPolicy, WorkflowEvaluationOutcome, WorkflowEvaluationResult,
+        WorkflowGateResult, WorkflowStepStatus,
+    };
 
     const TEST_DIGEST: &str =
         "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
@@ -2718,34 +2613,11 @@ mod tests {
             skip_reason: None,
             redaction: crate::redaction::RedactionReport::default(),
         };
-        let checkpoint = ArtifactReference {
-            id: "checkpoint".into(),
-            kind: "workflow_checkpoint".into(),
-            path: "checkpoint.json".into(),
-            sha256: TEST_DIGEST.into(),
-            size_bytes: 1,
-            media_type: "application/json".into(),
-        };
-        let mut report = report(Vec::new());
-        report.workflow_runs.push(WorkflowAttemptReport {
-            workflow_id: "workflow.test".into(),
-            workflow_scenario_version: 1,
-            workflow_sha256: TEST_DIGEST.into(),
-            run_id: "workflow-run".into(),
-            attempt_id: "workflow-attempt".into(),
-            attempt_number: 1,
-            started_at: "2026-08-12T12:00:00Z".into(),
-            completed_at: "2026-08-12T12:00:01Z".into(),
-            duration_ms: 1_000,
-            passed: false,
-            technical_failure: false,
-            flow_snapshot: Value::Null,
-            steps: vec![step],
-            criteria: Vec::new(),
-            aggregate_cost_usd: None,
-            checkpoint,
-            cleanup: crate::workflow::WorkflowCleanupReport::default(),
-        });
+        let mut attempt = run(50, false);
+        attempt.semantic_tests = vec![step];
+        attempt.assessment_results =
+            crate::assessment::semantic_test_assessments(&attempt.semantic_tests, &[]);
+        let report = report(vec![aggregate(vec![attempt])]);
 
         let contract = AssessmentContract::from_assessment_evidence(&report);
         contract.validate(&report).unwrap();

@@ -17,7 +17,6 @@
   "dependencies": {
     "@fontsource/chivo-mono": "^5.2.8",
     "@fontsource/inter": "^5.2.8",
-    "@xyflow/react": "12.11.3",
     "iii-browser-sdk": "^0.21.6",
     "lucide-react": "^1.16.0",
     "react": "^19.2.6",

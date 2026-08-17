@@ -24,7 +24,6 @@ use super::read_model::{
     TestVersionGetRequest, TestVersionResult, TestsListRequest, TestsListResponse,
 };
 use super::store::read_stored_run;
-use super::workflows;
 use super::{ApiError, DashboardArgs, RunRequest, RunSnapshot};
 
 const MAX_REQUEST_BYTES: usize = 64 * 1024;
@@ -73,10 +72,6 @@ pub(super) async fn serve(args: DashboardArgs) -> Result<()> {
         .route("/api/dashboard/tests", get(tests_page))
         .route("/api/dashboard/test-version", get(test_version))
         .route("/api/dashboard/tests/:test_id/history", get(test_history))
-        .route(
-            "/api/dashboard/security-review-runs/:id",
-            get(security_review_run_detail),
-        )
         .fallback(get(static_asset));
     let app = if view_only {
         app
@@ -133,44 +128,9 @@ async fn dashboard_config(State(state): State<AppState>) -> Json<Value> {
             "plan_create": bus::PLAN_CREATE,
             "plan_update": bus::PLAN_UPDATE,
             "plan_run_start": bus::PLAN_RUN_START,
-            "security_review_runs": "/api/dashboard/security-review-runs/:id",
             "changed_trigger": bus::CHANGED_TRIGGER,
         }
     }))
-}
-
-async fn security_review_run_detail(
-    State(state): State<AppState>,
-    AxumPath(id): AxumPath<String>,
-) -> Result<Json<Value>, ApiError> {
-    validate_execution_id(&id).map_err(ApiError::bad_request)?;
-    let execution_dir = state.controller.runs_dir().join(&id);
-    let run = read_stored_run(&execution_dir)
-        .map_err(ApiError::internal)?
-        .ok_or_else(|| ApiError::not_found("workflow execution not found"))?;
-    if let Some(report) = run.report {
-        return Ok(Json(json!({
-            "execution_id": id,
-            "passed": report.passed,
-            "security_review_runs": report.workflow_runs,
-        })));
-    }
-    let checkpoint = workflows::latest_checkpoint(&execution_dir.join("results"))
-        .map_err(ApiError::internal)?
-        .ok_or_else(|| ApiError::not_found("workflow checkpoint is not available yet"))?;
-    Ok(Json(json!({
-        "execution_id": id,
-        "passed": Value::Null,
-        "security_review_runs": [{
-            "workflow_id": checkpoint.workflow_id,
-            "workflow_sha256": checkpoint.workflow_sha256,
-            "flow_snapshot": checkpoint.flow_snapshot,
-            "run_id": checkpoint.run_id,
-            "attempt_id": checkpoint.attempt_id,
-            "active_nodes": checkpoint.active_nodes,
-            "steps": checkpoint.steps,
-        }],
-    })))
 }
 
 async fn plans_list(State(state): State<AppState>) -> Result<Json<Value>, ApiError> {

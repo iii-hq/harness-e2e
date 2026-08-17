@@ -1,5 +1,6 @@
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use anyhow::{bail, Context, Result};
@@ -20,17 +21,24 @@ use crate::context::E2eContext;
 use crate::identity::{self, ExecutionIdentity, SystemUnderTestIdentity};
 use crate::judge::{self, JudgeConfig};
 use crate::report::{
-    CriterionReport, E2eManifest, E2eReport, E2eRunReport, E2eScenarioReport, EvaluationDimension,
-    FailurePhase, HardGateReport, ModelArtifact, RetryAttemptReport, RunStatus,
+    CostReport, CriterionReport, E2eManifest, E2eReport, E2eRunReport, E2eScenarioReport,
+    EvaluationDimension, FailurePhase, HardGateReport, ModelArtifact, RetryAttemptReport,
+    RunStatus, ScenarioFlowEvidence,
 };
 use crate::scenarios::common;
 use crate::scenarios::{
     CriterionAward, MaterializedScenario, ObjectiveEvaluation, ScenarioCase,
-    ScenarioDeliverableCapture, ScenarioId, ScenarioObservation, ScenarioSpec,
+    ScenarioDeliverableCapture, ScenarioExecutionKind, ScenarioId, ScenarioObservation,
+    ScenarioSpec,
 };
 use crate::wire::{
     ControlPlaneEvidence, FunctionPolicy, MessageInput, Model, SendOptions, SendRequest,
     SendResponse, SessionInit, StatusReport,
+};
+use crate::workflow::{
+    composite_definition, composite_descriptor_catalog, composite_runtime, execute_workflow,
+    observe_worker_contracts, WorkflowCleanupStatus, WorkflowExecutionRequest,
+    WorkflowFailurePhase, WorkflowStepStatus,
 };
 
 const MAX_RUNS: u32 = 20;
@@ -60,6 +68,7 @@ pub struct SubjectConfig {
 
 pub struct SuiteRunConfig {
     pub url: String,
+    pub execution_id: Option<String>,
     pub subject: SubjectConfig,
     pub judge: Option<JudgeConfig>,
     pub output: PathBuf,
@@ -133,11 +142,14 @@ pub async fn run_suite(config: SuiteRunConfig) -> Result<SuiteRunOutcome> {
         .control
         .as_ref()
         .map(|control| control.execution_id.clone())
+        .or_else(|| config.execution_id.clone())
         .unwrap_or_else(|| Uuid::new_v4().simple().to_string());
     let started_at = Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true);
-    let context = E2eContext::connect(&config.url)
-        .await
-        .context("connect E2E runner")?;
+    let context = Arc::new(
+        E2eContext::connect(&config.url)
+            .await
+            .context("connect E2E runner")?,
+    );
     let control_plane = context
         .preflight_control_plane()
         .await
@@ -170,6 +182,21 @@ pub async fn run_suite(config: SuiteRunConfig) -> Result<SuiteRunOutcome> {
         },
         None => None,
     };
+    let composite_definitions = config
+        .scenarios
+        .iter()
+        .filter_map(|scenario| composite_definition(*scenario))
+        .collect::<Vec<_>>();
+    let composite_catalog = composite_descriptor_catalog(&config.scenarios)?;
+    for definition in &composite_definitions {
+        definition
+            .validate(&composite_catalog)
+            .with_context(|| format!("validate Rust-defined scenario '{}'", definition.id))?;
+    }
+    let worker_contracts =
+        observe_worker_contracts(context.as_ref(), &composite_catalog, &composite_definitions)
+            .await
+            .context("preflight composite scenario worker contracts")?;
     emit_phase(config.control.as_ref(), SuitePhase::Materializing).await?;
     let mut scenario_reports = Vec::new();
 
@@ -243,7 +270,7 @@ pub async fn run_suite(config: SuiteRunConfig) -> Result<SuiteRunOutcome> {
         subject: subject.clone(),
         judge: judge.clone(),
         control_plane,
-        worker_contracts: Vec::new(),
+        worker_contracts,
     };
     let mut report = E2eReport::new(
         execution,
@@ -779,6 +806,14 @@ fn validate_config(config: &SuiteRunConfig) -> Result<()> {
     if config.technical_retries > MAX_TECHNICAL_RETRIES {
         bail!("technical retries must be between 0 and {MAX_TECHNICAL_RETRIES}");
     }
+    if config.technical_retries > 0
+        && config
+            .scenarios
+            .iter()
+            .any(|scenario| scenario.execution_kind() == ScenarioExecutionKind::CompositeFlow)
+    {
+        bail!("composite scenarios with non-repeatable steps require --technical-retries 0");
+    }
     if config.scenarios.is_empty() {
         bail!("at least one scenario is required");
     }
@@ -855,7 +890,7 @@ struct AttemptRequest<'a> {
     output: &'a std::path::Path,
 }
 
-async fn run_once(context: &E2eContext, request: AttemptRequest<'_>) -> E2eRunReport {
+async fn run_once(context: &Arc<E2eContext>, request: AttemptRequest<'_>) -> E2eRunReport {
     let AttemptRequest {
         scenario_id,
         run_id,
@@ -870,6 +905,23 @@ async fn run_once(context: &E2eContext, request: AttemptRequest<'_>) -> E2eRunRe
     let started = Instant::now();
     let attempt_id = Uuid::new_v4().simple().to_string();
     let session_id = format!("e2e_{attempt_id}");
+    if scenario_id.execution_kind() == ScenarioExecutionKind::CompositeFlow {
+        return run_composite_once(
+            context,
+            CompositeAttemptRequest {
+                scenario_id,
+                run_id,
+                attempt_number,
+                subject,
+                seed,
+                control,
+                output,
+                attempt_id,
+                started,
+            },
+        )
+        .await;
+    }
     let materialized = match scenario_id.materialize(&attempt_id, seed) {
         Ok(materialized) => materialized,
         Err(error) => {
@@ -935,7 +987,7 @@ async fn run_once(context: &E2eContext, request: AttemptRequest<'_>) -> E2eRunRe
 
     if report.failures.is_empty() {
         if let Err(error) = execute(
-            context,
+            context.as_ref(),
             ExecutionRequest {
                 subject,
                 judge_config,
@@ -1077,6 +1129,321 @@ async fn run_once(context: &E2eContext, request: AttemptRequest<'_>) -> E2eRunRe
     report
 }
 
+struct CompositeAttemptRequest<'a> {
+    scenario_id: ScenarioId,
+    run_id: &'a str,
+    attempt_number: u32,
+    subject: &'a SubjectConfig,
+    seed: u64,
+    control: Option<&'a SuiteControl>,
+    output: &'a std::path::Path,
+    attempt_id: String,
+    started: Instant,
+}
+
+async fn run_composite_once(
+    context: &Arc<E2eContext>,
+    request: CompositeAttemptRequest<'_>,
+) -> E2eRunReport {
+    let CompositeAttemptRequest {
+        scenario_id,
+        run_id,
+        attempt_number,
+        subject,
+        seed,
+        control,
+        output,
+        attempt_id,
+        started,
+    } = request;
+    let session_id = format!("scenario_{attempt_id}");
+    let materialized = match scenario_id.materialize(&attempt_id, seed) {
+        Ok(materialized) => materialized,
+        Err(error) => {
+            let spec = scenario_id.spec(&attempt_id);
+            let mut report = E2eRunReport::new(
+                run_id.to_string(),
+                attempt_id,
+                attempt_number,
+                session_id,
+                spec.prompt.clone(),
+            );
+            report.push_failure(
+                RunStatus::InfrastructureError,
+                FailurePhase::Setup,
+                format!("composite scenario materialization failed: {error:#}"),
+            );
+            report.wall_time_ms = started.elapsed().as_millis().min(u64::MAX as u128) as u64;
+            ensure_assessment_results(&spec, &mut report);
+            report.refresh_dimensions(false);
+            return report;
+        }
+    };
+    let MaterializedScenario { spec, case, .. } = materialized;
+    let mut report = E2eRunReport::new(
+        run_id.to_string(),
+        attempt_id.clone(),
+        attempt_number,
+        session_id.clone(),
+        spec.prompt.clone(),
+    );
+    if let Err(error) = emit_event(
+        control,
+        SuiteEvent::AttemptStarted {
+            scenario_id,
+            attempt_id: attempt_id.clone(),
+            session_id,
+        },
+    )
+    .await
+    {
+        report.push_failure(
+            RunStatus::InfrastructureError,
+            FailurePhase::Setup,
+            format!("persist attempt checkpoint: {error:#}"),
+        );
+    }
+
+    if report.failures.is_empty() {
+        if let Err(error) = emit_phase(control, SuitePhase::SettingUp).await {
+            report.push_failure(
+                RunStatus::InfrastructureError,
+                FailurePhase::Setup,
+                format!("persist setup checkpoint: {error:#}"),
+            );
+        }
+    }
+
+    if report.failures.is_empty() {
+        match composite_runtime(
+            scenario_id,
+            context.clone(),
+            &subject.model,
+            &subject.provider,
+        ) {
+            Ok(runtime) => {
+                let uses_harness = runtime
+                    .definition
+                    .nodes
+                    .iter()
+                    .any(|node| node.step_type == crate::workflow::HARNESS_STEP_ID);
+                let bind_result = if uses_harness {
+                    context.bind_turn_completed().await
+                } else {
+                    Ok(())
+                };
+                if let Err(error) = bind_result {
+                    report.push_failure(
+                        RunStatus::InfrastructureError,
+                        FailurePhase::Setup,
+                        format!("bind composite Harness observation: {error:#}"),
+                    );
+                } else {
+                    let _ = emit_phase(control, SuitePhase::Executing).await;
+                    let cancellation = control.map_or_else(
+                        || watch::channel(false).1,
+                        |control| control.cancellation.clone(),
+                    );
+                    let outcome = execute_workflow(
+                        &runtime.definition,
+                        runtime.catalog,
+                        WorkflowExecutionRequest {
+                            output_dir: output.to_path_buf(),
+                            run_id: run_id.to_string(),
+                            attempt_id: Some(attempt_id.clone()),
+                            attempt_number,
+                            cancellation,
+                            cleanup_hook: runtime.cleanup_hook,
+                        },
+                    )
+                    .await;
+                    if uses_harness {
+                        if let Err(error) = context.unbind_turn_completed().await {
+                            report.push_failure(
+                                RunStatus::InfrastructureError,
+                                FailurePhase::Cleanup,
+                                format!("unbind composite Harness observation: {error:#}"),
+                            );
+                        }
+                    }
+                    match outcome {
+                        Ok(workflow) => populate_composite_report(&mut report, workflow),
+                        Err(error) => report.push_failure(
+                            RunStatus::InfrastructureError,
+                            FailurePhase::Execute,
+                            format!("execute composite scenario: {error:#}"),
+                        ),
+                    }
+                }
+            }
+            Err(error) => report.push_failure(
+                RunStatus::InfrastructureError,
+                FailurePhase::Setup,
+                format!("materialize composite runtime: {error:#}"),
+            ),
+        }
+    }
+
+    report.wall_time_ms = started.elapsed().as_millis().min(u64::MAX as u128) as u64;
+    if report.assessment_results.is_empty() {
+        ensure_assessment_results(&spec, &mut report);
+    }
+    report.update_efficiency(case.work);
+    report.refresh_dimensions(false);
+    let _ = emit_phase(control, SuitePhase::Persisting).await;
+    let _ = emit_event(
+        control,
+        SuiteEvent::AttemptFinished {
+            attempt_id: attempt_id.clone(),
+        },
+    )
+    .await;
+    report
+}
+
+fn populate_composite_report(
+    report: &mut E2eRunReport,
+    workflow: crate::workflow::WorkflowAttemptReport,
+) {
+    report.session_id = workflow
+        .steps
+        .iter()
+        .find_map(|step| step.harness_session_id.clone())
+        .unwrap_or_else(|| format!("scenario_{}", workflow.attempt_id));
+    report.wall_time_ms = workflow.duration_ms;
+    report.hard_gates = workflow
+        .steps
+        .iter()
+        .flat_map(|step| {
+            let required_completion = step.required.then(|| HardGateReport {
+                id: format!("{}.required_test_completion", step.node_id),
+                dimension: EvaluationDimension::StructuralIntegrity,
+                passed: step.status == WorkflowStepStatus::Succeeded,
+                reason: if step.status == WorkflowStepStatus::Succeeded {
+                    "required semantic test completed successfully".into()
+                } else {
+                    format!("required semantic test ended with status {:?}", step.status)
+                },
+            });
+            required_completion
+                .into_iter()
+                .chain(step.hard_gates.iter().map(|gate| HardGateReport {
+                    id: format!("{}.{}", step.node_id, gate.id),
+                    dimension: EvaluationDimension::StructuralIntegrity,
+                    passed: gate.passed,
+                    reason: gate.reason.clone(),
+                }))
+        })
+        .collect();
+    report.criteria = workflow
+        .criteria
+        .iter()
+        .map(|criterion| CriterionReport {
+            id: criterion.id.clone(),
+            possible: criterion.weight,
+            awarded: criterion.score.and_then(|score| {
+                score
+                    .is_finite()
+                    .then(|| (score.clamp(0.0, 1.0) * f64::from(criterion.weight)).round() as u8)
+            }),
+            reason: criterion.summary.clone(),
+        })
+        .collect();
+    let evaluated = workflow
+        .criteria
+        .iter()
+        .filter_map(|criterion| {
+            criterion
+                .score
+                .filter(|score| score.is_finite())
+                .map(|score| {
+                    (
+                        score.clamp(0.0, 1.0) * f64::from(criterion.weight),
+                        criterion.weight,
+                    )
+                })
+        })
+        .collect::<Vec<_>>();
+    let evaluated_weight = evaluated
+        .iter()
+        .map(|(_, weight)| u16::from(*weight))
+        .sum::<u16>();
+    report.score = (evaluated_weight > 0).then(|| {
+        (evaluated.iter().map(|(score, _)| score).sum::<f64>() / f64::from(evaluated_weight)
+            * 100.0)
+            .round()
+            .clamp(0.0, 100.0) as u8
+    });
+    report.cost = CostReport {
+        subject_usd: workflow.aggregate_cost_usd,
+        judge_usd: Some(0.0),
+        total_usd: workflow.aggregate_cost_usd,
+    };
+    for step in &workflow.steps {
+        for failure in &step.failures {
+            report.push_failure(
+                if failure.technical {
+                    RunStatus::InfrastructureError
+                } else {
+                    RunStatus::SubjectError
+                },
+                workflow_failure_phase(failure.phase),
+                format!("semantic test '{}': {}", step.node_id, failure.message),
+            );
+        }
+    }
+    if workflow.cleanup.status == WorkflowCleanupStatus::Failed {
+        report.push_failure(
+            RunStatus::InfrastructureError,
+            FailurePhase::Cleanup,
+            workflow
+                .cleanup
+                .failure
+                .clone()
+                .unwrap_or_else(|| "mandatory composite cleanup failed".into()),
+        );
+    }
+    if workflow.technical_failure
+        && !report
+            .failures
+            .iter()
+            .any(|failure| failure.domain == crate::report::FailureDomain::E2eInfrastructure)
+    {
+        report.push_failure(
+            RunStatus::InfrastructureError,
+            FailurePhase::Execute,
+            "composite scenario ended with an unclassified technical failure",
+        );
+    }
+    report.assessment_results =
+        crate::assessment::semantic_test_assessments(&workflow.steps, &workflow.criteria);
+    report.evidence.push(workflow.checkpoint.clone());
+    report.scenario_flow = Some(ScenarioFlowEvidence {
+        definition_sha256: workflow.workflow_sha256.clone(),
+        snapshot: workflow.flow_snapshot.clone(),
+        checkpoint: workflow.checkpoint.clone(),
+        cleanup: workflow.cleanup.clone(),
+    });
+    report.semantic_tests = workflow.steps;
+    if report.failures.is_empty() {
+        report.finish(if workflow.passed {
+            RunStatus::Passed
+        } else {
+            RunStatus::HardGateFailed
+        });
+    }
+}
+
+fn workflow_failure_phase(phase: WorkflowFailurePhase) -> FailurePhase {
+    match phase {
+        WorkflowFailurePhase::Preflight => FailurePhase::Setup,
+        WorkflowFailurePhase::Execute | WorkflowFailurePhase::Cancel => FailurePhase::Execute,
+        WorkflowFailurePhase::Capture | WorkflowFailurePhase::Persist => FailurePhase::Collect,
+        WorkflowFailurePhase::Evaluate => FailurePhase::Evaluate,
+        WorkflowFailurePhase::Cleanup => FailurePhase::Cleanup,
+    }
+}
+
 struct RetryRequest<'a> {
     scenario_id: ScenarioId,
     subject: &'a SubjectConfig,
@@ -1089,7 +1456,7 @@ struct RetryRequest<'a> {
 }
 
 async fn run_with_technical_retries(
-    context: &E2eContext,
+    context: &Arc<E2eContext>,
     request: RetryRequest<'_>,
 ) -> E2eRunReport {
     let RetryRequest {

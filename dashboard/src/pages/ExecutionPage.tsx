@@ -1,12 +1,9 @@
 import { useEffect, useMemo, useState } from 'react'
 import { AssessmentWorkspace } from '@/components/AssessmentWorkspace'
+import { SemanticTestFlow } from '@/components/SemanticTestFlow'
 import { ThemeToggle } from '@/components/ThemeToggle'
 import { TranscriptDialog } from '@/components/TranscriptDialog'
-import {
-  hashForExecution,
-  hashForSecurityReview,
-  hashForWorkspace,
-} from '@/hooks/use-hash-route'
+import { hashForExecution, hashForWorkspace } from '@/hooks/use-hash-route'
 import {
   type AssessmentRunMetrics,
   type AssessmentRunView,
@@ -364,6 +361,7 @@ function ResultsSection({
         </div>
         <span className="coverage-note">{runCount} diagnostic runs</span>
       </div>
+      <SemanticTestFlow detail={detail} />
       <div className="mt-6">
         <AssessmentWorkspace detail={detail} onTranscript={onTranscript} />
       </div>
@@ -568,12 +566,6 @@ export function ExecutionPage({
         </a>
         <nav className="topbar-actions" aria-label="Execution actions">
           <ThemeToggle />
-          <a
-            className="button button-secondary"
-            href={hashForSecurityReview(executionId)}
-          >
-            Open executed DAG <span aria-hidden="true">→</span>
-          </a>
         </nav>
       </header>
       <main

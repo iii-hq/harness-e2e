@@ -809,7 +809,7 @@ impl AssessmentContract {
                 )
             })
             .collect::<BTreeMap<_, _>>();
-        let mut runs = report
+        let runs = report
             .scenarios
             .iter()
             .flat_map(|scenario| &scenario.runs)
@@ -834,41 +834,6 @@ impl AssessmentContract {
                 }
             })
             .collect::<Vec<_>>();
-        runs.extend(
-            report
-                .workflow_runs
-                .iter()
-                .filter(|workflow| !legacy_workflow_adapter(workflow))
-                .map(|workflow| {
-                    let system_status = if workflow.technical_failure {
-                        SystemStatus::InfrastructureError
-                    } else if workflow.passed {
-                        SystemStatus::Passed
-                    } else {
-                        SystemStatus::HardGateFailed
-                    };
-                    let ai_final_assessment = previous
-                        .get(&(workflow.run_id.as_str(), workflow.attempt_id.as_str()))
-                        .cloned()
-                        .unwrap_or_else(|| {
-                            AiFinalAssessment::not_evaluated(
-                                "final AI assessment has not been evaluated",
-                            )
-                        });
-                    RunAssessmentContract {
-                        run_id: workflow.run_id.clone(),
-                        attempt_id: workflow.attempt_id.clone(),
-                        system_status,
-                        assessments: workflow_assessments(workflow),
-                        assets: Vec::new(),
-                        effective_status: derive_effective_status(
-                            system_status,
-                            &ai_final_assessment,
-                        ),
-                        ai_final_assessment,
-                    }
-                }),
-        );
         Self { runs }
     }
 
@@ -888,29 +853,6 @@ impl AssessmentContract {
             expected.insert(
                 (run.run_id.as_str(), run.attempt_id.as_str()),
                 (SystemStatus::from(run.status), evidence),
-            );
-        }
-        for workflow in report
-            .workflow_runs
-            .iter()
-            .filter(|workflow| !legacy_workflow_adapter(workflow))
-        {
-            let status = if workflow.technical_failure {
-                SystemStatus::InfrastructureError
-            } else if workflow.passed {
-                SystemStatus::Passed
-            } else {
-                SystemStatus::HardGateFailed
-            };
-            let evidence = workflow
-                .steps
-                .iter()
-                .flat_map(|step| &step.assets)
-                .map(|asset| (asset.artifact.id.as_str(), asset.artifact.sha256.as_str()))
-                .collect();
-            expected.insert(
-                (workflow.run_id.as_str(), workflow.attempt_id.as_str()),
-                (status, evidence),
             );
         }
         expected
@@ -941,12 +883,7 @@ impl AssessmentContract {
             .scenarios
             .iter()
             .map(|scenario| scenario.runs.len())
-            .sum::<usize>()
-            + report
-                .workflow_runs
-                .iter()
-                .filter(|workflow| !legacy_workflow_adapter(workflow))
-                .count();
+            .sum::<usize>();
         if expected.len() != expected_run_count {
             bail!("E2E report repeats a run/attempt identity");
         }
@@ -998,18 +935,11 @@ impl AssessmentContract {
     }
 }
 
-fn legacy_workflow_adapter(workflow: &crate::workflow::WorkflowAttemptReport) -> bool {
-    workflow
-        .steps
-        .first()
-        .is_some_and(|step| step.step_type == "legacy.scenario")
-}
-
-fn workflow_assessments(
-    workflow: &crate::workflow::WorkflowAttemptReport,
+pub(crate) fn semantic_test_assessments(
+    tests: &[crate::workflow::WorkflowStepReport],
+    criteria: &[crate::workflow::WorkflowCriterionResult],
 ) -> Vec<AssessmentResult> {
-    let evidence = workflow
-        .steps
+    let evidence = tests
         .iter()
         .flat_map(|step| &step.assets)
         .map(|asset| (asset.artifact.id.as_str(), &asset.artifact))
@@ -1021,7 +951,7 @@ fn workflow_assessments(
             .collect::<Vec<_>>()
     };
     let mut assessments = Vec::new();
-    for step in &workflow.steps {
+    for step in tests {
         assessments.extend(step.hard_gates.iter().map(|gate| AssessmentResult {
             criterion_id: format!("{}.{}", step.node_id, gate.id),
             target: AssessmentTarget {
@@ -1084,7 +1014,7 @@ fn workflow_assessments(
             }
         }));
     }
-    assessments.extend(workflow.criteria.iter().map(|criterion| {
+    assessments.extend(criteria.iter().map(|criterion| {
         let score = criterion.score.and_then(|value| {
             value.is_finite().then(|| AssessmentScore {
                 awarded: (value.clamp(0.0, 1.0) * f64::from(criterion.weight)).round() as u8,
@@ -1092,7 +1022,7 @@ fn workflow_assessments(
             })
         });
         AssessmentResult {
-            criterion_id: format!("workflow.{}", criterion.id),
+            criterion_id: criterion.id.clone(),
             target: AssessmentTarget {
                 kind: AssessmentTargetKind::Criterion,
                 id: criterion.producer_node_id.clone(),

@@ -613,6 +613,15 @@ pub(super) fn validate_request(request: &mut RunRequest) -> std::result::Result<
     {
         return Err("request contains an unknown scenario".into());
     }
+    if request.scenarios.iter().any(|value| {
+        ScenarioId::ALL
+            .iter()
+            .any(|scenario| scenario.as_str() == value && scenario.manual_cli_only())
+    }) {
+        return Err(
+            "manually prepared composite scenarios must be started with the local CLI".into(),
+        );
+    }
     Ok(())
 }
 

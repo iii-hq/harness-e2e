@@ -8,7 +8,6 @@ mod presenter;
 mod proxy;
 mod read_model;
 mod store;
-mod workflows;
 
 use std::net::SocketAddr;
 use std::path::PathBuf;

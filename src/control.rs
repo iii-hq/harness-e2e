@@ -627,13 +627,14 @@ impl ControlPlane {
         });
         let output = self.inner.output_root.join(&execution_id);
         let scenarios = if request.scenarios.is_empty() {
-            ScenarioId::ALL.to_vec()
+            crate::scenarios::selected(&[])
         } else {
             unique_scenarios(&request.scenarios)
         };
         let judge = Some(judge_config(&request));
         let outcome = run_suite(SuiteRunConfig {
             url: self.inner.url.clone(),
+            execution_id: None,
             subject: SubjectConfig {
                 model: request.model.clone(),
                 provider: request.provider.clone(),
@@ -1109,10 +1110,13 @@ fn validate_run_request(request: &RunRequest) -> Result<LaneBudget> {
     }
     let budget = lane_budget(&request.lane);
     let scenarios = if request.scenarios.is_empty() {
-        ScenarioId::ALL.to_vec()
+        crate::scenarios::selected(&[])
     } else {
         unique_scenarios(&request.scenarios)
     };
+    if scenarios.iter().any(|scenario| scenario.manual_cli_only()) {
+        bail!("manually prepared composite scenarios can only be started with the local CLI");
+    }
     let base_seed_count = 1_usize;
     let unique_rotating_seeds = request
         .rotating_seeds

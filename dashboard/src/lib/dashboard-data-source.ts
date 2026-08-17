@@ -18,6 +18,13 @@ import type {
 } from '@/lib/test-catalog'
 
 export type JsonObject = Record<string, unknown>
+export type JsonValue =
+  | null
+  | boolean
+  | number
+  | string
+  | JsonValue[]
+  | { [key: string]: JsonValue }
 
 export type LocalPlanState =
   | 'draft'
@@ -193,6 +200,64 @@ export type DashboardRunEfficiency = JsonObject & {
   turns?: number | null
 }
 
+export type SemanticTestAsset = JsonObject & {
+  id: string
+  namespaced_id?: string
+  kind?: string
+  media_type?: string
+  size_bytes?: number
+  artifact: JsonObject & { path: string; sha256?: string }
+}
+
+export type SemanticTestReport = JsonObject & {
+  node_id: string
+  step_type: string
+  step_version: number
+  required: boolean
+  dependencies: string[]
+  status: string
+  duration_ms: number
+  metrics?: JsonValue | null
+  cost_usd?: number | null
+  assets?: SemanticTestAsset[]
+  hard_gates?: Array<
+    JsonObject & {
+      id: string
+      passed: boolean
+      reason: string
+      evidence_ids?: string[]
+    }
+  >
+  evaluations?: Array<
+    JsonObject & {
+      id: string
+      outcome: string
+      summary: string
+      score?: number | null
+      evidence_ids?: string[]
+    }
+  >
+  failures?: Array<
+    JsonObject & { phase: string; message: string; technical?: boolean }
+  >
+  skip_reason?: string | null
+}
+
+export type ScenarioFlowEvidence = JsonObject & {
+  definition_sha256: string
+  snapshot: JsonObject & {
+    executable: false
+    scenario_id?: string
+    scenario_version?: number
+  }
+  checkpoint: JsonObject & { path: string; sha256?: string }
+  cleanup: JsonObject & {
+    status: 'succeeded' | 'failed'
+    duration_ms: number
+    failure?: string | null
+  }
+}
+
 export type DashboardRunProjection = JsonObject & {
   run_id: string
   attempt_id: string
@@ -203,6 +268,8 @@ export type DashboardRunProjection = JsonObject & {
   metrics?: DashboardRunMetrics | null
   cost?: DashboardRunCost | null
   efficiency?: DashboardRunEfficiency | null
+  semantic_tests?: SemanticTestReport[]
+  scenario_flow?: ScenarioFlowEvidence | null
 }
 
 export type DashboardReportProjection = JsonObject & {

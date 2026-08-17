@@ -4,20 +4,109 @@ mod run;
 mod scheduler;
 pub mod security_scan;
 
-pub use builtin::{harness_descriptor, register_harness_step, HarnessStepConfig};
+use std::sync::Arc;
+
+pub use builtin::{
+    harness_descriptor, register_harness_step, HarnessStepConfig, HARNESS_STEP_ID,
+    HARNESS_STEP_VERSION,
+};
 pub use catalog::{
     CapturedWorkflowAsset, NoopWorkflowCleanupHook, RegisteredStepType, StepCatalog,
     StepEvaluation, StepExecutor, StepExecutorContext, StepExecutorOutput, TypedPortValue,
     WorkflowAssetContent, WorkflowCleanupContext, WorkflowCleanupHook, WorkflowEvaluationOutcome,
     WorkflowEvaluationResult, WorkflowGateResult, WorkflowProvenance,
 };
-pub use run::{run_security_review, SecurityReviewRunConfig, SecurityReviewRunOutcome};
+pub(crate) use run::observe_worker_contracts;
 pub use scheduler::{
     execute_workflow, CheckpointStore, WorkflowAssetReport, WorkflowAttemptReport,
     WorkflowCheckpointV1, WorkflowCleanupReport, WorkflowCleanupStatus, WorkflowCriterionResult,
     WorkflowExecutionRequest, WorkflowFailurePhase, WorkflowStepFailure, WorkflowStepReport,
     WorkflowStepStatus,
 };
+
+use crate::context::E2eContext;
+use crate::scenarios::ScenarioId;
+
+/// Runtime materialized entirely from Rust for one composite scenario attempt.
+/// The definition is retained only to drive this in-process scheduler and to
+/// produce a non-executable evidence snapshot.
+pub struct CompositeScenarioRuntime {
+    pub definition: WorkflowDefinitionV1,
+    pub catalog: Arc<StepCatalog>,
+    pub cleanup_hook: Arc<dyn WorkflowCleanupHook>,
+}
+
+/// Return the Rust-owned definition for a composite scenario. Adding a future
+/// sequential scenario requires registering it here and implementing its step
+/// catalog; no JSON definition is loaded or accepted by the runner.
+pub fn composite_definition(scenario: ScenarioId) -> Option<WorkflowDefinitionV1> {
+    match scenario {
+        ScenarioId::SecurityReview => Some(security_scan::definition()),
+        _ => None,
+    }
+}
+
+/// Build a descriptor-only catalog for whole-suite contract preflight. These
+/// entries cannot execute and exist only to validate Rust definitions and the
+/// exact worker contracts they declare.
+pub fn composite_descriptor_catalog(scenarios: &[ScenarioId]) -> Result<StepCatalog> {
+    let mut catalog = StepCatalog::new();
+    for scenario in scenarios {
+        let Some(definition) = composite_definition(*scenario) else {
+            continue;
+        };
+        if definition
+            .nodes
+            .iter()
+            .any(|node| node.step_type == builtin::HARNESS_STEP_ID)
+            && catalog
+                .get(builtin::HARNESS_STEP_ID, builtin::HARNESS_STEP_VERSION)
+                .is_none()
+        {
+            catalog.register_descriptor(harness_descriptor()?)?;
+        }
+        if scenario == &ScenarioId::SecurityReview {
+            for descriptor in security_scan::descriptors_only() {
+                if catalog.get(&descriptor.id, descriptor.version).is_none() {
+                    catalog.register_descriptor(descriptor)?;
+                }
+            }
+        }
+    }
+    Ok(catalog)
+}
+
+/// Materialize an executable runtime for a single attempt. Runtime state is not
+/// shared across attempts, which keeps cleanup ownership exact and retry-safe.
+pub fn composite_runtime(
+    scenario: ScenarioId,
+    context: Arc<E2eContext>,
+    model: &str,
+    provider: &str,
+) -> Result<CompositeScenarioRuntime> {
+    let definition = composite_definition(scenario)
+        .with_context(|| format!("scenario '{}' is not composite", scenario.as_str()))?;
+    let mut catalog = StepCatalog::new();
+    if definition
+        .nodes
+        .iter()
+        .any(|node| node.step_type == builtin::HARNESS_STEP_ID)
+    {
+        register_harness_step(&mut catalog, context.clone(), model, provider)?;
+    }
+    let cleanup_hook = match scenario {
+        ScenarioId::SecurityReview => {
+            security_scan::register_security_scan_steps(&mut catalog, context)?
+        }
+        _ => bail!("scenario '{}' has no composite runtime", scenario.as_str()),
+    };
+    definition.validate(&catalog)?;
+    Ok(CompositeScenarioRuntime {
+        definition,
+        catalog: Arc::new(catalog),
+        cleanup_hook,
+    })
+}
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 

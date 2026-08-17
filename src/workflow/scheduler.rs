@@ -33,6 +33,7 @@ const MAX_WORKFLOW_ASSET_BYTES: usize = 16 * 1024 * 1024;
 pub struct WorkflowExecutionRequest {
     pub output_dir: PathBuf,
     pub run_id: String,
+    pub attempt_id: Option<String>,
     pub attempt_number: u32,
     pub cancellation: watch::Receiver<bool>,
     pub cleanup_hook: Arc<dyn WorkflowCleanupHook>,
@@ -44,6 +45,7 @@ impl WorkflowExecutionRequest {
         Self {
             output_dir,
             run_id: Uuid::new_v4().simple().to_string(),
+            attempt_id: None,
             attempt_number: 1,
             cancellation,
             cleanup_hook: Arc::new(NoopWorkflowCleanupHook),
@@ -306,7 +308,10 @@ pub async fn execute_workflow(
     request: WorkflowExecutionRequest,
 ) -> Result<WorkflowAttemptReport> {
     let materialized = definition.validate(&catalog)?;
-    let attempt_id = Uuid::new_v4().simple().to_string();
+    let attempt_id = request
+        .attempt_id
+        .clone()
+        .unwrap_or_else(|| Uuid::new_v4().simple().to_string());
     let cleanup_context = WorkflowCleanupContext {
         workflow_id: materialized.definition.id.clone(),
         workflow_sha256: materialized.sha256.clone(),
@@ -1646,6 +1651,7 @@ mod tests {
             WorkflowExecutionRequest {
                 output_dir: output.path().to_path_buf(),
                 run_id: "cancel-run".into(),
+                attempt_id: None,
                 attempt_number: 1,
                 cancellation,
                 cleanup_hook: Arc::new(CountingWorkflowCleanup(workflow_cleanup_called.clone())),
