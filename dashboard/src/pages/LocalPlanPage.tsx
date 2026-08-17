@@ -1308,17 +1308,17 @@ export function LocalPlanDetailPage({ planId }: { planId: string }) {
     let cancelled = false
     setHistoryLoading(true)
     setHistoryError(null)
+    setSelectedCandidateId((current) =>
+      selectedPlanCandidate(
+        current,
+        candidateSelectionPinned,
+        plan.candidate_execution_ids,
+      ),
+    )
     void loadExecutionSummaries(bridge.listExecutions, executionIds)
       .then((summaries) => {
         if (cancelled) return
         setExecutionSummaries(summaries)
-        setSelectedCandidateId((current) =>
-          selectedPlanCandidate(
-            current,
-            candidateSelectionPinned,
-            plan.candidate_execution_ids,
-          ),
-        )
       })
       .catch((cause) => {
         if (cancelled) return
