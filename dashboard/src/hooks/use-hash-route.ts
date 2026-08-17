@@ -11,7 +11,11 @@ export type DashboardRoute =
   | { page: 'plan-create' }
   | { page: 'plan-detail'; planId: string }
   | { page: 'coverage' }
-  | { page: 'workflows'; workflowId: string | null }
+  | {
+      page: 'workflows'
+      workflowId: string | null
+      executionId: string | null
+    }
 
 export type DashboardRoutes = {
   current: () => DashboardRoute
@@ -23,7 +27,10 @@ export type DashboardRoutes = {
   newPlan: () => string
   plan: (planId: string) => string
   coverage: () => string
-  workflows: (workflowId?: string | null) => string
+  workflows: (
+    workflowId?: string | null,
+    executionId?: string | null,
+  ) => string
 }
 
 const workspaceViews = new Set<WorkspaceView>([
@@ -90,7 +97,18 @@ export function routeFromHash(rawHash: string): DashboardRoute | null {
   }
   if (head === 'coverage') return { page: 'coverage' }
   if (head === 'workflows') {
-    return { page: 'workflows', workflowId: rest[0] ?? null }
+    if (rest[0] === 'runs') {
+      return {
+        page: 'workflows',
+        workflowId: null,
+        executionId: rest[1] ?? null,
+      }
+    }
+    return {
+      page: 'workflows',
+      workflowId: rest[0] ?? null,
+      executionId: null,
+    }
   }
   return null
 }
@@ -141,7 +159,11 @@ export function hashForPlan(planId: string): string {
   return `#/plans/${encodeSegment(planId)}`
 }
 
-export function hashForWorkflows(workflowId: string | null = null): string {
+export function hashForWorkflows(
+  workflowId: string | null = null,
+  executionId: string | null = null,
+): string {
+  if (executionId) return `#/workflows/runs/${encodeSegment(executionId)}`
   return workflowId ? `#/workflows/${encodeSegment(workflowId)}` : '#/workflows'
 }
 
@@ -167,7 +189,7 @@ export function routeRenderIdentity(route: DashboardRoute): string {
   if (route.page === 'plan-detail') return `${route.page}:${route.planId}`
   if (route.page === 'plan-create') return route.page
   if (route.page === 'workflows') {
-    return `${route.page}:${route.workflowId ?? ''}`
+    return `${route.page}:${route.workflowId ?? ''}:${route.executionId ?? ''}`
   }
   if (route.page === 'overview') {
     return route.view === 'tests' ? 'overview:tests' : 'overview:workspace'

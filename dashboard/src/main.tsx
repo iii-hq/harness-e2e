@@ -36,7 +36,12 @@ function RoutedPage({ route }: { route: DashboardRoute }) {
     case 'coverage':
       return <CoveragePage />
     case 'workflows':
-      return <WorkflowEditorPage workflowId={route.workflowId} />
+      return (
+        <WorkflowEditorPage
+          workflowId={route.workflowId}
+          executionId={route.executionId}
+        />
+      )
     case 'overview':
       if (route.view === 'tests') {
         return <TestsCatalogPage />

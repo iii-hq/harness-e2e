@@ -119,7 +119,12 @@ export type WorkflowObservedStep = {
 export type WorkflowRunDetail = {
   execution_id: string
   passed: boolean | null
-  workflow_runs: Array<{ workflow_id: string; steps: WorkflowObservedStep[] }>
+  workflow_definition?: WorkflowDefinition | null
+  workflow_runs: Array<{
+    workflow_id: string
+    workflow_sha256?: string
+    steps: WorkflowObservedStep[]
+  }>
 }
 
 async function request<T>(path: string, options: RequestInit = {}): Promise<T> {

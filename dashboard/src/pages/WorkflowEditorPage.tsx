@@ -216,8 +216,10 @@ function downloadDefinition(definition: WorkflowDefinition) {
 
 export function WorkflowEditorPage({
   workflowId,
+  executionId,
 }: {
   workflowId: string | null
+  executionId: string | null
 }) {
   const [catalog, setCatalog] = useState<WorkflowCatalog | null>(null)
   const [draft, setDraft] = useState<WorkflowDraft | null>(null)
@@ -278,8 +280,44 @@ export function WorkflowEditorPage({
   useEffect(() => {
     workflowDataSource
       .catalog()
-      .then((loaded) => {
+      .then(async (loaded) => {
         setCatalog(loaded)
+        if (executionId) {
+          const detail = await workflowDataSource.runDetail(executionId)
+          const workflowRun = detail.workflow_runs.at(-1)
+          if (!workflowRun || !detail.workflow_definition) {
+            throw new Error('Observed workflow definition is not available.')
+          }
+          const official = loaded.official.find(
+            (item) => item.id === workflowRun.workflow_id,
+          )
+          setDraft(null)
+          setSourceOfficial(official ?? null)
+          setDefinition(clone(detail.workflow_definition))
+          setLayout({})
+          setLabel(`${workflowRun.workflow_id} · ${executionId}`)
+          setHistory([])
+          setFuture([])
+          setDirty(false)
+          setValidation(workflowRun.workflow_sha256 ?? null)
+          setSelectedNodeId(null)
+          setObserved(
+            Object.fromEntries(
+              workflowRun.steps.map((step) => [step.node_id, step]),
+            ),
+          )
+          setRun({
+            executionId,
+            status:
+              detail.passed === null
+                ? 'running'
+                : detail.passed
+                  ? 'completed'
+                  : 'failed',
+            log: 'Read-only persisted workflow execution.',
+          })
+          return
+        }
         const selectedDraft = loaded.drafts.find(
           (item) => item.id === workflowId,
         )
@@ -292,7 +330,7 @@ export function WorkflowEditorPage({
         else if (loaded.official[0]) loadOfficial(loaded.official[0])
       })
       .catch((cause) => setError(String(cause)))
-  }, [loadDraft, loadOfficial, workflowId])
+  }, [executionId, loadDraft, loadOfficial, workflowId])
 
   const commit = useCallback(
     (mutate: (next: EditorSnapshot) => void) => {
@@ -645,11 +683,14 @@ export function WorkflowEditorPage({
           <a href={hashForWorkspace()} className="workflow-back-link">
             <ChevronLeft size={16} /> Executions
           </a>
-          <span className="section-kicker">Local DAG composer</span>
-          <h1>Workflow editor</h1>
+          <span className="section-kicker">
+            {executionId ? 'Observed workflow execution' : 'Local DAG composer'}
+          </span>
+          <h1>{executionId ? 'Executed DAG' : 'Workflow editor'}</h1>
           <p>
-            Compose only Rust-registered steps. Layout is saved separately and
-            never changes the executable hash.
+            {executionId
+              ? 'Read-only node status, hard gates, assets, and failures from the persisted checkpoint and results.'
+              : 'Compose only Rust-registered steps. Layout is saved separately and never changes the executable hash.'}
           </p>
         </div>
         <div className="workflow-header-actions">
@@ -1195,6 +1236,19 @@ function ObservedEvidence({ step }: { step: WorkflowObservedStep }) {
           className={gate.passed ? 'status-pass' : 'status-fail'}
         >
           <strong>{gate.id}</strong> {gate.reason}
+        </p>
+      ))}
+      {step.evaluations?.map((evaluation) => (
+        <p key={evaluation.id}>
+          <strong>
+            {evaluation.id} · {evaluation.outcome}
+          </strong>{' '}
+          {evaluation.summary}
+        </p>
+      ))}
+      {step.failures?.map((failure, index) => (
+        <p key={`${failure.phase}-${index}`} className="status-fail">
+          <strong>{failure.phase}</strong> {failure.message}
         </p>
       ))}
       {step.assets?.map((asset) => (

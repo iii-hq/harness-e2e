@@ -271,23 +271,30 @@ async fn workflow_run_detail(
     AxumPath(id): AxumPath<String>,
 ) -> Result<Json<Value>, ApiError> {
     validate_execution_id(&id).map_err(ApiError::bad_request)?;
-    let run = read_stored_run(&state.controller.runs_dir().join(&id))
+    let execution_dir = state.controller.runs_dir().join(&id);
+    let run = read_stored_run(&execution_dir)
         .map_err(ApiError::internal)?
         .ok_or_else(|| ApiError::not_found("workflow execution not found"))?;
+    let workflow_definition = match std::fs::read(execution_dir.join("workflow-definition.json")) {
+        Ok(bytes) => serde_json::from_slice::<Value>(&bytes).map_err(ApiError::internal)?,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Value::Null,
+        Err(error) => return Err(ApiError::internal(error)),
+    };
     if let Some(report) = run.report {
         return Ok(Json(json!({
             "execution_id": id,
             "passed": report.passed,
+            "workflow_definition": workflow_definition,
             "workflow_runs": report.workflow_runs,
         })));
     }
-    let checkpoint =
-        workflows::latest_checkpoint(&state.controller.runs_dir().join(&id).join("results"))
-            .map_err(ApiError::internal)?
-            .ok_or_else(|| ApiError::not_found("workflow checkpoint is not available yet"))?;
+    let checkpoint = workflows::latest_checkpoint(&execution_dir.join("results"))
+        .map_err(ApiError::internal)?
+        .ok_or_else(|| ApiError::not_found("workflow checkpoint is not available yet"))?;
     Ok(Json(json!({
         "execution_id": id,
         "passed": Value::Null,
+        "workflow_definition": workflow_definition,
         "workflow_runs": [{
             "workflow_id": checkpoint.workflow_id,
             "workflow_sha256": checkpoint.workflow_sha256,

@@ -2,7 +2,11 @@ import { useEffect, useMemo, useState } from 'react'
 import { AssessmentWorkspace } from '@/components/AssessmentWorkspace'
 import { ThemeToggle } from '@/components/ThemeToggle'
 import { TranscriptDialog } from '@/components/TranscriptDialog'
-import { hashForExecution, hashForWorkspace } from '@/hooks/use-hash-route'
+import {
+  hashForExecution,
+  hashForWorkflows,
+  hashForWorkspace,
+} from '@/hooks/use-hash-route'
 import {
   type AssessmentRunMetrics,
   type AssessmentRunView,
@@ -566,9 +570,9 @@ export function ExecutionPage({
           <ThemeToggle />
           <a
             className="button button-secondary"
-            href="https://github.com/iii-hq/harness-e2e/actions"
+            href={hashForWorkflows(null, executionId)}
           >
-            Open workflow <span aria-hidden="true">↗</span>
+            Open executed DAG <span aria-hidden="true">→</span>
           </a>
         </nav>
       </header>

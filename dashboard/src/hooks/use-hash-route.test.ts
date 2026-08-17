@@ -7,6 +7,7 @@ import {
   hashForPlan,
   hashForPlans,
   hashForTestHistory,
+  hashForWorkflows,
   hashForWorkspace,
   routeFromHash,
   routeRenderIdentity,
@@ -65,6 +66,16 @@ describe('dashboard hash routes', () => {
     expect(routeFromHash(hashForPlan('plan/one'))).toEqual({
       page: 'plan-detail',
       planId: 'plan/one',
+    })
+  })
+
+  it('routes persisted workflow executions to the read-only DAG', () => {
+    const hash = hashForWorkflows(null, 'local/run one')
+    expect(hash).toBe('#/workflows/runs/local%2Frun%20one')
+    expect(routeFromHash(hash)).toEqual({
+      page: 'workflows',
+      workflowId: null,
+      executionId: 'local/run one',
     })
   })
 
