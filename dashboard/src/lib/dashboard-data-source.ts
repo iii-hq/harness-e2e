@@ -121,6 +121,14 @@ export type DashboardScenarioMetricSummary = JsonObject & {
     tokens?: number | null
     work_amplification?: number | null
   }
+  samples?: JsonObject & {
+    cost_usd?: number | null
+    duration_seconds?: number | null
+    function_call_errors?: number | null
+    function_calls?: number | null
+    tokens?: number | null
+    work_amplification?: number | null
+  }
 }
 
 export type DashboardSubjectSummary = JsonObject & {

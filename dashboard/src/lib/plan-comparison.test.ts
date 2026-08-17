@@ -155,6 +155,46 @@ describe('local plan comparison view model', () => {
     )
   })
 
+  it('derives fully reported function errors from retained scenario metrics', () => {
+    const comparison = buildPlanComparison(
+      execution('baseline', {
+        totals: {
+          ...execution('baseline').totals,
+          function_call_errors: null,
+        },
+        scenario_metrics: [
+          {
+            scenario_id: 'direct_answer',
+            run_count: 2,
+            averages: { function_call_errors: 0.5 },
+            samples: { function_call_errors: 2 },
+          },
+        ],
+      }),
+      execution('candidate', {
+        totals: {
+          ...execution('candidate').totals,
+          function_call_errors: null,
+        },
+        scenario_metrics: [
+          {
+            scenario_id: 'direct_answer',
+            run_count: 2,
+            averages: { function_call_errors: 0 },
+            samples: { function_call_errors: 2 },
+          },
+        ],
+      }),
+    )
+
+    expect(metricById(comparison, 'function_errors')).toMatchObject({
+      baseline: 1,
+      candidate: 0,
+      delta: -1,
+      tone: 'positive',
+    })
+  })
+
   it('disables per-test deltas for different retained contracts', () => {
     const detail = (
       id: string,

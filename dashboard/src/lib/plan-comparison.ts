@@ -106,6 +106,30 @@ function percentPoints(value: number | null): number | null {
   return Math.abs(value) <= 1 ? value * 100 : value
 }
 
+function scenarioMetricTotal(
+  execution: DashboardExecutionSummary,
+  key: 'function_calls' | 'function_call_errors',
+): number | null {
+  const metrics = execution.scenario_metrics ?? []
+  if (metrics.length === 0) return null
+  let total = 0
+  for (const metric of metrics) {
+    const average = finite(metric.averages?.[key])
+    const samples = finite(metric.samples?.[key])
+    const runCount = finite(metric.run_count)
+    if (
+      average === null ||
+      samples === null ||
+      runCount === null ||
+      samples !== runCount
+    ) {
+      return null
+    }
+    total += average * samples
+  }
+  return total
+}
+
 function metricTone(
   baseline: number | null,
   candidate: number | null,
@@ -175,9 +199,15 @@ export function executionMetricValue(
     case 'cost':
       return finite(executionTotals.total_cost_usd)
     case 'function_calls':
-      return finite(executionTotals.function_calls)
+      return (
+        finite(executionTotals.function_calls) ??
+        scenarioMetricTotal(execution, 'function_calls')
+      )
     case 'function_errors':
-      return finite(executionTotals.function_call_errors)
+      return (
+        finite(executionTotals.function_call_errors) ??
+        scenarioMetricTotal(execution, 'function_call_errors')
+      )
   }
 }
 
