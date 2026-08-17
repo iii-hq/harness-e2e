@@ -323,6 +323,14 @@ mod tests {
     }
 
     #[test]
+    fn local_requests_allow_rust_defined_composite_scenarios() {
+        let mut value = request();
+        value.scenarios = vec!["security_review".into(), "direct_answer".into()];
+        value.technical_retries = 0;
+        validate_request(&mut value).expect("local plans must start composite scenarios");
+    }
+
+    #[test]
     fn accepts_engine_caller_metadata_without_persisting_it() {
         let mut value = serde_json::to_value(request()).expect("request should serialize");
         value["_caller_worker_id"] = serde_json::json!("browser-worker");

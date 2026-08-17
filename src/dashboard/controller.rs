@@ -613,15 +613,10 @@ pub(super) fn validate_request(request: &mut RunRequest) -> std::result::Result<
     {
         return Err("request contains an unknown scenario".into());
     }
-    if request.scenarios.iter().any(|value| {
-        ScenarioId::ALL
-            .iter()
-            .any(|scenario| scenario.as_str() == value && scenario.manual_cli_only())
-    }) {
-        return Err(
-            "manually prepared composite scenarios must be started with the local CLI".into(),
-        );
-    }
+    // Local plans are another supported entry point for Rust-defined composite
+    // scenarios. The control-plane handler keeps rejecting manually prepared
+    // scenarios; this dashboard path starts the local CLI child with the same
+    // deterministic composite driver and therefore must not filter them out.
     Ok(())
 }
 
