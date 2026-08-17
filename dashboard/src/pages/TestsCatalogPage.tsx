@@ -139,11 +139,11 @@ export function TestsCatalogPage() {
                 <div className="section-kicker">Independent history</div>
                 <h2 id="test-catalog-heading">Tests</h2>
               </div>
-              <label className="search-field">
-                <span className="visually-hidden">Search tests</span>
+              <label className="search-field catalog-search-field">
+                <span className="catalog-search-label">Search tests</span>
                 <input
                   type="search"
-                  placeholder="Search test id"
+                  placeholder="Test ID"
                   value={query}
                   onChange={(event) => setQuery(event.target.value)}
                 />

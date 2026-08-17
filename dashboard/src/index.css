@@ -6425,6 +6425,50 @@ footer {
   border-bottom: 1px solid var(--line);
 }
 
+.catalog-search-field {
+  display: grid;
+  gap: 6px;
+  width: min(100%, 260px);
+}
+
+.catalog-search-label {
+  color: var(--text-muted);
+  font-size: 0.6rem;
+  font-weight: 700;
+  letter-spacing: 0.055em;
+  text-transform: uppercase;
+}
+
+.catalog-search-field input {
+  width: 100%;
+  min-height: 42px;
+  padding: 0 12px;
+  border: 1px solid var(--line-strong);
+  border-radius: 8px;
+  outline: none;
+  background: var(--surface-raised);
+  color: var(--text);
+  font: inherit;
+  font-size: 0.78rem;
+  transition:
+    border-color 140ms ease,
+    background-color 140ms ease,
+    box-shadow 140ms ease;
+}
+
+.catalog-search-field input::placeholder {
+  color: var(--text-muted);
+}
+
+.catalog-search-field input:hover {
+  border-color: var(--text-muted);
+}
+
+.catalog-search-field input:focus-visible {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px rgba(199, 255, 74, 0.12);
+}
+
 .overview-shell .section-kicker {
   margin-bottom: 8px;
   color: var(--text-muted);

@@ -70,6 +70,12 @@ test('keeps the workspace navigation and versioned test flow', () => {
   assert.match(testsPage, /loadVersionResult\(row\.test_id/)
   assert.match(testsPage, /prefetchedCatalog/)
   assert.match(catalogPage, /href=\{hashForWorkspace\(\)\}[\s\S]*Overview/)
+  assert.match(catalogPage, /catalog-search-label">Search tests/)
+  assert.match(catalogPage, /placeholder="Test ID"/)
+  assert.match(
+    read('src', 'index.css'),
+    /\.catalog-search-field input[\s\S]*border: 1px solid var\(--line-strong\)/,
+  )
   assert.match(historyPage, /<header className="topbar">/)
   assert.match(historyPage, /<span className="brand-copy">/)
   assert.match(historyPage, /Test catalog/)
