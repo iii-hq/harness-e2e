@@ -1,4 +1,10 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import {
+  type CSSProperties,
+  useCallback,
+  useEffect,
+  useMemo,
+  useState,
+} from 'react'
 import { ProviderModelDropdown } from '@/components/ProviderModelDropdown'
 import { ThemeToggle } from '@/components/ThemeToggle'
 import {
@@ -26,10 +32,9 @@ import {
   formatPlanMetricDelta,
   formatPlanMetricValue,
   loadExecutionSummaries,
+  type MetricDirection,
   metricById,
-  PLAN_DETAIL_METRICS,
   type PlanComparison,
-  type PlanMetricComparison,
   type PlanScenarioComparison,
   type PlanVerdict,
 } from '@/lib/plan-comparison'
@@ -324,14 +329,13 @@ function executionStatus(
   return { label: titleCase(state), tone: 'status-neutral' }
 }
 
-function summaryMetric(
-  summary: DashboardExecutionSummary | null,
-  id: 'pass_rate' | 'quality' | 'tokens' | 'duration' | 'cost',
-) {
-  if (!summary) return 'Not reported'
-  const metric = metricById(buildPlanComparison(summary, summary), id)
-  return metric ? formatPlanMetricValue(metric, 'baseline') : 'Not reported'
-}
+const PLAN_COMPARISON_TABLE_METRICS = [
+  'pass_rate',
+  'quality',
+  'tokens',
+  'duration',
+  'cost',
+] as const
 
 type ExecutionHistoryRow = {
   id: string
@@ -418,22 +422,96 @@ export function selectedPlanCandidate(
   return candidateIds.at(-1) ?? null
 }
 
+export function planMetricWinnerIds(
+  values: Array<{ id: string; value: number | null }>,
+  direction: MetricDirection,
+) {
+  if (direction === 'context') return []
+  const comparable = values.filter(
+    (entry): entry is { id: string; value: number } => entry.value !== null,
+  )
+  if (comparable.length < 2) return []
+  const winnerValue = comparable.reduce(
+    (best, entry) =>
+      direction === 'higher'
+        ? Math.max(best, entry.value)
+        : Math.min(best, entry.value),
+    comparable[0].value,
+  )
+  return comparable
+    .filter((entry) => Math.abs(entry.value - winnerValue) < 1e-9)
+    .map((entry) => entry.id)
+}
+
+function planExecutionLabel(plan: LocalPlan, executionId: string | null) {
+  if (!executionId) return 'Execution unavailable'
+  if (executionId === plan.baseline_execution_id) return 'Official baseline'
+  const candidateIndex = plan.candidate_execution_ids.indexOf(executionId)
+  return candidateIndex >= 0 ? `Candidate #${candidateIndex + 1}` : executionId
+}
+
 export function PlanExecutionHistory({
   plan,
   summaries,
+  visualBaselineId,
+  comparisonCandidateIds,
   selectedCandidateId,
+  onVisualBaselineChange,
+  onToggleCandidate,
   onSelectCandidate,
   loading,
   error = null,
 }: {
   plan: LocalPlan
   summaries: Record<string, DashboardExecutionSummary>
+  visualBaselineId: string | null
+  comparisonCandidateIds: string[]
   selectedCandidateId: string | null
+  onVisualBaselineChange: (id: string) => void
+  onToggleCandidate: (id: string, selected: boolean) => void
   onSelectCandidate: (id: string) => void
   loading: boolean
   error?: string | null
 }) {
   const rows = executionHistoryRows(plan, summaries)
+  const baseline = visualBaselineId
+    ? (summaries[visualBaselineId] ?? null)
+    : null
+  const selectableRows = rows.filter(
+    (row) => row.role !== 'attempt' && row.fallback !== 'running',
+  )
+  const visualBaselineRow = rows.find((row) => row.id === visualBaselineId)
+  const comparisonRows = rows.filter((row) =>
+    comparisonCandidateIds.includes(row.id),
+  )
+  const comparisonColumns = [
+    ...(visualBaselineRow ? [visualBaselineRow] : []),
+    ...comparisonRows,
+  ].map((row) => {
+    const isVisualBaseline = row.id === visualBaselineId
+    const rowComparison =
+      !isVisualBaseline && baseline && row.summary
+        ? buildPlanComparison(baseline, row.summary)
+        : null
+    const snapshot = row.summary
+      ? buildPlanComparison(row.summary, row.summary)
+      : null
+    return {
+      row,
+      isVisualBaseline,
+      rowComparison,
+      metricSource: rowComparison ?? snapshot,
+      status: isVisualBaseline
+        ? { label: 'Reference', tone: 'status-neutral' }
+        : rowComparison
+          ? planVerdictPresentation[rowComparison.verdict]
+          : executionStatus(row.summary, row.fallback),
+      selected: row.id === selectedCandidateId,
+    }
+  })
+  const diagnosticRows = rows.filter(
+    (row) => row.role === 'attempt' || row.fallback === 'running',
+  )
   return (
     <section
       className="panel plan-panel-composite plan-execution-history-panel"
@@ -441,17 +519,17 @@ export function PlanExecutionHistory({
     >
       <div className="panel-heading plan-panel-heading">
         <div>
-          <div className="section-kicker">Execution history</div>
-          <h2 id="plan-execution-history-title">Runs in this plan</h2>
+          <div className="section-kicker">Plan comparison</div>
+          <h2 id="plan-execution-history-title">Baseline and candidates</h2>
           <p>
-            The baseline is fixed. Select any completed candidate to compare its
-            retained evidence.
+            Choose a visual baseline and any number of candidates. This view
+            never changes the official baseline stored with the plan.
           </p>
         </div>
         <span className="coverage-note">
           {loading
             ? 'Loading…'
-            : `${rows.length} execution${rows.length === 1 ? '' : 's'}`}
+            : `${visualBaselineId ? '1 visual baseline' : 'Baseline pending'} · ${comparisonCandidateIds.length} selected`}
         </span>
       </div>
       {error && (
@@ -466,114 +544,243 @@ export function PlanExecutionHistory({
           <p>Capture the baseline to begin this plan history.</p>
         </div>
       ) : (
-        <div className="plan-execution-table-wrap">
-          <table className="plan-execution-table">
-            <thead>
-              <tr>
-                <th scope="col">Execution</th>
-                <th scope="col">Date</th>
-                <th scope="col">Result</th>
-                <th scope="col">Pass rate</th>
-                <th scope="col">Quality</th>
-                <th scope="col">Tokens</th>
-                <th scope="col">Duration</th>
-                <th scope="col">Cost</th>
-                <th scope="col">Actions</th>
-              </tr>
-            </thead>
-            <tbody>
-              {rows.map((row) => {
-                const status = executionStatus(row.summary, row.fallback)
-                const selected = row.id === selectedCandidateId
-                return (
-                  <tr
-                    className={selected ? 'is-selected' : undefined}
-                    key={`${row.role}:${row.id}`}
-                  >
-                    <th scope="row" data-label="Execution">
-                      <strong>{row.label}</strong>
-                      <span>{row.detail}</span>
-                      <code title={row.id}>{row.id}</code>
-                    </th>
-                    <td data-label="Date">
-                      <time>
-                        {row.summary?.completed_at
-                          ? formatDate(row.summary.completed_at)
-                          : row.fallback === 'running'
-                            ? 'Running now'
-                            : 'Date unavailable'}
-                      </time>
-                    </td>
-                    <td data-label="Result">
+        <>
+          <div className="plan-comparison-selection plan-panel-section">
+            <label className="plan-visual-baseline-field">
+              <span>Visual baseline</span>
+              <select
+                value={visualBaselineId ?? ''}
+                disabled={loading || selectableRows.length === 0}
+                onChange={(event) => onVisualBaselineChange(event.target.value)}
+              >
+                {selectableRows.map((row) => (
+                  <option key={row.id} value={row.id}>
+                    {planExecutionLabel(plan, row.id)}
+                  </option>
+                ))}
+              </select>
+              <small>The official plan baseline remains unchanged.</small>
+            </label>
+            <fieldset className="plan-candidate-selection">
+              <legend>Candidates in table</legend>
+              <div className="plan-candidate-options">
+                {selectableRows
+                  .filter((row) => row.id !== visualBaselineId)
+                  .map((row) => {
+                    const selected = comparisonCandidateIds.includes(row.id)
+                    return (
+                      <label
+                        className={`plan-candidate-option${selected ? ' is-selected' : ''}`}
+                        key={row.id}
+                      >
+                        <input
+                          type="checkbox"
+                          checked={selected}
+                          onChange={(event) =>
+                            onToggleCandidate(row.id, event.target.checked)
+                          }
+                        />
+                        <span>{planExecutionLabel(plan, row.id)}</span>
+                      </label>
+                    )
+                  })}
+              </div>
+            </fieldset>
+          </div>
+          <div className="plan-execution-table-wrap">
+            <table
+              className="plan-execution-table"
+              style={
+                {
+                  '--plan-execution-column-count': Math.max(
+                    comparisonColumns.length,
+                    1,
+                  ),
+                } as CSSProperties
+              }
+            >
+              <caption className="visually-hidden">
+                Plan metrics in rows, with the visual baseline and selected
+                candidates in columns. Best values are highlighted.
+              </caption>
+              <thead>
+                <tr>
+                  <th scope="col">Metric</th>
+                  {comparisonColumns.map(
+                    ({ row, isVisualBaseline, status, selected }) => (
+                      <th
+                        className={[
+                          'plan-execution-column-header',
+                          isVisualBaseline ? 'is-baseline' : '',
+                          selected ? 'is-selected' : '',
+                        ]
+                          .filter(Boolean)
+                          .join(' ')}
+                        data-execution-id={row.id}
+                        key={`${row.role}:${row.id}`}
+                        scope="col"
+                      >
+                        <div className="plan-execution-column-title">
+                          <strong>{planExecutionLabel(plan, row.id)}</strong>
+                          <span>
+                            {[
+                              row.detail,
+                              row.summary?.completed_at
+                                ? formatDate(row.summary.completed_at)
+                                : 'Date unavailable',
+                            ]
+                              .filter(Boolean)
+                              .join(' · ')}
+                          </span>
+                          <code title={row.id}>{row.id}</code>
+                        </div>
+                        <span className={`status-pill ${status.tone}`}>
+                          {status.label}
+                        </span>
+                        <div className="plan-execution-actions">
+                          {!isVisualBaseline && (
+                            <button
+                              className="button button-secondary"
+                              type="button"
+                              aria-pressed={selected}
+                              onClick={() => onSelectCandidate(row.id)}
+                            >
+                              {selected ? 'Viewing details' : 'View details'}
+                            </button>
+                          )}
+                          <a
+                            className="plan-execution-report-link"
+                            href={hashForExecution(row.id)}
+                          >
+                            View report
+                          </a>
+                        </div>
+                      </th>
+                    ),
+                  )}
+                </tr>
+              </thead>
+              <tbody>
+                {PLAN_COMPARISON_TABLE_METRICS.map((id) => {
+                  const entries = comparisonColumns.map((column) => {
+                    const metric = column.metricSource
+                      ? metricById(column.metricSource, id)
+                      : null
+                    const side: 'baseline' | 'candidate' = column.rowComparison
+                      ? 'candidate'
+                      : 'baseline'
+                    return {
+                      column,
+                      metric,
+                      side,
+                      value: metric?.[side] ?? null,
+                    }
+                  })
+                  const descriptor = entries.find(
+                    ({ metric }) => metric,
+                  )?.metric
+                  const winnerIds = new Set(
+                    planMetricWinnerIds(
+                      entries.map(({ column, value }) => ({
+                        id: column.row.id,
+                        value,
+                      })),
+                      descriptor?.direction ?? 'context',
+                    ),
+                  )
+                  const directionLabel =
+                    descriptor?.direction === 'higher'
+                      ? 'Higher is better'
+                      : descriptor?.direction === 'lower'
+                        ? 'Lower is better'
+                        : 'Context only'
+                  return (
+                    <tr data-metric-id={id} key={id}>
+                      <th scope="row">
+                        <strong>{descriptor?.label ?? titleCase(id)}</strong>
+                        <span>{directionLabel}</span>
+                      </th>
+                      {entries.map(({ column, metric, side }) => {
+                        const winner = winnerIds.has(column.row.id)
+                        return (
+                          <td
+                            className={[
+                              column.isVisualBaseline ? 'is-baseline' : '',
+                              column.selected ? 'is-selected' : '',
+                              winner ? 'is-winner' : '',
+                            ]
+                              .filter(Boolean)
+                              .join(' ')}
+                            data-execution-id={column.row.id}
+                            key={column.row.id}
+                          >
+                            {metric ? (
+                              <span className="plan-execution-metric">
+                                <span className="plan-execution-metric-value">
+                                  <strong>
+                                    {formatPlanMetricValue(metric, side)}
+                                  </strong>
+                                  {winner && (
+                                    <span className="plan-winner-badge">
+                                      Winner
+                                    </span>
+                                  )}
+                                </span>
+                                {column.isVisualBaseline ? (
+                                  <small>Reference</small>
+                                ) : column.rowComparison ? (
+                                  <small
+                                    className={`metric-tone-${metric.tone}`}
+                                  >
+                                    {formatPlanMetricDelta(metric)}
+                                  </small>
+                                ) : (
+                                  <small>Not comparable</small>
+                                )}
+                              </span>
+                            ) : (
+                              'Not reported'
+                            )}
+                          </td>
+                        )
+                      })}
+                    </tr>
+                  )
+                })}
+              </tbody>
+            </table>
+          </div>
+          {diagnosticRows.length > 0 && (
+            <div className="plan-non-comparable plan-panel-section">
+              <div>
+                <strong>Non-comparable attempts</strong>
+                <span>
+                  Running and incomplete attempts do not affect metric winners.
+                </span>
+              </div>
+              <ul>
+                {diagnosticRows.map((row) => {
+                  const status = executionStatus(row.summary, row.fallback)
+                  return (
+                    <li key={`${row.role}:${row.id}`}>
+                      <span>
+                        <strong>{row.label}</strong>
+                        <small>{row.detail}</small>
+                        <code title={row.id}>{row.id}</code>
+                      </span>
                       <span className={`status-pill ${status.tone}`}>
                         {status.label}
                       </span>
-                    </td>
-                    <td data-label="Pass rate">
-                      {summaryMetric(row.summary, 'pass_rate')}
-                    </td>
-                    <td data-label="Quality">
-                      {summaryMetric(row.summary, 'quality')}
-                    </td>
-                    <td data-label="Tokens">
-                      {summaryMetric(row.summary, 'tokens')}
-                    </td>
-                    <td data-label="Duration">
-                      {summaryMetric(row.summary, 'duration')}
-                    </td>
-                    <td data-label="Cost">
-                      {summaryMetric(row.summary, 'cost')}
-                    </td>
-                    <td data-label="Actions">
-                      <div className="plan-execution-actions">
-                        {row.candidateNumber !== null && (
-                          <button
-                            className="button button-secondary"
-                            type="button"
-                            aria-pressed={selected}
-                            onClick={() => onSelectCandidate(row.id)}
-                          >
-                            {selected ? 'Comparing' : 'Compare with baseline'}
-                          </button>
-                        )}
-                        <a
-                          className="plan-execution-report-link"
-                          href={hashForExecution(row.id)}
-                        >
-                          View report
-                        </a>
-                      </div>
-                    </td>
-                  </tr>
-                )
-              })}
-            </tbody>
-          </table>
-        </div>
+                      <a href={hashForExecution(row.id)}>View report</a>
+                    </li>
+                  )
+                })}
+              </ul>
+            </div>
+          )}
+        </>
       )}
     </section>
-  )
-}
-
-function ComparisonMetricCard({ metric }: { metric: PlanMetricComparison }) {
-  return (
-    <article className="plan-comparison-metric-card">
-      <span>{metric.label}</span>
-      <div className="plan-comparison-metric-values">
-        <span>
-          <small>Baseline</small>
-          <strong>{formatPlanMetricValue(metric, 'baseline')}</strong>
-        </span>
-        <i aria-hidden="true">→</i>
-        <span>
-          <small>Candidate</small>
-          <strong>{formatPlanMetricValue(metric, 'candidate')}</strong>
-        </span>
-      </div>
-      <b className={`metric-tone-${metric.tone}`}>
-        {formatPlanMetricDelta(metric)}
-      </b>
-    </article>
   )
 }
 
@@ -666,6 +873,8 @@ export function PlanComparisonPanel({
   baselineExecutionId,
   candidateExecutionId,
   candidateNumber,
+  baselineLabel = 'Baseline',
+  candidateLabel,
   loading,
   error,
 }: {
@@ -673,34 +882,54 @@ export function PlanComparisonPanel({
   baselineExecutionId: string | null
   candidateExecutionId: string | null
   candidateNumber: number | null
+  baselineLabel?: string
+  candidateLabel?: string
   loading: boolean
   error: string | null
 }) {
+  const resolvedCandidateLabel =
+    candidateLabel ?? `Candidate #${candidateNumber ?? '—'}`
   if (!baselineExecutionId || !candidateExecutionId) {
     return (
       <section className="panel plan-panel-padded plan-comparison-empty">
         <div className="section-kicker">Execution comparison</div>
         <h2>Baseline vs candidate</h2>
         <p>
-          Complete a baseline and at least one candidate to calculate objective
-          and directional deltas.
+          Select a visual baseline and at least one candidate to calculate
+          objective and directional deltas.
         </p>
       </section>
     )
   }
   if (loading) {
     return (
-      <section className="panel plan-panel-padded" aria-live="polite">
+      <section
+        className="panel plan-panel-padded plan-comparison-panel"
+        aria-labelledby="plan-comparison-title"
+        aria-live="polite"
+        aria-busy="true"
+        tabIndex={-1}
+      >
         <div className="section-kicker">Execution comparison</div>
-        <h2>Loading baseline and candidate…</h2>
+        <h2 id="plan-comparison-title">
+          {baselineLabel} vs {resolvedCandidateLabel}
+        </h2>
+        <p>Loading baseline and candidate evidence…</p>
       </section>
     )
   }
   if (error || !comparison) {
     return (
-      <section className="panel plan-panel-padded" role="alert">
+      <section
+        className="panel plan-panel-padded plan-comparison-panel"
+        aria-labelledby="plan-comparison-title"
+        role="alert"
+        tabIndex={-1}
+      >
         <div className="section-kicker">Execution comparison</div>
-        <h2>Comparison unavailable</h2>
+        <h2 id="plan-comparison-title">
+          {baselineLabel} vs {resolvedCandidateLabel} unavailable
+        </h2>
         <p>{error || 'The retained execution details could not be read.'}</p>
       </section>
     )
@@ -717,7 +946,7 @@ export function PlanComparisonPanel({
         <div>
           <div className="section-kicker">Execution comparison</div>
           <h2 id="plan-comparison-title">
-            Baseline vs Candidate #{candidateNumber ?? '—'}
+            {baselineLabel} vs {resolvedCandidateLabel}
           </h2>
           <strong className="plan-comparison-headline">
             {comparison.headline}
@@ -728,22 +957,14 @@ export function PlanComparisonPanel({
       </div>
       <div className="plan-comparison-provenance plan-panel-section">
         <a href={hashForExecution(baselineExecutionId)}>
-          <span>Baseline</span>
+          <span>{baselineLabel}</span>
           <code>{baselineExecutionId}</code>
         </a>
         <i aria-hidden="true">→</i>
         <a href={hashForExecution(candidateExecutionId)}>
-          <span>Candidate #{candidateNumber ?? '—'}</span>
+          <span>{resolvedCandidateLabel}</span>
           <code>{candidateExecutionId}</code>
         </a>
-      </div>
-      <div className="plan-comparison-metrics plan-panel-section">
-        {PLAN_DETAIL_METRICS.map((id) => {
-          const metric = metricById(comparison, id)
-          return metric ? (
-            <ComparisonMetricCard key={id} metric={metric} />
-          ) : null
-        })}
       </div>
       <div className="plan-panel-section">
         <PlanScenarioComparisonTable scenarios={comparison.scenarios} />
@@ -1252,6 +1473,12 @@ export function LocalPlanDetailPage({ planId }: { planId: string }) {
   >({})
   const [historyLoading, setHistoryLoading] = useState(false)
   const [historyError, setHistoryError] = useState<string | null>(null)
+  const [visualBaselineOverride, setVisualBaselineOverride] = useState<
+    string | null
+  >(null)
+  const [excludedComparisonIds, setExcludedComparisonIds] = useState<string[]>(
+    [],
+  )
   const [selectedCandidateId, setSelectedCandidateId] = useState<string | null>(
     null,
   )
@@ -1308,19 +1535,42 @@ export function LocalPlanDetailPage({ planId }: { planId: string }) {
       plan?.last_attempt_id,
     ],
   )
+  const comparableExecutionIds = useMemo(
+    () =>
+      [
+        plan?.baseline_execution_id ?? '',
+        ...(plan?.candidate_execution_ids ?? []),
+      ].filter(Boolean),
+    [plan?.baseline_execution_id, plan?.candidate_execution_ids],
+  )
+  const visualBaselineId =
+    visualBaselineOverride &&
+    comparableExecutionIds.includes(visualBaselineOverride)
+      ? visualBaselineOverride
+      : (plan?.baseline_execution_id ?? comparableExecutionIds[0] ?? null)
+  const comparisonCandidateIds = useMemo(
+    () =>
+      comparableExecutionIds.filter(
+        (id) => id !== visualBaselineId && !excludedComparisonIds.includes(id),
+      ),
+    [comparableExecutionIds, excludedComparisonIds, visualBaselineId],
+  )
+
+  useEffect(() => {
+    setSelectedCandidateId((current) =>
+      selectedPlanCandidate(
+        current,
+        candidateSelectionPinned,
+        comparisonCandidateIds,
+      ),
+    )
+  }, [candidateSelectionPinned, comparisonCandidateIds])
 
   useEffect(() => {
     if (!bridge || !plan) return
     let cancelled = false
     setHistoryLoading(true)
     setHistoryError(null)
-    setSelectedCandidateId((current) =>
-      selectedPlanCandidate(
-        current,
-        candidateSelectionPinned,
-        plan.candidate_execution_ids,
-      ),
-    )
     void loadExecutionSummaries(bridge.listExecutions, executionIds)
       .then((summaries) => {
         if (cancelled) return
@@ -1337,10 +1587,10 @@ export function LocalPlanDetailPage({ planId }: { planId: string }) {
     return () => {
       cancelled = true
     }
-  }, [bridge, candidateSelectionPinned, executionIds, plan])
+  }, [bridge, executionIds, plan])
 
   useEffect(() => {
-    const baselineId = plan?.baseline_execution_id ?? null
+    const baselineId = visualBaselineId
     if (!bridge || !baselineId || !selectedCandidateId) {
       setBaselineDetail(null)
       setCandidateDetail(null)
@@ -1372,7 +1622,7 @@ export function LocalPlanDetailPage({ planId }: { planId: string }) {
     return () => {
       cancelled = true
     }
-  }, [bridge, plan?.baseline_execution_id, selectedCandidateId])
+  }, [bridge, selectedCandidateId, visualBaselineId])
 
   const start = async (role: PlanRunRole) => {
     if (!bridge || !plan) return
@@ -1462,13 +1712,13 @@ export function LocalPlanDetailPage({ planId }: { planId: string }) {
   }, [plan])
 
   const comparison = useMemo(() => {
-    if (!plan?.baseline_execution_id || !selectedCandidateId) return null
+    if (!visualBaselineId || !selectedCandidateId) return null
     const detailsMatch =
-      baselineDetail?.id === plan.baseline_execution_id &&
+      baselineDetail?.id === visualBaselineId &&
       candidateDetail?.id === selectedCandidateId
     const baseline = detailsMatch
       ? baselineDetail
-      : executionSummaries[plan.baseline_execution_id]
+      : executionSummaries[visualBaselineId]
     const candidate = detailsMatch
       ? candidateDetail
       : executionSummaries[selectedCandidateId]
@@ -1483,13 +1733,47 @@ export function LocalPlanDetailPage({ planId }: { planId: string }) {
     baselineDetail,
     candidateDetail,
     executionSummaries,
-    plan?.baseline_execution_id,
     selectedCandidateId,
+    visualBaselineId,
   ])
   const selectedCandidateNumber =
     plan && selectedCandidateId
       ? plan.candidate_execution_ids.indexOf(selectedCandidateId) + 1
       : null
+  const changeVisualBaseline = (id: string) => {
+    if (!plan || !comparableExecutionIds.includes(id)) return
+    const availableCandidates = comparableExecutionIds.filter(
+      (candidateId) =>
+        candidateId !== id && !excludedComparisonIds.includes(candidateId),
+    )
+    setVisualBaselineOverride(id === plan.baseline_execution_id ? null : id)
+    setCandidateSelectionPinned(false)
+    setSelectedCandidateId((current) =>
+      current && current !== id && availableCandidates.includes(current)
+        ? current
+        : (availableCandidates.at(-1) ?? null),
+    )
+    setBaselineDetail(null)
+    setCandidateDetail(null)
+    setComparisonError(null)
+  }
+  const toggleComparisonCandidate = (id: string, selected: boolean) => {
+    setExcludedComparisonIds((current) =>
+      selected
+        ? current.filter((item) => item !== id)
+        : current.includes(id)
+          ? current
+          : [...current, id],
+    )
+    if (!selected && selectedCandidateId === id) {
+      setCandidateSelectionPinned(false)
+      setSelectedCandidateId(
+        comparisonCandidateIds
+          .filter((candidateId) => candidateId !== id)
+          .at(-1) ?? null,
+      )
+    }
+  }
   const selectCandidate = (id: string) => {
     setCandidateSelectionPinned(true)
     setCandidateDetail(null)
@@ -1581,25 +1865,31 @@ export function LocalPlanDetailPage({ planId }: { planId: string }) {
                 </small>
               </article>
             </section>
+            <PlanExecutionHistory
+              plan={plan}
+              summaries={executionSummaries}
+              visualBaselineId={visualBaselineId}
+              comparisonCandidateIds={comparisonCandidateIds}
+              selectedCandidateId={selectedCandidateId}
+              onVisualBaselineChange={changeVisualBaseline}
+              onToggleCandidate={toggleComparisonCandidate}
+              onSelectCandidate={selectCandidate}
+              loading={historyLoading}
+              error={historyError}
+            />
             <PlanComparisonPanel
               comparison={comparison}
-              baselineExecutionId={plan.baseline_execution_id}
+              baselineExecutionId={visualBaselineId}
               candidateExecutionId={selectedCandidateId}
               candidateNumber={
                 selectedCandidateNumber && selectedCandidateNumber > 0
                   ? selectedCandidateNumber
                   : null
               }
+              baselineLabel={`Visual baseline · ${planExecutionLabel(plan, visualBaselineId)}`}
+              candidateLabel={planExecutionLabel(plan, selectedCandidateId)}
               loading={comparisonLoading}
               error={comparisonError}
-            />
-            <PlanExecutionHistory
-              plan={plan}
-              summaries={executionSummaries}
-              selectedCandidateId={selectedCandidateId}
-              onSelectCandidate={selectCandidate}
-              loading={historyLoading}
-              error={historyError}
             />
             <PlanLifecycle
               plan={plan}
