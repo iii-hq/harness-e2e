@@ -168,8 +168,18 @@ pub trait StepExecutor: Send + Sync {
     async fn cleanup(&self, _context: &StepExecutorContext) -> Result<()> {
         Ok(())
     }
+}
 
-    async fn cleanup_workflow(&self, _context: &WorkflowCleanupContext) -> Result<()> {
+#[async_trait]
+pub trait WorkflowCleanupHook: Send + Sync {
+    async fn cleanup(&self, context: &WorkflowCleanupContext) -> Result<()>;
+}
+
+pub struct NoopWorkflowCleanupHook;
+
+#[async_trait]
+impl WorkflowCleanupHook for NoopWorkflowCleanupHook {
+    async fn cleanup(&self, _context: &WorkflowCleanupContext) -> Result<()> {
         Ok(())
     }
 }

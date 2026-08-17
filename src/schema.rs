@@ -7,7 +7,7 @@ use crate::asset::AssetCaptureManifest;
 use crate::durable::{DurableArchiveManifest, HistoryRecord};
 use crate::fault::{FaultEvaluation, FaultJournal, FaultPlan, FaultProfile};
 use crate::report::{E2eManifest, E2eReport};
-use crate::workflow::{WorkflowCheckpointV1, WorkflowDefinitionV1};
+use crate::workflow::WorkflowCheckpointV1;
 
 pub fn results() -> RootSchema {
     let mut root = root_schema_for::<E2eReport>();
@@ -50,10 +50,6 @@ pub fn asset_capture() -> RootSchema {
 
 pub fn manifest() -> RootSchema {
     root_schema_for::<E2eManifest>()
-}
-
-pub fn workflow_definition() -> RootSchema {
-    root_schema_for::<WorkflowDefinitionV1>()
 }
 
 pub fn workflow_checkpoint() -> RootSchema {
@@ -122,7 +118,6 @@ mod tests {
 
     #[test]
     fn workflow_schemas_match_snapshots() {
-        assert_snapshot("workflow-definition-v1.json", &workflow_definition());
         assert_snapshot("workflow-checkpoint-v1.json", &workflow_checkpoint());
     }
 

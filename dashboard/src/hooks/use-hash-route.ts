@@ -11,11 +11,7 @@ export type DashboardRoute =
   | { page: 'plan-create' }
   | { page: 'plan-detail'; planId: string }
   | { page: 'coverage' }
-  | {
-      page: 'workflows'
-      workflowId: string | null
-      executionId: string | null
-    }
+  | { page: 'security-review'; executionId: string }
 
 export type DashboardRoutes = {
   current: () => DashboardRoute
@@ -27,10 +23,7 @@ export type DashboardRoutes = {
   newPlan: () => string
   plan: (planId: string) => string
   coverage: () => string
-  workflows: (
-    workflowId?: string | null,
-    executionId?: string | null,
-  ) => string
+  securityReview: (executionId: string) => string
 }
 
 const workspaceViews = new Set<WorkspaceView>([
@@ -96,20 +89,8 @@ export function routeFromHash(rawHash: string): DashboardRoute | null {
     return { page: 'plan-detail', planId: rest[0] }
   }
   if (head === 'coverage') return { page: 'coverage' }
-  if (head === 'workflows') {
-    if (rest[0] === 'runs') {
-      return {
-        page: 'workflows',
-        workflowId: null,
-        executionId: rest[1] ?? null,
-      }
-    }
-    return {
-      page: 'workflows',
-      workflowId: rest[0] ?? null,
-      executionId: null,
-    }
-  }
+  if (head === 'security-review')
+    return { page: 'security-review', executionId: rest[0] ?? '' }
   return null
 }
 
@@ -159,12 +140,8 @@ export function hashForPlan(planId: string): string {
   return `#/plans/${encodeSegment(planId)}`
 }
 
-export function hashForWorkflows(
-  workflowId: string | null = null,
-  executionId: string | null = null,
-): string {
-  if (executionId) return `#/workflows/runs/${encodeSegment(executionId)}`
-  return workflowId ? `#/workflows/${encodeSegment(workflowId)}` : '#/workflows'
+export function hashForSecurityReview(executionId: string): string {
+  return `#/security-review/${encodeSegment(executionId)}`
 }
 
 export const dashboardRoutes: DashboardRoutes = {
@@ -177,7 +154,7 @@ export const dashboardRoutes: DashboardRoutes = {
   newPlan: hashForNewPlan,
   plan: hashForPlan,
   coverage: hashForCoverage,
-  workflows: hashForWorkflows,
+  securityReview: hashForSecurityReview,
 }
 
 export function routeRenderIdentity(route: DashboardRoute): string {
@@ -188,9 +165,8 @@ export function routeRenderIdentity(route: DashboardRoute): string {
   if (route.page === 'test-history') return `${route.page}:${route.testId}`
   if (route.page === 'plan-detail') return `${route.page}:${route.planId}`
   if (route.page === 'plan-create') return route.page
-  if (route.page === 'workflows') {
-    return `${route.page}:${route.workflowId ?? ''}:${route.executionId ?? ''}`
-  }
+  if (route.page === 'security-review')
+    return `${route.page}:${route.executionId}`
   if (route.page === 'overview') {
     return route.view === 'tests' ? 'overview:tests' : 'overview:workspace'
   }

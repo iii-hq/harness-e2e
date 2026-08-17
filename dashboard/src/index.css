@@ -33,6 +33,322 @@
   --shadow-panel: var(--shadow);
 }
 
+/* Rust-defined security_review execution projection (read-only). */
+.security-review-page {
+  min-height: 100vh;
+  padding: 28px clamp(18px, 4vw, 64px) 48px;
+  background: var(--page-bg, #f4f6f4);
+  color: var(--ink, #15221b);
+}
+
+.security-review-header,
+.security-review-summary,
+.security-review-test-card > header,
+.security-review-test-card dl,
+.security-review-evidence li,
+.security-review-actions {
+  display: flex;
+  align-items: center;
+}
+
+.security-review-header {
+  justify-content: space-between;
+  gap: 24px;
+  margin: 0 auto 22px;
+  max-width: 1440px;
+}
+
+.security-review-header h1 {
+  margin: 4px 0 6px;
+  font-size: clamp(2rem, 4vw, 4.2rem);
+  letter-spacing: -0.055em;
+}
+.security-review-header p {
+  max-width: 760px;
+  margin: 0;
+  color: var(--muted, #607067);
+}
+.security-review-header .eyebrow {
+  display: block;
+  margin: 9px 0 0;
+}
+.security-review-actions {
+  gap: 12px;
+}
+.status-badge {
+  border: 1px solid currentColor;
+  border-radius: 99px;
+  padding: 6px 11px;
+  font: 700 12px / 1 var(--mono);
+  text-transform: uppercase;
+}
+.status-succeeded,
+.status-passed {
+  color: #147447;
+}
+.status-failed,
+.status-hard_gate_failed {
+  color: #b63333;
+}
+.status-running {
+  color: #a96512;
+}
+.status-skipped {
+  color: #68736d;
+}
+
+.security-review-summary {
+  max-width: 1440px;
+  margin: 0 auto 18px;
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  border: 1px solid var(--line, #d6ddd8);
+  border-radius: 16px;
+  background: var(--surface, #fff);
+}
+.security-review-summary > div {
+  min-width: 0;
+  padding: 16px 18px;
+  border-right: 1px solid var(--line, #d6ddd8);
+}
+.security-review-summary > div:last-child {
+  border-right: 0;
+}
+.security-review-summary small,
+.security-review-summary strong {
+  display: block;
+}
+.security-review-summary small {
+  color: var(--muted, #607067);
+  text-transform: uppercase;
+  font: 700 10px / 1.4 var(--mono);
+}
+.security-review-summary strong {
+  overflow: hidden;
+  margin-top: 6px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.security-review-canvas {
+  height: 430px;
+  max-width: 1440px;
+  margin: 0 auto 28px;
+  overflow: hidden;
+  border: 1px solid var(--line, #d6ddd8);
+  border-radius: 16px;
+  background: var(--surface, #fff);
+}
+.security-review-node {
+  width: 220px;
+  padding: 14px 16px;
+  border: 1px solid #b7c4bc;
+  border-left: 5px solid currentColor;
+  border-radius: 12px;
+  background: var(--surface, #fff);
+  box-shadow: 0 10px 24px rgb(24 45 33 / 8%);
+}
+.security-review-node small,
+.security-review-node strong,
+.security-review-node span,
+.security-review-node footer {
+  display: block;
+}
+.security-review-node small {
+  font: 700 9px / 1.3 var(--mono);
+  text-transform: uppercase;
+}
+.security-review-node strong {
+  margin: 5px 0;
+  color: var(--ink, #15221b);
+  overflow-wrap: anywhere;
+}
+.security-review-node span,
+.security-review-node footer {
+  color: var(--muted, #607067);
+  font-size: 12px;
+}
+.security-review-node footer {
+  margin-top: 10px;
+  font-family: var(--mono);
+}
+.security-review-node .react-flow__handle {
+  width: 1px;
+  height: 1px;
+  opacity: 0;
+}
+
+.security-review-tests,
+.security-review-table-wrap,
+.security-review-footer {
+  width: 100%;
+  min-width: 0;
+  max-width: 1440px;
+  margin-right: auto;
+  margin-left: auto;
+}
+.security-review-tests > h2 {
+  margin: 0 0 14px;
+}
+.security-review-test-list {
+  display: grid;
+  min-width: 0;
+  gap: 14px;
+}
+.security-review-test-card {
+  width: 100%;
+  min-width: 0;
+  padding: 20px;
+  border: 1px solid var(--line, #d6ddd8);
+  border-radius: 16px;
+  background: var(--surface, #fff);
+}
+.security-review-test-card > header {
+  gap: 14px;
+}
+.security-review-test-card > header > span {
+  color: #8a9790;
+  font: 700 13px / 1 var(--mono);
+}
+.security-review-test-card > header > div {
+  flex: 1;
+  min-width: 0;
+}
+.security-review-test-card h3,
+.security-review-test-card p {
+  margin: 0;
+}
+.security-review-test-card > header p {
+  overflow-wrap: anywhere;
+  margin-top: 3px;
+  color: var(--muted, #607067);
+  font: 11px / 1.4 var(--mono);
+}
+.security-review-test-card > header > b {
+  font: 700 11px / 1 var(--mono);
+  text-transform: uppercase;
+}
+.security-review-test-card dl {
+  align-items: stretch;
+  gap: 12px;
+  margin: 18px 0;
+}
+.security-review-test-card dl > div {
+  flex: 1;
+  min-width: 0;
+  padding: 12px;
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--surface, #fff) 88%, #8aa897);
+}
+.security-review-test-card dt {
+  color: var(--muted, #607067);
+  font: 700 10px / 1.4 var(--mono);
+  text-transform: uppercase;
+}
+.security-review-test-card dd {
+  margin: 6px 0 0;
+}
+.security-review-test-card pre {
+  overflow: auto;
+  margin: 0;
+  max-height: 150px;
+  font: 11px / 1.45 var(--mono);
+  white-space: pre-wrap;
+}
+.security-review-skip {
+  padding: 10px 12px;
+  border-left: 3px solid #9a7226;
+  background: #fff6df;
+}
+.security-review-evidence {
+  margin-top: 16px;
+}
+.security-review-evidence h4 {
+  margin: 0 0 7px;
+  font-size: 13px;
+}
+.security-review-evidence ul {
+  display: grid;
+  gap: 7px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.security-review-evidence li {
+  align-items: flex-start;
+  gap: 10px;
+  padding: 10px 12px;
+  border: 1px solid var(--line, #d6ddd8);
+  border-radius: 9px;
+}
+.security-review-evidence li > * {
+  min-width: 0;
+  max-width: 100%;
+}
+.security-review-evidence li strong {
+  min-width: 180px;
+  overflow-wrap: anywhere;
+  font: 700 11px / 1.4 var(--mono);
+}
+.security-review-evidence li span {
+  flex: 1;
+  color: var(--muted, #607067);
+  font-size: 13px;
+}
+.security-review-evidence li code {
+  overflow-wrap: anywhere;
+  font-size: 10px;
+}
+.security-review-table-wrap {
+  overflow-x: auto;
+  margin-top: 22px;
+}
+.security-review-table-wrap .workflow-node-table {
+  min-width: 560px;
+}
+.security-review-footer {
+  padding-top: 22px;
+}
+.is-spinning {
+  animation: security-review-spin 1s linear infinite;
+}
+@keyframes security-review-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@media (max-width: 760px) {
+  .security-review-page {
+    padding: 18px 12px 36px;
+  }
+  .security-review-header {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+  .security-review-summary {
+    grid-template-columns: 1fr 1fr;
+  }
+  .security-review-summary > div:nth-child(2) {
+    border-right: 0;
+  }
+  .security-review-summary > div:nth-child(-n + 2) {
+    border-bottom: 1px solid var(--line, #d6ddd8);
+  }
+  .security-review-test-card dl {
+    flex-direction: column;
+  }
+  .security-review-evidence li {
+    flex-direction: column;
+  }
+  .security-review-evidence li strong {
+    min-width: 0;
+  }
+  .security-review-canvas {
+    height: 360px;
+  }
+}
+
 :root {
   color-scheme: dark;
   --bg: #0a0c0b;

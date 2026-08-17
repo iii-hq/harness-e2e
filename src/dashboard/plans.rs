@@ -338,8 +338,6 @@ pub(super) fn run_request(plan: &LocalPlan, role: PlanRunRole) -> RunRequest {
             role,
             plan_hash: plan.scope_hash.clone(),
         }),
-        workflow_definition: None,
-        workflow_hash: None,
     }
 }
 

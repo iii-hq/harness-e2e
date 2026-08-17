@@ -6,10 +6,10 @@ import { ExecutionPage } from '@/pages/ExecutionPage'
 import { LocalPlanCreatePage, LocalPlanDetailPage } from '@/pages/LocalPlanPage'
 import { OverviewPage } from '@/pages/OverviewPage'
 import { PlansPage } from '@/pages/PlansPage'
+import { SecurityReviewPage } from '@/pages/SecurityReviewPage'
 import { TestHistoryPage } from '@/pages/TestHistoryPage'
 import { TestsCatalogPage } from '@/pages/TestsCatalogPage'
 import { TestsPage } from '@/pages/TestsPage'
-import { WorkflowEditorPage } from '@/pages/WorkflowEditorPage'
 import './index.css'
 
 const root = document.querySelector<HTMLElement>('#root')
@@ -35,13 +35,8 @@ function RoutedPage({ route }: { route: DashboardRoute }) {
       return <LocalPlanDetailPage planId={route.planId} />
     case 'coverage':
       return <CoveragePage />
-    case 'workflows':
-      return (
-        <WorkflowEditorPage
-          workflowId={route.workflowId}
-          executionId={route.executionId}
-        />
-      )
+    case 'security-review':
+      return <SecurityReviewPage executionId={route.executionId} />
     case 'overview':
       if (route.view === 'tests') {
         return <TestsCatalogPage />
@@ -63,7 +58,7 @@ function App() {
         coverage: 'Harness stack coverage',
         execution: 'Harness E2E execution detail',
         overview: 'Harness E2E executions',
-        workflows: 'Workflow editor',
+        'security-review': 'Security review execution',
       }[route.page] ?? 'Harness E2E executions'
   }, [route.page])
   return <RoutedPage route={route} />

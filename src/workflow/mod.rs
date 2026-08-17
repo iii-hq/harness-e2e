@@ -6,16 +6,17 @@ pub mod security_scan;
 
 pub use builtin::{harness_descriptor, register_harness_step, HarnessStepConfig};
 pub use catalog::{
-    CapturedWorkflowAsset, RegisteredStepType, StepCatalog, StepEvaluation, StepExecutor,
-    StepExecutorContext, StepExecutorOutput, TypedPortValue, WorkflowAssetContent,
-    WorkflowCleanupContext, WorkflowEvaluationOutcome, WorkflowEvaluationResult,
-    WorkflowGateResult, WorkflowProvenance,
+    CapturedWorkflowAsset, NoopWorkflowCleanupHook, RegisteredStepType, StepCatalog,
+    StepEvaluation, StepExecutor, StepExecutorContext, StepExecutorOutput, TypedPortValue,
+    WorkflowAssetContent, WorkflowCleanupContext, WorkflowCleanupHook, WorkflowEvaluationOutcome,
+    WorkflowEvaluationResult, WorkflowGateResult, WorkflowProvenance,
 };
-pub use run::{run_workflow_suite, WorkflowRunConfig, WorkflowRunOutcome};
+pub use run::{run_security_review, SecurityReviewRunConfig, SecurityReviewRunOutcome};
 pub use scheduler::{
     execute_workflow, CheckpointStore, WorkflowAssetReport, WorkflowAttemptReport,
-    WorkflowCheckpointV1, WorkflowCriterionResult, WorkflowExecutionRequest, WorkflowFailurePhase,
-    WorkflowStepFailure, WorkflowStepReport, WorkflowStepStatus,
+    WorkflowCheckpointV1, WorkflowCleanupReport, WorkflowCleanupStatus, WorkflowCriterionResult,
+    WorkflowExecutionRequest, WorkflowFailurePhase, WorkflowStepFailure, WorkflowStepReport,
+    WorkflowStepStatus,
 };
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
@@ -29,7 +30,7 @@ pub const WORKFLOW_SCHEMA_VERSION: u32 = 1;
 pub const LOCAL_MAX_PARALLELISM: u16 = 16;
 pub const LOCAL_MAX_NODES: u16 = 256;
 
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Serialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct WorkflowDefinitionV1 {
     pub schema_version: u32,
@@ -123,7 +124,7 @@ impl WorkflowDefinitionV1 {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct WorkflowLimits {
     #[serde(default = "default_max_parallel")]
@@ -205,7 +206,7 @@ fn default_workflow_timeout_seconds() -> u64 {
     1_800
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Serialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct WorkflowNodeV1 {
     pub id: String,
@@ -229,7 +230,7 @@ fn default_required() -> bool {
     true
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Serialize, JsonSchema)]
 #[serde(tag = "source", rename_all = "snake_case", deny_unknown_fields)]
 pub enum WorkflowInputBinding {
     Literal { kind: PortValueKind, value: Value },
@@ -280,7 +281,7 @@ impl PortValueKind {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Serialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct WorkflowCriterionDeclaration {
     pub id: String,

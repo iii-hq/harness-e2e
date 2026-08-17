@@ -13,35 +13,31 @@ use crate::identity::{self, ExecutionIdentity, SystemUnderTestIdentity};
 use crate::report::{E2eManifest, E2eReport, ModelArtifact, ObservedWorkerContract};
 use crate::wire::Model;
 
-use super::security_scan::register_security_scan_steps;
-use super::{
-    execute_workflow, register_harness_step, StepCatalog, WorkflowDefinitionV1,
-    WorkflowExecutionRequest,
-};
+use super::security_scan::{self, register_security_scan_steps};
+use super::{execute_workflow, StepCatalog, WorkflowDefinitionV1, WorkflowExecutionRequest};
 
-pub struct WorkflowRunConfig {
+pub struct SecurityReviewRunConfig {
     pub url: String,
     pub model: String,
     pub provider: String,
-    pub output: PathBuf,
-    pub definitions: Vec<WorkflowDefinitionV1>,
+    pub runs_dir: PathBuf,
     pub lane: String,
 }
 
-pub struct WorkflowRunOutcome {
+pub struct SecurityReviewRunOutcome {
     pub report: E2eReport,
     pub manifest: E2eManifest,
     pub report_path: PathBuf,
 }
 
-pub async fn run_workflow_suite(config: WorkflowRunConfig) -> Result<WorkflowRunOutcome> {
-    if config.definitions.is_empty() {
-        bail!("at least one workflow definition is required");
-    }
+pub async fn run_security_review(
+    config: SecurityReviewRunConfig,
+) -> Result<SecurityReviewRunOutcome> {
     if config.model.trim().is_empty() || config.provider.trim().is_empty() {
         bail!("workflow model and provider cannot be empty");
     }
     let execution_id = Uuid::new_v4().simple().to_string();
+    let output = config.runs_dir.join(&execution_id).join("results");
     let started_at = timestamp();
     let context = Arc::new(
         E2eContext::connect(&config.url)
@@ -61,58 +57,51 @@ pub async fn run_workflow_suite(config: WorkflowRunConfig) -> Result<WorkflowRun
     let model = resolve_model(&context, &config.model, &config.provider).await?;
     let subject = ModelArtifact::from(model);
     let mut catalog = StepCatalog::new();
-    register_harness_step(
-        &mut catalog,
-        context.clone(),
-        config.model.clone(),
-        config.provider.clone(),
-    )?;
-    register_security_scan_steps(&mut catalog, context.clone())?;
-    for definition in &config.definitions {
-        definition.validate(&catalog)?;
-    }
+    let cleanup_hook = register_security_scan_steps(&mut catalog, context.clone())?;
+    let definition = security_scan::definition();
+    definition.validate(&catalog)?;
     let worker_contracts =
-        observe_worker_contracts(&context, &catalog, &config.definitions).await?;
+        observe_worker_contracts(&context, &catalog, std::slice::from_ref(&definition)).await?;
     let catalog = Arc::new(catalog);
     let mut workflow_runs = Vec::new();
-    for definition in &config.definitions {
-        let run_id = Uuid::new_v4().simple().to_string();
-        for attempt in 0..=definition.limits.technical_retries {
-            context.bind_turn_completed().await.with_context(|| {
-                format!("bind turn observation for workflow '{}'", definition.id)
-            })?;
-            let (cancel_sender, cancellation) = tokio::sync::watch::channel(false);
-            let signal_task = tokio::spawn(async move {
-                if tokio::signal::ctrl_c().await.is_ok() {
-                    let _ = cancel_sender.send(true);
-                }
-            });
-            let outcome = execute_workflow(
-                definition,
-                catalog.clone(),
-                WorkflowExecutionRequest {
-                    output_dir: config.output.clone(),
-                    run_id: run_id.clone(),
-                    attempt_number: u32::from(attempt) + 1,
-                    cancellation,
-                },
-            )
-            .await;
-            signal_task.abort();
-            let unbind = context.unbind_turn_completed().await;
-            let report = outcome.with_context(|| {
-                format!(
-                    "execute workflow '{}' attempt {}",
-                    definition.id,
-                    attempt + 1
-                )
-            })?;
-            unbind.context("unbind workflow turn observation")?;
-            let retry = report.technical_failure && attempt < definition.limits.technical_retries;
-            workflow_runs.push(report);
-            if !retry {
-                break;
+    let run_id = Uuid::new_v4().simple().to_string();
+    for attempt in 0..=definition.limits.technical_retries {
+        context
+            .bind_turn_completed()
+            .await
+            .with_context(|| format!("bind turn observation for workflow '{}'", definition.id))?;
+        let (cancel_sender, cancellation) = tokio::sync::watch::channel(false);
+        let signal_task = tokio::spawn(async move {
+            if tokio::signal::ctrl_c().await.is_ok() {
+                let _ = cancel_sender.send(true);
             }
+        });
+        let outcome = execute_workflow(
+            &definition,
+            catalog.clone(),
+            WorkflowExecutionRequest {
+                output_dir: output.clone(),
+                run_id: run_id.clone(),
+                attempt_number: u32::from(attempt) + 1,
+                cancellation,
+                cleanup_hook: cleanup_hook.clone(),
+            },
+        )
+        .await;
+        signal_task.abort();
+        let unbind = context.unbind_turn_completed().await;
+        let report = outcome.with_context(|| {
+            format!(
+                "execute workflow '{}' attempt {}",
+                definition.id,
+                attempt + 1
+            )
+        })?;
+        unbind.context("unbind workflow turn observation")?;
+        let retry = report.technical_failure && attempt < definition.limits.technical_retries;
+        workflow_runs.push(report);
+        if !retry {
+            break;
         }
     }
 
@@ -141,9 +130,9 @@ pub async fn run_workflow_suite(config: WorkflowRunConfig) -> Result<WorkflowRun
         identity::nonempty_env("HARNESS_E2E_ENGINE_REVISION"),
         workflow_runs,
     );
-    let report_path = report.write_to(&config.output, &manifest)?;
+    let report_path = report.write_to(&output, &manifest)?;
     context.shutdown().await;
-    Ok(WorkflowRunOutcome {
+    Ok(SecurityReviewRunOutcome {
         report,
         manifest,
         report_path,

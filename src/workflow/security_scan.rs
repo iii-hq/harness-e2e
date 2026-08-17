@@ -12,14 +12,25 @@ use tokio::process::Command;
 use crate::context::E2eContext;
 
 use super::{
-    CapturedWorkflowAsset, ControlSource, PortValueKind, ReplayPolicy, RequiredFunctionContract,
-    StepCatalog, StepEvaluation, StepExecutor, StepExecutorContext, StepExecutorOutput,
-    StepOperationalKind, StepPortDescriptor, StepTypeDescriptor, TypedPortValue,
-    WorkflowAssetContent, WorkflowCleanupContext, WorkflowEvaluationOutcome,
-    WorkflowEvaluationResult, WorkflowGateResult, WorkflowProvenance,
+    ActivationPolicy, BooleanCondition, CapturedWorkflowAsset, ControlSource, DependencyPolicy,
+    PortValueKind, ReplayPolicy, RequiredFunctionContract, StepCatalog, StepEvaluation,
+    StepExecutor, StepExecutorContext, StepExecutorOutput, StepOperationalKind, StepPortDescriptor,
+    StepTypeDescriptor, TypedPortValue, WorkflowAssetContent, WorkflowCleanupContext,
+    WorkflowCleanupHook, WorkflowCriterionDeclaration, WorkflowDefinitionV1,
+    WorkflowEvaluationOutcome, WorkflowEvaluationResult, WorkflowGateResult, WorkflowInputBinding,
+    WorkflowLimits, WorkflowNodeV1, WorkflowProvenance,
 };
 
 pub const FIXTURE_PATH_ENV: &str = "HARNESS_E2E_SECURITY_FIXTURE_PATH";
+pub const SCENARIO_ID: &str = "security_review";
+const REPOSITORY: &str = "iii-hq/security-scan-e2e-fixture";
+const SCHEDULED_REF: &str = "security-scan-e2e-scheduled";
+const SEEDED_PATHS: [&str; 4] = [
+    "src/vulnerable.rs",
+    "package.json",
+    ".env.example",
+    ".github/workflows/insecure.yml",
+];
 const REQUEST_FUNCTION: &str = "security-scan::request";
 const READ_FUNCTION: &str = "security-scan::read";
 const LIST_FUNCTION: &str = "security-scan::list";
@@ -50,16 +61,11 @@ const SECURITY_SCAN_CONTRACT_HASHES: [(&str, &str, &str); 4] = [
 
 #[derive(Debug, Clone, Copy)]
 enum SecurityStepKind {
-    Preflight,
-    Request,
-    Wait,
-    Assess,
+    ScanCommitA,
+    SuggestCommitA,
     Reconciliation,
-    List,
-    Integrity,
-    CreateScheduledCommit,
-    WaitScheduled,
-    Final,
+    ScheduledScanCommitB,
+    ListRunHistory,
 }
 
 struct SecurityExecutor {
@@ -79,12 +85,13 @@ struct FixtureStateInner {
     initial_head: Option<String>,
     scheduled_ref: Option<String>,
     scheduled_sha: Option<String>,
+    suggest_expected: bool,
 }
 
 pub fn register_security_scan_steps(
     catalog: &mut StepCatalog,
     context: Arc<E2eContext>,
-) -> Result<()> {
+) -> Result<Arc<dyn WorkflowCleanupHook>> {
     let fixture = Arc::new(FixtureState::default());
     for (descriptor, kind) in descriptors() {
         catalog.register(
@@ -96,7 +103,18 @@ pub fn register_security_scan_steps(
             }),
         )?;
     }
-    Ok(())
+    Ok(Arc::new(SecurityReviewCleanup { fixture }))
+}
+
+struct SecurityReviewCleanup {
+    fixture: Arc<FixtureState>,
+}
+
+#[async_trait]
+impl WorkflowCleanupHook for SecurityReviewCleanup {
+    async fn cleanup(&self, _context: &WorkflowCleanupContext) -> Result<()> {
+        self.fixture.restore().await
+    }
 }
 
 pub fn descriptors_only() -> Vec<StepTypeDescriptor> {
@@ -106,108 +124,177 @@ pub fn descriptors_only() -> Vec<StepTypeDescriptor> {
         .collect()
 }
 
+pub fn definition() -> WorkflowDefinitionV1 {
+    WorkflowDefinitionV1 {
+        schema_version: super::WORKFLOW_SCHEMA_VERSION,
+        id: SCENARIO_ID.into(),
+        scenario_version: 2,
+        description: "Rust-defined local security review: scan and deduplication, optional suggestions, GitHub reconciliation, cron execution, final listing, and mandatory cleanup.".into(),
+        limits: WorkflowLimits {
+            max_parallel: 3,
+            max_nodes: 8,
+            step_timeout_seconds: 420,
+            workflow_timeout_seconds: 1_800,
+            max_total_tokens: Some(500_000),
+            max_cost_usd: Some(25.0),
+            technical_retries: 0,
+        },
+        nodes: vec![
+            semantic_test("scan_commit_a", "security_review.scan_commit_a", &[], true),
+            WorkflowNodeV1 {
+                id: "suggest_commit_a".into(),
+                step_type: "security_review.suggest_commit_a".into(),
+                step_version: 1,
+                config: json!({}),
+                depends_on: vec!["scan_commit_a".into()],
+                inputs: BTreeMap::from([
+                    (
+                        "repository".into(),
+                        WorkflowInputBinding::Output {
+                            node_id: "scan_commit_a".into(),
+                            port: "repository".into(),
+                        },
+                    ),
+                    (
+                        "commit_a".into(),
+                        WorkflowInputBinding::Output {
+                            node_id: "scan_commit_a".into(),
+                            port: "commit_a".into(),
+                        },
+                    ),
+                ]),
+                activation: ActivationPolicy::All(vec![BooleanCondition {
+                    node_id: "scan_commit_a".into(),
+                    port: "should_run_suggest".into(),
+                    equals: true,
+                }]),
+                dependency_policy: DependencyPolicy::Succeeded,
+                required: false,
+            },
+            WorkflowNodeV1 {
+                inputs: BTreeMap::from([(
+                    "scan_run_id".into(),
+                    WorkflowInputBinding::Output {
+                        node_id: "scan_commit_a".into(),
+                        port: "scan_run_id".into(),
+                    },
+                )]),
+                ..semantic_test(
+                    "github_reconciliation",
+                    "security_review.github_reconciliation",
+                    &["scheduled_scan_commit_b"],
+                    true,
+                )
+            },
+            WorkflowNodeV1 {
+                dependency_policy: DependencyPolicy::Terminal,
+                inputs: BTreeMap::from([(
+                    "repository".into(),
+                    WorkflowInputBinding::Output {
+                        node_id: "scan_commit_a".into(),
+                        port: "repository".into(),
+                    },
+                )]),
+                ..semantic_test(
+                    "scheduled_scan_commit_b",
+                    "security_review.scheduled_scan_commit_b",
+                    &["scan_commit_a", "suggest_commit_a"],
+                    true,
+                )
+            },
+            WorkflowNodeV1 {
+                dependency_policy: DependencyPolicy::Terminal,
+                ..semantic_test(
+                    "list_run_history",
+                    "security_review.list_run_history",
+                    &["github_reconciliation"],
+                    true,
+                )
+            },
+        ],
+        criteria: vec![
+            criterion("scan_a_detection", 60, "scan_commit_a"),
+            criterion("suggest_a_quality", 20, "suggest_commit_a"),
+            criterion("scheduled_b_detection", 20, "scheduled_scan_commit_b"),
+        ],
+    }
+}
+
+fn semantic_test(
+    id: &str,
+    step_type: &str,
+    dependencies: &[&str],
+    required: bool,
+) -> WorkflowNodeV1 {
+    WorkflowNodeV1 {
+        id: id.into(),
+        step_type: step_type.into(),
+        step_version: 1,
+        config: json!({}),
+        depends_on: dependencies.iter().map(|value| (*value).into()).collect(),
+        inputs: BTreeMap::new(),
+        activation: ActivationPolicy::Always,
+        dependency_policy: DependencyPolicy::Succeeded,
+        required,
+    }
+}
+
+fn criterion(id: &str, weight: u8, producer_node_id: &str) -> WorkflowCriterionDeclaration {
+    WorkflowCriterionDeclaration {
+        id: id.into(),
+        weight,
+        producer_node_id: producer_node_id.into(),
+        output_port: "assessment".into(),
+        advisory: true,
+    }
+}
+
 fn descriptors() -> Vec<(StepTypeDescriptor, SecurityStepKind)> {
     vec![
         (
             descriptor(
-                "security_scan.preflight",
-                "Validate exact public contracts and the isolated fixture clone.",
-                object_schema(&[
-                    ("repository", string_schema()),
-                    ("scheduled_ref", string_schema()),
-                ], &["repository", "scheduled_ref"]),
+                "security_review.scan_commit_a",
+                "Validate contracts and fixture, request the exact scan twice, await it, assess the report, and prove repository immutability.",
+                object_schema(&[], &[]),
                 BTreeMap::new(),
                 BTreeMap::from([
                     ("repository".into(), port(PortValueKind::TextUtf8, false, None)),
                     ("commit_a".into(), port(PortValueKind::TextUtf8, false, None)),
-                    ("contracts".into(), port(PortValueKind::Json, false, None)),
-                ]),
-                ReplayPolicy::Idempotent,
-                StepOperationalKind::Product,
-            ),
-            SecurityStepKind::Preflight,
-        ),
-        (
-            descriptor(
-                "security_scan.request",
-                "Request one fixed security-scan mode through security-scan::request.",
-                object_schema(&[
-                    ("mode", enum_schema(&["scan", "suggest"])),
-                    ("expect_deduplicated", bool_schema()),
-                ], &["mode", "expect_deduplicated"]),
-                BTreeMap::from([
-                    ("repository".into(), port(PortValueKind::TextUtf8, false, None)),
-                    ("target_sha".into(), port(PortValueKind::TextUtf8, false, None)),
-                    ("original_run_id".into(), port(PortValueKind::TextUtf8, true, None)),
-                ]),
-                BTreeMap::from([
-                    ("run_id".into(), port(PortValueKind::TextUtf8, false, None)),
-                    ("deduplicated".into(), port(PortValueKind::Boolean, false, Some(ControlSource::Deterministic))),
-                    ("response".into(), port(PortValueKind::Json, false, None)),
-                ]),
-                ReplayPolicy::Idempotent,
-                StepOperationalKind::Product,
-            ),
-            SecurityStepKind::Request,
-        ),
-        (
-            descriptor(
-                "security_scan.wait",
-                "Poll security-scan::read until the public run is terminal.",
-                object_schema(&[
-                    ("timeout_seconds", integer_schema(1)),
-                    ("poll_interval_ms", integer_schema(10)),
-                    ("expected_mode", enum_schema(&["scan", "suggest"])),
-                ], &["timeout_seconds", "poll_interval_ms", "expected_mode"]),
-                BTreeMap::from([
-                    ("run_id".into(), port(PortValueKind::TextUtf8, false, None)),
-                    ("repository".into(), port(PortValueKind::TextUtf8, false, None)),
-                    ("target_sha".into(), port(PortValueKind::TextUtf8, false, None)),
-                ]),
-                BTreeMap::from([
-                    ("run".into(), port(PortValueKind::Json, false, None)),
+                    ("scan_run_id".into(), port(PortValueKind::TextUtf8, false, None)),
                     ("report".into(), port(PortValueKind::Json, false, None)),
-                    ("has_findings".into(), port(PortValueKind::Boolean, false, Some(ControlSource::Deterministic))),
-                    ("run_id".into(), port(PortValueKind::TextUtf8, false, None)),
-                ]),
-                ReplayPolicy::Idempotent,
-                StepOperationalKind::Product,
-            ),
-            SecurityStepKind::Wait,
-        ),
-        (
-            descriptor(
-                "security_scan.assess_report",
-                "Apply deterministic report, path, line, privacy, coverage and patch gates.",
-                object_schema(&[
-                    ("mode", enum_schema(&["scan", "suggest"])),
-                    ("seeded_paths", array_string_schema()),
-                ], &["mode", "seeded_paths"]),
-                BTreeMap::from([("report".into(), port(PortValueKind::Json, false, None))]),
-                BTreeMap::from([
-                    ("findings_valid".into(), port(PortValueKind::Boolean, false, Some(ControlSource::Deterministic))),
+                    ("should_run_suggest".into(), port(PortValueKind::Boolean, false, Some(ControlSource::Deterministic))),
                     ("assessment".into(), port(PortValueKind::Assessment, false, None)),
-                    ("report".into(), port(PortValueKind::Json, false, None)),
                 ]),
                 ReplayPolicy::Idempotent,
-                StepOperationalKind::Assessment,
+                StepOperationalKind::Product,
             ),
-            SecurityStepKind::Assess,
+            SecurityStepKind::ScanCommitA,
         ),
         (
             descriptor(
-                "security_scan.reconciliation",
-                "Read or refresh the durable GitHub reconciliation snapshot.",
-                object_schema(&[
-                    ("refresh", bool_schema()),
-                    ("source", nullable_enum_schema(&["dependabot", "code_scanning"])),
-                    ("severity", nullable_enum_schema(&["critical", "high", "medium", "low", "info"])),
-                    ("limit", integer_schema(1)),
-                ], &["refresh", "source", "severity", "limit"]),
+                "security_review.suggest_commit_a",
+                "When deterministic scan output permits it, request suggestions, await the report, check patches in a disposable copy, and prove the fixture stayed unchanged.",
+                object_schema(&[], &[]),
+                BTreeMap::from([
+                    ("repository".into(), port(PortValueKind::TextUtf8, false, None)),
+                    ("commit_a".into(), port(PortValueKind::TextUtf8, false, None)),
+                ]),
                 BTreeMap::from([
                     ("run_id".into(), port(PortValueKind::TextUtf8, false, None)),
-                    ("expected_snapshot".into(), port(PortValueKind::Json, true, None)),
+                    ("report".into(), port(PortValueKind::Json, false, None)),
+                    ("assessment".into(), port(PortValueKind::Assessment, false, None)),
                 ]),
+                ReplayPolicy::Idempotent,
+                StepOperationalKind::Product,
+            ),
+            SecurityStepKind::SuggestCommitA,
+        ),
+        (
+            descriptor(
+                "security_review.github_reconciliation",
+                "Read cached state, refresh GitHub sources, verify the persisted reread, and exercise source/severity pagination filters.",
+                object_schema(&[], &[]),
+                BTreeMap::from([("scan_run_id".into(), port(PortValueKind::TextUtf8, false, None))]),
                 BTreeMap::from([("snapshot".into(), port(PortValueKind::Json, false, None))]),
                 ReplayPolicy::Idempotent,
                 StepOperationalKind::Product,
@@ -216,79 +303,32 @@ fn descriptors() -> Vec<(StepTypeDescriptor, SecurityStepKind)> {
         ),
         (
             descriptor(
-                "security_scan.list",
-                "List security runs with fixed filters and bounded pagination.",
-                object_schema(&[
-                    ("repository", string_schema()),
-                    ("status", nullable_enum_schema(&["queued", "materializing", "materialized", "dispatching", "analyzing", "completed", "failed", "cancelling", "cancelled"])),
-                    ("limit", integer_schema(1)),
-                    ("expected_modes", array_string_schema()),
-                    ("expected_count", integer_schema(0)),
-                ], &["repository", "status", "limit", "expected_modes", "expected_count"]),
+                "security_review.scheduled_scan_commit_b",
+                "Create the delayed ref, observe the cron-created exact-SHA scan, assess its report, and leave restoration to the mandatory cleanup hook.",
+                object_schema(&[], &[]),
+                BTreeMap::from([("repository".into(), port(PortValueKind::TextUtf8, false, None))]),
+                BTreeMap::from([
+                    ("run_id".into(), port(PortValueKind::TextUtf8, false, None)),
+                    ("commit_b".into(), port(PortValueKind::TextUtf8, false, None)),
+                    ("report".into(), port(PortValueKind::Json, false, None)),
+                    ("assessment".into(), port(PortValueKind::Assessment, false, None)),
+                ]),
+                ReplayPolicy::Compensable,
+                StepOperationalKind::Product,
+            ),
+            SecurityStepKind::ScheduledScanCommitB,
+        ),
+        (
+            descriptor(
+                "security_review.list_run_history",
+                "Verify the final completed scan, optional suggestion, and cron run through bounded list filters.",
+                object_schema(&[], &[]),
                 BTreeMap::new(),
                 BTreeMap::from([("runs".into(), port(PortValueKind::Json, false, None))]),
                 ReplayPolicy::Idempotent,
                 StepOperationalKind::Product,
             ),
-            SecurityStepKind::List,
-        ),
-        (
-            descriptor(
-                "security_scan.fixture_integrity",
-                "Capture HEAD, status and tracked hashes from the isolated fixture clone.",
-                object_schema(&[("expected", enum_schema(&["commit_a", "commit_b"]))], &["expected"]),
-                BTreeMap::new(),
-                BTreeMap::from([("snapshot".into(), port(PortValueKind::Json, false, None))]),
-                ReplayPolicy::Idempotent,
-                StepOperationalKind::Assessment,
-            ),
-            SecurityStepKind::Integrity,
-        ),
-        (
-            descriptor(
-                "security_scan.create_scheduled_commit",
-                "Create the intentionally delayed local ref used only by the cron assertion.",
-                object_schema(&[("scheduled_ref", string_schema())], &["scheduled_ref"]),
-                BTreeMap::new(),
-                BTreeMap::from([("commit_b".into(), port(PortValueKind::TextUtf8, false, None))]),
-                ReplayPolicy::Compensable,
-                StepOperationalKind::Transformation,
-            ),
-            SecurityStepKind::CreateScheduledCommit,
-        ),
-        (
-            descriptor(
-                "security_scan.finalize",
-                "Aggregate immutable evidence and restore only fixture state created by this attempt.",
-                object_schema(&[], &[]),
-                BTreeMap::new(),
-                BTreeMap::from([("completed".into(), port(PortValueKind::Boolean, false, Some(ControlSource::Deterministic)))]),
-                ReplayPolicy::Idempotent,
-                StepOperationalKind::Assessment,
-            ),
-            SecurityStepKind::Final,
-        ),
-        (
-            descriptor(
-                "security_scan.wait_scheduled",
-                "Observe a cron-created run for an exact SHA without issuing a manual request.",
-                object_schema(&[
-                    ("timeout_seconds", integer_schema(1)),
-                    ("poll_interval_ms", integer_schema(10)),
-                ], &["timeout_seconds", "poll_interval_ms"]),
-                BTreeMap::from([
-                    ("repository".into(), port(PortValueKind::TextUtf8, false, None)),
-                    ("target_sha".into(), port(PortValueKind::TextUtf8, false, None)),
-                ]),
-                BTreeMap::from([
-                    ("run_id".into(), port(PortValueKind::TextUtf8, false, None)),
-                    ("run".into(), port(PortValueKind::Json, false, None)),
-                    ("report".into(), port(PortValueKind::Json, false, None)),
-                ]),
-                ReplayPolicy::Idempotent,
-                StepOperationalKind::Product,
-            ),
-            SecurityStepKind::WaitScheduled,
+            SecurityStepKind::ListRunHistory,
         ),
     ]
 }
@@ -343,24 +383,14 @@ fn required_contract(function_id: &str) -> RequiredFunctionContract {
 #[async_trait]
 impl StepExecutor for SecurityExecutor {
     async fn preflight(&self, _context: &StepExecutorContext) -> Result<()> {
-        if matches!(
-            self.kind,
-            SecurityStepKind::Preflight
-                | SecurityStepKind::Request
-                | SecurityStepKind::Wait
-                | SecurityStepKind::Reconciliation
-                | SecurityStepKind::List
-                | SecurityStepKind::WaitScheduled
-        ) {
-            for function in [
-                REQUEST_FUNCTION,
-                READ_FUNCTION,
-                LIST_FUNCTION,
-                RECONCILIATION_FUNCTION,
-            ] {
-                if !self.context.function_exists(function).await? {
-                    bail!("required security-scan function '{function}' is unavailable");
-                }
+        for function in [
+            REQUEST_FUNCTION,
+            READ_FUNCTION,
+            LIST_FUNCTION,
+            RECONCILIATION_FUNCTION,
+        ] {
+            if !self.context.function_exists(function).await? {
+                bail!("required security-scan function '{function}' is unavailable");
             }
         }
         Ok(())
@@ -368,16 +398,11 @@ impl StepExecutor for SecurityExecutor {
 
     async fn execute(&self, context: StepExecutorContext) -> Result<StepExecutorOutput> {
         match self.kind {
-            SecurityStepKind::Preflight => self.preflight_fixture(&context).await,
-            SecurityStepKind::Request => self.request_scan(&context).await,
-            SecurityStepKind::Wait => self.wait_run(&context).await,
-            SecurityStepKind::Assess => self.assess_report(&context).await,
+            SecurityStepKind::ScanCommitA => self.scan_commit_a(&context).await,
+            SecurityStepKind::SuggestCommitA => self.suggest_commit_a(&context).await,
             SecurityStepKind::Reconciliation => self.reconciliation(&context).await,
-            SecurityStepKind::List => self.list(&context).await,
-            SecurityStepKind::Integrity => self.integrity(&context).await,
-            SecurityStepKind::CreateScheduledCommit => self.create_scheduled_commit(&context).await,
-            SecurityStepKind::WaitScheduled => self.wait_scheduled(&context).await,
-            SecurityStepKind::Final => self.finalize(&context).await,
+            SecurityStepKind::ScheduledScanCommitB => self.scheduled_scan_commit_b(&context).await,
+            SecurityStepKind::ListRunHistory => self.list_run_history(&context).await,
         }
     }
 
@@ -398,16 +423,289 @@ impl StepExecutor for SecurityExecutor {
         }
         Ok(output)
     }
-
-    async fn cleanup_workflow(&self, _context: &WorkflowCleanupContext) -> Result<()> {
-        if matches!(self.kind, SecurityStepKind::Preflight) {
-            self.fixture.restore().await?;
-        }
-        Ok(())
-    }
 }
 
 impl SecurityExecutor {
+    async fn scan_commit_a(&self, context: &StepExecutorContext) -> Result<StepExecutorOutput> {
+        let mut result = StepExecutorOutput::default();
+        let preflight = self
+            .preflight_fixture(&operation_context(
+                context,
+                json!({"repository": REPOSITORY, "scheduled_ref": SCHEDULED_REF}),
+                BTreeMap::new(),
+            ))
+            .await?;
+        let repository = operation_output_string(&preflight, "repository")?;
+        let commit_a = operation_output_string(&preflight, "commit_a")?;
+        append_operation(&mut result, preflight, "contracts");
+
+        let request = self
+            .request_scan(&operation_context(
+                context,
+                json!({"mode": "scan", "expect_deduplicated": null}),
+                typed_inputs([
+                    ("repository", text_value(repository.clone())),
+                    ("target_sha", text_value(commit_a.clone())),
+                ]),
+            ))
+            .await?;
+        let scan_run_id = operation_output_string(&request, "run_id")?;
+        append_operation(&mut result, request, "request");
+
+        let duplicate = self
+            .request_scan(&operation_context(
+                context,
+                json!({"mode": "scan", "expect_deduplicated": true}),
+                typed_inputs([
+                    ("repository", text_value(repository.clone())),
+                    ("target_sha", text_value(commit_a.clone())),
+                    ("original_run_id", text_value(scan_run_id.clone())),
+                ]),
+            ))
+            .await?;
+        append_operation(&mut result, duplicate, "duplicate_request");
+
+        let waited = self
+            .wait_run(&operation_context(
+                context,
+                json!({"expected_mode": "scan", "timeout_seconds": 360, "poll_interval_ms": 500}),
+                typed_inputs([
+                    ("run_id", text_value(scan_run_id.clone())),
+                    ("repository", text_value(repository.clone())),
+                    ("target_sha", text_value(commit_a.clone())),
+                ]),
+            ))
+            .await?;
+        let report = operation_output_value(&waited, "report")?;
+        let poll_metrics = waited.metrics.clone();
+        append_operation(&mut result, waited, "run");
+
+        let assessed = self
+            .assess_report(&operation_context(
+                context,
+                json!({"mode": "scan", "seeded_paths": SEEDED_PATHS}),
+                typed_inputs([("report", json_value(report.clone()))]),
+            ))
+            .await?;
+        let findings_valid = operation_output_bool(&assessed, "findings_valid")?;
+        let assessment = operation_output(&assessed, "assessment")?;
+        let finding_count = report
+            .get("findings")
+            .and_then(Value::as_array)
+            .map_or(0, Vec::len);
+        let should_run_suggest = findings_valid && finding_count > 0;
+        self.fixture.lock().suggest_expected = should_run_suggest;
+        append_operation(&mut result, assessed, "report");
+
+        let integrity = self
+            .integrity(&operation_context(
+                context,
+                json!({"expected": "commit_a"}),
+                BTreeMap::new(),
+            ))
+            .await?;
+        append_operation(&mut result, integrity, "integrity");
+        result.outputs = BTreeMap::from([
+            ("repository".into(), text_value(repository)),
+            ("commit_a".into(), text_value(commit_a)),
+            ("scan_run_id".into(), text_value(scan_run_id)),
+            ("report".into(), json_value(report)),
+            ("should_run_suggest".into(), bool_value(should_run_suggest)),
+            ("assessment".into(), assessment),
+        ]);
+        result.metrics = Some(json!({
+            "request_count": 2,
+            "finding_count": finding_count,
+            "suggestion_branch_enabled": should_run_suggest,
+            "poll": poll_metrics,
+        }));
+        Ok(result)
+    }
+
+    async fn suggest_commit_a(&self, context: &StepExecutorContext) -> Result<StepExecutorOutput> {
+        let repository = input_string(context, "repository")?;
+        let commit_a = input_string(context, "commit_a")?;
+        let mut result = StepExecutorOutput::default();
+        let request = self
+            .request_scan(&operation_context(
+                context,
+                json!({"mode": "suggest", "expect_deduplicated": null}),
+                typed_inputs([
+                    ("repository", text_value(repository.clone())),
+                    ("target_sha", text_value(commit_a.clone())),
+                ]),
+            ))
+            .await?;
+        let run_id = operation_output_string(&request, "run_id")?;
+        append_operation(&mut result, request, "request");
+        let waited = self
+            .wait_run(&operation_context(
+                context,
+                json!({"expected_mode": "suggest", "timeout_seconds": 360, "poll_interval_ms": 500}),
+                typed_inputs([
+                    ("run_id", text_value(run_id.clone())),
+                    ("repository", text_value(repository)),
+                    ("target_sha", text_value(commit_a)),
+                ]),
+            ))
+            .await?;
+        let report = operation_output_value(&waited, "report")?;
+        let poll_metrics = waited.metrics.clone();
+        append_operation(&mut result, waited, "run");
+        let assessed = self
+            .assess_report(&operation_context(
+                context,
+                json!({"mode": "suggest", "seeded_paths": SEEDED_PATHS}),
+                typed_inputs([("report", json_value(report.clone()))]),
+            ))
+            .await?;
+        let assessment = operation_output(&assessed, "assessment")?;
+        append_operation(&mut result, assessed, "report");
+        let integrity = self
+            .integrity(&operation_context(
+                context,
+                json!({"expected": "commit_a"}),
+                BTreeMap::new(),
+            ))
+            .await?;
+        append_operation(&mut result, integrity, "integrity");
+        result.outputs = BTreeMap::from([
+            ("run_id".into(), text_value(run_id)),
+            ("report".into(), json_value(report)),
+            ("assessment".into(), assessment),
+        ]);
+        result.metrics = Some(json!({"request_count": 1, "poll": poll_metrics}));
+        Ok(result)
+    }
+
+    async fn reconciliation(&self, context: &StepExecutorContext) -> Result<StepExecutorOutput> {
+        let run_id = input_string(context, "scan_run_id")?;
+        let mut result = StepExecutorOutput::default();
+        let cached = self
+            .reconciliation_operation(&operation_context(
+                context,
+                json!({"refresh": false, "source": null, "severity": null, "limit": 100}),
+                typed_inputs([("run_id", text_value(run_id.clone()))]),
+            ))
+            .await?;
+        append_operation(&mut result, cached, "cached");
+        let refreshed = self
+            .reconciliation_operation(&operation_context(
+                context,
+                json!({"refresh": true, "source": null, "severity": null, "limit": 100}),
+                typed_inputs([("run_id", text_value(run_id.clone()))]),
+            ))
+            .await?;
+        let snapshot = operation_output_value(&refreshed, "snapshot")?;
+        append_operation(&mut result, refreshed, "refreshed");
+        let reread = self
+            .reconciliation_operation(&operation_context(
+                context,
+                json!({"refresh": false, "source": null, "severity": null, "limit": 100}),
+                typed_inputs([
+                    ("run_id", text_value(run_id.clone())),
+                    ("expected_snapshot", json_value(snapshot.clone())),
+                ]),
+            ))
+            .await?;
+        append_operation(&mut result, reread, "reread");
+        let filtered = self
+            .reconciliation_operation(&operation_context(
+                context,
+                json!({"refresh": false, "source": "dependabot", "severity": "high", "limit": 1}),
+                typed_inputs([("run_id", text_value(run_id))]),
+            ))
+            .await?;
+        append_operation(&mut result, filtered, "filtered");
+        result.outputs = BTreeMap::from([("snapshot".into(), json_value(snapshot))]);
+        result.metrics = Some(json!({"reconciliation_operations": 4}));
+        Ok(result)
+    }
+
+    async fn scheduled_scan_commit_b(
+        &self,
+        context: &StepExecutorContext,
+    ) -> Result<StepExecutorOutput> {
+        let repository = input_string(context, "repository")?;
+        let mut result = StepExecutorOutput::default();
+        let created = self
+            .create_scheduled_commit(&operation_context(
+                context,
+                json!({"scheduled_ref": SCHEDULED_REF}),
+                BTreeMap::new(),
+            ))
+            .await?;
+        let commit_b = operation_output_string(&created, "commit_b")?;
+        append_operation(&mut result, created, "scheduled_commit");
+        let waited = self
+            .wait_scheduled(&operation_context(
+                context,
+                json!({"timeout_seconds": 180, "poll_interval_ms": 500}),
+                typed_inputs([
+                    ("repository", text_value(repository)),
+                    ("target_sha", text_value(commit_b.clone())),
+                ]),
+            ))
+            .await?;
+        let run_id = operation_output_string(&waited, "run_id")?;
+        let report = operation_output_value(&waited, "report")?;
+        let poll_metrics = waited.metrics.clone();
+        append_operation(&mut result, waited, "scheduled_run");
+        let assessed = self
+            .assess_report(&operation_context(
+                context,
+                json!({"mode": "scan", "seeded_paths": SEEDED_PATHS}),
+                typed_inputs([("report", json_value(report.clone()))]),
+            ))
+            .await?;
+        let assessment = operation_output(&assessed, "assessment")?;
+        append_operation(&mut result, assessed, "report");
+        let integrity = self
+            .integrity(&operation_context(
+                context,
+                json!({"expected": "commit_b"}),
+                BTreeMap::new(),
+            ))
+            .await?;
+        append_operation(&mut result, integrity, "integrity");
+        result.outputs = BTreeMap::from([
+            ("run_id".into(), text_value(run_id)),
+            ("commit_b".into(), text_value(commit_b)),
+            ("report".into(), json_value(report)),
+            ("assessment".into(), assessment),
+        ]);
+        result.metrics = Some(json!({"cron_poll": poll_metrics}));
+        Ok(result)
+    }
+
+    async fn list_run_history(&self, context: &StepExecutorContext) -> Result<StepExecutorOutput> {
+        let suggest_expected = self.fixture.lock().suggest_expected;
+        let expected_modes = if suggest_expected {
+            json!(["scan", "suggest"])
+        } else {
+            json!(["scan"])
+        };
+        let mut output = self
+            .list(&operation_context(
+                context,
+                json!({
+                    "repository": REPOSITORY,
+                    "status": "completed",
+                    "limit": 100,
+                    "expected_count": if suggest_expected { 3 } else { 2 },
+                    "expected_modes": expected_modes,
+                    "expect_suggest": suggest_expected,
+                }),
+                BTreeMap::new(),
+            ))
+            .await?;
+        output.metrics = Some(json!({
+            "listed_run_count": output.outputs.get("runs").and_then(|value| value.value.get("runs")).and_then(Value::as_array).map_or(0, Vec::len),
+            "suggestion_expected": suggest_expected,
+        }));
+        Ok(output)
+    }
+
     async fn preflight_fixture(&self, context: &StepExecutorContext) -> Result<StepExecutorOutput> {
         let repository = config_string(context, "repository")?;
         let scheduled_ref = config_string(context, "scheduled_ref")?;
@@ -460,7 +758,11 @@ impl SecurityExecutor {
         let target_sha = input_string(context, "target_sha")?;
         validate_sha(&target_sha)?;
         let mode = config_string(context, "mode")?;
-        let expected_deduplicated = config_bool(context, "expect_deduplicated")?;
+        let expected_deduplicated = context
+            .node
+            .config
+            .get("expect_deduplicated")
+            .and_then(Value::as_bool);
         let response = self
             .context
             .trigger_value(
@@ -478,15 +780,17 @@ impl SecurityExecutor {
             .get("original_run_id")
             .and_then(|value| value.value.as_str());
         let identity_matches = match (expected_deduplicated, original_run_id) {
-            (true, Some(original)) => original == run_id,
-            (true, None) => false,
-            (false, _) => true,
+            (Some(true), Some(original)) => original == run_id,
+            (Some(true), None) => false,
+            _ => true,
         };
+        let deduplication_matches =
+            expected_deduplicated.is_none_or(|expected| expected == deduplicated);
         let gate = WorkflowGateResult {
             id: "request_identity_and_deduplication".into(),
-            passed: deduplicated == expected_deduplicated && identity_matches,
+            passed: deduplication_matches && identity_matches,
             reason: format!(
-                "Expected deduplicated={expected_deduplicated}; observed {deduplicated}; stable run identity={identity_matches}."
+                "Expected deduplicated={expected_deduplicated:?}; observed {deduplicated}; stable run identity={identity_matches}."
             ),
             evidence_ids: vec![format!("{}.request", context.node.id)],
         };
@@ -514,6 +818,7 @@ impl SecurityExecutor {
         let timeout = Duration::from_secs(config_u64(context, "timeout_seconds")?);
         let interval = Duration::from_millis(config_u64(context, "poll_interval_ms")?);
         let started = Instant::now();
+        let mut poll_count = 0_u64;
         loop {
             if *context.cancellation.borrow() {
                 bail!("security-scan wait was cancelled");
@@ -522,6 +827,7 @@ impl SecurityExecutor {
                 .context
                 .trigger_value(READ_FUNCTION, json!({"run_id": run_id}))
                 .await?;
+            poll_count += 1;
             let run = response
                 .get("run")
                 .filter(|value| !value.is_null())
@@ -542,7 +848,7 @@ impl SecurityExecutor {
                     && required_string(&run, "repository")? == repository
                     && required_string(&run, "target_sha")? == target_sha
                     && required_string(&run, "mode")? == expected_mode;
-                return Ok(output_with_internal_evaluation(
+                let mut output = output_with_internal_evaluation(
                     output_with_asset(
                         BTreeMap::from([
                             ("run".into(), json_value(run.clone())),
@@ -560,7 +866,12 @@ impl SecurityExecutor {
                         "Completed run retains the requested id, repository, full SHA and mode.",
                     )],
                     Vec::new(),
-                ));
+                );
+                output.metrics = Some(json!({
+                    "poll_count": poll_count,
+                    "wait_duration_ms": started.elapsed().as_millis(),
+                }));
+                return Ok(output);
             }
             if matches!(status.as_str(), "failed" | "cancelled") {
                 bail!(
@@ -646,7 +957,10 @@ impl SecurityExecutor {
         ))
     }
 
-    async fn reconciliation(&self, context: &StepExecutorContext) -> Result<StepExecutorOutput> {
+    async fn reconciliation_operation(
+        &self,
+        context: &StepExecutorContext,
+    ) -> Result<StepExecutorOutput> {
         let run_id = input_string(context, "run_id")?;
         let request = json!({
             "run_id": run_id,
@@ -741,15 +1055,14 @@ impl SecurityExecutor {
             let fixture = self.fixture.lock();
             (fixture.initial_head.clone(), fixture.scheduled_sha.clone())
         };
+        let expect_suggest = config_bool(context, "expect_suggest")?;
         let expected_lifecycle_present =
             commit_a.zip(commit_b).is_some_and(|(commit_a, commit_b)| {
-                [
-                    (commit_a.as_str(), "scan"),
-                    (commit_a.as_str(), "suggest"),
-                    (commit_b.as_str(), "scan"),
-                ]
-                .into_iter()
-                .all(|(sha, mode)| {
+                let mut expected = vec![(commit_a.as_str(), "scan"), (commit_b.as_str(), "scan")];
+                if expect_suggest {
+                    expected.push((commit_a.as_str(), "suggest"));
+                }
+                expected.into_iter().all(|(sha, mode)| {
                     runs.iter().any(|run| {
                         run.get("target_sha").and_then(Value::as_str) == Some(sha)
                             && run.get("mode").and_then(Value::as_str) == Some(mode)
@@ -865,14 +1178,6 @@ impl SecurityExecutor {
         ))
     }
 
-    async fn finalize(&self, _context: &StepExecutorContext) -> Result<StepExecutorOutput> {
-        self.fixture.restore().await?;
-        Ok(StepExecutorOutput {
-            outputs: BTreeMap::from([("completed".into(), bool_value(true))]),
-            ..StepExecutorOutput::default()
-        })
-    }
-
     async fn wait_scheduled(&self, context: &StepExecutorContext) -> Result<StepExecutorOutput> {
         let repository = input_string(context, "repository")?;
         let target_sha = input_string(context, "target_sha")?;
@@ -880,7 +1185,11 @@ impl SecurityExecutor {
         let timeout = Duration::from_secs(config_u64(context, "timeout_seconds")?);
         let interval = Duration::from_millis(config_u64(context, "poll_interval_ms")?);
         let started = Instant::now();
+        let mut poll_count = 0_u64;
         loop {
+            if *context.cancellation.borrow() {
+                bail!("scheduled security-scan wait was cancelled");
+            }
             let listed = self
                 .context
                 .trigger_value(
@@ -888,6 +1197,7 @@ impl SecurityExecutor {
                     json!({"repository": repository, "limit": 100}),
                 )
                 .await?;
+            poll_count += 1;
             let scheduled = listed
                 .get("runs")
                 .and_then(Value::as_array)
@@ -912,7 +1222,7 @@ impl SecurityExecutor {
                         .cloned()
                         .context("completed scheduled run is missing report")?;
                     let evidence = json!({"listed": summary, "run": run});
-                    return Ok(output_with_internal_evaluation(
+                    let mut output = output_with_internal_evaluation(
                         output_with_asset(
                             BTreeMap::from([
                                 ("run_id".into(), text_value(run_id)),
@@ -929,7 +1239,12 @@ impl SecurityExecutor {
                             "A cron-created scan completed for commit B without a manual request node.",
                         )],
                         Vec::new(),
-                    ));
+                    );
+                    output.metrics = Some(json!({
+                        "poll_count": poll_count,
+                        "wait_duration_ms": started.elapsed().as_millis(),
+                    }));
+                    return Ok(output);
                 }
             }
             if started.elapsed() >= timeout {
@@ -1380,6 +1695,106 @@ fn output_with_internal_evaluation(
     output
 }
 
+fn operation_context(
+    context: &StepExecutorContext,
+    config: Value,
+    inputs: BTreeMap<String, TypedPortValue>,
+) -> StepExecutorContext {
+    let mut operation = context.clone();
+    operation.node.config = config;
+    operation.inputs = inputs;
+    operation
+}
+
+fn typed_inputs<const N: usize>(
+    inputs: [(&str, TypedPortValue); N],
+) -> BTreeMap<String, TypedPortValue> {
+    inputs
+        .into_iter()
+        .map(|(key, value)| (key.to_string(), value))
+        .collect()
+}
+
+fn operation_output(output: &StepExecutorOutput, key: &str) -> Result<TypedPortValue> {
+    output
+        .outputs
+        .get(key)
+        .cloned()
+        .with_context(|| format!("security review operation did not produce '{key}'"))
+}
+
+fn operation_output_string(output: &StepExecutorOutput, key: &str) -> Result<String> {
+    operation_output(output, key)?
+        .value
+        .as_str()
+        .map(str::to_string)
+        .with_context(|| format!("security review operation output '{key}' is not text"))
+}
+
+fn operation_output_bool(output: &StepExecutorOutput, key: &str) -> Result<bool> {
+    operation_output(output, key)?
+        .value
+        .as_bool()
+        .with_context(|| format!("security review operation output '{key}' is not boolean"))
+}
+
+fn operation_output_value(output: &StepExecutorOutput, key: &str) -> Result<Value> {
+    Ok(operation_output(output, key)?.value)
+}
+
+fn append_operation(
+    target: &mut StepExecutorOutput,
+    mut operation: StepExecutorOutput,
+    asset_id: &str,
+) {
+    for asset in &mut operation.captured_assets {
+        let previous = asset.id.clone();
+        asset.id = asset_id.to_string();
+        let previous_evidence = asset
+            .provenance
+            .first()
+            .map(|provenance| format!("{}.{}", provenance.source_step_id, previous));
+        let current_evidence = asset
+            .provenance
+            .first()
+            .map(|provenance| format!("{}.{}", provenance.source_step_id, asset_id));
+        if let (Some(previous), Some(current)) = (previous_evidence, current_evidence) {
+            for gate in &mut operation.evaluation.hard_gates {
+                for evidence in &mut gate.evidence_ids {
+                    if evidence == &previous {
+                        *evidence = current.clone();
+                    }
+                }
+            }
+            for evaluation in &mut operation.evaluation.evaluations {
+                for evidence in &mut evaluation.evidence_ids {
+                    if evidence == &previous {
+                        *evidence = current.clone();
+                    }
+                }
+            }
+        }
+    }
+    for gate in &mut operation.evaluation.hard_gates {
+        gate.id = format!("{asset_id}.{}", gate.id);
+    }
+    for evaluation in &mut operation.evaluation.evaluations {
+        evaluation.id = format!("{asset_id}.{}", evaluation.id);
+    }
+    target.captured_assets.extend(operation.captured_assets);
+    target
+        .evaluation
+        .hard_gates
+        .extend(operation.evaluation.hard_gates);
+    target
+        .evaluation
+        .evaluations
+        .extend(operation.evaluation.evaluations);
+    if target.technical_failure.is_none() {
+        target.technical_failure = operation.technical_failure;
+    }
+}
+
 fn text_value(value: impl Into<String>) -> TypedPortValue {
     TypedPortValue {
         kind: PortValueKind::TextUtf8,
@@ -1568,30 +1983,6 @@ fn object_schema(properties: &[(&str, Value)], required: &[&str]) -> Value {
     })
 }
 
-fn string_schema() -> Value {
-    json!({"type": "string", "minLength": 1})
-}
-
-fn bool_schema() -> Value {
-    json!({"type": "boolean"})
-}
-
-fn integer_schema(minimum: u64) -> Value {
-    json!({"type": "integer", "minimum": minimum})
-}
-
-fn enum_schema(values: &[&str]) -> Value {
-    json!({"type": "string", "enum": values})
-}
-
-fn nullable_enum_schema(values: &[&str]) -> Value {
-    json!({"type": ["string", "null"], "enum": values.iter().map(|value| Value::String((*value).into())).chain(std::iter::once(Value::Null)).collect::<Vec<_>>()})
-}
-
-fn array_string_schema() -> Value {
-    json!({"type": "array", "items": {"type": "string"}, "uniqueItems": true})
-}
-
 fn port(
     kind: PortValueKind,
     optional: bool,
@@ -1733,16 +2124,13 @@ mod tests {
         for descriptor in descriptors_only() {
             catalog.register_descriptor(descriptor).unwrap();
         }
-        let definition: super::super::WorkflowDefinitionV1 = serde_json::from_str(include_str!(
-            "../../config/workflows/security-scan.full.json"
-        ))
-        .unwrap();
+        let definition = definition();
         let materialized = definition.validate(&catalog).unwrap();
-        assert_eq!(materialized.definition.nodes.len(), 18);
+        assert_eq!(materialized.definition.nodes.len(), 5);
         assert!(materialized
             .definition
             .nodes
             .iter()
-            .any(|node| node.id == "wait_scheduled_scan_b"));
+            .any(|node| node.id == "scheduled_scan_commit_b"));
     }
 }

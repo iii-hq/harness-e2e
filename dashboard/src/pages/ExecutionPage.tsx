@@ -4,7 +4,7 @@ import { ThemeToggle } from '@/components/ThemeToggle'
 import { TranscriptDialog } from '@/components/TranscriptDialog'
 import {
   hashForExecution,
-  hashForWorkflows,
+  hashForSecurityReview,
   hashForWorkspace,
 } from '@/hooks/use-hash-route'
 import {
@@ -570,7 +570,7 @@ export function ExecutionPage({
           <ThemeToggle />
           <a
             className="button button-secondary"
-            href={hashForWorkflows(null, executionId)}
+            href={hashForSecurityReview(executionId)}
           >
             Open executed DAG <span aria-hidden="true">→</span>
           </a>

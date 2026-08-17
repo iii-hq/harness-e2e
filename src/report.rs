@@ -1660,6 +1660,7 @@ impl E2eReport {
                     workflow_sha256: workflow_sha256.clone(),
                     run_id: run.run_id.clone(),
                     attempt_id: run.attempt_id.clone(),
+                    flow_snapshot: serde_json::Value::Null,
                     updated_at: self.execution.completed_at.clone(),
                     terminal_nodes: vec!["scenario".into()],
                     active_nodes: Vec::new(),
@@ -1687,10 +1688,12 @@ impl E2eReport {
                     duration_ms: run.wall_time_ms,
                     passed: run.status == RunStatus::Passed,
                     technical_failure: run.status.is_technical_failure(),
+                    flow_snapshot: serde_json::Value::Null,
                     steps: vec![step],
                     criteria: Vec::new(),
                     aggregate_cost_usd: run.cost.total_usd,
                     checkpoint,
+                    cleanup: crate::workflow::WorkflowCleanupReport::default(),
                 });
             }
         }
@@ -2736,10 +2739,12 @@ mod tests {
             duration_ms: 1_000,
             passed: false,
             technical_failure: false,
+            flow_snapshot: Value::Null,
             steps: vec![step],
             criteria: Vec::new(),
             aggregate_cost_usd: None,
             checkpoint,
+            cleanup: crate::workflow::WorkflowCleanupReport::default(),
         });
 
         let contract = AssessmentContract::from_assessment_evidence(&report);
