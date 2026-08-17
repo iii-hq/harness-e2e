@@ -8862,6 +8862,19 @@ footer {
   margin-top: 1.25rem;
 }
 
+.plan-comparison-panel {
+  scroll-margin-top: 18px;
+}
+
+.plan-comparison-panel:focus {
+  outline: none;
+}
+
+.plan-comparison-panel:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 3px;
+}
+
 .plan-comparison-empty {
   border-color: var(--line-strong);
 }
@@ -8948,34 +8961,38 @@ footer {
   text-transform: uppercase;
 }
 
-.plan-comparison-metric-card > div {
+.plan-comparison-metric-values {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
-  align-items: end;
-  gap: 0.24rem 0.5rem;
+  align-items: center;
+  gap: 0.5rem;
 }
 
-.plan-comparison-metric-card > div small {
+.plan-comparison-metric-values > span {
+  display: grid;
+  min-width: 0;
+  gap: 0.24rem;
+}
+
+.plan-comparison-metric-values > span:last-child {
+  justify-items: end;
+  text-align: right;
+}
+
+.plan-comparison-metric-values small {
   color: var(--text-muted);
   font-size: 0.56rem;
   text-transform: uppercase;
 }
 
-.plan-comparison-metric-card > div small:nth-of-type(2),
-.plan-comparison-metric-card > div strong:nth-of-type(2) {
-  text-align: right;
-}
-
-.plan-comparison-metric-card > div i {
-  grid-row: 1 / span 2;
-  grid-column: 2;
-  align-self: center;
+.plan-comparison-metric-values i {
   color: var(--text-muted);
   font-style: normal;
 }
 
-.plan-comparison-metric-card > div strong {
+.plan-comparison-metric-values strong {
   overflow: hidden;
+  max-width: 100%;
   font: 650 0.76rem var(--font-mono);
   text-overflow: ellipsis;
   white-space: nowrap;

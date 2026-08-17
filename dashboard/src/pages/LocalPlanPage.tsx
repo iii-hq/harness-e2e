@@ -559,12 +559,16 @@ function ComparisonMetricCard({ metric }: { metric: PlanMetricComparison }) {
   return (
     <article className="plan-comparison-metric-card">
       <span>{metric.label}</span>
-      <div>
-        <small>Baseline</small>
-        <strong>{formatPlanMetricValue(metric, 'baseline')}</strong>
+      <div className="plan-comparison-metric-values">
+        <span>
+          <small>Baseline</small>
+          <strong>{formatPlanMetricValue(metric, 'baseline')}</strong>
+        </span>
         <i aria-hidden="true">→</i>
-        <small>Candidate</small>
-        <strong>{formatPlanMetricValue(metric, 'candidate')}</strong>
+        <span>
+          <small>Candidate</small>
+          <strong>{formatPlanMetricValue(metric, 'candidate')}</strong>
+        </span>
       </div>
       <b className={`metric-tone-${metric.tone}`}>
         {formatPlanMetricDelta(metric)}
@@ -706,6 +710,8 @@ export function PlanComparisonPanel({
     <section
       className={`panel plan-panel-composite plan-comparison-panel plan-comparison-${comparison.verdict}`}
       aria-labelledby="plan-comparison-title"
+      aria-live="polite"
+      tabIndex={-1}
     >
       <div className="panel-heading plan-panel-heading">
         <div>
@@ -1484,6 +1490,20 @@ export function LocalPlanDetailPage({ planId }: { planId: string }) {
     plan && selectedCandidateId
       ? plan.candidate_execution_ids.indexOf(selectedCandidateId) + 1
       : null
+  const selectCandidate = (id: string) => {
+    setCandidateSelectionPinned(true)
+    setCandidateDetail(null)
+    setComparisonError(null)
+    setComparisonLoading(true)
+    setSelectedCandidateId(id)
+    window.requestAnimationFrame(() => {
+      const panel = document
+        .getElementById('plan-comparison-title')
+        ?.closest<HTMLElement>('section')
+      panel?.focus()
+      panel?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+    })
+  }
 
   return (
     <>
@@ -1577,13 +1597,7 @@ export function LocalPlanDetailPage({ planId }: { planId: string }) {
               plan={plan}
               summaries={executionSummaries}
               selectedCandidateId={selectedCandidateId}
-              onSelectCandidate={(id) => {
-                setCandidateSelectionPinned(true)
-                setCandidateDetail(null)
-                setComparisonError(null)
-                setComparisonLoading(true)
-                setSelectedCandidateId(id)
-              }}
+              onSelectCandidate={selectCandidate}
               loading={historyLoading}
               error={historyError}
             />
