@@ -980,6 +980,7 @@ mod tests {
                 child_sessions: Some(1),
                 function_calls: Some(1),
                 function_call_errors: Some(0),
+                context_compactions: Some(0),
                 validation_retries: Some(0),
                 transient_resumes: Some(0),
                 wake_resumes: Some(0),

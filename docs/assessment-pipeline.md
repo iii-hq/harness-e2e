@@ -59,7 +59,9 @@ and attempt identity, system status, per-assessment and asset conclusions,
 evaluation dimensions, selected numeric metrics, robustness signals, failures,
 cleanup outcome, and stable transcript evidence references. Raw transcripts,
 scenario prompts, and generated asset contents are never sent to the final
-analyzer.
+analyzer. Runtime metrics include the durable context-compaction count when the
+producer supplied it; legacy absence remains unrecorded rather than being
+inferred from the latest context snapshot.
 
 The configured judge analyzes this persisted input and returns an advisory
 verdict, 0–100 quality score, confidence, summary, factual observations,

@@ -69,6 +69,7 @@ export type AssessmentRunMetrics = {
   reasoningTokens: number | null
   functionCalls: number | null
   functionCallErrors: number | null
+  contextCompactions: number | null
   durationMs: number | null
   sessions: number | null
   turns: number | null
@@ -108,6 +109,7 @@ export function aggregateAssessmentMetrics(
     reasoningTokens: sumRunMetric(runs, 'reasoningTokens'),
     functionCalls: sumRunMetric(runs, 'functionCalls'),
     functionCallErrors: sumRunMetric(runs, 'functionCallErrors'),
+    contextCompactions: sumRunMetric(runs, 'contextCompactions'),
     durationMs: sumRunMetric(runs, 'durationMs'),
     sessions: sumRunMetric(runs, 'sessions'),
     turns: sumRunMetric(runs, 'turns'),
@@ -308,6 +310,9 @@ function assessmentRunMetrics(
     functionCallErrors:
       finiteNumber(totals?.function_call_errors) ??
       finiteNumber(efficiency?.function_call_errors),
+    contextCompactions:
+      finiteNumber(efficiency?.context_compactions) ??
+      finiteNumber(totals?.context_compactions),
     durationMs:
       finiteNumber(projectedRun.wall_time_ms) ??
       finiteNumber(efficiency?.wall_time_ms),

@@ -733,6 +733,10 @@ function AssessmentDetailContent({
             label="Function errors"
             value={formatMetricCount(run.metrics.functionCallErrors)}
           />
+          <RunMetricCard
+            label="Context compactions"
+            value={formatMetricCount(run.metrics.contextCompactions)}
+          />
         </div>
       </section>
 

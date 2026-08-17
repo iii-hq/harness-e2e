@@ -36,6 +36,7 @@ export type TestSideSummary = {
   median_cost_usd: number | null
   median_tokens: number | null
   median_duration_seconds: number | null
+  median_context_compactions?: number | null
   outcomes: {
     passed: number
     hard_gate_failed: number
@@ -48,6 +49,7 @@ export type TestSideSummary = {
     tokens: number
     duration_seconds: number
     turns?: number
+    context_compactions?: number
   }
   assessment_summary?: AssessmentSummary
 }
@@ -93,6 +95,7 @@ export type HistorySeries = {
   median_tokens: number | null
   median_duration_seconds: number | null
   median_turns: number | null
+  median_context_compactions?: number | null
 }
 
 export type HistorySystem = {
@@ -151,6 +154,7 @@ export type TestObservation = {
   median_tokens?: number | null
   median_duration_seconds?: number | null
   median_turns?: number | null
+  median_context_compactions?: number | null
 }
 
 export type TestVersionResult = {
@@ -173,6 +177,7 @@ export type TestVersionResult = {
     cost_usd: number | null
     tokens: number | null
     duration_seconds: number | null
+    context_compactions: number | null
   }
   from_observations: TestObservation[]
   to_observations: TestObservation[]

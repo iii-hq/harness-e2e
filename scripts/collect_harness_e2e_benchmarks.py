@@ -739,6 +739,7 @@ def collect(
         scenario_snapshots: list[dict[str, Any]] = []
         subject_costs: list[float | None] = []
         subject_wall_times: list[float | None] = []
+        subject_context_compactions: list[float | None] = []
         subject_passed = 0
         report_count = 0
         hard_gate_failures = 0
@@ -809,6 +810,7 @@ def collect(
                     "retries": None,
                     "total_cost_usd": None,
                     "wall_time_seconds": None,
+                    "context_compactions": None,
                 }
                 efficiency.append(
                     metric(
@@ -835,6 +837,7 @@ def collect(
                     )
                 subject_costs.append(None)
                 subject_wall_times.append(None)
+                subject_context_compactions.append(None)
                 scenario_snapshots.append(scenario_snapshot)
                 continue
 
@@ -943,6 +946,18 @@ def collect(
                 for run in runs
                 if isinstance(run, dict) and run.get("score") is not None
             ]
+            context_compactions = sum_known(
+                [
+                    optional_number(
+                        run.get("efficiency", {}).get("context_compactions")
+                        if isinstance(run.get("efficiency"), dict)
+                        else None,
+                        f"{report_path}: run context_compactions",
+                    )
+                    for run in runs
+                    if isinstance(run, dict)
+                ]
+            )
 
             system = report.get("system_under_test")
             engine_revision = (
@@ -1093,6 +1108,18 @@ def collect(
                         extra,
                     )
                 )
+            if context_compactions is not None:
+                efficiency.append(
+                    metric(
+                        "efficiency",
+                        subject["id"],
+                        scenario_id,
+                        "context_compactions",
+                        "count",
+                        context_compactions,
+                        extra,
+                    )
+                )
 
             hard_gate_failures += hard_gates
             technical_failures += technical
@@ -1100,6 +1127,7 @@ def collect(
             retries += retry_count
             subject_costs.append(total_cost)
             subject_wall_times.append(wall_time_seconds)
+            subject_context_compactions.append(context_compactions)
             scenario_snapshots.append(
                 {
                     "id": scenario_id,
@@ -1114,6 +1142,7 @@ def collect(
                     "retries": retry_count,
                     "total_cost_usd": total_cost,
                     "wall_time_seconds": wall_time_seconds,
+                    "context_compactions": context_compactions,
                 }
             )
 
@@ -1124,6 +1153,7 @@ def collect(
         all_reports_present = missing_reports == 0
         total_cost = sum_known(subject_costs)
         total_wall_time = sum_known(subject_wall_times)
+        total_context_compactions = sum_known(subject_context_compactions)
         suite_passed = (
             all_reports_present
             and subject_passed == expected_count
@@ -1264,6 +1294,18 @@ def collect(
                     suite_extra,
                 )
             )
+        if total_context_compactions is not None:
+            efficiency.append(
+                metric(
+                    "efficiency",
+                    subject["id"],
+                    "suite",
+                    "context_compactions",
+                    "count",
+                    total_context_compactions,
+                    suite_extra,
+                )
+            )
 
         snapshot_subjects.append(
             {
@@ -1281,6 +1323,7 @@ def collect(
                 "retry_attempts": retries,
                 "total_cost_usd": total_cost,
                 "wall_time_seconds": total_wall_time,
+                "context_compactions": total_context_compactions,
                 "scenarios": scenario_snapshots,
             }
         )

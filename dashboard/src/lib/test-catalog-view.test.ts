@@ -125,6 +125,7 @@ function row(
         cost_usd: null,
         tokens: null,
         duration_seconds: null,
+        context_compactions: null,
       },
       from_observations: [],
       to_observations: [],

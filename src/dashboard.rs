@@ -190,7 +190,7 @@ mod tests {
         CostReport, E2eManifest, E2eReport, E2eRunReport, E2eScenarioReport, ModelArtifact,
         RunStatus,
     };
-    use crate::scenarios::ExecutionPolicy;
+    use crate::scenarios::{ExecutionPolicy, WorkExpectation};
     use crate::wire::{ControlPlaneEvidence, FunctionContractEvidence};
 
     const TEST_DIGEST: &str =
@@ -247,6 +247,31 @@ mod tests {
             judge_usd: Some(0.0),
             total_usd: Some(0.1),
         };
+        run.metrics = Some(
+            serde_json::from_value(json!({
+                "root_session_id": "session",
+                "complete": true,
+                "totals": {
+                    "sessions": 1,
+                    "turns": 1,
+                    "function_calls": 0,
+                    "function_call_errors": 0,
+                    "context_compactions": 0
+                },
+                "by_session": [{
+                    "session_id": "session",
+                    "depth": 0,
+                    "turns": 1,
+                    "function_calls": 0,
+                    "function_call_errors": 0,
+                    "context_compactions": 0
+                }]
+            }))
+            .unwrap(),
+        );
+        run.update_efficiency(WorkExpectation {
+            minimum_expected_work: 1,
+        });
         E2eReport::new(
             execution,
             system,
@@ -366,6 +391,15 @@ mod tests {
         );
         assert_eq!(summary["subjects"][0]["engine_revision"], "engine-revision");
         assert_eq!(summary["assessment_summary"]["run_count"], 1);
+        assert_eq!(summary["totals"]["context_compactions"], 0.0);
+        assert_eq!(
+            summary["scenario_metrics"][0]["averages"]["context_compactions"],
+            0.0
+        );
+        assert_eq!(
+            summary["scenario_metrics"][0]["samples"]["context_compactions"],
+            1
+        );
         assert_eq!(
             summary["assessment_summary"]["ai_availability"]["not_evaluated"],
             1

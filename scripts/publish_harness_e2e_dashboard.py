@@ -155,6 +155,13 @@ def run_metric(run: dict[str, Any], metric_id: str) -> float | None:
             if isinstance(cost, dict)
             else None
         )
+    if metric_id == "context_compactions":
+        efficiency = run.get("efficiency", {})
+        return (
+            optional_number(efficiency.get("context_compactions"))
+            if isinstance(efficiency, dict)
+            else None
+        )
     return optional_number(totals.get(metric_id))
 
 
@@ -200,6 +207,7 @@ def build_scenario_metrics(detail: dict[str, Any]) -> list[dict[str, Any]]:
         "cost_usd",
         "function_calls",
         "function_call_errors",
+        "context_compactions",
         "sessions",
         "turns",
     )
@@ -267,6 +275,7 @@ def build_scenario_metrics(detail: dict[str, Any]) -> list[dict[str, Any]]:
 def build_execution_efficiency_totals(detail: dict[str, Any]) -> dict[str, float | None]:
     tokens: list[float | None] = []
     function_calls: list[float | None] = []
+    context_compactions: list[float | None] = []
     reports = detail.get("reports", [])
     if not isinstance(reports, list):
         reports = []
@@ -286,9 +295,11 @@ def build_execution_efficiency_totals(detail: dict[str, Any]) -> dict[str, float
                     continue
                 tokens.append(run_metric(run, "tokens"))
                 function_calls.append(run_metric(run, "function_calls"))
+                context_compactions.append(run_metric(run, "context_compactions"))
     return {
         "total_tokens": sum_complete(tokens),
         "function_calls": sum_complete(function_calls),
+        "context_compactions": sum_complete(context_compactions),
     }
 
 
@@ -374,12 +385,20 @@ def _public_metrics(value: Any) -> dict[str, Any] | None:
             "reasoning_tokens",
             "function_calls",
             "function_call_errors",
+            "context_compactions",
             "sessions",
             "turns",
             "cost_usd",
         ),
     )
     return {"totals": totals} if totals else None
+
+
+def _public_efficiency(value: Any) -> dict[str, Any] | None:
+    if not isinstance(value, dict):
+        return None
+    efficiency = _pick(value, ("context_compactions",))
+    return efficiency or None
 
 
 def _bounded_json(value: Any, *, depth: int = 0) -> Any:
@@ -569,6 +588,9 @@ def _public_retry(value: Any) -> dict[str, Any] | None:
     retry["failures"] = _public_failures(value.get("failures"))
     retry["deliverables"] = _public_deliverables(value.get("deliverables"))
     retry["dimensions"] = _public_dimensions(value.get("dimensions"))
+    efficiency = _public_efficiency(value.get("efficiency"))
+    if efficiency is not None:
+        retry["efficiency"] = efficiency
     return retry
 
 
@@ -594,6 +616,9 @@ def _public_run(
     metrics = _public_metrics(value.get("metrics"))
     if metrics is not None:
         run["metrics"] = metrics
+    efficiency = _public_efficiency(value.get("efficiency"))
+    if efficiency is not None:
+        run["efficiency"] = efficiency
     run["cost"] = _pick(value.get("cost"), ("subject_usd", "judge_usd", "total_usd"))
     run["criteria"] = _bounded_json(value.get("criteria", []))
     run["hard_gates"] = _public_gates(value.get("hard_gates"))
@@ -1552,6 +1577,7 @@ def _static_run_metrics(run: dict[str, Any]) -> dict[str, Any]:
         "cost_usd": run_metric(run, "cost_usd"),
         "tokens": run_metric(run, "tokens"),
         "duration_seconds": run_metric(run, "duration_seconds"),
+        "context_compactions": run_metric(run, "context_compactions"),
         "status": status,
         "assessment": assessment,
     }
@@ -1567,6 +1593,9 @@ def _side_summary(
     tokens = [value for run in runs if (value := run["tokens"]) is not None]
     durations = [
         value for run in runs if (value := run["duration_seconds"]) is not None
+    ]
+    context_compactions = [
+        value for run in runs if (value := run["context_compactions"]) is not None
     ]
     outcomes = {
         "passed": sum(run["status"] == "passed" for run in runs),
@@ -1592,12 +1621,14 @@ def _side_summary(
         "median_cost_usd": _median(costs),
         "median_tokens": _median(tokens),
         "median_duration_seconds": _median(durations),
+        "median_context_compactions": _median(context_compactions),
         "outcomes": outcomes,
         "samples": {
             "score": len(scores),
             "cost_usd": len(costs),
             "tokens": len(tokens),
             "duration_seconds": len(durations),
+            "context_compactions": len(context_compactions),
         },
         "assessment_summary": _assessment_summary(
             [run["assessment"] for run in runs]
@@ -1759,6 +1790,11 @@ def build_static_test_catalog(
                 for run in observation["runs"]
                 if run["score"] is not None
             ]
+            context_compactions = [
+                run["context_compactions"]
+                for run in observation["runs"]
+                if run["context_compactions"] is not None
+            ]
             public_observations.append(
                 {
                     key: observation[key]
@@ -1776,6 +1812,7 @@ def build_static_test_catalog(
                 }
                 | {
                     "median_score": _median(scores),
+                    "median_context_compactions": _median(context_compactions),
                     "run_count": len(observation["runs"]),
                     "scored_runs": len(scores),
                     "assessment_summary": _assessment_summary(

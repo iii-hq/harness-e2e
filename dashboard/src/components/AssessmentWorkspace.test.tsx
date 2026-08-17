@@ -25,6 +25,7 @@ const model: AssessmentWorkspaceModel = {
         reasoningTokens: 706,
         functionCalls: 14,
         functionCallErrors: 0,
+        contextCompactions: 3,
         durationMs: 62294,
         sessions: 1,
         turns: 16,
@@ -116,6 +117,7 @@ describe('assessment workspace component', () => {
     expect(rendered).toContain('Duration')
     expect(rendered).toContain('1m 02s')
     expect(rendered).toContain('Function errors')
+    expect(rendered).toContain('Context compactions')
     expect(rendered).toContain('Runtime metrics')
     expect(rendered).toContain(
       'min-h-10 min-w-0 grid-cols-[minmax(0,1fr)_auto] items-center gap-1 overflow-hidden',

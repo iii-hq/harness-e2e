@@ -252,6 +252,8 @@ pub struct SessionUsageTotals {
     pub function_calls: u64,
     pub function_call_errors: u64,
     #[serde(default)]
+    pub context_compactions: Option<u64>,
+    #[serde(default)]
     pub validation_retries: Option<u64>,
     #[serde(default)]
     pub transient_resumes: Option<u64>,
@@ -280,6 +282,8 @@ pub struct SessionUsage {
     pub turns: u64,
     pub function_calls: u64,
     pub function_call_errors: u64,
+    #[serde(default)]
+    pub context_compactions: Option<u64>,
     #[serde(default)]
     pub validation_retries: Option<u64>,
     #[serde(default)]
@@ -862,8 +866,26 @@ mod tests {
         assert_eq!(status.status, TurnStatus::Completed);
         assert!(tree.complete);
         assert_eq!(metrics.totals.sessions, 1);
+        assert_eq!(metrics.totals.context_compactions, None);
+        assert_eq!(metrics.by_session[0].context_compactions, None);
         assert!(stop.stopping);
         assert_eq!(teardown.removed, 0);
+    }
+
+    #[test]
+    fn response_types_preserve_known_zero_context_compactions() {
+        let fixtures: Value = serde_json::from_str(include_str!(
+            "../tests/fixtures/contracts/valid-responses.json"
+        ))
+        .unwrap();
+        let mut metrics = fixtures["metrics"].clone();
+        metrics["totals"]["context_compactions"] = serde_json::json!(0);
+        metrics["by_session"][0]["context_compactions"] = serde_json::json!(0);
+
+        let metrics: SessionMetricsResponse = serde_json::from_value(metrics).unwrap();
+
+        assert_eq!(metrics.totals.context_compactions, Some(0));
+        assert_eq!(metrics.by_session[0].context_compactions, Some(0));
     }
 
     #[test]

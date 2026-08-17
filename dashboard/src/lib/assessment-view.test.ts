@@ -155,9 +155,13 @@ describe('assessment presentation model', () => {
           reasoning_tokens: 706,
           function_calls: 14,
           function_call_errors: 0,
+          context_compactions: 3,
           sessions: 1,
           turns: 16,
         },
+      },
+      efficiency: {
+        context_compactions: 5,
       },
     }
     expect(buildAssessmentWorkspace(input).runs[0].metrics).toEqual({
@@ -169,6 +173,7 @@ describe('assessment presentation model', () => {
       reasoningTokens: 706,
       functionCalls: 14,
       functionCallErrors: 0,
+      contextCompactions: 5,
       durationMs: 62294,
       sessions: 1,
       turns: 16,
@@ -184,6 +189,7 @@ describe('assessment presentation model', () => {
         totalTokens: 120,
         functionCalls: 7,
         functionCallErrors: 1,
+        contextCompactions: 2,
         durationMs: 1500,
       },
     }
@@ -195,6 +201,7 @@ describe('assessment presentation model', () => {
         totalTokens: 80,
         functionCalls: 3,
         functionCallErrors: 2,
+        contextCompactions: 3,
         durationMs: 2500,
       },
     }
@@ -202,6 +209,7 @@ describe('assessment presentation model', () => {
       totalTokens: 200,
       functionCalls: 10,
       functionCallErrors: 3,
+      contextCompactions: 5,
       durationMs: 4000,
     })
   })

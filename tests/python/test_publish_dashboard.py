@@ -13,6 +13,8 @@ from publish_harness_e2e_dashboard import (
     _analyzer_profile_sha256,
     _assessment_profile_sha256,
     _assessment_summary,
+    build_execution_efficiency_totals,
+    build_scenario_metrics,
     build_static_test_catalog,
     complete_public_detail,
     publish,
@@ -36,6 +38,7 @@ def report(revision: str, scores: list[int]) -> dict:
                     "output_tokens": 10,
                 }
             },
+            "efficiency": {"context_compactions": index},
             "deliverables": [
                 {
                     "id": "artifact",
@@ -176,6 +179,28 @@ def contains_key(value: object, forbidden: str) -> bool:
 
 
 class PublishDashboardTests(unittest.TestCase):
+    def test_compaction_samples_exclude_legacy_absence_without_inventing_totals(self) -> None:
+        legacy_mixed = report("a" * 40, [10, 20])
+        legacy_mixed["scenarios"][0]["runs"][1].pop("efficiency")
+        detail = {
+            "reports": [
+                {
+                    "available": True,
+                    "subject_id": "openai-subject",
+                    "scenario_id": "coordination.parallel",
+                    "report": legacy_mixed,
+                }
+            ]
+        }
+
+        scenario_metric = build_scenario_metrics(detail)[0]
+
+        self.assertEqual(scenario_metric["averages"]["context_compactions"], 0)
+        self.assertEqual(scenario_metric["samples"]["context_compactions"], 1)
+        self.assertIsNone(
+            build_execution_efficiency_totals(detail)["context_compactions"]
+        )
+
     def test_publish_writes_json_manifest_and_removes_legacy_runtime_artifact(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             site = Path(directory)
@@ -237,6 +262,12 @@ class PublishDashboardTests(unittest.TestCase):
                 public_detail = complete_public_detail(
                     raw_detail, metadata(execution_id)
                 )
+                self.assertEqual(
+                    public_detail["reports"][0]["report"]["scenarios"][0]["runs"][0][
+                        "efficiency"
+                    ]["context_compactions"],
+                    0,
+                )
                 (site / detail_path).write_text(json.dumps(public_detail))
                 for forbidden in ("prompt", "transcript", "preview", "path"):
                     self.assertFalse(contains_key(public_detail, forbidden))
@@ -258,6 +289,18 @@ class PublishDashboardTests(unittest.TestCase):
             sides = row["version_results"]["3"]["sides"]
             medians = sorted(side["summary"]["median_score"] for side in sides.values())
             self.assertEqual(medians, [85.0, 100.0])
+            compaction_medians = sorted(
+                side["summary"]["median_context_compactions"]
+                for side in sides.values()
+            )
+            self.assertEqual(compaction_medians, [0.5, 1.0])
+            self.assertTrue(
+                all(
+                    side["summary"]["samples"]["context_compactions"]
+                    == side["summary"]["total_runs"]
+                    for side in sides.values()
+                )
+            )
             self.assertTrue(all("::" in side_id for side_id in sides))
             self.assertTrue(
                 all(
@@ -270,6 +313,7 @@ class PublishDashboardTests(unittest.TestCase):
             self.assertEqual(len(shard["observations"]), 2)
             self.assertNotIn("runs", shard["observations"][0])
             self.assertIn("cohort_id", shard["observations"][0])
+            self.assertIn("median_context_compactions", shard["observations"][0])
             self.assertTrue(
                 shard["observations"][0]["assessment_profile_sha256"].startswith(
                     "sha256:"
