@@ -1,7 +1,12 @@
 mod api;
+mod assessment_projection;
 mod assets;
+mod bus;
 mod controller;
+mod plans;
 mod presenter;
+mod proxy;
+mod read_model;
 mod store;
 
 use std::net::SocketAddr;
@@ -12,10 +17,9 @@ use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::Json;
 use clap::Args;
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
-
-const LOCAL_SCHEMA_VERSION: u32 = 1;
 
 #[derive(Debug, Clone, Args)]
 pub struct DashboardArgs {
@@ -36,7 +40,7 @@ pub struct DashboardArgs {
     pub view_only: bool,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, JsonSchema)]
 struct Defaults {
     url: String,
     model: String,
@@ -48,8 +52,14 @@ struct Defaults {
     seed: Option<u64>,
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 struct RunRequest {
+    // iii adds this routing metadata when a browser/worker invokes the
+    // function. It is accepted at the boundary but never persisted.
+    #[serde(rename = "_caller_worker_id", default, skip_serializing)]
+    #[schemars(skip)]
+    pub(super) _caller_worker_id: Option<String>,
     #[serde(default)]
     label: String,
     url: String,
@@ -64,9 +74,11 @@ struct RunRequest {
     technical_retries: u8,
     #[serde(default)]
     seed: Option<u64>,
+    #[serde(default)]
+    plan_context: Option<plans::PlanContext>,
 }
 
-#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, JsonSchema, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 enum JobStatus {
     Running,
@@ -82,9 +94,9 @@ impl JobStatus {
     }
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 struct RunMetadata {
-    schema_version: u32,
     id: String,
     label: String,
     status: JobStatus,
@@ -93,16 +105,21 @@ struct RunMetadata {
     returncode: Option<i32>,
     error: String,
     request: RunRequest,
+    #[serde(default)]
+    plan_context: Option<plans::PlanContext>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, JsonSchema)]
 struct JobView {
     #[serde(flatten)]
     metadata: RunMetadata,
     log: String,
+    log_from: u64,
+    log_offset: u64,
+    log_truncated: bool,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, JsonSchema)]
 struct RunSnapshot {
     job: Option<JobView>,
     defaults: Defaults,
@@ -125,6 +142,13 @@ impl ApiError {
     fn conflict(message: impl Into<String>) -> Self {
         Self {
             status: StatusCode::CONFLICT,
+            message: message.into(),
+        }
+    }
+
+    fn not_found(message: impl Into<String>) -> Self {
+        Self {
+            status: StatusCode::NOT_FOUND,
             message: message.into(),
         }
     }
@@ -158,25 +182,24 @@ mod tests {
     use super::presenter::{
         contract_fingerprint, execution_detail_value, execution_summary, load_execution_summaries,
     };
-    use super::store::{read_metadata, write_metadata};
+    use super::read_model::{DashboardReadModel, EvaluatedVersionsRequest, TestsListRequest};
+    use super::store::write_metadata;
     use super::*;
     use crate::identity::{ExecutionIdentity, StackIdentity, SystemUnderTestIdentity};
     use crate::report::{
-        CostReport, E2eManifestV2, E2eReport, E2eRunReport, E2eScenarioReport, ModelArtifact,
-        RunStatus, MANIFEST_SCHEMA_VERSION,
+        CostReport, E2eManifest, E2eReport, E2eRunReport, E2eScenarioReport, ModelArtifact,
+        RunStatus,
     };
     use crate::scenarios::ExecutionPolicy;
-    use crate::wire::{
-        ControlPlaneEvidence, FunctionContractEvidence, CONTROL_PLANE_CONTRACT_NAME,
-        CONTROL_PLANE_CONTRACT_VERSION,
-    };
+    use crate::wire::{ControlPlaneEvidence, FunctionContractEvidence};
 
     const TEST_DIGEST: &str =
         "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
 
     fn request() -> RunRequest {
         RunRequest {
-            label: " baseline ".into(),
+            _caller_worker_id: None,
+            label: " first run ".into(),
             url: "ws://127.0.0.1:49134".into(),
             model: "model".into(),
             provider: "provider".into(),
@@ -186,6 +209,7 @@ mod tests {
             runs: 1,
             technical_retries: 1,
             seed: Some(42),
+            plan_context: None,
         }
     }
 
@@ -251,19 +275,15 @@ mod tests {
         )
     }
 
-    fn manifest(report: &E2eReport) -> E2eManifestV2 {
-        E2eManifestV2 {
-            schema_version: MANIFEST_SCHEMA_VERSION,
-            execution: report.execution.clone().unwrap(),
-            system_under_test: report.system_under_test.clone().unwrap(),
+    fn manifest(report: &E2eReport) -> E2eManifest {
+        E2eManifest {
+            execution: report.execution.clone(),
+            system_under_test: report.system_under_test.clone(),
             subject: report.subject.clone(),
             judge: report.judge.clone(),
             control_plane: ControlPlaneEvidence {
-                name: CONTROL_PLANE_CONTRACT_NAME.into(),
-                version: CONTROL_PLANE_CONTRACT_VERSION,
                 functions: vec![FunctionContractEvidence {
                     function_id: "harness::status".into(),
-                    contract: json!({"name": CONTROL_PLANE_CONTRACT_NAME, "version": 1}),
                     request_schema: json!({"type": "object"}),
                     response_schema: json!({"type": "object"}),
                     sha256: TEST_DIGEST.into(),
@@ -280,15 +300,15 @@ mod tests {
 
     fn metadata() -> RunMetadata {
         RunMetadata {
-            schema_version: LOCAL_SCHEMA_VERSION,
             id: "local-20260807T120000-abcdef12".into(),
-            label: "baseline".into(),
+            label: "first run".into(),
             status: JobStatus::Completed,
             started_at: "2026-08-07T12:00:00Z".into(),
             completed_at: "2026-08-07T12:00:02Z".into(),
             returncode: Some(0),
             error: String::new(),
             request: request(),
+            plan_context: None,
         }
     }
 
@@ -296,9 +316,21 @@ mod tests {
     fn validates_and_normalizes_run_requests() {
         let mut value = request();
         validate_request(&mut value).unwrap();
-        assert_eq!(value.label, "baseline");
+        assert_eq!(value.label, "first run");
         value.url = "https://example.com".into();
         assert!(validate_request(&mut value).is_err());
+    }
+
+    #[test]
+    fn accepts_engine_caller_metadata_without_persisting_it() {
+        let mut value = serde_json::to_value(request()).expect("request should serialize");
+        value["_caller_worker_id"] = serde_json::json!("browser-worker");
+        let decoded: RunRequest =
+            serde_json::from_value(value).expect("engine metadata should be accepted");
+        assert_eq!(decoded._caller_worker_id.as_deref(), Some("browser-worker"));
+
+        let serialized = serde_json::to_value(decoded).expect("request should serialize");
+        assert!(serialized.get("_caller_worker_id").is_none());
     }
 
     #[test]
@@ -324,6 +356,7 @@ mod tests {
         let report = report();
         let summary = execution_summary(&metadata(), Some(&report)).unwrap();
         assert_eq!(summary["status"], "passed");
+        assert!(summary["totals"].get("average_score").is_none());
         assert_eq!(summary["run_id"], "execution");
         assert_eq!(summary["lane"], "local");
         assert_eq!(summary["stack"]["mode"], "source");
@@ -332,6 +365,15 @@ mod tests {
             "0123456789abcdef0123456789abcdef01234567"
         );
         assert_eq!(summary["subjects"][0]["engine_revision"], "engine-revision");
+        assert_eq!(summary["assessment_summary"]["run_count"], 1);
+        assert_eq!(
+            summary["assessment_summary"]["ai_availability"]["not_evaluated"],
+            1
+        );
+        assert_eq!(
+            summary["subjects"][0]["scenarios"][0]["assessment_summary"]["run_count"],
+            1
+        );
         assert!(summary["workflow_url"].is_null());
         assert_eq!(
             summary["detail_path"],
@@ -346,27 +388,17 @@ mod tests {
             detail["reports"][0]["report"]["scenarios"][0]["scenario_id"],
             "direct_answer"
         );
-    }
-
-    #[test]
-    fn legacy_results_keep_unknown_identity_fields_null() {
-        let mut value = serde_json::to_value(report()).unwrap();
-        let object = value.as_object_mut().unwrap();
-        object.remove("schema_version");
-        object.remove("execution");
-        object.remove("system_under_test");
-        object.remove("manifest");
-        object.remove("engine_revision");
-        let legacy: E2eReport = serde_json::from_value(value).unwrap();
-
-        let summary = execution_summary(&metadata(), Some(&legacy)).unwrap();
-        assert_eq!(legacy.schema_version, 1);
-        assert!(summary["source"]["sha"].is_null());
-        assert!(summary["source"]["repository"].is_null());
-        assert!(summary["release"]["stack_versions"].is_null());
-        assert!(summary["stack"]["mode"].is_null());
-        assert!(summary["subjects"][0]["engine_revision"].is_null());
-        assert!(summary["execution"]["head_sha"].is_null());
+        assert_eq!(
+            detail["reports"][0]["report"]["assessment_contract"]["runs"]
+                .as_array()
+                .unwrap()
+                .len(),
+            1
+        );
+        assert_eq!(
+            detail["reports"][0]["report"]["scenarios"][0]["runs"][0]["assessment"]["run_id"],
+            "run"
+        );
     }
 
     #[test]
@@ -401,6 +433,250 @@ mod tests {
     }
 
     #[test]
+    fn versioned_test_catalog_pools_raw_scores_and_keeps_evidence_lazy() {
+        let root = tempfile::tempdir().unwrap();
+        for (index, (revision, scores)) in [
+            (
+                "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                vec![10, 100, 100],
+            ),
+            ("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", vec![80, 90]),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let mut value = report();
+            value.judge = Some(ModelArtifact {
+                model: "judge-model".into(),
+                provider: "judge-provider".into(),
+                context_window: 100,
+                max_output_tokens: 10,
+                supports_tools: Some(false),
+                supports_vision: Some(false),
+            });
+            value.judge_protocol = Some("json".into());
+            let execution = &mut value.execution;
+            execution.execution_id = format!("execution-{index}");
+            execution.completed_at = format!("2026-08-0{}T12:00:02Z", index + 7);
+            let completed_at = execution.completed_at.clone();
+            if let StackIdentity::Source {
+                workers_revision, ..
+            } = &mut value.system_under_test.stack
+            {
+                *workers_revision = revision.into();
+            }
+            let runs = scores
+                .into_iter()
+                .enumerate()
+                .map(|(run_index, score)| {
+                    let mut run = E2eRunReport::new(
+                        format!("run-{index}-{run_index}"),
+                        format!("attempt-{run_index}"),
+                        1,
+                        format!("session-{index}-{run_index}"),
+                        "prompt".into(),
+                    );
+                    run.status = RunStatus::Passed;
+                    run.score = Some(score);
+                    run.wall_time_ms = 1_000 + u64::from(score);
+                    run
+                })
+                .collect();
+            value.scenarios = vec![E2eScenarioReport::aggregate(
+                "direct_answer",
+                1,
+                ExecutionPolicy {
+                    max_turns: 1,
+                    max_output_tokens: Some(10),
+                    max_total_tokens: 100,
+                    stuck_timeout_seconds: 10,
+                },
+                runs,
+            )];
+
+            let mut run_metadata = metadata();
+            run_metadata.id = format!("local-version-{index}");
+            run_metadata.completed_at = completed_at;
+            let run_dir = root.path().join(&run_metadata.id);
+            write_metadata(&run_dir, &run_metadata).unwrap();
+            let manifest = manifest(&value);
+            value.write_to(&run_dir.join("results"), &manifest).unwrap();
+        }
+
+        let model = DashboardReadModel::load(root.path()).unwrap();
+        let evaluated = model.evaluated_versions(EvaluatedVersionsRequest::default());
+        assert_eq!(evaluated.cohorts.len(), 1);
+        assert_eq!(evaluated.versions.len(), 2);
+        let cohort_id = evaluated.cohorts[0].id.clone();
+        let from = evaluated
+            .versions
+            .iter()
+            .find(|version| version.label.contains("aaaaaaaaaaaa"))
+            .unwrap()
+            .id
+            .clone();
+        let to = evaluated
+            .versions
+            .iter()
+            .find(|version| version.label.contains("bbbbbbbbbbbb"))
+            .unwrap()
+            .id
+            .clone();
+        let catalog = model
+            .tests_list(TestsListRequest {
+                limit: Some(100),
+                cohort_id: Some(cohort_id.clone()),
+                from_version_id: Some(from.clone()),
+                to_version_id: Some(to.clone()),
+                ..TestsListRequest::default()
+            })
+            .unwrap();
+        let row = catalog
+            .rows
+            .iter()
+            .find(|row| row.test_id == "direct_answer")
+            .unwrap();
+        let result = row.result.as_ref().unwrap();
+        assert_eq!(result.from.as_ref().unwrap().median_score, Some(100.0));
+        assert_eq!(result.to.as_ref().unwrap().median_score, Some(85.0));
+        assert_eq!(result.delta.score, Some(-15.0));
+        assert_eq!(result.compatibility, "compatible");
+        assert!(result.compatibility_reasons.is_empty());
+        assert_eq!(
+            result.from.as_ref().unwrap().assessment_summary.run_count,
+            3
+        );
+        assert!(result.from_observations.is_empty());
+        assert!(result.to_observations.is_empty());
+
+        let detail = model
+            .test_version_get(super::read_model::TestVersionGetRequest {
+                test_id: "direct_answer".into(),
+                test_version: 1,
+                cohort_id,
+                from_version_id: from,
+                to_version_id: to,
+            })
+            .unwrap();
+        assert_eq!(detail.from_observations.len(), 1);
+        assert_eq!(detail.to_observations.len(), 1);
+        assert_eq!(detail.from_observations[0].assessment_summary.run_count, 3);
+        assert!(detail.from_observations[0]
+            .assessment_profile_sha256
+            .starts_with("sha256:"));
+        assert!(detail.from_observations[0]
+            .analyzer_profile_sha256
+            .starts_with("sha256:"));
+        assert!(model
+            .tests_list(TestsListRequest {
+                cursor: Some("stale:1".into()),
+                ..TestsListRequest::default()
+            })
+            .unwrap_err()
+            .to_string()
+            .contains("stale"));
+
+        let history = model
+            .test_history(super::read_model::TestHistoryRequest {
+                test_id: "direct_answer".into(),
+                test_version: None,
+                limit: Some(1),
+                ..super::read_model::TestHistoryRequest::default()
+            })
+            .unwrap();
+        assert_eq!(history.test_version, 1);
+        assert_eq!(history.total, 2);
+        assert_eq!(history.observations.len(), 1);
+        assert!(history.next_cursor.is_some());
+        assert_eq!(history.series.len(), 2);
+        assert_eq!(history.subject_models.len(), 1);
+        assert_eq!(history.subject_models[0].provider, "provider");
+        assert_eq!(history.subject_models[0].models, vec!["model"]);
+        assert_eq!(history.judge_models.len(), 1);
+        assert_eq!(history.judge_models[0].provider, "judge-provider");
+        assert_eq!(history.judge_models[0].models, vec!["judge-model"]);
+        assert_ne!(
+            history.series[0].system_version_id,
+            history.series[1].system_version_id
+        );
+        assert_eq!(history.observations[0].median_tokens, None);
+        assert!(history.observations[0].median_duration_seconds.is_some());
+        assert_eq!(
+            history.observations[0].harness_revision.as_deref(),
+            Some("0123456789abcdef0123456789abcdef01234567")
+        );
+        assert_eq!(
+            history.observations[0].system_revision.as_deref(),
+            Some("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb")
+        );
+        let filtered = model
+            .test_history(super::read_model::TestHistoryRequest {
+                test_id: "direct_answer".into(),
+                test_version: Some(1),
+                case_id: Some(history.observations[0].case_id.clone()),
+                subject_provider: Some("provider".into()),
+                subject_model: Some("model".into()),
+                judge_provider: Some("judge-provider".into()),
+                judge_model: Some("judge-model".into()),
+                result: Some("passed".into()),
+                ..super::read_model::TestHistoryRequest::default()
+            })
+            .unwrap();
+        assert_eq!(filtered.total, 2);
+        let no_matching_judge = model
+            .test_history(super::read_model::TestHistoryRequest {
+                test_id: "direct_answer".into(),
+                judge_provider: Some("other-provider".into()),
+                ..super::read_model::TestHistoryRequest::default()
+            })
+            .unwrap();
+        assert_eq!(no_matching_judge.total, 0);
+    }
+
+    #[test]
+    fn metric_history_keeps_contracts_in_separate_series() {
+        let root = tempfile::tempdir().unwrap();
+        for (index, max_turns) in [(0, 1), (1, 2)] {
+            let mut value = report();
+            value.execution.execution_id = format!("execution-contract-{index}");
+            value.execution.completed_at = format!("2026-08-0{}T12:00:02Z", index + 7);
+            value.scenarios[0].execution_policy.max_turns = max_turns;
+
+            let mut run_metadata = metadata();
+            run_metadata.id = format!("local-contract-{index}");
+            run_metadata.completed_at = value.execution.completed_at.clone();
+            let run_dir = root.path().join(&run_metadata.id);
+            write_metadata(&run_dir, &run_metadata).unwrap();
+            let manifest = manifest(&value);
+            value.write_to(&run_dir.join("results"), &manifest).unwrap();
+        }
+
+        let model = DashboardReadModel::load(root.path()).unwrap();
+        let history = model
+            .test_history(super::read_model::TestHistoryRequest {
+                test_id: "direct_answer".into(),
+                limit: Some(100),
+                ..super::read_model::TestHistoryRequest::default()
+            })
+            .unwrap();
+
+        assert_eq!(history.total, 2);
+        assert_eq!(history.series.len(), 2);
+        assert_eq!(
+            history
+                .series
+                .iter()
+                .map(|series| series.execution_count)
+                .collect::<Vec<_>>(),
+            vec![1, 1]
+        );
+        assert_ne!(
+            history.observations[0].contract_sha256,
+            history.observations[1].contract_sha256
+        );
+    }
+
+    #[test]
     fn dashboard_accepts_safe_local_and_control_plane_execution_ids() {
         assert!(super::presenter::validate_execution_id("local-20260807T120000-abcdef12").is_ok());
         assert!(
@@ -411,16 +687,5 @@ mod tests {
             super::presenter::validate_execution_id("d0be4cb7dcf8561079b673d735715060/extra")
                 .is_err()
         );
-    }
-
-    #[test]
-    fn local_store_rejects_unknown_schema_versions() {
-        let root = tempfile::tempdir().unwrap();
-        let run = root.path().join("local-20260807T120000-abcdef12");
-        let mut metadata = metadata();
-        metadata.schema_version = LOCAL_SCHEMA_VERSION + 1;
-        write_metadata(&run, &metadata).unwrap();
-        let error = read_metadata(&run).unwrap_err();
-        assert!(error.to_string().contains("unsupported local run schema"));
     }
 }

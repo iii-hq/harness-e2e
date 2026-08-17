@@ -8,3 +8,6 @@ local-runs/
 dashboard/data.js
 dashboard/executions.js
 dashboard/runs/
+dashboard/dist/
+dashboard/node_modules/
+dashboard/*.tsbuildinfo

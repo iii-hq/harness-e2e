@@ -1,0 +1,586 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "AnalysisBundle",
+  "type": "object",
+  "required": [
+    "input_sha256",
+    "scope",
+    "subjects"
+  ],
+  "properties": {
+    "assessments": {
+      "type": "array",
+      "items": {
+        "$ref": "#/definitions/AssessmentResult"
+      }
+    },
+    "assets": {
+      "type": "array",
+      "items": {
+        "$ref": "#/definitions/AssetAssessmentResult"
+      }
+    },
+    "dimensions": {
+      "type": "array",
+      "items": {
+        "$ref": "#/definitions/DimensionReport"
+      }
+    },
+    "evidence": {
+      "type": "array",
+      "items": {
+        "$ref": "#/definitions/ArtifactReference"
+      }
+    },
+    "excerpts": {
+      "type": "array",
+      "items": {
+        "$ref": "#/definitions/AnalysisExcerpt"
+      }
+    },
+    "failures": {
+      "type": "array",
+      "items": {
+        "$ref": "#/definitions/FailureRecord"
+      }
+    },
+    "input_sha256": {
+      "type": "string"
+    },
+    "limitations": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "metrics": {
+      "type": "array",
+      "items": {
+        "$ref": "#/definitions/AnalysisMetric"
+      }
+    },
+    "scope": {
+      "$ref": "#/definitions/AnalysisScope"
+    },
+    "subjects": {
+      "type": "array",
+      "items": {
+        "$ref": "#/definitions/AnalysisSubject"
+      }
+    }
+  },
+  "additionalProperties": false,
+  "definitions": {
+    "AnalysisExcerpt": {
+      "type": "object",
+      "required": [
+        "evidence",
+        "kind",
+        "summary"
+      ],
+      "properties": {
+        "evidence": {
+          "$ref": "#/definitions/EvidenceReference"
+        },
+        "kind": {
+          "type": "string"
+        },
+        "summary": {
+          "type": "string"
+        }
+      }
+    },
+    "AnalysisMetric": {
+      "type": "object",
+      "required": [
+        "id",
+        "unit",
+        "value"
+      ],
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "unit": {
+          "type": "string"
+        },
+        "value": {
+          "type": "number",
+          "format": "double"
+        }
+      }
+    },
+    "AnalysisScope": {
+      "type": "string",
+      "enum": [
+        "execution",
+        "test",
+        "comparison"
+      ]
+    },
+    "AnalysisSubject": {
+      "type": "object",
+      "required": [
+        "attempt_id",
+        "case_id",
+        "effective_status",
+        "execution_id",
+        "run_id",
+        "scenario_id",
+        "scenario_version",
+        "system_status"
+      ],
+      "properties": {
+        "attempt_id": {
+          "type": "string"
+        },
+        "case_id": {
+          "type": "string"
+        },
+        "effective_status": {
+          "$ref": "#/definitions/EffectiveStatus"
+        },
+        "execution_id": {
+          "type": "string"
+        },
+        "run_id": {
+          "type": "string"
+        },
+        "scenario_id": {
+          "type": "string"
+        },
+        "scenario_version": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0.0
+        },
+        "system_status": {
+          "$ref": "#/definitions/SystemStatus"
+        }
+      }
+    },
+    "AnalyzerIdentity": {
+      "type": "object",
+      "required": [
+        "analyzer",
+        "input_sha256"
+      ],
+      "properties": {
+        "analyzer": {
+          "type": "string"
+        },
+        "input_sha256": {
+          "type": "string"
+        },
+        "model": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "provider": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "AnalyzerUsage": {
+      "type": "object",
+      "properties": {
+        "cost_usd": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double"
+        },
+        "input_tokens": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "latency_ms": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "output_tokens": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0.0
+        }
+      }
+    },
+    "ArtifactReference": {
+      "type": "object",
+      "required": [
+        "id",
+        "kind",
+        "media_type",
+        "path",
+        "sha256",
+        "size_bytes"
+      ],
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "kind": {
+          "type": "string"
+        },
+        "media_type": {
+          "type": "string"
+        },
+        "path": {
+          "type": "string"
+        },
+        "sha256": {
+          "type": "string"
+        },
+        "size_bytes": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        }
+      }
+    },
+    "AssessmentKind": {
+      "type": "string",
+      "enum": [
+        "required_check",
+        "signal",
+        "asset_validation",
+        "asset_quality"
+      ]
+    },
+    "AssessmentOutcome": {
+      "type": "string",
+      "enum": [
+        "passed",
+        "failed",
+        "partial",
+        "not_evaluated",
+        "unavailable",
+        "error"
+      ]
+    },
+    "AssessmentPolicy": {
+      "type": "string",
+      "enum": [
+        "hard_gate",
+        "advisory"
+      ]
+    },
+    "AssessmentResult": {
+      "type": "object",
+      "required": [
+        "criterion_id",
+        "dimension",
+        "kind",
+        "outcome",
+        "policy",
+        "source",
+        "summary",
+        "target"
+      ],
+      "properties": {
+        "analyzer": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/AnalyzerIdentity"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "analyzer_usage": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/AnalyzerUsage"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "confidence": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double"
+        },
+        "criterion_id": {
+          "type": "string"
+        },
+        "dimension": {
+          "$ref": "#/definitions/EvaluationDimension"
+        },
+        "evidence": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/EvidenceReference"
+          }
+        },
+        "kind": {
+          "$ref": "#/definitions/AssessmentKind"
+        },
+        "outcome": {
+          "$ref": "#/definitions/AssessmentOutcome"
+        },
+        "policy": {
+          "$ref": "#/definitions/AssessmentPolicy"
+        },
+        "score": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/AssessmentScore"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "source": {
+          "$ref": "#/definitions/AssessmentSource"
+        },
+        "summary": {
+          "type": "string"
+        },
+        "target": {
+          "$ref": "#/definitions/AssessmentTarget"
+        }
+      }
+    },
+    "AssessmentScore": {
+      "type": "object",
+      "required": [
+        "awarded",
+        "possible"
+      ],
+      "properties": {
+        "awarded": {
+          "type": "integer",
+          "format": "uint8",
+          "minimum": 0.0
+        },
+        "possible": {
+          "type": "integer",
+          "format": "uint8",
+          "minimum": 0.0
+        }
+      }
+    },
+    "AssessmentSource": {
+      "type": "string",
+      "enum": [
+        "deterministic",
+        "judge",
+        "asset_analyzer"
+      ]
+    },
+    "AssessmentTarget": {
+      "type": "object",
+      "required": [
+        "id",
+        "kind"
+      ],
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "kind": {
+          "$ref": "#/definitions/AssessmentTargetKind"
+        }
+      }
+    },
+    "AssessmentTargetKind": {
+      "type": "string",
+      "enum": [
+        "criterion",
+        "asset"
+      ]
+    },
+    "AssetAssessmentResult": {
+      "type": "object",
+      "required": [
+        "qualitative_assessment",
+        "validation"
+      ],
+      "properties": {
+        "qualitative_assessment": {
+          "$ref": "#/definitions/AssessmentResult"
+        },
+        "validation": {
+          "$ref": "#/definitions/AssetValidationResult"
+        }
+      }
+    },
+    "AssetValidationOutcome": {
+      "type": "string",
+      "enum": [
+        "valid",
+        "invalid",
+        "malformed",
+        "oversized",
+        "not_produced",
+        "unreadable",
+        "unsafe_path",
+        "removed_during_cleanup",
+        "unexpected",
+        "not_evaluated"
+      ]
+    },
+    "AssetValidationResult": {
+      "type": "object",
+      "required": [
+        "asset_id",
+        "outcome",
+        "summary"
+      ],
+      "properties": {
+        "asset_id": {
+          "type": "string"
+        },
+        "evidence": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/EvidenceReference"
+          }
+        },
+        "outcome": {
+          "$ref": "#/definitions/AssetValidationOutcome"
+        },
+        "summary": {
+          "type": "string"
+        }
+      }
+    },
+    "DimensionReport": {
+      "type": "object",
+      "required": [
+        "dimension",
+        "signals"
+      ],
+      "properties": {
+        "dimension": {
+          "$ref": "#/definitions/EvaluationDimension"
+        },
+        "passed": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "signals": true
+      }
+    },
+    "EffectiveStatus": {
+      "type": "string",
+      "enum": [
+        "unavailable",
+        "passed",
+        "passed_with_concerns",
+        "hard_gate_failed",
+        "subject_error",
+        "judge_error",
+        "resource_limit",
+        "infrastructure_error"
+      ]
+    },
+    "EvaluationDimension": {
+      "type": "string",
+      "enum": [
+        "deliverable",
+        "structural_integrity",
+        "efficiency",
+        "robustness",
+        "e2e_infrastructure"
+      ]
+    },
+    "EvidenceReference": {
+      "type": "object",
+      "required": [
+        "artifact_id",
+        "artifact_sha256"
+      ],
+      "properties": {
+        "artifact_id": {
+          "type": "string"
+        },
+        "artifact_sha256": {
+          "type": "string"
+        },
+        "locator": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      }
+    },
+    "FailureDomain": {
+      "type": "string",
+      "enum": [
+        "subject",
+        "judge",
+        "resource",
+        "e2e_infrastructure"
+      ]
+    },
+    "FailurePhase": {
+      "type": "string",
+      "enum": [
+        "setup",
+        "execute",
+        "collect",
+        "evaluate",
+        "cleanup"
+      ]
+    },
+    "FailureRecord": {
+      "type": "object",
+      "required": [
+        "domain",
+        "message",
+        "phase"
+      ],
+      "properties": {
+        "domain": {
+          "$ref": "#/definitions/FailureDomain"
+        },
+        "message": {
+          "type": "string"
+        },
+        "phase": {
+          "$ref": "#/definitions/FailurePhase"
+        }
+      }
+    },
+    "SystemStatus": {
+      "type": "string",
+      "enum": [
+        "unavailable",
+        "passed",
+        "hard_gate_failed",
+        "subject_error",
+        "judge_error",
+        "resource_limit",
+        "infrastructure_error"
+      ]
+    }
+  }
+}

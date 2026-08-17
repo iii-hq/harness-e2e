@@ -1,0 +1,159 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "FaultProfile",
+  "type": "object",
+  "required": [
+    "max_work_amplification",
+    "profile_id",
+    "seed"
+  ],
+  "properties": {
+    "cancellation": {
+      "default": null,
+      "anyOf": [
+        {
+          "$ref": "#/definitions/CancellationRule"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "child_timeout_ms": {
+      "default": null,
+      "type": [
+        "integer",
+        "null"
+      ],
+      "format": "uint64",
+      "minimum": 0.0
+    },
+    "delayed_calls": {
+      "default": [],
+      "type": "array",
+      "items": {
+        "$ref": "#/definitions/DelayRule"
+      }
+    },
+    "duplicate_events": {
+      "default": false,
+      "type": "boolean"
+    },
+    "expected_outcome": {
+      "default": "recovered",
+      "allOf": [
+        {
+          "$ref": "#/definitions/ExpectedTerminalOutcome"
+        }
+      ]
+    },
+    "fail_first_attempt": {
+      "default": [],
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "max_work_amplification": {
+      "type": "number",
+      "format": "double"
+    },
+    "out_of_order_results": {
+      "default": false,
+      "type": "boolean"
+    },
+    "profile_id": {
+      "type": "string"
+    },
+    "seed": {
+      "type": "integer",
+      "format": "uint64",
+      "minimum": 0.0
+    },
+    "transient_disconnect": {
+      "default": null,
+      "anyOf": [
+        {
+          "$ref": "#/definitions/DisconnectRule"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    }
+  },
+  "additionalProperties": false,
+  "definitions": {
+    "CancellationRule": {
+      "type": "object",
+      "required": [
+        "after_action"
+      ],
+      "properties": {
+        "after_action": {
+          "type": "string"
+        },
+        "grace_period_ms": {
+          "default": 30000,
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        }
+      },
+      "additionalProperties": false
+    },
+    "DelayRule": {
+      "type": "object",
+      "required": [
+        "delay_ms",
+        "target"
+      ],
+      "properties": {
+        "delay_ms": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "occurrences": {
+          "default": 1,
+          "type": "integer",
+          "format": "uint8",
+          "minimum": 0.0
+        },
+        "target": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "DisconnectRule": {
+      "type": "object",
+      "required": [
+        "after_action",
+        "duration_ms",
+        "target"
+      ],
+      "properties": {
+        "after_action": {
+          "type": "string"
+        },
+        "duration_ms": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "target": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "ExpectedTerminalOutcome": {
+      "type": "string",
+      "enum": [
+        "recovered",
+        "cancelled"
+      ]
+    }
+  }
+}

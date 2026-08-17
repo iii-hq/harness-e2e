@@ -39,7 +39,6 @@ def load_manifest(path: Path) -> dict[str, Any]:
     value = json.loads(path.read_text(encoding="utf-8"))
     require(isinstance(value, dict), "manifest must be a JSON object")
     allowed = {
-        "schema_version",
         "repository",
         "revision",
         "created_at",
@@ -47,8 +46,7 @@ def load_manifest(path: Path) -> dict[str, Any]:
         "files",
         "entrypoints",
     }
-    require(set(value) == allowed, "manifest fields do not match subject-artifact-v1")
-    require(value["schema_version"] == 1, "unsupported subject artifact schema")
+    require(set(value) == allowed, "manifest fields do not match the subject artifact contract")
     require(bool(REPOSITORY.fullmatch(value["repository"])), "invalid repository identity")
     require(bool(REVISION.fullmatch(value["revision"])), "revision must be a full lowercase SHA")
     require(isinstance(value["created_at"], str) and value["created_at"], "created_at is required")
@@ -57,7 +55,7 @@ def load_manifest(path: Path) -> dict[str, Any]:
     require(isinstance(archive, dict), "archive must be an object")
     require(
         set(archive) == {"sha256", "size_bytes", "media_type"},
-        "archive fields do not match subject-artifact-v1",
+        "archive fields do not match the subject artifact contract",
     )
     require(bool(DIGEST.fullmatch(archive["sha256"])), "invalid archive SHA-256")
     require(isinstance(archive["size_bytes"], int) and archive["size_bytes"] > 0, "invalid archive size")
@@ -72,7 +70,7 @@ def load_manifest(path: Path) -> dict[str, Any]:
         require(isinstance(item, dict), "file inventory entries must be objects")
         require(
             set(item) == {"path", "sha256", "size_bytes", "executable"},
-            "file inventory fields do not match subject-artifact-v1",
+            "file inventory fields do not match subject-artifact contract",
         )
         path_value = item["path"]
         require(isinstance(path_value, str) and SAFE_PATH.fullmatch(path_value) is not None, "unsafe declared file path")
@@ -91,7 +89,7 @@ def load_manifest(path: Path) -> dict[str, Any]:
         require(isinstance(item, dict), "entrypoints must be objects")
         require(
             set(item) == {"worker", "path", "args", "readiness_functions"},
-            "entrypoint fields do not match subject-artifact-v1",
+            "entrypoint fields do not match subject-artifact contract",
         )
         require(isinstance(item["worker"], str) and WORKER.fullmatch(item["worker"]) is not None, "invalid worker id")
         require(item["worker"] not in entrypoint_workers, f"duplicate entrypoint worker: {item['worker']}")
@@ -161,7 +159,6 @@ def main() -> int:
     except (OSError, json.JSONDecodeError, tarfile.TarError, VerificationError) as error:
         raise SystemExit(f"subject artifact verification failed: {error}") from error
     summary = {
-        "schema_version": 1,
         "status": "verified",
         "repository": manifest["repository"],
         "revision": manifest["revision"],

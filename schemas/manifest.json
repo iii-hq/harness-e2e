@@ -1,0 +1,224 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "E2eManifest",
+  "type": "object",
+  "required": [
+    "control_plane",
+    "execution",
+    "subject",
+    "system_under_test"
+  ],
+  "properties": {
+    "control_plane": {
+      "$ref": "#/definitions/ControlPlaneEvidence"
+    },
+    "execution": {
+      "$ref": "#/definitions/ExecutionIdentity"
+    },
+    "judge": {
+      "anyOf": [
+        {
+          "$ref": "#/definitions/ModelArtifact"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "subject": {
+      "$ref": "#/definitions/ModelArtifact"
+    },
+    "system_under_test": {
+      "$ref": "#/definitions/SystemUnderTestIdentity"
+    }
+  },
+  "additionalProperties": false,
+  "definitions": {
+    "ControlPlaneEvidence": {
+      "type": "object",
+      "required": [
+        "functions"
+      ],
+      "properties": {
+        "functions": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/FunctionContractEvidence"
+          }
+        }
+      }
+    },
+    "ExecutionIdentity": {
+      "type": "object",
+      "required": [
+        "completed_at",
+        "execution_id",
+        "lane",
+        "started_at"
+      ],
+      "properties": {
+        "completed_at": {
+          "type": "string"
+        },
+        "execution_id": {
+          "type": "string"
+        },
+        "lane": {
+          "type": "string"
+        },
+        "started_at": {
+          "type": "string"
+        }
+      }
+    },
+    "FunctionContractEvidence": {
+      "type": "object",
+      "required": [
+        "function_id",
+        "request_schema",
+        "response_schema",
+        "sha256"
+      ],
+      "properties": {
+        "function_id": {
+          "type": "string"
+        },
+        "request_schema": true,
+        "response_schema": true,
+        "sha256": {
+          "type": "string"
+        }
+      }
+    },
+    "ModelArtifact": {
+      "type": "object",
+      "required": [
+        "context_window",
+        "max_output_tokens",
+        "model",
+        "provider"
+      ],
+      "properties": {
+        "context_window": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "max_output_tokens": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "model": {
+          "type": "string"
+        },
+        "provider": {
+          "type": "string"
+        },
+        "supports_tools": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "supports_vision": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        }
+      }
+    },
+    "StackIdentity": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": [
+            "mode",
+            "workers_repository",
+            "workers_revision"
+          ],
+          "properties": {
+            "mode": {
+              "type": "string",
+              "enum": [
+                "source"
+              ]
+            },
+            "workers_repository": {
+              "type": "string"
+            },
+            "workers_revision": {
+              "type": "string"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "mode",
+            "stack_lock_digest",
+            "stack_versions"
+          ],
+          "properties": {
+            "mode": {
+              "type": "string",
+              "enum": [
+                "registry"
+              ]
+            },
+            "stack_lock_digest": {
+              "type": "string"
+            },
+            "stack_versions": {
+              "type": "object",
+              "additionalProperties": {
+                "type": "string"
+              }
+            }
+          }
+        }
+      ]
+    },
+    "SystemUnderTestIdentity": {
+      "type": "object",
+      "required": [
+        "contract_hashes",
+        "e2e_repository",
+        "e2e_revision",
+        "engine_version",
+        "harness_version",
+        "stack"
+      ],
+      "properties": {
+        "contract_hashes": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          }
+        },
+        "e2e_repository": {
+          "type": "string"
+        },
+        "e2e_revision": {
+          "type": "string"
+        },
+        "engine_revision": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "engine_version": {
+          "type": "string"
+        },
+        "harness_version": {
+          "type": "string"
+        },
+        "stack": {
+          "$ref": "#/definitions/StackIdentity"
+        }
+      }
+    }
+  }
+}

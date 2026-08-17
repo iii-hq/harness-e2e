@@ -4,7 +4,7 @@ use std::path::Path;
 use anyhow::{bail, Context, Result};
 use chrono::{SecondsFormat, Utc};
 
-use super::{JobStatus, RunMetadata, LOCAL_SCHEMA_VERSION};
+use super::{JobStatus, RunMetadata};
 use crate::report::E2eReport;
 
 pub(super) struct StoredRun {
@@ -30,23 +30,14 @@ pub(super) fn read_metadata(run_dir: &Path) -> Result<Option<RunMetadata>> {
     }
     let value: RunMetadata = serde_json::from_slice(&fs::read(&path)?)
         .with_context(|| format!("decode {}", path.display()))?;
-    if value.schema_version != LOCAL_SCHEMA_VERSION {
-        bail!(
-            "unsupported local run schema {} in {}; expected {}",
-            value.schema_version,
-            path.display(),
-            LOCAL_SCHEMA_VERSION
-        );
-    }
     Ok(Some(value))
 }
 
 pub(super) fn read_report(run_dir: &Path) -> Result<Option<E2eReport>> {
     let nested = run_dir.join("results");
-    let path = if nested.join("results-v2.json").is_file() || nested.join("results.json").is_file()
-    {
+    let path = if nested.join("results.json").is_file() {
         nested
-    } else if run_dir.join("results-v2.json").is_file() || run_dir.join("results.json").is_file() {
+    } else if run_dir.join("results.json").is_file() {
         run_dir.to_path_buf()
     } else {
         return Ok(None);
@@ -69,12 +60,7 @@ pub(super) fn read_stored_run(run_dir: &Path) -> Result<Option<StoredRun>> {
 }
 
 fn observed_metadata(run_dir: &Path, report: &E2eReport) -> Result<RunMetadata> {
-    let execution = report.execution.as_ref().with_context(|| {
-        format!(
-            "raw control-plane report in {} has no execution identity",
-            run_dir.display()
-        )
-    })?;
+    let execution = &report.execution;
     let directory_id = run_dir
         .file_name()
         .and_then(|value| value.to_str())
@@ -98,7 +84,6 @@ fn observed_metadata(run_dir: &Path, report: &E2eReport) -> Result<RunMetadata> 
         .filter_map(|scenario| scenario.case.as_ref().map(|case| case.seed))
         .next();
     Ok(RunMetadata {
-        schema_version: LOCAL_SCHEMA_VERSION,
         id: execution.execution_id.clone(),
         label: "e2e::* control-plane run".into(),
         status: JobStatus::Completed,
@@ -107,6 +92,7 @@ fn observed_metadata(run_dir: &Path, report: &E2eReport) -> Result<RunMetadata> 
         returncode: Some(0),
         error: String::new(),
         request: super::RunRequest {
+            _caller_worker_id: None,
             label: "e2e::* control-plane run".into(),
             url: String::new(),
             model: report.subject.model.clone(),
@@ -129,11 +115,14 @@ fn observed_metadata(run_dir: &Path, report: &E2eReport) -> Result<RunMetadata> 
             runs: requested_runs,
             technical_retries: 0,
             seed,
+            plan_context: None,
         },
+        plan_context: None,
     })
 }
 
-pub(super) fn recover_interrupted_runs(runs_dir: &Path) -> Result<()> {
+pub(super) fn recover_interrupted_runs(runs_dir: &Path) -> Result<Vec<RunMetadata>> {
+    let mut recovered = Vec::new();
     for entry in fs::read_dir(runs_dir)? {
         let entry = entry?;
         if !entry.file_type()?.is_dir() {
@@ -147,9 +136,10 @@ pub(super) fn recover_interrupted_runs(runs_dir: &Path) -> Result<()> {
             metadata.completed_at = Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true);
             metadata.error = "dashboard stopped before the runner completed".into();
             write_metadata(&entry.path(), &metadata)?;
+            recovered.push(metadata);
         }
     }
-    Ok(())
+    Ok(recovered)
 }
 
 pub(super) fn load_runs(runs_dir: &Path) -> Result<Vec<StoredRun>> {

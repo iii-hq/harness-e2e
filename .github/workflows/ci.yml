@@ -13,6 +13,19 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11.13.1
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: dashboard/pnpm-lock.yaml
+      - run: pnpm --dir dashboard install --frozen-lockfile
+      - run: pnpm --dir dashboard typecheck
+      - run: pnpm --dir dashboard lint
+      - run: pnpm --dir dashboard test
+      - run: pnpm --dir dashboard build
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy,rustfmt
@@ -31,8 +44,5 @@ jobs:
       - run: cargo fmt --all -- --check
       - run: cargo test --locked --all-targets
       - run: cargo clippy --locked --all-targets -- -D warnings
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 22
       - run: node --test tests/dashboard/*.test.cjs
       - run: python3 -m unittest discover -s tests/python -p 'test_*.py'

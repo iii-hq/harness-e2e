@@ -1,9 +1,14 @@
 use std::env;
+#[cfg(test)]
 use std::path::Path;
 
 use anyhow::Result;
 use serde_json::{json, Value};
 
+use super::assessment_projection::{
+    contracts_for_scenario, project_scenario_report, summarize, AssessmentSummary,
+};
+#[cfg(test)]
 use super::store::load_runs;
 use super::{JobStatus, RunMetadata};
 use crate::identity::StackIdentity;
@@ -12,6 +17,7 @@ use crate::report::{E2eReport, E2eRunReport, E2eScenarioReport};
 
 pub(super) const MAX_EXECUTIONS: usize = 100;
 
+#[cfg(test)]
 pub(super) fn load_execution_summaries(runs_dir: &Path) -> Result<Vec<Value>> {
     let mut values = Vec::new();
     for run in load_runs(runs_dir)? {
@@ -68,6 +74,7 @@ pub(super) fn execution_summary(
             "requested_runs": metadata.request.runs,
             "subjects": [],
             "scenario_metrics": [],
+            "assessment_summary": AssessmentSummary::default(),
             "capability": {},
             "totals": {},
             "first_failure": if metadata.error.is_empty() { Value::Null } else { json!({"kind":"runner", "message": metadata.error}) },
@@ -78,7 +85,12 @@ pub(super) fn execution_summary(
         "{}-{}",
         report.subject.provider, report.subject.model
     ));
-    let scenarios: Vec<_> = report.scenarios.iter().map(scenario_summary).collect();
+    let assessment_summary = summarize(report.assessment_contract.runs.iter());
+    let scenarios: Vec<_> = report
+        .scenarios
+        .iter()
+        .map(|scenario| scenario_summary(report, scenario))
+        .collect();
     let hard_gate_failures: u32 = report
         .scenarios
         .iter()
@@ -107,12 +119,6 @@ pub(super) fn execution_summary(
         .map(|scenario| scenario.aggregate.cost.total_usd)
         .collect();
     let total_cost_usd = sum_complete(&costs);
-    let scores: Vec<_> = report
-        .scenarios
-        .iter()
-        .filter_map(|scenario| scenario.aggregate.median_score)
-        .collect();
-    let average_score = mean(&scores);
     let expected = report.scenarios.len();
     let passed = report
         .scenarios
@@ -121,10 +127,11 @@ pub(super) fn execution_summary(
         .count();
     let status = semantic_status(report.passed, hard_gate_failures, technical_failures);
     let totals = efficiency_totals(report);
-    let execution_identity = report.execution.as_ref();
-    let system = report.system_under_test.as_ref();
+    let execution_identity = &report.execution;
+    let system = &report.system_under_test;
     let engine_revision = system
-        .and_then(|value| value.engine_revision.as_ref())
+        .engine_revision
+        .as_ref()
         .or(report.engine_revision.as_ref());
     let subject = json!({
         "id": subject_id,
@@ -143,32 +150,34 @@ pub(super) fn execution_summary(
         "retry_attempts": retries,
         "total_cost_usd": total_cost_usd,
         "wall_time_seconds": wall_time_seconds,
+        "assessment_summary": assessment_summary,
         "scenarios": scenarios,
     });
     Ok(json!({
         "id": metadata.id,
         "label": metadata.label,
-        "run_id": execution_identity.map(|value| value.execution_id.as_str()).unwrap_or(metadata.id.as_str()),
+        "run_id": execution_identity.execution_id,
         "attempt": 1,
         "workflow_name": "Harness E2E Local",
         "workflow_url": null,
         "event": "local",
         "actor": actor(),
-        "started_at": execution_identity.map(|value| value.started_at.as_str()).unwrap_or(metadata.started_at.as_str()),
-        "completed_at": execution_identity.map(|value| value.completed_at.as_str()).unwrap_or(metadata.completed_at.as_str()),
+        "started_at": execution_identity.started_at,
+        "completed_at": execution_identity.completed_at,
         "conclusion": if hard_gate_failures > 0 || technical_failures > 0 { "failure" } else { "success" },
         "status": status,
         "availability": "full",
         "detail_path": format!("runs/{}.json", metadata.id),
         "generated_at": generated_at,
-        "lane": execution_identity.map(|value| value.lane.as_str()).unwrap_or("local"),
+        "lane": execution_identity.lane,
         "execution": execution,
-        "release": release_identity(system),
-        "source": source_identity(system),
-        "stack": stack_identity(system),
+        "release": release_identity(Some(system)),
+        "source": source_identity(Some(system)),
+        "stack": stack_identity(Some(system)),
         "requested_runs": metadata.request.runs,
         "subjects": [subject],
         "scenario_metrics": scenario_metrics(&subject_id, report),
+        "assessment_summary": assessment_summary,
         "capability": capability_summary(report),
         "totals": {
             "expected_reports": expected,
@@ -176,7 +185,6 @@ pub(super) fn execution_summary(
             "report_coverage": 100.0,
             "passed_scenarios": passed,
             "scenario_pass_rate": if expected == 0 { 0.0 } else { passed as f64 / expected as f64 * 100.0 },
-            "average_score": average_score,
             "total_cost_usd": total_cost_usd,
             "wall_time_seconds": wall_time_seconds,
             "hard_gate_failures": hard_gate_failures,
@@ -197,28 +205,24 @@ pub(super) fn execution_detail_value(metadata: &RunMetadata, report: &E2eReport)
         "{}-{}",
         report.subject.provider, report.subject.model
     ));
-    let base = serde_json::to_value(report)?;
     let reports: Vec<_> = report
         .scenarios
         .iter()
         .map(|scenario| {
-            let mut value = base.clone();
-            value["passed"] = json!(scenario.passed);
-            value["scenarios"] = json!([scenario]);
-            json!({
+            Ok(json!({
                 "subject_id": subject_id,
                 "scenario_id": scenario.scenario_id,
                 "available": true,
-                "report": value,
-            })
+                "report": project_scenario_report(report, scenario)?,
+            }))
         })
-        .collect();
+        .collect::<Result<Vec<_>>>()?;
     let mut detail = summary;
     detail["reports"] = json!(reports);
     Ok(detail)
 }
 
-fn scenario_summary(scenario: &E2eScenarioReport) -> Value {
+fn scenario_summary(report: &E2eReport, scenario: &E2eScenarioReport) -> Value {
     let wall_time_seconds = scenario
         .runs
         .iter()
@@ -247,6 +251,7 @@ fn scenario_summary(scenario: &E2eScenarioReport) -> Value {
         "wall_time_seconds": wall_time_seconds,
         "robustness": scenario.aggregate.robustness,
         "efficiency": scenario_efficiency(scenario),
+        "assessment_summary": summarize(contracts_for_scenario(report, scenario)),
     })
 }
 
@@ -424,8 +429,8 @@ fn first_failure(report: &E2eReport) -> Value {
 }
 
 fn execution_identity(metadata: &RunMetadata, report: Option<&E2eReport>) -> Value {
-    let report_identity = report.and_then(|value| value.execution.as_ref());
-    let system = report.and_then(|value| value.system_under_test.as_ref());
+    let report_identity = report.map(|value| &value.execution);
+    let system = report.map(|value| &value.system_under_test);
     let (head_sha, repository) = match system.map(|value| &value.stack) {
         Some(StackIdentity::Source {
             workers_repository,

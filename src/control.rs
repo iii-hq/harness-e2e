@@ -24,8 +24,8 @@ use crate::fault::{
     ExpectedTerminalOutcome, FaultEvaluation, FaultJournal, FaultPlan, FaultProfile,
 };
 use crate::judge::JudgeConfig;
-use crate::longitudinal::{self, ComparisonPolicy, ComparisonResponse, PromotedBaselineIdentity};
-use crate::report::{E2eManifestV2, E2eReport};
+use crate::longitudinal::{self, ComparisonPolicy, ComparisonResponse};
+use crate::report::{E2eManifest, E2eReport};
 use crate::scenarios::{ComplexityProfile, DeliverableContract, ScenarioId};
 use crate::suite::{
     run_suite, SubjectConfig, SuiteControl, SuiteEvent, SuiteEventEnvelope, SuitePhase,
@@ -33,7 +33,6 @@ use crate::suite::{
 };
 
 pub const CONTROL_CONTRACT_NAME: &str = "e2e-control-plane";
-pub const CONTROL_CONTRACT_VERSION: u32 = 4;
 pub const RUN_ID: &str = "e2e::run";
 pub const STATUS_ID: &str = "e2e::status";
 pub const CANCEL_ID: &str = "e2e::cancel";
@@ -41,13 +40,10 @@ pub const RESULTS_GET_ID: &str = "e2e::results-get";
 pub const RESULTS_LIST_ID: &str = "e2e::results-list";
 pub const COMPARE_ID: &str = "e2e::compare";
 pub const SCENARIOS_LIST_ID: &str = "e2e::scenarios-list";
-pub const BASELINE_PROMOTE_ID: &str = "e2e::baseline-promote";
-pub const BASELINE_GET_ID: &str = "e2e::baseline-get";
 pub const FAULT_PLAN_ID: &str = "e2e::fault-plan";
 pub const FAULT_EVALUATE_ID: &str = "e2e::fault-evaluate";
 
-const RECORD_SCOPE: &str = "harness_e2e_execution_v1";
-const BASELINE_SCOPE: &str = "harness_e2e_baseline_v1";
+const RECORD_SCOPE: &str = "harness_e2e_execution";
 const MAX_IDEMPOTENCY_KEY_BYTES: usize = 256;
 const MAX_CONCURRENT_EXECUTIONS: usize = 4;
 
@@ -111,8 +107,8 @@ pub struct ActiveAttempt {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct ExecutionRecord {
-    pub schema_version: u32,
     pub execution_id: String,
     pub idempotency_key: String,
     pub phase: ExecutionPhase,
@@ -131,12 +127,13 @@ pub struct ExecutionRecord {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub report: Option<E2eReport>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub manifest: Option<E2eManifestV2>,
+    pub manifest: Option<E2eManifest>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub archive: Option<DurableArchiveReference>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct RunRequest {
     pub idempotency_key: String,
     #[serde(default = "default_lane")]
@@ -159,13 +156,10 @@ pub struct RunRequest {
     pub technical_retries: u8,
     #[serde(default = "default_progress_interval_seconds")]
     pub progress_interval_seconds: u64,
-    #[serde(default)]
-    pub allow_legacy_control_plane: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct LaneBudget {
-    pub policy_version: u32,
     pub max_cases: u16,
     pub max_runs_per_case: u32,
     pub max_technical_retries: u8,
@@ -211,7 +205,7 @@ pub struct ResultsGetResponse {
     pub phase: ExecutionPhase,
     pub result_path: Option<String>,
     pub report: Option<E2eReport>,
-    pub manifest: Option<E2eManifestV2>,
+    pub manifest: Option<E2eManifest>,
     pub archive: Option<DurableArchiveReference>,
 }
 
@@ -251,51 +245,10 @@ pub struct ResultsListResponse {
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct CompareRequest {
-    pub current_execution_id: String,
-    pub baseline: BaselineGetRequest,
+    pub from_execution_id: String,
+    pub to_execution_id: String,
     #[serde(default)]
     pub policy: ComparisonPolicy,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
-pub struct BaselinePromotionRequest {
-    pub name: String,
-    pub execution_id: String,
-    pub expected_current_version: u32,
-    #[serde(default)]
-    pub note: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
-pub struct BaselineGetRequest {
-    pub name: String,
-    #[serde(default)]
-    pub version: Option<u32>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-pub struct BaselineRecord {
-    pub schema_version: u32,
-    pub baseline_id: String,
-    pub name: String,
-    pub version: u32,
-    pub execution_id: String,
-    pub report_sha256: String,
-    pub promoted_at: String,
-    pub note: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
-struct BaselinePointer {
-    name: String,
-    version: u32,
-    baseline_id: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
-pub struct BaselineGetResponse {
-    pub baseline: BaselineRecord,
-    pub current_version: u32,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -491,35 +444,6 @@ impl ControlPlane {
         );
         register_function(
             &self.inner.iii,
-            BASELINE_PROMOTE_ID,
-            "Promote an immutable, versioned E2E execution baseline.",
-            {
-                let control = self.clone();
-                RegisterFunction::new_async(move |request: BaselinePromotionRequest| {
-                    let control = control.clone();
-                    async move {
-                        control
-                            .baseline_promote(request)
-                            .await
-                            .map_err(handler_error)
-                    }
-                })
-            },
-        );
-        register_function(
-            &self.inner.iii,
-            BASELINE_GET_ID,
-            "Read a current or versioned immutable E2E baseline.",
-            {
-                let control = self.clone();
-                RegisterFunction::new_async(move |request: BaselineGetRequest| {
-                    let control = control.clone();
-                    async move { control.baseline_get(request).await.map_err(handler_error) }
-                })
-            },
-        );
-        register_function(
-            &self.inner.iii,
             STATUS_ID,
             "Read the durable phase and progress of an E2E execution.",
             {
@@ -636,7 +560,6 @@ impl ControlPlane {
 
         let now = now();
         let record = ExecutionRecord {
-            schema_version: CONTROL_CONTRACT_VERSION,
             execution_id: execution_id.clone(),
             idempotency_key: request.idempotency_key.clone(),
             phase: ExecutionPhase::Requested,
@@ -708,7 +631,7 @@ impl ControlPlane {
         } else {
             unique_scenarios(&request.scenarios)
         };
-        let judge = judge_config(&request, &scenarios);
+        let judge = Some(judge_config(&request));
         let outcome = run_suite(SuiteRunConfig {
             url: self.inner.url.clone(),
             subject: SubjectConfig {
@@ -724,7 +647,6 @@ impl ControlPlane {
             technical_retries: request.technical_retries,
             progress_interval: (request.progress_interval_seconds > 0)
                 .then(|| Duration::from_secs(request.progress_interval_seconds)),
-            allow_legacy_control_plane: request.allow_legacy_control_plane,
             control: Some(SuiteControl {
                 execution_id: execution_id.clone(),
                 lane: request.lane.clone(),
@@ -955,175 +877,25 @@ impl ControlPlane {
     }
 
     async fn compare(&self, request: CompareRequest) -> Result<ComparisonResponse> {
-        let current = self.record(&request.current_execution_id).await?;
-        let promoted = self.baseline_get(request.baseline).await?.baseline;
-        let baseline = self.record(&promoted.execution_id).await?;
-        let mut comparison = compare_records(&current, &baseline, request.policy)?;
-        comparison.promoted_baseline = Some(PromotedBaselineIdentity {
-            baseline_id: promoted.baseline_id,
-            name: promoted.name,
-            version: promoted.version,
-            execution_id: promoted.execution_id,
-            report_sha256: promoted.report_sha256,
-            promoted_at: promoted.promoted_at,
-        });
-        longitudinal::refresh_comparison_id(&mut comparison)?;
+        if request.from_execution_id == request.to_execution_id {
+            bail!("comparison requires two distinct executions");
+        }
+        let from = self.record(&request.from_execution_id).await?;
+        let to = self.record(&request.to_execution_id).await?;
+        for (side, record) in [("from", &from), ("to", &to)] {
+            if record.phase != ExecutionPhase::Completed {
+                bail!("{side} execution must be completed before comparison");
+            }
+        }
+        let comparison = compare_records(&from, &to, request.policy)?;
         let artifacts = longitudinal::write_comparison(
-            &self.inner.output_root.join(&current.execution_id),
+            &self.inner.output_root.join(&to.execution_id),
             &comparison,
         )?;
         Ok(ComparisonResponse {
             comparison,
             artifacts,
         })
-    }
-
-    async fn baseline_promote(&self, request: BaselinePromotionRequest) -> Result<BaselineRecord> {
-        validate_baseline_name(&request.name)?;
-        let _admission = self.inner.admission.lock().await;
-        let execution = self.record(&request.execution_id).await?;
-        if execution.phase != ExecutionPhase::Completed {
-            bail!("only a completed execution can be promoted as a baseline");
-        }
-        let report = execution
-            .report
-            .as_ref()
-            .context("completed execution has no report")?;
-        let current = self.baseline_pointer(&request.name).await?;
-        let current_version = current.as_ref().map_or(0, |pointer| pointer.version);
-        if request.expected_current_version != current_version {
-            bail!(
-                "baseline '{}' current version is {}, expected {}",
-                request.name,
-                current_version,
-                request.expected_current_version
-            );
-        }
-        let version = current_version
-            .checked_add(1)
-            .context("baseline version overflow")?;
-        let report_sha256 = crate::artifact::sha256_value(report)?;
-        let baseline_id = crate::artifact::sha256_value(&json!({
-            "name": request.name,
-            "version": version,
-            "execution_id": request.execution_id,
-            "report_sha256": report_sha256,
-        }))?;
-        let candidate = BaselineRecord {
-            schema_version: 1,
-            baseline_id: baseline_id.clone(),
-            name: request.name.clone(),
-            version,
-            execution_id: request.execution_id,
-            report_sha256,
-            promoted_at: now(),
-            note: request.note,
-        };
-        let immutable_key = baseline_version_key(&candidate.name, version);
-        let existing = state_value(
-            self.trigger(
-                "state::get",
-                json!({ "scope": BASELINE_SCOPE, "key": immutable_key }),
-            )
-            .await?,
-        );
-        let record = if existing.is_null() {
-            self.trigger(
-                "state::set",
-                json!({
-                    "scope": BASELINE_SCOPE,
-                    "key": baseline_version_key(&candidate.name, version),
-                    "value": candidate,
-                }),
-            )
-            .await
-            .context("persist immutable baseline record")?;
-            candidate
-        } else {
-            let existing: BaselineRecord = serde_json::from_value(existing)
-                .context("decode existing immutable baseline record")?;
-            if existing.baseline_id != candidate.baseline_id {
-                bail!(
-                    "baseline '{}' version {} already exists with different evidence",
-                    candidate.name,
-                    version
-                );
-            }
-            existing
-        };
-        self.trigger(
-            "state::set",
-            json!({
-                "scope": BASELINE_SCOPE,
-                "key": baseline_current_key(&record.name),
-                "value": BaselinePointer {
-                    name: record.name.clone(),
-                    version,
-                    baseline_id,
-                },
-            }),
-        )
-        .await
-        .context("advance baseline pointer")?;
-        Ok(record)
-    }
-
-    async fn baseline_get(&self, request: BaselineGetRequest) -> Result<BaselineGetResponse> {
-        validate_baseline_name(&request.name)?;
-        let current = self
-            .baseline_pointer(&request.name)
-            .await?
-            .with_context(|| format!("unknown baseline '{}'", request.name))?;
-        let version = request.version.unwrap_or(current.version);
-        let value = state_value(
-            self.trigger(
-                "state::get",
-                json!({
-                    "scope": BASELINE_SCOPE,
-                    "key": baseline_version_key(&request.name, version),
-                }),
-            )
-            .await?,
-        );
-        if value.is_null() {
-            bail!("unknown baseline '{}' version {}", request.name, version);
-        }
-        let baseline: BaselineRecord =
-            serde_json::from_value(value).context("decode immutable baseline record")?;
-        if baseline.name != request.name || baseline.version != version {
-            bail!("baseline record identity does not match its immutable key");
-        }
-        if version == current.version && baseline.baseline_id != current.baseline_id {
-            bail!("current baseline pointer does not match its immutable record");
-        }
-        let execution = self.record(&baseline.execution_id).await?;
-        let report = execution
-            .report
-            .as_ref()
-            .context("baseline execution has no report")?;
-        if crate::artifact::sha256_value(report)? != baseline.report_sha256 {
-            bail!("baseline report hash does not match the promoted evidence");
-        }
-        Ok(BaselineGetResponse {
-            baseline,
-            current_version: current.version,
-        })
-    }
-
-    async fn baseline_pointer(&self, name: &str) -> Result<Option<BaselinePointer>> {
-        let value = state_value(
-            self.trigger(
-                "state::get",
-                json!({ "scope": BASELINE_SCOPE, "key": baseline_current_key(name) }),
-            )
-            .await?,
-        );
-        if value.is_null() {
-            return Ok(None);
-        }
-        Ok(Some(
-            serde_json::from_value(value).context("decode baseline pointer")?,
-        ))
     }
 
     async fn restore(&self) -> Result<()> {
@@ -1205,7 +977,7 @@ impl ControlPlane {
         phase: ExecutionPhase,
         error: String,
         report: Option<E2eReport>,
-        manifest: Option<E2eManifestV2>,
+        manifest: Option<E2eManifest>,
         result_path: Option<String>,
     ) -> Result<()> {
         self.update_record(execution_id, move |record| {
@@ -1305,7 +1077,6 @@ fn register_function(iii: &IIIClient, id: &str, description: &str, registration:
             "internal": true,
             "contract": {
                 "name": CONTROL_CONTRACT_NAME,
-                "version": CONTROL_CONTRACT_VERSION,
                 "capabilities": [id.trim_start_matches("e2e::")],
             }
         })),
@@ -1317,9 +1088,7 @@ fn handler_error(error: anyhow::Error) -> Error {
 }
 
 fn execution_id_for_key(idempotency_key: &str) -> String {
-    let digest = Sha256::digest(
-        format!("{CONTROL_CONTRACT_NAME}:v{CONTROL_CONTRACT_VERSION}:{idempotency_key}").as_bytes(),
-    );
+    let digest = Sha256::digest(format!("{CONTROL_CONTRACT_NAME}:{idempotency_key}").as_bytes());
     format!("{:x}", digest)[..32].to_string()
 }
 
@@ -1420,7 +1189,6 @@ fn lane_budget(lane: &str) -> LaneBudget {
             (24, 1, 1, 10_000)
         };
     LaneBudget {
-        policy_version: 2,
         max_cases,
         max_runs_per_case,
         max_technical_retries,
@@ -1428,14 +1196,8 @@ fn lane_budget(lane: &str) -> LaneBudget {
     }
 }
 
-fn judge_config(request: &RunRequest, scenarios: &[ScenarioId]) -> Option<JudgeConfig> {
-    let required = scenarios
-        .iter()
-        .any(|scenario| scenario.spec("judge-check").needs_judge());
-    if !required && request.judge_model.is_none() && request.judge_provider.is_none() {
-        return None;
-    }
-    Some(JudgeConfig {
+fn judge_config(request: &RunRequest) -> JudgeConfig {
+    JudgeConfig {
         model: request
             .judge_model
             .clone()
@@ -1444,7 +1206,7 @@ fn judge_config(request: &RunRequest, scenarios: &[ScenarioId]) -> Option<JudgeC
             .judge_provider
             .clone()
             .unwrap_or_else(|| request.provider.clone()),
-    })
+    }
 }
 
 fn unique_scenarios(scenarios: &[ScenarioId]) -> Vec<ScenarioId> {
@@ -1493,61 +1255,27 @@ fn status_response(record: &ExecutionRecord) -> StatusResponse {
 }
 
 fn compare_records(
-    current: &ExecutionRecord,
-    baseline: &ExecutionRecord,
+    from: &ExecutionRecord,
+    to: &ExecutionRecord,
     policy: ComparisonPolicy,
 ) -> Result<crate::longitudinal::ComparisonSummary> {
-    let current_report = current
+    let from_report = from
         .report
         .as_ref()
-        .context("current execution has no completed report")?;
-    let baseline_report = baseline
+        .context("from execution has no completed report")?;
+    let to_report = to
         .report
         .as_ref()
-        .context("baseline execution has no completed report")?;
+        .context("to execution has no completed report")?;
     longitudinal::compare_reports(
-        &current.execution_id,
-        &current.request.lane,
-        current_report,
-        &baseline.execution_id,
-        &baseline.request.lane,
-        baseline_report,
+        &from.execution_id,
+        &from.request.lane,
+        from_report,
+        &to.execution_id,
+        &to.request.lane,
+        to_report,
         policy,
     )
-}
-
-fn validate_baseline_name(name: &str) -> Result<()> {
-    if name.is_empty()
-        || name.len() > 80
-        || !name.bytes().all(|byte| {
-            byte.is_ascii_lowercase() || byte.is_ascii_digit() || matches!(byte, b'-' | b'_' | b'.')
-        })
-    {
-        bail!(
-            "baseline name must contain 1 to 80 lowercase ASCII letters, digits, '.', '-' or '_'"
-        );
-    }
-    Ok(())
-}
-
-fn baseline_version_key(name: &str, version: u32) -> String {
-    format!("{name}:v{version}")
-}
-
-fn baseline_current_key(name: &str) -> String {
-    format!("{name}:current")
-}
-
-fn state_value(response: Value) -> Value {
-    match response {
-        Value::Object(mut object)
-            if object.get("ok").and_then(Value::as_bool) == Some(true)
-                && object.contains_key("value") =>
-        {
-            object.remove("value").unwrap_or(Value::Null)
-        }
-        response => response,
-    }
 }
 
 fn relative_result_path(root: &Path, path: &Path) -> String {
@@ -1579,7 +1307,6 @@ mod tests {
             rotating_seeds: Vec::new(),
             technical_retries: 1,
             progress_interval_seconds: 15,
-            allow_legacy_control_plane: false,
         }
     }
 
@@ -1650,25 +1377,10 @@ mod tests {
     }
 
     #[test]
-    fn baseline_names_and_keys_are_bounded_and_deterministic() {
-        for name in ["daily", "coordination-l4", "release_1.2"] {
-            validate_baseline_name(name).unwrap();
-        }
-        for name in ["", "Daily", "has space", "path/escape"] {
-            assert!(validate_baseline_name(name).is_err());
-        }
-        assert!(validate_baseline_name(&"a".repeat(81)).is_err());
-        assert_eq!(baseline_version_key("daily", 7), "daily:v7");
-        assert_eq!(baseline_current_key("daily"), "daily:current");
-    }
-
-    #[test]
-    fn state_values_accept_native_and_wrapped_iii_shapes() {
-        assert_eq!(state_value(json!({"value": 1})), json!({"value": 1}));
+    fn execution_identity_is_stable_for_the_same_idempotency_key() {
         assert_eq!(
-            state_value(json!({"ok": true, "value": {"version": 2}})),
-            json!({"version": 2})
+            execution_id_for_key("release:123:case"),
+            "5d26613d37528e723253324a6bf5bd97"
         );
-        assert_eq!(state_value(Value::Null), Value::Null);
     }
 }

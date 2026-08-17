@@ -1,4 +1,6 @@
 pub mod artifact;
+pub mod assessment;
+pub mod asset;
 pub mod catalog;
 pub mod context;
 pub mod control;

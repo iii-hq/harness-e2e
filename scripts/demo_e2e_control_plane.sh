@@ -10,7 +10,6 @@ E2E_SCENARIO="${E2E_SCENARIO:-coordination.1}"
 E2E_SEED="${E2E_SEED:-4404}"
 E2E_TIMEOUT_SECONDS="${E2E_TIMEOUT_SECONDS:-1800}"
 E2E_POLL_SECONDS="${E2E_POLL_SECONDS:-2}"
-E2E_ALLOW_LEGACY="${E2E_ALLOW_LEGACY:-false}"
 E2E_DEMO_ROOT="${E2E_DEMO_ROOT:-${ROOT_DIR}/target/e2e-demo}"
 E2E_WORKERS_REPOSITORY="${HARNESS_E2E_WORKERS_REPOSITORY:-}"
 E2E_WORKERS_REVISION="${HARNESS_E2E_WORKERS_REVISION:-}"
@@ -18,7 +17,7 @@ CATALOG_ONLY=false
 
 usage() {
   printf '%s\n' \
-    'Usage: scripts/demo_e2e_control_plane.sh [--catalog-only] [--allow-legacy-control-plane]' \
+    'Usage: scripts/demo_e2e_control_plane.sh [--catalog-only]' \
     '' \
     'Environment overrides:' \
     '  III_URL, E2E_MODEL, E2E_PROVIDER, E2E_SCENARIO, E2E_SEED' \
@@ -30,9 +29,6 @@ while [[ $# -gt 0 ]]; do
   case "$1" in
     --catalog-only)
       CATALOG_ONLY=true
-      ;;
-    --allow-legacy-control-plane)
-      E2E_ALLOW_LEGACY=true
       ;;
     -h|--help)
       usage
@@ -150,7 +146,6 @@ request="$(jq -cn \
   --arg provider "$E2E_PROVIDER" \
   --arg scenario "$E2E_SCENARIO" \
   --argjson seed "$E2E_SEED" \
-  --argjson allow_legacy "$E2E_ALLOW_LEGACY" \
   '{
     idempotency_key: $idempotency_key,
     lane: "local-demo",
@@ -161,8 +156,7 @@ request="$(jq -cn \
     seed: $seed,
     rotating_seeds: [],
     technical_retries: 1,
-    progress_interval_seconds: 2,
-    allow_legacy_control_plane: $allow_legacy
+    progress_interval_seconds: 2
   }')"
 
 printf '\nSubmitting the asynchronous execution\n'

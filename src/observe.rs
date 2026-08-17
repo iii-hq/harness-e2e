@@ -9,7 +9,7 @@ use serde_json::Value;
 use tokio::sync::{watch, Notify};
 
 use crate::wire::{
-    SessionMetricsResponseV1, StatusReport, TurnCompletedEvent, TurnCompletedEventV1, TurnStatus,
+    SessionMetricsResponse, StatusReport, TurnCompletedEvent, TurnCompletedPayload, TurnStatus,
 };
 
 pub const SINK_FUNCTION_ID: &str = "e2e::on-turn-completed";
@@ -112,8 +112,8 @@ struct MetricsProgress {
     function_call_errors: u64,
 }
 
-impl From<&SessionMetricsResponseV1> for MetricsProgress {
-    fn from(metrics: &SessionMetricsResponseV1) -> Self {
+impl From<&SessionMetricsResponse> for MetricsProgress {
+    fn from(metrics: &SessionMetricsResponse) -> Self {
         Self {
             sessions: metrics.totals.sessions,
             function_calls: metrics.totals.function_calls,
@@ -141,7 +141,7 @@ impl ObserveMachine {
         }
     }
 
-    fn classify(&mut self, event: &TurnCompletedEventV1) -> EventKind {
+    fn classify(&mut self, event: &TurnCompletedPayload) -> EventKind {
         let key = (event.session_id.clone(), event.turn_id.clone());
         if !self.seen.insert(key) {
             return EventKind::Duplicate;
@@ -189,7 +189,7 @@ fn ensure_not_cancelled(cancellation: Option<&watch::Receiver<bool>>) -> Result<
 
 fn totals_changed(
     previous: &mut Option<MetricsProgress>,
-    metrics: &SessionMetricsResponseV1,
+    metrics: &SessionMetricsResponse,
 ) -> bool {
     let observed = MetricsProgress::from(metrics);
     if previous.as_ref() == Some(&observed) {
@@ -203,7 +203,7 @@ fn totals_changed(
 #[async_trait]
 pub(crate) trait TreeObserver: Send + Sync {
     async fn next_turn_completed(&self, timeout: Duration) -> Option<TurnCompletedEvent>;
-    async fn pull_metrics(&self, root_session_id: &str) -> Result<SessionMetricsResponseV1>;
+    async fn pull_metrics(&self, root_session_id: &str) -> Result<SessionMetricsResponse>;
     async fn pull_root_status(&self, root_session_id: &str) -> Result<Option<StatusReport>>;
     async fn stop_tree(&self, root_session_id: &str);
 }
@@ -216,7 +216,7 @@ pub(crate) async fn wait_until_complete<O: TreeObserver>(
     sample_interval: Duration,
     log_heartbeat: bool,
     cancellation: Option<&watch::Receiver<bool>>,
-) -> Result<SessionMetricsResponseV1> {
+) -> Result<SessionMetricsResponse> {
     let started = tokio::time::Instant::now();
     let mut last_progress = started;
     let mut previous_metrics = None;
@@ -334,18 +334,18 @@ mod tests {
     use tokio::sync::watch;
 
     use super::*;
-    use crate::wire::{SessionMetricsResponseBodyV1, SessionUsageTotalsV1, StatusReportV1};
+    use crate::wire::{SessionMetricsPayload, SessionUsageTotals, StatusReportPayload};
 
     struct Injected {
         hub: ObserveHub,
-        metrics: Mutex<SessionMetricsResponseV1>,
+        metrics: Mutex<SessionMetricsResponse>,
         status: Mutex<StatusReport>,
         stopped: AtomicBool,
         metrics_error: Mutex<Option<String>>,
     }
 
     impl Injected {
-        fn new(metrics: SessionMetricsResponseV1, status: StatusReport) -> Self {
+        fn new(metrics: SessionMetricsResponse, status: StatusReport) -> Self {
             Self {
                 hub: ObserveHub::new(),
                 metrics: Mutex::new(metrics),
@@ -359,7 +359,7 @@ mod tests {
             self.hub.push(event);
         }
 
-        fn set_metrics(&self, metrics: SessionMetricsResponseV1) {
+        fn set_metrics(&self, metrics: SessionMetricsResponse) {
             *self.metrics.lock().unwrap() = metrics;
         }
     }
@@ -370,7 +370,7 @@ mod tests {
             self.hub.wait_event(timeout).await
         }
 
-        async fn pull_metrics(&self, _root_session_id: &str) -> Result<SessionMetricsResponseV1> {
+        async fn pull_metrics(&self, _root_session_id: &str) -> Result<SessionMetricsResponse> {
             if let Some(error) = self.metrics_error.lock().unwrap().clone() {
                 bail!("{error}");
             }
@@ -393,7 +393,7 @@ mod tests {
         terminal: bool,
         result_error: Option<&str>,
     ) -> TurnCompletedEvent {
-        TurnCompletedEvent::from_normalized(TurnCompletedEventV1 {
+        TurnCompletedEvent::from_normalized(TurnCompletedPayload {
             session_id: session_id.to_string(),
             turn_id: turn_id.to_string(),
             status,
@@ -402,11 +402,11 @@ mod tests {
         })
     }
 
-    fn metrics(complete: bool, sessions: u64, function_calls: u64) -> SessionMetricsResponseV1 {
-        SessionMetricsResponseV1::from_normalized(SessionMetricsResponseBodyV1 {
+    fn metrics(complete: bool, sessions: u64, function_calls: u64) -> SessionMetricsResponse {
+        SessionMetricsResponse::from_normalized(SessionMetricsPayload {
             root_session_id: "root".to_string(),
             complete,
-            totals: SessionUsageTotalsV1 {
+            totals: SessionUsageTotals {
                 sessions,
                 turns: 1,
                 function_calls,
@@ -419,7 +419,7 @@ mod tests {
     }
 
     fn status(turn_status: TurnStatus, expects_wake: bool) -> StatusReport {
-        StatusReport::from_normalized(StatusReportV1 {
+        StatusReport::from_normalized(StatusReportPayload {
             session_id: "root".to_string(),
             turn_id: Some("turn-1".to_string()),
             status: turn_status,
@@ -441,7 +441,7 @@ mod tests {
         stuck: Duration,
         sample: Duration,
         cancellation: Option<&watch::Receiver<bool>>,
-    ) -> Result<SessionMetricsResponseV1> {
+    ) -> Result<SessionMetricsResponse> {
         wait_until_complete(
             observer,
             "direct_answer",

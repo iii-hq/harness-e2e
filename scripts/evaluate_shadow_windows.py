@@ -28,7 +28,6 @@ def evaluate(paths: list[Path], required: int) -> dict:
     if failed:
         reasons.append(f"non-equivalent recent windows: {failed}")
     return {
-        "schema_version": 1,
         "required_windows": required,
         "observed_windows": len(recent),
         "ready_for_cutover": len(recent) == required and unique and not failed,

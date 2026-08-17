@@ -1,0 +1,20 @@
+{
+  "lane_order": [
+    "pull_request",
+    "main",
+    "daily",
+    "release"
+  ],
+  "canonical": {
+    "entrypoint": "e2e::run",
+    "results_file": "results.json",
+    "archive_scheme": "iii-storage",
+    "required_identity_fields": [
+      "execution_id",
+      "lane",
+      "subject_revision",
+      "e2e_revision"
+    ]
+  },
+  "minimum_shadow_windows": 3
+}

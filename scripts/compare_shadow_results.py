@@ -17,8 +17,8 @@ def canonical_hash(value: Any) -> str:
 
 def load_report(path: Path) -> dict[str, Any]:
     value = json.loads(path.read_text(encoding="utf-8"))
-    if not isinstance(value, dict) or value.get("schema_version") != 2:
-        raise ValueError(f"{path} is not a results-v2 report")
+    if not isinstance(value, dict) or "schema_version" in value:
+        raise ValueError(f"{path} is not a current results report")
     if not isinstance(value.get("execution"), dict):
         raise ValueError(f"{path} has no execution identity")
     if not isinstance(value.get("system_under_test"), dict):
@@ -161,7 +161,6 @@ def compare(primary: dict[str, Any], shadow: dict[str, Any]) -> dict[str, Any]:
                 right[field],
             )
     return {
-        "schema_version": 1,
         "equivalent": not mismatches,
         "primary": {
             "execution_id": primary["execution"].get("execution_id"),

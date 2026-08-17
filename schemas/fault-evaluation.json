@@ -1,0 +1,95 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "FaultEvaluation",
+  "type": "object",
+  "required": [
+    "cancellation_observed",
+    "classification",
+    "cleanup_completed",
+    "execution_id",
+    "max_work_amplification",
+    "planned_actions",
+    "profile_id",
+    "profile_sha256",
+    "reasons",
+    "recovered_actions"
+  ],
+  "properties": {
+    "cancellation_observed": {
+      "type": "boolean"
+    },
+    "classification": {
+      "$ref": "#/definitions/RecoveryClassification"
+    },
+    "cleanup_completed": {
+      "type": "boolean"
+    },
+    "deliverable_correct": {
+      "type": [
+        "boolean",
+        "null"
+      ]
+    },
+    "execution_id": {
+      "type": "string"
+    },
+    "max_work_amplification": {
+      "type": "number",
+      "format": "double"
+    },
+    "observed_work_amplification": {
+      "type": [
+        "number",
+        "null"
+      ],
+      "format": "double"
+    },
+    "planned_actions": {
+      "type": "integer",
+      "format": "uint32",
+      "minimum": 0.0
+    },
+    "profile_id": {
+      "type": "string"
+    },
+    "profile_sha256": {
+      "type": "string"
+    },
+    "reasons": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "recovered_actions": {
+      "type": "integer",
+      "format": "uint32",
+      "minimum": 0.0
+    },
+    "results_sha256": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "structural_integrity": {
+      "type": [
+        "boolean",
+        "null"
+      ]
+    }
+  },
+  "additionalProperties": false,
+  "definitions": {
+    "RecoveryClassification": {
+      "type": "string",
+      "enum": [
+        "correct_recovery",
+        "excessive_recovery",
+        "incorrect_result",
+        "structural_failure",
+        "infrastructure_failure"
+      ]
+    }
+  }
+}

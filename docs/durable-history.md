@@ -7,17 +7,17 @@ subject under test.
 
 ## Contracts
 
-Contract v1 persists two independently versioned records:
+Durable history persists two current records:
 
-- `schemas/durable-archive-v1.json` describes a manifest whose files and
+- `schemas/durable-archive.json` describes a manifest whose files and
   chunks are content-addressed;
-- `schemas/history-record-v1.json` describes one validated analytical row.
+- `schemas/history-record.json` describes one validated analytical row.
 
 Every URI has the form
 `iii-storage://<private-alias>/<immutable-key>?sha256=<digest>`. Upload performs
 `putObject`, `headObject`, and a hash-verified read-after-write. Restore verifies
 the manifest, every chunk, the reconstructed file, and finally the native
-`results-v2` evidence graph.
+`results.json` evidence graph.
 
 The worker-facing aliases are:
 

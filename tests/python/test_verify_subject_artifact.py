@@ -37,7 +37,6 @@ class SubjectArtifactVerificationTests(unittest.TestCase):
                 archive.addfile(escape, io.BytesIO(b"x"))
         archive_bytes = archive_path.read_bytes()
         manifest = {
-            "schema_version": 1,
             "repository": "iii-hq/workers",
             "revision": REVISION,
             "created_at": "2026-08-12T00:00:00Z",

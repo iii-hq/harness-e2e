@@ -1,168 +1,299 @@
-const test = require("node:test");
-const assert = require("node:assert/strict");
-const fs = require("node:fs");
-const path = require("node:path");
-const vm = require("node:vm");
+const test = require('node:test')
+const assert = require('node:assert/strict')
+const fs = require('node:fs')
+const path = require('node:path')
 
-const repositoryRoot = path.join(__dirname, "..", "..");
-const dashboardRoot = path.join(repositoryRoot, "dashboard");
-const index = fs.readFileSync(path.join(dashboardRoot, "index.html"), "utf8");
-const execution = fs.readFileSync(
-  path.join(dashboardRoot, "execution.html"),
-  "utf8",
-);
-const executionScript = fs.readFileSync(
-  path.join(dashboardRoot, "execution.js"),
-  "utf8",
-);
-const sampleExecutions = fs.readFileSync(
-  path.join(dashboardRoot, "sample-executions.js"),
-  "utf8",
-);
-const overview = fs.readFileSync(path.join(dashboardRoot, "overview.js"), "utf8");
-const localRunner = fs.readFileSync(
-  path.join(dashboardRoot, "local-runner.js"),
-  "utf8",
-);
-const styles = fs.readFileSync(path.join(dashboardRoot, "styles.css"), "utf8");
+const repositoryRoot = path.join(__dirname, '..', '..')
+const dashboardRoot = path.join(repositoryRoot, 'dashboard')
+const read = (...segments) =>
+  fs.readFileSync(path.join(dashboardRoot, ...segments), 'utf8')
+const overviewPage = read('src', 'pages', 'OverviewPage.tsx')
+const executionPage = read('src', 'pages', 'ExecutionPage.tsx')
+const runner = read('src', 'components', 'LocalRunnerDialog.tsx')
+const modelDropdown = read('src', 'components', 'ProviderModelDropdown.tsx')
+const planPage = read('src', 'pages', 'LocalPlanPage.tsx')
+const plansPage = read('src', 'pages', 'PlansPage.tsx')
+const catalogPage = read('src', 'pages', 'TestsCatalogPage.tsx')
+const historyPage = read('src', 'pages', 'TestHistoryPage.tsx')
+const transcript = read('src', 'components', 'TranscriptDialog.tsx')
+const dataSource = read('src', 'lib', 'dashboard-data-source.ts')
+const viewModel = read('src', 'lib', 'execution-view.ts')
+const sectionNav = read('src', 'components', 'SectionNav.tsx')
+const testsPage = read('src', 'pages', 'TestsPage.tsx')
 const publisher = fs.readFileSync(
-  path.join(repositoryRoot, "scripts", "publish_harness_e2e_dashboard.py"),
-  "utf8",
-);
+  path.join(repositoryRoot, 'scripts', 'publish_harness_e2e_dashboard.py'),
+  'utf8',
+)
 
-test("places capability and efficiency before operational history", () => {
-  const latest = index.indexOf('class="panel latest-health"');
-  const matrix = index.indexOf('class="panel health-panel"');
-  const capability = index.indexOf('class="panel capability-panel"');
-  const efficiency = index.indexOf('class="panel efficiency-overview"');
-  const executions = index.indexOf('class="panel executions-panel"');
-
-  assert.equal(latest, -1);
-  assert.ok(capability >= 0);
-  assert.ok(efficiency >= 0);
-  assert.ok(capability < efficiency);
-  assert.ok(efficiency < matrix);
-  assert.ok(efficiency < executions);
-  assert.doesNotMatch(index, /Operational health|latest-daily-execution/i);
-});
-
-test("exposes evidence and policy separately in the capability frontier", () => {
-  assert.match(index, /id="capability-reliable-tier"/);
-  assert.match(index, /id="capability-statistical-tier"/);
-  assert.match(index, /id="capability-sample-size"/);
-  assert.match(index, /id="capability-body"/);
-  assert.match(overview, /p95 cost and wall-time budgets are not fully configured/);
-  assert.match(overview, /rateWithInterval/);
-});
-
-test("keeps the latest result inside the efficiency overview", () => {
-  assert.match(index, /class="efficiency-result"/);
-  assert.match(index, /id="efficiency-status"/);
-  assert.doesNotMatch(index, /id="kpi-status"/);
-});
-
-test("keeps hidden preview and diagnostic controls out of layout", () => {
-  assert.match(index, /id="preview-badge"[^>]+hidden/);
-  assert.match(styles, /\[hidden\]\s*\{[^}]*display:\s*none\s*!important;/s);
-});
-
-test("offers every semantic execution status as a filter", () => {
-  for (const status of [
-    "passed",
-    "hard_gate_failed",
-    "technical_failed",
-    "infra_failed",
-    "incomplete",
-    "cancelled",
-    "running",
-  ]) {
-    assert.match(index, new RegExp(`<option value="${status}">`));
-  }
-});
-
-test("restores the per-run chat transcript surface", () => {
-  assert.match(execution, /execution-transcript\.js/);
-  assert.match(execution, /session-transcript-dialog/);
-  assert.match(executionScript, /renderConversationLaunch/);
-  assert.match(executionScript, /conversation-open/);
-  assert.match(executionScript, /openConversationDialog/);
-  assert.match(executionScript, /id: "prompt", label: "Prompt"/);
-  assert.match(executionScript, /id: "sessions", label: "Sessions"/);
-  assert.match(executionScript, /Complete run record/);
-  assert.match(sampleExecutions, /availability: index < 3 \? "full"/);
-  assert.match(sampleExecutions, /transcript:\s*\{/);
-  assert.match(sampleExecutions, /criteria:\s*\[/);
-  assert.match(sampleExecutions, /traces:\s*\{/);
-});
-
-test("uses the delta meaning to color efficiency sparklines", () => {
-  assert.match(overview, /const efficiencyTrendColors =/);
-  assert.match(overview, /efficiencyTrendColors\[meta\.css\]/);
-  assert.doesNotMatch(overview, /const palette =/);
-});
-
-test("discovers local models and scenarios while keeping runner knobs advanced", () => {
-  assert.match(index, /id="local-subject"[^>]+disabled/);
-  assert.match(index, /id="local-scenario-options"/);
-  assert.match(index, /class="local-advanced local-field-wide"/);
-  assert.match(index, /id="local-catalog-refresh"/);
-  assert.doesNotMatch(index, /name="model"|name="provider"/);
-  assert.match(localRunner, /api\/local\/catalog/);
-  assert.match(localRunner, /catalog\.models/);
-  assert.match(localRunner, /catalog\.scenarios/);
-});
-
-test("uses the native local-run contract without import compatibility", () => {
-  assert.match(overview, /Last completed/);
-  assert.match(localRunner, /Results saved/);
-  assert.match(localRunner, /job\?\.status === "completed" && job\.id/);
+test('prioritizes the first-read execution signal', () => {
+  assert.match(overviewPage, /Latest execution/)
+  assert.match(overviewPage, /Scenario pass rate/)
+  assert.match(overviewPage, /Reliability events/)
+  assert.match(overviewPage, /Investigate execution/)
+  assert.match(overviewPage, /Subject/)
+  assert.match(overviewPage, /Judge/)
+  assert.match(overviewPage, /hashForWorkspace\('tests'\)/)
+  assert.match(overviewPage, /hashForPlans\(\)/)
+  assert.match(overviewPage, /View local plans/)
+  assert.match(overviewPage, /overview-intelligence-grid/)
+  assert.match(overviewPage, /className="overview-card-action"/)
   assert.doesNotMatch(
-    overview + localRunner,
-    /execution_id|Results imported|results\.json file/,
-  );
-});
+    overviewPage,
+    /className="button button-secondary" href=\{hashForPlans\(\)\}/,
+  )
+  assert.doesNotMatch(overviewPage, /View Actions/)
+  assert.doesNotMatch(
+    overviewPage,
+    /CurrentWork|current-work-panel|No local plan yet/,
+  )
+  assert.match(viewModel, /assessment_summary/)
+  assert.match(viewModel, /infrastructure_error/)
+  assert.match(viewModel, /resource_limit/)
+  assert.doesNotMatch(
+    overviewPage,
+    /HARNESS_EXECUTIONS|Technical Failed|window\.Harness/,
+  )
+})
 
-test("loads the local runner only for native local manifests", () => {
+test('uses one low-emphasis action treatment in overview card footers', () => {
+  const styles = read('src', 'index.css')
+  assert.match(styles, /\.overview-card-action\s*\{[\s\S]*display: inline-flex/)
+  assert.match(styles, /\.overview-card-action:hover[\s\S]*border-bottom-color/)
+  assert.match(styles, /\.overview-card-action:focus-visible[\s\S]*outline-offset/)
+})
+
+test('keeps the workspace navigation and versioned test flow', () => {
+  for (const view of ['overview', 'tests', 'capability', 'executions']) {
+    assert.match(sectionNav, new RegExp(`id: '${view}'`))
+  }
+  assert.match(testsPage, /Tests across system versions/)
+  assert.match(testsPage, /loadVersionResult\(row\.test_id/)
+  assert.match(testsPage, /prefetchedCatalog/)
+  assert.match(catalogPage, /href=\{hashForWorkspace\(\)\}[\s\S]*Overview/)
+  assert.match(catalogPage, /catalog-search-label">Search tests/)
+  assert.match(catalogPage, /placeholder="Test ID"/)
   assert.match(
-    index,
-    /if \(window\.HARNESS_EXECUTIONS\?\.mode === "local"\) \{\s*document\.write\('<script src="\.\/local-runner\.js"/s,
-  );
-  assert.match(overview, /if \(isLocal\) window\.HarnessLocalRunner\.initialize\(\)/);
-  assert.doesNotMatch(overview, /api\/local|local-run-form|local-run-cancel/);
-  assert.match(publisher, /"mode": "published"/);
+    read('src', 'index.css'),
+    /\.catalog-search-field input[\s\S]*border: 1px solid var\(--line-strong\)/,
+  )
+  assert.match(historyPage, /<header className="topbar">/)
+  assert.match(historyPage, /<span className="brand-copy">/)
+  assert.match(historyPage, /Test catalog/)
+  assert.doesNotMatch(historyPage, /tmh-topbar|tmh-brand|tmh-context/)
+  assert.match(plansPage, /All local plans/)
+  assert.match(plansPage, /hashForNewPlan\(\)/)
+  assert.match(plansPage, /Comparison available/)
+})
 
-  const loader = index.match(
-    /<script>\s*(if \(window\.HARNESS_EXECUTIONS\?\.mode === "local"\) \{[\s\S]*?local-runner\.js[\s\S]*?\})\s*<\/script>/,
-  )[1];
-  const writesFor = (mode) => {
-    const writes = [];
-    vm.runInNewContext(loader, {
-      document: { write: (value) => writes.push(value) },
-      window: { HARNESS_EXECUTIONS: { mode } },
-    });
-    return writes;
-  };
-  assert.deepEqual(writesFor("published"), []);
-  assert.deepEqual(writesFor("local"), [
-    '<script src="./local-runner.js"></script>',
-  ]);
-});
+test('distinguishes active tests from tests with no execution history', () => {
+  const styles = read('src', 'index.css')
+  assert.match(catalogPage, /lifecycleStatusClass/)
+  assert.match(catalogPage, /status-catalog-active/)
+  assert.match(catalogPage, /status-catalog-never-run/)
+  assert.match(styles, /\.status-catalog-active[\s\S]*color: var\(--success\)/)
+  assert.match(
+    styles,
+    /\.status-catalog-never-run[\s\S]*color: var\(--text-muted\)/,
+  )
+})
 
-test("keeps the completed runner log inside a padded local panel", () => {
-  assert.match(index, /id="local-run-log" class="local-run-log"/);
-  assert.match(styles, /\.local-runner\s*\{[^}]*padding:\s*28px 30px;[^}]*overflow:\s*hidden;/s);
-  assert.match(styles, /\.local-run-log-shell\s*\{[^}]*overflow:\s*hidden;/s);
-  assert.match(styles, /\.local-run-log\s*\{[^}]*max-width:\s*100%;[^}]*overflow-wrap:\s*anywhere;/s);
-});
+test('keeps metric history rows readable and opens details on demand', () => {
+  const styles = read('src', 'index.css')
+  assert.match(historyPage, /Median tokens/)
+  assert.match(historyPage, /Descriptive median/)
+  assert.match(historyPage, /metricCaption/)
+  assert.match(historyPage, /ExecutionDetailsDialog/)
+  assert.match(historyPage, /reports: detail\.reports\.filter\([\s\S]*scenario_id === testId/)
+  assert.match(historyPage, /Assessment details for this test/)
+  assert.match(historyPage, /Compare two runs/)
+  assert.match(historyPage, /Set baseline/)
+  assert.match(historyPage, /Set candidate/)
+  assert.match(historyPage, /compareTestObservations/)
+  assert.match(historyPage, /getExecution\(observation\.execution_id\)/)
+  assert.match(historyPage, /View details/)
+  assert.match(historyPage, /Open full execution report/)
+  assert.match(historyPage, /systemSummary/)
+  assert.doesNotMatch(historyPage, /item\.execution_id\.slice/)
+  assert.doesNotMatch(historyPage, /systemLabel/)
+  assert.doesNotMatch(historyPage, /See series/)
+  assert.doesNotMatch(historyPage, /Metrics by compatible series/)
+  assert.match(
+    styles,
+    /#test-metrics-history-proposal th,[\s\S]*white-space: normal/,
+  )
+  assert.match(styles, /overflow-wrap: anywhere/)
+  assert.match(
+    styles,
+    /\.test-catalog-panel > \.panel-heading[\s\S]*padding: 24px 28px/,
+  )
+})
 
-test("keeps comparison content padded with contained long values", () => {
-  assert.match(index, /href="\.\/compare\.html/);
-  const compare = fs.readFileSync(
-    path.join(dashboardRoot, "compare.html"),
-    "utf8",
-  );
-  assert.match(compare, /id="compare-content" class="compare-content"/);
-  assert.match(styles, /\.compare-content\s*>\s*\.panel\s*\{[^}]*padding:\s*28px 30px;[^}]*overflow:\s*hidden;/s);
-  assert.match(styles, /\.compare-selection-card h2\s*\{[^}]*overflow-wrap:\s*anywhere;/s);
-  assert.match(styles, /\.compare-metric-card\s*\{[^}]*overflow:\s*hidden;/s);
-});
+test('makes local plan scope selection focused and readable', () => {
+  assert.match(planPage, /Create a focused local plan/)
+  assert.match(planPage, /Find a test/)
+  assert.match(planPage, /Search by name or id/)
+  assert.match(planPage, /Select visible/)
+  assert.match(planPage, /plan-test-option/)
+  assert.match(planPage, /choose the smallest useful scope/)
+  assert.match(planPage, /Sampling and retries/)
+  assert.match(planPage, /Runs create logical evidence samples/)
+  assert.match(planPage, /plan-advanced-control/)
+  assert.doesNotMatch(planPage, /local-scenario-options/)
+})
+
+test('keeps plan panels explicitly padded and comparison content full bleed', () => {
+  const styles = read('src', 'index.css')
+  assert.match(styles, /--plan-panel-space-y: 24px/)
+  assert.match(styles, /--plan-panel-space-x: 28px/)
+  assert.match(styles, /--plan-card-space: 16px/)
+  assert.match(
+    styles,
+    /\.plan-panel-heading,[\s\S]*\.plan-panel-section[\s\S]*padding: var\(--plan-panel-space-y\) var\(--plan-panel-space-x\)/,
+  )
+  assert.match(
+    styles,
+    /\.plans-list-heading[\s\S]*padding: var\(--plan-panel-space-y\) var\(--plan-panel-space-x\)/,
+  )
+  assert.match(
+    styles,
+    /@media \(max-width: 560px\)[\s\S]*--plan-panel-space-y: 18px[\s\S]*--plan-panel-space-x: 18px/,
+  )
+  assert.match(planPage, /panel-heading plan-panel-heading/g)
+  assert.doesNotMatch(planPage, /className="panel-heading"/)
+  assert.match(plansPage, /panel-heading plans-list-heading/)
+  assert.match(planPage, /plan-execution-table-wrap/)
+  assert.match(planPage, /plan-scenario-table-wrap/)
+})
+
+test('exposes plan execution history and baseline comparison controls', () => {
+  assert.match(plansPage, /Latest candidate vs baseline/)
+  assert.match(plansPage, /Objective regressions/)
+  assert.match(plansPage, /Not reported/)
+  assert.match(planPage, /Runs in this plan/)
+  assert.match(planPage, /Compare with baseline/)
+  assert.match(planPage, /scrollIntoView\(\{ behavior: 'smooth'/)
+  assert.match(planPage, /aria-live="polite"/)
+  assert.match(planPage, /Baseline vs Candidate/)
+  assert.match(planPage, /PLAN_DETAIL_METRICS/)
+  assert.match(planPage, /Test breakdown/)
+  assert.match(planPage, /Run another candidate/)
+})
+
+test('uses a typed bridge for local, observed and static execution sources', () => {
+  assert.match(dataSource, /getExecution\(executionId/)
+  assert.match(dataSource, /mode: 'local' \| 'observed' \| 'published'/)
+  assert.match(dataSource, /executions\.json/)
+  assert.match(dataSource, /runtime\.functions\.execution_get/)
+  assert.match(dataSource, /runtime\.functions\.changed_trigger/)
+  assert.doesNotMatch(dataSource, /window\.HARNESS_EXECUTIONS/)
+})
+
+test('organizes detail into progressive disclosure sections', () => {
+  for (const section of ['summary', 'results', 'technical']) {
+    assert.match(executionPage, new RegExp(`id=\\"${section}\\"`))
+  }
+  assert.match(executionPage, /hashForExecution\(executionId, item\.id\)/)
+  assert.match(executionPage, /detail-index hidden sticky/)
+  assert.match(executionPage, /max-\[840px\]:grid/)
+  assert.match(
+    executionPage,
+    /anchor === 'evidence' \|\| anchor === 'raw-data'\) return 'technical'/,
+  )
+  assert.doesNotMatch(executionPage, /id="evidence"|Evidence register/)
+  assert.match(executionPage, /AssessmentWorkspace detail/)
+  assert.match(executionPage, /diagnostic runs/)
+  assert.match(executionPage, /onTranscript/)
+  assert.doesNotMatch(executionPage, /Open transcript/)
+  assert.match(executionPage, /aggregateAssessmentMetrics/)
+  assert.match(executionPage, /Execution indicators/)
+  assert.match(executionPage, /Total tokens/)
+  assert.doesNotMatch(executionPage, /buildHarnessRecommendation|Next run plan/)
+  assert.match(executionPage, /Preview raw JSON/)
+  assert.match(transcript, /max-\[560px\]:w-screen/)
+  assert.match(transcript, /max-\[560px\]:h-dvh/)
+})
+
+test('migrates runner and transcript behavior to React components', () => {
+  assert.match(runner, /getCatalog/)
+  assert.match(runner, /startRun/)
+  assert.match(runner, /cancelRun/)
+  assert.match(runner, /subscribeRunChanges/)
+  assert.match(runner, /aria-live/)
+  assert.match(runner, /function trapDialogFocus/)
+  assert.match(runner, /getClientRects\(\)\.length > 0/)
+  assert.match(runner, /onKeyDownCapture=\{trapDialogFocus\}/)
+  assert.match(transcript, /normalizeTranscript/)
+  assert.match(transcript, /session-transcript-dialog/)
+  assert.match(transcript, /conversation-shell/)
+  assert.match(transcript, /conversation-tool/)
+  assert.match(transcript, /formatTranscriptPayload/)
+})
+
+test('keeps an empty local execution label serializable and its action visible', () => {
+  const styles = read('src', 'index.css')
+
+  assert.match(runner, /label: form\.label\.trim\(\),/)
+  assert.doesNotMatch(runner, /label: form\.label \|\| null/)
+  assert.match(runner, /form="local-runner-form"/)
+  assert.match(
+    styles,
+    /\.local-runner-dialog \{[\s\S]*grid-template-rows: auto minmax\(0, 1fr\) auto/,
+  )
+  assert.match(
+    styles,
+    /\.local-runner-dialog:not\(\[open\]\) \{\s*display: none;/,
+  )
+  assert.match(
+    styles,
+    /\.local-advanced:not\(\[open\]\) \.local-advanced-grid \{\s*display: none;/,
+  )
+  assert.match(
+    styles,
+    /\.local-runner-dialog \.local-runner \{[\s\S]*overflow: auto/,
+  )
+})
+
+test('groups execution and judge models under their providers', () => {
+  for (const view of [runner, planPage, historyPage]) {
+    assert.match(view, /ProviderModelDropdown/)
+    assert.match(view, /Execution model/)
+    assert.match(view, /Judge model/)
+  }
+  assert.match(modelDropdown, /expandedProviders/)
+  assert.match(
+    modelDropdown,
+    /const collapsed = !expandedProviders\.has\(group\.provider\)/,
+  )
+  assert.match(modelDropdown, /aria-expanded=\{open\}/)
+  assert.match(modelDropdown, /provider-model-group-toggle/)
+})
+
+test('publisher writes only the JSON manifest', () => {
+  assert.match(publisher, /MANIFEST_FILENAME = "executions\.json"/)
+  assert.match(publisher, /write_json_atomic\(manifest_path/)
+  assert.match(publisher, /"mode": "published"/)
+  assert.match(publisher, /legacy_manifest_path\.unlink/)
+  assert.doesNotMatch(publisher, /HARNESS_EXECUTIONS/)
+})
+
+test('does not load removed DOM renderers', () => {
+  const legacyLoader = read('src', 'hooks', 'useLegacyPage.ts')
+  assert.doesNotMatch(
+    legacyLoader,
+    /overview\.js|execution\.js|local-runner\.js|execution-transcript\.js/,
+  )
+  for (const filename of [
+    'overview.js',
+    'execution.js',
+    'local-runner.js',
+    'execution-transcript.js',
+    'dashboard-data.js',
+    'execution-data.js',
+  ]) {
+    assert.equal(
+      fs.existsSync(path.join(dashboardRoot, 'public', filename)),
+      false,
+      `${filename} should be removed`,
+    )
+  }
+})

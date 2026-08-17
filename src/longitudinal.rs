@@ -12,8 +12,6 @@ use crate::report::{
 };
 use crate::scenarios::ComplexityTier;
 
-pub const COMPARISON_POLICY_VERSION: u32 = 1;
-pub const CAPABILITY_POLICY_VERSION: u32 = 1;
 const MINIMUM_ROBUSTNESS_SAMPLE: usize = 5;
 const MINIMUM_TAIL_SAMPLE: usize = 20;
 
@@ -22,8 +20,10 @@ pub struct RegressionThresholds {
     pub deliverable_success_drop: f64,
     pub structural_integrity_drop: f64,
     pub technical_failure_increase: f64,
-    pub p95_cost_increase_ratio: f64,
-    pub p95_wall_time_increase_ratio: f64,
+    #[serde(alias = "p95_cost_increase_ratio")]
+    pub cost_increase_ratio: f64,
+    #[serde(alias = "p95_wall_time_increase_ratio")]
+    pub wall_time_increase_ratio: f64,
     pub p95_turns_increase_ratio: f64,
 }
 
@@ -33,36 +33,40 @@ impl Default for RegressionThresholds {
             deliverable_success_drop: 0.03,
             structural_integrity_drop: 0.02,
             technical_failure_increase: 0.02,
-            p95_cost_increase_ratio: 0.20,
-            p95_wall_time_increase_ratio: 0.20,
+            cost_increase_ratio: 0.20,
+            wall_time_increase_ratio: 0.20,
             p95_turns_increase_ratio: 0.25,
         }
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct ScenarioCapabilityBudget {
+    pub maximum_p95_cost_usd: Option<f64>,
+    pub maximum_p95_wall_time_ms: Option<u64>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct CapabilityPolicy {
-    pub policy_version: u32,
-    pub minimum_sample_size: u32,
+    #[serde(alias = "minimum_sample_size")]
+    pub minimum_repeatable_sample_size: u32,
     pub tail_minimum_sample_size: u32,
     pub minimum_deliverable_success_rate: f64,
     pub minimum_structural_integrity_rate: f64,
     pub maximum_technical_failure_rate: f64,
-    pub maximum_p95_cost_usd: Option<f64>,
-    pub maximum_p95_wall_time_ms: Option<u64>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub scenario_budgets: BTreeMap<String, ScenarioCapabilityBudget>,
 }
 
 impl Default for CapabilityPolicy {
     fn default() -> Self {
         Self {
-            policy_version: CAPABILITY_POLICY_VERSION,
-            minimum_sample_size: MINIMUM_ROBUSTNESS_SAMPLE as u32,
+            minimum_repeatable_sample_size: MINIMUM_ROBUSTNESS_SAMPLE as u32,
             tail_minimum_sample_size: MINIMUM_TAIL_SAMPLE as u32,
             minimum_deliverable_success_rate: 0.90,
             minimum_structural_integrity_rate: 0.95,
             maximum_technical_failure_rate: 0.02,
-            maximum_p95_cost_usd: None,
-            maximum_p95_wall_time_ms: None,
+            scenario_budgets: BTreeMap::new(),
         }
     }
 }
@@ -101,8 +105,8 @@ pub struct CaseCohortKey {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum ComparisonSide {
-    Current,
-    Baseline,
+    From,
+    To,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -200,16 +204,24 @@ pub struct RegressionSignal {
     pub threshold: f64,
     pub blocking: bool,
     pub reason: String,
+    #[serde(default)]
+    pub statistic: String,
+    #[serde(default)]
+    pub n_from: u32,
+    #[serde(default)]
+    pub n_to: u32,
+    #[serde(default)]
+    pub maturity: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct CaseComparison {
     pub key: CaseCohortKey,
     pub complexity_tier: ComplexityTier,
-    pub current_run_ids: Vec<String>,
-    pub baseline_run_ids: Vec<String>,
-    pub current: CaseMetrics,
-    pub baseline: CaseMetrics,
+    pub from_run_ids: Vec<String>,
+    pub to_run_ids: Vec<String>,
+    pub from: CaseMetrics,
+    pub to: CaseMetrics,
     pub delta: BenchmarkDelta,
     pub regressions: Vec<RegressionSignal>,
 }
@@ -225,8 +237,7 @@ pub struct CohortAudit {
 pub struct TierCapability {
     pub tier: ComplexityTier,
     pub sample_size: u32,
-    pub statistically_eligible: bool,
-    pub reliable: bool,
+    pub repeatable: bool,
     pub deliverable_success: Option<RateEstimate>,
     pub structural_integrity: Option<RateEstimate>,
     pub technical_failure: Option<RateEstimate>,
@@ -236,45 +247,50 @@ pub struct TierCapability {
     pub cost_per_successful_deliverable: Option<f64>,
     pub p50_work_amplification: Option<f64>,
     pub p95_work_amplification: Option<f64>,
+    pub absolute_budgets_passed: Option<bool>,
+    pub scenario_budget_evaluations: Vec<ScenarioBudgetEvaluation>,
+    pub reasons: Vec<String>,
+    #[serde(default)]
+    pub case_count: u32,
+    #[serde(default)]
+    pub repeatable_case_count: u32,
+    #[serde(default)]
+    pub qualified_case_ids: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct ScenarioBudgetEvaluation {
+    pub scenario_id: String,
+    pub case_id: String,
+    pub budget: ScenarioCapabilityBudget,
+    pub p95_cost_usd: Option<f64>,
+    pub p95_wall_time_ms: Option<f64>,
+    pub passed: bool,
     pub reasons: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct CapabilityFrontier {
     pub policy: CapabilityPolicy,
-    pub highest_statistically_eligible_tier: Option<ComplexityTier>,
-    pub highest_reliable_tier: Option<ComplexityTier>,
+    pub highest_repeatable_tier: Option<ComplexityTier>,
     pub tiers: Vec<TierCapability>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-pub struct PromotedBaselineIdentity {
-    pub baseline_id: String,
-    pub name: String,
-    pub version: u32,
-    pub execution_id: String,
-    pub report_sha256: String,
-    pub promoted_at: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct ComparisonSummary {
     pub comparison_id: String,
-    pub policy_version: u32,
-    pub current_execution_id: String,
-    pub baseline_execution_id: String,
-    pub current_revision: Option<String>,
-    pub baseline_revision: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub promoted_baseline: Option<PromotedBaselineIdentity>,
+    pub from_execution_id: String,
+    pub to_execution_id: String,
+    pub from_revision: Option<String>,
+    pub to_revision: Option<String>,
     pub comparable: bool,
     pub gate_passed: bool,
     pub reasons: Vec<String>,
     pub cohort: CohortAudit,
     pub cases: Vec<CaseComparison>,
     pub regressions: Vec<RegressionSignal>,
-    pub current_capability: CapabilityFrontier,
-    pub baseline_capability: CapabilityFrontier,
+    pub from_capability: CapabilityFrontier,
+    pub to_capability: CapabilityFrontier,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
@@ -284,35 +300,35 @@ pub struct ComparisonResponse {
 }
 
 pub fn compare_reports(
-    current_execution_id: &str,
-    current_lane: &str,
-    current: &E2eReport,
-    baseline_execution_id: &str,
-    baseline_lane: &str,
-    baseline: &E2eReport,
+    from_execution_id: &str,
+    from_lane: &str,
+    from: &E2eReport,
+    to_execution_id: &str,
+    to_lane: &str,
+    to: &E2eReport,
     policy: ComparisonPolicy,
 ) -> Result<ComparisonSummary> {
-    let current_identity = execution_identity(current_lane, current);
-    let baseline_identity = execution_identity(baseline_lane, baseline);
-    let mut reasons = identity_differences(&current_identity, &baseline_identity);
+    let from_identity = execution_identity(from_lane, from);
+    let to_identity = execution_identity(to_lane, to);
+    let mut reasons = identity_differences(&from_identity, &to_identity);
     let identity_matches = reasons.is_empty();
     let mut cohort = CohortAudit::default();
-    let current_cases = cases_by_identity(current);
-    let baseline_cases = cases_by_identity(baseline);
-    let identities = current_cases
+    let from_cases = cases_by_identity(from);
+    let to_cases = cases_by_identity(to);
+    let identities = from_cases
         .keys()
-        .chain(baseline_cases.keys())
+        .chain(to_cases.keys())
         .cloned()
         .collect::<BTreeSet<_>>();
     let mut cases = Vec::new();
 
     for identity in identities {
-        let current_case = current_cases.get(&identity).copied();
-        let baseline_case = baseline_cases.get(&identity).copied();
-        let (Some(current_case), Some(baseline_case)) = (current_case, baseline_case) else {
-            let (side, scenario) = match (current_case, baseline_case) {
-                (Some(scenario), None) => (ComparisonSide::Current, scenario),
-                (None, Some(scenario)) => (ComparisonSide::Baseline, scenario),
+        let from_case = from_cases.get(&identity).copied();
+        let to_case = to_cases.get(&identity).copied();
+        let (Some(from_case), Some(to_case)) = (from_case, to_case) else {
+            let (side, scenario) = match (from_case, to_case) {
+                (Some(scenario), None) => (ComparisonSide::From, scenario),
+                (None, Some(scenario)) => (ComparisonSide::To, scenario),
                 (None, None) => unreachable!("identity came from one of the maps"),
                 (Some(_), Some(_)) => unreachable!("handled above"),
             };
@@ -325,77 +341,73 @@ pub fn compare_reports(
             continue;
         };
 
-        let current_key = case_key(current_identity.clone(), current_case)?;
-        let baseline_key = case_key(baseline_identity.clone(), baseline_case)?;
+        let from_key = case_key(from_identity.clone(), from_case)?;
+        let to_key = case_key(to_identity.clone(), to_case)?;
         let mut case_reasons = Vec::new();
         if !identity_matches {
             case_reasons.extend(reasons.iter().cloned());
         }
-        if current_key.contract_sha256 != baseline_key.contract_sha256 {
+        if from_key.contract_sha256 != to_key.contract_sha256 {
             case_reasons.push("materialized scenario contract fingerprint differs".into());
         }
         if !case_reasons.is_empty() {
             exclude_case(
                 &mut cohort,
-                ComparisonSide::Current,
-                current_case,
+                ComparisonSide::From,
+                from_case,
                 case_reasons.clone(),
             );
-            exclude_case(
-                &mut cohort,
-                ComparisonSide::Baseline,
-                baseline_case,
-                case_reasons,
-            );
+            exclude_case(&mut cohort, ComparisonSide::To, to_case, case_reasons);
             continue;
         }
 
-        let (current_runs, current_excluded) = eligible_runs(ComparisonSide::Current, current_case);
-        let (baseline_runs, baseline_excluded) =
-            eligible_runs(ComparisonSide::Baseline, baseline_case);
-        cohort.excluded_runs.extend(current_excluded);
-        cohort.excluded_runs.extend(baseline_excluded);
-        if current_runs.is_empty() || baseline_runs.is_empty() {
-            if current_runs.is_empty() {
+        let (from_runs, from_excluded) = eligible_runs(ComparisonSide::From, from_case);
+        let (to_runs, to_excluded) = eligible_runs(ComparisonSide::To, to_case);
+        cohort.excluded_runs.extend(from_excluded);
+        cohort.excluded_runs.extend(to_excluded);
+        if from_runs.is_empty() || to_runs.is_empty() {
+            if from_runs.is_empty() {
                 cohort.excluded_cases.push(ExcludedCase {
-                    side: ComparisonSide::Current,
-                    scenario_id: current_case.scenario_id.clone(),
-                    case_id: current_case.case_id.clone(),
+                    side: ComparisonSide::From,
+                    scenario_id: from_case.scenario_id.clone(),
+                    case_id: from_case.case_id.clone(),
                     reasons: vec!["no eligible runs remain after infrastructure exclusion".into()],
                 });
             }
-            if baseline_runs.is_empty() {
+            if to_runs.is_empty() {
                 cohort.excluded_cases.push(ExcludedCase {
-                    side: ComparisonSide::Baseline,
-                    scenario_id: baseline_case.scenario_id.clone(),
-                    case_id: baseline_case.case_id.clone(),
+                    side: ComparisonSide::To,
+                    scenario_id: to_case.scenario_id.clone(),
+                    case_id: to_case.case_id.clone(),
                     reasons: vec!["no eligible runs remain after infrastructure exclusion".into()],
                 });
             }
             continue;
         }
-        let current_metrics = case_metrics(&current_runs, current_case.runs.len());
-        let baseline_metrics = case_metrics(&baseline_runs, baseline_case.runs.len());
-        let delta = benchmark_delta(&current_metrics, &baseline_metrics);
+        let from_metrics = case_metrics(&from_runs, from_case.runs.len());
+        let to_metrics = case_metrics(&to_runs, to_case.runs.len());
+        let delta = benchmark_delta(&from_metrics, &to_metrics);
         let regressions = regression_signals(
-            &current_case.scenario_id,
-            &current_case.case_id,
+            &from_case.scenario_id,
+            &from_case.case_id,
+            &from_metrics,
+            &to_metrics,
             &delta,
             policy.regression,
         );
-        cohort.included_case_ids.push(current_case.case_id.clone());
+        cohort.included_case_ids.push(from_case.case_id.clone());
         cases.push(CaseComparison {
-            key: current_key,
-            complexity_tier: current_case
+            key: from_key,
+            complexity_tier: from_case
                 .case
                 .as_ref()
                 .context("comparable v2 scenario has no materialized case")?
                 .complexity
                 .tier,
-            current_run_ids: current_runs.iter().map(|run| run.run_id.clone()).collect(),
-            baseline_run_ids: baseline_runs.iter().map(|run| run.run_id.clone()).collect(),
-            current: current_metrics,
-            baseline: baseline_metrics,
+            from_run_ids: from_runs.iter().map(|run| run.run_id.clone()).collect(),
+            to_run_ids: to_runs.iter().map(|run| run.run_id.clone()).collect(),
+            from: from_metrics,
+            to: to_metrics,
             delta,
             regressions,
         });
@@ -417,28 +429,26 @@ pub fn compare_reports(
         .iter()
         .flat_map(|case| case.regressions.iter().cloned())
         .collect::<Vec<_>>();
-    let current_capability = capability_frontier(&cases, current, policy.capability);
-    let baseline_capability = capability_frontier(&cases, baseline, policy.capability);
+    let from_capability = capability_frontier(&cases, from, policy.capability.clone());
+    let to_capability = capability_frontier(&cases, to, policy.capability);
     let comparable = !cases.is_empty();
     let gate_passed = comparable
         && cohort.excluded_cases.is_empty()
         && regressions.iter().all(|signal| !signal.blocking);
     let mut summary = ComparisonSummary {
         comparison_id: String::new(),
-        policy_version: COMPARISON_POLICY_VERSION,
-        current_execution_id: current_execution_id.into(),
-        baseline_execution_id: baseline_execution_id.into(),
-        current_revision: revision(current),
-        baseline_revision: revision(baseline),
-        promoted_baseline: None,
+        from_execution_id: from_execution_id.into(),
+        to_execution_id: to_execution_id.into(),
+        from_revision: revision(from),
+        to_revision: revision(to),
         comparable,
         gate_passed,
         reasons,
         cohort,
         cases,
         regressions,
-        current_capability,
-        baseline_capability,
+        from_capability,
+        to_capability,
     };
     refresh_comparison_id(&mut summary)?;
     Ok(summary)
@@ -487,55 +497,43 @@ pub fn write_comparison(
 fn execution_identity(lane: &str, report: &E2eReport) -> ExecutionCohortIdentity {
     ExecutionCohortIdentity {
         lane: lane.into(),
-        stack_mode: report
-            .system_under_test
-            .as_ref()
-            .map(|system| match system.stack {
-                StackIdentity::Source { .. } => "source",
-                StackIdentity::Registry { .. } => "registry",
-            })
-            .unwrap_or("unknown")
-            .into(),
+        stack_mode: match &report.system_under_test.stack {
+            StackIdentity::Source { .. } => "source",
+            StackIdentity::Registry { .. } => "registry",
+        }
+        .into(),
         subject_provider: report.subject.provider.clone(),
         subject_model: report.subject.model.clone(),
         judge_provider: report.judge.as_ref().map(|judge| judge.provider.clone()),
         judge_model: report.judge.as_ref().map(|judge| judge.model.clone()),
         judge_protocol: report.judge_protocol.clone(),
-        e2e_repository: report
-            .system_under_test
-            .as_ref()
-            .map(|system| system.e2e_repository.clone()),
+        e2e_repository: Some(report.system_under_test.e2e_repository.clone()),
     }
 }
 
 fn identity_differences(
-    current: &ExecutionCohortIdentity,
-    baseline: &ExecutionCohortIdentity,
+    from: &ExecutionCohortIdentity,
+    to: &ExecutionCohortIdentity,
 ) -> Vec<String> {
     let mut reasons = Vec::new();
     for (name, differs) in [
-        ("execution lane differs", current.lane != baseline.lane),
-        (
-            "stack mode differs",
-            current.stack_mode != baseline.stack_mode,
-        ),
+        ("execution lane differs", from.lane != to.lane),
+        ("stack mode differs", from.stack_mode != to.stack_mode),
         (
             "subject model identity differs",
-            current.subject_provider != baseline.subject_provider
-                || current.subject_model != baseline.subject_model,
+            from.subject_provider != to.subject_provider || from.subject_model != to.subject_model,
         ),
         (
             "judge model identity differs",
-            current.judge_provider != baseline.judge_provider
-                || current.judge_model != baseline.judge_model,
+            from.judge_provider != to.judge_provider || from.judge_model != to.judge_model,
         ),
         (
             "judge protocol differs",
-            current.judge_protocol != baseline.judge_protocol,
+            from.judge_protocol != to.judge_protocol,
         ),
         (
             "E2E repository identity differs",
-            current.e2e_repository != baseline.e2e_repository,
+            from.e2e_repository != to.e2e_repository,
         ),
     ] {
         if differs {
@@ -747,15 +745,15 @@ fn case_metrics(runs: &[&E2eRunReport], total_runs: usize) -> CaseMetrics {
     }
 }
 
-fn benchmark_delta(current: &CaseMetrics, baseline: &CaseMetrics) -> BenchmarkDelta {
+fn benchmark_delta(from: &CaseMetrics, to: &CaseMetrics) -> BenchmarkDelta {
     let mut unavailable = BTreeMap::new();
     macro_rules! delta {
-        ($field:literal, $current:expr, $baseline:expr) => {{
-            let value = metric_delta($current, $baseline);
+        ($field:literal, $from:expr, $to:expr) => {{
+            let value = metric_delta($from, $to);
             if value.is_none() {
                 unavailable.insert(
                     $field.into(),
-                    "metric unavailable in current or baseline cohort".into(),
+                    "metric unavailable in from or to cohort".into(),
                 );
             }
             value
@@ -764,54 +762,45 @@ fn benchmark_delta(current: &CaseMetrics, baseline: &CaseMetrics) -> BenchmarkDe
     BenchmarkDelta {
         deliverable_success_rate: delta!(
             "deliverable_success_rate",
-            current.deliverable_success.as_ref().map(|value| value.rate),
-            baseline
-                .deliverable_success
-                .as_ref()
-                .map(|value| value.rate)
+            from.deliverable_success.as_ref().map(|value| value.rate),
+            to.deliverable_success.as_ref().map(|value| value.rate)
         ),
         structural_integrity_rate: delta!(
             "structural_integrity_rate",
-            current
-                .structural_integrity
-                .as_ref()
-                .map(|value| value.rate),
-            baseline
-                .structural_integrity
-                .as_ref()
-                .map(|value| value.rate)
+            from.structural_integrity.as_ref().map(|value| value.rate),
+            to.structural_integrity.as_ref().map(|value| value.rate)
         ),
         technical_failure_rate: delta!(
             "technical_failure_rate",
-            current.technical_failure.as_ref().map(|value| value.rate),
-            baseline.technical_failure.as_ref().map(|value| value.rate)
+            from.technical_failure.as_ref().map(|value| value.rate),
+            to.technical_failure.as_ref().map(|value| value.rate)
         ),
-        flaky_rate: delta!("flaky_rate", current.flaky_rate, baseline.flaky_rate),
-        median_score: delta!("median_score", current.median_score, baseline.median_score),
-        p50_cost_usd: delta!("p50_cost_usd", current.p50_cost_usd, baseline.p50_cost_usd),
-        p95_cost_usd: delta!("p95_cost_usd", current.p95_cost_usd, baseline.p95_cost_usd),
+        flaky_rate: delta!("flaky_rate", from.flaky_rate, to.flaky_rate),
+        median_score: delta!("median_score", from.median_score, to.median_score),
+        p50_cost_usd: delta!("p50_cost_usd", from.p50_cost_usd, to.p50_cost_usd),
+        p95_cost_usd: delta!("p95_cost_usd", from.p95_cost_usd, to.p95_cost_usd),
         p50_wall_time_ms: delta!(
             "p50_wall_time_ms",
-            current.p50_wall_time_ms,
-            baseline.p50_wall_time_ms
+            from.p50_wall_time_ms,
+            to.p50_wall_time_ms
         ),
         p95_wall_time_ms: delta!(
             "p95_wall_time_ms",
-            current.p95_wall_time_ms,
-            baseline.p95_wall_time_ms
+            from.p95_wall_time_ms,
+            to.p95_wall_time_ms
         ),
-        p50_turns: delta!("p50_turns", current.p50_turns, baseline.p50_turns),
-        p95_turns: delta!("p95_turns", current.p95_turns, baseline.p95_turns),
-        retry_rate: delta!("retry_rate", current.retry_rate, baseline.retry_rate),
+        p50_turns: delta!("p50_turns", from.p50_turns, to.p50_turns),
+        p95_turns: delta!("p95_turns", from.p95_turns, to.p95_turns),
+        retry_rate: delta!("retry_rate", from.retry_rate, to.retry_rate),
         p50_work_amplification: delta!(
             "p50_work_amplification",
-            current.p50_work_amplification,
-            baseline.p50_work_amplification
+            from.p50_work_amplification,
+            to.p50_work_amplification
         ),
         p95_work_amplification: delta!(
             "p95_work_amplification",
-            current.p95_work_amplification,
-            baseline.p95_work_amplification
+            from.p95_work_amplification,
+            to.p95_work_amplification
         ),
         unavailable,
     }
@@ -820,21 +809,31 @@ fn benchmark_delta(current: &CaseMetrics, baseline: &CaseMetrics) -> BenchmarkDe
 fn regression_signals(
     scenario_id: &str,
     case_id: &str,
+    from: &CaseMetrics,
+    to: &CaseMetrics,
     delta: &BenchmarkDelta,
     policy: RegressionThresholds,
 ) -> Vec<RegressionSignal> {
     let mut signals = Vec::new();
-    let mut push = |dimension, observed, threshold, reason: &str| {
-        signals.push(RegressionSignal {
-            scenario_id: scenario_id.into(),
-            case_id: case_id.into(),
-            dimension,
-            observed_delta: observed,
-            threshold,
-            blocking: true,
-            reason: reason.into(),
-        });
-    };
+    let n_from = from.included_runs;
+    let n_to = to.included_runs;
+    let maturity = evidence_maturity(n_from, n_to);
+    let mut push =
+        |dimension, observed, threshold, statistic: &str, blocking: bool, reason: String| {
+            signals.push(RegressionSignal {
+                scenario_id: scenario_id.into(),
+                case_id: case_id.into(),
+                dimension,
+                observed_delta: observed,
+                threshold,
+                blocking,
+                reason,
+                statistic: statistic.into(),
+                n_from,
+                n_to,
+                maturity: maturity.into(),
+            });
+        };
     if delta
         .deliverable_success_rate
         .is_some_and(|value| value.absolute < -policy.deliverable_success_drop)
@@ -843,7 +842,9 @@ fn regression_signals(
             RegressionDimension::Deliverable,
             delta.deliverable_success_rate.expect("checked").absolute,
             -policy.deliverable_success_drop,
-            "deliverable success rate fell beyond policy",
+            "rate",
+            true,
+            "deliverable success rate fell beyond policy".into(),
         );
     }
     if delta
@@ -854,7 +855,9 @@ fn regression_signals(
             RegressionDimension::StructuralIntegrity,
             delta.structural_integrity_rate.expect("checked").absolute,
             -policy.structural_integrity_drop,
-            "structural integrity rate fell beyond policy",
+            "rate",
+            true,
+            "structural integrity rate fell beyond policy".into(),
         );
     }
     if delta
@@ -865,44 +868,80 @@ fn regression_signals(
             RegressionDimension::TechnicalReliability,
             delta.technical_failure_rate.expect("checked").absolute,
             policy.technical_failure_increase,
-            "technical failure rate grew beyond policy",
+            "rate",
+            true,
+            "technical failure rate grew beyond policy".into(),
         );
     }
-    for (dimension, value, threshold, reason) in [
+    for (dimension, p95, median, threshold, label) in [
         (
             RegressionDimension::Cost,
             delta.p95_cost_usd,
-            policy.p95_cost_increase_ratio,
-            "p95 cost grew beyond policy",
+            delta.p50_cost_usd,
+            policy.cost_increase_ratio,
+            "cost",
         ),
         (
             RegressionDimension::WallTime,
             delta.p95_wall_time_ms,
-            policy.p95_wall_time_increase_ratio,
-            "p95 wall time grew beyond policy",
-        ),
-        (
-            RegressionDimension::Turns,
-            delta.p95_turns,
-            policy.p95_turns_increase_ratio,
-            "p95 turns grew beyond policy",
+            delta.p50_wall_time_ms,
+            policy.wall_time_increase_ratio,
+            "wall time",
         ),
     ] {
-        if value
-            .and_then(|value| value.relative_ratio)
-            .is_some_and(|ratio| ratio > threshold)
-        {
+        let Some((value, statistic)) = p95
+            .map(|value| (value, "p95"))
+            .or_else(|| median.map(|value| (value, "median")))
+        else {
+            continue;
+        };
+        if value.relative_ratio.is_some_and(|ratio| ratio > threshold) {
+            let blocking = statistic == "p95"
+                && n_from >= MINIMUM_TAIL_SAMPLE as u32
+                && n_to >= MINIMUM_TAIL_SAMPLE as u32;
             push(
                 dimension,
-                value
-                    .and_then(|value| value.relative_ratio)
-                    .expect("checked"),
+                value.relative_ratio.expect("checked"),
                 threshold,
-                reason,
+                statistic,
+                blocking,
+                if blocking {
+                    format!("relative p95 {label} grew beyond policy")
+                } else {
+                    format!("relative median {label} grew beyond policy (advisory until both sides have {MINIMUM_TAIL_SAMPLE} samples)")
+                },
             );
         }
     }
+    if delta
+        .p95_turns
+        .and_then(|value| value.relative_ratio)
+        .is_some_and(|ratio| ratio > policy.p95_turns_increase_ratio)
+    {
+        push(
+            RegressionDimension::Turns,
+            delta
+                .p95_turns
+                .and_then(|value| value.relative_ratio)
+                .expect("checked"),
+            policy.p95_turns_increase_ratio,
+            "p95",
+            n_from >= MINIMUM_TAIL_SAMPLE as u32 && n_to >= MINIMUM_TAIL_SAMPLE as u32,
+            "p95 turns grew beyond policy".into(),
+        );
+    }
     signals
+}
+
+fn evidence_maturity(n_from: u32, n_to: u32) -> &'static str {
+    let sample = n_from.min(n_to);
+    if sample >= MINIMUM_TAIL_SAMPLE as u32 {
+        "validated"
+    } else if sample >= MINIMUM_ROBUSTNESS_SAMPLE as u32 {
+        "repeatable"
+    } else {
+        "directional"
+    }
 }
 
 fn capability_frontier(
@@ -953,13 +992,16 @@ fn capability_for_selection(
     ];
     let mut reports = Vec::new();
     for tier in tiers {
-        let cohort = report
+        let tier_scenarios = report
             .scenarios
             .iter()
             .filter(|scenario| {
                 selected.get(&(scenario.scenario_id.clone(), scenario.case_id.clone()))
                     == Some(&tier)
             })
+            .collect::<Vec<_>>();
+        let cohort = tier_scenarios
+            .iter()
             .flat_map(|scenario| {
                 scenario
                     .runs
@@ -1008,10 +1050,10 @@ fn capability_for_selection(
                 .then(|| values.iter().sum::<f64>() / f64::from(deliverable_successes))
         });
         let mut reasons = Vec::new();
-        if sample_size < policy.minimum_sample_size {
+        if sample_size < policy.minimum_repeatable_sample_size {
             reasons.push(format!(
                 "requires at least {} runs; observed {sample_size}",
-                policy.minimum_sample_size
+                policy.minimum_repeatable_sample_size
             ));
         }
         if deliverable_success
@@ -1032,22 +1074,39 @@ fn capability_for_selection(
         {
             reasons.push("technical failure threshold not met or unavailable".into());
         }
-        let statistically_eligible = reasons.is_empty();
-        match policy.maximum_p95_cost_usd {
-            Some(limit) if p95_cost_usd.is_some_and(|value| value <= limit) => {}
-            Some(_) => reasons.push("p95 cost budget not met or unavailable".into()),
-            None => reasons.push("p95 cost budget is not configured".into()),
+        let case_evaluations = tier_scenarios
+            .iter()
+            .map(|scenario| scenario_repeatability(scenario, &policy))
+            .collect::<Vec<_>>();
+        let repeatable_case_count = case_evaluations
+            .iter()
+            .filter(|(repeatable, _)| *repeatable)
+            .count() as u32;
+        let qualified_case_ids = tier_scenarios
+            .iter()
+            .zip(case_evaluations.iter())
+            .filter(|(_, (repeatable, _))| *repeatable)
+            .map(|(scenario, _)| scenario.case_id.clone())
+            .collect::<Vec<_>>();
+        if repeatable_case_count < tier_scenarios.len() as u32 {
+            reasons.push(format!(
+                "{} of {} cases meet repeatable evidence thresholds; cases are not pooled",
+                repeatable_case_count,
+                tier_scenarios.len()
+            ));
         }
-        match policy.maximum_p95_wall_time_ms {
-            Some(limit) if p95_wall_time_ms.is_some_and(|value| value <= limit as f64) => {}
-            Some(_) => reasons.push("p95 wall-time budget not met or unavailable".into()),
-            None => reasons.push("p95 wall-time budget is not configured".into()),
-        }
+        let repeatable =
+            !tier_scenarios.is_empty() && repeatable_case_count == tier_scenarios.len() as u32;
+        let scenario_budget_evaluations = scenario_budget_evaluations(&tier_scenarios, &policy);
+        let absolute_budgets_passed = (!scenario_budget_evaluations.is_empty()).then(|| {
+            scenario_budget_evaluations
+                .iter()
+                .all(|evaluation| evaluation.passed)
+        });
         reports.push(TierCapability {
             tier,
             sample_size,
-            statistically_eligible,
-            reliable: reasons.is_empty(),
+            repeatable,
             deliverable_success,
             structural_integrity,
             technical_failure,
@@ -1057,25 +1116,124 @@ fn capability_for_selection(
             cost_per_successful_deliverable,
             p50_work_amplification,
             p95_work_amplification,
+            absolute_budgets_passed,
+            scenario_budget_evaluations,
             reasons,
+            case_count: tier_scenarios.len() as u32,
+            repeatable_case_count,
+            qualified_case_ids,
         });
     }
-    let highest_statistically_eligible_tier = reports
+    let highest_repeatable_tier = reports
         .iter()
-        .filter(|tier| tier.statistically_eligible)
-        .max_by_key(|tier| tier_rank(tier.tier))
-        .map(|tier| tier.tier);
-    let highest_reliable_tier = reports
-        .iter()
-        .filter(|tier| tier.reliable)
+        .filter(|tier| tier.repeatable)
         .max_by_key(|tier| tier_rank(tier.tier))
         .map(|tier| tier.tier);
     CapabilityFrontier {
         policy,
-        highest_statistically_eligible_tier,
-        highest_reliable_tier,
+        highest_repeatable_tier,
         tiers: reports,
     }
+}
+
+fn scenario_repeatability(
+    scenario: &E2eScenarioReport,
+    policy: &CapabilityPolicy,
+) -> (bool, Vec<String>) {
+    let cohort = scenario
+        .runs
+        .iter()
+        .filter(|run| run.status != RunStatus::InfrastructureError)
+        .collect::<Vec<_>>();
+    let mut reasons = Vec::new();
+    let sample_size = cohort.len() as u32;
+    if sample_size < policy.minimum_repeatable_sample_size {
+        reasons.push(format!(
+            "requires at least {} runs; observed {sample_size}",
+            policy.minimum_repeatable_sample_size
+        ));
+    }
+    if dimension_rate(&cohort, EvaluationDimension::Deliverable)
+        .as_ref()
+        .is_none_or(|value| value.rate < policy.minimum_deliverable_success_rate)
+    {
+        reasons.push("deliverable success threshold not met or unavailable".into());
+    }
+    if dimension_rate(&cohort, EvaluationDimension::StructuralIntegrity)
+        .as_ref()
+        .is_none_or(|value| value.rate < policy.minimum_structural_integrity_rate)
+    {
+        reasons.push("structural integrity threshold not met or unavailable".into());
+    }
+    let technical_failure = if cohort.is_empty() {
+        None
+    } else {
+        Some(rate_estimate(
+            cohort
+                .iter()
+                .filter(|run| {
+                    matches!(
+                        run.status,
+                        RunStatus::SubjectError | RunStatus::JudgeError | RunStatus::ResourceLimit
+                    )
+                })
+                .count(),
+            cohort.len(),
+        ))
+    };
+    if technical_failure
+        .as_ref()
+        .is_none_or(|value| value.rate > policy.maximum_technical_failure_rate)
+    {
+        reasons.push("technical failure threshold not met or unavailable".into());
+    }
+    (reasons.is_empty(), reasons)
+}
+
+fn scenario_budget_evaluations(
+    scenarios: &[&E2eScenarioReport],
+    policy: &CapabilityPolicy,
+) -> Vec<ScenarioBudgetEvaluation> {
+    scenarios
+        .iter()
+        .filter_map(|scenario| {
+            let budget = *policy.scenario_budgets.get(&scenario.scenario_id)?;
+            let runs = scenario
+                .runs
+                .iter()
+                .filter(|run| run.status != RunStatus::InfrastructureError)
+                .collect::<Vec<_>>();
+            let costs = collect_complete(&runs, |run| run.cost.total_usd);
+            let wall_times = runs
+                .iter()
+                .map(|run| run.wall_time_ms as f64)
+                .collect::<Vec<_>>();
+            let p95_cost_usd = capability_tail(&costs, policy.tail_minimum_sample_size);
+            let p95_wall_time_ms =
+                capability_tail(&Some(wall_times), policy.tail_minimum_sample_size);
+            let mut reasons = Vec::new();
+            if budget
+                .maximum_p95_cost_usd
+                .is_some_and(|limit| p95_cost_usd.is_none_or(|observed| observed > limit))
+            {
+                reasons.push("p95 cost budget not met or unavailable".into());
+            }
+            if budget.maximum_p95_wall_time_ms.is_some_and(|limit| {
+                p95_wall_time_ms.is_none_or(|observed| observed > limit as f64)
+            }) {
+                reasons.push("p95 wall-time budget not met or unavailable".into());
+            }
+            Some(ScenarioBudgetEvaluation {
+                scenario_id: scenario.scenario_id.clone(),
+                case_id: scenario.case_id.clone(),
+                budget,
+                p95_cost_usd,
+                p95_wall_time_ms,
+                passed: reasons.is_empty(),
+                reasons,
+            })
+        })
+        .collect()
 }
 
 fn capability_tail(values: &Option<Vec<f64>>, minimum_sample_size: u32) -> Option<f64> {
@@ -1182,10 +1340,10 @@ fn percentile(values: &[f64], percentile: usize) -> Option<f64> {
     values.get(rank.saturating_sub(1)).copied()
 }
 
-fn metric_delta(current: Option<f64>, baseline: Option<f64>) -> Option<DeltaValue> {
-    current.zip(baseline).map(|(current, baseline)| DeltaValue {
-        absolute: current - baseline,
-        relative_ratio: (baseline != 0.0).then(|| (current - baseline) / baseline.abs()),
+fn metric_delta(from: Option<f64>, to: Option<f64>) -> Option<DeltaValue> {
+    from.zip(to).map(|(from, to)| DeltaValue {
+        absolute: to - from,
+        relative_ratio: (from != 0.0).then(|| (to - from) / from.abs()),
     })
 }
 
@@ -1201,7 +1359,7 @@ fn tier_rank(tier: ComplexityTier) -> u8 {
 }
 
 fn revision(report: &E2eReport) -> Option<String> {
-    report.system_under_test.as_ref().and_then(system_revision)
+    system_revision(&report.system_under_test)
 }
 
 fn system_revision(system: &SystemUnderTestIdentity) -> Option<String> {
@@ -1216,28 +1374,24 @@ fn system_revision(system: &SystemUnderTestIdentity) -> Option<String> {
 }
 
 fn comparison_markdown(comparison: &ComparisonSummary) -> String {
-    let status = if comparison.gate_passed {
+    let status = if !comparison.comparable || !comparison.cohort.excluded_cases.is_empty() {
+        "INCOMPLETE"
+    } else if comparison.gate_passed {
         "PASS"
     } else {
         "FAIL"
     };
     let mut output = format!(
-        "# Harness E2E comparison: {status}\n\nComparison: `{}`  \nCurrent: `{}` at `{}`  \nBaseline execution: `{}` at `{}`  \nComparable cases: {}  \nExcluded cases: {}  \nExcluded runs: {}\n\n",
+        "# Harness E2E comparison: {status}\n\nComparison: `{}`  \nFrom: `{}` at `{}`  \nTo: `{}` at `{}`  \nComparable cases: {}  \nExcluded cases: {}  \nExcluded runs: {}\n\n",
         comparison.comparison_id,
-        comparison.current_execution_id,
-        comparison.current_revision.as_deref().unwrap_or("unknown"),
-        comparison.baseline_execution_id,
-        comparison.baseline_revision.as_deref().unwrap_or("unknown"),
+        comparison.from_execution_id,
+        comparison.from_revision.as_deref().unwrap_or("unknown"),
+        comparison.to_execution_id,
+        comparison.to_revision.as_deref().unwrap_or("unknown"),
         comparison.cohort.included_case_ids.len(),
         comparison.cohort.excluded_cases.len(),
         comparison.cohort.excluded_runs.len(),
     );
-    if let Some(baseline) = &comparison.promoted_baseline {
-        output.push_str(&format!(
-            "Promoted baseline: `{}` v{} (`{}`)  \nEvidence hash: `{}`\n\n",
-            baseline.name, baseline.version, baseline.baseline_id, baseline.report_sha256,
-        ));
-    }
     if !comparison.reasons.is_empty() {
         output.push_str("## Cohort warnings\n\n");
         for reason in &comparison.reasons {
@@ -1273,15 +1427,15 @@ fn comparison_markdown(comparison: &ComparisonSummary) -> String {
     }
     output.push_str("## Capability frontier\n\n");
     output.push_str(&format!(
-        "Current highest reliable tier: `{}`  \nBaseline highest reliable tier: `{}`\n",
+        "From highest repeatable tier: `{}`  \nTo highest repeatable tier: `{}`\n",
         comparison
-            .current_capability
-            .highest_reliable_tier
+            .from_capability
+            .highest_repeatable_tier
             .map(|tier| format!("{tier:?}"))
             .unwrap_or_else(|| "not established".into()),
         comparison
-            .baseline_capability
-            .highest_reliable_tier
+            .to_capability
+            .highest_repeatable_tier
             .map(|tier| format!("{tier:?}"))
             .unwrap_or_else(|| "not established".into()),
     ));
@@ -1337,10 +1491,28 @@ mod tests {
             }),
             ..BenchmarkDelta::default()
         };
-        let signals =
-            regression_signals("scenario", "case", &delta, RegressionThresholds::default());
+        let from = CaseMetrics {
+            included_runs: 20,
+            ..CaseMetrics::default()
+        };
+        let to = from.clone();
+        let signals = regression_signals(
+            "scenario",
+            "case",
+            &from,
+            &to,
+            &delta,
+            RegressionThresholds::default(),
+        );
         assert_eq!(signals.len(), 2);
-        assert!(signals.iter().all(|signal| signal.blocking));
+        assert!(signals
+            .iter()
+            .find(|signal| signal.dimension == RegressionDimension::Deliverable)
+            .is_some_and(|signal| signal.blocking));
+        assert!(signals
+            .iter()
+            .find(|signal| signal.dimension == RegressionDimension::WallTime)
+            .is_some_and(|signal| signal.blocking));
         assert!(signals
             .iter()
             .any(|signal| signal.dimension == RegressionDimension::Deliverable));
@@ -1350,16 +1522,51 @@ mod tests {
     }
 
     #[test]
+    fn local_comparisons_fall_back_to_relative_medians_before_p95_is_available() {
+        let delta = BenchmarkDelta {
+            p50_cost_usd: Some(DeltaValue {
+                absolute: 0.30,
+                relative_ratio: Some(0.30),
+            }),
+            p50_wall_time_ms: Some(DeltaValue {
+                absolute: 25.0,
+                relative_ratio: Some(0.25),
+            }),
+            ..BenchmarkDelta::default()
+        };
+
+        let from = CaseMetrics {
+            included_runs: 1,
+            ..CaseMetrics::default()
+        };
+        let to = from.clone();
+        let signals = regression_signals(
+            "scenario",
+            "case",
+            &from,
+            &to,
+            &delta,
+            RegressionThresholds::default(),
+        );
+
+        assert_eq!(signals.len(), 2);
+        assert!(signals.iter().all(|signal| !signal.blocking));
+        assert!(signals
+            .iter()
+            .all(|signal| signal.reason.contains("relative median")));
+    }
+
+    #[test]
     fn comparisons_allow_revision_changes_but_audit_cases_and_runs() {
-        let baseline = report("1111111111111111111111111111111111111111", false, false);
-        let current = report("2222222222222222222222222222222222222222", true, true);
+        let to = report("1111111111111111111111111111111111111111", true, true);
+        let from = report("2222222222222222222222222222222222222222", false, false);
         let comparison = compare_reports(
-            "current",
+            "from",
             "daily",
-            &current,
-            "baseline",
+            &from,
+            "to",
             "daily",
-            &baseline,
+            &to,
             ComparisonPolicy::default(),
         )
         .unwrap();
@@ -1368,7 +1575,7 @@ mod tests {
         assert_eq!(comparison.cases.len(), 1);
         assert_eq!(comparison.cohort.excluded_runs.len(), 1);
         assert_eq!(
-            comparison.current_revision.as_deref(),
+            comparison.from_revision.as_deref(),
             Some("2222222222222222222222222222222222222222")
         );
         assert!(comparison
@@ -1379,30 +1586,34 @@ mod tests {
             .regressions
             .iter()
             .any(|signal| signal.dimension == RegressionDimension::Cost));
+        assert!(comparison
+            .regressions
+            .iter()
+            .any(|signal| signal.dimension == RegressionDimension::WallTime));
         assert!(!comparison.gate_passed);
     }
 
     #[test]
     fn comparison_artifacts_are_immutable_and_verifiable() {
-        let baseline = report("1111111111111111111111111111111111111111", false, false);
-        let current = report("2222222222222222222222222222222222222222", false, false);
+        let to = report("1111111111111111111111111111111111111111", false, false);
+        let from = report("2222222222222222222222222222222222222222", false, false);
         let comparison = compare_reports(
-            "current",
+            "from",
             "daily",
-            &current,
-            "baseline",
+            &from,
+            "to",
             "daily",
-            &baseline,
+            &to,
             ComparisonPolicy::default(),
         )
         .unwrap();
         let replay = compare_reports(
-            "current",
+            "from",
             "daily",
-            &current,
-            "baseline",
+            &from,
+            "to",
             "daily",
-            &baseline,
+            &to,
             ComparisonPolicy::default(),
         )
         .unwrap();
@@ -1425,17 +1636,17 @@ mod tests {
 
     #[test]
     fn excluded_or_changed_cases_cannot_silently_pass_the_gate() {
-        let baseline = report("1111111111111111111111111111111111111111", false, false);
-        let mut current = report("2222222222222222222222222222222222222222", false, false);
-        current.scenarios[0].execution_policy.max_turns += 1;
+        let to = report("1111111111111111111111111111111111111111", false, false);
+        let mut from = report("2222222222222222222222222222222222222222", false, false);
+        from.scenarios[0].execution_policy.max_turns += 1;
 
         let comparison = compare_reports(
-            "current",
+            "from",
             "daily",
-            &current,
-            "baseline",
+            &from,
+            "to",
             "daily",
-            &baseline,
+            &to,
             ComparisonPolicy::default(),
         )
         .unwrap();
@@ -1452,19 +1663,19 @@ mod tests {
 
     #[test]
     fn an_infrastructure_only_side_has_no_comparable_cohort() {
-        let baseline = report("1111111111111111111111111111111111111111", false, false);
-        let mut current = report("2222222222222222222222222222222222222222", false, false);
-        for run in &mut current.scenarios[0].runs {
+        let to = report("1111111111111111111111111111111111111111", false, false);
+        let mut from = report("2222222222222222222222222222222222222222", false, false);
+        for run in &mut from.scenarios[0].runs {
             run.status = RunStatus::InfrastructureError;
         }
 
         let comparison = compare_reports(
-            "current",
+            "from",
             "daily",
-            &current,
-            "baseline",
+            &from,
+            "to",
             "daily",
-            &baseline,
+            &to,
             ComparisonPolicy::default(),
         )
         .unwrap();
@@ -1476,32 +1687,71 @@ mod tests {
     }
 
     #[test]
-    fn capability_requires_explicit_budgets_after_statistical_thresholds_pass() {
+    fn five_runs_establish_local_repeatability_without_absolute_budgets() {
+        let mut report = report("1111111111111111111111111111111111111111", false, false);
+        report.scenarios[0].runs.truncate(5);
+
+        let frontier = capability_for_report(&report, CapabilityPolicy::default());
+        let tier = frontier.tiers.first().unwrap();
+
+        assert_eq!(tier.sample_size, 5);
+        assert!(tier.repeatable);
+        assert!(tier.scenario_budget_evaluations.is_empty());
+        assert_eq!(frontier.highest_repeatable_tier, Some(tier.tier));
+        assert_eq!(tier.p95_cost_usd, None);
+        assert_eq!(tier.p95_wall_time_ms, None);
+    }
+
+    #[test]
+    fn absolute_budgets_are_optional_and_evaluated_per_scenario() {
         let report = report("1111111111111111111111111111111111111111", false, false);
-        let advisory = capability_for_report(&report, CapabilityPolicy::default());
-        let tier = advisory.tiers.first().unwrap();
-
-        assert_eq!(tier.sample_size, 20);
-        assert!(tier.statistically_eligible);
-        assert!(!tier.reliable);
-        assert_eq!(tier.p95_cost_usd, Some(1.0));
-        assert_eq!(tier.p95_wall_time_ms, Some(100.0));
-        assert!(advisory.highest_reliable_tier.is_none());
-        assert_eq!(
-            advisory.highest_statistically_eligible_tier,
-            Some(tier.tier)
-        );
-
-        let enforced = capability_for_report(
+        let constrained = capability_for_report(
             &report,
             CapabilityPolicy {
-                maximum_p95_cost_usd: Some(1.0),
-                maximum_p95_wall_time_ms: Some(100),
+                scenario_budgets: BTreeMap::from([(
+                    "coordination.2".into(),
+                    ScenarioCapabilityBudget {
+                        maximum_p95_cost_usd: Some(0.99),
+                        maximum_p95_wall_time_ms: Some(99),
+                    },
+                )]),
                 ..CapabilityPolicy::default()
             },
         );
-        assert_eq!(enforced.highest_reliable_tier, Some(tier.tier));
-        assert!(enforced.tiers.first().unwrap().reliable);
+        let tier = constrained.tiers.first().unwrap();
+        let evaluation = tier.scenario_budget_evaluations.first().unwrap();
+
+        assert!(tier.repeatable);
+        assert!(!evaluation.passed);
+        assert_eq!(tier.absolute_budgets_passed, Some(false));
+        assert_eq!(evaluation.p95_cost_usd, Some(1.0));
+        assert_eq!(evaluation.p95_wall_time_ms, Some(100.0));
+        assert_eq!(evaluation.reasons.len(), 2);
+
+        let unrelated = capability_for_report(
+            &report,
+            CapabilityPolicy {
+                scenario_budgets: BTreeMap::from([(
+                    "direct_answer".into(),
+                    ScenarioCapabilityBudget {
+                        maximum_p95_cost_usd: Some(0.01),
+                        maximum_p95_wall_time_ms: Some(1),
+                    },
+                )]),
+                ..CapabilityPolicy::default()
+            },
+        );
+        assert!(unrelated.tiers.first().unwrap().repeatable);
+        assert_eq!(
+            unrelated.tiers.first().unwrap().absolute_budgets_passed,
+            None
+        );
+        assert!(unrelated
+            .tiers
+            .first()
+            .unwrap()
+            .scenario_budget_evaluations
+            .is_empty());
     }
 
     fn report(revision: &str, regress: bool, include_infra: bool) -> E2eReport {

@@ -1,0 +1,171 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "DurableArchiveManifest",
+  "type": "object",
+  "required": [
+    "archive_id",
+    "created_at",
+    "execution_id",
+    "identity_sha256",
+    "objects",
+    "retention_class"
+  ],
+  "properties": {
+    "archive_id": {
+      "type": "string"
+    },
+    "created_at": {
+      "type": "string"
+    },
+    "execution_id": {
+      "type": "string"
+    },
+    "expires_at": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "identity_sha256": {
+      "type": "string"
+    },
+    "objects": {
+      "type": "array",
+      "items": {
+        "$ref": "#/definitions/DurableObject"
+      }
+    },
+    "retention_class": {
+      "$ref": "#/definitions/RetentionClass"
+    }
+  },
+  "additionalProperties": false,
+  "definitions": {
+    "DurableChunk": {
+      "type": "object",
+      "required": [
+        "index",
+        "object"
+      ],
+      "properties": {
+        "index": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0.0
+        },
+        "object": {
+          "$ref": "#/definitions/StorageObjectReference"
+        }
+      }
+    },
+    "DurableObject": {
+      "type": "object",
+      "required": [
+        "chunks",
+        "id",
+        "media_type",
+        "redaction",
+        "relative_path",
+        "sha256",
+        "size_bytes"
+      ],
+      "properties": {
+        "chunks": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/DurableChunk"
+          }
+        },
+        "id": {
+          "type": "string"
+        },
+        "media_type": {
+          "type": "string"
+        },
+        "redaction": {
+          "$ref": "#/definitions/RedactionReport"
+        },
+        "relative_path": {
+          "type": "string"
+        },
+        "sha256": {
+          "type": "string"
+        },
+        "size_bytes": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        }
+      }
+    },
+    "RedactionReport": {
+      "type": "object",
+      "required": [
+        "redacted_fields",
+        "redacted_values",
+        "rules"
+      ],
+      "properties": {
+        "redacted_fields": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0.0
+        },
+        "redacted_values": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0.0
+        },
+        "rules": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "uniqueItems": true
+        }
+      }
+    },
+    "RetentionClass": {
+      "type": "string",
+      "enum": [
+        "temporary",
+        "pull_request",
+        "longitudinal",
+        "canonical"
+      ]
+    },
+    "StorageObjectReference": {
+      "type": "object",
+      "required": [
+        "bucket",
+        "key",
+        "media_type",
+        "sha256",
+        "size_bytes",
+        "uri"
+      ],
+      "properties": {
+        "bucket": {
+          "type": "string"
+        },
+        "key": {
+          "type": "string"
+        },
+        "media_type": {
+          "type": "string"
+        },
+        "sha256": {
+          "type": "string"
+        },
+        "size_bytes": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "uri": {
+          "type": "string"
+        }
+      }
+    }
+  }
+}
