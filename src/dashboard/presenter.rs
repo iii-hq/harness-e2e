@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::env;
 #[cfg(test)]
 use std::path::Path;
@@ -14,6 +15,7 @@ use super::{JobStatus, RunMetadata};
 use crate::identity::StackIdentity;
 use crate::longitudinal::{capability_for_report, CapabilityPolicy};
 use crate::report::{E2eReport, E2eRunReport, E2eScenarioReport};
+use crate::workflow::{WorkflowStepReport, WorkflowStepStatus};
 
 pub(super) const MAX_EXECUTIONS: usize = 100;
 
@@ -74,6 +76,7 @@ pub(super) fn execution_summary(
             "requested_runs": metadata.request.runs,
             "subjects": [],
             "scenario_metrics": [],
+            "workflow_metrics": Value::Null,
             "assessment_summary": AssessmentSummary::default(),
             "capability": {},
             "totals": {},
@@ -177,6 +180,7 @@ pub(super) fn execution_summary(
         "requested_runs": metadata.request.runs,
         "subjects": [subject],
         "scenario_metrics": scenario_metrics(&subject_id, report),
+        "workflow_metrics": workflow_metric_summary_for_report(report),
         "assessment_summary": assessment_summary,
         "capability": capability_summary(report),
         "totals": {
@@ -373,9 +377,117 @@ fn scenario_metrics(subject_id: &str, report: &E2eReport) -> Vec<Value> {
                 "run_count": scenario.runs.len(),
                 "averages": averages,
                 "samples": samples,
+                "workflow": workflow_metric_summary_for_scenario(scenario),
             })
         })
         .collect()
+}
+
+/// Summarize operational metrics emitted by Rust-owned composite scenario
+/// steps. These values are intentionally separate from Harness session
+/// metrics: a direct worker/GitHub/cron workflow has no model tokens,
+/// function-call, or Harness-session counters to report.
+fn workflow_metric_summary_for_report(report: &E2eReport) -> Value {
+    let tests = report
+        .scenarios
+        .iter()
+        .flat_map(|scenario| scenario.runs.iter())
+        .flat_map(|run| run.semantic_tests.iter())
+        .collect::<Vec<_>>();
+    workflow_metric_summary(&tests)
+}
+
+fn workflow_metric_summary_for_scenario(scenario: &E2eScenarioReport) -> Value {
+    let tests = scenario
+        .runs
+        .iter()
+        .flat_map(|run| run.semantic_tests.iter())
+        .collect::<Vec<_>>();
+    workflow_metric_summary(&tests)
+}
+
+fn workflow_metric_summary(tests: &[&WorkflowStepReport]) -> Value {
+    let mut numeric_metrics = BTreeMap::<String, f64>::new();
+    let mut succeeded_steps = 0_u64;
+    let mut failed_steps = 0_u64;
+    let mut hard_gate_failed_steps = 0_u64;
+    let mut skipped_steps = 0_u64;
+    let mut cancelled_steps = 0_u64;
+    let mut running_steps = 0_u64;
+    let mut pending_steps = 0_u64;
+    let mut duration_ms = 0_u64;
+    let mut asset_count = 0_u64;
+    let mut hard_gate_count = 0_u64;
+    let mut passed_hard_gate_count = 0_u64;
+    let mut evaluation_count = 0_u64;
+    let mut failure_count = 0_u64;
+
+    for test in tests {
+        match test.status {
+            WorkflowStepStatus::Succeeded => succeeded_steps += 1,
+            WorkflowStepStatus::Failed => failed_steps += 1,
+            WorkflowStepStatus::HardGateFailed => hard_gate_failed_steps += 1,
+            WorkflowStepStatus::Skipped => skipped_steps += 1,
+            WorkflowStepStatus::Cancelled => cancelled_steps += 1,
+            WorkflowStepStatus::Running => running_steps += 1,
+            WorkflowStepStatus::Pending => pending_steps += 1,
+        }
+        duration_ms = duration_ms.saturating_add(test.duration_ms);
+        asset_count = asset_count.saturating_add(test.assets.len() as u64);
+        hard_gate_count = hard_gate_count.saturating_add(test.hard_gates.len() as u64);
+        passed_hard_gate_count = passed_hard_gate_count
+            .saturating_add(test.hard_gates.iter().filter(|gate| gate.passed).count() as u64);
+        evaluation_count = evaluation_count.saturating_add(test.evaluations.len() as u64);
+        failure_count = failure_count.saturating_add(test.failures.len() as u64);
+        if let Some(metrics) = &test.metrics {
+            collect_numeric_metric_leaves(metrics, "", &mut numeric_metrics);
+        }
+    }
+
+    json!({
+        "step_count": tests.len(),
+        "succeeded_steps": succeeded_steps,
+        "failed_steps": failed_steps,
+        "hard_gate_failed_steps": hard_gate_failed_steps,
+        "skipped_steps": skipped_steps,
+        "cancelled_steps": cancelled_steps,
+        "running_steps": running_steps,
+        "pending_steps": pending_steps,
+        "duration_ms": duration_ms,
+        "asset_count": asset_count,
+        "hard_gate_count": hard_gate_count,
+        "passed_hard_gate_count": passed_hard_gate_count,
+        "evaluation_count": evaluation_count,
+        "failure_count": failure_count,
+        "numeric_metrics": numeric_metrics,
+    })
+}
+
+fn collect_numeric_metric_leaves(value: &Value, path: &str, output: &mut BTreeMap<String, f64>) {
+    match value {
+        Value::Number(number) => {
+            if let Some(number) = number.as_f64() {
+                let key = if path.is_empty() { "value" } else { path };
+                *output.entry(key.to_owned()).or_default() += number;
+            }
+        }
+        Value::Object(object) => {
+            for (key, child) in object {
+                let child_path = if path.is_empty() {
+                    key.clone()
+                } else {
+                    format!("{path}.{key}")
+                };
+                collect_numeric_metric_leaves(child, &child_path, output);
+            }
+        }
+        Value::Array(values) => {
+            for child in values {
+                collect_numeric_metric_leaves(child, path, output);
+            }
+        }
+        Value::Null | Value::Bool(_) | Value::String(_) => {}
+    }
 }
 
 pub(super) fn contract_fingerprint(value: &Value) -> String {

@@ -4,6 +4,11 @@ import type {
   ScenarioFlowEvidence,
   SemanticTestReport,
 } from '@/lib/dashboard-data-source'
+import {
+  aggregateWorkflowMetrics,
+  type WorkflowMetricsSummary,
+  workflowMetricEntries,
+} from '@/lib/workflow-metrics'
 
 type ObservedFlow = {
   key: string
@@ -69,6 +74,10 @@ export function SemanticTestFlow({
             </div>
           </header>
 
+          <WorkflowMetricsOverview
+            metrics={aggregateWorkflowMetrics(flow.tests)}
+          />
+
           <ol className="m-0 grid list-none gap-3 p-4 lg:grid-cols-2">
             {flow.tests.map((test, index) => (
               <SemanticTestCard
@@ -121,6 +130,103 @@ export function SemanticTestFlow({
         </article>
       ))}
     </section>
+  )
+}
+
+function WorkflowMetricsOverview({
+  metrics,
+}: {
+  metrics: WorkflowMetricsSummary
+}) {
+  const attentionSteps =
+    metrics.failedSteps + metrics.hardGateFailedSteps + metrics.cancelledSteps
+  const numericMetrics = workflowMetricEntries(metrics)
+  return (
+    <section
+      className="border-b border-line bg-panel-subtle px-4 py-3"
+      aria-label="Workflow metrics"
+    >
+      <div className="flex flex-wrap items-baseline justify-between gap-2">
+        <div>
+          <div className="section-kicker">Persisted workflow metrics</div>
+          <p className="mt-1 text-xs text-ink-muted">
+            Operational counters collected by the Rust semantic tests. Harness
+            token and session metrics remain separate when they apply.
+          </p>
+        </div>
+        <span className="text-[0.65rem] text-ink-muted">
+          {metrics.stepCount} tests observed
+        </span>
+      </div>
+      <div className="mt-3 grid gap-2 sm:grid-cols-2 lg:grid-cols-5">
+        <WorkflowMetric
+          label="Steps"
+          value={`${metrics.succeededSteps}/${metrics.stepCount}`}
+          caption={
+            attentionSteps
+              ? `${attentionSteps} need attention`
+              : 'all succeeded'
+          }
+        />
+        <WorkflowMetric
+          label="Step duration"
+          value={formatDuration(metrics.durationMs)}
+          caption="sum of semantic tests"
+        />
+        <WorkflowMetric
+          label="Assets"
+          value={String(metrics.assetCount)}
+          caption="persisted before cleanup"
+        />
+        <WorkflowMetric
+          label="Hard gates"
+          value={`${metrics.passedHardGateCount}/${metrics.hardGateCount}`}
+          caption={`${metrics.evaluationCount} evaluations`}
+        />
+        <WorkflowMetric
+          label="Failures"
+          value={String(metrics.failureCount)}
+          caption={`${metrics.skippedSteps} skipped`}
+        />
+      </div>
+      {numericMetrics.length > 0 && (
+        <dl className="mt-3 grid gap-x-4 gap-y-1 text-xs sm:grid-cols-2 lg:grid-cols-3">
+          {numericMetrics.map(([key, value]) => (
+            <div
+              key={key}
+              className="flex min-w-0 items-baseline justify-between gap-3 border-t border-line/70 pt-1.5"
+            >
+              <dt className="truncate text-ink-muted" title={key}>
+                {humanize(key)}
+              </dt>
+              <dd className="m-0 shrink-0 font-mono text-ink-soft">
+                {formatNumericMetric(key, value)}
+              </dd>
+            </div>
+          ))}
+        </dl>
+      )}
+    </section>
+  )
+}
+
+function WorkflowMetric({
+  label,
+  value,
+  caption,
+}: {
+  label: string
+  value: string
+  caption: string
+}) {
+  return (
+    <div className="rounded-md border border-line bg-panel px-3 py-2">
+      <div className="section-kicker">{label}</div>
+      <strong className="mt-1 block text-sm text-ink">{value}</strong>
+      <span className="mt-0.5 block text-[0.65rem] text-ink-muted">
+        {caption}
+      </span>
+    </div>
   )
 }
 
@@ -289,6 +395,7 @@ function observedFlows(detail: DashboardExecutionDetail): ObservedFlow[] {
 
 function humanize(value: string) {
   return value
+    .replaceAll('.', ' / ')
     .replaceAll('_', ' ')
     .replace(/\b\w/g, (letter) => letter.toUpperCase())
 }
@@ -301,6 +408,13 @@ function formatDuration(milliseconds: number) {
   if (milliseconds < 1_000) return `${milliseconds} ms`
   if (milliseconds < 60_000) return `${(milliseconds / 1_000).toFixed(1)} s`
   return `${(milliseconds / 60_000).toFixed(1)} min`
+}
+
+function formatNumericMetric(key: string, value: number) {
+  const formatted = Number.isInteger(value)
+    ? value.toLocaleString('en-US')
+    : value.toLocaleString('en-US', { maximumFractionDigits: 2 })
+  return key.endsWith('_ms') ? `${formatted} ms` : formatted
 }
 
 function formatJson(value: unknown) {

@@ -71,6 +71,8 @@ describe('SemanticTestFlow', () => {
     expect(html).toContain('Evaluate Asset')
     expect(html).toContain('Asset is incomplete')
     expect(html).toContain('deliverables/evaluation.json')
+    expect(html).toContain('Persisted workflow metrics')
+    expect(html).toContain('Function Calls')
     expect(html).not.toContain('Security review execution')
   })
 })

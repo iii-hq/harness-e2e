@@ -136,6 +136,27 @@ export type DashboardScenarioMetricSummary = JsonObject & {
     tokens?: number | null
     work_amplification?: number | null
   }
+  workflow?: DashboardWorkflowMetricSummary | null
+}
+
+/** Operational metrics for Rust-owned composite steps, distinct from Harness
+ * model/session metrics which may legitimately be unavailable. */
+export type DashboardWorkflowMetricSummary = JsonObject & {
+  step_count?: number
+  succeeded_steps?: number
+  failed_steps?: number
+  hard_gate_failed_steps?: number
+  skipped_steps?: number
+  cancelled_steps?: number
+  running_steps?: number
+  pending_steps?: number
+  duration_ms?: number
+  asset_count?: number
+  hard_gate_count?: number
+  passed_hard_gate_count?: number
+  evaluation_count?: number
+  failure_count?: number
+  numeric_metrics?: JsonObject & Record<string, number>
 }
 
 export type DashboardSubjectSummary = JsonObject & {
@@ -167,6 +188,7 @@ export type DashboardExecutionSummary = JsonObject & {
   lane?: string
   subjects: DashboardSubjectSummary[]
   scenario_metrics?: DashboardScenarioMetricSummary[]
+  workflow_metrics?: DashboardWorkflowMetricSummary | null
   totals?: ExecutionTotals
   assessment_summary?: AssessmentSummary
 }

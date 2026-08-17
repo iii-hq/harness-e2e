@@ -25,6 +25,11 @@ import {
   formatPercent,
   titleCase,
 } from '@/lib/execution-view'
+import {
+  type WorkflowMetricsSummary,
+  workflowMetricEntries,
+  workflowMetricsFromDetail,
+} from '@/lib/workflow-metrics'
 
 type DetailSection = 'summary' | 'results' | 'technical'
 
@@ -186,6 +191,7 @@ type SummaryExecutionMetrics = {
   functionErrors: number | null
   durationSeconds: number | null
   runCount: number
+  workflow: WorkflowMetricsSummary | null
 }
 
 function finiteMetric(value: unknown): number | null {
@@ -196,6 +202,7 @@ function buildSummaryExecutionMetrics(
   presentation: ExecutionPresentation,
   aggregate: AssessmentRunMetrics,
   runCount: number,
+  workflow: WorkflowMetricsSummary | null,
 ): SummaryExecutionMetrics {
   const totals = presentation.execution.totals
   const reportedRuns =
@@ -212,6 +219,7 @@ function buildSummaryExecutionMetrics(
       presentation.modelRuntimeSeconds ??
       (aggregate.durationMs === null ? null : aggregate.durationMs / 1000),
     runCount: reportedRuns,
+    workflow,
   }
 }
 
@@ -223,6 +231,9 @@ function SummarySection({
   metrics: SummaryExecutionMetrics
 }) {
   const issue = presentation.primaryIssue
+  const hasRustWorkflow = Boolean(
+    metrics.workflow && metrics.workflow.stepCount > 0,
+  )
   return (
     <section
       id="summary"
@@ -278,19 +289,31 @@ function SummarySection({
             label="Total tokens"
             value={
               metrics.totalTokens === null
-                ? 'Not reported'
+                ? hasRustWorkflow
+                  ? 'Not applicable'
+                  : 'Not reported'
                 : Math.round(metrics.totalTokens).toLocaleString('en-US')
             }
-            caption={`${metrics.runCount} diagnostic runs`}
+            caption={
+              hasRustWorkflow
+                ? 'No Harness model session'
+                : `${metrics.runCount} diagnostic runs`
+            }
           />
           <SummaryMetric
             label="Function calls"
             value={
               metrics.functionCalls === null
-                ? 'Not reported'
+                ? hasRustWorkflow
+                  ? 'Not applicable'
+                  : 'Not reported'
                 : Math.round(metrics.functionCalls).toLocaleString('en-US')
             }
-            caption="Subject execution calls"
+            caption={
+              hasRustWorkflow
+                ? 'Rust operations shown below'
+                : 'Subject execution calls'
+            }
           />
           <SummaryMetric
             label="Workflow duration"
@@ -301,13 +324,22 @@ function SummarySection({
             label="Function errors"
             value={
               metrics.functionErrors === null
-                ? 'Not reported'
+                ? hasRustWorkflow
+                  ? 'Not applicable'
+                  : 'Not reported'
                 : Math.round(metrics.functionErrors).toLocaleString('en-US')
             }
-            caption="Calls that returned errors"
+            caption={
+              hasRustWorkflow
+                ? 'Step failures shown below'
+                : 'Calls that returned errors'
+            }
           />
         </div>
       </div>
+      {metrics.workflow && metrics.workflow.stepCount > 0 && (
+        <WorkflowSummary metrics={metrics.workflow} />
+      )}
       {issue && (
         <div className="mt-5 rounded-lg border border-danger/25 bg-danger/5 p-4">
           <div>
@@ -323,6 +355,71 @@ function SummarySection({
       )}
     </section>
   )
+}
+
+function WorkflowSummary({ metrics }: { metrics: WorkflowMetricsSummary }) {
+  const attentionSteps =
+    metrics.failedSteps + metrics.hardGateFailedSteps + metrics.cancelledSteps
+  const numericMetrics = workflowMetricEntries(metrics)
+  return (
+    <div className="mt-5">
+      <div className="section-kicker">Rust workflow metrics</div>
+      <p className="mt-1 text-xs text-ink-muted">
+        Persisted operational evidence from semantic tests. Model tokens,
+        Harness sessions and cost are shown separately only when available.
+      </p>
+      <div className="mt-2 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+        <SummaryMetric
+          label="Semantic tests"
+          value={`${metrics.succeededSteps}/${metrics.stepCount}`}
+          caption={
+            attentionSteps
+              ? `${attentionSteps} need attention`
+              : 'all succeeded'
+          }
+        />
+        <SummaryMetric
+          label="Step duration"
+          value={formatDuration(metrics.durationMs / 1000)}
+          caption="sum of persisted tests"
+        />
+        <SummaryMetric
+          label="Assets"
+          value={metrics.assetCount.toLocaleString('en-US')}
+          caption="captured before cleanup"
+        />
+        <SummaryMetric
+          label="Hard gates"
+          value={`${metrics.passedHardGateCount}/${metrics.hardGateCount}`}
+          caption={`${metrics.evaluationCount} evaluations`}
+        />
+      </div>
+      {numericMetrics.length > 0 && (
+        <dl className="mt-3 grid gap-x-4 gap-y-1 text-xs sm:grid-cols-2 lg:grid-cols-3">
+          {numericMetrics.map(([key, value]) => (
+            <div
+              key={key}
+              className="flex min-w-0 items-baseline justify-between gap-3 border-t border-line/70 pt-1.5"
+            >
+              <dt className="truncate text-ink-muted" title={key}>
+                {titleCase(key)}
+              </dt>
+              <dd className="m-0 shrink-0 font-mono text-ink-soft">
+                {formatWorkflowMetric(key, value)}
+              </dd>
+            </div>
+          ))}
+        </dl>
+      )}
+    </div>
+  )
+}
+
+function formatWorkflowMetric(key: string, value: number) {
+  const formatted = Number.isInteger(value)
+    ? value.toLocaleString('en-US')
+    : value.toLocaleString('en-US', { maximumFractionDigits: 2 })
+  return key.endsWith('_ms') ? `${formatted} ms` : formatted
 }
 
 function ResultsSection({
@@ -496,9 +593,10 @@ export function ExecutionPage({
             presentation,
             aggregateAssessmentMetrics(assessmentModel.runs),
             assessmentModel.runs.length,
+            detail ? workflowMetricsFromDetail(detail) : null,
           )
         : null,
-    [assessmentModel.runs, presentation],
+    [assessmentModel.runs, detail, presentation],
   )
 
   useEffect(() => {
@@ -548,6 +646,9 @@ export function ExecutionPage({
     { id: 'results', label: 'Results' },
     { id: 'technical', label: 'Technical' },
   ]
+  const hasRustWorkflow = Boolean(
+    summaryMetrics?.workflow && summaryMetrics.workflow.stepCount > 0,
+  )
   return (
     <>
       <a className="skip-link" href={hashForExecution(executionId, section)}>
@@ -625,12 +726,14 @@ export function ExecutionPage({
               caption={`${formatPercent(presentation.coverage)} coverage`}
             />
             <MetricCard
-              label="Model runtime"
+              label={hasRustWorkflow ? 'Execution runtime' : 'Model runtime'}
               value={formatDuration(presentation.modelRuntimeSeconds)}
               caption={
-                presentation.workflowRuntimeSeconds !== null
-                  ? `${formatDuration(presentation.workflowRuntimeSeconds)} workflow`
-                  : 'Workflow duration not reported'
+                hasRustWorkflow
+                  ? 'Rust workflow wall time'
+                  : presentation.workflowRuntimeSeconds !== null
+                    ? `${formatDuration(presentation.workflowRuntimeSeconds)} workflow`
+                    : 'Workflow duration not reported'
               }
             />
             <MetricCard
@@ -675,6 +778,7 @@ export function ExecutionPage({
                 functionErrors: null,
                 durationSeconds: null,
                 runCount: 0,
+                workflow: null,
               }
             }
           />

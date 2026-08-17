@@ -272,6 +272,7 @@ export function buildExecutionPresentation(
 
 export function titleCase(value: string): string {
   return value
+    .replaceAll('.', ' / ')
     .replaceAll('_', ' ')
     .replaceAll('-', ' ')
     .replace(/\b\w/g, (letter) => letter.toUpperCase())
