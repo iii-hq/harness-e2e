@@ -36,6 +36,11 @@ test('prioritizes the first-read execution signal', () => {
   assert.match(overviewPage, /hashForPlans\(\)/)
   assert.match(overviewPage, /View local plans/)
   assert.match(overviewPage, /overview-intelligence-grid/)
+  assert.match(overviewPage, /className="overview-card-action"/)
+  assert.doesNotMatch(
+    overviewPage,
+    /className="button button-secondary" href=\{hashForPlans\(\)\}/,
+  )
   assert.doesNotMatch(overviewPage, /View Actions/)
   assert.doesNotMatch(
     overviewPage,
@@ -48,6 +53,13 @@ test('prioritizes the first-read execution signal', () => {
     overviewPage,
     /HARNESS_EXECUTIONS|Technical Failed|window\.Harness/,
   )
+})
+
+test('uses one low-emphasis action treatment in overview card footers', () => {
+  const styles = read('src', 'index.css')
+  assert.match(styles, /\.overview-card-action\s*\{[\s\S]*display: inline-flex/)
+  assert.match(styles, /\.overview-card-action:hover[\s\S]*border-bottom-color/)
+  assert.match(styles, /\.overview-card-action:focus-visible[\s\S]*outline-offset/)
 })
 
 test('keeps the workspace navigation and versioned test flow', () => {

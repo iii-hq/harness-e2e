@@ -514,7 +514,7 @@ function LocalComparisonCard() {
       </div>
       <div className="overview-card-foot">
         <span>One focused pair is enough to start</span>
-        <a className="button button-secondary" href={hashForPlans()}>
+        <a className="overview-card-action" href={hashForPlans()}>
           View local plans <span aria-hidden="true">→</span>
         </a>
       </div>
@@ -594,7 +594,12 @@ function CapabilityView({
         </div>
         <div className="overview-card-foot">
           <span>Secondary to the local decision</span>
-          <a href={hashForWorkspace('capability')}>View evidence →</a>
+          <a
+            className="overview-card-action"
+            href={hashForWorkspace('capability')}
+          >
+            View evidence <span aria-hidden="true">→</span>
+          </a>
         </div>
       </article>
     )

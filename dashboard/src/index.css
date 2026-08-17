@@ -7256,10 +7256,25 @@ footer {
   font-size: 0.64rem;
 }
 
-.overview-card-foot a {
+.overview-card-action {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 3px 0;
+  border-bottom: 1px solid transparent;
   color: var(--text);
   font-weight: 650;
   text-decoration: none;
+  white-space: nowrap;
+}
+
+.overview-card-action:hover {
+  border-bottom-color: currentColor;
+}
+
+.overview-card-action:focus-visible {
+  border-bottom-color: currentColor;
+  outline-offset: 4px;
 }
 
 /* Local plan workspace ---------------------------------------------------- */
