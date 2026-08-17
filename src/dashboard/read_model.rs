@@ -6,9 +6,14 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
+use super::assessment_projection::{
+    analyzer_profile_sha256, assessment_profile_sha256, contracts_for_scenario, summarize,
+    AssessmentSummary,
+};
 use super::presenter::{execution_summary, MAX_EXECUTIONS};
 use super::store::{load_runs, StoredRun};
 use crate::artifact;
+use crate::assessment::RunAssessmentContract;
 use crate::identity::StackIdentity;
 use crate::report::{E2eRunReport, E2eScenarioReport, RunStatus};
 use crate::scenarios::ScenarioId;
@@ -112,6 +117,7 @@ pub(super) struct TestSideSummary {
     pub median_duration_seconds: Option<f64>,
     pub outcomes: OutcomeCounts,
     pub samples: MetricSamples,
+    pub assessment_summary: AssessmentSummary,
 }
 
 #[derive(Debug, Clone, Default, Serialize, JsonSchema)]
@@ -126,13 +132,17 @@ pub(super) struct TestDelta {
 pub(super) struct TestObservation {
     pub execution_id: String,
     pub evaluated_version_id: Option<String>,
+    pub cohort_id: String,
     pub completed_at: String,
     pub case_id: String,
     pub contract_sha256: String,
+    pub assessment_profile_sha256: String,
+    pub analyzer_profile_sha256: String,
     pub status: String,
     pub median_score: Option<f64>,
     pub run_count: usize,
     pub scored_runs: usize,
+    pub assessment_summary: AssessmentSummary,
 }
 
 #[derive(Debug, Clone, Serialize, JsonSchema)]
@@ -140,6 +150,7 @@ pub(super) struct TestVersionResult {
     pub test_id: String,
     pub test_version: u32,
     pub compatibility: String,
+    pub compatibility_reasons: Vec<String>,
     pub from: Option<TestSideSummary>,
     pub to: Option<TestSideSummary>,
     pub delta: TestDelta,
@@ -172,6 +183,7 @@ struct RunMetrics {
     tokens: Option<f64>,
     duration_seconds: f64,
     status: RunStatus,
+    assessment: RunAssessmentContract,
 }
 
 #[derive(Debug, Clone)]
@@ -182,6 +194,8 @@ struct Observation {
     completed_at: String,
     case_id: String,
     contract_sha256: String,
+    assessment_profile_sha256: String,
+    analyzer_profile_sha256: String,
     status: String,
     runs: Vec<RunMetrics>,
 }
@@ -293,6 +307,34 @@ impl DashboardReadModel {
             let test = self.tests.entry(scenario.scenario_id.clone()).or_default();
             let version = test.versions.entry(scenario.scenario_version).or_default();
             let contract_sha256 = scenario_contract_sha256(scenario)?;
+            let contracts = contracts_for_scenario(report, scenario);
+            let assessment_profile_sha256 =
+                assessment_profile_sha256(scenario.scenario_version, &contracts)?;
+            let analyzer_profile_sha256 = analyzer_profile_sha256(&contracts)?;
+            let contract_by_run = contracts
+                .iter()
+                .map(|contract| {
+                    (
+                        (contract.run_id.as_str(), contract.attempt_id.as_str()),
+                        *contract,
+                    )
+                })
+                .collect::<BTreeMap<_, _>>();
+            let runs = scenario
+                .runs
+                .iter()
+                .map(|run| {
+                    let assessment = contract_by_run
+                        .get(&(run.run_id.as_str(), run.attempt_id.as_str()))
+                        .with_context(|| {
+                            format!(
+                                "scenario '{}' run '{}:{}' has no assessment projection",
+                                scenario.scenario_id, run.run_id, run.attempt_id
+                            )
+                        })?;
+                    Ok(run_metrics(run, assessment))
+                })
+                .collect::<Result<Vec<_>>>()?;
             version.observations.push(Observation {
                 execution_id: stored.metadata.id.clone(),
                 evaluated_version_id: evaluated.as_ref().map(|value| value.id.clone()),
@@ -300,8 +342,10 @@ impl DashboardReadModel {
                 completed_at: stored.metadata.completed_at.clone(),
                 case_id: scenario.case_id.clone(),
                 contract_sha256,
+                assessment_profile_sha256,
+                analyzer_profile_sha256,
                 status: scenario_status(scenario).into(),
-                runs: scenario.runs.iter().map(run_metrics).collect(),
+                runs,
             });
         }
         Ok(())
@@ -515,7 +559,8 @@ impl DashboardReadModel {
         let to_observations = matching_observations(version, cohort_id, to_version_id);
         let from = side_summary(from_version_id, &from_observations);
         let to = side_summary(to_version_id, &to_observations);
-        let compatibility = compatibility(&from_observations, &to_observations);
+        let (compatibility, compatibility_reasons) =
+            compatibility(&from_observations, &to_observations);
         let delta = if compatibility == "compatible" {
             TestDelta {
                 score: metric_difference(
@@ -543,6 +588,7 @@ impl DashboardReadModel {
             test_id: test_id.into(),
             test_version,
             compatibility: compatibility.into(),
+            compatibility_reasons,
             from,
             to,
             delta,
@@ -633,7 +679,7 @@ fn scenario_contract_sha256(scenario: &E2eScenarioReport) -> Result<String> {
     }))
 }
 
-fn run_metrics(run: &E2eRunReport) -> RunMetrics {
+fn run_metrics(run: &E2eRunReport, assessment: &RunAssessmentContract) -> RunMetrics {
     let tokens = run.metrics.as_ref().and_then(|metrics| {
         metrics
             .totals
@@ -647,6 +693,7 @@ fn run_metrics(run: &E2eRunReport) -> RunMetrics {
         tokens,
         duration_seconds: run.wall_time_ms as f64 / 1_000.0,
         status: run.status,
+        assessment: assessment.clone(),
     }
 }
 
@@ -800,35 +847,80 @@ fn side_summary(
             tokens: tokens.len(),
             duration_seconds: durations.len(),
         },
+        assessment_summary: summarize(runs.iter().map(|run| &run.assessment)),
     })
 }
 
-fn compatibility(from: &[&Observation], to: &[&Observation]) -> &'static str {
+fn compatibility(from: &[&Observation], to: &[&Observation]) -> (&'static str, Vec<String>) {
     if from.is_empty() || to.is_empty() {
-        return "missing_side";
+        return ("missing_side", vec!["comparison_side_missing".into()]);
     }
     let Some(from_cases) = case_contracts(from) else {
-        return "contract_conflict";
+        return (
+            "contract_conflict",
+            vec!["scenario_contract_conflict".into()],
+        );
     };
     let Some(to_cases) = case_contracts(to) else {
-        return "contract_conflict";
+        return (
+            "contract_conflict",
+            vec!["scenario_contract_conflict".into()],
+        );
     };
-    if from_cases == to_cases {
-        "compatible"
-    } else {
-        "contract_changed"
+    if from_cases != to_cases {
+        return ("contract_changed", vec!["scenario_contract_changed".into()]);
     }
+    let Some(from_assessments) = case_profiles(from, |value| &value.assessment_profile_sha256)
+    else {
+        return (
+            "assessment_conflict",
+            vec!["assessment_profile_conflict".into()],
+        );
+    };
+    let Some(to_assessments) = case_profiles(to, |value| &value.assessment_profile_sha256) else {
+        return (
+            "assessment_conflict",
+            vec!["assessment_profile_conflict".into()],
+        );
+    };
+    if from_assessments != to_assessments {
+        return (
+            "assessment_changed",
+            vec!["assessment_profile_changed".into()],
+        );
+    }
+    let Some(from_analyzers) = case_profiles(from, |value| &value.analyzer_profile_sha256) else {
+        return (
+            "analyzer_conflict",
+            vec!["analyzer_profile_conflict".into()],
+        );
+    };
+    let Some(to_analyzers) = case_profiles(to, |value| &value.analyzer_profile_sha256) else {
+        return (
+            "analyzer_conflict",
+            vec!["analyzer_profile_conflict".into()],
+        );
+    };
+    if from_analyzers != to_analyzers {
+        return ("analyzer_changed", vec!["analyzer_profile_changed".into()]);
+    }
+    ("compatible", Vec::new())
 }
 
 fn case_contracts(observations: &[&Observation]) -> Option<BTreeMap<String, String>> {
+    case_profiles(observations, |observation| &observation.contract_sha256)
+}
+
+fn case_profiles<'a>(
+    observations: &[&'a Observation],
+    profile: impl Fn(&'a Observation) -> &'a String,
+) -> Option<BTreeMap<String, String>> {
     let mut values = BTreeMap::new();
     for observation in observations {
+        let profile = profile(observation);
         if values
-            .insert(
-                observation.case_id.clone(),
-                observation.contract_sha256.clone(),
-            )
-            .is_some_and(|existing| existing != observation.contract_sha256)
+            .insert(observation.case_id.clone(), profile.clone())
+            .is_some_and(|existing| existing != *profile)
         {
             return None;
         }
@@ -845,13 +937,17 @@ fn public_observation(observation: &&Observation) -> TestObservation {
     TestObservation {
         execution_id: observation.execution_id.clone(),
         evaluated_version_id: observation.evaluated_version_id.clone(),
+        cohort_id: observation.cohort_id.clone(),
         completed_at: observation.completed_at.clone(),
         case_id: observation.case_id.clone(),
         contract_sha256: observation.contract_sha256.clone(),
+        assessment_profile_sha256: observation.assessment_profile_sha256.clone(),
+        analyzer_profile_sha256: observation.analyzer_profile_sha256.clone(),
         status: observation.status.clone(),
         median_score: median(scores.clone()),
         run_count: observation.runs.len(),
         scored_runs: scores.len(),
+        assessment_summary: summarize(observation.runs.iter().map(|run| &run.assessment)),
     }
 }
 

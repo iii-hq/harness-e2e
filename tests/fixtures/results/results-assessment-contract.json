@@ -78,5 +78,80 @@
         "effective_status": "hard_gate_failed"
       }
     ]
+  },
+  "dashboard_projection": {
+    "scenario_version": 4,
+    "assessment_profile_sha256": "sha256:f00fdb70cfdaa302056d0176578b28fc661816605cb776256af69d276599e695",
+    "analyzer_profile_sha256": "sha256:ec6977902f98aecd7f834d0868afb393ae834ca1d83b55d088544934f9e19aec",
+    "summary": {
+      "run_count": 1,
+      "assessment_count": 1,
+      "asset_count": 1,
+      "evidence_reference_count": 2,
+      "system_statuses": {
+        "unavailable": 0,
+        "passed": 0,
+        "passed_with_concerns": 0,
+        "hard_gate_failed": 1,
+        "subject_error": 0,
+        "judge_error": 0,
+        "resource_limit": 0,
+        "infrastructure_error": 0
+      },
+      "effective_statuses": {
+        "unavailable": 0,
+        "passed": 0,
+        "passed_with_concerns": 0,
+        "hard_gate_failed": 1,
+        "subject_error": 0,
+        "judge_error": 0,
+        "resource_limit": 0,
+        "infrastructure_error": 0
+      },
+      "assessment_outcomes": {
+        "passed": 0,
+        "failed": 1,
+        "partial": 0,
+        "not_evaluated": 0,
+        "unavailable": 0,
+        "error": 0
+      },
+      "asset_qualitative_outcomes": {
+        "passed": 0,
+        "failed": 0,
+        "partial": 0,
+        "not_evaluated": 1,
+        "unavailable": 0,
+        "error": 0
+      },
+      "asset_validation_outcomes": {
+        "valid": 1,
+        "invalid": 0,
+        "malformed": 0,
+        "oversized": 0,
+        "not_produced": 0,
+        "unreadable": 0,
+        "unsafe_path": 0,
+        "removed_during_cleanup": 0,
+        "unexpected": 0,
+        "not_evaluated": 0
+      },
+      "ai_availability": {
+        "not_requested": 0,
+        "not_evaluated": 0,
+        "available": 0,
+        "unavailable": 1,
+        "malformed": 0,
+        "failed": 0
+      },
+      "ai_verdicts": {
+        "pass": 0,
+        "pass_with_concerns": 0,
+        "fail": 0,
+        "inconclusive": 0
+      },
+      "median_quality_score": null,
+      "median_confidence": null
+    }
   }
 }

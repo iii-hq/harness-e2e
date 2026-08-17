@@ -5,6 +5,9 @@ use std::path::Path;
 use anyhow::Result;
 use serde_json::{json, Value};
 
+use super::assessment_projection::{
+    contracts_for_scenario, project_scenario_report, summarize, AssessmentSummary,
+};
 #[cfg(test)]
 use super::store::load_runs;
 use super::{JobStatus, RunMetadata};
@@ -71,6 +74,7 @@ pub(super) fn execution_summary(
             "requested_runs": metadata.request.runs,
             "subjects": [],
             "scenario_metrics": [],
+            "assessment_summary": AssessmentSummary::default(),
             "capability": {},
             "totals": {},
             "first_failure": if metadata.error.is_empty() { Value::Null } else { json!({"kind":"runner", "message": metadata.error}) },
@@ -81,7 +85,12 @@ pub(super) fn execution_summary(
         "{}-{}",
         report.subject.provider, report.subject.model
     ));
-    let scenarios: Vec<_> = report.scenarios.iter().map(scenario_summary).collect();
+    let assessment_summary = summarize(report.assessment_contract.runs.iter());
+    let scenarios: Vec<_> = report
+        .scenarios
+        .iter()
+        .map(|scenario| scenario_summary(report, scenario))
+        .collect();
     let hard_gate_failures: u32 = report
         .scenarios
         .iter()
@@ -141,6 +150,7 @@ pub(super) fn execution_summary(
         "retry_attempts": retries,
         "total_cost_usd": total_cost_usd,
         "wall_time_seconds": wall_time_seconds,
+        "assessment_summary": assessment_summary,
         "scenarios": scenarios,
     });
     Ok(json!({
@@ -167,6 +177,7 @@ pub(super) fn execution_summary(
         "requested_runs": metadata.request.runs,
         "subjects": [subject],
         "scenario_metrics": scenario_metrics(&subject_id, report),
+        "assessment_summary": assessment_summary,
         "capability": capability_summary(report),
         "totals": {
             "expected_reports": expected,
@@ -194,28 +205,24 @@ pub(super) fn execution_detail_value(metadata: &RunMetadata, report: &E2eReport)
         "{}-{}",
         report.subject.provider, report.subject.model
     ));
-    let base = serde_json::to_value(report)?;
     let reports: Vec<_> = report
         .scenarios
         .iter()
         .map(|scenario| {
-            let mut value = base.clone();
-            value["passed"] = json!(scenario.passed);
-            value["scenarios"] = json!([scenario]);
-            json!({
+            Ok(json!({
                 "subject_id": subject_id,
                 "scenario_id": scenario.scenario_id,
                 "available": true,
-                "report": value,
-            })
+                "report": project_scenario_report(report, scenario)?,
+            }))
         })
-        .collect();
+        .collect::<Result<Vec<_>>>()?;
     let mut detail = summary;
     detail["reports"] = json!(reports);
     Ok(detail)
 }
 
-fn scenario_summary(scenario: &E2eScenarioReport) -> Value {
+fn scenario_summary(report: &E2eReport, scenario: &E2eScenarioReport) -> Value {
     let wall_time_seconds = scenario
         .runs
         .iter()
@@ -244,6 +251,7 @@ fn scenario_summary(scenario: &E2eScenarioReport) -> Value {
         "wall_time_seconds": wall_time_seconds,
         "robustness": scenario.aggregate.robustness,
         "efficiency": scenario_efficiency(scenario),
+        "assessment_summary": summarize(contracts_for_scenario(report, scenario)),
     })
 }
 

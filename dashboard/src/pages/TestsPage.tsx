@@ -111,6 +111,10 @@ function compatibilityLabel(result: TestVersionResult | null) {
     missing_side: 'Missing on one side',
     contract_changed: 'Cases or contract changed',
     contract_conflict: 'Contract conflict',
+    assessment_changed: 'Assessment profile changed',
+    assessment_conflict: 'Assessment profile conflict',
+    analyzer_changed: 'Analyzer profile changed',
+    analyzer_conflict: 'Analyzer profile conflict',
   }[result.compatibility]
 }
 

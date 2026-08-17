@@ -47,3 +47,26 @@ SHA-256. Both use recursively sorted compact JSON before SHA-256 calculation.
 
 Scenario contracts are the sole versioned domain: `scenario_version` selects a
 materialized scenario definition and remains part of case identity.
+
+## Dashboard projection
+
+The local Dashboard read model joins every scenario run to its exact
+`RunAssessmentContract`. Execution details retain the approved per-assessment,
+asset-validation, qualitative-review, final-AI, analyzer-usage, and evidence
+reference fields. Execution, subject, scenario, test-side, and retained
+observation views expose a bounded `assessment_summary` instead of copying
+those full results into list responses.
+
+Local and static comparison paths calculate the same scenario contract,
+assessment profile, and analyzer profile SHA-256 identities. A comparison is
+only `compatible` when all three identities agree within and across both sides
+of the selected cohort. Contract, assessment, and analyzer changes or conflicts
+are reported independently. The profiles are content identities, not payload
+versions; `scenario_version` remains the only versioned domain.
+
+Static publication uses an allowlist projection. It excludes prompts, raw
+transcripts, transcript message content, generated-asset previews, and private
+artifact paths. It retains bounded assessment conclusions, analyzer
+provenance, aggregate metrics, and immutable evidence ids/hashes. Retained
+reports without the current assessment contract expose explicit unavailable
+assessment state and never synthesize analyzer output.

@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import {
   AssessmentContractError,
   readAssessmentContract,
+  summarizeAssessmentContract,
 } from '@/lib/assessment-contract'
 import resultFixture from '../../../tests/fixtures/results/results-assessment-contract.json'
 
@@ -9,6 +10,7 @@ describe('assessment result contract', () => {
   it('preserves the shared current contract fixture', () => {
     const result = resultFixture as {
       assessment_contract: unknown
+      dashboard_projection: { summary: unknown }
     }
     const contract = readAssessmentContract(result)
 
@@ -18,6 +20,9 @@ describe('assessment result contract', () => {
       'unavailable',
     )
     expect(contract.runs[0]?.effective_status).toBe('hard_gate_failed')
+    expect(summarizeAssessmentContract(contract)).toEqual(
+      result.dashboard_projection.summary,
+    )
   })
 
   it('rejects versioned result and assessment payloads', () => {
