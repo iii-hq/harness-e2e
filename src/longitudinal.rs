@@ -151,6 +151,8 @@ pub struct CaseMetrics {
     pub p95_wall_time_ms: Option<f64>,
     pub p50_turns: Option<f64>,
     pub p95_turns: Option<f64>,
+    pub p50_context_compactions: Option<f64>,
+    pub p95_context_compactions: Option<f64>,
     pub retry_rate: Option<f64>,
     pub p50_work_amplification: Option<f64>,
     pub p95_work_amplification: Option<f64>,
@@ -177,6 +179,8 @@ pub struct BenchmarkDelta {
     pub p95_wall_time_ms: Option<DeltaValue>,
     pub p50_turns: Option<DeltaValue>,
     pub p95_turns: Option<DeltaValue>,
+    pub p50_context_compactions: Option<DeltaValue>,
+    pub p95_context_compactions: Option<DeltaValue>,
     pub retry_rate: Option<DeltaValue>,
     pub p50_work_amplification: Option<DeltaValue>,
     pub p95_work_amplification: Option<DeltaValue>,
@@ -688,6 +692,12 @@ fn case_metrics(runs: &[&E2eRunReport], total_runs: usize) -> CaseMetrics {
             .map(|(root, child)| (root + child) as f64)
     });
     let amplification = collect_complete(runs, |run| run.efficiency.as_ref()?.work_amplification);
+    let context_compactions = collect_complete(runs, |run| {
+        run.efficiency
+            .as_ref()?
+            .context_compactions
+            .map(|value| value as f64)
+    });
     let retry_rate = (!runs.is_empty()).then(|| {
         runs.iter()
             .filter(|run| !run.retry_attempts.is_empty())
@@ -701,6 +711,11 @@ fn case_metrics(runs: &[&E2eRunReport], total_runs: usize) -> CaseMetrics {
         &mut unavailable,
     );
     let p95_turns = tail_metric(&turns, "p95_turns", &mut unavailable);
+    let p95_context_compactions = tail_metric(
+        &context_compactions,
+        "p95_context_compactions",
+        &mut unavailable,
+    );
     let p95_work_amplification =
         tail_metric(&amplification, "p95_work_amplification", &mut unavailable);
     if costs.is_none() {
@@ -721,6 +736,12 @@ fn case_metrics(runs: &[&E2eRunReport], total_runs: usize) -> CaseMetrics {
             "one or more included runs lacks work amplification".into(),
         );
     }
+    if context_compactions.is_none() {
+        unavailable.insert(
+            "context_compactions".into(),
+            "one or more included runs lacks context compaction metrics".into(),
+        );
+    }
     CaseMetrics {
         included_runs: runs.len().try_into().unwrap_or(u32::MAX),
         excluded_infrastructure_runs: total_runs
@@ -738,6 +759,8 @@ fn case_metrics(runs: &[&E2eRunReport], total_runs: usize) -> CaseMetrics {
         p95_wall_time_ms,
         p50_turns: turns.as_deref().and_then(median),
         p95_turns,
+        p50_context_compactions: context_compactions.as_deref().and_then(median),
+        p95_context_compactions,
         retry_rate,
         p50_work_amplification: amplification.as_deref().and_then(median),
         p95_work_amplification,
@@ -791,6 +814,16 @@ fn benchmark_delta(from: &CaseMetrics, to: &CaseMetrics) -> BenchmarkDelta {
         ),
         p50_turns: delta!("p50_turns", from.p50_turns, to.p50_turns),
         p95_turns: delta!("p95_turns", from.p95_turns, to.p95_turns),
+        p50_context_compactions: delta!(
+            "p50_context_compactions",
+            from.p50_context_compactions,
+            to.p50_context_compactions
+        ),
+        p95_context_compactions: delta!(
+            "p95_context_compactions",
+            from.p95_context_compactions,
+            to.p95_context_compactions
+        ),
         retry_rate: delta!("retry_rate", from.retry_rate, to.retry_rate),
         p50_work_amplification: delta!(
             "p50_work_amplification",
@@ -1554,6 +1587,47 @@ mod tests {
         assert!(signals
             .iter()
             .all(|signal| signal.reason.contains("relative median")));
+    }
+
+    #[test]
+    fn context_compaction_deltas_are_diagnostic_only() {
+        let from = CaseMetrics {
+            included_runs: 20,
+            p50_context_compactions: Some(1.0),
+            p95_context_compactions: Some(2.0),
+            ..CaseMetrics::default()
+        };
+        let to = CaseMetrics {
+            included_runs: 20,
+            p50_context_compactions: Some(3.0),
+            p95_context_compactions: Some(5.0),
+            ..CaseMetrics::default()
+        };
+        let delta = benchmark_delta(&from, &to);
+
+        assert_eq!(
+            delta.p50_context_compactions,
+            Some(DeltaValue {
+                absolute: 2.0,
+                relative_ratio: Some(2.0),
+            })
+        );
+        assert_eq!(
+            delta.p95_context_compactions,
+            Some(DeltaValue {
+                absolute: 3.0,
+                relative_ratio: Some(1.5),
+            })
+        );
+        assert!(regression_signals(
+            "scenario",
+            "case",
+            &from,
+            &to,
+            &delta,
+            RegressionThresholds::default(),
+        )
+        .is_empty());
     }
 
     #[test]

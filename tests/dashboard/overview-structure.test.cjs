@@ -100,6 +100,8 @@ test('distinguishes active tests from tests with no execution history', () => {
 test('keeps metric history rows readable and opens details on demand', () => {
   const styles = read('src', 'index.css')
   assert.match(historyPage, /Median tokens/)
+  assert.match(historyPage, /Median context compactions/)
+  assert.match(testsPage, /Median context compactions A → B/)
   assert.match(historyPage, /Descriptive median/)
   assert.match(historyPage, /metricCaption/)
   assert.match(historyPage, /ExecutionDetailsDialog/)

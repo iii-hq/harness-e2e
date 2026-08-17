@@ -83,6 +83,7 @@ export type ExecutionTotals = JsonObject & {
   total_tokens?: number | null
   function_calls?: number | null
   function_call_errors?: number | null
+  context_compactions?: number | null
 }
 
 export type DashboardModelIdentity = JsonObject & {
@@ -118,6 +119,7 @@ export type DashboardScenarioMetricSummary = JsonObject & {
     duration_seconds?: number | null
     function_call_errors?: number | null
     function_calls?: number | null
+    context_compactions?: number | null
     tokens?: number | null
     work_amplification?: number | null
   }
@@ -126,6 +128,7 @@ export type DashboardScenarioMetricSummary = JsonObject & {
     duration_seconds?: number | null
     function_call_errors?: number | null
     function_calls?: number | null
+    context_compactions?: number | null
     tokens?: number | null
     work_amplification?: number | null
   }
@@ -172,6 +175,7 @@ export type DashboardRunMetricTotals = JsonObject & {
   reasoning_tokens?: number | null
   function_calls?: number | null
   function_call_errors?: number | null
+  context_compactions?: number | null
   sessions?: number | null
   turns?: number | null
 }
@@ -189,6 +193,7 @@ export type DashboardRunEfficiency = JsonObject & {
   total_tokens?: number | null
   function_calls?: number | null
   function_call_errors?: number | null
+  context_compactions?: number | null
   sessions?: number | null
   turns?: number | null
 }
@@ -701,6 +706,10 @@ function materializeStaticResult(
       duration_seconds: difference(
         from?.summary.median_duration_seconds ?? null,
         to?.summary.median_duration_seconds ?? null,
+      ),
+      context_compactions: difference(
+        from?.summary.median_context_compactions ?? null,
+        to?.summary.median_context_compactions ?? null,
       ),
     },
     from_observations: [],

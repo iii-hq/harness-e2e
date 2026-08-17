@@ -1001,6 +1001,14 @@
           "format": "uint64",
           "minimum": 0.0
         },
+        "context_compactions": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0.0
+        },
         "cost_usd": {
           "type": [
             "number",
@@ -1997,6 +2005,15 @@
         "context": {
           "default": null
         },
+        "context_compactions": {
+          "default": null,
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0.0
+        },
         "cost_usd": {
           "default": null,
           "type": [
@@ -2110,6 +2127,15 @@
           "minimum": 0.0
         },
         "cache_write_tokens": {
+          "default": null,
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "context_compactions": {
           "default": null,
           "type": [
             "integer",

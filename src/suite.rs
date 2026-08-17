@@ -597,6 +597,12 @@ fn final_assessment_metrics(
         );
         push_final_metric(
             &mut metrics,
+            "context_compactions",
+            efficiency.context_compactions.map(|value| value as f64),
+            "count",
+        );
+        push_final_metric(
+            &mut metrics,
             "validation_retries",
             efficiency.validation_retries.map(|value| value as f64),
             "count",
@@ -2473,6 +2479,54 @@ mod tests {
             "scenario exceeded its deadline",
         );
         assert!(!is_retryable_technical_failure(&budget));
+    }
+
+    #[test]
+    fn final_assessment_includes_known_context_compactions() {
+        let mut run = test_run_report();
+        run.efficiency = Some(crate::report::EfficiencyReport {
+            wall_time_ms: 1,
+            root_turns: None,
+            child_turns: None,
+            child_sessions: None,
+            function_calls: None,
+            function_call_errors: None,
+            context_compactions: Some(0),
+            validation_retries: None,
+            transient_resumes: None,
+            wake_resumes: None,
+            effective_fan_out: None,
+            critical_path_ms: None,
+            input_tokens: None,
+            output_tokens: None,
+            total_tokens: None,
+            cost_usd: None,
+            minimum_expected_work: 0,
+            observed_work: None,
+            work_amplification: None,
+            technical_attempts: 1,
+            observed_complexity: Default::default(),
+            unavailable: Default::default(),
+        });
+        let scenario = E2eScenarioReport::aggregate(
+            "direct_answer",
+            2,
+            ExecutionPolicy {
+                max_turns: 1,
+                max_output_tokens: Some(100),
+                max_total_tokens: 100,
+                stuck_timeout_seconds: 1,
+            },
+            vec![run],
+        );
+
+        let metric = final_assessment_metrics(&scenario, &scenario.runs[0])
+            .into_iter()
+            .find(|metric| metric.id == "context_compactions")
+            .expect("known zero context compactions remains a final assessment metric");
+
+        assert_eq!(metric.value, 0.0);
+        assert_eq!(metric.unit, "count");
     }
 
     #[test]

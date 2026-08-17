@@ -213,7 +213,13 @@ function logicalRunLabel(count: number) {
   return `${String(count)} logical ${count === 1 ? 'run' : 'runs'}`
 }
 
-type ComparisonMetricKey = 'score' | 'cost' | 'duration' | 'tokens' | 'turns'
+type ComparisonMetricKey =
+  | 'score'
+  | 'cost'
+  | 'duration'
+  | 'tokens'
+  | 'turns'
+  | 'contextCompactions'
 
 function formatMetricValue(metric: ComparisonMetricKey, value: number | null) {
   if (value === null) return 'Unknown'
@@ -227,6 +233,8 @@ function formatMetricValue(metric: ComparisonMetricKey, value: number | null) {
     case 'tokens':
       return formatTokens(value)
     case 'turns':
+      return Math.round(value).toLocaleString()
+    case 'contextCompactions':
       return Math.round(value).toLocaleString()
   }
 }
@@ -277,6 +285,7 @@ function ObservationComparisonPanel({
     { key: 'duration', label: 'Duration' },
     { key: 'tokens', label: 'Tokens' },
     { key: 'turns', label: 'Turns' },
+    { key: 'contextCompactions', label: 'Context compactions' },
   ]
 
   return (
@@ -535,6 +544,17 @@ function ExecutionDetailsDialog({
                   : Math.round(observation.median_turns).toLocaleString()}
               </strong>
             </div>
+            <div>
+              <span>Context compactions</span>
+              <strong>
+                {observation.median_context_compactions === null ||
+                observation.median_context_compactions === undefined
+                  ? 'Unknown'
+                  : Math.round(
+                      observation.median_context_compactions,
+                    ).toLocaleString()}
+              </strong>
+            </div>
           </section>
 
           <section className="tmh-execution-dialog-report">
@@ -648,10 +668,14 @@ export function TestHistoryPage({ testId }: { testId: string }) {
   const durations = observations.map((item) => item.median_duration_seconds)
   const tokens = observations.map((item) => item.median_tokens)
   const turns = observations.map((item) => item.median_turns)
+  const contextCompactions = observations.map(
+    (item) => item.median_context_compactions,
+  )
   const summaryCost = median(costs)
   const summaryDuration = median(durations)
   const summaryTokens = median(tokens)
   const summaryTurns = median(turns)
+  const summaryContextCompactions = median(contextCompactions)
   const latestVersion = history?.available_versions.find(
     (item) => item.version === history.test_version,
   )
@@ -736,8 +760,9 @@ export function TestHistoryPage({ testId }: { testId: string }) {
         </p>
         <h1>{testId}</h1>
         <p className="tmh-subtitle">
-          Inspect how this test&apos;s result, cost, duration, token usage, and
-          turns changed across retained local executions.
+          Inspect how this test&apos;s result, cost, duration, token usage,
+          turns, and context compactions changed across retained local
+          executions.
         </p>
 
         <div className="tmh-identity">
@@ -929,6 +954,21 @@ export function TestHistoryPage({ testId }: { testId: string }) {
                     )}
                   </small>
                 </div>
+                <div className="tmh-metric">
+                  <span>Median context compactions</span>
+                  <strong>
+                    {summaryContextCompactions === null
+                      ? 'Unknown'
+                      : Math.round(summaryContextCompactions).toLocaleString()}
+                  </strong>
+                  <small>
+                    {metricCaption(
+                      knownMetricCount(contextCompactions),
+                      observations.length,
+                      'context compaction',
+                    )}
+                  </small>
+                </div>
               </div>
 
               <p className="tmh-series-note">
@@ -950,7 +990,7 @@ export function TestHistoryPage({ testId }: { testId: string }) {
                     <th scope="col" style={{ width: '16%' }}>
                       Execution
                     </th>
-                    <th scope="col" style={{ width: '22%' }}>
+                    <th scope="col" style={{ width: '17%' }}>
                       Model and system
                     </th>
                     <th scope="col" style={{ width: '13%' }}>
@@ -968,7 +1008,10 @@ export function TestHistoryPage({ testId }: { testId: string }) {
                     <th scope="col" style={{ width: '7%' }}>
                       Turns
                     </th>
-                    <th scope="col" style={{ width: '13%' }}>
+                    <th scope="col" style={{ width: '10%' }}>
+                      Context compactions
+                    </th>
+                    <th scope="col" style={{ width: '10%' }}>
                       Actions
                     </th>
                   </tr>
@@ -1036,6 +1079,14 @@ export function TestHistoryPage({ testId }: { testId: string }) {
                         item.median_turns === undefined
                           ? 'Unknown'
                           : Math.round(item.median_turns).toLocaleString()}
+                      </td>
+                      <td data-label="Context compactions">
+                        {item.median_context_compactions === null ||
+                        item.median_context_compactions === undefined
+                          ? 'Unknown'
+                          : Math.round(
+                              item.median_context_compactions,
+                            ).toLocaleString()}
                       </td>
                       <td data-label="Actions">
                         <div className="tmh-row-actions">

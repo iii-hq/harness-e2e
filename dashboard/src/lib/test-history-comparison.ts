@@ -18,6 +18,7 @@ export type ObservationComparison = {
     duration: ComparedMetric
     tokens: ComparedMetric
     turns: ComparedMetric
+    contextCompactions: ComparedMetric
   }
 }
 
@@ -169,6 +170,10 @@ export function compareTestObservations(
       ),
       tokens: compareMetric(baseline.median_tokens, candidate.median_tokens),
       turns: compareMetric(baseline.median_turns, candidate.median_turns),
+      contextCompactions: compareMetric(
+        baseline.median_context_compactions,
+        candidate.median_context_compactions,
+      ),
     },
   }
 }

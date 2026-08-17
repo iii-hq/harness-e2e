@@ -34,6 +34,7 @@ export type PlanMetricId =
   | 'cost'
   | 'function_calls'
   | 'function_errors'
+  | 'context_compactions'
 
 export type PlanMetricComparison = {
   id: PlanMetricId
@@ -85,6 +86,7 @@ export const PLAN_DETAIL_METRICS: PlanMetricId[] = [
   'cost',
   'function_calls',
   'function_errors',
+  'context_compactions',
 ]
 
 function finite(value: unknown): number | null {
@@ -108,7 +110,7 @@ function percentPoints(value: number | null): number | null {
 
 function scenarioMetricTotal(
   execution: DashboardExecutionSummary,
-  key: 'function_calls' | 'function_call_errors',
+  key: 'function_calls' | 'function_call_errors' | 'context_compactions',
 ): number | null {
   const metrics = execution.scenario_metrics ?? []
   if (metrics.length === 0) return null
@@ -208,6 +210,11 @@ export function executionMetricValue(
         finite(executionTotals.function_call_errors) ??
         scenarioMetricTotal(execution, 'function_call_errors')
       )
+    case 'context_compactions':
+      return (
+        finite(executionTotals.context_compactions) ??
+        scenarioMetricTotal(execution, 'context_compactions')
+      )
   }
 }
 
@@ -241,6 +248,7 @@ function allMetrics(
     build('cost', 'Cost', 'lower', 'usd'),
     build('function_calls', 'Function calls', 'context', 'count'),
     build('function_errors', 'Function errors', 'lower', 'count'),
+    build('context_compactions', 'Context compactions', 'context', 'count'),
   ]
 }
 
@@ -362,7 +370,7 @@ function scenarioStatus(summary: DashboardScenarioSummary | undefined) {
 
 function scenarioAverage(
   metric: DashboardScenarioMetricSummary | undefined,
-  key: 'tokens' | 'duration_seconds' | 'cost_usd',
+  key: 'tokens' | 'duration_seconds' | 'cost_usd' | 'context_compactions',
 ) {
   return finite(metric?.averages?.[key])
 }
@@ -467,6 +475,14 @@ export function buildScenarioComparisons(
           scenarioAverage(rightMetrics, 'cost_usd'),
           'lower',
           'usd',
+        ),
+        metric(
+          'context_compactions',
+          'Context compactions',
+          scenarioAverage(leftMetrics, 'context_compactions'),
+          scenarioAverage(rightMetrics, 'context_compactions'),
+          'context',
+          'count',
         ),
       ],
     }

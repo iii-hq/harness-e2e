@@ -147,9 +147,12 @@ Pages. It also emits `tests/index.json` for compact version/test metadata and on
 
 Each full execution summary also carries compact per-scenario averages for
 tokens, wall time, cost, function calls, function-call errors, sessions, and
-turns. Tokens mean input plus output; cache-read tokens are already represented
-in input usage and are not added again. The execution table also exposes exact
-total tokens and function calls for every retained diagnostic report.
+turns, plus diagnostic context-compaction averages. Tokens mean input plus
+output; cache-read tokens are already represented in input usage and are not
+added again. The execution table also exposes exact total tokens, function
+calls, and context compactions for every retained diagnostic report. Missing
+compaction evidence remains unknown and is excluded from samples; a recorded
+zero remains zero. Compaction deltas are contextual and never change verdicts.
 
 Operational health remains the primary overview. Quality is never collapsed
 into a suite-wide score. The Tests view is the comparison surface: it shows

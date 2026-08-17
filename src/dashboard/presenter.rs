@@ -193,6 +193,7 @@ pub(super) fn execution_summary(
             "retries": retries,
             "total_tokens": totals.0,
             "function_calls": totals.1,
+            "context_compactions": totals.2,
         },
         "workflow_duration_seconds": wall_time_seconds,
         "first_failure": first_failure(report),
@@ -271,9 +272,20 @@ fn scenario_efficiency(scenario: &E2eScenarioReport) -> Value {
                 .map(|value| value as f64)
         })
         .collect::<Vec<_>>();
+    let context_compactions = scenario
+        .runs
+        .iter()
+        .filter_map(|run| {
+            run.efficiency
+                .as_ref()?
+                .context_compactions
+                .map(|value| value as f64)
+        })
+        .collect::<Vec<_>>();
     json!({
         "mean_work_amplification": mean(&work_amplification),
         "mean_effective_fan_out": mean(&fan_out),
+        "mean_context_compactions": mean(&context_compactions),
     })
 }
 
@@ -318,6 +330,11 @@ fn scenario_metrics(subject_id: &str, report: &E2eReport) -> Vec<Value> {
                         .metrics
                         .as_ref()
                         .map(|value| value.totals.function_call_errors as f64),
+                    "context_compactions" => run
+                        .efficiency
+                        .as_ref()
+                        .and_then(|value| value.context_compactions)
+                        .map(|value| value as f64),
                     "sessions" => run
                         .metrics
                         .as_ref()
@@ -343,6 +360,7 @@ fn scenario_metrics(subject_id: &str, report: &E2eReport) -> Vec<Value> {
                 "cost_usd",
                 "function_calls",
                 "function_call_errors",
+                "context_compactions",
                 "sessions",
                 "turns",
                 "work_amplification",
@@ -386,9 +404,10 @@ pub(super) fn contract_fingerprint(value: &Value) -> String {
     format!("fnv1a32:{hash:08x}")
 }
 
-fn efficiency_totals(report: &E2eReport) -> (Option<f64>, Option<f64>) {
+fn efficiency_totals(report: &E2eReport) -> (Option<f64>, Option<f64>, Option<f64>) {
     let mut tokens = Vec::new();
     let mut calls = Vec::new();
+    let mut context_compactions = Vec::new();
     for run in report.scenarios.iter().flat_map(|scenario| &scenario.runs) {
         if let Some(metrics) = &run.metrics {
             if let Some((input, output)) = metrics
@@ -400,8 +419,20 @@ fn efficiency_totals(report: &E2eReport) -> (Option<f64>, Option<f64>) {
             }
             calls.push(metrics.totals.function_calls as f64);
         }
+        context_compactions.push(
+            run.efficiency
+                .as_ref()
+                .and_then(|value| value.context_compactions)
+                .map(|value| value as f64),
+        );
     }
-    (sum_available(&tokens), sum_available(&calls))
+    (
+        sum_available(&tokens),
+        sum_available(&calls),
+        (!context_compactions.is_empty())
+            .then(|| sum_complete(&context_compactions))
+            .flatten(),
+    )
 }
 
 fn first_failure(report: &E2eReport) -> Value {

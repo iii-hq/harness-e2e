@@ -128,6 +128,7 @@ pub(super) struct MetricSamples {
     pub tokens: usize,
     pub duration_seconds: usize,
     pub turns: usize,
+    pub context_compactions: usize,
 }
 
 #[derive(Debug, Clone, Serialize, JsonSchema)]
@@ -142,6 +143,7 @@ pub(super) struct TestSideSummary {
     pub median_cost_usd: Option<f64>,
     pub median_tokens: Option<f64>,
     pub median_duration_seconds: Option<f64>,
+    pub median_context_compactions: Option<f64>,
     pub outcomes: OutcomeCounts,
     pub samples: MetricSamples,
     pub assessment_summary: AssessmentSummary,
@@ -153,6 +155,7 @@ pub(super) struct TestDelta {
     pub cost_usd: Option<f64>,
     pub tokens: Option<f64>,
     pub duration_seconds: Option<f64>,
+    pub context_compactions: Option<f64>,
 }
 
 #[derive(Debug, Clone, Serialize, JsonSchema)]
@@ -187,6 +190,7 @@ pub(super) struct TestObservation {
     pub median_tokens: Option<f64>,
     pub median_duration_seconds: Option<f64>,
     pub median_turns: Option<f64>,
+    pub median_context_compactions: Option<f64>,
 }
 
 #[derive(Debug, Clone, Serialize, JsonSchema)]
@@ -217,6 +221,7 @@ pub(super) struct HistorySeries {
     pub median_tokens: Option<f64>,
     pub median_duration_seconds: Option<f64>,
     pub median_turns: Option<f64>,
+    pub median_context_compactions: Option<f64>,
 }
 
 #[derive(Debug, Clone, Serialize, JsonSchema)]
@@ -287,6 +292,7 @@ struct RunMetrics {
     tokens: Option<f64>,
     duration_seconds: Option<f64>,
     turns: Option<f64>,
+    context_compactions: Option<f64>,
     status: RunStatus,
     assessment: RunAssessmentContract,
 }
@@ -853,6 +859,12 @@ impl DashboardReadModel {
                         .and_then(|value| value.median_duration_seconds),
                     to.as_ref().and_then(|value| value.median_duration_seconds),
                 ),
+                context_compactions: metric_difference(
+                    from.as_ref()
+                        .and_then(|value| value.median_context_compactions),
+                    to.as_ref()
+                        .and_then(|value| value.median_context_compactions),
+                ),
             }
         } else {
             TestDelta::default()
@@ -976,6 +988,11 @@ fn run_metrics(run: &E2eRunReport, assessment: &RunAssessmentContract) -> RunMet
                         .then_some(metrics.totals.turns as f64)
                 })
             }),
+        context_compactions: run
+            .efficiency
+            .as_ref()
+            .and_then(|efficiency| efficiency.context_compactions)
+            .map(|value| value as f64),
         status: run.status,
         assessment: assessment.clone(),
     }
@@ -1082,6 +1099,10 @@ fn side_summary(
         .iter()
         .filter_map(|run| run.duration_seconds)
         .collect::<Vec<_>>();
+    let context_compactions = runs
+        .iter()
+        .filter_map(|run| run.context_compactions)
+        .collect::<Vec<_>>();
     let outcomes = OutcomeCounts {
         passed: runs
             .iter()
@@ -1124,6 +1145,7 @@ fn side_summary(
         median_cost_usd: median(costs.clone()),
         median_tokens: median(tokens.clone()),
         median_duration_seconds: median(durations.clone()),
+        median_context_compactions: median(context_compactions.clone()),
         outcomes,
         samples: MetricSamples {
             score: scores.len(),
@@ -1131,6 +1153,7 @@ fn side_summary(
             tokens: tokens.len(),
             duration_seconds: durations.len(),
             turns: runs.iter().filter(|run| run.turns.is_some()).count(),
+            context_compactions: context_compactions.len(),
         },
         assessment_summary: summarize(runs.iter().map(|run| &run.assessment)),
     })
@@ -1239,6 +1262,11 @@ fn public_observation(observation: &&Observation) -> TestObservation {
         .iter()
         .filter_map(|run| run.turns)
         .collect::<Vec<_>>();
+    let context_compactions = observation
+        .runs
+        .iter()
+        .filter_map(|run| run.context_compactions)
+        .collect::<Vec<_>>();
     TestObservation {
         execution_id: observation.execution_id.clone(),
         evaluated_version_id: observation.evaluated_version_id.clone(),
@@ -1270,6 +1298,7 @@ fn public_observation(observation: &&Observation) -> TestObservation {
         median_tokens: median(tokens),
         median_duration_seconds: median(durations),
         median_turns: median(turns),
+        median_context_compactions: median(context_compactions),
     }
 }
 
@@ -1367,6 +1396,10 @@ fn history_series(id: String, observations: &[&Observation]) -> HistorySeries {
         .filter_map(|run| run.duration_seconds)
         .collect::<Vec<_>>();
     let turns = runs.iter().filter_map(|run| run.turns).collect::<Vec<_>>();
+    let context_compactions = runs
+        .iter()
+        .filter_map(|run| run.context_compactions)
+        .collect::<Vec<_>>();
     let first = observations.first().expect("history series is non-empty");
     HistorySeries {
         id,
@@ -1399,6 +1432,7 @@ fn history_series(id: String, observations: &[&Observation]) -> HistorySeries {
         median_tokens: median(tokens),
         median_duration_seconds: median(durations),
         median_turns: median(turns),
+        median_context_compactions: median(context_compactions),
     }
 }
 

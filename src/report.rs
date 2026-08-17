@@ -165,6 +165,7 @@ pub struct EfficiencyReport {
     pub child_sessions: Option<u64>,
     pub function_calls: Option<u64>,
     pub function_call_errors: Option<u64>,
+    pub context_compactions: Option<u64>,
     pub validation_retries: Option<u64>,
     pub transient_resumes: Option<u64>,
     pub wake_resumes: Option<u64>,
@@ -430,6 +431,7 @@ impl E2eRunReport {
                 "child_sessions",
                 "function_calls",
                 "function_call_errors",
+                "context_compactions",
                 "validation_retries",
                 "transient_resumes",
                 "wake_resumes",
@@ -451,6 +453,7 @@ impl E2eRunReport {
                 child_sessions: None,
                 function_calls: None,
                 function_call_errors: None,
+                context_compactions: None,
                 validation_retries: None,
                 transient_resumes: None,
                 wake_resumes: None,
@@ -533,6 +536,12 @@ impl E2eRunReport {
                 "terminal lifecycle metrics did not expose transient stream resumes".into(),
             );
         }
+        if metrics.totals.context_compactions.is_none() {
+            unavailable.insert(
+                "context_compactions".into(),
+                "Harness metrics contract did not expose durable context compactions".into(),
+            );
+        }
         let critical_path_ms = metrics
             .traces
             .as_ref()
@@ -607,6 +616,7 @@ impl E2eRunReport {
             child_sessions: Some(child_sessions),
             function_calls: Some(metrics.totals.function_calls),
             function_call_errors: Some(metrics.totals.function_call_errors),
+            context_compactions: metrics.totals.context_compactions,
             validation_retries,
             transient_resumes,
             wake_resumes,
@@ -682,6 +692,15 @@ impl E2eRunReport {
         aggregate.function_calls = sum_optional(&attempts, |value| value.function_calls);
         aggregate.function_call_errors =
             sum_optional(&attempts, |value| value.function_call_errors);
+        aggregate.context_compactions = all_present
+            .then(|| sum_optional(&attempts, |value| value.context_compactions))
+            .flatten();
+        if aggregate.context_compactions.is_none() {
+            aggregate.unavailable.insert(
+                "context_compactions".into(),
+                "one or more technical attempts lacked context compaction metrics".into(),
+            );
+        }
         aggregate.validation_retries = sum_optional(&attempts, |value| value.validation_retries);
         aggregate.transient_resumes = sum_optional(&attempts, |value| value.transient_resumes);
         aggregate.wake_resumes = sum_optional(&attempts, |value| value.wake_resumes);
@@ -2103,6 +2122,7 @@ mod tests {
         assert_eq!(efficiency.child_turns, Some(4));
         assert_eq!(efficiency.child_sessions, Some(2));
         assert_eq!(efficiency.function_calls, Some(8));
+        assert_eq!(efficiency.context_compactions, Some(2));
         assert_eq!(efficiency.validation_retries, Some(2));
         assert_eq!(efficiency.transient_resumes, Some(1));
         assert_eq!(efficiency.wake_resumes, Some(1));
@@ -2134,12 +2154,66 @@ mod tests {
         passed.update_efficiency(work);
         passed.attach_retry_attempts(vec![RetryAttemptReport::from(&failed)]);
 
+        let efficiency_dimension = passed
+            .dimensions
+            .iter()
+            .find(|dimension| dimension.dimension == EvaluationDimension::Efficiency)
+            .expect("retry aggregation refreshes the efficiency dimension");
+        assert_eq!(
+            efficiency_dimension.signals["context_compactions"],
+            serde_json::json!(4)
+        );
         let efficiency = passed.efficiency.unwrap();
         assert_eq!(efficiency.technical_attempts, 2);
+        assert_eq!(efficiency.context_compactions, Some(4));
         assert_eq!(efficiency.observed_work, Some(33));
         assert!((efficiency.work_amplification.unwrap() - 3.3).abs() < f64::EPSILON);
         assert!((passed.cost.total_usd.unwrap() - 0.30).abs() < f64::EPSILON);
         assert_eq!(passed.wall_time_ms, 1_500);
+    }
+
+    #[test]
+    fn retry_efficiency_preserves_unknown_context_compactions() {
+        let work = WorkExpectation {
+            minimum_expected_work: 10,
+        };
+        let mut legacy = run(0, false);
+        let mut legacy_metrics = metrics().into_normalized();
+        legacy_metrics.totals.context_compactions = None;
+        legacy.metrics = Some(SessionMetricsResponse::from_normalized(legacy_metrics));
+        legacy.terminal_status = Some(status(1, 0));
+        legacy.update_efficiency(work);
+
+        let mut current = run(100, true);
+        current.attempt_number = 2;
+        current.metrics = Some(metrics());
+        current.terminal_status = Some(status(1, 0));
+        current.update_efficiency(work);
+        current.attach_retry_attempts(vec![RetryAttemptReport::from(&legacy)]);
+
+        let efficiency = current.efficiency.unwrap();
+        assert_eq!(efficiency.context_compactions, None);
+        assert!(efficiency.unavailable.contains_key("context_compactions"));
+    }
+
+    #[test]
+    fn retry_without_efficiency_makes_context_compactions_unknown() {
+        let mut legacy = run(0, false);
+        legacy.status = RunStatus::SubjectError;
+
+        let mut current = run(100, true);
+        current.attempt_number = 2;
+        current.metrics = Some(metrics());
+        current.terminal_status = Some(status(1, 0));
+        current.update_efficiency(WorkExpectation {
+            minimum_expected_work: 10,
+        });
+        current.attach_retry_attempts(vec![RetryAttemptReport::from(&legacy)]);
+
+        let efficiency = current.efficiency.unwrap();
+        assert_eq!(efficiency.context_compactions, None);
+        assert!(efficiency.unavailable.contains_key("context_compactions"));
+        assert!(efficiency.unavailable.contains_key("retry_efficiency"));
     }
 
     #[test]
@@ -2564,6 +2638,7 @@ mod tests {
                 "turns": 7,
                 "function_calls": 8,
                 "function_call_errors": 0,
+                "context_compactions": 2,
                 "wake_resumes": 1,
                 "input_tokens": 1000,
                 "output_tokens": 500,

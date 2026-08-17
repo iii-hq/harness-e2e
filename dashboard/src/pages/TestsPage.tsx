@@ -167,6 +167,7 @@ function negateDelta(result: TestVersionResult | null) {
       cost_usd: negate(result.delta.cost_usd),
       tokens: negate(result.delta.tokens),
       duration_seconds: negate(result.delta.duration_seconds),
+      context_compactions: negate(result.delta.context_compactions),
     },
   }
 }
@@ -203,7 +204,7 @@ function RowDetails({ result }: { result: TestVersionResult | null }) {
           </ul>
         </div>
       )}
-      <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+      <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
         {[
           [
             'Pass rate A',
@@ -224,6 +225,10 @@ function RowDetails({ result }: { result: TestVersionResult | null }) {
           [
             'Median runtime A → B',
             `${formatDuration(result.from?.median_duration_seconds ?? null)} → ${formatDuration(result.to?.median_duration_seconds ?? null)}`,
+          ],
+          [
+            'Median context compactions A → B',
+            `${formatNumber(result.from?.median_context_compactions ?? null)} → ${formatNumber(result.to?.median_context_compactions ?? null)}`,
           ],
         ].map(([label, value]) => (
           <div

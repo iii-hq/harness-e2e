@@ -61,6 +61,7 @@ function execution(
       total_cost_usd: null,
       function_calls: 4,
       function_call_errors: 0,
+      context_compactions: 1,
     },
     assessment_summary: assessment(),
     ...overrides,
@@ -76,6 +77,7 @@ describe('local plan comparison view model', () => {
           ...execution('candidate').totals,
           total_tokens: 11_000,
           wall_time_seconds: 18,
+          context_compactions: 3,
         },
       }),
     )
@@ -90,6 +92,12 @@ describe('local plan comparison view model', () => {
       delta: -2,
       delta_percent: -10,
       tone: 'positive',
+    })
+    expect(metricById(comparison, 'context_compactions')).toMatchObject({
+      baseline: 1,
+      candidate: 3,
+      delta: 2,
+      tone: 'neutral',
     })
   })
 
