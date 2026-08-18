@@ -1,0 +1,11 @@
+{
+  "task_case_id": "serialization_compatibility",
+  "case_version": 1,
+  "canonical_seed": 1003,
+  "focused_test_command": "python3 tests/focused_probe.py",
+  "full_test_command": "python3 -m unittest discover -s tests -p test_*.py",
+  "maximum_validation_rounds": 2,
+  "maximum_changed_files": 1,
+  "maximum_patch_lines": 36,
+  "network_profile": "offline-v1"
+}

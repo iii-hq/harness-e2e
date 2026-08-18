@@ -193,10 +193,38 @@ pub async fn run_suite(config: SuiteRunConfig) -> Result<SuiteRunOutcome> {
             .validate(&composite_catalog)
             .with_context(|| format!("validate Rust-defined scenario '{}'", definition.id))?;
     }
-    let worker_contracts =
-        observe_worker_contracts(context.as_ref(), &composite_catalog, &composite_definitions)
-            .await
-            .context("preflight composite scenario worker contracts")?;
+    // Observe each composite independently. A missing fixture worker belongs to
+    // that scenario's infrastructure result; it must not erase reports for
+    // otherwise runnable scenarios in the same suite. Executable step
+    // preflights still enforce function availability and exact contracts.
+    let mut worker_contracts = Vec::new();
+    for definition in &composite_definitions {
+        match observe_worker_contracts(
+            context.as_ref(),
+            &composite_catalog,
+            std::slice::from_ref(definition),
+        )
+        .await
+        {
+            Ok(observed) => {
+                for contract in observed {
+                    if !worker_contracts.iter().any(
+                        |current: &crate::report::ObservedWorkerContract| {
+                            current.function_id == contract.function_id
+                        },
+                    ) {
+                        worker_contracts.push(contract);
+                    }
+                }
+            }
+            Err(error) => tracing::warn!(
+                scenario = definition.id,
+                error = %format!("{error:#}"),
+                "deferring composite worker contract failure to the scenario attempt"
+            ),
+        }
+    }
+    worker_contracts.sort_by(|left, right| left.function_id.cmp(&right.function_id));
     emit_phase(config.control.as_ref(), SuitePhase::Materializing).await?;
     let mut scenario_reports = Vec::new();
 
@@ -1561,12 +1589,9 @@ async fn execute(
     let stuck_timeout = Duration::from_secs(spec.execution.stuck_timeout_seconds);
     let filesystem_metadata = prepare_filesystem_root(spec)?;
     if let Some(setup) = spec.setup {
-        setup(context, run_id).await.map_err(|error| {
-            subject_failure(
-                FailurePhase::Execute,
-                format!("scenario setup failed: {error}"),
-            )
-        })?;
+        setup(context, run_id)
+            .await
+            .map_err(|error| scenario_setup_failure(error.to_string()))?;
     }
     emit_phase(control, SuitePhase::Executing)
         .await
@@ -2239,6 +2264,13 @@ fn infrastructure_failure(phase: FailurePhase, message: String) -> RunFailure {
     RunFailure::new(RunStatus::InfrastructureError, phase, message)
 }
 
+fn scenario_setup_failure(message: String) -> RunFailure {
+    infrastructure_failure(
+        FailurePhase::Setup,
+        format!("scenario setup failed: {message}"),
+    )
+}
+
 fn update_score(report: &mut E2eRunReport) {
     report.score = report.criteria.iter().try_fold(0_u8, |score, criterion| {
         criterion
@@ -2806,6 +2838,17 @@ mod tests {
             "scenario exceeded 600s while waiting for the complete session tree".into(),
         );
         assert_eq!(collection.status, RunStatus::ResourceLimit);
+    }
+
+    #[test]
+    fn runner_owned_scenario_setup_failures_are_infrastructure_errors() {
+        let failure = scenario_setup_failure("fixture digest mismatch".into());
+        assert_eq!(failure.status, RunStatus::InfrastructureError);
+        assert_eq!(failure.phase, FailurePhase::Setup);
+        assert_eq!(
+            failure.message,
+            "scenario setup failed: fixture digest mismatch"
+        );
     }
 
     #[test]

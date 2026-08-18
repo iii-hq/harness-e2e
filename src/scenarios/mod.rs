@@ -20,6 +20,9 @@ pub mod coordination;
 pub mod custom_validator;
 pub mod direct_answer;
 mod domain;
+pub mod engineering_ticket;
+pub mod git_regression_forensics;
+pub mod incident_response;
 pub mod mechanical_reaction;
 pub mod multi_subagent_validation;
 pub mod persistent_state;
@@ -358,6 +361,12 @@ pub enum ScenarioId {
     ResearchPipeline,
     #[value(name = "security_review")]
     SecurityReview,
+    #[value(name = "incident_response")]
+    IncidentResponse,
+    #[value(name = "engineering_ticket")]
+    EngineeringTicket,
+    #[value(name = "git_regression_forensics")]
+    GitRegressionForensics,
     #[value(name = "mechanical_reaction")]
     MechanicalReaction,
     #[value(name = "timer_wake")]
@@ -413,13 +422,16 @@ pub enum ScenarioId {
 }
 
 impl ScenarioId {
-    pub const ALL: [Self; 27] = [
+    pub const ALL: [Self; 30] = [
         Self::DirectAnswer,
         Self::PersistentState,
         Self::ReactiveAutomation,
         Self::ShellCoderSandbox,
         Self::ResearchPipeline,
         Self::SecurityReview,
+        Self::IncidentResponse,
+        Self::EngineeringTicket,
+        Self::GitRegressionForensics,
         Self::MechanicalReaction,
         Self::TimerWake,
         Self::ReceivingOperation,
@@ -451,6 +463,9 @@ impl ScenarioId {
             Self::ShellCoderSandbox => shell_coder_sandbox::ID,
             Self::ResearchPipeline => research_pipeline::ID,
             Self::SecurityReview => security_review::ID,
+            Self::IncidentResponse => incident_response::ID,
+            Self::EngineeringTicket => engineering_ticket::ID,
+            Self::GitRegressionForensics => git_regression_forensics::ID,
             Self::MechanicalReaction => mechanical_reaction::ID,
             Self::TimerWake => timer_wake::ID,
             Self::ReceivingOperation => receiving_operation::ID,
@@ -483,6 +498,9 @@ impl ScenarioId {
             Self::ShellCoderSandbox => shell_coder_sandbox::scenario(run_id),
             Self::ResearchPipeline => research_pipeline::scenario(run_id),
             Self::SecurityReview => security_review::scenario(run_id),
+            Self::IncidentResponse => incident_response::scenario(run_id),
+            Self::EngineeringTicket => engineering_ticket::scenario(run_id),
+            Self::GitRegressionForensics => git_regression_forensics::scenario(run_id),
             Self::MechanicalReaction => mechanical_reaction::scenario(run_id),
             Self::TimerWake => timer_wake::scenario(run_id),
             Self::ReceivingOperation => receiving_operation::scenario(run_id),
@@ -530,6 +548,9 @@ impl ScenarioId {
             Self::ShellCoderSandbox => shell_coder_sandbox::materialize(namespace, seed)?,
             Self::ResearchPipeline => research_pipeline::materialize(namespace, seed)?,
             Self::SecurityReview => security_review::materialize(namespace, seed)?,
+            Self::IncidentResponse => incident_response::materialize(namespace, seed)?,
+            Self::EngineeringTicket => engineering_ticket::materialize(namespace, seed)?,
+            Self::GitRegressionForensics => git_regression_forensics::materialize(namespace, seed)?,
             Self::MechanicalReaction => mechanical_reaction::materialize(namespace, seed)?,
             Self::TimerWake => timer_wake::materialize(namespace, seed)?,
             Self::ReceivingOperation => receiving_operation::materialize(namespace, seed)?,
@@ -593,6 +614,9 @@ impl ScenarioId {
     }
 
     pub fn canonical_seed(self) -> u64 {
+        if self == Self::EngineeringTicket {
+            return engineering_ticket::CANONICAL_SEED;
+        }
         // Stable FNV-1a keeps canonical cases reproducible without tying their
         // identity to a particular execution or retry attempt.
         stable_seed(self.as_str())
@@ -600,13 +624,19 @@ impl ScenarioId {
 
     pub fn execution_kind(self) -> ScenarioExecutionKind {
         match self {
-            Self::SecurityReview => ScenarioExecutionKind::CompositeFlow,
+            Self::SecurityReview | Self::IncidentResponse => ScenarioExecutionKind::CompositeFlow,
             _ => ScenarioExecutionKind::HarnessTurn,
         }
     }
 
     pub fn manual_cli_only(self) -> bool {
-        matches!(self, Self::SecurityReview)
+        matches!(
+            self,
+            Self::SecurityReview
+                | Self::IncidentResponse
+                | Self::EngineeringTicket
+                | Self::GitRegressionForensics
+        )
     }
 }
 
@@ -631,7 +661,7 @@ mod tests {
 
     use super::*;
     #[test]
-    fn registry_contains_twenty_seven_unique_valid_scenarios() {
+    fn registry_contains_thirty_unique_valid_scenarios() {
         let mut ids = HashSet::new();
         for scenario in ScenarioId::ALL {
             assert!(ids.insert(scenario.as_str()));
@@ -640,7 +670,7 @@ mod tests {
                 .materialize("run", scenario.canonical_seed())
                 .unwrap();
         }
-        assert_eq!(ids.len(), 27);
+        assert_eq!(ids.len(), 30);
     }
 
     #[test]
@@ -659,7 +689,10 @@ mod tests {
     fn default_selection_excludes_manually_prepared_scenarios() {
         let selected = selected(&[]);
         assert!(!selected.contains(&ScenarioId::SecurityReview));
-        assert_eq!(selected.len(), ScenarioId::ALL.len() - 1);
+        assert!(!selected.contains(&ScenarioId::IncidentResponse));
+        assert!(!selected.contains(&ScenarioId::EngineeringTicket));
+        assert!(!selected.contains(&ScenarioId::GitRegressionForensics));
+        assert_eq!(selected.len(), ScenarioId::ALL.len() - 4);
     }
 
     #[test]

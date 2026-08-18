@@ -1,0 +1,33 @@
+{
+  "schema_version": 1,
+  "case_id": "coderefinery-git-bisect-first-500-v1",
+  "upstream": {
+    "repository": "coderefinery/git-bisect-exercise",
+    "url": "https://github.com/coderefinery/git-bisect-exercise.git"
+  },
+  "bundle": {
+    "path": "input/repository.bundle",
+    "sha256": "sha256:2e1a744a89d04b600d511499e1c0edfa182089ad7a42bb3825fde631504649e1",
+    "size_bytes": 130277
+  },
+  "history": {
+    "good_sha": "f0ea95083275f5bd06f7c0b2498652929f3a2f01",
+    "bad_sha": "15c23f04e5a168ba347b495c166b63775cc63599",
+    "good_tree": "7cf8b4b73d8e75a097bb15b5874891a5ce842d20",
+    "bad_tree": "8179bbc077b53e6fd8defb1386b8b42c43722d53",
+    "range_commit_count": 499,
+    "repository_commit_count": 500
+  },
+  "probe": {
+    "path": "input/probe.py",
+    "sha256": "sha256:22e2d3f26ecb4c6ab1eafe8f4a2e45bcbe525e036f3978c0ea4c03d5a7988ed5",
+    "argv": ["python3", "input/probe.py", "checkout", "--trace", "probe-trace.jsonl"],
+    "good_stdout": "3.14",
+    "timeout_seconds": 30
+  },
+  "outputs": {
+    "checkout": "checkout",
+    "trace": "probe-trace.jsonl",
+    "report": "forensics-report.json"
+  }
+}
