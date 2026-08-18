@@ -1646,6 +1646,7 @@ async fn execute(
             stuck_timeout,
             progress_interval.is_some(),
             control.map(|control| &control.cancellation),
+            permission_mode,
         )
         .await
     {

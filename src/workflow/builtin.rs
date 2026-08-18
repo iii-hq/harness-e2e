@@ -10,7 +10,8 @@ use serde_json::{json, Value};
 
 use crate::context::E2eContext;
 use crate::wire::{
-    FunctionPolicy, HarnessMode, MessageInput, SendOptions, SendRequest, SendResponse, SessionInit,
+    FunctionPolicy, HarnessMode, MessageInput, PermissionMode, SendOptions, SendRequest,
+    SendResponse, SessionInit,
 };
 
 use super::{
@@ -211,6 +212,7 @@ impl StepExecutor for HarnessStepExecutor {
                 Duration::from_secs(config.stuck_timeout_seconds),
                 false,
                 Some(&context.cancellation),
+                PermissionMode::Full,
             )
             .await?;
         let transcript = self.context.transcript(&session_id).await?;
