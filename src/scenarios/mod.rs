@@ -24,6 +24,7 @@ pub mod deliverable;
 pub mod direct_answer;
 mod domain;
 mod kit;
+pub mod longhorizon;
 pub mod mechanical_reaction;
 pub mod multi_subagent_validation;
 pub mod orchestration;
@@ -494,6 +495,9 @@ pub enum ScenarioId {
     #[serde(rename = "deliverable.world_bible")]
     #[value(name = "deliverable.world_bible")]
     DeliverableWorldBible,
+    #[serde(rename = "longhorizon.hidden_rule_world")]
+    #[value(name = "longhorizon.hidden_rule_world")]
+    LonghorizonHiddenRuleWorld,
     #[serde(rename = "orchestration.checkpoint_resume")]
     #[value(name = "orchestration.checkpoint_resume")]
     OrchestrationCheckpointResume,
@@ -545,7 +549,7 @@ pub enum ScenarioId {
 }
 
 impl ScenarioId {
-    pub const ALL: [Self; 62] = [
+    pub const ALL: [Self; 63] = [
         Self::DirectAnswer,
         Self::PersistentState,
         Self::ReactiveAutomation,
@@ -592,6 +596,7 @@ impl ScenarioId {
         Self::DeliverableStaticSite,
         Self::DeliverableSvgChart,
         Self::DeliverableWorldBible,
+        Self::LonghorizonHiddenRuleWorld,
         Self::OrchestrationCheckpointResume,
         Self::OrchestrationCycleRefusal,
         Self::OrchestrationDiamondMerge,
@@ -658,6 +663,7 @@ impl ScenarioId {
             Self::DeliverableStaticSite => deliverable::static_site::ID,
             Self::DeliverableSvgChart => deliverable::svg_chart::ID,
             Self::DeliverableWorldBible => deliverable::world_bible::ID,
+            Self::LonghorizonHiddenRuleWorld => longhorizon::hidden_rule_world::ID,
             Self::OrchestrationCheckpointResume => orchestration::checkpoint_resume::ID,
             Self::OrchestrationCycleRefusal => orchestration::cycle_refusal::ID,
             Self::OrchestrationDiamondMerge => orchestration::diamond_merge::ID,
@@ -746,6 +752,7 @@ impl ScenarioId {
             Self::DeliverableStaticSite => deliverable::static_site::scenario(run_id),
             Self::DeliverableSvgChart => deliverable::svg_chart::scenario(run_id),
             Self::DeliverableWorldBible => deliverable::world_bible::scenario(run_id),
+            Self::LonghorizonHiddenRuleWorld => longhorizon::hidden_rule_world::scenario(run_id),
             Self::OrchestrationCheckpointResume => {
                 orchestration::checkpoint_resume::scenario(run_id)
             }
@@ -879,6 +886,9 @@ impl ScenarioId {
             Self::DeliverableStaticSite => deliverable::static_site::materialize(namespace, seed)?,
             Self::DeliverableSvgChart => deliverable::svg_chart::materialize(namespace, seed)?,
             Self::DeliverableWorldBible => deliverable::world_bible::materialize(namespace, seed)?,
+            Self::LonghorizonHiddenRuleWorld => {
+                longhorizon::hidden_rule_world::materialize(namespace, seed)?
+            }
             Self::OrchestrationCheckpointResume => {
                 orchestration::checkpoint_resume::materialize(namespace, seed)?
             }
@@ -950,9 +960,10 @@ impl ScenarioId {
     /// name alone.
     pub fn suite(self) -> ScenarioSuite {
         match self.as_str().split('.').next() {
-            Some("build" | "cognition" | "deliverable" | "orchestration" | "reliability") => {
-                ScenarioSuite::Extended
-            }
+            Some(
+                "build" | "cognition" | "deliverable" | "longhorizon" | "orchestration"
+                | "reliability",
+            ) => ScenarioSuite::Extended,
             _ => ScenarioSuite::Canonical,
         }
     }
@@ -994,18 +1005,23 @@ mod tests {
                 .materialize("run", scenario.canonical_seed())
                 .unwrap();
         }
-        assert_eq!(ids.len(), 62);
+        assert_eq!(ids.len(), 63);
     }
 
     #[test]
     fn the_extended_suite_holds_the_four_new_families() {
         let extended = ScenarioSuite::Extended.scenarios();
-        assert_eq!(extended.len(), 35);
+        assert_eq!(extended.len(), 36);
         for scenario in &extended {
             let family = scenario.as_str().split('.').next().unwrap_or_default();
             assert!(matches!(
                 family,
-                "build" | "cognition" | "deliverable" | "orchestration" | "reliability"
+                "build"
+                    | "cognition"
+                    | "deliverable"
+                    | "longhorizon"
+                    | "orchestration"
+                    | "reliability"
             ));
         }
     }

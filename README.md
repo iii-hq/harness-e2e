@@ -38,8 +38,8 @@ cargo run --locked --bin harness-e2e -- list --suite extended
 
 Scenarios belong to the canonical suite or the extended one. An empty
 selection resolves to the canonical suite, so the standing gates are unchanged
-by extended coverage; `--suite extended` opts a run into the thirty-five
-build, reliability, orchestration, deliverable, and cognition scenarios
+by extended coverage; `--suite extended` opts a run into the thirty-six
+build, reliability, orchestration, deliverable, cognition, and long-horizon scenarios
 documented in [docs/scenario-suites.md](docs/scenario-suites.md). The `build.*`
 scenarios build a working system from a prompt and are verified by running it
 against inputs planted after the session ends.

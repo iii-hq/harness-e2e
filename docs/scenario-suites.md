@@ -3,7 +3,7 @@
 Scenarios belong to one of two suites.
 
 - **Canonical** is what every standing gate runs. Membership is unchanged.
-- **Extended** is thirty-five additional scenarios: four that build a working
+- **Extended** is thirty-six additional scenarios: four that build a working
   system and verify it by running it, plus coverage of dependency failure,
   graph and loop engineering, file deliverables, and context handling.
 
@@ -28,8 +28,8 @@ cargo run --locked --bin harness-e2e -- run ... --scenario reliability.stale_cou
 ```
 
 A scenario joins a suite by its id prefix: `build.`, `cognition.`,
-`deliverable.`, `orchestration.`, and `reliability.` are extended, everything
-else is canonical. Adding a scenario to an existing family needs no registry change
+`deliverable.`, `longhorizon.`, `orchestration.`, and `reliability.` are
+extended, everything else is canonical. Adding a scenario to an existing family needs no registry change
 beyond the usual `ScenarioId` entry.
 
 ## What the extended suite measures
@@ -61,6 +61,20 @@ first contact with the held-out one.
 | `build.log_pipeline` | A log aggregator over a directory of log files | Aggregating unseen logs against the runner's own counts, quarantining malformed lines, and holding up over twenty thousand lines |
 | `build.migration_tool` | A forward and backward SQLite schema migration | Migrating an unseen database, checking column, backfill and index, rolling back to the original rows, and re-running `up` for idempotency |
 | `build.regression_suite` | A regression suite for a pricing library | Breaking the library four ways underneath it: every defect must fail the suite, a comment-only change must not |
+
+### longhorizon
+
+Scored for comparison rather than pass or fail. A task benchmark measures a
+harness when the model is held fixed and the harness varies: the delta between
+two executions is the signal, which is what `e2e::compare` already produces.
+So only the stack-attributable properties are hard-gated here, and the outcome
+and efficiency numbers are advisory: a weaker model moves the score instead of
+failing the gate, and two harness revisions on the same model separate on the
+advisory numbers.
+
+| Scenario | Measures | Hard gates | Advisory |
+| --- | --- | --- | --- |
+| `longhorizon.hidden_rule_world` | Learning an undocumented action-to-effect mapping by acting, across three levels that permute it | Every action reached the world and returned once, work stayed inside the action budget with no malformed actions, the reported progress equals the world's own record | Levels solved, actions spent per solved level |
 
 ### reliability
 
