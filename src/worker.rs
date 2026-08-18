@@ -8,6 +8,7 @@ use iii_sdk::runtime::WorkerMetadata;
 use iii_sdk::{register_worker, InitOptions};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 
 use crate::control::ControlPlane;
 use crate::manifest::WORKER_NAME;
@@ -15,6 +16,13 @@ use crate::manifest::WORKER_NAME;
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct WorkerConfig {
+    /// Directory where E2E execution records, plans, reports and dashboard
+    /// state are persisted and loaded on worker startup. This value is seeded
+    /// into the `configuration` worker and can be edited from Console.
+    #[schemars(
+        description = "Directory for persisted Harness E2E data. Changes apply after restarting the worker.",
+        length(min = 1)
+    )]
     pub data_dir: String,
 }
 
@@ -23,6 +31,42 @@ impl Default for WorkerConfig {
         Self {
             data_dir: "~/.iii/data/harness-e2e".into(),
         }
+    }
+}
+
+impl WorkerConfig {
+    pub fn to_json(&self) -> Value {
+        serde_json::to_value(self).expect("WorkerConfig serializes")
+    }
+
+    pub fn from_json(value: &Value) -> Result<Self, String> {
+        let config: Self = serde_json::from_value(value.clone())
+            .map_err(|error| format!("json parse: {error}"))?;
+        config.validate()
+    }
+
+    pub fn json_schema() -> Value {
+        let root = schemars::schema_for!(Self);
+        let mut schema =
+            serde_json::to_value(&root.schema).expect("WorkerConfig schema serializes");
+        if let Some(object) = schema.as_object_mut() {
+            if !root.definitions.is_empty() {
+                object.insert(
+                    "definitions".into(),
+                    serde_json::to_value(&root.definitions)
+                        .expect("WorkerConfig definitions serialize"),
+                );
+            }
+            object.insert("example".into(), Self::default().to_json());
+        }
+        schema
+    }
+
+    fn validate(self) -> Result<Self, String> {
+        if self.data_dir.trim().is_empty() {
+            return Err("data_dir cannot be empty".into());
+        }
+        Ok(self)
     }
 }
 
@@ -51,10 +95,9 @@ impl Default for WorkerArgs {
 }
 
 pub async fn serve(args: WorkerArgs) -> Result<()> {
-    let config = load_config(&args.config, args.data_dir.as_deref())?;
-    let data_dir = expand_home(&config.data_dir)?;
-    std::fs::create_dir_all(&data_dir)
-        .with_context(|| format!("create worker data directory {}", data_dir.display()))?;
+    // The local YAML is only a seed. The Console-editable configuration entry
+    // is authoritative unless the CLI/environment explicitly overrides it.
+    let seed = load_config(&args.config, None)?;
 
     let iii = register_worker(
         &args.url,
@@ -71,6 +114,43 @@ pub async fn serve(args: WorkerArgs) -> Result<()> {
         },
     );
     wait_for_state(&iii).await?;
+
+    let configuration_registered = match crate::configuration::register_config(&iii, &seed).await {
+        Ok(()) => true,
+        Err(error) => {
+            tracing::warn!(%error, "configuration worker unavailable; using the local seed");
+            false
+        }
+    };
+    let config = if configuration_registered {
+        match crate::configuration::fetch_config(&iii).await {
+            Ok(config) => config,
+            Err(error) => {
+                tracing::warn!(%error, "could not load Console configuration; using the local seed");
+                seed.clone()
+            }
+        }
+    } else {
+        seed.clone()
+    };
+    if configuration_registered {
+        crate::configuration::register_config_trigger(&iii)
+            .context("register configuration update trigger")?;
+    }
+
+    let (configured_data_dir, data_dir_source) = args
+        .data_dir
+        .as_deref()
+        .map(|path| (path.to_string_lossy().into_owned(), "cli"))
+        .unwrap_or_else(|| (config.data_dir.clone(), "configuration"));
+    let data_dir = resolve_data_dir(&configured_data_dir)?;
+    std::fs::create_dir_all(&data_dir)
+        .with_context(|| format!("create worker data directory {}", data_dir.display()))?;
+    tracing::info!(
+        data_dir = %data_dir.display(),
+        source = data_dir_source,
+        "Harness E2E storage directory selected"
+    );
     let control = ControlPlane::new(iii.clone(), args.url, data_dir)
         .await
         .context("restore the E2E control plane")?;
@@ -97,10 +177,14 @@ fn load_config(path: &Path, override_dir: Option<&Path>) -> Result<WorkerConfig>
     if let Some(data_dir) = override_dir {
         config.data_dir = data_dir.to_string_lossy().into_owned();
     }
-    if config.data_dir.trim().is_empty() {
+    config.validate().map_err(anyhow::Error::msg)
+}
+
+fn resolve_data_dir(value: &str) -> Result<PathBuf> {
+    if value.trim().is_empty() {
         bail!("worker config data_dir cannot be empty");
     }
-    Ok(config)
+    expand_home(value)
 }
 
 fn expand_home(value: &str) -> Result<PathBuf> {

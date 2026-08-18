@@ -17,7 +17,7 @@ use super::bus::{
 use super::controller::{validate_stack_url, Controller};
 use super::plans::{LocalPlan, PlanCreateRequest, PlanRunRequest, PlanUpdateRequest};
 use super::presenter::{
-    execution_detail_value, repository_url, validate_execution_id, MAX_EXECUTIONS,
+    execution_detail_value_optional, repository_url, validate_execution_id, MAX_EXECUTIONS,
 };
 use super::read_model::{
     EvaluatedVersionsRequest, EvaluatedVersionsResponse, TestHistoryRequest, TestHistoryResponse,
@@ -389,11 +389,7 @@ async fn execution_detail(
             status: StatusCode::NOT_FOUND,
             message: "execution not found".into(),
         })?;
-    let report = run.report.ok_or_else(|| ApiError {
-        status: StatusCode::NOT_FOUND,
-        message: "execution report not found".into(),
-    })?;
-    execution_detail_value(&run.metadata, &report)
+    execution_detail_value_optional(&run.metadata, run.report.as_ref())
         .map(Json)
         .map_err(ApiError::internal)
 }

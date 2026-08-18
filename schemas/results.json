@@ -1316,7 +1316,6 @@
     "ExecutionPolicy": {
       "type": "object",
       "required": [
-        "max_total_tokens",
         "max_turns",
         "stuck_timeout_seconds"
       ],
@@ -1330,12 +1329,25 @@
           "minimum": 0.0
         },
         "max_total_tokens": {
-          "type": "integer",
+          "description": "Shared Harness token budget. `None` leaves the Harness budget unbounded for this scenario.",
+          "type": [
+            "integer",
+            "null"
+          ],
           "format": "uint64",
           "minimum": 0.0
         },
         "max_turns": {
           "type": "integer",
+          "format": "uint32",
+          "minimum": 0.0
+        },
+        "max_validation_retries": {
+          "description": "Optional per-session cap for post-turn validation denials. `None` preserves the Harness-configured default.",
+          "type": [
+            "integer",
+            "null"
+          ],
           "format": "uint32",
           "minimum": 0.0
         },

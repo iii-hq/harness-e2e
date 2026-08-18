@@ -16,7 +16,6 @@ use crate::wire::SessionMetricsResponse;
 
 mod assessment;
 pub mod common;
-pub mod coordination;
 pub mod custom_validator;
 pub mod direct_answer;
 mod domain;
@@ -26,7 +25,6 @@ pub mod incident_response;
 pub mod mechanical_reaction;
 pub mod multi_subagent_validation;
 pub mod persistent_state;
-pub mod pr_review_regressions;
 pub mod reactive_automation;
 pub mod receiving_operation;
 pub mod research_pipeline;
@@ -35,6 +33,7 @@ pub mod shell_coder_sandbox;
 pub mod subagent_validation;
 pub mod subagent_validation_failure;
 pub mod timer_wake;
+pub mod todo_worker;
 pub mod validation_chain;
 pub mod validation_loop;
 pub mod validation_scope_enforcement;
@@ -124,10 +123,17 @@ pub struct ExecutionPolicy {
     pub max_turns: u32,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub max_output_tokens: Option<u64>,
-    pub max_total_tokens: u64,
+    /// Shared Harness token budget. `None` leaves the Harness budget
+    /// unbounded for this scenario.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub max_total_tokens: Option<u64>,
     /// Stop only after this many seconds without observable useful progress.
     /// Large scenarios have no fixed wall-clock deadline.
     pub stuck_timeout_seconds: u64,
+    /// Optional per-session cap for post-turn validation denials. `None`
+    /// preserves the Harness-configured default.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub max_validation_retries: Option<u32>,
 }
 
 impl ExecutionPolicy {
@@ -140,22 +146,23 @@ impl ExecutionPolicy {
                 "scenario '{scenario_id}': execution.max_output_tokens=0; expected None (provider limit) or at least 1"
             );
         }
-        if self.max_total_tokens == 0 {
-            bail!("scenario '{scenario_id}': execution.max_total_tokens=0; expected at least 1");
+        if self.max_total_tokens == Some(0) {
+            bail!("scenario '{scenario_id}': execution.max_total_tokens=0; expected None (unbounded) or at least 1");
         }
         if self.stuck_timeout_seconds == 0 {
             bail!(
                 "scenario '{scenario_id}': execution.stuck_timeout_seconds=0; expected at least 1"
             );
         }
-        if self
-            .max_output_tokens
-            .is_some_and(|max_output_tokens| self.max_total_tokens < max_output_tokens)
-        {
+        if self.max_output_tokens.is_some_and(|max_output_tokens| {
+            self.max_total_tokens
+                .is_some_and(|max_total_tokens| max_total_tokens < max_output_tokens)
+        }) {
             let max_output_tokens = self.max_output_tokens.expect("checked above");
+            let max_total_tokens = self.max_total_tokens.expect("checked above");
             bail!(
                 "scenario '{scenario_id}': execution.max_total_tokens={} is lower than execution.max_output_tokens={max_output_tokens}; expected max_total_tokens >= max_output_tokens",
-                self.max_total_tokens
+                max_total_tokens
             );
         }
         Ok(())
@@ -363,6 +370,12 @@ pub enum ScenarioId {
     SecurityReview,
     #[value(name = "incident_response")]
     IncidentResponse,
+    #[value(name = "todo_worker_simple")]
+    TodoWorkerSimple,
+    #[value(name = "todo_worker_planned")]
+    TodoWorkerPlanned,
+    #[value(name = "todo_worker_self_validating")]
+    TodoWorkerSelfValidating,
     #[value(name = "engineering_ticket")]
     EngineeringTicket,
     #[value(name = "git_regression_forensics")]
@@ -389,40 +402,10 @@ pub enum ScenarioId {
     ValidationScopeEnforcement,
     #[value(name = "validation_chain")]
     ValidationChain,
-    #[serde(rename = "coordination.1")]
-    #[value(name = "coordination.1")]
-    Coordination1,
-    #[serde(rename = "coordination.2")]
-    #[value(name = "coordination.2")]
-    Coordination2,
-    #[serde(rename = "coordination.3")]
-    #[value(name = "coordination.3")]
-    Coordination3,
-    #[serde(rename = "coordination.4")]
-    #[value(name = "coordination.4")]
-    Coordination4,
-    #[serde(rename = "coordination.5")]
-    #[value(name = "coordination.5")]
-    Coordination5,
-    #[serde(rename = "pr_review.token_takeover")]
-    #[value(name = "pr_review.token_takeover")]
-    PrReviewTokenTakeover,
-    #[serde(rename = "pr_review.reconnect_sweep")]
-    #[value(name = "pr_review.reconnect_sweep")]
-    PrReviewReconnectSweep,
-    #[serde(rename = "pr_review.asset_retry_ack")]
-    #[value(name = "pr_review.asset_retry_ack")]
-    PrReviewAssetRetryAck,
-    #[serde(rename = "pr_review.presence_reconnect")]
-    #[value(name = "pr_review.presence_reconnect")]
-    PrReviewPresenceReconnect,
-    #[serde(rename = "pr_review.prompt_provenance")]
-    #[value(name = "pr_review.prompt_provenance")]
-    PrReviewPromptProvenance,
 }
 
 impl ScenarioId {
-    pub const ALL: [Self; 30] = [
+    pub const ALL: [Self; 23] = [
         Self::DirectAnswer,
         Self::PersistentState,
         Self::ReactiveAutomation,
@@ -430,6 +413,9 @@ impl ScenarioId {
         Self::ResearchPipeline,
         Self::SecurityReview,
         Self::IncidentResponse,
+        Self::TodoWorkerSimple,
+        Self::TodoWorkerPlanned,
+        Self::TodoWorkerSelfValidating,
         Self::EngineeringTicket,
         Self::GitRegressionForensics,
         Self::MechanicalReaction,
@@ -443,16 +429,6 @@ impl ScenarioId {
         Self::ValidationSelfRepair,
         Self::ValidationScopeEnforcement,
         Self::ValidationChain,
-        Self::Coordination1,
-        Self::Coordination2,
-        Self::Coordination3,
-        Self::Coordination4,
-        Self::Coordination5,
-        Self::PrReviewTokenTakeover,
-        Self::PrReviewReconnectSweep,
-        Self::PrReviewAssetRetryAck,
-        Self::PrReviewPresenceReconnect,
-        Self::PrReviewPromptProvenance,
     ];
 
     pub fn as_str(self) -> &'static str {
@@ -464,6 +440,9 @@ impl ScenarioId {
             Self::ResearchPipeline => research_pipeline::ID,
             Self::SecurityReview => security_review::ID,
             Self::IncidentResponse => incident_response::ID,
+            Self::TodoWorkerSimple => todo_worker::SIMPLE_ID,
+            Self::TodoWorkerPlanned => todo_worker::PLANNED_ID,
+            Self::TodoWorkerSelfValidating => todo_worker::SELF_VALIDATING_ID,
             Self::EngineeringTicket => engineering_ticket::ID,
             Self::GitRegressionForensics => git_regression_forensics::ID,
             Self::MechanicalReaction => mechanical_reaction::ID,
@@ -477,16 +456,6 @@ impl ScenarioId {
             Self::ValidationSelfRepair => validation_self_repair::ID,
             Self::ValidationScopeEnforcement => validation_scope_enforcement::ID,
             Self::ValidationChain => validation_chain::ID,
-            Self::Coordination1 => coordination::ID_1,
-            Self::Coordination2 => coordination::ID_2,
-            Self::Coordination3 => coordination::ID_3,
-            Self::Coordination4 => coordination::ID_4,
-            Self::Coordination5 => coordination::ID_5,
-            Self::PrReviewTokenTakeover => pr_review_regressions::TOKEN_TAKEOVER_ID,
-            Self::PrReviewReconnectSweep => pr_review_regressions::RECONNECT_SWEEP_ID,
-            Self::PrReviewAssetRetryAck => pr_review_regressions::ASSET_RETRY_ACK_ID,
-            Self::PrReviewPresenceReconnect => pr_review_regressions::PRESENCE_RECONNECT_ID,
-            Self::PrReviewPromptProvenance => pr_review_regressions::PROMPT_PROVENANCE_ID,
         }
     }
 
@@ -499,6 +468,9 @@ impl ScenarioId {
             Self::ResearchPipeline => research_pipeline::scenario(run_id),
             Self::SecurityReview => security_review::scenario(run_id),
             Self::IncidentResponse => incident_response::scenario(run_id),
+            Self::TodoWorkerSimple => todo_worker::simple_scenario(run_id),
+            Self::TodoWorkerPlanned => todo_worker::planned_scenario(run_id),
+            Self::TodoWorkerSelfValidating => todo_worker::self_validating_scenario(run_id),
             Self::EngineeringTicket => engineering_ticket::scenario(run_id),
             Self::GitRegressionForensics => git_regression_forensics::scenario(run_id),
             Self::MechanicalReaction => mechanical_reaction::scenario(run_id),
@@ -512,31 +484,6 @@ impl ScenarioId {
             Self::ValidationSelfRepair => validation_self_repair::scenario(run_id),
             Self::ValidationScopeEnforcement => validation_scope_enforcement::scenario(run_id),
             Self::ValidationChain => validation_chain::scenario(run_id),
-            Self::Coordination1 => coordination::scenario(coordination::Rung::One, run_id),
-            Self::Coordination2 => coordination::scenario(coordination::Rung::Two, run_id),
-            Self::Coordination3 => coordination::scenario(coordination::Rung::Three, run_id),
-            Self::Coordination4 => coordination::scenario(coordination::Rung::Four, run_id),
-            Self::Coordination5 => coordination::scenario(coordination::Rung::Five, run_id),
-            Self::PrReviewTokenTakeover => pr_review_regressions::scenario(
-                pr_review_regressions::ReviewCase::TokenTakeover,
-                run_id,
-            ),
-            Self::PrReviewReconnectSweep => pr_review_regressions::scenario(
-                pr_review_regressions::ReviewCase::ReconnectSweep,
-                run_id,
-            ),
-            Self::PrReviewAssetRetryAck => pr_review_regressions::scenario(
-                pr_review_regressions::ReviewCase::AssetRetryAck,
-                run_id,
-            ),
-            Self::PrReviewPresenceReconnect => pr_review_regressions::scenario(
-                pr_review_regressions::ReviewCase::PresenceReconnect,
-                run_id,
-            ),
-            Self::PrReviewPromptProvenance => pr_review_regressions::scenario(
-                pr_review_regressions::ReviewCase::PromptProvenance,
-                run_id,
-            ),
         }
     }
 
@@ -549,6 +496,11 @@ impl ScenarioId {
             Self::ResearchPipeline => research_pipeline::materialize(namespace, seed)?,
             Self::SecurityReview => security_review::materialize(namespace, seed)?,
             Self::IncidentResponse => incident_response::materialize(namespace, seed)?,
+            Self::TodoWorkerSimple => todo_worker::simple_materialize(namespace, seed)?,
+            Self::TodoWorkerPlanned => todo_worker::planned_materialize(namespace, seed)?,
+            Self::TodoWorkerSelfValidating => {
+                todo_worker::self_validating_materialize(namespace, seed)?
+            }
             Self::EngineeringTicket => engineering_ticket::materialize(namespace, seed)?,
             Self::GitRegressionForensics => git_regression_forensics::materialize(namespace, seed)?,
             Self::MechanicalReaction => mechanical_reaction::materialize(namespace, seed)?,
@@ -568,46 +520,6 @@ impl ScenarioId {
                 validation_scope_enforcement::materialize(namespace, seed)?
             }
             Self::ValidationChain => validation_chain::materialize(namespace, seed)?,
-            Self::Coordination1 => {
-                coordination::materialize(coordination::Rung::One, namespace, seed)?
-            }
-            Self::Coordination2 => {
-                coordination::materialize(coordination::Rung::Two, namespace, seed)?
-            }
-            Self::Coordination3 => {
-                coordination::materialize(coordination::Rung::Three, namespace, seed)?
-            }
-            Self::Coordination4 => {
-                coordination::materialize(coordination::Rung::Four, namespace, seed)?
-            }
-            Self::Coordination5 => {
-                coordination::materialize(coordination::Rung::Five, namespace, seed)?
-            }
-            Self::PrReviewTokenTakeover => pr_review_regressions::materialize(
-                pr_review_regressions::ReviewCase::TokenTakeover,
-                namespace,
-                seed,
-            )?,
-            Self::PrReviewReconnectSweep => pr_review_regressions::materialize(
-                pr_review_regressions::ReviewCase::ReconnectSweep,
-                namespace,
-                seed,
-            )?,
-            Self::PrReviewAssetRetryAck => pr_review_regressions::materialize(
-                pr_review_regressions::ReviewCase::AssetRetryAck,
-                namespace,
-                seed,
-            )?,
-            Self::PrReviewPresenceReconnect => pr_review_regressions::materialize(
-                pr_review_regressions::ReviewCase::PresenceReconnect,
-                namespace,
-                seed,
-            )?,
-            Self::PrReviewPromptProvenance => pr_review_regressions::materialize(
-                pr_review_regressions::ReviewCase::PromptProvenance,
-                namespace,
-                seed,
-            )?,
         };
         materialized.validate()?;
         Ok(materialized)
@@ -624,28 +536,17 @@ impl ScenarioId {
 
     pub fn execution_kind(self) -> ScenarioExecutionKind {
         match self {
-            Self::SecurityReview | Self::IncidentResponse => ScenarioExecutionKind::CompositeFlow,
+            Self::SecurityReview | Self::IncidentResponse | Self::TodoWorkerPlanned => {
+                ScenarioExecutionKind::CompositeFlow
+            }
             _ => ScenarioExecutionKind::HarnessTurn,
         }
-    }
-
-    pub fn manual_cli_only(self) -> bool {
-        matches!(
-            self,
-            Self::SecurityReview
-                | Self::IncidentResponse
-                | Self::EngineeringTicket
-                | Self::GitRegressionForensics
-        )
     }
 }
 
 pub fn selected(requested: &[ScenarioId]) -> Vec<ScenarioId> {
     if requested.is_empty() {
-        return ScenarioId::ALL
-            .into_iter()
-            .filter(|scenario| !scenario.manual_cli_only())
-            .collect();
+        return ScenarioId::ALL.into_iter().collect();
     }
     requested.iter().copied().fold(Vec::new(), |mut ids, id| {
         if !ids.contains(&id) {
@@ -661,7 +562,7 @@ mod tests {
 
     use super::*;
     #[test]
-    fn registry_contains_thirty_unique_valid_scenarios() {
+    fn registry_contains_twenty_three_unique_valid_scenarios() {
         let mut ids = HashSet::new();
         for scenario in ScenarioId::ALL {
             assert!(ids.insert(scenario.as_str()));
@@ -670,7 +571,7 @@ mod tests {
                 .materialize("run", scenario.canonical_seed())
                 .unwrap();
         }
-        assert_eq!(ids.len(), 30);
+        assert_eq!(ids.len(), 23);
     }
 
     #[test]
@@ -686,13 +587,16 @@ mod tests {
     }
 
     #[test]
-    fn default_selection_excludes_manually_prepared_scenarios() {
+    fn default_selection_includes_every_registered_scenario() {
         let selected = selected(&[]);
-        assert!(!selected.contains(&ScenarioId::SecurityReview));
-        assert!(!selected.contains(&ScenarioId::IncidentResponse));
-        assert!(!selected.contains(&ScenarioId::EngineeringTicket));
-        assert!(!selected.contains(&ScenarioId::GitRegressionForensics));
-        assert_eq!(selected.len(), ScenarioId::ALL.len() - 4);
+        assert!(selected.contains(&ScenarioId::SecurityReview));
+        assert!(selected.contains(&ScenarioId::IncidentResponse));
+        assert!(selected.contains(&ScenarioId::EngineeringTicket));
+        assert!(selected.contains(&ScenarioId::GitRegressionForensics));
+        assert!(selected.contains(&ScenarioId::TodoWorkerSimple));
+        assert!(selected.contains(&ScenarioId::TodoWorkerPlanned));
+        assert!(selected.contains(&ScenarioId::TodoWorkerSelfValidating));
+        assert_eq!(selected.len(), ScenarioId::ALL.len());
     }
 
     #[test]
@@ -892,8 +796,8 @@ mod tests {
             ),
             (
                 "max_total_tokens",
-                |execution| execution.max_total_tokens = 0,
-                "scenario 'persistent_state': execution.max_total_tokens=0; expected at least 1",
+                |execution| execution.max_total_tokens = Some(0),
+                "scenario 'persistent_state': execution.max_total_tokens=0; expected None (unbounded) or at least 1",
             ),
             (
                 "stuck_timeout_seconds",
@@ -902,7 +806,7 @@ mod tests {
             ),
             (
                 "total_token_order",
-                |execution| execution.max_total_tokens = 1,
+                |execution| execution.max_total_tokens = Some(1),
                 "scenario 'persistent_state': execution.max_total_tokens=1 is lower than execution.max_output_tokens=8192; expected max_total_tokens >= max_output_tokens",
             ),
         ];

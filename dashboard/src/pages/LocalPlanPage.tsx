@@ -1342,7 +1342,9 @@ export function LocalPlanCreatePage() {
   const [scenarios, setScenarios] = useState<string[]>([])
   const [testQuery, setTestQuery] = useState('')
   const [runs, setRuns] = useState('1')
-  const [technicalRetries, setTechnicalRetries] = useState('1')
+  // Composite workflows contain non-repeatable steps; zero is the safe,
+  // valid default for every new local plan.
+  const [technicalRetries, setTechnicalRetries] = useState('0')
   const [seed, setSeed] = useState('')
   const [loading, setLoading] = useState(true)
   const [submitting, setSubmitting] = useState(false)

@@ -1270,7 +1270,7 @@ mod tests {
 
     fn report(revision: &str, regress: bool, include_infra: bool) -> E2eReport {
         let case = ScenarioCase::new(
-            "coordination.2",
+            "todo_worker_simple",
             1,
             7,
             serde_json::json!({"variant": "canonical"}),
@@ -1297,8 +1297,9 @@ mod tests {
             ExecutionPolicy {
                 max_turns: 10,
                 max_output_tokens: Some(100),
-                max_total_tokens: 1_000,
+                max_total_tokens: Some(1_000),
                 stuck_timeout_seconds: 30,
+                max_validation_retries: None,
             },
             runs,
         );

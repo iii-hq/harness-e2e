@@ -753,14 +753,6 @@ pub(super) fn validate_request(request: &mut RunRequest) -> std::result::Result<
                 .ok_or_else(|| "request contains an unknown scenario".to_string())
         })
         .collect::<std::result::Result<Vec<_>, _>>()?;
-    if selected
-        .iter()
-        .any(|scenario| scenario.manual_cli_only() && *scenario != ScenarioId::SecurityReview)
-    {
-        return Err(
-            "this manually prepared scenario can only be started with the local CLI".into(),
-        );
-    }
     if request.technical_retries > 0
         && selected
             .iter()

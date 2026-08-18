@@ -201,8 +201,20 @@ pub(super) fn execution_summary(
     }))
 }
 
-pub(super) fn execution_detail_value(metadata: &RunMetadata, report: &E2eReport) -> Result<Value> {
-    let summary = execution_summary(metadata, Some(report))?;
+/// Build the detail payload even when the runner has not persisted a final
+/// report yet. Active and cancelled runs are still real executions: the
+/// metadata contains their identity and lifecycle state, while `reports` is
+/// empty until a report becomes available.
+pub(super) fn execution_detail_value_optional(
+    metadata: &RunMetadata,
+    report: Option<&E2eReport>,
+) -> Result<Value> {
+    let summary = execution_summary(metadata, report)?;
+    let Some(report) = report else {
+        let mut detail = summary;
+        detail["reports"] = json!([]);
+        return Ok(detail);
+    };
     let subject_id = slug(&format!(
         "{}-{}",
         report.subject.provider, report.subject.model

@@ -1,5 +1,8 @@
 .harness-e2e-console-shell {
   min-width: 0;
+  /* Keep extension z-indexes (for example the sticky dashboard header) below
+   * Console-owned overlays such as Settings. */
+  isolation: isolate;
 }
 
 .harness-e2e-console-main {

@@ -29,9 +29,9 @@ def report(execution_id: str, e2e_revision: str = "1" * 40) -> dict:
         "judge_protocol": None,
         "scenarios": [
             {
-                "scenario_id": "coordination.1",
+                "scenario_id": "todo_worker_simple",
                 "scenario_version": 1,
-                "case_id": "coordination.1:v1:seed-1",
+                "case_id": "todo_worker_simple:v1:seed-1",
                 "case": {"seed": 1, "inputs_sha256": "sha256:" + "b" * 64},
                 "execution_policy": {"max_turns": 5},
                 "passed": True,
@@ -92,7 +92,7 @@ class ShadowParityTests(unittest.TestCase):
         )
         result = parity.compare(report("primary"), shadow)
         self.assertFalse(result["equivalent"])
-        self.assertEqual(result["mismatches"][0]["field"], "cases.coordination.1::coordination.1:v1:seed-1.runs")
+        self.assertEqual(result["mismatches"][0]["field"], "cases.todo_worker_simple::todo_worker_simple:v1:seed-1.runs")
 
     def test_requires_three_unique_consecutive_equivalent_windows(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

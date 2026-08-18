@@ -29,6 +29,9 @@ const FINAL_ASSESSMENT_SYSTEM_PROMPT: &str =
 Assess only the supplied sanitized, bounded facts and immutable evidence identities. \
 The system_status is authoritative: your advisory conclusion must never hide, replace, or promote \
 an objective, technical, infrastructure, or resource failure. Keep factual observations in facts; \
+When validation is supplied, assess construction only from that validation evidence. Describe an \
+in-run result such as 3/3 only as observed repeatability, never as broad reliability. If the \
+longitudinal cohort is ineligible, state that limitation explicitly. Never contradict a hard gate. \
 keep interpretations in strengths and concerns; make recommendation exclusively a concrete \
 harness or test remediation plan for the next execution (collection, serialization, fixtures, \
 scenario gates, provider transport, resource budgets, or assessment schema). Never recommend \
@@ -480,7 +483,10 @@ Every evidence entry must exactly copy an immutable identity from the supplied i
 invent or alter artifact ids, hashes, or locators. If evidence identities are available, cite at \
 least one. The recommendation must be a harness/test remediation step for the next execution, \
 never a release, product, or model-quality recommendation. Use this exact object shape and replace \
-only the example conclusions:\n{}",
+only the example conclusions. When the input contains validation, construction claims must come \
+only from its probes and bundle identity; in-run repeatability is not longitudinal reliability, \
+and an ineligible longitudinal cohort must appear in limitations. Never override or contradict \
+system_status or hard-gate assessments:\n{}",
         serde_json::to_string(input).context("serialize final assessment input")?,
         serde_json::to_string(&final_assessment_response_schema())
             .context("serialize final assessment response schema")?,
@@ -1296,6 +1302,7 @@ mod tests {
                 succeeded: true,
                 failures: Vec::new(),
             },
+            validation: None,
             excerpts: vec![crate::assessment::FinalAssessmentExcerpt {
                 kind: "transcript".into(),
                 summary: "Sanitized transcript identity only.".into(),

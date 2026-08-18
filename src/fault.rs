@@ -1008,15 +1008,16 @@ mod tests {
             asset_redaction: Default::default(),
         };
         let scenario = E2eScenarioReport {
-            scenario_id: "coordination.4".into(),
+            scenario_id: "todo_worker_simple".into(),
             case_id: "case-1".into(),
             scenario_version: 1,
             case: None,
             execution_policy: ExecutionPolicy {
                 max_turns: 10,
                 max_output_tokens: Some(1_000),
-                max_total_tokens: 2_000,
+                max_total_tokens: Some(2_000),
                 stuck_timeout_seconds: 30,
+                max_validation_retries: None,
             },
             aggregate: ScenarioAggregate {
                 runs: 1,

@@ -14,7 +14,9 @@ use crate::assessment::{
     AiAssessmentAvailability, AiFinalAssessment, AnalyzerIdentity, AnalyzerUsage,
     AssessmentOutcome, AssessmentResult, AssessmentScore, AssessmentTarget, AssessmentTargetKind,
     EvidenceReference, FinalAssessmentCleanup, FinalAssessmentExcerpt, FinalAssessmentInput,
-    FinalAssessmentMetric, FinalAssessmentSubject, SystemStatus,
+    FinalAssessmentLongitudinalRobustness, FinalAssessmentMetric, FinalAssessmentSubject,
+    FinalAssessmentValidation, FinalAssessmentValidationCoverage, FinalAssessmentValidationProbe,
+    FinalAssessmentValidationRepeatability, SystemStatus,
 };
 use crate::asset::{self, AssetCaptureLimits};
 use crate::context::E2eContext;
@@ -27,9 +29,9 @@ use crate::report::{
 };
 use crate::scenarios::common;
 use crate::scenarios::{
-    CriterionAward, MaterializedScenario, ObjectiveEvaluation, ScenarioCase,
-    ScenarioDeliverableCapture, ScenarioExecutionKind, ScenarioId, ScenarioObservation,
-    ScenarioSpec,
+    CapturedDeliverableContent, CriterionAward, MaterializedScenario, ObjectiveEvaluation,
+    ScenarioCase, ScenarioDeliverableCapture, ScenarioExecutionKind, ScenarioId,
+    ScenarioObservation, ScenarioSpec,
 };
 use crate::wire::{
     ControlPlaneEvidence, FunctionPolicy, MessageInput, Model, SendOptions, SendRequest,
@@ -735,6 +737,20 @@ fn final_assessment_input(
             evidence: EvidenceReference::from(reference),
         })
         .collect();
+    let validation = final_assessment_validation(scenario, run);
+    if validation.is_none()
+        && matches!(
+            scenario.scenario_id.as_str(),
+            crate::scenarios::todo_worker::SIMPLE_ID
+                | crate::scenarios::todo_worker::PLANNED_ID
+                | crate::scenarios::todo_worker::SELF_VALIDATING_ID
+        )
+    {
+        limitations.push(
+            "No complete Todo validation bundle was available for the final assessment projection."
+                .into(),
+        );
+    }
 
     FinalAssessmentInput {
         subject: FinalAssessmentSubject {
@@ -755,9 +771,137 @@ fn final_assessment_input(
             succeeded: cleanup_failures.is_empty(),
             failures: cleanup_failures,
         },
+        validation,
         excerpts,
         limitations,
     }
+}
+
+fn final_assessment_validation(
+    scenario: &E2eScenarioReport,
+    run: &E2eRunReport,
+) -> Option<FinalAssessmentValidation> {
+    use crate::scenarios::todo_worker::{ProbeOutcome, ValidationEvidenceBundle};
+
+    let atomic = run.deliverables.iter().find_map(|deliverable| {
+        if deliverable.kind != "todo_validation_evidence" {
+            return None;
+        }
+        let CapturedDeliverableContent::Json(value) = &deliverable.content else {
+            return None;
+        };
+        Some((
+            serde_json::from_value::<ValidationEvidenceBundle>(value.clone()).ok()?,
+            deliverable.artifact.as_ref()?.clone(),
+        ))
+    });
+    let composite = run.semantic_tests.iter().find_map(|step| {
+        let output = step.outputs.get("validation_bundle")?;
+        let bundle =
+            serde_json::from_value::<ValidationEvidenceBundle>(output.value.clone()).ok()?;
+        let reference = step
+            .assets
+            .iter()
+            .find(|asset| asset.kind == "todo_validation_evidence")?
+            .artifact
+            .clone();
+        Some((bundle, reference))
+    });
+    let (bundle, reference) = atomic.or(composite)?;
+    let final_attempt = bundle.attempts.last()?;
+    let mut grouped = std::collections::BTreeMap::<String, Vec<_>>::new();
+    for probe in &final_attempt.probes {
+        grouped.entry(probe.id.clone()).or_default().push(probe);
+    }
+    let probes = grouped
+        .into_iter()
+        .take(12)
+        .map(|(id, observations)| {
+            let outcome = if observations
+                .iter()
+                .all(|probe| probe.outcome == ProbeOutcome::Passed)
+            {
+                "passed"
+            } else if observations
+                .iter()
+                .any(|probe| probe.outcome == ProbeOutcome::InfrastructureError)
+            {
+                "infrastructure_error"
+            } else if observations
+                .iter()
+                .any(|probe| probe.outcome == ProbeOutcome::Failed)
+            {
+                "failed"
+            } else {
+                "not_evaluated"
+            };
+            let summary = observations
+                .iter()
+                .map(|probe| {
+                    format!(
+                        "repetition={} outcome={:?} observed={}",
+                        probe.repetition,
+                        probe.outcome,
+                        serde_json::to_string(&bounded_json(&probe.observed, 0))
+                            .unwrap_or_default()
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join("; ");
+            FinalAssessmentValidationProbe {
+                id,
+                outcome: outcome.into(),
+                summary: summary.chars().take(1_000).collect(),
+            }
+        })
+        .collect();
+    let validation_attempts = bundle.attempts.len().try_into().unwrap_or(u32::MAX);
+    let correction_attempts = bundle.nudges.min(validation_attempts.saturating_sub(1));
+    let robustness = &scenario.aggregate.robustness;
+    let mut limitations = bundle
+        .limitations
+        .iter()
+        .map(|value| bounded_text(value))
+        .collect::<Vec<_>>();
+    if !robustness.eligible {
+        limitations.push(format!(
+            "Longitudinal reliability is unavailable: {} comparable run(s), minimum {}.",
+            robustness.sample_size, robustness.minimum_sample_size
+        ));
+    }
+    Some(FinalAssessmentValidation {
+        bundle: EvidenceReference::from(&reference),
+        contract_sha256: bundle.contract_sha256,
+        plan_sha256: bundle.plan_sha256,
+        candidate_sha256: bundle.subject.candidate_sha256,
+        probes,
+        coverage: FinalAssessmentValidationCoverage {
+            required: bundle.coverage.required,
+            covered: bundle.coverage.covered,
+            omitted: bundle.coverage.omitted,
+            complete: bundle.coverage.complete,
+        },
+        validation_attempts,
+        correction_attempts,
+        repeatability: FinalAssessmentValidationRepeatability {
+            planned: bundle.repeatability.planned,
+            completed: bundle.repeatability.completed,
+            passed: bundle.repeatability.passed,
+            interpretation: format!(
+                "{}/{} planned CRUD cycles passed within this run; this is observed in-run repeatability, not broad reliability.",
+                bundle.repeatability.passed, bundle.repeatability.planned
+            ),
+        },
+        longitudinal_robustness: FinalAssessmentLongitudinalRobustness {
+            sample_size: robustness.sample_size,
+            minimum_sample_size: robustness.minimum_sample_size,
+            eligible: robustness.eligible,
+            technical_failure_rate: robustness.technical_failure_rate,
+            flaky_rate: robustness.flaky_rate,
+            unavailable_reasons: robustness.unavailable.clone(),
+        },
+        limitations,
+    })
 }
 
 fn final_assessment_metrics(
@@ -1762,7 +1906,8 @@ async fn execute(
                 options: Some(SendOptions {
                     max_turns: Some(spec.execution.max_turns),
                     max_output_tokens: spec.execution.max_output_tokens,
-                    max_total_tokens: Some(spec.execution.max_total_tokens),
+                    max_total_tokens: spec.execution.max_total_tokens,
+                    max_validation_retries: spec.execution.max_validation_retries,
                     functions: Some(e2e_function_policy(spec)),
                     metadata: filesystem_metadata,
                 }),
@@ -2607,8 +2752,9 @@ mod tests {
             execution: ExecutionPolicy {
                 max_turns: 1,
                 max_output_tokens: Some(1),
-                max_total_tokens: 1,
+                max_total_tokens: Some(1),
                 stuck_timeout_seconds: 1,
+                max_validation_retries: None,
             },
             denied_functions: &[],
             criteria: vec![CriterionSpec::advisory_judge("objective", 100, "objective")],
@@ -3056,8 +3202,9 @@ mod tests {
             ExecutionPolicy {
                 max_turns: 1,
                 max_output_tokens: Some(100),
-                max_total_tokens: 100,
+                max_total_tokens: Some(100),
                 stuck_timeout_seconds: 1,
+                max_validation_retries: None,
             },
             vec![run],
         );

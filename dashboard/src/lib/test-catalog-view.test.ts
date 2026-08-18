@@ -136,7 +136,7 @@ describe('versioned test catalog view', () => {
   const comparable = row('direct_answer', 'compatible', side(), side())
   const changed = row('persistent_state', 'contract_changed', side(), side())
   const oneSided = row('reactive_automation', 'missing_side', null, side(true))
-  const neverRun = row('coordination.1', 'missing_side', null, null)
+  const neverRun = row('todo_worker_simple', 'missing_side', null, null)
 
   it('keeps changed contracts separate from missing evidence', () => {
     expect(matchesResultFilter(changed, 'changed')).toBe(true)
@@ -154,7 +154,7 @@ describe('versioned test catalog view', () => {
       'direct_answer',
       'persistent_state',
       'reactive_automation',
-      'coordination.1',
+      'todo_worker_simple',
     ])
     expect(hasRetainedEvidence(neverRun)).toBe(false)
     expect(hasRetainedEvidence(oneSided)).toBe(true)

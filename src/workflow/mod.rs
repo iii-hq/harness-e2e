@@ -4,6 +4,7 @@ pub mod incident_response;
 mod run;
 mod scheduler;
 pub mod security_scan;
+pub mod todo_worker;
 
 use std::sync::Arc;
 
@@ -45,6 +46,7 @@ pub fn composite_definition(scenario: ScenarioId) -> Option<WorkflowDefinitionV1
     match scenario {
         ScenarioId::SecurityReview => Some(security_scan::definition()),
         ScenarioId::IncidentResponse => Some(incident_response::definition()),
+        ScenarioId::TodoWorkerPlanned => Some(todo_worker::definition()),
         _ => None,
     }
 }
@@ -90,6 +92,13 @@ pub fn composite_descriptor_catalog(scenarios: &[ScenarioId]) -> Result<StepCata
                 }
             }
         }
+        if scenario == &ScenarioId::TodoWorkerPlanned {
+            for descriptor in todo_worker::descriptors_only()? {
+                if catalog.get(&descriptor.id, descriptor.version).is_none() {
+                    catalog.register_descriptor(descriptor)?;
+                }
+            }
+        }
     }
     Ok(catalog)
 }
@@ -115,13 +124,15 @@ pub fn composite_runtime(
         node.step_type == builtin::HARNESS_STEP_ID
             && node.step_version == builtin::HARNESS_STEP_VERSION_V2
     }) {
-        register_harness_step_v2(
-            &mut catalog,
-            context.clone(),
-            model,
-            provider,
-            incident_response::harness_policy()?,
-        )?;
+        let policy = match scenario {
+            ScenarioId::IncidentResponse => incident_response::harness_policy()?,
+            ScenarioId::TodoWorkerPlanned => todo_worker::harness_policy()?,
+            _ => bail!(
+                "scenario '{}' uses Harness v2 without a workspace policy",
+                scenario.as_str()
+            ),
+        };
+        register_harness_step_v2(&mut catalog, context.clone(), model, provider, policy)?;
     }
     let cleanup_hook = match scenario {
         ScenarioId::SecurityReview => {
@@ -130,6 +141,7 @@ pub fn composite_runtime(
         ScenarioId::IncidentResponse => {
             incident_response::register_incident_response_steps(&mut catalog, context)?
         }
+        ScenarioId::TodoWorkerPlanned => todo_worker::register_steps(&mut catalog, context)?,
         _ => bail!("scenario '{}' has no composite runtime", scenario.as_str()),
     };
     definition.validate(&catalog)?;
