@@ -126,6 +126,60 @@ pub(in crate::scenarios) fn scope(run_id: &str) -> String {
     format!("e2e:{run_id}")
 }
 
+/// The per-run directory a filesystem-backed scenario owns.
+pub(in crate::scenarios) fn workspace_root(scenario_id: &str, run_id: &str) -> PathBuf {
+    let base = std::env::var_os("HARNESS_E2E_RUN_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(std::env::temp_dir);
+    let base = std::fs::canonicalize(&base).unwrap_or(base);
+    base.join("scenario-workspaces")
+        .join(format!("{scenario_id}-{run_id}"))
+}
+
+/// A family's shared capabilities plus whatever one scenario adds.
+pub(in crate::scenarios) fn capabilities(base: &[&str], extra: &[&str]) -> Vec<String> {
+    base.iter()
+        .chain(extra)
+        .map(|capability| (*capability).to_string())
+        .collect()
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(in crate::scenarios) fn family_case(
+    id: &'static str,
+    version: u32,
+    seed: u64,
+    inputs: Value,
+    profile: super::ComplexityProfile,
+    base_capabilities: &[&str],
+    extra_capabilities: &[&str],
+    contract: DeliverableContract,
+) -> anyhow::Result<super::ScenarioCase> {
+    super::ScenarioCase::new(
+        id,
+        version,
+        seed,
+        inputs,
+        profile,
+        capabilities(base_capabilities, extra_capabilities),
+        contract,
+    )
+}
+
+/// Sort JSON objects by one string field so a comparison ignores the order
+/// the agent happened to emit.
+pub(in crate::scenarios) fn sorted_by(values: &[Value], field: &str) -> Vec<Value> {
+    let mut values = values.to_vec();
+    values.sort_by_key(|value| {
+        value
+            .get(field)
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_string()
+    });
+    values
+}
+
 pub(in crate::scenarios) fn calls_of<'a>(
     calls: &'a [ObservedFunctionCall],
     function_id: &str,

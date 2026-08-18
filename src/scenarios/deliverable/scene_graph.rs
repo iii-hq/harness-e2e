@@ -84,17 +84,6 @@ fn expected_graph() -> Vec<Value> {
         .collect()
 }
 
-fn sorted(nodes: &[Value]) -> Vec<Value> {
-    let mut nodes = nodes.to_vec();
-    nodes.sort_by_key(|node| {
-        node.get("name")
-            .and_then(Value::as_str)
-            .unwrap_or_default()
-            .to_string()
-    });
-    nodes
-}
-
 pub fn scenario(run_id: &str) -> ScenarioSpec {
     Blueprint {
         id: ID,
@@ -181,7 +170,7 @@ fn evaluate<'a>(
 
         Ok(assessment::build_evaluation([
             GRAPH_EXACT.full_or_zero(
-                sorted(&nodes) == sorted(&expected_graph()),
+                kit::sorted_by(&nodes, "name") == kit::sorted_by(&expected_graph(), "name"),
                 format!("observed {} node(s) in `{GRAPH_FILE}`", nodes.len()),
             ),
             MODULE_CONSISTENT.full_or_zero(
@@ -255,6 +244,9 @@ mod tests {
     fn node_comparison_ignores_declaration_order() {
         let mut shuffled = expected_graph();
         shuffled.reverse();
-        assert_eq!(sorted(&shuffled), sorted(&expected_graph()));
+        assert_eq!(
+            kit::sorted_by(&shuffled, "name"),
+            kit::sorted_by(&expected_graph(), "name")
+        );
     }
 }

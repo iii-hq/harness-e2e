@@ -59,18 +59,6 @@ fn expected_routes() -> Vec<Value> {
         .collect()
 }
 
-fn sorted(routes: &[Value]) -> Vec<Value> {
-    let mut routes = routes.to_vec();
-    routes.sort_by_key(|route| {
-        route
-            .get("path")
-            .and_then(Value::as_str)
-            .unwrap_or_default()
-            .to_string()
-    });
-    routes
-}
-
 pub fn scenario(run_id: &str) -> ScenarioSpec {
     Blueprint {
         id: ID,
@@ -201,7 +189,7 @@ fn evaluate<'a>(
                 format!("external reference(s): {:?}", evidence.external),
             ),
             ROUTES_DECLARED.full_or_zero(
-                sorted(&evidence.routes) == sorted(&expected_routes())
+                kit::sorted_by(&evidence.routes, "path") == kit::sorted_by(&expected_routes(), "path")
                     && observation.response.contains("PAGES:2 FILES:4"),
                 format!("observed routes {:?}", evidence.routes),
             ),

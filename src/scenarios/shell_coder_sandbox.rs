@@ -955,10 +955,5 @@ fn sandbox_name(run_id: &str) -> String {
 }
 
 fn workspace_root(run_id: &str) -> PathBuf {
-    let base = std::env::var_os("HARNESS_E2E_RUN_DIR")
-        .map(PathBuf::from)
-        .unwrap_or_else(std::env::temp_dir);
-    let base = std::fs::canonicalize(&base).unwrap_or(base);
-    base.join("scenario-workspaces")
-        .join(format!("{ID}-{run_id}"))
+    super::kit::workspace_root(ID, run_id)
 }

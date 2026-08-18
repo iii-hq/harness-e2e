@@ -7,12 +7,7 @@ use std::path::{Path, PathBuf};
 use serde_json::Value;
 
 pub(in crate::scenarios) fn root(scenario_id: &str, run_id: &str) -> PathBuf {
-    let base = std::env::var_os("HARNESS_E2E_RUN_DIR")
-        .map(PathBuf::from)
-        .unwrap_or_else(std::env::temp_dir);
-    let base = std::fs::canonicalize(&base).unwrap_or(base);
-    base.join("scenario-workspaces")
-        .join(format!("{scenario_id}-{run_id}"))
+    crate::scenarios::kit::workspace_root(scenario_id, run_id)
 }
 
 pub(in crate::scenarios) fn read(root: &Path, relative: &str) -> Option<String> {

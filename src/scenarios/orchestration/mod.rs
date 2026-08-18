@@ -19,15 +19,8 @@ use crate::scenarios::{ComplexityProfile, DeliverableContract, ScenarioCase};
 
 pub(in crate::scenarios) const DELIVERABLE_KIND: &str = "orchestration_evidence";
 
-pub(in crate::scenarios) fn capabilities(extra: &[&str]) -> Vec<String> {
-    let mut capabilities = vec![
-        "e2e::control-plane-v1".to_string(),
-        "iii::functions".to_string(),
-        "iii::state".to_string(),
-    ];
-    capabilities.extend(extra.iter().map(|capability| (*capability).to_string()));
-    capabilities
-}
+pub(in crate::scenarios) const CAPABILITIES: &[&str] =
+    &["e2e::control-plane-v1", "iii::functions", "iii::state"];
 
 pub(in crate::scenarios) fn graph_profile(
     dependency_depth: u8,
@@ -70,13 +63,14 @@ pub(in crate::scenarios) fn case(
     extra_capabilities: &[&str],
     contract: DeliverableContract,
 ) -> anyhow::Result<ScenarioCase> {
-    ScenarioCase::new(
+    kit::family_case(
         id,
         version,
         seed,
         inputs,
         profile,
-        capabilities(extra_capabilities),
+        CAPABILITIES,
+        extra_capabilities,
         contract,
     )
 }
