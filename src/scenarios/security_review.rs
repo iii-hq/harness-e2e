@@ -25,6 +25,7 @@ pub fn scenario(_run_id: &str) -> ScenarioSpec {
             max_output_tokens: None,
             max_total_tokens: 500_000,
             stuck_timeout_seconds: 420,
+            max_validation_retries: None,
         },
         denied_functions: &[],
         criteria: vec![

@@ -134,6 +134,11 @@ pub struct ExecutionPolicy {
     /// Stop only after this many seconds without observable useful progress.
     /// Large scenarios have no fixed wall-clock deadline.
     pub stuck_timeout_seconds: u64,
+    /// How many times a post-turn validator may send the session back to
+    /// work. A scenario whose job outlasts one turn needs more than the
+    /// harness default, which is sized for a correction, not a build.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_validation_retries: Option<u32>,
 }
 
 impl ExecutionPolicy {

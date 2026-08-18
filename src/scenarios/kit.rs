@@ -54,6 +54,26 @@ pub(in crate::scenarios) const fn policy(
         max_output_tokens: Some(8_192),
         max_total_tokens,
         stuck_timeout_seconds,
+        max_validation_retries: None,
+    }
+}
+
+/// For work that does not fit in one reply: a larger output cap, and a
+/// validation budget big enough for a validator to keep sending the session
+/// back to the job.
+pub(in crate::scenarios) const fn long_policy(
+    max_turns: u32,
+    max_output_tokens: u64,
+    max_total_tokens: u64,
+    stuck_timeout_seconds: u64,
+    max_validation_retries: u32,
+) -> ExecutionPolicy {
+    ExecutionPolicy {
+        max_turns,
+        max_output_tokens: Some(max_output_tokens),
+        max_total_tokens,
+        stuck_timeout_seconds,
+        max_validation_retries: Some(max_validation_retries),
     }
 }
 

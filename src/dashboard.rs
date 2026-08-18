@@ -269,6 +269,7 @@ mod tests {
                     max_output_tokens: Some(10),
                     max_total_tokens: 100,
                     stuck_timeout_seconds: 10,
+                    max_validation_retries: None,
                 },
                 vec![run],
             )],
@@ -499,6 +500,7 @@ mod tests {
                     max_output_tokens: Some(10),
                     max_total_tokens: 100,
                     stuck_timeout_seconds: 10,
+                    max_validation_retries: None,
                 },
                 runs,
             )];

@@ -183,6 +183,7 @@ impl StepExecutor for HarnessStepExecutor {
                         max_turns: Some(config.max_turns),
                         max_output_tokens: config.max_output_tokens,
                         max_total_tokens: Some(config.max_total_tokens),
+                        max_validation_retries: None,
                         functions: Some(FunctionPolicy {
                             allow: vec!["*".into()],
                             deny: vec!["e2e::*".into()],

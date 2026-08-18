@@ -12,6 +12,7 @@
 use std::path::Path;
 use std::time::{Duration, Instant};
 
+use serde::Serialize;
 use serde_json::{json, Value};
 
 use crate::context::E2eContext;
@@ -19,6 +20,7 @@ use crate::scenarios::assessment::{self, AssessmentSpec};
 use crate::scenarios::build::repo;
 use crate::scenarios::deliverable::workspace;
 use crate::scenarios::kit::{self, Blueprint};
+use crate::scenarios::probe;
 use crate::scenarios::{
     CapturedInvariant, CleanupFuture, DeliverableCaptureFuture, EvaluationFuture,
     MaterializedScenario, ScenarioObservation, ScenarioSpec,
@@ -38,6 +40,11 @@ const RENDER_TIMEOUT: Duration = Duration::from_secs(300);
 /// Full marks for the advisory speed criteria at these values.
 const TARGET_SPEEDUP: f64 = 5.0;
 const TARGET_STARTUP_MS: f64 = 10.0;
+const HOOK_TYPE: &str = "harness::hook::post-turn";
+const HOOK_POINT: &str = "post_turn";
+const READY: &str = "PORT_READY";
+/// How many times the validator may send the session back to the job.
+const CONTINUATIONS: u32 = 80;
 
 const REFERENCE_FILES: [(&str, &str); 7] = [
     (
@@ -234,13 +241,184 @@ fn write_scripts(root: &Path, directory: &str, scripts: &[(String, Value)]) -> a
     Ok(())
 }
 
-fn setup<'a>(_context: &'a E2eContext, run_id: &'a str) -> CleanupFuture<'a> {
+/// The hook contract's answer shape.
+#[derive(Debug, Serialize)]
+struct HookVerdict {
+    decision: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    reason: Option<String>,
+}
+
+impl HookVerdict {
+    fn carry_on() -> Self {
+        Self {
+            decision: "continue".into(),
+            reason: None,
+        }
+    }
+
+    fn value(self) -> Value {
+        serde_json::to_value(self).unwrap_or_else(|_| json!({ "decision": "continue" }))
+    }
+}
+
+fn keep_working(reason: impl Into<String>) -> HookVerdict {
+    HookVerdict {
+        decision: "deny".into(),
+        reason: Some(reason.into()),
+    }
+}
+
+/// What exists so far, in one line, so a session that has been through
+/// compaction can re-orient without re-reading the tree.
+fn progress_note(root: &Path) -> String {
+    let present = |relative: &str| {
+        if root.join(relative).exists() {
+            "yes"
+        } else {
+            "no"
+        }
+    };
+    format!(
+        "so far: {MANIFEST} {}, port/src {}, {BINARY} {}",
+        present(MANIFEST),
+        present("port/src"),
+        present(BINARY)
+    )
+}
+
+/// A turn ending is not the job ending. Until the port builds and matches the
+/// reference on the sample scripts, every turn is sent back to work with what
+/// is missing; only then does the validator let the session finish.
+async fn continuation_verdict(root: &Path, claimed_ready: bool) -> HookVerdict {
+    if !root.join(MANIFEST).exists() {
+        return keep_working(format!(
+            "The port does not exist yet: there is no {MANIFEST}. Keep working; {}",
+            progress_note(root)
+        ));
+    }
+    if !claimed_ready {
+        return keep_working(format!(
+            "Keep going until the port builds and renders the corpus scripts exactly like the \
+             reference, then reply with exactly {READY}. {}",
+            progress_note(root)
+        ));
+    }
+
+    let build = repo::run(
+        root,
+        "cargo",
+        &["build", "--release", "--manifest-path", MANIFEST],
+        BUILD_TIMEOUT,
+    )
+    .await;
+    match build {
+        Some(run) if run.status == Some(0) => {}
+        Some(run) => {
+            let tail: String = run.stderr.chars().rev().take(600).collect();
+            let tail: String = tail.chars().rev().collect();
+            return keep_working(format!(
+                "The release build failed. Fix it and try again:\n{tail}"
+            ));
+        }
+        None => {
+            return keep_working(
+                "The release build did not finish inside its time budget. Simplify the build and \
+                 try again.",
+            )
+        }
+    }
+
+    for (name, _) in sample_scripts() {
+        let script = format!("{SAMPLE_SCRIPTS}/{name}");
+        let expected = repo::run(
+            root,
+            "python3",
+            &["-m", REFERENCE, "render", &script],
+            RENDER_TIMEOUT,
+        )
+        .await;
+        let observed = repo::run(root, BINARY, &["render", &script], RENDER_TIMEOUT).await;
+        match (expected, observed) {
+            (Some(expected), Some(observed)) if expected.stdout == observed.stdout => {}
+            (Some(expected), Some(observed)) => {
+                let first = expected
+                    .stdout
+                    .char_indices()
+                    .zip(observed.stdout.chars())
+                    .find(|((_, left), right)| left != right)
+                    .map(|((index, _), _)| index);
+                return keep_working(format!(
+                    "`{script}` does not match the reference yet: first difference at byte \
+                     {first:?} of {} expected bytes. Compare the two outputs and fix the port.",
+                    expected.stdout.len()
+                ));
+            }
+            _ => {
+                return keep_working(format!(
+                    "`{script}` could not be rendered by both implementations. Make \
+                     `{BINARY} render <script>` work first."
+                ))
+            }
+        }
+    }
+
+    HookVerdict::carry_on()
+}
+
+fn setup<'a>(context: &'a E2eContext, run_id: &'a str) -> CleanupFuture<'a> {
     Box::pin(async move {
         let root = workspace::root(ID, run_id);
         for (name, source) in REFERENCE_FILES {
             workspace::write(&root, &format!("{REFERENCE}/{name}"), source)?;
         }
-        write_scripts(&root, SAMPLE_SCRIPTS, &sample_scripts())
+        write_scripts(&root, SAMPLE_SCRIPTS, &sample_scripts())?;
+
+        let validator = probe::id("port_gate", run_id);
+        let workspace_root = root.clone();
+        probe::register(
+            context,
+            validator.clone(),
+            "E2E port validator: sends the session back to work until the port builds and matches \
+             the reference.",
+            move |envelope: Value| {
+                let workspace_root = workspace_root.clone();
+                async move {
+                    // A wrong hook point means this validator is gating
+                    // something other than turn completion: say so by letting
+                    // it through rather than blocking the wrong thing.
+                    if envelope.get("point").and_then(Value::as_str) != Some(HOOK_POINT) {
+                        return Ok(HookVerdict::carry_on().value());
+                    }
+                    let claimed_ready = match envelope.get("result") {
+                        Some(Value::String(text)) => text.contains(READY),
+                        Some(other) => other.to_string().contains(READY),
+                        None => false,
+                    };
+                    Ok(continuation_verdict(&workspace_root, claimed_ready)
+                        .await
+                        .value())
+                }
+            },
+        );
+
+        // The runner installs the binding itself, scoped to this run's
+        // session: a scenario that depends on the session registering its own
+        // continuation is one prompt-following slip away from ending early.
+        context
+            .trigger_value(
+                "engine::register_trigger",
+                json!({
+                    "trigger_type": HOOK_TYPE,
+                    "function_id": validator,
+                    "config": {
+                        "sessions": [format!("e2e_{run_id}")],
+                        "timeout_ms": 900_000_u64,
+                    },
+                }),
+            )
+            .await?;
+        Ok(())
     })
 }
 
@@ -275,10 +453,13 @@ pub fn scenario(run_id: &str) -> ScenarioSpec {
              checked against scripts you have not seen, covering every effect, every easing \
              curve, multi-stop gradients, a single-frame script, text wider than the declared \
              width, and other seeds. Match the reference's behaviour, not these files.\n\n\
-             When the port is complete, reply with exactly one line: `PORT_READY`."
+             A validator checks your work at the end of every turn and will send you back to \
+             it with what is still wrong, so do not stop early: keep going until it accepts. \
+             When the port builds and renders the sample scripts exactly like the reference, \
+             reply with exactly one line: `{READY}`."
         ),
         filesystem_root: Some(workspace::root(ID, run_id)),
-        execution: kit::policy(400, 12_000_000, 3_600),
+        execution: kit::long_policy(400, 32_768, 12_000_000, 3_600, CONTINUATIONS),
         assessments: ASSESSMENTS,
         setup: Some(setup),
         evaluate,
@@ -607,6 +788,7 @@ fn capture<'a>(
 
 fn cleanup<'a>(_context: &'a E2eContext, run_id: &'a str) -> CleanupFuture<'a> {
     Box::pin(async move {
+        probe::release(run_id);
         workspace::remove(&workspace::root(ID, run_id));
         Ok(())
     })

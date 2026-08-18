@@ -1620,6 +1620,7 @@ async fn execute(
                     max_turns: Some(spec.execution.max_turns),
                     max_output_tokens: spec.execution.max_output_tokens,
                     max_total_tokens: Some(spec.execution.max_total_tokens),
+                    max_validation_retries: spec.execution.max_validation_retries,
                     functions: Some(e2e_function_policy(spec)),
                     metadata: filesystem_metadata,
                 }),
@@ -2460,6 +2461,7 @@ mod tests {
                 max_output_tokens: Some(1),
                 max_total_tokens: 1,
                 stuck_timeout_seconds: 1,
+                max_validation_retries: None,
             },
             denied_functions: &[],
             criteria: vec![CriterionSpec::advisory_judge("objective", 100, "objective")],
@@ -2898,6 +2900,7 @@ mod tests {
                 max_output_tokens: Some(100),
                 max_total_tokens: 100,
                 stuck_timeout_seconds: 1,
+                max_validation_retries: None,
             },
             vec![run],
         );

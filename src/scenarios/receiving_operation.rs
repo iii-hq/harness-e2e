@@ -122,6 +122,7 @@ fn scenario_for_case(run_id: &str) -> ScenarioSpec {
             max_output_tokens: None,
             max_total_tokens: 1_200_000,
             stuck_timeout_seconds: 360,
+            max_validation_retries: None,
         },
         denied_functions: &["state::*"],
         criteria: assessment::criteria(ASSESSMENTS),

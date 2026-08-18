@@ -128,6 +128,8 @@ pub struct SendOptions {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub max_total_tokens: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub max_validation_retries: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub functions: Option<FunctionPolicy>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub metadata: Option<Value>,
@@ -460,6 +462,11 @@ const SEND_REQUEST: &[SchemaField] = &[
     },
     SchemaField {
         path: "options.max_total_tokens",
+        kind: JsonType::Integer,
+        required: false,
+    },
+    SchemaField {
+        path: "options.max_validation_retries",
         kind: JsonType::Integer,
         required: false,
     },
