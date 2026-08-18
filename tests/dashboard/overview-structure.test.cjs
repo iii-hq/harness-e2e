@@ -209,21 +209,41 @@ test('organizes detail into progressive disclosure sections', () => {
     assert.match(executionPage, new RegExp(`id=\\"${section}\\"`))
   }
   assert.match(executionPage, /hashForExecution\(executionId, item\.id\)/)
-  assert.match(executionPage, /detail-index hidden sticky/)
-  assert.match(executionPage, /max-\[840px\]:grid/)
+  assert.match(executionPage, /detail-index sticky top-16/)
+  assert.doesNotMatch(executionPage, /detail-index hidden/)
   assert.match(
     executionPage,
     /anchor === 'evidence' \|\| anchor === 'raw-data'\) return 'technical'/,
   )
+  assert.match(executionPage, /if \(!anchor \|\| !detail\) return/)
+  assert.match(executionPage, /\[anchor, detail\]/)
   assert.doesNotMatch(executionPage, /id="evidence"|Evidence register/)
   assert.match(executionPage, /AssessmentWorkspace detail/)
+  assert.match(executionPage, /SemanticTestFlow detail/)
   assert.match(executionPage, /diagnostic runs/)
   assert.match(executionPage, /onTranscript/)
   assert.doesNotMatch(executionPage, /Open transcript/)
   assert.match(executionPage, /aggregateAssessmentMetrics/)
-  assert.match(executionPage, /Execution indicators/)
-  assert.match(executionPage, /Total tokens/)
-  assert.doesNotMatch(executionPage, /buildHarnessRecommendation|Next run plan/)
+  assert.match(executionPage, /buildHarnessRecommendation/)
+  assert.match(executionPage, /Passed objectively; advisory review found gaps/)
+  assert.match(executionPage, /Recommended next step/)
+  assert.match(executionPage, /Primary concern/)
+  assert.match(executionPage, /Objective hard gates/)
+  assert.match(executionPage, /Seeded detection/)
+  assert.match(executionPage, /Semantic steps/)
+  assert.match(executionPage, /Workflow runtime/)
+  assert.match(executionPage, /AI quality/)
+  assert.match(executionPage, /Scenario evidence/)
+  assert.match(executionPage, /performance and evidence|performance/)
+  assert.match(executionPage, /Primary capability metrics come first/)
+  assert.match(executionPage, /Workflow trace/)
+  assert.ok(
+    executionPage.indexOf('<AssessmentWorkspace detail={detail}') <
+      executionPage.indexOf('<SemanticTestFlow detail={detail}'),
+    'scenario metrics should render before the workflow trace',
+  )
+  assert.match(executionPage, /@\/design-system\/styles\.css/)
+  assert.doesNotMatch(executionPage, /StatusPill|01 · Summary|02 · Results/)
   assert.match(executionPage, /Preview raw JSON/)
   assert.match(transcript, /max-\[560px\]:w-screen/)
   assert.match(transcript, /max-\[560px\]:h-dvh/)

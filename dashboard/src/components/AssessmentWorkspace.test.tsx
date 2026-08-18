@@ -108,20 +108,20 @@ describe('assessment workspace component', () => {
     expect(rendered).toContain('Effective harness')
     expect(rendered).toContain('run run-1')
     expect(rendered).not.toContain('attempt attempt-1')
-    expect(rendered).toContain('data-run-metrics')
+    expect(rendered).toContain('data-primary-run-metrics')
+    expect(rendered).toContain('Objective hard gates')
+    expect(rendered).toContain('Assessment outcomes')
+    expect(rendered).toContain('AI quality')
     expect(rendered).toContain('Tokens')
     expect(rendered).toContain('22,668')
-    expect(rendered).toContain('Functions')
+    expect(rendered).toContain('Function calls')
     expect(rendered).toContain('14')
     expect(rendered).toContain('Duration')
     expect(rendered).toContain('1m 02s')
     expect(rendered).toContain('Function errors')
-    expect(rendered).toContain('Runtime metrics')
-    expect(rendered).toContain(
-      'min-h-10 min-w-0 grid-cols-[minmax(0,1fr)_auto] items-center gap-1 overflow-hidden',
-    )
-    expect(rendered).toContain('shrink-0 whitespace-nowrap text-xl')
-    expect(rendered).toContain('sm:w-56')
+    expect(rendered).toContain('Runtime telemetry')
+    expect(rendered).toContain('grid-flow-dense')
+    expect(rendered).toContain('sm:grid-cols-2 lg:grid-cols-4')
     expect(rendered).toContain('Input tokens')
     expect(rendered).toContain('21,296')
     expect(rendered).toContain('Cache read')
@@ -145,22 +145,23 @@ describe('assessment workspace component', () => {
     expect(detailHtml).toContain('AI recommended next steps')
     expect(detailHtml).toContain('Advisory guidance from the AI assessment')
     expect(detailHtml).toContain('Fix the objective gate before release.')
+    expect(detailHtml.indexOf('Objective hard gates')).toBeLessThan(
+      detailHtml.indexOf('Outcome boundaries'),
+    )
+    expect(detailHtml.indexOf('Outcome boundaries')).toBeLessThan(
+      detailHtml.indexOf('Advisory AI conclusion'),
+    )
     expect(detailHtml.indexOf('Advisory AI conclusion')).toBeLessThan(
       detailHtml.indexOf('AI recommended next steps'),
     )
-    expect(detailHtml.indexOf('AI recommended next steps')).toBeLessThan(
-      detailHtml.indexOf('Outcome boundaries'),
-    )
     expect(rendered).toContain('Chat')
     expect(rendered).toContain('data-transcript-action=')
-    expect(html).toContain('pointer-events-none absolute right-4 bottom-3')
-    expect(html).not.toContain(
-      'flex justify-end border-t border-line px-4 py-2',
-    )
+    expect(html).toContain('Review evidence')
     expect(rendered.match(/<details[^>]*open/g) ?? []).toHaveLength(0)
+    expect(html).toContain('Filter scenario runs by assessment signal')
     expect(rendered).toContain('Filter assessment matrix')
     expect(html).toContain('Open details for Direct Answer')
-    expect(html).not.toContain('<details')
+    expect(html).toContain('<details')
     expect(detailHtml).toContain('assessment-detail-dialog')
     expect(detailHtml).toContain('m-auto')
     expect(detailHtml).not.toContain('data-transcript-action=')
@@ -170,6 +171,94 @@ describe('assessment workspace component', () => {
     expect(detailHtml).toContain('Scenario detail')
     expect(detailHtml).toContain('assessment-detail-header')
     expect(detailHtml).toContain('assessment-detail-actions')
+  })
+
+  it('surfaces security review capability metrics before evidence', () => {
+    const originalResult = model.runs[0].finalAssessment.result
+    if (!originalResult) throw new Error('expected final assessment fixture')
+    const securityModel: AssessmentWorkspaceModel = {
+      availability: 'available',
+      runs: [
+        {
+          ...model.runs[0],
+          key: 'security-review',
+          scenarioId: 'security_review',
+          systemStatus: 'passed',
+          effectiveStatus: 'passed_with_concerns',
+          hasAiDisagreement: false,
+          assessments: [
+            {
+              ...model.runs[0].assessments[0],
+              id: 'gate',
+              criterionId: 'request_identity',
+              outcome: 'passed',
+              score: undefined,
+            },
+            {
+              ...model.runs[0].assessments[0],
+              id: 'detection',
+              criterionId:
+                'scan_commit_a.report.seeded_vulnerability_detection',
+              policy: 'advisory',
+              kind: 'signal',
+              dimension: 'deliverable',
+              outcome: 'partial',
+              score: { awarded: 75, possible: 100 },
+              summary: 'Detected 3 of 4 explicitly seeded vulnerable paths.',
+            },
+            {
+              ...model.runs[0].assessments[0],
+              id: 'patches',
+              criterionId:
+                'suggest_commit_a.report.suggested_patch_applicability',
+              policy: 'advisory',
+              kind: 'signal',
+              dimension: 'deliverable',
+              outcome: 'partial',
+              score: { awarded: 0, possible: 100 },
+              summary:
+                '0 of 4 optional suggested patches passed git apply --check.',
+            },
+          ],
+          finalAssessment: {
+            availability: 'available',
+            result: {
+              ...originalResult,
+              verdict: 'pass_with_concerns',
+              quality_score: 75,
+              confidence: 0.82,
+            },
+          },
+        },
+      ],
+    }
+    const html = renderToStaticMarkup(
+      <AssessmentPanel model={securityModel} filter="all" />,
+    )
+    const detailHtml = renderToStaticMarkup(
+      <AssessmentDetailDialog
+        run={securityModel.runs[0]}
+        onClose={() => undefined}
+      />,
+    )
+
+    expect(html).toContain('Security Review')
+    expect(html).toContain('Objective hard gates')
+    expect(html).toContain('1/1')
+    expect(html).toContain('Seeded detection')
+    expect(html).toContain('3/4')
+    expect(html).toContain('75% advisory coverage')
+    expect(html).toContain('Optional patch checks')
+    expect(html).toContain('0/4')
+    expect(html).toContain('0% applied cleanly')
+    expect(html).toContain('82% confidence')
+    const effectiveIndex = detailHtml.indexOf('Effective harness')
+    const effectiveBoundary = detailHtml.slice(
+      effectiveIndex - 200,
+      effectiveIndex + 500,
+    )
+    expect(effectiveBoundary).toContain('border-warning/30')
+    expect(effectiveBoundary).not.toContain('border-danger/30')
   })
 
   it('renders explicit legacy and unavailable states without a default verdict', () => {
