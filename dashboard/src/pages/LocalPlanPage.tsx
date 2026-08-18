@@ -1,3 +1,4 @@
+import { ExternalLink, PencilLine } from 'lucide-react'
 import {
   type CSSProperties,
   type FormEvent,
@@ -524,11 +525,13 @@ function ExecutionNameControl({
         </form>
       ) : (
         <button
+          aria-label={`Rename ${label.trim() || fallbackLabel}`}
           className="plan-execution-rename-button"
+          title={`Rename ${label.trim() || fallbackLabel}`}
           type="button"
           onClick={() => setEditing(true)}
         >
-          Rename
+          <PencilLine aria-hidden="true" size={14} strokeWidth={1.8} />
         </button>
       )}
       {error && <small role="alert">{error}</small>}
@@ -846,6 +849,16 @@ export function PlanExecutionHistory({
               </span>
             </div>
             <ul className="plan-run-history-list">
+              <li className="plan-run-history-columns" aria-hidden="true">
+                <span>Execution</span>
+                <span>Result</span>
+                <span>Captured</span>
+                <span>Tokens</span>
+                <span>Duration</span>
+                <span>Calls</span>
+                <span>Errors</span>
+                <span />
+              </li>
               {rows.map((row) => {
                 const status = executionStatus(row.summary, row.fallback)
                 const timestamp =
@@ -862,25 +875,10 @@ export function PlanExecutionHistory({
                     : planExecutionLabel(plan, row.id)
                 return (
                   <li key={`${row.role}:${row.id}`}>
-                    <div className="plan-run-record-main">
-                      <div className="plan-run-record-identity">
-                        <span>{roleLabel}</span>
+                    <div className="plan-run-record-identity">
+                      <span>{roleLabel}</span>
+                      <div>
                         <strong>{displayLabel}</strong>
-                        <code title={row.id}>{row.id}</code>
-                      </div>
-                      <div className="plan-run-record-state">
-                        <span
-                          className={`plan-execution-result ${status.tone}`}
-                        >
-                          {status.label}
-                        </span>
-                        <time dateTime={timestamp || undefined}>
-                          {timestamp
-                            ? formatDate(timestamp)
-                            : 'Date unavailable'}
-                        </time>
-                      </div>
-                      <div className="plan-run-record-actions">
                         {row.role === 'candidate' && onRenameCandidate && (
                           <ExecutionNameControl
                             executionId={row.id}
@@ -889,27 +887,49 @@ export function PlanExecutionHistory({
                             onRename={onRenameCandidate}
                           />
                         )}
-                        <a href={hashForExecution(row.id)}>Open report</a>
                       </div>
+                      <code title={row.id}>{row.id}</code>
                     </div>
-                    <dl className="plan-run-record-metrics">
-                      <div>
-                        <dt>Tokens</dt>
-                        <dd>{executionMetricValue(row.summary, 'tokens')}</dd>
-                      </div>
-                      <div>
-                        <dt>Duration</dt>
-                        <dd>{executionMetricValue(row.summary, 'duration')}</dd>
-                      </div>
-                      <div>
-                        <dt>Function calls</dt>
-                        <dd>{executionMetricValue(row.summary, 'calls')}</dd>
-                      </div>
-                      <div>
-                        <dt>Function errors</dt>
-                        <dd>{executionMetricValue(row.summary, 'errors')}</dd>
-                      </div>
-                    </dl>
+                    <span className={`plan-execution-result ${status.tone}`}>
+                      {status.label}
+                    </span>
+                    <time dateTime={timestamp || undefined}>
+                      {timestamp ? formatDate(timestamp) : 'Date unavailable'}
+                    </time>
+                    <span
+                      className="plan-run-record-metric"
+                      data-label="Tokens"
+                    >
+                      {executionMetricValue(row.summary, 'tokens')}
+                    </span>
+                    <span
+                      className="plan-run-record-metric"
+                      data-label="Duration"
+                    >
+                      {executionMetricValue(row.summary, 'duration')}
+                    </span>
+                    <span className="plan-run-record-metric" data-label="Calls">
+                      {executionMetricValue(row.summary, 'calls')}
+                    </span>
+                    <span
+                      className="plan-run-record-metric"
+                      data-label="Errors"
+                    >
+                      {executionMetricValue(row.summary, 'errors')}
+                    </span>
+                    <a
+                      aria-label={`Open report for ${displayLabel}`}
+                      className="plan-run-report-link"
+                      href={hashForExecution(row.id)}
+                      title={`Open report for ${displayLabel}`}
+                    >
+                      <ExternalLink
+                        aria-hidden="true"
+                        size={14}
+                        strokeWidth={1.8}
+                      />
+                      <span>Report</span>
+                    </a>
                   </li>
                 )
               })}

@@ -209,9 +209,9 @@ describe('local plan execution comparison', () => {
     )
     expect(html).toContain('Winner')
     expect(html).toContain('Execution history')
-    expect(html).toContain('Function calls')
-    expect(html).toContain('Function errors')
-    expect(html).toContain('Open report')
+    expect(html).toContain('<span>Calls</span>')
+    expect(html).toContain('<span>Errors</span>')
+    expect(html).toContain('aria-label="Open report for Official baseline"')
   })
 
   it('selects metric winners by direction, preserves ties and ignores missing values', () => {
@@ -296,7 +296,10 @@ describe('local plan execution comparison', () => {
     expect(html).toContain('baseline-1')
     expect(html).toContain('candidate-1')
     expect(html).toContain('candidate-2')
-    expect(html.match(/>Rename</g)).toHaveLength(2)
+    expect(
+      html.match(/aria-label="Rename Harness (?:Latest|Next)"/g),
+    ).toHaveLength(2)
+    expect(html).toContain('plan-run-history-columns')
     expect(html).toContain('Candidates in table')
   })
 
