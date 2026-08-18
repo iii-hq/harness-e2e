@@ -56,7 +56,7 @@ impl E2eContext {
                 metadata: Some(WorkerMetadata {
                     runtime: "rust".to_string(),
                     version: env!("CARGO_PKG_VERSION").to_string(),
-                    name: "harness-e2e".to_string(),
+                    name: ephemeral_worker_name(),
                     os: std::env::consts::OS.to_string(),
                     pid: Some(std::process::id()),
                     ..WorkerMetadata::default()
@@ -375,6 +375,14 @@ impl E2eContext {
     }
 }
 
+fn ephemeral_worker_name() -> String {
+    format!(
+        "harness-e2e-{}-{}",
+        std::process::id(),
+        &uuid::Uuid::new_v4().simple().to_string()[..8]
+    )
+}
+
 struct ContextTreeObserver<'a> {
     context: &'a E2eContext,
     subscription: ObserveSubscription,
@@ -493,5 +501,16 @@ mod tests {
             function_ids(&listed).collect::<Vec<_>>(),
             ["provider::zai::stream", "database::query", "state::get"]
         );
+    }
+
+    #[test]
+    fn each_connection_uses_a_distinct_ephemeral_worker_name() {
+        let first = ephemeral_worker_name();
+        let second = ephemeral_worker_name();
+        let prefix = format!("harness-e2e-{}-", std::process::id());
+
+        assert!(first.starts_with(&prefix));
+        assert!(second.starts_with(&prefix));
+        assert_ne!(first, second);
     }
 }

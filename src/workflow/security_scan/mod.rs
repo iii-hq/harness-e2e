@@ -50,7 +50,7 @@ pub(crate) use helpers::{
 pub const FIXTURE_PATH_ENV: &str = "HARNESS_E2E_SECURITY_FIXTURE_PATH";
 pub const SCENARIO_ID: &str = "security_review";
 const REPOSITORY: &str = "iii-hq/security-scan-e2e-fixture";
-const SCHEDULED_REF: &str = "security-scan-e2e-scheduled";
+const COMMIT_B_REF: &str = "security-scan-e2e-commit-b";
 const SEEDED_PATHS: [&str; 4] = [
     "src/vulnerable.rs",
     "package.json",

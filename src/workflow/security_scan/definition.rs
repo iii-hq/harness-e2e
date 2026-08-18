@@ -4,8 +4,8 @@ pub fn definition() -> WorkflowDefinitionV1 {
     WorkflowDefinitionV1 {
         schema_version: crate::workflow::WORKFLOW_SCHEMA_VERSION,
         id: SCENARIO_ID.into(),
-        scenario_version: 2,
-        description: "Rust-defined local security review: scan and deduplication, optional suggestions, GitHub reconciliation, cron execution, final listing, and mandatory cleanup.".into(),
+        scenario_version: 3,
+        description: "Rust-defined local security review: immediate scans, deduplication, optional suggestions, GitHub reconciliation, final listing, and mandatory cleanup.".into(),
         limits: WorkflowLimits {
             max_parallel: 3,
             max_nodes: 8,
@@ -58,7 +58,7 @@ pub fn definition() -> WorkflowDefinitionV1 {
                 ..semantic_test(
                     "github_reconciliation",
                     "security_review.github_reconciliation",
-                    &["scheduled_scan_commit_b"],
+                    &["scan_commit_b"],
                     true,
                 )
             },
@@ -72,8 +72,8 @@ pub fn definition() -> WorkflowDefinitionV1 {
                     },
                 )]),
                 ..semantic_test(
-                    "scheduled_scan_commit_b",
-                    "security_review.scheduled_scan_commit_b",
+                    "scan_commit_b",
+                    "security_review.scan_commit_b",
                     &["scan_commit_a", "suggest_commit_a"],
                     true,
                 )
@@ -91,7 +91,7 @@ pub fn definition() -> WorkflowDefinitionV1 {
         criteria: vec![
             criterion("scan_a_detection", 60, "scan_commit_a"),
             criterion("suggest_a_quality", 20, "suggest_commit_a"),
-            criterion("scheduled_b_detection", 20, "scheduled_scan_commit_b"),
+            criterion("scan_b_detection", 20, "scan_commit_b"),
         ],
     }
 }
@@ -179,8 +179,8 @@ pub(super) fn descriptors() -> Vec<(StepTypeDescriptor, SecurityStepKind)> {
         ),
         (
             descriptor(
-                "security_review.scheduled_scan_commit_b",
-                "Create the delayed ref, observe the cron-created exact-SHA scan, assess its report, and leave restoration to the mandatory cleanup hook.",
+                "security_review.scan_commit_b",
+                "Create commit B, immediately request its exact-SHA scan, await and assess the report, and leave restoration to the mandatory cleanup hook.",
                 object_schema(&[], &[]),
                 BTreeMap::from([("repository".into(), port(PortValueKind::TextUtf8, false, None))]),
                 BTreeMap::from([
@@ -192,12 +192,12 @@ pub(super) fn descriptors() -> Vec<(StepTypeDescriptor, SecurityStepKind)> {
                 ReplayPolicy::Compensable,
                 StepOperationalKind::Product,
             ),
-            SecurityStepKind::ScheduledScanCommitB,
+            SecurityStepKind::ScanCommitB,
         ),
         (
             descriptor(
                 "security_review.list_run_history",
-                "Verify the final completed scan, optional suggestion, and cron run through bounded list filters.",
+                "Verify both completed exact-SHA scans and the optional suggestion through bounded list filters.",
                 object_schema(&[], &[]),
                 BTreeMap::new(),
                 BTreeMap::from([("runs".into(), port(PortValueKind::Json, false, None))]),
