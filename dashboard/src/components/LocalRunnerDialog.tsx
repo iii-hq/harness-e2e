@@ -297,14 +297,14 @@ export function LocalRunnerDialog({
   return (
     <dialog
       ref={dialogRef}
-      className="ds-root m-auto hidden max-h-[94dvh] w-[min(1180px,calc(100%_-_1rem))] max-w-none overflow-hidden rounded-xl border border-[var(--ds-color-line-strong)] bg-[var(--ds-color-surface)] p-0 text-[var(--ds-color-ink)] shadow-[var(--ds-shadow-panel)] open:grid open:grid-rows-[auto_minmax(0,1fr)] backdrop:bg-[var(--ds-color-backdrop)] backdrop:backdrop-blur-sm sm:w-[min(1180px,calc(100%_-_2rem))]"
+      className="ds-root m-auto hidden max-h-[94dvh] w-[min(1180px,calc(100%_-_1rem))] max-w-none overflow-hidden rounded-xl border border-[var(--color-edge)] bg-[var(--color-panel)] p-0 text-[var(--color-ink)] shadow-[var(--shadow-panel)] open:grid open:grid-rows-[auto_minmax(0,1fr)] backdrop:bg-[var(--color-backdrop)] backdrop:backdrop-blur-sm sm:w-[min(1180px,calc(100%_-_2rem))]"
       onClose={onClose}
       onKeyDownCapture={trapDialogFocus}
       aria-labelledby="local-runner-title"
     >
-      <header className="flex items-start justify-between gap-5 border-b border-[var(--ds-color-line)] bg-[var(--ds-color-surface)] px-5 py-4 sm:px-6">
+      <header className="flex items-start justify-between gap-5 border-b border-[var(--color-rule)] bg-[var(--color-panel)] px-5 py-4 sm:px-6">
         <div className="min-w-0">
-          <p className="m-0 font-mono text-[0.65rem] font-semibold uppercase tracking-[0.07em] text-[var(--ds-color-brand-text)]">
+          <p className="m-0 font-mono text-[0.65rem] font-semibold uppercase tracking-[0.07em] text-[var(--color-accent)]">
             Execution setup
           </p>
           <strong
@@ -313,13 +313,13 @@ export function LocalRunnerDialog({
           >
             Create a quick benchmark result
           </strong>
-          <p className="mt-1 mb-0 max-w-2xl text-xs leading-5 text-[var(--ds-color-ink-muted)]">
+          <p className="mt-1 mb-0 max-w-2xl text-xs leading-5 text-[var(--color-ink-ghost)]">
             Run selected scenarios once. Use a reusable plan when you need a
             fixed baseline and candidate comparison.
           </p>
         </div>
         <button
-          className="grid h-11 w-11 shrink-0 place-items-center rounded-lg border border-[var(--ds-color-line)] bg-transparent text-lg text-[var(--ds-color-ink-soft)] transition-colors hover:border-[var(--ds-color-line-strong)] hover:text-[var(--ds-color-ink)]"
+          className="grid h-11 w-11 shrink-0 place-items-center rounded-lg border border-[var(--color-rule)] bg-transparent text-lg text-[var(--color-ink-faint)] transition-colors hover:border-[var(--color-edge)] hover:text-[var(--color-ink)]"
           type="button"
           onClick={onClose}
           aria-label="Close execution form"
@@ -331,10 +331,10 @@ export function LocalRunnerDialog({
       <div className="min-h-0 overflow-auto">
         <form
           id="local-runner-form"
-          className="grid min-w-0 gap-px bg-[var(--ds-color-line)] lg:grid-cols-12"
+          className="grid min-w-0 gap-px bg-[var(--color-rule)] lg:grid-cols-12"
           onSubmit={submit}
         >
-          <div className="min-w-0 bg-[var(--ds-color-surface)] lg:col-span-8">
+          <div className="min-w-0 bg-[var(--color-panel)] lg:col-span-8">
             <ExecutionSetup
               idPrefix="quick-execution"
               mode="quick"
@@ -372,7 +372,7 @@ export function LocalRunnerDialog({
 
             {error && (
               <p
-                className="m-0 border-t border-[var(--ds-color-line)] bg-[color-mix(in_srgb,var(--ds-color-danger)_8%,var(--ds-color-surface))] p-5 text-xs leading-5 text-[var(--ds-color-danger)] sm:px-6"
+                className="m-0 border-t border-[var(--color-rule)] bg-[color-mix(in_srgb,var(--color-alert)_8%,var(--color-panel))] p-5 text-xs leading-5 text-[var(--color-alert)] sm:px-6"
                 role="alert"
               >
                 {error}
@@ -380,14 +380,14 @@ export function LocalRunnerDialog({
             )}
             {log && (
               <details
-                className="border-t border-[var(--ds-color-line)] p-5 sm:p-6"
+                className="border-t border-[var(--color-rule)] p-5 sm:p-6"
                 open={active}
               >
-                <summary className="cursor-pointer text-xs font-semibold text-[var(--ds-color-ink-soft)]">
+                <summary className="cursor-pointer text-xs font-semibold text-[var(--color-ink-faint)]">
                   Live runner output
                 </summary>
                 <pre
-                  className="mt-3 mb-0 max-h-80 w-full overflow-auto rounded-lg border border-[var(--ds-color-line)] bg-[#080a09] p-4 font-mono text-[0.68rem] leading-5 text-[#cbd3cc]"
+                  className="mt-3 mb-0 max-h-80 w-full overflow-auto rounded-lg border border-[var(--color-rule)] bg-[var(--color-bg)] p-4 font-mono text-[0.68rem] leading-5 text-[var(--color-ink-faint)]"
                   aria-live="polite"
                 >
                   {log}
@@ -396,7 +396,7 @@ export function LocalRunnerDialog({
             )}
           </div>
 
-          <div className="min-w-0 bg-[var(--ds-color-surface-raised)] lg:col-span-4">
+          <div className="min-w-0 bg-[var(--color-panel-raised)] lg:col-span-4">
             <ExecutionSetupReview
               mode="quick"
               status={
@@ -424,7 +424,7 @@ export function LocalRunnerDialog({
               ready={canRun && !active}
             >
               <button
-                className="inline-flex min-h-11 w-full items-center justify-center rounded-lg border border-[var(--ds-color-brand)] bg-[var(--ds-color-brand)] px-4 text-sm font-semibold text-[var(--ds-color-brand-ink)] transition-colors hover:bg-[color-mix(in_srgb,var(--ds-color-brand)_88%,white)] disabled:cursor-not-allowed disabled:opacity-45"
+                className="inline-flex min-h-11 w-full items-center justify-center rounded-lg border border-[var(--color-accent)] bg-[var(--color-accent)] px-4 text-sm font-semibold text-[var(--color-accent-fg)] transition-colors hover:bg-[color-mix(in_srgb,var(--color-accent)_88%,white)] disabled:cursor-not-allowed disabled:opacity-45"
                 type="submit"
                 form="local-runner-form"
                 disabled={active || !canRun}
@@ -438,7 +438,7 @@ export function LocalRunnerDialog({
               </button>
               {active && (
                 <button
-                  className="inline-flex min-h-11 w-full items-center justify-center rounded-lg border border-[var(--ds-color-line-strong)] bg-transparent px-4 text-sm font-semibold text-[var(--ds-color-ink-soft)] hover:text-[var(--ds-color-ink)]"
+                  className="inline-flex min-h-11 w-full items-center justify-center rounded-lg border border-[var(--color-edge)] bg-transparent px-4 text-sm font-semibold text-[var(--color-ink-faint)] hover:text-[var(--color-ink)]"
                   type="button"
                   onClick={() => void cancel()}
                 >
@@ -446,7 +446,7 @@ export function LocalRunnerDialog({
                 </button>
               )}
               <a
-                className="inline-flex min-h-10 w-full items-center justify-center rounded-lg px-3 text-xs font-semibold text-[var(--ds-color-ink-soft)] underline-offset-4 hover:text-[var(--ds-color-ink)] hover:underline"
+                className="inline-flex min-h-10 w-full items-center justify-center rounded-lg px-3 text-xs font-semibold text-[var(--color-ink-faint)] underline-offset-4 hover:text-[var(--color-ink)] hover:underline"
                 href={hashForNewPlan()}
               >
                 Create a reusable plan instead

@@ -14,6 +14,10 @@ export default defineConfig({
   resolve: {
     alias: {
       '@': path.resolve(root, 'src'),
+      '@iii-dev/console-ui': path.resolve(
+        root,
+        'src/lib/standalone-console-ui.tsx',
+      ),
     },
   },
   server: {

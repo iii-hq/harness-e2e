@@ -1,26 +1,7 @@
-:root {
-  --ds-color-canvas: #080b0a;
-  --ds-color-canvas-rgb: 8, 11, 10;
-  --ds-color-surface: #101512;
-  --ds-color-surface-raised: #171e1a;
-  --ds-color-surface-strong: #202a24;
-  --ds-color-ink: #f5f7f2;
-  --ds-color-ink-soft: #b3bdb5;
-  --ds-color-ink-muted: #8b968e;
-  --ds-color-line: rgba(245, 247, 242, 0.1);
-  --ds-color-line-strong: rgba(245, 247, 242, 0.2);
-  --ds-color-brand: #c7ff4a;
-  --ds-color-brand-ink: #11170a;
-  --ds-color-brand-text: #c7ff4a;
-  --ds-color-info: #7bc7ff;
-  --ds-color-success: #9ee66c;
-  --ds-color-warning: #ffd166;
-  --ds-color-danger: #ff786f;
-  --ds-color-focus: #d7ff7f;
-  --ds-color-backdrop: rgba(3, 5, 4, 0.82);
-
-  --ds-font-body: "Geist", ui-sans-serif, system-ui, sans-serif;
-  --ds-font-mono: "Chivo Mono", ui-monospace, monospace;
+/* The Console owns all color and font tokens. Standalone mode supplies the
+   same semantic names from dashboard-shell.css, so injected styles never
+   repaint the host with a private palette. */
+.harness-e2e-shell {
   --ds-text-xs: 0.75rem;
   --ds-text-sm: 0.875rem;
   --ds-text-md: 1rem;
@@ -47,12 +28,13 @@
   --ds-space-40: 10rem;
   --ds-space-48: 12rem;
 
-  --ds-radius-sm: 0.625rem;
-  --ds-radius-md: 1rem;
-  --ds-radius-lg: 1.5rem;
+  --ds-radius-sm: 6px;
+  --ds-radius-md: 6px;
+  --ds-radius-lg: 6px;
   --ds-radius-pill: 999px;
-  --ds-shadow-panel: 0 28px 80px rgba(0, 0, 0, 0.28);
-  --ds-shadow-focus: 0 0 0 4px rgba(199, 255, 74, 0.2);
+  --shadow-panel: none;
+  --shadow-focus: 0 0 0 3px
+    color-mix(in srgb, var(--color-accent) 22%, transparent);
 
   --ds-duration-instant: 100ms;
   --ds-duration-fast: 160ms;
@@ -62,30 +44,6 @@
   --ds-ease-emphasized: cubic-bezier(0.16, 1, 0.3, 1);
 }
 
-:root[data-theme="light"] {
-  --ds-color-canvas: #f2f5ef;
-  --ds-color-canvas-rgb: 242, 245, 239;
-  --ds-color-surface: #ffffff;
-  --ds-color-surface-raised: #f7faf4;
-  --ds-color-surface-strong: #e8eee4;
-  --ds-color-ink: #121713;
-  --ds-color-ink-soft: #4f5c53;
-  --ds-color-ink-muted: #5b675e;
-  --ds-color-line: rgba(18, 23, 19, 0.12);
-  --ds-color-line-strong: rgba(18, 23, 19, 0.24);
-  --ds-color-brand: #8fc900;
-  --ds-color-brand-ink: #101606;
-  --ds-color-brand-text: #4b6d00;
-  --ds-color-info: #006dae;
-  --ds-color-success: #2d6b0f;
-  --ds-color-warning: #865500;
-  --ds-color-danger: #b52d25;
-  --ds-color-focus: #4b6d00;
-  --ds-color-backdrop: rgba(18, 23, 19, 0.58);
-  --ds-shadow-panel: 0 24px 64px rgba(28, 46, 33, 0.12);
-  --ds-shadow-focus: 0 0 0 4px rgba(75, 109, 0, 0.18);
-}
-
 .ds-root,
 .ds-root * {
   box-sizing: border-box;
@@ -93,16 +51,16 @@
 
 .ds-root {
   min-width: 320px;
-  color: var(--ds-color-ink);
-  font-family: var(--ds-font-body);
+  color: var(--color-ink);
+  font-family: var(--font-sans);
   font-synthesis: none;
   text-rendering: optimizeLegibility;
 }
 
 .ds-root :where(button, a, input, select, textarea, summary):focus-visible {
-  outline: 2px solid var(--ds-color-focus);
+  outline: 2px solid var(--color-rule-focus);
   outline-offset: 3px;
-  box-shadow: var(--ds-shadow-focus);
+  box-shadow: var(--shadow-focus);
 }
 
 .ds-display {
@@ -116,7 +74,7 @@
 }
 
 .ds-mono {
-  font-family: var(--ds-font-mono);
+  font-family: var(--font-mono);
   font-variant-numeric: tabular-nums;
 }
 
@@ -133,7 +91,7 @@
 }
 
 @media (prefers-reduced-motion: reduce) {
-  :root {
+  .harness-e2e-shell {
     --ds-duration-instant: 1ms;
     --ds-duration-fast: 1ms;
     --ds-duration-base: 1ms;

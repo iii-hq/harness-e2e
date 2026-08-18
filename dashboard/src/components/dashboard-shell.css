@@ -1,0 +1,142 @@
+.harness-e2e-shell,
+.harness-e2e-shell * {
+  box-sizing: border-box;
+}
+
+.harness-e2e-shell {
+  --bg: var(--color-bg, #f2f0ed);
+  --surface: var(--color-panel, #fafafa);
+  --surface-raised: var(--color-panel-raised, #f7f5f2);
+  --surface-soft: var(--color-surface-hover, rgba(20, 16, 8, 0.085));
+  --line: var(--color-edge, rgba(20, 16, 8, 0.16));
+  --line-strong: var(--color-edge, rgba(20, 16, 8, 0.28));
+  --text: var(--color-ink, #0a0a0a);
+  --text-soft: var(--color-ink-faint, #6b6865);
+  --text-muted: var(--color-ink-ghost, #a3a09c);
+  --accent: var(--color-accent, #b8420f);
+  --accent-soft: var(--color-accent-muted, rgba(184, 66, 15, 0.1));
+  --accent-blue: var(--color-accent, #b8420f);
+  --warning: var(--color-warn, #a87a00);
+  --danger: var(--color-alert, #ff0026);
+  --success: var(--color-ok, #356f3d);
+  --color-rule: var(--color-edge, rgba(20, 16, 8, 0.16));
+  --color-accent-fg: var(--color-panel, #fafafa);
+  --color-accent-hover: var(--color-accent, #b8420f);
+  --grid-line: transparent;
+  --glass: var(--color-panel-raised, #f7f5f2);
+  --backdrop: color-mix(in srgb, var(--color-bg, #f2f0ed) 86%, transparent);
+  --radius-sm: 6px;
+  --radius-md: 6px;
+  --radius-lg: 6px;
+  --shadow: none;
+  --shadow-panel: none;
+  --shadow-focus: 0 0 0 3px
+    color-mix(in srgb, var(--color-accent, var(--accent)) 22%, transparent);
+  min-width: 0;
+  min-height: 100%;
+  color: var(--color-ink, var(--text));
+  background: var(--color-panel, var(--bg));
+  font-family: var(--font-sans, Inter, ui-sans-serif, system-ui, sans-serif);
+}
+
+.harness-e2e-shell[data-mode="standalone"] {
+  --font-sans: Inter, ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "Chivo Mono", ui-monospace, monospace;
+  --color-bg: #f2f0ed;
+  --color-panel: #fafafa;
+  --color-panel-raised: #f7f5f2;
+  --color-surface-hover: rgba(20, 16, 8, 0.085);
+  --color-edge: rgba(20, 16, 8, 0.16);
+  --color-ink: #0a0a0a;
+  --color-ink-faint: #6b6865;
+  --color-ink-ghost: #a3a09c;
+  --color-accent: #b8420f;
+  --color-accent-muted: rgba(184, 66, 15, 0.1);
+  --color-warn: #a87a00;
+  --color-alert: #ff0026;
+  --color-ok: #356f3d;
+}
+
+.harness-e2e-shell[data-mode="standalone"][data-theme="dark"] {
+  --color-bg: #0a0a0a;
+  --color-panel: #111111;
+  --color-panel-raised: #171717;
+  --color-surface-hover: rgba(255, 255, 255, 0.085);
+  --color-edge: rgba(255, 255, 255, 0.12);
+  --color-ink: #ededed;
+  --color-ink-faint: #a6a6a6;
+  --color-ink-ghost: #6f6f6f;
+  --color-accent: #28a8f7;
+  --color-accent-muted: rgba(40, 168, 247, 0.12);
+  --color-warn: #f5a524;
+  --color-alert: #f05d68;
+  --color-ok: #36c98f;
+}
+
+.harness-e2e-dashboard {
+  --bg: var(--color-bg, var(--bg));
+  --surface: var(--color-panel, var(--surface));
+  --surface-raised: var(--color-panel-raised, var(--surface-raised));
+  --surface-soft: var(--color-surface-hover, var(--surface-soft));
+  --line: var(--color-edge, var(--line));
+  --line-strong: var(--color-edge, var(--line-strong));
+  --text: var(--color-ink, var(--text));
+  --text-soft: var(--color-ink-faint, var(--text-soft));
+  --text-muted: var(--color-ink-ghost, var(--text-muted));
+  --accent: var(--color-accent, var(--accent));
+  --accent-soft: var(--color-accent-muted, var(--accent-soft));
+  --warning: var(--color-warn, var(--warning));
+  --danger: var(--color-alert, var(--danger));
+  --success: var(--color-ok, var(--success));
+  --radius-sm: 6px;
+  --radius-md: 6px;
+  --radius-lg: 6px;
+  --shadow: none;
+  min-width: 0;
+}
+
+.harness-e2e-header-action:hover {
+  border-color: var(--color-ink-faint, var(--text-soft));
+  background: var(--color-surface-hover, var(--surface-soft));
+}
+
+.harness-e2e-header-action-primary {
+  border-color: var(--color-accent, var(--accent));
+  background: var(--color-accent, var(--accent));
+  color: var(--color-accent-fg, var(--color-panel, var(--text)));
+}
+
+.harness-e2e-header-action-primary:hover {
+  border-color: var(--color-accent-hover, var(--accent));
+  background: var(--color-accent-hover, var(--accent));
+}
+
+.harness-e2e-discard-dialog::backdrop {
+  background: var(--color-backdrop, var(--backdrop));
+}
+
+.harness-e2e-shell[data-narrow="true"] .harness-e2e-navigation-wide {
+  display: none;
+}
+
+.harness-e2e-shell[data-narrow="true"] .harness-e2e-navigation-narrow {
+  display: block;
+}
+
+.harness-e2e-shell [data-route-chrome] {
+  display: none;
+}
+
+.harness-e2e-shell
+  :where(button, a, input, select, textarea, summary):focus-visible {
+  outline: 2px solid var(--color-rule-focus, var(--accent));
+  outline-offset: 3px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .harness-e2e-shell * {
+    scroll-behavior: auto !important;
+    animation-duration: 1ms !important;
+    transition-duration: 1ms !important;
+  }
+}

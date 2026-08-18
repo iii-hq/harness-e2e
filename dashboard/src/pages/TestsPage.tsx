@@ -7,7 +7,10 @@ import {
   Search,
 } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { AppHeader, appHeaderActionClassName } from '@/components/AppHeader'
+import {
+  DashboardPageActions,
+  dashboardHeaderActionClassName,
+} from '@/components/DashboardPageActions'
 import { hashForExecution, hashForWorkspace } from '@/hooks/use-hash-route'
 import { summarizeAssessmentContract } from '@/lib/assessment-contract'
 import {
@@ -769,12 +772,12 @@ export function TestsPage({
       </a>
       <div className="ambient ambient-one" aria-hidden="true"></div>
       <div className="ambient ambient-two" aria-hidden="true"></div>
-      <AppHeader
+      <DashboardPageActions
         active="tests"
         actionsLabel="Comparison actions"
         actions={
           <a
-            className={appHeaderActionClassName({ primary: true })}
+            className={dashboardHeaderActionClassName({ primary: true })}
             href={hashForWorkspace()}
             aria-label="New execution"
           >

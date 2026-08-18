@@ -1,5 +1,8 @@
 import { useEffect, useState } from 'react'
-import { AppHeader, appHeaderActionClassName } from '@/components/AppHeader'
+import {
+  DashboardPageActions,
+  dashboardHeaderActionClassName,
+} from '@/components/DashboardPageActions'
 import {
   hashForComparison,
   hashForNewPlan,
@@ -63,14 +66,14 @@ export function TestsCatalogPage() {
       <a className="skip-link" href="#tests-catalog-main">
         Skip to test catalog
       </a>
-      <AppHeader
+      <DashboardPageActions
         active="tests"
         actionsLabel="Test catalog actions"
         actions={
           <>
             {local ? (
               <a
-                className={appHeaderActionClassName({ primary: true })}
+                className={dashboardHeaderActionClassName({ primary: true })}
                 href={hashForNewPlan()}
                 aria-label="New local plan"
               >
@@ -78,7 +81,7 @@ export function TestsCatalogPage() {
               </a>
             ) : null}
             <a
-              className={appHeaderActionClassName()}
+              className={dashboardHeaderActionClassName()}
               href={hashForComparison()}
               aria-label="System comparison"
             >

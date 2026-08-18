@@ -1,15 +1,26 @@
 import { Moon, Sun } from 'lucide-react'
 import { useTheme } from '@/hooks/useTheme'
+import type { Theme } from '@/lib/theme'
 
-export function ThemeToggle() {
-  const [theme, setTheme] = useTheme()
+export function ThemeToggle({
+  theme: controlledTheme,
+  onChange,
+}: {
+  theme?: Theme
+  onChange?: (next: Theme) => void
+} = {}) {
+  const [localTheme, setLocalTheme] = useTheme({
+    syncDocument: controlledTheme === undefined,
+  })
+  const theme = controlledTheme ?? localTheme
+  const setTheme = onChange ?? setLocalTheme
   const nextTheme = theme === 'dark' ? 'light' : 'dark'
   const label = nextTheme === 'dark' ? 'Dark' : 'Light'
   const Icon = nextTheme === 'dark' ? Moon : Sun
 
   return (
     <button
-      className="inline-flex min-h-9 min-w-9 shrink-0 items-center justify-center gap-2 rounded-lg border border-[var(--ds-color-line-strong)] bg-[var(--ds-color-surface-raised)] px-2.5 text-xs font-semibold text-[var(--ds-color-ink)] transition-colors motion-reduce:transition-none hover:border-[var(--ds-color-ink-muted)] hover:bg-[var(--ds-color-surface-strong)] sm:min-w-[5.125rem] sm:px-3"
+      className="harness-e2e-header-action harness-e2e-theme-toggle inline-flex min-w-9 px-2.5"
       type="button"
       data-theme-toggle
       aria-label={`Use ${nextTheme} theme`}

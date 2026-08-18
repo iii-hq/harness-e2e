@@ -1,5 +1,8 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { AppHeader, appHeaderActionClassName } from '@/components/AppHeader'
+import {
+  DashboardPageActions,
+  dashboardHeaderActionClassName,
+} from '@/components/DashboardPageActions'
 import {
   hashForNewPlan,
   hashForPlan,
@@ -225,12 +228,12 @@ export function PlanComparisonSummary({
 
 function PlanListHeader() {
   return (
-    <AppHeader
+    <DashboardPageActions
       active="plans"
       actionsLabel="Local plan actions"
       actions={
         <a
-          className={appHeaderActionClassName({ primary: true })}
+          className={dashboardHeaderActionClassName({ primary: true })}
           href={hashForNewPlan()}
           aria-label="New local plan"
         >

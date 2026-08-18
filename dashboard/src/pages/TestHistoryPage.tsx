@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { AppHeader } from '@/components/AppHeader'
 import { AssessmentWorkspace } from '@/components/AssessmentWorkspace'
+import { DashboardPageActions } from '@/components/DashboardPageActions'
 import { ProviderModelDropdown } from '@/components/ProviderModelDropdown'
 import { hashForExecution, hashForWorkspace } from '@/hooks/use-hash-route'
 import {
@@ -689,7 +689,7 @@ export function TestHistoryPage({ testId }: { testId: string }) {
 
   return (
     <div id="test-metrics-history-proposal" className="tmh-page">
-      <AppHeader active="tests" />
+      <DashboardPageActions active="tests" />
 
       <main className="tmh-main" id="test-history-main">
         <p className="tmh-breadcrumb">
