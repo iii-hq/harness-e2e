@@ -369,22 +369,27 @@ pub(super) fn register_functions(iii: &IIIClient, controller: Arc<Controller>) {
             })
         },
     );
-    register(iii, PLAN_UPDATE, "Update an unlocked local plan.", {
-        let controller = controller.clone();
-        RegisterFunction::new_async(move |request: PlanUpdateRequest| {
+    register(
+        iii,
+        PLAN_UPDATE,
+        "Update a local plan or rename candidates.",
+        {
             let controller = controller.clone();
-            async move {
-                let id = request
-                    .plan_id
-                    .clone()
-                    .ok_or_else(|| handler_error("plan_id is required"))?;
-                controller
-                    .update_plan(&id, request)
-                    .await
-                    .map_err(|error| Error::Handler(error.message))
-            }
-        })
-    });
+            RegisterFunction::new_async(move |request: PlanUpdateRequest| {
+                let controller = controller.clone();
+                async move {
+                    let id = request
+                        .plan_id
+                        .clone()
+                        .ok_or_else(|| handler_error("plan_id is required"))?;
+                    controller
+                        .update_plan(&id, request)
+                        .await
+                        .map_err(|error| Error::Handler(error.message))
+                }
+            })
+        },
+    );
     register(
         iii,
         PLAN_RUN_START,

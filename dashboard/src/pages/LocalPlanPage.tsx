@@ -1,5 +1,7 @@
+import { ExternalLink, PencilLine } from 'lucide-react'
 import {
   type CSSProperties,
+  type FormEvent,
   useCallback,
   useEffect,
   useMemo,
@@ -25,6 +27,7 @@ import {
 import {
   buildExecutionPresentation,
   formatDate,
+  formatDuration,
   titleCase,
 } from '@/lib/execution-view'
 import {
@@ -447,7 +450,116 @@ function planExecutionLabel(plan: LocalPlan, executionId: string | null) {
   if (!executionId) return 'Execution unavailable'
   if (executionId === plan.baseline_execution_id) return 'Official baseline'
   const candidateIndex = plan.candidate_execution_ids.indexOf(executionId)
-  return candidateIndex >= 0 ? `Candidate #${candidateIndex + 1}` : executionId
+  if (candidateIndex < 0) return executionId
+  return (
+    plan.candidate_labels?.[executionId]?.trim() ||
+    `Candidate #${candidateIndex + 1}`
+  )
+}
+
+function ExecutionNameControl({
+  executionId,
+  fallbackLabel,
+  label,
+  onRename,
+}: {
+  executionId: string
+  fallbackLabel: string
+  label: string
+  onRename: (executionId: string, label: string) => Promise<void>
+}) {
+  const [draft, setDraft] = useState(label)
+  const [editing, setEditing] = useState(false)
+  const [saving, setSaving] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+
+  useEffect(() => setDraft(label), [label])
+
+  const submit = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault()
+    setSaving(true)
+    setError(null)
+    try {
+      await onRename(executionId, draft)
+      setEditing(false)
+    } catch (cause) {
+      setError(errorText(cause))
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return (
+    <div className="plan-execution-name-control">
+      {editing ? (
+        <form onSubmit={(event) => void submit(event)}>
+          <label>
+            <span className="visually-hidden">Name {fallbackLabel}</span>
+            <input
+              aria-label={`Name ${fallbackLabel}`}
+              maxLength={80}
+              placeholder={fallbackLabel}
+              value={draft}
+              onChange={(event) => setDraft(event.target.value)}
+            />
+          </label>
+          <button
+            className="button button-primary"
+            disabled={saving}
+            type="submit"
+          >
+            {saving ? 'Saving…' : 'Save'}
+          </button>
+          <button
+            className="button button-secondary"
+            disabled={saving}
+            type="button"
+            onClick={() => {
+              setDraft(label)
+              setError(null)
+              setEditing(false)
+            }}
+          >
+            Cancel
+          </button>
+        </form>
+      ) : (
+        <button
+          aria-label={`Rename ${label.trim() || fallbackLabel}`}
+          className="plan-execution-rename-button"
+          title={`Rename ${label.trim() || fallbackLabel}`}
+          type="button"
+          onClick={() => setEditing(true)}
+        >
+          <PencilLine aria-hidden="true" size={14} strokeWidth={1.8} />
+        </button>
+      )}
+      {error && <small role="alert">{error}</small>}
+    </div>
+  )
+}
+
+function finiteExecutionMetric(value: unknown) {
+  return typeof value === 'number' && Number.isFinite(value) ? value : null
+}
+
+function executionMetricValue(
+  summary: DashboardExecutionSummary | null,
+  metric: 'tokens' | 'duration' | 'calls' | 'errors',
+) {
+  const totals = summary?.totals
+  const value =
+    metric === 'tokens'
+      ? totals?.total_tokens
+      : metric === 'duration'
+        ? totals?.wall_time_seconds
+        : metric === 'calls'
+          ? totals?.function_calls
+          : totals?.function_call_errors
+  const numeric = finiteExecutionMetric(value)
+  if (numeric === null) return 'Not reported'
+  if (metric === 'duration') return formatDuration(numeric)
+  return Math.round(numeric).toLocaleString('en-US')
 }
 
 export function PlanExecutionHistory({
@@ -458,6 +570,7 @@ export function PlanExecutionHistory({
   selectedCandidateId,
   onVisualBaselineChange,
   onToggleCandidate,
+  onRenameCandidate,
   loading,
   error = null,
 }: {
@@ -468,6 +581,7 @@ export function PlanExecutionHistory({
   selectedCandidateId: string | null
   onVisualBaselineChange: (id: string) => void
   onToggleCandidate: (id: string, selected: boolean) => void
+  onRenameCandidate?: (executionId: string, label: string) => Promise<void>
   loading: boolean
   error?: string | null
 }) {
@@ -502,9 +616,6 @@ export function PlanExecutionHistory({
       selected: row.id === selectedCandidateId,
     }
   })
-  const diagnosticRows = rows.filter(
-    (row) => row.role === 'attempt' || row.fallback === 'running',
-  )
   return (
     <section
       className="panel plan-panel-composite plan-execution-history-panel"
@@ -721,34 +832,109 @@ export function PlanExecutionHistory({
               </tbody>
             </table>
           </div>
-          {diagnosticRows.length > 0 && (
-            <div className="plan-non-comparable plan-panel-section">
+          <section
+            className="plan-run-history plan-panel-section"
+            aria-labelledby="plan-run-history-title"
+          >
+            <div className="plan-run-history-heading">
               <div>
-                <strong>Non-comparable attempts</strong>
+                <strong id="plan-run-history-title">Execution history</strong>
                 <span>
-                  Running and incomplete attempts do not affect metric winners.
+                  Every retained run, with its captured usage and result.
+                  Incomplete attempts remain excluded from metric winners.
                 </span>
               </div>
-              <ul>
-                {diagnosticRows.map((row) => {
-                  const status = executionStatus(row.summary, row.fallback)
-                  return (
-                    <li key={`${row.role}:${row.id}`}>
-                      <span>
-                        <strong>{row.label}</strong>
-                        <small>{row.detail}</small>
-                        <code title={row.id}>{row.id}</code>
-                      </span>
-                      <span className={`status-pill ${status.tone}`}>
-                        {status.label}
-                      </span>
-                      <a href={hashForExecution(row.id)}>View report</a>
-                    </li>
-                  )
-                })}
-              </ul>
+              <span>
+                {rows.length} execution{rows.length === 1 ? '' : 's'}
+              </span>
             </div>
-          )}
+            <ul className="plan-run-history-list">
+              <li className="plan-run-history-columns" aria-hidden="true">
+                <span>Execution</span>
+                <span>Result</span>
+                <span>Captured</span>
+                <span>Tokens</span>
+                <span>Duration</span>
+                <span>Calls</span>
+                <span>Errors</span>
+                <span />
+              </li>
+              {rows.map((row) => {
+                const status = executionStatus(row.summary, row.fallback)
+                const timestamp =
+                  row.summary?.completed_at || row.summary?.started_at || ''
+                const roleLabel =
+                  row.role === 'baseline'
+                    ? 'Baseline'
+                    : row.role === 'candidate'
+                      ? `Candidate ${row.candidateNumber ?? ''}`.trim()
+                      : 'Attempt'
+                const displayLabel =
+                  row.role === 'attempt'
+                    ? row.label
+                    : planExecutionLabel(plan, row.id)
+                return (
+                  <li key={`${row.role}:${row.id}`}>
+                    <div className="plan-run-record-identity">
+                      <span>{roleLabel}</span>
+                      <div>
+                        <strong>{displayLabel}</strong>
+                        {row.role === 'candidate' && onRenameCandidate && (
+                          <ExecutionNameControl
+                            executionId={row.id}
+                            fallbackLabel={`Candidate #${row.candidateNumber ?? 1}`}
+                            label={plan.candidate_labels?.[row.id] ?? ''}
+                            onRename={onRenameCandidate}
+                          />
+                        )}
+                      </div>
+                      <code title={row.id}>{row.id}</code>
+                    </div>
+                    <span className={`plan-execution-result ${status.tone}`}>
+                      {status.label}
+                    </span>
+                    <time dateTime={timestamp || undefined}>
+                      {timestamp ? formatDate(timestamp) : 'Date unavailable'}
+                    </time>
+                    <span
+                      className="plan-run-record-metric"
+                      data-label="Tokens"
+                    >
+                      {executionMetricValue(row.summary, 'tokens')}
+                    </span>
+                    <span
+                      className="plan-run-record-metric"
+                      data-label="Duration"
+                    >
+                      {executionMetricValue(row.summary, 'duration')}
+                    </span>
+                    <span className="plan-run-record-metric" data-label="Calls">
+                      {executionMetricValue(row.summary, 'calls')}
+                    </span>
+                    <span
+                      className="plan-run-record-metric"
+                      data-label="Errors"
+                    >
+                      {executionMetricValue(row.summary, 'errors')}
+                    </span>
+                    <a
+                      aria-label={`Open report for ${displayLabel}`}
+                      className="plan-run-report-link"
+                      href={hashForExecution(row.id)}
+                      title={`Open report for ${displayLabel}`}
+                    >
+                      <ExternalLink
+                        aria-hidden="true"
+                        size={14}
+                        strokeWidth={1.8}
+                      />
+                      <span>Report</span>
+                    </a>
+                  </li>
+                )
+              })}
+            </ul>
+          </section>
         </>
       )}
     </section>
@@ -1736,6 +1922,17 @@ export function LocalPlanDetailPage({ planId }: { planId: string }) {
       )
     }
   }
+  const renameCandidate = async (executionId: string, label: string) => {
+    if (!bridge || !plan) return
+    const candidateLabels = { ...(plan.candidate_labels ?? {}) }
+    const normalized = label.trim()
+    if (normalized) candidateLabels[executionId] = normalized
+    else delete candidateLabels[executionId]
+    const nextPlan = await bridge.updatePlan(plan.id, {
+      candidate_labels: candidateLabels,
+    })
+    setPlan(nextPlan)
+  }
 
   return (
     <>
@@ -1821,6 +2018,7 @@ export function LocalPlanDetailPage({ planId }: { planId: string }) {
               selectedCandidateId={selectedCandidateId}
               onVisualBaselineChange={changeVisualBaseline}
               onToggleCandidate={toggleComparisonCandidate}
+              onRenameCandidate={renameCandidate}
               loading={historyLoading}
               error={historyError}
             />

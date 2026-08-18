@@ -9248,49 +9248,219 @@ footer {
   box-shadow: 1px 0 0 var(--line);
 }
 
-.plan-non-comparable {
+.plan-run-history {
   display: grid;
-  gap: 0.8rem;
+  gap: 1rem;
   background: var(--surface-soft);
 }
 
-.plan-non-comparable > div,
-.plan-non-comparable li > span:first-child {
+.plan-run-history-heading,
+.plan-run-history-heading > div {
   display: grid;
-  gap: 0.2rem;
+  gap: 0.3rem;
 }
 
-.plan-non-comparable > div span,
-.plan-non-comparable small,
-.plan-non-comparable code {
+.plan-run-history-heading {
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: start;
+}
+
+.plan-run-history-heading > div > span,
+.plan-run-history-heading > span {
   color: var(--text-muted);
   font-size: 0.62rem;
   font-weight: 400;
 }
 
-.plan-non-comparable ul {
-  display: grid;
-  gap: 0.5rem;
-  margin: 0;
-  padding: 0;
-  list-style: none;
+.plan-run-history-heading > span {
+  font-family: var(--font-mono);
+  white-space: nowrap;
 }
 
-.plan-non-comparable li {
+.plan-run-history-list {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto auto;
-  align-items: center;
-  gap: 0.8rem;
-  padding: 0.65rem 0.75rem;
+  overflow: hidden;
+  margin: 0;
+  padding: 0;
   border: 1px solid var(--line);
   border-radius: var(--radius-sm);
   background: var(--surface);
-  font-size: 0.68rem;
+  list-style: none;
 }
 
-.plan-non-comparable li a {
+.plan-run-history-list > li {
+  display: grid;
+  grid-template-columns:
+    minmax(13rem, 1.65fr) minmax(5.5rem, 0.55fr) minmax(8.5rem, 0.8fr)
+    repeat(4, minmax(4.5rem, 0.45fr)) auto;
+  align-items: center;
+  min-width: 0;
+  gap: 0.8rem;
+  padding: 0.72rem 1rem;
+}
+
+.plan-run-history-list > li + li {
+  border-top: 1px solid var(--line);
+}
+
+.plan-run-history-list > .plan-run-history-columns {
+  padding-top: 0.55rem;
+  padding-bottom: 0.55rem;
+  background: var(--surface-soft);
+  color: var(--text-muted);
+  font-size: 0.56rem;
+  font-weight: 700;
+  letter-spacing: 0.045em;
+  text-transform: uppercase;
+}
+
+.plan-run-record-identity {
+  display: grid;
+  min-width: 0;
+  gap: 0.2rem;
+}
+
+.plan-run-record-identity > span {
+  color: var(--text-muted);
+  font-size: 0.58rem;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+.plan-run-record-identity strong {
+  overflow: hidden;
+  color: var(--text);
+  font-size: 0.78rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.plan-run-record-identity > div {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  gap: 0.35rem;
+}
+
+.plan-run-record-identity code,
+.plan-run-history-list > li > time {
+  overflow: hidden;
+  color: var(--text-muted);
+  font-size: 0.6rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.plan-execution-result {
+  display: inline-flex;
+  align-items: center;
+  justify-self: start;
+  gap: 0.4rem;
   color: var(--text-soft);
-  text-underline-offset: 3px;
+  font-size: 0.62rem;
+  font-weight: 700;
+}
+
+.plan-execution-result::before {
+  width: 0.42rem;
+  height: 0.42rem;
+  border-radius: 50%;
+  background: currentColor;
+  content: "";
+}
+
+.plan-execution-result.status-pass {
+  color: var(--success);
+}
+
+.plan-execution-result.status-fail {
+  color: var(--danger);
+}
+
+.plan-execution-result.status-incomplete {
+  color: var(--warning);
+}
+
+.plan-execution-rename-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.75rem;
+  height: 1.75rem;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  background: none;
+  color: var(--text-muted);
+  cursor: pointer;
+}
+
+.plan-execution-rename-button:hover,
+.plan-execution-rename-button:focus-visible {
+  border-color: var(--line-strong);
+  background: var(--surface-soft);
+  color: var(--text);
+}
+
+.plan-execution-name-control form {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.plan-execution-name-control input {
+  width: min(13rem, 22vw);
+  min-height: 34px;
+  padding: 0.4rem 0.55rem;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  color: var(--text);
+  font: 600 0.68rem var(--font-body);
+}
+
+.plan-execution-name-control .button {
+  min-height: 34px;
+  padding: 0.4rem 0.55rem;
+}
+
+.plan-execution-name-control > small {
+  display: block;
+  margin-top: 0.35rem;
+  color: var(--danger);
+  font-size: 0.61rem;
+}
+
+.plan-run-record-metric {
+  overflow: hidden;
+  color: var(--text-soft);
+  font: 650 0.68rem var(--font-mono);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.plan-run-report-link {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.35rem;
+  min-height: 32px;
+  padding: 0.35rem 0.5rem;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  color: var(--text-soft);
+  font-size: 0.62rem;
+  font-weight: 650;
+  text-decoration: none;
+  white-space: nowrap;
+}
+
+.plan-run-report-link:hover,
+.plan-run-report-link:focus-visible {
+  border-color: var(--line-strong);
+  background: var(--surface-soft);
+  color: var(--text);
 }
 
 .plan-scenario-metric {
@@ -9546,12 +9716,45 @@ footer {
     text-transform: uppercase;
   }
 
-  .plan-non-comparable li {
-    grid-template-columns: minmax(0, 1fr) auto;
+  .plan-run-history-heading {
+    grid-template-columns: 1fr;
   }
 
-  .plan-non-comparable li a {
+  .plan-run-history-columns {
+    display: none !important;
+  }
+
+  .plan-run-history-list > li {
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: start;
+    gap: 0.65rem 1rem;
+    padding: 0.9rem;
+  }
+
+  .plan-run-record-identity {
     grid-column: 1 / -1;
+  }
+
+  .plan-run-history-list > li > time {
+    justify-self: end;
+  }
+
+  .plan-run-record-metric {
+    display: grid;
+    gap: 0.15rem;
+  }
+
+  .plan-run-record-metric::before {
+    color: var(--text-muted);
+    content: attr(data-label);
+    font: 700 0.54rem var(--font-body);
+    letter-spacing: 0.045em;
+    text-transform: uppercase;
+  }
+
+  .plan-run-report-link {
+    grid-column: 1 / -1;
+    justify-self: start;
   }
 }
 
@@ -9666,6 +9869,16 @@ footer {
   }
 
   .plan-candidate-option {
+    width: 100%;
+  }
+
+  .plan-execution-name-control form {
+    align-items: stretch;
+    flex-wrap: wrap;
+  }
+
+  .plan-execution-name-control label,
+  .plan-execution-name-control input {
     width: 100%;
   }
 

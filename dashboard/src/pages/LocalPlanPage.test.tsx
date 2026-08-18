@@ -185,7 +185,7 @@ describe('local plan execution comparison', () => {
       html.indexOf('Candidate #1'),
     )
     expect(html).toContain('Incomplete attempt')
-    expect(html).toContain('Excluded from comparison')
+    expect(html).toContain('Incomplete attempts remain excluded')
     expect(html).toContain('Baseline and candidates')
     expect(html).toContain('1 visual baseline · 2 selected')
     expect(html).toContain('Visual baseline')
@@ -208,8 +208,10 @@ describe('local plan execution comparison', () => {
       /data-metric-id="tokens"[\s\S]*?<td class="is-selected is-winner" data-execution-id="candidate-2"/,
     )
     expect(html).toContain('Winner')
-    expect(html).toContain('Non-comparable attempts')
-    expect(html).toContain('View report')
+    expect(html).toContain('Execution history')
+    expect(html).toContain('<span>Calls</span>')
+    expect(html).toContain('<span>Errors</span>')
+    expect(html).toContain('aria-label="Open report for Official baseline"')
   })
 
   it('selects metric winners by direction, preserves ties and ignores missing values', () => {
@@ -256,6 +258,49 @@ describe('local plan execution comparison', () => {
     expect(html).not.toContain('plan-comparison-metrics')
     expect(html).not.toContain('plan-comparison-metric-card')
     expect(html).toContain('Stable')
+  })
+
+  it('lists plan executions with persisted names and contextual rename controls', () => {
+    const plan: LocalPlan = {
+      ...candidateRunningPlan,
+      state: 'comparison_ready',
+      candidate_execution_ids: ['candidate-1', 'candidate-2'],
+      candidate_labels: {
+        'candidate-1': 'Harness Latest',
+        'candidate-2': 'Harness Next',
+      },
+      last_attempt_id: 'candidate-2',
+    }
+    const html = renderToStaticMarkup(
+      <PlanExecutionHistory
+        plan={plan}
+        summaries={{
+          'baseline-1': execution('baseline-1'),
+          'candidate-1': execution('candidate-1'),
+          'candidate-2': execution('candidate-2'),
+        }}
+        visualBaselineId="baseline-1"
+        comparisonCandidateIds={['candidate-1', 'candidate-2']}
+        selectedCandidateId="candidate-2"
+        onVisualBaselineChange={() => undefined}
+        onToggleCandidate={() => undefined}
+        onRenameCandidate={async () => undefined}
+        loading={false}
+      />,
+    )
+
+    expect(html).toContain('Harness Latest')
+    expect(html).toContain('Harness Next')
+    expect(html).toContain('Execution history')
+    expect(html).toContain('Visual baseline')
+    expect(html).toContain('baseline-1')
+    expect(html).toContain('candidate-1')
+    expect(html).toContain('candidate-2')
+    expect(
+      html.match(/aria-label="Rename Harness (?:Latest|Next)"/g),
+    ).toHaveLength(2)
+    expect(html).toContain('plan-run-history-columns')
+    expect(html).toContain('Candidates in table')
   })
 
   it('can use a candidate as a visual-only baseline', () => {

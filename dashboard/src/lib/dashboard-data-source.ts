@@ -64,6 +64,7 @@ export type LocalPlan = {
   seed: number | null
   baseline_execution_id: string | null
   candidate_execution_ids: string[]
+  candidate_labels?: Record<string, string>
   incomplete_execution_ids: string[]
   last_attempt_id: string | null
 }
