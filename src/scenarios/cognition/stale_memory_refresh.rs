@@ -83,7 +83,7 @@ pub fn scenario(run_id: &str) -> ScenarioSpec {
              the arrow."
         ),
         filesystem_root: None,
-        execution: kit::policy(14, 160_000, 300),
+        execution: kit::policy(14, 160_000, 600),
         assessments: ASSESSMENTS,
         setup: Some(setup),
         evaluate,

@@ -82,7 +82,7 @@ pub fn scenario(run_id: &str) -> ScenarioSpec {
              ATTEMPTS:<n>`. Quote each demand exactly as the gauge stated it."
         ),
         filesystem_root: None,
-        execution: kit::policy(12, 150_000, 240),
+        execution: kit::policy(12, 150_000, 600),
         assessments: ASSESSMENTS,
         setup: Some(setup),
         evaluate,

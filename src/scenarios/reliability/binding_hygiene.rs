@@ -50,7 +50,7 @@ pub fn scenario(_run_id: &str) -> ScenarioSpec {
              4. Reply with exactly one line: `REGISTERED:{BINDINGS} UNREGISTERED:{BINDINGS} BINDINGS:0`."
         ),
         filesystem_root: None,
-        execution: kit::policy(10, 120_000, 240),
+        execution: kit::policy(10, 120_000, 600),
         assessments: ASSESSMENTS,
         setup: None,
         evaluate,

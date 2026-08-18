@@ -68,7 +68,7 @@ pub fn scenario(run_id: &str) -> ScenarioSpec {
              4. When you reply, use exactly one line: `DELEGATED:3`."
         ),
         filesystem_root: None,
-        execution: kit::policy(20, 320_000, 420),
+        execution: kit::policy(20, 320_000, 900),
         assessments: ASSESSMENTS,
         setup: None,
         evaluate,

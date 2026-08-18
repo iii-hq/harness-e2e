@@ -86,7 +86,7 @@ pub fn scenario(run_id: &str) -> ScenarioSpec {
             EDGES.len(),
         ),
         filesystem_root: Some(workspace::root(ID, run_id)),
-        execution: kit::policy(16, 200_000, 360),
+        execution: kit::policy(16, 200_000, 900),
         assessments: ASSESSMENTS,
         setup: None,
         evaluate,

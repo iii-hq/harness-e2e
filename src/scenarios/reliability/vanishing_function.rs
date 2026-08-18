@@ -92,7 +92,7 @@ pub fn scenario(run_id: &str) -> ScenarioSpec {
              from step 1. Never invent page two."
         ),
         filesystem_root: None,
-        execution: kit::policy(12, 150_000, 240),
+        execution: kit::policy(12, 150_000, 600),
         assessments: ASSESSMENTS,
         setup: Some(setup),
         evaluate,

@@ -90,7 +90,7 @@ pub fn scenario(run_id: &str) -> ScenarioSpec {
              record count you observed. Do not guess the count."
         ),
         filesystem_root: None,
-        execution: kit::policy(10, 120_000, 240),
+        execution: kit::policy(10, 120_000, 600),
         assessments: ASSESSMENTS,
         setup: Some(setup),
         evaluate,

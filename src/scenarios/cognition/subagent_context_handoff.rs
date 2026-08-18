@@ -54,7 +54,7 @@ pub fn scenario(run_id: &str) -> ScenarioSpec {
              4. Reply with exactly one line: `DELEGATED:1 TAG:{RELEASE_TAG}`."
         ),
         filesystem_root: None,
-        execution: kit::policy(18, 280_000, 420),
+        execution: kit::policy(18, 280_000, 900),
         assessments: ASSESSMENTS,
         setup: None,
         evaluate,

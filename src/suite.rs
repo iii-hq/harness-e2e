@@ -32,8 +32,8 @@ use crate::scenarios::{
     ScenarioSpec,
 };
 use crate::wire::{
-    ControlPlaneEvidence, FunctionPolicy, HarnessMode, MessageInput, Model, SendOptions,
-    SendRequest, SendResponse, SessionInit, StatusReport,
+    ControlPlaneEvidence, FunctionPolicy, HarnessMode, MessageInput, Model, PermissionMode,
+    SendOptions, SendRequest, SendResponse, SessionInit, StatusReport,
 };
 use crate::workflow::{
     composite_definition, composite_descriptor_catalog, composite_runtime, execute_workflow,
@@ -79,6 +79,9 @@ pub struct SuiteRunConfig {
     pub technical_retries: u8,
     pub progress_interval: Option<Duration>,
     pub control: Option<SuiteControl>,
+    /// Approval mode applied to every session this run owns. Unattended runs
+    /// need more than the `manual` default.
+    pub permission_mode: PermissionMode,
 }
 
 pub struct SuiteRunOutcome {
@@ -222,6 +225,7 @@ pub async fn run_suite(config: SuiteRunConfig) -> Result<SuiteRunOutcome> {
                     RetryRequest {
                         scenario_id: *scenario_id,
                         subject: &config.subject,
+                        permission_mode: config.permission_mode,
                         judge_config: config.judge.as_ref(),
                         seed,
                         technical_retries: config.technical_retries,
@@ -883,6 +887,7 @@ struct AttemptRequest<'a> {
     run_id: &'a str,
     attempt_number: u32,
     subject: &'a SubjectConfig,
+    permission_mode: PermissionMode,
     judge_config: Option<&'a JudgeConfig>,
     seed: u64,
     progress_interval: Option<Duration>,
@@ -896,6 +901,7 @@ async fn run_once(context: &Arc<E2eContext>, request: AttemptRequest<'_>) -> E2e
         run_id,
         attempt_number,
         subject,
+        permission_mode,
         judge_config,
         seed,
         progress_interval,
@@ -990,6 +996,7 @@ async fn run_once(context: &Arc<E2eContext>, request: AttemptRequest<'_>) -> E2e
             context.as_ref(),
             ExecutionRequest {
                 subject,
+                permission_mode,
                 judge_config,
                 run_id: &attempt_id,
                 session_id: &session_id,
@@ -1447,6 +1454,7 @@ fn workflow_failure_phase(phase: WorkflowFailurePhase) -> FailurePhase {
 struct RetryRequest<'a> {
     scenario_id: ScenarioId,
     subject: &'a SubjectConfig,
+    permission_mode: PermissionMode,
     judge_config: Option<&'a JudgeConfig>,
     seed: u64,
     technical_retries: u8,
@@ -1462,6 +1470,7 @@ async fn run_with_technical_retries(
     let RetryRequest {
         scenario_id,
         subject,
+        permission_mode,
         judge_config,
         seed,
         technical_retries,
@@ -1480,6 +1489,7 @@ async fn run_with_technical_retries(
                 run_id: &run_id,
                 attempt_number,
                 subject,
+                permission_mode,
                 judge_config,
                 seed,
                 progress_interval,
@@ -1520,6 +1530,7 @@ struct RunFailure {
 
 struct ExecutionRequest<'a> {
     subject: &'a SubjectConfig,
+    permission_mode: PermissionMode,
     judge_config: Option<&'a JudgeConfig>,
     run_id: &'a str,
     session_id: &'a str,
@@ -1548,6 +1559,7 @@ async fn execute(
 ) -> Result<(), RunFailure> {
     let ExecutionRequest {
         subject,
+        permission_mode,
         judge_config,
         run_id,
         session_id,
@@ -1573,6 +1585,16 @@ async fn execute(
         .map_err(|error| infrastructure_failure(FailurePhase::Execute, error.to_string()))?;
     ensure_not_cancelled(control)
         .map_err(|error| infrastructure_failure(FailurePhase::Execute, error.to_string()))?;
+    let approval_surface = context
+        .set_permission_mode(session_id, permission_mode)
+        .await
+        .map_err(|error| infrastructure_failure(FailurePhase::Execute, error.to_string()))?;
+    if !approval_surface {
+        tracing::debug!(
+            session = session_id,
+            "stack exposes no approval surface; the session keeps its default permissions"
+        );
+    }
     context
         .bind_turn_completed()
         .await

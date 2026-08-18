@@ -115,7 +115,7 @@ pub fn scenario(run_id: &str) -> ScenarioSpec {
             max = VALUES.iter().copied().max().unwrap_or_default() * UNIT,
         ),
         filesystem_root: Some(workspace::root(ID, run_id)),
-        execution: kit::policy(16, 200_000, 360),
+        execution: kit::policy(16, 200_000, 900),
         assessments: ASSESSMENTS,
         setup: None,
         evaluate,

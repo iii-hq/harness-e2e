@@ -13,11 +13,12 @@ use tokio::sync::watch;
 
 use crate::observe::{self, ObserveHub, ObserveSubscription, TreeObserver};
 use crate::wire::{
-    self, ControlPlaneEvidence, SessionMetricsResponse, SessionTreeResponse, StatusReport,
-    StopResponse, TeardownResponse, TurnCompletedEvent, TurnStatus,
+    self, ControlPlaneEvidence, PermissionMode, SessionMetricsResponse, SessionTreeResponse,
+    StatusReport, StopResponse, TeardownResponse, TurnCompletedEvent, TurnStatus,
 };
 
 pub const INVOCATION_TIMEOUT: Duration = Duration::from_secs(120);
+const APPROVAL_SET_MODE: &str = "approval::set-mode";
 const PROGRESS_SAMPLE_INTERVAL: Duration = Duration::from_secs(15);
 
 pub struct E2eContext {
@@ -142,6 +143,27 @@ impl E2eContext {
             .context("engine::workers::list has no versioned Harness worker")?
             .to_string();
         Ok(RuntimeVersions { engine, harness })
+    }
+
+    /// Lift a session out of the approval surface's `manual` default so an
+    /// unattended run is not held on its first function call. Returns false
+    /// when the stack exposes no approval surface, which is not an error.
+    pub async fn set_permission_mode(
+        &self,
+        session_id: &str,
+        mode: PermissionMode,
+    ) -> Result<bool> {
+        if !self.function_exists(APPROVAL_SET_MODE).await? {
+            return Ok(false);
+        }
+        let _: Value = self
+            .trigger(
+                APPROVAL_SET_MODE,
+                json!({ "session_id": session_id, "mode": mode }),
+            )
+            .await
+            .with_context(|| format!("set permission mode for session {session_id}"))?;
+        Ok(true)
     }
 
     pub async fn bind_turn_completed(&self) -> Result<()> {

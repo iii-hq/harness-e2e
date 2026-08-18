@@ -8,6 +8,7 @@ use harness_e2e::judge::JudgeConfig;
 use harness_e2e::report::E2eReport;
 use harness_e2e::scenarios::{self, ScenarioId, ScenarioSuite};
 use harness_e2e::suite::{run_suite, SubjectConfig, SuiteRunConfig};
+use harness_e2e::wire::PermissionMode;
 
 #[derive(Debug, Parser)]
 #[command(name = "harness-e2e", about = "Run real-stack quality scenarios")]
@@ -101,6 +102,12 @@ struct RunArgs {
     /// out of the default selection and are opted into per run.
     #[arg(long, value_enum, default_value_t = ScenarioSuite::Canonical)]
     suite: ScenarioSuite,
+
+    /// Approval mode for the sessions this run owns. Scenario runs are
+    /// unattended, so the default lifts them out of `manual`, where every
+    /// function call waits for a human.
+    #[arg(long, value_enum, default_value_t = PermissionMode::Full)]
+    permission_mode: PermissionMode,
 }
 
 #[derive(Debug, Args)]
@@ -271,6 +278,7 @@ async fn run(args: RunArgs) -> Result<()> {
         args.judge_provider,
     ));
     let outcome = run_suite(SuiteRunConfig {
+        permission_mode: args.permission_mode,
         url: args.url,
         execution_id,
         subject,

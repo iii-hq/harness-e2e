@@ -633,6 +633,7 @@ impl ControlPlane {
         };
         let judge = Some(judge_config(&request));
         let outcome = run_suite(SuiteRunConfig {
+            permission_mode: crate::wire::PermissionMode::Full,
             url: self.inner.url.clone(),
             execution_id: None,
             subject: SubjectConfig {

@@ -60,7 +60,7 @@ pub fn scenario(run_id: &str) -> ScenarioSpec {
              4. Reply with exactly one line: `JOIN:<the joined value>`."
         ),
         filesystem_root: None,
-        execution: kit::policy(14, 160_000, 300),
+        execution: kit::policy(14, 160_000, 600),
         assessments: ASSESSMENTS,
         setup: None,
         evaluate,

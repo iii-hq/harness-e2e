@@ -133,6 +133,20 @@ pub struct SendOptions {
     pub metadata: Option<Value>,
 }
 
+/// How the approval surface gates a session's function calls. Scenario runs
+/// are unattended, so they raise their own session out of the `manual`
+/// default before the prompt is sent.
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, JsonSchema, clap::ValueEnum,
+)]
+#[serde(rename_all = "snake_case")]
+pub enum PermissionMode {
+    Manual,
+    Auto,
+    #[default]
+    Full,
+}
+
 #[derive(
     Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, JsonSchema, clap::ValueEnum,
 )]

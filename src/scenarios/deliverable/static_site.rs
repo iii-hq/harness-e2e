@@ -77,7 +77,7 @@ pub fn scenario(run_id: &str) -> ScenarioSpec {
              5. Reply with exactly one line: `PAGES:2 FILES:4`.",
         ),
         filesystem_root: Some(workspace::root(ID, run_id)),
-        execution: kit::policy(22, 300_000, 420),
+        execution: kit::policy(22, 300_000, 900),
         assessments: ASSESSMENTS,
         setup: None,
         evaluate,

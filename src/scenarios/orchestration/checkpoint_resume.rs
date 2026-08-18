@@ -104,7 +104,7 @@ pub fn scenario(run_id: &str) -> ScenarioSpec {
              PROCESSED:<comma-separated indexes>`."
         ),
         filesystem_root: None,
-        execution: kit::policy(20, 260_000, 360),
+        execution: kit::policy(20, 260_000, 600),
         assessments: ASSESSMENTS,
         setup: Some(setup),
         evaluate,

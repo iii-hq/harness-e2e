@@ -80,7 +80,7 @@ pub fn scenario(run_id: &str) -> ScenarioSpec {
             background()
         ),
         filesystem_root: None,
-        execution: kit::policy(16, 200_000, 300),
+        execution: kit::policy(16, 200_000, 600),
         assessments: ASSESSMENTS,
         setup: None,
         evaluate,

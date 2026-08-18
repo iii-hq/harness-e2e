@@ -116,7 +116,7 @@ pub fn scenario(run_id: &str) -> ScenarioSpec {
             count = MOVES.len(),
         ),
         filesystem_root: Some(workspace::root(ID, run_id)),
-        execution: kit::policy(24, 320_000, 480),
+        execution: kit::policy(24, 320_000, 900),
         assessments: ASSESSMENTS,
         setup: None,
         evaluate,

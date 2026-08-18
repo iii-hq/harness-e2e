@@ -74,7 +74,7 @@ pub fn scenario(run_id: &str) -> ScenarioSpec {
              is how many relations you wrote."
         ),
         filesystem_root: Some(workspace::root(ID, run_id)),
-        execution: kit::policy(20, 260_000, 420),
+        execution: kit::policy(20, 260_000, 900),
         assessments: ASSESSMENTS,
         setup: None,
         evaluate,

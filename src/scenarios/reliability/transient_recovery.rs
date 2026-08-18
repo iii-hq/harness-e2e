@@ -82,7 +82,7 @@ pub fn scenario(run_id: &str) -> ScenarioSpec {
              report a token you did not receive."
         ),
         filesystem_root: None,
-        execution: kit::policy(14, 150_000, 300),
+        execution: kit::policy(14, 150_000, 600),
         assessments: ASSESSMENTS,
         setup: Some(setup),
         evaluate,

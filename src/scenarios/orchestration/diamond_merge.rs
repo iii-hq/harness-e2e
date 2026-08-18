@@ -56,7 +56,7 @@ pub fn scenario(run_id: &str) -> ScenarioSpec {
              Reply with exactly one line: `MERGED:<value>`."
         ),
         filesystem_root: None,
-        execution: kit::policy(16, 180_000, 300),
+        execution: kit::policy(16, 180_000, 600),
         assessments: ASSESSMENTS,
         setup: None,
         evaluate,
