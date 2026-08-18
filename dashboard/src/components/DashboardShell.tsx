@@ -167,7 +167,7 @@ export function DashboardShell({
           title="harness e2e"
           description={`${sectionLabel ?? 'Overview'} · evidence, plans and live evaluation control`}
           actions={
-            <div className="harness-e2e-header-actions">
+            <div className="harness-e2e-header-actions flex min-w-0 items-center justify-end gap-2">
               {!embedded ? (
                 <ThemeToggle
                   theme={standaloneTheme}
@@ -180,39 +180,47 @@ export function DashboardShell({
           onClose={embedded ? onRequestClose : undefined}
         />
         <PageBody side={panelSide}>
-          <PageMain className="harness-e2e-console-main">
+          <PageMain className="harness-e2e-console-main min-h-0 min-w-0 overflow-auto p-0">
             <div
               ref={mainRef}
-              className="harness-e2e-dashboard"
+              className="harness-e2e-dashboard min-h-full min-w-0 overflow-x-hidden bg-panel text-ink"
               data-harness-e2e-dashboard
               data-theme={theme}
             >
-              <div className="harness-e2e-navigation" data-section={section}>
-                <div className="harness-e2e-navigation-wide">
+              <div
+                className="harness-e2e-navigation sticky top-0 z-10 min-w-0 border-b border-line bg-panel/95 backdrop-blur-[10px]"
+                data-section={section}
+              >
+                <div className="harness-e2e-navigation-wide min-w-0 px-4">
                   <Tabs
                     value={section}
                     onValueChange={(next) => navigate(next as DashboardSection)}
                     aria-label="Harness E2E sections"
                   >
-                    <TabsList>
+                    <TabsList className="flex min-h-11 gap-0.5 overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
                       {navigation.map((item) => (
-                        <TabsTrigger key={item.value} value={item.value}>
+                        <TabsTrigger
+                          key={item.value}
+                          value={item.value}
+                          className="min-h-11 whitespace-nowrap border-b-2 border-transparent px-3 text-xs font-medium leading-none text-ink-soft aria-[selected=true]:border-brand aria-[selected=true]:text-ink"
+                        >
                           {item.label}
                         </TabsTrigger>
                       ))}
                     </TabsList>
                   </Tabs>
                 </div>
-                <div className="harness-e2e-navigation-narrow">
+                <div className="harness-e2e-navigation-narrow hidden min-w-0 px-4 py-2">
                   <Select
                     value={section}
                     options={navigation}
                     onChange={(next) => navigate(next as DashboardSection)}
+                    className="min-h-11 w-full rounded-[6px] border border-line bg-panel-raised px-2.5 text-xs font-medium leading-none text-ink"
                     aria-label="Harness E2E section"
                   />
                 </div>
               </div>
-              <div className="harness-e2e-content">{children}</div>
+              <div className="harness-e2e-content min-w-0">{children}</div>
             </div>
           </PageMain>
         </PageBody>

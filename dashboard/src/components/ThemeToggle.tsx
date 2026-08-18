@@ -20,7 +20,7 @@ export function ThemeToggle({
 
   return (
     <button
-      className="harness-e2e-header-action harness-e2e-theme-toggle"
+      className="harness-e2e-header-action harness-e2e-theme-toggle inline-flex min-w-9 px-2.5"
       type="button"
       data-theme-toggle
       aria-label={`Use ${nextTheme} theme`}

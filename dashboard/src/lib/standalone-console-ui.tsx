@@ -45,16 +45,29 @@ export function PageHeader({
   className?: string
 }) {
   return (
-    <header className={`harness-e2e-standalone-header ${className ?? ''}`}>
-      <span className="harness-e2e-standalone-icon">{icon}</span>
-      <div className="harness-e2e-standalone-header-copy">
-        <strong>{title}</strong>
-        <span>{description}</span>
+    <header
+      className={`harness-e2e-standalone-header flex min-h-14 items-center gap-2.5 border-b border-line bg-panel-raised px-4 ${className ?? ''}`}
+    >
+      <span className="harness-e2e-standalone-icon grid h-5 w-5 shrink-0 place-items-center text-brand">
+        {icon}
+      </span>
+      <div className="harness-e2e-standalone-header-copy grid min-w-0 gap-0.5">
+        <strong className="truncate font-mono text-xs font-semibold leading-tight text-ink">
+          {title}
+        </strong>
+        <span className="truncate text-[11px] text-ink-soft">
+          {description}
+        </span>
       </div>
       {children}
       {actions}
       {onClose ? (
-        <button type="button" onClick={onClose} aria-label="Close page">
+        <button
+          className="ml-auto min-h-9 min-w-9 shrink-0 cursor-pointer border-0 bg-transparent text-lg text-ink-soft"
+          type="button"
+          onClick={onClose}
+          aria-label="Close page"
+        >
           ×
         </button>
       ) : null}
@@ -211,7 +224,10 @@ export function Skeleton({
   ...props
 }: HTMLAttributes<HTMLSpanElement>) {
   return (
-    <span className={`harness-e2e-skeleton ${className ?? ''}`} {...props} />
+    <span
+      className={`harness-e2e-skeleton block min-h-3 rounded-[4px] bg-panel-soft ${className ?? ''}`}
+      {...props}
+    />
   )
 }
 

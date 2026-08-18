@@ -138,7 +138,7 @@ test('keeps the workspace navigation and versioned test flow', () => {
     assert.match(page, /<DashboardPageActions/)
   }
   assert.match(dashboardShell, /<Tabs/)
-  assert.match(dashboardShell, /<TabsTrigger key=\{item\.value\}/)
+  assert.match(dashboardShell, /<TabsTrigger\b[^>]*key=\{item\.value\}/s)
   assert.match(dashboardShell, /<Select/)
   assert.match(appHeader, /return null/)
   assert.doesNotMatch(read('src', 'index.css'), /\.topbar(?:\s|,|\{)/)

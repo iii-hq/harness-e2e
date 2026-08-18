@@ -20,7 +20,7 @@ export function appHeaderActionClassName({
   className?: string
 } = {}) {
   return classes(
-    'harness-e2e-header-action',
+    'harness-e2e-header-action inline-flex min-h-9 shrink-0 items-center justify-center rounded-[6px] border border-line bg-panel-raised px-3 text-xs font-semibold leading-none text-ink no-underline transition-colors duration-150 ease-in-out',
     primary
       ? 'harness-e2e-header-action-primary'
       : 'harness-e2e-header-action-secondary',

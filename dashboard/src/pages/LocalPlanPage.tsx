@@ -134,19 +134,35 @@ function DiscardDraftDialog({
   if (!open) return null
   return (
     <dialog
-      className="harness-e2e-discard-dialog"
+      className="harness-e2e-discard-dialog m-auto w-[min(28rem,calc(100vw-2rem))] rounded-[6px] border border-line bg-panel p-5 text-ink"
       open
       aria-modal="true"
       aria-labelledby="discard-draft-title"
       aria-describedby="discard-draft-description"
     >
-      <h2 id="discard-draft-title">Discard draft changes?</h2>
-      <p id="discard-draft-description">{warning}</p>
-      <div className="harness-e2e-discard-dialog-actions">
-        <button ref={keepEditingRef} type="button" onClick={onDiscard}>
+      <h2 id="discard-draft-title" className="m-0 text-base font-semibold">
+        Discard draft changes?
+      </h2>
+      <p
+        id="discard-draft-description"
+        className="m-0 mt-2 text-[13px] leading-[1.5] text-ink-soft"
+      >
+        {warning}
+      </p>
+      <div className="harness-e2e-discard-dialog-actions mt-4 flex flex-wrap justify-end gap-2">
+        <button
+          ref={keepEditingRef}
+          className="min-h-11 cursor-pointer rounded-[6px] border border-line bg-panel-raised px-3 text-ink"
+          type="button"
+          onClick={onDiscard}
+        >
           Keep editing
         </button>
-        <button type="button" onClick={onContinue}>
+        <button
+          className="min-h-11 cursor-pointer rounded-[6px] border border-brand bg-brand px-3 text-panel"
+          type="button"
+          onClick={onContinue}
+        >
           Discard and continue
         </button>
       </div>
