@@ -231,7 +231,7 @@ test('keeps plan panels explicitly padded and comparison content full bleed', ()
   assert.doesNotMatch(planPage, /className="panel-heading"/)
   assert.match(plansPage, /panel-heading plans-list-heading/)
   assert.match(planPage, /plan-execution-table-wrap/)
-  assert.match(planPage, /plan-scenario-table-wrap/)
+  assert.match(planPage, /plan-scenario-disclosures/)
 })
 
 test('exposes baseline and arbitrary candidate comparison controls', () => {
@@ -267,7 +267,7 @@ test('exposes baseline and arbitrary candidate comparison controls', () => {
   assert.match(planPage, /baselineLabel.*resolvedCandidateLabel/s)
   assert.doesNotMatch(planPage, /plan-comparison-metrics/)
   assert.doesNotMatch(planPage, /ComparisonMetricCard/)
-  assert.match(planPage, /Test breakdown/)
+  assert.match(planPage, /Signals by test/)
   assert.match(planPage, /Run another candidate/)
 })
 
@@ -284,9 +284,9 @@ test('organizes detail into progressive disclosure sections', () => {
   for (const section of ['summary', 'results', 'technical']) {
     assert.match(executionPage, new RegExp(`id=\\"${section}\\"`))
   }
-  assert.match(executionPage, /hashForExecution\(executionId, item\.id\)/)
-  assert.match(executionPage, /detail-index sticky top-16/)
-  assert.doesNotMatch(executionPage, /detail-index hidden/)
+  assert.match(executionPage, /hashForExecution\(detail\.id, 'results'\)/)
+  assert.match(executionPage, /className="skip-link"/)
+  assert.doesNotMatch(executionPage, /detail-index/)
   assert.match(
     executionPage,
     /anchor === 'evidence' \|\| anchor === 'raw-data'\) return 'technical'/,
