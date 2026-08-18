@@ -5,6 +5,7 @@ import {
   hashForPlans,
   hashForWorkspace,
 } from '@/hooks/use-hash-route'
+import { isEmbeddedDashboard } from '@/lib/dashboard-runtime'
 import '@/design-system/styles.css'
 
 export type AppHeaderSection =
@@ -17,17 +18,17 @@ export type AppHeaderSection =
 const navigation: Array<{
   id: AppHeaderSection
   label: string
-  href: string
+  href: () => string
 }> = [
-  { id: 'overview', label: 'Overview', href: hashForWorkspace() },
-  { id: 'tests', label: 'Tests', href: hashForWorkspace('tests') },
+  { id: 'overview', label: 'Overview', href: () => hashForWorkspace() },
+  { id: 'tests', label: 'Tests', href: () => hashForWorkspace('tests') },
   {
     id: 'executions',
     label: 'Executions',
-    href: hashForWorkspace('executions'),
+    href: () => hashForWorkspace('executions'),
   },
-  { id: 'plans', label: 'Plans', href: hashForPlans() },
-  { id: 'coverage', label: 'Coverage', href: hashForCoverage() },
+  { id: 'plans', label: 'Plans', href: () => hashForPlans() },
+  { id: 'coverage', label: 'Coverage', href: () => hashForCoverage() },
 ]
 
 function classes(...values: Array<string | false | null | undefined>) {
@@ -90,7 +91,7 @@ export function AppHeader({
           return (
             <a
               className="inline-flex min-h-11 shrink-0 snap-start items-center justify-center border-b-2 border-transparent px-3 text-xs font-medium text-[var(--ds-color-ink-soft)] no-underline transition-colors motion-reduce:transition-none hover:bg-[var(--ds-color-surface-raised)] hover:text-[var(--ds-color-ink)] aria-[current=page]:border-[var(--ds-color-brand)] aria-[current=page]:text-[var(--ds-color-ink)] lg:min-h-16 lg:px-4 lg:hover:bg-transparent"
-              href={item.href}
+              href={item.href()}
               aria-current={current ? 'page' : undefined}
               key={item.id}
             >
@@ -109,7 +110,7 @@ export function AppHeader({
             {actions}
           </nav>
         ) : null}
-        {showThemeToggle ? <ThemeToggle /> : null}
+        {showThemeToggle && !isEmbeddedDashboard() ? <ThemeToggle /> : null}
       </div>
     </header>
   )

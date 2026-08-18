@@ -23,6 +23,7 @@ use super::read_model::{
 };
 use super::store::read_stored_run;
 use super::RunRequest;
+use crate::catalog::CatalogModel;
 use crate::context::E2eContext;
 use crate::scenarios::ScenarioId;
 
@@ -97,6 +98,34 @@ pub(super) struct ExecutionBundle {
 pub(super) struct CatalogRequest {
     #[serde(default)]
     pub url: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize, JsonSchema)]
+struct DashboardEmptyRequest {
+    #[serde(rename = "_caller_worker_id", default)]
+    #[schemars(skip)]
+    _caller_worker_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
+struct PlanGetRequest {
+    #[serde(rename = "_caller_worker_id", default)]
+    #[schemars(skip)]
+    _caller_worker_id: Option<String>,
+    plan_id: String,
+}
+
+#[derive(Debug, Clone, Serialize, JsonSchema)]
+struct PlansListResponse {
+    mode: String,
+    plans: Vec<super::plans::LocalPlan>,
+}
+
+#[derive(Debug, Serialize, JsonSchema)]
+pub(super) struct CatalogResponse {
+    url: String,
+    models: Vec<CatalogModel>,
+    scenarios: Vec<String>,
 }
 
 #[derive(Debug, Clone, Default, Deserialize, JsonSchema)]
@@ -330,25 +359,27 @@ pub(super) fn register_functions(iii: &IIIClient, controller: Arc<Controller>) {
         "List local plans and their baseline/candidate lifecycle.",
         {
             let controller = controller.clone();
-            RegisterFunction::new_async(move |_request: Value| {
+            RegisterFunction::new_async(move |_request: DashboardEmptyRequest| {
                 let controller = controller.clone();
                 async move {
                     let plans = controller.list_plans().await.map_err(handler_error)?;
-                    Ok(json!({ "mode": "local", "plans": plans }))
+                    Ok(PlansListResponse {
+                        mode: "local".into(),
+                        plans,
+                    })
                 }
             })
         },
     );
     register(iii, PLAN_GET, "Read one local plan.", {
         let controller = controller.clone();
-        RegisterFunction::new_async(move |request: Value| {
+        RegisterFunction::new_async(move |request: PlanGetRequest| {
             let controller = controller.clone();
             async move {
-                let id = request
-                    .get("plan_id")
-                    .and_then(Value::as_str)
-                    .ok_or_else(|| handler_error("plan_id is required"))?;
-                controller.get_plan(id).await.map_err(handler_error)
+                controller
+                    .get_plan(&request.plan_id)
+                    .await
+                    .map_err(handler_error)
             }
         })
     });
@@ -461,7 +492,7 @@ pub(super) fn register_functions(iii: &IIIClient, controller: Arc<Controller>) {
     });
     register(iii, RUN_CANCEL, "Cancel the active local E2E execution.", {
         let controller = controller.clone();
-        RegisterFunction::new_async(move |_request: Value| {
+        RegisterFunction::new_async(move |_request: DashboardEmptyRequest| {
             let controller = controller.clone();
             async move {
                 controller
@@ -627,7 +658,7 @@ pub(super) async fn catalog(
     controller: &Controller,
     request: CatalogRequest,
     connected: Option<&IIIClient>,
-) -> Result<Value> {
+) -> Result<CatalogResponse> {
     let url = request
         .url
         .unwrap_or_else(|| controller.default_url().to_string());
@@ -653,8 +684,15 @@ pub(super) async fn catalog(
             if models.is_empty() {
                 bail!("the running Harness has no registered models");
             }
-            let scenarios: Vec<_> = ScenarioId::ALL.iter().map(|value| value.as_str()).collect();
-            return Ok(json!({ "url": url, "models": models, "scenarios": scenarios }));
+            let scenarios = ScenarioId::ALL
+                .iter()
+                .map(|value| value.as_str().to_string())
+                .collect();
+            return Ok(CatalogResponse {
+                url,
+                models,
+                scenarios,
+            });
         }
     }
     let context = E2eContext::connect(&url).await?;
@@ -669,8 +707,15 @@ pub(super) async fn catalog(
         if models.is_empty() {
             bail!("the running Harness has no registered models");
         }
-        let scenarios: Vec<_> = ScenarioId::ALL.iter().map(|value| value.as_str()).collect();
-        Ok(json!({ "url": url, "models": models, "scenarios": scenarios }))
+        let scenarios = ScenarioId::ALL
+            .iter()
+            .map(|value| value.as_str().to_string())
+            .collect();
+        Ok(CatalogResponse {
+            url,
+            models,
+            scenarios,
+        })
     }
     .await;
     context.shutdown().await;

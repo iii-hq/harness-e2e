@@ -1,6 +1,7 @@
 use anyhow::{Context, Result};
 use iii_sdk::protocol::TriggerRequest;
 use iii_sdk::IIIClient;
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use crate::context::E2eContext;
@@ -16,7 +17,7 @@ struct ModelsListResponse {
     models: Vec<CatalogModel>,
 }
 
-#[derive(Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[derive(Debug, Deserialize, Serialize, JsonSchema, PartialEq, Eq)]
 pub struct CatalogModel {
     provider: String,
     #[serde(rename(serialize = "model", deserialize = "id"))]

@@ -9,6 +9,7 @@ dashboard/data.js
 dashboard/executions.js
 dashboard/runs/
 dashboard/dist/
+dashboard/dist-console/
 dashboard/node_modules/
 dashboard/*.tsbuildinfo
 dashboard/public/prototype/

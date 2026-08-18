@@ -171,6 +171,15 @@ pub async fn serve(args: DashboardArgs) -> Result<()> {
     api::serve(args).await
 }
 
+/// Register the dashboard read, plan, run, status, and cancellation functions
+/// against an already registered E2E control plane.
+pub async fn register_worker_functions(
+    iii: &iii_sdk::IIIClient,
+    control: crate::control::ControlPlane,
+) -> Result<()> {
+    api::register_worker_functions(iii, control).await
+}
+
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeMap;
@@ -178,7 +187,7 @@ mod tests {
 
     use serde_json::json;
 
-    use super::controller::{build_run_command, validate_request};
+    use super::controller::{control_request, validate_request};
     use super::presenter::{
         contract_fingerprint, execution_detail_value, execution_summary, load_execution_summaries,
     };
@@ -190,7 +199,7 @@ mod tests {
         CostReport, E2eManifest, E2eReport, E2eRunReport, E2eScenarioReport, ModelArtifact,
         RunStatus,
     };
-    use crate::scenarios::ExecutionPolicy;
+    use crate::scenarios::{ExecutionPolicy, ScenarioId};
     use crate::wire::{ControlPlaneEvidence, FunctionContractEvidence};
 
     const TEST_DIGEST: &str =
@@ -343,21 +352,12 @@ mod tests {
     }
 
     #[test]
-    fn builds_self_invocation_without_cargo() {
-        let command = build_run_command(
-            Path::new("/tmp/harness-e2e"),
-            &request(),
-            Path::new("/tmp/results"),
-        );
-        let std = command.as_std();
-        assert_eq!(std.get_program(), "/tmp/harness-e2e");
-        let args: Vec<_> = std
-            .get_args()
-            .map(|value| value.to_string_lossy())
-            .collect();
-        assert_eq!(args[0], "run");
-        assert!(args.contains(&"direct_answer".into()));
-        assert!(!args.iter().any(|value| value == "cargo"));
+    fn local_requests_are_mapped_to_the_shared_control_plane() {
+        let converted = control_request(&request()).expect("request should map");
+        assert_eq!(converted.label, " first run ");
+        assert_eq!(converted.lane, "local");
+        assert_eq!(converted.scenarios, vec![ScenarioId::DirectAnswer]);
+        assert!(converted.idempotency_key.starts_with("dashboard:"));
     }
 
     #[test]

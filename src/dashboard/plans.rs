@@ -10,7 +10,7 @@ use serde_json::json;
 
 use super::RunRequest;
 use crate::artifact;
-use crate::scenarios::ScenarioId;
+use crate::scenarios::{ScenarioExecutionKind, ScenarioId};
 
 const PLAN_SCHEMA_VERSION: u32 = 1;
 
@@ -444,10 +444,28 @@ fn validate_values(request: &PlanCreateRequest) -> Result<()> {
     if ids.len() != request.scenarios.len() {
         bail!("plan scenarios must be unique");
     }
-    for value in ids {
-        if !ScenarioId::ALL.iter().any(|id| id.as_str() == value) {
-            bail!("unknown scenario '{value}'");
-        }
+    let selected = ids
+        .into_iter()
+        .map(|value| {
+            ScenarioId::ALL
+                .iter()
+                .copied()
+                .find(|id| id.as_str() == value)
+                .with_context(|| format!("unknown scenario '{value}'"))
+        })
+        .collect::<Result<Vec<_>>>()?;
+    if selected
+        .iter()
+        .any(|scenario| scenario.manual_cli_only() && *scenario != ScenarioId::SecurityReview)
+    {
+        bail!("this manually prepared scenario can only be started with the local CLI");
+    }
+    if request.technical_retries > 0
+        && selected
+            .iter()
+            .any(|scenario| scenario.execution_kind() == ScenarioExecutionKind::CompositeFlow)
+    {
+        bail!("composite scenarios with non-repeatable steps require technical_retries=0");
     }
     Ok(())
 }
@@ -529,6 +547,20 @@ mod tests {
             ScenarioId::DirectAnswer.canonical_seed()
         );
         assert!(plan.baseline_execution_id.is_none());
+    }
+
+    #[test]
+    fn security_review_plan_requires_zero_technical_retries() {
+        let mut request = request();
+        request.scenarios = vec![ScenarioId::SecurityReview.as_str().into()];
+        assert!(new_plan(&request, "security-with-retry".into())
+            .unwrap_err()
+            .to_string()
+            .contains("technical_retries=0"));
+
+        request.technical_retries = 0;
+        new_plan(&request, "security-without-retry".into())
+            .expect("security review plan should use the shared control plane");
     }
 
     #[test]

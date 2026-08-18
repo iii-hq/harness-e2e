@@ -1,0 +1,28 @@
+.harness-e2e-console-shell {
+  min-width: 0;
+}
+
+.harness-e2e-console-main {
+  min-width: 0;
+  overflow: auto;
+  padding: 0;
+}
+
+.harness-e2e-dashboard {
+  position: relative;
+  min-width: 320px;
+  min-height: 100%;
+  overflow-x: hidden;
+  background:
+    linear-gradient(var(--grid-line) 1px, transparent 1px),
+    linear-gradient(90deg, var(--grid-line) 1px, transparent 1px), var(--bg);
+  background-size: 56px 56px;
+  color: var(--text);
+  font-family:
+    Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont,
+    "Segoe UI", sans-serif;
+}
+
+.harness-e2e-dashboard [id] {
+  scroll-margin-top: 5rem;
+}

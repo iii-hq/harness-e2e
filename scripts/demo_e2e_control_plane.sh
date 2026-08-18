@@ -94,15 +94,15 @@ trigger() {
     --json "$payload"
 }
 
-printf 'Building the trusted e2e-worker from %s\n' "$ROOT_DIR"
-cargo build --locked --manifest-path "${ROOT_DIR}/Cargo.toml" --bin e2e-worker
+printf 'Building the trusted harness-e2e worker from %s\n' "$ROOT_DIR"
+cargo build --locked --manifest-path "${ROOT_DIR}/Cargo.toml" --bin harness-e2e
 
 printf 'Starting e2e::* on %s\n' "$III_URL"
 HARNESS_E2E_WORKERS_REPOSITORY="$E2E_WORKERS_REPOSITORY" \
 HARNESS_E2E_WORKERS_REVISION="$E2E_WORKERS_REVISION" \
-"${ROOT_DIR}/target/debug/e2e-worker" \
+"${ROOT_DIR}/target/debug/harness-e2e" worker \
   --url "$III_URL" \
-  --output-root "${E2E_DEMO_ROOT}/runs" \
+  --data-dir "${E2E_DEMO_ROOT}/runs" \
   >"$WORKER_LOG" 2>&1 &
 WORKER_PID=$!
 
@@ -112,7 +112,7 @@ for _ in $(seq 1 60); do
     break
   fi
   if ! kill -0 "$WORKER_PID" 2>/dev/null; then
-    printf 'e2e-worker exited during startup; see %s\n' "$WORKER_LOG" >&2
+    printf 'harness-e2e worker exited during startup; see %s\n' "$WORKER_LOG" >&2
     exit 1
   fi
   sleep 0.5

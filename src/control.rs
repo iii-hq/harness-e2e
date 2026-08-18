@@ -12,7 +12,7 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
-use tokio::sync::{mpsc, watch, Mutex, RwLock};
+use tokio::sync::{broadcast, mpsc, watch, Mutex, RwLock};
 
 use crate::context::E2eContext;
 use crate::durable::{
@@ -136,6 +136,8 @@ pub struct ExecutionRecord {
 #[serde(deny_unknown_fields)]
 pub struct RunRequest {
     pub idempotency_key: String,
+    #[serde(default)]
+    pub label: String,
     #[serde(default = "default_lane")]
     pub lane: String,
     pub model: String,
@@ -273,6 +275,11 @@ pub struct ScenariosListResponse {
     pub scenarios: Vec<ScenarioDescriptor>,
 }
 
+#[derive(Debug, Clone)]
+pub struct ControlPlaneUpdate {
+    pub record: ExecutionRecord,
+}
+
 #[derive(Clone)]
 pub struct ControlPlane {
     inner: Arc<ControlPlaneInner>,
@@ -286,6 +293,7 @@ struct ControlPlaneInner {
     records: RwLock<HashMap<String, ExecutionRecord>>,
     cancellations: Mutex<HashMap<String, watch::Sender<bool>>>,
     durable: DurableHistory,
+    updates: broadcast::Sender<ControlPlaneUpdate>,
 }
 
 fn default_lane() -> String {
@@ -310,6 +318,7 @@ const fn default_results_limit() -> u16 {
 
 impl ControlPlane {
     pub async fn new(iii: IIIClient, url: String, output_root: PathBuf) -> Result<Self> {
+        let (updates, _) = broadcast::channel(256);
         let control = Self {
             inner: Arc::new(ControlPlaneInner {
                 durable: DurableHistory::from_client(iii.clone()),
@@ -319,6 +328,7 @@ impl ControlPlane {
                 admission: Mutex::new(()),
                 records: RwLock::new(HashMap::new()),
                 cancellations: Mutex::new(HashMap::new()),
+                updates,
             }),
         };
         control.restore().await?;
@@ -527,7 +537,32 @@ impl ControlPlane {
         );
     }
 
-    async fn run(&self, request: RunRequest) -> Result<RunAccepted> {
+    pub fn url(&self) -> &str {
+        &self.inner.url
+    }
+
+    pub fn output_root(&self) -> &Path {
+        &self.inner.output_root
+    }
+
+    pub fn subscribe(&self) -> broadcast::Receiver<ControlPlaneUpdate> {
+        self.inner.updates.subscribe()
+    }
+
+    pub async fn records(&self) -> Vec<ExecutionRecord> {
+        let mut records = self
+            .inner
+            .records
+            .read()
+            .await
+            .values()
+            .cloned()
+            .collect::<Vec<_>>();
+        records.sort_by(|left, right| right.requested_at.cmp(&left.requested_at));
+        records
+    }
+
+    pub async fn run(&self, request: RunRequest) -> Result<RunAccepted> {
         let lane_budget = validate_run_request(&request)?;
         let _admission = self.inner.admission.lock().await;
         let execution_id = execution_id_for_key(&request.idempotency_key);
@@ -737,11 +772,11 @@ impl ControlPlane {
         }
     }
 
-    async fn status(&self, execution_id: &str) -> Result<StatusResponse> {
+    pub async fn status(&self, execution_id: &str) -> Result<StatusResponse> {
         Ok(status_response(&self.record(execution_id).await?))
     }
 
-    async fn cancel(&self, execution_id: &str) -> Result<CancelResponse> {
+    pub async fn cancel(&self, execution_id: &str) -> Result<CancelResponse> {
         let record = self.record(execution_id).await?;
         if record.phase.terminal() {
             return Ok(CancelResponse {
@@ -770,7 +805,7 @@ impl ControlPlane {
         })
     }
 
-    async fn results_get(&self, execution_id: &str) -> Result<ResultsGetResponse> {
+    pub async fn results_get(&self, execution_id: &str) -> Result<ResultsGetResponse> {
         let record = self.record(execution_id).await?;
         Ok(ResultsGetResponse {
             execution_id: record.execution_id,
@@ -848,7 +883,7 @@ impl ControlPlane {
             .await
     }
 
-    async fn results_list(&self, request: ResultsListRequest) -> Result<ResultsListResponse> {
+    pub async fn results_list(&self, request: ResultsListRequest) -> Result<ResultsListResponse> {
         if request.limit == 0 || request.limit > 500 {
             bail!("results list limit must be between 1 and 500");
         }
@@ -1028,7 +1063,7 @@ impl ControlPlane {
         self.persist_record(record).await
     }
 
-    async fn record(&self, execution_id: &str) -> Result<ExecutionRecord> {
+    pub async fn record(&self, execution_id: &str) -> Result<ExecutionRecord> {
         self.inner
             .records
             .read()
@@ -1053,7 +1088,8 @@ impl ControlPlane {
             .records
             .write()
             .await
-            .insert(record.execution_id.clone(), record);
+            .insert(record.execution_id.clone(), record.clone());
+        let _ = self.inner.updates.send(ControlPlaneUpdate { record });
         Ok(())
     }
 
@@ -1114,8 +1150,18 @@ fn validate_run_request(request: &RunRequest) -> Result<LaneBudget> {
     } else {
         unique_scenarios(&request.scenarios)
     };
-    if scenarios.iter().any(|scenario| scenario.manual_cli_only()) {
-        bail!("manually prepared composite scenarios can only be started with the local CLI");
+    if scenarios
+        .iter()
+        .any(|scenario| scenario.manual_cli_only() && *scenario != ScenarioId::SecurityReview)
+    {
+        bail!("this manually prepared scenario can only be started with the local CLI");
+    }
+    if request.technical_retries > 0
+        && scenarios.iter().any(|scenario| {
+            scenario.execution_kind() == crate::scenarios::ScenarioExecutionKind::CompositeFlow
+        })
+    {
+        bail!("composite scenarios with non-repeatable steps require technical_retries=0");
     }
     let base_seed_count = 1_usize;
     let unique_rotating_seeds = request
@@ -1300,6 +1346,7 @@ mod tests {
     fn request() -> RunRequest {
         RunRequest {
             idempotency_key: "gate:sha:case".into(),
+            label: "PR gate".into(),
             lane: "pr-gate".into(),
             model: "model".into(),
             provider: "provider".into(),
@@ -1371,6 +1418,33 @@ mod tests {
             validate_run_request(&request).unwrap_err().to_string(),
             "lane 'pr-gate' permits at most 8 cases, got 9"
         );
+    }
+
+    #[test]
+    fn security_review_is_admitted_only_without_technical_retries() {
+        let mut request = request();
+        request.lane = "local".into();
+        request.scenarios = vec![ScenarioId::SecurityReview];
+        request.technical_retries = 0;
+        validate_run_request(&request).expect("security review should use the control plane");
+
+        request.technical_retries = 1;
+        assert_eq!(
+            validate_run_request(&request).unwrap_err().to_string(),
+            "composite scenarios with non-repeatable steps require technical_retries=0"
+        );
+    }
+
+    #[test]
+    fn other_manual_scenarios_remain_cli_only() {
+        let mut request = request();
+        request.lane = "local".into();
+        request.scenarios = vec![ScenarioId::EngineeringTicket];
+        request.technical_retries = 0;
+        assert!(validate_run_request(&request)
+            .unwrap_err()
+            .to_string()
+            .contains("local CLI"));
     }
 
     #[test]

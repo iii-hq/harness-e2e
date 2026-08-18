@@ -164,7 +164,7 @@ jobs:
       - run: pnpm --dir dashboard build
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
-      - run: cargo build --locked --release --bin e2e-worker
+      - run: cargo build --locked --release --bin harness-e2e
       - uses: actions/download-artifact@v4
         with:
           name: verified-subject-${{ inputs.source_revision }}
@@ -182,7 +182,7 @@ jobs:
           /opt/iii-harness-e2e/run-trusted-shadow \
             --subject-manifest verified/subject-manifest.json \
             --subject-root verified/subject \
-            --e2e-bin target/release/e2e-worker \
+            --e2e-bin target/release/harness-e2e \
             --lane '${{ inputs.lane }}' \
             --output shadow
       - name: Compare stable semantics

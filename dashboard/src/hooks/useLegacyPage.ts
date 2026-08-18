@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import { isEmbeddedDashboard } from '@/lib/dashboard-runtime'
 
 type CoverageLines = {
   count?: number
@@ -91,6 +92,10 @@ export function useLegacyPage(page: 'coverage') {
   const [error, setError] = useState<Error | null>(null)
 
   useEffect(() => {
+    if (isEmbeddedDashboard()) {
+      renderCoverage()
+      return
+    }
     let active = true
     loadLegacyPage(page).catch((cause: unknown) => {
       if (!active) return

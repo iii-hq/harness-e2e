@@ -5,19 +5,27 @@ use clap::{Args, Parser, Subcommand};
 use harness_e2e::dashboard;
 use harness_e2e::fault::{FaultEvaluation, FaultJournal, FaultPlan, FaultProfile};
 use harness_e2e::judge::JudgeConfig;
+use harness_e2e::manifest;
 use harness_e2e::report::E2eReport;
 use harness_e2e::scenarios::{self, ScenarioId};
 use harness_e2e::suite::{run_suite, SubjectConfig, SuiteRunConfig};
+use harness_e2e::worker::{self, WorkerArgs};
 
 #[derive(Debug, Parser)]
 #[command(name = "harness-e2e", about = "Run real-stack quality scenarios")]
 struct Cli {
+    /// Print the Registry worker manifest as JSON and exit.
+    #[arg(long)]
+    manifest: bool,
+
     #[command(subcommand)]
-    command: Command,
+    command: Option<Command>,
 }
 
 #[derive(Debug, Subcommand)]
 enum Command {
+    /// Run the harness-e2e worker explicitly (the default when no command is given).
+    Worker(WorkerArgs),
     /// Print the code-defined scenario ids as a JSON array.
     List,
     /// List models registered in the running stack.
@@ -144,14 +152,22 @@ struct FaultEvaluateArgs {
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    let cli = Cli::parse();
+    if cli.manifest {
+        println!("{}", serde_json::to_string(&manifest::build_manifest())?);
+        return Ok(());
+    }
+
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()
                 .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
         )
         .init();
-    match Cli::parse().command {
-        Command::List => {
+    match cli.command {
+        None => worker::serve(WorkerArgs::default()).await,
+        Some(Command::Worker(args)) => worker::serve(args).await,
+        Some(Command::List) => {
             let ids: Vec<_> = ScenarioId::ALL
                 .iter()
                 .map(|scenario| scenario.as_str())
@@ -159,12 +175,12 @@ async fn main() -> Result<()> {
             println!("{}", serde_json::to_string(&ids)?);
             Ok(())
         }
-        Command::Models(args) => models(args).await,
-        Command::Run(args) => run(args).await,
-        Command::Report(args) => report(args),
-        Command::Dashboard(args) => dashboard::serve(args).await,
-        Command::FaultPlan(args) => fault_plan(args),
-        Command::FaultEvaluate(args) => fault_evaluate(args),
+        Some(Command::Models(args)) => models(args).await,
+        Some(Command::Run(args)) => run(args).await,
+        Some(Command::Report(args)) => report(args),
+        Some(Command::Dashboard(args)) => dashboard::serve(args).await,
+        Some(Command::FaultPlan(args)) => fault_plan(args),
+        Some(Command::FaultEvaluate(args)) => fault_evaluate(args),
     }
 }
 
@@ -305,15 +321,47 @@ mod tests {
             Cli::try_parse_from(["harness-e2e", "list"])
                 .unwrap()
                 .command,
-            Command::List
+            Some(Command::List)
         ));
+    }
+
+    #[test]
+    fn no_subcommand_runs_the_worker_with_defaults() {
+        let cli = Cli::try_parse_from(["harness-e2e"]).unwrap();
+        assert!(!cli.manifest);
+        assert!(cli.command.is_none());
+    }
+
+    #[test]
+    fn manifest_flag_needs_no_worker_configuration() {
+        let cli = Cli::try_parse_from(["harness-e2e", "--manifest"]).unwrap();
+        assert!(cli.manifest);
+        assert!(cli.command.is_none());
+    }
+
+    #[test]
+    fn worker_subcommand_accepts_local_overrides() {
+        let cli = Cli::try_parse_from([
+            "harness-e2e",
+            "worker",
+            "--url",
+            "ws://127.0.0.1:5000",
+            "--data-dir",
+            "target/worker-data",
+        ])
+        .unwrap();
+        let Some(Command::Worker(args)) = cli.command else {
+            panic!("expected worker command");
+        };
+        assert_eq!(args.url, "ws://127.0.0.1:5000");
+        assert_eq!(args.data_dir, Some(PathBuf::from("target/worker-data")));
     }
 
     #[test]
     fn models_subcommand_accepts_an_optional_provider() {
         let cli =
             Cli::try_parse_from(["harness-e2e", "models", "--provider", "openai-codex"]).unwrap();
-        let Command::Models(args) = cli.command else {
+        let Some(Command::Models(args)) = cli.command else {
             panic!("expected models command");
         };
         assert_eq!(args.provider.as_deref(), Some("openai-codex"));
@@ -333,7 +381,7 @@ mod tests {
             "persistent_state",
         ])
         .unwrap();
-        let Command::Run(args) = cli.command else {
+        let Some(Command::Run(args)) = cli.command else {
             panic!("expected run command");
         };
         assert_eq!(args.scenario, [ScenarioId::PersistentState]);
@@ -356,7 +404,7 @@ mod tests {
             "security_review",
         ])
         .unwrap();
-        let Command::Run(args) = cli.command else {
+        let Some(Command::Run(args)) = cli.command else {
             panic!("expected run command");
         };
         assert_eq!(args.scenario, [ScenarioId::SecurityReview]);
@@ -367,7 +415,7 @@ mod tests {
     fn dashboard_is_available_as_serve_alias() {
         for name in ["dashboard", "serve"] {
             let cli = Cli::try_parse_from(["harness-e2e", name]).unwrap();
-            let Command::Dashboard(args) = cli.command else {
+            let Some(Command::Dashboard(args)) = cli.command else {
                 panic!("expected dashboard command");
             };
             assert_eq!(args.listen.to_string(), "0.0.0.0:4173");
@@ -375,7 +423,7 @@ mod tests {
             assert!(!args.view_only);
         }
         let cli = Cli::try_parse_from(["harness-e2e", "dashboard", "--view-only"]).unwrap();
-        let Command::Dashboard(args) = cli.command else {
+        let Some(Command::Dashboard(args)) = cli.command else {
             panic!("expected dashboard command");
         };
         assert!(args.view_only);
@@ -395,7 +443,7 @@ mod tests {
     #[test]
     fn report_subcommand_accepts_a_results_directory() {
         let cli = Cli::try_parse_from(["harness-e2e", "report", "target/e2e"]).unwrap();
-        let Command::Report(args) = cli.command else {
+        let Some(Command::Report(args)) = cli.command else {
             panic!("expected report command");
         };
         assert_eq!(args.input, PathBuf::from("target/e2e"));
@@ -412,7 +460,7 @@ mod tests {
             "plan.json",
         ])
         .unwrap();
-        let Command::FaultPlan(args) = cli.command else {
+        let Some(Command::FaultPlan(args)) = cli.command else {
             panic!("expected fault-plan command");
         };
         assert_eq!(args.profile, PathBuf::from("profile.json"));
@@ -430,7 +478,7 @@ mod tests {
             "evaluation.json",
         ])
         .unwrap();
-        let Command::FaultEvaluate(args) = cli.command else {
+        let Some(Command::FaultEvaluate(args)) = cli.command else {
             panic!("expected fault-evaluate command");
         };
         assert!(args.results.is_none());

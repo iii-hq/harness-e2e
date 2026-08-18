@@ -1,53 +1,54 @@
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::env;
 use std::fs::{self, File};
 use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
-use std::process::Stdio;
 use std::sync::Arc;
-use std::time::{Duration, Instant};
 
 use anyhow::{bail, Context, Result};
-use chrono::{SecondsFormat, Utc};
+use chrono::Utc;
 use serde_json::{json, Value};
-use tokio::process::{Child, Command};
-use tokio::sync::{Mutex, RwLock};
+use tokio::sync::{broadcast, Mutex, RwLock};
 use url::Url;
 
 use super::bus::DashboardEvents;
 use super::plans::{self, LocalPlan, PlanCreateRequest, PlanRunRole, PlanState, PlanUpdateRequest};
 use super::read_model::DashboardReadModel;
-use super::store::{read_report, recover_interrupted_runs, write_metadata};
+use super::store::{read_metadata, read_report, recover_interrupted_runs, write_metadata};
 use super::{
     ApiError, DashboardArgs, Defaults, JobStatus, JobView, RunMetadata, RunRequest, RunSnapshot,
 };
 use crate::artifact;
+use crate::control::{
+    ControlPlane, ExecutionPhase, ExecutionRecord, RunRequest as ControlRunRequest,
+};
 use crate::report::{E2eReport, RunStatus};
-use crate::scenarios::ScenarioId;
+use crate::scenarios::{ScenarioExecutionKind, ScenarioId};
 
 const MAX_LOG_TAIL_BYTES: u64 = 256 * 1024;
 const MAX_LOG_CHUNK_BYTES: u64 = 64 * 1024;
 
 struct ControllerState {
     job: Option<RunMetadata>,
-    child: Option<Child>,
 }
 
 pub(super) struct Controller {
     runs_dir: PathBuf,
     plans_dir: PathBuf,
-    executable: PathBuf,
     defaults: Defaults,
+    control: Option<ControlPlane>,
     state: Mutex<ControllerState>,
+    pending_plan_contexts: RwLock<HashMap<String, plans::PlanContext>>,
     plan_lock: Mutex<()>,
     read_model: RwLock<Option<Arc<DashboardReadModel>>>,
     events: Option<Arc<DashboardEvents>>,
 }
 
 impl Controller {
-    pub(super) fn new(
+    pub(super) async fn new(
         args: DashboardArgs,
         events: Option<Arc<DashboardEvents>>,
+        control: Option<ControlPlane>,
     ) -> Result<Arc<Self>> {
         validate_stack_url(&args.url)?;
         fs::create_dir_all(&args.runs_dir)
@@ -65,10 +66,25 @@ impl Controller {
                 plans::record_incomplete_attempt(&plans_dir, context, &metadata.id)?;
             }
         }
-        Ok(Arc::new(Self {
+        if let Some(control) = control.as_ref() {
+            if control.url() != args.url {
+                bail!(
+                    "dashboard URL {} differs from the control-plane URL {}",
+                    args.url,
+                    control.url()
+                );
+            }
+            if control.output_root() != args.runs_dir {
+                bail!(
+                    "dashboard runs directory {} differs from the control-plane data directory {}",
+                    args.runs_dir.display(),
+                    control.output_root().display()
+                );
+            }
+        }
+        let controller = Arc::new(Self {
             runs_dir: args.runs_dir,
             plans_dir,
-            executable: env::current_exe().context("resolve harness-e2e executable")?,
             defaults: Defaults {
                 url: args.url,
                 model: env::var("HARNESS_E2E_MODEL").unwrap_or_default(),
@@ -81,14 +97,20 @@ impl Controller {
                     .ok()
                     .and_then(|value| value.parse().ok()),
             },
-            state: Mutex::new(ControllerState {
-                job: None,
-                child: None,
-            }),
+            control,
+            state: Mutex::new(ControllerState { job: None }),
+            pending_plan_contexts: RwLock::new(HashMap::new()),
             plan_lock: Mutex::new(()),
             read_model: RwLock::new(None),
             events,
-        }))
+        });
+        if let Some(control) = controller.control.as_ref() {
+            for record in control.records().await {
+                controller.sync_control_record(record).await?;
+            }
+            controller.observe_control_plane();
+        }
+        Ok(controller)
     }
 
     pub(super) fn runs_dir(&self) -> &Path {
@@ -163,6 +185,7 @@ impl Controller {
         &self,
         request: PlanCreateRequest,
     ) -> Result<LocalPlan, ApiError> {
+        self.require_current_url(&request.url)?;
         let _plan_guard = self.plan_lock.lock().await;
         let id = format!(
             "plan-{}-{}",
@@ -188,6 +211,7 @@ impl Controller {
             .map_err(|error| ApiError::not_found(error.to_string()))?;
         plans::apply_update(&mut plan, &update)
             .map_err(|error| ApiError::bad_request(error.to_string()))?;
+        self.require_current_url(&plan.url)?;
         plans::write_plan(&self.plans_dir, &plan).map_err(ApiError::internal)?;
         Ok(plan)
     }
@@ -203,6 +227,7 @@ impl Controller {
             .get_plan(id)
             .await
             .map_err(|error| ApiError::not_found(error.to_string()))?;
+        self.require_current_url(&plan.url)?;
         match role {
             PlanRunRole::Baseline
                 if plan.state != PlanState::Draft || plan.baseline_execution_id.is_some() =>
@@ -244,57 +269,44 @@ impl Controller {
         mut request: RunRequest,
     ) -> Result<String, ApiError> {
         validate_request(&mut request).map_err(ApiError::bad_request)?;
+        self.require_current_url(&request.url)?;
         if let Some(context) = request.plan_context.as_ref() {
             self.validate_plan_context(context).await?;
         }
-        let mut state = self.state.lock().await;
-        if state.job.as_ref().is_some_and(|job| job.status.active()) {
-            return Err(ApiError::conflict("an E2E execution is already running"));
+        let control = self
+            .control
+            .as_ref()
+            .ok_or_else(|| ApiError::conflict("the E2E control plane is not available"))?;
+        let control_request = control_request(&request).map_err(ApiError::bad_request)?;
+        let idempotency_key = control_request.idempotency_key.clone();
+        if let Some(context) = request.plan_context.clone() {
+            self.pending_plan_contexts
+                .write()
+                .await
+                .insert(idempotency_key.clone(), context);
         }
-
-        let now = Utc::now();
-        let id = format!(
-            "local-{}-{}",
-            now.format("%Y%m%dT%H%M%S"),
-            &uuid::Uuid::new_v4().simple().to_string()[..8]
-        );
-        let run_dir = self.runs_dir.join(&id);
-        let output_dir = run_dir.join("results");
-        fs::create_dir_all(&output_dir).map_err(ApiError::internal)?;
-        let log_path = run_dir.join("run.log");
-        let stdout = File::create(&log_path).map_err(ApiError::internal)?;
-        let stderr = stdout.try_clone().map_err(ApiError::internal)?;
-
-        let mut command = build_run_command(&self.executable, &request, &output_dir);
-        command.kill_on_drop(true);
-        let child = command
-            .stdout(Stdio::from(stdout))
-            .stderr(Stdio::from(stderr))
-            .spawn()
-            .map_err(ApiError::internal)?;
-        let metadata = RunMetadata {
-            id: id.clone(),
-            label: request.label.clone(),
-            status: JobStatus::Running,
-            started_at: now.to_rfc3339_opts(SecondsFormat::Millis, true),
-            completed_at: String::new(),
-            returncode: None,
-            error: String::new(),
-            plan_context: request.plan_context.clone(),
-            request,
+        let accepted = match control.run(control_request).await {
+            Ok(accepted) => accepted,
+            Err(error) => {
+                self.pending_plan_contexts
+                    .write()
+                    .await
+                    .remove(&idempotency_key);
+                return Err(control_error(error));
+            }
         };
-        write_metadata(&run_dir, &metadata).map_err(ApiError::internal)?;
-        state.job = Some(metadata);
-        state.child = Some(child);
-        drop(state);
-
+        let record = control
+            .record(&accepted.execution_id)
+            .await
+            .map_err(ApiError::internal)?;
+        let mut metadata = metadata_from_record(&record, request.plan_context.clone());
+        metadata.request = request;
+        write_metadata(&self.runs_dir.join(&accepted.execution_id), &metadata)
+            .map_err(ApiError::internal)?;
+        self.set_current_job(metadata).await;
         self.invalidate_summaries().await;
-        self.emit_change("started", &id).await;
-
-        let execution_id = id.clone();
-        let controller = Arc::clone(self);
-        tokio::spawn(async move { controller.monitor(id).await });
-        Ok(execution_id)
+        self.emit_change("started", &accepted.execution_id).await;
+        Ok(accepted.execution_id)
     }
 
     async fn validate_plan_context(&self, context: &plans::PlanContext) -> Result<(), ApiError> {
@@ -327,97 +339,124 @@ impl Controller {
     }
 
     pub(super) async fn cancel(&self) -> Result<(), ApiError> {
-        let mut state = self.state.lock().await;
-        let Some(job) = state.job.as_ref() else {
-            return Err(ApiError::conflict("no E2E execution is running"));
+        let control = self
+            .control
+            .as_ref()
+            .ok_or_else(|| ApiError::conflict("the E2E control plane is not available"))?;
+        let current = self.state.lock().await.job.clone();
+        let execution_id = if let Some(job) = current.filter(|job| job.status.active()) {
+            job.id
+        } else {
+            control
+                .records()
+                .await
+                .into_iter()
+                .find(|record| !terminal(record.phase))
+                .map(|record| record.execution_id)
+                .ok_or_else(|| ApiError::conflict("no E2E execution is running"))?
         };
-        if job.status != JobStatus::Running {
+        let response = control
+            .cancel(&execution_id)
+            .await
+            .map_err(ApiError::internal)?;
+        if !response.accepted {
             return Err(ApiError::conflict("no E2E execution is running"));
         }
-        let id = job.id.clone();
-        if let Some(child) = state.child.as_mut() {
-            child.start_kill().map_err(ApiError::internal)?;
-        }
-        let job = state.job.as_mut().expect("job checked above");
-        job.status = JobStatus::Cancelling;
-        write_metadata(&self.runs_dir.join(&id), job).map_err(ApiError::internal)?;
-        drop(state);
-        self.invalidate_summaries().await;
-        self.emit_change("cancelling", &id).await;
+        let record = control
+            .record(&execution_id)
+            .await
+            .map_err(ApiError::internal)?;
+        self.sync_control_record(record)
+            .await
+            .map_err(ApiError::internal)?;
         Ok(())
     }
 
-    async fn monitor(self: Arc<Self>, id: String) {
-        let mut last_progress = Instant::now();
-        loop {
-            tokio::time::sleep(Duration::from_millis(250)).await;
-            let finished = {
-                let mut state = self.state.lock().await;
-                match state
-                    .child
-                    .as_mut()
-                    .and_then(|child| child.try_wait().transpose())
-                {
-                    Some(Ok(status)) => {
-                        state.child = None;
-                        Some(Ok(status))
-                    }
-                    Some(Err(error)) => {
-                        state.child = None;
-                        Some(Err(error))
-                    }
-                    None => None,
-                }
-            };
-            let Some(result) = finished else {
-                if last_progress.elapsed() >= Duration::from_secs(1) {
-                    self.emit_change("progress", &id).await;
-                    last_progress = Instant::now();
-                }
-                continue;
-            };
-            let mut state = self.state.lock().await;
-            let Some(job) = state.job.as_mut().filter(|job| job.id == id) else {
-                return;
-            };
-            let cancelling = job.status == JobStatus::Cancelling;
-            job.completed_at = Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true);
-            match result {
-                Ok(status) => {
-                    job.returncode = status.code();
-                    if cancelling {
-                        job.status = JobStatus::Cancelled;
-                    } else if read_report(&self.runs_dir.join(&id))
-                        .ok()
-                        .flatten()
-                        .is_some()
-                    {
-                        job.status = JobStatus::Completed;
-                    } else {
-                        job.status = JobStatus::Failed;
-                        job.error =
-                            "E2E runner did not produce a result artifact; inspect the log".into();
-                    }
-                }
-                Err(error) => {
-                    job.status = JobStatus::Failed;
-                    job.error = format!("cannot read E2E runner status: {error}");
-                }
-            }
-            if let Err(error) = write_metadata(&self.runs_dir.join(&id), job) {
-                tracing::error!(%error, %id, "write local E2E metadata");
-            }
-            let plan_context = job.plan_context.clone();
-            let status = job.status;
-            drop(state);
-            if let Some(context) = plan_context {
-                if let Err(error) = self.record_plan_attempt(&context, &id, status).await {
-                    tracing::error!(%error, %id, "update local plan after execution");
-                }
-            }
-            self.invalidate_summaries().await;
-            self.emit_change("finished", &id).await;
+    fn require_current_url(&self, url: &str) -> Result<(), ApiError> {
+        if url.trim() != self.defaults.url {
+            return Err(ApiError::conflict(format!(
+                "execution URL must match the worker stack {}",
+                self.defaults.url
+            )));
+        }
+        Ok(())
+    }
+
+    fn observe_control_plane(self: &Arc<Self>) {
+        let Some(control) = self.control.as_ref() else {
             return;
+        };
+        let mut updates = control.subscribe();
+        let control = control.clone();
+        let controller = Arc::clone(self);
+        tokio::spawn(async move {
+            loop {
+                match updates.recv().await {
+                    Ok(update) => {
+                        if let Err(error) = controller.sync_control_record(update.record).await {
+                            tracing::error!(%error, "project control-plane execution into dashboard");
+                        }
+                    }
+                    Err(broadcast::error::RecvError::Lagged(_)) => {
+                        for record in control.records().await {
+                            if let Err(error) = controller.sync_control_record(record).await {
+                                tracing::error!(%error, "resynchronize control-plane execution into dashboard");
+                            }
+                        }
+                    }
+                    Err(broadcast::error::RecvError::Closed) => return,
+                }
+            }
+        });
+    }
+
+    async fn sync_control_record(&self, record: ExecutionRecord) -> Result<()> {
+        let run_dir = self.runs_dir.join(&record.execution_id);
+        let previous = read_metadata(&run_dir)?;
+        let previous_terminal = previous
+            .as_ref()
+            .is_some_and(|metadata| !metadata.status.active());
+        let plan_context = self
+            .pending_plan_contexts
+            .read()
+            .await
+            .get(&record.request.idempotency_key)
+            .cloned()
+            .or_else(|| {
+                previous.as_ref().and_then(|metadata| {
+                    metadata
+                        .plan_context
+                        .clone()
+                        .or_else(|| metadata.request.plan_context.clone())
+                })
+            });
+        let mut metadata = metadata_from_record(&record, plan_context.clone());
+        metadata.request.url = self.defaults.url.clone();
+        write_metadata(&run_dir, &metadata)?;
+        self.set_current_job(metadata.clone()).await;
+        if !previous_terminal && terminal(record.phase) {
+            if let Some(context) = plan_context {
+                self.record_plan_attempt(&context, &record.execution_id, metadata.status)
+                    .await?;
+            }
+            self.pending_plan_contexts
+                .write()
+                .await
+                .remove(&record.request.idempotency_key);
+        }
+        self.invalidate_summaries().await;
+        self.emit_change(change_kind(&record), &record.execution_id)
+            .await;
+        Ok(())
+    }
+
+    async fn set_current_job(&self, metadata: RunMetadata) {
+        let mut state = self.state.lock().await;
+        let replace = state.job.as_ref().is_none_or(|current| {
+            current.id == metadata.id || metadata.started_at >= current.started_at
+        });
+        if replace {
+            state.job = Some(metadata);
         }
     }
 
@@ -439,8 +478,6 @@ impl Controller {
         }
         plan.updated_at = plans::now();
         plan.last_attempt_id = Some(execution_id.into());
-        // A missing or malformed report is an incomplete attempt, not a stuck
-        // plan. The execution metadata remains available for diagnosis.
         let report = read_report(&self.runs_dir.join(execution_id))
             .ok()
             .flatten();
@@ -480,6 +517,138 @@ impl Controller {
             }
         }
         plans::write_plan(&self.plans_dir, &plan)
+    }
+}
+
+pub(super) fn control_request(
+    request: &RunRequest,
+) -> std::result::Result<ControlRunRequest, String> {
+    let scenarios = request
+        .scenarios
+        .iter()
+        .map(|value| {
+            ScenarioId::ALL
+                .iter()
+                .copied()
+                .find(|scenario| scenario.as_str() == value)
+                .ok_or_else(|| format!("unknown scenario '{value}'"))
+        })
+        .collect::<std::result::Result<Vec<_>, _>>()?;
+    let (judge_model, judge_provider) = match (
+        request.judge_model.is_empty(),
+        request.judge_provider.is_empty(),
+    ) {
+        (true, true) => (None, None),
+        (false, false) => (
+            Some(request.judge_model.clone()),
+            Some(request.judge_provider.clone()),
+        ),
+        _ => return Err("judge_model and judge_provider must be supplied together".into()),
+    };
+    Ok(ControlRunRequest {
+        idempotency_key: format!("dashboard:{}", uuid::Uuid::new_v4().simple()),
+        label: request.label.clone(),
+        lane: "local".into(),
+        model: request.model.clone(),
+        provider: request.provider.clone(),
+        judge_model,
+        judge_provider,
+        scenarios,
+        runs: request.runs,
+        seed: request.seed,
+        rotating_seeds: Vec::new(),
+        technical_retries: request.technical_retries,
+        progress_interval_seconds: 15,
+    })
+}
+
+fn metadata_from_record(
+    record: &ExecutionRecord,
+    plan_context: Option<plans::PlanContext>,
+) -> RunMetadata {
+    let status = job_status(record);
+    let label = if record.request.label.trim().is_empty() {
+        "e2e::* control-plane run".into()
+    } else {
+        record.request.label.clone()
+    };
+    RunMetadata {
+        id: record.execution_id.clone(),
+        label: label.clone(),
+        status,
+        started_at: record.requested_at.clone(),
+        completed_at: if terminal(record.phase) {
+            record.updated_at.clone()
+        } else {
+            String::new()
+        },
+        returncode: match status {
+            JobStatus::Completed => Some(0),
+            JobStatus::Failed => Some(1),
+            _ => None,
+        },
+        error: record.error.clone(),
+        request: RunRequest {
+            _caller_worker_id: None,
+            label,
+            url: String::new(),
+            model: record.request.model.clone(),
+            provider: record.request.provider.clone(),
+            judge_model: record.request.judge_model.clone().unwrap_or_default(),
+            judge_provider: record.request.judge_provider.clone().unwrap_or_default(),
+            scenarios: record
+                .request
+                .scenarios
+                .iter()
+                .map(|scenario| scenario.as_str().to_string())
+                .collect(),
+            runs: record.request.runs,
+            technical_retries: record.request.technical_retries,
+            seed: record.request.seed,
+            plan_context: plan_context.clone(),
+        },
+        plan_context,
+    }
+}
+
+fn job_status(record: &ExecutionRecord) -> JobStatus {
+    match record.phase {
+        ExecutionPhase::Completed => JobStatus::Completed,
+        ExecutionPhase::Failed | ExecutionPhase::Unsupported => JobStatus::Failed,
+        ExecutionPhase::Cancelled => JobStatus::Cancelled,
+        _ if record.cancel_requested => JobStatus::Cancelling,
+        _ => JobStatus::Running,
+    }
+}
+
+fn terminal(phase: ExecutionPhase) -> bool {
+    matches!(
+        phase,
+        ExecutionPhase::Completed
+            | ExecutionPhase::Failed
+            | ExecutionPhase::Cancelled
+            | ExecutionPhase::Unsupported
+    )
+}
+
+fn change_kind(record: &ExecutionRecord) -> &'static str {
+    if terminal(record.phase) {
+        "finished"
+    } else if record.cancel_requested {
+        "cancelling"
+    } else if record.phase == ExecutionPhase::Requested {
+        "started"
+    } else {
+        "progress"
+    }
+}
+
+fn control_error(error: anyhow::Error) -> ApiError {
+    let message = format!("{error:#}");
+    if message.contains("concurrency limit") || message.contains("idempotency key") {
+        ApiError::conflict(message)
+    } else {
+        ApiError::bad_request(message)
     }
 }
 
@@ -540,41 +709,6 @@ fn validate_plan_id(value: &str) -> Result<()> {
     Ok(())
 }
 
-pub(super) fn build_run_command(
-    executable: &Path,
-    request: &RunRequest,
-    output_dir: &Path,
-) -> Command {
-    let mut command = Command::new(executable);
-    command
-        .arg("run")
-        .arg("--url")
-        .arg(&request.url)
-        .arg("--model")
-        .arg(&request.model)
-        .arg("--provider")
-        .arg(&request.provider)
-        .arg("--output")
-        .arg(output_dir)
-        .arg("--runs")
-        .arg(request.runs.to_string())
-        .arg("--technical-retries")
-        .arg(request.technical_retries.to_string());
-    if let Some(seed) = request.seed {
-        command.arg("--seed").arg(seed.to_string());
-    }
-    if !request.judge_model.is_empty() {
-        command.arg("--judge-model").arg(&request.judge_model);
-    }
-    if !request.judge_provider.is_empty() {
-        command.arg("--judge-provider").arg(&request.judge_provider);
-    }
-    for scenario in &request.scenarios {
-        command.arg("--scenario").arg(scenario);
-    }
-    command
-}
-
 pub(super) fn validate_request(request: &mut RunRequest) -> std::result::Result<(), String> {
     request.label = request.label.trim().to_string();
     request.url = request.url.trim().to_string();
@@ -591,6 +725,9 @@ pub(super) fn validate_request(request: &mut RunRequest) -> std::result::Result<
             return Err(format!("{name} is invalid"));
         }
     }
+    if request.judge_model.is_empty() != request.judge_provider.is_empty() {
+        return Err("judge_model and judge_provider must be supplied together".into());
+    }
     if !(1..=20).contains(&request.runs) {
         return Err("runs must be between 1 and 20".into());
     }
@@ -602,21 +739,37 @@ pub(super) fn validate_request(request: &mut RunRequest) -> std::result::Result<
     }
     let valid: BTreeMap<_, _> = ScenarioId::ALL
         .iter()
-        .map(|value| (value.as_str(), ()))
+        .map(|value| (value.as_str(), *value))
         .collect();
     request.scenarios.sort();
     request.scenarios.dedup();
-    if request
+    let selected = request
         .scenarios
         .iter()
-        .any(|value| !valid.contains_key(value.as_str()))
+        .map(|value| {
+            valid
+                .get(value.as_str())
+                .copied()
+                .ok_or_else(|| "request contains an unknown scenario".to_string())
+        })
+        .collect::<std::result::Result<Vec<_>, _>>()?;
+    if selected
+        .iter()
+        .any(|scenario| scenario.manual_cli_only() && *scenario != ScenarioId::SecurityReview)
     {
-        return Err("request contains an unknown scenario".into());
+        return Err(
+            "this manually prepared scenario can only be started with the local CLI".into(),
+        );
     }
-    // Local plans are another supported entry point for Rust-defined composite
-    // scenarios. The control-plane handler keeps rejecting manually prepared
-    // scenarios; this dashboard path starts the local CLI child with the same
-    // deterministic composite driver and therefore must not filter them out.
+    if request.technical_retries > 0
+        && selected
+            .iter()
+            .any(|scenario| scenario.execution_kind() == ScenarioExecutionKind::CompositeFlow)
+    {
+        return Err(
+            "composite scenarios with non-repeatable steps require technical_retries=0".into(),
+        );
+    }
     Ok(())
 }
 

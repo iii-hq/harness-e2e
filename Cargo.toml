@@ -2,21 +2,21 @@
 name = "harness-e2e"
 version = "0.1.0"
 edition = "2021"
+description = "Longitudinal capability and complexity evaluation for Harness stacks"
+license = "Apache-2.0"
+repository = "https://github.com/iii-hq/harness-e2e"
 publish = false
 
 [[bin]]
 name = "harness-e2e"
 path = "src/main.rs"
 
-[[bin]]
-name = "e2e-worker"
-path = "src/bin/e2e-worker.rs"
-
 [dependencies]
 iii-sdk = "=0.21.8"
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "time", "process", "net", "signal", "sync"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+serde_yaml = "0.9"
 schemars = "0.8"
 anyhow = "1"
 clap = { version = "4", features = ["derive", "env"] }

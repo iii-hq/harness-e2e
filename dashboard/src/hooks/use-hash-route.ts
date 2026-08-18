@@ -1,4 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
+import {
+  dashboardHash,
+  dashboardRouteHash,
+  isEmbeddedDashboard,
+} from '@/lib/dashboard-runtime'
 
 export type WorkspaceView = 'overview' | 'tests' | 'executions'
 
@@ -44,6 +49,9 @@ function encodeSegment(segment: string): string {
 }
 
 export function routeFromHash(rawHash: string): DashboardRoute | null {
+  const routedHash = dashboardRouteHash(rawHash)
+  if (routedHash === null) return null
+  rawHash = routedHash
   if (rawHash === '' || rawHash === '#' || rawHash === '#/') {
     return defaultRoute
   }
@@ -95,14 +103,16 @@ export function currentDashboardRoute(): DashboardRoute {
 }
 
 export function hashForWorkspace(view: WorkspaceView = 'overview'): string {
-  return `#/${view}`
+  return dashboardHash(view)
 }
 
 export function hashForExecution(
   executionId: string,
   anchor: string | null = null,
 ): string {
-  const route = `#/execution${executionId ? `/${encodeSegment(executionId)}` : ''}`
+  const route = dashboardHash(
+    `execution${executionId ? `/${encodeSegment(executionId)}` : ''}`,
+  )
   return anchor ? `${route}/${encodeSegment(anchor)}` : route
 }
 
@@ -110,29 +120,29 @@ export function hashForComparison(
   left: string | null = null,
   right: string | null = null,
 ): string {
-  if (!left) return '#/compare'
-  const route = `#/compare/${encodeSegment(left)}`
+  if (!left) return dashboardHash('compare')
+  const route = dashboardHash(`compare/${encodeSegment(left)}`)
   return right ? `${route}/${encodeSegment(right)}` : route
 }
 
 export function hashForCoverage(): string {
-  return '#/coverage'
+  return dashboardHash('coverage')
 }
 
 export function hashForTestHistory(testId: string): string {
-  return `#/tests/${encodeSegment(testId)}`
+  return dashboardHash(`tests/${encodeSegment(testId)}`)
 }
 
 export function hashForNewPlan(): string {
-  return '#/plans/new'
+  return dashboardHash('plans/new')
 }
 
 export function hashForPlans(): string {
-  return '#/plans'
+  return dashboardHash('plans')
 }
 
 export function hashForPlan(planId: string): string {
-  return `#/plans/${encodeSegment(planId)}`
+  return dashboardHash(`plans/${encodeSegment(planId)}`)
 }
 
 export const dashboardRoutes: DashboardRoutes = {
@@ -176,9 +186,10 @@ export function useHashRoute(): [DashboardRoute, (targetHash: string) => void] {
 
   useEffect(() => {
     if (
-      window.location.hash === '' ||
-      window.location.hash === '#' ||
-      window.location.hash === '#/'
+      !isEmbeddedDashboard() &&
+      (window.location.hash === '' ||
+        window.location.hash === '#' ||
+        window.location.hash === '#/')
     ) {
       replaceHash(hashForWorkspace())
     }
@@ -190,7 +201,10 @@ export function useHashRoute(): [DashboardRoute, (targetHash: string) => void] {
       // Each coarse page still has an isolated legacy renderer. A document
       // reload keeps those renderers single-instanced while the hash router
       // owns the public URL and overview/anchor navigation stays client-side.
-      if (routeRenderIdentity(next) !== routeRenderIdentity(routeRef.current)) {
+      if (
+        !isEmbeddedDashboard() &&
+        routeRenderIdentity(next) !== routeRenderIdentity(routeRef.current)
+      ) {
         window.location.reload()
         return
       }
