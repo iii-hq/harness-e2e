@@ -1,23 +1,31 @@
 import { useEffect, useMemo, useState } from 'react'
-import { AssessmentWorkspace } from '@/components/AssessmentWorkspace'
-import { SemanticTestFlow } from '@/components/SemanticTestFlow'
-import { ThemeToggle } from '@/components/ThemeToggle'
+import { AppHeader } from '@/components/AppHeader'
+import { ScenarioMatrix } from '@/components/ScenarioMatrix'
 import { TranscriptDialog } from '@/components/TranscriptDialog'
+import {
+  buttonClassName,
+  MetricCard,
+  type OperationalStatus,
+  PageHeader,
+  Panel,
+  StatusBadge,
+} from '@/design-system'
 import { hashForExecution, hashForWorkspace } from '@/hooks/use-hash-route'
 import {
   type AssessmentRunMetrics,
   type AssessmentRunView,
   aggregateAssessmentMetrics,
   buildAssessmentWorkspace,
+  buildHarnessRecommendation,
 } from '@/lib/assessment-view'
 import {
   type DashboardExecutionDetail,
   type DashboardExecutionSummary,
+  type ExecutionTotals,
   getDashboardDataBridge,
 } from '@/lib/dashboard-data-source'
 import {
   buildExecutionPresentation,
-  categoryLabel,
   categoryMessage,
   type ExecutionPresentation,
   formatDate,
@@ -25,18 +33,19 @@ import {
   formatPercent,
   titleCase,
 } from '@/lib/execution-view'
+import { buildScenarioMatrix } from '@/lib/scenario-matrix'
 import {
+  type GeneralRunMetrics,
+  summedGeneralRunMetricsFromDetail,
   type WorkflowMetricsSummary,
-  workflowMetricEntries,
   workflowMetricsFromDetail,
 } from '@/lib/workflow-metrics'
+import '@/design-system/styles.css'
 
 type DetailSection = 'summary' | 'results' | 'technical'
 
 const detailPanel =
-  'detail-section scroll-mt-[82px] overflow-hidden rounded-[10px] border border-line-strong border-l-[3px] bg-panel px-7 py-[26px] max-[560px]:px-[18px] max-[560px]:py-[22px]'
-const detailHeading =
-  'm-0 text-[clamp(1.35rem,2vw,1.85rem)] font-[570] tracking-[-0.045em]'
+  'detail-section scroll-mt-28 overflow-hidden rounded-[var(--ds-radius-md)] border border-[var(--ds-color-line-strong)] bg-[var(--ds-color-surface)] p-5 md:p-6'
 
 function sectionFromAnchor(anchor: string | null | undefined): DetailSection {
   if (
@@ -74,10 +83,49 @@ function summaryFromDetail(
   }
 }
 
-function modelNames(presentation: ExecutionPresentation['subjects']) {
-  return presentation.length
-    ? presentation.map((model) => `${model.provider}/${model.model}`).join(', ')
-    : 'Not reported'
+function executionStatus(presentation: ExecutionPresentation): {
+  status: OperationalStatus
+  label: string
+} {
+  if (presentation.attention === 'passed')
+    return { status: 'passed', label: 'Passed' }
+  if (presentation.attention === 'running')
+    return { status: 'running', label: 'Running' }
+  if (presentation.attention === 'cancelling')
+    return { status: 'cancelling', label: 'Cancelling' }
+  if (presentation.attention === 'cancelled')
+    return { status: 'cancelled', label: 'Cancelled' }
+  if (presentation.attention === 'incomplete')
+    return { status: 'incomplete', label: 'Incomplete' }
+  if (presentation.attention === 'unavailable')
+    return { status: 'unavailable', label: 'Unavailable' }
+  if (presentation.breakdown.hard_gate > 0)
+    return { status: 'hard_gate', label: 'Hard gate failed' }
+  if (
+    presentation.breakdown.inconclusive > 0 &&
+    presentation.breakdown.inconclusive === presentation.breakdown.issues
+  )
+    return { status: 'inconclusive', label: 'Inconclusive' }
+  return { status: 'failed', label: 'Failed' }
+}
+
+function statusFromContract(
+  value: string | null | undefined,
+): OperationalStatus {
+  if (value === 'passed' || value === 'pass') return 'passed'
+  if (value === 'hard_gate_failed') return 'hard_gate'
+  if (value === 'unavailable' || value === 'not_evaluated') return 'unavailable'
+  if (value === 'inconclusive') return 'inconclusive'
+  if (
+    value === 'pass_with_concerns' ||
+    value === 'passed_with_concerns' ||
+    value === 'partial'
+  )
+    return 'recommendation'
+  if (value === 'running') return 'running'
+  if (value === 'cancelled') return 'cancelled'
+  if (value === 'incomplete') return 'incomplete'
+  return 'failed'
 }
 
 function friendlyModelName(model: string) {
@@ -99,8 +147,10 @@ function ModelIdentityCard({
   models: ExecutionPresentation['subjects']
 }) {
   return (
-    <div className="min-w-0 rounded-lg border border-line bg-panel-faint px-3 py-2.5">
-      <div className="section-kicker">{label}</div>
+    <div className="min-w-0 bg-[var(--ds-color-surface-raised)] p-3">
+      <div className="font-mono text-[0.6rem] font-semibold uppercase tracking-[0.06em] text-[var(--ds-color-ink-muted)]">
+        {label}
+      </div>
       {models.length ? (
         models.map((model) => (
           <div
@@ -108,20 +158,20 @@ function ModelIdentityCard({
             className="mt-1 min-w-0"
           >
             <strong
-              className="block break-words text-sm text-ink"
+              className="block break-words text-sm text-[var(--ds-color-ink)]"
               title={`${model.provider}/${model.model}`}
             >
               {friendlyModelName(model.model)}
             </strong>
             {model.provider && (
-              <code className="mt-0.5 block break-all text-[0.59rem] text-ink-muted">
+              <code className="mt-0.5 block break-all font-mono text-[0.59rem] text-[var(--ds-color-ink-muted)]">
                 {model.provider}
               </code>
             )}
           </div>
         ))
       ) : (
-        <strong className="mt-1 block text-sm text-ink-muted">
+        <strong className="mt-1 block text-sm text-[var(--ds-color-ink-muted)]">
           Not reported
         </strong>
       )}
@@ -129,297 +179,231 @@ function ModelIdentityCard({
   )
 }
 
-function StatusPill({ presentation }: { presentation: ExecutionPresentation }) {
-  const tone =
-    presentation.attention === 'passed'
-      ? 'status-pass'
-      : presentation.attention === 'needs_attention'
-        ? 'status-fail'
-        : 'status-incomplete'
-  const label =
-    presentation.attention === 'passed'
-      ? 'Passed'
-      : presentation.attention === 'needs_attention'
-        ? 'Needs attention'
-        : titleCase(presentation.attention)
-  return <span className={`status-pill ${tone}`}>{label}</span>
-}
-
-function MetricCard({
-  label,
-  value,
-  caption,
-}: {
-  label: string
-  value: string
-  caption: string
-}) {
-  return (
-    <article className="kpi-card min-h-0 rounded-none border-0 border-r border-b border-line bg-transparent p-[22px] max-[760px]:border-r-0">
-      <div className="kpi-label">{label}</div>
-      <div className="kpi-value mt-5 text-[clamp(1.8rem,3vw,2.8rem)]">
-        {value}
-      </div>
-      <div className="kpi-delta">{caption}</div>
-    </article>
-  )
-}
-
-function SummaryMetric({
-  label,
-  value,
-  caption,
-}: {
-  label: string
-  value: string
-  caption: string
-}) {
-  return (
-    <div className="rounded-lg border border-line bg-panel-subtle p-3">
-      <small className="section-kicker">{label}</small>
-      <strong className="mt-2 block text-lg font-semibold text-ink">
-        {value}
-      </strong>
-      <span className="mt-1 block text-xs text-ink-muted">{caption}</span>
-    </div>
-  )
-}
-
 type SummaryExecutionMetrics = {
-  totalTokens: number | null
-  functionCalls: number | null
-  functionErrors: number | null
   durationSeconds: number | null
   runCount: number
   workflow: WorkflowMetricsSummary | null
+  totalTokens: number | null
+  functionCalls: number | null
+  functionCallErrors: number | null
+  totalCostUsd: number | null
 }
 
-function finiteMetric(value: unknown): number | null {
-  return typeof value === 'number' && Number.isFinite(value) ? value : null
-}
-
-function buildSummaryExecutionMetrics(
+export function buildSummaryExecutionMetrics(
   presentation: ExecutionPresentation,
   aggregate: AssessmentRunMetrics,
   runCount: number,
   workflow: WorkflowMetricsSummary | null,
+  totals: ExecutionTotals | null,
+  testTotals: GeneralRunMetrics | null = null,
 ): SummaryExecutionMetrics {
-  const totals = presentation.execution.totals
   const reportedRuns =
     runCount || presentation.receivedReports || presentation.breakdown.total
+  const workflowTokens =
+    workflow && workflow.tokenMetricSteps > 0 ? workflow.totalTokens : null
+  const workflowCalls =
+    workflow && workflow.functionCallMetricSteps > 0
+      ? workflow.functionCalls
+      : null
+  const workflowErrors =
+    workflow && workflow.functionCallErrorMetricSteps > 0
+      ? workflow.functionCallErrors
+      : null
   return {
-    totalTokens: finiteMetric(totals?.total_tokens) ?? aggregate.totalTokens,
-    functionCalls:
-      finiteMetric(totals?.function_calls) ?? aggregate.functionCalls,
-    functionErrors:
-      finiteMetric(totals?.function_call_errors) ??
-      aggregate.functionCallErrors,
     durationSeconds:
       presentation.workflowRuntimeSeconds ??
       presentation.modelRuntimeSeconds ??
       (aggregate.durationMs === null ? null : aggregate.durationMs / 1000),
     runCount: reportedRuns,
     workflow,
+    totalTokens:
+      testTotals?.totalTokens ??
+      finiteMetric(totals?.total_tokens) ??
+      aggregate.totalTokens ??
+      workflowTokens,
+    functionCalls:
+      testTotals?.functionCalls ??
+      finiteMetric(totals?.function_calls) ??
+      aggregate.functionCalls ??
+      workflowCalls,
+    functionCallErrors:
+      testTotals?.functionCallErrors ??
+      finiteMetric(totals?.function_call_errors) ??
+      aggregate.functionCallErrors ??
+      workflowErrors,
+    totalCostUsd: testTotals?.costUsd ?? finiteMetric(totals?.total_cost_usd),
   }
 }
 
-function SummarySection({
-  presentation,
-  metrics,
-}: {
-  presentation: ExecutionPresentation
-  metrics: SummaryExecutionMetrics
-}) {
-  const issue = presentation.primaryIssue
-  const hasRustWorkflow = Boolean(
-    metrics.workflow && metrics.workflow.stepCount > 0,
-  )
-  return (
-    <section
-      id="summary"
-      className={`${detailPanel} border-l-brand`}
-      aria-labelledby="summary-heading"
-    >
-      <div className="section-kicker mb-2">01 · Summary</div>
-      <div className="flex flex-wrap items-start justify-between gap-4">
-        <div>
-          <h2 id="summary-heading" className={detailHeading}>
-            {presentation.label}
-          </h2>
-          <p className="mt-3 max-w-3xl text-sm leading-6 text-ink-muted">
-            {presentation.attention === 'passed'
-              ? 'All retained scenarios passed their objective system checks.'
-              : issue
-                ? `${categoryLabel(issue.category)} is the first actionable signal in this execution.`
-                : 'The execution is still collecting enough evidence for a definitive result.'}
-          </p>
-        </div>
-        <StatusPill presentation={presentation} />
-      </div>
-      <div className="mt-6 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-        <div className="rounded-lg border border-line bg-panel-subtle p-3">
-          <small className="section-kicker">Subject</small>
-          <strong className="mt-2 block break-words text-sm text-ink">
-            {modelNames(presentation.subjects)}
-          </strong>
-        </div>
-        <div className="rounded-lg border border-line bg-panel-subtle p-3">
-          <small className="section-kicker">Judge</small>
-          <strong className="mt-2 block break-words text-sm text-ink">
-            {modelNames(presentation.judges)}
-          </strong>
-        </div>
-        <div className="rounded-lg border border-line bg-panel-subtle p-3">
-          <small className="section-kicker">Completed</small>
-          <strong className="mt-2 block text-sm text-ink">
-            {formatDate(presentation.completedAt)}
-          </strong>
-        </div>
-        <div className="rounded-lg border border-line bg-panel-subtle p-3">
-          <small className="section-kicker">Action</small>
-          <strong className="mt-2 block text-sm text-ink">
-            {issue ? 'Investigate results' : 'Review results'}
-          </strong>
-        </div>
-      </div>
-      <div className="mt-5">
-        <div className="section-kicker">Execution indicators</div>
-        <div className="mt-2 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-          <SummaryMetric
-            label="Total tokens"
-            value={
-              metrics.totalTokens === null
-                ? hasRustWorkflow
-                  ? 'Not applicable'
-                  : 'Not reported'
-                : Math.round(metrics.totalTokens).toLocaleString('en-US')
-            }
-            caption={
-              hasRustWorkflow
-                ? 'No Harness model session'
-                : `${metrics.runCount} diagnostic runs`
-            }
-          />
-          <SummaryMetric
-            label="Function calls"
-            value={
-              metrics.functionCalls === null
-                ? hasRustWorkflow
-                  ? 'Not applicable'
-                  : 'Not reported'
-                : Math.round(metrics.functionCalls).toLocaleString('en-US')
-            }
-            caption={
-              hasRustWorkflow
-                ? 'Rust operations shown below'
-                : 'Subject execution calls'
-            }
-          />
-          <SummaryMetric
-            label="Workflow duration"
-            value={formatDuration(metrics.durationSeconds)}
-            caption="End-to-end execution time"
-          />
-          <SummaryMetric
-            label="Function errors"
-            value={
-              metrics.functionErrors === null
-                ? hasRustWorkflow
-                  ? 'Not applicable'
-                  : 'Not reported'
-                : Math.round(metrics.functionErrors).toLocaleString('en-US')
-            }
-            caption={
-              hasRustWorkflow
-                ? 'Step failures shown below'
-                : 'Calls that returned errors'
-            }
-          />
-        </div>
-      </div>
-      {metrics.workflow && metrics.workflow.stepCount > 0 && (
-        <WorkflowSummary metrics={metrics.workflow} />
-      )}
-      {issue && (
-        <div className="mt-5 rounded-lg border border-danger/25 bg-danger/5 p-4">
-          <div>
-            <strong className="block text-sm text-ink">
-              {categoryMessage(issue.category, issue.count)}
-            </strong>
-            <span className="mt-1 block text-sm text-ink-muted">
-              Objective system outcomes remain authoritative over advisory AI
-              conclusions.
-            </span>
-          </div>
-        </div>
-      )}
-    </section>
-  )
+function finiteMetric(value: unknown) {
+  return typeof value === 'number' && Number.isFinite(value) ? value : null
 }
 
-function WorkflowSummary({ metrics }: { metrics: WorkflowMetricsSummary }) {
-  const attentionSteps =
-    metrics.failedSteps + metrics.hardGateFailedSteps + metrics.cancelledSteps
-  const numericMetrics = workflowMetricEntries(metrics)
+function formatMetricCount(value: number | null) {
+  return value == null ? '—' : Math.round(value).toLocaleString('en-US')
+}
+
+function formatReportedCost(value: number | null) {
+  if (value == null) return '—'
+  if (value > 0 && value < 0.0001) return '<$0.0001'
+  return `$${value.toFixed(4)}`
+}
+
+function DecisionBoundary({
+  label,
+  value,
+  caption,
+}: {
+  label: string
+  value: string
+  caption: string
+}) {
   return (
-    <div className="mt-5">
-      <div className="section-kicker">Rust workflow metrics</div>
-      <p className="mt-1 text-xs text-ink-muted">
-        Persisted operational evidence from semantic tests. Model tokens,
-        Harness sessions and cost are shown separately only when available.
+    <div className="grid content-start gap-2 bg-[var(--ds-color-surface-raised)] p-4">
+      <dt className="font-mono text-[0.62rem] font-semibold uppercase tracking-[0.06em] text-[var(--ds-color-ink-muted)]">
+        {label}
+      </dt>
+      <dd className="m-0">
+        <StatusBadge
+          status={statusFromContract(value)}
+          label={titleCase(value)}
+        />
+      </dd>
+      <p className="m-0 text-xs leading-5 text-[var(--ds-color-ink-soft)]">
+        {caption}
       </p>
-      <div className="mt-2 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-        <SummaryMetric
-          label="Semantic tests"
-          value={`${metrics.succeededSteps}/${metrics.stepCount}`}
-          caption={
-            attentionSteps
-              ? `${attentionSteps} need attention`
-              : 'all succeeded'
-          }
-        />
-        <SummaryMetric
-          label="Step duration"
-          value={formatDuration(metrics.durationMs / 1000)}
-          caption="sum of persisted tests"
-        />
-        <SummaryMetric
-          label="Assets"
-          value={metrics.assetCount.toLocaleString('en-US')}
-          caption="captured before cleanup"
-        />
-        <SummaryMetric
-          label="Hard gates"
-          value={`${metrics.passedHardGateCount}/${metrics.hardGateCount}`}
-          caption={`${metrics.evaluationCount} evaluations`}
-        />
-      </div>
-      {numericMetrics.length > 0 && (
-        <dl className="mt-3 grid gap-x-4 gap-y-1 text-xs sm:grid-cols-2 lg:grid-cols-3">
-          {numericMetrics.map(([key, value]) => (
-            <div
-              key={key}
-              className="flex min-w-0 items-baseline justify-between gap-3 border-t border-line/70 pt-1.5"
-            >
-              <dt className="truncate text-ink-muted" title={key}>
-                {titleCase(key)}
-              </dt>
-              <dd className="m-0 shrink-0 font-mono text-ink-soft">
-                {formatWorkflowMetric(key, value)}
-              </dd>
-            </div>
-          ))}
-        </dl>
-      )}
     </div>
   )
 }
 
-function formatWorkflowMetric(key: string, value: number) {
-  const formatted = Number.isInteger(value)
-    ? value.toLocaleString('en-US')
-    : value.toLocaleString('en-US', { maximumFractionDigits: 2 })
-  return key.endsWith('_ms') ? `${formatted} ms` : formatted
+export function DecisionSection({
+  presentation,
+  detail,
+  primaryRun,
+}: {
+  presentation: ExecutionPresentation
+  detail: DashboardExecutionDetail
+  primaryRun: AssessmentRunView | null
+}) {
+  const aiResult = primaryRun?.finalAssessment.result
+  const systemStatus = primaryRun?.systemStatus ?? presentation.attention
+  const advisoryStatus =
+    aiResult?.verdict ??
+    primaryRun?.finalAssessment.availability ??
+    'unavailable'
+  const effectiveStatus = primaryRun?.effectiveStatus ?? systemStatus
+  const objectivePassed = systemStatus === 'passed'
+  const title =
+    objectivePassed && advisoryStatus === 'pass_with_concerns'
+      ? 'Passed objectively; advisory review found gaps'
+      : `${titleCase(systemStatus)} objectively; AI ${titleCase(advisoryStatus)}`
+  const recommendation = primaryRun
+    ? aiResult?.recommendation || buildHarnessRecommendation(primaryRun)
+    : 'Inspect the retained execution evidence before deciding whether to rerun.'
+  const summary = detail.assessment_summary
+  const issue = presentation.primaryIssue
+
+  return (
+    <Panel
+      as="section"
+      id="summary"
+      padding="generous"
+      className="scroll-mt-28 rounded-[var(--ds-radius-md)] border-[var(--ds-color-line-strong)] p-5 md:p-6"
+      aria-labelledby="summary-heading"
+    >
+      <PageHeader
+        headingLevel={2}
+        context="Decision"
+        title={title}
+        summary={
+          aiResult?.summary ??
+          (issue
+            ? categoryMessage(issue.category, issue.count)
+            : 'The retained objective result is ready for evidence review.')
+        }
+        className="[&_h2]:text-[clamp(1.5rem,2.6vw,2.35rem)]"
+        actions={
+          <div className="flex flex-wrap justify-end gap-2">
+            <StatusBadge
+              status={statusFromContract(systemStatus)}
+              label={`System: ${titleCase(systemStatus)}`}
+            />
+            <StatusBadge
+              status={statusFromContract(advisoryStatus)}
+              label={`AI: ${titleCase(advisoryStatus)}`}
+            />
+          </div>
+        }
+      />
+
+      <div className="mt-6 grid overflow-hidden rounded-lg border border-[var(--ds-color-line)] lg:grid-cols-[minmax(0,1.35fr)_minmax(24rem,0.65fr)]">
+        <section className="grid content-start gap-3 p-4 md:p-5">
+          <p className="m-0 font-mono text-[0.65rem] font-semibold uppercase tracking-[0.06em] text-[var(--ds-color-brand-text)]">
+            Recommended next step
+          </p>
+          <p className="m-0 max-w-4xl text-sm leading-6 text-[var(--ds-color-ink)]">
+            {recommendation}
+          </p>
+          {aiResult?.concerns?.[0] ? (
+            <p className="m-0 border-l-2 border-[var(--ds-color-warning)] pl-3 text-xs leading-5 text-[var(--ds-color-ink-soft)]">
+              <strong className="text-[var(--ds-color-warning)]">
+                Primary concern:
+              </strong>{' '}
+              {aiResult.concerns[0]}
+            </p>
+          ) : null}
+          <a
+            className={buttonClassName({
+              variant: 'quiet',
+              size: 'compact',
+              className: 'mt-1 w-fit',
+            })}
+            href={hashForExecution(detail.id, 'results')}
+          >
+            Inspect retained evidence
+          </a>
+        </section>
+        <dl className="m-0 grid gap-px border-t border-[var(--ds-color-line)] bg-[var(--ds-color-line)] sm:grid-cols-3 lg:grid-cols-1 lg:border-t-0 lg:border-l">
+          <DecisionBoundary
+            label="Objective system"
+            value={systemStatus}
+            caption="Deterministic gates and execution outcome."
+          />
+          <DecisionBoundary
+            label="Advisory AI"
+            value={advisoryStatus}
+            caption="Qualitative guidance; never overrides the system."
+          />
+          <DecisionBoundary
+            label="Effective harness"
+            value={effectiveStatus}
+            caption="Canonical final status retained in the report."
+          />
+        </dl>
+      </div>
+
+      <dl className="mt-4 grid grid-cols-2 gap-px overflow-hidden rounded-lg border border-[var(--ds-color-line)] bg-[var(--ds-color-line)] lg:grid-cols-4">
+        {[
+          ['Assessments', summary?.assessment_count],
+          ['Passed', summary?.assessment_outcomes?.passed],
+          ['Partial', summary?.assessment_outcomes?.partial],
+          ['Evidence references', summary?.evidence_reference_count],
+        ].map(([label, value]) => (
+          <div
+            key={String(label)}
+            className="bg-[var(--ds-color-surface-raised)] p-3"
+          >
+            <dt className="font-mono text-[0.6rem] uppercase tracking-[0.06em] text-[var(--ds-color-ink-muted)]">
+              {label}
+            </dt>
+            <dd className="mt-1 mb-0 text-xl font-semibold text-[var(--ds-color-ink)]">
+              {typeof value === 'number' ? value.toLocaleString('en-US') : '—'}
+            </dd>
+          </div>
+        ))}
+      </dl>
+    </Panel>
+  )
 }
 
 function ResultsSection({
@@ -439,30 +423,32 @@ function ResultsSection({
       ),
     0,
   )
+  const scenarioCount = buildScenarioMatrix(detail).summary.total
   return (
-    <section
+    <Panel
+      as="section"
       id="results"
-      className={`${detailPanel} border-l-brand`}
+      padding="generous"
+      className={`${detailPanel} p-5 md:p-6`}
       aria-labelledby="results-heading"
     >
-      <div className="section-kicker mb-2">02 · Results</div>
-      <div className="flex flex-wrap items-end justify-between gap-4">
-        <div>
-          <h2 id="results-heading" className={detailHeading}>
-            Scenarios and assessments
-          </h2>
-          <p className="mt-2 max-w-2xl text-sm leading-6 text-ink-muted">
-            Objective outcomes, advisory interpretations, and run-level evidence
-            stay distinct while sharing one diagnostic flow.
-          </p>
-        </div>
-        <span className="coverage-note">{runCount} diagnostic runs</span>
-      </div>
-      <SemanticTestFlow detail={detail} />
+      <PageHeader
+        headingLevel={2}
+        context="Benchmark results"
+        title="Scenario results"
+        summary="Compare objective outcomes, advisory conclusions, runtime, and scenario structure. Expand one row to inspect its benchmark metrics and workflow."
+        className="[&_h2]:text-[clamp(1.5rem,2.4vw,2.2rem)]"
+        actions={
+          <span className="font-mono text-xs text-[var(--ds-color-ink-muted)]">
+            {scenarioCount} {scenarioCount === 1 ? 'scenario' : 'scenarios'} ·{' '}
+            {runCount} {runCount === 1 ? 'run' : 'runs'}
+          </span>
+        }
+      />
       <div className="mt-6">
-        <AssessmentWorkspace detail={detail} onTranscript={onTranscript} />
+        <ScenarioMatrix detail={detail} onTranscript={onTranscript} />
       </div>
-    </section>
+    </Panel>
   )
 }
 
@@ -487,24 +473,30 @@ function TechnicalSection({
     availability: detail.availability,
   }
   return (
-    <section
+    <Panel
+      as="section"
       id="technical"
-      className={`${detailPanel} border-l-line-strong bg-panel-faint`}
+      padding="generous"
+      className={`${detailPanel} bg-[var(--ds-color-surface-raised)] p-5 md:p-6`}
       aria-labelledby="technical-heading"
     >
-      <div className="section-kicker mb-2">03 · Technical</div>
-      <h2 id="technical-heading" className={detailHeading}>
-        Provenance and raw fields
-      </h2>
-      <p className="mt-2 max-w-2xl text-sm leading-6 text-ink-muted">
-        Internal identifiers remain available for reproducibility without
-        carrying the first-read experience.
-      </p>
+      <PageHeader
+        headingLevel={2}
+        context="Provenance"
+        title="Raw fields and immutable identity"
+        summary="Internal identifiers remain available for reproducibility without carrying the first-read experience."
+        className="[&_h2]:text-[clamp(1.5rem,2.4vw,2.2rem)]"
+      />
       <div className="mt-5 grid gap-2 sm:grid-cols-2">
         {Object.entries(technical).map(([key, value]) => (
-          <div key={key} className="rounded-lg border border-line bg-panel p-3">
-            <small className="section-kicker">{key.replaceAll('_', ' ')}</small>
-            <code className="mt-2 block break-all text-xs text-ink-soft">
+          <div
+            key={key}
+            className="rounded-lg border border-[var(--ds-color-line)] bg-[var(--ds-color-surface)] p-3"
+          >
+            <small className="font-mono text-[0.6rem] font-semibold uppercase tracking-[0.06em] text-[var(--ds-color-ink-muted)]">
+              {key.replaceAll('_', ' ')}
+            </small>
+            <code className="mt-2 block break-all font-mono text-xs text-[var(--ds-color-ink-soft)]">
               {typeof value === 'object'
                 ? JSON.stringify(value)
                 : String(value ?? 'Not reported')}
@@ -512,15 +504,15 @@ function TechnicalSection({
           </div>
         ))}
       </div>
-      <details className="mt-5 rounded-lg border border-line bg-panel-subtle">
-        <summary className="min-h-11 cursor-pointer px-4 py-3 text-sm font-semibold">
+      <details className="mt-5 rounded-lg border border-[var(--ds-color-line)] bg-[var(--ds-color-surface)]">
+        <summary className="min-h-11 cursor-pointer px-4 py-3 text-sm font-semibold text-[var(--ds-color-ink)]">
           Preview raw JSON
         </summary>
-        <pre className="max-h-[560px] overflow-auto border-t border-line p-4 text-xs text-ink-muted">
+        <pre className="max-h-[560px] overflow-auto border-t border-[var(--ds-color-line)] p-4 font-mono text-xs text-[var(--ds-color-ink-muted)]">
           {JSON.stringify(detail, null, 2)}
         </pre>
       </details>
-    </section>
+    </Panel>
   )
 }
 
@@ -544,13 +536,16 @@ export function ExecutionPage({
 
   useEffect(() => {
     setSection(sectionFromAnchor(anchor))
-    if (anchor)
-      window.requestAnimationFrame(() =>
-        document
-          .getElementById(sectionFromAnchor(anchor))
-          ?.scrollIntoView({ block: 'start' }),
-      )
   }, [anchor])
+
+  useEffect(() => {
+    if (!anchor || !detail) return
+    window.requestAnimationFrame(() =>
+      document
+        .getElementById(sectionFromAnchor(anchor))
+        ?.scrollIntoView({ block: 'start' }),
+    )
+  }, [anchor, detail])
 
   useEffect(() => {
     let active = true
@@ -594,9 +589,15 @@ export function ExecutionPage({
             aggregateAssessmentMetrics(assessmentModel.runs),
             assessmentModel.runs.length,
             detail ? workflowMetricsFromDetail(detail) : null,
+            detail?.totals ?? null,
+            detail ? summedGeneralRunMetricsFromDetail(detail) : null,
           )
         : null,
     [assessmentModel.runs, detail, presentation],
+  )
+  const scenarioMatrix = useMemo(
+    () => (detail ? buildScenarioMatrix(detail) : null),
+    [detail],
   )
 
   useEffect(() => {
@@ -614,173 +615,263 @@ export function ExecutionPage({
 
   if (error)
     return (
-      <>
+      <div className="ds-root min-h-dvh bg-[var(--ds-color-canvas)] text-[var(--ds-color-ink)]">
         <a className="skip-link" href={hashForWorkspace()}>
           Back to executions
         </a>
-        <main id="main" className="page-shell detail-shell">
-          <section className="empty-state" role="alert">
-            <div className="empty-icon" aria-hidden="true">
-              !
-            </div>
-            <h1>Execution not found</h1>
-            <p>{error}</p>
-            <a className="button" href={hashForWorkspace()}>
-              Back to executions
-            </a>
-          </section>
+        <main
+          id="main"
+          className="mx-auto grid min-h-dvh w-[min(52rem,calc(100%_-_1.5rem))] place-items-center py-8"
+        >
+          <Panel
+            role="alert"
+            padding="generous"
+            className="w-full rounded-[var(--ds-radius-md)] border-[var(--ds-color-danger)]"
+          >
+            <PageHeader
+              context="Execution unavailable"
+              title="Execution not found"
+              summary={error}
+              actions={
+                <a
+                  className={buttonClassName({ variant: 'secondary' })}
+                  href={hashForWorkspace('executions')}
+                >
+                  Back to executions
+                </a>
+              }
+            />
+          </Panel>
         </main>
-      </>
+      </div>
     )
   if (!detail || !presentation)
     return (
-      <main id="main" className="page-shell detail-shell">
-        <section className="detail-loading" aria-busy="true">
-          Loading execution report…
-        </section>
-      </main>
+      <div className="ds-root min-h-dvh bg-[var(--ds-color-canvas)] text-[var(--ds-color-ink)]">
+        <main
+          id="main"
+          className="mx-auto grid min-h-dvh w-[min(52rem,calc(100%_-_1.5rem))] place-items-center py-8"
+        >
+          <Panel
+            className="w-full rounded-[var(--ds-radius-md)]"
+            aria-busy="true"
+          >
+            <p className="m-0 font-mono text-xs uppercase tracking-[0.06em] text-[var(--ds-color-ink-muted)]">
+              Loading execution report…
+            </p>
+          </Panel>
+        </main>
+      </div>
     )
 
-  const navigation: Array<{ id: DetailSection; label: string }> = [
-    { id: 'summary', label: 'Summary' },
-    { id: 'results', label: 'Results' },
-    { id: 'technical', label: 'Technical' },
-  ]
-  const hasRustWorkflow = Boolean(
-    summaryMetrics?.workflow && summaryMetrics.workflow.stepCount > 0,
-  )
+  const primaryRun = assessmentModel.runs[0] ?? null
+  const aiResult = primaryRun?.finalAssessment.result
+  const status = executionStatus(presentation)
+  const workflow = summaryMetrics?.workflow ?? null
+  const hasRustWorkflow = Boolean(workflow && workflow.stepCount > 0)
+  const scenarioSummary = scenarioMatrix?.summary
+  const scenarioCount = scenarioSummary?.total ?? 0
+  const workflowScenarioCount =
+    scenarioMatrix?.items.filter((item) => item.workflowSteps.length > 0)
+      .length ?? 0
+  const scenarioAttention =
+    (scenarioSummary?.failed ?? 0) +
+    (scenarioSummary?.hardGate ?? 0) +
+    (scenarioSummary?.inconclusive ?? 0) +
+    (scenarioSummary?.unavailable ?? 0) +
+    (scenarioSummary?.running ?? 0) +
+    (scenarioSummary?.incomplete ?? 0)
+  const runtimeSeconds =
+    presentation.modelRuntimeSeconds ?? summaryMetrics?.durationSeconds ?? null
+  const coverageComplete =
+    presentation.coverage != null &&
+    (presentation.coverage === 1 || presentation.coverage >= 100)
   return (
-    <>
+    <div className="ds-root min-h-dvh bg-[var(--ds-color-canvas)] text-[var(--ds-color-ink)]">
       <a className="skip-link" href={hashForExecution(executionId, section)}>
         Skip to execution details
       </a>
-      <header className="topbar min-h-[68px]">
-        <a
-          className="brand"
-          href="https://github.com/iii-hq/harness-e2e"
-          aria-label="iii Harness E2E"
-        >
-          <span className="brand-copy">
-            <strong>iii</strong>
-            <span>Harness benchmarks</span>
-          </span>
-        </a>
-        <nav className="topbar-actions" aria-label="Execution actions">
-          <ThemeToggle />
-        </nav>
-      </header>
+      <AppHeader active="executions" />
       <main
         id="main"
-        className="page-shell detail-shell w-[min(1420px,calc(100%-48px))] pt-[30px] max-[840px]:w-[min(1420px,calc(100%-30px))]"
+        className="page-shell detail-shell w-[min(1380px,calc(100%_-_3rem))] pt-6 max-[640px]:w-[calc(100%_-_1.5rem)]"
       >
         <nav
-          className="breadcrumbs mb-5 items-center font-mono text-[0.64rem]"
+          className="breadcrumbs mb-5 flex min-w-0 items-center gap-2 overflow-hidden font-mono text-[0.64rem] text-[var(--ds-color-ink-muted)]"
           aria-label="Breadcrumb"
         >
-          <a href={hashForWorkspace()}>Executions</a>
+          <a href={hashForWorkspace()}>Overview</a>
           <span aria-hidden="true">/</span>
-          <span>{presentation.label}</span>
+          <a href={hashForWorkspace('executions')}>Executions</a>
+          <span aria-hidden="true">/</span>
+          <span className="truncate">{presentation.label}</span>
         </nav>
-        <section
+        <PageHeader
           id="detail-summary"
-          className="execution-summary grid grid-cols-[minmax(0,1.35fr)_minmax(420px,0.65fr)] overflow-hidden rounded-[10px] border border-line-strong border-t-[3px] border-t-brand bg-panel max-[1120px]:grid-cols-1"
-          aria-labelledby="execution-heading"
-        >
-          <div className="execution-summary-main min-w-0 p-[30px] max-[560px]:px-[18px] max-[560px]:py-[22px]">
-            <div className="eyebrow mb-3">
-              <span className="live-dot" aria-hidden="true" />
-              Execution report
-            </div>
-            <h1
-              id="execution-heading"
-              className="m-0 max-w-full break-words text-[clamp(2rem,4vw,3.6rem)] leading-[0.98] font-[550]"
-            >
-              {presentation.label}
-            </h1>
-            <fieldset className="m-0 mt-4 grid max-w-3xl gap-2 border-0 p-0 sm:grid-cols-2">
-              <legend className="sr-only">Execution models</legend>
-              <ModelIdentityCard
-                label="Subject"
-                models={presentation.subjects}
-              />
-              <ModelIdentityCard label="Judge" models={presentation.judges} />
-            </fieldset>
-            <div className="mt-5 flex flex-wrap gap-2">
-              <StatusPill presentation={presentation} />
-              <span className="data-badge">
+          context="Execution detail"
+          title={presentation.label}
+          summary={`${presentation.receivedReports ?? '—'} of ${presentation.expectedReports ?? '—'} expected reports received. Objective outcomes remain authoritative; advisory AI is shown separately.`}
+          className="border-b border-[var(--ds-color-line)] pb-6 [&_.ds-page-header-copy]:gap-2 [&_h1]:max-w-full [&_h1]:break-words [&_h1]:text-2xl md:[&_h1]:text-3xl"
+          actions={
+            <div className="flex flex-wrap justify-end gap-2">
+              <StatusBadge status={status.status} label={status.label} />
+              {scenarioCount === 1 && aiResult ? (
+                <StatusBadge
+                  status={statusFromContract(aiResult.verdict)}
+                  label={`AI: ${titleCase(aiResult.verdict)}`}
+                />
+              ) : null}
+              <span className="inline-flex min-h-8 items-center rounded-full border border-[var(--ds-color-line-strong)] px-3 font-mono text-[0.62rem] uppercase tracking-[0.04em] text-[var(--ds-color-ink-muted)]">
                 {detail.availability === 'full'
-                  ? 'Diagnostic detail'
+                  ? 'Full evidence'
                   : detail.availability === 'aggregate'
                     ? 'Aggregate'
                     : 'No report'}
               </span>
             </div>
-          </div>
+          }
+        />
+
+        <Panel
+          padding="none"
+          className="mt-5 overflow-hidden rounded-[var(--ds-radius-md)] border-[var(--ds-color-line-strong)]"
+        >
           <section
-            className="kpi-grid detail-kpis m-0 grid grid-cols-2 gap-0 border-l border-line bg-panel-faint max-[1120px]:border-t max-[1120px]:border-l-0 max-[760px]:grid-cols-1"
+            className="grid grid-cols-2 gap-px bg-[var(--ds-color-line)] lg:grid-cols-4"
+            aria-label="Execution identity"
+          >
+            <div className="bg-[var(--ds-color-surface-raised)] p-3">
+              <div className="font-mono text-[0.6rem] font-semibold uppercase tracking-[0.06em] text-[var(--ds-color-ink-muted)]">
+                Scenarios
+              </div>
+              <strong className="mt-1 block truncate text-sm text-[var(--ds-color-ink)]">
+                {scenarioCount
+                  ? `${scenarioCount} ${scenarioCount === 1 ? 'result' : 'results'}`
+                  : 'Not reported'}
+              </strong>
+            </div>
+            <ModelIdentityCard label="Subject" models={presentation.subjects} />
+            <ModelIdentityCard label="Judge" models={presentation.judges} />
+            <div className="bg-[var(--ds-color-surface-raised)] p-3">
+              <div className="font-mono text-[0.6rem] font-semibold uppercase tracking-[0.06em] text-[var(--ds-color-ink-muted)]">
+                Completed
+              </div>
+              <strong className="mt-1 block text-sm text-[var(--ds-color-ink)]">
+                {formatDate(presentation.completedAt)}
+              </strong>
+            </div>
+          </section>
+          <section
+            className="grid grid-flow-dense grid-cols-1 gap-0 border-t border-[var(--ds-color-line)] sm:grid-cols-2 lg:grid-cols-4"
             aria-label="Execution metrics"
           >
             <MetricCard
-              label="Scenario pass rate"
-              value={formatPercent(presentation.passRate)}
-              caption={`${formatPercent(presentation.coverage)} coverage`}
+              className="min-h-40 rounded-none border-0 border-t border-[var(--ds-color-line)] p-4 first:border-t-0 sm:border-t-0 sm:border-l sm:first:border-l-0 lg:p-5 [&_.ds-metric-value]:text-[clamp(1.9rem,3vw,2.8rem)]"
+              label="Objective scenarios"
+              value={
+                scenarioCount
+                  ? `${scenarioSummary?.passed ?? 0}/${scenarioCount}`
+                  : '—'
+              }
+              detail={`${scenarioSummary?.hardGate ?? 0} hard gate · ${scenarioSummary?.failed ?? 0} failed`}
+              delta={scenarioAttention > 0 ? 'Needs attention' : 'Passed'}
+              tone={scenarioAttention > 0 ? 'negative' : 'positive'}
             />
             <MetricCard
-              label={hasRustWorkflow ? 'Execution runtime' : 'Model runtime'}
-              value={formatDuration(presentation.modelRuntimeSeconds)}
-              caption={
-                hasRustWorkflow
-                  ? 'Rust workflow wall time'
-                  : presentation.workflowRuntimeSeconds !== null
-                    ? `${formatDuration(presentation.workflowRuntimeSeconds)} workflow`
-                    : 'Workflow duration not reported'
+              className="min-h-40 rounded-none border-0 border-t border-[var(--ds-color-line)] p-4 sm:border-t-0 sm:border-l lg:p-5 [&_.ds-metric-value]:text-[clamp(1.9rem,3vw,2.8rem)]"
+              label="Report coverage"
+              value={formatPercent(presentation.coverage)}
+              detail={`${presentation.receivedReports ?? 0} of ${presentation.expectedReports ?? 0} reports received`}
+              delta={
+                presentation.coverage == null
+                  ? 'Not reported'
+                  : coverageComplete
+                    ? 'Complete'
+                    : 'Missing reports'
+              }
+              tone={
+                presentation.coverage == null
+                  ? 'unavailable'
+                  : coverageComplete
+                    ? 'positive'
+                    : 'warning'
               }
             />
             <MetricCard
-              label="Results"
-              value={String(presentation.breakdown.total || '—')}
-              caption={`${presentation.breakdown.issues} requiring attention`}
+              className="min-h-40 rounded-none border-0 border-t border-[var(--ds-color-line)] p-4 sm:border-l lg:border-t-0 lg:p-5 [&_.ds-metric-value]:text-[clamp(1.9rem,3vw,2.8rem)]"
+              label="Execution runtime"
+              value={formatDuration(runtimeSeconds)}
+              detail={
+                presentation.modelRuntimeSeconds != null
+                  ? 'Reported wall-clock time'
+                  : `${summaryMetrics?.runCount ?? 0} observed runs`
+              }
+              delta={
+                presentation.modelRuntimeSeconds != null
+                  ? 'Wall clock'
+                  : 'Observed'
+              }
+              tone={runtimeSeconds === null ? 'unavailable' : 'neutral'}
             />
             <MetricCard
-              label="Evidence"
-              value={String(assessmentModel.runs.length)}
-              caption="Assessment runs retained"
+              className="min-h-40 rounded-none border-0 border-t border-[var(--ds-color-line)] p-4 sm:border-l lg:border-t-0 lg:p-5 [&_.ds-metric-value]:text-[clamp(1.9rem,3vw,2.8rem)]"
+              label="Workflow scenarios"
+              value={
+                scenarioCount
+                  ? `${workflowScenarioCount}/${scenarioCount}`
+                  : '—'
+              }
+              detail={
+                hasRustWorkflow
+                  ? `${workflow?.stepCount ?? 0} persisted steps`
+                  : 'No workflow steps retained'
+              }
+              delta={hasRustWorkflow ? 'Composite' : 'Standard'}
+              tone={hasRustWorkflow ? 'neutral' : 'unavailable'}
+            />
+            <MetricCard
+              className="min-h-40 rounded-none border-0 border-t border-[var(--ds-color-line)] p-4 lg:p-5 [&_.ds-metric-value]:text-[clamp(1.9rem,3vw,2.8rem)]"
+              label="Total tokens"
+              value={formatMetricCount(summaryMetrics?.totalTokens ?? null)}
+              detail="Consolidated subject execution usage"
+              delta="Usage"
+              tone={
+                summaryMetrics?.totalTokens == null ? 'unavailable' : 'neutral'
+              }
+            />
+            <MetricCard
+              className="min-h-40 rounded-none border-0 border-t border-l border-[var(--ds-color-line)] p-4 lg:p-5 [&_.ds-metric-value]:text-[clamp(1.9rem,3vw,2.8rem)]"
+              label="Function calls"
+              value={formatMetricCount(summaryMetrics?.functionCalls ?? null)}
+              detail={
+                summaryMetrics?.functionCallErrors == null
+                  ? 'Error count not captured'
+                  : `${formatMetricCount(summaryMetrics.functionCallErrors)} errors`
+              }
+              delta="Tools"
+              tone={
+                summaryMetrics?.functionCalls == null
+                  ? 'unavailable'
+                  : 'neutral'
+              }
+            />
+            <MetricCard
+              className="min-h-40 rounded-none border-0 border-t border-l border-[var(--ds-color-line)] p-4 lg:p-5 [&_.ds-metric-value]:text-[clamp(1.9rem,3vw,2.8rem)]"
+              label="Reported cost"
+              value={formatReportedCost(summaryMetrics?.totalCostUsd ?? null)}
+              detail="Consolidated execution cost"
+              delta="USD"
+              tone={
+                summaryMetrics?.totalCostUsd == null ? 'unavailable' : 'neutral'
+              }
             />
           </section>
-        </section>
-        <nav
-          className="detail-index hidden sticky top-3 z-20 mb-4 mt-[18px] grid-cols-3 gap-0 overflow-hidden rounded-[9px] border border-line-strong bg-glass p-0 shadow-[0_12px_30px_rgba(0,0,0,0.12)] backdrop-blur-[18px] max-[840px]:static max-[840px]:grid max-[560px]:grid-cols-2"
-          aria-label="Execution detail sections"
-        >
-          {navigation.map((item, index) => (
-            <a
-              key={item.id}
-              href={hashForExecution(executionId, item.id)}
-              className={`flex min-h-[52px] items-center gap-2.5 border-r border-line px-4 text-left no-underline ${section === item.id ? 'bg-panel-soft text-ink' : 'text-ink-muted hover:bg-panel-soft hover:text-ink'}`}
-              aria-current={section === item.id ? 'page' : undefined}
-            >
-              <span className="font-mono text-[0.6rem]" aria-hidden="true">
-                0{index + 1}
-              </span>
-              <strong className="text-[0.74rem] font-semibold">
-                {item.label}
-              </strong>
-            </a>
-          ))}
-        </nav>
-        <div className="detail-main grid min-w-0 gap-4">
-          <SummarySection
+        </Panel>
+        <div className="detail-main grid min-w-0 gap-5">
+          <DecisionSection
             presentation={presentation}
-            metrics={
-              summaryMetrics ?? {
-                totalTokens: null,
-                functionCalls: null,
-                functionErrors: null,
-                durationSeconds: null,
-                runCount: 0,
-                workflow: null,
-              }
-            }
+            detail={detail}
+            primaryRun={primaryRun}
           />
           <ResultsSection
             detail={detail}
@@ -797,10 +888,15 @@ export function ExecutionPage({
           onClose={() => setTranscript(null)}
         />
       )}
-      <footer>
+      <footer className="mx-auto mt-8 flex w-[min(1380px,calc(100%_-_3rem))] flex-wrap items-center justify-between gap-3 border-t border-[var(--ds-color-line)] py-6 text-xs text-[var(--ds-color-ink-muted)] max-[640px]:w-[calc(100%_-_1.5rem)]">
         <span>Harness E2E · public execution report</span>
-        <a href={hashForWorkspace()}>Back to all executions</a>
+        <a
+          className="text-[var(--ds-color-ink-soft)] underline-offset-4 hover:underline"
+          href={hashForWorkspace('executions')}
+        >
+          Back to all executions
+        </a>
       </footer>
-    </>
+    </div>
   )
 }

@@ -1,5 +1,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { ProviderModelDropdown } from '@/components/ProviderModelDropdown'
+import {
+  ExecutionSetup,
+  ExecutionSetupReview,
+} from '@/components/ExecutionSetup'
+import { hashForNewPlan } from '@/hooks/use-hash-route'
 import type {
   DashboardDataBridge,
   JsonObject,
@@ -144,6 +148,7 @@ export function LocalRunnerDialog({
   const dialogRef = useRef<HTMLDialogElement>(null)
   const [catalog, setCatalog] = useState<RunnerCatalog | null>(null)
   const [form, setForm] = useState<RunnerForm>(initialForm)
+  const [scenarioQuery, setScenarioQuery] = useState('')
   const [job, setJob] = useState<RunnerJob | null>(null)
   const [log, setLog] = useState('')
   const [logOffset, setLogOffset] = useState(0)
@@ -229,6 +234,19 @@ export function LocalRunnerDialog({
     () => modelGroups(catalog?.models ?? []),
     [catalog],
   )
+  const modelOptions = groupedModels.map((group) => ({
+    provider: group.provider,
+    models: group.models.map((model) => ({
+      label: model.model,
+      value: modelKey(model),
+    })),
+  }))
+  const runsPerScenario = Math.max(1, Number(form.runs) || 1)
+  const technicalRetries = Math.max(0, Number(form.technicalRetries) || 0)
+  const plannedRuns = form.scenarios.length * runsPerScenario
+  const canRun = Boolean(
+    catalog && selectedSubject && form.scenarios.length > 0,
+  )
 
   const update = <K extends keyof RunnerForm>(key: K, value: RunnerForm[K]) => {
     setForm((current) => ({ ...current, [key]: value }))
@@ -279,255 +297,163 @@ export function LocalRunnerDialog({
   return (
     <dialog
       ref={dialogRef}
-      className="local-runner-dialog"
+      className="ds-root m-auto hidden max-h-[94dvh] w-[min(1180px,calc(100%_-_1rem))] max-w-none overflow-hidden rounded-xl border border-[var(--ds-color-line-strong)] bg-[var(--ds-color-surface)] p-0 text-[var(--ds-color-ink)] shadow-[var(--ds-shadow-panel)] open:grid open:grid-rows-[auto_minmax(0,1fr)] backdrop:bg-[var(--ds-color-backdrop)] backdrop:backdrop-blur-sm sm:w-[min(1180px,calc(100%_-_2rem))]"
       onClose={onClose}
       onKeyDownCapture={trapDialogFocus}
       aria-labelledby="local-runner-title"
     >
-      <div className="local-runner-dialog-header">
-        <div>
-          <div className="section-kicker">New evidence</div>
-          <strong id="local-runner-title">Configure execution</strong>
+      <header className="flex items-start justify-between gap-5 border-b border-[var(--ds-color-line)] bg-[var(--ds-color-surface)] px-5 py-4 sm:px-6">
+        <div className="min-w-0">
+          <p className="m-0 font-mono text-[0.65rem] font-semibold uppercase tracking-[0.07em] text-[var(--ds-color-brand-text)]">
+            Execution setup
+          </p>
+          <strong
+            className="mt-1 block text-base font-semibold"
+            id="local-runner-title"
+          >
+            Create a quick benchmark result
+          </strong>
+          <p className="mt-1 mb-0 max-w-2xl text-xs leading-5 text-[var(--ds-color-ink-muted)]">
+            Run selected scenarios once. Use a reusable plan when you need a
+            fixed baseline and candidate comparison.
+          </p>
         </div>
         <button
-          className="dialog-close"
+          className="grid h-11 w-11 shrink-0 place-items-center rounded-lg border border-[var(--ds-color-line)] bg-transparent text-lg text-[var(--ds-color-ink-soft)] transition-colors hover:border-[var(--ds-color-line-strong)] hover:text-[var(--ds-color-ink)]"
           type="button"
           onClick={onClose}
           aria-label="Close execution form"
         >
           ×
         </button>
-      </div>
-      <section
-        className="panel local-runner"
-        aria-labelledby="local-runner-heading"
-      >
-        <div className="panel-heading local-runner-heading">
-          <div>
-            <div className="section-kicker">Local experiment</div>
-            <h2 id="local-runner-heading">Run E2E scenarios</h2>
-            <p className="trend-description">
-              Use the Harness running at the selected iii URL. Each run is saved
-              as an independent execution.
-            </p>
-          </div>
-          <span className="local-run-status">{statusLabel(job?.status)}</span>
-        </div>
-        <div className="local-connection" aria-live="polite">
-          <span
-            className={`local-connection-dot ${catalog ? 'connected' : ''}`}
-            aria-hidden="true"
-          />
-          <span>
-            {catalog
-              ? `${catalog.models.length} registered model${catalog.models.length === 1 ? '' : 's'} · ${catalog.scenarios.length} scenarios`
-              : 'Catalog loads when this dialog opens'}
-          </span>
-          <code>{form.url}</code>
-          <button
-            className="button"
-            type="button"
-            onClick={() => void refreshCatalog()}
-            disabled={loadingCatalog || active}
-          >
-            {loadingCatalog ? 'Refreshing…' : 'Refresh catalog'}
-          </button>
-        </div>
+      </header>
+
+      <div className="min-h-0 overflow-auto">
         <form
           id="local-runner-form"
-          className="local-run-form"
+          className="grid min-w-0 gap-px bg-[var(--ds-color-line)] lg:grid-cols-12"
           onSubmit={submit}
         >
-          <div className="local-field">
-            <span>
-              Execution label <small>optional</small>
-            </span>
-            <input
-              value={form.label}
-              maxLength={120}
-              placeholder="Before system prompt change"
-              onChange={(event) => update('label', event.target.value)}
+          <div className="min-w-0 bg-[var(--ds-color-surface)] lg:col-span-8">
+            <ExecutionSetup
+              idPrefix="quick-execution"
+              mode="quick"
+              label={form.label}
+              url={form.url}
+              subject={form.subject}
+              judge={form.judge}
+              modelGroups={modelOptions}
+              availableScenarios={catalog?.scenarios ?? []}
+              selectedScenarios={form.scenarios}
+              query={scenarioQuery}
+              runs={form.runs}
+              technicalRetries={form.technicalRetries}
+              seed={form.seed}
               disabled={active}
+              catalogLoading={loadingCatalog}
+              catalogSummary={
+                catalog
+                  ? `${catalog.models.length} registered model${catalog.models.length === 1 ? '' : 's'} · ${catalog.scenarios.length} scenarios`
+                  : 'Catalog loads when this dialog opens'
+              }
+              onRefreshCatalog={() => void refreshCatalog()}
+              onLabelChange={(value) => update('label', value)}
+              onUrlChange={(value) => update('url', value)}
+              onSubjectChange={(value) => update('subject', value)}
+              onJudgeChange={(value) => update('judge', value)}
+              onSelectedScenariosChange={(value) => update('scenarios', value)}
+              onQueryChange={setScenarioQuery}
+              onRunsChange={(value) => update('runs', value)}
+              onTechnicalRetriesChange={(value) =>
+                update('technicalRetries', value)
+              }
+              onSeedChange={(value) => update('seed', value)}
             />
-          </div>
-          <div className="local-field">
-            <span>
-              iii WebSocket URL <small>required</small>
-            </span>
-            <input
-              value={form.url}
-              required
-              placeholder="ws://127.0.0.1:49134"
-              onChange={(event) => update('url', event.target.value)}
-              disabled={active}
-            />
-          </div>
-          <div className="local-field">
-            <span>
-              Execution model <small>required</small>
-            </span>
-            <ProviderModelDropdown
-              ariaLabel="Execution model"
-              required
-              value={form.subject}
-              onChange={(value) => update('subject', value)}
-              disabled={active || !catalog}
-              groups={groupedModels.map((group) => ({
-                provider: group.provider,
-                models: group.models.map((model) => ({
-                  label: model.model,
-                  value: modelKey(model),
-                })),
-              }))}
-              placeholder="Choose a model"
-            />
-          </div>
-          <div className="local-field">
-            <span>
-              Judge model <small>automatic when blank</small>
-            </span>
-            <ProviderModelDropdown
-              ariaLabel="Judge model"
-              value={form.judge}
-              onChange={(value) => update('judge', value)}
-              disabled={active || !catalog}
-              groups={groupedModels.map((group) => ({
-                provider: group.provider,
-                models: group.models.map((model) => ({
-                  label: model.model,
-                  value: modelKey(model),
-                })),
-              }))}
-              placeholder="Use execution model when required"
-            />
-          </div>
-          <fieldset className="local-field local-field-wide">
-            <legend>
-              Scenarios <small>select one or more</small>
-            </legend>
-            <div className="local-scenario-toolbar">
-              <button
-                type="button"
-                onClick={() => update('scenarios', catalog?.scenarios ?? [])}
-                disabled={active || !catalog}
+
+            {error && (
+              <p
+                className="m-0 border-t border-[var(--ds-color-line)] bg-[color-mix(in_srgb,var(--ds-color-danger)_8%,var(--ds-color-surface))] p-5 text-xs leading-5 text-[var(--ds-color-danger)] sm:px-6"
+                role="alert"
               >
-                Select all
-              </button>
-              <button
-                type="button"
-                onClick={() => update('scenarios', [])}
-                disabled={active || !catalog}
+                {error}
+              </p>
+            )}
+            {log && (
+              <details
+                className="border-t border-[var(--ds-color-line)] p-5 sm:p-6"
+                open={active}
               >
-                Clear
+                <summary className="cursor-pointer text-xs font-semibold text-[var(--ds-color-ink-soft)]">
+                  Live runner output
+                </summary>
+                <pre
+                  className="mt-3 mb-0 max-h-80 w-full overflow-auto rounded-lg border border-[var(--ds-color-line)] bg-[#080a09] p-4 font-mono text-[0.68rem] leading-5 text-[#cbd3cc]"
+                  aria-live="polite"
+                >
+                  {log}
+                </pre>
+              </details>
+            )}
+          </div>
+
+          <div className="min-w-0 bg-[var(--ds-color-surface-raised)] lg:col-span-4">
+            <ExecutionSetupReview
+              mode="quick"
+              status={
+                job?.status
+                  ? statusLabel(job.status)
+                  : canRun
+                    ? 'Ready'
+                    : 'Incomplete'
+              }
+              subject={
+                selectedSubject
+                  ? `${selectedSubject.provider} / ${selectedSubject.model}`
+                  : ''
+              }
+              judge={
+                selectedJudge
+                  ? `${selectedJudge.provider} / ${selectedJudge.model}`
+                  : ''
+              }
+              url={form.url}
+              selectedScenarios={form.scenarios.length}
+              plannedRuns={plannedRuns}
+              runsPerScenario={runsPerScenario}
+              technicalRetries={technicalRetries}
+              ready={canRun && !active}
+            >
+              <button
+                className="inline-flex min-h-11 w-full items-center justify-center rounded-lg border border-[var(--ds-color-brand)] bg-[var(--ds-color-brand)] px-4 text-sm font-semibold text-[var(--ds-color-brand-ink)] transition-colors hover:bg-[color-mix(in_srgb,var(--ds-color-brand)_88%,white)] disabled:cursor-not-allowed disabled:opacity-45"
+                type="submit"
+                form="local-runner-form"
+                disabled={active || !canRun}
+                aria-busy={active}
+              >
+                {submitting
+                  ? 'Starting E2E…'
+                  : active
+                    ? 'E2E running…'
+                    : 'Run selected E2E'}
               </button>
-              <span>{form.scenarios.length} selected</span>
-            </div>
-            <div className="local-scenario-options">
-              {(catalog?.scenarios ?? []).map((scenario) => (
-                <label className="local-scenario-option" key={scenario}>
-                  <input
-                    type="checkbox"
-                    checked={form.scenarios.includes(scenario)}
-                    disabled={active}
-                    onChange={(event) =>
-                      update(
-                        'scenarios',
-                        event.target.checked
-                          ? [...form.scenarios, scenario]
-                          : form.scenarios.filter((item) => item !== scenario),
-                      )
-                    }
-                  />
-                  <span>{scenario.replaceAll('_', ' ')}</span>
-                </label>
-              ))}
-            </div>
-          </fieldset>
-          <details className="local-advanced local-field-wide">
-            <summary>Advanced options</summary>
-            <div className="local-advanced-grid">
-              <label className="local-field">
-                <span>Runs</span>
-                <input
-                  type="number"
-                  min="1"
-                  max="20"
-                  value={form.runs}
-                  onChange={(event) => update('runs', event.target.value)}
-                  disabled={active}
-                />
-              </label>
-              <label className="local-field">
-                <span>Technical retries</span>
-                <input
-                  type="number"
-                  min="0"
-                  max="3"
-                  value={form.technicalRetries}
-                  onChange={(event) =>
-                    update('technicalRetries', event.target.value)
-                  }
-                  disabled={active}
-                />
-              </label>
-              <label className="local-field">
-                <span>
-                  Case seed <small>canonical when blank</small>
-                </span>
-                <input
-                  type="number"
-                  min="0"
-                  step="1"
-                  value={form.seed}
-                  onChange={(event) => update('seed', event.target.value)}
-                  disabled={active}
-                />
-              </label>
-            </div>
-          </details>
+              {active && (
+                <button
+                  className="inline-flex min-h-11 w-full items-center justify-center rounded-lg border border-[var(--ds-color-line-strong)] bg-transparent px-4 text-sm font-semibold text-[var(--ds-color-ink-soft)] hover:text-[var(--ds-color-ink)]"
+                  type="button"
+                  onClick={() => void cancel()}
+                >
+                  Cancel execution
+                </button>
+              )}
+              <a
+                className="inline-flex min-h-10 w-full items-center justify-center rounded-lg px-3 text-xs font-semibold text-[var(--ds-color-ink-soft)] underline-offset-4 hover:text-[var(--ds-color-ink)] hover:underline"
+                href={hashForNewPlan()}
+              >
+                Create a reusable plan instead
+              </a>
+            </ExecutionSetupReview>
+          </div>
         </form>
-        {error && (
-          <p className="local-run-error" role="alert">
-            {error}
-          </p>
-        )}
-        {log && (
-          <details className="local-run-log-shell" open={active}>
-            <summary>Live runner output</summary>
-            <pre className="local-run-log" aria-live="polite">
-              {log}
-            </pre>
-          </details>
-        )}
-      </section>
-      <div className="local-run-actions">
-        <button
-          className="button local-run-submit min-w-[190px] justify-center"
-          type="submit"
-          form="local-runner-form"
-          disabled={
-            active ||
-            !catalog ||
-            !selectedSubject ||
-            form.scenarios.length === 0
-          }
-          aria-busy={active}
-        >
-          {submitting
-            ? 'Starting E2E…'
-            : active
-              ? 'E2E running…'
-              : 'Run selected E2E'}
-        </button>
-        {active && (
-          <button
-            className="button"
-            type="button"
-            onClick={() => void cancel()}
-          >
-            Cancel
-          </button>
-        )}
       </div>
     </dialog>
   )

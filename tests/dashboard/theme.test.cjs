@@ -15,18 +15,29 @@ test("sets the stored or system theme before React renders", () => {
 });
 
 test("uses the shared React theme control on every dashboard page", () => {
+  const appHeader = fs.readFileSync(
+    path.join(dashboardRoot, "src", "components", "AppHeader.tsx"),
+    "utf8",
+  );
+  assert.match(appHeader, /import \{ ThemeToggle \}/);
+  assert.match(appHeader, /<ThemeToggle \/>/);
+
   for (const page of [
     "OverviewPage.tsx",
     "TestsPage.tsx",
     "ExecutionPage.tsx",
     "CoveragePage.tsx",
+    "TestsCatalogPage.tsx",
+    "TestHistoryPage.tsx",
+    "PlansPage.tsx",
+    "LocalPlanPage.tsx",
   ]) {
     const source = fs.readFileSync(
       path.join(dashboardRoot, "src", "pages", page),
       "utf8",
     );
-    assert.match(source, /import \{ ThemeToggle \}/);
-    assert.match(source, /<ThemeToggle \/>/);
+    assert.match(source, /import \{ AppHeader/);
+    assert.match(source, /<AppHeader/);
   }
 });
 

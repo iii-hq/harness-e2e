@@ -60,7 +60,6 @@ pub(super) struct LocalPlan {
     pub state: PlanState,
     pub locked: bool,
     pub scope_hash: String,
-    pub policy_hash: String,
     pub url: String,
     pub model: String,
     pub provider: String,
@@ -211,8 +210,7 @@ pub(super) fn list_plans(plans_dir: &Path) -> Result<Vec<LocalPlan>> {
 pub(super) fn new_plan(request: &PlanCreateRequest, id: String) -> Result<LocalPlan> {
     validate_values(request)?;
     let scenarios = resolve_scope(&request.scenarios, request.seed)?;
-    let policy_hash = current_policy_hash()?;
-    let scope_hash = scope_hash(request, &scenarios, &policy_hash)?;
+    let scope_hash = scope_hash(request, &scenarios)?;
     let now = Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true);
     Ok(LocalPlan {
         schema_version: PLAN_SCHEMA_VERSION,
@@ -224,7 +222,6 @@ pub(super) fn new_plan(request: &PlanCreateRequest, id: String) -> Result<LocalP
         state: PlanState::Draft,
         locked: false,
         scope_hash,
-        policy_hash,
         url: request.url.trim().to_string(),
         model: request.model.trim().to_string(),
         provider: request.provider.trim().to_string(),
@@ -313,8 +310,7 @@ pub(super) fn apply_update(plan: &mut LocalPlan, update: &PlanUpdateRequest) -> 
     plan.runs = request.runs;
     plan.technical_retries = request.technical_retries;
     plan.seed = request.seed;
-    plan.policy_hash = current_policy_hash()?;
-    plan.scope_hash = scope_hash(&request, &plan.scenarios, &plan.policy_hash)?;
+    plan.scope_hash = scope_hash(&request, &plan.scenarios)?;
     plan.updated_at = Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true);
     Ok(())
 }
@@ -486,11 +482,7 @@ fn resolve_scope(scenario_ids: &[String], seed: Option<u64>) -> Result<Vec<PlanS
         .collect()
 }
 
-fn scope_hash(
-    request: &PlanCreateRequest,
-    scenarios: &[PlanScopeItem],
-    policy_hash: &str,
-) -> Result<String> {
+fn scope_hash(request: &PlanCreateRequest, scenarios: &[PlanScopeItem]) -> Result<String> {
     artifact::sha256_value(&json!({
         "url": request.url.trim(),
         "model": request.model.trim(),
@@ -500,14 +492,7 @@ fn scope_hash(
         "scenarios": scenarios,
         "runs": request.runs,
         "technical_retries": request.technical_retries,
-        "policy_hash": policy_hash,
     }))
-}
-
-fn current_policy_hash() -> Result<String> {
-    let value: serde_json::Value =
-        serde_json::from_str(include_str!("../../config/policies/capability-policy.json"))?;
-    artifact::sha256_value(&value)
 }
 
 #[cfg(test)]

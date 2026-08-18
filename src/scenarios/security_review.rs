@@ -10,7 +10,7 @@ use super::{
 };
 
 pub const ID: &str = "security_review";
-pub const VERSION: u32 = 2;
+pub const VERSION: u32 = 3;
 
 pub fn scenario(_run_id: &str) -> ScenarioSpec {
     ScenarioSpec {
@@ -18,7 +18,7 @@ pub fn scenario(_run_id: &str) -> ScenarioSpec {
         version: VERSION,
         // Composite scenarios do not send this text to Harness. It is retained as
         // the code-owned scenario purpose in the ordinary scenario contract.
-        prompt: "Exercise the complete security-scan lifecycle against the manually prepared local fixture, including scan deduplication, optional suggestions, GitHub reconciliation, cron execution, final listing, and repository integrity.".into(),
+        prompt: "Exercise the complete on-demand security-scan lifecycle against the manually prepared local fixture, including scan deduplication, optional suggestions, GitHub reconciliation, a second immediate exact-SHA scan, final listing, and repository integrity.".into(),
         filesystem_root: None,
         execution: ExecutionPolicy {
             max_turns: 1,
@@ -41,9 +41,9 @@ pub fn scenario(_run_id: &str) -> ScenarioSpec {
                 EvaluationDimension::Deliverable,
             ),
             CriterionSpec::advisory_deterministic(
-                "scheduled_b_detection",
+                "scan_b_detection",
                 20,
-                "Cron creates and completes the commit B scan with coherent report evidence.",
+                "An explicit request immediately creates and completes the commit B scan with coherent report evidence.",
                 EvaluationDimension::Deliverable,
             ),
         ],
@@ -81,7 +81,7 @@ pub fn materialize(namespace: &str, seed: u64) -> anyhow::Result<MaterializedSce
             "e2e::control-plane-v1".to_string(),
             "security_scan::v1".to_string(),
             "github::security-read".to_string(),
-            "cron::scheduled-run".to_string(),
+            "security_scan::on-demand".to_string(),
         ],
         DeliverableContract::default(),
     )?;
@@ -113,6 +113,15 @@ mod tests {
         assert_eq!(first.case.case_id, retry.case.case_id);
         assert_eq!(first.case.inputs_sha256, retry.case.inputs_sha256);
         assert_eq!(first.case.scenario_version, VERSION);
+        assert!(first
+            .case
+            .required_capabilities
+            .contains(&"security_scan::on-demand".to_string()));
+        assert!(!first
+            .case
+            .required_capabilities
+            .iter()
+            .any(|capability| capability.contains("cron")));
         assert_eq!(
             first.case.complexity.tier,
             crate::scenarios::ComplexityTier::L4Coordinated

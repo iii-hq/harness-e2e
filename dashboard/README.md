@@ -48,7 +48,7 @@ The server listens on `0.0.0.0:4173` by default. Open
 with the machine's address when accessing it remotely.
 
 The dashboard uses the same dependency-free hash-routing pattern as Console.
-Canonical routes are `#/overview`, `#/tests`, `#/capability`, `#/executions`,
+Canonical routes are `#/overview`, `#/tests`, `#/executions`,
 `#/execution/<id>`, and `#/coverage`. The old `#/scenarios` route redirects to
 Tests, while `#/compare/<from>/<to>` remains a deep link into the same
 Tests view. All views use the single `index.html` entry point.

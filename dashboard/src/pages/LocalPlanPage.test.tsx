@@ -9,6 +9,7 @@ import {
   PlanComparisonPanel,
   PlanExecutionHistory,
   PlanLifecycle,
+  PlanNonComparableAttempts,
   planMetricWinnerIds,
   selectedPlanCandidate,
 } from '@/pages/LocalPlanPage'
@@ -23,7 +24,6 @@ const candidateRunningPlan: LocalPlan = {
   state: 'candidate_running',
   locked: true,
   scope_hash: 'sha256:scope',
-  policy_hash: 'sha256:policy',
   url: 'https://example.invalid/catalog',
   model: 'codex/gpt-5.6-terra',
   provider: 'openai-codex',
@@ -140,6 +140,49 @@ describe('local plan lifecycle', () => {
 })
 
 describe('local plan execution comparison', () => {
+  it('hides comparison controls until a baseline and another execution exist', () => {
+    const html = renderToStaticMarkup(
+      <PlanExecutionHistory
+        plan={{
+          ...candidateRunningPlan,
+          state: 'baseline_ready',
+          candidate_execution_ids: [],
+          last_attempt_id: 'baseline-1',
+        }}
+        summaries={{ 'baseline-1': execution('baseline-1') }}
+        visualBaselineId="baseline-1"
+        comparisonCandidateIds={[]}
+        selectedCandidateId={null}
+        onVisualBaselineChange={() => undefined}
+        onToggleCandidate={() => undefined}
+        loading={false}
+      />,
+    )
+
+    expect(html).toBe('')
+
+    const noBaselineHtml = renderToStaticMarkup(
+      <PlanExecutionHistory
+        plan={{
+          ...candidateRunningPlan,
+          state: 'comparison_ready',
+          baseline_execution_id: null,
+          candidate_execution_ids: ['candidate-1'],
+          last_attempt_id: 'candidate-1',
+        }}
+        summaries={{ 'candidate-1': execution('candidate-1') }}
+        visualBaselineId={null}
+        comparisonCandidateIds={['candidate-1']}
+        selectedCandidateId="candidate-1"
+        onVisualBaselineChange={() => undefined}
+        onToggleCandidate={() => undefined}
+        loading={false}
+      />,
+    )
+
+    expect(noBaselineHtml).toBe('')
+  })
+
   it('pivots metrics into rows, keeps newest candidates first and separates incomplete attempts', () => {
     const plan: LocalPlan = {
       ...candidateRunningPlan,
@@ -163,7 +206,7 @@ describe('local plan execution comparison', () => {
         },
       }),
     }
-    const html = renderToStaticMarkup(
+    const historyHtml = renderToStaticMarkup(
       <PlanExecutionHistory
         plan={plan}
         summaries={summaries}
@@ -175,9 +218,17 @@ describe('local plan execution comparison', () => {
         loading={false}
       />,
     )
-    const tableHtml = html.slice(
-      html.indexOf('<table'),
-      html.indexOf('</table>') + '</table>'.length,
+    const diagnosticsHtml = renderToStaticMarkup(
+      <PlanNonComparableAttempts
+        plan={plan}
+        summaries={summaries}
+        onRenameCandidate={async () => undefined}
+      />,
+    )
+    const html = historyHtml + diagnosticsHtml
+    const tableHtml = historyHtml.slice(
+      historyHtml.indexOf('<table'),
+      historyHtml.indexOf('</table>') + '</table>'.length,
     )
 
     expect(html.indexOf('Baseline')).toBeLessThan(html.indexOf('Candidate #2'))
@@ -212,9 +263,11 @@ describe('local plan execution comparison', () => {
     expect(html).toContain('<span>Calls</span>')
     expect(html).toContain('<span>Errors</span>')
     expect(html).toContain('aria-label="Open report for Official baseline"')
+    expect(historyHtml).not.toContain('Execution history')
+    expect(diagnosticsHtml).toMatch(/^<section class="panel plan-run-history"/)
   })
 
-  it('selects metric winners by direction, preserves ties and ignores missing values', () => {
+  it('selects only strict metric winners and leaves ties blank', () => {
     const values = [
       { id: 'baseline', value: 90 },
       { id: 'candidate-1', value: 95 },
@@ -222,10 +275,7 @@ describe('local plan execution comparison', () => {
       { id: 'missing', value: null },
     ]
 
-    expect(planMetricWinnerIds(values, 'higher')).toEqual([
-      'candidate-1',
-      'candidate-2',
-    ])
+    expect(planMetricWinnerIds(values, 'higher')).toEqual([])
     expect(planMetricWinnerIds(values, 'lower')).toEqual(['baseline'])
     expect(planMetricWinnerIds(values, 'context')).toEqual([])
     expect(planMetricWinnerIds([{ id: 'only', value: 1 }], 'higher')).toEqual(
@@ -271,7 +321,7 @@ describe('local plan execution comparison', () => {
       },
       last_attempt_id: 'candidate-2',
     }
-    const html = renderToStaticMarkup(
+    const historyHtml = renderToStaticMarkup(
       <PlanExecutionHistory
         plan={plan}
         summaries={{
@@ -284,10 +334,21 @@ describe('local plan execution comparison', () => {
         selectedCandidateId="candidate-2"
         onVisualBaselineChange={() => undefined}
         onToggleCandidate={() => undefined}
-        onRenameCandidate={async () => undefined}
         loading={false}
       />,
     )
+    const executionsHtml = renderToStaticMarkup(
+      <PlanNonComparableAttempts
+        plan={plan}
+        summaries={{
+          'baseline-1': execution('baseline-1'),
+          'candidate-1': execution('candidate-1'),
+          'candidate-2': execution('candidate-2'),
+        }}
+        onRenameCandidate={async () => undefined}
+      />,
+    )
+    const html = historyHtml + executionsHtml
 
     expect(html).toContain('Harness Latest')
     expect(html).toContain('Harness Next')
@@ -301,6 +362,226 @@ describe('local plan execution comparison', () => {
     ).toHaveLength(2)
     expect(html).toContain('plan-run-history-columns')
     expect(html).toContain('Candidates in table')
+  })
+
+  it('keeps the verdict and test drill-down without duplicate metric cards', () => {
+    const baseline = execution('baseline-1')
+    const candidate = execution('candidate-2', {
+      totals: {
+        ...execution('candidate-2').totals,
+        total_tokens: 900,
+        wall_time_seconds: 10,
+      },
+    })
+    const html = renderToStaticMarkup(
+      <PlanComparisonPanel
+        comparison={buildPlanComparison(baseline, candidate)}
+        baselineExecutionId={baseline.id}
+        candidateExecutionId={candidate.id}
+        candidateNumber={2}
+        loading={false}
+        error={null}
+      />,
+    )
+
+    expect(html).toContain('Baseline vs Candidate #2')
+    expect(html).toContain('Objective results are stable')
+    expect(html).not.toContain('plan-comparison-metrics')
+    expect(html).not.toContain('plan-comparison-metric-card')
+    expect(html).toContain('Stable')
+  })
+
+  it('renders general security metrics as baseline to candidate evidence', () => {
+    const baseline = execution('baseline-1')
+    const candidate = execution('candidate-1')
+    const comparison = buildPlanComparison(baseline, candidate)
+    comparison.scenarios = [
+      {
+        id: 'security_review',
+        compatible: true,
+        reason: null,
+        baseline_status: 'passed',
+        candidate_status: 'passed',
+        metrics: [],
+        execution_metrics: [
+          {
+            id: 'cost',
+            label: 'Cost',
+            baseline: 0,
+            candidate: 0,
+            delta: 0,
+            delta_percent: null,
+            direction: 'lower',
+            format: 'usd',
+            tone: 'neutral',
+          },
+          {
+            id: 'tokens',
+            label: 'Tokens',
+            baseline: 4561,
+            candidate: 4703,
+            delta: 142,
+            delta_percent: 3.11,
+            direction: 'lower',
+            format: 'tokens',
+            tone: 'negative',
+          },
+          {
+            id: 'function_calls',
+            label: 'Function calls',
+            baseline: 13,
+            candidate: 13,
+            delta: 0,
+            delta_percent: 0,
+            direction: 'context',
+            format: 'count',
+            tone: 'neutral',
+          },
+          {
+            id: 'duration',
+            label: 'Time',
+            baseline: 0.3,
+            candidate: 0.4,
+            delta: 0.1,
+            delta_percent: 33.33,
+            direction: 'lower',
+            format: 'seconds',
+            tone: 'negative',
+          },
+          {
+            id: 'function_errors',
+            label: 'Function errors',
+            baseline: 0,
+            candidate: 0,
+            delta: 0,
+            delta_percent: null,
+            direction: 'lower',
+            format: 'count',
+            tone: 'neutral',
+          },
+        ],
+        workflow_metrics: [
+          {
+            id: 'workflow:finding_count',
+            label: 'Findings',
+            baseline: 4,
+            candidate: 5,
+            delta: 1,
+            delta_percent: 25,
+            direction: 'context',
+            format: 'count',
+            tone: 'neutral',
+          },
+        ],
+      },
+    ]
+
+    const html = renderToStaticMarkup(
+      <PlanExecutionHistory
+        plan={{
+          ...candidateRunningPlan,
+          state: 'comparison_ready',
+          candidate_execution_ids: ['candidate-1'],
+        }}
+        summaries={{ 'baseline-1': baseline, 'candidate-1': candidate }}
+        visualBaselineId="baseline-1"
+        comparisonCandidateIds={['candidate-1']}
+        selectedCandidateId="candidate-1"
+        scenarioComparison={comparison}
+        onVisualBaselineChange={() => undefined}
+        onToggleCandidate={() => undefined}
+        loading={false}
+      />,
+    )
+
+    expect(html).toContain('Scenario metrics')
+    expect(html).toContain('Tokens')
+    expect(html).toContain('Cost')
+    expect(html).toContain('Function calls')
+    expect(html).toContain('Function errors')
+    expect(html).toContain('Time')
+    expect(html).toContain('13 → 13')
+    expect(html).not.toContain('Findings')
+    expect(html).toContain('<details class="plan-scenario-disclosure" open="">')
+  })
+
+  it('shows the same five scenario metrics for every selected candidate', () => {
+    const scenarioExecution = (
+      id: string,
+      tokens: number,
+    ): DashboardExecutionSummary =>
+      execution(id, {
+        subjects: [
+          {
+            id: 'subject',
+            scenarios: [
+              {
+                id: 'security_review',
+                scenario_version: 3,
+                pass_rate: 100,
+                assessment_summary: {
+                  median_quality_score: 92,
+                },
+              },
+            ],
+          },
+        ] as never,
+        scenario_metrics: [
+          {
+            scenario_id: 'security_review',
+            scenario_version: 3,
+            contract_fingerprint: 'security-v3',
+            run_count: 1,
+            averages: {
+              cost_usd: 0.1,
+              tokens,
+              function_calls: 13,
+              function_call_errors: 0,
+              duration_seconds: 0.3,
+            },
+          },
+        ],
+      })
+    const baseline = scenarioExecution('baseline-1', 4_500)
+    const candidateOne = scenarioExecution('candidate-1', 4_000)
+    const candidateTwo = scenarioExecution('candidate-2', 3_800)
+    const html = renderToStaticMarkup(
+      <PlanExecutionHistory
+        plan={{
+          ...candidateRunningPlan,
+          state: 'comparison_ready',
+          candidate_execution_ids: ['candidate-1', 'candidate-2'],
+          last_attempt_id: 'candidate-2',
+        }}
+        summaries={{
+          'baseline-1': baseline,
+          'candidate-1': candidateOne,
+          'candidate-2': candidateTwo,
+        }}
+        visualBaselineId="baseline-1"
+        comparisonCandidateIds={['candidate-1', 'candidate-2']}
+        selectedCandidateId="candidate-2"
+        scenarioComparison={buildPlanComparison(baseline, candidateTwo)}
+        onVisualBaselineChange={() => undefined}
+        onToggleCandidate={() => undefined}
+        loading={false}
+      />,
+    )
+    const scenarioHtml = html.slice(html.indexOf('Scenario metrics'))
+
+    expect(scenarioHtml).toContain('Candidate #1')
+    expect(scenarioHtml).toContain('Candidate #2')
+    expect(scenarioHtml).toContain('2 candidates')
+    expect(scenarioHtml.match(/data-scenario-metric-id=/g)).toHaveLength(5)
+    for (const metricId of [
+      'cost',
+      'tokens',
+      'function_calls',
+      'function_errors',
+      'duration',
+    ]) {
+      expect(scenarioHtml).toContain(`data-scenario-metric-id="${metricId}"`)
+    }
   })
 
   it('can use a candidate as a visual-only baseline', () => {
@@ -356,6 +637,34 @@ describe('local plan execution comparison', () => {
     expect(html).toContain('tabindex="-1"')
     expect(html).toContain('aria-busy="true"')
     expect(html).toContain('Baseline vs Candidate #1')
+  })
+
+  it('does not render an empty comparison panel without both executions', () => {
+    const html = renderToStaticMarkup(
+      <PlanComparisonPanel
+        comparison={null}
+        baselineExecutionId="baseline-1"
+        candidateExecutionId={null}
+        candidateNumber={null}
+        loading={false}
+        error={null}
+      />,
+    )
+
+    expect(html).toBe('')
+
+    const noBaselineHtml = renderToStaticMarkup(
+      <PlanComparisonPanel
+        comparison={null}
+        baselineExecutionId={null}
+        candidateExecutionId="candidate-1"
+        candidateNumber={1}
+        loading={false}
+        error={null}
+      />,
+    )
+
+    expect(noBaselineHtml).toBe('')
   })
 
   it('selects the latest candidate automatically and preserves a valid manual selection', () => {

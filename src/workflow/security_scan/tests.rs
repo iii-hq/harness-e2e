@@ -127,10 +127,18 @@ fn full_workflow_is_valid_against_the_registered_catalog() {
     }
     let definition = definition();
     let materialized = definition.validate(&catalog).unwrap();
+    assert_eq!(materialized.definition.scenario_version, 3);
     assert_eq!(materialized.definition.nodes.len(), 5);
-    assert!(materialized
+    let scan_b = materialized
         .definition
         .nodes
         .iter()
-        .any(|node| node.id == "scheduled_scan_commit_b"));
+        .find(|node| node.id == "scan_commit_b")
+        .expect("commit B must be scanned on demand");
+    assert_eq!(scan_b.step_type, "security_review.scan_commit_b");
+    assert!(!materialized
+        .definition
+        .nodes
+        .iter()
+        .any(|node| node.id.contains("scheduled") || node.step_type.contains("scheduled")));
 }

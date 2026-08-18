@@ -1,19 +1,27 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
+import { AppHeader, appHeaderActionClassName } from '@/components/AppHeader'
+import { consumeQuickExecutionRequest } from '@/components/ExecutionSetup'
 import { LocalRunnerDialog } from '@/components/LocalRunnerDialog'
-import { ThemeToggle } from '@/components/ThemeToggle'
 import {
-  hashForCoverage,
+  Button,
+  buttonClassName,
+  MetricCard,
+  type MetricTone,
+  type OperationalStatus,
+  PageHeader,
+  Panel,
+  StatusBadge,
+} from '@/design-system'
+import {
   hashForExecution,
   hashForNewPlan,
   hashForPlans,
-  hashForWorkspace,
   type WorkspaceView,
 } from '@/hooks/use-hash-route'
 import {
   type DashboardDataBridge,
   type DashboardExecutionSummary,
   getDashboardDataBridge,
-  type JsonObject,
 } from '@/lib/dashboard-data-source'
 import {
   buildExecutionPresentation,
@@ -26,48 +34,64 @@ import {
   formatPercent,
   isExecutionAttention,
 } from '@/lib/execution-view'
+import '@/design-system/styles.css'
 
 function statusCopy(presentation: ExecutionPresentation) {
   if (presentation.attention === 'passed')
     return {
       label: 'Passed',
       title: 'Latest execution passed',
-      tone: 'status-pass',
+      status: 'passed' as const,
     }
   if (presentation.attention === 'running')
     return {
       label: 'Running',
       title: 'Execution is still running',
-      tone: 'status-incomplete',
+      status: 'running' as const,
     }
   if (presentation.attention === 'cancelling')
     return {
       label: 'Cancelling',
       title: 'Cancellation is in progress',
-      tone: 'status-incomplete',
+      status: 'cancelling' as const,
     }
   if (presentation.attention === 'cancelled')
     return {
       label: 'Cancelled',
       title: 'Execution was cancelled',
-      tone: 'status-incomplete',
+      status: 'cancelled' as const,
     }
   if (presentation.attention === 'incomplete')
     return {
       label: 'Incomplete',
       title: 'Evidence is incomplete',
-      tone: 'status-incomplete',
+      status: 'incomplete' as const,
     }
   if (presentation.attention === 'unavailable')
     return {
-      label: 'No report',
+      label: 'Unavailable',
       title: 'No report evidence is available',
-      tone: 'status-incomplete',
+      status: 'unavailable' as const,
+    }
+  if (presentation.breakdown.hard_gate > 0)
+    return {
+      label: 'Hard gate failed',
+      title: 'A hard gate blocks this execution',
+      status: 'hard_gate' as const,
+    }
+  if (
+    presentation.breakdown.inconclusive > 0 &&
+    presentation.breakdown.issues === presentation.breakdown.inconclusive
+  )
+    return {
+      label: 'Inconclusive',
+      title: 'The latest execution is inconclusive',
+      status: 'inconclusive' as const,
     }
   return {
-    label: 'Needs attention',
+    label: 'Failed',
     title: 'Latest execution needs attention',
-    tone: 'status-fail',
+    status: 'failed' as const,
   }
 }
 
@@ -76,23 +100,45 @@ function modelNames(models: ExecutionPresentation['subjects']) {
   return models.map((model) => `${model.provider}/${model.model}`).join(', ')
 }
 
+function finiteNumber(value: unknown): number | null {
+  return typeof value === 'number' && Number.isFinite(value) ? value : null
+}
+
+function metricTone(presentation: ExecutionPresentation): MetricTone {
+  if (presentation.attention === 'passed') return 'positive'
+  if (presentation.attention === 'needs_attention') return 'negative'
+  if (presentation.attention === 'unavailable') return 'unavailable'
+  return 'warning'
+}
+
+function failureStatus(category: FailureCategory): OperationalStatus {
+  if (category === 'hard_gate') return 'hard_gate'
+  if (category === 'inconclusive') return 'inconclusive'
+  return 'failed'
+}
+
 function SummaryKpi({
   label,
   value,
   caption,
+  tone = 'neutral',
+  delta,
 }: {
   label: string
   value: string
   caption: string
+  tone?: MetricTone
+  delta?: string
 }) {
   return (
-    <article className="kpi-card min-h-0">
-      <div className="kpi-label">{label}</div>
-      <div className="kpi-value mt-4 text-[clamp(1.8rem,3vw,2.55rem)]">
-        {value}
-      </div>
-      <div className="kpi-delta">{caption}</div>
-    </article>
+    <MetricCard
+      className="overview-v2-metric min-h-40 rounded-none border-0 border-t border-[var(--ds-color-line)] p-4 md:[&:nth-child(even)]:border-l lg:col-span-2 lg:min-h-0 lg:border-t-0 lg:border-l lg:p-5 lg:[&:nth-child(-n+2)]:border-b [&_.ds-metric-value]:text-[clamp(1.75rem,2.2vw,2.5rem)]"
+      label={label}
+      value={value}
+      detail={caption}
+      tone={tone}
+      delta={delta}
+    />
   )
 }
 
@@ -114,29 +160,35 @@ function FailureBreakdown({
   )
   if (categories.length === 0) {
     return (
-      <p className="m-0 text-sm text-ink-muted">
+      <p className="overview-v2-no-events m-0 text-sm text-[var(--ds-color-ink-soft)]">
         No blocking events were reported.
       </p>
     )
   }
   return (
-    <div className="grid gap-2 sm:grid-cols-2">
+    <section
+      className="overview-v2-breakdown grid gap-2 md:grid-cols-2"
+      aria-label="Reliability events"
+    >
       {categories.map((category) => (
-        <div
+        <article
           key={category}
-          className="rounded-lg border border-danger/25 bg-danger/5 px-3 py-2 text-sm text-ink-soft"
+          className="overview-v2-breakdown-item grid gap-2 rounded-xl border border-[var(--ds-color-line)] bg-[var(--ds-color-surface-raised)] p-3"
         >
-          <strong>{categoryLabel(category)}</strong>
-          <span className="ml-2 text-ink-muted">
+          <StatusBadge
+            status={failureStatus(category)}
+            label={categoryLabel(category)}
+          />
+          <p className="m-0 text-xs leading-5 text-[var(--ds-color-ink-soft)]">
             {categoryMessage(category, presentation.breakdown[category])}
-          </span>
-        </div>
+          </p>
+        </article>
       ))}
-    </div>
+    </section>
   )
 }
 
-function LatestExecution({
+export function LatestExecution({
   presentation,
 }: {
   presentation: ExecutionPresentation
@@ -144,21 +196,60 @@ function LatestExecution({
   const status = statusCopy(presentation)
   const issue = presentation.primaryIssue
   const execution = presentation.execution
+  const totalTokens = execution.totals?.total_tokens
+  const workflow = execution.workflow_metrics
+  const workflowStepCount = finiteNumber(workflow?.step_count) ?? 0
+  const hasWorkflowMetrics = workflowStepCount > 0
+  const workflowTokens = finiteNumber(workflow?.total_tokens)
+  const workflowFunctionCalls = finiteNumber(workflow?.function_calls)
+  const workflowTokenMetricSteps =
+    finiteNumber(workflow?.token_metric_steps) ??
+    (workflowTokens !== null ? workflowStepCount : 0)
+  const succeededWorkflowSteps = finiteNumber(workflow?.succeeded_steps) ?? 0
+  const skippedWorkflowSteps = finiteNumber(workflow?.skipped_steps) ?? 0
+  const activeWorkflowSteps =
+    (finiteNumber(workflow?.running_steps) ?? 0) +
+    (finiteNumber(workflow?.pending_steps) ?? 0)
+  const attentionWorkflowSteps =
+    (finiteNumber(workflow?.failed_steps) ?? 0) +
+    (finiteNumber(workflow?.hard_gate_failed_steps) ?? 0) +
+    (finiteNumber(workflow?.cancelled_steps) ?? 0)
+  const workflowDurationMs = finiteNumber(workflow?.duration_ms)
+  const runtimeSeconds = hasWorkflowMetrics
+    ? workflowDurationMs === null
+      ? presentation.workflowRuntimeSeconds
+      : workflowDurationMs / 1000
+    : presentation.modelRuntimeSeconds
+  const hardGateCount = finiteNumber(workflow?.hard_gate_count) ?? 0
+  const passedHardGateCount =
+    finiteNumber(workflow?.passed_hard_gate_count) ?? 0
+  const workflowAssetCount = finiteNumber(workflow?.asset_count) ?? 0
+  const workflowEvaluationCount = finiteNumber(workflow?.evaluation_count) ?? 0
   return (
     <section
-      className="latest-evidence"
+      className="latest-evidence overview-v2-bento mt-6 grid grid-flow-dense grid-cols-1 gap-0 overflow-hidden rounded-[var(--ds-radius-md)] border border-[var(--ds-color-line-strong)] bg-[var(--ds-color-surface)] md:grid-cols-2 lg:grid-cols-12 lg:grid-rows-2"
       aria-labelledby="latest-health-heading"
     >
-      <article className="panel latest-health">
-        <div className="latest-health-heading">
+      <Panel
+        as="article"
+        padding="generous"
+        className="latest-health overview-v2-signal rounded-none border-0 p-5 md:col-span-2 md:p-6 lg:col-span-8 lg:row-span-2"
+      >
+        <div className="latest-health-heading grid grid-cols-[minmax(0,1fr)_auto] items-start gap-6">
           <div>
-            <div className="section-kicker">01 / Current signal</div>
-            <h2 id="latest-health-heading">Latest execution</h2>
+            <p className="overview-v2-context m-0 font-mono text-[0.7rem] font-semibold uppercase tracking-[0.08em] text-[var(--ds-color-brand-text)]">
+              Latest execution
+            </p>
+            <h2
+              className="mt-2 max-w-4xl text-[clamp(1.8rem,3vw,3rem)] leading-[0.98] font-semibold tracking-[-0.045em] text-balance"
+              id="latest-health-heading"
+            >
+              {status.title}
+            </h2>
           </div>
-          <span className={`status-pill ${status.tone}`}>{status.label}</span>
+          <StatusBadge status={status.status} label={status.label} />
         </div>
-        <h3>{status.title}</h3>
-        <p className="trend-description">
+        <p className="trend-description mt-3 max-w-3xl text-sm leading-6 text-[var(--ds-color-ink-soft)]">
           {presentation.expectedReports !== null &&
           presentation.receivedReports !== null
             ? `${presentation.receivedReports} of ${presentation.expectedReports} expected reports received.`
@@ -168,7 +259,7 @@ function LatestExecution({
             : 'Only aggregate metadata is retained.'}
         </p>
         <section
-          className="latest-health-meta"
+          className="latest-health-meta overview-v2-identity mt-5 grid grid-cols-2 gap-px overflow-hidden rounded-lg border border-[var(--ds-color-line)] bg-[var(--ds-color-line)] lg:grid-cols-4 [&>span]:grid [&>span]:min-w-0 [&>span]:gap-1.5 [&>span]:bg-[var(--ds-color-surface-raised)] [&>span]:p-3 [&_small]:font-mono [&_small]:text-[0.6rem] [&_small]:uppercase [&_small]:tracking-[0.06em] [&_small]:text-[var(--ds-color-ink-muted)] [&_strong]:overflow-hidden [&_strong]:font-mono [&_strong]:text-xs [&_strong]:font-medium [&_strong]:text-ellipsis [&_strong]:whitespace-nowrap"
           aria-label="Latest execution identity"
         >
           <span>
@@ -193,69 +284,168 @@ function LatestExecution({
           </span>
         </section>
         <div
-          className={`latest-first-failure ${isExecutionAttention(presentation) ? 'has-failure' : ''}`}
+          className={`latest-first-failure overview-v2-primary-issue mt-4 grid grid-cols-[auto_minmax(0,1fr)] gap-3 rounded-lg border border-[var(--ds-color-line)] bg-[var(--ds-color-surface-raised)] p-3 ${isExecutionAttention(presentation) ? 'has-failure' : ''}`}
           aria-live="polite"
         >
-          <span className="latest-signal-icon" aria-hidden="true">
-            {issue ? '!' : '✓'}
-          </span>
+          <span
+            className="latest-signal-icon overview-v2-signal-mark mt-1 h-2.5 w-2.5 rounded-full bg-[var(--ds-color-success)] shadow-[0_0_0_5px_color-mix(in_srgb,var(--ds-color-success)_12%,transparent)] [.has-failure_&]:bg-[var(--ds-color-danger)] [.has-failure_&]:shadow-[0_0_0_5px_color-mix(in_srgb,var(--ds-color-danger)_12%,transparent)]"
+            aria-hidden="true"
+          />
           <div>
-            <strong>
+            <strong className="text-sm font-semibold text-[var(--ds-color-ink)]">
               {issue
                 ? `${categoryLabel(issue.category)} needs investigation`
                 : 'No blocking failure in the latest execution'}
             </strong>
-            <p>
+            <p className="mt-1 mb-0 text-xs leading-5 text-[var(--ds-color-ink-soft)]">
               {issue
                 ? categoryMessage(issue.category, issue.count)
                 : 'The result is ready for deeper evidence review.'}
             </p>
           </div>
         </div>
-        <div className="mt-4">
+        <div className="overview-v2-breakdown-wrap mt-3">
           <FailureBreakdown presentation={presentation} />
         </div>
-        <div className="latest-health-actions">
+        <div className="latest-health-actions overview-v2-signal-actions mt-4 flex flex-wrap gap-2">
           <a
-            className="button button-primary"
+            className={buttonClassName({ variant: 'primary' })}
             href={hashForExecution(execution.id)}
           >
             {issue ? 'Investigate execution' : 'Open execution'}
           </a>
           {execution.workflow_url && (
-            <a className="button" href={execution.workflow_url}>
+            <a
+              className={buttonClassName({ variant: 'quiet' })}
+              href={execution.workflow_url}
+            >
               Open workflow ↗
             </a>
           )}
         </div>
-      </article>
+      </Panel>
       <section
-        className="latest-kpi-grid"
+        className="latest-kpi-grid overview-v2-metrics contents"
         aria-label="Latest execution summary"
       >
         <SummaryKpi
           label="Scenario pass rate"
           value={formatPercent(presentation.passRate)}
-          caption={`${formatPercent(presentation.coverage)} report coverage`}
-        />
-        <SummaryKpi
-          label="Reliability events"
-          value={String(presentation.breakdown.issues || '—')}
-          caption="Affected scenarios, separated by category"
-        />
-        <SummaryKpi
-          label="Model runtime"
-          value={formatDuration(presentation.modelRuntimeSeconds)}
-          caption={
-            presentation.workflowRuntimeSeconds !== null
-              ? `${formatDuration(presentation.workflowRuntimeSeconds)} total workflow`
-              : 'Workflow duration not reported'
+          caption="Objective scenario outcomes"
+          delta={
+            presentation.attention === 'passed'
+              ? 'Healthy'
+              : presentation.passRate === null
+                ? 'No data'
+                : 'Attention'
           }
+          tone={metricTone(presentation)}
+        />
+        {hasWorkflowMetrics ? (
+          <SummaryKpi
+            label="Semantic steps"
+            value={`${succeededWorkflowSteps}/${workflowStepCount}`}
+            caption={
+              hardGateCount > 0
+                ? `${passedHardGateCount}/${hardGateCount} hard gates passed`
+                : `${workflowAssetCount} assets · ${workflowEvaluationCount} evaluations`
+            }
+            delta={
+              attentionWorkflowSteps > 0
+                ? 'Needs review'
+                : activeWorkflowSteps > 0
+                  ? 'In progress'
+                  : succeededWorkflowSteps + skippedWorkflowSteps ===
+                      workflowStepCount
+                    ? 'Complete'
+                    : 'Incomplete'
+            }
+            tone={
+              attentionWorkflowSteps > 0
+                ? 'negative'
+                : activeWorkflowSteps > 0
+                  ? 'warning'
+                  : succeededWorkflowSteps + skippedWorkflowSteps ===
+                      workflowStepCount
+                    ? 'positive'
+                    : 'unavailable'
+            }
+          />
+        ) : (
+          <SummaryKpi
+            label="Report coverage"
+            value={formatPercent(presentation.coverage)}
+            caption={
+              presentation.expectedReports !== null &&
+              presentation.receivedReports !== null
+                ? `${presentation.receivedReports} of ${presentation.expectedReports} reports received`
+                : 'Completeness was not published'
+            }
+            delta={
+              presentation.coverage === null
+                ? 'No data'
+                : presentation.coverage >= 1
+                  ? 'Complete'
+                  : 'Incomplete'
+            }
+            tone={
+              presentation.coverage === null
+                ? 'unavailable'
+                : presentation.coverage >= 1
+                  ? 'positive'
+                  : 'warning'
+            }
+          />
+        )}
+        <SummaryKpi
+          label={hasWorkflowMetrics ? 'Workflow runtime' : 'Model runtime'}
+          value={formatDuration(runtimeSeconds)}
+          caption={
+            hasWorkflowMetrics
+              ? `${workflowAssetCount} assets · ${workflowEvaluationCount} evaluations`
+              : presentation.workflowRuntimeSeconds !== null
+                ? `${formatDuration(presentation.workflowRuntimeSeconds)} total workflow`
+                : 'Workflow duration not reported'
+          }
+          delta={hasWorkflowMetrics ? 'Persisted' : 'Observed'}
+          tone={runtimeSeconds === null ? 'unavailable' : 'neutral'}
         />
         <SummaryKpi
-          label="Models"
-          value={String(presentation.subjects.length)}
-          caption={`${presentation.judges.length} judge model${presentation.judges.length === 1 ? '' : 's'}`}
+          label={hasWorkflowMetrics ? 'Workflow tokens' : 'Total tokens'}
+          value={
+            hasWorkflowMetrics
+              ? (workflowTokens?.toLocaleString() ?? 'Not captured')
+              : typeof totalTokens === 'number'
+                ? totalTokens.toLocaleString()
+                : '—'
+          }
+          caption={
+            hasWorkflowMetrics
+              ? `${workflowFunctionCalls?.toLocaleString() ?? 'No'} function calls · ${workflowTokenMetricSteps}/${workflowStepCount} steps reported tokens`
+              : 'Retained subject and judge usage'
+          }
+          delta={
+            hasWorkflowMetrics
+              ? workflowTokenMetricSteps === 0
+                ? 'No data'
+                : workflowTokenMetricSteps === workflowStepCount
+                  ? 'Complete'
+                  : 'Partial'
+              : typeof totalTokens === 'number'
+                ? 'Latest'
+                : 'No data'
+          }
+          tone={
+            hasWorkflowMetrics
+              ? workflowTokenMetricSteps === 0
+                ? 'unavailable'
+                : workflowTokenMetricSteps === workflowStepCount
+                  ? 'neutral'
+                  : 'warning'
+              : typeof totalTokens === 'number'
+                ? 'neutral'
+                : 'unavailable'
+          }
         />
       </section>
     </section>
@@ -290,21 +480,29 @@ function ExecutionHistory({
     })
   }, [event, executions, query, status])
   return (
-    <section
-      className="panel executions-panel"
+    <Panel
+      padding="none"
+      className="executions-panel overview-v2-history mt-6 overflow-hidden rounded-[var(--ds-radius-md)] border-[var(--ds-color-line-strong)] bg-[var(--ds-color-surface)] p-0"
       aria-labelledby="executions-heading"
     >
-      <div className="panel-heading executions-heading">
-        <div>
-          <div className="section-kicker">Recent executions</div>
-          <h2 id="executions-heading">Recent executions</h2>
-        </div>
-        <span className="coverage-note">
-          {filtered.length} of {executions.length} executions
-        </span>
-      </div>
-      <section className="table-filters" aria-label="Execution filters">
-        <label className="search-field">
+      <PageHeader
+        headingLevel={2}
+        context="Immutable run ledger"
+        title="Recent executions"
+        summary="Search objective outcomes, model evidence, scope, and retained diagnostic detail."
+        actions={
+          <span className="overview-v2-history-count font-mono text-xs text-[var(--ds-color-ink-muted)]">
+            {filtered.length} of {executions.length} executions
+          </span>
+        }
+        id="executions-heading"
+        className="panel-heading executions-heading overview-v2-history-heading border-b border-[var(--ds-color-line)] p-6 md:p-8"
+      />
+      <section
+        className="table-filters grid gap-3 border-b border-[var(--ds-color-line)] p-4 sm:grid-cols-2 md:grid-cols-[minmax(16rem,1fr)_auto_auto] md:p-6 [&_input]:min-h-11 [&_input]:w-full [&_input]:rounded-lg [&_input]:border [&_input]:border-[var(--ds-color-line-strong)] [&_input]:bg-[var(--ds-color-surface-raised)] [&_input]:px-3 [&_input]:text-sm [&_input]:text-[var(--ds-color-ink)] [&_select]:min-h-11 [&_select]:w-full [&_select]:rounded-lg [&_select]:border [&_select]:border-[var(--ds-color-line-strong)] [&_select]:bg-[var(--ds-color-surface-raised)] [&_select]:px-3 [&_select]:text-sm [&_select]:text-[var(--ds-color-ink)]"
+        aria-label="Execution filters"
+      >
+        <label className="search-field sm:col-span-2 md:col-span-1">
           <span className="visually-hidden">Search executions</span>
           <input
             type="search"
@@ -342,8 +540,8 @@ function ExecutionHistory({
           </select>
         </label>
       </section>
-      <div className="table-wrap">
-        <table className="execution-table">
+      <div className="table-wrap overflow-x-auto p-3 md:p-4">
+        <table className="execution-table w-full min-w-[68rem] border-collapse text-left text-xs md:text-sm [&_a]:font-semibold [&_a]:text-[var(--ds-color-ink)] [&_a]:underline-offset-4 [&_a:hover]:underline [&_td]:border-b [&_td]:border-[var(--ds-color-line)] [&_td]:px-4 [&_td]:py-4 [&_th]:border-b [&_th]:border-[var(--ds-color-line-strong)] [&_th]:px-4 [&_th]:py-3 [&_th]:font-mono [&_th]:text-[0.62rem] [&_th]:font-semibold [&_th]:uppercase [&_th]:tracking-[0.06em] [&_th]:text-[var(--ds-color-ink-muted)] [&_tbody_tr]:transition-colors [&_tbody_tr:hover]:bg-[var(--ds-color-surface-raised)]">
           <thead>
             <tr>
               <th scope="col">Execution</th>
@@ -370,11 +568,7 @@ function ExecutionHistory({
                     </small>
                   </td>
                   <td data-label="Result">
-                    <span
-                      className={`table-status status-${status.tone.replace('status-', '')}`}
-                    >
-                      {status.label}
-                    </span>
+                    <StatusBadge status={status.status} label={status.label} />
                   </td>
                   <td
                     data-label="Subject"
@@ -438,33 +632,42 @@ function ExecutionHistory({
           <p className="table-empty">No executions match these filters.</p>
         )}
       </div>
-    </section>
+    </Panel>
   )
 }
 
 function LocalComparisonCard() {
   return (
-    <article
-      className="overview-intelligence-card overview-comparison-card"
+    <Panel
+      as="article"
+      padding="none"
+      className="overview-intelligence-card overview-comparison-card overview-v2-comparison-card overflow-hidden rounded-[var(--ds-radius-md)] border-[var(--ds-color-line-strong)]"
       aria-labelledby="local-comparison-heading"
     >
-      <div className="overview-card-main">
-        <div className="overview-card-heading">
+      <div className="overview-card-main p-5 md:p-6">
+        <div className="overview-card-heading grid grid-cols-[minmax(0,1fr)_auto] items-start gap-4">
           <div>
-            <div className="section-kicker">Local comparison</div>
-            <h3 id="local-comparison-heading">Focused and explicit</h3>
+            <div className="section-kicker font-mono text-[0.68rem] uppercase tracking-[0.08em] text-[var(--ds-color-brand-text)]">
+              Local comparison
+            </div>
+            <h3
+              className="mt-2 text-xl leading-tight font-semibold tracking-[-0.025em] md:text-2xl"
+              id="local-comparison-heading"
+            >
+              Comparable by construction
+            </h3>
           </div>
-          <span className="overview-card-state overview-card-state-neutral">
-            Ready
+          <span className="overview-card-state overview-card-state-neutral overview-v2-state rounded-full border border-[var(--ds-color-line-strong)] px-3 py-2 font-mono text-[0.62rem] uppercase tracking-[0.04em] text-[var(--ds-color-ink-muted)]">
+            Decision protocol
           </span>
         </div>
-        <p className="overview-card-copy">
+        <p className="overview-card-copy mt-3 max-w-4xl text-sm leading-6 text-[var(--ds-color-ink-soft)]">
           Choose only the tests relevant to the current change. Capture one
           baseline run, then rerun the same cases and seeds after editing the
           Harness.
         </p>
         <section
-          className="overview-comparison-status"
+          className="overview-comparison-status mt-4 grid gap-px overflow-hidden rounded-lg border border-[var(--ds-color-line)] bg-[var(--ds-color-line)] md:grid-cols-2 xl:grid-cols-4 [&>div]:grid [&>div]:gap-1.5 [&>div]:bg-[var(--ds-color-surface)] [&>div]:p-4 [&_small]:text-xs [&_small]:leading-5 [&_small]:text-[var(--ds-color-ink-soft)] [&_span]:font-mono [&_span]:text-[0.6rem] [&_span]:uppercase [&_span]:tracking-[0.06em] [&_span]:text-[var(--ds-color-ink-muted)] [&_strong]:text-sm [&_strong]:font-semibold"
           aria-label="Local comparison strategy"
         >
           <div className="overview-comparison-dimension">
@@ -500,7 +703,10 @@ function LocalComparisonCard() {
             </small>
           </div>
         </section>
-        <section className="overview-versions" aria-label="Comparison sequence">
+        <section
+          className="overview-versions mt-4 grid grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] items-center gap-3 rounded-lg border border-[var(--ds-color-line)] bg-[var(--ds-color-surface-strong)] p-3 [&>div]:grid [&>div]:gap-1 [&>div:last-child]:text-right [&_span]:font-mono [&_span]:text-[0.6rem] [&_span]:uppercase [&_span]:tracking-[0.06em] [&_span]:text-[var(--ds-color-ink-muted)] [&_strong]:text-xs [&_strong]:font-semibold"
+          aria-label="Comparison sequence"
+        >
           <div className="overview-version">
             <span>Baseline</span>
             <strong>1 run per selected test</strong>
@@ -512,250 +718,38 @@ function LocalComparisonCard() {
           </div>
         </section>
       </div>
-      <div className="overview-card-foot">
+      <div className="overview-card-foot flex flex-wrap items-center justify-between gap-4 border-t border-[var(--ds-color-line)] bg-[var(--ds-color-surface)] px-5 py-3 text-xs text-[var(--ds-color-ink-muted)] md:px-6">
         <span>One focused pair is enough to start</span>
-        <a className="overview-card-action" href={hashForPlans()}>
+        <a
+          className="overview-card-action inline-flex min-h-11 items-center border-b border-transparent font-semibold text-[var(--ds-color-ink)] no-underline hover:border-[var(--ds-color-ink)]"
+          href={hashForPlans()}
+        >
           View local plans <span aria-hidden="true">→</span>
         </a>
       </div>
-    </article>
+    </Panel>
   )
 }
 
-function CapabilityView({
-  latest,
-  compact = false,
-}: {
-  latest: ExecutionPresentation | null
-  compact?: boolean
-}) {
-  const capability = capabilityData(latest?.execution)
-  const qualifiedCases = capability.tiers.flatMap((tier) =>
-    tier.qualified_case_ids.map((caseId) => ({ tier: tier.tier, caseId })),
-  )
-  if (compact) {
-    const tierLookup = new Map(
-      capability.tiers.map((tier) => [tier.tier.toLowerCase(), tier]),
-    )
-    return (
-      <article
-        className="overview-intelligence-card overview-capability-card"
-        aria-labelledby="capability-heading"
-      >
-        <div className="overview-card-main">
-          <div className="overview-card-heading">
-            <div>
-              <div className="section-kicker">Accumulated evidence</div>
-              <h3 id="capability-heading">
-                Confidence grows in the background
-              </h3>
-            </div>
-            <span className="overview-card-state overview-card-state-neutral">
-              Historical
-            </span>
-          </div>
-          <p className="overview-card-copy">
-            Compatible local reruns strengthen history without becoming a
-            prerequisite. Five samples support local repeatability; p95 appears
-            only after twenty complete samples.
-          </p>
-          <div className="overview-capability-highlight">
-            <span>Highest repeatable tier</span>
-            <strong>
-              {capabilityTierLabel(capability.highest_repeatable_tier)}
-            </strong>
-          </div>
-          <section
-            className="overview-tier-list"
-            aria-label="Complexity tier evidence"
-          >
-            {capabilityTierDefinitions.map(({ key, label }) => {
-              const tier = tierLookup.get(key)
-              const qualified = tier?.qualified_case_ids.length ?? 0
-              const state =
-                qualified > 0 ? 'qualified' : tier ? 'observed' : 'empty'
-              const detail =
-                qualified > 0
-                  ? `${qualified} qualified case${qualified === 1 ? '' : 's'}`
-                  : tier
-                    ? 'Observed, not qualified'
-                    : 'No evidence'
-              return (
-                <div
-                  className={`overview-tier overview-tier-${state}`}
-                  key={key}
-                >
-                  <strong>{label}</strong>
-                  <span>{detail}</span>
-                </div>
-              )
-            })}
-          </section>
-        </div>
-        <div className="overview-card-foot">
-          <span>Secondary to the local decision</span>
-          <a
-            className="overview-card-action"
-            href={hashForWorkspace('capability')}
-          >
-            View evidence <span aria-hidden="true">→</span>
-          </a>
-        </div>
-      </article>
-    )
-  }
+function OverviewDecisionModel() {
   return (
     <section
-      className="panel capability-panel"
-      aria-labelledby="capability-heading"
-    >
-      <div className="panel-heading">
-        <div>
-          <div className="section-kicker">Evidence frontier</div>
-          <h2 id="capability-heading">Accumulated evidence</h2>
-          <p className="trend-description">
-            Capability is established from versioned tests and repeated
-            execution evidence.
-          </p>
-        </div>
-      </div>
-      <div className="capability-summary">
-        <article className="capability-card capability-primary">
-          <div className="kpi-label">Highest repeatable tier</div>
-          <strong>
-            {capabilityTierLabel(capability.highest_repeatable_tier)}
-          </strong>
-          <small>
-            Qualified per case; an unqualified case does not prove its tier.
-          </small>
-        </article>
-        <article className="capability-card">
-          <div className="kpi-label">Qualified cases</div>
-          <strong>{qualifiedCases.length || '—'}</strong>
-          <small>Cases with repeatable local evidence</small>
-        </article>
-        <article className="capability-card">
-          <div className="kpi-label">Coverage</div>
-          <strong>{latest ? formatPercent(latest.coverage) : '—'}</strong>
-          <small>Report completeness</small>
-        </article>
-        <article className="capability-card">
-          <div className="kpi-label">Observed scenarios</div>
-          <strong>{latest?.expectedReports ?? '—'}</strong>
-          <small>Expected reports in the latest execution</small>
-        </article>
-      </div>
-      <div className="capability-qualifications">
-        <div className="section-kicker">Qualified cases by tier</div>
-        {qualifiedCases.length > 0 ? (
-          <ul>
-            {qualifiedCases.map(({ tier, caseId }) => (
-              <li key={`${tier}:${caseId}`}>
-                <span>{tier}</span>
-                <strong>{caseId}</strong>
-              </li>
-            ))}
-          </ul>
-        ) : (
-          <p>No case has repeatable evidence in the latest execution.</p>
-        )}
-      </div>
-      <div className="comparison-bar">
-        <div>
-          <strong>Compare results by test and scenario version</strong>
-          <span>
-            Scores remain attached to one scenario contract and evaluated
-            cohort.
-          </span>
-        </div>
-        <a className="button" href={hashForWorkspace('tests')}>
-          Open versioned tests
-        </a>
-      </div>
-    </section>
-  )
-}
-
-function OverviewDecisionModel({
-  latest,
-}: {
-  latest: ExecutionPresentation | null
-}) {
-  return (
-    <section
-      className="overview-decision-model"
+      className="overview-decision-model overview-v2-comparison mt-6"
       aria-labelledby="decision-model-heading"
     >
-      <header className="overview-decision-heading">
-        <div>
-          <div className="section-kicker">Decision model</div>
-          <h2 id="decision-model-heading">Fast locally, confident over time</h2>
-        </div>
-        <p>
-          A local comparison starts with one run per selected test. Repetition
-          is targeted and historical validation never delays the engineering
-          loop.
-        </p>
-      </header>
-      <div className="overview-intelligence-grid">
+      <PageHeader
+        headingLevel={2}
+        context="Baseline and candidate"
+        title="Measure improvement against a fixed comparison"
+        summary="Keep scope, cases, seeds, subject, and judge stable before interpreting functional or efficiency changes."
+        id="decision-model-heading"
+        className="[&_h2]:text-xl md:[&_h2]:text-2xl"
+      />
+      <div className="overview-intelligence-grid overview-intelligence-grid-single mt-4">
         <LocalComparisonCard />
-        <CapabilityView latest={latest} compact />
       </div>
     </section>
   )
-}
-
-type CapabilityTierView = {
-  tier: string
-  qualified_case_ids: string[]
-}
-
-const capabilityTierDefinitions = [
-  { key: 'l0_atomic', label: 'L0' },
-  { key: 'l1_sequential', label: 'L1' },
-  { key: 'l2_stateful', label: 'L2' },
-  { key: 'l3_concurrent', label: 'L3' },
-  { key: 'l4_coordinated', label: 'L4' },
-  { key: 'l5_adaptive', label: 'L5' },
-]
-
-function capabilityTierLabel(value: string | null) {
-  if (!value) return 'Not repeatable yet'
-  const normalized = value.toLowerCase()
-  return (
-    capabilityTierDefinitions.find(
-      (definition) => definition.key === normalized,
-    )?.label ?? value
-  )
-}
-
-function capabilityData(execution: DashboardExecutionSummary | undefined): {
-  highest_repeatable_tier: string | null
-  tiers: CapabilityTierView[]
-} {
-  const value = execution?.capability
-  if (!value || typeof value !== 'object' || Array.isArray(value)) {
-    return { highest_repeatable_tier: null, tiers: [] }
-  }
-  const source = value as JsonObject
-  const highest =
-    typeof source.highest_repeatable_tier === 'string'
-      ? source.highest_repeatable_tier
-      : null
-  const tiers = Array.isArray(source.tiers)
-    ? source.tiers.flatMap((item) => {
-        if (!item || typeof item !== 'object' || Array.isArray(item)) return []
-        const tier = item as JsonObject
-        if (typeof tier.tier !== 'string') return []
-        const qualified_case_ids = Array.isArray(tier.qualified_case_ids)
-          ? tier.qualified_case_ids.filter(
-              (caseId): caseId is string => typeof caseId === 'string',
-            )
-          : []
-        return [{ tier: tier.tier, qualified_case_ids }]
-      })
-    : []
-  return { highest_repeatable_tier: highest, tiers }
 }
 
 export function OverviewPage({ activeView }: { activeView: WorkspaceView }) {
@@ -784,128 +778,136 @@ export function OverviewPage({ activeView }: { activeView: WorkspaceView }) {
     void load()
   }, [load])
 
+  useEffect(() => {
+    if (consumeQuickExecutionRequest()) setRunnerOpen(true)
+  }, [])
+
   const latest = executions[0]
     ? buildExecutionPresentation(executions[0])
     : null
+
   return (
-    <>
+    <div className="ds-root overview-v2-root min-h-dvh bg-[var(--ds-color-canvas)] text-[var(--ds-color-ink)]">
       <a className="skip-link" href="#main">
         Skip to execution dashboard
       </a>
-      <div className="ambient ambient-one" aria-hidden="true" />
-      <div className="ambient ambient-two" aria-hidden="true" />
-      <header className="topbar">
-        <a
-          className="brand"
-          href="https://github.com/iii-hq/harness-e2e"
-          aria-label="iii Harness E2E"
-        >
-          <span className="brand-copy">
-            <strong>iii</strong>
-            <span>Harness benchmarks</span>
-          </span>
-        </a>
-        <nav className="topbar-actions" aria-label="Dashboard actions">
-          {bridge?.mode === 'local' && (
-            <a className="button button-primary" href={hashForNewPlan()}>
-              ＋ New local plan
-            </a>
-          )}
-          {bridge?.mode === 'local' && (
-            <button
-              className="button button-secondary"
-              type="button"
-              onClick={() => setRunnerOpen(true)}
-            >
-              Quick execution
-            </button>
-          )}
-          <a
-            className="button button-secondary"
-            href={hashForCoverage()}
-            data-mobile-label="Coverage"
-          >
-            Coverage
-          </a>
-          <a
-            className="button button-secondary"
-            href={hashForWorkspace('tests')}
-            data-mobile-label="Tests"
-          >
-            Tests
-          </a>
-          <ThemeToggle />
-        </nav>
-      </header>
-      <main id="main" className="page-shell overview-shell">
-        <section className="page-heading" aria-labelledby="page-title">
-          <div>
-            <div className="eyebrow">
-              <span className="live-dot" aria-hidden="true" />
-              Harness E2E
-            </div>
-            <h1 id="page-title">Harness evidence</h1>
-            <p>
-              Know what ran, what passed, and what requires attention before
-              trusting a benchmark.
-            </p>
-          </div>
-          <div className="sync-block">
-            <span>Last published</span>
-            <time dateTime={latest?.completedAt}>
-              {latest
-                ? formatDate(latest.completedAt)
-                : loading
-                  ? 'Loading…'
-                  : 'Waiting for data'}
-            </time>
-          </div>
-        </section>
+      <AppHeader
+        active={activeView}
+        actionsLabel="Overview actions"
+        actions={
+          bridge?.mode === 'local' ? (
+            <>
+              <a
+                className={appHeaderActionClassName({ primary: true })}
+                href={hashForNewPlan()}
+                aria-label="New local plan"
+              >
+                New plan
+              </a>
+              <button
+                className={appHeaderActionClassName()}
+                type="button"
+                onClick={() => setRunnerOpen(true)}
+                aria-label="Quick execution"
+              >
+                Quick run
+              </button>
+            </>
+          ) : null
+        }
+      />
+      <main
+        id="main"
+        className="page-shell overview-v2-shell w-[calc(100%_-_1.5rem)] max-w-[1420px] pt-0 pb-32 md:w-[calc(100%_-_3rem)]"
+      >
+        {activeView === 'overview' ? (
+          <PageHeader
+            title="Performance overview"
+            summary="Objective outcomes, retained evidence, and execution efficiency for the latest Harness run."
+            context="Developer workspace"
+            className="overview-v2-operational-header border-b border-[var(--ds-color-line)] py-6 md:py-8 [&_.ds-page-header-copy]:gap-2 [&_h1]:max-w-full [&_h1]:text-2xl md:[&_h1]:text-3xl"
+            actions={
+              <>
+                <span className="grid gap-1 text-right font-mono text-[0.65rem] text-[var(--ds-color-ink-muted)] max-md:hidden">
+                  <span className="uppercase tracking-[0.08em]">
+                    Last published
+                  </span>
+                  <time
+                    className="text-[var(--ds-color-ink-soft)]"
+                    dateTime={latest?.completedAt}
+                  >
+                    {latest
+                      ? formatDate(latest.completedAt)
+                      : loading
+                        ? 'Loading'
+                        : 'Waiting for data'}
+                  </time>
+                </span>
+                <a
+                  className={buttonClassName({ variant: 'primary' })}
+                  href={
+                    latest
+                      ? hashForExecution(latest.execution.id)
+                      : '#overview-content'
+                  }
+                >
+                  Open execution
+                </a>
+                <a
+                  className={buttonClassName({ variant: 'secondary' })}
+                  href={hashForPlans()}
+                >
+                  Compare plans
+                </a>
+              </>
+            }
+          />
+        ) : (
+          <PageHeader
+            title="Execution ledger"
+            summary="Search immutable runs by objective result, model, scope, and retained evidence."
+            context="Harness E2E"
+            className="overview-v2-ledger-header border-b border-[var(--ds-color-line)] py-6 md:py-8 [&_h1]:text-2xl md:[&_h1]:text-3xl"
+          />
+        )}
         {error && (
-          <section className="empty-state" role="alert">
-            <div className="empty-icon" aria-hidden="true">
-              !
-            </div>
+          <Panel
+            className="empty-state mt-6 grid justify-items-start gap-4 p-8"
+            role="alert"
+            tone="raised"
+          >
+            <StatusBadge status="unavailable" label="Data unavailable" />
             <h2>Dashboard data unavailable</h2>
             <p>{error}</p>
-            <button
-              className="button"
-              type="button"
-              onClick={() => void load()}
-            >
-              Retry
-            </button>
-          </section>
+            <Button onClick={() => void load()}>Retry</Button>
+          </Panel>
         )}
         {!error && loading && (
-          <section className="latest-evidence" aria-busy="true">
-            <article className="panel latest-health">
-              <div className="h-8 w-48 animate-pulse rounded bg-panel-soft" />
-              <div className="mt-8 h-12 max-w-xl animate-pulse rounded bg-panel-soft" />
-            </article>
-          </section>
+          <Panel
+            className="mt-6 grid min-h-56 content-center gap-6 p-8"
+            aria-busy="true"
+            aria-label="Loading execution evidence"
+          >
+            <div className="h-4 w-40 animate-pulse rounded-full bg-[var(--ds-color-surface-strong)] motion-reduce:animate-none" />
+            <div className="h-16 w-full max-w-3xl animate-pulse rounded-2xl bg-[var(--ds-color-surface-strong)] motion-reduce:animate-none" />
+          </Panel>
         )}
         {!error && !loading && (
-          <div id="overview-content">
+          <div id="overview-content" className="grid gap-0">
             {executions.length === 0 ? (
-              <section className="empty-state">
-                <div className="empty-icon" aria-hidden="true">
-                  ⌁
-                </div>
+              <Panel className="empty-state mt-6 grid justify-items-start gap-4 p-8">
+                <StatusBadge status="unavailable" label="Awaiting evidence" />
                 <h2>No executions published</h2>
                 <p>The next Harness E2E workflow will appear here.</p>
-              </section>
+              </Panel>
             ) : (
               <>
                 {activeView === 'overview' && latest && (
                   <>
                     <LatestExecution presentation={latest} />
-                    <OverviewDecisionModel latest={latest} />
+                    <OverviewDecisionModel />
                     <ExecutionHistory executions={executions} />
                   </>
-                )}
-                {activeView === 'capability' && (
-                  <CapabilityView latest={latest} />
                 )}
                 {activeView === 'executions' && (
                   <ExecutionHistory executions={executions} />
@@ -921,12 +923,12 @@ export function OverviewPage({ activeView }: { activeView: WorkspaceView }) {
         onClose={() => setRunnerOpen(false)}
         onCompleted={() => void load()}
       />
-      <footer>
+      <footer className="mx-auto flex w-[calc(100%_-_1.5rem)] max-w-[1420px] flex-wrap items-center justify-between gap-4 border-t border-[var(--ds-color-line)] py-8 font-mono text-xs text-[var(--ds-color-ink-muted)] md:w-[calc(100%_-_3rem)]">
         <span>Harness E2E · execution evidence</span>
         <a href="https://github.com/iii-hq/harness-e2e">
           Suite documentation <span aria-hidden="true">↗</span>
         </a>
       </footer>
-    </>
+    </div>
   )
 }

@@ -11,3 +11,4 @@ dashboard/runs/
 dashboard/dist/
 dashboard/node_modules/
 dashboard/*.tsbuildinfo
+dashboard/public/prototype/

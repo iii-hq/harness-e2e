@@ -43,6 +43,10 @@ use crate::workflow::{
 
 const MAX_RUNS: u32 = 20;
 const MAX_TECHNICAL_RETRIES: u8 = 3;
+// Objective results are already durable when this advisory phase begins. Keep
+// analyzer/provider stalls from holding the CLI child (and its plan lifecycle)
+// indefinitely; timing out the advisory assessment never changes run status.
+const FINAL_ASSESSMENT_BATCH_TIMEOUT: Duration = Duration::from_secs(120);
 
 pub(crate) fn e2e_function_policy(spec: &ScenarioSpec) -> FunctionPolicy {
     let mut deny = vec!["e2e::*".to_string()];
@@ -182,6 +186,11 @@ pub async fn run_suite(config: SuiteRunConfig) -> Result<SuiteRunOutcome> {
         },
         None => None,
     };
+    if config.scenarios.contains(&ScenarioId::SecurityReview) {
+        crate::workflow::security_scan::register_local_adapter_if_configured(context.as_ref())
+            .await
+            .context("register fixture-backed local security-scan adapter")?;
+    }
     let composite_definitions = config
         .scenarios
         .iter()
@@ -193,10 +202,38 @@ pub async fn run_suite(config: SuiteRunConfig) -> Result<SuiteRunOutcome> {
             .validate(&composite_catalog)
             .with_context(|| format!("validate Rust-defined scenario '{}'", definition.id))?;
     }
-    let worker_contracts =
-        observe_worker_contracts(context.as_ref(), &composite_catalog, &composite_definitions)
-            .await
-            .context("preflight composite scenario worker contracts")?;
+    // Observe each composite independently. A missing fixture worker belongs to
+    // that scenario's infrastructure result; it must not erase reports for
+    // otherwise runnable scenarios in the same suite. Executable step
+    // preflights still enforce function availability and exact contracts.
+    let mut worker_contracts = Vec::new();
+    for definition in &composite_definitions {
+        match observe_worker_contracts(
+            context.as_ref(),
+            &composite_catalog,
+            std::slice::from_ref(definition),
+        )
+        .await
+        {
+            Ok(observed) => {
+                for contract in observed {
+                    if !worker_contracts.iter().any(
+                        |current: &crate::report::ObservedWorkerContract| {
+                            current.function_id == contract.function_id
+                        },
+                    ) {
+                        worker_contracts.push(contract);
+                    }
+                }
+            }
+            Err(error) => tracing::warn!(
+                scenario = definition.id,
+                error = %format!("{error:#}"),
+                "deferring composite worker contract failure to the scenario attempt"
+            ),
+        }
+    }
+    worker_contracts.sort_by(|left, right| left.function_id.cmp(&right.function_id));
     emit_phase(config.control.as_ref(), SuitePhase::Materializing).await?;
     let mut scenario_reports = Vec::new();
 
@@ -290,9 +327,29 @@ pub async fn run_suite(config: SuiteRunConfig) -> Result<SuiteRunOutcome> {
     // the complementary analyzer. A provider failure can therefore never erase
     // the completed execution.
     report.write_to(&config.output, &manifest)?;
+    let final_assessment_count = report
+        .scenarios
+        .iter()
+        .map(|scenario| scenario.runs.len())
+        .sum::<usize>();
+    tracing::info!(
+        final_assessment_count,
+        timeout_seconds = FINAL_ASSESSMENT_BATCH_TIMEOUT.as_secs(),
+        "objective results persisted; starting advisory final assessments before runner shutdown"
+    );
+    let final_assessments_started = Instant::now();
     evaluate_final_assessments(&context, config.judge.as_ref(), &config.output, &mut report)
         .await?;
+    tracing::info!(
+        final_assessment_count,
+        duration_ms = final_assessments_started
+            .elapsed()
+            .as_millis()
+            .min(u64::MAX as u128) as u64,
+        "advisory final assessments completed; persisting the final report"
+    );
     let report_path = report.write_to(&config.output, &manifest)?;
+    tracing::info!("final report persisted; shutting down the E2E connection");
     context.shutdown().await;
     Ok(SuiteRunOutcome {
         report,
@@ -314,9 +371,17 @@ async fn evaluate_final_assessments(
     output: &std::path::Path,
     report: &mut E2eReport,
 ) -> Result<()> {
+    let total = report
+        .scenarios
+        .iter()
+        .map(|scenario| scenario.runs.len())
+        .sum::<usize>();
+    let batch_started = Instant::now();
+    let mut ordinal = 0usize;
     for scenario_index in 0..report.scenarios.len() {
         for run_index in 0..report.scenarios[scenario_index].runs.len() {
-            let (run_id, attempt_id, input) = {
+            ordinal += 1;
+            let (scenario_id, run_id, attempt_id, run_status, input) = {
                 let scenario = &report.scenarios[scenario_index];
                 let run = &scenario.runs[run_index];
                 let contract = report
@@ -333,11 +398,23 @@ async fn evaluate_final_assessments(
                         )
                     })?;
                 (
+                    scenario.scenario_id.clone(),
                     run.run_id.clone(),
                     run.attempt_id.clone(),
+                    run.status,
                     final_assessment_input(&report.execution.execution_id, scenario, run, contract),
                 )
             };
+            tracing::info!(
+                scenario = scenario_id,
+                run_id,
+                attempt_id,
+                status = ?run_status,
+                ordinal,
+                total,
+                "starting advisory final assessment"
+            );
+            let assessment_started = Instant::now();
             if let Err(error) = input.validate() {
                 attach_final_assessment(
                     report,
@@ -353,6 +430,15 @@ async fn evaluate_final_assessments(
                         "final_assessment_input_invalid: {error:#}"
                     )),
                 )?;
+                tracing::warn!(
+                    scenario = scenario_id,
+                    run_id,
+                    attempt_id,
+                    ordinal,
+                    total,
+                    error = %format!("{error:#}"),
+                    "advisory final assessment input was invalid"
+                );
                 continue;
             }
             let input_reference = match artifact::write_json(
@@ -381,17 +467,55 @@ async fn evaluate_final_assessments(
                             "final_assessment_input_persistence_failed: {error:#}"
                         )),
                     )?;
+                    tracing::warn!(
+                        scenario = scenario_id,
+                        run_id,
+                        attempt_id,
+                        ordinal,
+                        total,
+                        error = %format!("{error:#}"),
+                        "advisory final assessment input could not be persisted"
+                    );
                     continue;
                 }
             };
 
             let (assessment, attempts, usage) = match judge_config {
                 Some(config) => {
-                    let outcome = judge::evaluate_final_assessment(context, config, &input).await?;
-                    (outcome.assessment, outcome.attempts, outcome.usage)
+                    let remaining =
+                        FINAL_ASSESSMENT_BATCH_TIMEOUT.saturating_sub(batch_started.elapsed());
+                    if remaining.is_zero() {
+                        (
+                            timed_out_final_assessment(&input, config, Duration::ZERO)?,
+                            0,
+                            None,
+                        )
+                    } else {
+                        match tokio::time::timeout(
+                            remaining,
+                            judge::evaluate_final_assessment(context, config, &input),
+                        )
+                        .await
+                        {
+                            Ok(outcome) => {
+                                let outcome = outcome?;
+                                (outcome.assessment, outcome.attempts, outcome.usage)
+                            }
+                            Err(_) => (
+                                timed_out_final_assessment(
+                                    &input,
+                                    config,
+                                    assessment_started.elapsed(),
+                                )?,
+                                1,
+                                None,
+                            ),
+                        }
+                    }
                 }
                 None => (unavailable_final_assessment(&input)?, 0, None),
             };
+            let availability = assessment.availability;
 
             attach_final_assessment(
                 report,
@@ -405,12 +529,57 @@ async fn evaluate_final_assessments(
                 judge_config.is_some(),
                 assessment,
             )?;
+            tracing::info!(
+                scenario = scenario_id,
+                run_id,
+                attempt_id,
+                status = ?run_status,
+                availability = ?availability,
+                attempts,
+                ordinal,
+                total,
+                duration_ms = assessment_started
+                    .elapsed()
+                    .as_millis()
+                    .min(u64::MAX as u128) as u64,
+                "advisory final assessment finished"
+            );
         }
         report.scenarios[scenario_index].refresh_aggregate()?;
     }
     report.passed =
         !report.scenarios.is_empty() && report.scenarios.iter().all(|scenario| scenario.passed);
     Ok(())
+}
+
+fn timed_out_final_assessment(
+    input: &FinalAssessmentInput,
+    config: &JudgeConfig,
+    elapsed: Duration,
+) -> Result<AiFinalAssessment> {
+    let elapsed_ms = elapsed.as_millis().min(u64::MAX as u128) as u64;
+    let assessment = AiFinalAssessment {
+        availability: AiAssessmentAvailability::Failed,
+        result: None,
+        analyzer: Some(AnalyzerIdentity {
+            analyzer: "final-assessment".into(),
+            provider: Some(config.provider.clone()),
+            model: Some(config.model.clone()),
+            input_sha256: input.sha256()?,
+        }),
+        analyzer_usage: Some(AnalyzerUsage {
+            latency_ms: Some(elapsed_ms),
+            input_tokens: None,
+            output_tokens: None,
+            cost_usd: None,
+        }),
+        reason: Some(format!(
+            "final_assessment_timeout: advisory analysis exceeded the {} second suite finalization budget; the objective system status is unchanged",
+            FINAL_ASSESSMENT_BATCH_TIMEOUT.as_secs()
+        )),
+    };
+    assessment.validate()?;
+    Ok(assessment)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1561,12 +1730,9 @@ async fn execute(
     let stuck_timeout = Duration::from_secs(spec.execution.stuck_timeout_seconds);
     let filesystem_metadata = prepare_filesystem_root(spec)?;
     if let Some(setup) = spec.setup {
-        setup(context, run_id).await.map_err(|error| {
-            subject_failure(
-                FailurePhase::Execute,
-                format!("scenario setup failed: {error}"),
-            )
-        })?;
+        setup(context, run_id)
+            .await
+            .map_err(|error| scenario_setup_failure(error.to_string()))?;
     }
     emit_phase(control, SuitePhase::Executing)
         .await
@@ -2239,6 +2405,13 @@ fn infrastructure_failure(phase: FailurePhase, message: String) -> RunFailure {
     RunFailure::new(RunStatus::InfrastructureError, phase, message)
 }
 
+fn scenario_setup_failure(message: String) -> RunFailure {
+    infrastructure_failure(
+        FailurePhase::Setup,
+        format!("scenario setup failed: {message}"),
+    )
+}
+
 fn update_score(report: &mut E2eRunReport) {
     report.score = report.criteria.iter().try_fold(0_u8, |score, criterion| {
         criterion
@@ -2809,6 +2982,17 @@ mod tests {
     }
 
     #[test]
+    fn runner_owned_scenario_setup_failures_are_infrastructure_errors() {
+        let failure = scenario_setup_failure("fixture digest mismatch".into());
+        assert_eq!(failure.status, RunStatus::InfrastructureError);
+        assert_eq!(failure.phase, FailurePhase::Setup);
+        assert_eq!(
+            failure.message,
+            "scenario setup failed: fixture digest mismatch"
+        );
+    }
+
+    #[test]
     fn only_transient_technical_failures_are_retried() {
         let mut transient = test_run_report();
         transient.push_failure(
@@ -2905,6 +3089,30 @@ mod tests {
             unavailable.analyzer.unwrap().input_sha256,
             input.sha256().unwrap()
         );
+
+        let timed_out = timed_out_final_assessment(
+            &input,
+            &JudgeConfig {
+                model: "judge-model".into(),
+                provider: "judge-provider".into(),
+            },
+            FINAL_ASSESSMENT_BATCH_TIMEOUT,
+        )
+        .unwrap();
+        assert_eq!(timed_out.availability, AiAssessmentAvailability::Failed);
+        assert_eq!(
+            timed_out.analyzer.as_ref().unwrap().input_sha256,
+            input.sha256().unwrap()
+        );
+        assert_eq!(
+            timed_out.analyzer.as_ref().unwrap().model.as_deref(),
+            Some("judge-model")
+        );
+        assert!(timed_out
+            .reason
+            .as_deref()
+            .unwrap()
+            .contains("objective system status is unchanged"));
     }
 
     fn test_run_report() -> E2eRunReport {

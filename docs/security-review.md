@@ -15,8 +15,8 @@ The scenario contains five semantic tests:
 2. `suggest_commit_a` runs only when the deterministic scan result contains
    valid findings. Request, polling, patch checks and integrity checks remain
    internal operations of this test.
-3. `scheduled_scan_commit_b` creates the manually configured delayed ref, waits
-   for cron to originate the run, evaluates it and checks repository integrity.
+3. `scan_commit_b` creates a second exact commit, immediately requests its scan,
+   waits for completion, evaluates it and checks repository integrity.
 4. `github_reconciliation` checks cached, refreshed, persisted and filtered
    reconciliation views without combining GitHub and Harness counts.
 5. `list_run_history` verifies the completed exact-SHA lifecycle, accounting for
@@ -28,7 +28,7 @@ separately and is not modeled as a test.
 ## Manual local execution
 
 Prepare the stack, fixture clone, a provider such as Codex, GitHub read-only
-credentials and cron configuration before starting the runner. The provider is
+credentials before starting the runner. The provider is
 ordinary CLI subject configuration; it is not embedded in `security_review`.
 Point the fixture variable at the disposable clone and use the same `run`
 command as every other scenario:
@@ -69,4 +69,6 @@ keyboard and assistive-technology navigation. Any future composite scenario
 with `semantic_tests` receives the same presentation automatically.
 
 This local workflow does not modify CI, GitHub Actions, release gates or
-publication configuration.
+publication configuration. Recurring scheduler or cron behavior belongs in a
+separate automation scenario; it is intentionally not part of this on-demand
+benchmark.

@@ -5,7 +5,7 @@ pub(super) enum SecurityStepKind {
     ScanCommitA,
     SuggestCommitA,
     Reconciliation,
-    ScheduledScanCommitB,
+    ScanCommitB,
     ListRunHistory,
 }
 
@@ -36,7 +36,7 @@ impl StepExecutor for SecurityExecutor {
             SecurityStepKind::ScanCommitA => self.scan_commit_a(&context).await,
             SecurityStepKind::SuggestCommitA => self.suggest_commit_a(&context).await,
             SecurityStepKind::Reconciliation => self.reconciliation(&context).await,
-            SecurityStepKind::ScheduledScanCommitB => self.scheduled_scan_commit_b(&context).await,
+            SecurityStepKind::ScanCommitB => self.scan_commit_b(&context).await,
             SecurityStepKind::ListRunHistory => self.list_run_history(&context).await,
         }
     }
@@ -65,7 +65,7 @@ impl SecurityExecutor {
         let preflight = self
             .preflight_fixture(&operation_context(
                 context,
-                json!({"repository": REPOSITORY, "scheduled_ref": SCHEDULED_REF}),
+                json!({"repository": REPOSITORY, "commit_b_ref": COMMIT_B_REF}),
                 BTreeMap::new(),
             ))
             .await?;
@@ -256,35 +256,44 @@ impl SecurityExecutor {
         Ok(result)
     }
 
-    async fn scheduled_scan_commit_b(
-        &self,
-        context: &StepExecutorContext,
-    ) -> Result<StepExecutorOutput> {
+    async fn scan_commit_b(&self, context: &StepExecutorContext) -> Result<StepExecutorOutput> {
         let repository = input_string(context, "repository")?;
         let mut result = StepExecutorOutput::default();
         let created = self
-            .create_scheduled_commit(&operation_context(
+            .create_commit_b(&operation_context(
                 context,
-                json!({"scheduled_ref": SCHEDULED_REF}),
+                json!({"commit_b_ref": COMMIT_B_REF}),
                 BTreeMap::new(),
             ))
             .await?;
         let commit_b = operation_output_string(&created, "commit_b")?;
-        append_operation(&mut result, created, "scheduled_commit");
-        let waited = self
-            .wait_scheduled(&operation_context(
+        append_operation(&mut result, created, "commit_b");
+        let request = self
+            .request_scan(&operation_context(
                 context,
-                json!({"timeout_seconds": 180, "poll_interval_ms": 500}),
+                json!({"mode": "scan", "expect_deduplicated": null}),
                 typed_inputs([
+                    ("repository", text_value(repository.clone())),
+                    ("target_sha", text_value(commit_b.clone())),
+                ]),
+            ))
+            .await?;
+        let run_id = operation_output_string(&request, "run_id")?;
+        append_operation(&mut result, request, "request");
+        let waited = self
+            .wait_run(&operation_context(
+                context,
+                json!({"expected_mode": "scan", "timeout_seconds": 360, "poll_interval_ms": 500}),
+                typed_inputs([
+                    ("run_id", text_value(run_id.clone())),
                     ("repository", text_value(repository)),
                     ("target_sha", text_value(commit_b.clone())),
                 ]),
             ))
             .await?;
-        let run_id = operation_output_string(&waited, "run_id")?;
         let report = operation_output_value(&waited, "report")?;
         let poll_metrics = waited.metrics.clone();
-        append_operation(&mut result, waited, "scheduled_run");
+        append_operation(&mut result, waited, "run");
         let assessed = self
             .assess_report(&operation_context(
                 context,
@@ -308,7 +317,7 @@ impl SecurityExecutor {
             ("report".into(), json_value(report)),
             ("assessment".into(), assessment),
         ]);
-        result.metrics = Some(json!({"cron_poll": poll_metrics}));
+        result.metrics = Some(json!({"request_count": 1, "poll": poll_metrics}));
         Ok(result)
     }
 

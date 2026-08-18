@@ -6,7 +6,7 @@ impl SecurityExecutor {
         context: &StepExecutorContext,
     ) -> Result<StepExecutorOutput> {
         let repository = config_string(context, "repository")?;
-        let scheduled_ref = config_string(context, "scheduled_ref")?;
+        let commit_b_ref = config_string(context, "commit_b_ref")?;
         let path = fixture_path()?;
         let head = git(&path, &["rev-parse", "HEAD"]).await?;
         validate_sha(&head)?;
@@ -17,12 +17,12 @@ impl SecurityExecutor {
                 "show-ref",
                 "--verify",
                 "--quiet",
-                &format!("refs/heads/{scheduled_ref}"),
+                &format!("refs/heads/{commit_b_ref}"),
             ],
         )
         .await?
         {
-            bail!("scheduled ref '{scheduled_ref}' must not exist before the workflow");
+            bail!("commit B ref '{commit_b_ref}' must not exist before the workflow");
         }
         let info = self
             .context
@@ -36,7 +36,7 @@ impl SecurityExecutor {
             let mut fixture = self.fixture.lock();
             fixture.path = Some(path.clone());
             fixture.initial_head = Some(head.clone());
-            fixture.scheduled_ref = Some(scheduled_ref);
+            fixture.commit_b_ref = Some(commit_b_ref);
         }
         let contracts = info.get("functions").cloned().unwrap_or(Value::Null);
         Ok(output_with_asset(
@@ -360,7 +360,7 @@ impl SecurityExecutor {
             });
         let (commit_a, commit_b) = {
             let fixture = self.fixture.lock();
-            (fixture.initial_head.clone(), fixture.scheduled_sha.clone())
+            (fixture.initial_head.clone(), fixture.commit_b_sha.clone())
         };
         let expect_suggest = config_bool(context, "expect_suggest")?;
         let expected_lifecycle_present =
@@ -413,7 +413,7 @@ impl SecurityExecutor {
             let fixture = self.fixture.lock();
             match expected.as_str() {
                 "commit_a" => fixture.initial_head.clone(),
-                "commit_b" => fixture.scheduled_sha.clone(),
+                "commit_b" => fixture.commit_b_sha.clone(),
                 _ => None,
             }
         }
@@ -440,17 +440,17 @@ impl SecurityExecutor {
         ))
     }
 
-    pub(super) async fn create_scheduled_commit(
+    pub(super) async fn create_commit_b(
         &self,
         context: &StepExecutorContext,
     ) -> Result<StepExecutorOutput> {
         let path = self.fixture.path()?;
         ensure_clean(&path).await?;
-        let scheduled_ref = config_string(context, "scheduled_ref")?;
-        let marker = path.join("security-scan-e2e-scheduled.txt");
-        std::fs::write(&marker, b"synthetic scheduled security scan fixture\n")
+        let commit_b_ref = config_string(context, "commit_b_ref")?;
+        let marker = path.join("security-scan-e2e-commit-b.txt");
+        std::fs::write(&marker, b"synthetic on-demand security scan fixture\n")
             .with_context(|| format!("write {}", marker.display()))?;
-        git(&path, &["add", "--", "security-scan-e2e-scheduled.txt"]).await?;
+        git(&path, &["add", "--", "security-scan-e2e-commit-b.txt"]).await?;
         git(
             &path,
             &[
@@ -460,7 +460,7 @@ impl SecurityExecutor {
                 "user.email=harness-e2e@example.invalid",
                 "commit",
                 "-m",
-                "test: add scheduled security fixture",
+                "test: add on-demand security fixture",
             ],
         )
         .await?;
@@ -470,103 +470,21 @@ impl SecurityExecutor {
             &path,
             &[
                 "update-ref",
-                &format!("refs/heads/{scheduled_ref}"),
+                &format!("refs/heads/{commit_b_ref}"),
                 &commit_b,
             ],
         )
         .await?;
         {
             let mut fixture = self.fixture.lock();
-            fixture.scheduled_ref = Some(scheduled_ref);
-            fixture.scheduled_sha = Some(commit_b.clone());
+            fixture.commit_b_ref = Some(commit_b_ref);
+            fixture.commit_b_sha = Some(commit_b.clone());
         }
         Ok(output_with_asset(
             BTreeMap::from([("commit_b".into(), text_value(commit_b.clone()))]),
-            "scheduled-commit",
+            "commit-b",
             json!({"commit_b": commit_b}),
             &context.node.id,
         ))
-    }
-
-    pub(super) async fn wait_scheduled(
-        &self,
-        context: &StepExecutorContext,
-    ) -> Result<StepExecutorOutput> {
-        let repository = input_string(context, "repository")?;
-        let target_sha = input_string(context, "target_sha")?;
-        validate_sha(&target_sha)?;
-        let timeout = Duration::from_secs(config_u64(context, "timeout_seconds")?);
-        let interval = Duration::from_millis(config_u64(context, "poll_interval_ms")?);
-        let started = Instant::now();
-        let mut poll_count = 0_u64;
-        loop {
-            if *context.cancellation.borrow() {
-                bail!("scheduled security-scan wait was cancelled");
-            }
-            let listed = self
-                .context
-                .trigger_value(
-                    LIST_FUNCTION,
-                    json!({"repository": repository, "limit": 100}),
-                )
-                .await?;
-            poll_count += 1;
-            let scheduled = listed
-                .get("runs")
-                .and_then(Value::as_array)
-                .into_iter()
-                .flatten()
-                .find(|run| {
-                    run.get("target_sha").and_then(Value::as_str) == Some(target_sha.as_str())
-                        && run.get("mode").and_then(Value::as_str) == Some("scan")
-                });
-            if let Some(summary) = scheduled {
-                let run_id = required_string(summary, "run_id")?;
-                let read = self
-                    .context
-                    .trigger_value(READ_FUNCTION, json!({"run_id": run_id}))
-                    .await?;
-                if let Some(run) = read
-                    .get("run")
-                    .filter(|run| run.get("status").and_then(Value::as_str) == Some("completed"))
-                {
-                    let report = run
-                        .get("report")
-                        .cloned()
-                        .context("completed scheduled run is missing report")?;
-                    let evidence = json!({"listed": summary, "run": run});
-                    let mut output = output_with_internal_evaluation(
-                        output_with_asset(
-                            BTreeMap::from([
-                                ("run_id".into(), text_value(run_id)),
-                                ("run".into(), json_value(run.clone())),
-                                ("report".into(), json_value(report)),
-                            ]),
-                            "scheduled-run",
-                            evidence,
-                            &context.node.id,
-                        ),
-                        vec![gate(
-                            "cron_created_exact_sha",
-                            true,
-                            "A cron-created scan completed for commit B without a manual request node.",
-                        )],
-                        Vec::new(),
-                    );
-                    output.metrics = Some(json!({
-                        "poll_count": poll_count,
-                        "wait_duration_ms": started.elapsed().as_millis(),
-                    }));
-                    return Ok(output);
-                }
-            }
-            if started.elapsed() >= timeout {
-                bail!(
-                    "cron did not create and complete a scan for SHA {target_sha} within {}s",
-                    timeout.as_secs()
-                );
-            }
-            tokio::time::sleep(interval).await;
-        }
     }
 }

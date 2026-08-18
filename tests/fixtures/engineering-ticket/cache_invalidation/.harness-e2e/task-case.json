@@ -1,0 +1,11 @@
+{
+  "task_case_id": "cache_invalidation",
+  "case_version": 1,
+  "canonical_seed": 1004,
+  "focused_test_command": "python3 tests/focused_probe.py",
+  "full_test_command": "python3 -m unittest discover -s tests -p test_*.py",
+  "maximum_validation_rounds": 2,
+  "maximum_changed_files": 2,
+  "maximum_patch_lines": 48,
+  "network_profile": "offline-v1"
+}

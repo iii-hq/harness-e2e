@@ -1,0 +1,155 @@
+:root {
+  --ds-color-canvas: #080b0a;
+  --ds-color-canvas-rgb: 8, 11, 10;
+  --ds-color-surface: #101512;
+  --ds-color-surface-raised: #171e1a;
+  --ds-color-surface-strong: #202a24;
+  --ds-color-ink: #f5f7f2;
+  --ds-color-ink-soft: #b3bdb5;
+  --ds-color-ink-muted: #8b968e;
+  --ds-color-line: rgba(245, 247, 242, 0.1);
+  --ds-color-line-strong: rgba(245, 247, 242, 0.2);
+  --ds-color-brand: #c7ff4a;
+  --ds-color-brand-ink: #11170a;
+  --ds-color-brand-text: #c7ff4a;
+  --ds-color-info: #7bc7ff;
+  --ds-color-success: #9ee66c;
+  --ds-color-warning: #ffd166;
+  --ds-color-danger: #ff786f;
+  --ds-color-focus: #d7ff7f;
+  --ds-color-backdrop: rgba(3, 5, 4, 0.82);
+
+  --ds-font-body: "Geist", ui-sans-serif, system-ui, sans-serif;
+  --ds-font-mono: "Chivo Mono", ui-monospace, monospace;
+  --ds-text-xs: 0.75rem;
+  --ds-text-sm: 0.875rem;
+  --ds-text-md: 1rem;
+  --ds-text-lg: clamp(1.2rem, 1.7vw, 1.5rem);
+  --ds-text-xl: clamp(1.7rem, 3vw, 2.75rem);
+  --ds-text-display: clamp(3rem, 7vw, 7.4rem);
+  --ds-leading-tight: 0.94;
+  --ds-leading-body: 1.55;
+  --ds-tracking-tight: -0.045em;
+  --ds-tracking-label: 0.08em;
+
+  --ds-space-1: 0.25rem;
+  --ds-space-2: 0.5rem;
+  --ds-space-3: 0.75rem;
+  --ds-space-4: 1rem;
+  --ds-space-5: 1.25rem;
+  --ds-space-6: 1.5rem;
+  --ds-space-8: 2rem;
+  --ds-space-10: 2.5rem;
+  --ds-space-12: 3rem;
+  --ds-space-16: 4rem;
+  --ds-space-24: 6rem;
+  --ds-space-32: 8rem;
+  --ds-space-40: 10rem;
+  --ds-space-48: 12rem;
+
+  --ds-radius-sm: 0.625rem;
+  --ds-radius-md: 1rem;
+  --ds-radius-lg: 1.5rem;
+  --ds-radius-pill: 999px;
+  --ds-shadow-panel: 0 28px 80px rgba(0, 0, 0, 0.28);
+  --ds-shadow-focus: 0 0 0 4px rgba(199, 255, 74, 0.2);
+
+  --ds-duration-instant: 100ms;
+  --ds-duration-fast: 160ms;
+  --ds-duration-base: 240ms;
+  --ds-duration-slow: 700ms;
+  --ds-ease-standard: cubic-bezier(0.2, 0.8, 0.2, 1);
+  --ds-ease-emphasized: cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+:root[data-theme="light"] {
+  --ds-color-canvas: #f2f5ef;
+  --ds-color-canvas-rgb: 242, 245, 239;
+  --ds-color-surface: #ffffff;
+  --ds-color-surface-raised: #f7faf4;
+  --ds-color-surface-strong: #e8eee4;
+  --ds-color-ink: #121713;
+  --ds-color-ink-soft: #4f5c53;
+  --ds-color-ink-muted: #5b675e;
+  --ds-color-line: rgba(18, 23, 19, 0.12);
+  --ds-color-line-strong: rgba(18, 23, 19, 0.24);
+  --ds-color-brand: #8fc900;
+  --ds-color-brand-ink: #101606;
+  --ds-color-brand-text: #4b6d00;
+  --ds-color-info: #006dae;
+  --ds-color-success: #2d6b0f;
+  --ds-color-warning: #865500;
+  --ds-color-danger: #b52d25;
+  --ds-color-focus: #4b6d00;
+  --ds-color-backdrop: rgba(18, 23, 19, 0.58);
+  --ds-shadow-panel: 0 24px 64px rgba(28, 46, 33, 0.12);
+  --ds-shadow-focus: 0 0 0 4px rgba(75, 109, 0, 0.18);
+}
+
+.ds-root,
+.ds-root * {
+  box-sizing: border-box;
+}
+
+.ds-root {
+  min-width: 320px;
+  color: var(--ds-color-ink);
+  font-family: var(--ds-font-body);
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+}
+
+.ds-root :where(button, a, input, select, textarea, summary):focus-visible {
+  outline: 2px solid var(--ds-color-focus);
+  outline-offset: 3px;
+  box-shadow: var(--ds-shadow-focus);
+}
+
+.ds-display {
+  max-width: 72rem;
+  margin: 0;
+  font-size: var(--ds-text-display);
+  font-weight: 600;
+  letter-spacing: -0.065em;
+  line-height: var(--ds-leading-tight);
+  text-wrap: balance;
+}
+
+.ds-mono {
+  font-family: var(--ds-font-mono);
+  font-variant-numeric: tabular-nums;
+}
+
+.ds-visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  overflow: hidden;
+  padding: 0;
+  border: 0;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :root {
+    --ds-duration-instant: 1ms;
+    --ds-duration-fast: 1ms;
+    --ds-duration-base: 1ms;
+    --ds-duration-slow: 1ms;
+  }
+
+  html:has(.ds-root) {
+    scroll-behavior: auto;
+  }
+
+  .ds-root *,
+  .ds-root *::before,
+  .ds-root *::after {
+    scroll-behavior: auto !important;
+    animation-duration: 1ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 1ms !important;
+  }
+}

@@ -1,5 +1,6 @@
 mod builtin;
 mod catalog;
+pub mod incident_response;
 mod run;
 mod scheduler;
 pub mod security_scan;
@@ -7,8 +8,9 @@ pub mod security_scan;
 use std::sync::Arc;
 
 pub use builtin::{
-    harness_descriptor, register_harness_step, HarnessStepConfig, HARNESS_STEP_ID,
-    HARNESS_STEP_VERSION,
+    harness_descriptor, harness_descriptor_v2, register_harness_step, register_harness_step_v2,
+    HarnessStepConfig, HarnessStepConfigV2, HarnessStepPolicy, HARNESS_STEP_ID,
+    HARNESS_STEP_VERSION, HARNESS_STEP_VERSION_V2,
 };
 pub use catalog::{
     CapturedWorkflowAsset, NoopWorkflowCleanupHook, RegisteredStepType, StepCatalog,
@@ -42,6 +44,7 @@ pub struct CompositeScenarioRuntime {
 pub fn composite_definition(scenario: ScenarioId) -> Option<WorkflowDefinitionV1> {
     match scenario {
         ScenarioId::SecurityReview => Some(security_scan::definition()),
+        ScenarioId::IncidentResponse => Some(incident_response::definition()),
         _ => None,
     }
 }
@@ -55,18 +58,33 @@ pub fn composite_descriptor_catalog(scenarios: &[ScenarioId]) -> Result<StepCata
         let Some(definition) = composite_definition(*scenario) else {
             continue;
         };
-        if definition
-            .nodes
-            .iter()
-            .any(|node| node.step_type == builtin::HARNESS_STEP_ID)
-            && catalog
-                .get(builtin::HARNESS_STEP_ID, builtin::HARNESS_STEP_VERSION)
-                .is_none()
+        if definition.nodes.iter().any(|node| {
+            node.step_type == builtin::HARNESS_STEP_ID
+                && node.step_version == builtin::HARNESS_STEP_VERSION
+        }) && catalog
+            .get(builtin::HARNESS_STEP_ID, builtin::HARNESS_STEP_VERSION)
+            .is_none()
         {
             catalog.register_descriptor(harness_descriptor()?)?;
         }
+        if definition.nodes.iter().any(|node| {
+            node.step_type == builtin::HARNESS_STEP_ID
+                && node.step_version == builtin::HARNESS_STEP_VERSION_V2
+        }) && catalog
+            .get(builtin::HARNESS_STEP_ID, builtin::HARNESS_STEP_VERSION_V2)
+            .is_none()
+        {
+            catalog.register_descriptor(harness_descriptor_v2()?)?;
+        }
         if scenario == &ScenarioId::SecurityReview {
             for descriptor in security_scan::descriptors_only() {
+                if catalog.get(&descriptor.id, descriptor.version).is_none() {
+                    catalog.register_descriptor(descriptor)?;
+                }
+            }
+        }
+        if scenario == &ScenarioId::IncidentResponse {
+            for descriptor in incident_response::descriptors_only()? {
                 if catalog.get(&descriptor.id, descriptor.version).is_none() {
                     catalog.register_descriptor(descriptor)?;
                 }
@@ -87,16 +105,30 @@ pub fn composite_runtime(
     let definition = composite_definition(scenario)
         .with_context(|| format!("scenario '{}' is not composite", scenario.as_str()))?;
     let mut catalog = StepCatalog::new();
-    if definition
-        .nodes
-        .iter()
-        .any(|node| node.step_type == builtin::HARNESS_STEP_ID)
-    {
+    if definition.nodes.iter().any(|node| {
+        node.step_type == builtin::HARNESS_STEP_ID
+            && node.step_version == builtin::HARNESS_STEP_VERSION
+    }) {
         register_harness_step(&mut catalog, context.clone(), model, provider)?;
+    }
+    if definition.nodes.iter().any(|node| {
+        node.step_type == builtin::HARNESS_STEP_ID
+            && node.step_version == builtin::HARNESS_STEP_VERSION_V2
+    }) {
+        register_harness_step_v2(
+            &mut catalog,
+            context.clone(),
+            model,
+            provider,
+            incident_response::harness_policy()?,
+        )?;
     }
     let cleanup_hook = match scenario {
         ScenarioId::SecurityReview => {
             security_scan::register_security_scan_steps(&mut catalog, context)?
+        }
+        ScenarioId::IncidentResponse => {
+            incident_response::register_incident_response_steps(&mut catalog, context)?
         }
         _ => bail!("scenario '{}' has no composite runtime", scenario.as_str()),
     };

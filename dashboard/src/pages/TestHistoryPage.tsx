@@ -1,12 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
+import { AppHeader } from '@/components/AppHeader'
 import { AssessmentWorkspace } from '@/components/AssessmentWorkspace'
 import { ProviderModelDropdown } from '@/components/ProviderModelDropdown'
-import { ThemeToggle } from '@/components/ThemeToggle'
-import {
-  hashForExecution,
-  hashForPlans,
-  hashForWorkspace,
-} from '@/hooks/use-hash-route'
+import { hashForExecution, hashForWorkspace } from '@/hooks/use-hash-route'
 import {
   type DashboardExecutionDetail,
   getDashboardDataBridge,
@@ -693,42 +689,7 @@ export function TestHistoryPage({ testId }: { testId: string }) {
 
   return (
     <div id="test-metrics-history-proposal" className="tmh-page">
-      <header className="topbar">
-        <a
-          className="brand"
-          href={hashForWorkspace()}
-          aria-label="Harness E2E dashboard"
-        >
-          <span className="brand-copy">
-            <strong>iii</strong>
-            <span>Harness benchmarks</span>
-          </span>
-        </a>
-        <nav className="topbar-actions" aria-label="Test history actions">
-          <a
-            className="button button-secondary"
-            href={hashForWorkspace()}
-            data-mobile-label="Overview"
-          >
-            Overview
-          </a>
-          <a
-            className="button button-secondary"
-            href={hashForWorkspace('tests')}
-            data-mobile-label="Tests"
-          >
-            Test catalog
-          </a>
-          <a
-            className="button button-secondary"
-            href={hashForPlans()}
-            data-mobile-label="Plans"
-          >
-            Plans
-          </a>
-          <ThemeToggle />
-        </nav>
-      </header>
+      <AppHeader active="tests" />
 
       <main className="tmh-main" id="test-history-main">
         <p className="tmh-breadcrumb">

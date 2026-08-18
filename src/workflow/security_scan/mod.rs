@@ -26,6 +26,7 @@ mod evaluation;
 mod executor;
 mod fixture;
 mod helpers;
+mod local_adapter;
 mod operations;
 #[cfg(test)]
 mod tests;
@@ -46,11 +47,12 @@ pub(crate) use helpers::{
     operation_output_value, output_with_asset, output_with_internal_evaluation, port,
     required_string, text_value, typed_inputs, validate_contract_info, validate_sha,
 };
+pub(crate) use local_adapter::register_local_adapter_if_configured;
 
 pub const FIXTURE_PATH_ENV: &str = "HARNESS_E2E_SECURITY_FIXTURE_PATH";
 pub const SCENARIO_ID: &str = "security_review";
 const REPOSITORY: &str = "iii-hq/security-scan-e2e-fixture";
-const SCHEDULED_REF: &str = "security-scan-e2e-scheduled";
+const COMMIT_B_REF: &str = "security-scan-e2e-commit-b";
 const SEEDED_PATHS: [&str; 4] = [
     "src/vulnerable.rs",
     "package.json",

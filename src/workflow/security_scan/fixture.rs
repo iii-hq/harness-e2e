@@ -9,8 +9,8 @@ pub(super) struct FixtureState {
 pub(super) struct FixtureStateInner {
     pub(super) path: Option<PathBuf>,
     pub(super) initial_head: Option<String>,
-    pub(super) scheduled_ref: Option<String>,
-    pub(super) scheduled_sha: Option<String>,
+    pub(super) commit_b_ref: Option<String>,
+    pub(super) commit_b_sha: Option<String>,
     pub(super) suggest_expected: bool,
 }
 
@@ -40,12 +40,12 @@ impl FixtureState {
     }
 
     pub(super) async fn restore(&self) -> Result<()> {
-        let (path, initial, scheduled_ref) = {
+        let (path, initial, commit_b_ref) = {
             let fixture = self.lock();
             (
                 fixture.path.clone(),
                 fixture.initial_head.clone(),
-                fixture.scheduled_ref.clone(),
+                fixture.commit_b_ref.clone(),
             )
         };
         let (Some(path), Some(initial)) = (path, initial) else {
@@ -55,14 +55,14 @@ impl FixtureState {
         if current != initial {
             git(&path, &["reset", "--hard", &initial]).await?;
         }
-        if let Some(reference) = scheduled_ref {
+        if let Some(reference) = commit_b_ref {
             let _ = git(
                 &path,
                 &["update-ref", "-d", &format!("refs/heads/{reference}")],
             )
             .await;
         }
-        let marker = path.join("security-scan-e2e-scheduled.txt");
+        let marker = path.join("security-scan-e2e-commit-b.txt");
         if marker.exists() {
             std::fs::remove_file(&marker)
                 .with_context(|| format!("remove {}", marker.display()))?;

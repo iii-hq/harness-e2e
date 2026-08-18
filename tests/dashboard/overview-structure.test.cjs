@@ -9,7 +9,11 @@ const read = (...segments) =>
   fs.readFileSync(path.join(dashboardRoot, ...segments), 'utf8')
 const overviewPage = read('src', 'pages', 'OverviewPage.tsx')
 const executionPage = read('src', 'pages', 'ExecutionPage.tsx')
+const coveragePage = read('src', 'pages', 'CoveragePage.tsx')
+const appHeader = read('src', 'components', 'AppHeader.tsx')
 const runner = read('src', 'components', 'LocalRunnerDialog.tsx')
+const executionSetup = read('src', 'components', 'ExecutionSetup.tsx')
+const scenarioMatrix = read('src', 'components', 'ScenarioMatrix.tsx')
 const modelDropdown = read('src', 'components', 'ProviderModelDropdown.tsx')
 const planPage = read('src', 'pages', 'LocalPlanPage.tsx')
 const plansPage = read('src', 'pages', 'PlansPage.tsx')
@@ -32,11 +36,11 @@ test('prioritizes the first-read execution signal', () => {
   assert.match(overviewPage, /Investigate execution/)
   assert.match(overviewPage, /Subject/)
   assert.match(overviewPage, /Judge/)
-  assert.match(overviewPage, /hashForWorkspace\('tests'\)/)
+  assert.match(appHeader, /hashForWorkspace\('tests'\)/)
   assert.match(overviewPage, /hashForPlans\(\)/)
   assert.match(overviewPage, /View local plans/)
   assert.match(overviewPage, /overview-intelligence-grid/)
-  assert.match(overviewPage, /className="overview-card-action"/)
+  assert.match(overviewPage, /className="overview-card-action[^"]*inline-flex/)
   assert.doesNotMatch(
     overviewPage,
     /className="button button-secondary" href=\{hashForPlans\(\)\}/,
@@ -53,32 +57,92 @@ test('prioritizes the first-read execution signal', () => {
     overviewPage,
     /HARNESS_EXECUTIONS|Technical Failed|window\.Harness/,
   )
+  assert.doesNotMatch(overviewPage, /Confidence grows in the background/)
+  assert.doesNotMatch(overviewPage, /01 \/ Current signal/)
+  assert.doesNotMatch(sectionNav, /capability/i)
+})
+
+test('keeps the overview operational, dense, and Tailwind-based', () => {
+  const styles = read('src', 'index.css')
+
+  for (const primitive of [
+    'Button',
+    'MetricCard',
+    'PageHeader',
+    'Panel',
+    'StatusBadge',
+  ]) {
+    assert.match(overviewPage, new RegExp(`\\b${primitive}\\b`))
+  }
+  assert.match(styles, /@import "tailwindcss" important/)
+  assert.match(overviewPage, /lg:grid-cols-12 lg:grid-rows-2/)
+  assert.match(overviewPage, /grid-flow-dense/)
+  assert.match(overviewPage, /Performance overview/)
+  assert.match(overviewPage, /Total tokens/)
+  assert.match(overviewPage, /Measure improvement against a fixed comparison/)
+  assert.match(overviewPage, /@\/design-system\/styles\.css/)
+  assert.doesNotMatch(overviewPage, /\.\/overview\.css/)
+  assert.doesNotMatch(overviewPage, /Evidence that|earns trust/)
+  assert.doesNotMatch(overviewPage, /overview-v2-hero|data-overview-visual/)
+  assert.doesNotMatch(
+    overviewPage,
+    /useGSAP|ScrollTrigger|gsap\.registerPlugin/,
+  )
+  assert.doesNotMatch(overviewPage, /min-h-\[72rem\]/)
+})
+
+test('adapts overview metrics when persisted workflow evidence is available', () => {
+  assert.match(overviewPage, /execution\.workflow_metrics/)
+  assert.match(overviewPage, /Semantic steps/)
+  assert.match(overviewPage, /Workflow runtime/)
+  assert.match(overviewPage, /hard gates passed/)
+  assert.match(overviewPage, /attentionWorkflowSteps/)
+  assert.match(overviewPage, /activeWorkflowSteps/)
 })
 
 test('uses one low-emphasis action treatment in overview card footers', () => {
   const styles = read('src', 'index.css')
   assert.match(styles, /\.overview-card-action\s*\{[\s\S]*display: inline-flex/)
   assert.match(styles, /\.overview-card-action:hover[\s\S]*border-bottom-color/)
-  assert.match(styles, /\.overview-card-action:focus-visible[\s\S]*outline-offset/)
+  assert.match(
+    styles,
+    /\.overview-card-action:focus-visible[\s\S]*outline-offset/,
+  )
 })
 
 test('keeps the workspace navigation and versioned test flow', () => {
-  for (const view of ['overview', 'tests', 'capability', 'executions']) {
+  for (const view of ['overview', 'tests', 'executions']) {
     assert.match(sectionNav, new RegExp(`id: '${view}'`))
   }
   assert.match(testsPage, /Tests across system versions/)
   assert.match(testsPage, /loadVersionResult\(row\.test_id/)
   assert.match(testsPage, /prefetchedCatalog/)
-  assert.match(catalogPage, /href=\{hashForWorkspace\(\)\}[\s\S]*Overview/)
+  assert.match(catalogPage, /<AppHeader[\s\S]*active="tests"/)
   assert.match(catalogPage, /catalog-search-label">Search tests/)
   assert.match(catalogPage, /placeholder="Test ID"/)
   assert.match(
     read('src', 'index.css'),
     /\.catalog-search-field input[\s\S]*border: 1px solid var\(--line-strong\)/,
   )
-  assert.match(historyPage, /<header className="topbar">/)
-  assert.match(historyPage, /<span className="brand-copy">/)
-  assert.match(historyPage, /Test catalog/)
+  for (const page of [
+    overviewPage,
+    executionPage,
+    coveragePage,
+    catalogPage,
+    historyPage,
+    testsPage,
+    planPage,
+    plansPage,
+  ]) {
+    assert.match(page, /<AppHeader/)
+  }
+  assert.match(appHeader, /aria-current=\{current \? 'page' : undefined\}/)
+  assert.match(appHeader, /Overview/)
+  assert.match(appHeader, /Tests/)
+  assert.match(appHeader, /Executions/)
+  assert.match(appHeader, /Plans/)
+  assert.match(appHeader, /Coverage/)
+  assert.doesNotMatch(read('src', 'index.css'), /\.topbar(?:\s|,|\{)/)
   assert.doesNotMatch(historyPage, /tmh-topbar|tmh-brand|tmh-context/)
   assert.match(plansPage, /All local plans/)
   assert.match(plansPage, /hashForNewPlan\(\)/)
@@ -103,7 +167,10 @@ test('keeps metric history rows readable and opens details on demand', () => {
   assert.match(historyPage, /Descriptive median/)
   assert.match(historyPage, /metricCaption/)
   assert.match(historyPage, /ExecutionDetailsDialog/)
-  assert.match(historyPage, /reports: detail\.reports\.filter\([\s\S]*scenario_id === testId/)
+  assert.match(
+    historyPage,
+    /reports: detail\.reports\.filter\([\s\S]*scenario_id === testId/,
+  )
   assert.match(historyPage, /Assessment details for this test/)
   assert.match(historyPage, /Compare two runs/)
   assert.match(historyPage, /Set baseline/)
@@ -129,16 +196,18 @@ test('keeps metric history rows readable and opens details on demand', () => {
 })
 
 test('makes local plan scope selection focused and readable', () => {
-  assert.match(planPage, /Create a focused local plan/)
-  assert.match(planPage, /Find a test/)
-  assert.match(planPage, /Search by name or id/)
-  assert.match(planPage, /Select visible/)
-  assert.match(planPage, /plan-test-option/)
-  assert.match(planPage, /choose the smallest useful scope/)
-  assert.match(planPage, /Sampling and retries/)
-  assert.match(planPage, /Runs create logical evidence samples/)
-  assert.match(planPage, /plan-advanced-control/)
-  assert.doesNotMatch(planPage, /local-scenario-options/)
+  assert.match(planPage, /Create a benchmark plan/)
+  assert.match(planPage, /ExecutionSetup/)
+  assert.match(planPage, /ExecutionSetupReview/)
+  assert.match(planPage, /Quick execution/)
+  assert.match(planPage, /requestQuickExecution/)
+  assert.match(executionSetup, /Find a test/)
+  assert.match(executionSetup, /Search by name or id/)
+  assert.match(executionSetup, /Select visible/)
+  assert.match(executionSetup, /Select the benchmark scope/)
+  assert.match(executionSetup, /Sampling, retries and seed/)
+  assert.match(executionSetup, /Logical runs/)
+  assert.doesNotMatch(planPage, /plan-test-option|plan-advanced-control/)
 })
 
 test('keeps plan panels explicitly padded and comparison content full bleed', () => {
@@ -162,7 +231,7 @@ test('keeps plan panels explicitly padded and comparison content full bleed', ()
   assert.doesNotMatch(planPage, /className="panel-heading"/)
   assert.match(plansPage, /panel-heading plans-list-heading/)
   assert.match(planPage, /plan-execution-table-wrap/)
-  assert.match(planPage, /plan-scenario-table-wrap/)
+  assert.match(planPage, /plan-scenario-disclosures/)
 })
 
 test('exposes baseline and arbitrary candidate comparison controls', () => {
@@ -171,7 +240,10 @@ test('exposes baseline and arbitrary candidate comparison controls', () => {
   assert.match(plansPage, /Objective regressions/)
   assert.match(plansPage, /Not reported/)
   assert.match(planPage, /Baseline and candidates/)
-  assert.match(planPage, /Choose a visual baseline and any number of candidates/)
+  assert.match(
+    planPage,
+    /Choose a visual baseline and any number of candidates/,
+  )
   assert.match(planPage, /PLAN_COMPARISON_TABLE_METRICS/)
   assert.match(planPage, /plan-execution-metric/)
   assert.match(planPage, /planMetricWinnerIds/)
@@ -184,6 +256,10 @@ test('exposes baseline and arbitrary candidate comparison controls', () => {
   assert.match(planPage, /plan-run-history-list/)
   assert.match(planPage, /ExecutionNameControl/)
   assert.match(planPage, /official plan baseline remains unchanged/)
+  assert.match(
+    planPage,
+    /!plan\.baseline_execution_id[\s\S]*plan\.candidate_execution_ids\.length === 0/,
+  )
   assert.doesNotMatch(planPage, /onSelectCandidate/)
   assert.doesNotMatch(planPage, /plan-execution-report-link/)
   assert.doesNotMatch(planPage, /scrollIntoView\(\{ behavior: 'smooth'/)
@@ -191,7 +267,7 @@ test('exposes baseline and arbitrary candidate comparison controls', () => {
   assert.match(planPage, /baselineLabel.*resolvedCandidateLabel/s)
   assert.doesNotMatch(planPage, /plan-comparison-metrics/)
   assert.doesNotMatch(planPage, /ComparisonMetricCard/)
-  assert.match(planPage, /Test breakdown/)
+  assert.match(planPage, /Signals by test/)
   assert.match(planPage, /Run another candidate/)
 })
 
@@ -208,22 +284,37 @@ test('organizes detail into progressive disclosure sections', () => {
   for (const section of ['summary', 'results', 'technical']) {
     assert.match(executionPage, new RegExp(`id=\\"${section}\\"`))
   }
-  assert.match(executionPage, /hashForExecution\(executionId, item\.id\)/)
-  assert.match(executionPage, /detail-index hidden sticky/)
-  assert.match(executionPage, /max-\[840px\]:grid/)
+  assert.match(executionPage, /hashForExecution\(detail\.id, 'results'\)/)
+  assert.match(executionPage, /className="skip-link"/)
+  assert.doesNotMatch(executionPage, /detail-index/)
   assert.match(
     executionPage,
     /anchor === 'evidence' \|\| anchor === 'raw-data'\) return 'technical'/,
   )
+  assert.match(executionPage, /if \(!anchor \|\| !detail\) return/)
+  assert.match(executionPage, /\[anchor, detail\]/)
   assert.doesNotMatch(executionPage, /id="evidence"|Evidence register/)
-  assert.match(executionPage, /AssessmentWorkspace detail/)
-  assert.match(executionPage, /diagnostic runs/)
+  assert.match(executionPage, /ScenarioMatrix detail/)
+  assert.match(scenarioMatrix, /AssessmentWorkspace/)
+  assert.match(scenarioMatrix, /SemanticTestFlow/)
+  assert.match(scenarioMatrix, /WorkflowDurationProfile/)
+  assert.match(scenarioMatrix, /Inspect scenario evidence/)
   assert.match(executionPage, /onTranscript/)
   assert.doesNotMatch(executionPage, /Open transcript/)
   assert.match(executionPage, /aggregateAssessmentMetrics/)
-  assert.match(executionPage, /Execution indicators/)
-  assert.match(executionPage, /Total tokens/)
-  assert.doesNotMatch(executionPage, /buildHarnessRecommendation|Next run plan/)
+  assert.match(executionPage, /buildHarnessRecommendation/)
+  assert.match(executionPage, /Passed objectively; advisory review found gaps/)
+  assert.match(executionPage, /Recommended next step/)
+  assert.match(executionPage, /Primary concern/)
+  assert.match(executionPage, /Benchmark results/)
+  assert.match(executionPage, /Scenario results/)
+  assert.match(scenarioMatrix, /Objective result/)
+  assert.match(scenarioMatrix, /Advisory/)
+  assert.match(scenarioMatrix, /Runtime/)
+  assert.match(scenarioMatrix, /Structure/)
+  assert.match(executionPage, /buildScenarioMatrix\(detail\)/)
+  assert.match(executionPage, /@\/design-system\/styles\.css/)
+  assert.doesNotMatch(executionPage, /StatusPill|01 · Summary|02 · Results/)
   assert.match(executionPage, /Preview raw JSON/)
   assert.match(transcript, /max-\[560px\]:w-screen/)
   assert.match(transcript, /max-\[560px\]:h-dvh/)
@@ -246,42 +337,31 @@ test('migrates runner and transcript behavior to React components', () => {
 })
 
 test('keeps an empty local execution label serializable and its action visible', () => {
-  const styles = read('src', 'index.css')
-
   assert.match(runner, /label: form\.label\.trim\(\),/)
   assert.doesNotMatch(runner, /label: form\.label \|\| null/)
   assert.match(runner, /form="local-runner-form"/)
-  assert.match(
-    styles,
-    /\.local-runner-dialog \{[\s\S]*grid-template-rows: auto minmax\(0, 1fr\) auto/,
-  )
-  assert.match(
-    styles,
-    /\.local-runner-dialog:not\(\[open\]\) \{\s*display: none;/,
-  )
-  assert.match(
-    styles,
-    /\.local-advanced:not\(\[open\]\) \.local-advanced-grid \{\s*display: none;/,
-  )
-  assert.match(
-    styles,
-    /\.local-runner-dialog \.local-runner \{[\s\S]*overflow: auto/,
-  )
+  assert.match(runner, /hidden max-h-\[94dvh\]/)
+  assert.match(runner, /open:grid open:grid-rows/)
+  assert.match(runner, /lg:grid-cols-12/)
+  assert.match(runner, /Create a reusable plan instead/)
+  assert.match(executionSetup, /mode === 'plan'/)
 })
 
 test('groups execution and judge models under their providers', () => {
-  for (const view of [runner, planPage, historyPage]) {
+  for (const view of [runner, planPage]) assert.match(view, /ExecutionSetup/)
+  for (const view of [executionSetup, historyPage]) {
     assert.match(view, /ProviderModelDropdown/)
-    assert.match(view, /Execution model/)
-    assert.match(view, /Judge model/)
   }
+  assert.match(executionSetup, /Execution model/)
+  assert.match(executionSetup, /Judge model/)
   assert.match(modelDropdown, /expandedProviders/)
   assert.match(
     modelDropdown,
     /const collapsed = !expandedProviders\.has\(group\.provider\)/,
   )
   assert.match(modelDropdown, /aria-expanded=\{open\}/)
-  assert.match(modelDropdown, /provider-model-group-toggle/)
+  assert.match(modelDropdown, /role="option"/)
+  assert.doesNotMatch(modelDropdown, /provider-model-group-toggle/)
 })
 
 test('publisher writes only the JSON manifest', () => {

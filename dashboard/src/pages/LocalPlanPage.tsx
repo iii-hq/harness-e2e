@@ -7,8 +7,12 @@ import {
   useMemo,
   useState,
 } from 'react'
-import { ProviderModelDropdown } from '@/components/ProviderModelDropdown'
-import { ThemeToggle } from '@/components/ThemeToggle'
+import { AppHeader } from '@/components/AppHeader'
+import {
+  ExecutionSetup,
+  ExecutionSetupReview,
+  requestQuickExecution,
+} from '@/components/ExecutionSetup'
 import {
   hashForExecution,
   hashForNewPlan,
@@ -38,6 +42,7 @@ import {
   type MetricDirection,
   metricById,
   type PlanComparison,
+  type PlanMetricId,
   type PlanScenarioComparison,
   type PlanVerdict,
 } from '@/lib/plan-comparison'
@@ -338,6 +343,8 @@ const PLAN_COMPARISON_TABLE_METRICS = [
   'tokens',
   'duration',
   'cost',
+  'function_calls',
+  'function_errors',
 ] as const
 
 type ExecutionHistoryRow = {
@@ -441,9 +448,10 @@ export function planMetricWinnerIds(
         : Math.min(best, entry.value),
     comparable[0].value,
   )
-  return comparable
+  const winners = comparable
     .filter((entry) => Math.abs(entry.value - winnerValue) < 1e-9)
     .map((entry) => entry.id)
+  return winners.length === 1 ? winners : []
 }
 
 function planExecutionLabel(plan: LocalPlan, executionId: string | null) {
@@ -568,9 +576,9 @@ export function PlanExecutionHistory({
   visualBaselineId,
   comparisonCandidateIds,
   selectedCandidateId,
+  scenarioComparison = null,
   onVisualBaselineChange,
   onToggleCandidate,
-  onRenameCandidate,
   loading,
   error = null,
 }: {
@@ -579,12 +587,23 @@ export function PlanExecutionHistory({
   visualBaselineId: string | null
   comparisonCandidateIds: string[]
   selectedCandidateId: string | null
+  scenarioComparison?: PlanComparison | null
   onVisualBaselineChange: (id: string) => void
   onToggleCandidate: (id: string, selected: boolean) => void
-  onRenameCandidate?: (executionId: string, label: string) => Promise<void>
   loading: boolean
   error?: string | null
 }) {
+  // Comparison controls are only useful once there is an official baseline
+  // and a second completed execution to compare with it. Keep the empty and
+  // baseline-only states focused on the lifecycle actions instead of showing
+  // a table full of context-only values.
+  if (
+    !plan.baseline_execution_id ||
+    plan.candidate_execution_ids.length === 0
+  ) {
+    return null
+  }
+
   const rows = executionHistoryRows(plan, summaries)
   const baseline = visualBaselineId
     ? (summaries[visualBaselineId] ?? null)
@@ -615,6 +634,22 @@ export function PlanExecutionHistory({
       metricSource: rowComparison ?? snapshot,
       selected: row.id === selectedCandidateId,
     }
+  })
+  const scenarioComparisons = comparisonColumns.flatMap((column) => {
+    if (column.isVisualBaseline) return []
+    const comparison =
+      column.selected && scenarioComparison
+        ? scenarioComparison
+        : column.rowComparison
+    return comparison
+      ? [
+          {
+            id: column.row.id,
+            label: planExecutionLabel(plan, column.row.id),
+            comparison,
+          },
+        ]
+      : []
   })
   return (
     <section
@@ -832,197 +867,308 @@ export function PlanExecutionHistory({
               </tbody>
             </table>
           </div>
-          <section
-            className="plan-run-history plan-panel-section"
-            aria-labelledby="plan-run-history-title"
-          >
-            <div className="plan-run-history-heading">
-              <div>
-                <strong id="plan-run-history-title">Execution history</strong>
-                <span>
-                  Every retained run, with its captured usage and result.
-                  Incomplete attempts remain excluded from metric winners.
-                </span>
-              </div>
-              <span>
-                {rows.length} execution{rows.length === 1 ? '' : 's'}
-              </span>
+          {scenarioComparisons.some(
+            ({ comparison }) => comparison.scenarios.length > 0,
+          ) ? (
+            <div className="plan-panel-section plan-scenario-detail-section">
+              <PlanScenarioComparisonTable comparisons={scenarioComparisons} />
             </div>
-            <ul className="plan-run-history-list">
-              <li className="plan-run-history-columns" aria-hidden="true">
-                <span>Execution</span>
-                <span>Result</span>
-                <span>Captured</span>
-                <span>Tokens</span>
-                <span>Duration</span>
-                <span>Calls</span>
-                <span>Errors</span>
-                <span />
-              </li>
-              {rows.map((row) => {
-                const status = executionStatus(row.summary, row.fallback)
-                const timestamp =
-                  row.summary?.completed_at || row.summary?.started_at || ''
-                const roleLabel =
-                  row.role === 'baseline'
-                    ? 'Baseline'
-                    : row.role === 'candidate'
-                      ? `Candidate ${row.candidateNumber ?? ''}`.trim()
-                      : 'Attempt'
-                const displayLabel =
-                  row.role === 'attempt'
-                    ? row.label
-                    : planExecutionLabel(plan, row.id)
-                return (
-                  <li key={`${row.role}:${row.id}`}>
-                    <div className="plan-run-record-identity">
-                      <span>{roleLabel}</span>
-                      <div>
-                        <strong>{displayLabel}</strong>
-                        {row.role === 'candidate' && onRenameCandidate && (
-                          <ExecutionNameControl
-                            executionId={row.id}
-                            fallbackLabel={`Candidate #${row.candidateNumber ?? 1}`}
-                            label={plan.candidate_labels?.[row.id] ?? ''}
-                            onRename={onRenameCandidate}
-                          />
-                        )}
-                      </div>
-                      <code title={row.id}>{row.id}</code>
-                    </div>
-                    <span className={`plan-execution-result ${status.tone}`}>
-                      {status.label}
-                    </span>
-                    <time dateTime={timestamp || undefined}>
-                      {timestamp ? formatDate(timestamp) : 'Date unavailable'}
-                    </time>
-                    <span
-                      className="plan-run-record-metric"
-                      data-label="Tokens"
-                    >
-                      {executionMetricValue(row.summary, 'tokens')}
-                    </span>
-                    <span
-                      className="plan-run-record-metric"
-                      data-label="Duration"
-                    >
-                      {executionMetricValue(row.summary, 'duration')}
-                    </span>
-                    <span className="plan-run-record-metric" data-label="Calls">
-                      {executionMetricValue(row.summary, 'calls')}
-                    </span>
-                    <span
-                      className="plan-run-record-metric"
-                      data-label="Errors"
-                    >
-                      {executionMetricValue(row.summary, 'errors')}
-                    </span>
-                    <a
-                      aria-label={`Open report for ${displayLabel}`}
-                      className="plan-run-report-link"
-                      href={hashForExecution(row.id)}
-                      title={`Open report for ${displayLabel}`}
-                    >
-                      <ExternalLink
-                        aria-hidden="true"
-                        size={14}
-                        strokeWidth={1.8}
-                      />
-                      <span>Report</span>
-                    </a>
-                  </li>
-                )
-              })}
-            </ul>
-          </section>
+          ) : null}
         </>
       )}
     </section>
   )
 }
 
-function ScenarioMetric({
-  scenario,
-  id,
+export function PlanNonComparableAttempts({
+  plan,
+  summaries,
+  onRenameCandidate,
 }: {
-  scenario: PlanScenarioComparison
-  id: 'pass_rate' | 'quality' | 'tokens' | 'duration'
+  plan: LocalPlan
+  summaries: Record<string, DashboardExecutionSummary>
+  onRenameCandidate?: (executionId: string, label: string) => Promise<void>
 }) {
-  const metric = scenario.metrics.find((item) => item.id === id)
-  if (!metric) return <span>Not reported</span>
+  const rows = executionHistoryRows(plan, summaries)
+  if (rows.length === 0) return null
+
   return (
-    <span className="plan-scenario-metric">
-      <span>
-        {formatPlanMetricValue(metric, 'baseline')} →{' '}
-        {formatPlanMetricValue(metric, 'candidate')}
-      </span>
-      <small className={`metric-tone-${metric.tone}`}>
-        {formatPlanMetricDelta(metric)}
-      </small>
-    </span>
+    <section
+      className="panel plan-run-history"
+      aria-labelledby="plan-run-history-title"
+    >
+      <div className="plan-run-history-heading">
+        <div>
+          <strong id="plan-run-history-title">Execution history</strong>
+          <span>
+            Every retained run, with its captured usage and result. Incomplete
+            attempts remain excluded from metric winners.
+          </span>
+        </div>
+        <span>
+          {rows.length} execution{rows.length === 1 ? '' : 's'}
+        </span>
+      </div>
+      <ul className="plan-run-history-list">
+        <li className="plan-run-history-columns" aria-hidden="true">
+          <span>Execution</span>
+          <span>Result</span>
+          <span>Captured</span>
+          <span>Tokens</span>
+          <span>Duration</span>
+          <span>Calls</span>
+          <span>Errors</span>
+          <span />
+        </li>
+        {rows.map((row) => {
+          const status = executionStatus(row.summary, row.fallback)
+          const timestamp =
+            row.summary?.completed_at || row.summary?.started_at || ''
+          const roleLabel =
+            row.role === 'baseline'
+              ? 'Baseline'
+              : row.role === 'candidate'
+                ? `Candidate ${row.candidateNumber ?? ''}`.trim()
+                : 'Attempt'
+          const displayLabel =
+            row.role === 'attempt'
+              ? row.label
+              : planExecutionLabel(plan, row.id)
+          return (
+            <li key={`${row.role}:${row.id}`}>
+              <div className="plan-run-record-identity">
+                <span>{roleLabel}</span>
+                <div>
+                  <strong>{displayLabel}</strong>
+                  {row.role === 'candidate' && onRenameCandidate && (
+                    <ExecutionNameControl
+                      executionId={row.id}
+                      fallbackLabel={`Candidate #${row.candidateNumber ?? 1}`}
+                      label={plan.candidate_labels?.[row.id] ?? ''}
+                      onRename={onRenameCandidate}
+                    />
+                  )}
+                </div>
+                <code title={row.id}>{row.id}</code>
+              </div>
+              <span className={`plan-execution-result ${status.tone}`}>
+                {status.label}
+              </span>
+              <time dateTime={timestamp || undefined}>
+                {timestamp ? formatDate(timestamp) : 'Date unavailable'}
+              </time>
+              <span className="plan-run-record-metric" data-label="Tokens">
+                {executionMetricValue(row.summary, 'tokens')}
+              </span>
+              <span className="plan-run-record-metric" data-label="Duration">
+                {executionMetricValue(row.summary, 'duration')}
+              </span>
+              <span className="plan-run-record-metric" data-label="Calls">
+                {executionMetricValue(row.summary, 'calls')}
+              </span>
+              <span className="plan-run-record-metric" data-label="Errors">
+                {executionMetricValue(row.summary, 'errors')}
+              </span>
+              <a
+                aria-label={`Open report for ${displayLabel}`}
+                className="plan-run-report-link"
+                href={hashForExecution(row.id)}
+                title={`Open report for ${displayLabel}`}
+              >
+                <ExternalLink aria-hidden="true" size={14} strokeWidth={1.8} />
+                <span>Report</span>
+              </a>
+            </li>
+          )
+        })}
+      </ul>
+    </section>
   )
 }
 
 function PlanScenarioComparisonTable({
-  scenarios,
+  comparisons,
 }: {
-  scenarios: PlanScenarioComparison[]
+  comparisons: Array<{
+    id: string
+    label: string
+    comparison: PlanComparison
+  }>
 }) {
-  if (scenarios.length === 0) return null
+  const scenarioIds = [
+    ...new Set(
+      comparisons.flatMap(({ comparison }) =>
+        comparison.scenarios.map((scenario) => scenario.id),
+      ),
+    ),
+  ].sort()
+  if (scenarioIds.length === 0) return null
   return (
     <div className="plan-scenario-comparison">
       <div className="plan-scenario-comparison-heading">
         <div>
-          <div className="section-kicker">Test breakdown</div>
-          <h3>Comparable scope by test</h3>
+          <div className="section-kicker">Scenario metrics</div>
+          <h3>Signals by test</h3>
+          <p>
+            Compact scenario evidence for the visual baseline and all selected
+            candidates. Expand a test to inspect every captured metric.
+          </p>
         </div>
-        <span>{scenarios.length} tests</span>
+        <span>
+          {scenarioIds.length} tests · {comparisons.length} candidates
+        </span>
       </div>
-      <div className="plan-scenario-table-wrap">
-        <table className="plan-scenario-table">
-          <thead>
-            <tr>
-              <th scope="col">Test</th>
-              <th scope="col">Objective result</th>
-              <th scope="col">Pass rate</th>
-              <th scope="col">Quality</th>
-              <th scope="col">Tokens</th>
-              <th scope="col">Duration</th>
-            </tr>
-          </thead>
-          <tbody>
-            {scenarios.map((scenario) => (
-              <tr key={scenario.id}>
-                <th scope="row" data-label="Test">
-                  <strong>{scenarioName(scenario.id)}</strong>
-                  <code>{scenario.id}</code>
-                  {!scenario.compatible && <small>{scenario.reason}</small>}
-                </th>
-                <td data-label="Objective result">
-                  <span>
-                    {titleCase(scenario.baseline_status)} →{' '}
-                    {titleCase(scenario.candidate_status)}
-                  </span>
-                </td>
-                <td data-label="Pass rate">
-                  <ScenarioMetric scenario={scenario} id="pass_rate" />
-                </td>
-                <td data-label="Quality">
-                  <ScenarioMetric scenario={scenario} id="quality" />
-                </td>
-                <td data-label="Tokens">
-                  <ScenarioMetric scenario={scenario} id="tokens" />
-                </td>
-                <td data-label="Duration">
-                  <ScenarioMetric scenario={scenario} id="duration" />
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
+      <div className="plan-scenario-disclosures">
+        {scenarioIds.map((scenarioId) => {
+          const scenarioColumns = comparisons.map((column) => ({
+            ...column,
+            scenario:
+              column.comparison.scenarios.find(
+                (scenario) => scenario.id === scenarioId,
+              ) ?? null,
+          }))
+          const firstScenario = scenarioColumns.find(
+            ({ scenario }) => scenario,
+          )?.scenario
+          if (!firstScenario) return null
+          const metricLists = scenarioColumns.map(({ scenario }) =>
+            scenario ? scenarioMetrics(scenario) : [],
+          )
+          const metricIds: PlanMetricId[] = [
+            'cost',
+            'tokens',
+            'function_calls',
+            'function_errors',
+            'duration',
+          ]
+          const summaryMetricIds = metricIds.slice(0, 3)
+          return (
+            <details
+              className="plan-scenario-disclosure"
+              key={scenarioId}
+              open={scenarioId === 'security_review'}
+            >
+              <summary>
+                <span className="plan-scenario-identity">
+                  <strong>{scenarioName(scenarioId)}</strong>
+                  <code>{scenarioId}</code>
+                </span>
+                <span className="plan-scenario-objective">
+                  <small>Objective</small>
+                  <b>
+                    {titleCase(firstScenario.baseline_status)} →{' '}
+                    {scenarioColumns
+                      .map(({ scenario }) =>
+                        titleCase(scenario?.candidate_status ?? 'not reported'),
+                      )
+                      .join(' · ')}
+                  </b>
+                </span>
+                <span className="plan-scenario-signals">
+                  {summaryMetricIds.map((metricId) => {
+                    const metrics = metricLists.map(
+                      (list) => list.find(({ id }) => id === metricId) ?? null,
+                    )
+                    const descriptor = metrics.find((metric) => metric)
+                    if (!descriptor) return null
+                    return (
+                      <span key={metricId}>
+                        <small>{descriptor.label}</small>
+                        <b>
+                          {formatPlanMetricValue(descriptor, 'baseline')} →{' '}
+                          {metrics
+                            .map((metric) =>
+                              metric
+                                ? formatPlanMetricValue(metric, 'candidate')
+                                : 'Not reported',
+                            )
+                            .join(' · ')}
+                        </b>
+                      </span>
+                    )
+                  })}
+                </span>
+                <span className="plan-scenario-chevron" aria-hidden="true" />
+              </summary>
+              <div className="plan-scenario-metric-detail">
+                <table
+                  className="plan-scenario-metric-grid"
+                  style={
+                    {
+                      '--plan-scenario-column-count': comparisons.length,
+                    } as CSSProperties
+                  }
+                >
+                  <thead>
+                    <tr>
+                      <th scope="col">Metric</th>
+                      <th scope="col">Baseline</th>
+                      {comparisons.map((column) => (
+                        <th key={column.id} scope="col">
+                          {column.label}
+                        </th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {metricIds.map((metricId) => {
+                      const metrics = metricLists.map(
+                        (list) =>
+                          list.find(({ id }) => id === metricId) ?? null,
+                      )
+                      const descriptor = metrics.find((metric) => metric)
+                      if (!descriptor) return null
+                      return (
+                        <tr data-scenario-metric-id={metricId} key={metricId}>
+                          <th scope="row">{descriptor.label}</th>
+                          <td>
+                            {formatPlanMetricValue(descriptor, 'baseline')}
+                          </td>
+                          {metrics.map((metric, index) => (
+                            <td key={comparisons[index].id}>
+                              {metric ? (
+                                <span className="plan-scenario-candidate-metric">
+                                  <b>
+                                    {formatPlanMetricValue(metric, 'candidate')}
+                                  </b>
+                                  <small
+                                    className={`metric-tone-${metric.tone}`}
+                                  >
+                                    {formatPlanMetricDelta(metric)}
+                                  </small>
+                                </span>
+                              ) : (
+                                'Not reported'
+                              )}
+                            </td>
+                          ))}
+                        </tr>
+                      )
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            </details>
+          )
+        })}
       </div>
     </div>
   )
+}
+
+function scenarioMetrics(scenario: PlanScenarioComparison) {
+  const metricIds: PlanMetricId[] = [
+    'cost',
+    'tokens',
+    'function_calls',
+    'function_errors',
+    'duration',
+  ]
+  const available = [...scenario.execution_metrics, ...scenario.metrics]
+  return metricIds.flatMap((id) => {
+    const metric = available.find((candidate) => candidate.id === id)
+    return metric ? [metric] : []
+  })
 }
 
 export function PlanComparisonPanel({
@@ -1047,16 +1193,7 @@ export function PlanComparisonPanel({
   const resolvedCandidateLabel =
     candidateLabel ?? `Candidate #${candidateNumber ?? '—'}`
   if (!baselineExecutionId || !candidateExecutionId) {
-    return (
-      <section className="panel plan-panel-padded plan-comparison-empty">
-        <div className="section-kicker">Execution comparison</div>
-        <h2>Baseline vs candidate</h2>
-        <p>
-          Select a visual baseline and at least one candidate to calculate
-          objective and directional deltas.
-        </p>
-      </section>
-    )
+    return null
   }
   if (loading) {
     return (
@@ -1124,52 +1261,17 @@ export function PlanComparisonPanel({
         </a>
       </div>
       <div className="plan-panel-section">
-        <PlanScenarioComparisonTable scenarios={comparison.scenarios} />
+        <PlanScenarioComparisonTable
+          comparisons={[
+            {
+              id: candidateExecutionId,
+              label: resolvedCandidateLabel,
+              comparison,
+            },
+          ]}
+        />
       </div>
     </section>
-  )
-}
-
-function PlanHeader({ local = true }: { local?: boolean }) {
-  return (
-    <header className="topbar">
-      <a
-        className="brand"
-        href={hashForWorkspace()}
-        aria-label="Harness E2E dashboard"
-      >
-        <span className="brand-copy">
-          <strong>iii</strong>
-          <span>Harness benchmarks</span>
-        </span>
-      </a>
-      <nav className="topbar-actions" aria-label="Plan actions">
-        <a
-          className="button button-secondary"
-          href={hashForWorkspace()}
-          data-mobile-label="Overview"
-        >
-          Overview
-        </a>
-        <a
-          className="button button-secondary"
-          href={hashForPlans()}
-          data-mobile-label="Plans"
-        >
-          Plans
-        </a>
-        {local && (
-          <a
-            className="button button-secondary"
-            href={hashForWorkspace('tests')}
-            data-mobile-label="Tests"
-          >
-            Test catalog
-          </a>
-        )}
-        <ThemeToggle />
-      </nav>
-    </header>
   )
 }
 
@@ -1204,11 +1306,7 @@ export function LocalPlanCreatePage() {
         if (cancelled) return
         setCatalog(loaded)
         setUrl(loaded.url)
-        setSubject(
-          loaded.models[0]
-            ? `${loaded.models[0].provider}\n${loaded.models[0].model}`
-            : '',
-        )
+        setSubject(loaded.models[0] ? modelKey(loaded.models[0]) : '')
       })
       .catch((cause) => {
         if (!cancelled) setError(errorText(cause))
@@ -1222,25 +1320,20 @@ export function LocalPlanCreatePage() {
   }, [])
 
   const selectedSubject = catalog?.models.find(
-    (item) => `${item.provider}\n${item.model}` === subject,
+    (item) => modelKey(item) === subject,
   )
-  const selectedJudge = catalog?.models.find(
-    (item) => `${item.provider}\n${item.model}` === judge,
-  )
+  const selectedJudge = catalog?.models.find((item) => modelKey(item) === judge)
   const groupedModels = useMemo(
     () => modelGroups(catalog?.models ?? []),
     [catalog],
   )
-  const visibleScenarios = useMemo(() => {
-    const query = testQuery.trim().toLocaleLowerCase()
-    const all = catalog?.scenarios ?? []
-    if (!query) return all
-    return all.filter((scenario) =>
-      `${scenario} ${scenarioName(scenario)}`
-        .toLocaleLowerCase()
-        .includes(query),
-    )
-  }, [catalog?.scenarios, testQuery])
+  const modelOptions = groupedModels.map((group) => ({
+    provider: group.provider,
+    models: group.models.map((item) => ({
+      label: item.model,
+      value: modelKey(item),
+    })),
+  }))
   const runsPerTest = Math.max(1, Number(runs) || 1)
   const retryCount = Math.max(0, Number(technicalRetries) || 0)
   const plannedRuns = scenarios.length * runsPerTest
@@ -1251,21 +1344,6 @@ export function LocalPlanCreatePage() {
     Boolean(selectedSubject) &&
     scenarios.length > 0 &&
     hasPlanLabel
-
-  const toggleScenario = (scenario: string, checked: boolean) => {
-    setScenarios((current) => {
-      if (checked)
-        return current.includes(scenario) ? current : [...current, scenario]
-      return current.filter((item) => item !== scenario)
-    })
-  }
-
-  const selectVisibleScenarios = () => {
-    setScenarios((current) => [
-      ...current,
-      ...visibleScenarios.filter((scenario) => !current.includes(scenario)),
-    ])
-  }
 
   const create = async (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault()
@@ -1306,317 +1384,170 @@ export function LocalPlanCreatePage() {
 
   return (
     <>
-      <a className="skip-link" href="#plan-create-main">
+      <a
+        className="fixed top-3 left-3 z-[100] -translate-y-24 rounded-lg bg-[var(--ds-color-brand)] px-4 py-3 text-sm font-semibold text-[var(--ds-color-brand-ink)] transition-transform focus:translate-y-0"
+        href="#plan-create-main"
+      >
         Skip to plan creation
       </a>
-      <PlanHeader />
+      <AppHeader active="plans" />
       <main
         id="plan-create-main"
-        className="page-shell overview-shell plan-create-shell"
+        className="ds-root mx-auto w-[calc(100%_-_1.5rem)] max-w-[1420px] py-8 sm:w-[calc(100%_-_3rem)] sm:py-10"
       >
-        <section className="page-heading" aria-labelledby="plan-create-title">
-          <div>
-            <div className="eyebrow">
-              <span className="live-dot" aria-hidden="true" />
-              Local evidence plan
-            </div>
-            <h1 id="plan-create-title">Create a focused local plan</h1>
-            <p>
-              Capture only the tests that matter for this change. The baseline
-              locks this scope; every candidate will reuse it exactly.
+        <header className="grid items-end gap-6 border-b border-[var(--ds-color-line)] pb-6 lg:grid-cols-[minmax(0,1fr)_auto]">
+          <div className="min-w-0">
+            <p className="m-0 font-mono text-[0.68rem] font-semibold uppercase tracking-[0.08em] text-[var(--ds-color-brand-text)]">
+              Execution setup
+            </p>
+            <h1
+              className="mt-3 mb-0 max-w-4xl text-[clamp(1.75rem,3vw,2.75rem)] font-semibold tracking-[-0.045em] text-[var(--ds-color-ink)]"
+              id="plan-create-title"
+            >
+              Create a benchmark plan
+            </h1>
+            <p className="mt-3 mb-0 max-w-3xl text-sm leading-6 text-[var(--ds-color-ink-soft)]">
+              Save a focused scope, capture its baseline, then run the same
+              scenarios after your change to measure improvement.
             </p>
           </div>
-          <div className="sync-block">
-            <span>Evidence default</span>
-            <strong>1 run / test</strong>
-          </div>
-        </section>
+          <nav
+            className="grid min-w-[18rem] grid-cols-2 gap-px overflow-hidden rounded-lg border border-[var(--ds-color-line)] bg-[var(--ds-color-line)] max-[390px]:min-w-0"
+            aria-label="Execution setup mode"
+          >
+            <a
+              className="grid min-h-14 content-center gap-0.5 bg-[var(--ds-color-surface-raised)] px-4 text-xs text-[var(--ds-color-ink-soft)] no-underline transition-colors hover:text-[var(--ds-color-ink)]"
+              href={hashForWorkspace()}
+              onClick={requestQuickExecution}
+            >
+              <strong className="font-semibold">Quick execution</strong>
+              <span className="text-[0.65rem] text-[var(--ds-color-ink-muted)]">
+                One result now
+              </span>
+            </a>
+            <span
+              className="grid min-h-14 content-center gap-0.5 bg-[var(--ds-color-surface-strong)] px-4 text-xs text-[var(--ds-color-ink)]"
+              aria-current="page"
+            >
+              <strong className="font-semibold">Reusable plan</strong>
+              <span className="text-[0.65rem] text-[var(--ds-color-ink-muted)]">
+                Baseline + candidates
+              </span>
+            </span>
+          </nav>
+        </header>
+
         {error && (
-          <section className="empty-state" role="alert">
-            <h2>Plan cannot be created</h2>
-            <p>{error}</p>
+          <section
+            className="mt-6 rounded-lg border border-[color-mix(in_srgb,var(--ds-color-danger)_35%,transparent)] bg-[color-mix(in_srgb,var(--ds-color-danger)_8%,var(--ds-color-surface))] p-5"
+            role="alert"
+          >
+            <h2 className="m-0 text-sm font-semibold text-[var(--ds-color-danger)]">
+              Plan cannot be created
+            </h2>
+            <p className="mt-2 mb-0 text-xs leading-5 text-[var(--ds-color-ink-soft)]">
+              {error}
+            </p>
           </section>
         )}
-        <section className="panel plan-form-panel">
-          <form className="plan-form" onSubmit={create}>
-            <section
-              className="plan-form-section"
-              aria-labelledby="plan-intent-title"
+
+        <form
+          className="mt-6 grid min-w-0 gap-px overflow-hidden rounded-xl border border-[var(--ds-color-line-strong)] bg-[var(--ds-color-line)] lg:grid-cols-12"
+          onSubmit={create}
+        >
+          <div className="min-w-0 bg-[var(--ds-color-surface)] lg:col-span-8">
+            <ExecutionSetup
+              idPrefix="plan-create"
+              mode="plan"
+              label={label}
+              purpose={purpose}
+              url={url}
+              subject={subject}
+              judge={judge}
+              modelGroups={modelOptions}
+              availableScenarios={catalog?.scenarios ?? []}
+              selectedScenarios={scenarios}
+              query={testQuery}
+              runs={runs}
+              technicalRetries={technicalRetries}
+              seed={seed}
+              disabled={submitting}
+              catalogLoading={loading}
+              catalogSummary={
+                loading
+                  ? 'Loading local catalog'
+                  : catalog
+                    ? `${catalog.models.length} registered model${catalog.models.length === 1 ? '' : 's'} · ${catalog.scenarios.length} scenarios`
+                    : 'Catalog unavailable'
+              }
+              onLabelChange={setLabel}
+              onPurposeChange={setPurpose}
+              onUrlChange={setUrl}
+              onSubjectChange={setSubject}
+              onJudgeChange={setJudge}
+              onSelectedScenariosChange={setScenarios}
+              onQueryChange={setTestQuery}
+              onRunsChange={setRuns}
+              onTechnicalRetriesChange={setTechnicalRetries}
+              onSeedChange={setSeed}
+            />
+          </div>
+
+          <div className="min-w-0 bg-[var(--ds-color-surface-raised)] lg:col-span-4">
+            <ExecutionSetupReview
+              mode="plan"
+              status={canCreate ? 'Ready' : 'Incomplete'}
+              subject={
+                selectedSubject
+                  ? `${selectedSubject.provider} / ${selectedSubject.model}`
+                  : ''
+              }
+              judge={
+                selectedJudge
+                  ? `${selectedJudge.provider} / ${selectedJudge.model}`
+                  : ''
+              }
+              url={url}
+              selectedScenarios={scenarios.length}
+              plannedRuns={plannedRuns}
+              runsPerScenario={runsPerTest}
+              technicalRetries={retryCount}
+              ready={canCreate}
             >
-              <div className="plan-form-section-heading">
-                <span>01</span>
-                <div>
-                  <h2 id="plan-intent-title">What are you validating?</h2>
-                  <p>
-                    A short label makes this local evidence easy to find again.
-                  </p>
-                </div>
-              </div>
-              <div className="plan-form-fields plan-form-intent-fields">
-                <label>
-                  <span>Plan label</span>
-                  <input
-                    value={label}
-                    required
-                    maxLength={120}
-                    placeholder="Before harness change"
-                    onChange={(event) => setLabel(event.target.value)}
-                  />
-                </label>
-                <label>
-                  <span>
-                    Purpose <small>optional</small>
-                  </span>
-                  <textarea
-                    value={purpose}
-                    rows={2}
-                    placeholder="Validate the loop-engineering change"
-                    onChange={(event) => setPurpose(event.target.value)}
-                  />
-                </label>
-              </div>
-            </section>
-            <section
-              className="plan-form-section"
-              aria-labelledby="plan-execution-title"
-            >
-              <div className="plan-form-section-heading">
-                <span>02</span>
-                <div>
-                  <h2 id="plan-execution-title">Execution setup</h2>
-                  <p>The subject and judge are recorded with the plan.</p>
-                </div>
-              </div>
-              <div className="plan-form-fields plan-form-execution-fields">
-                <label className="plan-url-field">
-                  <span>iii WebSocket URL</span>
-                  <input
-                    required
-                    value={url}
-                    onChange={(event) => setUrl(event.target.value)}
-                  />
-                </label>
-                <div>
-                  <span>Execution model</span>
-                  <ProviderModelDropdown
-                    required
-                    ariaLabel="Execution model"
-                    value={subject}
-                    disabled={loading}
-                    onChange={setSubject}
-                    groups={groupedModels.map((group) => ({
-                      provider: group.provider,
-                      models: group.models.map((item) => ({
-                        label: item.model,
-                        value: modelKey(item),
-                      })),
-                    }))}
-                    placeholder="Choose a model"
-                  />
-                </div>
-                <div>
-                  <span>
-                    Judge model <small>optional</small>
-                  </span>
-                  <ProviderModelDropdown
-                    ariaLabel="Judge model"
-                    value={judge}
-                    disabled={loading}
-                    onChange={setJudge}
-                    groups={groupedModels.map((group) => ({
-                      provider: group.provider,
-                      models: group.models.map((item) => ({
-                        label: item.model,
-                        value: modelKey(item),
-                      })),
-                    }))}
-                    placeholder="Use default judge"
-                  />
-                </div>
-              </div>
-            </section>
-            <fieldset className="plan-scope-field">
-              <legend>
-                <span>03</span>
-                Tests <small>choose the smallest useful scope</small>
-              </legend>
-              <div className="plan-scope-intro">
-                <div>
-                  <h2>Build the test scope</h2>
-                  <p>
-                    Start empty. Search for the behaviors touched by your
-                    change, then select only those tests.
-                  </p>
-                </div>
-                <output aria-live="polite">
-                  <strong>{scenarios.length}</strong>
-                  <span>
-                    {scenarios.length === 1
-                      ? 'test selected'
-                      : 'tests selected'}
-                    {' · '}
-                    {plannedRuns} logical {plannedRuns === 1 ? 'run' : 'runs'}
-                  </span>
-                </output>
-              </div>
-              <div className="plan-scope-controls">
-                <label className="plan-test-search">
-                  <span>Find a test</span>
-                  <input
-                    type="search"
-                    value={testQuery}
-                    placeholder="Search by name or id"
-                    onChange={(event) => setTestQuery(event.target.value)}
-                  />
-                </label>
-                <div className="plan-scope-actions">
-                  <button
-                    type="button"
-                    onClick={selectVisibleScenarios}
-                    disabled={visibleScenarios.length === 0}
-                  >
-                    Select visible ({visibleScenarios.length})
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setScenarios([])}
-                    disabled={scenarios.length === 0}
-                  >
-                    Clear selection
-                  </button>
-                </div>
-              </div>
-              <div className="plan-test-options">
-                {visibleScenarios.map((scenario) => {
-                  const selected = scenarios.includes(scenario)
-                  return (
-                    <label
-                      className={`plan-test-option${selected ? ' is-selected' : ''}`}
-                      key={scenario}
-                    >
-                      <input
-                        type="checkbox"
-                        checked={selected}
-                        onChange={(event) =>
-                          toggleScenario(scenario, event.target.checked)
-                        }
-                      />
-                      <span className="plan-test-option-copy">
-                        <strong>{scenarioName(scenario)}</strong>
-                        <code>{scenario}</code>
-                      </span>
-                    </label>
-                  )
-                })}
-                {!visibleScenarios.length && (
-                  <p className="plan-test-empty">
-                    No tests match “{testQuery}”. Try another name or clear the
-                    search.
-                  </p>
-                )}
-              </div>
-              <p className="plan-scope-note">
-                The scope becomes immutable when the baseline starts. Technical
-                retries do not add evidence samples.
-              </p>
-            </fieldset>
-            <details className="plan-advanced">
-              <summary>
-                <span className="plan-advanced-summary-copy">
-                  <span>Optional controls</span>
-                  <strong>Sampling and retries</strong>
-                  <small>
-                    Keep the default unless you deliberately need more local
-                    evidence.
-                  </small>
-                </span>
-                <span className="plan-advanced-summary-meta">
-                  {runsPerTest} {runsPerTest === 1 ? 'run' : 'runs'} / test ·{' '}
-                  {retryCount} {retryCount === 1 ? 'retry' : 'retries'}
-                </span>
-              </summary>
-              <div className="plan-advanced-body">
-                <p className="plan-advanced-intro">
-                  Runs create logical evidence samples. Retries only recover a
-                  technical failure and never increase the evidence count.
-                </p>
-                <div className="plan-advanced-grid">
-                  <label className="plan-advanced-control">
-                    <span>
-                      <strong>Runs per test</strong>
-                      <small>default: 1</small>
-                    </span>
-                    <p>
-                      Increase only when you want repeatable local evidence.
-                    </p>
-                    <input
-                      type="number"
-                      min="1"
-                      max="20"
-                      value={runs}
-                      onChange={(event) => setRuns(event.target.value)}
-                    />
-                  </label>
-                  <label className="plan-advanced-control">
-                    <span>
-                      <strong>Technical retries</strong>
-                      <small>default: 1</small>
-                    </span>
-                    <p>Retries a technical failure without adding a sample.</p>
-                    <input
-                      type="number"
-                      min="0"
-                      max="3"
-                      value={technicalRetries}
-                      onChange={(event) =>
-                        setTechnicalRetries(event.target.value)
-                      }
-                    />
-                  </label>
-                  <label className="plan-advanced-control">
-                    <span>
-                      <strong>Seed</strong>
-                      <small>optional</small>
-                    </span>
-                    <p>Leave blank to resolve the canonical case seeds.</p>
-                    <input
-                      type="number"
-                      min="0"
-                      placeholder="Canonical"
-                      value={seed}
-                      onChange={(event) => setSeed(event.target.value)}
-                    />
-                  </label>
-                </div>
-              </div>
-            </details>
-            <div className="plan-form-actions">
               <p
+                className="m-0 text-xs leading-5 text-[var(--ds-color-ink-muted)]"
                 id="plan-create-requirements"
-                className="plan-create-requirements"
               >
                 {hasPlanLabel && scenarios.length > 0
-                  ? 'Ready to create a draft. The scope stays editable until you start the baseline.'
+                  ? 'Ready to create a draft. The scope stays editable until the baseline starts.'
                   : `Before creating: ${hasPlanLabel ? 'select at least one test' : 'add a plan label'}${hasPlanLabel || scenarios.length === 0 ? '' : ' and select at least one test'}.`}
               </p>
-              <a className="button" href={hashForPlans()}>
-                Cancel
-              </a>
               <button
-                className="button button-primary"
+                className="inline-flex min-h-11 w-full items-center justify-center rounded-lg border border-[var(--ds-color-brand)] bg-[var(--ds-color-brand)] px-4 text-sm font-semibold text-[var(--ds-color-brand-ink)] transition-colors hover:bg-[color-mix(in_srgb,var(--ds-color-brand)_88%,white)] disabled:cursor-not-allowed disabled:opacity-45"
                 type="submit"
                 disabled={!canCreate}
                 aria-describedby="plan-create-requirements"
               >
                 {submitting ? 'Creating…' : 'Create draft plan'}
               </button>
-            </div>
-          </form>
-        </section>
+              <a
+                className="inline-flex min-h-10 w-full items-center justify-center rounded-lg border border-[var(--ds-color-line-strong)] px-3 text-xs font-semibold text-[var(--ds-color-ink-soft)] no-underline hover:text-[var(--ds-color-ink)]"
+                href={hashForPlans()}
+              >
+                Cancel
+              </a>
+            </ExecutionSetupReview>
+          </div>
+        </form>
       </main>
-      <footer>
+      <footer className="ds-root mx-auto flex w-[calc(100%_-_1.5rem)] max-w-[1420px] flex-wrap items-center justify-between gap-4 border-t border-[var(--ds-color-line)] py-8 font-mono text-xs text-[var(--ds-color-ink-muted)] sm:w-[calc(100%_-_3rem)]">
         <span>Harness E2E · local plans</span>
-        <a href={hashForWorkspace()}>Back to home</a>
+        <a
+          className="text-inherit underline-offset-4 hover:underline"
+          href={hashForWorkspace()}
+        >
+          Back to home
+        </a>
       </footer>
     </>
   )
@@ -1886,10 +1817,6 @@ export function LocalPlanDetailPage({ planId }: { planId: string }) {
     selectedCandidateId,
     visualBaselineId,
   ])
-  const selectedCandidateNumber =
-    plan && selectedCandidateId
-      ? plan.candidate_execution_ids.indexOf(selectedCandidateId) + 1
-      : null
   const changeVisualBaseline = (id: string) => {
     if (!plan || !comparableExecutionIds.includes(id)) return
     const availableCandidates = comparableExecutionIds.filter(
@@ -1939,7 +1866,7 @@ export function LocalPlanDetailPage({ planId }: { planId: string }) {
       <a className="skip-link" href="#plan-detail-main">
         Skip to plan detail
       </a>
-      <PlanHeader />
+      <AppHeader active="plans" />
       <main
         id="plan-detail-main"
         className="page-shell overview-shell plan-detail-shell"
@@ -2016,31 +1943,24 @@ export function LocalPlanDetailPage({ planId }: { planId: string }) {
               visualBaselineId={visualBaselineId}
               comparisonCandidateIds={comparisonCandidateIds}
               selectedCandidateId={selectedCandidateId}
+              scenarioComparison={
+                comparisonLoading || comparisonError ? null : comparison
+              }
               onVisualBaselineChange={changeVisualBaseline}
               onToggleCandidate={toggleComparisonCandidate}
-              onRenameCandidate={renameCandidate}
               loading={historyLoading}
               error={historyError}
-            />
-            <PlanComparisonPanel
-              comparison={comparison}
-              baselineExecutionId={visualBaselineId}
-              candidateExecutionId={selectedCandidateId}
-              candidateNumber={
-                selectedCandidateNumber && selectedCandidateNumber > 0
-                  ? selectedCandidateNumber
-                  : null
-              }
-              baselineLabel={`Visual baseline · ${planExecutionLabel(plan, visualBaselineId)}`}
-              candidateLabel={planExecutionLabel(plan, selectedCandidateId)}
-              loading={comparisonLoading}
-              error={comparisonError}
             />
             <PlanLifecycle
               plan={plan}
               starting={starting}
               feedback={runFeedback}
               onStart={(role) => void start(role)}
+            />
+            <PlanNonComparableAttempts
+              plan={plan}
+              summaries={executionSummaries}
+              onRenameCandidate={renameCandidate}
             />
           </>
         )}

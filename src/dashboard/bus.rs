@@ -372,7 +372,7 @@ pub(super) fn register_functions(iii: &IIIClient, controller: Arc<Controller>) {
     register(
         iii,
         PLAN_UPDATE,
-        "Update a local plan or rename candidates.",
+        "Update an unlocked local plan or rename retained candidates.",
         {
             let controller = controller.clone();
             RegisterFunction::new_async(move |request: PlanUpdateRequest| {

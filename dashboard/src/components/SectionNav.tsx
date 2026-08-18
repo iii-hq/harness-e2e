@@ -19,14 +19,8 @@ const views: Array<{
     description: 'Versioned results across evaluated systems',
   },
   {
-    id: 'capability',
-    index: '03',
-    label: 'Capability',
-    description: 'Evidence-backed complexity frontier',
-  },
-  {
     id: 'executions',
-    index: '04',
+    index: '03',
     label: 'Executions',
     description: 'Immutable run ledger',
   },

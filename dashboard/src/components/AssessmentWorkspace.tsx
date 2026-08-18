@@ -56,19 +56,6 @@ function formatRunDuration(durationMs: number | null) {
   return formatDuration(durationMs == null ? null : durationMs / 1000)
 }
 
-function RunMetric({ label, value }: { label: string; value: string }) {
-  return (
-    <span className="min-w-0">
-      <small className="block text-[0.59rem] font-semibold uppercase tracking-[0.06em] text-ink-muted">
-        {label}
-      </small>
-      <strong className="mt-0.5 block truncate text-xs font-semibold text-ink">
-        {value}
-      </strong>
-    </span>
-  )
-}
-
 function RunMetricCard({ label, value }: { label: string; value: string }) {
   return (
     <div className="rounded-lg border border-line bg-panel-subtle p-3">
@@ -79,6 +66,190 @@ function RunMetricCard({ label, value }: { label: string; value: string }) {
         {value}
       </strong>
     </div>
+  )
+}
+
+type PrimaryMetricTone =
+  | 'positive'
+  | 'warning'
+  | 'negative'
+  | 'neutral'
+  | 'unavailable'
+
+type PrimaryMetric = {
+  label: string
+  value: string
+  detail: string
+  context: 'Objective' | 'Advisory' | 'Observed'
+  tone: PrimaryMetricTone
+}
+
+const PRIMARY_METRIC_TONES: Record<PrimaryMetricTone, string> = {
+  positive: 'bg-success/5 [&_[data-metric-value]]:text-success',
+  warning: 'bg-warning/5 [&_[data-metric-value]]:text-warning',
+  negative: 'bg-danger/5 [&_[data-metric-value]]:text-danger',
+  neutral: 'bg-panel [&_[data-metric-value]]:text-ink',
+  unavailable: 'bg-panel-subtle [&_[data-metric-value]]:text-ink-muted',
+}
+
+function metricRatio(entry: AssessmentEntry | undefined) {
+  if (!entry) return 'Not reported'
+  const ratio = entry.summary.match(/\b(\d+)\s+of\s+(\d+)\b/i)
+  if (ratio) return `${ratio[1]}/${ratio[2]}`
+  if (entry.score) return `${entry.score.awarded}/${entry.score.possible}`
+  return titleCase(entry.outcome)
+}
+
+function scorePercent(entry: AssessmentEntry | undefined) {
+  if (!entry?.score || entry.score.possible <= 0) return null
+  return Math.round((entry.score.awarded / entry.score.possible) * 100)
+}
+
+function metricToneForEntry(
+  entry: AssessmentEntry | undefined,
+): PrimaryMetricTone {
+  if (!entry) return 'unavailable'
+  if (entry.outcome === 'passed') return 'positive'
+  if (entry.outcome === 'partial') return 'warning'
+  if (entry.outcome === 'failed' || entry.outcome === 'error') return 'negative'
+  return 'neutral'
+}
+
+function primaryRunMetrics(run: AssessmentRunView): PrimaryMetric[] {
+  const hardGates = run.assessments.filter(
+    (entry) => entry.policy === 'hard_gate',
+  )
+  const passedHardGates = hardGates.filter(
+    (entry) => entry.outcome === 'passed',
+  ).length
+  const detection = run.assessments.find((entry) =>
+    entry.criterionId.includes('seeded_vulnerability_detection'),
+  )
+  const patchApplicability = run.assessments.find((entry) =>
+    entry.criterionId.includes('suggested_patch_applicability'),
+  )
+  const passedAssessments = run.assessments.filter(
+    (entry) => entry.outcome === 'passed',
+  ).length
+  const aiResult = run.finalAssessment.result
+  const hardGateTone: PrimaryMetricTone =
+    hardGates.length === 0
+      ? 'unavailable'
+      : passedHardGates === hardGates.length
+        ? 'positive'
+        : 'negative'
+  const assessmentTone: PrimaryMetricTone =
+    passedAssessments === run.assessments.length ? 'positive' : 'warning'
+  const aiTone: PrimaryMetricTone = !aiResult
+    ? 'unavailable'
+    : aiResult.verdict === 'pass'
+      ? 'positive'
+      : aiResult.verdict === 'pass_with_concerns' ||
+          aiResult.verdict === 'inconclusive'
+        ? 'warning'
+        : 'negative'
+
+  return [
+    {
+      label: 'Objective hard gates',
+      value:
+        hardGates.length > 0
+          ? `${passedHardGates}/${hardGates.length}`
+          : 'Not reported',
+      detail:
+        hardGates.length > 0
+          ? `${hardGates.length - passedHardGates} failed`
+          : 'No deterministic gates retained',
+      context: 'Objective',
+      tone: hardGateTone,
+    },
+    detection
+      ? {
+          label: 'Seeded detection',
+          value: metricRatio(detection),
+          detail: `${scorePercent(detection) ?? '—'}% advisory coverage`,
+          context: 'Advisory',
+          tone: metricToneForEntry(detection),
+        }
+      : {
+          label: 'Assessment outcomes',
+          value:
+            run.assessments.length > 0
+              ? `${passedAssessments}/${run.assessments.length}`
+              : 'Not reported',
+          detail: `${run.assessments.length - passedAssessments} need review`,
+          context: 'Observed',
+          tone: assessmentTone,
+        },
+    patchApplicability
+      ? {
+          label: 'Optional patch checks',
+          value: metricRatio(patchApplicability),
+          detail: `${scorePercent(patchApplicability) ?? '—'}% applied cleanly`,
+          context: 'Advisory',
+          tone: metricToneForEntry(patchApplicability),
+        }
+      : {
+          label: 'Runtime',
+          value: formatRunDuration(run.metrics.durationMs),
+          detail: 'Subject execution time',
+          context: 'Observed',
+          tone: run.metrics.durationMs == null ? 'unavailable' : 'neutral',
+        },
+    {
+      label: 'AI quality',
+      value: aiResult ? String(aiResult.quality_score) : 'Not reported',
+      detail: aiResult
+        ? `${formatConfidence(aiResult.confidence)} confidence`
+        : 'No advisory conclusion',
+      context: 'Advisory',
+      tone: aiTone,
+    },
+  ]
+}
+
+function PrimaryMetricBoard({
+  run,
+  standalone = false,
+}: {
+  run: AssessmentRunView
+  standalone?: boolean
+}) {
+  return (
+    <section
+      className={`grid grid-flow-dense grid-cols-1 gap-px overflow-hidden bg-line sm:grid-cols-2 lg:grid-cols-4 ${
+        standalone ? 'rounded-lg border border-line' : 'border-y border-line'
+      }`}
+      aria-label={`${titleCase(run.scenarioId)} primary metrics`}
+      data-primary-run-metrics
+    >
+      {primaryRunMetrics(run).map((metric) => (
+        <article
+          key={metric.label}
+          className={`grid min-h-36 content-between gap-5 p-4 ${PRIMARY_METRIC_TONES[metric.tone]}`}
+        >
+          <div className="flex items-start justify-between gap-3">
+            <h5 className="m-0 text-[0.62rem] font-semibold uppercase tracking-[0.06em] text-ink-muted">
+              {metric.label}
+            </h5>
+            <span className="shrink-0 font-mono text-[0.58rem] uppercase tracking-[0.05em] text-ink-muted">
+              {metric.context}
+            </span>
+          </div>
+          <div>
+            <strong
+              className="block text-[clamp(1.8rem,3vw,2.55rem)] font-semibold leading-none tracking-[-0.045em] tabular-nums"
+              data-metric-value
+            >
+              {metric.value}
+            </strong>
+            <p className="mt-2 mb-0 text-xs leading-5 text-ink-muted">
+              {metric.detail}
+            </p>
+          </div>
+        </article>
+      ))}
+    </section>
   )
 }
 
@@ -104,7 +275,11 @@ function toneForOutcome(outcome: string) {
   ) {
     return 'border-danger/30 bg-danger/5 text-danger'
   }
-  if (outcome === 'partial' || outcome === 'pass_with_concerns') {
+  if (
+    outcome === 'partial' ||
+    outcome === 'pass_with_concerns' ||
+    outcome === 'passed_with_concerns'
+  ) {
     return 'border-warning/30 bg-warning/5 text-warning'
   }
   return 'border-line bg-panel-subtle text-ink-muted'
@@ -520,7 +695,7 @@ function FinalAiCard({ run }: { run: AssessmentRunView }) {
           : 'border-line bg-panel'
       }`}
     >
-      <header className="grid items-start gap-4 border-b border-line p-4 sm:grid-cols-[minmax(0,1fr)_16rem]">
+      <header className="border-b border-line p-4">
         <div className="flex min-w-0 items-start gap-3">
           <BrainCircuit
             className="mt-0.5 shrink-0 text-brand"
@@ -537,24 +712,6 @@ function FinalAiCard({ run }: { run: AssessmentRunView }) {
             </p>
           </div>
         </div>
-        <dl className="m-0 grid w-full min-w-0 grid-cols-2 gap-2 sm:w-56">
-          <div className="grid min-h-10 min-w-0 grid-cols-[minmax(0,1fr)_auto] items-center gap-1 overflow-hidden rounded-md border border-line bg-panel-subtle px-2.5 py-2">
-            <dt className="min-w-0 truncate text-[0.58rem] font-semibold uppercase tracking-[0.06em] text-ink-muted">
-              Quality
-            </dt>
-            <dd className="m-0 shrink-0 whitespace-nowrap text-xl font-semibold leading-none text-ink">
-              {result.quality_score}
-            </dd>
-          </div>
-          <div className="grid min-h-10 min-w-0 grid-cols-[minmax(0,1fr)_auto] items-center gap-1 overflow-hidden rounded-md border border-line bg-panel-subtle px-2.5 py-2">
-            <dt className="min-w-0 truncate text-[0.58rem] font-semibold uppercase tracking-[0.06em] text-ink-muted">
-              Confidence
-            </dt>
-            <dd className="m-0 shrink-0 whitespace-nowrap text-xl font-semibold leading-none text-ink">
-              {formatConfidence(result.confidence)}
-            </dd>
-          </div>
-        </dl>
       </header>
       {run.hasAiDisagreement && (
         <div
@@ -635,7 +792,7 @@ function AssessmentDetailContent({
 
   return (
     <div className="grid gap-5">
-      <FinalAiCard run={run} />
+      <PrimaryMetricBoard run={run} standalone />
 
       <section aria-labelledby={`${safeId(run.key)}-outcome`}>
         <div className="mb-3 flex items-center gap-2">
@@ -678,23 +835,17 @@ function AssessmentDetailContent({
         </div>
       </section>
 
-      <section
-        className="grid gap-3"
-        aria-labelledby={`${safeId(run.key)}-runtime`}
-      >
-        <div>
-          <h4
-            id={`${safeId(run.key)}-runtime`}
-            className="m-0 text-sm text-ink"
-          >
-            Runtime metrics
-          </h4>
-          <p className="m-0 mt-1 text-xs text-ink-muted">
-            Subject execution usage for this scenario run.
-          </p>
-        </div>
+      <FinalAiCard run={run} />
+
+      <details className="rounded-lg border border-line bg-panel-subtle">
+        <summary
+          id={`${safeId(run.key)}-runtime`}
+          className="min-h-11 cursor-pointer px-4 py-3 text-sm font-semibold text-ink"
+        >
+          Runtime telemetry
+        </summary>
         <div
-          className="grid gap-2 sm:grid-cols-2 lg:grid-cols-4"
+          className="grid gap-2 border-t border-line p-3 sm:grid-cols-2 lg:grid-cols-4"
           data-run-metrics-detail
         >
           <RunMetricCard
@@ -734,7 +885,7 @@ function AssessmentDetailContent({
             value={formatMetricCount(run.metrics.functionCallErrors)}
           />
         </div>
-      </section>
+      </details>
 
       <section
         className="grid gap-3"
@@ -889,54 +1040,43 @@ function RunAssessment({
         objectiveFailure ? 'border-danger/40' : 'border-line'
       }`}
     >
-      <div className="relative px-4 py-3">
-        <button
-          className="group relative block w-full text-left"
-          type="button"
-          onClick={onOpen}
-          aria-label={`Open details for ${titleCase(run.scenarioId)}`}
-        >
-          <span className="block min-w-0">
-            <strong className="block pr-56 text-sm text-ink max-[560px]:pr-0">
-              {titleCase(run.scenarioId)} · scenario v{run.scenarioVersion}
-            </strong>
-            <span className="mt-1 block break-all pr-56 font-mono text-[0.62rem] text-ink-muted max-[560px]:pr-0">
-              {run.subjectId} · run {run.runId}
-            </span>
-            <span className="absolute right-0 top-0 block max-[560px]:static max-[560px]:mt-2">
-              <RunStatusBadges run={run} aiLabel={aiLabel} />
-            </span>
-            <span
-              className={`mt-3 grid grid-cols-2 gap-x-4 gap-y-2 text-left lg:grid-cols-4 ${onTranscript && run.transcript ? 'pr-24' : ''}`}
-              data-run-metrics
-            >
-              <RunMetric
-                label="Tokens"
-                value={formatMetricCount(run.metrics.totalTokens)}
-              />
-              <RunMetric
-                label="Functions"
-                value={formatMetricCount(run.metrics.functionCalls)}
-              />
-              <RunMetric
-                label="Duration"
-                value={formatRunDuration(run.metrics.durationMs)}
-              />
-              <RunMetric
-                label="Function errors"
-                value={formatMetricCount(run.metrics.functionCallErrors)}
-              />
-            </span>
+      <header className="flex flex-col gap-4 p-4 sm:flex-row sm:items-start sm:justify-between">
+        <div className="min-w-0">
+          <span className="font-mono text-[0.62rem] font-semibold uppercase tracking-[0.06em] text-ink-muted">
+            Scenario performance
           </span>
-        </button>
-        {onTranscript && run.transcript && (
-          <div className="pointer-events-none absolute right-4 bottom-3">
-            <span className="pointer-events-auto">
-              <ChatButton run={run} onTranscript={onTranscript} />
-            </span>
-          </div>
-        )}
-      </div>
+          <h4 className="mt-1 mb-0 text-lg font-semibold tracking-[-0.025em] text-ink">
+            {titleCase(run.scenarioId)}
+          </h4>
+          <p className="mt-1 mb-0 break-all font-mono text-[0.62rem] text-ink-muted">
+            v{run.scenarioVersion} · {run.subjectId} · run {run.runId}
+          </p>
+        </div>
+        <RunStatusBadges run={run} aiLabel={aiLabel} />
+      </header>
+
+      <PrimaryMetricBoard run={run} />
+
+      <footer className="flex flex-col gap-3 p-3 sm:flex-row sm:items-center sm:justify-between">
+        <p className="m-0 font-mono text-[0.62rem] text-ink-muted">
+          Runtime {formatRunDuration(run.metrics.durationMs)} · Tokens{' '}
+          {formatMetricCount(run.metrics.totalTokens)} · Function errors{' '}
+          {formatMetricCount(run.metrics.functionCallErrors)}
+        </p>
+        <div className="flex flex-wrap gap-2">
+          {onTranscript && run.transcript ? (
+            <ChatButton run={run} onTranscript={onTranscript} />
+          ) : null}
+          <button
+            className="button inline-flex min-h-11 items-center justify-center"
+            type="button"
+            onClick={onOpen}
+            aria-label={`Open details for ${titleCase(run.scenarioId)}`}
+          >
+            Review evidence
+          </button>
+        </div>
+      </footer>
     </article>
   )
 }
@@ -993,35 +1133,40 @@ export function AssessmentPanel({
   const counts = assessmentFilterCounts(model.runs)
 
   return (
-    <div className="grid gap-4">
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <fieldset className="m-0 flex flex-wrap gap-2 border-0 p-0">
-          <legend className="sr-only">Filter assessment matrix</legend>
-          {FILTERS.map((candidate) => (
-            <button
-              key={candidate.id}
-              className={`min-h-11 rounded-full border px-3 py-2 text-xs font-semibold transition ${
-                filter === candidate.id
-                  ? 'border-brand bg-brand-soft text-ink'
-                  : 'border-line bg-panel text-ink-muted hover:border-line-strong hover:text-ink'
-              }`}
-              type="button"
-              aria-pressed={filter === candidate.id}
-              onClick={() => onFilter?.(candidate.id)}
-            >
-              {candidate.label} · {counts[candidate.id]}
-            </button>
-          ))}
-        </fieldset>
-        <span className="text-xs text-ink-muted">
-          Select a run to open details.
-        </span>
-      </div>
-      <p className="m-0 text-xs text-ink-muted" role="status">
-        {filter === 'low_confidence'
-          ? `Low confidence means below ${Math.round(LOW_CONFIDENCE_THRESHOLD * 100)}%.`
-          : `${counts[filter]} assessment${counts[filter] === 1 ? '' : 's'} match this view.`}
-      </p>
+    <div className="grid gap-3">
+      <details className="rounded-lg border border-line bg-panel-subtle">
+        <summary className="flex min-h-11 cursor-pointer items-center justify-between gap-3 px-4 py-3 text-xs font-semibold text-ink-soft">
+          <span>Filter scenario runs by assessment signal</span>
+          <span className="font-mono text-[0.62rem] font-normal text-ink-muted">
+            {counts.all} assessments
+          </span>
+        </summary>
+        <div className="border-t border-line p-3">
+          <fieldset className="m-0 flex flex-wrap gap-2 border-0 p-0">
+            <legend className="sr-only">Filter assessment matrix</legend>
+            {FILTERS.map((candidate) => (
+              <button
+                key={candidate.id}
+                className={`min-h-11 rounded-full border px-3 py-2 text-xs font-semibold transition motion-reduce:transition-none ${
+                  filter === candidate.id
+                    ? 'border-brand bg-brand-soft text-ink'
+                    : 'border-line bg-panel text-ink-muted hover:border-line-strong hover:text-ink'
+                }`}
+                type="button"
+                aria-pressed={filter === candidate.id}
+                onClick={() => onFilter?.(candidate.id)}
+              >
+                {candidate.label} · {counts[candidate.id]}
+              </button>
+            ))}
+          </fieldset>
+          <p className="mt-3 mb-0 text-xs text-ink-muted" role="status">
+            {filter === 'low_confidence'
+              ? `Low confidence means below ${Math.round(LOW_CONFIDENCE_THRESHOLD * 100)}%.`
+              : `${counts[filter]} assessment${counts[filter] === 1 ? '' : 's'} match this view.`}
+          </p>
+        </div>
+      </details>
       <div className="grid gap-3">
         {visibleRuns.map((run) => (
           <RunAssessment
@@ -1031,6 +1176,11 @@ export function AssessmentPanel({
             onTranscript={onTranscript}
           />
         ))}
+        {visibleRuns.length === 0 ? (
+          <div className="rounded-lg border border-dashed border-line p-5 text-sm text-ink-muted">
+            No scenario runs match this assessment filter.
+          </div>
+        ) : null}
       </div>
       {selectedRun && (
         <AssessmentDetailDialog

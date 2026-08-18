@@ -54,13 +54,18 @@ mod tests {
     use super::*;
 
     #[test]
-    fn bundle_contains_single_page_application() {
+    fn bundle_contains_dashboard() {
         let path = "index.html";
         assert!(
             DashboardAssets::get(path).is_some(),
             "dashboard bundle is missing {path}"
         );
-        for obsolete in ["execution.html", "compare.html", "coverage/index.html"] {
+        for obsolete in [
+            "design-system.html",
+            "execution.html",
+            "compare.html",
+            "coverage/index.html",
+        ] {
             assert!(
                 DashboardAssets::get(obsolete).is_none(),
                 "dashboard bundle still contains obsolete page {obsolete}"
