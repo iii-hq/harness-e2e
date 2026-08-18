@@ -9019,6 +9019,81 @@ footer {
   accent-color: var(--accent);
 }
 
+.plan-candidate-naming {
+  display: grid;
+  grid-column: 1 / -1;
+  grid-template-columns: minmax(180px, 0.55fr) minmax(0, 1.45fr);
+  gap: var(--plan-card-space);
+  padding-top: var(--plan-card-space);
+  border-top: 1px solid var(--line);
+}
+
+.plan-candidate-naming > div:first-child {
+  display: grid;
+  align-content: start;
+  gap: 0.35rem;
+}
+
+.plan-candidate-naming > div:first-child > span {
+  color: var(--text-muted);
+  font-size: 0.61rem;
+  font-weight: 700;
+  letter-spacing: 0.055em;
+  text-transform: uppercase;
+}
+
+.plan-candidate-naming > div:first-child > small,
+.plan-candidate-name-form > small {
+  color: var(--text-muted);
+  font-size: 0.62rem;
+  line-height: 1.45;
+}
+
+.plan-candidate-name-form > small {
+  grid-column: 1 / -1;
+  color: var(--danger);
+}
+
+.plan-candidate-name-list {
+  display: grid;
+  gap: 0.55rem;
+}
+
+.plan-candidate-name-form {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: end;
+  gap: 0.5rem;
+}
+
+.plan-candidate-name-form label {
+  display: grid;
+  min-width: 0;
+  gap: 0.28rem;
+}
+
+.plan-candidate-name-form label > span {
+  color: var(--text-soft);
+  font-size: 0.64rem;
+  font-weight: 650;
+}
+
+.plan-candidate-name-form input {
+  width: 100%;
+  min-height: 38px;
+  padding: 0.5rem 0.65rem;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  color: var(--text);
+  font: 600 0.7rem var(--font-body);
+}
+
+.plan-candidate-name-form .button {
+  min-height: 38px;
+  padding: 0.5rem 0.75rem;
+}
+
 .plan-scenario-comparison {
   overflow: hidden;
   border: 1px solid var(--line);
@@ -9448,6 +9523,10 @@ footer {
     grid-template-columns: 1fr;
   }
 
+  .plan-candidate-naming {
+    grid-template-columns: 1fr;
+  }
+
   .current-work-summary > div:first-child,
   .current-work-summary > .button,
   .history-summary .kpi-card:last-child {
@@ -9667,6 +9746,14 @@ footer {
 
   .plan-candidate-option {
     width: 100%;
+  }
+
+  .plan-candidate-name-form {
+    grid-template-columns: 1fr;
+  }
+
+  .plan-candidate-name-form .button {
+    justify-self: start;
   }
 
   .plan-scenario-table tbody th,

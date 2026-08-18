@@ -1,5 +1,6 @@
 import {
   type CSSProperties,
+  type FormEvent,
   useCallback,
   useEffect,
   useMemo,
@@ -447,7 +448,68 @@ function planExecutionLabel(plan: LocalPlan, executionId: string | null) {
   if (!executionId) return 'Execution unavailable'
   if (executionId === plan.baseline_execution_id) return 'Official baseline'
   const candidateIndex = plan.candidate_execution_ids.indexOf(executionId)
-  return candidateIndex >= 0 ? `Candidate #${candidateIndex + 1}` : executionId
+  if (candidateIndex < 0) return executionId
+  return (
+    plan.candidate_labels?.[executionId]?.trim() ||
+    `Candidate #${candidateIndex + 1}`
+  )
+}
+
+function CandidateLabelEditor({
+  executionId,
+  fallbackLabel,
+  label,
+  onRename,
+}: {
+  executionId: string
+  fallbackLabel: string
+  label: string
+  onRename: (executionId: string, label: string) => Promise<void>
+}) {
+  const [draft, setDraft] = useState(label)
+  const [saving, setSaving] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+
+  useEffect(() => setDraft(label), [label])
+
+  const submit = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault()
+    setSaving(true)
+    setError(null)
+    try {
+      await onRename(executionId, draft)
+    } catch (cause) {
+      setError(errorText(cause))
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return (
+    <form
+      className="plan-candidate-name-form"
+      onSubmit={(event) => void submit(event)}
+    >
+      <label>
+        <span>{fallbackLabel}</span>
+        <input
+          aria-label={`Name ${fallbackLabel}`}
+          maxLength={80}
+          placeholder={fallbackLabel}
+          value={draft}
+          onChange={(event) => setDraft(event.target.value)}
+        />
+      </label>
+      <button
+        className="button button-secondary"
+        disabled={saving}
+        type="submit"
+      >
+        {saving ? 'Saving…' : label ? 'Rename' : 'Name'}
+      </button>
+      {error && <small role="alert">{error}</small>}
+    </form>
+  )
 }
 
 export function PlanExecutionHistory({
@@ -458,6 +520,7 @@ export function PlanExecutionHistory({
   selectedCandidateId,
   onVisualBaselineChange,
   onToggleCandidate,
+  onRenameCandidate,
   loading,
   error = null,
 }: {
@@ -468,6 +531,7 @@ export function PlanExecutionHistory({
   selectedCandidateId: string | null
   onVisualBaselineChange: (id: string) => void
   onToggleCandidate: (id: string, selected: boolean) => void
+  onRenameCandidate?: (executionId: string, label: string) => Promise<void>
   loading: boolean
   error?: string | null
 }) {
@@ -579,6 +643,27 @@ export function PlanExecutionHistory({
                   })}
               </div>
             </fieldset>
+            {onRenameCandidate && (
+              <div className="plan-candidate-naming">
+                <div>
+                  <span>Candidate names</span>
+                  <small>
+                    Names are plan metadata and do not change captured results.
+                  </small>
+                </div>
+                <div className="plan-candidate-name-list">
+                  {plan.candidate_execution_ids.map((executionId, index) => (
+                    <CandidateLabelEditor
+                      executionId={executionId}
+                      fallbackLabel={`Candidate #${index + 1}`}
+                      key={executionId}
+                      label={plan.candidate_labels?.[executionId] ?? ''}
+                      onRename={onRenameCandidate}
+                    />
+                  ))}
+                </div>
+              </div>
+            )}
           </div>
           <div className="plan-execution-table-wrap">
             <table
@@ -1736,6 +1821,17 @@ export function LocalPlanDetailPage({ planId }: { planId: string }) {
       )
     }
   }
+  const renameCandidate = async (executionId: string, label: string) => {
+    if (!bridge || !plan) return
+    const candidateLabels = { ...(plan.candidate_labels ?? {}) }
+    const normalized = label.trim()
+    if (normalized) candidateLabels[executionId] = normalized
+    else delete candidateLabels[executionId]
+    const nextPlan = await bridge.updatePlan(plan.id, {
+      candidate_labels: candidateLabels,
+    })
+    setPlan(nextPlan)
+  }
 
   return (
     <>
@@ -1821,6 +1917,7 @@ export function LocalPlanDetailPage({ planId }: { planId: string }) {
               selectedCandidateId={selectedCandidateId}
               onVisualBaselineChange={changeVisualBaseline}
               onToggleCandidate={toggleComparisonCandidate}
+              onRenameCandidate={renameCandidate}
               loading={historyLoading}
               error={historyError}
             />

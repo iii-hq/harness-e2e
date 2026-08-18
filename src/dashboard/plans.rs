@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -72,6 +73,8 @@ pub(super) struct LocalPlan {
     pub seed: Option<u64>,
     pub baseline_execution_id: Option<String>,
     pub candidate_execution_ids: Vec<String>,
+    #[serde(default)]
+    pub candidate_labels: BTreeMap<String, String>,
     pub incomplete_execution_ids: Vec<String>,
     pub last_attempt_id: Option<String>,
 }
@@ -125,6 +128,7 @@ pub(super) struct PlanUpdateRequest {
     pub runs: Option<u32>,
     pub technical_retries: Option<u8>,
     pub seed: Option<u64>,
+    pub candidate_labels: Option<BTreeMap<String, String>>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
@@ -233,14 +237,33 @@ pub(super) fn new_plan(request: &PlanCreateRequest, id: String) -> Result<LocalP
         seed: request.seed,
         baseline_execution_id: None,
         candidate_execution_ids: Vec::new(),
+        candidate_labels: BTreeMap::new(),
         incomplete_execution_ids: Vec::new(),
         last_attempt_id: None,
     })
 }
 
 pub(super) fn apply_update(plan: &mut LocalPlan, update: &PlanUpdateRequest) -> Result<()> {
-    if plan.locked {
+    let changes_scope = update.label.is_some()
+        || update.purpose.is_some()
+        || update.url.is_some()
+        || update.model.is_some()
+        || update.provider.is_some()
+        || update.judge_model.is_some()
+        || update.judge_provider.is_some()
+        || update.scenarios.is_some()
+        || update.runs.is_some()
+        || update.technical_retries.is_some()
+        || update.seed.is_some();
+    if plan.locked && changes_scope {
         bail!("local plan is locked after its baseline started");
+    }
+    if let Some(labels) = &update.candidate_labels {
+        plan.candidate_labels = validate_candidate_labels(plan, labels)?;
+    }
+    if !changes_scope {
+        plan.updated_at = Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true);
+        return Ok(());
     }
     let mut request = plan_request(plan);
     if let Some(value) = &update.label {
@@ -294,6 +317,34 @@ pub(super) fn apply_update(plan: &mut LocalPlan, update: &PlanUpdateRequest) -> 
     plan.scope_hash = scope_hash(&request, &plan.scenarios, &plan.policy_hash)?;
     plan.updated_at = Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true);
     Ok(())
+}
+
+fn validate_candidate_labels(
+    plan: &LocalPlan,
+    labels: &BTreeMap<String, String>,
+) -> Result<BTreeMap<String, String>> {
+    let mut validated = BTreeMap::new();
+    for (execution_id, label) in labels {
+        if !plan
+            .candidate_execution_ids
+            .iter()
+            .any(|candidate_id| candidate_id == execution_id)
+        {
+            bail!("candidate label references unknown execution '{execution_id}'");
+        }
+        let label = label.trim();
+        if label.is_empty() {
+            continue;
+        }
+        if label.chars().count() > 80 {
+            bail!("candidate label must be at most 80 characters");
+        }
+        if label.chars().any(char::is_control) {
+            bail!("candidate label must not contain control characters");
+        }
+        validated.insert(execution_id.clone(), label.to_string());
+    }
+    Ok(validated)
 }
 
 pub(super) fn plan_request(plan: &LocalPlan) -> PlanCreateRequest {
@@ -530,6 +581,72 @@ mod tests {
         };
         let error = apply_update(&mut plan, &update).expect_err("locked plan must be immutable");
         assert!(error.to_string().contains("locked"));
+    }
+
+    #[test]
+    fn locked_plans_allow_candidate_names_to_be_changed_and_cleared() {
+        let mut plan = new_plan(&request(), "plan-names".into()).expect("plan should materialize");
+        plan.locked = true;
+        plan.candidate_execution_ids = vec!["candidate-1".into()];
+        let original_scope_hash = plan.scope_hash.clone();
+
+        apply_update(
+            &mut plan,
+            &PlanUpdateRequest {
+                candidate_labels: Some(BTreeMap::from([(
+                    "candidate-1".into(),
+                    "  Harness Next  ".into(),
+                )])),
+                ..PlanUpdateRequest::default()
+            },
+        )
+        .expect("candidate metadata should remain editable");
+        assert_eq!(
+            plan.candidate_labels.get("candidate-1").map(String::as_str),
+            Some("Harness Next")
+        );
+        assert_eq!(plan.scope_hash, original_scope_hash);
+
+        apply_update(
+            &mut plan,
+            &PlanUpdateRequest {
+                candidate_labels: Some(BTreeMap::from([("candidate-1".into(), "  ".into())])),
+                ..PlanUpdateRequest::default()
+            },
+        )
+        .expect("an empty name should restore the generated label");
+        assert!(plan.candidate_labels.is_empty());
+    }
+
+    #[test]
+    fn candidate_names_only_accept_retained_candidate_executions() {
+        let mut plan =
+            new_plan(&request(), "plan-name-validation".into()).expect("plan should materialize");
+        plan.locked = true;
+        let error = apply_update(
+            &mut plan,
+            &PlanUpdateRequest {
+                candidate_labels: Some(BTreeMap::from([(
+                    "unknown-execution".into(),
+                    "Mystery candidate".into(),
+                )])),
+                ..PlanUpdateRequest::default()
+            },
+        )
+        .expect_err("unknown executions must be rejected");
+        assert!(error.to_string().contains("unknown execution"));
+    }
+
+    #[test]
+    fn reads_schema_v1_plans_created_before_candidate_names() {
+        let plan = new_plan(&request(), "plan-old-v1".into()).expect("plan should materialize");
+        let mut value = serde_json::to_value(plan).expect("plan should serialize");
+        value
+            .as_object_mut()
+            .expect("plan should be an object")
+            .remove("candidate_labels");
+        let decoded: LocalPlan = serde_json::from_value(value).expect("old plan should decode");
+        assert!(decoded.candidate_labels.is_empty());
     }
 
     #[test]

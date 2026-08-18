@@ -258,6 +258,43 @@ describe('local plan execution comparison', () => {
     expect(html).toContain('Stable')
   })
 
+  it('uses persisted candidate names throughout the comparison and exposes rename controls', () => {
+    const plan: LocalPlan = {
+      ...candidateRunningPlan,
+      state: 'comparison_ready',
+      candidate_execution_ids: ['candidate-1', 'candidate-2'],
+      candidate_labels: {
+        'candidate-1': 'Harness Latest',
+        'candidate-2': 'Harness Next',
+      },
+      last_attempt_id: 'candidate-2',
+    }
+    const html = renderToStaticMarkup(
+      <PlanExecutionHistory
+        plan={plan}
+        summaries={{
+          'baseline-1': execution('baseline-1'),
+          'candidate-1': execution('candidate-1'),
+          'candidate-2': execution('candidate-2'),
+        }}
+        visualBaselineId="baseline-1"
+        comparisonCandidateIds={['candidate-1', 'candidate-2']}
+        selectedCandidateId="candidate-2"
+        onVisualBaselineChange={() => undefined}
+        onToggleCandidate={() => undefined}
+        onRenameCandidate={async () => undefined}
+        loading={false}
+      />,
+    )
+
+    expect(html).toContain('Harness Latest')
+    expect(html).toContain('Harness Next')
+    expect(html).toContain('Candidate names')
+    expect(html).toContain('aria-label="Name Candidate #1"')
+    expect(html).toContain('value="Harness Latest"')
+    expect(html.match(/>Rename</g)).toHaveLength(2)
+  })
+
   it('can use a candidate as a visual-only baseline', () => {
     const plan: LocalPlan = {
       ...candidateRunningPlan,
