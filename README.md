@@ -63,8 +63,7 @@ Vite server proxies runtime data, the scoped iii WebSocket, and local-run APIs
 to the Rust dashboard on port 4173.
 
 Rust-defined composite scenarios, including the multi-test `security_review`
-example, result schema v2 and their common read-only execution projection are documented in
-[docs/security-review.md](docs/security-review.md).
+example, use the shared result schema v2 and read-only execution projection.
 
 The running Harness must publish request and response schemas compatible with
 the current typed surface. Missing or incompatible fields fail preflight; no
@@ -99,8 +98,7 @@ HARNESS_E2E_WORKERS_REVISION=<full-subject-git-sha> \
   ./scripts/demo_e2e_control_plane.sh
 ```
 
-Use `--catalog-only` for a no-model smoke check. See
-[docs/demo.md](docs/demo.md) for the expected flow and retained evidence.
+Use `--catalog-only` for a no-model smoke check.
 
 Start the asynchronous worker:
 
@@ -129,14 +127,12 @@ Subject policies deny `e2e::*`.
 
 Durable artifacts are chunked through `storage::*`, while longitudinal series
 are ingested through `database::*`. The runner has no S3, GCS, R2, SQL-driver,
-or Harness dependency. See [docs/durable-history.md](docs/durable-history.md)
-for retention, deployment, integrity, and recovery details.
+or Harness dependency.
 
 Weekly Stress materializes deterministic fault plans and evaluates journals from a
 protected supervisor. See [docs/fault-injection.md](docs/fault-injection.md).
 Lane promotion is governed by
-[`config/policies/cutover.json`](config/policies/cutover.json) and the
-[incident/rollback runbook](docs/incident-and-rollback.md).
+[`config/policies/cutover.json`](config/policies/cutover.json).
 
 ## Repository boundaries
 
@@ -157,15 +153,13 @@ Contract compatibility is established at runtime from
 `engine::functions::list` and `engine::functions::info`; the checked-in schemas
 are parity fixtures, not a linked product API.
 
-The assessment and on-demand analysis boundary is documented in
-[docs/assessment-result-contract.md](docs/assessment-result-contract.md).
-Payloads have one current shape and are written only to `results.json`; scenario
-contracts are the only versioned domain.
+The assessment and on-demand analysis boundary has one current payload shape,
+written only to `results.json`; scenario contracts are the only versioned
+domain.
 
-Deterministic, pre-cleanup asset capture and its explicit safety limits are
-documented in [docs/asset-evidence.md](docs/asset-evidence.md). Capture writes an
-unversioned sidecar containing the canonical deterministic validation portion,
-which is aggregated into `results.json`.
+Deterministic, pre-cleanup asset capture applies explicit safety limits and
+writes an unversioned sidecar containing the canonical deterministic validation
+portion, which is aggregated into `results.json`.
 
 ## Observation
 
@@ -210,9 +204,7 @@ cohort.
 amplification deltas remain independent. A tier is repeatable after five local
 runs satisfy the deliverable, structural, and technical thresholds. Cost and
 wall-time are reported as observed metrics and compared only within a compatible
-baseline/candidate cohort. See [docs/release.md](docs/release.md) for the
-protected environment, immutable identity, artifact, retry, and promotion
-boundaries.
+baseline/candidate cohort.
 
 ## Worker releases
 
