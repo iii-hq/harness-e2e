@@ -6,6 +6,9 @@
 //! behaviour against its own reference. A system that hard-codes the sample it
 //! was shown fails on first contact with the held-out one.
 
+pub mod log_pipeline;
+pub mod migration_tool;
+pub mod regression_suite;
 pub(in crate::scenarios) mod repo;
 pub mod security_scanner;
 

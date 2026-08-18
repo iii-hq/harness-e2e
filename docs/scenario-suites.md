@@ -3,8 +3,9 @@
 Scenarios belong to one of two suites.
 
 - **Canonical** is what every standing gate runs. Membership is unchanged.
-- **Extended** is thirty-one additional scenarios covering dependency failure,
-  graph and loop engineering, build-shaped deliverables, and context handling.
+- **Extended** is thirty-five additional scenarios: four that build a working
+  system and verify it by running it, plus coverage of dependency failure,
+  graph and loop engineering, file deliverables, and context handling.
 
 An empty selection resolves to the canonical suite, so adding extended
 scenarios does not change what a PR gate, the daily lane, or `e2e::run` with
@@ -26,8 +27,8 @@ A single extended scenario runs by id without the suite flag:
 cargo run --locked --bin harness-e2e -- run ... --scenario reliability.stale_counter
 ```
 
-A scenario joins a suite by its id prefix: `cognition.`, `deliverable.`,
-`orchestration.`, and `reliability.` are extended, everything
+A scenario joins a suite by its id prefix: `build.`, `cognition.`,
+`deliverable.`, `orchestration.`, and `reliability.` are extended, everything
 else is canonical. Adding a scenario to an existing family needs no registry change
 beyond the usual `ScenarioId` entry.
 
@@ -44,6 +45,22 @@ temporary `e2etest::*` probe on its own engine connection (`src/scenarios/probe.
 and removes it during cleanup. Probes are how a run gets a service that lies,
 disappears mid-session, fails twice then succeeds, or deduplicates a
 redelivery, without touching the subject stack's configuration.
+
+### build
+
+Build a substantial system from a prompt, then verify it by using it. The
+session gets a sample to develop against; the runner plants held-out inputs
+*after* the session ends, runs what was built, and compares the behaviour
+against its own reference. Nothing about the description, the plan, or the
+shape of the code is graded, and a system that memorised its sample fails on
+first contact with the held-out one.
+
+| Scenario | The system built | Verified by |
+| --- | --- | --- |
+| `build.security_scanner` | A static scanner with five named rules and a JSON report | Scanning an unseen tree carrying one issue per rule beside safe equivalents of each, a clean tree, and the same tree twice |
+| `build.log_pipeline` | A log aggregator over a directory of log files | Aggregating unseen logs against the runner's own counts, quarantining malformed lines, and holding up over twenty thousand lines |
+| `build.migration_tool` | A forward and backward SQLite schema migration | Migrating an unseen database, checking column, backfill and index, rolling back to the original rows, and re-running `up` for idempotency |
+| `build.regression_suite` | A regression suite for a pricing library | Breaking the library four ways underneath it: every defect must fail the suite, a comment-only change must not |
 
 ### reliability
 

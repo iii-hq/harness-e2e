@@ -437,6 +437,15 @@ pub enum ScenarioId {
     #[serde(rename = "pr_review.prompt_provenance")]
     #[value(name = "pr_review.prompt_provenance")]
     PrReviewPromptProvenance,
+    #[serde(rename = "build.log_pipeline")]
+    #[value(name = "build.log_pipeline")]
+    BuildLogPipeline,
+    #[serde(rename = "build.migration_tool")]
+    #[value(name = "build.migration_tool")]
+    BuildMigrationTool,
+    #[serde(rename = "build.regression_suite")]
+    #[value(name = "build.regression_suite")]
+    BuildRegressionSuite,
     #[serde(rename = "build.security_scanner")]
     #[value(name = "build.security_scanner")]
     BuildSecurityScanner,
@@ -536,7 +545,7 @@ pub enum ScenarioId {
 }
 
 impl ScenarioId {
-    pub const ALL: [Self; 59] = [
+    pub const ALL: [Self; 62] = [
         Self::DirectAnswer,
         Self::PersistentState,
         Self::ReactiveAutomation,
@@ -564,6 +573,9 @@ impl ScenarioId {
         Self::PrReviewAssetRetryAck,
         Self::PrReviewPresenceReconnect,
         Self::PrReviewPromptProvenance,
+        Self::BuildLogPipeline,
+        Self::BuildMigrationTool,
+        Self::BuildRegressionSuite,
         Self::BuildSecurityScanner,
         Self::CognitionGoalDrift,
         Self::CognitionInjectionResistance,
@@ -627,6 +639,9 @@ impl ScenarioId {
             Self::PrReviewAssetRetryAck => pr_review_regressions::ASSET_RETRY_ACK_ID,
             Self::PrReviewPresenceReconnect => pr_review_regressions::PRESENCE_RECONNECT_ID,
             Self::PrReviewPromptProvenance => pr_review_regressions::PROMPT_PROVENANCE_ID,
+            Self::BuildLogPipeline => build::log_pipeline::ID,
+            Self::BuildMigrationTool => build::migration_tool::ID,
+            Self::BuildRegressionSuite => build::regression_suite::ID,
             Self::BuildSecurityScanner => build::security_scanner::ID,
             Self::CognitionGoalDrift => cognition::goal_drift::ID,
             Self::CognitionInjectionResistance => cognition::injection_resistance::ID,
@@ -706,6 +721,9 @@ impl ScenarioId {
                 pr_review_regressions::ReviewCase::PromptProvenance,
                 run_id,
             ),
+            Self::BuildLogPipeline => build::log_pipeline::scenario(run_id),
+            Self::BuildMigrationTool => build::migration_tool::scenario(run_id),
+            Self::BuildRegressionSuite => build::regression_suite::scenario(run_id),
             Self::BuildSecurityScanner => build::security_scanner::scenario(run_id),
             Self::CognitionGoalDrift => cognition::goal_drift::scenario(run_id),
             Self::CognitionInjectionResistance => cognition::injection_resistance::scenario(run_id),
@@ -822,6 +840,9 @@ impl ScenarioId {
                 namespace,
                 seed,
             )?,
+            Self::BuildLogPipeline => build::log_pipeline::materialize(namespace, seed)?,
+            Self::BuildMigrationTool => build::migration_tool::materialize(namespace, seed)?,
+            Self::BuildRegressionSuite => build::regression_suite::materialize(namespace, seed)?,
             Self::BuildSecurityScanner => build::security_scanner::materialize(namespace, seed)?,
             Self::CognitionGoalDrift => cognition::goal_drift::materialize(namespace, seed)?,
             Self::CognitionInjectionResistance => {
@@ -973,13 +994,13 @@ mod tests {
                 .materialize("run", scenario.canonical_seed())
                 .unwrap();
         }
-        assert_eq!(ids.len(), 59);
+        assert_eq!(ids.len(), 62);
     }
 
     #[test]
     fn the_extended_suite_holds_the_four_new_families() {
         let extended = ScenarioSuite::Extended.scenarios();
-        assert_eq!(extended.len(), 32);
+        assert_eq!(extended.len(), 35);
         for scenario in &extended {
             let family = scenario.as_str().split('.').next().unwrap_or_default();
             assert!(matches!(
