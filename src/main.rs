@@ -21,6 +21,8 @@ struct Cli {
 enum Command {
     /// Print the code-defined scenario ids as a JSON array.
     List(ListArgs),
+    /// Print one scenario's prompt and its declared assessments.
+    Show(ShowArgs),
     /// List models registered in the running stack.
     Models(ModelsArgs),
     /// Execute one or more quality scenarios against a running stack.
@@ -111,6 +113,18 @@ struct RunArgs {
 }
 
 #[derive(Debug, Args)]
+struct ShowArgs {
+    /// The scenario to print.
+    #[arg(long, value_enum)]
+    scenario: ScenarioId,
+
+    /// Run id the prompt is rendered for. Scenario prompts name per-run
+    /// functions, scopes, and sessions, so a real run's ids differ from these.
+    #[arg(long, default_value = "showcase")]
+    run_id: String,
+}
+
+#[derive(Debug, Args)]
 struct ListArgs {
     /// Print only the scenarios in this suite.
     #[arg(long, value_enum)]
@@ -177,6 +191,29 @@ async fn main() -> Result<()> {
                 .map(|scenario| scenario.as_str())
                 .collect();
             println!("{}", serde_json::to_string(&ids)?);
+            Ok(())
+        }
+        Command::Show(args) => {
+            let spec = args.scenario.spec(&args.run_id);
+            println!("# {} (version {})", spec.id, spec.version);
+            println!(
+                "# suite: {:?}; max_turns: {}; stuck_timeout: {}s",
+                args.scenario.suite(),
+                spec.execution.max_turns,
+                spec.execution.stuck_timeout_seconds
+            );
+            for criterion in &spec.criteria {
+                let policy = match criterion.policy {
+                    harness_e2e::assessment::AssessmentPolicy::HardGate => "hard gate",
+                    harness_e2e::assessment::AssessmentPolicy::Advisory => "advisory",
+                };
+                println!(
+                    "# {} [{policy}, {} points]: {}",
+                    criterion.id, criterion.weight, criterion.description
+                );
+            }
+            println!();
+            println!("{}", spec.prompt);
             Ok(())
         }
         Command::Models(args) => models(args).await,
