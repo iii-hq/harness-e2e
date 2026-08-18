@@ -763,13 +763,13 @@ fn courier_spawns_are_minimal(calls: &[CallAt], names: &Names) -> bool {
 
 fn no_forbidden_calls(calls: &[CallAt]) -> bool {
     calls.iter().all(|call| {
-        !call.function_id.starts_with("state::")
-            && !call.function_id.starts_with("cron::")
-            && !(call.function_id == "engine::register_trigger"
+        !(call.function_id.starts_with("state::")
+            || call.function_id.starts_with("cron::")
+            || (call.function_id == "engine::register_trigger"
                 && matches!(
                     call.arguments.get("trigger_type").and_then(Value::as_str),
                     Some("timer" | "cron")
-                ))
+                )))
     })
 }
 

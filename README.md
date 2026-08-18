@@ -33,7 +33,14 @@ List the materialized scenarios and their scenario versions:
 
 ```bash
 cargo run --locked --bin harness-e2e -- list
+cargo run --locked --bin harness-e2e -- list --suite extended
 ```
+
+Scenarios belong to the canonical suite or the extended one. An empty
+selection resolves to the canonical suite, so the standing gates are unchanged
+by extended coverage; `--suite extended` opts a run into the thirty
+reliability, orchestration, deliverable, and cognition scenarios documented in
+[docs/scenario-suites.md](docs/scenario-suites.md).
 
 Run against an existing stack:
 

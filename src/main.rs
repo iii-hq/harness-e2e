@@ -6,7 +6,7 @@ use harness_e2e::dashboard;
 use harness_e2e::fault::{FaultEvaluation, FaultJournal, FaultPlan, FaultProfile};
 use harness_e2e::judge::JudgeConfig;
 use harness_e2e::report::E2eReport;
-use harness_e2e::scenarios::{self, ScenarioId};
+use harness_e2e::scenarios::{self, ScenarioId, ScenarioSuite};
 use harness_e2e::suite::{run_suite, SubjectConfig, SuiteRunConfig};
 
 #[derive(Debug, Parser)]
@@ -19,7 +19,7 @@ struct Cli {
 #[derive(Debug, Subcommand)]
 enum Command {
     /// Print the code-defined scenario ids as a JSON array.
-    List,
+    List(ListArgs),
     /// List models registered in the running stack.
     Models(ModelsArgs),
     /// Execute one or more quality scenarios against a running stack.
@@ -96,6 +96,18 @@ struct RunArgs {
     /// Run only the selected scenario. Repeat to select more than one.
     #[arg(long, value_enum)]
     scenario: Vec<ScenarioId>,
+
+    /// Which suite to run when no scenario is named. Extended scenarios stay
+    /// out of the default selection and are opted into per run.
+    #[arg(long, value_enum, default_value_t = ScenarioSuite::Canonical)]
+    suite: ScenarioSuite,
+}
+
+#[derive(Debug, Args)]
+struct ListArgs {
+    /// Print only the scenarios in this suite.
+    #[arg(long, value_enum)]
+    suite: Option<ScenarioSuite>,
 }
 
 #[derive(Debug, Args)]
@@ -151,9 +163,10 @@ async fn main() -> Result<()> {
         )
         .init();
     match Cli::parse().command {
-        Command::List => {
+        Command::List(args) => {
             let ids: Vec<_> = ScenarioId::ALL
                 .iter()
+                .filter(|scenario| args.suite.is_none_or(|suite| scenario.suite() == suite))
                 .map(|scenario| scenario.as_str())
                 .collect();
             println!("{}", serde_json::to_string(&ids)?);
@@ -227,7 +240,7 @@ fn report(args: ReportArgs) -> Result<()> {
 }
 
 async fn run(args: RunArgs) -> Result<()> {
-    let selected_scenarios = scenarios::selected(&args.scenario);
+    let selected_scenarios = scenarios::selected_in(&args.scenario, args.suite);
     let technical_retries = args.technical_retries.unwrap_or_else(|| {
         if selected_scenarios.iter().any(|scenario| {
             scenario.execution_kind() == scenarios::ScenarioExecutionKind::CompositeFlow
@@ -305,8 +318,60 @@ mod tests {
             Cli::try_parse_from(["harness-e2e", "list"])
                 .unwrap()
                 .command,
-            Command::List
+            Command::List(ListArgs { suite: None })
         ));
+    }
+
+    #[test]
+    fn list_and_run_accept_a_suite_selector() {
+        let Command::List(args) =
+            Cli::try_parse_from(["harness-e2e", "list", "--suite", "extended"])
+                .unwrap()
+                .command
+        else {
+            panic!("expected list command");
+        };
+        assert_eq!(args.suite, Some(ScenarioSuite::Extended));
+
+        let Command::Run(args) = Cli::try_parse_from([
+            "harness-e2e",
+            "run",
+            "--url",
+            "ws://127.0.0.1:49134",
+            "--model",
+            "m",
+            "--provider",
+            "p",
+            "--suite",
+            "extended",
+        ])
+        .unwrap()
+        .command
+        else {
+            panic!("expected run command");
+        };
+        assert_eq!(args.suite, ScenarioSuite::Extended);
+        assert!(args.scenario.is_empty());
+    }
+
+    #[test]
+    fn a_run_without_a_suite_selector_stays_canonical() {
+        let Command::Run(args) = Cli::try_parse_from([
+            "harness-e2e",
+            "run",
+            "--url",
+            "ws://127.0.0.1:49134",
+            "--model",
+            "m",
+            "--provider",
+            "p",
+        ])
+        .unwrap()
+        .command
+        else {
+            panic!("expected run command");
+        };
+        assert_eq!(args.suite, ScenarioSuite::Canonical);
     }
 
     #[test]
