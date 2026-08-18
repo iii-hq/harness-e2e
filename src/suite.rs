@@ -32,8 +32,8 @@ use crate::scenarios::{
     ScenarioSpec,
 };
 use crate::wire::{
-    ControlPlaneEvidence, FunctionPolicy, MessageInput, Model, SendOptions, SendRequest,
-    SendResponse, SessionInit, StatusReport,
+    ControlPlaneEvidence, FunctionPolicy, HarnessMode, MessageInput, Model, SendOptions,
+    SendRequest, SendResponse, SessionInit, StatusReport,
 };
 use crate::workflow::{
     composite_definition, composite_descriptor_catalog, composite_runtime, execute_workflow,
@@ -1594,6 +1594,7 @@ async fn execute(
                     })),
                 }),
                 options: Some(SendOptions {
+                    mode: Some(HarnessMode::Agent),
                     max_turns: Some(spec.execution.max_turns),
                     max_output_tokens: spec.execution.max_output_tokens,
                     max_total_tokens: Some(spec.execution.max_total_tokens),

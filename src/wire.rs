@@ -116,6 +116,11 @@ pub enum MessageInput {
 
 #[derive(Debug, Clone, Default, Serialize, JsonSchema)]
 pub struct SendOptions {
+    /// Console / send operating mode. `agent` runs the turn autonomously;
+    /// `ask` caps the turn's dispatch policy at the harness default and is
+    /// never what a scenario wants.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mode: Option<HarnessMode>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub max_turns: Option<u32>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -126,6 +131,16 @@ pub struct SendOptions {
     pub functions: Option<FunctionPolicy>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub metadata: Option<Value>,
+}
+
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, JsonSchema, clap::ValueEnum,
+)]
+#[serde(rename_all = "snake_case")]
+pub enum HarnessMode {
+    Ask,
+    #[default]
+    Agent,
 }
 
 #[derive(Debug, Clone, Default, Serialize, JsonSchema)]
@@ -412,6 +427,11 @@ const SEND_REQUEST: &[SchemaField] = &[
     SchemaField {
         path: "options",
         kind: JsonType::Object,
+        required: false,
+    },
+    SchemaField {
+        path: "options.mode",
+        kind: JsonType::String,
         required: false,
     },
     SchemaField {
