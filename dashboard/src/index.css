@@ -8944,14 +8944,15 @@ footer {
   background: var(--surface-soft);
 }
 
-.plan-visual-baseline-field {
+.plan-visual-baseline-field,
+.plan-candidate-selection {
   display: grid;
   min-width: 0;
   gap: 0.55rem;
 }
 
 .plan-visual-baseline-field > span,
-.plan-execution-list-intro > span {
+.plan-candidate-selection legend {
   color: var(--text-muted);
   font-size: 0.61rem;
   font-weight: 700;
@@ -8976,181 +8977,46 @@ footer {
   line-height: 1.45;
 }
 
-.plan-execution-list-intro {
-  display: grid;
-  grid-column: 1 / -1;
-  gap: 0.35rem;
-  padding-top: var(--plan-card-space);
-  border-top: 1px solid var(--line);
+.plan-candidate-selection {
+  margin: 0;
+  padding: 0;
+  border: 0;
 }
 
-.plan-execution-list-intro > small {
-  color: var(--text-muted);
-  font-size: 0.62rem;
-  line-height: 1.45;
+.plan-candidate-selection legend {
+  padding: 0;
 }
 
-.plan-execution-list {
-  display: grid;
-  grid-column: 1 / -1;
-  overflow: hidden;
+.plan-candidate-options {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.plan-candidate-option {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  min-height: 40px;
+  padding: 0.5rem 0.7rem;
   border: 1px solid var(--line);
   border-radius: var(--radius-sm);
   background: var(--surface);
-}
-
-.plan-execution-list-row {
-  display: grid;
-  grid-template-columns: minmax(7rem, 0.28fr) minmax(14rem, 1fr) auto;
-  align-items: center;
-  min-width: 0;
-  gap: 1rem;
-  padding: 0.9rem 1rem;
-  border-left: 2px solid transparent;
-  background: var(--surface);
-  transition:
-    background-color 160ms ease,
-    border-color 160ms ease;
-}
-
-.plan-execution-list-row + .plan-execution-list-row {
-  border-top: 1px solid var(--line);
-}
-
-.plan-execution-list-row:hover,
-.plan-execution-list-row:focus-within {
-  background: var(--surface-soft);
-}
-
-.plan-execution-list-row.is-selected {
-  border-left-color: var(--accent);
-  background: color-mix(in srgb, var(--accent-soft) 60%, var(--surface));
-}
-
-.plan-execution-list-row.is-baseline {
-  border-left-color: var(--text-muted);
-}
-
-.plan-execution-list-control,
-.plan-execution-list-control label {
-  display: flex;
-  align-items: center;
-  gap: 0.5rem;
-}
-
-.plan-execution-list-control label {
   color: var(--text-soft);
   cursor: pointer;
-  font-size: 0.65rem;
-  font-weight: 700;
-}
-
-.plan-execution-list-control input {
-  width: 1rem;
-  height: 1rem;
-  margin: 0;
-  accent-color: var(--accent);
-}
-
-.plan-execution-role {
-  color: var(--text-muted);
-  font-size: 0.61rem;
-  font-weight: 700;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
-}
-
-.plan-execution-list-identity {
-  display: grid;
-  min-width: 0;
-  gap: 0.35rem;
-}
-
-.plan-execution-list-identity > div {
-  display: flex;
-  align-items: center;
-  min-width: 0;
-  gap: 0.6rem;
-}
-
-.plan-execution-list-identity strong {
-  overflow: hidden;
-  color: var(--text);
-  font-size: 0.74rem;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.plan-execution-list-identity .status-pill {
-  flex: none;
-  padding: 0.2rem 0.45rem;
-  font-size: 0.56rem;
-}
-
-.plan-execution-list-identity p {
-  display: flex;
-  min-width: 0;
-  gap: 0.65rem;
-  margin: 0;
-  color: var(--text-muted);
-  font-size: 0.61rem;
-}
-
-.plan-execution-list-identity code {
-  overflow: hidden;
-  color: var(--text-muted);
-  font-size: 0.59rem;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.plan-candidate-name-form {
-  display: grid;
-  grid-template-columns: minmax(13rem, 1fr) auto;
-  align-items: center;
-  min-width: min(34rem, 42vw);
-  gap: 0.5rem;
-}
-
-.plan-candidate-name-form label {
-  display: grid;
-  min-width: 0;
-  gap: 0.28rem;
-}
-
-.plan-candidate-name-form label > span {
-  color: var(--text-soft);
-  font-size: 0.64rem;
+  font-size: 0.68rem;
   font-weight: 650;
 }
 
-.plan-candidate-name-form input {
-  width: 100%;
-  min-height: 38px;
-  padding: 0.5rem 0.65rem;
-  border: 1px solid var(--line-strong);
-  border-radius: var(--radius-sm);
-  background: var(--surface);
+.plan-candidate-option.is-selected {
+  border-color: color-mix(in srgb, var(--accent) 42%, var(--line));
+  background: var(--accent-soft);
   color: var(--text);
-  font: 600 0.7rem var(--font-body);
 }
 
-.plan-candidate-name-form > small {
-  grid-column: 1 / -1;
-  color: var(--danger);
-  font-size: 0.62rem;
-  line-height: 1.45;
-}
-
-.plan-candidate-name-actions {
-  display: flex;
-  gap: 0.4rem;
-}
-
-.plan-candidate-name-form .button,
-.plan-candidate-edit-button {
-  min-height: 38px;
-  padding: 0.5rem 0.75rem;
+.plan-candidate-option input {
+  margin: 0;
+  accent-color: var(--accent);
 }
 
 .plan-scenario-comparison {
@@ -9382,49 +9248,212 @@ footer {
   box-shadow: 1px 0 0 var(--line);
 }
 
-.plan-non-comparable {
+.plan-run-history {
   display: grid;
-  gap: 0.8rem;
+  gap: 1rem;
   background: var(--surface-soft);
 }
 
-.plan-non-comparable > div,
-.plan-non-comparable li > span:first-child {
+.plan-run-history-heading,
+.plan-run-history-heading > div {
   display: grid;
-  gap: 0.2rem;
+  gap: 0.3rem;
 }
 
-.plan-non-comparable > div span,
-.plan-non-comparable small,
-.plan-non-comparable code {
+.plan-run-history-heading {
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: start;
+}
+
+.plan-run-history-heading > div > span,
+.plan-run-history-heading > span {
   color: var(--text-muted);
   font-size: 0.62rem;
   font-weight: 400;
 }
 
-.plan-non-comparable ul {
-  display: grid;
-  gap: 0.5rem;
-  margin: 0;
-  padding: 0;
-  list-style: none;
+.plan-run-history-heading > span {
+  font-family: var(--font-mono);
+  white-space: nowrap;
 }
 
-.plan-non-comparable li {
+.plan-run-history-list {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto auto;
-  align-items: center;
-  gap: 0.8rem;
-  padding: 0.65rem 0.75rem;
+  overflow: hidden;
+  margin: 0;
+  padding: 0;
   border: 1px solid var(--line);
   border-radius: var(--radius-sm);
   background: var(--surface);
-  font-size: 0.68rem;
+  list-style: none;
 }
 
-.plan-non-comparable li a {
+.plan-run-history-list > li {
+  display: grid;
+  min-width: 0;
+  padding: 1rem;
+}
+
+.plan-run-history-list > li + li {
+  border-top: 1px solid var(--line);
+}
+
+.plan-run-record-main {
+  display: grid;
+  grid-template-columns: minmax(14rem, 1fr) minmax(9rem, auto) auto;
+  align-items: start;
+  gap: 1rem;
+}
+
+.plan-run-record-identity,
+.plan-run-record-state {
+  display: grid;
+  min-width: 0;
+  gap: 0.3rem;
+}
+
+.plan-run-record-identity > span {
+  color: var(--text-muted);
+  font-size: 0.58rem;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+.plan-run-record-identity strong {
+  overflow: hidden;
+  color: var(--text);
+  font-size: 0.78rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.plan-run-record-identity code,
+.plan-run-record-state time {
+  overflow: hidden;
+  color: var(--text-muted);
+  font-size: 0.6rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.plan-execution-result {
+  display: inline-flex;
+  align-items: center;
+  justify-self: start;
+  gap: 0.4rem;
   color: var(--text-soft);
+  font-size: 0.62rem;
+  font-weight: 700;
+}
+
+.plan-execution-result::before {
+  width: 0.42rem;
+  height: 0.42rem;
+  border-radius: 50%;
+  background: currentColor;
+  content: "";
+}
+
+.plan-execution-result.status-pass {
+  color: var(--success);
+}
+
+.plan-execution-result.status-fail {
+  color: var(--danger);
+}
+
+.plan-execution-result.status-incomplete {
+  color: var(--warning);
+}
+
+.plan-run-record-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 0.75rem;
+}
+
+.plan-run-record-actions > a,
+.plan-execution-rename-button {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--text-soft);
+  cursor: pointer;
+  font: 650 0.64rem var(--font-body);
+  text-decoration: underline;
   text-underline-offset: 3px;
+}
+
+.plan-execution-rename-button:hover,
+.plan-execution-rename-button:focus-visible,
+.plan-run-record-actions > a:hover,
+.plan-run-record-actions > a:focus-visible {
+  color: var(--text);
+}
+
+.plan-execution-name-control form {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.plan-execution-name-control input {
+  width: min(16rem, 28vw);
+  min-height: 34px;
+  padding: 0.4rem 0.55rem;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  color: var(--text);
+  font: 600 0.68rem var(--font-body);
+}
+
+.plan-execution-name-control .button {
+  min-height: 34px;
+  padding: 0.4rem 0.55rem;
+}
+
+.plan-execution-name-control > small {
+  display: block;
+  margin-top: 0.35rem;
+  color: var(--danger);
+  font-size: 0.61rem;
+}
+
+.plan-run-record-metrics {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  margin: 0.85rem 0 0;
+  padding-top: 0.75rem;
+  border-top: 1px solid var(--line);
+}
+
+.plan-run-record-metrics > div {
+  display: grid;
+  gap: 0.2rem;
+  padding: 0 0.8rem;
+  border-left: 1px solid var(--line);
+}
+
+.plan-run-record-metrics > div:first-child {
+  padding-left: 0;
+  border-left: 0;
+}
+
+.plan-run-record-metrics dt {
+  color: var(--text-muted);
+  font-size: 0.56rem;
+  font-weight: 700;
+  letter-spacing: 0.045em;
+  text-transform: uppercase;
+}
+
+.plan-run-record-metrics dd {
+  margin: 0;
+  color: var(--text-soft);
+  font: 650 0.68rem var(--font-mono);
 }
 
 .plan-scenario-metric {
@@ -9680,12 +9709,23 @@ footer {
     text-transform: uppercase;
   }
 
-  .plan-non-comparable li {
-    grid-template-columns: minmax(0, 1fr) auto;
+  .plan-run-history-heading,
+  .plan-run-record-main {
+    grid-template-columns: 1fr;
   }
 
-  .plan-non-comparable li a {
-    grid-column: 1 / -1;
+  .plan-run-record-actions {
+    justify-content: flex-start;
+  }
+
+  .plan-run-record-metrics {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 0.75rem 0;
+  }
+
+  .plan-run-record-metrics > div:nth-child(3) {
+    padding-left: 0;
+    border-left: 0;
   }
 }
 
@@ -9794,31 +9834,23 @@ footer {
     text-align: left;
   }
 
-  .plan-execution-list-row {
-    grid-template-columns: 1fr auto;
-  }
-
-  .plan-execution-list-control {
-    grid-column: 1 / -1;
-  }
-
-  .plan-candidate-name-form {
-    grid-column: 1 / -1;
-    min-width: 0;
-  }
-
-  .plan-candidate-name-form {
+  .plan-candidate-options {
+    display: grid;
     grid-template-columns: 1fr;
   }
 
-  .plan-candidate-name-actions {
-    justify-content: flex-start;
+  .plan-candidate-option {
+    width: 100%;
   }
 
-  .plan-execution-list-identity p {
-    align-items: flex-start;
-    flex-direction: column;
-    gap: 0.25rem;
+  .plan-execution-name-control form {
+    align-items: stretch;
+    flex-wrap: wrap;
+  }
+
+  .plan-execution-name-control label,
+  .plan-execution-name-control input {
+    width: 100%;
   }
 
   .plan-scenario-table tbody th,

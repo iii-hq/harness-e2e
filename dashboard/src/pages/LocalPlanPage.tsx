@@ -26,6 +26,7 @@ import {
 import {
   buildExecutionPresentation,
   formatDate,
+  formatDuration,
   titleCase,
 } from '@/lib/execution-view'
 import {
@@ -455,32 +456,21 @@ function planExecutionLabel(plan: LocalPlan, executionId: string | null) {
   )
 }
 
-function PlanExecutionListRow({
+function ExecutionNameControl({
   executionId,
   fallbackLabel,
   label,
-  summary,
-  visualBaseline,
-  selected,
-  onToggle,
   onRename,
 }: {
   executionId: string
   fallbackLabel: string
   label: string
-  summary: DashboardExecutionSummary | null
-  visualBaseline: boolean
-  selected: boolean
-  onToggle: (selected: boolean) => void
   onRename: (executionId: string, label: string) => Promise<void>
 }) {
   const [draft, setDraft] = useState(label)
   const [editing, setEditing] = useState(false)
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  const displayLabel = label.trim() || fallbackLabel
-  const status = executionStatus(summary)
-  const timestamp = summary?.completed_at || summary?.started_at || ''
 
   useEffect(() => setDraft(label), [label])
 
@@ -499,42 +489,11 @@ function PlanExecutionListRow({
   }
 
   return (
-    <article
-      className={`plan-execution-list-row${selected ? ' is-selected' : ''}${visualBaseline ? ' is-baseline' : ''}`}
-    >
-      <div className="plan-execution-list-control">
-        {visualBaseline ? (
-          <span className="plan-execution-role">Visual baseline</span>
-        ) : (
-          <label>
-            <input
-              type="checkbox"
-              checked={selected}
-              onChange={(event) => onToggle(event.target.checked)}
-            />
-            <span>Compare</span>
-          </label>
-        )}
-      </div>
-      <div className="plan-execution-list-identity">
-        <div>
-          <strong>{displayLabel}</strong>
-          <span className={`status-pill ${status.tone}`}>{status.label}</span>
-        </div>
-        <p>
-          <span>
-            {timestamp ? formatDate(timestamp) : 'Report unavailable'}
-          </span>
-          <code title={executionId}>{executionId}</code>
-        </p>
-      </div>
+    <div className="plan-execution-name-control">
       {editing ? (
-        <form
-          className="plan-candidate-name-form"
-          onSubmit={(event) => void submit(event)}
-        >
+        <form onSubmit={(event) => void submit(event)}>
           <label>
-            <span>Display name</span>
+            <span className="visually-hidden">Name {fallbackLabel}</span>
             <input
               aria-label={`Name ${fallbackLabel}`}
               maxLength={80}
@@ -543,40 +502,61 @@ function PlanExecutionListRow({
               onChange={(event) => setDraft(event.target.value)}
             />
           </label>
-          <div className="plan-candidate-name-actions">
-            <button
-              className="button button-primary"
-              disabled={saving}
-              type="submit"
-            >
-              {saving ? 'Saving…' : 'Save'}
-            </button>
-            <button
-              className="button button-secondary"
-              disabled={saving}
-              type="button"
-              onClick={() => {
-                setDraft(label)
-                setError(null)
-                setEditing(false)
-              }}
-            >
-              Cancel
-            </button>
-          </div>
-          {error && <small role="alert">{error}</small>}
+          <button
+            className="button button-primary"
+            disabled={saving}
+            type="submit"
+          >
+            {saving ? 'Saving…' : 'Save'}
+          </button>
+          <button
+            className="button button-secondary"
+            disabled={saving}
+            type="button"
+            onClick={() => {
+              setDraft(label)
+              setError(null)
+              setEditing(false)
+            }}
+          >
+            Cancel
+          </button>
         </form>
       ) : (
         <button
-          className="button button-secondary plan-candidate-edit-button"
+          className="plan-execution-rename-button"
           type="button"
           onClick={() => setEditing(true)}
         >
-          Edit name
+          Rename
         </button>
       )}
-    </article>
+      {error && <small role="alert">{error}</small>}
+    </div>
   )
+}
+
+function finiteExecutionMetric(value: unknown) {
+  return typeof value === 'number' && Number.isFinite(value) ? value : null
+}
+
+function executionMetricValue(
+  summary: DashboardExecutionSummary | null,
+  metric: 'tokens' | 'duration' | 'calls' | 'errors',
+) {
+  const totals = summary?.totals
+  const value =
+    metric === 'tokens'
+      ? totals?.total_tokens
+      : metric === 'duration'
+        ? totals?.wall_time_seconds
+        : metric === 'calls'
+          ? totals?.function_calls
+          : totals?.function_call_errors
+  const numeric = finiteExecutionMetric(value)
+  if (numeric === null) return 'Not reported'
+  if (metric === 'duration') return formatDuration(numeric)
+  return Math.round(numeric).toLocaleString('en-US')
 }
 
 export function PlanExecutionHistory({
@@ -633,9 +613,6 @@ export function PlanExecutionHistory({
       selected: row.id === selectedCandidateId,
     }
   })
-  const diagnosticRows = rows.filter(
-    (row) => row.role === 'attempt' || row.fallback === 'running',
-  )
   return (
     <section
       className="panel plan-panel-composite plan-execution-history-panel"
@@ -685,84 +662,31 @@ export function PlanExecutionHistory({
               </select>
               <small>The official plan baseline remains unchanged.</small>
             </label>
-            <div className="plan-execution-list-intro">
-              <span>Plan executions</span>
-              <small>
-                Select comparison columns and give candidate runs a useful name.
-                Names are plan metadata; captured results stay unchanged.
-              </small>
-            </div>
-            <div className="plan-execution-list">
-              {selectableRows.map((row) => {
-                const fallbackLabel =
-                  row.role === 'baseline'
-                    ? 'Official baseline'
-                    : `Candidate #${row.candidateNumber ?? 1}`
-                const isCandidate = row.role === 'candidate'
-                const selected = comparisonCandidateIds.includes(row.id)
-                if (isCandidate && onRenameCandidate) {
-                  return (
-                    <PlanExecutionListRow
-                      executionId={row.id}
-                      fallbackLabel={fallbackLabel}
-                      key={row.id}
-                      label={plan.candidate_labels?.[row.id] ?? ''}
-                      summary={row.summary}
-                      visualBaseline={row.id === visualBaselineId}
-                      selected={selected}
-                      onToggle={(nextSelected) =>
-                        onToggleCandidate(row.id, nextSelected)
-                      }
-                      onRename={onRenameCandidate}
-                    />
-                  )
-                }
-                const status = executionStatus(row.summary)
-                const timestamp =
-                  row.summary?.completed_at || row.summary?.started_at || ''
-                return (
-                  <article
-                    className={`plan-execution-list-row${selected ? ' is-selected' : ''}${row.id === visualBaselineId ? ' is-baseline' : ''}`}
-                    key={row.id}
-                  >
-                    <div className="plan-execution-list-control">
-                      {row.id === visualBaselineId ? (
-                        <span className="plan-execution-role">
-                          Visual baseline
-                        </span>
-                      ) : (
-                        <label>
-                          <input
-                            type="checkbox"
-                            checked={selected}
-                            onChange={(event) =>
-                              onToggleCandidate(row.id, event.target.checked)
-                            }
-                          />
-                          <span>Compare</span>
-                        </label>
-                      )}
-                    </div>
-                    <div className="plan-execution-list-identity">
-                      <div>
-                        <strong>{fallbackLabel}</strong>
-                        <span className={`status-pill ${status.tone}`}>
-                          {status.label}
-                        </span>
-                      </div>
-                      <p>
-                        <span>
-                          {timestamp
-                            ? formatDate(timestamp)
-                            : 'Report unavailable'}
-                        </span>
-                        <code title={row.id}>{row.id}</code>
-                      </p>
-                    </div>
-                  </article>
-                )
-              })}
-            </div>
+            <fieldset className="plan-candidate-selection">
+              <legend>Candidates in table</legend>
+              <div className="plan-candidate-options">
+                {selectableRows
+                  .filter((row) => row.id !== visualBaselineId)
+                  .map((row) => {
+                    const selected = comparisonCandidateIds.includes(row.id)
+                    return (
+                      <label
+                        className={`plan-candidate-option${selected ? ' is-selected' : ''}`}
+                        key={row.id}
+                      >
+                        <input
+                          type="checkbox"
+                          checked={selected}
+                          onChange={(event) =>
+                            onToggleCandidate(row.id, event.target.checked)
+                          }
+                        />
+                        <span>{planExecutionLabel(plan, row.id)}</span>
+                      </label>
+                    )
+                  })}
+              </div>
+            </fieldset>
           </div>
           <div className="plan-execution-table-wrap">
             <table
@@ -905,34 +829,92 @@ export function PlanExecutionHistory({
               </tbody>
             </table>
           </div>
-          {diagnosticRows.length > 0 && (
-            <div className="plan-non-comparable plan-panel-section">
+          <section
+            className="plan-run-history plan-panel-section"
+            aria-labelledby="plan-run-history-title"
+          >
+            <div className="plan-run-history-heading">
               <div>
-                <strong>Non-comparable attempts</strong>
+                <strong id="plan-run-history-title">Execution history</strong>
                 <span>
-                  Running and incomplete attempts do not affect metric winners.
+                  Every retained run, with its captured usage and result.
+                  Incomplete attempts remain excluded from metric winners.
                 </span>
               </div>
-              <ul>
-                {diagnosticRows.map((row) => {
-                  const status = executionStatus(row.summary, row.fallback)
-                  return (
-                    <li key={`${row.role}:${row.id}`}>
-                      <span>
-                        <strong>{row.label}</strong>
-                        <small>{row.detail}</small>
-                        <code title={row.id}>{row.id}</code>
-                      </span>
-                      <span className={`status-pill ${status.tone}`}>
-                        {status.label}
-                      </span>
-                      <a href={hashForExecution(row.id)}>View report</a>
-                    </li>
-                  )
-                })}
-              </ul>
+              <span>
+                {rows.length} execution{rows.length === 1 ? '' : 's'}
+              </span>
             </div>
-          )}
+            <ul className="plan-run-history-list">
+              {rows.map((row) => {
+                const status = executionStatus(row.summary, row.fallback)
+                const timestamp =
+                  row.summary?.completed_at || row.summary?.started_at || ''
+                const roleLabel =
+                  row.role === 'baseline'
+                    ? 'Baseline'
+                    : row.role === 'candidate'
+                      ? `Candidate ${row.candidateNumber ?? ''}`.trim()
+                      : 'Attempt'
+                const displayLabel =
+                  row.role === 'attempt'
+                    ? row.label
+                    : planExecutionLabel(plan, row.id)
+                return (
+                  <li key={`${row.role}:${row.id}`}>
+                    <div className="plan-run-record-main">
+                      <div className="plan-run-record-identity">
+                        <span>{roleLabel}</span>
+                        <strong>{displayLabel}</strong>
+                        <code title={row.id}>{row.id}</code>
+                      </div>
+                      <div className="plan-run-record-state">
+                        <span
+                          className={`plan-execution-result ${status.tone}`}
+                        >
+                          {status.label}
+                        </span>
+                        <time dateTime={timestamp || undefined}>
+                          {timestamp
+                            ? formatDate(timestamp)
+                            : 'Date unavailable'}
+                        </time>
+                      </div>
+                      <div className="plan-run-record-actions">
+                        {row.role === 'candidate' && onRenameCandidate && (
+                          <ExecutionNameControl
+                            executionId={row.id}
+                            fallbackLabel={`Candidate #${row.candidateNumber ?? 1}`}
+                            label={plan.candidate_labels?.[row.id] ?? ''}
+                            onRename={onRenameCandidate}
+                          />
+                        )}
+                        <a href={hashForExecution(row.id)}>Open report</a>
+                      </div>
+                    </div>
+                    <dl className="plan-run-record-metrics">
+                      <div>
+                        <dt>Tokens</dt>
+                        <dd>{executionMetricValue(row.summary, 'tokens')}</dd>
+                      </div>
+                      <div>
+                        <dt>Duration</dt>
+                        <dd>{executionMetricValue(row.summary, 'duration')}</dd>
+                      </div>
+                      <div>
+                        <dt>Function calls</dt>
+                        <dd>{executionMetricValue(row.summary, 'calls')}</dd>
+                      </div>
+                      <div>
+                        <dt>Function errors</dt>
+                        <dd>{executionMetricValue(row.summary, 'errors')}</dd>
+                      </div>
+                    </dl>
+                  </li>
+                )
+              })}
+            </ul>
+          </section>
         </>
       )}
     </section>

@@ -185,12 +185,12 @@ describe('local plan execution comparison', () => {
       html.indexOf('Candidate #1'),
     )
     expect(html).toContain('Incomplete attempt')
-    expect(html).toContain('Excluded from comparison')
+    expect(html).toContain('Incomplete attempts remain excluded')
     expect(html).toContain('Baseline and candidates')
     expect(html).toContain('1 visual baseline · 2 selected')
     expect(html).toContain('Visual baseline')
     expect(html).toContain('Official baseline')
-    expect(html).toContain('Plan executions')
+    expect(html).toContain('Candidates in table')
     expect(html).toContain('never changes the official baseline')
     expect(html).toContain('<th scope="col">Metric</th>')
     expect(html).toContain('Pass rate')
@@ -208,8 +208,10 @@ describe('local plan execution comparison', () => {
       /data-metric-id="tokens"[\s\S]*?<td class="is-selected is-winner" data-execution-id="candidate-2"/,
     )
     expect(html).toContain('Winner')
-    expect(html).toContain('Non-comparable attempts')
-    expect(html).toContain('View report')
+    expect(html).toContain('Execution history')
+    expect(html).toContain('Function calls')
+    expect(html).toContain('Function errors')
+    expect(html).toContain('Open report')
   })
 
   it('selects metric winners by direction, preserves ties and ignores missing values', () => {
@@ -289,13 +291,13 @@ describe('local plan execution comparison', () => {
 
     expect(html).toContain('Harness Latest')
     expect(html).toContain('Harness Next')
-    expect(html).toContain('Plan executions')
+    expect(html).toContain('Execution history')
     expect(html).toContain('Visual baseline')
     expect(html).toContain('baseline-1')
     expect(html).toContain('candidate-1')
     expect(html).toContain('candidate-2')
-    expect(html.match(/>Edit name</g)).toHaveLength(2)
-    expect(html.match(/>Compare</g)).toHaveLength(2)
+    expect(html.match(/>Rename</g)).toHaveLength(2)
+    expect(html).toContain('Candidates in table')
   })
 
   it('can use a candidate as a visual-only baseline', () => {
