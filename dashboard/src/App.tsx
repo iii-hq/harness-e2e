@@ -1,4 +1,5 @@
 import { useEffect } from 'react'
+import { DashboardShell } from '@/components/DashboardShell'
 import { type DashboardRoute, useHashRoute } from '@/hooks/use-hash-route'
 import { CoveragePage } from '@/pages/CoveragePage'
 import { ExecutionPage } from '@/pages/ExecutionPage'
@@ -34,8 +35,18 @@ function RoutedPage({ route }: { route: DashboardRoute }) {
 }
 
 export function App({
+  embedded = false,
+  tabId,
+  panelSide,
+  theme,
+  onRequestClose,
   manageDocumentTitle = true,
 }: {
+  embedded?: boolean
+  tabId?: string
+  panelSide?: 'left' | 'right'
+  theme?: 'light' | 'dark'
+  onRequestClose?: () => void
   manageDocumentTitle?: boolean
 }) {
   const [route] = useHashRoute()
@@ -53,5 +64,16 @@ export function App({
         overview: 'Harness E2E executions',
       }[route.page] ?? 'Harness E2E executions'
   }, [manageDocumentTitle, route.page])
-  return <RoutedPage route={route} />
+  return (
+    <DashboardShell
+      route={route}
+      embedded={embedded}
+      tabId={tabId}
+      panelSide={panelSide}
+      theme={theme}
+      onRequestClose={onRequestClose}
+    >
+      <RoutedPage route={route} />
+    </DashboardShell>
+  )
 }

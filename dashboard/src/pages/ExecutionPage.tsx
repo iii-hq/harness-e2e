@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
-import { AppHeader } from '@/components/AppHeader'
+import { DashboardPageActions } from '@/components/DashboardPageActions'
 import { ScenarioMatrix } from '@/components/ScenarioMatrix'
 import { TranscriptDialog } from '@/components/TranscriptDialog'
 import {
@@ -45,7 +45,7 @@ import '@/design-system/styles.css'
 type DetailSection = 'summary' | 'results' | 'technical'
 
 const detailPanel =
-  'detail-section scroll-mt-28 overflow-hidden rounded-[var(--ds-radius-md)] border border-[var(--ds-color-line-strong)] bg-[var(--ds-color-surface)] p-5 md:p-6'
+  'detail-section scroll-mt-28 overflow-hidden rounded-[var(--ds-radius-md)] border border-[var(--color-edge)] bg-[var(--color-panel)] p-5 md:p-6'
 
 function sectionFromAnchor(anchor: string | null | undefined): DetailSection {
   if (
@@ -147,8 +147,8 @@ function ModelIdentityCard({
   models: ExecutionPresentation['subjects']
 }) {
   return (
-    <div className="min-w-0 bg-[var(--ds-color-surface-raised)] p-3">
-      <div className="font-mono text-[0.6rem] font-semibold uppercase tracking-[0.06em] text-[var(--ds-color-ink-muted)]">
+    <div className="min-w-0 bg-[var(--color-panel-raised)] p-3">
+      <div className="font-mono text-[0.6rem] font-semibold uppercase tracking-[0.06em] text-[var(--color-ink-ghost)]">
         {label}
       </div>
       {models.length ? (
@@ -158,20 +158,20 @@ function ModelIdentityCard({
             className="mt-1 min-w-0"
           >
             <strong
-              className="block break-words text-sm text-[var(--ds-color-ink)]"
+              className="block break-words text-sm text-[var(--color-ink)]"
               title={`${model.provider}/${model.model}`}
             >
               {friendlyModelName(model.model)}
             </strong>
             {model.provider && (
-              <code className="mt-0.5 block break-all font-mono text-[0.59rem] text-[var(--ds-color-ink-muted)]">
+              <code className="mt-0.5 block break-all font-mono text-[0.59rem] text-[var(--color-ink-ghost)]">
                 {model.provider}
               </code>
             )}
           </div>
         ))
       ) : (
-        <strong className="mt-1 block text-sm text-[var(--ds-color-ink-muted)]">
+        <strong className="mt-1 block text-sm text-[var(--color-ink-ghost)]">
           Not reported
         </strong>
       )}
@@ -259,8 +259,8 @@ function DecisionBoundary({
   caption: string
 }) {
   return (
-    <div className="grid content-start gap-2 bg-[var(--ds-color-surface-raised)] p-4">
-      <dt className="font-mono text-[0.62rem] font-semibold uppercase tracking-[0.06em] text-[var(--ds-color-ink-muted)]">
+    <div className="grid content-start gap-2 bg-[var(--color-panel-raised)] p-4">
+      <dt className="font-mono text-[0.62rem] font-semibold uppercase tracking-[0.06em] text-[var(--color-ink-ghost)]">
         {label}
       </dt>
       <dd className="m-0">
@@ -269,7 +269,7 @@ function DecisionBoundary({
           label={titleCase(value)}
         />
       </dd>
-      <p className="m-0 text-xs leading-5 text-[var(--ds-color-ink-soft)]">
+      <p className="m-0 text-xs leading-5 text-[var(--color-ink-faint)]">
         {caption}
       </p>
     </div>
@@ -308,7 +308,7 @@ export function DecisionSection({
       as="section"
       id="summary"
       padding="generous"
-      className="scroll-mt-28 rounded-[var(--ds-radius-md)] border-[var(--ds-color-line-strong)] p-5 md:p-6"
+      className="scroll-mt-28 rounded-[var(--ds-radius-md)] border-[var(--color-edge)] p-5 md:p-6"
       aria-labelledby="summary-heading"
     >
       <PageHeader
@@ -336,17 +336,17 @@ export function DecisionSection({
         }
       />
 
-      <div className="mt-6 grid overflow-hidden rounded-lg border border-[var(--ds-color-line)] lg:grid-cols-[minmax(0,1.35fr)_minmax(24rem,0.65fr)]">
+      <div className="mt-6 grid overflow-hidden rounded-lg border border-[var(--color-rule)] lg:grid-cols-[minmax(0,1.35fr)_minmax(24rem,0.65fr)]">
         <section className="grid content-start gap-3 p-4 md:p-5">
-          <p className="m-0 font-mono text-[0.65rem] font-semibold uppercase tracking-[0.06em] text-[var(--ds-color-brand-text)]">
+          <p className="m-0 font-mono text-[0.65rem] font-semibold uppercase tracking-[0.06em] text-[var(--color-accent)]">
             Recommended next step
           </p>
-          <p className="m-0 max-w-4xl text-sm leading-6 text-[var(--ds-color-ink)]">
+          <p className="m-0 max-w-4xl text-sm leading-6 text-[var(--color-ink)]">
             {recommendation}
           </p>
           {aiResult?.concerns?.[0] ? (
-            <p className="m-0 border-l-2 border-[var(--ds-color-warning)] pl-3 text-xs leading-5 text-[var(--ds-color-ink-soft)]">
-              <strong className="text-[var(--ds-color-warning)]">
+            <p className="m-0 border-l-2 border-[var(--color-warn)] pl-3 text-xs leading-5 text-[var(--color-ink-faint)]">
+              <strong className="text-[var(--color-warn)]">
                 Primary concern:
               </strong>{' '}
               {aiResult.concerns[0]}
@@ -363,7 +363,7 @@ export function DecisionSection({
             Inspect retained evidence
           </a>
         </section>
-        <dl className="m-0 grid gap-px border-t border-[var(--ds-color-line)] bg-[var(--ds-color-line)] sm:grid-cols-3 lg:grid-cols-1 lg:border-t-0 lg:border-l">
+        <dl className="m-0 grid gap-px border-t border-[var(--color-rule)] bg-[var(--color-rule)] sm:grid-cols-3 lg:grid-cols-1 lg:border-t-0 lg:border-l">
           <DecisionBoundary
             label="Objective system"
             value={systemStatus}
@@ -382,7 +382,7 @@ export function DecisionSection({
         </dl>
       </div>
 
-      <dl className="mt-4 grid grid-cols-2 gap-px overflow-hidden rounded-lg border border-[var(--ds-color-line)] bg-[var(--ds-color-line)] lg:grid-cols-4">
+      <dl className="mt-4 grid grid-cols-2 gap-px overflow-hidden rounded-lg border border-[var(--color-rule)] bg-[var(--color-rule)] lg:grid-cols-4">
         {[
           ['Assessments', summary?.assessment_count],
           ['Passed', summary?.assessment_outcomes?.passed],
@@ -391,12 +391,12 @@ export function DecisionSection({
         ].map(([label, value]) => (
           <div
             key={String(label)}
-            className="bg-[var(--ds-color-surface-raised)] p-3"
+            className="bg-[var(--color-panel-raised)] p-3"
           >
-            <dt className="font-mono text-[0.6rem] uppercase tracking-[0.06em] text-[var(--ds-color-ink-muted)]">
+            <dt className="font-mono text-[0.6rem] uppercase tracking-[0.06em] text-[var(--color-ink-ghost)]">
               {label}
             </dt>
-            <dd className="mt-1 mb-0 text-xl font-semibold text-[var(--ds-color-ink)]">
+            <dd className="mt-1 mb-0 text-xl font-semibold text-[var(--color-ink)]">
               {typeof value === 'number' ? value.toLocaleString('en-US') : '—'}
             </dd>
           </div>
@@ -439,7 +439,7 @@ function ResultsSection({
         summary="Compare objective outcomes, advisory conclusions, runtime, and scenario structure. Expand one row to inspect its benchmark metrics and workflow."
         className="[&_h2]:text-[clamp(1.5rem,2.4vw,2.2rem)]"
         actions={
-          <span className="font-mono text-xs text-[var(--ds-color-ink-muted)]">
+          <span className="font-mono text-xs text-[var(--color-ink-ghost)]">
             {scenarioCount} {scenarioCount === 1 ? 'scenario' : 'scenarios'} ·{' '}
             {runCount} {runCount === 1 ? 'run' : 'runs'}
           </span>
@@ -477,7 +477,7 @@ function TechnicalSection({
       as="section"
       id="technical"
       padding="generous"
-      className={`${detailPanel} bg-[var(--ds-color-surface-raised)] p-5 md:p-6`}
+      className={`${detailPanel} bg-[var(--color-panel-raised)] p-5 md:p-6`}
       aria-labelledby="technical-heading"
     >
       <PageHeader
@@ -491,12 +491,12 @@ function TechnicalSection({
         {Object.entries(technical).map(([key, value]) => (
           <div
             key={key}
-            className="rounded-lg border border-[var(--ds-color-line)] bg-[var(--ds-color-surface)] p-3"
+            className="rounded-lg border border-[var(--color-rule)] bg-[var(--color-panel)] p-3"
           >
-            <small className="font-mono text-[0.6rem] font-semibold uppercase tracking-[0.06em] text-[var(--ds-color-ink-muted)]">
+            <small className="font-mono text-[0.6rem] font-semibold uppercase tracking-[0.06em] text-[var(--color-ink-ghost)]">
               {key.replaceAll('_', ' ')}
             </small>
-            <code className="mt-2 block break-all font-mono text-xs text-[var(--ds-color-ink-soft)]">
+            <code className="mt-2 block break-all font-mono text-xs text-[var(--color-ink-faint)]">
               {typeof value === 'object'
                 ? JSON.stringify(value)
                 : String(value ?? 'Not reported')}
@@ -504,11 +504,11 @@ function TechnicalSection({
           </div>
         ))}
       </div>
-      <details className="mt-5 rounded-lg border border-[var(--ds-color-line)] bg-[var(--ds-color-surface)]">
-        <summary className="min-h-11 cursor-pointer px-4 py-3 text-sm font-semibold text-[var(--ds-color-ink)]">
+      <details className="mt-5 rounded-lg border border-[var(--color-rule)] bg-[var(--color-panel)]">
+        <summary className="min-h-11 cursor-pointer px-4 py-3 text-sm font-semibold text-[var(--color-ink)]">
           Preview raw JSON
         </summary>
-        <pre className="max-h-[560px] overflow-auto border-t border-[var(--ds-color-line)] p-4 font-mono text-xs text-[var(--ds-color-ink-muted)]">
+        <pre className="max-h-[560px] overflow-auto border-t border-[var(--color-rule)] p-4 font-mono text-xs text-[var(--color-ink-ghost)]">
           {JSON.stringify(detail, null, 2)}
         </pre>
       </details>
@@ -615,7 +615,7 @@ export function ExecutionPage({
 
   if (error)
     return (
-      <div className="ds-root min-h-dvh bg-[var(--ds-color-canvas)] text-[var(--ds-color-ink)]">
+      <div className="ds-root min-h-dvh bg-[var(--color-bg)] text-[var(--color-ink)]">
         <a className="skip-link" href={hashForWorkspace()}>
           Back to executions
         </a>
@@ -626,7 +626,7 @@ export function ExecutionPage({
           <Panel
             role="alert"
             padding="generous"
-            className="w-full rounded-[var(--ds-radius-md)] border-[var(--ds-color-danger)]"
+            className="w-full rounded-[var(--ds-radius-md)] border-[var(--color-alert)]"
           >
             <PageHeader
               context="Execution unavailable"
@@ -647,7 +647,7 @@ export function ExecutionPage({
     )
   if (!detail || !presentation)
     return (
-      <div className="ds-root min-h-dvh bg-[var(--ds-color-canvas)] text-[var(--ds-color-ink)]">
+      <div className="ds-root min-h-dvh bg-[var(--color-bg)] text-[var(--color-ink)]">
         <main
           id="main"
           className="mx-auto grid min-h-dvh w-[min(52rem,calc(100%_-_1.5rem))] place-items-center py-8"
@@ -656,7 +656,7 @@ export function ExecutionPage({
             className="w-full rounded-[var(--ds-radius-md)]"
             aria-busy="true"
           >
-            <p className="m-0 font-mono text-xs uppercase tracking-[0.06em] text-[var(--ds-color-ink-muted)]">
+            <p className="m-0 font-mono text-xs uppercase tracking-[0.06em] text-[var(--color-ink-ghost)]">
               Loading execution report…
             </p>
           </Panel>
@@ -687,17 +687,17 @@ export function ExecutionPage({
     presentation.coverage != null &&
     (presentation.coverage === 1 || presentation.coverage >= 100)
   return (
-    <div className="ds-root min-h-dvh bg-[var(--ds-color-canvas)] text-[var(--ds-color-ink)]">
+    <div className="ds-root min-h-dvh bg-[var(--color-bg)] text-[var(--color-ink)]">
       <a className="skip-link" href={hashForExecution(executionId, section)}>
         Skip to execution details
       </a>
-      <AppHeader active="executions" />
+      <DashboardPageActions active="executions" />
       <main
         id="main"
         className="page-shell detail-shell w-[min(1380px,calc(100%_-_3rem))] pt-6 max-[640px]:w-[calc(100%_-_1.5rem)]"
       >
         <nav
-          className="breadcrumbs mb-5 flex min-w-0 items-center gap-2 overflow-hidden font-mono text-[0.64rem] text-[var(--ds-color-ink-muted)]"
+          className="breadcrumbs mb-5 flex min-w-0 items-center gap-2 overflow-hidden font-mono text-[0.64rem] text-[var(--color-ink-ghost)]"
           aria-label="Breadcrumb"
         >
           <a href={hashForWorkspace()}>Overview</a>
@@ -711,7 +711,7 @@ export function ExecutionPage({
           context="Execution detail"
           title={presentation.label}
           summary={`${presentation.receivedReports ?? '—'} of ${presentation.expectedReports ?? '—'} expected reports received. Objective outcomes remain authoritative; advisory AI is shown separately.`}
-          className="border-b border-[var(--ds-color-line)] pb-6 [&_.ds-page-header-copy]:gap-2 [&_h1]:max-w-full [&_h1]:break-words [&_h1]:text-2xl md:[&_h1]:text-3xl"
+          className="border-b border-[var(--color-rule)] pb-6 [&_.ds-page-header-copy]:gap-2 [&_h1]:max-w-full [&_h1]:break-words [&_h1]:text-2xl md:[&_h1]:text-3xl"
           actions={
             <div className="flex flex-wrap justify-end gap-2">
               <StatusBadge status={status.status} label={status.label} />
@@ -721,7 +721,7 @@ export function ExecutionPage({
                   label={`AI: ${titleCase(aiResult.verdict)}`}
                 />
               ) : null}
-              <span className="inline-flex min-h-8 items-center rounded-full border border-[var(--ds-color-line-strong)] px-3 font-mono text-[0.62rem] uppercase tracking-[0.04em] text-[var(--ds-color-ink-muted)]">
+              <span className="inline-flex min-h-8 items-center rounded-full border border-[var(--color-edge)] px-3 font-mono text-[0.62rem] uppercase tracking-[0.04em] text-[var(--color-ink-ghost)]">
                 {detail.availability === 'full'
                   ? 'Full evidence'
                   : detail.availability === 'aggregate'
@@ -734,17 +734,17 @@ export function ExecutionPage({
 
         <Panel
           padding="none"
-          className="mt-5 overflow-hidden rounded-[var(--ds-radius-md)] border-[var(--ds-color-line-strong)]"
+          className="mt-5 overflow-hidden rounded-[var(--ds-radius-md)] border-[var(--color-edge)]"
         >
           <section
-            className="grid grid-cols-2 gap-px bg-[var(--ds-color-line)] lg:grid-cols-4"
+            className="grid grid-cols-2 gap-px bg-[var(--color-rule)] lg:grid-cols-4"
             aria-label="Execution identity"
           >
-            <div className="bg-[var(--ds-color-surface-raised)] p-3">
-              <div className="font-mono text-[0.6rem] font-semibold uppercase tracking-[0.06em] text-[var(--ds-color-ink-muted)]">
+            <div className="bg-[var(--color-panel-raised)] p-3">
+              <div className="font-mono text-[0.6rem] font-semibold uppercase tracking-[0.06em] text-[var(--color-ink-ghost)]">
                 Scenarios
               </div>
-              <strong className="mt-1 block truncate text-sm text-[var(--ds-color-ink)]">
+              <strong className="mt-1 block truncate text-sm text-[var(--color-ink)]">
                 {scenarioCount
                   ? `${scenarioCount} ${scenarioCount === 1 ? 'result' : 'results'}`
                   : 'Not reported'}
@@ -752,21 +752,21 @@ export function ExecutionPage({
             </div>
             <ModelIdentityCard label="Subject" models={presentation.subjects} />
             <ModelIdentityCard label="Judge" models={presentation.judges} />
-            <div className="bg-[var(--ds-color-surface-raised)] p-3">
-              <div className="font-mono text-[0.6rem] font-semibold uppercase tracking-[0.06em] text-[var(--ds-color-ink-muted)]">
+            <div className="bg-[var(--color-panel-raised)] p-3">
+              <div className="font-mono text-[0.6rem] font-semibold uppercase tracking-[0.06em] text-[var(--color-ink-ghost)]">
                 Completed
               </div>
-              <strong className="mt-1 block text-sm text-[var(--ds-color-ink)]">
+              <strong className="mt-1 block text-sm text-[var(--color-ink)]">
                 {formatDate(presentation.completedAt)}
               </strong>
             </div>
           </section>
           <section
-            className="grid grid-flow-dense grid-cols-1 gap-0 border-t border-[var(--ds-color-line)] sm:grid-cols-2 lg:grid-cols-4"
+            className="grid grid-flow-dense grid-cols-1 gap-0 border-t border-[var(--color-rule)] sm:grid-cols-2 lg:grid-cols-4"
             aria-label="Execution metrics"
           >
             <MetricCard
-              className="min-h-40 rounded-none border-0 border-t border-[var(--ds-color-line)] p-4 first:border-t-0 sm:border-t-0 sm:border-l sm:first:border-l-0 lg:p-5 [&_.ds-metric-value]:text-[clamp(1.9rem,3vw,2.8rem)]"
+              className="min-h-40 rounded-none border-0 border-t border-[var(--color-rule)] p-4 first:border-t-0 sm:border-t-0 sm:border-l sm:first:border-l-0 lg:p-5 [&_.ds-metric-value]:text-[clamp(1.9rem,3vw,2.8rem)]"
               label="Objective scenarios"
               value={
                 scenarioCount
@@ -778,7 +778,7 @@ export function ExecutionPage({
               tone={scenarioAttention > 0 ? 'negative' : 'positive'}
             />
             <MetricCard
-              className="min-h-40 rounded-none border-0 border-t border-[var(--ds-color-line)] p-4 sm:border-t-0 sm:border-l lg:p-5 [&_.ds-metric-value]:text-[clamp(1.9rem,3vw,2.8rem)]"
+              className="min-h-40 rounded-none border-0 border-t border-[var(--color-rule)] p-4 sm:border-t-0 sm:border-l lg:p-5 [&_.ds-metric-value]:text-[clamp(1.9rem,3vw,2.8rem)]"
               label="Report coverage"
               value={formatPercent(presentation.coverage)}
               detail={`${presentation.receivedReports ?? 0} of ${presentation.expectedReports ?? 0} reports received`}
@@ -798,7 +798,7 @@ export function ExecutionPage({
               }
             />
             <MetricCard
-              className="min-h-40 rounded-none border-0 border-t border-[var(--ds-color-line)] p-4 sm:border-l lg:border-t-0 lg:p-5 [&_.ds-metric-value]:text-[clamp(1.9rem,3vw,2.8rem)]"
+              className="min-h-40 rounded-none border-0 border-t border-[var(--color-rule)] p-4 sm:border-l lg:border-t-0 lg:p-5 [&_.ds-metric-value]:text-[clamp(1.9rem,3vw,2.8rem)]"
               label="Execution runtime"
               value={formatDuration(runtimeSeconds)}
               detail={
@@ -814,7 +814,7 @@ export function ExecutionPage({
               tone={runtimeSeconds === null ? 'unavailable' : 'neutral'}
             />
             <MetricCard
-              className="min-h-40 rounded-none border-0 border-t border-[var(--ds-color-line)] p-4 sm:border-l lg:border-t-0 lg:p-5 [&_.ds-metric-value]:text-[clamp(1.9rem,3vw,2.8rem)]"
+              className="min-h-40 rounded-none border-0 border-t border-[var(--color-rule)] p-4 sm:border-l lg:border-t-0 lg:p-5 [&_.ds-metric-value]:text-[clamp(1.9rem,3vw,2.8rem)]"
               label="Workflow scenarios"
               value={
                 scenarioCount
@@ -830,7 +830,7 @@ export function ExecutionPage({
               tone={hasRustWorkflow ? 'neutral' : 'unavailable'}
             />
             <MetricCard
-              className="min-h-40 rounded-none border-0 border-t border-[var(--ds-color-line)] p-4 lg:p-5 [&_.ds-metric-value]:text-[clamp(1.9rem,3vw,2.8rem)]"
+              className="min-h-40 rounded-none border-0 border-t border-[var(--color-rule)] p-4 lg:p-5 [&_.ds-metric-value]:text-[clamp(1.9rem,3vw,2.8rem)]"
               label="Total tokens"
               value={formatMetricCount(summaryMetrics?.totalTokens ?? null)}
               detail="Consolidated subject execution usage"
@@ -840,7 +840,7 @@ export function ExecutionPage({
               }
             />
             <MetricCard
-              className="min-h-40 rounded-none border-0 border-t border-l border-[var(--ds-color-line)] p-4 lg:p-5 [&_.ds-metric-value]:text-[clamp(1.9rem,3vw,2.8rem)]"
+              className="min-h-40 rounded-none border-0 border-t border-l border-[var(--color-rule)] p-4 lg:p-5 [&_.ds-metric-value]:text-[clamp(1.9rem,3vw,2.8rem)]"
               label="Function calls"
               value={formatMetricCount(summaryMetrics?.functionCalls ?? null)}
               detail={
@@ -856,7 +856,7 @@ export function ExecutionPage({
               }
             />
             <MetricCard
-              className="min-h-40 rounded-none border-0 border-t border-l border-[var(--ds-color-line)] p-4 lg:p-5 [&_.ds-metric-value]:text-[clamp(1.9rem,3vw,2.8rem)]"
+              className="min-h-40 rounded-none border-0 border-t border-l border-[var(--color-rule)] p-4 lg:p-5 [&_.ds-metric-value]:text-[clamp(1.9rem,3vw,2.8rem)]"
               label="Reported cost"
               value={formatReportedCost(summaryMetrics?.totalCostUsd ?? null)}
               detail="Consolidated execution cost"
@@ -888,10 +888,10 @@ export function ExecutionPage({
           onClose={() => setTranscript(null)}
         />
       )}
-      <footer className="mx-auto mt-8 flex w-[min(1380px,calc(100%_-_3rem))] flex-wrap items-center justify-between gap-3 border-t border-[var(--ds-color-line)] py-6 text-xs text-[var(--ds-color-ink-muted)] max-[640px]:w-[calc(100%_-_1.5rem)]">
+      <footer className="mx-auto mt-8 flex w-[min(1380px,calc(100%_-_3rem))] flex-wrap items-center justify-between gap-3 border-t border-[var(--color-rule)] py-6 text-xs text-[var(--color-ink-ghost)] max-[640px]:w-[calc(100%_-_1.5rem)]">
         <span>Harness E2E · public execution report</span>
         <a
-          className="text-[var(--ds-color-ink-soft)] underline-offset-4 hover:underline"
+          className="text-[var(--color-ink-faint)] underline-offset-4 hover:underline"
           href={hashForWorkspace('executions')}
         >
           Back to all executions

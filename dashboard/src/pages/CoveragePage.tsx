@@ -1,4 +1,4 @@
-import { AppHeader } from '@/components/AppHeader'
+import { DashboardPageActions } from '@/components/DashboardPageActions'
 import { LegacyLoadError } from '@/components/LegacyLoadError'
 import { useLegacyPage } from '@/hooks/useLegacyPage'
 
@@ -14,7 +14,7 @@ export function CoveragePage() {
       <div className="ambient ambient-one" aria-hidden="true"></div>
       <div className="ambient ambient-two" aria-hidden="true"></div>
 
-      <AppHeader active="coverage" />
+      <DashboardPageActions active="coverage" />
 
       <main id="main" className="page-shell overview-shell">
         <section className="page-heading" aria-labelledby="page-title">

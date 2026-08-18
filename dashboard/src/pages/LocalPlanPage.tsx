@@ -5,14 +5,16 @@ import {
   useCallback,
   useEffect,
   useMemo,
+  useRef,
   useState,
 } from 'react'
-import { AppHeader } from '@/components/AppHeader'
+import { DashboardPageActions } from '@/components/DashboardPageActions'
 import {
   ExecutionSetup,
   ExecutionSetupReview,
   requestQuickExecution,
 } from '@/components/ExecutionSetup'
+import { useDirtyNavigation } from '@/hooks/use-dirty-navigation'
 import {
   hashForExecution,
   hashForNewPlan,
@@ -112,6 +114,44 @@ function stateLabel(plan: LocalPlan) {
   )
     return 'Baseline attempt incomplete · retry available'
   return plan.state.replaceAll('_', ' ')
+}
+
+function DiscardDraftDialog({
+  open,
+  warning,
+  onDiscard,
+  onContinue,
+}: {
+  open: boolean
+  warning: string
+  onDiscard: () => void
+  onContinue: () => void
+}) {
+  const keepEditingRef = useRef<HTMLButtonElement>(null)
+  useEffect(() => {
+    if (open) keepEditingRef.current?.focus()
+  }, [open])
+  if (!open) return null
+  return (
+    <dialog
+      className="harness-e2e-discard-dialog"
+      open
+      aria-modal="true"
+      aria-labelledby="discard-draft-title"
+      aria-describedby="discard-draft-description"
+    >
+      <h2 id="discard-draft-title">Discard draft changes?</h2>
+      <p id="discard-draft-description">{warning}</p>
+      <div className="harness-e2e-discard-dialog-actions">
+        <button ref={keepEditingRef} type="button" onClick={onDiscard}>
+          Keep editing
+        </button>
+        <button type="button" onClick={onContinue}>
+          Discard and continue
+        </button>
+      </div>
+    </dialog>
+  )
 }
 
 type PlanRunRole = 'baseline' | 'candidate'
@@ -1291,6 +1331,18 @@ export function LocalPlanCreatePage() {
   const [loading, setLoading] = useState(true)
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const initialValues = useRef({
+    label: '',
+    purpose: '',
+    url: '',
+    subject: '',
+    judge: '',
+    scenarios: [] as string[],
+    testQuery: '',
+    runs: '1',
+    technicalRetries: '1',
+    seed: '',
+  })
 
   useEffect(() => {
     let cancelled = false
@@ -1307,6 +1359,11 @@ export function LocalPlanCreatePage() {
         setCatalog(loaded)
         setUrl(loaded.url)
         setSubject(loaded.models[0] ? modelKey(loaded.models[0]) : '')
+        initialValues.current = {
+          ...initialValues.current,
+          url: loaded.url,
+          subject: loaded.models[0] ? modelKey(loaded.models[0]) : '',
+        }
       })
       .catch((cause) => {
         if (!cancelled) setError(errorText(cause))
@@ -1345,6 +1402,20 @@ export function LocalPlanCreatePage() {
     scenarios.length > 0 &&
     hasPlanLabel
 
+  const dirty =
+    label !== initialValues.current.label ||
+    purpose !== initialValues.current.purpose ||
+    url !== initialValues.current.url ||
+    subject !== initialValues.current.subject ||
+    judge !== initialValues.current.judge ||
+    testQuery !== initialValues.current.testQuery ||
+    runs !== initialValues.current.runs ||
+    technicalRetries !== initialValues.current.technicalRetries ||
+    seed !== initialValues.current.seed ||
+    scenarios.join('\u0000') !== initialValues.current.scenarios.join('\u0000')
+
+  const dirtyNavigation = useDirtyNavigation(dirty && !submitting)
+
   const create = async (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault()
     if (
@@ -1374,6 +1445,18 @@ export function LocalPlanCreatePage() {
         technical_retries: retryCount,
         seed: seed ? Number(seed) : null,
       })
+      initialValues.current = {
+        label: label.trim(),
+        purpose: purpose.trim(),
+        url,
+        subject,
+        judge,
+        scenarios,
+        testQuery,
+        runs,
+        technicalRetries,
+        seed,
+      }
       window.location.hash = hashForPlan(plan.id)
     } catch (cause) {
       setError(errorText(cause))
@@ -1384,53 +1467,59 @@ export function LocalPlanCreatePage() {
 
   return (
     <>
+      <DiscardDraftDialog
+        open={dirtyNavigation.pendingHash !== null}
+        warning={dirtyNavigation.warning}
+        onDiscard={dirtyNavigation.cancelNavigation}
+        onContinue={dirtyNavigation.confirmNavigation}
+      />
       <a
-        className="fixed top-3 left-3 z-[100] -translate-y-24 rounded-lg bg-[var(--ds-color-brand)] px-4 py-3 text-sm font-semibold text-[var(--ds-color-brand-ink)] transition-transform focus:translate-y-0"
+        className="fixed top-3 left-3 z-[100] -translate-y-24 rounded-lg bg-[var(--color-accent)] px-4 py-3 text-sm font-semibold text-[var(--color-accent-fg)] transition-transform focus:translate-y-0"
         href="#plan-create-main"
       >
         Skip to plan creation
       </a>
-      <AppHeader active="plans" />
+      <DashboardPageActions active="plans" />
       <main
         id="plan-create-main"
         className="ds-root mx-auto w-[calc(100%_-_1.5rem)] max-w-[1420px] py-8 sm:w-[calc(100%_-_3rem)] sm:py-10"
       >
-        <header className="grid items-end gap-6 border-b border-[var(--ds-color-line)] pb-6 lg:grid-cols-[minmax(0,1fr)_auto]">
+        <header className="grid items-end gap-6 border-b border-[var(--color-rule)] pb-6 lg:grid-cols-[minmax(0,1fr)_auto]">
           <div className="min-w-0">
-            <p className="m-0 font-mono text-[0.68rem] font-semibold uppercase tracking-[0.08em] text-[var(--ds-color-brand-text)]">
+            <p className="m-0 font-mono text-[0.68rem] font-semibold uppercase tracking-[0.08em] text-[var(--color-accent)]">
               Execution setup
             </p>
             <h1
-              className="mt-3 mb-0 max-w-4xl text-[clamp(1.75rem,3vw,2.75rem)] font-semibold tracking-[-0.045em] text-[var(--ds-color-ink)]"
+              className="mt-3 mb-0 max-w-4xl text-[clamp(1.75rem,3vw,2.75rem)] font-semibold tracking-[-0.045em] text-[var(--color-ink)]"
               id="plan-create-title"
             >
               Create a benchmark plan
             </h1>
-            <p className="mt-3 mb-0 max-w-3xl text-sm leading-6 text-[var(--ds-color-ink-soft)]">
+            <p className="mt-3 mb-0 max-w-3xl text-sm leading-6 text-[var(--color-ink-faint)]">
               Save a focused scope, capture its baseline, then run the same
               scenarios after your change to measure improvement.
             </p>
           </div>
           <nav
-            className="grid min-w-[18rem] grid-cols-2 gap-px overflow-hidden rounded-lg border border-[var(--ds-color-line)] bg-[var(--ds-color-line)] max-[390px]:min-w-0"
+            className="grid min-w-[18rem] grid-cols-2 gap-px overflow-hidden rounded-lg border border-[var(--color-rule)] bg-[var(--color-rule)] max-[390px]:min-w-0"
             aria-label="Execution setup mode"
           >
             <a
-              className="grid min-h-14 content-center gap-0.5 bg-[var(--ds-color-surface-raised)] px-4 text-xs text-[var(--ds-color-ink-soft)] no-underline transition-colors hover:text-[var(--ds-color-ink)]"
+              className="grid min-h-14 content-center gap-0.5 bg-[var(--color-panel-raised)] px-4 text-xs text-[var(--color-ink-faint)] no-underline transition-colors hover:text-[var(--color-ink)]"
               href={hashForWorkspace()}
               onClick={requestQuickExecution}
             >
               <strong className="font-semibold">Quick execution</strong>
-              <span className="text-[0.65rem] text-[var(--ds-color-ink-muted)]">
+              <span className="text-[0.65rem] text-[var(--color-ink-ghost)]">
                 One result now
               </span>
             </a>
             <span
-              className="grid min-h-14 content-center gap-0.5 bg-[var(--ds-color-surface-strong)] px-4 text-xs text-[var(--ds-color-ink)]"
+              className="grid min-h-14 content-center gap-0.5 bg-[var(--color-surface-hover)] px-4 text-xs text-[var(--color-ink)]"
               aria-current="page"
             >
               <strong className="font-semibold">Reusable plan</strong>
-              <span className="text-[0.65rem] text-[var(--ds-color-ink-muted)]">
+              <span className="text-[0.65rem] text-[var(--color-ink-ghost)]">
                 Baseline + candidates
               </span>
             </span>
@@ -1439,23 +1528,23 @@ export function LocalPlanCreatePage() {
 
         {error && (
           <section
-            className="mt-6 rounded-lg border border-[color-mix(in_srgb,var(--ds-color-danger)_35%,transparent)] bg-[color-mix(in_srgb,var(--ds-color-danger)_8%,var(--ds-color-surface))] p-5"
+            className="mt-6 rounded-lg border border-[color-mix(in_srgb,var(--color-alert)_35%,transparent)] bg-[color-mix(in_srgb,var(--color-alert)_8%,var(--color-panel))] p-5"
             role="alert"
           >
-            <h2 className="m-0 text-sm font-semibold text-[var(--ds-color-danger)]">
+            <h2 className="m-0 text-sm font-semibold text-[var(--color-alert)]">
               Plan cannot be created
             </h2>
-            <p className="mt-2 mb-0 text-xs leading-5 text-[var(--ds-color-ink-soft)]">
+            <p className="mt-2 mb-0 text-xs leading-5 text-[var(--color-ink-faint)]">
               {error}
             </p>
           </section>
         )}
 
         <form
-          className="mt-6 grid min-w-0 gap-px overflow-hidden rounded-xl border border-[var(--ds-color-line-strong)] bg-[var(--ds-color-line)] lg:grid-cols-12"
+          className="mt-6 grid min-w-0 gap-px overflow-hidden rounded-xl border border-[var(--color-edge)] bg-[var(--color-rule)] lg:grid-cols-12"
           onSubmit={create}
         >
-          <div className="min-w-0 bg-[var(--ds-color-surface)] lg:col-span-8">
+          <div className="min-w-0 bg-[var(--color-panel)] lg:col-span-8">
             <ExecutionSetup
               idPrefix="plan-create"
               mode="plan"
@@ -1493,7 +1582,7 @@ export function LocalPlanCreatePage() {
             />
           </div>
 
-          <div className="min-w-0 bg-[var(--ds-color-surface-raised)] lg:col-span-4">
+          <div className="min-w-0 bg-[var(--color-panel-raised)] lg:col-span-4">
             <ExecutionSetupReview
               mode="plan"
               status={canCreate ? 'Ready' : 'Incomplete'}
@@ -1515,7 +1604,7 @@ export function LocalPlanCreatePage() {
               ready={canCreate}
             >
               <p
-                className="m-0 text-xs leading-5 text-[var(--ds-color-ink-muted)]"
+                className="m-0 text-xs leading-5 text-[var(--color-ink-ghost)]"
                 id="plan-create-requirements"
               >
                 {hasPlanLabel && scenarios.length > 0
@@ -1523,7 +1612,7 @@ export function LocalPlanCreatePage() {
                   : `Before creating: ${hasPlanLabel ? 'select at least one test' : 'add a plan label'}${hasPlanLabel || scenarios.length === 0 ? '' : ' and select at least one test'}.`}
               </p>
               <button
-                className="inline-flex min-h-11 w-full items-center justify-center rounded-lg border border-[var(--ds-color-brand)] bg-[var(--ds-color-brand)] px-4 text-sm font-semibold text-[var(--ds-color-brand-ink)] transition-colors hover:bg-[color-mix(in_srgb,var(--ds-color-brand)_88%,white)] disabled:cursor-not-allowed disabled:opacity-45"
+                className="inline-flex min-h-11 w-full items-center justify-center rounded-lg border border-[var(--color-accent)] bg-[var(--color-accent)] px-4 text-sm font-semibold text-[var(--color-accent-fg)] transition-colors hover:bg-[color-mix(in_srgb,var(--color-accent)_88%,white)] disabled:cursor-not-allowed disabled:opacity-45"
                 type="submit"
                 disabled={!canCreate}
                 aria-describedby="plan-create-requirements"
@@ -1531,7 +1620,7 @@ export function LocalPlanCreatePage() {
                 {submitting ? 'Creating…' : 'Create draft plan'}
               </button>
               <a
-                className="inline-flex min-h-10 w-full items-center justify-center rounded-lg border border-[var(--ds-color-line-strong)] px-3 text-xs font-semibold text-[var(--ds-color-ink-soft)] no-underline hover:text-[var(--ds-color-ink)]"
+                className="inline-flex min-h-10 w-full items-center justify-center rounded-lg border border-[var(--color-edge)] px-3 text-xs font-semibold text-[var(--color-ink-faint)] no-underline hover:text-[var(--color-ink)]"
                 href={hashForPlans()}
               >
                 Cancel
@@ -1540,7 +1629,7 @@ export function LocalPlanCreatePage() {
           </div>
         </form>
       </main>
-      <footer className="ds-root mx-auto flex w-[calc(100%_-_1.5rem)] max-w-[1420px] flex-wrap items-center justify-between gap-4 border-t border-[var(--ds-color-line)] py-8 font-mono text-xs text-[var(--ds-color-ink-muted)] sm:w-[calc(100%_-_3rem)]">
+      <footer className="ds-root mx-auto flex w-[calc(100%_-_1.5rem)] max-w-[1420px] flex-wrap items-center justify-between gap-4 border-t border-[var(--color-rule)] py-8 font-mono text-xs text-[var(--color-ink-ghost)] sm:w-[calc(100%_-_3rem)]">
         <span>Harness E2E · local plans</span>
         <a
           className="text-inherit underline-offset-4 hover:underline"
@@ -1866,7 +1955,7 @@ export function LocalPlanDetailPage({ planId }: { planId: string }) {
       <a className="skip-link" href="#plan-detail-main">
         Skip to plan detail
       </a>
-      <AppHeader active="plans" />
+      <DashboardPageActions active="plans" />
       <main
         id="plan-detail-main"
         className="page-shell overview-shell plan-detail-shell"

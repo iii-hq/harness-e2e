@@ -1,5 +1,8 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { AppHeader, appHeaderActionClassName } from '@/components/AppHeader'
+import {
+  DashboardPageActions,
+  dashboardHeaderActionClassName,
+} from '@/components/DashboardPageActions'
 import { consumeQuickExecutionRequest } from '@/components/ExecutionSetup'
 import { LocalRunnerDialog } from '@/components/LocalRunnerDialog'
 import {
@@ -18,6 +21,7 @@ import {
   hashForPlans,
   type WorkspaceView,
 } from '@/hooks/use-hash-route'
+import { useLatestRequest } from '@/hooks/use-latest-request'
 import {
   type DashboardDataBridge,
   type DashboardExecutionSummary,
@@ -132,7 +136,7 @@ function SummaryKpi({
 }) {
   return (
     <MetricCard
-      className="overview-v2-metric min-h-40 rounded-none border-0 border-t border-[var(--ds-color-line)] p-4 md:[&:nth-child(even)]:border-l lg:col-span-2 lg:min-h-0 lg:border-t-0 lg:border-l lg:p-5 lg:[&:nth-child(-n+2)]:border-b [&_.ds-metric-value]:text-[clamp(1.75rem,2.2vw,2.5rem)]"
+      className="overview-v2-metric min-h-40 rounded-none border-0 border-t border-[var(--color-rule)] p-4 md:[&:nth-child(even)]:border-l lg:col-span-2 lg:min-h-0 lg:border-t-0 lg:border-l lg:p-5 lg:[&:nth-child(-n+2)]:border-b [&_.ds-metric-value]:text-[clamp(1.75rem,2.2vw,2.5rem)]"
       label={label}
       value={value}
       detail={caption}
@@ -160,7 +164,7 @@ function FailureBreakdown({
   )
   if (categories.length === 0) {
     return (
-      <p className="overview-v2-no-events m-0 text-sm text-[var(--ds-color-ink-soft)]">
+      <p className="overview-v2-no-events m-0 text-sm text-[var(--color-ink-faint)]">
         No blocking events were reported.
       </p>
     )
@@ -173,13 +177,13 @@ function FailureBreakdown({
       {categories.map((category) => (
         <article
           key={category}
-          className="overview-v2-breakdown-item grid gap-2 rounded-xl border border-[var(--ds-color-line)] bg-[var(--ds-color-surface-raised)] p-3"
+          className="overview-v2-breakdown-item grid gap-2 rounded-xl border border-[var(--color-rule)] bg-[var(--color-panel-raised)] p-3"
         >
           <StatusBadge
             status={failureStatus(category)}
             label={categoryLabel(category)}
           />
-          <p className="m-0 text-xs leading-5 text-[var(--ds-color-ink-soft)]">
+          <p className="m-0 text-xs leading-5 text-[var(--color-ink-faint)]">
             {categoryMessage(category, presentation.breakdown[category])}
           </p>
         </article>
@@ -227,7 +231,7 @@ export function LatestExecution({
   const workflowEvaluationCount = finiteNumber(workflow?.evaluation_count) ?? 0
   return (
     <section
-      className="latest-evidence overview-v2-bento mt-6 grid grid-flow-dense grid-cols-1 gap-0 overflow-hidden rounded-[var(--ds-radius-md)] border border-[var(--ds-color-line-strong)] bg-[var(--ds-color-surface)] md:grid-cols-2 lg:grid-cols-12 lg:grid-rows-2"
+      className="latest-evidence overview-v2-bento mt-6 grid grid-flow-dense grid-cols-1 gap-0 overflow-hidden rounded-[var(--ds-radius-md)] border border-[var(--color-edge)] bg-[var(--color-panel)] md:grid-cols-2 lg:grid-cols-12 lg:grid-rows-2"
       aria-labelledby="latest-health-heading"
     >
       <Panel
@@ -237,7 +241,7 @@ export function LatestExecution({
       >
         <div className="latest-health-heading grid grid-cols-[minmax(0,1fr)_auto] items-start gap-6">
           <div>
-            <p className="overview-v2-context m-0 font-mono text-[0.7rem] font-semibold uppercase tracking-[0.08em] text-[var(--ds-color-brand-text)]">
+            <p className="overview-v2-context m-0 font-mono text-[0.7rem] font-semibold uppercase tracking-[0.08em] text-[var(--color-accent)]">
               Latest execution
             </p>
             <h2
@@ -249,7 +253,7 @@ export function LatestExecution({
           </div>
           <StatusBadge status={status.status} label={status.label} />
         </div>
-        <p className="trend-description mt-3 max-w-3xl text-sm leading-6 text-[var(--ds-color-ink-soft)]">
+        <p className="trend-description mt-3 max-w-3xl text-sm leading-6 text-[var(--color-ink-faint)]">
           {presentation.expectedReports !== null &&
           presentation.receivedReports !== null
             ? `${presentation.receivedReports} of ${presentation.expectedReports} expected reports received.`
@@ -259,7 +263,7 @@ export function LatestExecution({
             : 'Only aggregate metadata is retained.'}
         </p>
         <section
-          className="latest-health-meta overview-v2-identity mt-5 grid grid-cols-2 gap-px overflow-hidden rounded-lg border border-[var(--ds-color-line)] bg-[var(--ds-color-line)] lg:grid-cols-4 [&>span]:grid [&>span]:min-w-0 [&>span]:gap-1.5 [&>span]:bg-[var(--ds-color-surface-raised)] [&>span]:p-3 [&_small]:font-mono [&_small]:text-[0.6rem] [&_small]:uppercase [&_small]:tracking-[0.06em] [&_small]:text-[var(--ds-color-ink-muted)] [&_strong]:overflow-hidden [&_strong]:font-mono [&_strong]:text-xs [&_strong]:font-medium [&_strong]:text-ellipsis [&_strong]:whitespace-nowrap"
+          className="latest-health-meta overview-v2-identity mt-5 grid grid-cols-2 gap-px overflow-hidden rounded-lg border border-[var(--color-rule)] bg-[var(--color-rule)] lg:grid-cols-4 [&>span]:grid [&>span]:min-w-0 [&>span]:gap-1.5 [&>span]:bg-[var(--color-panel-raised)] [&>span]:p-3 [&_small]:font-mono [&_small]:text-[0.6rem] [&_small]:uppercase [&_small]:tracking-[0.06em] [&_small]:text-[var(--color-ink-ghost)] [&_strong]:overflow-hidden [&_strong]:font-mono [&_strong]:text-xs [&_strong]:font-medium [&_strong]:text-ellipsis [&_strong]:whitespace-nowrap"
           aria-label="Latest execution identity"
         >
           <span>
@@ -284,20 +288,20 @@ export function LatestExecution({
           </span>
         </section>
         <div
-          className={`latest-first-failure overview-v2-primary-issue mt-4 grid grid-cols-[auto_minmax(0,1fr)] gap-3 rounded-lg border border-[var(--ds-color-line)] bg-[var(--ds-color-surface-raised)] p-3 ${isExecutionAttention(presentation) ? 'has-failure' : ''}`}
+          className={`latest-first-failure overview-v2-primary-issue mt-4 grid grid-cols-[auto_minmax(0,1fr)] gap-3 rounded-lg border border-[var(--color-rule)] bg-[var(--color-panel-raised)] p-3 ${isExecutionAttention(presentation) ? 'has-failure' : ''}`}
           aria-live="polite"
         >
           <span
-            className="latest-signal-icon overview-v2-signal-mark mt-1 h-2.5 w-2.5 rounded-full bg-[var(--ds-color-success)] shadow-[0_0_0_5px_color-mix(in_srgb,var(--ds-color-success)_12%,transparent)] [.has-failure_&]:bg-[var(--ds-color-danger)] [.has-failure_&]:shadow-[0_0_0_5px_color-mix(in_srgb,var(--ds-color-danger)_12%,transparent)]"
+            className="latest-signal-icon overview-v2-signal-mark mt-1 h-2.5 w-2.5 rounded-full bg-[var(--color-ok)] shadow-[0_0_0_5px_color-mix(in_srgb,var(--color-ok)_12%,transparent)] [.has-failure_&]:bg-[var(--color-alert)] [.has-failure_&]:shadow-[0_0_0_5px_color-mix(in_srgb,var(--color-alert)_12%,transparent)]"
             aria-hidden="true"
           />
           <div>
-            <strong className="text-sm font-semibold text-[var(--ds-color-ink)]">
+            <strong className="text-sm font-semibold text-[var(--color-ink)]">
               {issue
                 ? `${categoryLabel(issue.category)} needs investigation`
                 : 'No blocking failure in the latest execution'}
             </strong>
-            <p className="mt-1 mb-0 text-xs leading-5 text-[var(--ds-color-ink-soft)]">
+            <p className="mt-1 mb-0 text-xs leading-5 text-[var(--color-ink-faint)]">
               {issue
                 ? categoryMessage(issue.category, issue.count)
                 : 'The result is ready for deeper evidence review.'}
@@ -482,7 +486,7 @@ function ExecutionHistory({
   return (
     <Panel
       padding="none"
-      className="executions-panel overview-v2-history mt-6 overflow-hidden rounded-[var(--ds-radius-md)] border-[var(--ds-color-line-strong)] bg-[var(--ds-color-surface)] p-0"
+      className="executions-panel overview-v2-history mt-6 overflow-hidden rounded-[var(--ds-radius-md)] border-[var(--color-edge)] bg-[var(--color-panel)] p-0"
       aria-labelledby="executions-heading"
     >
       <PageHeader
@@ -491,15 +495,15 @@ function ExecutionHistory({
         title="Recent executions"
         summary="Search objective outcomes, model evidence, scope, and retained diagnostic detail."
         actions={
-          <span className="overview-v2-history-count font-mono text-xs text-[var(--ds-color-ink-muted)]">
+          <span className="overview-v2-history-count font-mono text-xs text-[var(--color-ink-ghost)]">
             {filtered.length} of {executions.length} executions
           </span>
         }
         id="executions-heading"
-        className="panel-heading executions-heading overview-v2-history-heading border-b border-[var(--ds-color-line)] p-6 md:p-8"
+        className="panel-heading executions-heading overview-v2-history-heading border-b border-[var(--color-rule)] p-6 md:p-8"
       />
       <section
-        className="table-filters grid gap-3 border-b border-[var(--ds-color-line)] p-4 sm:grid-cols-2 md:grid-cols-[minmax(16rem,1fr)_auto_auto] md:p-6 [&_input]:min-h-11 [&_input]:w-full [&_input]:rounded-lg [&_input]:border [&_input]:border-[var(--ds-color-line-strong)] [&_input]:bg-[var(--ds-color-surface-raised)] [&_input]:px-3 [&_input]:text-sm [&_input]:text-[var(--ds-color-ink)] [&_select]:min-h-11 [&_select]:w-full [&_select]:rounded-lg [&_select]:border [&_select]:border-[var(--ds-color-line-strong)] [&_select]:bg-[var(--ds-color-surface-raised)] [&_select]:px-3 [&_select]:text-sm [&_select]:text-[var(--ds-color-ink)]"
+        className="table-filters grid gap-3 border-b border-[var(--color-rule)] p-4 sm:grid-cols-2 md:grid-cols-[minmax(16rem,1fr)_auto_auto] md:p-6 [&_input]:min-h-11 [&_input]:w-full [&_input]:rounded-lg [&_input]:border [&_input]:border-[var(--color-edge)] [&_input]:bg-[var(--color-panel-raised)] [&_input]:px-3 [&_input]:text-sm [&_input]:text-[var(--color-ink)] [&_select]:min-h-11 [&_select]:w-full [&_select]:rounded-lg [&_select]:border [&_select]:border-[var(--color-edge)] [&_select]:bg-[var(--color-panel-raised)] [&_select]:px-3 [&_select]:text-sm [&_select]:text-[var(--color-ink)]"
         aria-label="Execution filters"
       >
         <label className="search-field sm:col-span-2 md:col-span-1">
@@ -541,7 +545,7 @@ function ExecutionHistory({
         </label>
       </section>
       <div className="table-wrap overflow-x-auto p-3 md:p-4">
-        <table className="execution-table w-full min-w-[68rem] border-collapse text-left text-xs md:text-sm [&_a]:font-semibold [&_a]:text-[var(--ds-color-ink)] [&_a]:underline-offset-4 [&_a:hover]:underline [&_td]:border-b [&_td]:border-[var(--ds-color-line)] [&_td]:px-4 [&_td]:py-4 [&_th]:border-b [&_th]:border-[var(--ds-color-line-strong)] [&_th]:px-4 [&_th]:py-3 [&_th]:font-mono [&_th]:text-[0.62rem] [&_th]:font-semibold [&_th]:uppercase [&_th]:tracking-[0.06em] [&_th]:text-[var(--ds-color-ink-muted)] [&_tbody_tr]:transition-colors [&_tbody_tr:hover]:bg-[var(--ds-color-surface-raised)]">
+        <table className="execution-table w-full min-w-[68rem] border-collapse text-left text-xs md:text-sm [&_a]:font-semibold [&_a]:text-[var(--color-ink)] [&_a]:underline-offset-4 [&_a:hover]:underline [&_td]:border-b [&_td]:border-[var(--color-rule)] [&_td]:px-4 [&_td]:py-4 [&_th]:border-b [&_th]:border-[var(--color-edge)] [&_th]:px-4 [&_th]:py-3 [&_th]:font-mono [&_th]:text-[0.62rem] [&_th]:font-semibold [&_th]:uppercase [&_th]:tracking-[0.06em] [&_th]:text-[var(--color-ink-ghost)] [&_tbody_tr]:transition-colors [&_tbody_tr:hover]:bg-[var(--color-panel-raised)]">
           <thead>
             <tr>
               <th scope="col">Execution</th>
@@ -641,13 +645,13 @@ function LocalComparisonCard() {
     <Panel
       as="article"
       padding="none"
-      className="overview-intelligence-card overview-comparison-card overview-v2-comparison-card overflow-hidden rounded-[var(--ds-radius-md)] border-[var(--ds-color-line-strong)]"
+      className="overview-intelligence-card overview-comparison-card overview-v2-comparison-card overflow-hidden rounded-[var(--ds-radius-md)] border-[var(--color-edge)]"
       aria-labelledby="local-comparison-heading"
     >
       <div className="overview-card-main p-5 md:p-6">
         <div className="overview-card-heading grid grid-cols-[minmax(0,1fr)_auto] items-start gap-4">
           <div>
-            <div className="section-kicker font-mono text-[0.68rem] uppercase tracking-[0.08em] text-[var(--ds-color-brand-text)]">
+            <div className="section-kicker font-mono text-[0.68rem] uppercase tracking-[0.08em] text-[var(--color-accent)]">
               Local comparison
             </div>
             <h3
@@ -657,17 +661,17 @@ function LocalComparisonCard() {
               Comparable by construction
             </h3>
           </div>
-          <span className="overview-card-state overview-card-state-neutral overview-v2-state rounded-full border border-[var(--ds-color-line-strong)] px-3 py-2 font-mono text-[0.62rem] uppercase tracking-[0.04em] text-[var(--ds-color-ink-muted)]">
+          <span className="overview-card-state overview-card-state-neutral overview-v2-state rounded-full border border-[var(--color-edge)] px-3 py-2 font-mono text-[0.62rem] uppercase tracking-[0.04em] text-[var(--color-ink-ghost)]">
             Decision protocol
           </span>
         </div>
-        <p className="overview-card-copy mt-3 max-w-4xl text-sm leading-6 text-[var(--ds-color-ink-soft)]">
+        <p className="overview-card-copy mt-3 max-w-4xl text-sm leading-6 text-[var(--color-ink-faint)]">
           Choose only the tests relevant to the current change. Capture one
           baseline run, then rerun the same cases and seeds after editing the
           Harness.
         </p>
         <section
-          className="overview-comparison-status mt-4 grid gap-px overflow-hidden rounded-lg border border-[var(--ds-color-line)] bg-[var(--ds-color-line)] md:grid-cols-2 xl:grid-cols-4 [&>div]:grid [&>div]:gap-1.5 [&>div]:bg-[var(--ds-color-surface)] [&>div]:p-4 [&_small]:text-xs [&_small]:leading-5 [&_small]:text-[var(--ds-color-ink-soft)] [&_span]:font-mono [&_span]:text-[0.6rem] [&_span]:uppercase [&_span]:tracking-[0.06em] [&_span]:text-[var(--ds-color-ink-muted)] [&_strong]:text-sm [&_strong]:font-semibold"
+          className="overview-comparison-status mt-4 grid gap-px overflow-hidden rounded-lg border border-[var(--color-rule)] bg-[var(--color-rule)] md:grid-cols-2 xl:grid-cols-4 [&>div]:grid [&>div]:gap-1.5 [&>div]:bg-[var(--color-panel)] [&>div]:p-4 [&_small]:text-xs [&_small]:leading-5 [&_small]:text-[var(--color-ink-faint)] [&_span]:font-mono [&_span]:text-[0.6rem] [&_span]:uppercase [&_span]:tracking-[0.06em] [&_span]:text-[var(--color-ink-ghost)] [&_strong]:text-sm [&_strong]:font-semibold"
           aria-label="Local comparison strategy"
         >
           <div className="overview-comparison-dimension">
@@ -704,7 +708,7 @@ function LocalComparisonCard() {
           </div>
         </section>
         <section
-          className="overview-versions mt-4 grid grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] items-center gap-3 rounded-lg border border-[var(--ds-color-line)] bg-[var(--ds-color-surface-strong)] p-3 [&>div]:grid [&>div]:gap-1 [&>div:last-child]:text-right [&_span]:font-mono [&_span]:text-[0.6rem] [&_span]:uppercase [&_span]:tracking-[0.06em] [&_span]:text-[var(--ds-color-ink-muted)] [&_strong]:text-xs [&_strong]:font-semibold"
+          className="overview-versions mt-4 grid grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] items-center gap-3 rounded-lg border border-[var(--color-rule)] bg-[var(--color-surface-hover)] p-3 [&>div]:grid [&>div]:gap-1 [&>div:last-child]:text-right [&_span]:font-mono [&_span]:text-[0.6rem] [&_span]:uppercase [&_span]:tracking-[0.06em] [&_span]:text-[var(--color-ink-ghost)] [&_strong]:text-xs [&_strong]:font-semibold"
           aria-label="Comparison sequence"
         >
           <div className="overview-version">
@@ -718,10 +722,10 @@ function LocalComparisonCard() {
           </div>
         </section>
       </div>
-      <div className="overview-card-foot flex flex-wrap items-center justify-between gap-4 border-t border-[var(--ds-color-line)] bg-[var(--ds-color-surface)] px-5 py-3 text-xs text-[var(--ds-color-ink-muted)] md:px-6">
+      <div className="overview-card-foot flex flex-wrap items-center justify-between gap-4 border-t border-[var(--color-rule)] bg-[var(--color-panel)] px-5 py-3 text-xs text-[var(--color-ink-ghost)] md:px-6">
         <span>One focused pair is enough to start</span>
         <a
-          className="overview-card-action inline-flex min-h-11 items-center border-b border-transparent font-semibold text-[var(--ds-color-ink)] no-underline hover:border-[var(--ds-color-ink)]"
+          className="overview-card-action inline-flex min-h-11 items-center border-b border-transparent font-semibold text-[var(--color-ink)] no-underline hover:border-[var(--color-ink)]"
           href={hashForPlans()}
         >
           View local plans <span aria-hidden="true">→</span>
@@ -758,21 +762,25 @@ export function OverviewPage({ activeView }: { activeView: WorkspaceView }) {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [runnerOpen, setRunnerOpen] = useState(false)
+  const beginRequest = useLatestRequest()
 
   const load = useCallback(async () => {
+    const request = beginRequest()
     setLoading(true)
     setError(null)
     try {
       const nextBridge = bridge ?? (await getDashboardDataBridge())
+      if (!request.isCurrent()) return
       setBridge(nextBridge)
       const manifest = await nextBridge.listExecutions({ limit: 100 })
+      if (!request.isCurrent()) return
       setExecutions(manifest.executions ?? [])
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : String(cause))
     } finally {
       setLoading(false)
     }
-  }, [bridge])
+  }, [beginRequest, bridge])
 
   useEffect(() => {
     void load()
@@ -787,25 +795,25 @@ export function OverviewPage({ activeView }: { activeView: WorkspaceView }) {
     : null
 
   return (
-    <div className="ds-root overview-v2-root min-h-dvh bg-[var(--ds-color-canvas)] text-[var(--ds-color-ink)]">
+    <div className="ds-root overview-v2-root min-h-dvh bg-[var(--color-bg)] text-[var(--color-ink)]">
       <a className="skip-link" href="#main">
         Skip to execution dashboard
       </a>
-      <AppHeader
+      <DashboardPageActions
         active={activeView}
         actionsLabel="Overview actions"
         actions={
           bridge?.mode === 'local' ? (
             <>
               <a
-                className={appHeaderActionClassName({ primary: true })}
+                className={dashboardHeaderActionClassName({ primary: true })}
                 href={hashForNewPlan()}
                 aria-label="New local plan"
               >
                 New plan
               </a>
               <button
-                className={appHeaderActionClassName()}
+                className={dashboardHeaderActionClassName()}
                 type="button"
                 onClick={() => setRunnerOpen(true)}
                 aria-label="Quick execution"
@@ -825,15 +833,15 @@ export function OverviewPage({ activeView }: { activeView: WorkspaceView }) {
             title="Performance overview"
             summary="Objective outcomes, retained evidence, and execution efficiency for the latest Harness run."
             context="Developer workspace"
-            className="overview-v2-operational-header border-b border-[var(--ds-color-line)] py-6 md:py-8 [&_.ds-page-header-copy]:gap-2 [&_h1]:max-w-full [&_h1]:text-2xl md:[&_h1]:text-3xl"
+            className="overview-v2-operational-header border-b border-[var(--color-rule)] py-6 md:py-8 [&_.ds-page-header-copy]:gap-2 [&_h1]:max-w-full [&_h1]:text-2xl md:[&_h1]:text-3xl"
             actions={
               <>
-                <span className="grid gap-1 text-right font-mono text-[0.65rem] text-[var(--ds-color-ink-muted)] max-md:hidden">
+                <span className="grid gap-1 text-right font-mono text-[0.65rem] text-[var(--color-ink-ghost)] max-md:hidden">
                   <span className="uppercase tracking-[0.08em]">
                     Last published
                   </span>
                   <time
-                    className="text-[var(--ds-color-ink-soft)]"
+                    className="text-[var(--color-ink-faint)]"
                     dateTime={latest?.completedAt}
                   >
                     {latest
@@ -867,7 +875,7 @@ export function OverviewPage({ activeView }: { activeView: WorkspaceView }) {
             title="Execution ledger"
             summary="Search immutable runs by objective result, model, scope, and retained evidence."
             context="Harness E2E"
-            className="overview-v2-ledger-header border-b border-[var(--ds-color-line)] py-6 md:py-8 [&_h1]:text-2xl md:[&_h1]:text-3xl"
+            className="overview-v2-ledger-header border-b border-[var(--color-rule)] py-6 md:py-8 [&_h1]:text-2xl md:[&_h1]:text-3xl"
           />
         )}
         {error && (
@@ -888,8 +896,8 @@ export function OverviewPage({ activeView }: { activeView: WorkspaceView }) {
             aria-busy="true"
             aria-label="Loading execution evidence"
           >
-            <div className="h-4 w-40 animate-pulse rounded-full bg-[var(--ds-color-surface-strong)] motion-reduce:animate-none" />
-            <div className="h-16 w-full max-w-3xl animate-pulse rounded-2xl bg-[var(--ds-color-surface-strong)] motion-reduce:animate-none" />
+            <div className="h-4 w-40 animate-pulse rounded-full bg-[var(--color-surface-hover)] motion-reduce:animate-none" />
+            <div className="h-16 w-full max-w-3xl animate-pulse rounded-2xl bg-[var(--color-surface-hover)] motion-reduce:animate-none" />
           </Panel>
         )}
         {!error && !loading && (
@@ -923,7 +931,7 @@ export function OverviewPage({ activeView }: { activeView: WorkspaceView }) {
         onClose={() => setRunnerOpen(false)}
         onCompleted={() => void load()}
       />
-      <footer className="mx-auto flex w-[calc(100%_-_1.5rem)] max-w-[1420px] flex-wrap items-center justify-between gap-4 border-t border-[var(--ds-color-line)] py-8 font-mono text-xs text-[var(--ds-color-ink-muted)] md:w-[calc(100%_-_3rem)]">
+      <footer className="mx-auto flex w-[calc(100%_-_1.5rem)] max-w-[1420px] flex-wrap items-center justify-between gap-4 border-t border-[var(--color-rule)] py-8 font-mono text-xs text-[var(--color-ink-ghost)] md:w-[calc(100%_-_3rem)]">
         <span>Harness E2E · execution evidence</span>
         <a href="https://github.com/iii-hq/harness-e2e">
           Suite documentation <span aria-hidden="true">↗</span>

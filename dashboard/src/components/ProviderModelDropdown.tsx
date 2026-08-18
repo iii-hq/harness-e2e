@@ -95,7 +95,7 @@ export function ProviderModelDropdown({
     <div className="relative min-w-0 w-full" ref={rootRef}>
       <button
         type="button"
-        className="flex min-h-11 w-full items-center justify-between gap-2.5 rounded-lg border border-[var(--ds-color-line)] bg-[var(--ds-color-surface-raised)] px-3 py-2 text-left text-sm text-[var(--ds-color-ink)] transition-colors duration-[var(--ds-duration-fast)] hover:border-[var(--ds-color-line-strong)] focus-visible:border-[var(--ds-color-focus)] focus-visible:[outline:2px_solid_var(--ds-color-focus)] focus-visible:[outline-offset:3px] disabled:cursor-not-allowed disabled:opacity-50 aria-expanded:border-[var(--ds-color-line-strong)]"
+        className="flex min-h-11 w-full items-center justify-between gap-2.5 rounded-lg border border-[var(--color-rule)] bg-[var(--color-panel-raised)] px-3 py-2 text-left text-sm text-[var(--color-ink)] transition-colors duration-[var(--ds-duration-fast)] hover:border-[var(--color-edge)] focus-visible:border-[var(--color-rule-focus)] focus-visible:[outline:2px_solid_var(--color-rule-focus)] focus-visible:[outline-offset:3px] disabled:cursor-not-allowed disabled:opacity-50 aria-expanded:border-[var(--color-edge)]"
         aria-label={ariaLabel}
         aria-haspopup="listbox"
         aria-controls={menuId}
@@ -125,12 +125,12 @@ export function ProviderModelDropdown({
               <strong className="overflow-hidden text-ellipsis whitespace-nowrap text-xs font-semibold">
                 {selected.label}
               </strong>
-              <small className="overflow-hidden text-ellipsis whitespace-nowrap text-[0.64rem] font-medium text-[var(--ds-color-ink-muted)]">
+              <small className="overflow-hidden text-ellipsis whitespace-nowrap text-[0.64rem] font-medium text-[var(--color-ink-ghost)]">
                 {selected.provider}
               </small>
             </>
           ) : (
-            <span className="overflow-hidden text-ellipsis whitespace-nowrap text-xs text-[var(--ds-color-ink-muted)]">
+            <span className="overflow-hidden text-ellipsis whitespace-nowrap text-xs text-[var(--color-ink-ghost)]">
               {placeholder}
             </span>
           )}
@@ -144,13 +144,13 @@ export function ProviderModelDropdown({
 
       {open && (
         <div
-          className="absolute z-50 mt-2 grid max-h-80 w-full min-w-[15rem] overflow-auto rounded-lg border border-[var(--ds-color-line-strong)] bg-[var(--ds-color-surface)] p-1.5 shadow-[var(--ds-shadow-panel)]"
+          className="absolute z-50 mt-2 grid max-h-80 w-full min-w-[15rem] overflow-auto rounded-lg border border-[var(--color-edge)] bg-[var(--color-panel)] p-1.5 shadow-[var(--shadow-panel)]"
           id={menuId}
           role="listbox"
           aria-label={ariaLabel}
         >
           {normalizedGroups.length === 0 ? (
-            <div className="p-5 text-center text-xs text-[var(--ds-color-ink-muted)]">
+            <div className="p-5 text-center text-xs text-[var(--color-ink-ghost)]">
               No models available
             </div>
           ) : (
@@ -162,12 +162,12 @@ export function ProviderModelDropdown({
               ].join('-')
               return (
                 <section
-                  className="border-b border-[var(--ds-color-line)] py-1 last:border-b-0"
+                  className="border-b border-[var(--color-rule)] py-1 last:border-b-0"
                   key={group.provider}
                 >
                   <button
                     type="button"
-                    className="flex min-h-9 w-full items-center gap-2 rounded-md border-0 bg-transparent px-2 text-left font-mono text-[0.68rem] font-semibold text-[var(--ds-color-ink-soft)] transition-colors duration-[var(--ds-duration-fast)] hover:bg-[var(--ds-color-surface-raised)] hover:text-[var(--ds-color-ink)]"
+                    className="flex min-h-9 w-full items-center gap-2 rounded-md border-0 bg-transparent px-2 text-left font-mono text-[0.68rem] font-semibold text-[var(--color-ink-faint)] transition-colors duration-[var(--ds-duration-fast)] hover:bg-[var(--color-panel-raised)] hover:text-[var(--color-ink)]"
                     aria-expanded={!collapsed}
                     aria-controls={groupId}
                     onClick={() => toggleProvider(group.provider)}
@@ -180,7 +180,7 @@ export function ProviderModelDropdown({
                     <span className="min-w-0 flex-1 overflow-hidden text-ellipsis whitespace-nowrap">
                       {group.provider}
                     </span>
-                    <small className="font-mono text-[0.62rem] font-normal text-[var(--ds-color-ink-muted)]">
+                    <small className="font-mono text-[0.62rem] font-normal text-[var(--color-ink-ghost)]">
                       {group.models.length}
                     </small>
                   </button>
@@ -193,8 +193,8 @@ export function ProviderModelDropdown({
                           aria-selected={model.value === value}
                           className={`flex min-h-9 w-full items-center justify-between gap-2 rounded-md border-0 px-2.5 text-left text-xs transition-colors duration-[var(--ds-duration-fast)] ${
                             model.value === value
-                              ? 'bg-[var(--ds-color-surface-strong)] font-semibold text-[var(--ds-color-ink)]'
-                              : 'bg-transparent text-[var(--ds-color-ink-soft)] hover:bg-[var(--ds-color-surface-raised)] hover:text-[var(--ds-color-ink)]'
+                              ? 'bg-[var(--color-surface-hover)] font-semibold text-[var(--color-ink)]'
+                              : 'bg-transparent text-[var(--color-ink-faint)] hover:bg-[var(--color-panel-raised)] hover:text-[var(--color-ink)]'
                           }`}
                           key={model.value}
                           onClick={() => {
