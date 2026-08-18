@@ -300,6 +300,7 @@ mod tests {
                     sha256: TEST_DIGEST.into(),
                 }],
             },
+            observation_contract: None,
             worker_contracts: Vec::new(),
         }
     }

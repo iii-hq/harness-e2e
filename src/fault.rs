@@ -1083,6 +1083,7 @@ mod tests {
             judge: None,
             judge_protocol: None,
             engine_revision: None,
+            observation_contract: None,
             passed: true,
             redaction: Default::default(),
             assessment_contract: crate::assessment::AssessmentContract { runs: Vec::new() },

@@ -4,9 +4,10 @@ use schemars::JsonSchema;
 
 use crate::assessment::{AnalysisBundle, AnalysisResponse};
 use crate::asset::AssetCaptureManifest;
+use crate::control::ScenariosListResponse;
 use crate::durable::{DurableArchiveManifest, HistoryRecord};
 use crate::fault::{FaultEvaluation, FaultJournal, FaultPlan, FaultProfile};
-use crate::report::{E2eManifest, E2eReport};
+use crate::report::{E2eManifest, E2eObservationEnvelope, E2eReport};
 use crate::workflow::WorkflowCheckpointV1;
 
 pub fn results() -> RootSchema {
@@ -50,6 +51,14 @@ pub fn asset_capture() -> RootSchema {
 
 pub fn manifest() -> RootSchema {
     root_schema_for::<E2eManifest>()
+}
+
+pub fn observation() -> RootSchema {
+    root_schema_for::<E2eObservationEnvelope>()
+}
+
+pub fn scenario_catalog() -> RootSchema {
+    root_schema_for::<ScenariosListResponse>()
 }
 
 pub fn workflow_checkpoint() -> RootSchema {
@@ -114,6 +123,12 @@ mod tests {
     #[test]
     fn manifest_schema_matches_snapshot() {
         assert_snapshot("manifest.json", &manifest());
+    }
+
+    #[test]
+    fn observation_contract_schemas_match_snapshots() {
+        assert_snapshot("e2e-observation-v1.json", &observation());
+        assert_snapshot("e2e-scenario-catalog-v1.json", &scenario_catalog());
     }
 
     #[test]

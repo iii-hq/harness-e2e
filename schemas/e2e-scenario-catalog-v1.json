@@ -1,0 +1,266 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "ScenariosListResponse",
+  "type": "object",
+  "required": [
+    "catalog_sha256",
+    "runner",
+    "scenarios",
+    "schema"
+  ],
+  "properties": {
+    "catalog_sha256": {
+      "type": "string"
+    },
+    "runner": {
+      "$ref": "#/definitions/RunnerIdentity"
+    },
+    "scenarios": {
+      "type": "array",
+      "items": {
+        "$ref": "#/definitions/ScenarioDescriptor"
+      }
+    },
+    "schema": {
+      "type": "string"
+    }
+  },
+  "definitions": {
+    "ArtifactExpectation": {
+      "type": "object",
+      "required": [
+        "id",
+        "kind",
+        "max_size_bytes",
+        "media_type",
+        "schema"
+      ],
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "kind": {
+          "type": "string"
+        },
+        "max_size_bytes": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "media_type": {
+          "type": "string"
+        },
+        "schema": true
+      }
+    },
+    "ComplexityProfile": {
+      "type": "object",
+      "required": [
+        "ambiguity_level",
+        "artifact_count",
+        "coordination_edges",
+        "dependency_depth",
+        "external_systems",
+        "parallel_branches",
+        "planning_depth",
+        "state_transitions",
+        "validation_loops",
+        "wake_cycles"
+      ],
+      "properties": {
+        "ambiguity_level": {
+          "type": "integer",
+          "format": "uint8",
+          "minimum": 0.0
+        },
+        "artifact_count": {
+          "type": "integer",
+          "format": "uint8",
+          "minimum": 0.0
+        },
+        "coordination_edges": {
+          "type": "integer",
+          "format": "uint16",
+          "minimum": 0.0
+        },
+        "dependency_depth": {
+          "type": "integer",
+          "format": "uint8",
+          "minimum": 0.0
+        },
+        "external_systems": {
+          "type": "integer",
+          "format": "uint8",
+          "minimum": 0.0
+        },
+        "parallel_branches": {
+          "type": "integer",
+          "format": "uint8",
+          "minimum": 0.0
+        },
+        "planning_depth": {
+          "type": "integer",
+          "format": "uint8",
+          "minimum": 0.0
+        },
+        "state_transitions": {
+          "type": "integer",
+          "format": "uint16",
+          "minimum": 0.0
+        },
+        "validation_loops": {
+          "type": "integer",
+          "format": "uint8",
+          "minimum": 0.0
+        },
+        "wake_cycles": {
+          "type": "integer",
+          "format": "uint8",
+          "minimum": 0.0
+        }
+      }
+    },
+    "DeliverableContract": {
+      "type": "object",
+      "required": [
+        "artifacts",
+        "capture_before_cleanup",
+        "invariants",
+        "provenance_required"
+      ],
+      "properties": {
+        "artifacts": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/ArtifactExpectation"
+          }
+        },
+        "capture_before_cleanup": {
+          "type": "boolean"
+        },
+        "invariants": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/InvariantSpec"
+          }
+        },
+        "provenance_required": {
+          "type": "boolean"
+        }
+      }
+    },
+    "InvariantSpec": {
+      "type": "object",
+      "required": [
+        "description",
+        "id"
+      ],
+      "properties": {
+        "description": {
+          "type": "string"
+        },
+        "id": {
+          "type": "string"
+        }
+      }
+    },
+    "RunnerIdentity": {
+      "type": "object",
+      "required": [
+        "name",
+        "revision",
+        "version"
+      ],
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "revision": {
+          "type": "string"
+        },
+        "version": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "ScenarioDescriptor": {
+      "type": "object",
+      "required": [
+        "case_id",
+        "complexity",
+        "contract_sha256",
+        "deliverable_contract",
+        "inputs_sha256",
+        "required_capabilities",
+        "scenario_id",
+        "scenario_version",
+        "seed"
+      ],
+      "properties": {
+        "case_id": {
+          "type": "string"
+        },
+        "complexity": {
+          "$ref": "#/definitions/ComplexityProfile"
+        },
+        "contract_sha256": {
+          "type": "string"
+        },
+        "deliverable_contract": {
+          "$ref": "#/definitions/DeliverableContract"
+        },
+        "inputs_sha256": {
+          "type": "string"
+        },
+        "required_capabilities": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "scenario_id": {
+          "$ref": "#/definitions/ScenarioId"
+        },
+        "scenario_version": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0.0
+        },
+        "seed": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        }
+      }
+    },
+    "ScenarioId": {
+      "type": "string",
+      "enum": [
+        "direct_answer",
+        "persistent_state",
+        "reactive_automation",
+        "shell_coder_sandbox",
+        "research_pipeline",
+        "security_review",
+        "incident_response",
+        "todo_worker_simple",
+        "todo_worker_planned",
+        "todo_worker_self_validating",
+        "engineering_ticket",
+        "git_regression_forensics",
+        "mechanical_reaction",
+        "timer_wake",
+        "receiving_operation",
+        "validation_loop",
+        "subagent_validation",
+        "multi_subagent_validation",
+        "subagent_validation_failure",
+        "custom_validator",
+        "validation_self_repair",
+        "validation_scope_enforcement",
+        "validation_chain"
+      ]
+    }
+  }
+}

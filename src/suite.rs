@@ -24,8 +24,8 @@ use crate::identity::{self, ExecutionIdentity, SystemUnderTestIdentity};
 use crate::judge::{self, JudgeConfig};
 use crate::report::{
     CostReport, CriterionReport, E2eManifest, E2eReport, E2eRunReport, E2eScenarioReport,
-    EvaluationDimension, FailurePhase, HardGateReport, ModelArtifact, RetryAttemptReport,
-    RunStatus, ScenarioFlowEvidence,
+    EvaluationDimension, FailurePhase, HardGateReport, ModelArtifact, ObservationRunContract,
+    RetryAttemptReport, RunStatus, ScenarioFlowEvidence,
 };
 use crate::scenarios::common;
 use crate::scenarios::{
@@ -85,6 +85,7 @@ pub struct SuiteRunConfig {
     pub technical_retries: u8,
     pub progress_interval: Option<Duration>,
     pub control: Option<SuiteControl>,
+    pub observation_contract: Option<ObservationRunContract>,
 }
 
 pub struct SuiteRunOutcome {
@@ -170,6 +171,9 @@ pub async fn run_suite(config: SuiteRunConfig) -> Result<SuiteRunOutcome> {
         &control_plane,
     )
     .context("resolve system-under-test identity")?;
+    if let Some(contract) = &config.observation_contract {
+        contract.validate_runtime(&system_under_test)?;
+    }
     let subject_model = resolve_model(&context, &config.subject.model, &config.subject.provider)
         .await
         .context("resolve subject model")?;
@@ -309,6 +313,7 @@ pub async fn run_suite(config: SuiteRunConfig) -> Result<SuiteRunOutcome> {
         subject: subject.clone(),
         judge: judge.clone(),
         control_plane,
+        observation_contract: config.observation_contract.clone(),
         worker_contracts,
     };
     let mut report = E2eReport::new(
@@ -323,6 +328,7 @@ pub async fn run_suite(config: SuiteRunConfig) -> Result<SuiteRunOutcome> {
         identity::nonempty_env("HARNESS_E2E_ENGINE_REVISION"),
         scenario_reports,
     );
+    report.observation_contract = config.observation_contract.clone();
     emit_phase(config.control.as_ref(), SuitePhase::Finalizing).await?;
     ensure_not_cancelled(config.control.as_ref())?;
     // Persist a complete objective result and immutable evidence before invoking

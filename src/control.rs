@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
@@ -14,6 +14,7 @@ use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use tokio::sync::{broadcast, mpsc, watch, Mutex, RwLock};
 
+use crate::artifact::{self, ArtifactReference};
 use crate::context::E2eContext;
 use crate::durable::{
     ArchiveHeadResponse, ArchiveResponse, ArchiveRestoreResponse, DurableArchiveReference,
@@ -25,8 +26,16 @@ use crate::fault::{
 };
 use crate::judge::JudgeConfig;
 use crate::longitudinal::{self, ComparisonPolicy, ComparisonResponse};
-use crate::report::{E2eManifest, E2eReport};
-use crate::scenarios::{ComplexityProfile, DeliverableContract, ScenarioId};
+use crate::report::{
+    E2eManifest, E2eObservationEnvelope, E2eReport, ObservationDataAvailability,
+    ObservationEvidence, ObservationExecutionIdentity, ObservationIdentity, ObservationMetric,
+    ObservationMetricDerivation, ObservationMetricOrigin, ObservationObjective, ObservationOutcome,
+    ObservationProvenance, ObservationRunContract, ObservationSample, ObservationSelectedCase,
+    RunnerIdentity, CATALOG_SCHEMA, OBSERVATION_SCHEMA,
+};
+use crate::scenarios::{
+    scenario_contract_sha256, ComplexityProfile, DeliverableContract, ScenarioId,
+};
 use crate::suite::{
     run_suite, SubjectConfig, SuiteControl, SuiteEvent, SuiteEventEnvelope, SuitePhase,
     SuiteRunConfig,
@@ -115,6 +124,10 @@ pub struct ExecutionRecord {
     pub requested_at: String,
     pub updated_at: String,
     pub request: RunRequest,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub request_sha256: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub run_contract_sha256: Option<String>,
     pub lane_budget: LaneBudget,
     pub transitions: Vec<PhaseTransition>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -128,6 +141,10 @@ pub struct ExecutionRecord {
     pub report: Option<E2eReport>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub manifest: Option<E2eManifest>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub observation: Option<E2eObservationEnvelope>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub observation_artifact: Option<ArtifactReference>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub archive: Option<DurableArchiveReference>,
 }
@@ -158,6 +175,8 @@ pub struct RunRequest {
     pub technical_retries: u8,
     #[serde(default = "default_progress_interval_seconds")]
     pub progress_interval_seconds: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub run_contract: Option<ObservationRunContract>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -173,6 +192,9 @@ pub struct RunAccepted {
     pub execution_id: String,
     pub phase: ExecutionPhase,
     pub duplicate: bool,
+    pub request_sha256: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub run_contract_sha256: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -209,6 +231,10 @@ pub struct ResultsGetResponse {
     pub report: Option<E2eReport>,
     pub manifest: Option<E2eManifest>,
     pub archive: Option<DurableArchiveReference>,
+    pub request_sha256: String,
+    pub run_contract_sha256: Option<String>,
+    pub observation: Option<E2eObservationEnvelope>,
+    pub observation_artifact: Option<ArtifactReference>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -265,6 +291,8 @@ pub struct ScenarioDescriptor {
     pub scenario_version: u32,
     pub case_id: String,
     pub seed: u64,
+    pub inputs_sha256: String,
+    pub contract_sha256: String,
     pub complexity: ComplexityProfile,
     pub required_capabilities: Vec<String>,
     pub deliverable_contract: DeliverableContract,
@@ -272,6 +300,9 @@ pub struct ScenarioDescriptor {
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct ScenariosListResponse {
+    pub schema: String,
+    pub runner: RunnerIdentity,
+    pub catalog_sha256: String,
     pub scenarios: Vec<ScenarioDescriptor>,
 }
 
@@ -564,6 +595,12 @@ impl ControlPlane {
 
     pub async fn run(&self, request: RunRequest) -> Result<RunAccepted> {
         let lane_budget = validate_run_request(&request)?;
+        let request_sha256 = artifact::sha256_value(&request)?;
+        let run_contract_sha256 = request
+            .run_contract
+            .as_ref()
+            .map(artifact::sha256_value)
+            .transpose()?;
         let _admission = self.inner.admission.lock().await;
         let execution_id = execution_id_for_key(&request.idempotency_key);
         if let Some(record) = self.inner.records.read().await.get(&execution_id).cloned() {
@@ -578,6 +615,12 @@ impl ControlPlane {
                 execution_id,
                 phase: record.phase,
                 duplicate: true,
+                request_sha256: if record.request_sha256.is_empty() {
+                    artifact::sha256_value(&record.request)?
+                } else {
+                    record.request_sha256
+                },
+                run_contract_sha256: record.run_contract_sha256,
             });
         }
 
@@ -601,6 +644,8 @@ impl ControlPlane {
             requested_at: now.clone(),
             updated_at: now.clone(),
             request: request.clone(),
+            request_sha256: request_sha256.clone(),
+            run_contract_sha256: run_contract_sha256.clone(),
             lane_budget,
             transitions: vec![PhaseTransition {
                 phase: ExecutionPhase::Requested,
@@ -613,6 +658,8 @@ impl ControlPlane {
             result_path: None,
             report: None,
             manifest: None,
+            observation: None,
+            observation_artifact: None,
             archive: None,
         };
         self.persist_record(record).await?;
@@ -627,6 +674,8 @@ impl ControlPlane {
             execution_id,
             phase: ExecutionPhase::Admitted,
             duplicate: false,
+            request_sha256,
+            run_contract_sha256,
         })
     }
 
@@ -649,6 +698,22 @@ impl ControlPlane {
         request: RunRequest,
         cancellation: watch::Receiver<bool>,
     ) {
+        if let Err(error) = preflight_run_contract(&request) {
+            let result = self
+                .finish(
+                    &execution_id,
+                    ExecutionPhase::Unsupported,
+                    format!("{error:#}"),
+                    None,
+                    None,
+                    None,
+                )
+                .await;
+            if let Err(error) = result {
+                tracing::error!(execution_id, %error, "failed to persist unsupported E2E observation");
+            }
+            return;
+        }
         let (events, mut checkpoints) = mpsc::channel::<SuiteEventEnvelope>(16);
         let checkpoint_control = self.clone();
         let checkpoint_execution_id = execution_id.clone();
@@ -689,6 +754,7 @@ impl ControlPlane {
                 events,
                 cancellation: cancellation.clone(),
             }),
+            observation_contract: request.run_contract.clone(),
         })
         .await;
         checkpoint_task.abort();
@@ -715,14 +781,17 @@ impl ControlPlane {
             }
             Err(error) => {
                 self.cleanup_active_attempt(&execution_id).await;
+                let rendered = format!("{error:#}");
                 self.finish(
                     &execution_id,
                     if cancelled || format!("{error:#}").contains("was cancelled") {
                         ExecutionPhase::Cancelled
+                    } else if rendered.contains("E2E observation identity mismatch") {
+                        ExecutionPhase::Unsupported
                     } else {
                         ExecutionPhase::Failed
                     },
-                    format!("{error:#}"),
+                    rendered,
                     None,
                     None,
                     None,
@@ -814,6 +883,14 @@ impl ControlPlane {
             report: record.report,
             manifest: record.manifest,
             archive: record.archive,
+            request_sha256: if record.request_sha256.is_empty() {
+                artifact::sha256_value(&record.request)?
+            } else {
+                record.request_sha256
+            },
+            run_contract_sha256: record.run_contract_sha256,
+            observation: record.observation,
+            observation_artifact: record.observation_artifact,
         })
     }
 
@@ -841,18 +918,22 @@ impl ControlPlane {
 
     async fn archive(&self, request: ArchiveExecutionRequest) -> Result<ArchiveResponse> {
         let record = self.record(&request.execution_id).await?;
-        if record.phase != ExecutionPhase::Completed {
-            bail!("only a completed execution can be archived");
+        if !record.phase.terminal() {
+            bail!("only a terminal execution can be archived");
         }
-        let report = record
-            .report
-            .as_ref()
-            .context("completed execution has no report")?;
+        if record.report.is_none() && record.observation.is_none() {
+            bail!("terminal execution has neither a report nor an observation envelope");
+        }
         let output = self.inner.output_root.join(&record.execution_id);
         let response = self
             .inner
             .durable
-            .archive(&output, report, request.retention_class)
+            .archive(
+                &output,
+                record.report.as_ref(),
+                record.observation.as_ref(),
+                request.retention_class,
+            )
             .await?;
         let archive = response.archive.clone();
         self.update_record(&request.execution_id, move |record| {
@@ -962,6 +1043,35 @@ impl ControlPlane {
                     at: record.updated_at.clone(),
                     reason: "restart recovery compensated the active attempt".into(),
                 });
+                if record.request.run_contract.is_some() {
+                    let observation = terminal_observation(
+                        &record,
+                        ExecutionPhase::Cancelled,
+                        &record.error,
+                        record.report.as_ref(),
+                        record.manifest.as_ref(),
+                        record.result_path.as_deref(),
+                        &self.inner.output_root,
+                    )?;
+                    let artifact =
+                        observation.write_to(&self.inner.output_root.join(&execution_id))?;
+                    record.observation = Some(observation);
+                    record.observation_artifact = Some(artifact);
+                }
+                self.persist_record(record).await?;
+            } else if record.request.run_contract.is_some() && record.observation.is_none() {
+                let observation = terminal_observation(
+                    &record,
+                    record.phase,
+                    &record.error,
+                    record.report.as_ref(),
+                    record.manifest.as_ref(),
+                    record.result_path.as_deref(),
+                    &self.inner.output_root,
+                )?;
+                let artifact = observation.write_to(&self.inner.output_root.join(&execution_id))?;
+                record.observation = Some(observation);
+                record.observation_artifact = Some(artifact);
                 self.persist_record(record).await?;
             } else {
                 self.inner
@@ -1016,12 +1126,31 @@ impl ControlPlane {
         manifest: Option<E2eManifest>,
         result_path: Option<String>,
     ) -> Result<()> {
+        let current = self.record(execution_id).await?;
+        let (observation, observation_artifact) = if current.request.run_contract.is_some() {
+            let observation = terminal_observation(
+                &current,
+                phase,
+                &error,
+                report.as_ref(),
+                manifest.as_ref(),
+                result_path.as_deref(),
+                &self.inner.output_root,
+            )?;
+            let output = self.inner.output_root.join(execution_id);
+            let artifact = observation.write_to(&output)?;
+            (Some(observation), Some(artifact))
+        } else {
+            (None, None)
+        };
         self.update_record(execution_id, move |record| {
             record.phase = phase;
             record.error = error;
             record.report = report;
             record.manifest = manifest;
             record.result_path = result_path;
+            record.observation = observation;
+            record.observation_artifact = observation_artifact;
             record.active_attempt = None;
             record.transitions.push(PhaseTransition {
                 phase,
@@ -1208,7 +1337,111 @@ fn validate_run_request(request: &RunRequest) -> Result<LaneBudget> {
     if request.judge_model.is_some() != request.judge_provider.is_some() {
         bail!("judge_model and judge_provider must be supplied together");
     }
+    if let Some(contract) = &request.run_contract {
+        contract.validate()?;
+        let expected = observation_idempotency_key(request)?;
+        if request.idempotency_key != expected {
+            bail!("D0 idempotency_key must equal {expected}");
+        }
+    }
     Ok(budget)
+}
+
+fn observation_intent_sha256(request: &RunRequest) -> Result<String> {
+    let contract = request
+        .run_contract
+        .as_ref()
+        .context("D0 observation intent requires run_contract")?;
+    artifact::sha256_value(&json!({
+        "run_contract": contract,
+        "lane": request.lane,
+        "model": request.model,
+        "provider": request.provider,
+        "judge_model": request.judge_model,
+        "judge_provider": request.judge_provider,
+        "scenarios": request.scenarios,
+        "runs": request.runs,
+        "seed": request.seed,
+        "rotating_seeds": request.rotating_seeds,
+        "technical_retries": request.technical_retries,
+    }))
+}
+
+fn observation_idempotency_key(request: &RunRequest) -> Result<String> {
+    let digest = observation_intent_sha256(request)?;
+    Ok(format!(
+        "rc:d0:{}",
+        digest.strip_prefix("sha256:").unwrap_or(&digest)
+    ))
+}
+
+fn preflight_run_contract(request: &RunRequest) -> Result<()> {
+    let Some(contract) = &request.run_contract else {
+        return Ok(());
+    };
+    contract.validate()?;
+    let runner = RunnerIdentity::runtime();
+    runner.validate()?;
+    if contract.runner != runner {
+        bail!(
+            "E2E observation identity mismatch: expected runner {:?}, observed {:?}",
+            contract.runner,
+            runner
+        );
+    }
+    let catalog = scenarios_list(ScenariosListRequest { seed: request.seed })?;
+    if contract.plan.catalog_sha256 != catalog.catalog_sha256 {
+        bail!(
+            "E2E observation catalog mismatch: expected {}, observed {}",
+            contract.plan.catalog_sha256,
+            catalog.catalog_sha256
+        );
+    }
+    let scenarios = if request.scenarios.is_empty() {
+        crate::scenarios::selected(&[])
+    } else {
+        unique_scenarios(&request.scenarios)
+    };
+    let mut expected = Vec::new();
+    for scenario in scenarios {
+        for seed in observation_case_seeds(scenario, request.seed, &request.rotating_seeds) {
+            let descriptor = materialize_scenario_descriptor(scenario, seed, "run-contract")?;
+            expected.push(ObservationSelectedCase {
+                scenario_id: descriptor.scenario_id,
+                scenario_version: descriptor.scenario_version,
+                case_id: descriptor.case_id,
+                seed: descriptor.seed,
+                inputs_sha256: descriptor.inputs_sha256,
+                contract_sha256: descriptor.contract_sha256,
+            });
+        }
+    }
+    sort_selected_cases(&mut expected);
+    let mut supplied = contract.selected_cases.clone();
+    sort_selected_cases(&mut supplied);
+    if supplied != expected {
+        bail!("E2E observation selected cases differ from runtime materialization");
+    }
+    Ok(())
+}
+
+fn observation_case_seeds(scenario: ScenarioId, fixed: Option<u64>, rotating: &[u64]) -> Vec<u64> {
+    let mut seeds = vec![fixed.unwrap_or_else(|| scenario.canonical_seed())];
+    for seed in rotating {
+        if !seeds.contains(seed) {
+            seeds.push(*seed);
+        }
+    }
+    seeds
+}
+
+fn sort_selected_cases(cases: &mut [ObservationSelectedCase]) {
+    cases.sort_by(|left, right| {
+        left.scenario_id
+            .as_str()
+            .cmp(right.scenario_id.as_str())
+            .then_with(|| left.case_id.cmp(&right.case_id))
+    });
 }
 
 fn lane_budget(lane: &str) -> LaneBudget {
@@ -1270,19 +1503,380 @@ fn scenarios_list(request: ScenariosListRequest) -> Result<ScenariosListResponse
         .into_iter()
         .map(|scenario_id| {
             let seed = request.seed.unwrap_or_else(|| scenario_id.canonical_seed());
-            let materialized = scenario_id.materialize("catalog", seed)?;
-            Ok(ScenarioDescriptor {
-                scenario_id,
-                scenario_version: materialized.case.scenario_version,
-                case_id: materialized.case.case_id,
-                seed,
-                complexity: materialized.case.complexity.profile,
-                required_capabilities: materialized.case.required_capabilities,
-                deliverable_contract: materialized.case.deliverable_contract,
-            })
+            materialize_scenario_descriptor(scenario_id, seed, "catalog")
         })
         .collect::<Result<Vec<_>>>()?;
-    Ok(ScenariosListResponse { scenarios })
+    let runner = RunnerIdentity::runtime();
+    runner.validate()?;
+    let catalog_sha256 = artifact::sha256_value(&json!({
+        "schema": CATALOG_SCHEMA,
+        "runner": &runner,
+        "scenarios": &scenarios,
+    }))?;
+    Ok(ScenariosListResponse {
+        schema: CATALOG_SCHEMA.into(),
+        runner,
+        catalog_sha256,
+        scenarios,
+    })
+}
+
+fn materialize_scenario_descriptor(
+    scenario_id: ScenarioId,
+    seed: u64,
+    label: &str,
+) -> Result<ScenarioDescriptor> {
+    let materialized = scenario_id.materialize(label, seed)?;
+    let contract_sha256 =
+        scenario_contract_sha256(&materialized.case, materialized.spec.execution)?;
+    Ok(ScenarioDescriptor {
+        scenario_id,
+        scenario_version: materialized.case.scenario_version,
+        case_id: materialized.case.case_id,
+        seed,
+        inputs_sha256: materialized.case.inputs_sha256,
+        contract_sha256,
+        complexity: materialized.case.complexity.profile,
+        required_capabilities: materialized.case.required_capabilities,
+        deliverable_contract: materialized.case.deliverable_contract,
+    })
+}
+
+fn terminal_observation(
+    record: &ExecutionRecord,
+    phase: ExecutionPhase,
+    error: &str,
+    report: Option<&E2eReport>,
+    manifest: Option<&E2eManifest>,
+    result_path: Option<&str>,
+    output_root: &Path,
+) -> Result<E2eObservationEnvelope> {
+    let contract = record
+        .request
+        .run_contract
+        .as_ref()
+        .context("terminal D0 observation is missing run_contract")?;
+    let request_sha256 = if record.request_sha256.is_empty() {
+        artifact::sha256_value(&record.request)?
+    } else {
+        record.request_sha256.clone()
+    };
+    let run_contract_sha256 = record
+        .run_contract_sha256
+        .clone()
+        .map(Ok)
+        .unwrap_or_else(|| artifact::sha256_value(contract))?;
+    let completed_at = report
+        .map(|report| report.execution.completed_at.clone())
+        .unwrap_or_else(|| record.updated_at.clone());
+    let samples = report.map(observation_samples).unwrap_or_default();
+    let data_availability = observation_data_availability(&samples);
+    let objective = observation_objective(phase, report);
+    let passed = (phase == ExecutionPhase::Completed)
+        .then(|| report.map(|report| report.passed))
+        .flatten();
+    let result_sha256 = result_path
+        .map(|path| output_root.join(path))
+        .filter(|path| path.is_file())
+        .map(|path| {
+            std::fs::read(&path)
+                .map(|bytes| artifact::sha256_bytes(&bytes))
+                .with_context(|| format!("read observation result {}", path.display()))
+        })
+        .transpose()?;
+    let mut artifacts = Vec::new();
+    if let Some(report) = report {
+        if let Some(reference) = &report.manifest {
+            artifacts.push(reference.clone());
+        }
+        for run in report
+            .scenarios
+            .iter()
+            .flat_map(|scenario| scenario.runs.iter())
+        {
+            artifacts.extend(run.evidence.iter().cloned());
+            artifacts.extend(
+                run.deliverables
+                    .iter()
+                    .filter_map(|deliverable| deliverable.artifact.clone()),
+            );
+        }
+    }
+    artifacts.sort_by(|left, right| left.path.cmp(&right.path));
+    artifacts.dedup_by(|left, right| left.path == right.path && left.sha256 == right.sha256);
+    let system_under_test = report
+        .map(|report| report.system_under_test.clone())
+        .or_else(|| manifest.map(|manifest| manifest.system_under_test.clone()));
+    let (error, _) = crate::redaction::RedactionPolicy::from_environment().redact_text(error);
+    let observation = E2eObservationEnvelope {
+        schema: OBSERVATION_SCHEMA.into(),
+        identity: ObservationIdentity {
+            target: contract.target.clone(),
+            plan: contract.plan.clone(),
+            runner: contract.runner.clone(),
+            execution: ObservationExecutionIdentity {
+                id: record.execution_id.clone(),
+                attempt: contract.attempt,
+                request_sha256,
+                run_contract_sha256,
+                started_at: record.requested_at.clone(),
+                completed_at,
+            },
+        },
+        mode: contract.mode.clone(),
+        outcome: ObservationOutcome {
+            control_phase: serde_json::to_value(phase)?
+                .as_str()
+                .unwrap_or("unknown")
+                .to_string(),
+            objective,
+            passed,
+            data_availability,
+            error,
+        },
+        samples,
+        evidence: ObservationEvidence {
+            results_sha256: result_sha256,
+            manifest_sha256: report
+                .and_then(|report| report.manifest.as_ref())
+                .map(|reference| reference.sha256.clone()),
+            artifacts,
+        },
+        provenance: ObservationProvenance {
+            subject_model: record.request.model.clone(),
+            subject_provider: record.request.provider.clone(),
+            system_under_test,
+        },
+    };
+    observation.validate()?;
+    Ok(observation)
+}
+
+fn observation_samples(report: &E2eReport) -> Vec<ObservationSample> {
+    report
+        .scenarios
+        .iter()
+        .flat_map(|scenario| {
+            let seed = scenario.case.as_ref().map_or(0, |case| case.seed);
+            scenario.runs.iter().map(move |run| {
+                let data_availability = match &run.efficiency {
+                    Some(metrics) if metrics.unavailable.is_empty() => {
+                        ObservationDataAvailability::Complete
+                    }
+                    Some(_) => ObservationDataAvailability::Partial,
+                    None => ObservationDataAvailability::Unavailable,
+                };
+                let derivations = run
+                    .efficiency
+                    .as_ref()
+                    .is_some_and(|metrics| metrics.work_amplification.is_some())
+                    .then(|| ObservationMetricDerivation {
+                        metric: "work_amplification".into(),
+                        origin: ObservationMetricOrigin::DerivedFromObserved,
+                        formula: "observed_work / max(minimum_expected_work, 1)".into(),
+                        formula_version: "1".into(),
+                    })
+                    .into_iter()
+                    .collect();
+                ObservationSample {
+                    scenario_id: scenario.scenario_id.clone(),
+                    scenario_version: scenario.scenario_version,
+                    case_id: scenario.case_id.clone(),
+                    seed,
+                    run_id: run.run_id.clone(),
+                    attempt_id: run.attempt_id.clone(),
+                    status: run.status,
+                    origin: ObservationMetricOrigin::Observed,
+                    data_availability,
+                    metrics: run.efficiency.clone(),
+                    metric_values: observation_metric_values(run.efficiency.as_ref()),
+                    derivations,
+                }
+            })
+        })
+        .collect()
+}
+
+fn observation_metric_values(
+    metrics: Option<&crate::report::EfficiencyReport>,
+) -> BTreeMap<String, ObservationMetric> {
+    const METRICS: &[(&str, &str)] = &[
+        ("wall_time_ms", "ms"),
+        ("root_turns", "turns"),
+        ("child_turns", "turns"),
+        ("child_sessions", "sessions"),
+        ("function_calls", "calls"),
+        ("function_call_errors", "errors"),
+        ("validation_retries", "retries"),
+        ("transient_resumes", "resumes"),
+        ("wake_resumes", "resumes"),
+        ("effective_fan_out", "branches"),
+        ("critical_path_ms", "ms"),
+        ("input_tokens", "tokens"),
+        ("output_tokens", "tokens"),
+        ("total_tokens", "tokens"),
+        ("cost_usd", "USD"),
+        ("minimum_expected_work", "work_units"),
+        ("observed_work", "work_units"),
+        ("work_amplification", "ratio"),
+        ("technical_attempts", "attempts"),
+    ];
+    METRICS
+        .iter()
+        .map(|(name, unit)| {
+            let (value, origin) = match (metrics, *name) {
+                (Some(metrics), "wall_time_ms") => (
+                    Some(metrics.wall_time_ms as f64),
+                    ObservationMetricOrigin::Observed,
+                ),
+                (Some(metrics), "root_turns") => (
+                    metrics.root_turns.map(|value| value as f64),
+                    ObservationMetricOrigin::Observed,
+                ),
+                (Some(metrics), "child_turns") => (
+                    metrics.child_turns.map(|value| value as f64),
+                    ObservationMetricOrigin::Observed,
+                ),
+                (Some(metrics), "child_sessions") => (
+                    metrics.child_sessions.map(|value| value as f64),
+                    ObservationMetricOrigin::Observed,
+                ),
+                (Some(metrics), "function_calls") => (
+                    metrics.function_calls.map(|value| value as f64),
+                    ObservationMetricOrigin::Observed,
+                ),
+                (Some(metrics), "function_call_errors") => (
+                    metrics.function_call_errors.map(|value| value as f64),
+                    ObservationMetricOrigin::Observed,
+                ),
+                (Some(metrics), "validation_retries") => (
+                    metrics.validation_retries.map(|value| value as f64),
+                    ObservationMetricOrigin::Observed,
+                ),
+                (Some(metrics), "transient_resumes") => (
+                    metrics.transient_resumes.map(|value| value as f64),
+                    ObservationMetricOrigin::Observed,
+                ),
+                (Some(metrics), "wake_resumes") => (
+                    metrics.wake_resumes.map(|value| value as f64),
+                    ObservationMetricOrigin::Observed,
+                ),
+                (Some(metrics), "effective_fan_out") => (
+                    metrics.effective_fan_out.map(|value| value as f64),
+                    ObservationMetricOrigin::Observed,
+                ),
+                (Some(metrics), "critical_path_ms") => (
+                    metrics.critical_path_ms.map(|value| value as f64),
+                    ObservationMetricOrigin::Observed,
+                ),
+                (Some(metrics), "input_tokens") => (
+                    metrics.input_tokens.map(|value| value as f64),
+                    ObservationMetricOrigin::Observed,
+                ),
+                (Some(metrics), "output_tokens") => (
+                    metrics.output_tokens.map(|value| value as f64),
+                    ObservationMetricOrigin::Observed,
+                ),
+                (Some(metrics), "total_tokens") => (
+                    metrics.total_tokens.map(|value| value as f64),
+                    ObservationMetricOrigin::Observed,
+                ),
+                (Some(metrics), "cost_usd") => {
+                    (metrics.cost_usd, ObservationMetricOrigin::Observed)
+                }
+                (Some(metrics), "minimum_expected_work") => (
+                    Some(metrics.minimum_expected_work as f64),
+                    ObservationMetricOrigin::Observed,
+                ),
+                (Some(metrics), "observed_work") => (
+                    metrics.observed_work.map(|value| value as f64),
+                    ObservationMetricOrigin::Observed,
+                ),
+                (Some(metrics), "work_amplification") => (
+                    metrics.work_amplification,
+                    ObservationMetricOrigin::DerivedFromObserved,
+                ),
+                (Some(metrics), "technical_attempts") => (
+                    Some(metrics.technical_attempts as f64),
+                    ObservationMetricOrigin::Observed,
+                ),
+                (None, _) => (None, ObservationMetricOrigin::Observed),
+                _ => (None, ObservationMetricOrigin::Observed),
+            };
+            let availability = match (metrics, value) {
+                (None, _) => ObservationDataAvailability::Unavailable,
+                (Some(metrics), Some(_)) if !metrics.unavailable.contains_key(*name) => {
+                    ObservationDataAvailability::Complete
+                }
+                (Some(_metrics), Some(_)) => ObservationDataAvailability::Partial,
+                (Some(metrics), None) if metrics.unavailable.contains_key(*name) => {
+                    ObservationDataAvailability::Unavailable
+                }
+                (Some(_), None) => ObservationDataAvailability::Partial,
+            };
+            (
+                (*name).into(),
+                ObservationMetric {
+                    value,
+                    unit: (*unit).into(),
+                    availability,
+                    origin,
+                },
+            )
+        })
+        .collect()
+}
+
+fn observation_data_availability(samples: &[ObservationSample]) -> ObservationDataAvailability {
+    if samples.is_empty()
+        || samples
+            .iter()
+            .all(|sample| sample.data_availability == ObservationDataAvailability::Unavailable)
+    {
+        ObservationDataAvailability::Unavailable
+    } else if samples
+        .iter()
+        .all(|sample| sample.data_availability == ObservationDataAvailability::Complete)
+    {
+        ObservationDataAvailability::Complete
+    } else {
+        ObservationDataAvailability::Partial
+    }
+}
+
+fn observation_objective(
+    phase: ExecutionPhase,
+    report: Option<&E2eReport>,
+) -> ObservationObjective {
+    match phase {
+        ExecutionPhase::Cancelled => ObservationObjective::Cancelled,
+        ExecutionPhase::Unsupported => ObservationObjective::UnsupportedPlan,
+        ExecutionPhase::Failed => ObservationObjective::InfrastructureFailed,
+        ExecutionPhase::Completed => {
+            let Some(report) = report else {
+                return ObservationObjective::InfrastructureFailed;
+            };
+            if report.passed {
+                return ObservationObjective::Passed;
+            }
+            let statuses = report
+                .scenarios
+                .iter()
+                .flat_map(|scenario| scenario.runs.iter().map(|run| run.status))
+                .collect::<Vec<_>>();
+            if statuses
+                .iter()
+                .any(|status| *status == crate::report::RunStatus::InfrastructureError)
+            {
+                ObservationObjective::InfrastructureFailed
+            } else if statuses.iter().any(|status| status.is_technical_failure()) {
+                ObservationObjective::TechnicalFailed
+            } else {
+                ObservationObjective::HardGateFailed
+            }
+        }
+        _ => ObservationObjective::InfrastructureFailed,
+    }
 }
 
 fn status_response(record: &ExecutionRecord) -> StatusResponse {
@@ -1352,7 +1946,57 @@ mod tests {
             rotating_seeds: Vec::new(),
             technical_retries: 1,
             progress_interval_seconds: 15,
+            run_contract: None,
         }
+    }
+
+    fn d0_request() -> RunRequest {
+        let mut request = request();
+        let catalog = scenarios_list(ScenariosListRequest { seed: request.seed }).unwrap();
+        let scenario = catalog
+            .scenarios
+            .iter()
+            .find(|scenario| scenario.scenario_id == ScenarioId::PersistentState)
+            .unwrap()
+            .clone();
+        request.run_contract = Some(ObservationRunContract {
+            schema_version: 1,
+            mode: crate::report::ObservationMode {
+                environment: crate::report::ObservationEnvironment::Demonstration,
+                decision: crate::report::ObservationDecision::ObserveOnly,
+            },
+            target: crate::report::ObservationTargetIdentity {
+                application: "harness".into(),
+                version: "1.0.0".into(),
+                stack: crate::identity::StackIdentity::Source {
+                    workers_repository: "iii-hq/workers".into(),
+                    workers_revision: "0123456789abcdef0123456789abcdef01234567".into(),
+                },
+            },
+            plan: crate::report::ObservationPlanIdentity {
+                id: "deployment-d0".into(),
+                revision: "revision-1".into(),
+                sha256: format!("sha256:{}", "a".repeat(64)),
+                catalog_sha256: catalog.catalog_sha256,
+            },
+            runner: catalog.runner,
+            attempt: 1,
+            selected_cases: vec![ObservationSelectedCase {
+                scenario_id: scenario.scenario_id,
+                scenario_version: scenario.scenario_version,
+                case_id: scenario.case_id.clone(),
+                seed: scenario.seed,
+                inputs_sha256: scenario.inputs_sha256.clone(),
+                contract_sha256: scenario.contract_sha256.clone(),
+            }],
+            correlation: crate::report::ObservationCorrelation {
+                system: "release-control".into(),
+                deployment_id: "deployment-1".into(),
+                operation_id: "operation-1".into(),
+            },
+        });
+        request.idempotency_key = observation_idempotency_key(&request).unwrap();
+        request
     }
 
     #[test]
@@ -1383,6 +2027,174 @@ mod tests {
             .scenarios
             .iter()
             .all(|scenario| scenario.case_id.contains("seed-0000000000000007")));
+        assert_eq!(response.schema, CATALOG_SCHEMA);
+        assert!(response.catalog_sha256.starts_with("sha256:"));
+        assert!(response.scenarios.iter().all(|scenario| {
+            scenario.inputs_sha256.starts_with("sha256:")
+                && scenario.contract_sha256.starts_with("sha256:")
+        }));
+    }
+
+    #[test]
+    fn catalog_digest_is_stable_for_the_same_runtime_materialization() {
+        let first = scenarios_list(ScenariosListRequest { seed: Some(7) }).unwrap();
+        let second = scenarios_list(ScenariosListRequest { seed: Some(7) }).unwrap();
+        let changed = scenarios_list(ScenariosListRequest { seed: Some(8) }).unwrap();
+        assert_eq!(first.catalog_sha256, second.catalog_sha256);
+        assert_ne!(first.catalog_sha256, changed.catalog_sha256);
+        assert_eq!(first.runner, RunnerIdentity::runtime());
+    }
+
+    #[test]
+    fn d0_preflight_binds_runner_catalog_and_selected_cases() {
+        let request = d0_request();
+        validate_run_request(&request).unwrap();
+        preflight_run_contract(&request).unwrap();
+
+        let mut wrong_runner = request.clone();
+        wrong_runner.run_contract.as_mut().unwrap().runner.version = "other".into();
+        assert!(preflight_run_contract(&wrong_runner)
+            .unwrap_err()
+            .to_string()
+            .contains("identity mismatch"));
+
+        let mut wrong_case = request;
+        wrong_case.run_contract.as_mut().unwrap().selected_cases[0].inputs_sha256 =
+            format!("sha256:{}", "b".repeat(64));
+        assert!(preflight_run_contract(&wrong_case)
+            .unwrap_err()
+            .to_string()
+            .contains("selected cases"));
+    }
+
+    #[test]
+    fn d0_idempotency_key_is_bound_to_the_canonical_intent() {
+        let request = d0_request();
+        assert_eq!(
+            request.idempotency_key,
+            observation_idempotency_key(&request).unwrap()
+        );
+        let mut tampered = request;
+        tampered.model = "other-model".into();
+        assert!(validate_run_request(&tampered)
+            .unwrap_err()
+            .to_string()
+            .contains("D0 idempotency_key"));
+    }
+
+    #[test]
+    fn request_and_run_contract_hashes_change_for_an_explicit_rerun() {
+        let first = d0_request();
+        let mut rerun = first.clone();
+        rerun.run_contract.as_mut().unwrap().attempt = 2;
+        assert_ne!(
+            artifact::sha256_value(&first).unwrap(),
+            artifact::sha256_value(&rerun).unwrap()
+        );
+        assert_ne!(
+            artifact::sha256_value(first.run_contract.as_ref().unwrap()).unwrap(),
+            artifact::sha256_value(rerun.run_contract.as_ref().unwrap()).unwrap()
+        );
+    }
+
+    #[test]
+    fn unsupported_d0_execution_still_produces_a_terminal_observation() {
+        let request = d0_request();
+        let record = ExecutionRecord {
+            execution_id: "execution-1".into(),
+            idempotency_key: request.idempotency_key.clone(),
+            phase: ExecutionPhase::Admitted,
+            requested_at: "2026-08-18T10:00:00Z".into(),
+            updated_at: "2026-08-18T10:00:00Z".into(),
+            request_sha256: artifact::sha256_value(&request).unwrap(),
+            run_contract_sha256: Some(
+                artifact::sha256_value(request.run_contract.as_ref().unwrap()).unwrap(),
+            ),
+            request,
+            lane_budget: lane_budget("pr-gate"),
+            transitions: Vec::new(),
+            active_attempt: None,
+            cancel_requested: false,
+            error: String::new(),
+            result_path: None,
+            report: None,
+            manifest: None,
+            observation: None,
+            observation_artifact: None,
+            archive: None,
+        };
+        let output = tempfile::tempdir().unwrap();
+        let observation = terminal_observation(
+            &record,
+            ExecutionPhase::Unsupported,
+            "catalog mismatch",
+            None,
+            None,
+            None,
+            output.path(),
+        )
+        .unwrap();
+        assert_eq!(observation.schema, OBSERVATION_SCHEMA);
+        assert_eq!(
+            observation.outcome.objective,
+            ObservationObjective::UnsupportedPlan
+        );
+        assert_eq!(
+            observation.outcome.data_availability,
+            ObservationDataAvailability::Unavailable
+        );
+        observation.write_to(output.path()).unwrap();
+        E2eObservationEnvelope::read_from(output.path()).unwrap();
+    }
+
+    #[test]
+    fn observation_metrics_preserve_observed_zero_separately_from_unavailable() {
+        let metrics: crate::report::EfficiencyReport = serde_json::from_value(json!({
+            "wall_time_ms": 0,
+            "root_turns": 0,
+            "minimum_expected_work": 1,
+            "technical_attempts": 1,
+            "observed_complexity": {},
+            "unavailable": {}
+        }))
+        .unwrap();
+        let observed = ObservationSample {
+            scenario_id: "direct_answer".into(),
+            scenario_version: 1,
+            case_id: "case".into(),
+            seed: 1,
+            run_id: "run".into(),
+            attempt_id: "attempt".into(),
+            status: crate::report::RunStatus::Passed,
+            origin: ObservationMetricOrigin::Observed,
+            data_availability: ObservationDataAvailability::Complete,
+            metrics: Some(metrics.clone()),
+            metric_values: observation_metric_values(Some(&metrics)),
+            derivations: Vec::new(),
+        };
+        let unavailable = ObservationSample {
+            metrics: None,
+            data_availability: ObservationDataAvailability::Unavailable,
+            ..observed.clone()
+        };
+        let value = serde_json::to_value(&observed).unwrap();
+        assert_eq!(value["metrics"]["root_turns"], 0);
+        assert_eq!(value["metrics"]["input_tokens"], Value::Null);
+        assert_eq!(value["metric_values"]["wall_time_ms"]["value"], 0.0);
+        assert_eq!(value["metric_values"]["wall_time_ms"]["unit"], "ms");
+        assert_eq!(
+            value["metric_values"]["wall_time_ms"]["availability"],
+            "complete"
+        );
+        assert_eq!(value["metric_values"]["input_tokens"]["value"], Value::Null);
+        assert_eq!(
+            value["metric_values"]["input_tokens"]["availability"],
+            "partial"
+        );
+        assert_eq!(
+            observation_data_availability(&[observed, unavailable]),
+            ObservationDataAvailability::Partial
+        );
     }
 
     #[test]
