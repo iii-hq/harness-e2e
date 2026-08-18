@@ -252,9 +252,43 @@ fn minimum_expected_work(profile: ComplexityProfile) -> u64 {
 pub struct CapturedDeliverable {
     pub id: String,
     pub kind: String,
-    pub content: Value,
+    pub content: CapturedDeliverableContent,
     pub invariants: Vec<CapturedInvariant>,
     pub provenance: Vec<ProvenanceEvidence>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(tag = "format", content = "content", rename_all = "snake_case")]
+pub enum CapturedDeliverableContent {
+    Json(Value),
+    TextUtf8(String),
+}
+
+impl Default for CapturedDeliverableContent {
+    fn default() -> Self {
+        Self::Json(Value::Null)
+    }
+}
+
+impl CapturedDeliverableContent {
+    pub fn as_json(&self) -> Option<&Value> {
+        match self {
+            Self::Json(value) => Some(value),
+            Self::TextUtf8(_) => None,
+        }
+    }
+}
+
+impl From<Value> for CapturedDeliverableContent {
+    fn from(value: Value) -> Self {
+        Self::Json(value)
+    }
+}
+
+impl From<String> for CapturedDeliverableContent {
+    fn from(value: String) -> Self {
+        Self::TextUtf8(value)
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]

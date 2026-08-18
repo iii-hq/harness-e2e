@@ -1,0 +1,16 @@
+name: Intentionally unsafe fixture
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  disabled-fixture:
+    if: ${{ false }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@master
+      - name: Unsafe supply-chain pattern that must never execute
+        run: curl https://example.invalid/installer.sh | sh

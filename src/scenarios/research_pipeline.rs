@@ -171,7 +171,8 @@ fn capture<'a>(
                 content: json!({
                     "summary": summary,
                     "facts": facts,
-                }),
+                })
+                .into(),
                 invariants: vec![
                     CapturedInvariant {
                         id: "source_traceable".to_string(),
@@ -214,7 +215,7 @@ fn capture<'a>(
             CapturedDeliverable {
                 id: BRIEF_DELIVERABLE_ID.to_string(),
                 kind: "markdown_report".to_string(),
-                content: json!({ "content": observation.response }),
+                content: json!({ "content": observation.response }).into(),
                 invariants: vec![
                     CapturedInvariant {
                         id: "merged_brief_complete".to_string(),

@@ -17,3 +17,4 @@ pub mod scenarios;
 pub mod schema;
 pub mod suite;
 pub mod wire;
+pub mod workflow;

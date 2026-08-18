@@ -200,7 +200,8 @@ fn capture<'a>(
                 content: json!({
                     "path": FINAL_NAME,
                     "content": final_content,
-                }),
+                })
+                .into(),
                 invariants: vec![
                     CapturedInvariant {
                         id: "exact_final_content".to_string(),
@@ -235,7 +236,8 @@ fn capture<'a>(
                         "stopped": sandbox.stopped,
                         "ordered": sandbox.ordered,
                     },
-                }),
+                })
+                .into(),
                 invariants: vec![
                     CapturedInvariant {
                         id: "host_output_exact".to_string(),

@@ -61,6 +61,10 @@ then embeds the Vite output in the binary. Node and pnpm must be available on
 Vite server proxies runtime data, the scoped iii WebSocket, and local-run APIs
 to the Rust dashboard on port 4173.
 
+Rust-defined composite scenarios, including the multi-test `security_review`
+example, result schema v2 and their common read-only execution projection are documented in
+[docs/security-review.md](docs/security-review.md).
+
 The running Harness must publish request and response schemas compatible with
 the current typed surface. Missing or incompatible fields fail preflight; no
 payload-version compatibility mode is available.

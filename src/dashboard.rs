@@ -289,6 +289,7 @@ mod tests {
                     sha256: TEST_DIGEST.into(),
                 }],
             },
+            worker_contracts: Vec::new(),
         }
     }
 
@@ -319,6 +320,14 @@ mod tests {
         assert_eq!(value.label, "first run");
         value.url = "https://example.com".into();
         assert!(validate_request(&mut value).is_err());
+    }
+
+    #[test]
+    fn local_requests_allow_rust_defined_composite_scenarios() {
+        let mut value = request();
+        value.scenarios = vec!["security_review".into(), "direct_answer".into()];
+        value.technical_retries = 0;
+        validate_request(&mut value).expect("local plans must start composite scenarios");
     }
 
     #[test]

@@ -8,6 +8,7 @@
     "manifest",
     "passed",
     "scenarios",
+    "schema_version",
     "subject",
     "system_under_test"
   ],
@@ -71,6 +72,11 @@
         "$ref": "#/definitions/E2eScenarioReport"
       }
     },
+    "schema_version": {
+      "type": "integer",
+      "format": "uint32",
+      "minimum": 0.0
+    },
     "subject": {
       "$ref": "#/definitions/ModelArtifact"
     },
@@ -80,6 +86,66 @@
   },
   "additionalProperties": false,
   "definitions": {
+    "ActivationPolicy": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": [
+            "policy"
+          ],
+          "properties": {
+            "policy": {
+              "type": "string",
+              "enum": [
+                "always"
+              ]
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "conditions",
+            "policy"
+          ],
+          "properties": {
+            "conditions": {
+              "type": "array",
+              "items": {
+                "$ref": "#/definitions/BooleanCondition"
+              }
+            },
+            "policy": {
+              "type": "string",
+              "enum": [
+                "all"
+              ]
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "conditions",
+            "policy"
+          ],
+          "properties": {
+            "conditions": {
+              "type": "array",
+              "items": {
+                "$ref": "#/definitions/BooleanCondition"
+              }
+            },
+            "policy": {
+              "type": "string",
+              "enum": [
+                "any"
+              ]
+            }
+          }
+        }
+      ]
+    },
     "AiAssessmentAvailability": {
       "type": "string",
       "enum": [
@@ -500,6 +566,26 @@
         }
       }
     },
+    "BooleanCondition": {
+      "type": "object",
+      "required": [
+        "equals",
+        "node_id",
+        "port"
+      ],
+      "properties": {
+        "equals": {
+          "type": "boolean"
+        },
+        "node_id": {
+          "type": "string"
+        },
+        "port": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
     "CapturedInvariant": {
       "type": "object",
       "required": [
@@ -667,6 +753,13 @@
         }
       }
     },
+    "DeliverableContentFormat": {
+      "type": "string",
+      "enum": [
+        "json",
+        "text_utf8"
+      ]
+    },
     "DeliverableContract": {
       "type": "object",
       "required": [
@@ -699,6 +792,7 @@
     "DeliverableReport": {
       "type": "object",
       "required": [
+        "content_format",
         "content_sha256",
         "content_size_bytes",
         "id",
@@ -720,6 +814,9 @@
               "type": "null"
             }
           ]
+        },
+        "content_format": {
+          "$ref": "#/definitions/DeliverableContentFormat"
         },
         "content_sha256": {
           "type": "string"
@@ -758,6 +855,13 @@
           "type": "boolean"
         }
       }
+    },
+    "DependencyPolicy": {
+      "type": "string",
+      "enum": [
+        "succeeded",
+        "terminal"
+      ]
     },
     "DimensionReport": {
       "type": "object",
@@ -890,6 +994,17 @@
         "run_id": {
           "type": "string"
         },
+        "scenario_flow": {
+          "description": "Evidence-only flow identity emitted by Rust. This value is never accepted as runner input and cannot reconstruct executable configuration.",
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ScenarioFlowEvidence"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "score": {
           "type": [
             "integer",
@@ -897,6 +1012,13 @@
           ],
           "format": "uint8",
           "minimum": 0.0
+        },
+        "semantic_tests": {
+          "description": "Semantic tests executed inside a code-defined composite scenario. Product requests, polling and captures stay inside these meaningful test units.",
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/WorkflowStepReport"
+          }
         },
         "session_id": {
           "type": "string"
@@ -1549,6 +1671,15 @@
         }
       }
     },
+    "PortValueKind": {
+      "type": "string",
+      "enum": [
+        "boolean",
+        "json",
+        "text_utf8",
+        "assessment"
+      ]
+    },
     "ProvenanceEvidence": {
       "type": "object",
       "required": [
@@ -1665,6 +1796,22 @@
         },
         "run_id": {
           "type": "string"
+        },
+        "scenario_flow": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ScenarioFlowEvidence"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "semantic_tests": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/WorkflowStepReport"
+          }
         },
         "session_id": {
           "type": "string"
@@ -1936,6 +2083,28 @@
           "$ref": "#/definitions/WorkExpectation"
         }
       }
+    },
+    "ScenarioFlowEvidence": {
+      "type": "object",
+      "required": [
+        "checkpoint",
+        "cleanup",
+        "definition_sha256",
+        "snapshot"
+      ],
+      "properties": {
+        "checkpoint": {
+          "$ref": "#/definitions/ArtifactReference"
+        },
+        "cleanup": {
+          "$ref": "#/definitions/WorkflowCleanupReport"
+        },
+        "definition_sha256": {
+          "type": "string"
+        },
+        "snapshot": true
+      },
+      "additionalProperties": false
     },
     "SessionMetricsPayload": {
       "type": "object",
@@ -2305,6 +2474,20 @@
         }
       }
     },
+    "TypedPortValue": {
+      "type": "object",
+      "required": [
+        "kind",
+        "value"
+      ],
+      "properties": {
+        "kind": {
+          "$ref": "#/definitions/PortValueKind"
+        },
+        "value": true
+      },
+      "additionalProperties": false
+    },
     "WorkExpectation": {
       "type": "object",
       "required": [
@@ -2317,6 +2500,321 @@
           "minimum": 0.0
         }
       }
+    },
+    "WorkflowAssetReport": {
+      "type": "object",
+      "required": [
+        "artifact",
+        "content_sha256",
+        "id",
+        "kind",
+        "media_type",
+        "namespaced_id",
+        "preview",
+        "preview_truncated",
+        "size_bytes"
+      ],
+      "properties": {
+        "artifact": {
+          "$ref": "#/definitions/ArtifactReference"
+        },
+        "content_sha256": {
+          "type": "string"
+        },
+        "id": {
+          "type": "string"
+        },
+        "kind": {
+          "type": "string"
+        },
+        "media_type": {
+          "type": "string"
+        },
+        "namespaced_id": {
+          "type": "string"
+        },
+        "preview": true,
+        "preview_truncated": {
+          "type": "boolean"
+        },
+        "size_bytes": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        }
+      },
+      "additionalProperties": false
+    },
+    "WorkflowCleanupReport": {
+      "type": "object",
+      "required": [
+        "duration_ms",
+        "status"
+      ],
+      "properties": {
+        "duration_ms": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "failure": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "status": {
+          "$ref": "#/definitions/WorkflowCleanupStatus"
+        }
+      },
+      "additionalProperties": false
+    },
+    "WorkflowCleanupStatus": {
+      "type": "string",
+      "enum": [
+        "succeeded",
+        "failed"
+      ]
+    },
+    "WorkflowEvaluationOutcome": {
+      "type": "string",
+      "enum": [
+        "passed",
+        "failed",
+        "advisory",
+        "not_evaluated"
+      ]
+    },
+    "WorkflowEvaluationResult": {
+      "type": "object",
+      "required": [
+        "id",
+        "outcome",
+        "summary"
+      ],
+      "properties": {
+        "evidence_ids": {
+          "default": [],
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "id": {
+          "type": "string"
+        },
+        "outcome": {
+          "$ref": "#/definitions/WorkflowEvaluationOutcome"
+        },
+        "score": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double"
+        },
+        "summary": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "WorkflowFailurePhase": {
+      "type": "string",
+      "enum": [
+        "preflight",
+        "execute",
+        "capture",
+        "persist",
+        "evaluate",
+        "cleanup",
+        "cancel"
+      ]
+    },
+    "WorkflowGateResult": {
+      "type": "object",
+      "required": [
+        "id",
+        "passed",
+        "reason"
+      ],
+      "properties": {
+        "evidence_ids": {
+          "default": [],
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "id": {
+          "type": "string"
+        },
+        "passed": {
+          "type": "boolean"
+        },
+        "reason": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "WorkflowStepFailure": {
+      "type": "object",
+      "required": [
+        "message",
+        "phase",
+        "technical"
+      ],
+      "properties": {
+        "message": {
+          "type": "string"
+        },
+        "phase": {
+          "$ref": "#/definitions/WorkflowFailurePhase"
+        },
+        "technical": {
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": false
+    },
+    "WorkflowStepReport": {
+      "type": "object",
+      "required": [
+        "activation",
+        "dependencies",
+        "dependency_policy",
+        "duration_ms",
+        "node_id",
+        "required",
+        "status",
+        "step_type",
+        "step_version"
+      ],
+      "properties": {
+        "activation": {
+          "$ref": "#/definitions/ActivationPolicy"
+        },
+        "assets": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/WorkflowAssetReport"
+          }
+        },
+        "completed_at": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "cost_usd": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double"
+        },
+        "dependencies": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "dependency_policy": {
+          "$ref": "#/definitions/DependencyPolicy"
+        },
+        "duration_ms": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "evaluations": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/WorkflowEvaluationResult"
+          }
+        },
+        "failures": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/WorkflowStepFailure"
+          }
+        },
+        "hard_gates": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/WorkflowGateResult"
+          }
+        },
+        "harness_session_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "metrics": true,
+        "node_id": {
+          "type": "string"
+        },
+        "outputs": {
+          "type": "object",
+          "additionalProperties": {
+            "$ref": "#/definitions/TypedPortValue"
+          }
+        },
+        "redaction": {
+          "default": {
+            "redacted_fields": 0,
+            "redacted_values": 0,
+            "rules": []
+          },
+          "allOf": [
+            {
+              "$ref": "#/definitions/RedactionReport"
+            }
+          ]
+        },
+        "required": {
+          "type": "boolean"
+        },
+        "skip_reason": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "started_at": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "status": {
+          "$ref": "#/definitions/WorkflowStepStatus"
+        },
+        "step_type": {
+          "type": "string"
+        },
+        "step_version": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0.0
+        },
+        "transcript": true
+      },
+      "additionalProperties": false
+    },
+    "WorkflowStepStatus": {
+      "type": "string",
+      "enum": [
+        "pending",
+        "running",
+        "succeeded",
+        "hard_gate_failed",
+        "failed",
+        "skipped",
+        "cancelled"
+      ]
     }
   }
 }

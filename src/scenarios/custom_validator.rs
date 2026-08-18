@@ -234,7 +234,8 @@ fn capture<'a>(
                 "acceptance_tokens": TOKENS,
                 "validation_nudges": nudges,
                 "response": observation.response,
-            }),
+            })
+            .into(),
             invariants,
             provenance: vec![
                 ProvenanceEvidence {

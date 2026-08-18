@@ -172,18 +172,13 @@ fn evaluate<'a>(
             .iter()
             .find(|deliverable| deliverable.id == DELIVERABLE_ID)
             .ok_or_else(|| anyhow::anyhow!("captured child deliverable is missing"))?;
-        let rows = deliverable
+        let content = deliverable
             .content
-            .get("rows")
-            .and_then(Value::as_u64)
-            .unwrap_or(0);
-        let verdict = deliverable
-            .content
-            .get("verdict")
-            .and_then(Value::as_u64)
-            .unwrap_or(0);
-        let child_nudges = deliverable
-            .content
+            .as_json()
+            .ok_or_else(|| anyhow::anyhow!("captured child deliverable is not JSON"))?;
+        let rows = content.get("rows").and_then(Value::as_u64).unwrap_or(0);
+        let verdict = content.get("verdict").and_then(Value::as_u64).unwrap_or(0);
+        let child_nudges = content
             .get("child_nudges")
             .and_then(Value::as_u64)
             .unwrap_or(0) as usize;
@@ -318,7 +313,8 @@ fn capture<'a>(
                 "rows": rows,
                 "verdict": verdict,
                 "child_nudges": child_nudges,
-            }),
+            })
+            .into(),
             invariants: vec![
                 CapturedInvariant {
                     id: "exact_row_count".to_string(),

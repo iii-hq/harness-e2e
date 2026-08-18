@@ -961,6 +961,8 @@ mod tests {
             cost: CostReport::default(),
             evidence: Vec::new(),
             deliverables: Vec::new(),
+            semantic_tests: Vec::new(),
+            scenario_flow: None,
             dimensions: vec![
                 DimensionReport {
                     dimension: EvaluationDimension::Deliverable,
@@ -1046,6 +1048,7 @@ mod tests {
             runs: vec![run],
         };
         E2eReport {
+            schema_version: 2,
             execution: crate::identity::ExecutionIdentity {
                 execution_id: "execution-1".into(),
                 lane: "weekly-stress".into(),

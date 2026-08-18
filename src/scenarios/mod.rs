@@ -27,6 +27,7 @@ pub mod pr_review_regressions;
 pub mod reactive_automation;
 pub mod receiving_operation;
 pub mod research_pipeline;
+pub mod security_review;
 pub mod shell_coder_sandbox;
 pub mod subagent_validation;
 pub mod subagent_validation_failure;
@@ -37,9 +38,9 @@ pub mod validation_scope_enforcement;
 pub mod validation_self_repair;
 
 pub use domain::{
-    stable_seed, ArtifactExpectation, CapturedDeliverable, CapturedInvariant, ComplexityProfile,
-    ComplexityTier, DeliverableContract, InvariantSpec, ProvenanceEvidence, ScenarioCase,
-    WorkExpectation,
+    stable_seed, ArtifactExpectation, CapturedDeliverable, CapturedDeliverableContent,
+    CapturedInvariant, ComplexityProfile, ComplexityTier, DeliverableContract, InvariantSpec,
+    ProvenanceEvidence, ScenarioCase, WorkExpectation,
 };
 
 pub type EvaluationFuture<'a> =
@@ -318,6 +319,12 @@ pub struct ObjectiveEvaluation {
     pub awards: Vec<CriterionAward>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ScenarioExecutionKind {
+    HarnessTurn,
+    CompositeFlow,
+}
+
 pub struct CriterionAward {
     pub id: String,
     pub awarded: u8,
@@ -349,6 +356,8 @@ pub enum ScenarioId {
     ShellCoderSandbox,
     #[value(name = "research_pipeline")]
     ResearchPipeline,
+    #[value(name = "security_review")]
+    SecurityReview,
     #[value(name = "mechanical_reaction")]
     MechanicalReaction,
     #[value(name = "timer_wake")]
@@ -404,12 +413,13 @@ pub enum ScenarioId {
 }
 
 impl ScenarioId {
-    pub const ALL: [Self; 26] = [
+    pub const ALL: [Self; 27] = [
         Self::DirectAnswer,
         Self::PersistentState,
         Self::ReactiveAutomation,
         Self::ShellCoderSandbox,
         Self::ResearchPipeline,
+        Self::SecurityReview,
         Self::MechanicalReaction,
         Self::TimerWake,
         Self::ReceivingOperation,
@@ -440,6 +450,7 @@ impl ScenarioId {
             Self::ReactiveAutomation => reactive_automation::ID,
             Self::ShellCoderSandbox => shell_coder_sandbox::ID,
             Self::ResearchPipeline => research_pipeline::ID,
+            Self::SecurityReview => security_review::ID,
             Self::MechanicalReaction => mechanical_reaction::ID,
             Self::TimerWake => timer_wake::ID,
             Self::ReceivingOperation => receiving_operation::ID,
@@ -471,6 +482,7 @@ impl ScenarioId {
             Self::ReactiveAutomation => reactive_automation::scenario(run_id),
             Self::ShellCoderSandbox => shell_coder_sandbox::scenario(run_id),
             Self::ResearchPipeline => research_pipeline::scenario(run_id),
+            Self::SecurityReview => security_review::scenario(run_id),
             Self::MechanicalReaction => mechanical_reaction::scenario(run_id),
             Self::TimerWake => timer_wake::scenario(run_id),
             Self::ReceivingOperation => receiving_operation::scenario(run_id),
@@ -517,6 +529,7 @@ impl ScenarioId {
             Self::ReactiveAutomation => reactive_automation::materialize(namespace, seed)?,
             Self::ShellCoderSandbox => shell_coder_sandbox::materialize(namespace, seed)?,
             Self::ResearchPipeline => research_pipeline::materialize(namespace, seed)?,
+            Self::SecurityReview => security_review::materialize(namespace, seed)?,
             Self::MechanicalReaction => mechanical_reaction::materialize(namespace, seed)?,
             Self::TimerWake => timer_wake::materialize(namespace, seed)?,
             Self::ReceivingOperation => receiving_operation::materialize(namespace, seed)?,
@@ -584,11 +597,25 @@ impl ScenarioId {
         // identity to a particular execution or retry attempt.
         stable_seed(self.as_str())
     }
+
+    pub fn execution_kind(self) -> ScenarioExecutionKind {
+        match self {
+            Self::SecurityReview => ScenarioExecutionKind::CompositeFlow,
+            _ => ScenarioExecutionKind::HarnessTurn,
+        }
+    }
+
+    pub fn manual_cli_only(self) -> bool {
+        matches!(self, Self::SecurityReview)
+    }
 }
 
 pub fn selected(requested: &[ScenarioId]) -> Vec<ScenarioId> {
     if requested.is_empty() {
-        return ScenarioId::ALL.to_vec();
+        return ScenarioId::ALL
+            .into_iter()
+            .filter(|scenario| !scenario.manual_cli_only())
+            .collect();
     }
     requested.iter().copied().fold(Vec::new(), |mut ids, id| {
         if !ids.contains(&id) {
@@ -604,7 +631,7 @@ mod tests {
 
     use super::*;
     #[test]
-    fn registry_contains_twenty_six_unique_valid_scenarios() {
+    fn registry_contains_twenty_seven_unique_valid_scenarios() {
         let mut ids = HashSet::new();
         for scenario in ScenarioId::ALL {
             assert!(ids.insert(scenario.as_str()));
@@ -613,7 +640,7 @@ mod tests {
                 .materialize("run", scenario.canonical_seed())
                 .unwrap();
         }
-        assert_eq!(ids.len(), 26);
+        assert_eq!(ids.len(), 27);
     }
 
     #[test]
@@ -626,6 +653,13 @@ mod tests {
             ]),
             vec![ScenarioId::ReactiveAutomation, ScenarioId::DirectAnswer]
         );
+    }
+
+    #[test]
+    fn default_selection_excludes_manually_prepared_scenarios() {
+        let selected = selected(&[]);
+        assert!(!selected.contains(&ScenarioId::SecurityReview));
+        assert_eq!(selected.len(), ScenarioId::ALL.len() - 1);
     }
 
     #[test]
@@ -765,6 +799,12 @@ mod tests {
 
             if scenario == ScenarioId::DirectAnswer {
                 assert_eq!(first.case.complexity.tier, domain::ComplexityTier::L0Atomic);
+                assert!(first.case.deliverable_contract.artifacts.is_empty());
+                assert!(first.capture.is_none());
+                continue;
+            }
+
+            if scenario.execution_kind() == ScenarioExecutionKind::CompositeFlow {
                 assert!(first.case.deliverable_contract.artifacts.is_empty());
                 assert!(first.capture.is_none());
                 continue;

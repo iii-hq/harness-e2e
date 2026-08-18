@@ -66,6 +66,10 @@ struct RunArgs {
     #[arg(long, env = "HARNESS_E2E_OUTPUT", default_value = "target/e2e")]
     output: PathBuf,
 
+    /// Store this manual execution in a dashboard-compatible history directory.
+    #[arg(long, env = "HARNESS_E2E_RUNS_DIR")]
+    runs_dir: Option<PathBuf>,
+
     #[arg(long, default_value_t = 1)]
     runs: u32,
 
@@ -78,8 +82,8 @@ struct RunArgs {
     rotating_seeds: Vec<u64>,
 
     /// Retry transient provider and transport failures, never hard-gate or resource failures.
-    #[arg(long, env = "HARNESS_E2E_TECHNICAL_RETRIES", default_value_t = 1)]
-    technical_retries: u8,
+    #[arg(long, env = "HARNESS_E2E_TECHNICAL_RETRIES")]
+    technical_retries: Option<u8>,
 
     /// Emit a progress heartbeat while a scenario runs. Set to 0 to disable.
     #[arg(
@@ -224,10 +228,30 @@ fn report(args: ReportArgs) -> Result<()> {
 
 async fn run(args: RunArgs) -> Result<()> {
     let selected_scenarios = scenarios::selected(&args.scenario);
+    let technical_retries = args.technical_retries.unwrap_or_else(|| {
+        if selected_scenarios.iter().any(|scenario| {
+            scenario.execution_kind() == scenarios::ScenarioExecutionKind::CompositeFlow
+        }) {
+            0
+        } else {
+            1
+        }
+    });
     let subject = SubjectConfig {
         model: args.model,
         provider: args.provider,
     };
+    let execution_id = args
+        .runs_dir
+        .as_ref()
+        .map(|_| uuid::Uuid::new_v4().simple().to_string());
+    let output = args
+        .runs_dir
+        .as_ref()
+        .zip(execution_id.as_ref())
+        .map_or(args.output, |(runs_dir, execution_id)| {
+            runs_dir.join(execution_id).join("results")
+        });
     let judge = Some(judge_config(
         &subject,
         args.judge_model,
@@ -235,14 +259,15 @@ async fn run(args: RunArgs) -> Result<()> {
     ));
     let outcome = run_suite(SuiteRunConfig {
         url: args.url,
+        execution_id,
         subject,
         judge,
-        output: args.output,
+        output,
         scenarios: selected_scenarios,
         runs: args.runs,
         seed: args.seed,
         rotating_seeds: args.rotating_seeds,
-        technical_retries: args.technical_retries,
+        technical_retries,
         progress_interval: (args.progress_interval_seconds > 0)
             .then(|| std::time::Duration::from_secs(args.progress_interval_seconds)),
         control: None,
@@ -313,8 +338,29 @@ mod tests {
         };
         assert_eq!(args.scenario, [ScenarioId::PersistentState]);
         assert_eq!(args.output, PathBuf::from("target/e2e"));
-        assert_eq!(args.technical_retries, 1);
+        assert!(args.runs_dir.is_none());
+        assert_eq!(args.technical_retries, None);
         assert_eq!(args.progress_interval_seconds, 15);
+    }
+
+    #[test]
+    fn security_review_uses_the_common_run_command() {
+        let cli = Cli::try_parse_from([
+            "harness-e2e",
+            "run",
+            "--model",
+            "gpt-5-codex",
+            "--provider",
+            "openai-codex",
+            "--scenario",
+            "security_review",
+        ])
+        .unwrap();
+        let Command::Run(args) = cli.command else {
+            panic!("expected run command");
+        };
+        assert_eq!(args.scenario, [ScenarioId::SecurityReview]);
+        assert_eq!(args.technical_retries, None);
     }
 
     #[test]

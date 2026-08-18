@@ -1149,6 +1149,7 @@ mod tests {
             id: "result".into(),
             kind: "state_value".into(),
             media_type: "application/json".into(),
+            content_format: crate::report::DeliverableContentFormat::Json,
             content_sha256: format!("sha256:{}", "c".repeat(64)),
             content_size_bytes: 18,
             schema_valid: true,
@@ -1157,7 +1158,7 @@ mod tests {
             provenance: Vec::new(),
             preview: json!({"status": "ready"}),
             artifact: None,
-            content: json!({"status": "ready"}),
+            content: json!({"status": "ready"}).into(),
         };
         (asset, deliverable)
     }

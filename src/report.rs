@@ -14,13 +14,14 @@ use crate::assessment::{
 };
 use crate::identity::{ExecutionIdentity, SystemUnderTestIdentity};
 use crate::scenarios::{
-    CapturedDeliverable, CapturedInvariant, ExecutionPolicy, ProvenanceEvidence, ScenarioCase,
-    WorkExpectation,
+    CapturedDeliverable, CapturedDeliverableContent, CapturedInvariant, ExecutionPolicy,
+    ProvenanceEvidence, ScenarioCase, WorkExpectation,
 };
 #[cfg(test)]
 use crate::scenarios::{ComplexityProfile, DeliverableContract};
 use crate::schema;
 use crate::wire::{ControlPlaneEvidence, Model, SessionMetricsResponse, StatusReport};
+use crate::workflow::{WorkflowCleanupReport, WorkflowStepReport};
 
 mod summary;
 
@@ -80,6 +81,7 @@ pub struct DeliverableReport {
     pub id: String,
     pub kind: String,
     pub media_type: String,
+    pub content_format: DeliverableContentFormat,
     pub content_sha256: String,
     pub content_size_bytes: u64,
     pub schema_valid: bool,
@@ -91,7 +93,14 @@ pub struct DeliverableReport {
     pub artifact: Option<ArtifactReference>,
     #[serde(skip)]
     #[schemars(skip)]
-    pub content: Value,
+    pub content: CapturedDeliverableContent,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum DeliverableContentFormat {
+    Json,
+    TextUtf8,
 }
 
 impl DeliverableReport {
@@ -245,6 +254,10 @@ pub struct RetryAttemptReport {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub deliverables: Vec<DeliverableReport>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub semantic_tests: Vec<WorkflowStepReport>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scenario_flow: Option<ScenarioFlowEvidence>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub dimensions: Vec<DimensionReport>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub efficiency: Option<EfficiencyReport>,
@@ -277,6 +290,8 @@ impl From<&E2eRunReport> for RetryAttemptReport {
             metrics: report.metrics.clone(),
             evidence: report.evidence.clone(),
             deliverables: report.deliverables.clone(),
+            semantic_tests: report.semantic_tests.clone(),
+            scenario_flow: report.scenario_flow.clone(),
             dimensions: report.dimensions.clone(),
             efficiency: report.efficiency.clone(),
             failures: report.failures.clone(),
@@ -313,6 +328,14 @@ pub struct E2eRunReport {
     pub evidence: Vec<ArtifactReference>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub deliverables: Vec<DeliverableReport>,
+    /// Semantic tests executed inside a code-defined composite scenario. Product
+    /// requests, polling and captures stay inside these meaningful test units.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub semantic_tests: Vec<WorkflowStepReport>,
+    /// Evidence-only flow identity emitted by Rust. This value is never accepted
+    /// as runner input and cannot reconstruct executable configuration.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scenario_flow: Option<ScenarioFlowEvidence>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub dimensions: Vec<DimensionReport>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -367,6 +390,8 @@ impl E2eRunReport {
             cost: CostReport::default(),
             evidence: Vec::new(),
             deliverables: Vec::new(),
+            semantic_tests: Vec::new(),
+            scenario_flow: None,
             dimensions: Vec::new(),
             efficiency: None,
             retry_attempts: Vec::new(),
@@ -765,6 +790,15 @@ impl E2eRunReport {
     }
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ScenarioFlowEvidence {
+    pub definition_sha256: String,
+    pub snapshot: Value,
+    pub checkpoint: ArtifactReference,
+    pub cleanup: WorkflowCleanupReport,
+}
+
 fn unavailable_complexity() -> ObservedComplexityReport {
     let unavailable = [
         "planning_depth",
@@ -1123,6 +1157,8 @@ pub struct E2eManifest {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub judge: Option<ModelArtifact>,
     pub control_plane: ControlPlaneEvidence,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub worker_contracts: Vec<ObservedWorkerContract>,
 }
 
 impl E2eManifest {
@@ -1132,13 +1168,34 @@ impl E2eManifest {
         if self.control_plane.functions.is_empty() {
             bail!("manifest control plane cannot be empty");
         }
+        let mut observed = HashSet::new();
+        for contract in &self.worker_contracts {
+            if contract.function_id.trim().is_empty() {
+                bail!("manifest worker contract function_id cannot be empty");
+            }
+            if !observed.insert(contract.function_id.as_str()) {
+                bail!(
+                    "manifest has duplicate worker contract '{}'",
+                    contract.function_id
+                );
+            }
+        }
         Ok(())
     }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ObservedWorkerContract {
+    pub function_id: String,
+    pub request_schema_sha256: String,
+    pub response_schema_sha256: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct E2eReport {
+    pub schema_version: u32,
     pub execution: ExecutionIdentity,
     pub system_under_test: SystemUnderTestIdentity,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -1169,6 +1226,7 @@ impl E2eReport {
     ) -> Self {
         let passed = !scenarios.is_empty() && scenarios.iter().all(|scenario| scenario.passed);
         let mut report = Self {
+            schema_version: 2,
             execution,
             system_under_test,
             manifest: None,
@@ -1186,6 +1244,7 @@ impl E2eReport {
     }
 
     pub fn write_to(&mut self, output: &Path, manifest: &E2eManifest) -> Result<PathBuf> {
+        self.schema_version = 2;
         fs::create_dir_all(output)
             .with_context(|| format!("create report directory {}", output.display()))?;
         manifest.validate().context("validate E2E manifest")?;
@@ -1217,7 +1276,17 @@ impl E2eReport {
             input.to_path_buf()
         };
         let bytes = fs::read(&path).with_context(|| format!("read {}", path.display()))?;
-        let report: Self = serde_json::from_slice(&bytes)
+        let mut value: Value = serde_json::from_slice(&bytes)
+            .with_context(|| format!("decode E2E report {}", path.display()))?;
+        let version = value.get("schema_version").and_then(Value::as_u64);
+        match version {
+            None => {
+                normalize_unversioned_v1(&mut value)?;
+            }
+            Some(2) => {}
+            Some(version) => bail!("unsupported results schema_version {version}; expected 2"),
+        }
+        let report: Self = serde_json::from_value(value)
             .with_context(|| format!("decode typed E2E report {}", path.display()))?;
         validate_against_schema(&schema::results(), &report, "results")?;
         report.assessment_contract.validate(&report)?;
@@ -1237,6 +1306,9 @@ impl E2eReport {
     }
 
     fn validate(&self, manifest: &E2eManifest, output: &Path) -> Result<()> {
+        if self.schema_version != 2 {
+            bail!("results schema_version must be 2");
+        }
         if self.execution.execution_id != manifest.execution.execution_id {
             bail!("results and manifest execution identities differ");
         }
@@ -1275,12 +1347,22 @@ impl E2eReport {
                     reference.verify(output)?;
                 }
                 verify_deliverables(output, &run.deliverables)?;
+                validate_semantic_evidence(
+                    output,
+                    run.scenario_flow.as_ref(),
+                    &run.semantic_tests,
+                )?;
                 for attempt in &run.retry_attempts {
                     validate_retry_identity(run, attempt)?;
                     for reference in &attempt.evidence {
                         reference.verify(output)?;
                     }
                     verify_deliverables(output, &attempt.deliverables)?;
+                    validate_semantic_evidence(
+                        output,
+                        attempt.scenario_flow.as_ref(),
+                        &attempt.semantic_tests,
+                    )?;
                 }
             }
         }
@@ -1313,6 +1395,12 @@ impl E2eReport {
                     &mut run.asset_assessments,
                 )?;
                 scan_deliverable_content(&policy, &run.deliverables)?;
+                redact_semantic_evidence(
+                    &policy,
+                    &mut redaction,
+                    &mut run.scenario_flow,
+                    &mut run.semantic_tests,
+                );
                 for retry in &mut run.retry_attempts {
                     redaction.merge(retry.asset_redaction.clone());
                     if let Some(transcript) = &mut retry.transcript {
@@ -1334,6 +1422,12 @@ impl E2eReport {
                         &mut retry.asset_assessments,
                     )?;
                     scan_deliverable_content(&policy, &retry.deliverables)?;
+                    redact_semantic_evidence(
+                        &policy,
+                        &mut redaction,
+                        &mut retry.scenario_flow,
+                        &mut retry.semantic_tests,
+                    );
                 }
             }
         }
@@ -1368,6 +1462,11 @@ impl E2eReport {
                         references: &mut run.evidence,
                     },
                 )?;
+                append_semantic_references(
+                    &mut run.evidence,
+                    run.scenario_flow.as_ref(),
+                    &run.semantic_tests,
+                );
                 bind_assessment_evidence(&mut run.assessment_results, &run.evidence);
                 for attempt in &mut run.retry_attempts {
                     attempt.evidence.clear();
@@ -1384,11 +1483,152 @@ impl E2eReport {
                             references: &mut attempt.evidence,
                         },
                     )?;
+                    append_semantic_references(
+                        &mut attempt.evidence,
+                        attempt.scenario_flow.as_ref(),
+                        &attempt.semantic_tests,
+                    );
                     bind_assessment_evidence(&mut attempt.assessment_results, &attempt.evidence);
                 }
             }
         }
         Ok(())
+    }
+}
+
+fn validate_semantic_evidence(
+    output: &Path,
+    flow: Option<&ScenarioFlowEvidence>,
+    tests: &[WorkflowStepReport],
+) -> Result<()> {
+    if tests.is_empty() {
+        if flow.is_some() {
+            bail!("scenario flow evidence requires at least one semantic test");
+        }
+        return Ok(());
+    }
+    let flow = flow.context("semantic tests require scenario flow evidence")?;
+    if flow.definition_sha256.trim().is_empty()
+        || flow.snapshot.get("executable").and_then(Value::as_bool) != Some(false)
+    {
+        bail!("scenario flow snapshot must be identified and explicitly non-executable");
+    }
+    flow.checkpoint.verify(output)?;
+    for test in tests {
+        for asset in &test.assets {
+            asset.artifact.verify(output)?;
+            if asset.artifact.sha256 != asset.content_sha256
+                || asset.artifact.size_bytes != asset.size_bytes
+            {
+                bail!(
+                    "semantic test asset '{}.{}' differs from its immutable reference",
+                    test.node_id,
+                    asset.id
+                );
+            }
+        }
+    }
+    Ok(())
+}
+
+fn append_semantic_references(
+    references: &mut Vec<ArtifactReference>,
+    flow: Option<&ScenarioFlowEvidence>,
+    tests: &[WorkflowStepReport],
+) {
+    let candidates = flow.into_iter().map(|flow| &flow.checkpoint).chain(
+        tests
+            .iter()
+            .flat_map(|test| test.assets.iter().map(|asset| &asset.artifact)),
+    );
+    for candidate in candidates {
+        if !references
+            .iter()
+            .any(|reference| reference.id == candidate.id && reference.sha256 == candidate.sha256)
+        {
+            references.push(candidate.clone());
+        }
+    }
+}
+
+fn redact_semantic_evidence(
+    policy: &crate::redaction::RedactionPolicy,
+    redaction: &mut crate::redaction::RedactionReport,
+    flow: &mut Option<ScenarioFlowEvidence>,
+    tests: &mut [WorkflowStepReport],
+) {
+    if let Some(flow) = flow {
+        redaction.merge(policy.redact_value(&mut flow.snapshot));
+        if let Some(failure) = &mut flow.cleanup.failure {
+            redact_string(policy, redaction, failure);
+        }
+    }
+    for test in tests {
+        redaction.merge(test.redaction.clone());
+        for output in test.outputs.values_mut() {
+            redaction.merge(policy.redact_value(&mut output.value));
+        }
+        if let Some(transcript) = &mut test.transcript {
+            redaction.merge(policy.redact_value(transcript));
+        }
+        if let Some(metrics) = &mut test.metrics {
+            redaction.merge(policy.redact_value(metrics));
+        }
+        for asset in &mut test.assets {
+            redaction.merge(policy.redact_value(&mut asset.preview));
+        }
+        for gate in &mut test.hard_gates {
+            redact_string(policy, redaction, &mut gate.reason);
+        }
+        for evaluation in &mut test.evaluations {
+            redact_string(policy, redaction, &mut evaluation.summary);
+        }
+        for failure in &mut test.failures {
+            redact_string(policy, redaction, &mut failure.message);
+        }
+        if let Some(reason) = &mut test.skip_reason {
+            redact_string(policy, redaction, reason);
+        }
+    }
+}
+
+fn normalize_unversioned_v1(value: &mut Value) -> Result<()> {
+    value
+        .as_object_mut()
+        .context("legacy E2E report must have an object root")?
+        .insert("schema_version".into(), Value::from(2));
+    let Some(scenarios) = value.get_mut("scenarios").and_then(Value::as_array_mut) else {
+        return Ok(());
+    };
+    for scenario in scenarios {
+        let Some(runs) = scenario.get_mut("runs").and_then(Value::as_array_mut) else {
+            continue;
+        };
+        for run in runs {
+            normalize_v1_deliverables(run);
+            if let Some(retries) = run.get_mut("retry_attempts").and_then(Value::as_array_mut) {
+                for retry in retries {
+                    normalize_v1_deliverables(retry);
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+fn normalize_v1_deliverables(attempt: &mut Value) {
+    let Some(deliverables) = attempt
+        .get_mut("deliverables")
+        .and_then(Value::as_array_mut)
+    else {
+        return;
+    };
+    for deliverable in deliverables {
+        if let Some(object) = deliverable.as_object_mut() {
+            object
+                .entry("content_format")
+                .or_insert_with(|| Value::String("json".into()));
+        }
     }
 }
 
@@ -1481,14 +1721,16 @@ fn scan_deliverable_content(
     deliverables: &[DeliverableReport],
 ) -> Result<()> {
     for deliverable in deliverables {
-        policy
-            .assert_clean(&serde_json::to_vec(&deliverable.content)?)
-            .with_context(|| {
-                format!(
-                    "deliverable '{}' contains secret material and cannot be persisted",
-                    deliverable.id
-                )
-            })?;
+        let bytes = match &deliverable.content {
+            CapturedDeliverableContent::Json(value) => serde_json::to_vec(value)?,
+            CapturedDeliverableContent::TextUtf8(value) => value.as_bytes().to_vec(),
+        };
+        policy.assert_clean(&bytes).with_context(|| {
+            format!(
+                "deliverable '{}' contains secret material and cannot be persisted",
+                deliverable.id
+            )
+        })?;
     }
     Ok(())
 }
@@ -1586,13 +1828,23 @@ fn materialize_attempt_evidence(
     }
     let deliverable_root = PathBuf::from("deliverables").join(run_id).join(attempt_id);
     for deliverable in deliverables {
-        let reference = artifact::write_json(
-            output,
-            &deliverable_root.join(format!("{}.json", deliverable.id)),
-            deliverable.id.clone(),
-            deliverable.kind.clone(),
-            &deliverable.content,
-        )?;
+        let reference = match &deliverable.content {
+            CapturedDeliverableContent::Json(value) => artifact::write_json(
+                output,
+                &deliverable_root.join(format!("{}.json", deliverable.id)),
+                deliverable.id.clone(),
+                deliverable.kind.clone(),
+                value,
+            )?,
+            CapturedDeliverableContent::TextUtf8(value) => artifact::write_bytes(
+                output,
+                &deliverable_root.join(format!("{}.txt", deliverable.id)),
+                deliverable.id.clone(),
+                deliverable.kind.clone(),
+                deliverable.media_type.clone(),
+                value.as_bytes(),
+            )?,
+        };
         deliverable.artifact = Some(reference);
     }
     Ok(())
@@ -1631,12 +1883,22 @@ fn verify_deliverables(output: &Path, deliverables: &[DeliverableReport]) -> Res
             .as_ref()
             .with_context(|| format!("deliverable '{}' is missing its artifact", deliverable.id))?;
         reference.verify(output)?;
-        let content: Value = serde_json::from_slice(
-            &fs::read(output.join(&reference.path))
-                .with_context(|| format!("read deliverable artifact {}", reference.path))?,
-        )
-        .with_context(|| format!("decode deliverable artifact {}", reference.path))?;
-        if artifact::sha256_value(&content)? != deliverable.content_sha256 {
+        let bytes = fs::read(output.join(&reference.path))
+            .with_context(|| format!("read deliverable artifact {}", reference.path))?;
+        let observed_hash = match deliverable.content_format {
+            DeliverableContentFormat::Json => {
+                let content: Value = serde_json::from_slice(&bytes)
+                    .with_context(|| format!("decode deliverable artifact {}", reference.path))?;
+                artifact::sha256_value(&content)?
+            }
+            DeliverableContentFormat::TextUtf8 => {
+                std::str::from_utf8(&bytes).with_context(|| {
+                    format!("decode UTF-8 deliverable artifact {}", reference.path)
+                })?;
+                artifact::sha256_bytes(&bytes)
+            }
+        };
+        if observed_hash != deliverable.content_sha256 {
             bail!(
                 "deliverable '{}' content hash does not match its artifact",
                 deliverable.id
@@ -1836,12 +2098,16 @@ mod tests {
     use super::*;
     use crate::assessment::{
         AssessmentKind, AssessmentOutcome, AssessmentPolicy, AssessmentScore, AssessmentSource,
-        AssessmentTarget,
+        AssessmentTarget, SystemStatus,
     };
     use crate::identity::StackIdentity;
     use crate::scenarios::{ArtifactExpectation, InvariantSpec};
     use crate::wire::{
         ControlPlaneEvidence, FunctionContractEvidence, SessionMetricsResponse, StatusReport,
+    };
+    use crate::workflow::{
+        ActivationPolicy, DependencyPolicy, WorkflowEvaluationOutcome, WorkflowEvaluationResult,
+        WorkflowGateResult, WorkflowStepStatus,
     };
 
     const TEST_DIGEST: &str =
@@ -1885,6 +2151,7 @@ mod tests {
                     sha256: TEST_DIGEST.into(),
                 }],
             },
+            worker_contracts: Vec::new(),
         }
     }
 
@@ -2246,7 +2513,7 @@ mod tests {
         let value: Value =
             serde_json::from_slice(&std::fs::read(output.path().join("results.json")).unwrap())
                 .unwrap();
-        assert!(value.get("schema_version").is_none());
+        assert_eq!(value.get("schema_version"), Some(&serde_json::json!(2)));
         assert!(value.get("assessment_contract").is_some());
         assert!(value["scenarios"][0]["runs"][0].get("attempt_id").is_some());
     }
@@ -2269,16 +2536,98 @@ mod tests {
     }
 
     #[test]
-    fn read_rejects_versioned_payloads() {
+    fn read_accepts_unversioned_v1_and_rejects_unknown_versions() {
         let output = tempfile::tempdir().unwrap();
         let mut report = report(vec![aggregate(vec![run(100, true)])]);
         let path = report.write_to(output.path(), &manifest()).unwrap();
         let mut value: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        value.as_object_mut().unwrap().remove("schema_version");
+        std::fs::write(&path, serde_json::to_vec_pretty(&value).unwrap()).unwrap();
+        let (legacy, _) = E2eReport::read_from(&path).unwrap();
+        assert_eq!(legacy.schema_version, 2);
+
         value["schema_version"] = serde_json::json!(3);
         std::fs::write(&path, serde_json::to_vec_pretty(&value).unwrap()).unwrap();
 
         let error = E2eReport::read_from(&path).unwrap_err();
-        assert!(format!("{error:#}").contains("unknown field `schema_version`"));
+        assert!(format!("{error:#}").contains("unsupported results schema_version 3"));
+    }
+
+    #[test]
+    fn unversioned_v1_deliverables_default_to_json_during_normalization() {
+        let mut value = serde_json::json!({
+            "scenarios": [{
+                "runs": [{
+                    "deliverables": [{"id": "legacy"}],
+                    "retry_attempts": [{"deliverables": [{"id": "retry"}]}]
+                }]
+            }]
+        });
+        normalize_unversioned_v1(&mut value).unwrap();
+        assert_eq!(value["schema_version"], 2);
+        assert_eq!(
+            value["scenarios"][0]["runs"][0]["deliverables"][0]["content_format"],
+            "json"
+        );
+        assert_eq!(
+            value["scenarios"][0]["runs"][0]["retry_attempts"][0]["deliverables"][0]
+                ["content_format"],
+            "json"
+        );
+    }
+
+    #[test]
+    fn native_workflow_gates_and_evaluations_are_aggregated_into_the_assessment_contract() {
+        let step = WorkflowStepReport {
+            node_id: "assess".into(),
+            step_type: "test.assess".into(),
+            step_version: 1,
+            required: true,
+            dependencies: Vec::new(),
+            dependency_policy: DependencyPolicy::Succeeded,
+            activation: ActivationPolicy::Always,
+            status: WorkflowStepStatus::HardGateFailed,
+            started_at: Some("2026-08-12T12:00:00Z".into()),
+            completed_at: Some("2026-08-12T12:00:01Z".into()),
+            duration_ms: 1_000,
+            harness_session_id: None,
+            outputs: BTreeMap::new(),
+            transcript: None,
+            metrics: None,
+            cost_usd: None,
+            assets: Vec::new(),
+            hard_gates: vec![WorkflowGateResult {
+                id: "valid".into(),
+                passed: false,
+                reason: "deterministic validation failed".into(),
+                evidence_ids: Vec::new(),
+            }],
+            evaluations: vec![WorkflowEvaluationResult {
+                id: "quality".into(),
+                outcome: WorkflowEvaluationOutcome::Advisory,
+                summary: "half of the advisory signals matched".into(),
+                score: Some(0.5),
+                evidence_ids: Vec::new(),
+            }],
+            failures: Vec::new(),
+            skip_reason: None,
+            redaction: crate::redaction::RedactionReport::default(),
+        };
+        let mut attempt = run(50, false);
+        attempt.semantic_tests = vec![step];
+        attempt.assessment_results =
+            crate::assessment::semantic_test_assessments(&attempt.semantic_tests, &[]);
+        let report = report(vec![aggregate(vec![attempt])]);
+
+        let contract = AssessmentContract::from_assessment_evidence(&report);
+        contract.validate(&report).unwrap();
+        assert_eq!(contract.runs.len(), 1);
+        assert_eq!(contract.runs[0].system_status, SystemStatus::HardGateFailed);
+        assert_eq!(contract.runs[0].assessments.len(), 2);
+        assert_eq!(
+            contract.runs[0].assessments[1].outcome,
+            AssessmentOutcome::Partial
+        );
     }
 
     #[test]
@@ -2322,7 +2671,7 @@ mod tests {
         let captured = CapturedDeliverable {
             id: "result".into(),
             kind: "state_value".into(),
-            content: serde_json::json!({ "status": "ready" }),
+            content: serde_json::json!({ "status": "ready" }).into(),
             invariants: vec![CapturedInvariant {
                 id: "ready".into(),
                 passed: true,
@@ -2411,7 +2760,7 @@ mod tests {
         let captured = CapturedDeliverable {
             id: "result".into(),
             kind: "state_value".into(),
-            content: serde_json::json!({ "status": "ready" }),
+            content: serde_json::json!({ "status": "ready" }).into(),
             invariants: vec![CapturedInvariant {
                 id: "ready".into(),
                 passed: true,
@@ -2529,7 +2878,7 @@ mod tests {
             vec![CapturedDeliverable {
                 id: "result".into(),
                 kind: "json".into(),
-                content: serde_json::json!("wrong shape"),
+                content: serde_json::json!("wrong shape").into(),
                 invariants: vec![CapturedInvariant {
                     id: "correct".into(),
                     passed: false,

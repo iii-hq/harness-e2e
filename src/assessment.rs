@@ -793,6 +793,9 @@ pub struct AssessmentContract {
     pub runs: Vec<RunAssessmentContract>,
 }
 
+type ExpectedRunEvidence<'a> = (SystemStatus, Vec<(&'a str, &'a str)>);
+type ExpectedRuns<'a> = BTreeMap<(&'a str, &'a str), ExpectedRunEvidence<'a>>;
+
 impl AssessmentContract {
     pub fn from_assessment_evidence(report: &E2eReport) -> Self {
         let previous = report
@@ -806,36 +809,53 @@ impl AssessmentContract {
                 )
             })
             .collect::<BTreeMap<_, _>>();
-        Self {
-            runs: report
-                .scenarios
+        let runs = report
+            .scenarios
+            .iter()
+            .flat_map(|scenario| &scenario.runs)
+            .map(|run| {
+                let system_status = SystemStatus::from(run.status);
+                let ai_final_assessment = previous
+                    .get(&(run.run_id.as_str(), run.attempt_id.as_str()))
+                    .cloned()
+                    .unwrap_or_else(|| {
+                        AiFinalAssessment::not_evaluated(
+                            "final AI assessment has not been evaluated",
+                        )
+                    });
+                RunAssessmentContract {
+                    run_id: run.run_id.clone(),
+                    attempt_id: run.attempt_id.clone(),
+                    system_status,
+                    assessments: run.assessment_results.clone(),
+                    assets: run.asset_assessments.clone(),
+                    effective_status: derive_effective_status(system_status, &ai_final_assessment),
+                    ai_final_assessment,
+                }
+            })
+            .collect::<Vec<_>>();
+        Self { runs }
+    }
+
+    fn expected_runs(report: &E2eReport) -> ExpectedRuns<'_> {
+        let mut expected = BTreeMap::new();
+        for run in report.scenarios.iter().flat_map(|scenario| &scenario.runs) {
+            let evidence = run
+                .evidence
                 .iter()
-                .flat_map(|scenario| &scenario.runs)
-                .map(|run| {
-                    let system_status = SystemStatus::from(run.status);
-                    let ai_final_assessment = previous
-                        .get(&(run.run_id.as_str(), run.attempt_id.as_str()))
-                        .cloned()
-                        .unwrap_or_else(|| {
-                            AiFinalAssessment::not_evaluated(
-                                "final AI assessment has not been evaluated",
-                            )
-                        });
-                    RunAssessmentContract {
-                        run_id: run.run_id.clone(),
-                        attempt_id: run.attempt_id.clone(),
-                        system_status,
-                        assessments: run.assessment_results.clone(),
-                        assets: run.asset_assessments.clone(),
-                        effective_status: derive_effective_status(
-                            system_status,
-                            &ai_final_assessment,
-                        ),
-                        ai_final_assessment,
-                    }
-                })
-                .collect(),
+                .chain(
+                    run.deliverables
+                        .iter()
+                        .filter_map(|deliverable| deliverable.artifact.as_ref()),
+                )
+                .map(|artifact| (artifact.id.as_str(), artifact.sha256.as_str()))
+                .collect();
+            expected.insert(
+                (run.run_id.as_str(), run.attempt_id.as_str()),
+                (SystemStatus::from(run.status), evidence),
+            );
         }
+        expected
     }
 
     pub fn set_final_assessment(
@@ -858,12 +878,7 @@ impl AssessmentContract {
     }
 
     pub fn validate(&self, report: &E2eReport) -> Result<()> {
-        let expected = report
-            .scenarios
-            .iter()
-            .flat_map(|scenario| &scenario.runs)
-            .map(|run| ((run.run_id.as_str(), run.attempt_id.as_str()), run))
-            .collect::<BTreeMap<_, _>>();
+        let expected = Self::expected_runs(report);
         let expected_run_count = report
             .scenarios
             .iter()
@@ -883,14 +898,14 @@ impl AssessmentContract {
                     run.attempt_id
                 );
             }
-            let expected_run = expected.get(&identity).with_context(|| {
-                format!(
-                    "assessment contract contains unknown run '{}:{}'",
-                    run.run_id, run.attempt_id
-                )
-            })?;
-            let expected_status = SystemStatus::from(expected_run.status);
-            if run.system_status != expected_status {
+            let (expected_status, expected_evidence) =
+                expected.get(&identity).with_context(|| {
+                    format!(
+                        "assessment contract contains unknown run '{}:{}'",
+                        run.run_id, run.attempt_id
+                    )
+                })?;
+            if run.system_status != *expected_status {
                 bail!(
                     "assessment run '{}:{}' system status {:?} differs from E2E run status {:?}",
                     run.run_id,
@@ -900,19 +915,9 @@ impl AssessmentContract {
                 );
             }
             for reference in run.evidence_references() {
-                let matches_artifact = expected_run
-                    .evidence
-                    .iter()
-                    .chain(
-                        expected_run
-                            .deliverables
-                            .iter()
-                            .filter_map(|deliverable| deliverable.artifact.as_ref()),
-                    )
-                    .any(|artifact| {
-                        artifact.id == reference.artifact_id
-                            && artifact.sha256 == reference.artifact_sha256
-                    });
+                let matches_artifact = expected_evidence.iter().any(|(id, sha256)| {
+                    *id == reference.artifact_id && *sha256 == reference.artifact_sha256
+                });
                 if !matches_artifact {
                     bail!(
                         "assessment evidence '{}' is not present in run '{}:{}'",
@@ -928,6 +933,135 @@ impl AssessmentContract {
         }
         Ok(())
     }
+}
+
+pub(crate) fn semantic_test_assessments(
+    tests: &[crate::workflow::WorkflowStepReport],
+    criteria: &[crate::workflow::WorkflowCriterionResult],
+) -> Vec<AssessmentResult> {
+    let evidence = tests
+        .iter()
+        .flat_map(|step| &step.assets)
+        .map(|asset| (asset.artifact.id.as_str(), &asset.artifact))
+        .collect::<BTreeMap<_, _>>();
+    let references = |ids: &[String]| {
+        ids.iter()
+            .filter_map(|id| evidence.get(id.as_str()).copied())
+            .map(EvidenceReference::from)
+            .collect::<Vec<_>>()
+    };
+    let mut assessments = Vec::new();
+    for step in tests {
+        assessments.extend(step.hard_gates.iter().map(|gate| AssessmentResult {
+            criterion_id: format!("{}.{}", step.node_id, gate.id),
+            target: AssessmentTarget {
+                kind: AssessmentTargetKind::Criterion,
+                id: step.node_id.clone(),
+            },
+            kind: AssessmentKind::RequiredCheck,
+            policy: AssessmentPolicy::HardGate,
+            dimension: crate::report::EvaluationDimension::StructuralIntegrity,
+            source: AssessmentSource::Deterministic,
+            outcome: if gate.passed {
+                AssessmentOutcome::Passed
+            } else {
+                AssessmentOutcome::Failed
+            },
+            score: None,
+            confidence: None,
+            summary: gate.reason.clone(),
+            evidence: references(&gate.evidence_ids),
+            analyzer: None,
+            analyzer_usage: None,
+        }));
+        assessments.extend(step.evaluations.iter().map(|evaluation| {
+            let score = evaluation.score.and_then(|value| {
+                value.is_finite().then(|| AssessmentScore {
+                    awarded: (value.clamp(0.0, 1.0) * 100.0).round() as u8,
+                    possible: 100,
+                })
+            });
+            AssessmentResult {
+                criterion_id: format!("{}.{}", step.node_id, evaluation.id),
+                target: AssessmentTarget {
+                    kind: AssessmentTargetKind::Criterion,
+                    id: step.node_id.clone(),
+                },
+                kind: AssessmentKind::Signal,
+                policy: AssessmentPolicy::Advisory,
+                dimension: crate::report::EvaluationDimension::Deliverable,
+                source: AssessmentSource::Deterministic,
+                outcome: match evaluation.outcome {
+                    crate::workflow::WorkflowEvaluationOutcome::Passed => AssessmentOutcome::Passed,
+                    crate::workflow::WorkflowEvaluationOutcome::Failed => AssessmentOutcome::Failed,
+                    crate::workflow::WorkflowEvaluationOutcome::Advisory => {
+                        if score.is_some() {
+                            AssessmentOutcome::Partial
+                        } else {
+                            AssessmentOutcome::Passed
+                        }
+                    }
+                    crate::workflow::WorkflowEvaluationOutcome::NotEvaluated => {
+                        AssessmentOutcome::NotEvaluated
+                    }
+                },
+                score,
+                confidence: None,
+                summary: evaluation.summary.clone(),
+                evidence: references(&evaluation.evidence_ids),
+                analyzer: None,
+                analyzer_usage: None,
+            }
+        }));
+    }
+    assessments.extend(criteria.iter().map(|criterion| {
+        let score = criterion.score.and_then(|value| {
+            value.is_finite().then(|| AssessmentScore {
+                awarded: (value.clamp(0.0, 1.0) * f64::from(criterion.weight)).round() as u8,
+                possible: criterion.weight,
+            })
+        });
+        AssessmentResult {
+            criterion_id: criterion.id.clone(),
+            target: AssessmentTarget {
+                kind: AssessmentTargetKind::Criterion,
+                id: criterion.producer_node_id.clone(),
+            },
+            kind: if criterion.advisory {
+                AssessmentKind::Signal
+            } else {
+                AssessmentKind::RequiredCheck
+            },
+            policy: if criterion.advisory {
+                AssessmentPolicy::Advisory
+            } else {
+                AssessmentPolicy::HardGate
+            },
+            dimension: crate::report::EvaluationDimension::Deliverable,
+            source: AssessmentSource::Deterministic,
+            outcome: match criterion.outcome {
+                crate::workflow::WorkflowEvaluationOutcome::Passed => AssessmentOutcome::Passed,
+                crate::workflow::WorkflowEvaluationOutcome::Failed => AssessmentOutcome::Failed,
+                crate::workflow::WorkflowEvaluationOutcome::Advisory => {
+                    if score.is_some() {
+                        AssessmentOutcome::Partial
+                    } else {
+                        AssessmentOutcome::Passed
+                    }
+                }
+                crate::workflow::WorkflowEvaluationOutcome::NotEvaluated => {
+                    AssessmentOutcome::NotEvaluated
+                }
+            },
+            score,
+            confidence: None,
+            summary: criterion.summary.clone(),
+            evidence: references(&criterion.evidence_ids),
+            analyzer: None,
+            analyzer_usage: None,
+        }
+    }));
+    assessments
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]

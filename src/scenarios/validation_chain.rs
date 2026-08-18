@@ -187,7 +187,8 @@ fn capture<'a>(
                 "marker": marker,
                 "validation_nudges": nudge_texts(&observation.transcript),
                 "response": observation.response,
-            }),
+            })
+            .into(),
             invariants,
             provenance: vec![
                 ProvenanceEvidence {

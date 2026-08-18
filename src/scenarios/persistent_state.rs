@@ -121,7 +121,10 @@ fn evaluate<'a>(
             .count();
         assess(
             &expected,
-            &deliverable.content,
+            deliverable
+                .content
+                .as_json()
+                .ok_or_else(|| anyhow::anyhow!("state deliverable is not JSON"))?,
             exact_write,
             writes,
             observation.metrics.totals.function_call_errors,
@@ -176,7 +179,7 @@ fn capture<'a>(
         Ok(vec![CapturedDeliverable {
             id: DELIVERABLE_ID.to_string(),
             kind: "state_value".to_string(),
-            content: observed.clone(),
+            content: observed.clone().into(),
             invariants: vec![
                 CapturedInvariant {
                     id: "matches_expected".to_string(),
