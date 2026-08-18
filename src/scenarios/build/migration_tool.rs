@@ -267,7 +267,41 @@ impl Verification {
     }
 }
 
-async fn verify(run_id: &str) -> Verification {
+/// One verification per attempt, shared by the evaluation and the captured
+/// evidence. Re-running it would repeat the work and, where anything is
+/// timed, answer differently the second time.
+static VERIFIED: std::sync::LazyLock<
+    std::sync::Mutex<std::collections::HashMap<String, std::sync::Arc<Verification>>>,
+> = std::sync::LazyLock::new(|| std::sync::Mutex::new(std::collections::HashMap::new()));
+
+fn cached(run_id: &str) -> Option<std::sync::Arc<Verification>> {
+    VERIFIED
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .get(run_id)
+        .cloned()
+}
+
+async fn verify(run_id: &str) -> std::sync::Arc<Verification> {
+    if let Some(verification) = cached(run_id) {
+        return verification;
+    }
+    let verification = std::sync::Arc::new(run_verification(run_id).await);
+    VERIFIED
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .insert(run_id.to_string(), std::sync::Arc::clone(&verification));
+    verification
+}
+
+fn forget_verification(run_id: &str) {
+    VERIFIED
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .remove(run_id);
+}
+
+async fn run_verification(run_id: &str) -> Verification {
     let root = workspace::root(ID, run_id);
     if !seed_database(&root, HELD_DATABASE).await {
         return Verification {
@@ -384,6 +418,7 @@ fn capture<'a>(
 
 fn cleanup<'a>(_context: &'a E2eContext, run_id: &'a str) -> CleanupFuture<'a> {
     Box::pin(async move {
+        forget_verification(run_id);
         workspace::remove(&workspace::root(ID, run_id));
         Ok(())
     })
