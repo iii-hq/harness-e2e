@@ -195,6 +195,90 @@ describe('local plan comparison view model', () => {
     })
   })
 
+  it('derives security calls and errors from retained workflow evidence', () => {
+    const retained = (id: string): DashboardExecutionSummary =>
+      execution(id, {
+        totals: {
+          ...execution(id).totals,
+          function_calls: null,
+          function_call_errors: null,
+        },
+        scenario_metrics: [
+          {
+            scenario_id: 'security_review',
+            run_count: 1,
+            averages: {
+              function_calls: null,
+              function_call_errors: null,
+            },
+            samples: {
+              function_calls: 0,
+              function_call_errors: 0,
+            },
+            workflow: {
+              failure_count: 0,
+              numeric_metrics: {
+                request_count: 4,
+                'poll.poll_count': 3,
+                reconciliation_operations: 4,
+              },
+            },
+          },
+        ],
+      })
+
+    const comparison = buildPlanComparison(
+      retained('baseline'),
+      retained('candidate'),
+    )
+
+    expect(metricById(comparison, 'function_calls')).toMatchObject({
+      baseline: 13,
+      candidate: 13,
+      delta: 0,
+    })
+    expect(metricById(comparison, 'function_errors')).toMatchObject({
+      baseline: 0,
+      candidate: 0,
+      delta: 0,
+    })
+  })
+
+  it('adds derived security calls to natively reported execution calls', () => {
+    const retained = execution('baseline', {
+      totals: {
+        ...execution('baseline').totals,
+        function_calls: 3,
+        function_call_errors: 0,
+      },
+      scenario_metrics: [
+        {
+          scenario_id: 'security_review',
+          run_count: 1,
+          averages: {
+            function_calls: null,
+            function_call_errors: null,
+          },
+          workflow: {
+            failure_count: 0,
+            numeric_metrics: {
+              request_count: 4,
+              'poll.poll_count': 3,
+              reconciliation_operations: 4,
+            },
+          },
+        },
+      ],
+    })
+
+    expect(buildPlanComparison(retained, retained).metrics).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ id: 'function_calls', baseline: 16 }),
+        expect.objectContaining({ id: 'function_errors', baseline: 0 }),
+      ]),
+    )
+  })
+
   it('disables per-test deltas for different retained contracts', () => {
     const detail = (
       id: string,
@@ -232,6 +316,109 @@ describe('local plan comparison view model', () => {
     expect(row.compatible).toBe(false)
     expect(row.reason).toMatch(/contract differs/i)
     expect(row.metrics.every((metric) => metric.delta === null)).toBe(true)
+  })
+
+  it('compares backfilled general metrics for security review', () => {
+    const detail = (id: string, outputTokens: number) =>
+      ({
+        ...execution(id),
+        reports: [
+          {
+            subject_id: 'subject',
+            scenario_id: 'security_review',
+            available: true,
+            report: {
+              scenarios: [
+                {
+                  scenario_id: 'security_review',
+                  scenario_version: 3,
+                  runs: [
+                    {
+                      run_id: `${id}-run`,
+                      attempt_id: `${id}-attempt`,
+                      judge_usage: {
+                        input_tokens: 3_000,
+                        output_tokens: outputTokens,
+                      },
+                      semantic_tests: [
+                        {
+                          node_id: 'scan_commit_a',
+                          status: 'succeeded',
+                          duration_ms: 10,
+                          metrics: {
+                            request_count: 4,
+                            poll: { poll_count: 3 },
+                            reconciliation_operations: 4,
+                          },
+                          failures: [],
+                        },
+                        {
+                          node_id: 'list_run_history',
+                          status: 'succeeded',
+                          duration_ms: 1,
+                          failures: [],
+                        },
+                      ],
+                    },
+                  ],
+                },
+              ],
+            },
+          },
+        ],
+        subjects: [
+          {
+            id: 'subject',
+            scenarios: [
+              {
+                id: 'security_review',
+                scenario_version: 3,
+                pass_rate: 100,
+                assessment_summary: assessment(),
+              },
+            ],
+          },
+        ],
+        scenario_metrics: [
+          {
+            scenario_id: 'security_review',
+            scenario_version: 3,
+            contract_fingerprint: 'security-v3',
+          },
+        ],
+      }) as unknown as DashboardExecutionDetail
+    const [row] = buildScenarioComparisons(
+      detail('baseline', 500),
+      detail('candidate', 400),
+    )
+
+    expect(row.execution_metrics).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: 'tokens',
+          baseline: 3500,
+          candidate: 3400,
+          delta: -100,
+          format: 'tokens',
+        }),
+        expect.objectContaining({
+          id: 'cost',
+          baseline: 0,
+          candidate: 0,
+          format: 'usd',
+        }),
+        expect.objectContaining({
+          id: 'function_calls',
+          baseline: 13,
+          candidate: 13,
+        }),
+        expect.objectContaining({
+          id: 'function_errors',
+          baseline: 0,
+          candidate: 0,
+        }),
+      ]),
+    )
   })
 
   it('loads referenced summaries in bounded batches', async () => {

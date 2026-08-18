@@ -804,7 +804,6 @@ def complete_public_detail(
                 "stack",
                 "requested_runs",
                 "scenario_metrics",
-                "capability",
                 "totals",
                 "workflow_duration_seconds",
                 "first_failure",

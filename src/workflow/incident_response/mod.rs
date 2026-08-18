@@ -25,6 +25,7 @@ mod evaluation;
 mod executor;
 mod fixture;
 mod helpers;
+mod local_adapter;
 mod prompts;
 mod schemas;
 #[cfg(test)]
@@ -83,6 +84,7 @@ pub fn register_incident_response_steps(
     catalog: &mut StepCatalog,
     context: Arc<E2eContext>,
 ) -> Result<Arc<dyn WorkflowCleanupHook>> {
+    local_adapter::register(context.as_ref())?;
     let fixture = Arc::new(IncidentFixtureState::default());
     for (descriptor, kind) in descriptors()? {
         catalog.register(

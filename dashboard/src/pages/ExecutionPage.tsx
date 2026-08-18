@@ -21,6 +21,7 @@ import {
 import {
   type DashboardExecutionDetail,
   type DashboardExecutionSummary,
+  type ExecutionTotals,
   getDashboardDataBridge,
 } from '@/lib/dashboard-data-source'
 import {
@@ -34,6 +35,8 @@ import {
 } from '@/lib/execution-view'
 import { buildScenarioMatrix } from '@/lib/scenario-matrix'
 import {
+  type GeneralRunMetrics,
+  summedGeneralRunMetricsFromDetail,
   type WorkflowMetricsSummary,
   workflowMetricsFromDetail,
 } from '@/lib/workflow-metrics'
@@ -180,16 +183,32 @@ type SummaryExecutionMetrics = {
   durationSeconds: number | null
   runCount: number
   workflow: WorkflowMetricsSummary | null
+  totalTokens: number | null
+  functionCalls: number | null
+  functionCallErrors: number | null
+  totalCostUsd: number | null
 }
 
-function buildSummaryExecutionMetrics(
+export function buildSummaryExecutionMetrics(
   presentation: ExecutionPresentation,
   aggregate: AssessmentRunMetrics,
   runCount: number,
   workflow: WorkflowMetricsSummary | null,
+  totals: ExecutionTotals | null,
+  testTotals: GeneralRunMetrics | null = null,
 ): SummaryExecutionMetrics {
   const reportedRuns =
     runCount || presentation.receivedReports || presentation.breakdown.total
+  const workflowTokens =
+    workflow && workflow.tokenMetricSteps > 0 ? workflow.totalTokens : null
+  const workflowCalls =
+    workflow && workflow.functionCallMetricSteps > 0
+      ? workflow.functionCalls
+      : null
+  const workflowErrors =
+    workflow && workflow.functionCallErrorMetricSteps > 0
+      ? workflow.functionCallErrors
+      : null
   return {
     durationSeconds:
       presentation.workflowRuntimeSeconds ??
@@ -197,7 +216,37 @@ function buildSummaryExecutionMetrics(
       (aggregate.durationMs === null ? null : aggregate.durationMs / 1000),
     runCount: reportedRuns,
     workflow,
+    totalTokens:
+      testTotals?.totalTokens ??
+      finiteMetric(totals?.total_tokens) ??
+      aggregate.totalTokens ??
+      workflowTokens,
+    functionCalls:
+      testTotals?.functionCalls ??
+      finiteMetric(totals?.function_calls) ??
+      aggregate.functionCalls ??
+      workflowCalls,
+    functionCallErrors:
+      testTotals?.functionCallErrors ??
+      finiteMetric(totals?.function_call_errors) ??
+      aggregate.functionCallErrors ??
+      workflowErrors,
+    totalCostUsd: testTotals?.costUsd ?? finiteMetric(totals?.total_cost_usd),
   }
+}
+
+function finiteMetric(value: unknown) {
+  return typeof value === 'number' && Number.isFinite(value) ? value : null
+}
+
+function formatMetricCount(value: number | null) {
+  return value == null ? '—' : Math.round(value).toLocaleString('en-US')
+}
+
+function formatReportedCost(value: number | null) {
+  if (value == null) return '—'
+  if (value > 0 && value < 0.0001) return '<$0.0001'
+  return `$${value.toFixed(4)}`
 }
 
 function DecisionBoundary({
@@ -540,6 +589,8 @@ export function ExecutionPage({
             aggregateAssessmentMetrics(assessmentModel.runs),
             assessmentModel.runs.length,
             detail ? workflowMetricsFromDetail(detail) : null,
+            detail?.totals ?? null,
+            detail ? summedGeneralRunMetricsFromDetail(detail) : null,
           )
         : null,
     [assessmentModel.runs, detail, presentation],
@@ -613,11 +664,6 @@ export function ExecutionPage({
       </div>
     )
 
-  const navigation: Array<{ id: DetailSection; label: string }> = [
-    { id: 'summary', label: 'Decision' },
-    { id: 'results', label: 'Scenarios' },
-    { id: 'technical', label: 'Provenance' },
-  ]
   const primaryRun = assessmentModel.runs[0] ?? null
   const aiResult = primaryRun?.finalAssessment.result
   const status = executionStatus(presentation)
@@ -783,23 +829,44 @@ export function ExecutionPage({
               delta={hasRustWorkflow ? 'Composite' : 'Standard'}
               tone={hasRustWorkflow ? 'neutral' : 'unavailable'}
             />
+            <MetricCard
+              className="min-h-40 rounded-none border-0 border-t border-[var(--ds-color-line)] p-4 lg:p-5 [&_.ds-metric-value]:text-[clamp(1.9rem,3vw,2.8rem)]"
+              label="Total tokens"
+              value={formatMetricCount(summaryMetrics?.totalTokens ?? null)}
+              detail="Consolidated subject execution usage"
+              delta="Usage"
+              tone={
+                summaryMetrics?.totalTokens == null ? 'unavailable' : 'neutral'
+              }
+            />
+            <MetricCard
+              className="min-h-40 rounded-none border-0 border-t border-l border-[var(--ds-color-line)] p-4 lg:p-5 [&_.ds-metric-value]:text-[clamp(1.9rem,3vw,2.8rem)]"
+              label="Function calls"
+              value={formatMetricCount(summaryMetrics?.functionCalls ?? null)}
+              detail={
+                summaryMetrics?.functionCallErrors == null
+                  ? 'Error count not captured'
+                  : `${formatMetricCount(summaryMetrics.functionCallErrors)} errors`
+              }
+              delta="Tools"
+              tone={
+                summaryMetrics?.functionCalls == null
+                  ? 'unavailable'
+                  : 'neutral'
+              }
+            />
+            <MetricCard
+              className="min-h-40 rounded-none border-0 border-t border-l border-[var(--ds-color-line)] p-4 lg:p-5 [&_.ds-metric-value]:text-[clamp(1.9rem,3vw,2.8rem)]"
+              label="Reported cost"
+              value={formatReportedCost(summaryMetrics?.totalCostUsd ?? null)}
+              detail="Consolidated execution cost"
+              delta="USD"
+              tone={
+                summaryMetrics?.totalCostUsd == null ? 'unavailable' : 'neutral'
+              }
+            />
           </section>
         </Panel>
-        <nav
-          className="detail-index sticky top-16 z-40 mt-5 mb-4 grid grid-cols-3 gap-px overflow-hidden rounded-[var(--ds-radius-sm)] border border-[var(--ds-color-line-strong)] bg-[var(--ds-color-line)] p-0 shadow-[var(--ds-shadow-panel)] backdrop-blur-xl"
-          aria-label="Execution detail sections"
-        >
-          {navigation.map((item) => (
-            <a
-              key={item.id}
-              href={hashForExecution(executionId, item.id)}
-              className={`flex min-h-11 items-center justify-center bg-[var(--ds-color-surface)] px-3 text-center text-xs font-semibold no-underline transition-colors motion-reduce:transition-none ${section === item.id ? 'text-[var(--ds-color-ink)] shadow-[inset_0_-2px_var(--ds-color-brand)]' : 'text-[var(--ds-color-ink-muted)] hover:bg-[var(--ds-color-surface-raised)] hover:text-[var(--ds-color-ink)]'}`}
-              aria-current={section === item.id ? 'page' : undefined}
-            >
-              {item.label}
-            </a>
-          ))}
-        </nav>
         <div className="detail-main grid min-w-0 gap-5">
           <DecisionSection
             presentation={presentation}

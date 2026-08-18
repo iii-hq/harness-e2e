@@ -1,6 +1,7 @@
 import type {
   DashboardExecutionDetail,
   DashboardExecutionSummary,
+  DashboardRunProjection,
   DashboardScenarioMetricSummary,
   DashboardScenarioSummary,
   ExecutionTotals,
@@ -10,6 +11,12 @@ import {
   buildExecutionPresentation,
   failureBreakdown,
 } from '@/lib/execution-view'
+import {
+  generalRunMetrics,
+  workflowMetricEntriesFromRecord,
+  workflowMetricLabel,
+  workflowMetricUnit,
+} from '@/lib/workflow-metrics'
 
 export type PlanVerdict = 'improved' | 'stable' | 'regressed' | 'inconclusive'
 export type MetricTone = 'positive' | 'negative' | 'neutral' | 'unavailable'
@@ -20,6 +27,7 @@ export type MetricFormat =
   | 'count'
   | 'tokens'
   | 'seconds'
+  | 'milliseconds'
   | 'usd'
 
 export type PlanMetricId =
@@ -36,7 +44,7 @@ export type PlanMetricId =
   | 'function_errors'
 
 export type PlanMetricComparison = {
-  id: PlanMetricId
+  id: PlanMetricId | `workflow:${string}`
   label: string
   baseline: number | null
   candidate: number | null
@@ -54,6 +62,8 @@ export type PlanScenarioComparison = {
   baseline_status: string
   candidate_status: string
   metrics: PlanMetricComparison[]
+  execution_metrics: PlanMetricComparison[]
+  workflow_metrics: PlanMetricComparison[]
 }
 
 export type PlanComparison = {
@@ -114,9 +124,16 @@ function scenarioMetricTotal(
   if (metrics.length === 0) return null
   let total = 0
   for (const metric of metrics) {
-    const average = finite(metric.averages?.[key])
-    const samples = finite(metric.samples?.[key])
+    const explicitAverage = finite(metric.averages?.[key])
+    const average = scenarioAverage(metric, key)
+    const reportedSamples = finite(metric.samples?.[key])
     const runCount = finite(metric.run_count)
+    const samples =
+      explicitAverage !== null
+        ? reportedSamples
+        : average !== null
+          ? runCount
+          : null
     if (
       average === null ||
       samples === null ||
@@ -128,6 +145,28 @@ function scenarioMetricTotal(
     total += average * samples
   }
   return total
+}
+
+function derivedSecurityMetricTotal(
+  execution: DashboardExecutionSummary,
+  key: 'function_calls' | 'function_call_errors',
+): number | null {
+  let total = 0
+  let found = false
+  for (const metric of execution.scenario_metrics ?? []) {
+    if (
+      metric.scenario_id !== 'security_review' ||
+      finite(metric.averages?.[key]) !== null
+    ) {
+      continue
+    }
+    const average = scenarioAverage(metric, key)
+    const runCount = finite(metric.run_count)
+    if (average === null || runCount === null) continue
+    total += average * runCount
+    found = true
+  }
+  return found ? total : null
 }
 
 function metricTone(
@@ -143,7 +182,7 @@ function metricTone(
 }
 
 function comparisonMetric(
-  id: PlanMetricId,
+  id: PlanMetricId | `workflow:${string}`,
   label: string,
   baseline: number | null,
   candidate: number | null,
@@ -199,16 +238,27 @@ export function executionMetricValue(
     case 'cost':
       return finite(executionTotals.total_cost_usd)
     case 'function_calls':
-      return (
-        finite(executionTotals.function_calls) ??
-        scenarioMetricTotal(execution, 'function_calls')
+      return addDerivedSecurityMetric(
+        finite(executionTotals.function_calls),
+        derivedSecurityMetricTotal(execution, 'function_calls'),
+        scenarioMetricTotal(execution, 'function_calls'),
       )
     case 'function_errors':
-      return (
-        finite(executionTotals.function_call_errors) ??
-        scenarioMetricTotal(execution, 'function_call_errors')
+      return addDerivedSecurityMetric(
+        finite(executionTotals.function_call_errors),
+        derivedSecurityMetricTotal(execution, 'function_call_errors'),
+        scenarioMetricTotal(execution, 'function_call_errors'),
       )
   }
+}
+
+function addDerivedSecurityMetric(
+  reported: number | null,
+  derivedSecurity: number | null,
+  fullyReportedFallback: number | null,
+): number | null {
+  if (reported !== null) return reported + (derivedSecurity ?? 0)
+  return fullyReportedFallback ?? derivedSecurity
 }
 
 function allMetrics(
@@ -332,7 +382,7 @@ function objectiveVerdict(
   }
 }
 
-function scenarioMap(detail: DashboardExecutionDetail) {
+function scenarioMap(detail: DashboardExecutionSummary) {
   const values = new Map<string, DashboardScenarioSummary>()
   for (const subject of detail.subjects ?? []) {
     for (const scenario of subject.scenarios ?? []) {
@@ -342,7 +392,7 @@ function scenarioMap(detail: DashboardExecutionDetail) {
   return values
 }
 
-function scenarioMetricMap(detail: DashboardExecutionDetail) {
+function scenarioMetricMap(detail: DashboardExecutionSummary) {
   return new Map(
     (detail.scenario_metrics ?? []).map((metric) => [
       metric.scenario_id,
@@ -362,14 +412,163 @@ function scenarioStatus(summary: DashboardScenarioSummary | undefined) {
 
 function scenarioAverage(
   metric: DashboardScenarioMetricSummary | undefined,
-  key: 'tokens' | 'duration_seconds' | 'cost_usd',
+  key:
+    | 'tokens'
+    | 'duration_seconds'
+    | 'cost_usd'
+    | 'function_calls'
+    | 'function_call_errors',
 ) {
-  return finite(metric?.averages?.[key])
+  const explicit = finite(metric?.averages?.[key])
+  if (explicit !== null || metric?.scenario_id !== 'security_review') {
+    return explicit
+  }
+
+  const runCount = finite(metric.run_count)
+  if (!runCount) return null
+  if (key === 'function_call_errors') {
+    const failures = finite(metric.workflow?.failure_count)
+    return failures === null ? null : failures / runCount
+  }
+  if (key !== 'function_calls') return null
+
+  const workflow = metric.workflow?.numeric_metrics
+  const requests = finite(workflow?.request_count)
+  const polls = finite(workflow?.['poll.poll_count'])
+  const reconciliation = finite(workflow?.reconciliation_operations)
+  if (requests === null || polls === null || reconciliation === null) {
+    return null
+  }
+
+  // Security Review v3 persists operation counts instead of canonical Harness
+  // usage totals. Include its scan and history entrypoints once per run so a
+  // retained summary remains comparable before full execution detail is loaded.
+  return (requests + polls + reconciliation + 2 * runCount) / runCount
+}
+
+function primaryScenarioRun(
+  execution: DashboardExecutionSummary,
+  scenarioId: string,
+): DashboardRunProjection | null {
+  const detail = execution as DashboardExecutionDetail
+  for (const record of detail.reports ?? []) {
+    for (const scenario of record.report?.scenarios ?? []) {
+      if (scenario.scenario_id === scenarioId)
+        return scenario.runs.at(-1) ?? null
+    }
+  }
+  return null
+}
+
+function runDurationSeconds(run: DashboardRunProjection | null): number | null {
+  const milliseconds = finite(
+    run?.wall_time_ms ?? run?.efficiency?.wall_time_ms,
+  )
+  return milliseconds === null ? null : milliseconds / 1000
+}
+
+function generalMetricComparisons(
+  baseline: DashboardRunProjection | null,
+  candidate: DashboardRunProjection | null,
+  baselineSummary: DashboardScenarioMetricSummary | undefined,
+  candidateSummary: DashboardScenarioMetricSummary | undefined,
+  compatible: boolean,
+): PlanMetricComparison[] {
+  const left = generalRunMetrics(baseline, baseline?.semantic_tests ?? [])
+  const right = generalRunMetrics(candidate, candidate?.semantic_tests ?? [])
+  const metric = (
+    id: PlanMetricId,
+    label: string,
+    leftValue: number | null,
+    rightValue: number | null,
+    direction: MetricDirection,
+    format: MetricFormat,
+  ) =>
+    comparisonMetric(
+      id,
+      label,
+      compatible ? leftValue : null,
+      compatible ? rightValue : null,
+      direction,
+      format,
+    )
+  return [
+    metric(
+      'cost',
+      'Cost',
+      left.costUsd ?? scenarioAverage(baselineSummary, 'cost_usd'),
+      right.costUsd ?? scenarioAverage(candidateSummary, 'cost_usd'),
+      'lower',
+      'usd',
+    ),
+    metric(
+      'tokens',
+      'Tokens',
+      left.totalTokens ?? scenarioAverage(baselineSummary, 'tokens'),
+      right.totalTokens ?? scenarioAverage(candidateSummary, 'tokens'),
+      'lower',
+      'tokens',
+    ),
+    metric(
+      'function_calls',
+      'Function calls',
+      left.functionCalls ?? scenarioAverage(baselineSummary, 'function_calls'),
+      right.functionCalls ??
+        scenarioAverage(candidateSummary, 'function_calls'),
+      'context',
+      'count',
+    ),
+    metric(
+      'function_errors',
+      'Function errors',
+      left.functionCallErrors ??
+        scenarioAverage(baselineSummary, 'function_call_errors'),
+      right.functionCallErrors ??
+        scenarioAverage(candidateSummary, 'function_call_errors'),
+      'lower',
+      'count',
+    ),
+    metric(
+      'duration',
+      'Time',
+      scenarioAverage(baselineSummary, 'duration_seconds') ??
+        runDurationSeconds(baseline),
+      scenarioAverage(candidateSummary, 'duration_seconds') ??
+        runDurationSeconds(candidate),
+      'lower',
+      'seconds',
+    ),
+  ]
+}
+
+function workflowMetricComparisons(
+  baseline: DashboardScenarioMetricSummary | undefined,
+  candidate: DashboardScenarioMetricSummary | undefined,
+  compatible: boolean,
+): PlanMetricComparison[] {
+  const left = new Map(
+    workflowMetricEntriesFromRecord(baseline?.workflow?.numeric_metrics),
+  )
+  const right = new Map(
+    workflowMetricEntriesFromRecord(candidate?.workflow?.numeric_metrics),
+  )
+  return [...new Set([...left.keys(), ...right.keys()])]
+    .sort()
+    .map((path) =>
+      comparisonMetric(
+        `workflow:${path}`,
+        workflowMetricLabel(path),
+        compatible ? (left.get(path) ?? null) : null,
+        compatible ? (right.get(path) ?? null) : null,
+        'context',
+        workflowMetricUnit(path),
+      ),
+    )
 }
 
 export function buildScenarioComparisons(
-  baseline: DashboardExecutionDetail,
-  candidate: DashboardExecutionDetail,
+  baseline: DashboardExecutionSummary,
+  candidate: DashboardExecutionSummary,
 ): PlanScenarioComparison[] {
   const baselineScenarios = scenarioMap(baseline)
   const candidateScenarios = scenarioMap(candidate)
@@ -386,6 +585,16 @@ export function buildScenarioComparisons(
     const right = candidateScenarios.get(id)
     const leftMetrics = baselineMetrics.get(id)
     const rightMetrics = candidateMetrics.get(id)
+    const leftRun = primaryScenarioRun(baseline, id)
+    const rightRun = primaryScenarioRun(candidate, id)
+    const leftGeneral = generalRunMetrics(
+      leftRun,
+      leftRun?.semantic_tests ?? [],
+    )
+    const rightGeneral = generalRunMetrics(
+      rightRun,
+      rightRun?.semantic_tests ?? [],
+    )
     const versionMismatch =
       left?.scenario_version != null &&
       right?.scenario_version != null &&
@@ -447,8 +656,8 @@ export function buildScenarioComparisons(
         metric(
           'tokens',
           'Tokens',
-          scenarioAverage(leftMetrics, 'tokens'),
-          scenarioAverage(rightMetrics, 'tokens'),
+          scenarioAverage(leftMetrics, 'tokens') ?? leftGeneral.totalTokens,
+          scenarioAverage(rightMetrics, 'tokens') ?? rightGeneral.totalTokens,
           'lower',
           'tokens',
         ),
@@ -463,12 +672,24 @@ export function buildScenarioComparisons(
         metric(
           'cost',
           'Cost',
-          scenarioAverage(leftMetrics, 'cost_usd'),
-          scenarioAverage(rightMetrics, 'cost_usd'),
+          scenarioAverage(leftMetrics, 'cost_usd') ?? leftGeneral.costUsd,
+          scenarioAverage(rightMetrics, 'cost_usd') ?? rightGeneral.costUsd,
           'lower',
           'usd',
         ),
       ],
+      execution_metrics: generalMetricComparisons(
+        leftRun,
+        rightRun,
+        leftMetrics,
+        rightMetrics,
+        compatible,
+      ),
+      workflow_metrics: workflowMetricComparisons(
+        leftMetrics,
+        rightMetrics,
+        compatible,
+      ),
     }
   })
 }
@@ -498,9 +719,10 @@ export function buildPlanComparison(
     baseline,
     candidate,
     metrics: allMetrics(baseline, candidate),
-    scenarios: details
-      ? buildScenarioComparisons(details.baseline, details.candidate)
-      : [],
+    scenarios: buildScenarioComparisons(
+      details?.baseline ?? baseline,
+      details?.candidate ?? candidate,
+    ),
   }
 }
 
@@ -540,6 +762,10 @@ export function formatPlanMetricValue(
       return value < 60
         ? `${value.toFixed(value < 10 ? 1 : 0)}s`
         : `${Math.floor(value / 60)}m ${Math.round(value % 60)}s`
+    case 'milliseconds':
+      return value < 1_000
+        ? `${compactNumber(value)} ms`
+        : `${(value / 1_000).toFixed(1)}s`
     case 'usd':
       return `$${value.toFixed(value < 1 ? 4 : 2)}`
     case 'count':
@@ -560,6 +786,8 @@ export function formatPlanMetricDelta(metric: PlanMetricComparison): string {
   const absolute = (() => {
     if (metric.format === 'seconds')
       return signed(value, `${Math.abs(value).toFixed(1)}s`)
+    if (metric.format === 'milliseconds')
+      return signed(value, `${compactNumber(Math.abs(value))} ms`)
     if (metric.format === 'usd')
       return signed(value, `$${Math.abs(value).toFixed(4)}`)
     return signed(value, compactNumber(Math.abs(value)))

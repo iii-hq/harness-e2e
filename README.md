@@ -138,8 +138,8 @@ Lane promotion is governed by
 - `tests/` owns test-only fixtures, golden wire schemas, and the Node/Python
   validation suites.
 - `schemas/` contains the public contracts for generated E2E artifacts.
-- `dashboard/` contains the React, TypeScript, Vite, and Tailwind capability
-  dashboard embedded in the Rust binary.
+- `dashboard/` contains the React, TypeScript, Vite, and Tailwind dashboard
+  embedded in the Rust binary.
 - generated reports, transcripts, logs, and deliverables stay outside Git.
 
 The crate may depend on the iii SDK and generic libraries. It must not declare
@@ -185,7 +185,7 @@ credentials in their environment. Provider workers and the trusted E2E worker
 are started separately. PR execution remains non-blocking shadow evidence until
 the source repository, revision, E2E ref, and credential boundary are approved.
 
-## Comparison and capability
+## Comparison
 
 Every completed execution records the subject and E2E revisions, observed wire
 contracts, scenario version, materialized inputs, seed, policies, artifacts,
@@ -195,14 +195,6 @@ execution ids (`from_execution_id` and `to_execution_id`) and writes a unique
 deltas remain disabled when the case set or canonical contract differs.
 
 Deliverable, structural, technical, cost, latency, turns, retries, and work
-amplification deltas remain independent. A tier is repeatable after five local
-runs satisfy the deliverable, structural, and technical thresholds. Cost and
-wall-time are governed primarily by relative regressions against a compatible
-baseline: p95 with twenty complete samples, otherwise the local median.
-Absolute p95 budgets are optional and configured per scenario when a scenario
-has a fixed operational ceiling.
-
-`scenario_budgets` maps a scenario id to optional
-`maximum_p95_cost_usd` and `maximum_p95_wall_time_ms` limits. An absent entry
-means that no absolute ceiling applies; it does not prevent the tier from being
-classified as repeatable.
+amplification deltas remain independent. Cost and wall-time are reported as
+observed metrics and compared only within a compatible baseline/candidate
+cohort.

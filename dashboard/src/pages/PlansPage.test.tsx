@@ -16,7 +16,6 @@ const plan: LocalPlan = {
   state: 'comparison_ready',
   locked: true,
   scope_hash: 'sha256:scope',
-  policy_hash: 'sha256:policy',
   url: 'https://example.invalid/catalog',
   model: 'codex/gpt-5.6-terra',
   provider: 'openai-codex',

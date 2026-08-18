@@ -147,6 +147,7 @@ impl IncidentExecutor {
                 PREFLIGHT_FUNCTION,
                 FixturePreflightRequest {
                     workspace_root: path.to_string_lossy().into_owned(),
+                    _caller_worker_id: None,
                 },
             )
             .await?;
@@ -206,6 +207,7 @@ impl IncidentExecutor {
                 BASELINE_FUNCTION,
                 BaselineRequest {
                     attempt_id: context.attempt_id.clone(),
+                    _caller_worker_id: None,
                 },
             )
             .await?;
@@ -242,6 +244,7 @@ impl IncidentExecutor {
         let request = AlertRequest {
             event_id: crate::scenarios::incident_response::INCIDENT_EVENT_ID.into(),
             idempotency_key: key,
+            _caller_worker_id: None,
         };
         let first: AlertResponse = self.context.trigger(ALERT_FUNCTION, &request).await?;
         let second: AlertResponse = self.context.trigger(ALERT_FUNCTION, &request).await?;
@@ -300,6 +303,7 @@ impl IncidentExecutor {
                 ReproduceRequest {
                     event_id: event_id.clone(),
                     reproduction_key: format!("{}:{}:one", context.run_id, context.attempt_id),
+                    _caller_worker_id: None,
                 },
             )
             .await?;
@@ -310,6 +314,7 @@ impl IncidentExecutor {
                 ReproduceRequest {
                     event_id: event_id.clone(),
                     reproduction_key: format!("{}:{}:two", context.run_id, context.attempt_id),
+                    _caller_worker_id: None,
                 },
             )
             .await?;
@@ -332,6 +337,7 @@ impl IncidentExecutor {
                     TelemetryRequest {
                         kind: kind.into(),
                         event_id: event_id.clone(),
+                        _caller_worker_id: None,
                     },
                 )
                 .await?;
@@ -488,6 +494,7 @@ impl IncidentExecutor {
                             workspace_root: workspace.to_string_lossy().into_owned(),
                             candidate_sha: None,
                             probe_ids: diagnosis.falsification_probe_ids.clone(),
+                            _caller_worker_id: None,
                         },
                     )
                     .await?;
@@ -593,6 +600,7 @@ impl IncidentExecutor {
                     .into_iter()
                     .map(str::to_string)
                     .collect(),
+                    _caller_worker_id: None,
                 },
             )
             .await?;
@@ -783,6 +791,7 @@ impl IncidentExecutor {
                     action: action.into(),
                     revision: revision.clone(),
                     attempt_id: context.attempt_id.clone(),
+                    _caller_worker_id: None,
                 },
             )
             .await?;
@@ -830,6 +839,7 @@ impl IncidentExecutor {
                 RECONCILE_FUNCTION,
                 ReconcileRequest {
                     attempt_id: context.attempt_id.clone(),
+                    _caller_worker_id: None,
                 },
             )
             .await?;

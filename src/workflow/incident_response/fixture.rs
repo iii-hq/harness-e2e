@@ -66,6 +66,7 @@ impl WorkflowCleanupHook for IncidentResponseCleanup {
                 ResetRequest {
                     attempt_id: context.attempt_id.clone(),
                     initial_revision: initial.clone(),
+                    _caller_worker_id: None,
                 },
             )
             .await?;
@@ -99,6 +100,7 @@ impl WorkflowCleanupHook for IncidentResponseCleanup {
                 RECONCILE_FUNCTION,
                 ReconcileRequest {
                     attempt_id: context.attempt_id.clone(),
+                    _caller_worker_id: None,
                 },
             )
             .await?;

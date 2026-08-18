@@ -1,7 +1,11 @@
 import { describe, expect, it } from 'vitest'
-import type { SemanticTestReport } from '@/lib/dashboard-data-source'
+import type {
+  DashboardExecutionDetail,
+  SemanticTestReport,
+} from '@/lib/dashboard-data-source'
 import {
   aggregateWorkflowMetrics,
+  summedGeneralRunMetricsFromDetail,
   workflowMetricEntries,
   workflowStepUsage,
 } from '@/lib/workflow-metrics'
@@ -162,6 +166,103 @@ describe('workflow metrics', () => {
       inputTokens: 10,
       outputTokens: null,
       totalTokens: null,
+    })
+  })
+
+  it('sums the general metrics shown by every retained test', () => {
+    const run = (
+      totalTokens: number,
+      functionCalls: number,
+      functionCallErrors: number,
+    ) => ({
+      metrics: {
+        totals: {
+          total_tokens: totalTokens,
+          function_calls: functionCalls,
+          function_call_errors: functionCallErrors,
+        },
+      },
+      semantic_tests: [],
+    })
+    const detail = {
+      reports: [
+        {
+          report: {
+            scenarios: [{ runs: [run(367, 0, 0)] }],
+          },
+        },
+        {
+          report: {
+            scenarios: [{ runs: [run(4_142, 3, 0)] }],
+          },
+        },
+        {
+          report: {
+            scenarios: [
+              {
+                runs: [
+                  {
+                    judge_usage: { input_tokens: 3_325, output_tokens: 1_311 },
+                    semantic_tests: [
+                      {
+                        node_id: 'scan_commit_a',
+                        status: 'succeeded',
+                        duration_ms: 0,
+                        metrics: {
+                          request_count: 2,
+                          poll: { poll_count: 1 },
+                        },
+                        failures: [],
+                      },
+                      {
+                        node_id: 'suggest_commit_a',
+                        status: 'succeeded',
+                        duration_ms: 0,
+                        metrics: {
+                          request_count: 1,
+                          poll: { poll_count: 1 },
+                        },
+                        failures: [],
+                      },
+                      {
+                        node_id: 'scan_commit_b',
+                        status: 'succeeded',
+                        duration_ms: 0,
+                        metrics: {
+                          request_count: 1,
+                          poll: { poll_count: 1 },
+                        },
+                        failures: [],
+                      },
+                      {
+                        node_id: 'github_reconciliation',
+                        status: 'succeeded',
+                        duration_ms: 0,
+                        metrics: { reconciliation_operations: 4 },
+                        failures: [],
+                      },
+                      {
+                        node_id: 'list_run_history',
+                        status: 'succeeded',
+                        duration_ms: 0,
+                        failures: [],
+                      },
+                    ],
+                  },
+                ],
+              },
+            ],
+          },
+        },
+      ],
+    } as unknown as DashboardExecutionDetail
+
+    expect(summedGeneralRunMetricsFromDetail(detail)).toMatchObject({
+      totalTokens: 9_145,
+      functionCalls: 16,
+      functionCallErrors: 0,
+      costUsd: null,
+      backfilled: true,
     })
   })
 })

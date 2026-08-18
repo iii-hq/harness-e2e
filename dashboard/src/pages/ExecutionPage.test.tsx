@@ -3,7 +3,10 @@ import { describe, expect, it } from 'vitest'
 import type { AssessmentRunView } from '@/lib/assessment-view'
 import type { DashboardExecutionDetail } from '@/lib/dashboard-data-source'
 import { buildExecutionPresentation } from '@/lib/execution-view'
-import { DecisionSection } from '@/pages/ExecutionPage'
+import {
+  buildSummaryExecutionMetrics,
+  DecisionSection,
+} from '@/pages/ExecutionPage'
 
 const detail = {
   id: 'execution-1',
@@ -92,5 +95,79 @@ describe('execution decision hierarchy', () => {
     expect(html).toContain('39')
     expect(html).toContain('7')
     expect(html).toContain('17')
+  })
+
+  it('prefers consolidated execution totals for primary usage metrics', () => {
+    const metrics = buildSummaryExecutionMetrics(
+      buildExecutionPresentation(detail),
+      {
+        totalTokens: 100,
+        inputTokens: null,
+        outputTokens: null,
+        cacheReadTokens: null,
+        cacheWriteTokens: null,
+        reasoningTokens: null,
+        functionCalls: 2,
+        functionCallErrors: 1,
+        durationMs: 1_000,
+        sessions: null,
+        turns: null,
+      },
+      1,
+      null,
+      {
+        total_tokens: 445_900,
+        function_calls: 58,
+        function_call_errors: 3,
+        total_cost_usd: 1.2345,
+      },
+    )
+
+    expect(metrics).toMatchObject({
+      totalTokens: 445_900,
+      functionCalls: 58,
+      functionCallErrors: 3,
+      totalCostUsd: 1.2345,
+    })
+  })
+
+  it('prefers the sum of retained test metrics over partial execution totals', () => {
+    const metrics = buildSummaryExecutionMetrics(
+      buildExecutionPresentation(detail),
+      {
+        totalTokens: 4_509,
+        inputTokens: null,
+        outputTokens: null,
+        cacheReadTokens: null,
+        cacheWriteTokens: null,
+        reasoningTokens: null,
+        functionCalls: 3,
+        functionCallErrors: 0,
+        durationMs: 1_000,
+        sessions: null,
+        turns: null,
+      },
+      3,
+      null,
+      {
+        total_tokens: 4_509,
+        function_calls: 3,
+        function_call_errors: 0,
+      },
+      {
+        totalTokens: 9_145,
+        functionCalls: 16,
+        functionCallErrors: 0,
+        costUsd: null,
+        backfilled: true,
+      },
+    )
+
+    expect(metrics).toMatchObject({
+      totalTokens: 9_145,
+      functionCalls: 16,
+      functionCallErrors: 0,
+      totalCostUsd: null,
+    })
   })
 })

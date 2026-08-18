@@ -7509,6 +7509,14 @@ footer {
   font-size: 0.92rem;
 }
 
+.plan-scenario-comparison-heading p {
+  max-width: 52rem;
+  margin: 0.35rem 0 0;
+  color: var(--text-muted);
+  font-size: 0.66rem;
+  line-height: 1.55;
+}
+
 .plan-scenario-comparison-heading > span {
   color: var(--text-muted);
   font-size: 0.68rem;
@@ -7716,6 +7724,7 @@ footer {
 .plan-run-history {
   display: grid;
   gap: 1rem;
+  padding: var(--plan-panel-space-y) var(--plan-panel-space-x);
   background: var(--surface-soft);
 }
 
@@ -7939,6 +7948,225 @@ footer {
   font-weight: 650;
 }
 
+.plan-scenario-table tbody .plan-scenario-workflow-row:hover {
+  background: transparent;
+}
+
+.plan-scenario-table .plan-scenario-workflow-row > td {
+  padding-top: 0;
+  background: var(--surface-soft);
+}
+
+.plan-scenario-workflow-metrics {
+  display: grid;
+  gap: 0.65rem;
+  padding: 0.7rem 0;
+}
+
+.plan-scenario-workflow-metrics > strong {
+  color: var(--text-muted);
+  font-size: 0.58rem;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+.plan-scenario-workflow-metrics > div {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.45rem;
+}
+
+.plan-scenario-workflow-metrics span {
+  display: grid;
+  min-width: 8.5rem;
+  gap: 0.18rem;
+  padding: 0.55rem 0.65rem;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+}
+
+.plan-scenario-workflow-metrics small,
+.plan-scenario-workflow-metrics i {
+  color: var(--text-muted);
+  font-size: 0.58rem;
+  font-style: normal;
+}
+
+.plan-scenario-workflow-metrics b {
+  color: var(--text);
+  font: 650 0.68rem var(--font-mono);
+}
+
+.plan-scenario-detail-section {
+  border-top: 1px solid var(--line);
+}
+
+.plan-scenario-disclosures {
+  display: grid;
+}
+
+.plan-scenario-disclosure {
+  border-top: 1px solid var(--line);
+  background: var(--surface);
+}
+
+.plan-scenario-disclosure summary {
+  display: grid;
+  grid-template-columns: minmax(10rem, 0.8fr) minmax(9rem, 0.65fr) minmax(
+      20rem,
+      1.7fr
+    ) 1rem;
+  align-items: center;
+  gap: 1rem;
+  min-height: 4.5rem;
+  padding: 0.85rem var(--plan-card-space);
+  cursor: pointer;
+  list-style: none;
+}
+
+.plan-scenario-disclosure summary::-webkit-details-marker {
+  display: none;
+}
+
+.plan-scenario-disclosure summary:hover {
+  background: rgba(var(--contrast-rgb), 0.022);
+}
+
+.plan-scenario-identity,
+.plan-scenario-objective,
+.plan-scenario-signals > span {
+  display: grid;
+  min-width: 0;
+  gap: 0.18rem;
+}
+
+.plan-scenario-identity strong {
+  color: var(--text);
+  font-size: 0.74rem;
+}
+
+.plan-scenario-identity code,
+.plan-scenario-objective small,
+.plan-scenario-signals small {
+  overflow: hidden;
+  color: var(--text-muted);
+  font-size: 0.57rem;
+  font-weight: 500;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.plan-scenario-objective b,
+.plan-scenario-signals b {
+  overflow: hidden;
+  color: var(--text-soft);
+  font: 650 0.64rem var(--font-mono);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.plan-scenario-signals {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0.75rem;
+}
+
+.plan-scenario-chevron {
+  width: 0.48rem;
+  height: 0.48rem;
+  border-right: 1.5px solid var(--text-muted);
+  border-bottom: 1.5px solid var(--text-muted);
+  transform: rotate(45deg) translateY(-0.12rem);
+  transition: transform 140ms ease;
+}
+
+.plan-scenario-disclosure[open] .plan-scenario-chevron {
+  transform: rotate(225deg) translate(-0.05rem, -0.05rem);
+}
+
+.plan-scenario-metric-detail {
+  padding: 0 var(--plan-card-space) var(--plan-card-space);
+  background: var(--surface-soft);
+}
+
+.plan-scenario-metric-detail > p {
+  margin: 0;
+  padding: 0.8rem 0;
+  color: var(--text-muted);
+  font-size: 0.66rem;
+}
+
+.plan-scenario-metric-grid {
+  width: max(
+    100%,
+    calc(12rem + (var(--plan-scenario-column-count, 1) + 1) * 10rem)
+  );
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  border-collapse: separate;
+  border-spacing: 0;
+  background: var(--surface);
+  font-size: 0.66rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.plan-scenario-metric-grid tbody tr + tr {
+  border-top: 1px solid var(--line);
+}
+
+.plan-scenario-metric-grid th,
+.plan-scenario-metric-grid td {
+  min-width: 0;
+  padding: 0.65rem 0.8rem;
+  border-top: 1px solid var(--line);
+  text-align: left;
+}
+
+.plan-scenario-metric-grid th + th,
+.plan-scenario-metric-grid th + td,
+.plan-scenario-metric-grid td + td {
+  border-left: 1px solid var(--line);
+}
+
+.plan-scenario-metric-grid thead {
+  background: var(--surface-soft);
+  color: var(--text-muted);
+  font-size: 0.56rem;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+.plan-scenario-metric-grid thead th {
+  border-top: 0;
+}
+
+.plan-scenario-metric-grid th:first-child {
+  width: 12rem;
+}
+
+.plan-scenario-candidate-metric {
+  display: grid;
+  gap: 0.18rem;
+}
+
+.plan-scenario-candidate-metric b {
+  color: var(--text-soft);
+  font: 650 0.68rem var(--font-mono);
+}
+
+.plan-scenario-candidate-metric small {
+  font-size: 0.58rem;
+  font-weight: 650;
+}
+
+.plan-scenario-metric-grid strong {
+  color: var(--text-soft);
+  font-weight: 650;
+}
+
 .plan-history-error {
   background: color-mix(in srgb, var(--warning) 7%, var(--surface));
   color: var(--text-soft);
@@ -8037,6 +8265,20 @@ footer {
 }
 
 @media (max-width: 840px) {
+  .plan-scenario-disclosure summary {
+    grid-template-columns: minmax(9rem, 0.8fr) minmax(8rem, 0.7fr) 1rem;
+  }
+
+  .plan-scenario-signals {
+    grid-column: 1 / -1;
+    grid-row: 2;
+  }
+
+  .plan-scenario-chevron {
+    grid-column: 3;
+    grid-row: 1;
+  }
+
   .current-work-summary,
   .plan-status-grid,
   .history-summary {
@@ -8063,6 +8305,14 @@ footer {
 }
 
 @media (max-width: 760px) {
+  .plan-scenario-metric-detail {
+    overflow-x: auto;
+  }
+
+  .plan-scenario-metric-grid {
+    min-width: 610px;
+  }
+
   .plan-scenario-table {
     min-width: 0;
   }
@@ -8155,6 +8405,24 @@ footer {
 }
 
 @media (max-width: 560px) {
+  .plan-scenario-disclosure summary {
+    grid-template-columns: minmax(0, 1fr) 1rem;
+  }
+
+  .plan-scenario-objective {
+    grid-column: 1;
+    grid-row: 2;
+  }
+
+  .plan-scenario-signals {
+    grid-row: 3;
+    grid-template-columns: 1fr;
+  }
+
+  .plan-scenario-chevron {
+    grid-column: 2;
+  }
+
   :root {
     --plan-panel-space-y: 18px;
     --plan-panel-space-x: 18px;

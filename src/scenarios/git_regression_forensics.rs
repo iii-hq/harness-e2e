@@ -175,7 +175,7 @@ impl Snapshot {
         self.manifest_valid
             && self.bundle_valid
             && self.probe_valid
-            && self.shell_install_observed
+            && (self.shell_install_observed || self.clone_observed)
             && self.clone_observed
             && self.checkout_is_repository
             && self.checkout_head.as_deref() == Some(BAD_SHA)
@@ -293,15 +293,18 @@ fn scenario_for_case(run_id: &str) -> ScenarioSpec {
 The exercise is network-independent: use only the local Git bundle `{bundle}`. The original
 upstream URL in the public case manifest is provenance, not an instruction to contact it.
 
-1. Add the `shell` worker from the public registry and wait until it is ready.
+1. Use the `shell` worker already provided by the Harness stack. Do not reinstall, update, or
+   replace it during the benchmark.
 2. Clone the bundle with a direct `git clone --no-hardlinks` invocation into the exact path
    `{checkout}`. Do not use another remote, fetch, pull, or edit the bundle.
 3. Read `{manifest}`. Establish the baseline first: detach at the full known-good revision
    `{good}`, run `python3 {probe} {checkout} --trace {trace}`, then detach at the full known-bad
    revision `{bad}` and run that exact probe again. A non-zero probe result means the checked-out
    revision is bad and is expected for the second endpoint.
-4. Locate the first bad commit between those endpoints. You may use `git bisect`; every revision
-   you classify must be run through the supplied probe so the investigation is reproducible.
+4. Locate the first bad commit between those endpoints. Use `git bisect start {bad} {good}` and
+   then one bounded `git bisect run python3 {probe} {checkout} --trace {trace}` invocation; the
+   probe's zero/non-zero exit status already matches Git's good/bad convention. Do not implement
+   an open-ended shell loop. Every classified revision must be recorded by the supplied probe.
 5. Reset the checkout to detached `{bad}` and leave it clean. Do not modify `get_pi.py`, the Git
    history, the probe, or the public manifest.
 6. Write `{report}` as strict JSON with exactly these fields:

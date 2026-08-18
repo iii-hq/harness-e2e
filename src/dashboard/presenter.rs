@@ -13,7 +13,6 @@ use super::assessment_projection::{
 use super::store::load_runs;
 use super::{JobStatus, RunMetadata};
 use crate::identity::StackIdentity;
-use crate::longitudinal::{capability_for_report, CapabilityPolicy};
 use crate::report::{E2eReport, E2eRunReport, E2eScenarioReport};
 use crate::workflow::{WorkflowStepReport, WorkflowStepStatus};
 
@@ -78,7 +77,6 @@ pub(super) fn execution_summary(
             "scenario_metrics": [],
             "workflow_metrics": Value::Null,
             "assessment_summary": AssessmentSummary::default(),
-            "capability": {},
             "totals": {},
             "first_failure": if metadata.error.is_empty() { Value::Null } else { json!({"kind":"runner", "message": metadata.error}) },
         }));
@@ -182,7 +180,6 @@ pub(super) fn execution_summary(
         "scenario_metrics": scenario_metrics(&subject_id, report),
         "workflow_metrics": workflow_metric_summary_for_report(report),
         "assessment_summary": assessment_summary,
-        "capability": capability_summary(report),
         "totals": {
             "expected_reports": expected,
             "received_reports": expected,
@@ -197,6 +194,7 @@ pub(super) fn execution_summary(
             "retries": retries,
             "total_tokens": totals.0,
             "function_calls": totals.1,
+            "function_call_errors": totals.2,
         },
         "workflow_duration_seconds": wall_time_seconds,
         "first_failure": first_failure(report),
@@ -281,11 +279,6 @@ fn scenario_efficiency(scenario: &E2eScenarioReport) -> Value {
     })
 }
 
-fn capability_summary(report: &E2eReport) -> Value {
-    serde_json::to_value(capability_for_report(report, CapabilityPolicy::default()))
-        .expect("serialize capability frontier")
-}
-
 fn semantic_status(passed: bool, hard_gates: u32, technical: u32) -> &'static str {
     if technical > 0 {
         "technical_failed"
@@ -305,23 +298,13 @@ fn scenario_metrics(subject_id: &str, report: &E2eReport) -> Vec<Value> {
         .map(|scenario| {
             let metric = |run: &E2eRunReport, name: &str| -> Option<f64> {
                 match name {
-                    "tokens" => run.metrics.as_ref().and_then(|value| {
-                        value
-                            .totals
-                            .input_tokens
-                            .zip(value.totals.output_tokens)
-                            .map(|(input, output)| (input + output) as f64)
-                    }),
+                    "tokens" => run_total_tokens(&scenario.scenario_id, run),
                     "duration_seconds" => Some(run.wall_time_ms as f64 / 1000.0),
-                    "cost_usd" => run.cost.total_usd,
-                    "function_calls" => run
-                        .metrics
-                        .as_ref()
-                        .map(|value| value.totals.function_calls as f64),
-                    "function_call_errors" => run
-                        .metrics
-                        .as_ref()
-                        .map(|value| value.totals.function_call_errors as f64),
+                    "cost_usd" => run_total_cost(&scenario.scenario_id, run),
+                    "function_calls" => run_function_calls(&scenario.scenario_id, run),
+                    "function_call_errors" => {
+                        run_function_call_errors(&scenario.scenario_id, run)
+                    }
                     "sessions" => run
                         .metrics
                         .as_ref()
@@ -578,22 +561,92 @@ pub(super) fn contract_fingerprint(value: &Value) -> String {
     format!("fnv1a32:{hash:08x}")
 }
 
-fn efficiency_totals(report: &E2eReport) -> (Option<f64>, Option<f64>) {
+fn efficiency_totals(report: &E2eReport) -> (Option<f64>, Option<f64>, Option<f64>) {
     let mut tokens = Vec::new();
     let mut calls = Vec::new();
-    for run in report.scenarios.iter().flat_map(|scenario| &scenario.runs) {
-        if let Some(metrics) = &run.metrics {
-            if let Some((input, output)) = metrics
+    let mut errors = Vec::new();
+    for scenario in &report.scenarios {
+        for run in &scenario.runs {
+            tokens.push(run_total_tokens(&scenario.scenario_id, run));
+            calls.push(run_function_calls(&scenario.scenario_id, run));
+            errors.push(run_function_call_errors(&scenario.scenario_id, run));
+        }
+    }
+    (
+        sum_complete(&tokens),
+        sum_complete(&calls),
+        sum_complete(&errors),
+    )
+}
+
+fn run_total_tokens(scenario_id: &str, run: &E2eRunReport) -> Option<f64> {
+    run.metrics
+        .as_ref()
+        .and_then(|metrics| {
+            metrics
                 .totals
                 .input_tokens
                 .zip(metrics.totals.output_tokens)
-            {
-                tokens.push((input + output) as f64);
-            }
-            calls.push(metrics.totals.function_calls as f64);
-        }
-    }
-    (sum_available(&tokens), sum_available(&calls))
+                .map(|(input, output)| (input + output) as f64)
+        })
+        .or_else(|| {
+            (scenario_id == "security_review").then_some(())?;
+            run.judge_usage
+                .as_ref()?
+                .input_tokens
+                .zip(run.judge_usage.as_ref()?.output_tokens)
+                .map(|(input, output)| (input + output) as f64)
+        })
+}
+
+fn run_function_calls(scenario_id: &str, run: &E2eRunReport) -> Option<f64> {
+    run.metrics
+        .as_ref()
+        .map(|metrics| metrics.totals.function_calls as f64)
+        .or_else(|| {
+            (scenario_id == "security_review").then(|| {
+                run.semantic_tests
+                    .iter()
+                    .map(|test| {
+                        let metrics = test.metrics.as_ref();
+                        let operations = [
+                            metrics.and_then(|value| value.pointer("/request_count")),
+                            metrics.and_then(|value| value.pointer("/poll/poll_count")),
+                            metrics.and_then(|value| value.pointer("/reconciliation_operations")),
+                        ]
+                        .into_iter()
+                        .flatten()
+                        .filter_map(Value::as_u64)
+                        .sum::<u64>();
+                        operations
+                            + u64::from(matches!(
+                                test.node_id.as_str(),
+                                "scan_commit_a" | "list_run_history"
+                            ))
+                    })
+                    .sum::<u64>() as f64
+            })
+        })
+}
+
+fn run_function_call_errors(scenario_id: &str, run: &E2eRunReport) -> Option<f64> {
+    run.metrics
+        .as_ref()
+        .map(|metrics| metrics.totals.function_call_errors as f64)
+        .or_else(|| {
+            (scenario_id == "security_review").then(|| {
+                run.semantic_tests
+                    .iter()
+                    .map(|test| test.failures.len() as u64)
+                    .sum::<u64>() as f64
+            })
+        })
+}
+
+fn run_total_cost(scenario_id: &str, run: &E2eRunReport) -> Option<f64> {
+    run.cost
+        .total_usd
+        .or_else(|| (scenario_id == "security_review").then_some(0.0))
 }
 
 fn first_failure(report: &E2eReport) -> Value {
@@ -733,14 +786,14 @@ pub(super) fn validate_execution_id(value: &str) -> std::result::Result<(), Stri
 }
 
 fn sum_complete(values: &[Option<f64>]) -> Option<f64> {
-    values
-        .iter()
-        .copied()
-        .try_fold(0.0, |total, value| Some(total + value?))
-}
-
-fn sum_available(values: &[f64]) -> Option<f64> {
-    (!values.is_empty()).then(|| values.iter().sum())
+    (!values.is_empty())
+        .then(|| {
+            values
+                .iter()
+                .copied()
+                .try_fold(0.0, |total, value| Some(total + value?))
+        })
+        .flatten()
 }
 
 fn mean(values: &[f64]) -> Option<f64> {

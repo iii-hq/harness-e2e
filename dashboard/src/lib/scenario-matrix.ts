@@ -7,6 +7,7 @@ import type {
 } from '@/lib/dashboard-data-source'
 import {
   aggregateWorkflowMetrics,
+  generalRunMetrics,
   workflowStepUsage,
 } from '@/lib/workflow-metrics'
 
@@ -36,8 +37,7 @@ export type ScenarioMatrixItem = {
   primaryRun: DashboardRunProjection | null
   workflowRun: DashboardRunProjection | null
   workflowSteps: SemanticTestReport[]
-  hardGates: { passed: number; total: number }
-  primarySignal: { label: string; value: string; detail: string }
+  primaryMetrics: Array<{ label: string; value: string; detail: string }>
 }
 
 export type ScenarioMatrixSummary = {
@@ -151,7 +151,6 @@ function scenarioItem(
           : 'unavailable'),
   )
   const duration = scenarioDuration(detail, subjectId, scenario, runs)
-  const hardGates = hardGateSummary(primaryRun, workflowSteps)
 
   return {
     key: `${subjectId}:${scenario.scenario_id}:v${scenario.scenario_version}:${reportIndex}:${scenarioIndex}`,
@@ -170,8 +169,7 @@ function scenarioItem(
     primaryRun,
     workflowRun: workflowRun ?? null,
     workflowSteps,
-    hardGates,
-    primarySignal: primarySignal(primaryRun, workflowSteps),
+    primaryMetrics: primaryMetrics(primaryRun, workflowSteps, duration),
   }
 }
 
@@ -206,12 +204,7 @@ function unavailableScenario(
     primaryRun: null,
     workflowRun: null,
     workflowSteps: [],
-    hardGates: { passed: 0, total: 0 },
-    primarySignal: {
-      label: 'Evidence',
-      value: 'Unavailable',
-      detail: 'The expected scenario report was not retained.',
-    },
+    primaryMetrics: primaryMetrics(null, [], { value: null, kind: null }),
   }
 }
 
@@ -289,113 +282,96 @@ function scenarioDuration(
   }
 }
 
-function hardGateSummary(
+function primaryMetrics(
   run: DashboardRunProjection | null,
   tests: SemanticTestReport[],
-): { passed: number; total: number } {
-  const stepGates = tests.flatMap((test) => test.hard_gates ?? [])
-  if (stepGates.length > 0) {
-    return {
-      passed: stepGates.filter((gate) => gate.passed).length,
-      total: stepGates.length,
-    }
+  duration: { value: number | null; kind: 'single' | 'average' | null },
+): ScenarioMatrixItem['primaryMetrics'] {
+  const runUsage = generalRunMetrics(run, tests)
+  const workflow = tests.length > 0 ? aggregateWorkflowMetrics(tests) : null
+  const workflowCosts = tests.map((test) => finiteNumber(test.cost_usd))
+  const workflowCost =
+    workflowCosts.length > 0 &&
+    workflowCosts.every((value): value is number => value != null)
+      ? workflowCosts.reduce((total, value) => total + value, 0)
+      : null
+  const totalTokens =
+    runUsage.totalTokens ??
+    (workflow && workflow.tokenMetricSteps > 0 ? workflow.totalTokens : null)
+  const functionCalls =
+    runUsage.functionCalls ??
+    (workflow && workflow.functionCallMetricSteps > 0
+      ? workflow.functionCalls
+      : null)
+  const functionErrors =
+    runUsage.functionCallErrors ??
+    (workflow && workflow.functionCallErrorMetricSteps > 0
+      ? workflow.functionCallErrors
+      : null)
+  const costUsd = runUsage.costUsd ?? workflowCost
+  const durationMs =
+    duration.value ??
+    finiteNumber(run?.wall_time_ms ?? run?.efficiency?.wall_time_ms)
+  const missingDetail = run ? 'Not captured for this run' : 'No run retained'
+  const runtimeMetric = {
+    label: 'Runtime',
+    value: durationMs == null ? '—' : formatDuration(durationMs),
+    detail:
+      duration.kind === 'average'
+        ? 'Average scenario duration'
+        : durationMs == null
+          ? missingDetail
+          : 'Subject execution time',
   }
-  const assessments = run?.assessment?.assessments ?? []
-  const gates = assessments.filter((entry) => entry.policy === 'hard_gate')
-  return {
-    passed: gates.filter((entry) => entry.outcome === 'passed').length,
-    total: gates.length,
-  }
-}
-
-function primarySignal(
-  run: DashboardRunProjection | null,
-  tests: SemanticTestReport[],
-): ScenarioMatrixItem['primarySignal'] {
-  const runUsage = runUsageSummary(run)
-  if (runUsage.totalTokens != null) {
-    return {
+  return [
+    runtimeMetric,
+    {
       label: 'Total tokens',
-      value: formatCount(runUsage.totalTokens),
-      detail: 'Subject execution usage',
-    }
-  }
-  if (runUsage.functionCalls != null) {
-    return {
-      label: 'Function calls',
-      value: formatCount(runUsage.functionCalls),
+      value: totalTokens == null ? '—' : formatCount(totalTokens),
       detail:
-        runUsage.functionCallErrors == null
-          ? 'Error count not captured'
-          : `${formatCount(runUsage.functionCallErrors)} errors`,
-    }
-  }
-  if (runUsage.functionCallErrors != null) {
-    return {
+        runUsage.totalTokens != null
+          ? runUsage.backfilled
+            ? 'Evaluator usage · backfilled'
+            : 'Subject execution usage'
+          : workflow && workflow.tokenMetricSteps > 0
+            ? `${workflow.tokenMetricSteps}/${workflow.stepCount} workflow steps reported`
+            : missingDetail,
+    },
+    {
+      label: 'Function calls',
+      value: functionCalls == null ? '—' : formatCount(functionCalls),
+      detail:
+        runUsage.backfilled && functionCalls != null
+          ? 'Workflow operations · backfilled'
+          : functionErrors == null
+            ? functionCalls == null
+              ? missingDetail
+              : 'Error count not captured'
+            : `${formatCount(functionErrors)} errors`,
+    },
+    {
       label: 'Function errors',
-      value: formatCount(runUsage.functionCallErrors),
-      detail: 'Subject execution errors',
-    }
-  }
-  if (runUsage.costUsd != null) {
-    return {
+      value: functionErrors == null ? '—' : formatCount(functionErrors),
+      detail:
+        functionErrors == null
+          ? missingDetail
+          : runUsage.backfilled
+            ? 'Workflow failures · backfilled'
+            : 'Subject execution errors',
+    },
+    {
       label: 'Reported cost',
-      value: formatCost(runUsage.costUsd),
-      detail: 'Subject execution cost',
-    }
-  }
-  if (tests.length > 0) {
-    const workflow = aggregateWorkflowMetrics(tests)
-    if (workflow.tokenMetricSteps > 0) {
-      return {
-        label: 'Workflow tokens',
-        value: formatCount(workflow.totalTokens),
-        detail: `${workflow.tokenMetricSteps}/${workflow.stepCount} steps reported`,
-      }
-    }
-    if (workflow.functionCallMetricSteps > 0) {
-      return {
-        label: 'Function calls',
-        value: formatCount(workflow.functionCalls),
-        detail:
-          workflow.functionCallErrorMetricSteps > 0
-            ? `${formatCount(workflow.functionCallErrors)} errors · ${workflow.functionCallMetricSteps}/${workflow.stepCount} steps reported`
-            : `${workflow.functionCallMetricSteps}/${workflow.stepCount} steps reported`,
-      }
-    }
-    if (workflow.functionCallErrorMetricSteps > 0) {
-      return {
-        label: 'Function errors',
-        value: formatCount(workflow.functionCallErrors),
-        detail: `${workflow.functionCallErrorMetricSteps}/${workflow.stepCount} steps reported`,
-      }
-    }
-    const costs = tests.map((test) => finiteNumber(test.cost_usd))
-    if (costs.every((value): value is number => value != null)) {
-      return {
-        label: 'Workflow cost',
-        value: formatCost(costs.reduce((total, value) => total + value, 0)),
-        detail: `Reported by all ${workflow.stepCount} steps`,
-      }
-    }
-    return {
-      label: 'Recorded time',
-      value: formatDuration(workflow.durationMs),
-      detail: `${workflow.stepCount} workflow steps`,
-    }
-  }
-  if (runUsage.durationMs != null) {
-    return {
-      label: 'Runtime',
-      value: formatDuration(runUsage.durationMs),
-      detail: 'Subject execution time',
-    }
-  }
-  return {
-    label: 'Efficiency metrics',
-    value: 'Not captured',
-    detail: run ? 'No canonical telemetry retained' : 'No run retained',
-  }
+      value: costUsd == null ? '—' : formatCost(costUsd),
+      detail:
+        runUsage.costUsd != null
+          ? runUsage.backfilled
+            ? 'Local run · no metered charge'
+            : 'Subject execution cost'
+          : workflowCost != null && workflow
+            ? `Reported by all ${workflow.stepCount} workflow steps`
+            : missingDetail,
+    },
+  ]
 }
 
 export type StepMetricSignal = {
@@ -441,30 +417,6 @@ export function stepSignals(test: SemanticTestReport): StepMetricSignal[] {
   return signals.length > 0
     ? signals
     : [{ label: 'Metrics', value: 'Not captured' }]
-}
-
-function runUsageSummary(run: DashboardRunProjection | null) {
-  const totals = run?.metrics?.totals
-  const input = finiteNumber(totals?.input_tokens)
-  const output = finiteNumber(totals?.output_tokens)
-  const explicitTotal = finiteNumber(
-    totals?.total_tokens ?? run?.efficiency?.total_tokens,
-  )
-  return {
-    totalTokens:
-      explicitTotal ??
-      (input != null && output != null ? input + output : null),
-    functionCalls: finiteNumber(
-      totals?.function_calls ?? run?.efficiency?.function_calls,
-    ),
-    functionCallErrors: finiteNumber(
-      totals?.function_call_errors ?? run?.efficiency?.function_call_errors,
-    ),
-    costUsd: finiteNumber(run?.cost?.total_usd),
-    durationMs: finiteNumber(
-      run?.wall_time_ms ?? run?.efficiency?.wall_time_ms,
-    ),
-  }
 }
 
 function finiteNumber(value: unknown): number | null {

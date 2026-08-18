@@ -187,11 +187,33 @@ describe('scenario matrix presentation model', () => {
     expect(security.durationMs).toBe(3_000)
     expect(security.durationKind).toBe('average')
     expect(security.workflowSteps).toHaveLength(2)
-    expect(security.hardGates).toEqual({ passed: 2, total: 2 })
-    expect(security.primarySignal).toMatchObject({
-      label: 'Workflow tokens',
-      value: '1,000',
-    })
+    expect(security.primaryMetrics).toEqual([
+      {
+        label: 'Runtime',
+        value: '3.0 s',
+        detail: 'Average scenario duration',
+      },
+      {
+        label: 'Total tokens',
+        value: '1,000',
+        detail: '1/2 workflow steps reported',
+      },
+      {
+        label: 'Function calls',
+        value: '3',
+        detail: '0 errors',
+      },
+      {
+        label: 'Function errors',
+        value: '0',
+        detail: 'Subject execution errors',
+      },
+      {
+        label: 'Reported cost',
+        value: '—',
+        detail: 'Not captured for this run',
+      },
+    ])
 
     const scoped = detailForScenario(detail, security)
     expect(scoped.reports).toHaveLength(1)
@@ -212,6 +234,48 @@ describe('scenario matrix presentation model', () => {
     ])
     expect(stepSignals(workflow.workflowSteps[1])).toEqual([
       { label: 'Metrics', value: 'Not captured' },
+    ])
+  })
+
+  it('backfills general security-review metrics from retained evidence', () => {
+    const detail = executionDetail()
+    const run = detail.reports[0]?.report?.scenarios[0]?.runs[0]
+    const scan = run?.semantic_tests?.[0]
+    if (!scan) throw new Error('expected workflow fixture')
+    scan.metrics = {
+      request_count: 4,
+      reconciliation_operations: 4,
+    }
+    scan.node_id = 'scan_commit_a'
+    scan.cost_usd = null
+    run.judge_usage = { input_tokens: 3_000, output_tokens: 500 }
+
+    expect(buildScenarioMatrix(detail).items[0]?.primaryMetrics).toEqual([
+      {
+        label: 'Runtime',
+        value: '3.0 s',
+        detail: 'Average scenario duration',
+      },
+      {
+        label: 'Total tokens',
+        value: '3,500',
+        detail: 'Evaluator usage · backfilled',
+      },
+      {
+        label: 'Function calls',
+        value: '9',
+        detail: 'Workflow operations · backfilled',
+      },
+      {
+        label: 'Function errors',
+        value: '0',
+        detail: 'Workflow failures · backfilled',
+      },
+      {
+        label: 'Reported cost',
+        value: '$0.0000',
+        detail: 'Local run · no metered charge',
+      },
     ])
   })
 })

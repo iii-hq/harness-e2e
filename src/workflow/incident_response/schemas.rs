@@ -8,6 +8,9 @@ use serde_json::Value;
 #[serde(deny_unknown_fields)]
 pub struct FixturePreflightRequest {
     pub workspace_root: String,
+    #[serde(rename = "_caller_worker_id", default, skip_serializing)]
+    #[schemars(skip)]
+    pub(crate) _caller_worker_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -27,6 +30,9 @@ pub struct FixturePreflightResponse {
 #[serde(deny_unknown_fields)]
 pub struct BaselineRequest {
     pub attempt_id: String,
+    #[serde(rename = "_caller_worker_id", default, skip_serializing)]
+    #[schemars(skip)]
+    pub(crate) _caller_worker_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -46,6 +52,9 @@ pub struct BaselineResponse {
 pub struct AlertRequest {
     pub event_id: String,
     pub idempotency_key: String,
+    #[serde(rename = "_caller_worker_id", default, skip_serializing)]
+    #[schemars(skip)]
+    pub(crate) _caller_worker_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -62,6 +71,9 @@ pub struct AlertResponse {
 pub struct ReproduceRequest {
     pub event_id: String,
     pub reproduction_key: String,
+    #[serde(rename = "_caller_worker_id", default, skip_serializing)]
+    #[schemars(skip)]
+    pub(crate) _caller_worker_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
@@ -82,6 +94,9 @@ pub struct ReproduceResponse {
 pub struct TelemetryRequest {
     pub kind: String,
     pub event_id: String,
+    #[serde(rename = "_caller_worker_id", default, skip_serializing)]
+    #[schemars(skip)]
+    pub(crate) _caller_worker_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -102,6 +117,9 @@ pub struct ValidateRequest {
     pub candidate_sha: Option<String>,
     #[serde(default)]
     pub probe_ids: Vec<String>,
+    #[serde(rename = "_caller_worker_id", default, skip_serializing)]
+    #[schemars(skip)]
+    pub(crate) _caller_worker_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -137,6 +155,9 @@ pub struct DeployRequest {
     pub action: String,
     pub revision: String,
     pub attempt_id: String,
+    #[serde(rename = "_caller_worker_id", default, skip_serializing)]
+    #[schemars(skip)]
+    pub(crate) _caller_worker_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -151,6 +172,9 @@ pub struct DeployResponse {
 #[serde(deny_unknown_fields)]
 pub struct ReconcileRequest {
     pub attempt_id: String,
+    #[serde(rename = "_caller_worker_id", default, skip_serializing)]
+    #[schemars(skip)]
+    pub(crate) _caller_worker_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -170,6 +194,9 @@ pub struct ReconcileResponse {
 pub struct ResetRequest {
     pub attempt_id: String,
     pub initial_revision: String,
+    #[serde(rename = "_caller_worker_id", default, skip_serializing)]
+    #[schemars(skip)]
+    pub(crate) _caller_worker_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]

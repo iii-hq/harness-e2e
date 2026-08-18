@@ -6,7 +6,6 @@ import { type OperationalStatus, StatusBadge } from '@/design-system'
 import type { AssessmentRunView } from '@/lib/assessment-view'
 import type {
   DashboardExecutionDetail,
-  DashboardRunProjection,
   SemanticTestReport,
 } from '@/lib/dashboard-data-source'
 import { titleCase } from '@/lib/execution-view'
@@ -267,9 +266,7 @@ function ScenarioExpansion({
           </div>
         ) : item.workflowSteps.length > 0 ? (
           <WorkflowDurationProfile tests={item.workflowSteps} />
-        ) : (
-          <StandardScenarioRuns item={item} />
-        )}
+        ) : null}
         {item.available ? (
           <details className="group border-t border-[var(--ds-color-line)]">
             <summary className="flex min-h-12 cursor-pointer list-none items-center justify-between gap-4 px-4 py-3 text-sm font-semibold text-[var(--ds-color-ink)] marker:hidden md:px-5">
@@ -295,17 +292,11 @@ function ScenarioExpansion({
 }
 
 function ScenarioResultBand({ item }: { item: ScenarioMatrixItem }) {
-  const hardGates = item.hardGates.total
-    ? `${item.hardGates.passed}/${item.hardGates.total}`
-    : 'Not reported'
-
   return (
-    <dl className="m-0 grid grid-cols-2 gap-px bg-[var(--ds-color-line)] [&>div:last-child]:col-span-2 lg:grid-cols-[minmax(13rem,1.25fr)_repeat(4,minmax(9rem,1fr))] lg:[&>div:last-child]:col-span-1">
-      <ResultFact
-        label="Benchmark"
-        value={titleCase(item.scenarioId)}
-        detail={`scenario v${item.scenarioVersion ?? '—'} · ${item.subjectId}`}
-      />
+    <dl
+      className="m-0 grid grid-cols-2 gap-px bg-[var(--ds-color-line)] lg:grid-cols-4 xl:grid-cols-7"
+      data-scenario-primary-metrics
+    >
       <ResultFact
         label="Objective"
         value={item.objective.label}
@@ -318,20 +309,14 @@ function ScenarioResultBand({ item }: { item: ScenarioMatrixItem }) {
         status={item.advisory.status}
         detail="Does not override objective result"
       />
-      <ResultFact
-        label="Hard gates"
-        value={hardGates}
-        detail={
-          item.hardGates.total
-            ? 'Deterministic checks'
-            : 'No gate count retained'
-        }
-      />
-      <ResultFact
-        label={item.primarySignal.label}
-        value={item.primarySignal.value}
-        detail={item.primarySignal.detail}
-      />
+      {item.primaryMetrics.map((metric) => (
+        <ResultFact
+          key={metric.label}
+          label={metric.label}
+          value={metric.value}
+          detail={metric.detail}
+        />
+      ))}
     </dl>
   )
 }
@@ -348,7 +333,10 @@ function ResultFact({
   status?: OperationalStatus
 }) {
   return (
-    <div className="min-w-0 bg-[var(--ds-color-surface)] p-3 md:p-4">
+    <div
+      className="min-w-0 bg-[var(--ds-color-surface)] p-3 md:p-4"
+      data-primary-metric={label}
+    >
       <dt className="font-mono text-[0.58rem] font-semibold uppercase tracking-[0.06em] text-[var(--ds-color-ink-muted)]">
         {label}
       </dt>
@@ -524,44 +512,6 @@ function WorkflowStepRow({
   )
 }
 
-function StandardScenarioRuns({ item }: { item: ScenarioMatrixItem }) {
-  if (item.runs.length === 0) return null
-  return (
-    <section className="border-t border-[var(--ds-color-line)]">
-      <header className="border-b border-[var(--ds-color-line)] px-4 py-4 md:px-5">
-        <h3 className="m-0 text-sm font-semibold text-[var(--ds-color-ink)]">
-          Recorded runs
-        </h3>
-        <p className="m-0 mt-1 text-xs leading-5 text-[var(--ds-color-ink-muted)]">
-          This scenario has no persisted workflow. Only available run telemetry
-          is shown.
-        </p>
-      </header>
-      <ol className="m-0 grid list-none p-0">
-        {item.runs.map((run, index) => (
-          <li
-            key={`${run.run_id}:${run.attempt_id}`}
-            className="grid gap-3 border-t border-[var(--ds-color-line)] px-4 py-3 first:border-t-0 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-center md:px-5"
-          >
-            <div className="min-w-0">
-              <strong className="block truncate font-mono text-xs text-[var(--ds-color-ink)]">
-                {run.attempt_id || run.run_id}
-              </strong>
-              <span className="mt-1 block font-mono text-[0.61rem] text-[var(--ds-color-ink-muted)]">
-                run {index + 1} · {formatScenarioDuration(runDuration(run))}
-              </span>
-            </div>
-            <StatusBadge
-              status={runStatus(run).status}
-              label={runStatus(run).label}
-            />
-          </li>
-        ))}
-      </ol>
-    </section>
-  )
-}
-
 function workflowStepStatus(statusValue: string): {
   status: OperationalStatus
   label: string
@@ -580,36 +530,6 @@ function workflowStepStatus(statusValue: string): {
     return { status: 'incomplete', label: titleCase(status) }
   }
   return { status: 'unavailable', label: titleCase(status) }
-}
-
-function runStatus(run: DashboardRunProjection) {
-  const raw = String(
-    run.assessment?.system_status || run.status || 'unavailable',
-  ).toLowerCase()
-  if (raw === 'passed' || raw === 'pass' || raw === 'succeeded') {
-    return { status: 'passed' as const, label: 'Passed' }
-  }
-  if (raw === 'hard_gate_failed') {
-    return { status: 'hard_gate' as const, label: 'Hard gate failed' }
-  }
-  if (raw === 'inconclusive') {
-    return { status: 'inconclusive' as const, label: 'Inconclusive' }
-  }
-  if (raw === 'running') {
-    return { status: 'running' as const, label: 'Running' }
-  }
-  if (raw === 'cancelled') {
-    return { status: 'cancelled' as const, label: 'Cancelled' }
-  }
-  if (raw === 'unavailable' || raw === 'not_evaluated') {
-    return { status: 'unavailable' as const, label: 'Unavailable' }
-  }
-  return { status: 'failed' as const, label: titleCase(raw) }
-}
-
-function runDuration(run: DashboardRunProjection) {
-  const value = run.wall_time_ms ?? run.efficiency?.wall_time_ms
-  return typeof value === 'number' && Number.isFinite(value) ? value : null
 }
 
 function safeId(value: string) {

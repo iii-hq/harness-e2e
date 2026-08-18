@@ -43,7 +43,6 @@ export type LocalPlan = {
   state: LocalPlanState
   locked: boolean
   scope_hash: string
-  policy_hash: string
   url: string
   model: string
   provider: string
@@ -301,6 +300,13 @@ export type DashboardRunProjection = JsonObject & {
   metrics?: DashboardRunMetrics | null
   cost?: DashboardRunCost | null
   efficiency?: DashboardRunEfficiency | null
+  judge_usage?:
+    | (JsonObject & {
+        input_tokens?: number | null
+        output_tokens?: number | null
+        cost_usd?: number | null
+      })
+    | null
   semantic_tests?: SemanticTestReport[]
   scenario_flow?: ScenarioFlowEvidence | null
 }

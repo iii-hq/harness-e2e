@@ -1,5 +1,6 @@
 import type {
   DashboardExecutionDetail,
+  DashboardRunProjection,
   JsonValue,
   SemanticTestReport,
 } from '@/lib/dashboard-data-source'
@@ -38,6 +39,111 @@ export type WorkflowStepUsage = {
   totalTokens: number | null
   functionCalls: number | null
   functionCallErrors: number | null
+}
+
+export type GeneralRunMetrics = {
+  totalTokens: number | null
+  functionCalls: number | null
+  functionCallErrors: number | null
+  costUsd: number | null
+  backfilled: boolean
+}
+
+export function generalRunMetrics(
+  run: DashboardRunProjection | null | undefined,
+  tests: readonly SemanticTestReport[],
+): GeneralRunMetrics {
+  const totals = run?.metrics?.totals
+  const input = nullableNumber(totals?.input_tokens)
+  const output = nullableNumber(totals?.output_tokens)
+  const explicitTokens = nullableNumber(
+    totals?.total_tokens ?? run?.efficiency?.total_tokens,
+  )
+  const explicitCalls = nullableNumber(
+    totals?.function_calls ?? run?.efficiency?.function_calls,
+  )
+  const explicitErrors = nullableNumber(
+    totals?.function_call_errors ?? run?.efficiency?.function_call_errors,
+  )
+  const explicitCost = nullableNumber(run?.cost?.total_usd)
+  const securityReview = tests.some((test) => test.node_id === 'scan_commit_a')
+  if (!securityReview) {
+    return {
+      totalTokens:
+        explicitTokens ??
+        (input != null && output != null ? input + output : null),
+      functionCalls: explicitCalls,
+      functionCallErrors: explicitErrors,
+      costUsd: explicitCost,
+      backfilled: false,
+    }
+  }
+
+  const workflow = aggregateWorkflowMetrics(tests)
+  const judgeInput = nullableNumber(run?.judge_usage?.input_tokens)
+  const judgeOutput = nullableNumber(run?.judge_usage?.output_tokens)
+  const calls =
+    (workflow.numericMetrics.request_count ?? 0) +
+    (workflow.numericMetrics['poll.poll_count'] ?? 0) +
+    (workflow.numericMetrics.reconciliation_operations ?? 0) +
+    (tests.some((test) => test.node_id === 'scan_commit_a') ? 1 : 0) +
+    (tests.some((test) => test.node_id === 'list_run_history') ? 1 : 0)
+  const errors = tests.reduce(
+    (total, test) => total + (test.failures?.length ?? 0),
+    0,
+  )
+  return {
+    totalTokens:
+      explicitTokens ??
+      (input != null && output != null
+        ? input + output
+        : judgeInput != null && judgeOutput != null
+          ? judgeInput + judgeOutput
+          : null),
+    functionCalls: explicitCalls ?? calls,
+    functionCallErrors: explicitErrors ?? errors,
+    costUsd: explicitCost ?? 0,
+    backfilled:
+      explicitTokens == null ||
+      explicitCalls == null ||
+      explicitErrors == null ||
+      explicitCost == null,
+  }
+}
+
+export function summedGeneralRunMetricsFromDetail(
+  detail: DashboardExecutionDetail,
+): GeneralRunMetrics | null {
+  const runs = (detail.reports ?? []).flatMap((record) =>
+    (record.report?.scenarios ?? []).flatMap((scenario) => scenario.runs ?? []),
+  )
+  if (runs.length === 0) return null
+
+  const values = runs.map((run) =>
+    generalRunMetrics(run, run.semantic_tests ?? []),
+  )
+  const sumComplete = (
+    select: (metrics: GeneralRunMetrics) => number | null,
+  ): number | null => {
+    const selected = values.map(select)
+    return selected.every((value): value is number => value !== null)
+      ? selected.reduce((total, value) => total + value, 0)
+      : null
+  }
+
+  return {
+    totalTokens: sumComplete((metrics) => metrics.totalTokens),
+    functionCalls: sumComplete((metrics) => metrics.functionCalls),
+    functionCallErrors: sumComplete((metrics) => metrics.functionCallErrors),
+    costUsd: sumComplete((metrics) => metrics.costUsd),
+    backfilled: values.some((metrics) => metrics.backfilled),
+  }
+}
+
+function nullableNumber(value: unknown): number | null {
+  return typeof value === 'number' && Number.isFinite(value) && value >= 0
+    ? value
+    : null
 }
 
 export const emptyWorkflowMetrics = (): WorkflowMetricsSummary => ({
@@ -137,9 +243,43 @@ export function workflowMetricsFromDetail(
 export function workflowMetricEntries(
   metrics: WorkflowMetricsSummary,
 ): Array<[string, number]> {
-  return Object.entries(metrics.numericMetrics)
-    .filter(([key]) => !USAGE_METRIC_PATHS.has(key))
+  return workflowMetricEntriesFromRecord(metrics.numericMetrics)
+}
+
+export function workflowMetricEntriesFromRecord(
+  metrics: Readonly<Record<string, unknown>> | undefined | null,
+): Array<[string, number]> {
+  return Object.entries(metrics ?? {})
+    .filter(
+      (entry): entry is [string, number] =>
+        !USAGE_METRIC_PATHS.has(entry[0]) &&
+        typeof entry[1] === 'number' &&
+        Number.isFinite(entry[1]),
+    )
     .sort(([left], [right]) => left.localeCompare(right))
+}
+
+const WORKFLOW_METRIC_LABELS: Record<string, string> = {
+  finding_count: 'Findings',
+  listed_run_count: 'Listed runs',
+  'poll.poll_count': 'Polls',
+  'poll.wait_duration_ms': 'Poll wait',
+  reconciliation_operations: 'Reconciliation operations',
+  request_count: 'Requests',
+}
+
+export function workflowMetricLabel(path: string): string {
+  return (
+    WORKFLOW_METRIC_LABELS[path] ??
+    path
+      .replaceAll('.', ' ')
+      .replaceAll('_', ' ')
+      .replace(/\b\w/g, (letter) => letter.toUpperCase())
+  )
+}
+
+export function workflowMetricUnit(path: string): 'count' | 'milliseconds' {
+  return path.endsWith('_ms') ? 'milliseconds' : 'count'
 }
 
 /**

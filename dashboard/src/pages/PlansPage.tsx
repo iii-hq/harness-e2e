@@ -20,6 +20,7 @@ import {
   PLAN_CORE_METRICS,
   type PlanComparison,
   type PlanMetricComparison,
+  type PlanMetricId,
   type PlanVerdict,
 } from '@/lib/plan-comparison'
 
@@ -128,10 +129,7 @@ function ComparisonMetric({ metric }: { metric: PlanMetricComparison }) {
   )
 }
 
-function comparisonRange(
-  comparison: PlanComparison,
-  id: PlanMetricComparison['id'],
-) {
+function comparisonRange(comparison: PlanComparison, id: PlanMetricId) {
   const metric = metricById(comparison, id)
   return metric
     ? `${formatPlanMetricValue(metric, 'baseline')} → ${formatPlanMetricValue(metric, 'candidate')}`
