@@ -54,18 +54,18 @@ mod tests {
     use super::*;
 
     #[test]
-    fn bundle_contains_dashboard_and_design_system() {
+    fn bundle_contains_dashboard() {
         let path = "index.html";
         assert!(
             DashboardAssets::get(path).is_some(),
             "dashboard bundle is missing {path}"
         );
-        let design_system_path = "design-system.html";
-        assert!(
-            DashboardAssets::get(design_system_path).is_some(),
-            "dashboard bundle is missing {design_system_path}"
-        );
-        for obsolete in ["execution.html", "compare.html", "coverage/index.html"] {
+        for obsolete in [
+            "design-system.html",
+            "execution.html",
+            "compare.html",
+            "coverage/index.html",
+        ] {
             assert!(
                 DashboardAssets::get(obsolete).is_none(),
                 "dashboard bundle still contains obsolete page {obsolete}"

@@ -11,14 +11,6 @@ const root = fileURLToPath(new URL('.', import.meta.url))
 export default defineConfig({
   base: './',
   plugins: [react(), tailwindcss()],
-  build: {
-    rollupOptions: {
-      input: {
-        dashboard: path.resolve(root, 'index.html'),
-        designSystem: path.resolve(root, 'design-system.html'),
-      },
-    },
-  },
   resolve: {
     alias: {
       '@': path.resolve(root, 'src'),

@@ -17,12 +17,6 @@ importers:
       '@fontsource/inter':
         specifier: ^5.2.8
         version: 5.3.0
-      '@gsap/react':
-        specifier: ^2.1.2
-        version: 2.1.2(gsap@3.15.0)(react@19.2.8)
-      gsap:
-        specifier: ^3.15.0
-        version: 3.15.0
       iii-browser-sdk:
         specifier: ^0.21.6
         version: 0.21.8
@@ -131,12 +125,6 @@ packages:
 
   '@fontsource/inter@5.3.0':
     resolution: {integrity: sha512-RofMylZmjlJEfELXeNHFWBRcSs75rGU/6bV2S2jfnvv/3rPXPGe0LgUJTklcHZ9lM4OZmAVFhcJPnACfb91A3g==}
-
-  '@gsap/react@2.1.2':
-    resolution: {integrity: sha512-JqliybO1837UcgH2hVOM4VO+38APk3ECNrsuSM4MuXp+rbf+/2IG2K1YJiqfTcXQHH7XlA0m3ykniFYstfq0Iw==}
-    peerDependencies:
-      gsap: ^3.12.5
-      react: '>=17'
 
   '@jridgewell/gen-mapping@0.3.13':
     resolution: {integrity: sha512-2kkt/7niJ6MgEPxF0bYdQ6etZaA+fQvDcLKckhy1yIQOzaoKjBBjSj63/aLVjYE3qhRt5dvM+uUyfCg6UKCBbA==}
@@ -457,9 +445,6 @@ packages:
 
   graceful-fs@4.2.11:
     resolution: {integrity: sha512-RbJ5/jmFcNNCcDV5o9eTnBLJ/HszWV0P73bc+Ff4nS/rJj+YaS6IGyiOL0VoBYX+l1Wrl3k63h/KrH+nhJ0XvQ==}
-
-  gsap@3.15.0:
-    resolution: {integrity: sha512-dMW4CWBTUK1AEEDeZc1g4xpPGIrSf9fJF960qbTZmN/QwZIWY5wgliS6JWl9/25fpTGJrMRtSjGtOmPnfjZB+A==}
 
   iii-browser-sdk@0.21.8:
     resolution: {integrity: sha512-MfP5E29Vps/bpZyWzBkWdgi7FdmKMg7S+3/CzzGamiSi8at2IqF1md/TVZdXwi0C5c38hqrlHa+D4YOs0MM60A==}
@@ -839,11 +824,6 @@ snapshots:
 
   '@fontsource/inter@5.3.0': {}
 
-  '@gsap/react@2.1.2(gsap@3.15.0)(react@19.2.8)':
-    dependencies:
-      gsap: 3.15.0
-      react: 19.2.8
-
   '@jridgewell/gen-mapping@0.3.13':
     dependencies:
       '@jridgewell/sourcemap-codec': 1.5.5
@@ -1077,8 +1057,6 @@ snapshots:
     optional: true
 
   graceful-fs@4.2.11: {}
-
-  gsap@3.15.0: {}
 
   iii-browser-sdk@0.21.8: {}
 

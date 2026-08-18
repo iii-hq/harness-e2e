@@ -32,7 +32,6 @@ fn ensure_dashboard_bundle() {
         "dashboard/src",
         "dashboard/public",
         "dashboard/index.html",
-        "dashboard/design-system.html",
         "dashboard/package.json",
         "dashboard/pnpm-lock.yaml",
         "dashboard/vite.config.ts",
@@ -104,7 +103,6 @@ fn dashboard_dist_is_fresh(dist_index: &Path, dashboard_dir: &Path) -> bool {
     }
     for relative in [
         "index.html",
-        "design-system.html",
         "package.json",
         "pnpm-lock.yaml",
         "vite.config.ts",
