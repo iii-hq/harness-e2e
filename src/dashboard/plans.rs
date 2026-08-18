@@ -454,12 +454,6 @@ fn validate_values(request: &PlanCreateRequest) -> Result<()> {
                 .with_context(|| format!("unknown scenario '{value}'"))
         })
         .collect::<Result<Vec<_>>>()?;
-    if selected
-        .iter()
-        .any(|scenario| scenario.manual_cli_only() && *scenario != ScenarioId::SecurityReview)
-    {
-        bail!("this manually prepared scenario can only be started with the local CLI");
-    }
     if request.technical_retries > 0
         && selected
             .iter()
@@ -561,6 +555,22 @@ mod tests {
         request.technical_retries = 0;
         new_plan(&request, "security-without-retry".into())
             .expect("security review plan should use the shared control plane");
+    }
+
+    #[test]
+    fn todo_worker_plans_are_admitted_by_the_dashboard() {
+        for scenario in [
+            ScenarioId::TodoWorkerSimple,
+            ScenarioId::TodoWorkerPlanned,
+            ScenarioId::TodoWorkerSelfValidating,
+        ] {
+            let mut request = request();
+            request.scenarios = vec![scenario.as_str().into()];
+            request.technical_retries = 0;
+            new_plan(&request, format!("{scenario:?}-plan")).unwrap_or_else(|error| {
+                panic!("{scenario:?} should be dashboard-admitted: {error:#}")
+            });
+        }
     }
 
     #[test]

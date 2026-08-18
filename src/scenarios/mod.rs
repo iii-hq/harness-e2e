@@ -35,6 +35,7 @@ pub mod shell_coder_sandbox;
 pub mod subagent_validation;
 pub mod subagent_validation_failure;
 pub mod timer_wake;
+pub mod todo_worker;
 pub mod validation_chain;
 pub mod validation_loop;
 pub mod validation_scope_enforcement;
@@ -124,10 +125,17 @@ pub struct ExecutionPolicy {
     pub max_turns: u32,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub max_output_tokens: Option<u64>,
-    pub max_total_tokens: u64,
+    /// Shared Harness token budget. `None` leaves the Harness budget
+    /// unbounded for this scenario.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub max_total_tokens: Option<u64>,
     /// Stop only after this many seconds without observable useful progress.
     /// Large scenarios have no fixed wall-clock deadline.
     pub stuck_timeout_seconds: u64,
+    /// Optional per-session cap for post-turn validation denials. `None`
+    /// preserves the Harness-configured default.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub max_validation_retries: Option<u32>,
 }
 
 impl ExecutionPolicy {
@@ -140,22 +148,23 @@ impl ExecutionPolicy {
                 "scenario '{scenario_id}': execution.max_output_tokens=0; expected None (provider limit) or at least 1"
             );
         }
-        if self.max_total_tokens == 0 {
-            bail!("scenario '{scenario_id}': execution.max_total_tokens=0; expected at least 1");
+        if self.max_total_tokens == Some(0) {
+            bail!("scenario '{scenario_id}': execution.max_total_tokens=0; expected None (unbounded) or at least 1");
         }
         if self.stuck_timeout_seconds == 0 {
             bail!(
                 "scenario '{scenario_id}': execution.stuck_timeout_seconds=0; expected at least 1"
             );
         }
-        if self
-            .max_output_tokens
-            .is_some_and(|max_output_tokens| self.max_total_tokens < max_output_tokens)
-        {
+        if self.max_output_tokens.is_some_and(|max_output_tokens| {
+            self.max_total_tokens
+                .is_some_and(|max_total_tokens| max_total_tokens < max_output_tokens)
+        }) {
             let max_output_tokens = self.max_output_tokens.expect("checked above");
+            let max_total_tokens = self.max_total_tokens.expect("checked above");
             bail!(
                 "scenario '{scenario_id}': execution.max_total_tokens={} is lower than execution.max_output_tokens={max_output_tokens}; expected max_total_tokens >= max_output_tokens",
-                self.max_total_tokens
+                max_total_tokens
             );
         }
         Ok(())
@@ -363,6 +372,12 @@ pub enum ScenarioId {
     SecurityReview,
     #[value(name = "incident_response")]
     IncidentResponse,
+    #[value(name = "todo_worker_simple")]
+    TodoWorkerSimple,
+    #[value(name = "todo_worker_planned")]
+    TodoWorkerPlanned,
+    #[value(name = "todo_worker_self_validating")]
+    TodoWorkerSelfValidating,
     #[value(name = "engineering_ticket")]
     EngineeringTicket,
     #[value(name = "git_regression_forensics")]
@@ -422,7 +437,7 @@ pub enum ScenarioId {
 }
 
 impl ScenarioId {
-    pub const ALL: [Self; 30] = [
+    pub const ALL: [Self; 33] = [
         Self::DirectAnswer,
         Self::PersistentState,
         Self::ReactiveAutomation,
@@ -430,6 +445,9 @@ impl ScenarioId {
         Self::ResearchPipeline,
         Self::SecurityReview,
         Self::IncidentResponse,
+        Self::TodoWorkerSimple,
+        Self::TodoWorkerPlanned,
+        Self::TodoWorkerSelfValidating,
         Self::EngineeringTicket,
         Self::GitRegressionForensics,
         Self::MechanicalReaction,
@@ -464,6 +482,9 @@ impl ScenarioId {
             Self::ResearchPipeline => research_pipeline::ID,
             Self::SecurityReview => security_review::ID,
             Self::IncidentResponse => incident_response::ID,
+            Self::TodoWorkerSimple => todo_worker::SIMPLE_ID,
+            Self::TodoWorkerPlanned => todo_worker::PLANNED_ID,
+            Self::TodoWorkerSelfValidating => todo_worker::SELF_VALIDATING_ID,
             Self::EngineeringTicket => engineering_ticket::ID,
             Self::GitRegressionForensics => git_regression_forensics::ID,
             Self::MechanicalReaction => mechanical_reaction::ID,
@@ -499,6 +520,9 @@ impl ScenarioId {
             Self::ResearchPipeline => research_pipeline::scenario(run_id),
             Self::SecurityReview => security_review::scenario(run_id),
             Self::IncidentResponse => incident_response::scenario(run_id),
+            Self::TodoWorkerSimple => todo_worker::simple_scenario(run_id),
+            Self::TodoWorkerPlanned => todo_worker::planned_scenario(run_id),
+            Self::TodoWorkerSelfValidating => todo_worker::self_validating_scenario(run_id),
             Self::EngineeringTicket => engineering_ticket::scenario(run_id),
             Self::GitRegressionForensics => git_regression_forensics::scenario(run_id),
             Self::MechanicalReaction => mechanical_reaction::scenario(run_id),
@@ -549,6 +573,11 @@ impl ScenarioId {
             Self::ResearchPipeline => research_pipeline::materialize(namespace, seed)?,
             Self::SecurityReview => security_review::materialize(namespace, seed)?,
             Self::IncidentResponse => incident_response::materialize(namespace, seed)?,
+            Self::TodoWorkerSimple => todo_worker::simple_materialize(namespace, seed)?,
+            Self::TodoWorkerPlanned => todo_worker::planned_materialize(namespace, seed)?,
+            Self::TodoWorkerSelfValidating => {
+                todo_worker::self_validating_materialize(namespace, seed)?
+            }
             Self::EngineeringTicket => engineering_ticket::materialize(namespace, seed)?,
             Self::GitRegressionForensics => git_regression_forensics::materialize(namespace, seed)?,
             Self::MechanicalReaction => mechanical_reaction::materialize(namespace, seed)?,
@@ -624,28 +653,17 @@ impl ScenarioId {
 
     pub fn execution_kind(self) -> ScenarioExecutionKind {
         match self {
-            Self::SecurityReview | Self::IncidentResponse => ScenarioExecutionKind::CompositeFlow,
+            Self::SecurityReview | Self::IncidentResponse | Self::TodoWorkerPlanned => {
+                ScenarioExecutionKind::CompositeFlow
+            }
             _ => ScenarioExecutionKind::HarnessTurn,
         }
-    }
-
-    pub fn manual_cli_only(self) -> bool {
-        matches!(
-            self,
-            Self::SecurityReview
-                | Self::IncidentResponse
-                | Self::EngineeringTicket
-                | Self::GitRegressionForensics
-        )
     }
 }
 
 pub fn selected(requested: &[ScenarioId]) -> Vec<ScenarioId> {
     if requested.is_empty() {
-        return ScenarioId::ALL
-            .into_iter()
-            .filter(|scenario| !scenario.manual_cli_only())
-            .collect();
+        return ScenarioId::ALL.into_iter().collect();
     }
     requested.iter().copied().fold(Vec::new(), |mut ids, id| {
         if !ids.contains(&id) {
@@ -661,7 +679,7 @@ mod tests {
 
     use super::*;
     #[test]
-    fn registry_contains_thirty_unique_valid_scenarios() {
+    fn registry_contains_thirty_three_unique_valid_scenarios() {
         let mut ids = HashSet::new();
         for scenario in ScenarioId::ALL {
             assert!(ids.insert(scenario.as_str()));
@@ -670,7 +688,7 @@ mod tests {
                 .materialize("run", scenario.canonical_seed())
                 .unwrap();
         }
-        assert_eq!(ids.len(), 30);
+        assert_eq!(ids.len(), 33);
     }
 
     #[test]
@@ -686,13 +704,16 @@ mod tests {
     }
 
     #[test]
-    fn default_selection_excludes_manually_prepared_scenarios() {
+    fn default_selection_includes_every_registered_scenario() {
         let selected = selected(&[]);
-        assert!(!selected.contains(&ScenarioId::SecurityReview));
-        assert!(!selected.contains(&ScenarioId::IncidentResponse));
-        assert!(!selected.contains(&ScenarioId::EngineeringTicket));
-        assert!(!selected.contains(&ScenarioId::GitRegressionForensics));
-        assert_eq!(selected.len(), ScenarioId::ALL.len() - 4);
+        assert!(selected.contains(&ScenarioId::SecurityReview));
+        assert!(selected.contains(&ScenarioId::IncidentResponse));
+        assert!(selected.contains(&ScenarioId::EngineeringTicket));
+        assert!(selected.contains(&ScenarioId::GitRegressionForensics));
+        assert!(selected.contains(&ScenarioId::TodoWorkerSimple));
+        assert!(selected.contains(&ScenarioId::TodoWorkerPlanned));
+        assert!(selected.contains(&ScenarioId::TodoWorkerSelfValidating));
+        assert_eq!(selected.len(), ScenarioId::ALL.len());
     }
 
     #[test]
@@ -892,8 +913,8 @@ mod tests {
             ),
             (
                 "max_total_tokens",
-                |execution| execution.max_total_tokens = 0,
-                "scenario 'persistent_state': execution.max_total_tokens=0; expected at least 1",
+                |execution| execution.max_total_tokens = Some(0),
+                "scenario 'persistent_state': execution.max_total_tokens=0; expected None (unbounded) or at least 1",
             ),
             (
                 "stuck_timeout_seconds",
@@ -902,7 +923,7 @@ mod tests {
             ),
             (
                 "total_token_order",
-                |execution| execution.max_total_tokens = 1,
+                |execution| execution.max_total_tokens = Some(1),
                 "scenario 'persistent_state': execution.max_total_tokens=1 is lower than execution.max_output_tokens=8192; expected max_total_tokens >= max_output_tokens",
             ),
         ];

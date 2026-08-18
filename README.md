@@ -110,6 +110,14 @@ cargo run --locked --bin harness-e2e -- worker \
   --data-dir target/e2e-worker
 ```
 
+The worker uses `~/.iii/data/harness-e2e` by default. Its storage setting is
+registered as the `harness-e2e` configuration entry, so it can be changed from
+Console → Workers → configure harness-e2e. The YAML passed with `--config` is
+only the first-boot seed; a value already saved in Console wins. The command
+line `--data-dir` (or `HARNESS_E2E_DATA_DIR`) is an explicit local override and
+wins over both. A Console change is applied after restarting the E2E worker;
+existing directories are never moved or deleted automatically.
+
 The worker exposes `e2e::run`, `e2e::status`, `e2e::cancel`,
 `e2e::results-get`, `e2e::results-list`, `e2e::compare`,
 `e2e::scenarios-list`, `e2e::archive`, `e2e::archive-head`,

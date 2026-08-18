@@ -458,6 +458,153 @@ pub struct FinalAssessmentCleanup {
     pub failures: Vec<String>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct FinalAssessmentValidationProbe {
+    pub id: String,
+    pub outcome: String,
+    pub summary: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct FinalAssessmentValidationCoverage {
+    pub required: Vec<String>,
+    pub covered: Vec<String>,
+    pub omitted: Vec<String>,
+    pub complete: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct FinalAssessmentValidationRepeatability {
+    pub planned: u8,
+    pub completed: u8,
+    pub passed: u8,
+    pub interpretation: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct FinalAssessmentLongitudinalRobustness {
+    pub sample_size: u32,
+    pub minimum_sample_size: u32,
+    pub eligible: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub technical_failure_rate: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub flaky_rate: Option<f64>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub unavailable_reasons: BTreeMap<String, String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct FinalAssessmentValidation {
+    pub bundle: EvidenceReference,
+    pub contract_sha256: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub plan_sha256: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub candidate_sha256: Option<String>,
+    pub probes: Vec<FinalAssessmentValidationProbe>,
+    pub coverage: FinalAssessmentValidationCoverage,
+    pub validation_attempts: u32,
+    pub correction_attempts: u32,
+    pub repeatability: FinalAssessmentValidationRepeatability,
+    pub longitudinal_robustness: FinalAssessmentLongitudinalRobustness,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub limitations: Vec<String>,
+}
+
+impl FinalAssessmentValidation {
+    fn validate(&self) -> Result<()> {
+        self.bundle.validate()?;
+        validate_sha256(&self.contract_sha256, "validation contract hash")?;
+        if let Some(plan) = &self.plan_sha256 {
+            validate_sha256(plan, "validation plan hash")?;
+        }
+        if let Some(candidate) = &self.candidate_sha256 {
+            validate_sha256(candidate, "validation candidate hash")?;
+        }
+        if self.probes.len() > 12 {
+            bail!("final assessment validation includes more than 12 probes");
+        }
+        let mut probe_ids = BTreeSet::new();
+        for probe in &self.probes {
+            required(&probe.id, "validation probe id")?;
+            required(&probe.summary, "validation probe summary")?;
+            if probe.summary.chars().count() > 1_000 {
+                bail!(
+                    "validation probe '{}' summary exceeds 1000 characters",
+                    probe.id
+                );
+            }
+            if !matches!(
+                probe.outcome.as_str(),
+                "passed" | "failed" | "not_evaluated" | "infrastructure_error"
+            ) {
+                bail!("validation probe '{}' has an unknown outcome", probe.id);
+            }
+            if !probe_ids.insert(probe.id.as_str()) {
+                bail!("final assessment validation repeats probe '{}'", probe.id);
+            }
+        }
+        for (label, ids) in [
+            ("required", &self.coverage.required),
+            ("covered", &self.coverage.covered),
+            ("omitted", &self.coverage.omitted),
+        ] {
+            if ids.len() > 12 {
+                bail!("validation coverage {label} exceeds 12 entries");
+            }
+            for id in ids {
+                required(id, "validation coverage id")?;
+            }
+        }
+        if self.coverage.complete != self.coverage.omitted.is_empty() {
+            bail!("validation coverage completion differs from omitted probes");
+        }
+        if self.validation_attempts == 0 || self.correction_attempts >= self.validation_attempts {
+            bail!("validation attempt counts are inconsistent");
+        }
+        if self.repeatability.completed > self.repeatability.planned
+            || self.repeatability.passed > self.repeatability.completed
+        {
+            bail!("validation repeatability counts are inconsistent");
+        }
+        required(
+            &self.repeatability.interpretation,
+            "validation repeatability interpretation",
+        )?;
+        let robustness = &self.longitudinal_robustness;
+        if robustness.minimum_sample_size == 0
+            || robustness.eligible != (robustness.sample_size >= robustness.minimum_sample_size)
+        {
+            bail!("longitudinal robustness eligibility is inconsistent");
+        }
+        for (label, rate) in [
+            ("technical failure", robustness.technical_failure_rate),
+            ("flaky", robustness.flaky_rate),
+        ] {
+            if rate.is_some_and(|value| !value.is_finite() || !(0.0..=1.0).contains(&value)) {
+                bail!("longitudinal {label} rate is invalid");
+            }
+        }
+        if !robustness.eligible && robustness.unavailable_reasons.is_empty() {
+            bail!("ineligible longitudinal robustness requires an unavailable reason");
+        }
+        for (id, reason) in &robustness.unavailable_reasons {
+            required(id, "longitudinal unavailable metric")?;
+            required(reason, "longitudinal unavailable reason")?;
+        }
+        for limitation in &self.limitations {
+            required(limitation, "validation limitation")?;
+        }
+        Ok(())
+    }
+}
+
 /// Sanitized, bounded, and reproducible input for the automatic per-run AI
 /// assessment. Raw transcripts and generated asset contents are deliberately
 /// absent; the analyzer receives only their immutable evidence identities.
@@ -476,6 +623,8 @@ pub struct FinalAssessmentInput {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub metrics: Vec<FinalAssessmentMetric>,
     pub cleanup: FinalAssessmentCleanup,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub validation: Option<FinalAssessmentValidation>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub excerpts: Vec<FinalAssessmentExcerpt>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -518,6 +667,9 @@ impl FinalAssessmentInput {
         if self.cleanup.succeeded != self.cleanup.failures.is_empty() {
             bail!("final assessment cleanup outcome differs from its failure list");
         }
+        if let Some(validation) = &self.validation {
+            validation.validate()?;
+        }
         for excerpt in &self.excerpts {
             required(&excerpt.kind, "final assessment excerpt kind")?;
             required(&excerpt.summary, "final assessment excerpt summary")?;
@@ -551,6 +703,9 @@ impl FinalAssessmentInput {
         for asset in &self.assets {
             references.extend(&asset.validation.evidence);
             references.extend(&asset.qualitative_assessment.evidence);
+        }
+        if let Some(validation) = &self.validation {
+            references.push(&validation.bundle);
         }
         references.extend(self.excerpts.iter().map(|excerpt| &excerpt.evidence));
         references
@@ -1319,6 +1474,73 @@ fn required(value: &str, label: &str) -> Result<()> {
 mod tests {
     use super::*;
 
+    fn validation_input() -> FinalAssessmentInput {
+        FinalAssessmentInput {
+            subject: FinalAssessmentSubject {
+                execution_id: "execution-1".into(),
+                run_id: "run-1".into(),
+                attempt_id: "attempt-1".into(),
+                scenario_id: "todo_worker_self_validating".into(),
+                scenario_version: 1,
+                case_id: "case-1".into(),
+                system_status: SystemStatus::Passed,
+            },
+            assessments: Vec::new(),
+            assets: Vec::new(),
+            dimensions: Vec::new(),
+            failures: Vec::new(),
+            metrics: Vec::new(),
+            cleanup: FinalAssessmentCleanup {
+                succeeded: true,
+                failures: Vec::new(),
+            },
+            validation: Some(FinalAssessmentValidation {
+                bundle: EvidenceReference {
+                    artifact_id: "todo_validation_evidence".into(),
+                    artifact_sha256: format!("sha256:{}", "a".repeat(64)),
+                    locator: None,
+                },
+                contract_sha256: format!("sha256:{}", "b".repeat(64)),
+                plan_sha256: None,
+                candidate_sha256: Some(format!("sha256:{}", "c".repeat(64))),
+                probes: vec![FinalAssessmentValidationProbe {
+                    id: "todo_crud_isolated".into(),
+                    outcome: "passed".into(),
+                    summary: "3/3 bounded CRUD cycles passed.".into(),
+                }],
+                coverage: FinalAssessmentValidationCoverage {
+                    required: vec!["todo_crud_isolated".into()],
+                    covered: vec!["todo_crud_isolated".into()],
+                    omitted: Vec::new(),
+                    complete: true,
+                },
+                validation_attempts: 1,
+                correction_attempts: 0,
+                repeatability: FinalAssessmentValidationRepeatability {
+                    planned: 3,
+                    completed: 3,
+                    passed: 3,
+                    interpretation: "3/3 is observed in-run repeatability, not broad reliability."
+                        .into(),
+                },
+                longitudinal_robustness: FinalAssessmentLongitudinalRobustness {
+                    sample_size: 1,
+                    minimum_sample_size: 5,
+                    eligible: false,
+                    technical_failure_rate: Some(0.0),
+                    flaky_rate: None,
+                    unavailable_reasons: BTreeMap::from([(
+                        "robustness".into(),
+                        "requires five comparable runs".into(),
+                    )]),
+                },
+                limitations: vec!["Longitudinal reliability is unavailable.".into()],
+            }),
+            excerpts: Vec::new(),
+            limitations: Vec::new(),
+        }
+    }
+
     fn unavailable_ai() -> AiFinalAssessment {
         AiFinalAssessment {
             availability: AiAssessmentAvailability::Unavailable,
@@ -1440,6 +1662,25 @@ mod tests {
         .is_err());
         assert!(validate_confidence(Some(1.01), "confidence").is_err());
         assert!(validate_confidence(Some(f64::NAN), "confidence").is_err());
+    }
+
+    #[test]
+    fn final_validation_is_bounded_and_exposes_only_its_bundle_identity() {
+        let mut input = validation_input();
+        input.validate().unwrap();
+        let references = input.evidence_references();
+        assert_eq!(references.len(), 1);
+        assert_eq!(references[0].artifact_id, "todo_validation_evidence");
+
+        input.validation.as_mut().unwrap().probes[0].summary = "x".repeat(1_001);
+        assert!(input.validate().is_err());
+    }
+
+    #[test]
+    fn final_validation_cannot_bypass_the_sixty_four_kib_input_limit() {
+        let mut input = validation_input();
+        input.validation.as_mut().unwrap().limitations = vec!["x".repeat(70 * 1024)];
+        assert!(input.validate().is_err());
     }
 
     #[test]

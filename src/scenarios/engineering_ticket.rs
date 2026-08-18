@@ -663,8 +663,9 @@ fn scenario_for_case(run_id: &str, task: &'static TaskCase) -> ScenarioSpec {
         execution: ExecutionPolicy {
             max_turns: 48,
             max_output_tokens: Some(16_384),
-            max_total_tokens: 600_000,
+            max_total_tokens: Some(600_000),
             stuck_timeout_seconds: 600,
+            max_validation_retries: None,
         },
         denied_functions: &["http::*", "browser::*", "github::*"],
         criteria: assessment::criteria(ASSESSMENTS),

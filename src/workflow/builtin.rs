@@ -32,8 +32,9 @@ pub struct HarnessStepConfig {
     pub max_turns: u32,
     #[serde(default)]
     pub max_output_tokens: Option<u64>,
+    /// Shared Harness token budget. `None` leaves the session unbounded.
     #[serde(default = "default_max_total_tokens")]
-    pub max_total_tokens: u64,
+    pub max_total_tokens: Option<u64>,
     #[serde(default = "default_stuck_timeout_seconds")]
     pub stuck_timeout_seconds: u64,
 }
@@ -46,8 +47,9 @@ pub struct HarnessStepConfigV2 {
     pub max_turns: u32,
     #[serde(default)]
     pub max_output_tokens: Option<u64>,
+    /// Shared Harness token budget. `None` leaves the session unbounded.
     #[serde(default = "default_max_total_tokens")]
-    pub max_total_tokens: u64,
+    pub max_total_tokens: Option<u64>,
     #[serde(default = "default_stuck_timeout_seconds")]
     pub stuck_timeout_seconds: u64,
     #[serde(default)]
@@ -166,8 +168,8 @@ fn default_max_turns() -> u32 {
     100
 }
 
-fn default_max_total_tokens() -> u64 {
-    100_000
+fn default_max_total_tokens() -> Option<u64> {
+    Some(100_000)
 }
 
 fn default_stuck_timeout_seconds() -> u64 {
@@ -335,7 +337,7 @@ impl StepExecutor for HarnessStepExecutor {
         let config = decode_config(context)?;
         if config.prompt.trim().is_empty()
             || config.max_turns == 0
-            || config.max_total_tokens == 0
+            || config.max_total_tokens == Some(0)
             || config.stuck_timeout_seconds == 0
         {
             bail!("Harness step prompt and limits must be non-empty and positive");
@@ -357,7 +359,7 @@ impl StepExecutor for HarnessStepExecutor {
 
     async fn execute(&self, context: StepExecutorContext) -> Result<StepExecutorOutput> {
         let config = decode_config(&context)?;
-        let session_id = format!("e2e_{}_{}", context.attempt_id, context.node.id);
+        let session_id = workflow_session_id(&context.attempt_id, &context.node.id);
         let structured_input = context.inputs.get("data").map(|input| input.value.clone());
         let message = match structured_input {
             Some(input) => format!(
@@ -393,7 +395,8 @@ impl StepExecutor for HarnessStepExecutor {
                     options: Some(SendOptions {
                         max_turns: Some(config.max_turns),
                         max_output_tokens: config.max_output_tokens,
-                        max_total_tokens: Some(config.max_total_tokens),
+                        max_total_tokens: config.max_total_tokens,
+                        max_validation_retries: None,
                         functions: Some(FunctionPolicy {
                             allow: vec!["*".into()],
                             deny: vec!["e2e::*".into()],
@@ -512,7 +515,7 @@ impl StepExecutor for HarnessStepExecutorV2 {
         let workspace_root = optional_text_input(&context, "workspace_root")?;
         let metadata = self.policy.workspace_metadata(workspace_root)?;
         let functions = self.policy.function_policy(&config)?;
-        let session_id = format!("e2e_{}_{}", context.attempt_id, context.node.id);
+        let session_id = workflow_session_id(&context.attempt_id, &context.node.id);
         let structured_input = context.inputs.get("data").map(|input| input.value.clone());
         let message = match structured_input {
             Some(input) => format!(
@@ -548,7 +551,8 @@ impl StepExecutor for HarnessStepExecutorV2 {
                     options: Some(SendOptions {
                         max_turns: Some(config.max_turns),
                         max_output_tokens: config.max_output_tokens,
-                        max_total_tokens: Some(config.max_total_tokens),
+                        max_total_tokens: config.max_total_tokens,
+                        max_validation_retries: None,
                         functions: Some(functions),
                         metadata,
                     }),
@@ -671,12 +675,12 @@ fn decode_config_v2(context: &StepExecutorContext) -> Result<HarnessStepConfigV2
 fn validate_v2_config(config: &HarnessStepConfigV2) -> Result<()> {
     if config.prompt.trim().is_empty()
         || config.max_turns == 0
-        || config.max_total_tokens == 0
+        || config.max_total_tokens == Some(0)
         || config.stuck_timeout_seconds == 0
         || config.max_output_tokens == Some(0)
         || config
             .max_output_tokens
-            .is_some_and(|maximum| maximum > config.max_total_tokens)
+            .is_some_and(|maximum| config.max_total_tokens.is_some_and(|total| maximum > total))
     {
         bail!("Harness v2 step prompt and limits must be non-empty, positive, and ordered");
     }
@@ -698,9 +702,28 @@ fn optional_text_input<'a>(context: &'a StepExecutorContext, id: &str) -> Result
         .transpose()
 }
 
+pub(crate) fn workflow_session_id(attempt_id: &str, node_id: &str) -> String {
+    format!("e2e_{attempt_id}_{node_id}")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn v2_harness_step_accepts_an_unbounded_token_budget() {
+        let config: HarnessStepConfigV2 = serde_json::from_value(serde_json::json!({
+            "prompt": "continue",
+            "max_turns": 4,
+            "max_output_tokens": 16_384,
+            "max_total_tokens": null,
+            "stuck_timeout_seconds": 60,
+        }))
+        .unwrap();
+
+        assert_eq!(config.max_total_tokens, None);
+        validate_v2_config(&config).unwrap();
+    }
 
     #[test]
     fn harness_step_does_not_accept_function_ids_and_is_not_retry_safe() {
@@ -755,7 +778,7 @@ mod tests {
                 prompt: "analyze".into(),
                 max_turns: 1,
                 max_output_tokens: Some(10),
-                max_total_tokens: 10,
+                max_total_tokens: Some(10),
                 stuck_timeout_seconds: 1,
                 function_allow: vec!["coder::read-file".into()],
                 function_deny: vec!["state::*".into(), "state::*".into()],

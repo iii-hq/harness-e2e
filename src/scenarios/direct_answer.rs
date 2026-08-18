@@ -35,8 +35,9 @@ pub fn scenario(_run_id: &str) -> ScenarioSpec {
         execution: ExecutionPolicy {
             max_turns: 2,
             max_output_tokens: Some(2_048),
-            max_total_tokens: 32_768,
+            max_total_tokens: Some(32_768),
             stuck_timeout_seconds: 120,
+            max_validation_retries: None,
         },
         denied_functions: &[],
         criteria: vec![

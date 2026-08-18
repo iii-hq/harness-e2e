@@ -123,6 +123,8 @@ pub struct SendOptions {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub max_total_tokens: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub max_validation_retries: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub functions: Option<FunctionPolicy>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub metadata: Option<Value>,
@@ -840,6 +842,19 @@ mod tests {
             ]
         });
         validate_control_plane(&raw).unwrap();
+    }
+
+    #[test]
+    fn send_options_encode_the_validation_retry_cap_only_when_configured() {
+        let configured = serde_json::to_value(SendOptions {
+            max_validation_retries: Some(2),
+            ..SendOptions::default()
+        })
+        .unwrap();
+        assert_eq!(configured["max_validation_retries"], 2);
+
+        let defaulted = serde_json::to_value(SendOptions::default()).unwrap();
+        assert!(defaulted.get("max_validation_retries").is_none());
     }
 
     #[test]

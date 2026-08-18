@@ -1015,8 +1015,9 @@ mod tests {
             execution_policy: ExecutionPolicy {
                 max_turns: 10,
                 max_output_tokens: Some(1_000),
-                max_total_tokens: 2_000,
+                max_total_tokens: Some(2_000),
                 stuck_timeout_seconds: 30,
+                max_validation_retries: None,
             },
             aggregate: ScenarioAggregate {
                 runs: 1,

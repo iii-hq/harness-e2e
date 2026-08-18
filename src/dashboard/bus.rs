@@ -15,7 +15,7 @@ use serde_json::{json, Value};
 use super::controller::Controller;
 use super::plans::{PlanCreateRequest, PlanRunRequest, PlanUpdateRequest};
 use super::presenter::{
-    execution_detail_value, repository_url, validate_execution_id, MAX_EXECUTIONS,
+    execution_detail_value_optional, repository_url, validate_execution_id, MAX_EXECUTIONS,
 };
 use super::read_model::{
     EvaluatedVersionsRequest, EvaluatedVersionsResponse, TestHistoryRequest, TestHistoryResponse,
@@ -621,8 +621,7 @@ pub(super) async fn execution_bundle(
         .await
         .context("read execution task")??
         .context("execution not found")?;
-    let report = run.report.context("execution report not found")?;
-    let detail = execution_detail_value(&run.metadata, &report)?;
+    let detail = execution_detail_value_optional(&run.metadata, run.report.as_ref())?;
     Ok(ExecutionBundle { manifest, detail })
 }
 

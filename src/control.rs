@@ -1150,12 +1150,6 @@ fn validate_run_request(request: &RunRequest) -> Result<LaneBudget> {
     } else {
         unique_scenarios(&request.scenarios)
     };
-    if scenarios
-        .iter()
-        .any(|scenario| scenario.manual_cli_only() && *scenario != ScenarioId::SecurityReview)
-    {
-        bail!("this manually prepared scenario can only be started with the local CLI");
-    }
     if request.technical_retries > 0
         && scenarios.iter().any(|scenario| {
             scenario.execution_kind() == crate::scenarios::ScenarioExecutionKind::CompositeFlow
@@ -1436,15 +1430,26 @@ mod tests {
     }
 
     #[test]
-    fn other_manual_scenarios_remain_cli_only() {
-        let mut request = request();
-        request.lane = "local".into();
-        request.scenarios = vec![ScenarioId::EngineeringTicket];
-        request.technical_retries = 0;
-        assert!(validate_run_request(&request)
-            .unwrap_err()
-            .to_string()
-            .contains("local CLI"));
+    fn todo_worker_scenarios_are_admitted_by_the_control_plane() {
+        for scenario in [
+            ScenarioId::TodoWorkerSimple,
+            ScenarioId::TodoWorkerSelfValidating,
+        ] {
+            let mut request = request();
+            request.lane = "local".into();
+            request.scenarios = vec![scenario];
+            request.technical_retries = 0;
+            validate_run_request(&request).unwrap_or_else(|error| {
+                panic!("{scenario:?} should be Console-admitted: {error:#}")
+            });
+        }
+
+        let mut planned = request();
+        planned.lane = "local".into();
+        planned.scenarios = vec![ScenarioId::TodoWorkerPlanned];
+        planned.technical_retries = 0;
+        validate_run_request(&planned)
+            .expect("planned Todo worker should be Console-admitted without technical retries");
     }
 
     #[test]

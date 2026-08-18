@@ -274,7 +274,6 @@ Register one scenario id:
 id: engineering_ticket
 scenario_version: 1
 execution_kind: harness_turn
-manual_cli_only: true initially
 canonical seed: 1001
 ```
 

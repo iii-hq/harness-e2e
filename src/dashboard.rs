@@ -189,7 +189,8 @@ mod tests {
 
     use super::controller::{control_request, validate_request};
     use super::presenter::{
-        contract_fingerprint, execution_detail_value, execution_summary, load_execution_summaries,
+        contract_fingerprint, execution_detail_value_optional, execution_summary,
+        load_execution_summaries,
     };
     use super::read_model::{DashboardReadModel, EvaluatedVersionsRequest, TestsListRequest};
     use super::store::write_metadata;
@@ -276,8 +277,9 @@ mod tests {
                 ExecutionPolicy {
                     max_turns: 1,
                     max_output_tokens: Some(10),
-                    max_total_tokens: 100,
+                    max_total_tokens: Some(100),
                     stuck_timeout_seconds: 10,
+                    max_validation_retries: None,
                 },
                 vec![run],
             )],
@@ -392,7 +394,7 @@ mod tests {
             summary["subjects"][0]["scenarios"][0]["id"],
             "direct_answer"
         );
-        let detail = execution_detail_value(&metadata(), &report).unwrap();
+        let detail = execution_detail_value_optional(&metadata(), Some(&report)).unwrap();
         assert_eq!(
             detail["reports"][0]["report"]["scenarios"][0]["scenario_id"],
             "direct_answer"
@@ -408,6 +410,25 @@ mod tests {
             detail["reports"][0]["report"]["scenarios"][0]["runs"][0]["assessment"]["run_id"],
             "run"
         );
+    }
+
+    #[test]
+    fn active_and_cancelled_runs_have_partial_details_without_a_report() {
+        for (job_status, expected_status) in [
+            (JobStatus::Running, "running"),
+            (JobStatus::Cancelling, "running"),
+            (JobStatus::Cancelled, "cancelled"),
+        ] {
+            let mut metadata = metadata();
+            metadata.status = job_status;
+            metadata.completed_at.clear();
+
+            let detail = execution_detail_value_optional(&metadata, None).unwrap();
+            assert_eq!(detail["id"], metadata.id);
+            assert_eq!(detail["status"], expected_status);
+            assert_eq!(detail["availability"], "unavailable");
+            assert_eq!(detail["reports"], json!([]));
+        }
     }
 
     #[test]
@@ -497,8 +518,9 @@ mod tests {
                 ExecutionPolicy {
                     max_turns: 1,
                     max_output_tokens: Some(10),
-                    max_total_tokens: 100,
+                    max_total_tokens: Some(100),
                     stuck_timeout_seconds: 10,
+                    max_validation_retries: None,
                 },
                 runs,
             )];

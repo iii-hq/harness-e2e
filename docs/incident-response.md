@@ -209,7 +209,6 @@ Add `src/scenarios/incident_response.rs` with:
 id: incident_response
 scenario_version: 1
 execution_kind: composite_flow
-manual_cli_only: true
 canonical seed: stable_seed("incident_response")
 ```
 
@@ -606,7 +605,7 @@ Implementation requires these narrow registrations:
    `src/scenarios/mod.rs`.
 2. Register `incident_response::scenario` and `materialize` in the existing
    `ScenarioId` matches.
-3. Return `ScenarioExecutionKind::CompositeFlow` and `manual_cli_only = true`.
+3. Return `ScenarioExecutionKind::CompositeFlow`.
 4. Add `pub mod incident_response` in `src/workflow/mod.rs`.
 5. Extend `composite_definition`, `composite_descriptor_catalog`, and
    `composite_runtime` with the new definition, descriptor catalog, runtime,

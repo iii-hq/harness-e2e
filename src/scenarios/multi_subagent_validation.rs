@@ -152,8 +152,9 @@ fn scenario_for_case(run_id: &str) -> ScenarioSpec {
         execution: ExecutionPolicy {
             max_turns: 20,
             max_output_tokens: Some(8_192),
-            max_total_tokens: 600_000,
+            max_total_tokens: Some(600_000),
             stuck_timeout_seconds: 420,
+            max_validation_retries: None,
         },
         denied_functions: &[],
         criteria: assessment::criteria(ASSESSMENTS),
