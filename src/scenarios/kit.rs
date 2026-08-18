@@ -94,6 +94,7 @@ pub(in crate::scenarios) fn contract(
         }],
         invariants: assessments
             .iter()
+            .filter(|assessment| assessment.gates())
             .map(|assessment| InvariantSpec {
                 id: assessment.id().to_string(),
                 description: assessment.description().to_string(),
@@ -279,9 +280,13 @@ mod tests {
     }
 
     #[test]
-    fn a_contract_mirrors_its_assessments_as_invariants() {
-        const ASSESSMENTS: &[AssessmentSpec] =
-            &[AssessmentSpec::hard_gated("only_gate", 100, "described")];
+    fn a_contract_takes_its_invariants_from_the_gates_alone() {
+        // An advisory score is a number, not a property a capture can report.
+        // Declaring one as an invariant fails every capture of that scenario.
+        const ASSESSMENTS: &[AssessmentSpec] = &[
+            AssessmentSpec::hard_gated("only_gate", 60, "described"),
+            AssessmentSpec::score_only("a_measurement", 40, "measured, not asserted"),
+        ];
         let contract = contract(
             "artifact",
             "kind",

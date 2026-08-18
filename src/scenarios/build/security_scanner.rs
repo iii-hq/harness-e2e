@@ -475,29 +475,15 @@ fn evaluate<'a>(
 }
 
 fn capture<'a>(
-    _context: &'a E2eContext,
+    context: &'a E2eContext,
     observation: &'a ScenarioObservation,
     run_id: &'a str,
 ) -> DeliverableCaptureFuture<'a> {
     Box::pin(async move {
         let root = workspace::root(ID, run_id);
         let verification = verify(run_id).await;
-        let invariants = vec![
-            crate::scenarios::CapturedInvariant {
-                id: "system_runs".to_string(),
-                passed: verification.ran,
-                reason: format!("exit status {:?}", verification.holdout_status),
-            },
-            crate::scenarios::CapturedInvariant {
-                id: "findings_exact".to_string(),
-                passed: verification.reported == verification.expected,
-                reason: format!(
-                    "{} reported, {} expected",
-                    verification.reported.len(),
-                    verification.expected.len()
-                ),
-            },
-        ];
+        let invariants =
+            kit::captured_gate_invariants(evaluate(context, observation, run_id).await?);
         Ok(vec![kit::evidence(
             DELIVERABLE_ID,
             super::DELIVERABLE_KIND,

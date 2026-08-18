@@ -11,8 +11,8 @@ use crate::scenarios::assessment::{self, AssessmentSpec};
 use crate::scenarios::deliverable::workspace;
 use crate::scenarios::kit::{self, Blueprint};
 use crate::scenarios::{
-    CapturedInvariant, CleanupFuture, DeliverableCaptureFuture, EvaluationFuture,
-    MaterializedScenario, ScenarioObservation, ScenarioSpec,
+    CleanupFuture, DeliverableCaptureFuture, EvaluationFuture, MaterializedScenario,
+    ScenarioObservation, ScenarioSpec,
 };
 
 use super::repo;
@@ -380,24 +380,14 @@ fn evaluate<'a>(
 }
 
 fn capture<'a>(
-    _context: &'a E2eContext,
+    context: &'a E2eContext,
     observation: &'a ScenarioObservation,
     run_id: &'a str,
 ) -> DeliverableCaptureFuture<'a> {
     Box::pin(async move {
         let verification = verify(run_id).await;
-        let invariants = vec![
-            CapturedInvariant {
-                id: "forward_correct".to_string(),
-                passed: verification.forward_correct(),
-                reason: "column, backfill, and index checked by the runner".to_string(),
-            },
-            CapturedInvariant {
-                id: "rollback_restores".to_string(),
-                passed: verification.rollback_restores(),
-                reason: "schema and rows compared against the seeded database".to_string(),
-            },
-        ];
+        let invariants =
+            kit::captured_gate_invariants(evaluate(context, observation, run_id).await?);
         Ok(vec![kit::evidence(
             DELIVERABLE_ID,
             super::DELIVERABLE_KIND,

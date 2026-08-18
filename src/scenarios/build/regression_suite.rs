@@ -12,8 +12,8 @@ use crate::scenarios::assessment::{self, AssessmentSpec};
 use crate::scenarios::deliverable::workspace;
 use crate::scenarios::kit::{self, Blueprint};
 use crate::scenarios::{
-    CapturedInvariant, CleanupFuture, DeliverableCaptureFuture, EvaluationFuture,
-    MaterializedScenario, ScenarioObservation, ScenarioSpec,
+    CleanupFuture, DeliverableCaptureFuture, EvaluationFuture, MaterializedScenario,
+    ScenarioObservation, ScenarioSpec,
 };
 
 use super::repo;
@@ -336,24 +336,14 @@ fn evaluate<'a>(
 }
 
 fn capture<'a>(
-    _context: &'a E2eContext,
+    context: &'a E2eContext,
     observation: &'a ScenarioObservation,
     run_id: &'a str,
 ) -> DeliverableCaptureFuture<'a> {
     Box::pin(async move {
         let verification = verify(run_id).await;
-        let invariants = vec![
-            CapturedInvariant {
-                id: "defects_caught".to_string(),
-                passed: verification.caught.len() == DEFECTS.len(),
-                reason: format!("missed {:?}", verification.missed),
-            },
-            CapturedInvariant {
-                id: "no_false_alarm".to_string(),
-                passed: verification.inert_stayed_green,
-                reason: "a behaviour-preserving change must stay green".to_string(),
-            },
-        ];
+        let invariants =
+            kit::captured_gate_invariants(evaluate(context, observation, run_id).await?);
         Ok(vec![kit::evidence(
             DELIVERABLE_ID,
             super::DELIVERABLE_KIND,
