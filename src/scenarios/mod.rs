@@ -29,6 +29,7 @@ pub mod mechanical_reaction;
 pub mod multi_subagent_validation;
 pub mod orchestration;
 pub mod persistent_state;
+pub mod port;
 pub mod pr_review_regressions;
 mod probe;
 pub mod reactive_automation;
@@ -522,6 +523,9 @@ pub enum ScenarioId {
     #[serde(rename = "orchestration.topological_order")]
     #[value(name = "orchestration.topological_order")]
     OrchestrationTopologicalOrder,
+    #[serde(rename = "port.python_to_rust")]
+    #[value(name = "port.python_to_rust")]
+    PortPythonToRust,
     #[serde(rename = "reliability.amplification_bound")]
     #[value(name = "reliability.amplification_bound")]
     ReliabilityAmplificationBound,
@@ -549,7 +553,7 @@ pub enum ScenarioId {
 }
 
 impl ScenarioId {
-    pub const ALL: [Self; 63] = [
+    pub const ALL: [Self; 64] = [
         Self::DirectAnswer,
         Self::PersistentState,
         Self::ReactiveAutomation,
@@ -605,6 +609,7 @@ impl ScenarioId {
         Self::OrchestrationImpossibleStop,
         Self::OrchestrationRepairConvergence,
         Self::OrchestrationTopologicalOrder,
+        Self::PortPythonToRust,
         Self::ReliabilityAmplificationBound,
         Self::ReliabilityBindingHygiene,
         Self::ReliabilityIdempotentApply,
@@ -672,6 +677,7 @@ impl ScenarioId {
             Self::OrchestrationImpossibleStop => orchestration::impossible_stop::ID,
             Self::OrchestrationRepairConvergence => orchestration::repair_convergence::ID,
             Self::OrchestrationTopologicalOrder => orchestration::topological_order::ID,
+            Self::PortPythonToRust => port::python_to_rust::ID,
             Self::ReliabilityAmplificationBound => reliability::amplification_bound::ID,
             Self::ReliabilityBindingHygiene => reliability::binding_hygiene::ID,
             Self::ReliabilityIdempotentApply => reliability::idempotent_apply::ID,
@@ -769,6 +775,7 @@ impl ScenarioId {
             Self::OrchestrationTopologicalOrder => {
                 orchestration::topological_order::scenario(run_id)
             }
+            Self::PortPythonToRust => port::python_to_rust::scenario(run_id),
             Self::ReliabilityAmplificationBound => {
                 reliability::amplification_bound::scenario(run_id)
             }
@@ -913,6 +920,7 @@ impl ScenarioId {
             Self::OrchestrationTopologicalOrder => {
                 orchestration::topological_order::materialize(namespace, seed)?
             }
+            Self::PortPythonToRust => port::python_to_rust::materialize(namespace, seed)?,
             Self::ReliabilityAmplificationBound => {
                 reliability::amplification_bound::materialize(namespace, seed)?
             }
@@ -961,7 +969,7 @@ impl ScenarioId {
     pub fn suite(self) -> ScenarioSuite {
         match self.as_str().split('.').next() {
             Some(
-                "build" | "cognition" | "deliverable" | "longhorizon" | "orchestration"
+                "build" | "cognition" | "deliverable" | "longhorizon" | "orchestration" | "port"
                 | "reliability",
             ) => ScenarioSuite::Extended,
             _ => ScenarioSuite::Canonical,
@@ -1005,13 +1013,13 @@ mod tests {
                 .materialize("run", scenario.canonical_seed())
                 .unwrap();
         }
-        assert_eq!(ids.len(), 63);
+        assert_eq!(ids.len(), 64);
     }
 
     #[test]
     fn the_extended_suite_holds_the_four_new_families() {
         let extended = ScenarioSuite::Extended.scenarios();
-        assert_eq!(extended.len(), 36);
+        assert_eq!(extended.len(), 37);
         for scenario in &extended {
             let family = scenario.as_str().split('.').next().unwrap_or_default();
             assert!(matches!(
@@ -1021,6 +1029,7 @@ mod tests {
                     | "deliverable"
                     | "longhorizon"
                     | "orchestration"
+                    | "port"
                     | "reliability"
             ));
         }

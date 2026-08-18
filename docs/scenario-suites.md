@@ -3,7 +3,7 @@
 Scenarios belong to one of two suites.
 
 - **Canonical** is what every standing gate runs. Membership is unchanged.
-- **Extended** is thirty-six additional scenarios: four that build a working
+- **Extended** is thirty-seven additional scenarios: five that build or rewrite a working
   system and verify it by running it, plus coverage of dependency failure,
   graph and loop engineering, file deliverables, and context handling.
 
@@ -28,8 +28,8 @@ cargo run --locked --bin harness-e2e -- run ... --scenario reliability.stale_cou
 ```
 
 A scenario joins a suite by its id prefix: `build.`, `cognition.`,
-`deliverable.`, `longhorizon.`, `orchestration.`, and `reliability.` are
-extended, everything else is canonical. Adding a scenario to an existing family needs no registry change
+`deliverable.`, `longhorizon.`, `orchestration.`, `port.`, and `reliability.`
+are extended, everything else is canonical. Adding a scenario to an existing family needs no registry change
 beyond the usual `ScenarioId` entry.
 
 ## What the extended suite measures
@@ -61,6 +61,21 @@ first contact with the held-out one.
 | `build.log_pipeline` | A log aggregator over a directory of log files | Aggregating unseen logs against the runner's own counts, quarantining malformed lines, and holding up over twenty thousand lines |
 | `build.migration_tool` | A forward and backward SQLite schema migration | Migrating an unseen database, checking column, backfill and index, rolling back to the original rows, and re-running `up` for idempotency |
 | `build.regression_suite` | A regression suite for a pricing library | Breaking the library four ways underneath it: every defect must fail the suite, a comment-only change must not |
+
+### port
+
+The long ones. A rewrite of a working library does not fit in a context
+window, so what is really under test is whether the session still knows what
+it was doing after hours of it: what survived compaction, what was delegated,
+what had to be re-read. Correctness is not a matter of opinion, because the
+original is right there to be run.
+
+| Scenario | The system built | Verified by |
+| --- | --- | --- |
+| `port.python_to_rust` | A Rust rewrite of a bundled Python text-effects renderer: same CLI, no runtime dependencies, one binary | Byte-identical stdout against the reference on scripts written after the session ends, an empty `[dependencies]` table, the binary running outside its source tree; speed and startup measured as advisory scores |
+
+Budgets match the shape of the work: 400 turns, twelve million tokens, and an
+hour of no observable progress before the watchdog calls it stuck.
 
 ### longhorizon
 
