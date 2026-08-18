@@ -2185,6 +2185,7 @@ mod tests {
                 max_output_tokens: Some(1),
                 max_total_tokens: 1,
                 stuck_timeout_seconds: 1,
+                max_validation_retries: None,
             },
             runs,
         )
@@ -2698,6 +2699,7 @@ mod tests {
                 max_output_tokens: Some(1),
                 max_total_tokens: 1,
                 stuck_timeout_seconds: 1,
+                max_validation_retries: None,
             },
             vec![attempt],
         )]);
@@ -2813,6 +2815,7 @@ mod tests {
                 max_output_tokens: Some(1),
                 max_total_tokens: 1,
                 stuck_timeout_seconds: 1,
+                max_validation_retries: None,
             },
             vec![attempt],
         )]);

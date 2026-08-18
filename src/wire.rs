@@ -116,6 +116,11 @@ pub enum MessageInput {
 
 #[derive(Debug, Clone, Default, Serialize, JsonSchema)]
 pub struct SendOptions {
+    /// Console / send operating mode. `agent` runs the turn autonomously;
+    /// `ask` caps the turn's dispatch policy at the harness default and is
+    /// never what a scenario wants.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mode: Option<HarnessMode>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub max_turns: Option<u32>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -123,9 +128,35 @@ pub struct SendOptions {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub max_total_tokens: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub max_validation_retries: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub functions: Option<FunctionPolicy>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub metadata: Option<Value>,
+}
+
+/// How the approval surface gates a session's function calls. Scenario runs
+/// are unattended, so they raise their own session out of the `manual`
+/// default before the prompt is sent.
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, JsonSchema, clap::ValueEnum,
+)]
+#[serde(rename_all = "snake_case")]
+pub enum PermissionMode {
+    Manual,
+    Auto,
+    #[default]
+    Full,
+}
+
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, JsonSchema, clap::ValueEnum,
+)]
+#[serde(rename_all = "snake_case")]
+pub enum HarnessMode {
+    Ask,
+    #[default]
+    Agent,
 }
 
 #[derive(Debug, Clone, Default, Serialize, JsonSchema)]
@@ -415,6 +446,11 @@ const SEND_REQUEST: &[SchemaField] = &[
         required: false,
     },
     SchemaField {
+        path: "options.mode",
+        kind: JsonType::String,
+        required: false,
+    },
+    SchemaField {
         path: "options.max_turns",
         kind: JsonType::Integer,
         required: false,
@@ -426,6 +462,11 @@ const SEND_REQUEST: &[SchemaField] = &[
     },
     SchemaField {
         path: "options.max_total_tokens",
+        kind: JsonType::Integer,
+        required: false,
+    },
+    SchemaField {
+        path: "options.max_validation_retries",
         kind: JsonType::Integer,
         required: false,
     },

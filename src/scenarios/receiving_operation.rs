@@ -122,6 +122,7 @@ fn scenario_for_case(run_id: &str) -> ScenarioSpec {
             max_output_tokens: None,
             max_total_tokens: 1_200_000,
             stuck_timeout_seconds: 360,
+            max_validation_retries: None,
         },
         denied_functions: &["state::*"],
         criteria: assessment::criteria(ASSESSMENTS),
@@ -763,13 +764,13 @@ fn courier_spawns_are_minimal(calls: &[CallAt], names: &Names) -> bool {
 
 fn no_forbidden_calls(calls: &[CallAt]) -> bool {
     calls.iter().all(|call| {
-        !call.function_id.starts_with("state::")
-            && !call.function_id.starts_with("cron::")
-            && !(call.function_id == "engine::register_trigger"
+        !(call.function_id.starts_with("state::")
+            || call.function_id.starts_with("cron::")
+            || (call.function_id == "engine::register_trigger"
                 && matches!(
                     call.arguments.get("trigger_type").and_then(Value::as_str),
                     Some("timer" | "cron")
-                ))
+                )))
     })
 }
 

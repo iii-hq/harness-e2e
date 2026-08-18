@@ -68,6 +68,12 @@ impl AssessmentSpec {
         self.weight
     }
 
+    /// Whether this assessment is a property a deliverable can carry as an
+    /// invariant. An advisory score is a measurement, not an invariant.
+    pub(super) const fn gates(self) -> bool {
+        matches!(self.gate_policy, GatePolicy::HardGated)
+    }
+
     pub(super) const fn id(self) -> &'static str {
         self.id
     }

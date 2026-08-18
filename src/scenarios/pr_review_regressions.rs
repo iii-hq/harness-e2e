@@ -125,6 +125,7 @@ pub fn scenario(case: ReviewCase, _run_id: &str) -> ScenarioSpec {
             max_output_tokens: Some(4_096),
             max_total_tokens: 32_768,
             stuck_timeout_seconds: 180,
+            max_validation_retries: None,
         },
         denied_functions: &[],
         criteria: vec![

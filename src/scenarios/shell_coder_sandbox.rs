@@ -152,6 +152,7 @@ fn scenario_for_case(run_id: &str) -> ScenarioSpec {
             max_output_tokens: Some(8_192),
             max_total_tokens: 1_638_400,
             stuck_timeout_seconds: 600,
+            max_validation_retries: None,
         },
         denied_functions: &[],
         criteria: assessment::criteria(ASSESSMENTS),
@@ -955,10 +956,5 @@ fn sandbox_name(run_id: &str) -> String {
 }
 
 fn workspace_root(run_id: &str) -> PathBuf {
-    let base = std::env::var_os("HARNESS_E2E_RUN_DIR")
-        .map(PathBuf::from)
-        .unwrap_or_else(std::env::temp_dir);
-    let base = std::fs::canonicalize(&base).unwrap_or(base);
-    base.join("scenario-workspaces")
-        .join(format!("{ID}-{run_id}"))
+    super::kit::workspace_root(ID, run_id)
 }

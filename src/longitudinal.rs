@@ -1785,6 +1785,7 @@ mod tests {
                 max_output_tokens: Some(100),
                 max_total_tokens: 1_000,
                 stuck_timeout_seconds: 30,
+                max_validation_retries: None,
             },
             runs,
         );

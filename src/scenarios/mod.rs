@@ -15,17 +15,26 @@ use crate::report::HardGateReport;
 use crate::wire::SessionMetricsResponse;
 
 mod assessment;
+pub mod build;
+pub mod cognition;
 pub mod common;
 pub mod coordination;
 pub mod custom_validator;
+pub mod deliverable;
 pub mod direct_answer;
 mod domain;
+mod kit;
+pub mod longhorizon;
 pub mod mechanical_reaction;
 pub mod multi_subagent_validation;
+pub mod orchestration;
 pub mod persistent_state;
+pub mod port;
 pub mod pr_review_regressions;
+mod probe;
 pub mod reactive_automation;
 pub mod receiving_operation;
+pub mod reliability;
 pub mod research_pipeline;
 pub mod security_review;
 pub mod shell_coder_sandbox;
@@ -125,6 +134,11 @@ pub struct ExecutionPolicy {
     /// Stop only after this many seconds without observable useful progress.
     /// Large scenarios have no fixed wall-clock deadline.
     pub stuck_timeout_seconds: u64,
+    /// How many times a post-turn validator may send the session back to
+    /// work. A scenario whose job outlasts one turn needs more than the
+    /// harness default, which is sized for a correction, not a build.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_validation_retries: Option<u32>,
 }
 
 impl ExecutionPolicy {
@@ -345,6 +359,26 @@ fn captured_gate_invariants(objective: ObjectiveEvaluation) -> Vec<CapturedInvar
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema, ValueEnum)]
 #[serde(rename_all = "snake_case")]
+pub enum ScenarioSuite {
+    /// The scenarios every standing gate runs.
+    Canonical,
+    /// Extended coverage: reliability regressions, graph and loop
+    /// engineering, build-shaped deliverables, and context handling. Opt in
+    /// per run; the canonical gate cost stays unchanged.
+    Extended,
+}
+
+impl ScenarioSuite {
+    pub fn scenarios(self) -> Vec<ScenarioId> {
+        ScenarioId::ALL
+            .into_iter()
+            .filter(|scenario| scenario.suite() == self && !scenario.manual_cli_only())
+            .collect()
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema, ValueEnum)]
+#[serde(rename_all = "snake_case")]
 pub enum ScenarioId {
     #[value(name = "direct_answer")]
     DirectAnswer,
@@ -410,10 +444,121 @@ pub enum ScenarioId {
     #[serde(rename = "pr_review.prompt_provenance")]
     #[value(name = "pr_review.prompt_provenance")]
     PrReviewPromptProvenance,
+    #[serde(rename = "build.log_pipeline")]
+    #[value(name = "build.log_pipeline")]
+    BuildLogPipeline,
+    #[serde(rename = "build.migration_tool")]
+    #[value(name = "build.migration_tool")]
+    BuildMigrationTool,
+    #[serde(rename = "build.regression_suite")]
+    #[value(name = "build.regression_suite")]
+    BuildRegressionSuite,
+    #[serde(rename = "build.security_scanner")]
+    #[value(name = "build.security_scanner")]
+    BuildSecurityScanner,
+    #[serde(rename = "cognition.goal_drift")]
+    #[value(name = "cognition.goal_drift")]
+    CognitionGoalDrift,
+    #[serde(rename = "cognition.injection_resistance")]
+    #[value(name = "cognition.injection_resistance")]
+    CognitionInjectionResistance,
+    #[serde(rename = "cognition.instruction_precedence")]
+    #[value(name = "cognition.instruction_precedence")]
+    CognitionInstructionPrecedence,
+    #[serde(rename = "cognition.stale_memory_refresh")]
+    #[value(name = "cognition.stale_memory_refresh")]
+    CognitionStaleMemoryRefresh,
+    #[serde(rename = "cognition.subagent_context_handoff")]
+    #[value(name = "cognition.subagent_context_handoff")]
+    CognitionSubagentContextHandoff,
+    #[serde(rename = "cognition.subagent_scope")]
+    #[value(name = "cognition.subagent_scope")]
+    CognitionSubagentScope,
+    #[serde(rename = "deliverable.anomaly_report")]
+    #[value(name = "deliverable.anomaly_report")]
+    DeliverableAnomalyReport,
+    #[serde(rename = "deliverable.api_contract")]
+    #[value(name = "deliverable.api_contract")]
+    DeliverableApiContract,
+    #[serde(rename = "deliverable.architecture_diagram")]
+    #[value(name = "deliverable.architecture_diagram")]
+    DeliverableArchitectureDiagram,
+    #[serde(rename = "deliverable.game_simulation")]
+    #[value(name = "deliverable.game_simulation")]
+    DeliverableGameSimulation,
+    #[serde(rename = "deliverable.payload_fidelity")]
+    #[value(name = "deliverable.payload_fidelity")]
+    DeliverablePayloadFidelity,
+    #[serde(rename = "deliverable.scene_graph")]
+    #[value(name = "deliverable.scene_graph")]
+    DeliverableSceneGraph,
+    #[serde(rename = "deliverable.static_site")]
+    #[value(name = "deliverable.static_site")]
+    DeliverableStaticSite,
+    #[serde(rename = "deliverable.svg_chart")]
+    #[value(name = "deliverable.svg_chart")]
+    DeliverableSvgChart,
+    #[serde(rename = "deliverable.world_bible")]
+    #[value(name = "deliverable.world_bible")]
+    DeliverableWorldBible,
+    #[serde(rename = "longhorizon.hidden_rule_world")]
+    #[value(name = "longhorizon.hidden_rule_world")]
+    LonghorizonHiddenRuleWorld,
+    #[serde(rename = "orchestration.checkpoint_resume")]
+    #[value(name = "orchestration.checkpoint_resume")]
+    OrchestrationCheckpointResume,
+    #[serde(rename = "orchestration.cycle_refusal")]
+    #[value(name = "orchestration.cycle_refusal")]
+    OrchestrationCycleRefusal,
+    #[serde(rename = "orchestration.diamond_merge")]
+    #[value(name = "orchestration.diamond_merge")]
+    OrchestrationDiamondMerge,
+    #[serde(rename = "orchestration.exact_iteration_budget")]
+    #[value(name = "orchestration.exact_iteration_budget")]
+    OrchestrationExactIterationBudget,
+    #[serde(rename = "orchestration.fanout_join")]
+    #[value(name = "orchestration.fanout_join")]
+    OrchestrationFanoutJoin,
+    #[serde(rename = "orchestration.impossible_stop")]
+    #[value(name = "orchestration.impossible_stop")]
+    OrchestrationImpossibleStop,
+    #[serde(rename = "orchestration.repair_convergence")]
+    #[value(name = "orchestration.repair_convergence")]
+    OrchestrationRepairConvergence,
+    #[serde(rename = "orchestration.topological_order")]
+    #[value(name = "orchestration.topological_order")]
+    OrchestrationTopologicalOrder,
+    #[serde(rename = "port.python_to_rust")]
+    #[value(name = "port.python_to_rust")]
+    PortPythonToRust,
+    #[serde(rename = "reliability.amplification_bound")]
+    #[value(name = "reliability.amplification_bound")]
+    ReliabilityAmplificationBound,
+    #[serde(rename = "reliability.binding_hygiene")]
+    #[value(name = "reliability.binding_hygiene")]
+    ReliabilityBindingHygiene,
+    #[serde(rename = "reliability.idempotent_apply")]
+    #[value(name = "reliability.idempotent_apply")]
+    ReliabilityIdempotentApply,
+    #[serde(rename = "reliability.missing_function")]
+    #[value(name = "reliability.missing_function")]
+    ReliabilityMissingFunction,
+    #[serde(rename = "reliability.permanent_stop")]
+    #[value(name = "reliability.permanent_stop")]
+    ReliabilityPermanentStop,
+    #[serde(rename = "reliability.stale_counter")]
+    #[value(name = "reliability.stale_counter")]
+    ReliabilityStaleCounter,
+    #[serde(rename = "reliability.transient_recovery")]
+    #[value(name = "reliability.transient_recovery")]
+    ReliabilityTransientRecovery,
+    #[serde(rename = "reliability.vanishing_function")]
+    #[value(name = "reliability.vanishing_function")]
+    ReliabilityVanishingFunction,
 }
 
 impl ScenarioId {
-    pub const ALL: [Self; 27] = [
+    pub const ALL: [Self; 64] = [
         Self::DirectAnswer,
         Self::PersistentState,
         Self::ReactiveAutomation,
@@ -441,6 +586,43 @@ impl ScenarioId {
         Self::PrReviewAssetRetryAck,
         Self::PrReviewPresenceReconnect,
         Self::PrReviewPromptProvenance,
+        Self::BuildLogPipeline,
+        Self::BuildMigrationTool,
+        Self::BuildRegressionSuite,
+        Self::BuildSecurityScanner,
+        Self::CognitionGoalDrift,
+        Self::CognitionInjectionResistance,
+        Self::CognitionInstructionPrecedence,
+        Self::CognitionStaleMemoryRefresh,
+        Self::CognitionSubagentContextHandoff,
+        Self::CognitionSubagentScope,
+        Self::DeliverableAnomalyReport,
+        Self::DeliverableApiContract,
+        Self::DeliverableArchitectureDiagram,
+        Self::DeliverableGameSimulation,
+        Self::DeliverablePayloadFidelity,
+        Self::DeliverableSceneGraph,
+        Self::DeliverableStaticSite,
+        Self::DeliverableSvgChart,
+        Self::DeliverableWorldBible,
+        Self::LonghorizonHiddenRuleWorld,
+        Self::OrchestrationCheckpointResume,
+        Self::OrchestrationCycleRefusal,
+        Self::OrchestrationDiamondMerge,
+        Self::OrchestrationExactIterationBudget,
+        Self::OrchestrationFanoutJoin,
+        Self::OrchestrationImpossibleStop,
+        Self::OrchestrationRepairConvergence,
+        Self::OrchestrationTopologicalOrder,
+        Self::PortPythonToRust,
+        Self::ReliabilityAmplificationBound,
+        Self::ReliabilityBindingHygiene,
+        Self::ReliabilityIdempotentApply,
+        Self::ReliabilityMissingFunction,
+        Self::ReliabilityPermanentStop,
+        Self::ReliabilityStaleCounter,
+        Self::ReliabilityTransientRecovery,
+        Self::ReliabilityVanishingFunction,
     ];
 
     pub fn as_str(self) -> &'static str {
@@ -472,6 +654,43 @@ impl ScenarioId {
             Self::PrReviewAssetRetryAck => pr_review_regressions::ASSET_RETRY_ACK_ID,
             Self::PrReviewPresenceReconnect => pr_review_regressions::PRESENCE_RECONNECT_ID,
             Self::PrReviewPromptProvenance => pr_review_regressions::PROMPT_PROVENANCE_ID,
+            Self::BuildLogPipeline => build::log_pipeline::ID,
+            Self::BuildMigrationTool => build::migration_tool::ID,
+            Self::BuildRegressionSuite => build::regression_suite::ID,
+            Self::BuildSecurityScanner => build::security_scanner::ID,
+            Self::CognitionGoalDrift => cognition::goal_drift::ID,
+            Self::CognitionInjectionResistance => cognition::injection_resistance::ID,
+            Self::CognitionInstructionPrecedence => cognition::instruction_precedence::ID,
+            Self::CognitionStaleMemoryRefresh => cognition::stale_memory_refresh::ID,
+            Self::CognitionSubagentContextHandoff => cognition::subagent_context_handoff::ID,
+            Self::CognitionSubagentScope => cognition::subagent_scope::ID,
+            Self::DeliverableAnomalyReport => deliverable::anomaly_report::ID,
+            Self::DeliverableApiContract => deliverable::api_contract::ID,
+            Self::DeliverableArchitectureDiagram => deliverable::architecture_diagram::ID,
+            Self::DeliverableGameSimulation => deliverable::game_simulation::ID,
+            Self::DeliverablePayloadFidelity => deliverable::payload_fidelity::ID,
+            Self::DeliverableSceneGraph => deliverable::scene_graph::ID,
+            Self::DeliverableStaticSite => deliverable::static_site::ID,
+            Self::DeliverableSvgChart => deliverable::svg_chart::ID,
+            Self::DeliverableWorldBible => deliverable::world_bible::ID,
+            Self::LonghorizonHiddenRuleWorld => longhorizon::hidden_rule_world::ID,
+            Self::OrchestrationCheckpointResume => orchestration::checkpoint_resume::ID,
+            Self::OrchestrationCycleRefusal => orchestration::cycle_refusal::ID,
+            Self::OrchestrationDiamondMerge => orchestration::diamond_merge::ID,
+            Self::OrchestrationExactIterationBudget => orchestration::exact_iteration_budget::ID,
+            Self::OrchestrationFanoutJoin => orchestration::fanout_join::ID,
+            Self::OrchestrationImpossibleStop => orchestration::impossible_stop::ID,
+            Self::OrchestrationRepairConvergence => orchestration::repair_convergence::ID,
+            Self::OrchestrationTopologicalOrder => orchestration::topological_order::ID,
+            Self::PortPythonToRust => port::python_to_rust::ID,
+            Self::ReliabilityAmplificationBound => reliability::amplification_bound::ID,
+            Self::ReliabilityBindingHygiene => reliability::binding_hygiene::ID,
+            Self::ReliabilityIdempotentApply => reliability::idempotent_apply::ID,
+            Self::ReliabilityMissingFunction => reliability::missing_function::ID,
+            Self::ReliabilityPermanentStop => reliability::permanent_stop::ID,
+            Self::ReliabilityStaleCounter => reliability::stale_counter::ID,
+            Self::ReliabilityTransientRecovery => reliability::transient_recovery::ID,
+            Self::ReliabilityVanishingFunction => reliability::vanishing_function::ID,
         }
     }
 
@@ -519,6 +738,59 @@ impl ScenarioId {
                 pr_review_regressions::ReviewCase::PromptProvenance,
                 run_id,
             ),
+            Self::BuildLogPipeline => build::log_pipeline::scenario(run_id),
+            Self::BuildMigrationTool => build::migration_tool::scenario(run_id),
+            Self::BuildRegressionSuite => build::regression_suite::scenario(run_id),
+            Self::BuildSecurityScanner => build::security_scanner::scenario(run_id),
+            Self::CognitionGoalDrift => cognition::goal_drift::scenario(run_id),
+            Self::CognitionInjectionResistance => cognition::injection_resistance::scenario(run_id),
+            Self::CognitionInstructionPrecedence => {
+                cognition::instruction_precedence::scenario(run_id)
+            }
+            Self::CognitionStaleMemoryRefresh => cognition::stale_memory_refresh::scenario(run_id),
+            Self::CognitionSubagentContextHandoff => {
+                cognition::subagent_context_handoff::scenario(run_id)
+            }
+            Self::CognitionSubagentScope => cognition::subagent_scope::scenario(run_id),
+            Self::DeliverableAnomalyReport => deliverable::anomaly_report::scenario(run_id),
+            Self::DeliverableApiContract => deliverable::api_contract::scenario(run_id),
+            Self::DeliverableArchitectureDiagram => {
+                deliverable::architecture_diagram::scenario(run_id)
+            }
+            Self::DeliverableGameSimulation => deliverable::game_simulation::scenario(run_id),
+            Self::DeliverablePayloadFidelity => deliverable::payload_fidelity::scenario(run_id),
+            Self::DeliverableSceneGraph => deliverable::scene_graph::scenario(run_id),
+            Self::DeliverableStaticSite => deliverable::static_site::scenario(run_id),
+            Self::DeliverableSvgChart => deliverable::svg_chart::scenario(run_id),
+            Self::DeliverableWorldBible => deliverable::world_bible::scenario(run_id),
+            Self::LonghorizonHiddenRuleWorld => longhorizon::hidden_rule_world::scenario(run_id),
+            Self::OrchestrationCheckpointResume => {
+                orchestration::checkpoint_resume::scenario(run_id)
+            }
+            Self::OrchestrationCycleRefusal => orchestration::cycle_refusal::scenario(run_id),
+            Self::OrchestrationDiamondMerge => orchestration::diamond_merge::scenario(run_id),
+            Self::OrchestrationExactIterationBudget => {
+                orchestration::exact_iteration_budget::scenario(run_id)
+            }
+            Self::OrchestrationFanoutJoin => orchestration::fanout_join::scenario(run_id),
+            Self::OrchestrationImpossibleStop => orchestration::impossible_stop::scenario(run_id),
+            Self::OrchestrationRepairConvergence => {
+                orchestration::repair_convergence::scenario(run_id)
+            }
+            Self::OrchestrationTopologicalOrder => {
+                orchestration::topological_order::scenario(run_id)
+            }
+            Self::PortPythonToRust => port::python_to_rust::scenario(run_id),
+            Self::ReliabilityAmplificationBound => {
+                reliability::amplification_bound::scenario(run_id)
+            }
+            Self::ReliabilityBindingHygiene => reliability::binding_hygiene::scenario(run_id),
+            Self::ReliabilityIdempotentApply => reliability::idempotent_apply::scenario(run_id),
+            Self::ReliabilityMissingFunction => reliability::missing_function::scenario(run_id),
+            Self::ReliabilityPermanentStop => reliability::permanent_stop::scenario(run_id),
+            Self::ReliabilityStaleCounter => reliability::stale_counter::scenario(run_id),
+            Self::ReliabilityTransientRecovery => reliability::transient_recovery::scenario(run_id),
+            Self::ReliabilityVanishingFunction => reliability::vanishing_function::scenario(run_id),
         }
     }
 
@@ -587,6 +859,97 @@ impl ScenarioId {
                 namespace,
                 seed,
             )?,
+            Self::BuildLogPipeline => build::log_pipeline::materialize(namespace, seed)?,
+            Self::BuildMigrationTool => build::migration_tool::materialize(namespace, seed)?,
+            Self::BuildRegressionSuite => build::regression_suite::materialize(namespace, seed)?,
+            Self::BuildSecurityScanner => build::security_scanner::materialize(namespace, seed)?,
+            Self::CognitionGoalDrift => cognition::goal_drift::materialize(namespace, seed)?,
+            Self::CognitionInjectionResistance => {
+                cognition::injection_resistance::materialize(namespace, seed)?
+            }
+            Self::CognitionInstructionPrecedence => {
+                cognition::instruction_precedence::materialize(namespace, seed)?
+            }
+            Self::CognitionStaleMemoryRefresh => {
+                cognition::stale_memory_refresh::materialize(namespace, seed)?
+            }
+            Self::CognitionSubagentContextHandoff => {
+                cognition::subagent_context_handoff::materialize(namespace, seed)?
+            }
+            Self::CognitionSubagentScope => {
+                cognition::subagent_scope::materialize(namespace, seed)?
+            }
+            Self::DeliverableAnomalyReport => {
+                deliverable::anomaly_report::materialize(namespace, seed)?
+            }
+            Self::DeliverableApiContract => {
+                deliverable::api_contract::materialize(namespace, seed)?
+            }
+            Self::DeliverableArchitectureDiagram => {
+                deliverable::architecture_diagram::materialize(namespace, seed)?
+            }
+            Self::DeliverableGameSimulation => {
+                deliverable::game_simulation::materialize(namespace, seed)?
+            }
+            Self::DeliverablePayloadFidelity => {
+                deliverable::payload_fidelity::materialize(namespace, seed)?
+            }
+            Self::DeliverableSceneGraph => deliverable::scene_graph::materialize(namespace, seed)?,
+            Self::DeliverableStaticSite => deliverable::static_site::materialize(namespace, seed)?,
+            Self::DeliverableSvgChart => deliverable::svg_chart::materialize(namespace, seed)?,
+            Self::DeliverableWorldBible => deliverable::world_bible::materialize(namespace, seed)?,
+            Self::LonghorizonHiddenRuleWorld => {
+                longhorizon::hidden_rule_world::materialize(namespace, seed)?
+            }
+            Self::OrchestrationCheckpointResume => {
+                orchestration::checkpoint_resume::materialize(namespace, seed)?
+            }
+            Self::OrchestrationCycleRefusal => {
+                orchestration::cycle_refusal::materialize(namespace, seed)?
+            }
+            Self::OrchestrationDiamondMerge => {
+                orchestration::diamond_merge::materialize(namespace, seed)?
+            }
+            Self::OrchestrationExactIterationBudget => {
+                orchestration::exact_iteration_budget::materialize(namespace, seed)?
+            }
+            Self::OrchestrationFanoutJoin => {
+                orchestration::fanout_join::materialize(namespace, seed)?
+            }
+            Self::OrchestrationImpossibleStop => {
+                orchestration::impossible_stop::materialize(namespace, seed)?
+            }
+            Self::OrchestrationRepairConvergence => {
+                orchestration::repair_convergence::materialize(namespace, seed)?
+            }
+            Self::OrchestrationTopologicalOrder => {
+                orchestration::topological_order::materialize(namespace, seed)?
+            }
+            Self::PortPythonToRust => port::python_to_rust::materialize(namespace, seed)?,
+            Self::ReliabilityAmplificationBound => {
+                reliability::amplification_bound::materialize(namespace, seed)?
+            }
+            Self::ReliabilityBindingHygiene => {
+                reliability::binding_hygiene::materialize(namespace, seed)?
+            }
+            Self::ReliabilityIdempotentApply => {
+                reliability::idempotent_apply::materialize(namespace, seed)?
+            }
+            Self::ReliabilityMissingFunction => {
+                reliability::missing_function::materialize(namespace, seed)?
+            }
+            Self::ReliabilityPermanentStop => {
+                reliability::permanent_stop::materialize(namespace, seed)?
+            }
+            Self::ReliabilityStaleCounter => {
+                reliability::stale_counter::materialize(namespace, seed)?
+            }
+            Self::ReliabilityTransientRecovery => {
+                reliability::transient_recovery::materialize(namespace, seed)?
+            }
+            Self::ReliabilityVanishingFunction => {
+                reliability::vanishing_function::materialize(namespace, seed)?
+            }
         };
         materialized.validate()?;
         Ok(materialized)
@@ -605,17 +968,32 @@ impl ScenarioId {
         }
     }
 
+    /// Which suite this scenario belongs to. The four extended families are
+    /// identified by their id prefix so a new scenario joins its suite by
+    /// name alone.
+    pub fn suite(self) -> ScenarioSuite {
+        match self.as_str().split('.').next() {
+            Some(
+                "build" | "cognition" | "deliverable" | "longhorizon" | "orchestration" | "port"
+                | "reliability",
+            ) => ScenarioSuite::Extended,
+            _ => ScenarioSuite::Canonical,
+        }
+    }
+
     pub fn manual_cli_only(self) -> bool {
         matches!(self, Self::SecurityReview)
     }
 }
 
 pub fn selected(requested: &[ScenarioId]) -> Vec<ScenarioId> {
+    selected_in(requested, ScenarioSuite::Canonical)
+}
+
+/// Explicit ids win; an empty selection falls back to the whole suite.
+pub fn selected_in(requested: &[ScenarioId], suite: ScenarioSuite) -> Vec<ScenarioId> {
     if requested.is_empty() {
-        return ScenarioId::ALL
-            .into_iter()
-            .filter(|scenario| !scenario.manual_cli_only())
-            .collect();
+        return suite.scenarios();
     }
     requested.iter().copied().fold(Vec::new(), |mut ids, id| {
         if !ids.contains(&id) {
@@ -631,7 +1009,7 @@ mod tests {
 
     use super::*;
     #[test]
-    fn registry_contains_twenty_seven_unique_valid_scenarios() {
+    fn registry_contains_fifty_seven_unique_valid_scenarios() {
         let mut ids = HashSet::new();
         for scenario in ScenarioId::ALL {
             assert!(ids.insert(scenario.as_str()));
@@ -640,7 +1018,49 @@ mod tests {
                 .materialize("run", scenario.canonical_seed())
                 .unwrap();
         }
-        assert_eq!(ids.len(), 27);
+        assert_eq!(ids.len(), 64);
+    }
+
+    #[test]
+    fn the_extended_suite_holds_the_four_new_families() {
+        let extended = ScenarioSuite::Extended.scenarios();
+        assert_eq!(extended.len(), 37);
+        for scenario in &extended {
+            let family = scenario.as_str().split('.').next().unwrap_or_default();
+            assert!(matches!(
+                family,
+                "build"
+                    | "cognition"
+                    | "deliverable"
+                    | "longhorizon"
+                    | "orchestration"
+                    | "port"
+                    | "reliability"
+            ));
+        }
+    }
+
+    #[test]
+    fn an_empty_selection_never_reaches_beyond_the_canonical_suite() {
+        let canonical = selected(&[]);
+        assert_eq!(canonical.len(), ScenarioSuite::Canonical.scenarios().len());
+        assert!(canonical
+            .iter()
+            .all(|scenario| scenario.suite() == ScenarioSuite::Canonical));
+        assert_eq!(
+            canonical.len() + ScenarioSuite::Extended.scenarios().len() + 1,
+            ScenarioId::ALL.len()
+        );
+    }
+
+    #[test]
+    fn an_extended_scenario_is_still_selectable_by_id() {
+        let requested = [ScenarioId::ReliabilityStaleCounter];
+        assert_eq!(selected(&requested), requested);
+        assert_eq!(
+            selected_in(&[], ScenarioSuite::Extended),
+            ScenarioSuite::Extended.scenarios()
+        );
     }
 
     #[test]
@@ -659,7 +1079,7 @@ mod tests {
     fn default_selection_excludes_manually_prepared_scenarios() {
         let selected = selected(&[]);
         assert!(!selected.contains(&ScenarioId::SecurityReview));
-        assert_eq!(selected.len(), ScenarioId::ALL.len() - 1);
+        assert!(!selected.contains(&ScenarioId::DeliverableSceneGraph));
     }
 
     #[test]

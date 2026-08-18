@@ -13,17 +13,21 @@ use tokio::sync::watch;
 
 use crate::observe::{self, ObserveHub, ObserveSubscription, TreeObserver};
 use crate::wire::{
-    self, ControlPlaneEvidence, SessionMetricsResponse, SessionTreeResponse, StatusReport,
-    StopResponse, TeardownResponse, TurnCompletedEvent, TurnStatus,
+    self, ControlPlaneEvidence, PermissionMode, SessionMetricsResponse, SessionTreeResponse,
+    StatusReport, StopResponse, TeardownResponse, TurnCompletedEvent, TurnStatus,
 };
 
 pub const INVOCATION_TIMEOUT: Duration = Duration::from_secs(120);
+const APPROVAL_SET_MODE: &str = "approval::set-mode";
+const APPROVAL_LIST_PENDING: &str = "approval::list-pending";
+const APPROVAL_RESOLVE: &str = "approval::resolve";
 const PROGRESS_SAMPLE_INTERVAL: Duration = Duration::from_secs(15);
 
 pub struct E2eContext {
     client: IIIClient,
     hub: ObserveHub,
     binding_id: Mutex<Option<String>>,
+    raised: Mutex<std::collections::HashSet<String>>,
 }
 
 pub struct RuntimeVersions {
@@ -44,6 +48,7 @@ impl E2eContext {
             client,
             hub: ObserveHub::new(),
             binding_id: Mutex::new(None),
+            raised: Mutex::new(std::collections::HashSet::new()),
         }
     }
 }
@@ -68,6 +73,7 @@ impl E2eContext {
             client,
             hub: ObserveHub::new(),
             binding_id: Mutex::new(None),
+            raised: Mutex::new(std::collections::HashSet::new()),
         };
         context.wait_until_ready().await?;
         context.register_observation_sink();
@@ -144,6 +150,115 @@ impl E2eContext {
         Ok(RuntimeVersions { engine, harness })
     }
 
+    /// Lift a session out of the approval surface's `manual` default so an
+    /// unattended run is not held on its first function call. Returns false
+    /// when the stack exposes no approval surface, which is not an error.
+    pub async fn set_permission_mode(
+        &self,
+        session_id: &str,
+        mode: PermissionMode,
+    ) -> Result<bool> {
+        if !self.function_exists(APPROVAL_SET_MODE).await? {
+            return Ok(false);
+        }
+        let _: Value = self
+            .trigger(
+                APPROVAL_SET_MODE,
+                json!({ "session_id": session_id, "mode": mode }),
+            )
+            .await
+            .with_context(|| format!("set permission mode for session {session_id}"))?;
+        Ok(true)
+    }
+
+    /// Raise every session in a run's tree, not just the root: a spawned
+    /// sub-agent gets its own session and does not inherit the parent's
+    /// permissions, so its first call would hold forever in an unattended
+    /// run. Already-held calls in the tree are released as well.
+    pub async fn raise_tree_permissions(
+        &self,
+        root_session_id: &str,
+        mode: PermissionMode,
+    ) -> Result<()> {
+        if !self.function_exists(APPROVAL_SET_MODE).await? {
+            return Ok(());
+        }
+        for session_id in self.tree_session_ids(root_session_id).await {
+            if !self.remember_raised(&session_id) {
+                continue;
+            }
+            let _ = self.set_permission_mode(&session_id, mode).await;
+            self.release_pending(&session_id).await;
+        }
+        Ok(())
+    }
+
+    async fn tree_session_ids(&self, root_session_id: &str) -> Vec<String> {
+        let tree = tokio::time::timeout(
+            Duration::from_secs(5),
+            self.trigger::<_, SessionTreeResponse>(
+                "harness::session-tree",
+                json!({ "root_session_id": root_session_id }),
+            ),
+        )
+        .await;
+        match tree {
+            Ok(Ok(tree)) => tree
+                .sessions
+                .iter()
+                .map(|session| session.session_id.clone())
+                .collect(),
+            _ => vec![root_session_id.to_string()],
+        }
+    }
+
+    /// True the first time this run sees a session, so each one is raised once.
+    fn remember_raised(&self, session_id: &str) -> bool {
+        self.raised
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .insert(session_id.to_string())
+    }
+
+    /// Approve anything already parked in the pending inbox for this session.
+    /// A call held before the mode was raised stays held otherwise.
+    async fn release_pending(&self, session_id: &str) {
+        let Ok(pending) = self
+            .trigger_value(
+                APPROVAL_LIST_PENDING,
+                json!({ "session_id": session_id, "limit": 50 }),
+            )
+            .await
+        else {
+            return;
+        };
+        let records = pending
+            .get("pending")
+            .or_else(|| pending.get("records"))
+            .and_then(Value::as_array)
+            .cloned()
+            .unwrap_or_default();
+        for record in records {
+            let Some(call_id) = record
+                .get("function_call_id")
+                .and_then(Value::as_str)
+                .or_else(|| record.pointer("/call/id").and_then(Value::as_str))
+            else {
+                continue;
+            };
+            let _ = self
+                .trigger_value(
+                    APPROVAL_RESOLVE,
+                    json!({
+                        "session_id": session_id,
+                        "function_call_id": call_id,
+                        "decision": "allow",
+                    }),
+                )
+                .await;
+        }
+    }
+
     pub async fn bind_turn_completed(&self) -> Result<()> {
         self.unbind_turn_completed().await.ok();
         self.hub.drain();
@@ -199,10 +314,12 @@ impl E2eContext {
         stuck_timeout: Duration,
         log_heartbeat: bool,
         cancellation: Option<&watch::Receiver<bool>>,
+        permission_mode: PermissionMode,
     ) -> Result<SessionMetricsResponse> {
         let observer = ContextTreeObserver {
             context: self,
             subscription: self.hub.subscribe(),
+            permission_mode,
         };
         observe::wait_until_complete(
             &observer,
@@ -378,6 +495,7 @@ impl E2eContext {
 struct ContextTreeObserver<'a> {
     context: &'a E2eContext,
     subscription: ObserveSubscription,
+    permission_mode: PermissionMode,
 }
 
 #[async_trait]
@@ -387,6 +505,10 @@ impl TreeObserver for ContextTreeObserver<'_> {
     }
 
     async fn pull_metrics(&self, root_session_id: &str) -> Result<SessionMetricsResponse> {
+        let _ = self
+            .context
+            .raise_tree_permissions(root_session_id, self.permission_mode)
+            .await;
         self.context.metrics(root_session_id).await
     }
 
