@@ -11,9 +11,10 @@ subject artifact or an already-running iii stack.
 
 ## Binaries
 
-- `harness-e2e` runs scenarios directly, reads reports, and serves the local
-  dashboard.
-- `e2e-worker` registers the asynchronous `e2e::*` control plane in iii.
+- `harness-e2e` starts the iii worker by default and registers the asynchronous
+  `e2e::*` control plane plus the injectable Console dashboard. Explicit
+  subcommands keep direct scenario execution, report inspection, and the
+  standalone dashboard available from the same binary.
 
 Build and validate the repository:
 
@@ -104,9 +105,9 @@ Use `--catalog-only` for a no-model smoke check. See
 Start the asynchronous worker:
 
 ```bash
-cargo run --locked --bin e2e-worker -- \
+cargo run --locked --bin harness-e2e -- worker \
   --url ws://127.0.0.1:49134 \
-  --output-root target/e2e-worker
+  --data-dir target/e2e-worker
 ```
 
 The worker exposes `e2e::run`, `e2e::status`, `e2e::cancel`,
@@ -198,3 +199,16 @@ Deliverable, structural, technical, cost, latency, turns, retries, and work
 amplification deltas remain independent. Cost and wall-time are reported as
 observed metrics and compared only within a compatible baseline/candidate
 cohort.
+amplification deltas remain independent. A tier is repeatable after five local
+runs satisfy the deliverable, structural, and technical thresholds. Cost and
+wall-time are reported as observed metrics and compared only within a compatible
+baseline/candidate cohort. See [docs/release.md](docs/release.md) for the
+protected environment, immutable identity, artifact, retry, and promotion
+boundaries.
+
+## Worker releases
+
+Namespaced stable SemVer tags (`harness-e2e/vX.Y.Z`) build the standard nine
+Registry binary targets, create a GitHub prerelease, collect the live typed iii
+interface from the released Linux binary, and publish only the Registry
+`next` channel.

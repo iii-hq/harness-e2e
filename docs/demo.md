@@ -15,7 +15,7 @@ two parallel children and a merge.
 The script performs the complete public flow:
 
 ```text
-build trusted e2e-worker
+build trusted harness-e2e worker
   -> register e2e::* in iii
   -> materialize e2e::scenarios-list
   -> admit e2e::run

@@ -11,6 +11,7 @@ import {
   routeFromHash,
   routeRenderIdentity,
 } from '@/hooks/use-hash-route'
+import { configureDashboardRuntime } from '@/lib/dashboard-runtime'
 
 describe('dashboard hash routes', () => {
   it('routes the evidence workspace without an html page name', () => {
@@ -66,6 +67,25 @@ describe('dashboard hash routes', () => {
       page: 'plan-detail',
       planId: 'plan/one',
     })
+  })
+
+  it('keeps every route inside the injectable Console page', () => {
+    const restore = configureDashboardRuntime({
+      embedded: true,
+      hashBase: '#/ext/harness-e2e',
+    })
+    try {
+      expect(hashForWorkspace()).toBe('#/ext/harness-e2e/overview')
+      expect(hashForPlan('plan/one')).toBe('#/ext/harness-e2e/plans/plan%2Fone')
+      expect(routeFromHash('#/ext/harness-e2e/execution/run%2Fone')).toEqual({
+        page: 'execution',
+        executionId: 'run/one',
+        anchor: null,
+      })
+      expect(routeFromHash('#/workers')).toBeNull()
+    } finally {
+      restore()
+    }
   })
 
   it('reloads only when navigation swaps the legacy workspace renderer', () => {

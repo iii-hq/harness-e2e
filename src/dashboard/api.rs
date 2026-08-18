@@ -25,6 +25,7 @@ use super::read_model::{
 };
 use super::store::read_stored_run;
 use super::{ApiError, DashboardArgs, RunRequest, RunSnapshot};
+use crate::control::ControlPlane;
 
 const MAX_REQUEST_BYTES: usize = 64 * 1024;
 
@@ -52,7 +53,15 @@ pub(super) async fn serve(args: DashboardArgs) -> Result<()> {
     let engine_url = Arc::new(args.url.clone());
     let iii = (!view_only).then(|| bus::connect(&engine_url));
     let events = iii.as_deref().map(bus::DashboardEvents::register);
-    let controller = Controller::new(args, events)?;
+    let control = if let Some(iii) = iii.as_deref() {
+        let control =
+            ControlPlane::new(iii.clone(), args.url.clone(), args.runs_dir.clone()).await?;
+        control.register();
+        Some(control)
+    } else {
+        None
+    };
+    let controller = Controller::new(args, events, control).await?;
     if let Some(iii) = iii.as_deref() {
         bus::register_functions(iii, controller.clone());
     }
@@ -104,6 +113,22 @@ pub(super) async fn serve(args: DashboardArgs) -> Result<()> {
     if let Some(iii) = iii {
         iii.shutdown_async().await;
     }
+    Ok(())
+}
+
+pub(super) async fn register_worker_functions(
+    iii: &iii_sdk::IIIClient,
+    control: ControlPlane,
+) -> Result<()> {
+    let args = DashboardArgs {
+        listen: "127.0.0.1:0".parse().expect("static socket address"),
+        url: control.url().to_string(),
+        runs_dir: control.output_root().to_path_buf(),
+        view_only: false,
+    };
+    let events = Some(bus::DashboardEvents::register(iii));
+    let controller = Controller::new(args, events, Some(control)).await?;
+    bus::register_functions(iii, controller);
     Ok(())
 }
 
@@ -313,7 +338,7 @@ async fn cancel_run(
 async fn catalog(
     State(state): State<AppState>,
     Query(query): Query<CatalogQuery>,
-) -> Result<Json<Value>, ApiError> {
+) -> Result<Json<bus::CatalogResponse>, ApiError> {
     let url = query
         .url
         .unwrap_or_else(|| state.controller.default_url().to_string());

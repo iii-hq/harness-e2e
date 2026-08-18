@@ -1,0 +1,17 @@
+iii: v1
+name: harness-e2e
+language: rust
+deploy: binary
+manifest: Cargo.toml
+license: Apache-2.0
+bin: harness-e2e
+tags: [harness, e2e, evaluation, benchmark, dashboard]
+description: Measure Harness capability, retain reproducible evidence, and expose the E2E dashboard.
+
+dependencies:
+  harness: "^1.8.1"
+  console: "^1.9.3"
+  state: "^0.22.0"
+  llm-router: "^1.4.7"
+  database: "^0.5.0"
+  storage: "^0.1.10"

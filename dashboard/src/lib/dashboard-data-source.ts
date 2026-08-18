@@ -355,10 +355,11 @@ export type ExecutionBundle = {
   detail: DashboardExecutionDetail
 }
 
-type RuntimeConfig = {
+export type RuntimeConfig = {
   mode: 'local' | 'observed'
   transport: 'iii' | 'static'
   page_size: number
+  http_fallback?: boolean
   functions: {
     executions_list: string
     execution_get: string
@@ -415,6 +416,13 @@ export type DashboardDataBridge = {
 
 let runtimePromise: Promise<RuntimeConfig | null> | null = null
 let bridgePromise: Promise<DashboardDataBridge | null> | null = null
+let installedRuntime: RuntimeConfig | null = null
+
+export function installDashboardRuntimeConfig(runtime: RuntimeConfig) {
+  installedRuntime = runtime
+  runtimePromise = Promise.resolve(runtime)
+  bridgePromise = null
+}
 
 async function dashboardBridge(
   runtime: RuntimeConfig,
@@ -441,7 +449,9 @@ function makeBridge(runtime: RuntimeConfig): DashboardDataBridge {
       const client = await getDashboardIiiClient()
       return await client.trigger<T>(functionId, payload)
     } catch (cause) {
-      if (!isTransportUnavailable(cause)) throw normalizeBridgeError(cause)
+      if (runtime.http_fallback === false || !isTransportUnavailable(cause)) {
+        throw normalizeBridgeError(cause)
+      }
       return fallback()
     }
   }
@@ -903,7 +913,9 @@ async function getExecution(
       },
     )
   } catch (cause) {
-    if (!isTransportUnavailable(cause)) throw normalizeBridgeError(cause)
+    if (runtime.http_fallback === false || !isTransportUnavailable(cause)) {
+      throw normalizeBridgeError(cause)
+    }
     return httpJson(
       `./api/dashboard/executions/${encodeURIComponent(executionId)}`,
     )
@@ -966,6 +978,7 @@ function filterStaticExecutions(
 }
 
 async function runtimeConfig(): Promise<RuntimeConfig | null> {
+  if (installedRuntime) return installedRuntime
   runtimePromise ??= httpJson<RuntimeConfig>('./api/dashboard').catch(
     () => null,
   )

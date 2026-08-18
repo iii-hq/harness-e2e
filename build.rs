@@ -5,6 +5,10 @@ use std::time::SystemTime;
 
 fn main() {
     ensure_dashboard_bundle();
+    println!(
+        "cargo:rustc-env=TARGET={}",
+        env::var("TARGET").expect("Cargo sets TARGET")
+    );
     println!("cargo:rerun-if-env-changed=HARNESS_E2E_BUILD_REPOSITORY");
     println!("cargo:rerun-if-env-changed=HARNESS_E2E_BUILD_REVISION");
 
@@ -35,6 +39,7 @@ fn ensure_dashboard_bundle() {
         "dashboard/package.json",
         "dashboard/pnpm-lock.yaml",
         "dashboard/vite.config.ts",
+        "dashboard/vite.console.config.ts",
         "dashboard/tsconfig.app.json",
         "dashboard/tsconfig.json",
         "dashboard/tsconfig.node.json",
@@ -45,17 +50,26 @@ fn ensure_dashboard_bundle() {
     println!("cargo:rerun-if-env-changed=PNPM");
 
     let dashboard_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("dashboard");
-    let dist_index = dashboard_dir.join("dist").join("index.html");
-    if dist_index.exists() && dashboard_dist_is_fresh(&dist_index, &dashboard_dir) {
+    let dist_assets = [
+        dashboard_dir.join("dist").join("index.html"),
+        dashboard_dir.join("dist-console").join("page.js"),
+        dashboard_dir.join("dist-console").join("styles.css"),
+    ];
+    if dist_assets
+        .iter()
+        .all(|asset| asset.exists() && dashboard_dist_is_fresh(asset, &dashboard_dir))
+    {
         return;
     }
 
     if env::var_os("SKIP_DASHBOARD_BUILD").is_some() {
-        if !dist_index.exists() {
-            panic!(
-                "SKIP_DASHBOARD_BUILD is set but {} is missing; build the React app with `pnpm --dir dashboard install && pnpm --dir dashboard build`",
-                dist_index.display()
-            );
+        for asset in &dist_assets {
+            if !asset.exists() {
+                panic!(
+                    "SKIP_DASHBOARD_BUILD is set but {} is missing; build the React app with `pnpm --dir dashboard install && pnpm --dir dashboard build`",
+                    asset.display()
+                );
+            }
         }
         return;
     }
@@ -63,11 +77,13 @@ fn ensure_dashboard_bundle() {
     let pnpm = locate_pnpm();
     run_pnpm(&pnpm, &dashboard_dir, &["install", "--frozen-lockfile"]);
     run_pnpm(&pnpm, &dashboard_dir, &["build"]);
-    if !dist_index.exists() {
-        panic!(
-            "dashboard build completed without producing {}",
-            dist_index.display()
-        );
+    for asset in &dist_assets {
+        if !asset.exists() {
+            panic!(
+                "dashboard build completed without producing {}",
+                asset.display()
+            );
+        }
     }
 }
 
@@ -106,6 +122,7 @@ fn dashboard_dist_is_fresh(dist_index: &Path, dashboard_dir: &Path) -> bool {
         "package.json",
         "pnpm-lock.yaml",
         "vite.config.ts",
+        "vite.console.config.ts",
         "tsconfig.app.json",
         "tsconfig.json",
         "tsconfig.node.json",
