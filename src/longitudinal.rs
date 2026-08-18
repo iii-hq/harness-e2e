@@ -1270,7 +1270,7 @@ mod tests {
 
     fn report(revision: &str, regress: bool, include_infra: bool) -> E2eReport {
         let case = ScenarioCase::new(
-            "coordination.2",
+            "todo_worker_simple",
             1,
             7,
             serde_json::json!({"variant": "canonical"}),

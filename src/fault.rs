@@ -1008,7 +1008,7 @@ mod tests {
             asset_redaction: Default::default(),
         };
         let scenario = E2eScenarioReport {
-            scenario_id: "coordination.4".into(),
+            scenario_id: "todo_worker_simple".into(),
             case_id: "case-1".into(),
             scenario_version: 1,
             case: None,

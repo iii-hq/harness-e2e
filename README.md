@@ -43,7 +43,7 @@ cargo run --locked --bin harness-e2e -- run \
   --url ws://127.0.0.1:49134 \
   --model codex/gpt-5.6-luna \
   --provider openai-codex \
-  --scenario coordination.1
+  --scenario todo_worker_simple
 ```
 
 ## Dashboard
@@ -91,7 +91,7 @@ and the complete dashboard behavior.
 ## Real control-plane demo
 
 With an iii stack already running, exercise the complete asynchronous
-`e2e::*` path using a real coordination scenario:
+`e2e::*` path using a real Todo Worker scenario:
 
 ```bash
 HARNESS_E2E_WORKERS_REPOSITORY=iii-hq/workers \

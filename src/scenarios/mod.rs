@@ -16,7 +16,6 @@ use crate::wire::SessionMetricsResponse;
 
 mod assessment;
 pub mod common;
-pub mod coordination;
 pub mod custom_validator;
 pub mod direct_answer;
 mod domain;
@@ -26,7 +25,6 @@ pub mod incident_response;
 pub mod mechanical_reaction;
 pub mod multi_subagent_validation;
 pub mod persistent_state;
-pub mod pr_review_regressions;
 pub mod reactive_automation;
 pub mod receiving_operation;
 pub mod research_pipeline;
@@ -404,40 +402,10 @@ pub enum ScenarioId {
     ValidationScopeEnforcement,
     #[value(name = "validation_chain")]
     ValidationChain,
-    #[serde(rename = "coordination.1")]
-    #[value(name = "coordination.1")]
-    Coordination1,
-    #[serde(rename = "coordination.2")]
-    #[value(name = "coordination.2")]
-    Coordination2,
-    #[serde(rename = "coordination.3")]
-    #[value(name = "coordination.3")]
-    Coordination3,
-    #[serde(rename = "coordination.4")]
-    #[value(name = "coordination.4")]
-    Coordination4,
-    #[serde(rename = "coordination.5")]
-    #[value(name = "coordination.5")]
-    Coordination5,
-    #[serde(rename = "pr_review.token_takeover")]
-    #[value(name = "pr_review.token_takeover")]
-    PrReviewTokenTakeover,
-    #[serde(rename = "pr_review.reconnect_sweep")]
-    #[value(name = "pr_review.reconnect_sweep")]
-    PrReviewReconnectSweep,
-    #[serde(rename = "pr_review.asset_retry_ack")]
-    #[value(name = "pr_review.asset_retry_ack")]
-    PrReviewAssetRetryAck,
-    #[serde(rename = "pr_review.presence_reconnect")]
-    #[value(name = "pr_review.presence_reconnect")]
-    PrReviewPresenceReconnect,
-    #[serde(rename = "pr_review.prompt_provenance")]
-    #[value(name = "pr_review.prompt_provenance")]
-    PrReviewPromptProvenance,
 }
 
 impl ScenarioId {
-    pub const ALL: [Self; 33] = [
+    pub const ALL: [Self; 23] = [
         Self::DirectAnswer,
         Self::PersistentState,
         Self::ReactiveAutomation,
@@ -461,16 +429,6 @@ impl ScenarioId {
         Self::ValidationSelfRepair,
         Self::ValidationScopeEnforcement,
         Self::ValidationChain,
-        Self::Coordination1,
-        Self::Coordination2,
-        Self::Coordination3,
-        Self::Coordination4,
-        Self::Coordination5,
-        Self::PrReviewTokenTakeover,
-        Self::PrReviewReconnectSweep,
-        Self::PrReviewAssetRetryAck,
-        Self::PrReviewPresenceReconnect,
-        Self::PrReviewPromptProvenance,
     ];
 
     pub fn as_str(self) -> &'static str {
@@ -498,16 +456,6 @@ impl ScenarioId {
             Self::ValidationSelfRepair => validation_self_repair::ID,
             Self::ValidationScopeEnforcement => validation_scope_enforcement::ID,
             Self::ValidationChain => validation_chain::ID,
-            Self::Coordination1 => coordination::ID_1,
-            Self::Coordination2 => coordination::ID_2,
-            Self::Coordination3 => coordination::ID_3,
-            Self::Coordination4 => coordination::ID_4,
-            Self::Coordination5 => coordination::ID_5,
-            Self::PrReviewTokenTakeover => pr_review_regressions::TOKEN_TAKEOVER_ID,
-            Self::PrReviewReconnectSweep => pr_review_regressions::RECONNECT_SWEEP_ID,
-            Self::PrReviewAssetRetryAck => pr_review_regressions::ASSET_RETRY_ACK_ID,
-            Self::PrReviewPresenceReconnect => pr_review_regressions::PRESENCE_RECONNECT_ID,
-            Self::PrReviewPromptProvenance => pr_review_regressions::PROMPT_PROVENANCE_ID,
         }
     }
 
@@ -536,31 +484,6 @@ impl ScenarioId {
             Self::ValidationSelfRepair => validation_self_repair::scenario(run_id),
             Self::ValidationScopeEnforcement => validation_scope_enforcement::scenario(run_id),
             Self::ValidationChain => validation_chain::scenario(run_id),
-            Self::Coordination1 => coordination::scenario(coordination::Rung::One, run_id),
-            Self::Coordination2 => coordination::scenario(coordination::Rung::Two, run_id),
-            Self::Coordination3 => coordination::scenario(coordination::Rung::Three, run_id),
-            Self::Coordination4 => coordination::scenario(coordination::Rung::Four, run_id),
-            Self::Coordination5 => coordination::scenario(coordination::Rung::Five, run_id),
-            Self::PrReviewTokenTakeover => pr_review_regressions::scenario(
-                pr_review_regressions::ReviewCase::TokenTakeover,
-                run_id,
-            ),
-            Self::PrReviewReconnectSweep => pr_review_regressions::scenario(
-                pr_review_regressions::ReviewCase::ReconnectSweep,
-                run_id,
-            ),
-            Self::PrReviewAssetRetryAck => pr_review_regressions::scenario(
-                pr_review_regressions::ReviewCase::AssetRetryAck,
-                run_id,
-            ),
-            Self::PrReviewPresenceReconnect => pr_review_regressions::scenario(
-                pr_review_regressions::ReviewCase::PresenceReconnect,
-                run_id,
-            ),
-            Self::PrReviewPromptProvenance => pr_review_regressions::scenario(
-                pr_review_regressions::ReviewCase::PromptProvenance,
-                run_id,
-            ),
         }
     }
 
@@ -597,46 +520,6 @@ impl ScenarioId {
                 validation_scope_enforcement::materialize(namespace, seed)?
             }
             Self::ValidationChain => validation_chain::materialize(namespace, seed)?,
-            Self::Coordination1 => {
-                coordination::materialize(coordination::Rung::One, namespace, seed)?
-            }
-            Self::Coordination2 => {
-                coordination::materialize(coordination::Rung::Two, namespace, seed)?
-            }
-            Self::Coordination3 => {
-                coordination::materialize(coordination::Rung::Three, namespace, seed)?
-            }
-            Self::Coordination4 => {
-                coordination::materialize(coordination::Rung::Four, namespace, seed)?
-            }
-            Self::Coordination5 => {
-                coordination::materialize(coordination::Rung::Five, namespace, seed)?
-            }
-            Self::PrReviewTokenTakeover => pr_review_regressions::materialize(
-                pr_review_regressions::ReviewCase::TokenTakeover,
-                namespace,
-                seed,
-            )?,
-            Self::PrReviewReconnectSweep => pr_review_regressions::materialize(
-                pr_review_regressions::ReviewCase::ReconnectSweep,
-                namespace,
-                seed,
-            )?,
-            Self::PrReviewAssetRetryAck => pr_review_regressions::materialize(
-                pr_review_regressions::ReviewCase::AssetRetryAck,
-                namespace,
-                seed,
-            )?,
-            Self::PrReviewPresenceReconnect => pr_review_regressions::materialize(
-                pr_review_regressions::ReviewCase::PresenceReconnect,
-                namespace,
-                seed,
-            )?,
-            Self::PrReviewPromptProvenance => pr_review_regressions::materialize(
-                pr_review_regressions::ReviewCase::PromptProvenance,
-                namespace,
-                seed,
-            )?,
         };
         materialized.validate()?;
         Ok(materialized)
@@ -679,7 +562,7 @@ mod tests {
 
     use super::*;
     #[test]
-    fn registry_contains_thirty_three_unique_valid_scenarios() {
+    fn registry_contains_twenty_three_unique_valid_scenarios() {
         let mut ids = HashSet::new();
         for scenario in ScenarioId::ALL {
             assert!(ids.insert(scenario.as_str()));
@@ -688,7 +571,7 @@ mod tests {
                 .materialize("run", scenario.canonical_seed())
                 .unwrap();
         }
-        assert_eq!(ids.len(), 33);
+        assert_eq!(ids.len(), 23);
     }
 
     #[test]

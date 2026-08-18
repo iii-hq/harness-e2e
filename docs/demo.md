@@ -4,11 +4,10 @@ This demo exercises the extracted system against a running iii stack. It does
 not use sample reports, mocked functions, linked Harness crates, or direct
 Harness process access.
 
-The default case is `coordination.1`: one child session writes an independent
-branch and the root session finalizes one validated deliverable after a real
-wake. The run uses a fixed seed so its inputs and expected artifact remain
-reproducible. Set `E2E_SCENARIO=coordination.2` to add the next ladder rung with
-two parallel children and a merge.
+The default case is `todo_worker_simple`: one Harness session creates and
+validates a run-scoped Todo Worker. The run uses a fixed seed so its inputs and
+expected evidence remain reproducible. Use `todo_worker_planned` to exercise
+the five-node planner/compiler/builder/validator workflow.
 
 ## What it proves
 
@@ -53,10 +52,10 @@ The running Harness must publish request and response schemas compatible with
 the current typed surface. Missing or incompatible fields fail preflight; no
 payload-version compatibility mode exists.
 
-Select another materialized case or model with environment variables:
+Select another Todo Worker case or model with environment variables:
 
 ```bash
-E2E_SCENARIO=coordination.2 \
+E2E_SCENARIO=todo_worker_planned \
 E2E_MODEL=codex/gpt-5.6-terra \
 E2E_PROVIDER=openai-codex \
 E2E_SEED=4404 \
