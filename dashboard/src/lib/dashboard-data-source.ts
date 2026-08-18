@@ -140,8 +140,8 @@ export type DashboardScenarioMetricSummary = JsonObject & {
   workflow?: DashboardWorkflowMetricSummary | null
 }
 
-/** Operational metrics for Rust-owned composite steps, distinct from Harness
- * model/session metrics which may legitimately be unavailable. */
+/** Consolidated workflow metrics. Usage totals are sourced exclusively from
+ * persisted step metrics and may cover only part of a composite workflow. */
 export type DashboardWorkflowMetricSummary = JsonObject & {
   step_count?: number
   succeeded_steps?: number
@@ -157,6 +157,16 @@ export type DashboardWorkflowMetricSummary = JsonObject & {
   passed_hard_gate_count?: number
   evaluation_count?: number
   failure_count?: number
+  input_tokens?: number | null
+  output_tokens?: number | null
+  total_tokens?: number | null
+  function_calls?: number | null
+  function_call_errors?: number | null
+  input_token_metric_steps?: number
+  output_token_metric_steps?: number
+  token_metric_steps?: number
+  function_call_metric_steps?: number
+  function_call_error_metric_steps?: number
   numeric_metrics?: JsonObject & Record<string, number>
 }
 

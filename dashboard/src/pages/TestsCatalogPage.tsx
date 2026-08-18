@@ -1,9 +1,8 @@
 import { useEffect, useState } from 'react'
-import { ThemeToggle } from '@/components/ThemeToggle'
+import { AppHeader, appHeaderActionClassName } from '@/components/AppHeader'
 import {
   hashForComparison,
   hashForNewPlan,
-  hashForPlans,
   hashForTestHistory,
   hashForWorkspace,
 } from '@/hooks/use-hash-route'
@@ -64,45 +63,30 @@ export function TestsCatalogPage() {
       <a className="skip-link" href="#tests-catalog-main">
         Skip to test catalog
       </a>
-      <header className="topbar">
-        <a
-          className="brand"
-          href={hashForWorkspace()}
-          aria-label="Harness E2E dashboard"
-        >
-          <span className="brand-copy">
-            <strong>iii</strong>
-            <span>Harness benchmarks</span>
-          </span>
-        </a>
-        <nav className="topbar-actions" aria-label="Test catalog actions">
-          <a
-            className="button button-secondary"
-            href={hashForWorkspace()}
-            data-mobile-label="Overview"
-          >
-            Overview
-          </a>
-          {local && (
+      <AppHeader
+        active="tests"
+        actionsLabel="Test catalog actions"
+        actions={
+          <>
+            {local ? (
+              <a
+                className={appHeaderActionClassName({ primary: true })}
+                href={hashForNewPlan()}
+                aria-label="New local plan"
+              >
+                New plan
+              </a>
+            ) : null}
             <a
-              className="button button-secondary"
-              href={hashForPlans()}
-              data-mobile-label="Plans"
+              className={appHeaderActionClassName()}
+              href={hashForComparison()}
+              aria-label="System comparison"
             >
-              Plans
+              Compare
             </a>
-          )}
-          {local && (
-            <a className="button button-primary" href={hashForNewPlan()}>
-              ＋ New local plan
-            </a>
-          )}
-          <a className="button button-secondary" href={hashForComparison()}>
-            System comparison
-          </a>
-          <ThemeToggle />
-        </nav>
-      </header>
+          </>
+        }
+      />
       <main id="tests-catalog-main" className="page-shell overview-shell">
         <section className="page-heading" aria-labelledby="tests-catalog-title">
           <div>

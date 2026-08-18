@@ -140,6 +140,49 @@ describe('local plan lifecycle', () => {
 })
 
 describe('local plan execution comparison', () => {
+  it('hides comparison controls until a baseline and another execution exist', () => {
+    const html = renderToStaticMarkup(
+      <PlanExecutionHistory
+        plan={{
+          ...candidateRunningPlan,
+          state: 'baseline_ready',
+          candidate_execution_ids: [],
+          last_attempt_id: 'baseline-1',
+        }}
+        summaries={{ 'baseline-1': execution('baseline-1') }}
+        visualBaselineId="baseline-1"
+        comparisonCandidateIds={[]}
+        selectedCandidateId={null}
+        onVisualBaselineChange={() => undefined}
+        onToggleCandidate={() => undefined}
+        loading={false}
+      />,
+    )
+
+    expect(html).toBe('')
+
+    const noBaselineHtml = renderToStaticMarkup(
+      <PlanExecutionHistory
+        plan={{
+          ...candidateRunningPlan,
+          state: 'comparison_ready',
+          baseline_execution_id: null,
+          candidate_execution_ids: ['candidate-1'],
+          last_attempt_id: 'candidate-1',
+        }}
+        summaries={{ 'candidate-1': execution('candidate-1') }}
+        visualBaselineId={null}
+        comparisonCandidateIds={['candidate-1']}
+        selectedCandidateId="candidate-1"
+        onVisualBaselineChange={() => undefined}
+        onToggleCandidate={() => undefined}
+        loading={false}
+      />,
+    )
+
+    expect(noBaselineHtml).toBe('')
+  })
+
   it('pivots metrics into rows, keeps newest candidates first and separates incomplete attempts', () => {
     const plan: LocalPlan = {
       ...candidateRunningPlan,
@@ -356,6 +399,34 @@ describe('local plan execution comparison', () => {
     expect(html).toContain('tabindex="-1"')
     expect(html).toContain('aria-busy="true"')
     expect(html).toContain('Baseline vs Candidate #1')
+  })
+
+  it('does not render an empty comparison panel without both executions', () => {
+    const html = renderToStaticMarkup(
+      <PlanComparisonPanel
+        comparison={null}
+        baselineExecutionId="baseline-1"
+        candidateExecutionId={null}
+        candidateNumber={null}
+        loading={false}
+        error={null}
+      />,
+    )
+
+    expect(html).toBe('')
+
+    const noBaselineHtml = renderToStaticMarkup(
+      <PlanComparisonPanel
+        comparison={null}
+        baselineExecutionId={null}
+        candidateExecutionId="candidate-1"
+        candidateNumber={1}
+        loading={false}
+        error={null}
+      />,
+    )
+
+    expect(noBaselineHtml).toBe('')
   })
 
   it('selects the latest candidate automatically and preserves a valid manual selection', () => {

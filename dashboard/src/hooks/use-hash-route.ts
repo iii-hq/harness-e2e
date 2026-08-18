@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 
-export type WorkspaceView = 'overview' | 'tests' | 'capability' | 'executions'
+export type WorkspaceView = 'overview' | 'tests' | 'executions'
 
 export type DashboardRoute =
   | { page: 'overview'; view: WorkspaceView }
@@ -27,7 +27,6 @@ export type DashboardRoutes = {
 const workspaceViews = new Set<WorkspaceView>([
   'overview',
   'tests',
-  'capability',
   'executions',
 ])
 const defaultRoute: DashboardRoute = { page: 'overview', view: 'overview' }

@@ -1,6 +1,5 @@
+import { AppHeader } from '@/components/AppHeader'
 import { LegacyLoadError } from '@/components/LegacyLoadError'
-import { ThemeToggle } from '@/components/ThemeToggle'
-import { hashForWorkspace } from '@/hooks/use-hash-route'
 import { useLegacyPage } from '@/hooks/useLegacyPage'
 
 export function CoveragePage() {
@@ -15,28 +14,7 @@ export function CoveragePage() {
       <div className="ambient ambient-one" aria-hidden="true"></div>
       <div className="ambient ambient-two" aria-hidden="true"></div>
 
-      <header className="topbar">
-        <a
-          className="brand"
-          href="https://github.com/iii-hq/workers"
-          aria-label="iii workers"
-        >
-          <span className="brand-copy">
-            <strong>iii</strong>
-            <span>Harness benchmarks</span>
-          </span>
-        </a>
-        <nav className="topbar-actions" aria-label="Dashboard actions">
-          <ThemeToggle />
-          <a
-            className="button button-secondary"
-            href={hashForWorkspace()}
-            data-mobile-label="Runs"
-          >
-            Executions
-          </a>
-        </nav>
-      </header>
+      <AppHeader active="coverage" />
 
       <main id="main" className="page-shell overview-shell">
         <section className="page-heading" aria-labelledby="page-title">

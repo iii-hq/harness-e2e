@@ -1,5 +1,6 @@
 import { Check, ChevronDown, ChevronRight } from 'lucide-react'
 import { useEffect, useId, useMemo, useRef, useState } from 'react'
+import '@/design-system/styles.css'
 
 export type ProviderModelOption = {
   label: string
@@ -91,10 +92,10 @@ export function ProviderModelDropdown({
   }
 
   return (
-    <div className="provider-model-dropdown" ref={rootRef}>
+    <div className="relative min-w-0 w-full" ref={rootRef}>
       <button
         type="button"
-        className="provider-model-trigger"
+        className="flex min-h-11 w-full items-center justify-between gap-2.5 rounded-lg border border-[var(--ds-color-line)] bg-[var(--ds-color-surface-raised)] px-3 py-2 text-left text-sm text-[var(--ds-color-ink)] transition-colors duration-[var(--ds-duration-fast)] hover:border-[var(--ds-color-line-strong)] focus-visible:border-[var(--ds-color-focus)] focus-visible:[outline:2px_solid_var(--ds-color-focus)] focus-visible:[outline-offset:3px] disabled:cursor-not-allowed disabled:opacity-50 aria-expanded:border-[var(--ds-color-line-strong)]"
         aria-label={ariaLabel}
         aria-haspopup="listbox"
         aria-controls={menuId}
@@ -118,34 +119,40 @@ export function ProviderModelDropdown({
           }
         }}
       >
-        <span className="provider-model-selection">
+        <span className="flex min-w-0 flex-1 flex-col gap-0.5 overflow-hidden">
           {selected ? (
             <>
-              <strong>{selected.label}</strong>
-              <small>{selected.provider}</small>
+              <strong className="overflow-hidden text-ellipsis whitespace-nowrap text-xs font-semibold">
+                {selected.label}
+              </strong>
+              <small className="overflow-hidden text-ellipsis whitespace-nowrap text-[0.64rem] font-medium text-[var(--ds-color-ink-muted)]">
+                {selected.provider}
+              </small>
             </>
           ) : (
-            <span>{placeholder}</span>
+            <span className="overflow-hidden text-ellipsis whitespace-nowrap text-xs text-[var(--ds-color-ink-muted)]">
+              {placeholder}
+            </span>
           )}
         </span>
         <ChevronDown
           size={15}
           aria-hidden="true"
-          className={
-            open ? 'provider-model-chevron is-open' : 'provider-model-chevron'
-          }
+          className={`shrink-0 transition-transform duration-[var(--ds-duration-fast)] ${open ? 'rotate-180' : ''}`}
         />
       </button>
 
       {open && (
         <div
-          className="provider-model-menu"
+          className="absolute z-50 mt-2 grid max-h-80 w-full min-w-[15rem] overflow-auto rounded-lg border border-[var(--ds-color-line-strong)] bg-[var(--ds-color-surface)] p-1.5 shadow-[var(--ds-shadow-panel)]"
           id={menuId}
           role="listbox"
           aria-label={ariaLabel}
         >
           {normalizedGroups.length === 0 ? (
-            <div className="provider-model-empty">No models available</div>
+            <div className="p-5 text-center text-xs text-[var(--ds-color-ink-muted)]">
+              No models available
+            </div>
           ) : (
             normalizedGroups.map((group) => {
               const collapsed = !expandedProviders.has(group.provider)
@@ -155,16 +162,12 @@ export function ProviderModelDropdown({
               ].join('-')
               return (
                 <section
-                  className={
-                    collapsed
-                      ? 'provider-model-group is-collapsed'
-                      : 'provider-model-group'
-                  }
+                  className="border-b border-[var(--ds-color-line)] py-1 last:border-b-0"
                   key={group.provider}
                 >
                   <button
                     type="button"
-                    className="provider-model-group-toggle"
+                    className="flex min-h-9 w-full items-center gap-2 rounded-md border-0 bg-transparent px-2 text-left font-mono text-[0.68rem] font-semibold text-[var(--ds-color-ink-soft)] transition-colors duration-[var(--ds-duration-fast)] hover:bg-[var(--ds-color-surface-raised)] hover:text-[var(--ds-color-ink)]"
                     aria-expanded={!collapsed}
                     aria-controls={groupId}
                     onClick={() => toggleProvider(group.provider)}
@@ -172,23 +175,27 @@ export function ProviderModelDropdown({
                     <ChevronRight
                       size={14}
                       aria-hidden="true"
-                      className="provider-model-group-chevron"
+                      className={`shrink-0 transition-transform duration-[var(--ds-duration-fast)] ${collapsed ? '' : 'rotate-90'}`}
                     />
-                    <span>{group.provider}</span>
-                    <small>{group.models.length}</small>
+                    <span className="min-w-0 flex-1 overflow-hidden text-ellipsis whitespace-nowrap">
+                      {group.provider}
+                    </span>
+                    <small className="font-mono text-[0.62rem] font-normal text-[var(--ds-color-ink-muted)]">
+                      {group.models.length}
+                    </small>
                   </button>
                   {!collapsed && (
-                    <div className="provider-model-options" id={groupId}>
+                    <div className="grid gap-0.5 pb-1 pl-5" id={groupId}>
                       {group.models.map((model) => (
                         <button
                           type="button"
                           role="option"
                           aria-selected={model.value === value}
-                          className={
+                          className={`flex min-h-9 w-full items-center justify-between gap-2 rounded-md border-0 px-2.5 text-left text-xs transition-colors duration-[var(--ds-duration-fast)] ${
                             model.value === value
-                              ? 'provider-model-option is-selected'
-                              : 'provider-model-option'
-                          }
+                              ? 'bg-[var(--ds-color-surface-strong)] font-semibold text-[var(--ds-color-ink)]'
+                              : 'bg-transparent text-[var(--ds-color-ink-soft)] hover:bg-[var(--ds-color-surface-raised)] hover:text-[var(--ds-color-ink)]'
+                          }`}
                           key={model.value}
                           onClick={() => {
                             onChange(model.value)

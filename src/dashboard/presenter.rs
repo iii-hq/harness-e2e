@@ -383,10 +383,9 @@ fn scenario_metrics(subject_id: &str, report: &E2eReport) -> Vec<Value> {
         .collect()
 }
 
-/// Summarize operational metrics emitted by Rust-owned composite scenario
-/// steps. These values are intentionally separate from Harness session
-/// metrics: a direct worker/GitHub/cron workflow has no model tokens,
-/// function-call, or Harness-session counters to report.
+/// Summarize metrics persisted by composite scenario steps. Workflow usage is
+/// derived only from step metrics; direct worker/GitHub/cron steps may
+/// legitimately report no model-token or function-call counters.
 fn workflow_metric_summary_for_report(report: &E2eReport) -> Value {
     let tests = report
         .scenarios
@@ -421,6 +420,16 @@ fn workflow_metric_summary(tests: &[&WorkflowStepReport]) -> Value {
     let mut passed_hard_gate_count = 0_u64;
     let mut evaluation_count = 0_u64;
     let mut failure_count = 0_u64;
+    let mut input_tokens = 0_u64;
+    let mut output_tokens = 0_u64;
+    let mut total_tokens = 0_u64;
+    let mut function_calls = 0_u64;
+    let mut function_call_errors = 0_u64;
+    let mut input_token_metric_steps = 0_u64;
+    let mut output_token_metric_steps = 0_u64;
+    let mut token_metric_steps = 0_u64;
+    let mut function_call_metric_steps = 0_u64;
+    let mut function_call_error_metric_steps = 0_u64;
 
     for test in tests {
         match test.status {
@@ -440,6 +449,27 @@ fn workflow_metric_summary(tests: &[&WorkflowStepReport]) -> Value {
         evaluation_count = evaluation_count.saturating_add(test.evaluations.len() as u64);
         failure_count = failure_count.saturating_add(test.failures.len() as u64);
         if let Some(metrics) = &test.metrics {
+            let usage = workflow_step_usage(metrics);
+            if let Some(value) = usage.input_tokens {
+                input_tokens = input_tokens.saturating_add(value);
+                input_token_metric_steps += 1;
+            }
+            if let Some(value) = usage.output_tokens {
+                output_tokens = output_tokens.saturating_add(value);
+                output_token_metric_steps += 1;
+            }
+            if let Some(value) = usage.total_tokens {
+                total_tokens = total_tokens.saturating_add(value);
+                token_metric_steps += 1;
+            }
+            if let Some(value) = usage.function_calls {
+                function_calls = function_calls.saturating_add(value);
+                function_call_metric_steps += 1;
+            }
+            if let Some(value) = usage.function_call_errors {
+                function_call_errors = function_call_errors.saturating_add(value);
+                function_call_error_metric_steps += 1;
+            }
             collect_numeric_metric_leaves(metrics, "", &mut numeric_metrics);
         }
     }
@@ -459,8 +489,58 @@ fn workflow_metric_summary(tests: &[&WorkflowStepReport]) -> Value {
         "passed_hard_gate_count": passed_hard_gate_count,
         "evaluation_count": evaluation_count,
         "failure_count": failure_count,
+        "input_tokens": (input_token_metric_steps > 0).then_some(input_tokens),
+        "output_tokens": (output_token_metric_steps > 0).then_some(output_tokens),
+        "total_tokens": (token_metric_steps > 0).then_some(total_tokens),
+        "function_calls": (function_call_metric_steps > 0).then_some(function_calls),
+        "function_call_errors": (function_call_error_metric_steps > 0)
+            .then_some(function_call_errors),
+        "input_token_metric_steps": input_token_metric_steps,
+        "output_token_metric_steps": output_token_metric_steps,
+        "token_metric_steps": token_metric_steps,
+        "function_call_metric_steps": function_call_metric_steps,
+        "function_call_error_metric_steps": function_call_error_metric_steps,
         "numeric_metrics": numeric_metrics,
     })
+}
+
+#[derive(Debug, PartialEq)]
+struct WorkflowStepUsage {
+    input_tokens: Option<u64>,
+    output_tokens: Option<u64>,
+    total_tokens: Option<u64>,
+    function_calls: Option<u64>,
+    function_call_errors: Option<u64>,
+}
+
+fn workflow_step_usage(metrics: &Value) -> WorkflowStepUsage {
+    let input_tokens = first_usage_metric(metrics, &["/totals/input_tokens", "/input_tokens"]);
+    let output_tokens = first_usage_metric(metrics, &["/totals/output_tokens", "/output_tokens"]);
+    let total_tokens = first_usage_metric(
+        metrics,
+        &["/totals/total_tokens", "/total_tokens", "/tokens"],
+    )
+    .or_else(|| {
+        input_tokens
+            .zip(output_tokens)
+            .map(|(input, output)| input.saturating_add(output))
+    });
+    WorkflowStepUsage {
+        input_tokens,
+        output_tokens,
+        total_tokens,
+        function_calls: first_usage_metric(metrics, &["/totals/function_calls", "/function_calls"]),
+        function_call_errors: first_usage_metric(
+            metrics,
+            &["/totals/function_call_errors", "/function_call_errors"],
+        ),
+    }
+}
+
+fn first_usage_metric(metrics: &Value, pointers: &[&str]) -> Option<u64> {
+    pointers
+        .iter()
+        .find_map(|pointer| metrics.pointer(pointer).and_then(Value::as_u64))
 }
 
 fn collect_numeric_metric_leaves(value: &Value, path: &str, output: &mut BTreeMap<String, f64>) {
@@ -690,4 +770,42 @@ fn actor() -> String {
 
 pub(super) fn repository_url() -> String {
     "https://github.com/iii-hq/harness-e2e".into()
+}
+
+#[cfg(test)]
+mod workflow_usage_tests {
+    use super::*;
+
+    #[test]
+    fn reads_canonical_step_usage_and_derives_total_tokens() {
+        let usage = workflow_step_usage(&json!({
+            "totals": {
+                "input_tokens": 1_200,
+                "output_tokens": 300,
+                "function_calls": 4,
+                "function_call_errors": 1,
+            }
+        }));
+
+        assert_eq!(
+            usage,
+            WorkflowStepUsage {
+                input_tokens: Some(1_200),
+                output_tokens: Some(300),
+                total_tokens: Some(1_500),
+                function_calls: Some(4),
+                function_call_errors: Some(1),
+            }
+        );
+    }
+
+    #[test]
+    fn does_not_present_a_partial_token_pair_as_a_total() {
+        let usage = workflow_step_usage(&json!({
+            "totals": { "input_tokens": 1_200 }
+        }));
+
+        assert_eq!(usage.input_tokens, Some(1_200));
+        assert_eq!(usage.total_tokens, None);
+    }
 }

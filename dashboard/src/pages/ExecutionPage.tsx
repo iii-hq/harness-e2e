@@ -1,7 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
-import { AssessmentWorkspace } from '@/components/AssessmentWorkspace'
-import { SemanticTestFlow } from '@/components/SemanticTestFlow'
-import { ThemeToggle } from '@/components/ThemeToggle'
+import { AppHeader } from '@/components/AppHeader'
+import { ScenarioMatrix } from '@/components/ScenarioMatrix'
 import { TranscriptDialog } from '@/components/TranscriptDialog'
 import {
   buttonClassName,
@@ -11,11 +10,7 @@ import {
   Panel,
   StatusBadge,
 } from '@/design-system'
-import {
-  hashForCoverage,
-  hashForExecution,
-  hashForWorkspace,
-} from '@/hooks/use-hash-route'
+import { hashForExecution, hashForWorkspace } from '@/hooks/use-hash-route'
 import {
   type AssessmentRunMetrics,
   type AssessmentRunView,
@@ -37,6 +32,7 @@ import {
   formatPercent,
   titleCase,
 } from '@/lib/execution-view'
+import { buildScenarioMatrix } from '@/lib/scenario-matrix'
 import {
   type WorkflowMetricsSummary,
   workflowMetricsFromDetail,
@@ -378,8 +374,7 @@ function ResultsSection({
       ),
     0,
   )
-  const scenarioId = detail.reports?.[0]?.report?.scenarios?.[0]?.scenario_id
-  const scenarioName = scenarioId ? titleCase(scenarioId) : 'Assessment'
+  const scenarioCount = buildScenarioMatrix(detail).summary.total
   return (
     <Panel
       as="section"
@@ -390,28 +385,19 @@ function ResultsSection({
     >
       <PageHeader
         headingLevel={2}
-        context="Scenario evidence"
-        title={`${scenarioName} performance`}
-        summary="Primary capability metrics come first. Workflow trace, assessment matrix, artifacts, and provenance remain available as supporting evidence."
+        context="Benchmark results"
+        title="Scenario results"
+        summary="Compare objective outcomes, advisory conclusions, runtime, and scenario structure. Expand one row to inspect its benchmark metrics and workflow."
         className="[&_h2]:text-[clamp(1.5rem,2.4vw,2.2rem)]"
         actions={
           <span className="font-mono text-xs text-[var(--ds-color-ink-muted)]">
-            {runCount} diagnostic {runCount === 1 ? 'run' : 'runs'}
+            {scenarioCount} {scenarioCount === 1 ? 'scenario' : 'scenarios'} ·{' '}
+            {runCount} {runCount === 1 ? 'run' : 'runs'}
           </span>
         }
       />
       <div className="mt-6">
-        <AssessmentWorkspace detail={detail} onTranscript={onTranscript} />
-      </div>
-      <div className="mt-6 border-t border-[var(--ds-color-line)] pt-6">
-        <h3 className="m-0 text-lg font-semibold tracking-[-0.025em] text-[var(--ds-color-ink)]">
-          Workflow trace
-        </h3>
-        <p className="mt-1 mb-4 text-xs leading-5 text-[var(--ds-color-ink-soft)]">
-          Persisted steps, hard gates, artifacts, and evaluations explain how
-          the result was produced.
-        </p>
-        <SemanticTestFlow detail={detail} />
+        <ScenarioMatrix detail={detail} onTranscript={onTranscript} />
       </div>
     </Panel>
   )
@@ -558,6 +544,10 @@ export function ExecutionPage({
         : null,
     [assessmentModel.runs, detail, presentation],
   )
+  const scenarioMatrix = useMemo(
+    () => (detail ? buildScenarioMatrix(detail) : null),
+    [detail],
+  )
 
   useEffect(() => {
     if (anchor || !presentation) return
@@ -625,89 +615,37 @@ export function ExecutionPage({
 
   const navigation: Array<{ id: DetailSection; label: string }> = [
     { id: 'summary', label: 'Decision' },
-    { id: 'results', label: 'Evidence' },
+    { id: 'results', label: 'Scenarios' },
     { id: 'technical', label: 'Provenance' },
   ]
   const primaryRun = assessmentModel.runs[0] ?? null
   const aiResult = primaryRun?.finalAssessment.result
-  const detectionSignal = primaryRun?.assessments.find((entry) =>
-    entry.criterionId.includes('seeded_vulnerability_detection'),
-  )
-  const detectionRatio = detectionSignal?.summary.match(
-    /\b(\d+)\s+of\s+(\d+)\b/i,
-  )
-  const detectionPercent =
-    detectionSignal?.score && detectionSignal.score.possible > 0
-      ? Math.round(
-          (detectionSignal.score.awarded / detectionSignal.score.possible) *
-            100,
-        )
-      : null
   const status = executionStatus(presentation)
   const workflow = summaryMetrics?.workflow ?? null
   const hasRustWorkflow = Boolean(workflow && workflow.stepCount > 0)
-  const workflowAttention = workflow
-    ? workflow.failedSteps +
-      workflow.hardGateFailedSteps +
-      workflow.cancelledSteps
-    : 0
-  const runtimeSeconds = hasRustWorkflow
-    ? (workflow?.durationMs ?? 0) / 1000
-    : (summaryMetrics?.durationSeconds ?? null)
-  const scenarioId = detail.reports?.[0]?.scenario_id
+  const scenarioSummary = scenarioMatrix?.summary
+  const scenarioCount = scenarioSummary?.total ?? 0
+  const workflowScenarioCount =
+    scenarioMatrix?.items.filter((item) => item.workflowSteps.length > 0)
+      .length ?? 0
+  const scenarioAttention =
+    (scenarioSummary?.failed ?? 0) +
+    (scenarioSummary?.hardGate ?? 0) +
+    (scenarioSummary?.inconclusive ?? 0) +
+    (scenarioSummary?.unavailable ?? 0) +
+    (scenarioSummary?.running ?? 0) +
+    (scenarioSummary?.incomplete ?? 0)
+  const runtimeSeconds =
+    presentation.modelRuntimeSeconds ?? summaryMetrics?.durationSeconds ?? null
+  const coverageComplete =
+    presentation.coverage != null &&
+    (presentation.coverage === 1 || presentation.coverage >= 100)
   return (
     <div className="ds-root min-h-dvh bg-[var(--ds-color-canvas)] text-[var(--ds-color-ink)]">
       <a className="skip-link" href={hashForExecution(executionId, section)}>
         Skip to execution details
       </a>
-      <header className="topbar sticky top-0 z-50 grid min-h-16 w-[calc(100%_-_1.5rem)] max-w-[1440px] grid-cols-[auto_1fr] items-center gap-3 border-b border-[var(--ds-color-line)] bg-[color:rgba(var(--ds-color-canvas-rgb),0.88)] backdrop-blur-xl md:w-[calc(100%_-_3rem)] md:grid-cols-[auto_1fr_auto]">
-        <a
-          className="brand justify-self-start text-[var(--ds-color-ink)]"
-          href={hashForWorkspace()}
-          aria-label="iii Harness E2E"
-        >
-          <span className="brand-copy gap-2">
-            <strong>iii</strong>
-            <span>Harness benchmarks</span>
-          </span>
-        </a>
-        <nav
-          className="hidden h-16 items-stretch justify-self-center md:flex"
-          aria-label="Evidence workspace"
-        >
-          <a
-            className="inline-flex items-center border-b-2 border-transparent px-4 text-xs font-medium text-[var(--ds-color-ink-soft)] no-underline transition-colors motion-reduce:transition-none hover:text-[var(--ds-color-ink)]"
-            href={hashForWorkspace()}
-          >
-            Overview
-          </a>
-          <a
-            className="inline-flex items-center border-b-2 border-transparent px-4 text-xs font-medium text-[var(--ds-color-ink-soft)] no-underline transition-colors motion-reduce:transition-none hover:text-[var(--ds-color-ink)]"
-            href={hashForWorkspace('tests')}
-          >
-            Tests
-          </a>
-          <a
-            className="inline-flex items-center border-b-2 border-[var(--ds-color-brand)] px-4 text-xs font-medium text-[var(--ds-color-ink)] no-underline transition-colors motion-reduce:transition-none"
-            href={hashForWorkspace('executions')}
-            aria-current="page"
-          >
-            Executions
-          </a>
-        </nav>
-        <nav
-          className="topbar-actions justify-self-end gap-2 [&_.theme-toggle]:min-h-9 [&_.theme-toggle]:border-[var(--ds-color-line-strong)] [&_.theme-toggle]:bg-[var(--ds-color-surface-raised)] [&_.theme-toggle]:text-[var(--ds-color-ink)]"
-          aria-label="Execution actions"
-        >
-          <a
-            className="hidden text-xs font-medium text-[var(--ds-color-ink-soft)] no-underline hover:text-[var(--ds-color-ink)] lg:inline-flex"
-            href={hashForCoverage()}
-          >
-            Coverage
-          </a>
-          <ThemeToggle />
-        </nav>
-      </header>
+      <AppHeader active="executions" />
       <main
         id="main"
         className="page-shell detail-shell w-[min(1380px,calc(100%_-_3rem))] pt-6 max-[640px]:w-[calc(100%_-_1.5rem)]"
@@ -731,7 +669,7 @@ export function ExecutionPage({
           actions={
             <div className="flex flex-wrap justify-end gap-2">
               <StatusBadge status={status.status} label={status.label} />
-              {aiResult ? (
+              {scenarioCount === 1 && aiResult ? (
                 <StatusBadge
                   status={statusFromContract(aiResult.verdict)}
                   label={`AI: ${titleCase(aiResult.verdict)}`}
@@ -758,13 +696,12 @@ export function ExecutionPage({
           >
             <div className="bg-[var(--ds-color-surface-raised)] p-3">
               <div className="font-mono text-[0.6rem] font-semibold uppercase tracking-[0.06em] text-[var(--ds-color-ink-muted)]">
-                Scenario
+                Scenarios
               </div>
-              <strong
-                className="mt-1 block truncate text-sm text-[var(--ds-color-ink)]"
-                title={scenarioId}
-              >
-                {scenarioId ? titleCase(scenarioId) : 'Not reported'}
+              <strong className="mt-1 block truncate text-sm text-[var(--ds-color-ink)]">
+                {scenarioCount
+                  ? `${scenarioCount} ${scenarioCount === 1 ? 'result' : 'results'}`
+                  : 'Not reported'}
               </strong>
             </div>
             <ModelIdentityCard label="Subject" models={presentation.subjects} />
@@ -784,101 +721,67 @@ export function ExecutionPage({
           >
             <MetricCard
               className="min-h-40 rounded-none border-0 border-t border-[var(--ds-color-line)] p-4 first:border-t-0 sm:border-t-0 sm:border-l sm:first:border-l-0 lg:p-5 [&_.ds-metric-value]:text-[clamp(1.9rem,3vw,2.8rem)]"
-              label={hasRustWorkflow ? 'Objective hard gates' : 'Report status'}
+              label="Objective scenarios"
               value={
-                hasRustWorkflow
-                  ? `${workflow?.passedHardGateCount ?? 0}/${workflow?.hardGateCount ?? 0}`
-                  : formatPercent(presentation.passRate)
+                scenarioCount
+                  ? `${scenarioSummary?.passed ?? 0}/${scenarioCount}`
+                  : '—'
               }
-              detail={
-                hasRustWorkflow
-                  ? `${workflow?.hardGateFailedSteps ?? 0} failed · deterministic`
-                  : `${formatPercent(presentation.coverage)} report coverage`
-              }
-              delta={workflowAttention > 0 ? 'Failed' : 'Passed'}
-              tone={workflowAttention > 0 ? 'negative' : 'positive'}
+              detail={`${scenarioSummary?.hardGate ?? 0} hard gate · ${scenarioSummary?.failed ?? 0} failed`}
+              delta={scenarioAttention > 0 ? 'Needs attention' : 'Passed'}
+              tone={scenarioAttention > 0 ? 'negative' : 'positive'}
             />
             <MetricCard
               className="min-h-40 rounded-none border-0 border-t border-[var(--ds-color-line)] p-4 sm:border-t-0 sm:border-l lg:p-5 [&_.ds-metric-value]:text-[clamp(1.9rem,3vw,2.8rem)]"
-              label={
-                detectionSignal
-                  ? 'Seeded detection'
-                  : hasRustWorkflow
-                    ? 'Semantic steps'
-                    : 'Report coverage'
-              }
-              value={
-                detectionSignal
-                  ? detectionRatio
-                    ? `${detectionRatio[1]}/${detectionRatio[2]}`
-                    : detectionSignal.score
-                      ? `${detectionSignal.score.awarded}/${detectionSignal.score.possible}`
-                      : titleCase(detectionSignal.outcome)
-                  : hasRustWorkflow
-                    ? `${workflow?.succeededSteps ?? 0}/${workflow?.stepCount ?? 0}`
-                    : formatPercent(presentation.coverage)
-              }
-              detail={
-                detectionSignal
-                  ? `${detectionPercent ?? '—'}% of vulnerable paths detected`
-                  : hasRustWorkflow
-                    ? `${workflow?.succeededSteps ?? 0}/${workflow?.stepCount ?? 0} semantic steps passed`
-                    : `${presentation.receivedReports ?? 0} of ${presentation.expectedReports ?? 0} reports received`
-              }
+              label="Report coverage"
+              value={formatPercent(presentation.coverage)}
+              detail={`${presentation.receivedReports ?? 0} of ${presentation.expectedReports ?? 0} reports received`}
               delta={
-                detectionSignal
-                  ? titleCase(detectionSignal.outcome)
-                  : workflowAttention > 0
-                    ? 'Needs review'
-                    : 'Complete'
+                presentation.coverage == null
+                  ? 'Not reported'
+                  : coverageComplete
+                    ? 'Complete'
+                    : 'Missing reports'
               }
               tone={
-                detectionSignal
-                  ? detectionSignal.outcome === 'passed'
+                presentation.coverage == null
+                  ? 'unavailable'
+                  : coverageComplete
                     ? 'positive'
-                    : detectionSignal.outcome === 'partial'
-                      ? 'warning'
-                      : 'negative'
-                  : workflowAttention > 0
-                    ? 'negative'
-                    : 'positive'
+                    : 'warning'
               }
             />
             <MetricCard
               className="min-h-40 rounded-none border-0 border-t border-[var(--ds-color-line)] p-4 sm:border-l lg:border-t-0 lg:p-5 [&_.ds-metric-value]:text-[clamp(1.9rem,3vw,2.8rem)]"
-              label={hasRustWorkflow ? 'Workflow runtime' : 'Model runtime'}
+              label="Execution runtime"
               value={formatDuration(runtimeSeconds)}
               detail={
-                hasRustWorkflow
-                  ? `${workflow?.assetCount ?? 0} assets · ${workflow?.evaluationCount ?? 0} evaluations`
-                  : `${summaryMetrics?.runCount ?? 0} diagnostic runs`
+                presentation.modelRuntimeSeconds != null
+                  ? 'Reported wall-clock time'
+                  : `${summaryMetrics?.runCount ?? 0} observed runs`
               }
-              delta={hasRustWorkflow ? 'Persisted' : 'Observed'}
+              delta={
+                presentation.modelRuntimeSeconds != null
+                  ? 'Wall clock'
+                  : 'Observed'
+              }
               tone={runtimeSeconds === null ? 'unavailable' : 'neutral'}
             />
             <MetricCard
               className="min-h-40 rounded-none border-0 border-t border-[var(--ds-color-line)] p-4 sm:border-l lg:border-t-0 lg:p-5 [&_.ds-metric-value]:text-[clamp(1.9rem,3vw,2.8rem)]"
-              label={aiResult ? 'AI quality' : 'Assessment evidence'}
+              label="Workflow scenarios"
               value={
-                aiResult
-                  ? String(aiResult.quality_score)
-                  : String(assessmentModel.runs.length || '—')
+                scenarioCount
+                  ? `${workflowScenarioCount}/${scenarioCount}`
+                  : '—'
               }
               detail={
-                aiResult
-                  ? `${Math.round(aiResult.confidence * 100)}% confidence · ${titleCase(aiResult.verdict)}`
-                  : 'Retained assessment runs'
+                hasRustWorkflow
+                  ? `${workflow?.stepCount ?? 0} persisted steps`
+                  : 'No workflow steps retained'
               }
-              delta={aiResult ? 'Advisory' : 'Retained'}
-              tone={
-                aiResult
-                  ? aiResult.verdict === 'pass'
-                    ? 'positive'
-                    : aiResult.verdict === 'fail'
-                      ? 'negative'
-                      : 'warning'
-                  : 'unavailable'
-              }
+              delta={hasRustWorkflow ? 'Composite' : 'Standard'}
+              tone={hasRustWorkflow ? 'neutral' : 'unavailable'}
             />
           </section>
         </Panel>

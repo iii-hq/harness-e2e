@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { ThemeToggle } from '@/components/ThemeToggle'
+import { AppHeader, appHeaderActionClassName } from '@/components/AppHeader'
 import {
   hashForNewPlan,
   hashForPlan,
@@ -227,38 +227,19 @@ export function PlanComparisonSummary({
 
 function PlanListHeader() {
   return (
-    <header className="topbar">
-      <a
-        className="brand"
-        href={hashForWorkspace()}
-        aria-label="Harness E2E dashboard"
-      >
-        <span className="brand-copy">
-          <strong>iii</strong>
-          <span>Harness benchmarks</span>
-        </span>
-      </a>
-      <nav className="topbar-actions" aria-label="Local plan actions">
+    <AppHeader
+      active="plans"
+      actionsLabel="Local plan actions"
+      actions={
         <a
-          className="button button-secondary"
-          href={hashForWorkspace()}
-          data-mobile-label="Overview"
+          className={appHeaderActionClassName({ primary: true })}
+          href={hashForNewPlan()}
+          aria-label="New local plan"
         >
-          Overview
+          New plan
         </a>
-        <a className="button button-primary" href={hashForNewPlan()}>
-          ＋ New local plan
-        </a>
-        <a
-          className="button button-secondary"
-          href={hashForWorkspace('tests')}
-          data-mobile-label="Tests"
-        >
-          Test catalog
-        </a>
-        <ThemeToggle />
-      </nav>
-    </header>
+      }
+    />
   )
 }
 

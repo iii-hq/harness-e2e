@@ -7,12 +7,8 @@ import {
   Search,
 } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { ThemeToggle } from '@/components/ThemeToggle'
-import {
-  hashForCoverage,
-  hashForExecution,
-  hashForWorkspace,
-} from '@/hooks/use-hash-route'
+import { AppHeader, appHeaderActionClassName } from '@/components/AppHeader'
+import { hashForExecution, hashForWorkspace } from '@/hooks/use-hash-route'
 import { summarizeAssessmentContract } from '@/lib/assessment-contract'
 import {
   type DashboardDataBridge,
@@ -773,35 +769,19 @@ export function TestsPage({
       </a>
       <div className="ambient ambient-one" aria-hidden="true"></div>
       <div className="ambient ambient-two" aria-hidden="true"></div>
-      <header className="topbar">
-        <a
-          className="brand"
-          href={hashForWorkspace()}
-          aria-label="Harness E2E dashboard"
-        >
-          <span className="brand-copy">
-            <strong>iii</strong>
-            <span>Harness benchmarks</span>
-          </span>
-        </a>
-        <nav className="topbar-actions" aria-label="Dashboard actions">
+      <AppHeader
+        active="tests"
+        actionsLabel="Comparison actions"
+        actions={
           <a
-            className="button button-primary"
+            className={appHeaderActionClassName({ primary: true })}
             href={hashForWorkspace()}
-            data-mobile-label="New"
+            aria-label="New execution"
           >
-            ＋ New execution
+            New run
           </a>
-          <a
-            className="button button-secondary"
-            href={hashForCoverage()}
-            data-mobile-label="Coverage"
-          >
-            Coverage
-          </a>
-          <ThemeToggle />
-        </nav>
-      </header>
+        }
+      />
 
       <main id="tests-main" className="page-shell overview-shell">
         <section className="page-heading" aria-labelledby="tests-title">
