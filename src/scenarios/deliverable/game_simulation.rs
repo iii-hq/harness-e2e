@@ -161,7 +161,19 @@ pub fn materialize(namespace: &str, seed: u64) -> anyhow::Result<MaterializedSce
 fn observed_trace(run_id: &str) -> Vec<Value> {
     workspace::read_json(&workspace::root(ID, run_id), TRACE_FILE)
         .and_then(|trace| trace.get("steps").and_then(Value::as_array).cloned())
+        .map(|steps| steps.iter().map(declared_fields).collect())
         .unwrap_or_default()
+}
+
+/// Compare only the fields the scenario asked for. A step that also carries
+/// the move it applied, or why, is still the same step.
+fn declared_fields(step: &Value) -> Value {
+    json!({
+        "step": step.get("step").cloned().unwrap_or(Value::Null),
+        "x": step.get("x").cloned().unwrap_or(Value::Null),
+        "y": step.get("y").cloned().unwrap_or(Value::Null),
+        "score": step.get("score").cloned().unwrap_or(Value::Null),
+    })
 }
 
 fn evaluate<'a>(
@@ -248,6 +260,15 @@ mod tests {
         let (x, y, score) = final_state();
         assert_eq!((x, y), (3, 4));
         assert_eq!(score, 3 * COIN_VALUE - BUMP_PENALTY);
+    }
+
+    #[test]
+    fn a_step_carrying_extra_detail_still_compares_equal() {
+        let annotated = json!({
+            "step": 1, "x": 0, "y": 0, "score": -1,
+            "move": "U", "reason": "bump"
+        });
+        assert_eq!(declared_fields(&annotated), reference_trace()[0]);
     }
 
     #[test]

@@ -38,7 +38,7 @@ const GRAPH_EXACT: AssessmentSpec = AssessmentSpec::hard_gated(
 const MODULE_CONSISTENT: AssessmentSpec = AssessmentSpec::hard_gated(
     "module_consistent",
     30,
-    "The scene module builds a scene and names every node in the graph.",
+    "The scene module builds on three.js and names every node in the graph.",
 );
 const SELF_CONTAINED: AssessmentSpec = AssessmentSpec::hard_gated(
     "self_contained",
@@ -174,11 +174,11 @@ fn evaluate<'a>(
                 format!("observed {} node(s) in `{GRAPH_FILE}`", nodes.len()),
             ),
             MODULE_CONSISTENT.full_or_zero(
-                named_in_module == NODES.len() && module.contains("Scene"),
+                named_in_module == NODES.len() && module.contains("three"),
                 format!(
-                    "`{MODULE_FILE}` names {named_in_module} of {} node(s); builds a Scene: {}",
+                    "`{MODULE_FILE}` names {named_in_module} of {} node(s); imports three: {}",
                     NODES.len(),
-                    module.contains("Scene")
+                    module.contains("three")
                 ),
             ),
             SELF_CONTAINED.full_or_zero(

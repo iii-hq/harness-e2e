@@ -94,10 +94,11 @@ pub fn scenario(run_id: &str) -> ScenarioSpec {
             "Resume an interrupted batch of {TOTAL_ITEMS} items in state scope `{scope}`.\n\n\
              1. Read key `{CHECKPOINT_KEY}` from that scope. It holds the index of the last item \
              that was already processed by the previous run.\n\
-             2. Process only the items after that checkpoint, in ascending order. Processing \
-             item `n` means: call `{items}` with payload {{\"index\": n}}, then `state::set` key \
-             `item:n` with the exact `payload` string it returned, then `state::set` key \
-             `{CHECKPOINT_KEY}` to `n`.\n\
+             2. Process every index that is greater than that checkpoint and less than or \
+             equal to {TOTAL_ITEMS}, in ascending order, ending with index {TOTAL_ITEMS} itself. \
+             Processing item `n` means: call `{items}` with payload {{\"index\": n}}, then \
+             `state::set` key `item:n` with the exact `payload` string it returned, then \
+             `state::set` key `{CHECKPOINT_KEY}` to `n`.\n\
              3. Never fetch or rewrite an item at or below the checkpoint you read. That work is \
              already done and repeating it is a failure.\n\
              4. Reply with exactly one line: `RESUMED_FROM:<first index you processed> \

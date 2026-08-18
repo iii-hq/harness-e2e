@@ -15,6 +15,7 @@ use crate::report::HardGateReport;
 use crate::wire::SessionMetricsResponse;
 
 mod assessment;
+pub mod build;
 pub mod cognition;
 pub mod common;
 pub mod coordination;
@@ -436,6 +437,9 @@ pub enum ScenarioId {
     #[serde(rename = "pr_review.prompt_provenance")]
     #[value(name = "pr_review.prompt_provenance")]
     PrReviewPromptProvenance,
+    #[serde(rename = "build.security_scanner")]
+    #[value(name = "build.security_scanner")]
+    BuildSecurityScanner,
     #[serde(rename = "cognition.goal_drift")]
     #[value(name = "cognition.goal_drift")]
     CognitionGoalDrift,
@@ -466,6 +470,9 @@ pub enum ScenarioId {
     #[serde(rename = "deliverable.game_simulation")]
     #[value(name = "deliverable.game_simulation")]
     DeliverableGameSimulation,
+    #[serde(rename = "deliverable.payload_fidelity")]
+    #[value(name = "deliverable.payload_fidelity")]
+    DeliverablePayloadFidelity,
     #[serde(rename = "deliverable.scene_graph")]
     #[value(name = "deliverable.scene_graph")]
     DeliverableSceneGraph,
@@ -529,7 +536,7 @@ pub enum ScenarioId {
 }
 
 impl ScenarioId {
-    pub const ALL: [Self; 57] = [
+    pub const ALL: [Self; 59] = [
         Self::DirectAnswer,
         Self::PersistentState,
         Self::ReactiveAutomation,
@@ -557,6 +564,7 @@ impl ScenarioId {
         Self::PrReviewAssetRetryAck,
         Self::PrReviewPresenceReconnect,
         Self::PrReviewPromptProvenance,
+        Self::BuildSecurityScanner,
         Self::CognitionGoalDrift,
         Self::CognitionInjectionResistance,
         Self::CognitionInstructionPrecedence,
@@ -567,6 +575,7 @@ impl ScenarioId {
         Self::DeliverableApiContract,
         Self::DeliverableArchitectureDiagram,
         Self::DeliverableGameSimulation,
+        Self::DeliverablePayloadFidelity,
         Self::DeliverableSceneGraph,
         Self::DeliverableStaticSite,
         Self::DeliverableSvgChart,
@@ -618,6 +627,7 @@ impl ScenarioId {
             Self::PrReviewAssetRetryAck => pr_review_regressions::ASSET_RETRY_ACK_ID,
             Self::PrReviewPresenceReconnect => pr_review_regressions::PRESENCE_RECONNECT_ID,
             Self::PrReviewPromptProvenance => pr_review_regressions::PROMPT_PROVENANCE_ID,
+            Self::BuildSecurityScanner => build::security_scanner::ID,
             Self::CognitionGoalDrift => cognition::goal_drift::ID,
             Self::CognitionInjectionResistance => cognition::injection_resistance::ID,
             Self::CognitionInstructionPrecedence => cognition::instruction_precedence::ID,
@@ -628,6 +638,7 @@ impl ScenarioId {
             Self::DeliverableApiContract => deliverable::api_contract::ID,
             Self::DeliverableArchitectureDiagram => deliverable::architecture_diagram::ID,
             Self::DeliverableGameSimulation => deliverable::game_simulation::ID,
+            Self::DeliverablePayloadFidelity => deliverable::payload_fidelity::ID,
             Self::DeliverableSceneGraph => deliverable::scene_graph::ID,
             Self::DeliverableStaticSite => deliverable::static_site::ID,
             Self::DeliverableSvgChart => deliverable::svg_chart::ID,
@@ -695,6 +706,7 @@ impl ScenarioId {
                 pr_review_regressions::ReviewCase::PromptProvenance,
                 run_id,
             ),
+            Self::BuildSecurityScanner => build::security_scanner::scenario(run_id),
             Self::CognitionGoalDrift => cognition::goal_drift::scenario(run_id),
             Self::CognitionInjectionResistance => cognition::injection_resistance::scenario(run_id),
             Self::CognitionInstructionPrecedence => {
@@ -711,6 +723,7 @@ impl ScenarioId {
                 deliverable::architecture_diagram::scenario(run_id)
             }
             Self::DeliverableGameSimulation => deliverable::game_simulation::scenario(run_id),
+            Self::DeliverablePayloadFidelity => deliverable::payload_fidelity::scenario(run_id),
             Self::DeliverableSceneGraph => deliverable::scene_graph::scenario(run_id),
             Self::DeliverableStaticSite => deliverable::static_site::scenario(run_id),
             Self::DeliverableSvgChart => deliverable::svg_chart::scenario(run_id),
@@ -809,6 +822,7 @@ impl ScenarioId {
                 namespace,
                 seed,
             )?,
+            Self::BuildSecurityScanner => build::security_scanner::materialize(namespace, seed)?,
             Self::CognitionGoalDrift => cognition::goal_drift::materialize(namespace, seed)?,
             Self::CognitionInjectionResistance => {
                 cognition::injection_resistance::materialize(namespace, seed)?
@@ -836,6 +850,9 @@ impl ScenarioId {
             }
             Self::DeliverableGameSimulation => {
                 deliverable::game_simulation::materialize(namespace, seed)?
+            }
+            Self::DeliverablePayloadFidelity => {
+                deliverable::payload_fidelity::materialize(namespace, seed)?
             }
             Self::DeliverableSceneGraph => deliverable::scene_graph::materialize(namespace, seed)?,
             Self::DeliverableStaticSite => deliverable::static_site::materialize(namespace, seed)?,
@@ -912,7 +929,7 @@ impl ScenarioId {
     /// name alone.
     pub fn suite(self) -> ScenarioSuite {
         match self.as_str().split('.').next() {
-            Some("cognition" | "deliverable" | "orchestration" | "reliability") => {
+            Some("build" | "cognition" | "deliverable" | "orchestration" | "reliability") => {
                 ScenarioSuite::Extended
             }
             _ => ScenarioSuite::Canonical,
@@ -956,18 +973,18 @@ mod tests {
                 .materialize("run", scenario.canonical_seed())
                 .unwrap();
         }
-        assert_eq!(ids.len(), 57);
+        assert_eq!(ids.len(), 59);
     }
 
     #[test]
     fn the_extended_suite_holds_the_four_new_families() {
         let extended = ScenarioSuite::Extended.scenarios();
-        assert_eq!(extended.len(), 30);
+        assert_eq!(extended.len(), 32);
         for scenario in &extended {
             let family = scenario.as_str().split('.').next().unwrap_or_default();
             assert!(matches!(
                 family,
-                "cognition" | "deliverable" | "orchestration" | "reliability"
+                "build" | "cognition" | "deliverable" | "orchestration" | "reliability"
             ));
         }
     }

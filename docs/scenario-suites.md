@@ -3,7 +3,7 @@
 Scenarios belong to one of two suites.
 
 - **Canonical** is what every standing gate runs. Membership is unchanged.
-- **Extended** is thirty additional scenarios covering dependency failure,
+- **Extended** is thirty-one additional scenarios covering dependency failure,
   graph and loop engineering, build-shaped deliverables, and context handling.
 
 An empty selection resolves to the canonical suite, so adding extended
@@ -27,8 +27,8 @@ cargo run --locked --bin harness-e2e -- run ... --scenario reliability.stale_cou
 ```
 
 A scenario joins a suite by its id prefix: `cognition.`, `deliverable.`,
-`orchestration.`, and `reliability.` are extended, everything else is
-canonical. Adding a scenario to an existing family needs no registry change
+`orchestration.`, and `reliability.` are extended, everything
+else is canonical. Adding a scenario to an existing family needs no registry change
 beyond the usual `ScenarioId` entry.
 
 ## What the extended suite measures
@@ -91,6 +91,7 @@ artifact.
 | `deliverable.svg_chart` | A bar chart as SVG | Parses with the declared viewport, one rect per value, exact geometry, summary reported |
 | `deliverable.api_contract` | An OpenAPI document | Declared version, exact operation set, exact response codes, resource schema |
 | `deliverable.world_bible` | An invented setting as entities and relations | Referential integrity, entity model, relation rules, summary reported |
+| `deliverable.payload_fidelity` | A large payload carried through the stack unchanged | Shape intact, payload exact, checksum reported |
 | `deliverable.anomaly_report` | An audit of a seeded dataset | Report parses, findings match the rules replayed by the runner, coverage stated, summary reported |
 
 ### cognition
@@ -106,6 +107,20 @@ instructions that outrank quoted content, and knowledge that has gone stale.
 | `cognition.subagent_scope` | Delegation instead of doing the work | One child per job, every job delivered, orchestrator wrote nothing itself |
 | `cognition.subagent_context_handoff` | Context the child cannot obtain on its own | One child, tag present in the child's transcript, result carries the tag |
 | `cognition.stale_memory_refresh` | Cached knowledge behind the live source | Live source consulted, memory refreshed, change reported |
+
+## Approval and unattended runs
+
+A session starts in the approval surface's `manual` mode, where every function
+call waits for a human. An unattended run has nobody to answer, so the runner
+raises its own sessions before sending, defaulting to `full` and overridable
+with `--permission-mode`. Spawned children do not inherit that mode, so each
+metrics sample raises any session that has appeared in the run's tree since the
+last one and releases whatever it had parked in the pending inbox. A stack
+without an approval surface skips this path entirely.
+
+Scenario turns are also sent with the harness operating mode set to `agent`:
+`ask` caps the turn's dispatch policy at the stack's default and is never what
+a scenario wants.
 
 ## Adding to a family
 
