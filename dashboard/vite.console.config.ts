@@ -45,16 +45,151 @@ function scopedConsoleStyles(): Plugin {
         if (css.includes('@font-face')) {
           throw new Error('injectable console CSS must not contain @font-face')
         }
-        const scoped = scopeCss(renameKeyframes(css))
+        const sanitized = sanitizeConsoleStyles(css)
+        const scoped = scopeCss(renameKeyframes(sanitized))
         if (!scoped.includes(scope)) {
           throw new Error(
             `injectable console CSS is missing its ${scope} scope`,
+          )
+        }
+        const privateDecoration = scoped.match(
+          /(?:gradient\(|@font-face|(?:^|[;{])\s*box-shadow\s*:)/i,
+        )
+        if (privateDecoration) {
+          throw new Error(
+            `injectable console CSS contains a private decoration or font rule: ${scoped.slice(Math.max(0, privateDecoration.index ?? 0) - 80, (privateDecoration.index ?? 0) + 120)}`,
           )
         }
         writeFileSync(outputPath, scoped)
       }
     },
   }
+}
+
+/**
+ * The host owns color, type, elevation, and background treatment. The
+ * standalone stylesheet still contains historical dashboard decorations, so
+ * remove those declarations at the Console boundary instead of allowing a
+ * worker bundle to repaint the host. Literal colors are converted to semantic
+ * variables so dark/light changes continue to come from the host tokens.
+ */
+function sanitizeConsoleStyles(css: string): string {
+  css = stripPrivateDeclarations(css)
+  css = css.replace(/#([0-9a-f]{3,8})\b/gi, (_match, value: string) =>
+    semanticHex(value),
+  )
+
+  const channels: Record<string, string> = {
+    '199,255,74': '--color-accent',
+    '123,199,255': '--color-accent',
+    '158,230,108': '--color-ok',
+    '255,209,102': '--color-warn',
+    '255,120,111': '--color-alert',
+    '255,0,38': '--color-alert',
+    '255,255,255': '--color-ink',
+    '0,0,0': '--color-bg',
+    '20,16,8': '--color-ink',
+    '13,16,14': '--color-panel',
+  }
+  css = css.replace(
+    /rgba?\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)(?:\s*,\s*([\d.]+))?\s*\)/gi,
+    (_match, red: string, green: string, blue: string, alpha?: string) => {
+      const token = channels[`${red},${green},${blue}`]
+      if (!token) return _match
+      if (alpha === undefined) return `var(${token})`
+      const percentage = Math.round(Number(alpha) * 100)
+      return `color-mix(in srgb, var(${token}) ${percentage}%, transparent)`
+    },
+  )
+  return css
+}
+
+function stripPrivateDeclarations(css: string): string {
+  const declaration =
+    /(^|[;{])(\s*)(background(?:-image)?|(?:-webkit-)?mask-image|box-shadow)\s*:/gi
+  let output = ''
+  let cursor = 0
+  let match: RegExpExecArray | null
+  while (true) {
+    match = declaration.exec(css)
+    if (!match) break
+    const propertyStart = match.index + match[1].length
+    let index = declaration.lastIndex
+    let parens = 0
+    let end = css.length
+    for (; index < css.length; index++) {
+      const char = css[index]
+      if (char === '(') parens++
+      else if (char === ')') parens = Math.max(0, parens - 1)
+      else if (parens === 0 && char === ';') {
+        end = index + 1
+        break
+      } else if (parens === 0 && char === '}') {
+        end = index
+        break
+      }
+    }
+    const value = css.slice(declaration.lastIndex, end)
+    const privateValue =
+      match[3].toLowerCase() === 'box-shadow' || /gradient\(/i.test(value)
+    output += css.slice(cursor, privateValue ? propertyStart : end)
+    cursor = end
+    // Keep the delimiter in the next search so adjacent declarations after a
+    // semicolon are not skipped.
+    declaration.lastIndex = Math.max(cursor - 1, 0)
+  }
+  return output + css.slice(cursor)
+}
+
+function semanticHex(value: string): string {
+  const normalized = value.toLowerCase()
+  const base =
+    normalized.length === 3 || normalized.length === 4
+      ? normalized
+          .slice(0, 3)
+          .split('')
+          .map((c) => c + c)
+          .join('')
+      : normalized.slice(0, 6)
+  const alphaDigits =
+    normalized.length === 4 || normalized.length === 8
+      ? normalized.slice(-2)
+      : null
+  const tokens: Record<string, string> = {
+    c7ff4a: '--color-accent',
+    b8420f: '--color-accent',
+    '7bc7ff': '--color-accent',
+    '9ee66c': '--color-ok',
+    ffd166: '--color-warn',
+    ff786f: '--color-alert',
+    ff0026: '--color-alert',
+    f05d68: '--color-alert',
+    f5a524: '--color-warn',
+    '356f3d': '--color-ok',
+    '0a0a0a': '--color-bg',
+    '0a0c0b': '--color-bg',
+    '080a09': '--color-bg',
+    '111111': '--color-panel',
+    '111412': '--color-panel',
+    '171717': '--color-panel-raised',
+    '171a18': '--color-panel-raised',
+    '1d211e': '--color-surface-hover',
+    fafafa: '--color-panel',
+    f7f5f2: '--color-panel-raised',
+    f5f7f4: '--color-ink',
+    ededed: '--color-ink',
+    a8b0a9: '--color-ink-faint',
+    a6a6a6: '--color-ink-faint',
+    '707971': '--color-ink-ghost',
+    '6f6f6f': '--color-ink-ghost',
+    cbd3cc: '--color-ink-faint',
+  }
+  const token = tokens[base] ?? '--color-ink'
+  if (!alphaDigits) return `var(${token})`
+  const percentage = Math.round((Number.parseInt(alphaDigits, 16) / 255) * 100)
+  if (percentage === 0) return 'transparent'
+  if (percentage === 100) return `var(${token})`
+  return `color-mix(in srgb, var(${token}) ${percentage}%, transparent)`
 }
 
 function renameKeyframes(css: string): string {
