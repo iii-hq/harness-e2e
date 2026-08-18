@@ -8944,15 +8944,14 @@ footer {
   background: var(--surface-soft);
 }
 
-.plan-visual-baseline-field,
-.plan-candidate-selection {
+.plan-visual-baseline-field {
   display: grid;
   min-width: 0;
   gap: 0.55rem;
 }
 
 .plan-visual-baseline-field > span,
-.plan-candidate-selection legend {
+.plan-execution-list-intro > span {
   color: var(--text-muted);
   font-size: 0.61rem;
   font-weight: 700;
@@ -8977,92 +8976,139 @@ footer {
   line-height: 1.45;
 }
 
-.plan-candidate-selection {
-  margin: 0;
-  padding: 0;
-  border: 0;
-}
-
-.plan-candidate-selection legend {
-  padding: 0;
-}
-
-.plan-candidate-options {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.5rem;
-}
-
-.plan-candidate-option {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.5rem;
-  min-height: 40px;
-  padding: 0.5rem 0.7rem;
-  border: 1px solid var(--line);
-  border-radius: var(--radius-sm);
-  background: var(--surface);
-  color: var(--text-soft);
-  cursor: pointer;
-  font-size: 0.68rem;
-  font-weight: 650;
-}
-
-.plan-candidate-option.is-selected {
-  border-color: color-mix(in srgb, var(--accent) 42%, var(--line));
-  background: var(--accent-soft);
-  color: var(--text);
-}
-
-.plan-candidate-option input {
-  margin: 0;
-  accent-color: var(--accent);
-}
-
-.plan-candidate-naming {
+.plan-execution-list-intro {
   display: grid;
   grid-column: 1 / -1;
-  grid-template-columns: minmax(180px, 0.55fr) minmax(0, 1.45fr);
-  gap: var(--plan-card-space);
+  gap: 0.35rem;
   padding-top: var(--plan-card-space);
   border-top: 1px solid var(--line);
 }
 
-.plan-candidate-naming > div:first-child {
-  display: grid;
-  align-content: start;
-  gap: 0.35rem;
-}
-
-.plan-candidate-naming > div:first-child > span {
-  color: var(--text-muted);
-  font-size: 0.61rem;
-  font-weight: 700;
-  letter-spacing: 0.055em;
-  text-transform: uppercase;
-}
-
-.plan-candidate-naming > div:first-child > small,
-.plan-candidate-name-form > small {
+.plan-execution-list-intro > small {
   color: var(--text-muted);
   font-size: 0.62rem;
   line-height: 1.45;
 }
 
-.plan-candidate-name-form > small {
+.plan-execution-list {
+  display: grid;
   grid-column: 1 / -1;
-  color: var(--danger);
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
 }
 
-.plan-candidate-name-list {
+.plan-execution-list-row {
   display: grid;
-  gap: 0.55rem;
+  grid-template-columns: minmax(7rem, 0.28fr) minmax(14rem, 1fr) auto;
+  align-items: center;
+  min-width: 0;
+  gap: 1rem;
+  padding: 0.9rem 1rem;
+  border-left: 2px solid transparent;
+  background: var(--surface);
+  transition:
+    background-color 160ms ease,
+    border-color 160ms ease;
+}
+
+.plan-execution-list-row + .plan-execution-list-row {
+  border-top: 1px solid var(--line);
+}
+
+.plan-execution-list-row:hover,
+.plan-execution-list-row:focus-within {
+  background: var(--surface-soft);
+}
+
+.plan-execution-list-row.is-selected {
+  border-left-color: var(--accent);
+  background: color-mix(in srgb, var(--accent-soft) 60%, var(--surface));
+}
+
+.plan-execution-list-row.is-baseline {
+  border-left-color: var(--text-muted);
+}
+
+.plan-execution-list-control,
+.plan-execution-list-control label {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.plan-execution-list-control label {
+  color: var(--text-soft);
+  cursor: pointer;
+  font-size: 0.65rem;
+  font-weight: 700;
+}
+
+.plan-execution-list-control input {
+  width: 1rem;
+  height: 1rem;
+  margin: 0;
+  accent-color: var(--accent);
+}
+
+.plan-execution-role {
+  color: var(--text-muted);
+  font-size: 0.61rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.plan-execution-list-identity {
+  display: grid;
+  min-width: 0;
+  gap: 0.35rem;
+}
+
+.plan-execution-list-identity > div {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  gap: 0.6rem;
+}
+
+.plan-execution-list-identity strong {
+  overflow: hidden;
+  color: var(--text);
+  font-size: 0.74rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.plan-execution-list-identity .status-pill {
+  flex: none;
+  padding: 0.2rem 0.45rem;
+  font-size: 0.56rem;
+}
+
+.plan-execution-list-identity p {
+  display: flex;
+  min-width: 0;
+  gap: 0.65rem;
+  margin: 0;
+  color: var(--text-muted);
+  font-size: 0.61rem;
+}
+
+.plan-execution-list-identity code {
+  overflow: hidden;
+  color: var(--text-muted);
+  font-size: 0.59rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .plan-candidate-name-form {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  align-items: end;
+  grid-template-columns: minmax(13rem, 1fr) auto;
+  align-items: center;
+  min-width: min(34rem, 42vw);
   gap: 0.5rem;
 }
 
@@ -9089,7 +9135,20 @@ footer {
   font: 600 0.7rem var(--font-body);
 }
 
-.plan-candidate-name-form .button {
+.plan-candidate-name-form > small {
+  grid-column: 1 / -1;
+  color: var(--danger);
+  font-size: 0.62rem;
+  line-height: 1.45;
+}
+
+.plan-candidate-name-actions {
+  display: flex;
+  gap: 0.4rem;
+}
+
+.plan-candidate-name-form .button,
+.plan-candidate-edit-button {
   min-height: 38px;
   padding: 0.5rem 0.75rem;
 }
@@ -9523,10 +9582,6 @@ footer {
     grid-template-columns: 1fr;
   }
 
-  .plan-candidate-naming {
-    grid-template-columns: 1fr;
-  }
-
   .current-work-summary > div:first-child,
   .current-work-summary > .button,
   .history-summary .kpi-card:last-child {
@@ -9739,21 +9794,31 @@ footer {
     text-align: left;
   }
 
-  .plan-candidate-options {
-    display: grid;
-    grid-template-columns: 1fr;
+  .plan-execution-list-row {
+    grid-template-columns: 1fr auto;
   }
 
-  .plan-candidate-option {
-    width: 100%;
+  .plan-execution-list-control {
+    grid-column: 1 / -1;
+  }
+
+  .plan-candidate-name-form {
+    grid-column: 1 / -1;
+    min-width: 0;
   }
 
   .plan-candidate-name-form {
     grid-template-columns: 1fr;
   }
 
-  .plan-candidate-name-form .button {
-    justify-self: start;
+  .plan-candidate-name-actions {
+    justify-content: flex-start;
+  }
+
+  .plan-execution-list-identity p {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 0.25rem;
   }
 
   .plan-scenario-table tbody th,

@@ -190,7 +190,7 @@ describe('local plan execution comparison', () => {
     expect(html).toContain('1 visual baseline · 2 selected')
     expect(html).toContain('Visual baseline')
     expect(html).toContain('Official baseline')
-    expect(html).toContain('Candidates in table')
+    expect(html).toContain('Plan executions')
     expect(html).toContain('never changes the official baseline')
     expect(html).toContain('<th scope="col">Metric</th>')
     expect(html).toContain('Pass rate')
@@ -258,7 +258,7 @@ describe('local plan execution comparison', () => {
     expect(html).toContain('Stable')
   })
 
-  it('uses persisted candidate names throughout the comparison and exposes rename controls', () => {
+  it('lists plan executions with persisted names and contextual rename controls', () => {
     const plan: LocalPlan = {
       ...candidateRunningPlan,
       state: 'comparison_ready',
@@ -289,10 +289,13 @@ describe('local plan execution comparison', () => {
 
     expect(html).toContain('Harness Latest')
     expect(html).toContain('Harness Next')
-    expect(html).toContain('Candidate names')
-    expect(html).toContain('aria-label="Name Candidate #1"')
-    expect(html).toContain('value="Harness Latest"')
-    expect(html.match(/>Rename</g)).toHaveLength(2)
+    expect(html).toContain('Plan executions')
+    expect(html).toContain('Visual baseline')
+    expect(html).toContain('baseline-1')
+    expect(html).toContain('candidate-1')
+    expect(html).toContain('candidate-2')
+    expect(html.match(/>Edit name</g)).toHaveLength(2)
+    expect(html.match(/>Compare</g)).toHaveLength(2)
   })
 
   it('can use a candidate as a visual-only baseline', () => {

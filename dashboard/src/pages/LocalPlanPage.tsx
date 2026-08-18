@@ -455,20 +455,32 @@ function planExecutionLabel(plan: LocalPlan, executionId: string | null) {
   )
 }
 
-function CandidateLabelEditor({
+function PlanExecutionListRow({
   executionId,
   fallbackLabel,
   label,
+  summary,
+  visualBaseline,
+  selected,
+  onToggle,
   onRename,
 }: {
   executionId: string
   fallbackLabel: string
   label: string
+  summary: DashboardExecutionSummary | null
+  visualBaseline: boolean
+  selected: boolean
+  onToggle: (selected: boolean) => void
   onRename: (executionId: string, label: string) => Promise<void>
 }) {
   const [draft, setDraft] = useState(label)
+  const [editing, setEditing] = useState(false)
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const displayLabel = label.trim() || fallbackLabel
+  const status = executionStatus(summary)
+  const timestamp = summary?.completed_at || summary?.started_at || ''
 
   useEffect(() => setDraft(label), [label])
 
@@ -478,6 +490,7 @@ function CandidateLabelEditor({
     setError(null)
     try {
       await onRename(executionId, draft)
+      setEditing(false)
     } catch (cause) {
       setError(errorText(cause))
     } finally {
@@ -486,29 +499,83 @@ function CandidateLabelEditor({
   }
 
   return (
-    <form
-      className="plan-candidate-name-form"
-      onSubmit={(event) => void submit(event)}
+    <article
+      className={`plan-execution-list-row${selected ? ' is-selected' : ''}${visualBaseline ? ' is-baseline' : ''}`}
     >
-      <label>
-        <span>{fallbackLabel}</span>
-        <input
-          aria-label={`Name ${fallbackLabel}`}
-          maxLength={80}
-          placeholder={fallbackLabel}
-          value={draft}
-          onChange={(event) => setDraft(event.target.value)}
-        />
-      </label>
-      <button
-        className="button button-secondary"
-        disabled={saving}
-        type="submit"
-      >
-        {saving ? 'Saving…' : label ? 'Rename' : 'Name'}
-      </button>
-      {error && <small role="alert">{error}</small>}
-    </form>
+      <div className="plan-execution-list-control">
+        {visualBaseline ? (
+          <span className="plan-execution-role">Visual baseline</span>
+        ) : (
+          <label>
+            <input
+              type="checkbox"
+              checked={selected}
+              onChange={(event) => onToggle(event.target.checked)}
+            />
+            <span>Compare</span>
+          </label>
+        )}
+      </div>
+      <div className="plan-execution-list-identity">
+        <div>
+          <strong>{displayLabel}</strong>
+          <span className={`status-pill ${status.tone}`}>{status.label}</span>
+        </div>
+        <p>
+          <span>
+            {timestamp ? formatDate(timestamp) : 'Report unavailable'}
+          </span>
+          <code title={executionId}>{executionId}</code>
+        </p>
+      </div>
+      {editing ? (
+        <form
+          className="plan-candidate-name-form"
+          onSubmit={(event) => void submit(event)}
+        >
+          <label>
+            <span>Display name</span>
+            <input
+              aria-label={`Name ${fallbackLabel}`}
+              maxLength={80}
+              placeholder={fallbackLabel}
+              value={draft}
+              onChange={(event) => setDraft(event.target.value)}
+            />
+          </label>
+          <div className="plan-candidate-name-actions">
+            <button
+              className="button button-primary"
+              disabled={saving}
+              type="submit"
+            >
+              {saving ? 'Saving…' : 'Save'}
+            </button>
+            <button
+              className="button button-secondary"
+              disabled={saving}
+              type="button"
+              onClick={() => {
+                setDraft(label)
+                setError(null)
+                setEditing(false)
+              }}
+            >
+              Cancel
+            </button>
+          </div>
+          {error && <small role="alert">{error}</small>}
+        </form>
+      ) : (
+        <button
+          className="button button-secondary plan-candidate-edit-button"
+          type="button"
+          onClick={() => setEditing(true)}
+        >
+          Edit name
+        </button>
+      )}
+    </article>
   )
 }
 
@@ -618,52 +685,84 @@ export function PlanExecutionHistory({
               </select>
               <small>The official plan baseline remains unchanged.</small>
             </label>
-            <fieldset className="plan-candidate-selection">
-              <legend>Candidates in table</legend>
-              <div className="plan-candidate-options">
-                {selectableRows
-                  .filter((row) => row.id !== visualBaselineId)
-                  .map((row) => {
-                    const selected = comparisonCandidateIds.includes(row.id)
-                    return (
-                      <label
-                        className={`plan-candidate-option${selected ? ' is-selected' : ''}`}
-                        key={row.id}
-                      >
-                        <input
-                          type="checkbox"
-                          checked={selected}
-                          onChange={(event) =>
-                            onToggleCandidate(row.id, event.target.checked)
-                          }
-                        />
-                        <span>{planExecutionLabel(plan, row.id)}</span>
-                      </label>
-                    )
-                  })}
-              </div>
-            </fieldset>
-            {onRenameCandidate && (
-              <div className="plan-candidate-naming">
-                <div>
-                  <span>Candidate names</span>
-                  <small>
-                    Names are plan metadata and do not change captured results.
-                  </small>
-                </div>
-                <div className="plan-candidate-name-list">
-                  {plan.candidate_execution_ids.map((executionId, index) => (
-                    <CandidateLabelEditor
-                      executionId={executionId}
-                      fallbackLabel={`Candidate #${index + 1}`}
-                      key={executionId}
-                      label={plan.candidate_labels?.[executionId] ?? ''}
+            <div className="plan-execution-list-intro">
+              <span>Plan executions</span>
+              <small>
+                Select comparison columns and give candidate runs a useful name.
+                Names are plan metadata; captured results stay unchanged.
+              </small>
+            </div>
+            <div className="plan-execution-list">
+              {selectableRows.map((row) => {
+                const fallbackLabel =
+                  row.role === 'baseline'
+                    ? 'Official baseline'
+                    : `Candidate #${row.candidateNumber ?? 1}`
+                const isCandidate = row.role === 'candidate'
+                const selected = comparisonCandidateIds.includes(row.id)
+                if (isCandidate && onRenameCandidate) {
+                  return (
+                    <PlanExecutionListRow
+                      executionId={row.id}
+                      fallbackLabel={fallbackLabel}
+                      key={row.id}
+                      label={plan.candidate_labels?.[row.id] ?? ''}
+                      summary={row.summary}
+                      visualBaseline={row.id === visualBaselineId}
+                      selected={selected}
+                      onToggle={(nextSelected) =>
+                        onToggleCandidate(row.id, nextSelected)
+                      }
                       onRename={onRenameCandidate}
                     />
-                  ))}
-                </div>
-              </div>
-            )}
+                  )
+                }
+                const status = executionStatus(row.summary)
+                const timestamp =
+                  row.summary?.completed_at || row.summary?.started_at || ''
+                return (
+                  <article
+                    className={`plan-execution-list-row${selected ? ' is-selected' : ''}${row.id === visualBaselineId ? ' is-baseline' : ''}`}
+                    key={row.id}
+                  >
+                    <div className="plan-execution-list-control">
+                      {row.id === visualBaselineId ? (
+                        <span className="plan-execution-role">
+                          Visual baseline
+                        </span>
+                      ) : (
+                        <label>
+                          <input
+                            type="checkbox"
+                            checked={selected}
+                            onChange={(event) =>
+                              onToggleCandidate(row.id, event.target.checked)
+                            }
+                          />
+                          <span>Compare</span>
+                        </label>
+                      )}
+                    </div>
+                    <div className="plan-execution-list-identity">
+                      <div>
+                        <strong>{fallbackLabel}</strong>
+                        <span className={`status-pill ${status.tone}`}>
+                          {status.label}
+                        </span>
+                      </div>
+                      <p>
+                        <span>
+                          {timestamp
+                            ? formatDate(timestamp)
+                            : 'Report unavailable'}
+                        </span>
+                        <code title={row.id}>{row.id}</code>
+                      </p>
+                    </div>
+                  </article>
+                )
+              })}
+            </div>
           </div>
           <div className="plan-execution-table-wrap">
             <table
