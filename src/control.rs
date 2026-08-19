@@ -1869,10 +1869,7 @@ fn observation_objective(
                 .iter()
                 .flat_map(|scenario| scenario.runs.iter().map(|run| run.status))
                 .collect::<Vec<_>>();
-            if statuses
-                .iter()
-                .any(|status| *status == crate::report::RunStatus::InfrastructureError)
-            {
+            if statuses.contains(&crate::report::RunStatus::InfrastructureError) {
                 ObservationObjective::InfrastructureFailed
             } else if statuses.iter().any(|status| status.is_technical_failure()) {
                 ObservationObjective::TechnicalFailed
