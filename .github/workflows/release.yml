@@ -270,7 +270,8 @@ jobs:
             sleep 10
           done
           for _ in {1..60}; do
-            if iii trigger 'state::list' --json '{}' >/dev/null 2>&1; then
+            if iii trigger 'state::list' \
+              --json '{"scope":"__harness_e2e_release_probe__"}' >/dev/null 2>&1; then
               iii trigger 'engine::workers::list' --json '{}' > baseline-workers.json
               iii trigger 'engine::triggers::list' \
                 --json '{"include_internal": false}' > baseline-triggers.json
