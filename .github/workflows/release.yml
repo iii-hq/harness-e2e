@@ -23,6 +23,8 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       version: ${{ steps.release.outputs.version }}
+      maturity: ${{ steps.release.outputs.maturity }}
+      registry_tag: ${{ steps.release.outputs.registry_tag }}
       tag: ${{ steps.release.outputs.tag }}
       commit_sha: ${{ steps.release.outputs.commit_sha }}
     steps:
@@ -80,17 +82,18 @@ jobs:
           retention-days: 1
 
   github-release:
-    name: Create GitHub prerelease
+    name: Create GitHub release
     needs: validate
     runs-on: ubuntu-latest
     permissions:
       contents: write
     steps:
-      - uses: softprops/action-gh-release@v2
+      - uses: softprops/action-gh-release@v3
         with:
           tag_name: ${{ needs.validate.outputs.tag }}
           name: harness-e2e v${{ needs.validate.outputs.version }}
-          prerelease: true
+          prerelease: ${{ needs.validate.outputs.registry_tag == 'next' || needs.validate.outputs.maturity != 'stable' }}
+          make_latest: ${{ needs.validate.outputs.registry_tag == 'latest' && needs.validate.outputs.maturity == 'stable' }}
           generate_release_notes: true
 
   binaries:
@@ -187,8 +190,8 @@ jobs:
           manifest-path: Cargo.toml
           token: ${{ github.token }}
 
-  registry-next:
-    name: Collect typed interface and publish next
+  registry-publish:
+    name: Collect typed interface and publish Registry channel
     needs: [validate, binaries]
     runs-on: ubuntu-latest
     timeout-minutes: 20
@@ -294,25 +297,35 @@ jobs:
             --baseline-triggers baseline-triggers.json \
             --wait-seconds 120 \
             --out worker-interface.json
-      - name: Build Registry payload for next
+      - name: Build Registry payload for Registry channel
         env:
           RELEASE_VERSION: ${{ needs.validate.outputs.version }}
+          RELEASE_MATURITY: ${{ needs.validate.outputs.maturity }}
+          REGISTRY_TAG: ${{ needs.validate.outputs.registry_tag }}
           RELEASE_TAG: ${{ needs.validate.outputs.tag }}
           REPOSITORY_URL: https://github.com/${{ github.repository }}
         run: |
-          python3 scripts/release_worker.py build-payload \
-            --version "$RELEASE_VERSION" \
-            --tag "$RELEASE_TAG" \
-            --repo-url "$REPOSITORY_URL" \
-            --interface worker-interface.json \
-            --checksums-dir release-assets \
+          payload_args=(
+            build-payload
+            --version "$RELEASE_VERSION"
+            --tag "$RELEASE_TAG"
+            --registry-tag "$REGISTRY_TAG"
+            --repo-url "$REPOSITORY_URL"
+            --interface worker-interface.json
+            --checksums-dir release-assets
             --out registry-payload.json
-      - name: POST immutable release to Registry next
+          )
+          if [[ "$RELEASE_MATURITY" == 'experimental' ]]; then
+            payload_args+=(--experimental)
+          fi
+          python3 scripts/release_worker.py "${payload_args[@]}"
+      - name: POST immutable release to Registry channel
         env:
           API_URL: https://api.workers.iii.dev
           API_KEY: ${{ secrets.WORKERS_REGISTRY_API_KEY }}
           WORKER: harness-e2e
           VERSION: ${{ needs.validate.outputs.version }}
+          REGISTRY_TAG: ${{ needs.validate.outputs.registry_tag }}
         run: |
           set -euo pipefail
           if [[ -z "$API_KEY" ]]; then
@@ -328,13 +341,14 @@ jobs:
             resolve_http=$(curl -sS -o registry-resolve.json -w '%{http_code}' \
               -H 'Content-Type: application/json' \
               -X POST "$API_URL/resolve" \
-              --data "$(jq -cn --arg worker "$WORKER" '{worker: $worker, version: "next"}')")
+              --data "$(jq -cn --arg worker "$WORKER" --arg channel "$REGISTRY_TAG" \
+                '{worker: $worker, version: $channel}')")
             resolved=$(jq -r '.root.version // empty' registry-resolve.json)
             if [[ "$resolve_http" != '200' || "$resolved" != "$VERSION" ]]; then
-              echo "::error::HTTP 409 was not an idempotent retry; next does not resolve to $VERSION"
+              echo "::error::HTTP 409 was not an idempotent retry; $REGISTRY_TAG does not resolve to $VERSION"
               exit 1
             fi
-            echo "::notice::$WORKER@$VERSION already published on next"
+            echo "::notice::$WORKER@$VERSION already published on $REGISTRY_TAG"
           elif [[ "$http" != '200' ]]; then
             echo "::error::Registry publish failed with HTTP $http"
             exit 1

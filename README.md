@@ -208,7 +208,12 @@ baseline/candidate cohort.
 
 ## Worker releases
 
-Namespaced stable SemVer tags (`harness-e2e/vX.Y.Z`) build the standard nine
-Registry binary targets, create a GitHub prerelease, collect the live typed iii
-interface from the released Linux binary, and publish only the Registry
-`next` channel.
+Namespaced release tags (`harness-e2e/vX.Y.Z` or
+`harness-e2e/vX.Y.Z-experimental|alpha|beta`) build the standard nine Registry
+binary targets, create a GitHub release, collect the live typed iii interface
+from the released Linux binary, and publish to the Registry channel selected
+by the tag annotation. A release is a GitHub prerelease when its Registry
+channel is `next` or its maturity is non-stable; only the `-experimental`
+maturity also sets the Registry worker's explicit `experimental` badge. The
+Registry channel is read from the annotated tag's `registry-tag: next` or
+`registry-tag: latest` line; tags without that line fall back to `next`.

@@ -20,7 +20,13 @@ from typing import Any
 
 
 WORKER_NAME = "harness-e2e"
-TAG_RE = re.compile(r"^harness-e2e/v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$")
+SEMVER_CORE = r"(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)"
+VERSION_RE = re.compile(
+    rf"^(?P<core>{SEMVER_CORE})(?:-(?P<maturity>experimental|alpha|beta))?$"
+)
+TAG_RE = re.compile(
+    rf"^harness-e2e/v(?P<version>{SEMVER_CORE}(?:-(?:experimental|alpha|beta))?)$"
+)
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 SCHEMA_KEYS = frozenset(
     {"type", "properties", "$ref", "allOf", "anyOf", "oneOf", "enum", "items", "const"}
@@ -51,6 +57,16 @@ def read_yaml(path: pathlib.Path) -> Any:
     return yaml.safe_load(path.read_text(encoding="utf-8"))
 
 
+def release_maturity(version: str) -> str:
+    match = VERSION_RE.fullmatch(version)
+    if not match:
+        raise ValueError(
+            "version must be MAJOR.MINOR.PATCH with an optional "
+            "-experimental, -alpha, or -beta suffix"
+        )
+    return match.group("maturity") or "stable"
+
+
 def git(*args: str, root: pathlib.Path) -> str:
     return subprocess.run(
         ["git", "-C", str(root), *args],
@@ -58,6 +74,16 @@ def git(*args: str, root: pathlib.Path) -> str:
         capture_output=True,
         text=True,
     ).stdout.strip()
+
+
+def tag_metadata(root: pathlib.Path, tag: str) -> dict[str, str]:
+    contents = git("tag", "--list", "--format=%(contents)", tag, root=root)
+    metadata: dict[str, str] = {}
+    for line in contents.splitlines():
+        key, separator, value = line.partition(":")
+        if separator:
+            metadata[key.strip()] = value.strip()
+    return metadata
 
 
 def github_output(**values: str) -> None:
@@ -72,8 +98,15 @@ def github_output(**values: str) -> None:
 def validate_release(root: pathlib.Path, tag: str, event_sha: str) -> dict[str, str]:
     match = TAG_RE.fullmatch(tag)
     if not match:
-        raise ValueError("release tag must match harness-e2e/vX.Y.Z with a stable SemVer")
-    version = ".".join(match.groups())
+        raise ValueError(
+            "release tag must match harness-e2e/vX.Y.Z with an optional "
+            "-experimental, -alpha, or -beta suffix"
+        )
+    version = match.group("version")
+    maturity = release_maturity(version)
+    registry_tag = tag_metadata(root, tag).get("registry-tag", "next")
+    if registry_tag not in {"next", "latest"}:
+        raise ValueError("tag annotation registry-tag must be next or latest")
 
     import tomllib
 
@@ -122,7 +155,13 @@ def validate_release(root: pathlib.Path, tag: str, event_sha: str) -> dict[str, 
             f"GitHub event SHA {event_sha} is neither the tag object nor tagged commit"
         )
 
-    result = {"tag": tag, "version": version, "commit_sha": tag_commit}
+    result = {
+        "tag": tag,
+        "version": version,
+        "maturity": maturity,
+        "registry_tag": registry_tag,
+        "commit_sha": tag_commit,
+    }
     github_output(**result)
     return result
 
@@ -283,12 +322,17 @@ def build_payload(
     root: pathlib.Path,
     version: str,
     tag: str,
+    registry_tag: str,
     repo_url: str,
     interface: dict[str, Any],
     checksums_dir: pathlib.Path,
+    experimental: bool = False,
 ) -> dict[str, Any]:
     if tag != f"harness-e2e/v{version}":
         raise ValueError("tag and version do not identify the same release")
+    release_maturity(version)
+    if registry_tag not in {"next", "latest"}:
+        raise ValueError("registry tag must be next or latest")
     manifest = read_yaml(root / "iii.worker.yaml")
     config = read_yaml(root / "config.yaml")
     if not isinstance(manifest, dict) or not isinstance(config, dict):
@@ -324,7 +368,7 @@ def build_payload(
     return {
         "worker_name": WORKER_NAME,
         "version": version,
-        "tag": "next",
+        "tag": registry_tag,
         "type": "binary",
         "readme": (root / "README.md").read_text(encoding="utf-8"),
         "repo": repo_url,
@@ -334,7 +378,10 @@ def build_payload(
         "config": config,
         "functions": functions,
         "triggers": interface.get("triggers") or [],
-        "experimental": False,
+        # Match the Workers publisher contract: maturity is encoded in the
+        # version, while the Registry badge is an explicit boolean payload
+        # field. The workflow maps only -experimental to this flag.
+        "experimental": bool(experimental),
         "tags": manifest.get("tags") or [],
         "binaries": binaries,
     }
@@ -361,9 +408,15 @@ def main() -> int:
     payload.add_argument("--root", default=".")
     payload.add_argument("--version", required=True)
     payload.add_argument("--tag", required=True)
+    payload.add_argument("--registry-tag", default="next", choices=("next", "latest"))
     payload.add_argument("--repo-url", required=True)
     payload.add_argument("--interface", required=True)
     payload.add_argument("--checksums-dir", required=True)
+    payload.add_argument(
+        "--experimental",
+        action="store_true",
+        help="mark the published Registry worker as experimental",
+    )
     payload.add_argument("--out", required=True)
 
     args = parser.parse_args()
@@ -385,12 +438,24 @@ def main() -> int:
                 root=pathlib.Path(args.root),
                 version=args.version,
                 tag=args.tag,
+                registry_tag=args.registry_tag,
                 repo_url=args.repo_url,
                 interface=read_json(args.interface),
                 checksums_dir=pathlib.Path(args.checksums_dir),
+                experimental=args.experimental,
             )
             pathlib.Path(args.out).write_text(json.dumps(release_payload, indent=2) + "\n", encoding="utf-8")
-            print(json.dumps({"worker_name": WORKER_NAME, "version": args.version, "tag": "next", "targets": list(TARGETS)}, indent=2))
+            print(
+                json.dumps(
+                    {
+                        "worker_name": WORKER_NAME,
+                        "version": args.version,
+                        "tag": args.registry_tag,
+                        "targets": list(TARGETS),
+                    },
+                    indent=2,
+                )
+            )
     except (OSError, ValueError, RuntimeError, subprocess.SubprocessError) as error:
         print(f"error: {error}", file=sys.stderr)
         return 1
