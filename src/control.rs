@@ -152,6 +152,11 @@ pub struct ExecutionRecord {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct RunRequest {
+    // iii injects this routing metadata for worker-to-worker invocations.
+    // It is accepted at the wire boundary but is never persisted or hashed.
+    #[serde(rename = "_caller_worker_id", default, skip_serializing)]
+    #[schemars(skip)]
+    pub(super) _caller_worker_id: Option<String>,
     pub idempotency_key: String,
     #[serde(default)]
     pub label: String,
@@ -1933,6 +1938,7 @@ mod tests {
 
     fn request() -> RunRequest {
         RunRequest {
+            _caller_worker_id: None,
             idempotency_key: "gate:sha:case".into(),
             label: "PR gate".into(),
             lane: "pr-gate".into(),
@@ -1948,6 +1954,24 @@ mod tests {
             progress_interval_seconds: 15,
             run_contract: None,
         }
+    }
+
+    #[test]
+    fn run_request_accepts_engine_caller_metadata_without_persisting_it() {
+        let mut value = serde_json::to_value(request()).unwrap();
+        value["_caller_worker_id"] = serde_json::json!("worker-1");
+
+        let with_caller: RunRequest = serde_json::from_value(value).unwrap();
+        assert_eq!(with_caller._caller_worker_id.as_deref(), Some("worker-1"));
+        assert!(!serde_json::to_value(&with_caller)
+            .unwrap()
+            .as_object()
+            .unwrap()
+            .contains_key("_caller_worker_id"));
+        assert_eq!(
+            crate::artifact::sha256_value(&with_caller).unwrap(),
+            crate::artifact::sha256_value(&request()).unwrap()
+        );
     }
 
     fn d0_request() -> RunRequest {
