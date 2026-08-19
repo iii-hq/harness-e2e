@@ -16,7 +16,7 @@ use sha2::{Digest, Sha256};
 use crate::artifact;
 use crate::identity::StackIdentity;
 use crate::redaction::{RedactionPolicy, RedactionReport};
-use crate::report::E2eReport;
+use crate::report::{E2eObservationEnvelope, E2eReport};
 
 pub const ARCHIVE_ID: &str = "e2e::archive";
 pub const ARCHIVE_HEAD_ID: &str = "e2e::archive-head";
@@ -291,15 +291,14 @@ impl DurableHistory {
     pub async fn archive(
         &self,
         output: &Path,
-        report: &E2eReport,
+        report: Option<&E2eReport>,
+        observation: Option<&E2eObservationEnvelope>,
         retention_class: RetentionClass,
     ) -> Result<ArchiveResponse> {
-        let execution = &report.execution;
-        let system = &report.system_under_test;
-        system.validate()?;
-        let identity_sha256 = artifact::sha256_value(system)?;
-        let archive_id = archive_id(report, retention_class)?;
-        let created_at = execution.completed_at.clone();
+        let basis = archive_basis(report, observation)?;
+        let identity_sha256 = basis.identity_sha256.clone();
+        let archive_id = archive_id(&basis, report, observation, retention_class)?;
+        let created_at = basis.completed_at.clone();
         let completed_at = DateTime::parse_from_rfc3339(&created_at)
             .context("execution completed_at must be RFC 3339")?
             .with_timezone(&Utc);
@@ -379,7 +378,7 @@ impl DurableHistory {
         }
         let manifest = DurableArchiveManifest {
             archive_id: archive_id.clone(),
-            execution_id: execution.execution_id.clone(),
+            execution_id: basis.execution_id.clone(),
             identity_sha256: identity_sha256.clone(),
             retention_class,
             created_at: created_at.clone(),
@@ -421,7 +420,7 @@ impl DurableHistory {
             .await?;
         let archive = DurableArchiveReference {
             archive_id,
-            execution_id: execution.execution_id.clone(),
+            execution_id: basis.execution_id.clone(),
             identity_sha256,
             retention_class,
             created_at,
@@ -429,7 +428,7 @@ impl DurableHistory {
             manifest: manifest_object,
             manifest_backup,
         };
-        let history = history_record(report, archive.clone())?;
+        let history = history_record(&basis, archive.clone())?;
         let duplicate_ingestion = self.ingest(&history).await?;
         Ok(ArchiveResponse {
             archive,
@@ -506,7 +505,7 @@ impl DurableHistory {
         }
         let destination = restore_root.join(&archive.archive_id);
         if destination.exists() {
-            E2eReport::read_from(&destination)
+            validate_restored_payload(&destination)
                 .context("validate previously restored E2E result and evidence")?;
             return Ok(ArchiveRestoreResponse {
                 archive,
@@ -541,7 +540,7 @@ impl DurableHistory {
                 }
                 artifact::write_atomic(&path, &bytes)?;
             }
-            E2eReport::read_from(&destination)
+            validate_restored_payload(&destination)
                 .context("validate reconstructed E2E result and evidence")?;
             Ok::<_, anyhow::Error>(())
         }
@@ -882,20 +881,105 @@ impl DurableHistory {
     }
 }
 
-fn archive_id(report: &E2eReport, retention: RetentionClass) -> Result<String> {
-    let execution = &report.execution;
-    let system = &report.system_under_test;
-    let digest = artifact::sha256_value(&json!({
-        "execution": execution,
-        "system": system,
-        "retention": retention,
-    }))?;
-    Ok(digest_component(&digest)[..32].to_string())
+struct ArchiveBasis {
+    execution_id: String,
+    lane: String,
+    completed_at: String,
+    identity_sha256: String,
+    subject_provider: String,
+    subject_model: String,
+    passed: bool,
+    case_count: u32,
+    stack_mode: String,
+    subject_revision: String,
+    e2e_repository: String,
+    e2e_revision: String,
 }
 
-fn history_record(report: &E2eReport, archive: DurableArchiveReference) -> Result<HistoryRecord> {
+fn validate_restored_payload(destination: &Path) -> Result<()> {
+    let has_report = destination.join("results.json").is_file();
+    let has_observation = destination.join("observation.json").is_file();
+    if !has_report && !has_observation {
+        bail!("restored archive has neither results.json nor observation.json");
+    }
+    if has_report {
+        E2eReport::read_from(destination)?;
+    }
+    if has_observation {
+        E2eObservationEnvelope::read_from(destination)?;
+    }
+    Ok(())
+}
+
+fn archive_basis(
+    report: Option<&E2eReport>,
+    observation: Option<&E2eObservationEnvelope>,
+) -> Result<ArchiveBasis> {
+    if let Some(observation) = observation {
+        observation.validate()?;
+        if let Some(report) = report {
+            let contract = report
+                .observation_contract
+                .as_ref()
+                .context("report archived with a D0 observation has no run contract")?;
+            if report.execution.execution_id != observation.identity.execution.id
+                || report.execution.completed_at != observation.identity.execution.completed_at
+                || contract.target != observation.identity.target
+                || contract.plan != observation.identity.plan
+                || contract.runner != observation.identity.runner
+                || contract.attempt != observation.identity.execution.attempt
+            {
+                bail!("report and terminal observation identities differ");
+            }
+            if observation
+                .provenance
+                .system_under_test
+                .as_ref()
+                .is_none_or(|system| {
+                    serde_json::to_value(system).ok()
+                        != serde_json::to_value(&report.system_under_test).ok()
+                })
+            {
+                bail!("report and terminal observation provenance differ");
+            }
+        }
+        let (stack_mode, subject_revision) = match &observation.identity.target.stack {
+            StackIdentity::Source {
+                workers_revision, ..
+            } => ("source".to_string(), workers_revision.clone()),
+            StackIdentity::Registry {
+                stack_lock_digest, ..
+            } => ("registry".to_string(), stack_lock_digest.clone()),
+        };
+        return Ok(ArchiveBasis {
+            execution_id: observation.identity.execution.id.clone(),
+            lane: report
+                .map(|report| report.execution.lane.clone())
+                .unwrap_or_else(|| "observation".into()),
+            completed_at: observation.identity.execution.completed_at.clone(),
+            identity_sha256: artifact::sha256_value(&observation.identity)?,
+            subject_provider: observation.provenance.subject_provider.clone(),
+            subject_model: observation.provenance.subject_model.clone(),
+            passed: observation.outcome.passed.unwrap_or(false),
+            case_count: u32::try_from(
+                observation
+                    .samples
+                    .iter()
+                    .map(|sample| (&sample.scenario_id, &sample.case_id))
+                    .collect::<std::collections::HashSet<_>>()
+                    .len(),
+            )
+            .unwrap_or(u32::MAX),
+            stack_mode,
+            subject_revision,
+            e2e_repository: observation.identity.runner.name.clone(),
+            e2e_revision: observation.identity.runner.revision.clone(),
+        });
+    }
+    let report = report.context("archive requires a report or terminal observation")?;
     let execution = &report.execution;
     let system = &report.system_under_test;
+    system.validate()?;
     let (stack_mode, subject_revision) = match &system.stack {
         StackIdentity::Source {
             workers_revision, ..
@@ -904,12 +988,11 @@ fn history_record(report: &E2eReport, archive: DurableArchiveReference) -> Resul
             stack_lock_digest, ..
         } => ("registry".to_string(), stack_lock_digest.clone()),
     };
-    let record = HistoryRecord {
-        ingestion_id: archive.archive_id.clone(),
-        identity_sha256: archive.identity_sha256.clone(),
+    Ok(ArchiveBasis {
         execution_id: execution.execution_id.clone(),
         lane: execution.lane.clone(),
-        occurred_at: execution.completed_at.clone(),
+        completed_at: execution.completed_at.clone(),
+        identity_sha256: artifact::sha256_value(system)?,
         subject_provider: report.subject.provider.clone(),
         subject_model: report.subject.model.clone(),
         passed: report.passed,
@@ -918,6 +1001,47 @@ fn history_record(report: &E2eReport, archive: DurableArchiveReference) -> Resul
         subject_revision,
         e2e_repository: system.e2e_repository.clone(),
         e2e_revision: system.e2e_revision.clone(),
+    })
+}
+
+fn archive_id(
+    basis: &ArchiveBasis,
+    report: Option<&E2eReport>,
+    observation: Option<&E2eObservationEnvelope>,
+    retention: RetentionClass,
+) -> Result<String> {
+    let digest = if observation.is_none() {
+        let report = report.context("legacy archive identity requires a report")?;
+        artifact::sha256_value(&json!({
+            "execution": report.execution,
+            "system": report.system_under_test,
+            "retention": retention,
+        }))?
+    } else {
+        artifact::sha256_value(&json!({
+            "execution_id": basis.execution_id,
+            "identity_sha256": basis.identity_sha256,
+            "retention": retention,
+        }))?
+    };
+    Ok(digest_component(&digest)[..32].to_string())
+}
+
+fn history_record(basis: &ArchiveBasis, archive: DurableArchiveReference) -> Result<HistoryRecord> {
+    let record = HistoryRecord {
+        ingestion_id: archive.archive_id.clone(),
+        identity_sha256: archive.identity_sha256.clone(),
+        execution_id: basis.execution_id.clone(),
+        lane: basis.lane.clone(),
+        occurred_at: basis.completed_at.clone(),
+        subject_provider: basis.subject_provider.clone(),
+        subject_model: basis.subject_model.clone(),
+        passed: basis.passed,
+        case_count: basis.case_count,
+        stack_mode: basis.stack_mode.clone(),
+        subject_revision: basis.subject_revision.clone(),
+        e2e_repository: basis.e2e_repository.clone(),
+        e2e_revision: basis.e2e_revision.clone(),
         archive,
     };
     validate_history_record(&record)?;
@@ -1094,6 +1218,12 @@ mod tests {
     use std::sync::Mutex;
 
     use super::*;
+    use crate::report::{
+        ObservationDataAvailability, ObservationDecision, ObservationEnvironment,
+        ObservationEvidence, ObservationExecutionIdentity, ObservationIdentity, ObservationMode,
+        ObservationObjective, ObservationOutcome, ObservationPlanIdentity, ObservationProvenance,
+        ObservationTargetIdentity, RunnerIdentity, OBSERVATION_SCHEMA,
+    };
 
     #[derive(Default)]
     struct FakeCaller {
@@ -1144,6 +1274,59 @@ mod tests {
         }
     }
 
+    fn terminal_observation() -> E2eObservationEnvelope {
+        E2eObservationEnvelope {
+            schema: OBSERVATION_SCHEMA.into(),
+            identity: ObservationIdentity {
+                target: ObservationTargetIdentity {
+                    application: "harness".into(),
+                    version: "1.0.0".into(),
+                    stack: StackIdentity::Source {
+                        workers_repository: "iii-hq/workers".into(),
+                        workers_revision: "0123456789abcdef0123456789abcdef01234567".into(),
+                    },
+                },
+                plan: ObservationPlanIdentity {
+                    id: "deployment-d0".into(),
+                    revision: "revision-1".into(),
+                    sha256: format!("sha256:{}", "a".repeat(64)),
+                    catalog_sha256: format!("sha256:{}", "b".repeat(64)),
+                },
+                runner: RunnerIdentity {
+                    name: "harness-e2e".into(),
+                    version: "0.1.0".into(),
+                    revision: "89abcdef0123456789abcdef0123456789abcdef".into(),
+                },
+                execution: ObservationExecutionIdentity {
+                    id: "execution-1".into(),
+                    attempt: 1,
+                    request_sha256: format!("sha256:{}", "c".repeat(64)),
+                    run_contract_sha256: format!("sha256:{}", "d".repeat(64)),
+                    started_at: "2026-08-18T10:00:00Z".into(),
+                    completed_at: "2026-08-18T10:01:00Z".into(),
+                },
+            },
+            mode: ObservationMode {
+                environment: ObservationEnvironment::Demonstration,
+                decision: ObservationDecision::ObserveOnly,
+            },
+            outcome: ObservationOutcome {
+                control_phase: "failed".into(),
+                objective: ObservationObjective::InfrastructureFailed,
+                passed: None,
+                data_availability: ObservationDataAvailability::Unavailable,
+                error: "preflight failed".into(),
+            },
+            samples: Vec::new(),
+            evidence: ObservationEvidence::default(),
+            provenance: ObservationProvenance {
+                subject_model: "model".into(),
+                subject_provider: "provider".into(),
+                system_under_test: None,
+            },
+        }
+    }
+
     #[test]
     fn retention_policy_is_explicit_and_canonical_never_expires() {
         assert_eq!(
@@ -1178,6 +1361,32 @@ mod tests {
         assert!(safe_path("runs/evidence.json").is_ok());
         assert!(safe_path("../secret").is_err());
         assert!(safe_path("/absolute").is_err());
+    }
+
+    #[test]
+    fn terminal_observation_is_a_stable_archive_identity_without_a_report() {
+        let observation = terminal_observation();
+        let basis = archive_basis(None, Some(&observation)).unwrap();
+        let first = archive_id(
+            &basis,
+            None,
+            Some(&observation),
+            RetentionClass::Longitudinal,
+        )
+        .unwrap();
+        let second = archive_id(
+            &basis,
+            None,
+            Some(&observation),
+            RetentionClass::Longitudinal,
+        )
+        .unwrap();
+        assert_eq!(first, second);
+        assert_eq!(basis.execution_id, "execution-1");
+
+        let output = tempfile::tempdir().unwrap();
+        observation.write_to(output.path()).unwrap();
+        validate_restored_payload(output.path()).unwrap();
     }
 
     #[tokio::test]

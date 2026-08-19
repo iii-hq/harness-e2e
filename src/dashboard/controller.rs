@@ -546,6 +546,7 @@ pub(super) fn control_request(
         _ => return Err("judge_model and judge_provider must be supplied together".into()),
     };
     Ok(ControlRunRequest {
+        _caller_worker_id: None,
         idempotency_key: format!("dashboard:{}", uuid::Uuid::new_v4().simple()),
         label: request.label.clone(),
         lane: "local".into(),
@@ -559,6 +560,7 @@ pub(super) fn control_request(
         rotating_seeds: Vec::new(),
         technical_retries: request.technical_retries,
         progress_interval_seconds: 15,
+        run_contract: None,
     })
 }
 

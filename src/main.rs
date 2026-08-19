@@ -287,6 +287,7 @@ async fn run(args: RunArgs) -> Result<()> {
         progress_interval: (args.progress_interval_seconds > 0)
             .then(|| std::time::Duration::from_secs(args.progress_interval_seconds)),
         control: None,
+        observation_contract: None,
     })
     .await
     .context("run E2E quality suite")?;

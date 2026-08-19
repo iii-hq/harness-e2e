@@ -3,12 +3,25 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+use super::ExecutionPolicy;
 use crate::artifact::sha256_value;
 
 pub fn stable_seed(id: &str) -> u64 {
     id.bytes().fold(0xcbf29ce484222325, |hash, byte| {
         (hash ^ u64::from(byte)).wrapping_mul(0x100000001b3)
     })
+}
+
+pub fn scenario_contract_sha256(
+    case: &ScenarioCase,
+    execution_policy: ExecutionPolicy,
+) -> Result<String> {
+    sha256_value(&serde_json::json!({
+        "scenario_id": case.scenario_id,
+        "scenario_version": case.scenario_version,
+        "case": case,
+        "execution_policy": execution_policy,
+    }))
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]

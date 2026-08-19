@@ -12,7 +12,7 @@ use crate::assessment::{
     AssessmentContract, AssessmentResult, AssessmentTargetKind, AssetAssessmentResult,
     EvidenceReference,
 };
-use crate::identity::{ExecutionIdentity, SystemUnderTestIdentity};
+use crate::identity::{ExecutionIdentity, StackIdentity, SystemUnderTestIdentity};
 use crate::scenarios::{
     CapturedDeliverable, CapturedDeliverableContent, CapturedInvariant, ExecutionPolicy,
     ProvenanceEvidence, ScenarioCase, WorkExpectation,
@@ -1134,6 +1134,411 @@ pub struct ModelArtifact {
     pub supports_vision: Option<bool>,
 }
 
+pub const OBSERVATION_SCHEMA: &str = "e2e-observation/v1";
+pub const CATALOG_SCHEMA: &str = "e2e-scenario-catalog/v1";
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct RunnerIdentity {
+    pub name: String,
+    pub version: String,
+    pub revision: String,
+}
+
+impl RunnerIdentity {
+    pub fn runtime() -> Self {
+        Self {
+            name: env!("CARGO_PKG_NAME").to_string(),
+            version: env!("CARGO_PKG_VERSION").to_string(),
+            revision: crate::identity::nonempty_env("HARNESS_E2E_REVISION")
+                .unwrap_or_else(|| env!("HARNESS_E2E_BUILD_REVISION").to_string()),
+        }
+    }
+
+    pub fn validate(&self) -> Result<()> {
+        required_observation_value(&self.name, "runner name")?;
+        required_observation_value(&self.version, "runner version")?;
+        validate_observation_revision(&self.revision, "runner revision")
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ObservationTargetIdentity {
+    pub application: String,
+    pub version: String,
+    pub stack: StackIdentity,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ObservationPlanIdentity {
+    pub id: String,
+    pub revision: String,
+    pub sha256: String,
+    pub catalog_sha256: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum ObservationEnvironment {
+    Demonstration,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum ObservationDecision {
+    ObserveOnly,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ObservationMode {
+    pub environment: ObservationEnvironment,
+    pub decision: ObservationDecision,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ObservationSelectedCase {
+    pub scenario_id: crate::scenarios::ScenarioId,
+    pub scenario_version: u32,
+    pub case_id: String,
+    pub seed: u64,
+    pub inputs_sha256: String,
+    pub contract_sha256: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ObservationCorrelation {
+    pub system: String,
+    pub deployment_id: String,
+    pub operation_id: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ObservationRunContract {
+    pub schema_version: u32,
+    pub mode: ObservationMode,
+    pub target: ObservationTargetIdentity,
+    pub plan: ObservationPlanIdentity,
+    pub runner: RunnerIdentity,
+    pub attempt: u32,
+    pub selected_cases: Vec<ObservationSelectedCase>,
+    pub correlation: ObservationCorrelation,
+}
+
+impl ObservationRunContract {
+    pub fn validate(&self) -> Result<()> {
+        if self.schema_version != 1 {
+            bail!("run_contract schema_version must be 1");
+        }
+        if self.target.application != "harness" {
+            bail!("run_contract target application must be 'harness'");
+        }
+        required_observation_value(&self.target.version, "target version")?;
+        validate_observation_stack(&self.target.stack)?;
+        required_observation_value(&self.plan.id, "plan id")?;
+        required_observation_value(&self.plan.revision, "plan revision")?;
+        validate_observation_sha256(&self.plan.sha256, "plan digest")?;
+        validate_observation_sha256(&self.plan.catalog_sha256, "catalog digest")?;
+        self.runner.validate()?;
+        if self.attempt == 0 {
+            bail!("run_contract attempt must be at least 1");
+        }
+        if self.selected_cases.is_empty() {
+            bail!("run_contract selected_cases cannot be empty");
+        }
+        let mut identities = HashSet::new();
+        for case in &self.selected_cases {
+            if case.scenario_version == 0 || case.case_id.trim().is_empty() {
+                bail!("run_contract contains an invalid selected case identity");
+            }
+            validate_observation_sha256(&case.inputs_sha256, "selected case inputs")?;
+            validate_observation_sha256(&case.contract_sha256, "selected case contract")?;
+            if !identities.insert((case.scenario_id.as_str(), case.case_id.as_str())) {
+                bail!("run_contract contains duplicate selected cases");
+            }
+        }
+        required_observation_value(&self.correlation.system, "correlation system")?;
+        required_observation_value(&self.correlation.deployment_id, "deployment id")?;
+        required_observation_value(&self.correlation.operation_id, "operation id")?;
+        Ok(())
+    }
+
+    pub fn validate_runtime(&self, system: &SystemUnderTestIdentity) -> Result<()> {
+        if self.target.version != system.harness_version
+            || self.target.stack != system.stack
+            || self.runner.revision != system.e2e_revision
+        {
+            bail!(
+                "E2E observation identity mismatch: expected Harness {} with {:?} on runner {}, observed {} with {:?} on runner {}",
+                self.target.version,
+                self.target.stack,
+                self.runner.revision,
+                system.harness_version,
+                system.stack,
+                system.e2e_revision
+            );
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ObservationExecutionIdentity {
+    pub id: String,
+    pub attempt: u32,
+    pub request_sha256: String,
+    pub run_contract_sha256: String,
+    pub started_at: String,
+    pub completed_at: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ObservationIdentity {
+    pub target: ObservationTargetIdentity,
+    pub plan: ObservationPlanIdentity,
+    pub runner: RunnerIdentity,
+    pub execution: ObservationExecutionIdentity,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum ObservationObjective {
+    Passed,
+    QualityAdvisory,
+    HardGateFailed,
+    TechnicalFailed,
+    InfrastructureFailed,
+    Cancelled,
+    UnsupportedPlan,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum ObservationDataAvailability {
+    Complete,
+    Partial,
+    Unavailable,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ObservationOutcome {
+    pub control_phase: String,
+    pub objective: ObservationObjective,
+    pub passed: Option<bool>,
+    pub data_availability: ObservationDataAvailability,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub error: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum ObservationMetricOrigin {
+    Observed,
+    DerivedFromObserved,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ObservationMetricDerivation {
+    pub metric: String,
+    pub origin: ObservationMetricOrigin,
+    pub formula: String,
+    pub formula_version: String,
+}
+
+/// A metric is explicit about its unit and availability so a recorded zero
+/// cannot be mistaken for a missing measurement. The legacy `metrics` object
+/// remains alongside this additive projection for current consumers.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ObservationMetric {
+    pub value: Option<f64>,
+    pub unit: String,
+    pub availability: ObservationDataAvailability,
+    pub origin: ObservationMetricOrigin,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ObservationSample {
+    pub scenario_id: String,
+    pub scenario_version: u32,
+    pub case_id: String,
+    pub seed: u64,
+    pub run_id: String,
+    pub attempt_id: String,
+    pub status: RunStatus,
+    pub origin: ObservationMetricOrigin,
+    pub data_availability: ObservationDataAvailability,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub metrics: Option<EfficiencyReport>,
+    #[serde(default)]
+    pub metric_values: BTreeMap<String, ObservationMetric>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub derivations: Vec<ObservationMetricDerivation>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ObservationEvidence {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub results_sha256: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub manifest_sha256: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub artifacts: Vec<ArtifactReference>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ObservationProvenance {
+    pub subject_model: String,
+    pub subject_provider: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub system_under_test: Option<SystemUnderTestIdentity>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct E2eObservationEnvelope {
+    pub schema: String,
+    pub identity: ObservationIdentity,
+    pub mode: ObservationMode,
+    pub outcome: ObservationOutcome,
+    pub samples: Vec<ObservationSample>,
+    pub evidence: ObservationEvidence,
+    pub provenance: ObservationProvenance,
+}
+
+impl E2eObservationEnvelope {
+    pub fn validate(&self) -> Result<()> {
+        if self.schema != OBSERVATION_SCHEMA {
+            bail!("observation schema must be {OBSERVATION_SCHEMA}");
+        }
+        self.identity.runner.validate()?;
+        if self.identity.target.application != "harness" {
+            bail!("observation target application must be 'harness'");
+        }
+        required_observation_value(&self.identity.target.version, "target version")?;
+        validate_observation_stack(&self.identity.target.stack)?;
+        required_observation_value(&self.identity.plan.id, "plan id")?;
+        required_observation_value(&self.identity.plan.revision, "plan revision")?;
+        validate_observation_sha256(&self.identity.plan.sha256, "plan digest")?;
+        validate_observation_sha256(&self.identity.plan.catalog_sha256, "catalog digest")?;
+        validate_observation_sha256(
+            &self.identity.execution.request_sha256,
+            "observation request digest",
+        )?;
+        validate_observation_sha256(
+            &self.identity.execution.run_contract_sha256,
+            "observation run contract digest",
+        )?;
+        ExecutionIdentity {
+            execution_id: self.identity.execution.id.clone(),
+            lane: "observation".into(),
+            started_at: self.identity.execution.started_at.clone(),
+            completed_at: self.identity.execution.completed_at.clone(),
+        }
+        .validate()?;
+        if let Some(digest) = &self.evidence.results_sha256 {
+            validate_observation_sha256(digest, "results evidence")?;
+        }
+        if let Some(digest) = &self.evidence.manifest_sha256 {
+            validate_observation_sha256(digest, "manifest evidence")?;
+        }
+        if let Some(system) = &self.provenance.system_under_test {
+            system.validate()?;
+        }
+        Ok(())
+    }
+
+    pub fn write_to(&self, output: &Path) -> Result<ArtifactReference> {
+        self.validate()?;
+        artifact::write_json(
+            output,
+            Path::new("observation.json"),
+            "terminal_observation",
+            OBSERVATION_SCHEMA,
+            self,
+        )
+    }
+
+    pub fn read_from(output: &Path) -> Result<Self> {
+        let path = if output.is_dir() {
+            output.join("observation.json")
+        } else {
+            output.to_path_buf()
+        };
+        let observation: Self = serde_json::from_slice(
+            &fs::read(&path).with_context(|| format!("read {}", path.display()))?,
+        )
+        .with_context(|| format!("decode {}", path.display()))?;
+        observation.validate()?;
+        let root = path.parent().context("observation path has no parent")?;
+        for reference in &observation.evidence.artifacts {
+            reference.verify(root)?;
+        }
+        Ok(observation)
+    }
+}
+
+fn required_observation_value(value: &str, label: &str) -> Result<()> {
+    if value.trim().is_empty() {
+        bail!("{label} cannot be empty");
+    }
+    Ok(())
+}
+
+fn validate_observation_revision(value: &str, label: &str) -> Result<()> {
+    if value.len() != 40 || !value.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        bail!("{label} must be a full immutable Git SHA");
+    }
+    Ok(())
+}
+
+fn validate_observation_sha256(value: &str, label: &str) -> Result<()> {
+    if value.len() != 71
+        || !value.starts_with("sha256:")
+        || !value[7..].bytes().all(|byte| byte.is_ascii_hexdigit())
+    {
+        bail!("{label} must be a sha256:<64 hex characters> digest");
+    }
+    Ok(())
+}
+
+fn validate_observation_stack(stack: &StackIdentity) -> Result<()> {
+    match stack {
+        StackIdentity::Source {
+            workers_repository,
+            workers_revision,
+        } => {
+            required_observation_value(workers_repository, "workers repository")?;
+            validate_observation_revision(workers_revision, "workers revision")
+        }
+        StackIdentity::Registry {
+            stack_versions,
+            stack_lock_digest,
+        } => {
+            if stack_versions.is_empty() {
+                bail!("target registry stack_versions cannot be empty");
+            }
+            for (worker, version) in stack_versions {
+                required_observation_value(worker, "registry worker")?;
+                required_observation_value(version, "registry worker version")?;
+            }
+            validate_observation_sha256(stack_lock_digest, "stack lock digest")
+        }
+    }
+}
+
 impl From<Model> for ModelArtifact {
     fn from(model: Model) -> Self {
         let model = model.into_normalized();
@@ -1157,6 +1562,8 @@ pub struct E2eManifest {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub judge: Option<ModelArtifact>,
     pub control_plane: ControlPlaneEvidence,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub observation_contract: Option<ObservationRunContract>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub worker_contracts: Vec<ObservedWorkerContract>,
 }
@@ -1167,6 +1574,9 @@ impl E2eManifest {
         self.system_under_test.validate()?;
         if self.control_plane.functions.is_empty() {
             bail!("manifest control plane cannot be empty");
+        }
+        if let Some(contract) = &self.observation_contract {
+            contract.validate()?;
         }
         let mut observed = HashSet::new();
         for contract in &self.worker_contracts {
@@ -1207,6 +1617,8 @@ pub struct E2eReport {
     pub judge_protocol: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub engine_revision: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub observation_contract: Option<ObservationRunContract>,
     pub passed: bool,
     #[serde(default)]
     pub redaction: crate::redaction::RedactionReport,
@@ -1234,6 +1646,7 @@ impl E2eReport {
             judge,
             judge_protocol,
             engine_revision,
+            observation_contract: None,
             passed,
             redaction: crate::redaction::RedactionReport::default(),
             assessment_contract: AssessmentContract { runs: Vec::new() },
@@ -1317,6 +1730,13 @@ impl E2eReport {
             != serde_json::to_value(&manifest.system_under_test)?
         {
             bail!("results and manifest system identities differ");
+        }
+        if self.observation_contract != manifest.observation_contract {
+            bail!("results and manifest observation contracts differ");
+        }
+        if let Some(contract) = &self.observation_contract {
+            contract.validate()?;
+            contract.validate_runtime(&self.system_under_test)?;
         }
         let reference = self
             .manifest
@@ -2151,7 +2571,48 @@ mod tests {
                     sha256: TEST_DIGEST.into(),
                 }],
             },
+            observation_contract: None,
             worker_contracts: Vec::new(),
+        }
+    }
+
+    fn observation_contract() -> ObservationRunContract {
+        ObservationRunContract {
+            schema_version: 1,
+            mode: ObservationMode {
+                environment: ObservationEnvironment::Demonstration,
+                decision: ObservationDecision::ObserveOnly,
+            },
+            target: ObservationTargetIdentity {
+                application: "harness".into(),
+                version: system().harness_version,
+                stack: system().stack,
+            },
+            plan: ObservationPlanIdentity {
+                id: "deployment-d0".into(),
+                revision: "revision-1".into(),
+                sha256: TEST_DIGEST.into(),
+                catalog_sha256: format!("sha256:{}", "a".repeat(64)),
+            },
+            runner: RunnerIdentity {
+                name: "harness-e2e".into(),
+                version: "0.1.0".into(),
+                revision: "0123456789abcdef0123456789abcdef01234567".into(),
+            },
+            attempt: 1,
+            selected_cases: vec![ObservationSelectedCase {
+                scenario_id: crate::scenarios::ScenarioId::DirectAnswer,
+                scenario_version: 1,
+                case_id: "direct_answer:v1:seed-0000000000000001".into(),
+                seed: 1,
+                inputs_sha256: format!("sha256:{}", "b".repeat(64)),
+                contract_sha256: format!("sha256:{}", "c".repeat(64)),
+            }],
+            correlation: ObservationCorrelation {
+                system: "release-control".into(),
+                deployment_id: "deployment-1".into(),
+                operation_id: "operation-1".into(),
+            },
         }
     }
 
@@ -2464,6 +2925,32 @@ mod tests {
     fn an_empty_report_does_not_pass() {
         let report = report(vec![]);
         assert!(!report.passed);
+    }
+
+    #[test]
+    fn observation_contract_is_persisted_in_report_and_manifest() {
+        let output = tempfile::tempdir().unwrap();
+        let contract = observation_contract();
+        contract.validate_runtime(&system()).unwrap();
+        let mut manifest = manifest();
+        manifest.observation_contract = Some(contract.clone());
+        let mut report = report(vec![aggregate(vec![run(100, true)])]);
+        report.observation_contract = Some(contract.clone());
+        report.write_to(output.path(), &manifest).unwrap();
+
+        let (decoded, _) = E2eReport::read_from(output.path()).unwrap();
+        assert_eq!(decoded.observation_contract, Some(contract));
+    }
+
+    #[test]
+    fn observation_target_mismatch_is_rejected_by_preflight() {
+        let mut contract = observation_contract();
+        contract.target.version = "other".into();
+        assert!(contract
+            .validate_runtime(&system())
+            .unwrap_err()
+            .to_string()
+            .contains("identity mismatch"));
     }
 
     #[test]

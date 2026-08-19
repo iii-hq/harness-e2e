@@ -1,0 +1,809 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "E2eObservationEnvelope",
+  "type": "object",
+  "required": [
+    "evidence",
+    "identity",
+    "mode",
+    "outcome",
+    "provenance",
+    "samples",
+    "schema"
+  ],
+  "properties": {
+    "evidence": {
+      "$ref": "#/definitions/ObservationEvidence"
+    },
+    "identity": {
+      "$ref": "#/definitions/ObservationIdentity"
+    },
+    "mode": {
+      "$ref": "#/definitions/ObservationMode"
+    },
+    "outcome": {
+      "$ref": "#/definitions/ObservationOutcome"
+    },
+    "provenance": {
+      "$ref": "#/definitions/ObservationProvenance"
+    },
+    "samples": {
+      "type": "array",
+      "items": {
+        "$ref": "#/definitions/ObservationSample"
+      }
+    },
+    "schema": {
+      "type": "string"
+    }
+  },
+  "additionalProperties": false,
+  "definitions": {
+    "ArtifactReference": {
+      "type": "object",
+      "required": [
+        "id",
+        "kind",
+        "media_type",
+        "path",
+        "sha256",
+        "size_bytes"
+      ],
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "kind": {
+          "type": "string"
+        },
+        "media_type": {
+          "type": "string"
+        },
+        "path": {
+          "type": "string"
+        },
+        "sha256": {
+          "type": "string"
+        },
+        "size_bytes": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        }
+      }
+    },
+    "EfficiencyReport": {
+      "type": "object",
+      "required": [
+        "minimum_expected_work",
+        "observed_complexity",
+        "technical_attempts",
+        "wall_time_ms"
+      ],
+      "properties": {
+        "child_sessions": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "child_turns": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "cost_usd": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double"
+        },
+        "critical_path_ms": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "effective_fan_out": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "function_call_errors": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "function_calls": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "input_tokens": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "minimum_expected_work": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "observed_complexity": {
+          "$ref": "#/definitions/ObservedComplexityReport"
+        },
+        "observed_work": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "output_tokens": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "root_turns": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "technical_attempts": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0.0
+        },
+        "total_tokens": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "transient_resumes": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "unavailable": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          }
+        },
+        "validation_retries": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "wake_resumes": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "wall_time_ms": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "work_amplification": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double"
+        }
+      }
+    },
+    "ObservationDataAvailability": {
+      "type": "string",
+      "enum": [
+        "complete",
+        "partial",
+        "unavailable"
+      ]
+    },
+    "ObservationDecision": {
+      "type": "string",
+      "enum": [
+        "observe_only"
+      ]
+    },
+    "ObservationEnvironment": {
+      "type": "string",
+      "enum": [
+        "demonstration"
+      ]
+    },
+    "ObservationEvidence": {
+      "type": "object",
+      "properties": {
+        "artifacts": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/ArtifactReference"
+          }
+        },
+        "manifest_sha256": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "results_sha256": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "ObservationExecutionIdentity": {
+      "type": "object",
+      "required": [
+        "attempt",
+        "completed_at",
+        "id",
+        "request_sha256",
+        "run_contract_sha256",
+        "started_at"
+      ],
+      "properties": {
+        "attempt": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0.0
+        },
+        "completed_at": {
+          "type": "string"
+        },
+        "id": {
+          "type": "string"
+        },
+        "request_sha256": {
+          "type": "string"
+        },
+        "run_contract_sha256": {
+          "type": "string"
+        },
+        "started_at": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "ObservationIdentity": {
+      "type": "object",
+      "required": [
+        "execution",
+        "plan",
+        "runner",
+        "target"
+      ],
+      "properties": {
+        "execution": {
+          "$ref": "#/definitions/ObservationExecutionIdentity"
+        },
+        "plan": {
+          "$ref": "#/definitions/ObservationPlanIdentity"
+        },
+        "runner": {
+          "$ref": "#/definitions/RunnerIdentity"
+        },
+        "target": {
+          "$ref": "#/definitions/ObservationTargetIdentity"
+        }
+      },
+      "additionalProperties": false
+    },
+    "ObservationMetric": {
+      "description": "A metric is explicit about its unit and availability so a recorded zero cannot be mistaken for a missing measurement. The legacy `metrics` object remains alongside this additive projection for current consumers.",
+      "type": "object",
+      "required": [
+        "availability",
+        "origin",
+        "unit"
+      ],
+      "properties": {
+        "availability": {
+          "$ref": "#/definitions/ObservationDataAvailability"
+        },
+        "origin": {
+          "$ref": "#/definitions/ObservationMetricOrigin"
+        },
+        "unit": {
+          "type": "string"
+        },
+        "value": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double"
+        }
+      },
+      "additionalProperties": false
+    },
+    "ObservationMetricDerivation": {
+      "type": "object",
+      "required": [
+        "formula",
+        "formula_version",
+        "metric",
+        "origin"
+      ],
+      "properties": {
+        "formula": {
+          "type": "string"
+        },
+        "formula_version": {
+          "type": "string"
+        },
+        "metric": {
+          "type": "string"
+        },
+        "origin": {
+          "$ref": "#/definitions/ObservationMetricOrigin"
+        }
+      },
+      "additionalProperties": false
+    },
+    "ObservationMetricOrigin": {
+      "type": "string",
+      "enum": [
+        "observed",
+        "derived_from_observed"
+      ]
+    },
+    "ObservationMode": {
+      "type": "object",
+      "required": [
+        "decision",
+        "environment"
+      ],
+      "properties": {
+        "decision": {
+          "$ref": "#/definitions/ObservationDecision"
+        },
+        "environment": {
+          "$ref": "#/definitions/ObservationEnvironment"
+        }
+      },
+      "additionalProperties": false
+    },
+    "ObservationObjective": {
+      "type": "string",
+      "enum": [
+        "passed",
+        "quality_advisory",
+        "hard_gate_failed",
+        "technical_failed",
+        "infrastructure_failed",
+        "cancelled",
+        "unsupported_plan"
+      ]
+    },
+    "ObservationOutcome": {
+      "type": "object",
+      "required": [
+        "control_phase",
+        "data_availability",
+        "objective"
+      ],
+      "properties": {
+        "control_phase": {
+          "type": "string"
+        },
+        "data_availability": {
+          "$ref": "#/definitions/ObservationDataAvailability"
+        },
+        "error": {
+          "type": "string"
+        },
+        "objective": {
+          "$ref": "#/definitions/ObservationObjective"
+        },
+        "passed": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "ObservationPlanIdentity": {
+      "type": "object",
+      "required": [
+        "catalog_sha256",
+        "id",
+        "revision",
+        "sha256"
+      ],
+      "properties": {
+        "catalog_sha256": {
+          "type": "string"
+        },
+        "id": {
+          "type": "string"
+        },
+        "revision": {
+          "type": "string"
+        },
+        "sha256": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "ObservationProvenance": {
+      "type": "object",
+      "required": [
+        "subject_model",
+        "subject_provider"
+      ],
+      "properties": {
+        "subject_model": {
+          "type": "string"
+        },
+        "subject_provider": {
+          "type": "string"
+        },
+        "system_under_test": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/SystemUnderTestIdentity"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "ObservationSample": {
+      "type": "object",
+      "required": [
+        "attempt_id",
+        "case_id",
+        "data_availability",
+        "origin",
+        "run_id",
+        "scenario_id",
+        "scenario_version",
+        "seed",
+        "status"
+      ],
+      "properties": {
+        "attempt_id": {
+          "type": "string"
+        },
+        "case_id": {
+          "type": "string"
+        },
+        "data_availability": {
+          "$ref": "#/definitions/ObservationDataAvailability"
+        },
+        "derivations": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/ObservationMetricDerivation"
+          }
+        },
+        "metric_values": {
+          "default": {},
+          "type": "object",
+          "additionalProperties": {
+            "$ref": "#/definitions/ObservationMetric"
+          }
+        },
+        "metrics": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/EfficiencyReport"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "origin": {
+          "$ref": "#/definitions/ObservationMetricOrigin"
+        },
+        "run_id": {
+          "type": "string"
+        },
+        "scenario_id": {
+          "type": "string"
+        },
+        "scenario_version": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0.0
+        },
+        "seed": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "status": {
+          "$ref": "#/definitions/RunStatus"
+        }
+      },
+      "additionalProperties": false
+    },
+    "ObservationTargetIdentity": {
+      "type": "object",
+      "required": [
+        "application",
+        "stack",
+        "version"
+      ],
+      "properties": {
+        "application": {
+          "type": "string"
+        },
+        "stack": {
+          "$ref": "#/definitions/StackIdentity"
+        },
+        "version": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "ObservedComplexityReport": {
+      "type": "object",
+      "properties": {
+        "ambiguity_level": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "artifact_count": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "coordination_edges": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "dependency_depth": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "external_systems": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "parallel_branches": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "planning_depth": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "state_transitions": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "unavailable": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          }
+        },
+        "validation_loops": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "wake_cycles": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0.0
+        }
+      }
+    },
+    "RunStatus": {
+      "type": "string",
+      "enum": [
+        "passed",
+        "hard_gate_failed",
+        "subject_error",
+        "judge_error",
+        "resource_limit",
+        "infrastructure_error"
+      ]
+    },
+    "RunnerIdentity": {
+      "type": "object",
+      "required": [
+        "name",
+        "revision",
+        "version"
+      ],
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "revision": {
+          "type": "string"
+        },
+        "version": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "StackIdentity": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": [
+            "mode",
+            "workers_repository",
+            "workers_revision"
+          ],
+          "properties": {
+            "mode": {
+              "type": "string",
+              "enum": [
+                "source"
+              ]
+            },
+            "workers_repository": {
+              "type": "string"
+            },
+            "workers_revision": {
+              "type": "string"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "mode",
+            "stack_lock_digest",
+            "stack_versions"
+          ],
+          "properties": {
+            "mode": {
+              "type": "string",
+              "enum": [
+                "registry"
+              ]
+            },
+            "stack_lock_digest": {
+              "type": "string"
+            },
+            "stack_versions": {
+              "type": "object",
+              "additionalProperties": {
+                "type": "string"
+              }
+            }
+          }
+        }
+      ]
+    },
+    "SystemUnderTestIdentity": {
+      "type": "object",
+      "required": [
+        "contract_hashes",
+        "e2e_repository",
+        "e2e_revision",
+        "engine_version",
+        "harness_version",
+        "stack"
+      ],
+      "properties": {
+        "contract_hashes": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          }
+        },
+        "e2e_repository": {
+          "type": "string"
+        },
+        "e2e_revision": {
+          "type": "string"
+        },
+        "engine_revision": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "engine_version": {
+          "type": "string"
+        },
+        "harness_version": {
+          "type": "string"
+        },
+        "stack": {
+          "$ref": "#/definitions/StackIdentity"
+        }
+      }
+    }
+  }
+}

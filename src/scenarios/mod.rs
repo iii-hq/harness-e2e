@@ -40,9 +40,9 @@ pub mod validation_scope_enforcement;
 pub mod validation_self_repair;
 
 pub use domain::{
-    stable_seed, ArtifactExpectation, CapturedDeliverable, CapturedDeliverableContent,
-    CapturedInvariant, ComplexityProfile, ComplexityTier, DeliverableContract, InvariantSpec,
-    ProvenanceEvidence, ScenarioCase, WorkExpectation,
+    scenario_contract_sha256, stable_seed, ArtifactExpectation, CapturedDeliverable,
+    CapturedDeliverableContent, CapturedInvariant, ComplexityProfile, ComplexityTier,
+    DeliverableContract, InvariantSpec, ProvenanceEvidence, ScenarioCase, WorkExpectation,
 };
 
 pub type EvaluationFuture<'a> =
