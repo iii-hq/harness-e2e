@@ -1,3 +1,4 @@
+use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -86,10 +87,40 @@ pub struct WorkerArgs {
 
 impl Default for WorkerArgs {
     fn default() -> Self {
+        Self::from_environment(|name| std::env::var_os(name))
+    }
+}
+
+impl WorkerArgs {
+    /// Resolve the same environment-backed defaults that clap applies to the
+    /// explicit `worker` subcommand.
+    ///
+    /// Registry workers are launched as the bare binary, without that
+    /// subcommand. In that form clap never gets a chance to apply `III_URL`
+    /// and `HARNESS_E2E_DATA_DIR`; using these defaults keeps the managed
+    /// worker attached to the engine that spawned it.
+    fn from_environment(mut environment: impl FnMut(&str) -> Option<OsString>) -> Self {
+        let managed = environment("III_WORKER_NAME")
+            .as_deref()
+            .is_some_and(|name| name == WORKER_NAME);
         Self {
-            url: "ws://127.0.0.1:49134".into(),
-            config: PathBuf::from("config.yaml"),
-            data_dir: None,
+            url: environment("III_URL")
+                .filter(|url| !url.is_empty())
+                .unwrap_or_else(|| OsString::from("ws://127.0.0.1:49134"))
+                .to_string_lossy()
+                .into_owned(),
+            // The engine project may itself use `config.yaml`. That file is
+            // not this worker's static configuration and must not be decoded
+            // as `WorkerConfig`; the absent managed path selects the safe
+            // `WorkerConfig::default()` unless an explicit --config is used.
+            config: if managed {
+                PathBuf::from("harness-e2e-managed-config.yaml")
+            } else {
+                PathBuf::from("config.yaml")
+            },
+            data_dir: environment("HARNESS_E2E_DATA_DIR")
+                .filter(|path| !path.is_empty())
+                .map(PathBuf::from),
         }
     }
 }
@@ -243,6 +274,7 @@ async fn shutdown_signal() -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::BTreeMap;
 
     #[test]
     fn config_defaults_without_a_file_and_accepts_a_cli_override() {
@@ -268,5 +300,31 @@ mod tests {
             .unwrap_err()
             .to_string()
             .contains("data_dir cannot be empty"));
+    }
+
+    #[test]
+    fn managed_defaults_keep_engine_and_data_dir_environment() {
+        let values = BTreeMap::from([
+            ("III_WORKER_NAME", OsString::from(WORKER_NAME)),
+            ("III_URL", OsString::from("ws://127.0.0.1:49259")),
+            ("HARNESS_E2E_DATA_DIR", OsString::from("/tmp/harness-e2e")),
+        ]);
+        let args = WorkerArgs::from_environment(|name| values.get(name).cloned());
+
+        assert_eq!(args.url, "ws://127.0.0.1:49259");
+        assert_eq!(args.data_dir, Some(PathBuf::from("/tmp/harness-e2e")));
+        assert_eq!(
+            args.config,
+            PathBuf::from("harness-e2e-managed-config.yaml")
+        );
+    }
+
+    #[test]
+    fn standalone_defaults_keep_the_local_config_file() {
+        let args = WorkerArgs::from_environment(|_| None);
+
+        assert_eq!(args.url, "ws://127.0.0.1:49134");
+        assert_eq!(args.data_dir, None);
+        assert_eq!(args.config, PathBuf::from("config.yaml"));
     }
 }
