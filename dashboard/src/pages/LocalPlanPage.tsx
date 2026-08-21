@@ -1508,7 +1508,7 @@ export function LocalPlanCreatePage() {
               Execution setup
             </p>
             <h1
-              className="mt-3 mb-0 max-w-4xl text-[clamp(1.75rem,3vw,2.75rem)] font-semibold tracking-[-0.045em] text-[var(--color-ink)]"
+              className="mt-2 mb-0 max-w-4xl font-mono text-xl font-semibold tracking-[-0.01em] text-ink"
               id="plan-create-title"
             >
               Create a benchmark plan
@@ -1523,7 +1523,7 @@ export function LocalPlanCreatePage() {
             aria-label="Execution setup mode"
           >
             <a
-              className="grid min-h-14 content-center gap-0.5 bg-[var(--color-panel-raised)] px-4 text-xs text-[var(--color-ink-faint)] no-underline transition-colors hover:text-[var(--color-ink)]"
+              className="grid min-h-14 content-center gap-0.5 bg-panel-raised px-4 text-xs text-[var(--color-ink-faint)] no-underline transition-colors hover:text-ink"
               href={hashForWorkspace()}
               onClick={requestQuickExecution}
             >
@@ -1533,7 +1533,7 @@ export function LocalPlanCreatePage() {
               </span>
             </a>
             <span
-              className="grid min-h-14 content-center gap-0.5 bg-[var(--color-surface-hover)] px-4 text-xs text-[var(--color-ink)]"
+              className="grid min-h-14 content-center gap-0.5 bg-[var(--color-surface-hover)] px-4 text-xs text-ink"
               aria-current="page"
             >
               <strong className="font-semibold">Reusable plan</strong>
@@ -1546,7 +1546,7 @@ export function LocalPlanCreatePage() {
 
         {error && (
           <section
-            className="mt-6 rounded-lg border border-[color-mix(in_srgb,var(--color-alert)_35%,transparent)] bg-[color-mix(in_srgb,var(--color-alert)_8%,var(--color-panel))] p-5"
+            className="mt-6 rounded-lg border border-[color-mix(in_srgb,var(--color-alert)_35%,transparent)] bg-[color-mix(in_srgb,var(--color-alert)_8%,var(--surface))] p-5"
             role="alert"
           >
             <h2 className="m-0 text-sm font-semibold text-[var(--color-alert)]">
@@ -1562,7 +1562,7 @@ export function LocalPlanCreatePage() {
           className="mt-6 grid min-w-0 gap-px overflow-hidden rounded-xl border border-[var(--color-edge)] bg-[var(--color-rule)] lg:grid-cols-12"
           onSubmit={create}
         >
-          <div className="min-w-0 bg-[var(--color-panel)] lg:col-span-8">
+          <div className="min-w-0 bg-panel lg:col-span-8">
             <ExecutionSetup
               idPrefix="plan-create"
               mode="plan"
@@ -1600,7 +1600,7 @@ export function LocalPlanCreatePage() {
             />
           </div>
 
-          <div className="min-w-0 bg-[var(--color-panel-raised)] lg:col-span-4">
+          <div className="min-w-0 bg-panel-raised lg:col-span-4">
             <ExecutionSetupReview
               mode="plan"
               status={canCreate ? 'Ready' : 'Incomplete'}
@@ -1638,7 +1638,7 @@ export function LocalPlanCreatePage() {
                 {submitting ? 'Creating…' : 'Create draft plan'}
               </button>
               <a
-                className="inline-flex min-h-10 w-full items-center justify-center rounded-lg border border-[var(--color-edge)] px-3 text-xs font-semibold text-[var(--color-ink-faint)] no-underline hover:text-[var(--color-ink)]"
+                className="inline-flex min-h-10 w-full items-center justify-center rounded-lg border border-[var(--color-edge)] px-3 text-xs font-semibold text-[var(--color-ink-faint)] no-underline hover:text-ink"
                 href={hashForPlans()}
               >
                 Cancel

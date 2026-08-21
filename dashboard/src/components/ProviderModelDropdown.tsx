@@ -95,7 +95,7 @@ export function ProviderModelDropdown({
     <div className="relative min-w-0 w-full" ref={rootRef}>
       <button
         type="button"
-        className="flex min-h-11 w-full items-center justify-between gap-2.5 rounded-lg border border-[var(--color-rule)] bg-[var(--color-panel-raised)] px-3 py-2 text-left text-sm text-[var(--color-ink)] transition-colors duration-[var(--ds-duration-fast)] hover:border-[var(--color-edge)] focus-visible:border-[var(--color-rule-focus)] focus-visible:[outline:2px_solid_var(--color-rule-focus)] focus-visible:[outline-offset:3px] disabled:cursor-not-allowed disabled:opacity-50 aria-expanded:border-[var(--color-edge)]"
+        className="flex min-h-11 w-full items-center justify-between gap-2.5 rounded-lg border border-[var(--color-rule)] bg-panel-raised px-3 py-2 text-left text-sm text-ink transition-colors duration-[var(--ds-duration-fast)] hover:border-[var(--color-edge)] focus-visible:border-[var(--color-rule-focus)] focus-visible:[outline:2px_solid_var(--color-rule-focus)] focus-visible:[outline-offset:3px] disabled:cursor-not-allowed disabled:opacity-50 aria-expanded:border-[var(--color-edge)]"
         aria-label={ariaLabel}
         aria-haspopup="listbox"
         aria-controls={menuId}
@@ -144,7 +144,7 @@ export function ProviderModelDropdown({
 
       {open && (
         <div
-          className="absolute z-50 mt-2 grid max-h-80 w-full min-w-[15rem] overflow-auto rounded-lg border border-[var(--color-edge)] bg-[var(--color-panel)] p-1.5 shadow-[var(--shadow-panel)]"
+          className="absolute z-50 mt-2 grid max-h-80 w-full min-w-[15rem] overflow-auto rounded-lg border border-[var(--color-edge)] bg-panel p-1.5 shadow-[var(--shadow-panel)]"
           id={menuId}
           role="listbox"
           aria-label={ariaLabel}
@@ -167,7 +167,7 @@ export function ProviderModelDropdown({
                 >
                   <button
                     type="button"
-                    className="flex min-h-9 w-full items-center gap-2 rounded-md border-0 bg-transparent px-2 text-left font-mono text-[0.68rem] font-semibold text-[var(--color-ink-faint)] transition-colors duration-[var(--ds-duration-fast)] hover:bg-[var(--color-panel-raised)] hover:text-[var(--color-ink)]"
+                    className="flex min-h-9 w-full items-center gap-2 rounded-md border-0 bg-transparent px-2 text-left font-mono text-[0.68rem] font-semibold text-[var(--color-ink-faint)] transition-colors duration-[var(--ds-duration-fast)] hover:bg-panel-raised hover:text-ink"
                     aria-expanded={!collapsed}
                     aria-controls={groupId}
                     onClick={() => toggleProvider(group.provider)}
@@ -193,8 +193,8 @@ export function ProviderModelDropdown({
                           aria-selected={model.value === value}
                           className={`flex min-h-9 w-full items-center justify-between gap-2 rounded-md border-0 px-2.5 text-left text-xs transition-colors duration-[var(--ds-duration-fast)] ${
                             model.value === value
-                              ? 'bg-[var(--color-surface-hover)] font-semibold text-[var(--color-ink)]'
-                              : 'bg-transparent text-[var(--color-ink-faint)] hover:bg-[var(--color-panel-raised)] hover:text-[var(--color-ink)]'
+                              ? 'bg-[var(--color-surface-hover)] font-semibold text-ink'
+                              : 'bg-transparent text-[var(--color-ink-faint)] hover:bg-panel-raised hover:text-ink'
                           }`}
                           key={model.value}
                           onClick={() => {

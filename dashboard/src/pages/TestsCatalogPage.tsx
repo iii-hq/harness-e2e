@@ -1,3 +1,4 @@
+import { Search } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import {
   DashboardPageActions,
@@ -7,7 +8,6 @@ import {
   hashForComparison,
   hashForNewPlan,
   hashForTestHistory,
-  hashForWorkspace,
 } from '@/hooks/use-hash-route'
 import {
   type DashboardDataBridge,
@@ -15,24 +15,40 @@ import {
 } from '@/lib/dashboard-data-source'
 import type { TestCatalogRow, TestsListResponse } from '@/lib/test-catalog'
 
-function versionLabel(row: TestCatalogRow) {
-  if (!row.current_version) return 'No current version'
-  const version = row.available_versions.find(
+type LifecycleFilter = 'all' | TestCatalogRow['lifecycle']
+
+function currentVersion(row: TestCatalogRow) {
+  return row.available_versions.find(
     (item) => item.version === row.current_version,
   )
-  return `v${row.current_version} · ${version?.execution_count ?? 0} executions`
 }
 
-function lifecycleStatusClass(lifecycle: TestCatalogRow['lifecycle']) {
-  if (lifecycle === 'active') return 'status-catalog-active'
-  if (lifecycle === 'never_run') return 'status-catalog-never-run'
-  return 'status-catalog-retired'
+const lifecyclePresentation: Record<
+  TestCatalogRow['lifecycle'],
+  { label: string; dotClassName: string; textClassName: string }
+> = {
+  active: {
+    label: 'active',
+    dotClassName: 'bg-[var(--success)]',
+    textClassName: 'text-ink',
+  },
+  never_run: {
+    label: 'never run',
+    dotClassName: 'bg-[var(--color-ink-ghost)]',
+    textClassName: 'text-[var(--color-ink-ghost)]',
+  },
+  retired: {
+    label: 'retired',
+    dotClassName: 'bg-[var(--warning)]',
+    textClassName: 'text-[var(--warning)]',
+  },
 }
 
 export function TestsCatalogPage() {
   const [bridge, setBridge] = useState<DashboardDataBridge | null>(null)
   const [data, setData] = useState<TestsListResponse | null>(null)
   const [query, setQuery] = useState('')
+  const [lifecycle, setLifecycle] = useState<LifecycleFilter>('all')
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
 
@@ -56,9 +72,11 @@ export function TestsCatalogPage() {
     }
   }, [])
 
-  const rows = (data?.rows ?? []).filter((row) =>
-    row.test_id.toLowerCase().includes(query.trim().toLowerCase()),
-  )
+  const allRows = data?.rows ?? []
+  const rows = allRows.filter((row) => {
+    if (lifecycle !== 'all' && row.lifecycle !== lifecycle) return false
+    return row.test_id.toLowerCase().includes(query.trim().toLowerCase())
+  })
   const local = bridge?.mode === 'local'
 
   return (
@@ -90,112 +108,155 @@ export function TestsCatalogPage() {
           </>
         }
       />
-      <main id="tests-catalog-main" className="page-shell overview-shell">
-        <section className="page-heading" aria-labelledby="tests-catalog-title">
-          <div>
-            <div className="eyebrow">
-              <span className="live-dot" aria-hidden="true" />
-              Test catalog
-            </div>
-            <h1 id="tests-catalog-title">Choose a test to inspect</h1>
-            <p>
-              History describes one test over time. It is intentionally separate
-              from system-version comparison.
-            </p>
-          </div>
-          <div className="sync-block">
-            <span>Catalog revision</span>
-            <strong className="font-mono text-xs text-ink-muted">
-              {data?.revision.slice(-12) ?? 'loading'}
-            </strong>
-          </div>
+      <main
+        id="tests-catalog-main"
+        className="page-shell w-[calc(100%_-_1.5rem)] max-w-[1420px] pt-5 pb-16 md:w-[calc(100%_-_3rem)]"
+      >
+        <section
+          className="flex flex-wrap items-center gap-2.5"
+          aria-label="Test catalog filters"
+        >
+          <label className="relative block w-full max-w-xs">
+            <span className="visually-hidden">Search tests</span>
+            <Search
+              className="absolute top-1/2 left-3 -translate-y-1/2 text-[var(--color-ink-ghost)]"
+              size={14}
+              aria-hidden="true"
+            />
+            <input
+              className="min-h-9 w-full rounded-[6px] border-0 bg-[var(--surface-fill)] pl-9 pr-3 text-[13px] text-ink outline-none placeholder:text-[var(--color-ink-ghost)]"
+              type="search"
+              placeholder="Filter tests…"
+              value={query}
+              onChange={(event) => setQuery(event.target.value)}
+            />
+          </label>
+          <label>
+            <span className="visually-hidden">Filter by lifecycle</span>
+            <select
+              className="min-h-9 rounded-[6px] border-0 bg-[var(--surface-fill)] px-3 text-[13px] text-[var(--color-ink-faint)] outline-none"
+              value={lifecycle}
+              onChange={(event) =>
+                setLifecycle(event.target.value as LifecycleFilter)
+              }
+            >
+              <option value="all">All lifecycles</option>
+              <option value="active">Active</option>
+              <option value="never_run">Never run</option>
+              <option value="retired">Retired</option>
+            </select>
+          </label>
+          <span className="ms-auto font-mono text-xs text-[var(--color-ink-ghost)]">
+            {allRows.length} tests
+            {data?.revision ? (
+              <>
+                {' · catalog '}
+                <span className="text-[var(--color-ink-faint)]">
+                  {data.revision.slice(-12)}
+                </span>
+              </>
+            ) : null}
+          </span>
         </section>
         {error && (
-          <section className="empty-state" role="alert">
+          <section className="empty-state mt-6" role="alert">
             <h2>Test catalog unavailable</h2>
             <p>{error}</p>
           </section>
         )}
-        {!error && (
-          <section
-            className="panel test-catalog-panel"
-            aria-labelledby="test-catalog-heading"
-          >
-            <div className="panel-heading">
-              <div>
-                <div className="section-kicker">Independent history</div>
-                <h2 id="test-catalog-heading">Tests</h2>
-              </div>
-              <label className="search-field catalog-search-field">
-                <span className="catalog-search-label">Search tests</span>
-                <input
-                  type="search"
-                  placeholder="Test ID"
-                  value={query}
-                  onChange={(event) => setQuery(event.target.value)}
-                />
-              </label>
+        {!error &&
+          (loading ? (
+            <div className="mt-4 grid gap-2" aria-busy="true" role="status">
+              <span className="visually-hidden">Loading test catalog</span>
+              {['first', 'second', 'third', 'fourth', 'fifth', 'sixth'].map(
+                (placeholder) => (
+                  <div
+                    key={placeholder}
+                    className="h-10 animate-pulse rounded-[6px] bg-[var(--surface-fill)] motion-reduce:animate-none"
+                  />
+                ),
+              )}
             </div>
-            {loading ? (
-              <p className="table-empty">Loading tests…</p>
-            ) : rows.length === 0 ? (
-              <p className="table-empty">No tests match this filter.</p>
-            ) : (
-              <div className="table-wrap">
-                <table className="execution-table test-catalog-table">
-                  <thead>
-                    <tr>
-                      <th scope="col">Test</th>
-                      <th scope="col">Version</th>
-                      <th scope="col">Lifecycle</th>
-                      <th scope="col">History</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {rows.map((row) => (
+          ) : rows.length === 0 ? (
+            <p className="m-0 mt-8 text-center text-[13px] text-[var(--color-ink-faint)]">
+              {allRows.length === 0
+                ? 'No tests are registered yet.'
+                : 'No tests match this filter.'}
+            </p>
+          ) : (
+            <div className="mt-3 overflow-x-auto">
+              <table className="w-full min-w-[48rem] border-collapse text-left [&_td]:border-0 [&_td]:px-3 [&_td]:py-2.5 [&_th]:border-0 [&_th]:px-3 [&_th]:py-2 [&_th]:font-mono [&_th]:text-[11px] [&_th]:font-medium [&_th]:uppercase [&_th]:tracking-[0.06em] [&_th]:text-[var(--color-ink-ghost)] [&_tbody_tr]:transition-colors [&_tbody_tr:hover]:bg-[var(--surface-soft)]">
+                <thead>
+                  <tr>
+                    <th scope="col">Test</th>
+                    <th scope="col">Version</th>
+                    <th scope="col">Lifecycle</th>
+                    <th scope="col">Executions</th>
+                    <th scope="col">
+                      <span className="visually-hidden">History</span>
+                    </th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {rows.map((row) => {
+                    const version = currentVersion(row)
+                    const tone = lifecyclePresentation[row.lifecycle]
+                    return (
                       <tr key={row.test_id}>
                         <td data-label="Test">
-                          <strong>{row.test_id}</strong>
-                          <small className="block text-ink-muted">
+                          <span className="block font-mono text-[13px] leading-5 font-medium text-ink">
+                            {row.test_id}
+                          </span>
+                          <small className="block text-xs text-[var(--color-ink-ghost)]">
                             {row.available_versions.length} contract version
                             {row.available_versions.length === 1 ? '' : 's'}
                           </small>
                         </td>
-                        <td data-label="Version">{versionLabel(row)}</td>
-                        <td data-label="Lifecycle">
-                          <span
-                            className={`status-pill ${lifecycleStatusClass(row.lifecycle)}`}
-                          >
-                            {row.lifecycle.replace('_', ' ')}
+                        <td data-label="Version">
+                          <span className="inline-flex items-center rounded-full bg-[var(--surface-fill)] px-2 py-0.5 font-mono text-[11px] font-medium text-[var(--color-ink-faint)]">
+                            {row.current_version
+                              ? `v${row.current_version}`
+                              : '—'}
                           </span>
                         </td>
-                        <td data-label="History">
+                        <td data-label="Lifecycle">
+                          <span
+                            className={`inline-flex items-center gap-2 text-xs ${tone.textClassName}`}
+                          >
+                            <span
+                              className={`h-1.5 w-1.5 rounded-full ${tone.dotClassName}`}
+                              aria-hidden="true"
+                            />
+                            {tone.label}
+                          </span>
+                        </td>
+                        <td data-label="Executions">
+                          <span className="font-mono text-xs text-[var(--color-ink-faint)]">
+                            {version?.execution_count ?? 0}
+                          </span>
+                        </td>
+                        <td data-label="History" className="text-right">
                           {local ? (
                             <a
-                              className="button button-secondary"
+                              className="inline-flex min-h-7 items-center rounded-[6px] bg-[var(--surface-fill)] px-2.5 text-xs font-medium text-[var(--color-ink-faint)] no-underline transition-colors hover:bg-[var(--surface-soft)] hover:text-ink"
                               href={hashForTestHistory(row.test_id)}
                             >
                               View metrics
                             </a>
                           ) : (
-                            <span className="text-sm text-ink-muted">
+                            <span className="text-xs text-[var(--color-ink-ghost)]">
                               Local dashboard only
                             </span>
                           )}
                         </td>
                       </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            )}
-          </section>
-        )}
+                    )
+                  })}
+                </tbody>
+              </table>
+            </div>
+          ))}
       </main>
-      <footer>
-        <span>Harness E2E · test catalog</span>
-        <a href={hashForWorkspace()}>Back to home</a>
-      </footer>
     </>
   )
 }

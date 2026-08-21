@@ -116,8 +116,12 @@ export function SideResult({ summary }: { summary: TestSideSummary | null }) {
   return (
     <div className="grid gap-1.5">
       <span
-        className={`w-fit rounded-full border px-2 py-1 text-[0.65rem] font-semibold ${status.tone}`}
+        className={`inline-flex w-fit items-center gap-1.5 font-mono text-xs font-medium lowercase ${status.tone}`}
       >
+        <span
+          aria-hidden="true"
+          className="h-1.5 w-1.5 shrink-0 rounded-full bg-current"
+        />
         System: {status.label}
       </span>
       <strong className="text-base font-semibold tracking-[-0.03em] text-ink">

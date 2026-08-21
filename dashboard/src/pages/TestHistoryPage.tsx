@@ -105,6 +105,7 @@ function formatCost(value: number | null | undefined) {
 function formatDuration(value: number | null | undefined) {
   if (value === null || value === undefined || !Number.isFinite(value))
     return 'Unknown'
+  if (value < 60) return `${value.toFixed(1).replace(/\.0$/, '')}s`
   const rounded = Math.max(0, Math.round(value))
   return (
     String(Math.floor(rounded / 60)) +
@@ -256,6 +257,366 @@ function deltaTone(metric: ComparisonMetricKey, value: ComparedMetric) {
   return improved ? 'tmh-delta-improved' : 'tmh-delta-regressed'
 }
 
+function finiteMetric(value: number | null | undefined): number | null {
+  return value !== null && value !== undefined && Number.isFinite(value)
+    ? value
+    : null
+}
+
+function formatDay(value: string) {
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return ''
+  return new Intl.DateTimeFormat(undefined, {
+    month: 'short',
+    day: 'numeric',
+  }).format(date)
+}
+
+function ScoreTrendChart({
+  observations,
+  selectedKeys,
+  onSelect,
+}: {
+  observations: TestObservation[]
+  selectedKeys: string[]
+  onSelect: (observation: TestObservation) => void
+}) {
+  // Observations arrive newest-first; the chart reads left → right in time.
+  const plotted = [...observations]
+    .reverse()
+    .filter((item) => finiteMetric(item.median_score) !== null)
+  if (plotted.length === 0) {
+    return <p className="tmh-chart-empty">No scored executions to plot yet.</p>
+  }
+  const left = 60
+  const right = 515
+  const top = 22
+  const bottom = 178
+  const xs = plotted.map((_, index) =>
+    plotted.length === 1
+      ? (left + right) / 2
+      : left + (index * (right - left)) / (plotted.length - 1),
+  )
+  const yFor = (score: number) =>
+    top + ((100 - Math.max(0, Math.min(100, score))) / 100) * (bottom - top)
+  const line = xs
+    .map(
+      (x, index) =>
+        `${x.toFixed(1)},${yFor(plotted[index].median_score as number).toFixed(1)}`,
+    )
+    .join(' ')
+  return (
+    <svg
+      className="tmh-chart"
+      viewBox="0 0 560 216"
+      role="img"
+      aria-label="Median score per retained execution"
+    >
+      <line className="tmh-chart-grid" x1="36" y1={top} x2="548" y2={top} />
+      <line className="tmh-chart-grid" x1="36" y1="100" x2="548" y2="100" />
+      <line
+        className="tmh-chart-grid"
+        x1="36"
+        y1={bottom}
+        x2="548"
+        y2={bottom}
+      />
+      <text className="tmh-chart-tick" x="28" y={top + 4} textAnchor="end">
+        100
+      </text>
+      <text className="tmh-chart-tick" x="28" y="104" textAnchor="end">
+        50
+      </text>
+      <text className="tmh-chart-tick" x="28" y={bottom + 4} textAnchor="end">
+        0
+      </text>
+      <text className="tmh-chart-tick" x="548" y="96" textAnchor="end">
+        gate 50
+      </text>
+      {plotted.length > 1 && (
+        <polyline className="tmh-chart-line" points={line} />
+      )}
+      {plotted.map((item, index) => {
+        const key = testObservationKey(item)
+        const selectedIndex = selectedKeys.indexOf(key)
+        const failed = item.status !== 'passed'
+        const score = item.median_score as number
+        const x = xs[index]
+        const y = yFor(score)
+        const dotClass =
+          selectedIndex >= 0
+            ? 'tmh-chart-dot-selected'
+            : failed
+              ? 'tmh-chart-dot-failed'
+              : 'tmh-chart-dot-context'
+        const slot =
+          selectedIndex === 0 ? 'A' : selectedIndex === 1 ? 'B' : null
+        const labelBelow = y <= 168
+        return (
+          // biome-ignore lint/a11y/useSemanticElements: an SVG hit target cannot be a native <button>; the group carries the full button contract (role, tabIndex, keyboard activation).
+          <g
+            className="tmh-chart-hit"
+            key={key}
+            role="button"
+            tabIndex={0}
+            aria-pressed={selectedIndex >= 0}
+            aria-label={`${formatDate(item.completed_at)} · score ${score.toFixed(0)} · ${formatStatus(item.status)}${slot ? ` · selected as ${slot}` : ''}`}
+            onClick={() => onSelect(item)}
+            onKeyDown={(event) => {
+              if (event.key === 'Enter' || event.key === ' ') {
+                event.preventDefault()
+                onSelect(item)
+              }
+            }}
+          >
+            <title>
+              {`${formatDate(item.completed_at)} · score ${score.toFixed(0)} · ${formatStatus(item.status)} · ${formatDuration(item.median_duration_seconds)} · ${formatTokens(item.median_tokens)} tokens`}
+            </title>
+            <circle className="tmh-chart-target" cx={x} cy={y} r="12" />
+            <circle
+              className={`tmh-chart-dot ${dotClass}`}
+              cx={x}
+              cy={y}
+              r={selectedIndex >= 0 ? 4.5 : 4}
+            />
+            {slot ? (
+              <g
+                className={
+                  slot === 'A' ? 'tmh-chart-chip-a' : 'tmh-chart-chip-b'
+                }
+              >
+                <rect
+                  x={x - 9}
+                  y={labelBelow ? y + 10 : y - 27}
+                  width="18"
+                  height="15"
+                  rx="4"
+                />
+                <text
+                  x={x}
+                  y={labelBelow ? y + 21.5 : y - 15.5}
+                  textAnchor="middle"
+                >
+                  {slot}
+                </text>
+              </g>
+            ) : failed ? (
+              <text
+                className="tmh-chart-value"
+                x={x}
+                y={labelBelow ? y + 18 : y - 10}
+                textAnchor="middle"
+              >
+                {score.toFixed(0)}
+              </text>
+            ) : null}
+          </g>
+        )
+      })}
+      <text className="tmh-chart-tick" x={xs[0]} y="206" textAnchor="middle">
+        {formatDay(plotted[0].completed_at)}
+      </text>
+      {plotted.length > 1 && (
+        <text
+          className="tmh-chart-tick"
+          x={xs[xs.length - 1]}
+          y="206"
+          textAnchor="middle"
+        >
+          {formatDay(plotted[plotted.length - 1].completed_at)}
+        </text>
+      )}
+    </svg>
+  )
+}
+
+function formatDumbbellValue(metric: ComparisonMetricKey, value: number) {
+  // Dumbbell ends need exact values: abbreviated tokens ("1.4k") collapse
+  // nearly-equal sides into identical labels.
+  if (metric === 'tokens') return Math.round(value).toLocaleString()
+  return formatMetricValue(metric, value)
+}
+
+function dumbbellPercent(value: number, scaleMax: number) {
+  return Math.max(4, Math.min(96, (value / scaleMax) * 100))
+}
+
+function deltaPillText(metric: ComparisonMetricKey, value: ComparedMetric) {
+  if (value.delta === null) return '—'
+  if (value.delta === 0) return 'no change'
+  if (metric === 'score') {
+    const sign = value.delta > 0 ? '+' : '−'
+    return `${sign}${Math.abs(value.delta).toFixed(1)}`
+  }
+  if (value.relativeDelta === null) return formatMetricDelta(metric, value)
+  const magnitude = Math.abs(value.relativeDelta * 100)
+  const sign = value.relativeDelta > 0 ? '+' : '−'
+  return `${sign}${magnitude.toFixed(magnitude >= 10 ? 0 : 1)}%`
+}
+
+function DumbbellRow({
+  label,
+  metric,
+  value,
+}: {
+  label: string
+  metric: ComparisonMetricKey
+  value: ComparedMetric
+}) {
+  const a = finiteMetric(value.baseline)
+  const b = finiteMetric(value.candidate)
+  const pill = (
+    <span className={`tmh-delta-pill ${deltaTone(metric, value)}`}>
+      {deltaPillText(metric, value)}
+    </span>
+  )
+  if (a === null && b === null) {
+    return (
+      <div className="tmh-dumbrow">
+        <span className="tmh-label">{label}</span>
+        <div className="tmh-track">
+          <div className="tmh-trackline" />
+          <span className="tmh-dval tmh-dval-center">not recorded</span>
+        </div>
+        {pill}
+      </div>
+    )
+  }
+  const scaleMax =
+    metric === 'score' ? 105 : Math.max(a ?? 0, b ?? 0) * 1.08 || 1
+  if (a !== null && b !== null && a === b) {
+    const percent = dumbbellPercent(a, scaleMax)
+    return (
+      <div className="tmh-dumbrow">
+        <span className="tmh-label">{label}</span>
+        <div className="tmh-track">
+          <div className="tmh-trackline" />
+          <span
+            className="tmh-ddot tmh-ddot-equal"
+            style={{ left: `${percent}%` }}
+          />
+          <span
+            className="tmh-dval"
+            style={{
+              left: `clamp(20px, ${percent}%, calc(100% - 20px))`,
+              top: 26,
+            }}
+          >
+            {formatDumbbellValue(metric, a)} · A and B
+          </span>
+        </div>
+        {pill}
+      </div>
+    )
+  }
+  if (a === null || b === null) {
+    const known = (a ?? b) as number
+    const percent = dumbbellPercent(known, scaleMax)
+    const side = a === null ? 'b' : 'a'
+    return (
+      <div className="tmh-dumbrow">
+        <span className="tmh-label">{label}</span>
+        <div className="tmh-track">
+          <div className="tmh-trackline" />
+          <span
+            className={`tmh-ddot tmh-ddot-${side}`}
+            style={{ left: `${percent}%` }}
+          />
+          <span
+            className="tmh-dval"
+            style={{
+              left: `clamp(20px, ${percent}%, calc(100% - 20px))`,
+              top: 26,
+            }}
+          >
+            {formatDumbbellValue(metric, known)} · only {side.toUpperCase()}
+          </span>
+        </div>
+        {pill}
+      </div>
+    )
+  }
+  const aPercent = dumbbellPercent(a, scaleMax)
+  const bPercent = dumbbellPercent(b, scaleMax)
+  const close = Math.abs(aPercent - bPercent) < 9
+  const lo = Math.min(aPercent, bPercent)
+  return (
+    <div className="tmh-dumbrow">
+      <span className="tmh-label">{label}</span>
+      <div className="tmh-track">
+        <div className="tmh-trackline" />
+        <div
+          className="tmh-conn"
+          style={{
+            left: `${lo}%`,
+            width: `${Math.abs(aPercent - bPercent)}%`,
+          }}
+        />
+        <span
+          className="tmh-ddot tmh-ddot-a"
+          style={{ left: `${aPercent}%` }}
+        />
+        <span
+          className="tmh-ddot tmh-ddot-b"
+          style={{ left: `${bPercent}%` }}
+        />
+        <span
+          className="tmh-dval"
+          style={{
+            left: `clamp(20px, ${aPercent}%, calc(100% - 20px))`,
+            top: 26,
+          }}
+        >
+          {formatDumbbellValue(metric, a)}
+        </span>
+        <span
+          className="tmh-dval tmh-dval-b"
+          style={{
+            left: `clamp(20px, ${bPercent}%, calc(100% - 20px))`,
+            top: close ? -6 : 26,
+          }}
+        >
+          {formatDumbbellValue(metric, b)}
+        </span>
+      </div>
+      {pill}
+    </div>
+  )
+}
+
+function comparisonVerdict(
+  comparison: ReturnType<typeof compareTestObservations>,
+) {
+  if (!comparison.compatible) return null
+  const score = comparison.metrics.score
+  let scorePart: string
+  if (score.delta === null) {
+    scorePart = 'has no comparable score'
+  } else if (score.delta === 0) {
+    scorePart = `keeps the score (${score.candidate?.toFixed(0) ?? '—'})`
+  } else if (score.delta > 0) {
+    scorePart = `raises the score ${score.baseline?.toFixed(0)} → ${score.candidate?.toFixed(0)}`
+  } else {
+    scorePart = `drops the score ${score.baseline?.toFixed(0)} → ${score.candidate?.toFixed(0)}`
+  }
+  const secondary: string[] = []
+  for (const key of ['duration', 'tokens', 'cost'] as const) {
+    const value = comparison.metrics[key]
+    if (
+      value.delta === null ||
+      value.delta === 0 ||
+      value.relativeDelta === null
+    )
+      continue
+    const magnitude = Math.abs(value.relativeDelta * 100)
+    const pct = magnitude.toFixed(magnitude >= 10 ? 0 : 1)
+    secondary.push(
+      value.delta < 0 ? `cuts ${key} ${pct}%` : `${key} up ${pct}%`,
+    )
+  }
+  return `The candidate ${scorePart}${secondary.length ? `; ${secondary.join(', ')}` : ''}.`
+}
+
 function ObservationComparisonPanel({
   baseline,
   candidate,
@@ -267,77 +628,84 @@ function ObservationComparisonPanel({
 }) {
   const comparison =
     baseline && candidate ? compareTestObservations(baseline, candidate) : null
+  const verdict = comparison ? comparisonVerdict(comparison) : null
   const metrics: Array<{ key: ComparisonMetricKey; label: string }> = [
-    { key: 'score', label: 'Score' },
-    { key: 'cost', label: 'Cost' },
     { key: 'duration', label: 'Duration' },
     { key: 'tokens', label: 'Tokens' },
+    { key: 'score', label: 'Score' },
     { key: 'turns', label: 'Turns' },
   ]
+  if (
+    comparison &&
+    (finiteMetric(comparison.metrics.cost.baseline) !== null ||
+      finiteMetric(comparison.metrics.cost.candidate) !== null)
+  ) {
+    metrics.splice(2, 0, { key: 'cost', label: 'Cost' })
+  }
 
   return (
     <section
-      className="tmh-comparison"
+      className="tmh-viz-card"
       aria-labelledby="tmh-comparison-title"
       aria-live="polite"
     >
-      <header className="tmh-comparison-head">
-        <div>
-          <span className="tmh-label">Selected executions</span>
-          <h3 id="tmh-comparison-title">Compare two runs</h3>
-          <p>
-            Select a baseline and candidate from the history below. The
-            comparison never pools separate cases or cohorts.
-          </p>
-        </div>
+      <div className="tmh-viz-head">
+        <span className="tmh-label" id="tmh-comparison-title">
+          Baseline → candidate
+        </span>
         {baseline && (
           <button
             className="tmh-clear-comparison"
             type="button"
             onClick={onClear}
           >
-            Clear selection
+            Clear
           </button>
         )}
-      </header>
-
-      <div className="tmh-comparison-selection">
-        <div>
-          <span>Baseline</span>
-          {baseline ? (
-            <strong>
-              {formatDate(baseline.completed_at)} ·{' '}
-              {logicalRunLabel(baseline.run_count)}
-            </strong>
-          ) : (
-            <strong>Choose an execution</strong>
-          )}
-        </div>
-        <span className="tmh-comparison-arrow" aria-hidden="true">
-          →
+      </div>
+      <div className="tmh-ab-row">
+        <span className="tmh-ab-side">
+          <span className="tmh-ab-chip tmh-ab-chip-a" aria-hidden="true">
+            A
+          </span>
+          <span className="tmh-ab-name">
+            {baseline
+              ? `${formatDate(baseline.completed_at)} · ${logicalRunLabel(baseline.run_count)}`
+              : 'Choose an execution'}
+          </span>
         </span>
-        <div>
-          <span>Candidate</span>
-          {candidate ? (
-            <strong>
-              {formatDate(candidate.completed_at)} ·{' '}
-              {logicalRunLabel(candidate.run_count)}
-            </strong>
-          ) : (
-            <strong>Choose an execution</strong>
-          )}
-        </div>
+        <svg
+          className="tmh-ab-arrow"
+          width="13"
+          height="13"
+          viewBox="0 0 14 14"
+          fill="none"
+          aria-hidden="true"
+        >
+          <path d="M2 7h9M8 4l3 3-3 3" />
+        </svg>
+        <span className="tmh-ab-side">
+          <span className="tmh-ab-chip tmh-ab-chip-b" aria-hidden="true">
+            B
+          </span>
+          <span className="tmh-ab-name tmh-ab-name-b">
+            {candidate
+              ? `${formatDate(candidate.completed_at)} · ${logicalRunLabel(candidate.run_count)}`
+              : 'Choose an execution'}
+          </span>
+        </span>
       </div>
 
       {!baseline ? (
         <p className="tmh-comparison-message">
-          Select <strong>Set baseline</strong> on the execution to use as the
-          reference point.
+          Click a point on the chart, or <strong>Set A</strong> on an execution,
+          to pick the baseline. The comparison never pools separate cases or
+          cohorts.
         </p>
       ) : !candidate ? (
         <p className="tmh-comparison-message">
-          Now select <strong>Set candidate</strong> to compare its metrics with
-          this baseline.
+          Now pick the candidate — click another point or <strong>Set B</strong>{' '}
+          on an execution.
         </p>
       ) : !comparison?.compatible ? (
         <div className="tmh-comparison-warning" role="status">
@@ -348,27 +716,19 @@ function ObservationComparisonPanel({
           </span>
         </div>
       ) : (
-        <div className="tmh-comparison-metrics">
-          {metrics.map(({ key, label }) => {
-            const value = comparison.metrics[key]
-            return (
-              <div className="tmh-comparison-metric" key={key}>
-                <span>{label}</span>
-                <strong>
-                  {formatMetricValue(key, value.baseline)}
-                  <small>baseline</small>
-                </strong>
-                <strong>
-                  {formatMetricValue(key, value.candidate)}
-                  <small>candidate</small>
-                </strong>
-                <em className={deltaTone(key, value)}>
-                  {formatMetricDelta(key, value)}
-                </em>
-              </div>
-            )
-          })}
-        </div>
+        <>
+          <div className="tmh-dumbbells">
+            {metrics.map(({ key, label }) => (
+              <DumbbellRow
+                key={key}
+                label={label}
+                metric={key}
+                value={comparison.metrics[key]}
+              />
+            ))}
+          </div>
+          {verdict && <p className="tmh-verdict">{verdict}</p>}
+        </>
       )}
     </section>
   )
@@ -680,11 +1040,11 @@ export function TestHistoryPage({ testId }: { testId: string }) {
     const selectedIndex = comparisonKeys.indexOf(
       testObservationKey(observation),
     )
-    if (selectedIndex === 0) return 'Baseline selected'
-    if (selectedIndex === 1) return 'Candidate selected'
-    if (comparisonKeys.length === 0) return 'Set baseline'
-    if (comparisonKeys.length === 1) return 'Set candidate'
-    return 'Replace candidate'
+    if (selectedIndex === 0) return 'A · baseline'
+    if (selectedIndex === 1) return 'B · candidate'
+    if (comparisonKeys.length === 0) return 'Set A'
+    if (comparisonKeys.length === 1) return 'Set B'
+    return 'Replace B'
   }
 
   return (
@@ -892,18 +1252,36 @@ export function TestHistoryPage({ testId }: { testId: string }) {
                 </div>
               </div>
 
-              <p className="tmh-series-note">
-                <strong>Descriptive median:</strong> values summarize the
-                visible execution records. Select two executions below to
-                inspect a same-scope baseline/candidate delta. Missing metrics
-                stay unknown.
-              </p>
-
-              <ObservationComparisonPanel
-                baseline={baseline}
-                candidate={candidate}
-                onClear={clearComparison}
-              />
+              {comparisonKeys.length > 0 ? (
+                <div className="tmh-viz">
+                  <section
+                    className="tmh-viz-card"
+                    aria-label="Score per execution"
+                  >
+                    <div className="tmh-viz-head">
+                      <span className="tmh-label">Score per execution</span>
+                      <span className="tmh-viz-hint">
+                        click a point to set A or B
+                      </span>
+                    </div>
+                    <ScoreTrendChart
+                      observations={observations}
+                      selectedKeys={comparisonKeys}
+                      onSelect={selectForComparison}
+                    />
+                  </section>
+                  <ObservationComparisonPanel
+                    baseline={baseline}
+                    candidate={candidate}
+                    onClear={clearComparison}
+                  />
+                </div>
+              ) : (
+                <p className="tmh-compare-cta">
+                  Select <strong>Set A</strong> on an execution below to open
+                  the graphical baseline/candidate comparison.
+                </p>
+              )}
 
               <table aria-label={`Metric history for ${testId}`}>
                 <thead>

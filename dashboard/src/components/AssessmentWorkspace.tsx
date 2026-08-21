@@ -238,7 +238,7 @@ function PrimaryMetricBoard({
           </div>
           <div>
             <strong
-              className="block text-[clamp(1.8rem,3vw,2.55rem)] font-semibold leading-none tracking-[-0.045em] tabular-nums"
+              className="block font-mono text-[1.375rem] font-semibold leading-tight tracking-[-0.01em] tabular-nums"
               data-metric-value
             >
               {metric.value}
