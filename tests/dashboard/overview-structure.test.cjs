@@ -33,19 +33,16 @@ const publisher = fs.readFileSync(
 test('prioritizes the first-read execution signal', () => {
   assert.match(overviewPage, /Latest execution/)
   assert.match(overviewPage, /Scenario pass rate/)
-  assert.match(overviewPage, /Reliability events/)
+  assert.match(overviewPage, /Recent executions/)
   assert.match(overviewPage, /Investigate execution/)
   assert.match(overviewPage, /Subject/)
-  assert.match(overviewPage, /Judge/)
+  assert.match(overviewPage, /modelNames\(presentation\.judges\)/)
   assert.match(dashboardShell, /value: 'tests'/)
-  assert.match(overviewPage, /hashForPlans\(\)/)
-  assert.match(overviewPage, /View local plans/)
-  assert.match(overviewPage, /overview-intelligence-grid/)
-  assert.match(overviewPage, /className="overview-card-action[^"]*inline-flex/)
-  assert.doesNotMatch(
-    overviewPage,
-    /className="button button-secondary" href=\{hashForPlans\(\)\}/,
-  )
+  assert.match(overviewPage, /hashForNewPlan\(\)/)
+  assert.match(overviewPage, /New plan/)
+  assert.match(overviewPage, /lg:grid-cols-\[minmax\(0,1fr\)_300px\]/)
+  assert.match(overviewPage, /buttonClassName\(\{ variant: 'secondary' \}\)/)
+  assert.doesNotMatch(overviewPage, /hashForPlans/)
   assert.doesNotMatch(overviewPage, /View Actions/)
   assert.doesNotMatch(
     overviewPage,
@@ -69,18 +66,18 @@ test('keeps the overview operational, dense, and Tailwind-based', () => {
   for (const primitive of [
     'Button',
     'MetricCard',
-    'PageHeader',
     'Panel',
     'StatusBadge',
   ]) {
     assert.match(overviewPage, new RegExp(`\\b${primitive}\\b`))
   }
+  assert.match(overviewPage, /DashboardPageActions/)
   assert.match(styles, /@import "tailwindcss" important/)
-  assert.match(overviewPage, /lg:grid-cols-12 lg:grid-rows-2/)
-  assert.match(overviewPage, /grid-flow-dense/)
-  assert.match(overviewPage, /Performance overview/)
+  assert.match(overviewPage, /lg:grid-cols-\[minmax\(0,1fr\)_300px\]/)
+  assert.match(overviewPage, /xl:grid-cols-4/)
+  assert.match(overviewPage, /Recent executions/)
   assert.match(overviewPage, /Total tokens/)
-  assert.match(overviewPage, /Measure improvement against a fixed comparison/)
+  assert.match(overviewPage, /Run the full suite or a subset/)
   assert.match(overviewPage, /@\/design-system\/styles\.css/)
   assert.doesNotMatch(overviewPage, /\.\/overview\.css/)
   assert.doesNotMatch(overviewPage, /Evidence that|earns trust/)
@@ -119,11 +116,11 @@ test('keeps the workspace navigation and versioned test flow', () => {
   assert.match(testsPage, /loadVersionResult\(row\.test_id/)
   assert.match(testsPage, /prefetchedCatalog/)
   assert.match(catalogPage, /<DashboardPageActions[\s\S]*active="tests"/)
-  assert.match(catalogPage, /catalog-search-label">Search tests/)
-  assert.match(catalogPage, /placeholder="Test ID"/)
+  assert.match(catalogPage, /visually-hidden">Search tests/)
+  assert.match(catalogPage, /placeholder="Filter tests…"/)
   assert.match(
-    read('src', 'index.css'),
-    /\.catalog-search-field input[\s\S]*border: 1px solid var\(--line-strong\)/,
+    catalogPage,
+    /type="search"[\s\S]*border-0[\s\S]*bg-\[var\(--surface-fill\)\]/,
   )
   for (const page of [
     overviewPage,
@@ -149,21 +146,19 @@ test('keeps the workspace navigation and versioned test flow', () => {
 })
 
 test('distinguishes active tests from tests with no execution history', () => {
-  const styles = read('src', 'index.css')
-  assert.match(catalogPage, /lifecycleStatusClass/)
-  assert.match(catalogPage, /status-catalog-active/)
-  assert.match(catalogPage, /status-catalog-never-run/)
-  assert.match(styles, /\.status-catalog-active[\s\S]*color: var\(--success\)/)
+  assert.match(catalogPage, /lifecyclePresentation/)
+  assert.match(catalogPage, /dotClassName: 'bg-\[var\(--success\)\]'/)
   assert.match(
-    styles,
-    /\.status-catalog-never-run[\s\S]*color: var\(--text-muted\)/,
+    catalogPage,
+    /never_run:[\s\S]*dotClassName: 'bg-\[var\(--color-ink-ghost\)\]'/,
   )
+  assert.doesNotMatch(catalogPage, /status-catalog-/)
 })
 
 test('keeps metric history rows readable and opens details on demand', () => {
   const styles = read('src', 'index.css')
   assert.match(historyPage, /Median tokens/)
-  assert.match(historyPage, /Descriptive median/)
+  assert.match(historyPage, /Impact by scenario/)
   assert.match(historyPage, /metricCaption/)
   assert.match(historyPage, /ExecutionDetailsDialog/)
   assert.match(
@@ -171,9 +166,11 @@ test('keeps metric history rows readable and opens details on demand', () => {
     /reports: detail\.reports\.filter\([\s\S]*scenario_id === testId/,
   )
   assert.match(historyPage, /Assessment details for this test/)
-  assert.match(historyPage, /Compare two runs/)
-  assert.match(historyPage, /Set baseline/)
-  assert.match(historyPage, /Set candidate/)
+  assert.match(historyPage, /A · Baseline/)
+  assert.match(historyPage, /B · Candidate/)
+  assert.match(historyPage, /Functions/)
+  assert.match(historyPage, /Errors/)
+  assert.match(historyPage, /View score history across/)
   assert.match(historyPage, /compareTestObservations/)
   assert.match(historyPage, /getExecution\(observation\.execution_id\)/)
   assert.match(historyPage, /View details/)
@@ -231,6 +228,30 @@ test('keeps plan panels explicitly padded and comparison content full bleed', ()
   assert.match(plansPage, /panel-heading plans-list-heading/)
   assert.match(planPage, /plan-execution-table-wrap/)
   assert.match(planPage, /plan-scenario-disclosures/)
+  assert.match(planPage, /page-heading plan-detail-heading/)
+  assert.match(planPage, /plan-detail-state/)
+  assert.match(
+    styles,
+    /\.plans-how-it-works \{[\s\S]*?background: transparent;[\s\S]*?\.plans-how-it-works > div \{[\s\S]*?background: transparent;/,
+  )
+  assert.match(
+    styles,
+    /\.plans-summary-grid \{[\s\S]*?background: transparent;[\s\S]*?\.plans-summary-card \{[\s\S]*?background: transparent;[\s\S]*?box-shadow: none;/,
+  )
+  assert.match(
+    styles,
+    /\.plans-list-panel \{[\s\S]*?border: 1px solid var\(--line\);[\s\S]*?background: transparent;[\s\S]*?box-shadow: none;/,
+  )
+  assert.match(
+    styles,
+    /\.plan-run-history \{[\s\S]*?margin-top: 1\.25rem;[\s\S]*?background: var\(--surface\);/,
+  )
+  assert.match(
+    styles,
+    /\.plan-status-grid \{[\s\S]*?gap: 0;[\s\S]*?border: 1px solid var\(--line\);[\s\S]*?background: var\(--surface\);/,
+  )
+  assert.match(styles, /\.plan-status-card \+ \.plan-status-card/)
+  assert.doesNotMatch(planPage, /Execution controls|Plan actions|Next action/)
 })
 
 test('exposes baseline and arbitrary candidate comparison controls', () => {
@@ -249,6 +270,18 @@ test('exposes baseline and arbitrary candidate comparison controls', () => {
   assert.match(planPage, /plan-winner-badge/)
   assert.match(planPage, /--plan-execution-column-count/)
   assert.match(styles, /table-layout: fixed/)
+  assert.match(
+    styles,
+    /\.plan-comparison-selection \{[\s\S]*?grid-template-columns: minmax\(280px, 0\.9fr\) minmax\(0, 1\.1fr\)/,
+  )
+  assert.match(
+    styles,
+    /\.plan-candidate-options \{[\s\S]*?display: flex;[\s\S]*?flex-wrap: wrap;/,
+  )
+  assert.match(
+    styles,
+    /\.plan-execution-table tbody td\.is-winner \{[\s\S]*?background: transparent;/,
+  )
   assert.match(planPage, /Best values are highlighted/)
   assert.match(planPage, /Visual baseline/)
   assert.match(planPage, /Execution history/)
@@ -266,7 +299,8 @@ test('exposes baseline and arbitrary candidate comparison controls', () => {
   assert.match(planPage, /baselineLabel.*resolvedCandidateLabel/s)
   assert.doesNotMatch(planPage, /plan-comparison-metrics/)
   assert.doesNotMatch(planPage, /ComparisonMetricCard/)
-  assert.match(planPage, /Signals by test/)
+  assert.match(planPage, /Metrics by test/)
+  assert.match(planPage, /'turns'/)
   assert.match(planPage, /Run another candidate/)
 })
 

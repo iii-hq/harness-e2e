@@ -88,13 +88,76 @@ function hashForSection(section: DashboardSection): string {
   return hashForWorkspace(section as WorkspaceView)
 }
 
+function TabGlyph({ children }: { children: ReactNode }) {
+  return (
+    <svg
+      viewBox="0 0 16 16"
+      width="16"
+      height="16"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.35"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      {children}
+    </svg>
+  )
+}
+
+const sectionIcons: Record<DashboardSection, ReactNode> = {
+  overview: (
+    <TabGlyph>
+      <rect x="2.5" y="2.5" width="4.8" height="7" rx="1" />
+      <rect x="2.5" y="11.5" width="4.8" height="2" rx="1" />
+      <rect x="8.7" y="2.5" width="4.8" height="2" rx="1" />
+      <rect x="8.7" y="6.5" width="4.8" height="7" rx="1" />
+    </TabGlyph>
+  ),
+  tests: (
+    <TabGlyph>
+      <path d="M6.4 2.2h3.2M8 2.2v3.4l3.9 6.3a1.4 1.4 0 0 1-1.19 2.1H5.29a1.4 1.4 0 0 1-1.19-2.1L8 5.6" />
+      <path d="M5.7 10.2h4.6" />
+    </TabGlyph>
+  ),
+  executions: (
+    <TabGlyph>
+      <circle cx="8" cy="8.2" r="5.3" />
+      <path d="M8 5.4v2.8l1.9 1.4" />
+    </TabGlyph>
+  ),
+  plans: (
+    <TabGlyph>
+      <circle cx="4.6" cy="4.6" r="1.9" />
+      <circle cx="11.4" cy="11.4" r="1.9" />
+      <path d="M4.6 6.5v2.4a2.3 2.3 0 0 0 2.3 2.3h1.8" />
+      <path d="M11.4 9.5V7.1a2.3 2.3 0 0 0-2.3-2.3H7.3" />
+    </TabGlyph>
+  ),
+  coverage: (
+    <TabGlyph>
+      <circle cx="8" cy="8" r="5.3" />
+      <path d="M8 2.7v5.3l3.7 3.7" />
+    </TabGlyph>
+  ),
+}
+
+// Coverage stays reachable by URL but is deliberately absent from the menu.
 const navigation: Array<{ value: DashboardSection; label: string }> = [
   { value: 'overview', label: 'Overview' },
   { value: 'tests', label: 'Tests' },
   { value: 'executions', label: 'Executions' },
   { value: 'plans', label: 'Plans' },
-  { value: 'coverage', label: 'Coverage' },
 ]
+
+const sectionLabels: Record<DashboardSection, string> = {
+  overview: 'Overview',
+  tests: 'Tests',
+  executions: 'Executions',
+  plans: 'Plans',
+  coverage: 'Coverage',
+}
 
 function HarnessE2eIcon() {
   return (
@@ -140,7 +203,7 @@ export function DashboardShell({
   }, [])
   const clearHeader = useCallback(() => setHeaderState({ key: '' }), [])
   const section = sectionForRoute(route)
-  const sectionLabel = navigation.find((item) => item.value === section)?.label
+  const sectionLabel = sectionLabels[section]
   const contextValue: DashboardChromeContextValue = {
     embedded,
     tabId,
@@ -188,7 +251,7 @@ export function DashboardShell({
               data-theme={theme}
             >
               <div
-                className="harness-e2e-navigation sticky top-0 z-10 min-w-0 border-b border-line bg-panel/95 backdrop-blur-[10px]"
+                className="harness-e2e-navigation sticky top-0 z-10 min-w-0 border-b border-line bg-panel"
                 data-section={section}
               >
                 <div className="harness-e2e-navigation-wide min-w-0 px-4">
@@ -197,12 +260,22 @@ export function DashboardShell({
                     onValueChange={(next) => navigate(next as DashboardSection)}
                     aria-label="Harness E2E sections"
                   >
-                    <TabsList className="flex min-h-11 gap-0.5 overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+                    <TabsList className="flex items-center gap-1 overflow-x-auto py-1.5 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
                       {navigation.map((item) => (
+                        // Embedded: no className override, so the Console
+                        // host's canonical content-navigation tab (line
+                        // variant + semantic icon) fully governs the look.
+                        // Standalone: the local stub is unstyled, so it gets
+                        // the pill vocabulary explicitly.
                         <TabsTrigger
                           key={item.value}
                           value={item.value}
-                          className="min-h-11 whitespace-nowrap border-b-2 border-transparent px-3 text-xs font-medium leading-none text-ink-soft aria-[selected=true]:border-brand aria-[selected=true]:text-ink"
+                          icon={sectionIcons[item.value]}
+                          className={
+                            embedded
+                              ? undefined
+                              : 'whitespace-nowrap rounded-[6px] px-2.5 py-1.5 text-[13px] font-medium leading-none text-ink-soft transition-colors hover:bg-panel-soft hover:text-ink aria-[selected=true]:bg-[var(--surface-selected)] aria-[selected=true]:font-semibold aria-[selected=true]:text-ink'
+                          }
                         >
                           {item.label}
                         </TabsTrigger>
@@ -215,7 +288,7 @@ export function DashboardShell({
                     value={section}
                     options={navigation}
                     onChange={(next) => navigate(next as DashboardSection)}
-                    className="min-h-11 w-full rounded-[6px] border border-line bg-panel-raised px-2.5 text-xs font-medium leading-none text-ink"
+                    className="min-h-9 w-full rounded-[6px] border-0 bg-panel-soft px-2.5 font-mono text-[12px] font-medium lowercase leading-none text-ink"
                     aria-label="Harness E2E section"
                   />
                 </div>

@@ -1,6 +1,7 @@
 import { useEffect } from 'react'
 import { DashboardShell } from '@/components/DashboardShell'
 import { type DashboardRoute, useHashRoute } from '@/hooks/use-hash-route'
+import { ScenarioChatProvider } from '@/lib/scenario-chat-context'
 import { CoveragePage } from '@/pages/CoveragePage'
 import { ExecutionPage } from '@/pages/ExecutionPage'
 import { LocalPlanCreatePage, LocalPlanDetailPage } from '@/pages/LocalPlanPage'
@@ -40,6 +41,7 @@ export function App({
   panelSide,
   theme,
   onRequestClose,
+  openChat,
   manageDocumentTitle = true,
 }: {
   embedded?: boolean
@@ -47,6 +49,7 @@ export function App({
   panelSide?: 'left' | 'right'
   theme?: 'light' | 'dark'
   onRequestClose?: () => void
+  openChat?: (sessionId: string) => void
   manageDocumentTitle?: boolean
 }) {
   const [route] = useHashRoute()
@@ -73,7 +76,9 @@ export function App({
       theme={theme}
       onRequestClose={onRequestClose}
     >
-      <RoutedPage route={route} />
+      <ScenarioChatProvider openChat={openChat}>
+        <RoutedPage route={route} />
+      </ScenarioChatProvider>
     </DashboardShell>
   )
 }

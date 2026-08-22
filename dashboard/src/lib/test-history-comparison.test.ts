@@ -32,6 +32,8 @@ function observation(
     median_cost_usd: 0.5,
     median_tokens: 1000,
     median_duration_seconds: 20,
+    median_function_calls: 4,
+    median_function_call_errors: 0,
     median_turns: 2,
     ...overrides,
   }
@@ -45,6 +47,8 @@ describe('test history execution comparison', () => {
       evaluated_version_id: 'system-b',
       median_cost_usd: 0.6,
       median_duration_seconds: 15,
+      median_function_calls: 6,
+      median_function_call_errors: 1,
     })
 
     const result = compareTestObservations(baseline, candidate)
@@ -57,6 +61,8 @@ describe('test history execution comparison', () => {
     expect(result.metrics.cost.relativeDelta).toBeCloseTo(0.2)
     expect(result.metrics.duration.delta).toBe(-5)
     expect(result.metrics.duration.relativeDelta).toBe(-0.25)
+    expect(result.metrics.functionCalls.delta).toBe(2)
+    expect(result.metrics.functionErrors.delta).toBe(1)
   })
 
   it('does not compute a compatible result when the evidence boundary differs', () => {
@@ -93,6 +99,12 @@ describe('test history execution comparison', () => {
       candidate: 5,
       delta: null,
       relativeDelta: null,
+    })
+    expect(result.metrics.functionCalls).toEqual({
+      baseline: 4,
+      candidate: 4,
+      delta: 0,
+      relativeDelta: 0,
     })
     expect(testObservationKey(baseline)).not.toBe(testObservationKey(candidate))
   })

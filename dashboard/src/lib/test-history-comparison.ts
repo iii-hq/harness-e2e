@@ -17,6 +17,8 @@ export type ObservationComparison = {
     cost: ComparedMetric
     duration: ComparedMetric
     tokens: ComparedMetric
+    functionCalls: ComparedMetric
+    functionErrors: ComparedMetric
     turns: ComparedMetric
   }
 }
@@ -168,6 +170,14 @@ export function compareTestObservations(
         candidate.median_duration_seconds,
       ),
       tokens: compareMetric(baseline.median_tokens, candidate.median_tokens),
+      functionCalls: compareMetric(
+        baseline.median_function_calls,
+        candidate.median_function_calls,
+      ),
+      functionErrors: compareMetric(
+        baseline.median_function_call_errors,
+        candidate.median_function_call_errors,
+      ),
       turns: compareMetric(baseline.median_turns, candidate.median_turns),
     },
   }

@@ -1,6 +1,7 @@
 import { ChevronDown } from 'lucide-react'
 import { type ReactNode, useEffect, useMemo, useState } from 'react'
 import { AssessmentWorkspace } from '@/components/AssessmentWorkspace'
+import { ScenarioChatAction } from '@/components/ScenarioChatAction'
 import { SemanticTestFlow } from '@/components/SemanticTestFlow'
 import { type OperationalStatus, StatusBadge } from '@/design-system'
 import type { AssessmentRunView } from '@/lib/assessment-view'
@@ -41,7 +42,7 @@ export function ScenarioMatrix({
 
   if (model.items.length === 0) {
     return (
-      <div className="rounded-[var(--ds-radius-sm)] border border-dashed border-[var(--color-edge)] bg-[var(--color-panel-raised)] p-5 text-sm text-[var(--color-ink-ghost)]">
+      <div className="rounded-[var(--ds-radius-sm)] border border-dashed border-[var(--color-edge)] bg-panel-raised p-5 text-sm text-[var(--color-ink-ghost)]">
         No scenario reports were retained for this execution.
       </div>
     )
@@ -50,9 +51,9 @@ export function ScenarioMatrix({
   return (
     <div className="grid gap-4">
       <ScenarioSummary summary={model.summary} />
-      <div className="overflow-hidden rounded-[var(--ds-radius-md)] border border-[var(--color-edge)] bg-[var(--color-panel)]">
+      <div className="overflow-hidden rounded-[var(--ds-radius-md)] border border-[var(--color-edge)] bg-panel">
         <div
-          className="hidden grid-cols-[minmax(13rem,1.2fr)_minmax(9rem,0.75fr)_minmax(10rem,1fr)_minmax(7rem,0.55fr)_minmax(8rem,0.7fr)] gap-4 border-b border-[var(--color-rule)] bg-[var(--color-panel-raised)] px-5 py-3 font-mono text-[0.61rem] font-semibold uppercase tracking-[0.06em] text-[var(--color-ink-ghost)] lg:grid"
+          className="hidden grid-cols-[minmax(13rem,1.2fr)_minmax(9rem,0.75fr)_minmax(10rem,1fr)_minmax(7rem,0.55fr)_minmax(8rem,0.7fr)] gap-4 border-b border-[var(--color-rule)] bg-panel-raised px-5 py-3 font-mono text-[0.61rem] font-semibold uppercase tracking-[0.06em] text-[var(--color-ink-ghost)] lg:grid"
           aria-hidden="true"
         >
           <span>Scenario</span>
@@ -117,7 +118,7 @@ function ScenarioSummary({
       className="flex flex-wrap items-center gap-x-5 gap-y-2 border-y border-[var(--color-rule)] py-3"
       aria-label="Scenario result summary"
     >
-      <strong className="font-mono text-xs font-semibold text-[var(--color-ink)]">
+      <strong className="font-mono text-xs font-semibold text-ink">
         {summary.total} {summary.total === 1 ? 'scenario' : 'scenarios'}
       </strong>
       {entries
@@ -158,9 +159,7 @@ function ScenarioRow({
       <button
         data-scenario-row={item.key}
         className={`group grid min-h-16 w-full min-w-0 gap-x-4 gap-y-3 border-0 px-4 py-4 text-left transition-colors motion-reduce:transition-none lg:grid-cols-[minmax(13rem,1.2fr)_minmax(9rem,0.75fr)_minmax(10rem,1fr)_minmax(7rem,0.55fr)_minmax(8rem,0.7fr)] lg:items-center lg:px-5 ${
-          expanded
-            ? 'bg-[var(--color-panel-raised)]'
-            : 'bg-[var(--color-panel)] hover:bg-[var(--color-panel-raised)]'
+          expanded ? 'bg-panel-raised' : 'bg-panel hover:bg-panel-raised'
         }`}
         type="button"
         aria-expanded={expanded}
@@ -173,7 +172,7 @@ function ScenarioRow({
             aria-hidden="true"
           />
           <span className="min-w-0">
-            <strong className="block truncate text-sm font-semibold text-[var(--color-ink)]">
+            <strong className="block truncate text-sm font-semibold text-ink">
               {titleCase(item.scenarioId)}
               {item.scenarioVersion != null ? ` v${item.scenarioVersion}` : ''}
             </strong>
@@ -196,7 +195,7 @@ function ScenarioRow({
           />
         </MatrixCell>
         <MatrixCell label="Runtime">
-          <strong className="font-mono text-xs font-semibold tabular-nums text-[var(--color-ink)]">
+          <strong className="font-mono text-xs font-semibold tabular-nums text-ink">
             {formatScenarioDuration(item.durationMs)}
           </strong>
           {item.durationKind === 'average' ? (
@@ -254,10 +253,26 @@ function ScenarioExpansion({
   return (
     <section
       id={id}
-      className="border-t border-[var(--color-edge)] bg-[var(--color-panel-raised)] p-3 sm:p-4 md:p-5"
+      className="border-t border-[var(--color-edge)] bg-panel-raised p-3 sm:p-4 md:p-5"
       aria-label={`${titleCase(item.scenarioId)} scenario result`}
     >
-      <div className="overflow-hidden rounded-[var(--ds-radius-sm)] border border-[var(--color-rule)] bg-[var(--color-panel)]">
+      <div className="overflow-hidden rounded-[var(--ds-radius-sm)] border border-[var(--color-rule)] bg-panel">
+        <div className="flex min-h-14 flex-col gap-3 border-b border-[var(--color-rule)] bg-panel px-4 py-3 sm:flex-row sm:items-center sm:justify-between md:px-5">
+          <div className="min-w-0">
+            <strong className="block truncate text-sm text-ink">
+              {titleCase(item.scenarioId)} run evidence
+            </strong>
+            <span className="mt-1 block font-mono text-[0.61rem] text-[var(--color-ink-ghost)]">
+              {item.runCount}{' '}
+              {item.runCount === 1 ? 'logical run' : 'logical runs'}
+            </span>
+          </div>
+          <ScenarioChatAction
+            detail={detail}
+            scenarioId={item.scenarioId}
+            subjectId={item.subjectId}
+          />
+        </div>
         <ScenarioResultBand item={item} />
         {!item.available ? (
           <div className="border-t border-[var(--color-rule)] px-4 py-6 text-sm leading-6 text-[var(--color-ink-ghost)] md:px-5">
@@ -269,7 +284,7 @@ function ScenarioExpansion({
         ) : null}
         {item.available ? (
           <details className="group border-t border-[var(--color-rule)]">
-            <summary className="flex min-h-12 cursor-pointer list-none items-center justify-between gap-4 px-4 py-3 text-sm font-semibold text-[var(--color-ink)] marker:hidden md:px-5">
+            <summary className="flex min-h-12 cursor-pointer list-none items-center justify-between gap-4 px-4 py-3 text-sm font-semibold text-ink marker:hidden md:px-5">
               <span>Inspect scenario evidence</span>
               <span className="font-mono text-[0.61rem] font-normal text-[var(--color-ink-ghost)]">
                 assessments, gates, artifacts, and provenance
@@ -333,10 +348,7 @@ function ResultFact({
   status?: OperationalStatus
 }) {
   return (
-    <div
-      className="min-w-0 bg-[var(--color-panel)] p-3 md:p-4"
-      data-primary-metric={label}
-    >
+    <div className="min-w-0 bg-panel p-3 md:p-4" data-primary-metric={label}>
       <dt className="font-mono text-[0.58rem] font-semibold uppercase tracking-[0.06em] text-[var(--color-ink-ghost)]">
         {label}
       </dt>
@@ -344,7 +356,7 @@ function ResultFact({
         {status ? (
           <StatusBadge status={status} label={value} />
         ) : (
-          <strong className="block truncate font-mono text-sm font-semibold tabular-nums text-[var(--color-ink)]">
+          <strong className="block truncate font-mono text-sm font-semibold tabular-nums text-ink">
             {value}
           </strong>
         )}
@@ -372,7 +384,7 @@ function WorkflowDurationProfile({ tests }: { tests: SemanticTestReport[] }) {
         <div>
           <h3
             id="workflow-duration-heading"
-            className="m-0 text-sm font-semibold text-[var(--color-ink)]"
+            className="m-0 text-sm font-semibold text-ink"
           >
             Workflow duration profile
           </h3>
@@ -385,7 +397,7 @@ function WorkflowDurationProfile({ tests }: { tests: SemanticTestReport[] }) {
           {formatScenarioDuration(totalDuration)} recorded step time
         </span>
       </header>
-      <div className="hidden grid-cols-[minmax(12rem,0.9fr)_7rem_minmax(14rem,1.4fr)_minmax(12rem,1fr)] gap-4 border-b border-[var(--color-rule)] bg-[var(--color-panel-raised)] px-5 py-2.5 font-mono text-[0.58rem] font-semibold uppercase tracking-[0.06em] text-[var(--color-ink-ghost)] lg:grid">
+      <div className="hidden grid-cols-[minmax(12rem,0.9fr)_7rem_minmax(14rem,1.4fr)_minmax(12rem,1fr)] gap-4 border-b border-[var(--color-rule)] bg-panel-raised px-5 py-2.5 font-mono text-[0.58rem] font-semibold uppercase tracking-[0.06em] text-[var(--color-ink-ghost)] lg:grid">
         <span>Step</span>
         <span>Duration</span>
         <span>Duration profile</span>
@@ -443,12 +455,12 @@ function WorkflowStepRow({
       data-workflow-step={test.node_id}
     >
       <div className="flex min-w-0 items-start gap-3">
-        <span className="grid size-7 shrink-0 place-items-center rounded-md border border-[var(--color-rule)] bg-[var(--color-panel-raised)] font-mono text-[0.61rem] font-semibold text-[var(--color-ink-ghost)]">
+        <span className="grid size-7 shrink-0 place-items-center rounded-md border border-[var(--color-rule)] bg-panel-raised font-mono text-[0.61rem] font-semibold text-[var(--color-ink-ghost)]">
           {String(index + 1).padStart(2, '0')}
         </span>
         <div className="min-w-0">
           <div className="flex min-w-0 flex-wrap items-center gap-2">
-            <strong className="truncate text-sm text-[var(--color-ink)]">
+            <strong className="truncate text-sm text-ink">
               {titleCase(test.node_id)}
             </strong>
             <StatusBadge
@@ -466,7 +478,7 @@ function WorkflowStepRow({
         <span className="font-mono text-[0.58rem] font-semibold uppercase tracking-[0.06em] text-[var(--color-ink-ghost)] lg:hidden">
           Duration
         </span>
-        <strong className="font-mono text-xs font-semibold tabular-nums text-[var(--color-ink)]">
+        <strong className="font-mono text-xs font-semibold tabular-nums text-ink">
           {formatScenarioDuration(test.duration_ms)}
         </strong>
       </div>
@@ -497,7 +509,7 @@ function WorkflowStepRow({
           {metrics.map((metric) => (
             <span
               key={metric.label}
-              className="inline-flex min-w-0 items-baseline gap-1 rounded-md border border-[var(--color-rule)] bg-[var(--color-panel-raised)] px-2 py-1 font-mono text-[0.6rem] text-[var(--color-ink-ghost)]"
+              className="inline-flex min-w-0 items-baseline gap-1 rounded-md border border-[var(--color-rule)] bg-panel-raised px-2 py-1 font-mono text-[0.6rem] text-[var(--color-ink-ghost)]"
               data-step-metric={metric.label}
             >
               <span className="truncate">{metric.label}</span>

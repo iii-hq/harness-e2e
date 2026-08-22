@@ -154,7 +154,7 @@ describe('assessment workspace component', () => {
     expect(detailHtml.indexOf('Advisory AI conclusion')).toBeLessThan(
       detailHtml.indexOf('AI recommended next steps'),
     )
-    expect(rendered).toContain('Chat')
+    expect(rendered).toContain('Transcript')
     expect(rendered).toContain('data-transcript-action=')
     expect(html).toContain('Review evidence')
     expect(rendered.match(/<details[^>]*open/g) ?? []).toHaveLength(0)

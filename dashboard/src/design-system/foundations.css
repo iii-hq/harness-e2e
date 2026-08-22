@@ -3,15 +3,15 @@
    repaint the host with a private palette. */
 .harness-e2e-shell {
   --ds-text-xs: 0.75rem;
-  --ds-text-sm: 0.875rem;
-  --ds-text-md: 1rem;
-  --ds-text-lg: clamp(1.2rem, 1.7vw, 1.5rem);
-  --ds-text-xl: clamp(1.7rem, 3vw, 2.75rem);
-  --ds-text-display: clamp(3rem, 7vw, 7.4rem);
-  --ds-leading-tight: 0.94;
-  --ds-leading-body: 1.55;
-  --ds-tracking-tight: -0.045em;
-  --ds-tracking-label: 0.08em;
+  --ds-text-sm: 0.8125rem;
+  --ds-text-md: 0.875rem;
+  --ds-text-lg: 1rem;
+  --ds-text-xl: 1.25rem;
+  --ds-text-display: 1.375rem;
+  --ds-leading-tight: 1.2;
+  --ds-leading-body: 1.5;
+  --ds-tracking-tight: -0.01em;
+  --ds-tracking-label: 0.06em;
 
   --ds-space-1: 0.25rem;
   --ds-space-2: 0.5rem;
@@ -66,10 +66,12 @@
 .ds-display {
   max-width: 72rem;
   margin: 0;
+  font-family: var(--font-mono);
   font-size: var(--ds-text-display);
   font-weight: 600;
-  letter-spacing: -0.065em;
+  letter-spacing: -0.01em;
   line-height: var(--ds-leading-tight);
+  text-transform: lowercase;
   text-wrap: balance;
 }
 

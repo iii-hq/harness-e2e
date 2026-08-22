@@ -11,6 +11,10 @@ import './console-overrides.css'
 
 const HASH_BASE = '#/ext/harness-e2e'
 
+type ChatCapableHost = Host & {
+  chat?: { selectConversation?: (sessionId: string) => void }
+}
+
 const runtimeConfig: RuntimeConfig = {
   mode: 'local',
   transport: 'iii',
@@ -43,12 +47,18 @@ function DashboardPage({
   onRequestClose,
 }: PageRenderProps & { host: Host }) {
   const theme = host.useTheme()
+  const chat = (host as ChatCapableHost).chat
   return (
     <App
       embedded
       tabId={tabId}
       panelSide={panelSide}
       theme={theme}
+      openChat={
+        chat?.selectConversation
+          ? (sessionId) => chat.selectConversation?.(sessionId)
+          : undefined
+      }
       onRequestClose={onRequestClose}
       manageDocumentTitle={false}
     />
