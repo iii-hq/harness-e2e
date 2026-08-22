@@ -42,6 +42,7 @@ export type PlanMetricId =
   | 'cost'
   | 'function_calls'
   | 'function_errors'
+  | 'turns'
 
 export type PlanMetricComparison = {
   id: PlanMetricId | `workflow:${string}`
@@ -81,6 +82,7 @@ export const PLAN_CORE_METRICS: PlanMetricId[] = [
   'quality',
   'tokens',
   'duration',
+  'turns',
 ]
 
 export const PLAN_DETAIL_METRICS: PlanMetricId[] = [
@@ -95,6 +97,7 @@ export const PLAN_DETAIL_METRICS: PlanMetricId[] = [
   'cost',
   'function_calls',
   'function_errors',
+  'turns',
 ]
 
 function finite(value: unknown): number | null {
@@ -118,7 +121,7 @@ function percentPoints(value: number | null): number | null {
 
 function scenarioMetricTotal(
   execution: DashboardExecutionSummary,
-  key: 'function_calls' | 'function_call_errors',
+  key: 'function_calls' | 'function_call_errors' | 'turns',
 ): number | null {
   const metrics = execution.scenario_metrics ?? []
   if (metrics.length === 0) return null
@@ -249,6 +252,10 @@ export function executionMetricValue(
         derivedSecurityMetricTotal(execution, 'function_call_errors'),
         scenarioMetricTotal(execution, 'function_call_errors'),
       )
+    case 'turns':
+      return (
+        finite(executionTotals.turns) ?? scenarioMetricTotal(execution, 'turns')
+      )
   }
 }
 
@@ -291,6 +298,7 @@ function allMetrics(
     build('cost', 'Cost', 'lower', 'usd'),
     build('function_calls', 'Function calls', 'context', 'count'),
     build('function_errors', 'Function errors', 'lower', 'count'),
+    build('turns', 'Turns', 'lower', 'count'),
   ]
 }
 
@@ -417,7 +425,8 @@ function scenarioAverage(
     | 'duration_seconds'
     | 'cost_usd'
     | 'function_calls'
-    | 'function_call_errors',
+    | 'function_call_errors'
+    | 'turns',
 ) {
   const explicit = finite(metric?.averages?.[key])
   if (explicit !== null || metric?.scenario_id !== 'security_review') {
@@ -465,6 +474,10 @@ function runDurationSeconds(run: DashboardRunProjection | null): number | null {
     run?.wall_time_ms ?? run?.efficiency?.wall_time_ms,
   )
   return milliseconds === null ? null : milliseconds / 1000
+}
+
+function runTurns(run: DashboardRunProjection | null): number | null {
+  return finite(run?.metrics?.totals?.turns ?? run?.efficiency?.turns)
 }
 
 function generalMetricComparisons(
@@ -676,6 +689,14 @@ export function buildScenarioComparisons(
           scenarioAverage(rightMetrics, 'cost_usd') ?? rightGeneral.costUsd,
           'lower',
           'usd',
+        ),
+        metric(
+          'turns',
+          'Turns',
+          scenarioAverage(leftMetrics, 'turns') ?? runTurns(leftRun),
+          scenarioAverage(rightMetrics, 'turns') ?? runTurns(rightRun),
+          'lower',
+          'count',
         ),
       ],
       execution_metrics: generalMetricComparisons(

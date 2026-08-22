@@ -139,8 +139,13 @@ export function TabsTrigger({
   value,
   className,
   children,
+  // The standalone pills stay icon-free; the Console host renders this slot.
+  icon: _icon,
   ...props
-}: ButtonHTMLAttributes<HTMLButtonElement> & { value: string }) {
+}: ButtonHTMLAttributes<HTMLButtonElement> & {
+  value: string
+  icon?: ReactNode | false
+}) {
   const context = useContext(TabsContext)
   const selected = context.value === value
   return (

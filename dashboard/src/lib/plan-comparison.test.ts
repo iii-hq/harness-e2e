@@ -195,6 +195,54 @@ describe('local plan comparison view model', () => {
     })
   })
 
+  it('derives execution and per-test turns from retained scenario metrics', () => {
+    const retained = (id: string, turns: number): DashboardExecutionSummary =>
+      execution(id, {
+        subjects: [
+          {
+            id: 'subject',
+            scenarios: [
+              {
+                id: 'direct_answer',
+                scenario_version: 1,
+                pass_rate: 100,
+                assessment_summary: assessment(),
+              },
+            ],
+          },
+        ],
+        scenario_metrics: [
+          {
+            scenario_id: 'direct_answer',
+            scenario_version: 1,
+            run_count: 2,
+            averages: { turns },
+            samples: { turns: 2 },
+          },
+        ],
+      })
+    const baseline = retained('baseline', 2)
+    const candidate = retained('candidate', 1)
+    const comparison = buildPlanComparison(baseline, candidate)
+
+    expect(metricById(comparison, 'turns')).toMatchObject({
+      baseline: 4,
+      candidate: 2,
+      delta: -2,
+      tone: 'positive',
+    })
+    expect(comparison.scenarios[0]?.metrics).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: 'turns',
+          baseline: 2,
+          candidate: 1,
+          tone: 'positive',
+        }),
+      ]),
+    )
+  })
+
   it('derives security calls and errors from retained workflow evidence', () => {
     const retained = (id: string): DashboardExecutionSummary =>
       execution(id, {

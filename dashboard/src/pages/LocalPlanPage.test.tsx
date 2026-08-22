@@ -58,6 +58,7 @@ function execution(
       total_tokens: 1_000,
       wall_time_seconds: 12,
       total_cost_usd: 0.1,
+      turns: id === 'baseline-1' ? 4 : 3,
       function_calls: 3,
       function_call_errors: 0,
     },
@@ -133,9 +134,15 @@ describe('local plan lifecycle', () => {
     )
 
     expect(html).toContain('Candidate results are ready')
+    expect(html).toContain(
+      '<h2 id="plan-lifecycle-title">Candidate results are ready</h2>',
+    )
     expect(html).toContain('View latest candidate')
     expect(html).toContain('Run another candidate')
     expect(html).toContain('View baseline execution')
+    expect(html).not.toContain('Execution controls')
+    expect(html).not.toContain('Plan actions')
+    expect(html).not.toContain('Next action')
   })
 })
 
@@ -241,14 +248,21 @@ describe('local plan execution comparison', () => {
     expect(html).toContain('1 visual baseline · 2 selected')
     expect(html).toContain('Visual baseline')
     expect(html).toContain('Official baseline')
-    expect(html).toContain('Candidates in table')
+    expect(html).toContain('Compare candidates')
+    expect(html).toContain(
+      'Select one or more executions to show in the table.',
+    )
+    expect(html).not.toContain('Choose what appears below.')
+    expect(html).toContain('Reference')
+    expect(html).toContain('Candidate')
     expect(html).toContain('never changes the official baseline')
     expect(html).toContain('<th scope="col">Metric</th>')
     expect(html).toContain('Pass rate')
     expect(html).toContain('Higher is better')
     expect(html).toContain('Lower is better')
+    expect(html).toContain('role="tooltip"')
     expect(html).toContain('--plan-execution-column-count:3')
-    expect(tableHtml).not.toMatch(/reference/i)
+    expect(tableHtml).toContain('>Reference<')
     expect(tableHtml).not.toMatch(/improved/i)
     expect(tableHtml).not.toContain('View details')
     expect(tableHtml).not.toContain('Viewing details')
@@ -258,11 +272,12 @@ describe('local plan execution comparison', () => {
     expect(html).toMatch(
       /data-metric-id="tokens"[\s\S]*?<td class="is-selected is-winner" data-execution-id="candidate-2"/,
     )
-    expect(html).toContain('Winner')
+    expect(html).toContain('Best')
     expect(html).toContain('Execution history')
     expect(html).toContain('<span>Calls</span>')
     expect(html).toContain('<span>Errors</span>')
     expect(html).toContain('aria-label="Open report for Official baseline"')
+    expect(html).toContain('title="baseline-1"')
     expect(historyHtml).not.toContain('Execution history')
     expect(diagnosticsHtml).toMatch(/^<section class="panel plan-run-history"/)
   })
@@ -361,7 +376,8 @@ describe('local plan execution comparison', () => {
       html.match(/aria-label="Rename Harness (?:Latest|Next)"/g),
     ).toHaveLength(2)
     expect(html).toContain('plan-run-history-columns')
-    expect(html).toContain('Candidates in table')
+    expect(executionsHtml).toContain('data-label="Turns"')
+    expect(html).toContain('Compare candidates')
   })
 
   it('keeps the verdict and test drill-down without duplicate metric cards', () => {
@@ -459,6 +475,17 @@ describe('local plan execution comparison', () => {
             format: 'count',
             tone: 'neutral',
           },
+          {
+            id: 'turns',
+            label: 'Turns',
+            baseline: 2,
+            candidate: 1,
+            delta: -1,
+            delta_percent: -50,
+            direction: 'lower',
+            format: 'count',
+            tone: 'positive',
+          },
         ],
         workflow_metrics: [
           {
@@ -494,18 +521,19 @@ describe('local plan execution comparison', () => {
       />,
     )
 
-    expect(html).toContain('Scenario metrics')
+    expect(html).toContain('Metrics by test')
     expect(html).toContain('Tokens')
     expect(html).toContain('Cost')
     expect(html).toContain('Function calls')
     expect(html).toContain('Function errors')
+    expect(html).toContain('Turns')
     expect(html).toContain('Time')
-    expect(html).toContain('13 → 13')
+    expect(html).toContain('plan-scenario-signal-values')
     expect(html).not.toContain('Findings')
     expect(html).toContain('<details class="plan-scenario-disclosure" open="">')
   })
 
-  it('shows the same five scenario metrics for every selected candidate', () => {
+  it('shows eight scenario metrics including turns and highlights strict winners', () => {
     const scenarioExecution = (
       id: string,
       tokens: number,
@@ -537,6 +565,7 @@ describe('local plan execution comparison', () => {
               tokens,
               function_calls: 13,
               function_call_errors: 0,
+              turns: id === 'baseline-1' ? 2 : 1,
               duration_seconds: 0.3,
             },
           },
@@ -567,21 +596,29 @@ describe('local plan execution comparison', () => {
         loading={false}
       />,
     )
-    const scenarioHtml = html.slice(html.indexOf('Scenario metrics'))
+    const scenarioHtml = html.slice(html.indexOf('Metrics by test'))
 
     expect(scenarioHtml).toContain('Candidate #1')
     expect(scenarioHtml).toContain('Candidate #2')
     expect(scenarioHtml).toContain('2 candidates')
-    expect(scenarioHtml.match(/data-scenario-metric-id=/g)).toHaveLength(5)
+    expect(scenarioHtml.match(/data-scenario-metric-id=/g)).toHaveLength(8)
     for (const metricId of [
+      'pass_rate',
+      'quality',
       'cost',
+      'turns',
+      'duration',
       'tokens',
       'function_calls',
       'function_errors',
-      'duration',
     ]) {
       expect(scenarioHtml).toContain(`data-scenario-metric-id="${metricId}"`)
     }
+    expect(scenarioHtml).toMatch(
+      /plan-scenario-signal-value is-winner" title="Candidate #2"/,
+    )
+    expect(scenarioHtml).toContain('plan-scenario-metric-grid')
+    expect(scenarioHtml).toContain('class="is-winner"')
   })
 
   it('can use a candidate as a visual-only baseline', () => {

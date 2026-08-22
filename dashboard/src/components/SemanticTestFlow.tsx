@@ -1,4 +1,5 @@
 import type { ReactNode } from 'react'
+import { ScenarioChatAction } from '@/components/ScenarioChatAction'
 import { type OperationalStatus, StatusBadge } from '@/design-system/primitives'
 import type {
   DashboardExecutionDetail,
@@ -14,6 +15,7 @@ import {
 
 type ObservedFlow = {
   key: string
+  subjectId: string
   scenarioId: string
   runId: string
   tests: SemanticTestReport[]
@@ -71,6 +73,13 @@ export function SemanticTestFlow({
               >
                 run {shortHash(flow.runId)}
               </code>
+              <ScenarioChatAction
+                compact
+                detail={detail}
+                scenarioId={flow.scenarioId}
+                subjectId={flow.subjectId}
+                runId={flow.runId}
+              />
             </div>
           </header>
 
@@ -619,6 +628,7 @@ function observedFlows(detail: DashboardExecutionDetail): ObservedFlow[] {
         .filter((run) => (run.semantic_tests?.length ?? 0) > 0)
         .map((run) => ({
           key: `${record.subject_id}:${scenario.scenario_id}:${run.run_id}:${run.attempt_id}`,
+          subjectId: record.subject_id,
           scenarioId: scenario.scenario_id,
           runId: run.run_id,
           tests: run.semantic_tests ?? [],

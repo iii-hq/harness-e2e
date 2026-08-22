@@ -48,6 +48,7 @@ function execution(id: string, passRate: number): DashboardExecutionSummary {
       total_tokens: id === 'baseline-1' ? 1_000 : 900,
       wall_time_seconds: id === 'baseline-1' ? 12 : 10,
       total_cost_usd: id === 'baseline-1' ? 0.1 : 0.09,
+      turns: id === 'baseline-1' ? 4 : 3,
     },
     assessment_summary: {
       system_statuses:
@@ -77,6 +78,7 @@ describe('plan list comparison summary', () => {
     expect(html).toContain('Hard gates')
     expect(html).toContain('Technical failures')
     expect(html).toContain('Cost')
+    expect(html).toContain('Turns')
   })
 
   it('keeps the no-candidate state explicit while exposing the baseline snapshot', () => {

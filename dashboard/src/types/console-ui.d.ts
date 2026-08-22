@@ -110,6 +110,8 @@ declare module '@iii-dev/console-ui' {
   export interface TabsTriggerProps
     extends React.ButtonHTMLAttributes<HTMLButtonElement> {
     value: string
+    /** Semantic 16px glyph; the host infers one from `value`, `false` hides it. */
+    icon?: React.ReactNode | false
   }
   export const TabsTrigger: React.ComponentType<TabsTriggerProps>
 

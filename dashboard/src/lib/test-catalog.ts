@@ -92,6 +92,8 @@ export type HistorySeries = {
   median_cost_usd: number | null
   median_tokens: number | null
   median_duration_seconds: number | null
+  median_function_calls: number | null
+  median_function_call_errors: number | null
   median_turns: number | null
 }
 
@@ -150,6 +152,8 @@ export type TestObservation = {
   median_cost_usd?: number | null
   median_tokens?: number | null
   median_duration_seconds?: number | null
+  median_function_calls?: number | null
+  median_function_call_errors?: number | null
   median_turns?: number | null
 }
 

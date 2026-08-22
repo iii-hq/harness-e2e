@@ -71,9 +71,9 @@ type ExecutionSetupReviewProps = {
 const fieldLabel =
   'grid min-w-0 gap-2 text-xs font-semibold text-[var(--color-ink-faint)]'
 const fieldControl =
-  'min-h-11 w-full rounded-lg border border-[var(--color-rule)] bg-[var(--color-panel-raised)] px-3 text-sm text-[var(--color-ink)] transition-colors duration-[var(--ds-duration-fast)] placeholder:text-[var(--color-ink-ghost)] hover:border-[var(--color-edge)] focus-visible:border-[var(--color-rule-focus)] focus-visible:[outline:2px_solid_var(--color-rule-focus)] focus-visible:[outline-offset:3px] disabled:cursor-not-allowed disabled:opacity-50'
+  'min-h-11 w-full rounded-lg border border-[var(--color-rule)] bg-panel-raised px-3 text-sm text-ink transition-colors duration-[var(--ds-duration-fast)] placeholder:text-[var(--color-ink-ghost)] hover:border-[var(--color-edge)] focus-visible:border-[var(--color-rule-focus)] focus-visible:[outline:2px_solid_var(--color-rule-focus)] focus-visible:[outline-offset:3px] disabled:cursor-not-allowed disabled:opacity-50'
 const quietButton =
-  'inline-flex min-h-10 items-center justify-center gap-2 rounded-lg border border-[var(--color-rule)] bg-[var(--color-panel-raised)] px-3 text-xs font-semibold text-[var(--color-ink-faint)] transition-colors duration-[var(--ds-duration-fast)] hover:border-[var(--color-edge)] hover:text-[var(--color-ink)] disabled:cursor-not-allowed disabled:opacity-45'
+  'inline-flex min-h-10 items-center justify-center gap-2 rounded-lg border border-[var(--color-rule)] bg-panel-raised px-3 text-xs font-semibold text-[var(--color-ink-faint)] transition-colors duration-[var(--ds-duration-fast)] hover:border-[var(--color-edge)] hover:text-ink disabled:cursor-not-allowed disabled:opacity-45'
 
 export function scenarioDisplayName(scenario: string) {
   return scenario
@@ -99,7 +99,7 @@ function SetupSection({
           {number}
         </span>
         <div className="min-w-0">
-          <h2 className="m-0 text-sm font-semibold tracking-[-0.015em] text-[var(--color-ink)]">
+          <h2 className="m-0 text-sm font-semibold tracking-[-0.015em] text-ink">
             {title}
           </h2>
           <p className="mt-1 mb-0 max-w-2xl text-xs leading-5 text-[var(--color-ink-ghost)]">
@@ -174,9 +174,9 @@ export function ExecutionSetup({
   }
 
   return (
-    <div className="min-w-0 bg-[var(--color-panel)]">
+    <div className="min-w-0 bg-panel">
       <div
-        className="flex flex-wrap items-center gap-3 border-b border-[var(--color-rule)] bg-[var(--color-panel-raised)] px-5 py-3 sm:px-6"
+        className="flex flex-wrap items-center gap-3 border-b border-[var(--color-rule)] bg-panel-raised px-5 py-3 sm:px-6"
         aria-live="polite"
       >
         <span
@@ -372,9 +372,7 @@ export function ExecutionSetup({
 
           <output className="flex min-h-10 flex-wrap items-center justify-between gap-2 border-y border-[var(--color-rule)] py-2 font-mono text-[0.68rem] text-[var(--color-ink-ghost)]">
             <span>
-              <strong className="text-[var(--color-ink)]">
-                {selectedScenarios.length}
-              </strong>{' '}
+              <strong className="text-ink">{selectedScenarios.length}</strong>{' '}
               {selectedScenarios.length === 1
                 ? 'test selected'
                 : 'tests selected'}
@@ -384,15 +382,15 @@ export function ExecutionSetup({
             </span>
           </output>
 
-          <div className="grid max-h-[25rem] grid-cols-1 gap-2 overflow-auto rounded-lg border border-[var(--color-rule)] bg-[var(--color-panel-raised)] p-2 sm:grid-cols-2">
+          <div className="grid max-h-[25rem] grid-cols-1 gap-2 overflow-auto rounded-lg border border-[var(--color-rule)] bg-panel-raised p-2 sm:grid-cols-2">
             {visibleScenarios.map((scenario) => {
               const selected = selectedScenarios.includes(scenario)
               return (
                 <label
                   className={`flex min-h-16 min-w-0 cursor-pointer items-start gap-3 rounded-lg border p-3 transition-colors duration-[var(--ds-duration-fast)] ${
                     selected
-                      ? 'border-[color-mix(in_srgb,var(--color-accent)_60%,var(--color-rule))] bg-[color-mix(in_srgb,var(--color-accent)_7%,var(--color-panel))]'
-                      : 'border-[var(--color-rule)] bg-[var(--color-panel)] hover:border-[var(--color-edge)]'
+                      ? 'border-[color-mix(in_srgb,var(--color-accent)_60%,var(--color-rule))] bg-[color-mix(in_srgb,var(--color-accent)_7%,var(--surface))]'
+                      : 'border-[var(--color-rule)] bg-panel hover:border-[var(--color-edge)]'
                   }`}
                   key={scenario}
                 >
@@ -406,7 +404,7 @@ export function ExecutionSetup({
                     }
                   />
                   <span className="grid min-w-0 gap-1">
-                    <strong className="text-xs font-semibold leading-4 text-[var(--color-ink)]">
+                    <strong className="text-xs font-semibold leading-4 text-ink">
                       {scenarioDisplayName(scenario)}
                     </strong>
                     <code className="break-all font-mono text-[0.62rem] leading-4 text-[var(--color-ink-ghost)]">
@@ -431,7 +429,7 @@ export function ExecutionSetup({
             <span className="font-mono text-[0.65rem] font-semibold uppercase tracking-[0.06em] text-[var(--color-accent)]">
               Optional controls
             </span>
-            <strong className="text-sm font-semibold text-[var(--color-ink)]">
+            <strong className="text-sm font-semibold text-ink">
               Sampling, retries and seed
             </strong>
             <small className="text-xs leading-4 text-[var(--color-ink-ghost)]">
@@ -444,7 +442,7 @@ export function ExecutionSetup({
           </span>
         </summary>
         <div className="grid gap-px border-t border-[var(--color-rule)] bg-[var(--color-rule)] sm:grid-cols-3">
-          <label className={`${fieldLabel} bg-[var(--color-panel)] p-5`}>
+          <label className={`${fieldLabel} bg-panel p-5`}>
             Runs per test
             <span className="text-[0.68rem] font-normal leading-4 text-[var(--color-ink-ghost)]">
               Logical evidence samples.
@@ -459,7 +457,7 @@ export function ExecutionSetup({
               disabled={disabled}
             />
           </label>
-          <label className={`${fieldLabel} bg-[var(--color-panel)] p-5`}>
+          <label className={`${fieldLabel} bg-panel p-5`}>
             Technical retries
             <span className="text-[0.68rem] font-normal leading-4 text-[var(--color-ink-ghost)]">
               Recovery attempts only.
@@ -474,7 +472,7 @@ export function ExecutionSetup({
               disabled={disabled}
             />
           </label>
-          <label className={`${fieldLabel} bg-[var(--color-panel)] p-5`}>
+          <label className={`${fieldLabel} bg-panel p-5`}>
             Case seed
             <span className="text-[0.68rem] font-normal leading-4 text-[var(--color-ink-ghost)]">
               Canonical when blank.
@@ -517,14 +515,14 @@ export function ExecutionSetupReview({
   ]
 
   return (
-    <aside className="grid content-start bg-[var(--color-panel-raised)] lg:sticky lg:top-20 lg:max-h-[calc(100dvh-6rem)] lg:overflow-auto">
+    <aside className="grid content-start bg-panel-raised lg:sticky lg:top-20 lg:max-h-[calc(100dvh-6rem)] lg:overflow-auto">
       <div className="border-b border-[var(--color-rule)] p-5 sm:p-6">
         <p className="m-0 font-mono text-[0.65rem] font-semibold uppercase tracking-[0.07em] text-[var(--color-accent)]">
           {mode === 'plan' ? 'Reusable workflow' : 'One-off result'}
         </p>
         <div className="mt-3 flex items-start justify-between gap-3">
           <div>
-            <h2 className="m-0 text-base font-semibold text-[var(--color-ink)]">
+            <h2 className="m-0 text-base font-semibold text-ink">
               Review setup
             </h2>
             <p className="mt-1 mb-0 text-xs leading-5 text-[var(--color-ink-ghost)]">
@@ -548,13 +546,13 @@ export function ExecutionSetupReview({
       <dl className="grid grid-cols-2 gap-px bg-[var(--color-rule)]">
         {facts.map((fact) => (
           <div
-            className="grid min-h-24 content-between gap-3 bg-[var(--color-panel)] p-4"
+            className="grid min-h-24 content-between gap-3 bg-panel p-4"
             key={fact.label}
           >
             <dt className="font-mono text-[0.62rem] uppercase tracking-[0.05em] text-[var(--color-ink-ghost)]">
               {fact.label}
             </dt>
-            <dd className="m-0 font-mono text-xl font-semibold tracking-[-0.04em] text-[var(--color-ink)]">
+            <dd className="m-0 font-mono text-xl font-semibold tracking-[-0.04em] text-ink">
               {fact.value}
             </dd>
           </div>
@@ -566,7 +564,7 @@ export function ExecutionSetupReview({
           <dt className="font-mono text-[0.62rem] uppercase tracking-[0.05em] text-[var(--color-ink-ghost)]">
             Execution model
           </dt>
-          <dd className="m-0 break-all text-[var(--color-ink)]">
+          <dd className="m-0 break-all text-ink">
             {subject || 'Not selected'}
           </dd>
         </div>

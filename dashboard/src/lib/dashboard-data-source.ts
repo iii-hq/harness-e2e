@@ -90,6 +90,7 @@ export type ExecutionTotals = JsonObject & {
   total_tokens?: number | null
   function_calls?: number | null
   function_call_errors?: number | null
+  turns?: number | null
 }
 
 export type DashboardModelIdentity = JsonObject & {
@@ -125,6 +126,7 @@ export type DashboardScenarioMetricSummary = JsonObject & {
     duration_seconds?: number | null
     function_call_errors?: number | null
     function_calls?: number | null
+    turns?: number | null
     tokens?: number | null
     work_amplification?: number | null
   }
@@ -133,6 +135,7 @@ export type DashboardScenarioMetricSummary = JsonObject & {
     duration_seconds?: number | null
     function_call_errors?: number | null
     function_calls?: number | null
+    turns?: number | null
     tokens?: number | null
     work_amplification?: number | null
   }
@@ -293,6 +296,8 @@ export type ScenarioFlowEvidence = JsonObject & {
 export type DashboardRunProjection = JsonObject & {
   run_id: string
   attempt_id: string
+  attempt_number?: number
+  session_id?: string
   assessment: RunAssessmentContract
   transcript?: JsonObject
   status?: string
@@ -309,6 +314,16 @@ export type DashboardRunProjection = JsonObject & {
     | null
   semantic_tests?: SemanticTestReport[]
   scenario_flow?: ScenarioFlowEvidence | null
+  retry_attempts?: DashboardRetryAttemptProjection[]
+}
+
+export type DashboardRetryAttemptProjection = JsonObject & {
+  run_id: string
+  attempt_id: string
+  attempt_number: number
+  session_id: string
+  status?: string
+  wall_time_ms?: number | null
 }
 
 export type DashboardReportProjection = JsonObject & {

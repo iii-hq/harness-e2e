@@ -120,6 +120,7 @@ describe('execution decision hierarchy', () => {
         function_calls: 58,
         function_call_errors: 3,
         total_cost_usd: 1.2345,
+        turns: 24,
       },
     )
 
@@ -128,6 +129,7 @@ describe('execution decision hierarchy', () => {
       functionCalls: 58,
       functionCallErrors: 3,
       totalCostUsd: 1.2345,
+      turns: 24,
     })
   })
 
@@ -145,7 +147,7 @@ describe('execution decision hierarchy', () => {
         functionCallErrors: 0,
         durationMs: 1_000,
         sessions: null,
-        turns: null,
+        turns: 7,
       },
       3,
       null,
@@ -168,6 +170,7 @@ describe('execution decision hierarchy', () => {
       functionCalls: 16,
       functionCallErrors: 0,
       totalCostUsd: null,
+      turns: 7,
     })
   })
 })
