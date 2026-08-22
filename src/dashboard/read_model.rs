@@ -186,6 +186,8 @@ pub(super) struct TestObservation {
     pub median_cost_usd: Option<f64>,
     pub median_tokens: Option<f64>,
     pub median_duration_seconds: Option<f64>,
+    pub median_function_calls: Option<f64>,
+    pub median_function_call_errors: Option<f64>,
     pub median_turns: Option<f64>,
 }
 
@@ -216,6 +218,8 @@ pub(super) struct HistorySeries {
     pub median_cost_usd: Option<f64>,
     pub median_tokens: Option<f64>,
     pub median_duration_seconds: Option<f64>,
+    pub median_function_calls: Option<f64>,
+    pub median_function_call_errors: Option<f64>,
     pub median_turns: Option<f64>,
 }
 
@@ -286,6 +290,8 @@ struct RunMetrics {
     cost_usd: Option<f64>,
     tokens: Option<f64>,
     duration_seconds: Option<f64>,
+    function_calls: Option<f64>,
+    function_call_errors: Option<f64>,
     turns: Option<f64>,
     status: RunStatus,
     assessment: RunAssessmentContract,
@@ -965,6 +971,30 @@ fn run_metrics(run: &E2eRunReport, assessment: &RunAssessmentContract) -> RunMet
         cost_usd: run.cost.total_usd,
         tokens,
         duration_seconds: (run.wall_time_ms > 0).then(|| run.wall_time_ms as f64 / 1_000.0),
+        function_calls: run
+            .efficiency
+            .as_ref()
+            .and_then(|efficiency| efficiency.function_calls)
+            .map(|value| value as f64)
+            .or_else(|| {
+                run.metrics.as_ref().and_then(|metrics| {
+                    metrics
+                        .complete
+                        .then_some(metrics.totals.function_calls as f64)
+                })
+            }),
+        function_call_errors: run
+            .efficiency
+            .as_ref()
+            .and_then(|efficiency| efficiency.function_call_errors)
+            .map(|value| value as f64)
+            .or_else(|| {
+                run.metrics.as_ref().and_then(|metrics| {
+                    metrics
+                        .complete
+                        .then_some(metrics.totals.function_call_errors as f64)
+                })
+            }),
         turns: run
             .efficiency
             .as_ref()
@@ -1239,6 +1269,16 @@ fn public_observation(observation: &&Observation) -> TestObservation {
         .iter()
         .filter_map(|run| run.turns)
         .collect::<Vec<_>>();
+    let function_calls = observation
+        .runs
+        .iter()
+        .filter_map(|run| run.function_calls)
+        .collect::<Vec<_>>();
+    let function_call_errors = observation
+        .runs
+        .iter()
+        .filter_map(|run| run.function_call_errors)
+        .collect::<Vec<_>>();
     TestObservation {
         execution_id: observation.execution_id.clone(),
         evaluated_version_id: observation.evaluated_version_id.clone(),
@@ -1269,6 +1309,8 @@ fn public_observation(observation: &&Observation) -> TestObservation {
         median_cost_usd: median(costs),
         median_tokens: median(tokens),
         median_duration_seconds: median(durations),
+        median_function_calls: median(function_calls),
+        median_function_call_errors: median(function_call_errors),
         median_turns: median(turns),
     }
 }
@@ -1367,6 +1409,14 @@ fn history_series(id: String, observations: &[&Observation]) -> HistorySeries {
         .filter_map(|run| run.duration_seconds)
         .collect::<Vec<_>>();
     let turns = runs.iter().filter_map(|run| run.turns).collect::<Vec<_>>();
+    let function_calls = runs
+        .iter()
+        .filter_map(|run| run.function_calls)
+        .collect::<Vec<_>>();
+    let function_call_errors = runs
+        .iter()
+        .filter_map(|run| run.function_call_errors)
+        .collect::<Vec<_>>();
     let first = observations.first().expect("history series is non-empty");
     HistorySeries {
         id,
@@ -1398,6 +1448,8 @@ fn history_series(id: String, observations: &[&Observation]) -> HistorySeries {
         median_cost_usd: median(costs),
         median_tokens: median(tokens),
         median_duration_seconds: median(durations),
+        median_function_calls: median(function_calls),
+        median_function_call_errors: median(function_call_errors),
         median_turns: median(turns),
     }
 }

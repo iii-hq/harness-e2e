@@ -184,6 +184,7 @@ type SummaryExecutionMetrics = {
   runCount: number
   workflow: WorkflowMetricsSummary | null
   totalTokens: number | null
+  turns: number | null
   functionCalls: number | null
   functionCallErrors: number | null
   totalCostUsd: number | null
@@ -221,6 +222,7 @@ export function buildSummaryExecutionMetrics(
       finiteMetric(totals?.total_tokens) ??
       aggregate.totalTokens ??
       workflowTokens,
+    turns: finiteMetric(totals?.turns) ?? aggregate.turns,
     functionCalls:
       testTotals?.functionCalls ??
       finiteMetric(totals?.function_calls) ??
@@ -835,6 +837,14 @@ export function ExecutionPage({
               tone={
                 summaryMetrics?.totalTokens == null ? 'unavailable' : 'neutral'
               }
+            />
+            <MetricCard
+              className="bg-panel"
+              label="Turns"
+              value={formatMetricCount(summaryMetrics?.turns ?? null)}
+              detail="Root and delegated agent turns"
+              delta="Efficiency"
+              tone={summaryMetrics?.turns == null ? 'unavailable' : 'neutral'}
             />
             <MetricCard
               className="bg-panel"

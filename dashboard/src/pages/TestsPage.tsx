@@ -11,6 +11,7 @@ import {
   DashboardPageActions,
   dashboardHeaderActionClassName,
 } from '@/components/DashboardPageActions'
+import { ScenarioChatAction } from '@/components/ScenarioChatAction'
 import { hashForExecution, hashForWorkspace } from '@/hooks/use-hash-route'
 import { summarizeAssessmentContract } from '@/lib/assessment-contract'
 import {
@@ -251,33 +252,46 @@ function RowDetails({ result }: { result: TestVersionResult | null }) {
         ) : (
           <div className="grid gap-2">
             {observations.map((observation) => (
-              <a
+              <article
                 key={`${observation.side}-${observation.execution_id}-${observation.case_id}`}
-                className="flex min-h-11 items-center justify-between gap-3 rounded-lg border border-line bg-panel px-3 py-2 text-sm text-ink no-underline hover:border-line-strong hover:bg-panel-raised"
-                href={hashForExecution(observation.execution_id)}
+                className="flex min-h-14 items-center gap-2 rounded-lg border border-line bg-panel p-2 text-sm text-ink hover:border-line-strong hover:bg-panel-raised"
               >
-                <span className="min-w-0">
-                  <strong className="mr-2 text-brand">
-                    {observation.side}
-                  </strong>
-                  <span className="break-all font-mono text-xs">
-                    {observation.execution_id}
+                <a
+                  className="flex min-w-0 flex-1 items-center justify-between gap-3 rounded-md px-1 py-1 text-ink no-underline focus-visible:outline-2 focus-visible:outline-brand"
+                  href={hashForExecution(observation.execution_id)}
+                >
+                  <span className="min-w-0">
+                    <strong className="mr-2 text-brand">
+                      {observation.side}
+                    </strong>
+                    <span className="break-all font-mono text-xs">
+                      {observation.execution_id}
+                    </span>
+                    <small className="mt-1 block text-ink-muted">
+                      {observation.case_id} · score{' '}
+                      {formatNumber(observation.median_score)} · n=
+                      {observation.scored_runs}
+                    </small>
+                    <small className="mt-1 block text-ink-muted">
+                      {observation.assessment_summary?.assessment_count ?? 0}{' '}
+                      assessments ·{' '}
+                      {observation.assessment_summary
+                        ?.evidence_reference_count ?? 0}{' '}
+                      evidence references
+                    </small>
                   </span>
-                  <small className="mt-1 block text-ink-muted">
-                    {observation.case_id} · score{' '}
-                    {formatNumber(observation.median_score)} · n=
-                    {observation.scored_runs}
-                  </small>
-                  <small className="mt-1 block text-ink-muted">
-                    {observation.assessment_summary?.assessment_count ?? 0}{' '}
-                    assessments ·{' '}
-                    {observation.assessment_summary?.evidence_reference_count ??
-                      0}{' '}
-                    evidence references
-                  </small>
-                </span>
-                <ExternalLink size={15} aria-hidden="true" />
-              </a>
+                  <ExternalLink
+                    className="shrink-0"
+                    size={15}
+                    aria-hidden="true"
+                  />
+                </a>
+                <ScenarioChatAction
+                  compact
+                  executionId={observation.execution_id}
+                  scenarioId={result.test_id}
+                />
+              </article>
             ))}
           </div>
         )}

@@ -104,6 +104,13 @@ function finiteNumber(value: unknown): number | null {
   return typeof value === 'number' && Number.isFinite(value) ? value : null
 }
 
+function formatTurns(value: unknown) {
+  const turns = finiteNumber(value)
+  if (turns === null) return 'Turns not captured'
+  const rounded = Math.round(turns)
+  return `${rounded.toLocaleString()} ${rounded === 1 ? 'turn' : 'turns'}`
+}
+
 function metricTone(presentation: ExecutionPresentation): MetricTone {
   if (presentation.attention === 'passed') return 'positive'
   if (presentation.attention === 'needs_attention') return 'negative'
@@ -148,6 +155,7 @@ export function LatestExecution({
   const issue = presentation.primaryIssue
   const execution = presentation.execution
   const totalTokens = execution.totals?.total_tokens
+  const turnsLabel = formatTurns(execution.totals?.turns)
   const workflow = execution.workflow_metrics
   const workflowStepCount = finiteNumber(workflow?.step_count) ?? 0
   const hasWorkflowMetrics = workflowStepCount > 0
@@ -311,8 +319,8 @@ export function LatestExecution({
           }
           caption={
             hasWorkflowMetrics
-              ? `${workflowFunctionCalls?.toLocaleString() ?? 'No'} function calls · ${workflowTokenMetricSteps}/${workflowStepCount} steps reported tokens`
-              : 'Retained subject and judge usage'
+              ? `${turnsLabel} · ${workflowFunctionCalls?.toLocaleString() ?? 'No'} function calls · ${workflowTokenMetricSteps}/${workflowStepCount} steps reported tokens`
+              : `${turnsLabel} · retained subject and judge usage`
           }
           delta={
             hasWorkflowMetrics

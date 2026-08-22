@@ -201,7 +201,10 @@ mod tests {
         RunStatus,
     };
     use crate::scenarios::{ExecutionPolicy, ScenarioId};
-    use crate::wire::{ControlPlaneEvidence, FunctionContractEvidence};
+    use crate::wire::{
+        ControlPlaneEvidence, FunctionContractEvidence, Observed, SessionMetricsPayload,
+        SessionUsageTotals,
+    };
 
     const TEST_DIGEST: &str =
         "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
@@ -663,6 +666,53 @@ mod tests {
             })
             .unwrap();
         assert_eq!(no_matching_judge.total, 0);
+    }
+
+    #[test]
+    fn metric_history_exposes_complete_function_activity() {
+        let root = tempfile::tempdir().unwrap();
+        let mut value = report();
+        value.scenarios[0].runs[0].metrics =
+            Some(Observed::from_normalized(SessionMetricsPayload {
+                root_session_id: "session".into(),
+                complete: true,
+                totals: SessionUsageTotals {
+                    sessions: 1,
+                    turns: 3,
+                    function_calls: 4,
+                    function_call_errors: 1,
+                    input_tokens: Some(800),
+                    output_tokens: Some(200),
+                    ..SessionUsageTotals::default()
+                },
+                by_session: Vec::new(),
+                traces: None,
+            }));
+        let run_dir = root.path().join("metric-activity");
+        let mut run_metadata = metadata();
+        run_metadata.id = "metric-activity".into();
+        write_metadata(&run_dir, &run_metadata).unwrap();
+        let report_manifest = manifest(&value);
+        value
+            .write_to(&run_dir.join("results"), &report_manifest)
+            .unwrap();
+
+        let model = DashboardReadModel::load(root.path()).unwrap();
+        let history = model
+            .test_history(super::read_model::TestHistoryRequest {
+                test_id: "direct_answer".into(),
+                limit: Some(100),
+                ..super::read_model::TestHistoryRequest::default()
+            })
+            .unwrap();
+        let observation = history.observations.first().unwrap();
+
+        assert_eq!(observation.median_tokens, Some(1000.0));
+        assert_eq!(observation.median_function_calls, Some(4.0));
+        assert_eq!(observation.median_function_call_errors, Some(1.0));
+        assert_eq!(observation.median_turns, Some(3.0));
+        assert_eq!(history.series[0].median_function_calls, Some(4.0));
+        assert_eq!(history.series[0].median_function_call_errors, Some(1.0));
     }
 
     #[test]

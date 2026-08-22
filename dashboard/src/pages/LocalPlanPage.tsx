@@ -1,4 +1,4 @@
-import { ExternalLink, PencilLine } from 'lucide-react'
+import { ExternalLink, Info, PencilLine } from 'lucide-react'
 import {
   type CSSProperties,
   type FormEvent,
@@ -14,6 +14,7 @@ import {
   ExecutionSetupReview,
   requestQuickExecution,
 } from '@/components/ExecutionSetup'
+import { ScenarioChatAction } from '@/components/ScenarioChatAction'
 import { useDirtyNavigation } from '@/hooks/use-dirty-navigation'
 import {
   hashForExecution,
@@ -44,6 +45,7 @@ import {
   type MetricDirection,
   metricById,
   type PlanComparison,
+  type PlanMetricComparison,
   type PlanMetricId,
   type PlanScenarioComparison,
   type PlanVerdict,
@@ -282,20 +284,17 @@ export function PlanLifecycle({
       className="panel plan-panel-composite plan-lifecycle-panel"
       aria-labelledby="plan-lifecycle-title"
     >
-      <div className="panel-heading plan-panel-heading">
-        <div>
-          <div className="section-kicker">Execution controls</div>
-          <h2 id="plan-lifecycle-title">Plan actions</h2>
-        </div>
-        {plan.locked && <span className="status-pill status-pass">Locked</span>}
-      </div>
       <div
         className={`plan-next-action plan-next-action-${nextAction.state}`}
         aria-live="polite"
       >
-        <div>
-          <span className="section-kicker">Next action</span>
-          <h3>{nextAction.title}</h3>
+        <div className="plan-next-action-copy">
+          <div className="plan-next-action-heading">
+            <h2 id="plan-lifecycle-title">{nextAction.title}</h2>
+            {plan.locked && (
+              <span className="status-pill status-pass">Locked</span>
+            )}
+          </div>
           <p>{nextAction.detail}</p>
         </div>
         <div className="plan-next-action-controls">
@@ -396,12 +395,35 @@ function executionStatus(
 const PLAN_COMPARISON_TABLE_METRICS = [
   'pass_rate',
   'quality',
-  'tokens',
   'duration',
+  'tokens',
   'cost',
+  'turns',
   'function_calls',
   'function_errors',
 ] as const
+
+const PLAN_SCENARIO_TABLE_METRICS: PlanMetricId[] = [
+  'pass_rate',
+  'quality',
+  'duration',
+  'tokens',
+  'cost',
+  'turns',
+  'function_calls',
+  'function_errors',
+]
+
+const PLAN_SCENARIO_SUMMARY_METRICS: PlanMetricId[] = [
+  'quality',
+  'duration',
+  'tokens',
+  'turns',
+  'function_calls',
+  'function_errors',
+]
+
+const SCENARIO_BASELINE_ID = '__visual_baseline__'
 
 type ExecutionHistoryRow = {
   id: string
@@ -609,7 +631,7 @@ function finiteExecutionMetric(value: unknown) {
 
 function executionMetricValue(
   summary: DashboardExecutionSummary | null,
-  metric: 'tokens' | 'duration' | 'calls' | 'errors',
+  metric: 'tokens' | 'duration' | 'turns' | 'calls' | 'errors',
 ) {
   const totals = summary?.totals
   const value =
@@ -617,9 +639,11 @@ function executionMetricValue(
       ? totals?.total_tokens
       : metric === 'duration'
         ? totals?.wall_time_seconds
-        : metric === 'calls'
-          ? totals?.function_calls
-          : totals?.function_call_errors
+        : metric === 'turns'
+          ? totals?.turns
+          : metric === 'calls'
+            ? totals?.function_calls
+            : totals?.function_call_errors
   const numeric = finiteExecutionMetric(value)
   if (numeric === null) return 'Not reported'
   if (metric === 'duration') return formatDuration(numeric)
@@ -707,6 +731,9 @@ export function PlanExecutionHistory({
         ]
       : []
   })
+  const comparisonColumnStyle = {
+    '--plan-execution-column-count': Math.max(comparisonColumns.length, 1),
+  } as CSSProperties
   return (
     <section
       className="panel plan-panel-composite plan-execution-history-panel"
@@ -757,7 +784,8 @@ export function PlanExecutionHistory({
               <small>The official plan baseline remains unchanged.</small>
             </label>
             <fieldset className="plan-candidate-selection">
-              <legend>Candidates in table</legend>
+              <legend>Compare candidates</legend>
+              <small>Select one or more executions to show in the table.</small>
               <div className="plan-candidate-options">
                 {selectableRows
                   .filter((row) => row.id !== visualBaselineId)
@@ -785,14 +813,7 @@ export function PlanExecutionHistory({
           <div className="plan-execution-table-wrap">
             <table
               className="plan-execution-table"
-              style={
-                {
-                  '--plan-execution-column-count': Math.max(
-                    comparisonColumns.length,
-                    1,
-                  ),
-                } as CSSProperties
-              }
+              style={comparisonColumnStyle}
             >
               <caption className="visually-hidden">
                 Plan metrics in rows, with the visual baseline and selected
@@ -814,8 +835,14 @@ export function PlanExecutionHistory({
                         data-execution-id={row.id}
                         key={`${row.role}:${row.id}`}
                         scope="col"
+                        title={row.id}
                       >
                         <div className="plan-execution-column-title">
+                          <span
+                            className={`plan-execution-column-role${isVisualBaseline ? ' is-baseline' : ' is-candidate'}`}
+                          >
+                            {isVisualBaseline ? 'Reference' : 'Candidate'}
+                          </span>
                           <strong>{planExecutionLabel(plan, row.id)}</strong>
                           <span>
                             {[
@@ -827,7 +854,6 @@ export function PlanExecutionHistory({
                               .filter(Boolean)
                               .join(' · ')}
                           </span>
-                          <code title={row.id}>{row.id}</code>
                         </div>
                       </th>
                     ),
@@ -871,8 +897,27 @@ export function PlanExecutionHistory({
                   return (
                     <tr data-metric-id={id} key={id}>
                       <th scope="row">
-                        <strong>{descriptor?.label ?? titleCase(id)}</strong>
-                        <span>{directionLabel}</span>
+                        <span className="plan-execution-metric-label">
+                          <strong>{descriptor?.label ?? titleCase(id)}</strong>
+                          <button
+                            className="plan-metric-direction"
+                            aria-describedby={`plan-metric-direction-${id}`}
+                            type="button"
+                          >
+                            <Info
+                              aria-hidden="true"
+                              size={12}
+                              strokeWidth={1.8}
+                            />
+                            <span
+                              className="plan-metric-direction-tooltip"
+                              id={`plan-metric-direction-${id}`}
+                              role="tooltip"
+                            >
+                              {directionLabel}
+                            </span>
+                          </button>
+                        </span>
                       </th>
                       {entries.map(({ column, metric, side }) => {
                         const winner = winnerIds.has(column.row.id)
@@ -896,7 +941,7 @@ export function PlanExecutionHistory({
                                   </strong>
                                   {winner && (
                                     <span className="plan-winner-badge">
-                                      Winner
+                                      Best
                                     </span>
                                   )}
                                 </span>
@@ -908,7 +953,9 @@ export function PlanExecutionHistory({
                                     {formatPlanMetricDelta(metric)}
                                   </small>
                                 ) : !column.isVisualBaseline ? (
-                                  <small>Not comparable</small>
+                                  <small className="metric-tone-unavailable">
+                                    Not comparable
+                                  </small>
                                 ) : null}
                               </span>
                             ) : (
@@ -972,6 +1019,7 @@ export function PlanNonComparableAttempts({
           <span>Captured</span>
           <span>Tokens</span>
           <span>Duration</span>
+          <span>Turns</span>
           <span>Calls</span>
           <span>Errors</span>
           <span />
@@ -1019,6 +1067,9 @@ export function PlanNonComparableAttempts({
               <span className="plan-run-record-metric" data-label="Duration">
                 {executionMetricValue(row.summary, 'duration')}
               </span>
+              <span className="plan-run-record-metric" data-label="Turns">
+                {executionMetricValue(row.summary, 'turns')}
+              </span>
               <span className="plan-run-record-metric" data-label="Calls">
                 {executionMetricValue(row.summary, 'calls')}
               </span>
@@ -1063,15 +1114,16 @@ function PlanScenarioComparisonTable({
     <div className="plan-scenario-comparison">
       <div className="plan-scenario-comparison-heading">
         <div>
-          <div className="section-kicker">Scenario metrics</div>
-          <h3>Signals by test</h3>
+          <h3>Metrics by test</h3>
           <p>
-            Compact scenario evidence for the visual baseline and all selected
-            candidates. Expand a test to inspect every captured metric.
+            Compare outcomes and efficiency for each test. Expand a row for
+            exact values and deltas.
           </p>
         </div>
         <span>
-          {scenarioIds.length} tests · {comparisons.length} candidates
+          {scenarioIds.length} {scenarioIds.length === 1 ? 'test' : 'tests'} ·{' '}
+          {comparisons.length}{' '}
+          {comparisons.length === 1 ? 'candidate' : 'candidates'}
         </span>
       </div>
       <div className="plan-scenario-disclosures">
@@ -1090,14 +1142,6 @@ function PlanScenarioComparisonTable({
           const metricLists = scenarioColumns.map(({ scenario }) =>
             scenario ? scenarioMetrics(scenario) : [],
           )
-          const metricIds: PlanMetricId[] = [
-            'cost',
-            'tokens',
-            'function_calls',
-            'function_errors',
-            'duration',
-          ]
-          const summaryMetricIds = metricIds.slice(0, 3)
           return (
             <details
               className="plan-scenario-disclosure"
@@ -1121,25 +1165,50 @@ function PlanScenarioComparisonTable({
                   </b>
                 </span>
                 <span className="plan-scenario-signals">
-                  {summaryMetricIds.map((metricId) => {
+                  {PLAN_SCENARIO_SUMMARY_METRICS.map((metricId) => {
                     const metrics = metricLists.map(
                       (list) => list.find(({ id }) => id === metricId) ?? null,
                     )
                     const descriptor = metrics.find((metric) => metric)
                     if (!descriptor) return null
+                    const winnerIds = scenarioMetricWinnerIds(
+                      descriptor,
+                      metrics,
+                      comparisons,
+                    )
                     return (
-                      <span key={metricId}>
+                      <span className="plan-scenario-signal" key={metricId}>
                         <small>{descriptor.label}</small>
-                        <b>
-                          {formatPlanMetricValue(descriptor, 'baseline')} →{' '}
-                          {metrics
-                            .map((metric) =>
-                              metric
-                                ? formatPlanMetricValue(metric, 'candidate')
-                                : 'Not reported',
-                            )
-                            .join(' · ')}
-                        </b>
+                        <span className="plan-scenario-signal-values">
+                          <b
+                            className={`plan-scenario-signal-value${winnerIds.has(SCENARIO_BASELINE_ID) ? ' is-winner' : ''}`}
+                            title="Visual baseline"
+                          >
+                            {formatPlanMetricValue(descriptor, 'baseline')}
+                            {winnerIds.has(SCENARIO_BASELINE_ID) && (
+                              <em>Best</em>
+                            )}
+                          </b>
+                          {metrics.map((metric, index) => (
+                            <span
+                              className="plan-scenario-signal-candidate"
+                              key={comparisons[index].id}
+                            >
+                              <i aria-hidden="true">→</i>
+                              <b
+                                className={`plan-scenario-signal-value${winnerIds.has(comparisons[index].id) ? ' is-winner' : ''}`}
+                                title={comparisons[index].label}
+                              >
+                                {metric
+                                  ? formatPlanMetricValue(metric, 'candidate')
+                                  : 'Not reported'}
+                                {winnerIds.has(comparisons[index].id) && (
+                                  <em>Best</em>
+                                )}
+                              </b>
+                            </span>
+                          ))}
+                        </span>
                       </span>
                     )
                   })}
@@ -1155,38 +1224,97 @@ function PlanScenarioComparisonTable({
                     } as CSSProperties
                   }
                 >
+                  <caption className="visually-hidden">
+                    Metrics for {scenarioName(scenarioId)}, comparing the visual
+                    baseline with selected candidates.
+                  </caption>
                   <thead>
                     <tr>
                       <th scope="col">Metric</th>
-                      <th scope="col">Baseline</th>
+                      <th scope="col">
+                        <span className="plan-scenario-column-heading">
+                          <small>Reference</small>
+                          <strong>Baseline</strong>
+                          <ScenarioChatAction
+                            compact
+                            executionId={
+                              comparisons[0]?.comparison.baseline?.id
+                            }
+                            scenarioId={scenarioId}
+                          />
+                        </span>
+                      </th>
                       {comparisons.map((column) => (
                         <th key={column.id} scope="col">
-                          {column.label}
+                          <span className="plan-scenario-column-heading">
+                            <small>Candidate</small>
+                            <strong>{column.label}</strong>
+                            <ScenarioChatAction
+                              compact
+                              executionId={column.id}
+                              scenarioId={scenarioId}
+                            />
+                          </span>
                         </th>
                       ))}
                     </tr>
                   </thead>
                   <tbody>
-                    {metricIds.map((metricId) => {
+                    {PLAN_SCENARIO_TABLE_METRICS.map((metricId) => {
                       const metrics = metricLists.map(
                         (list) =>
                           list.find(({ id }) => id === metricId) ?? null,
                       )
                       const descriptor = metrics.find((metric) => metric)
                       if (!descriptor) return null
+                      const winnerIds = scenarioMetricWinnerIds(
+                        descriptor,
+                        metrics,
+                        comparisons,
+                      )
                       return (
                         <tr data-scenario-metric-id={metricId} key={metricId}>
                           <th scope="row">{descriptor.label}</th>
-                          <td>
-                            {formatPlanMetricValue(descriptor, 'baseline')}
+                          <td
+                            className={
+                              winnerIds.has(SCENARIO_BASELINE_ID)
+                                ? 'is-winner'
+                                : undefined
+                            }
+                          >
+                            <span className="plan-scenario-metric-value">
+                              <b>
+                                {formatPlanMetricValue(descriptor, 'baseline')}
+                              </b>
+                              {winnerIds.has(SCENARIO_BASELINE_ID) && (
+                                <span className="plan-winner-badge">Best</span>
+                              )}
+                            </span>
                           </td>
                           {metrics.map((metric, index) => (
-                            <td key={comparisons[index].id}>
+                            <td
+                              className={
+                                winnerIds.has(comparisons[index].id)
+                                  ? 'is-winner'
+                                  : undefined
+                              }
+                              key={comparisons[index].id}
+                            >
                               {metric ? (
                                 <span className="plan-scenario-candidate-metric">
-                                  <b>
-                                    {formatPlanMetricValue(metric, 'candidate')}
-                                  </b>
+                                  <span className="plan-scenario-metric-value">
+                                    <b>
+                                      {formatPlanMetricValue(
+                                        metric,
+                                        'candidate',
+                                      )}
+                                    </b>
+                                    {winnerIds.has(comparisons[index].id) && (
+                                      <span className="plan-winner-badge">
+                                        Best
+                                      </span>
+                                    )}
+                                  </span>
                                   <small
                                     className={`metric-tone-${metric.tone}`}
                                   >
@@ -1212,16 +1340,28 @@ function PlanScenarioComparisonTable({
   )
 }
 
+function scenarioMetricWinnerIds(
+  descriptor: PlanMetricComparison,
+  metrics: Array<PlanMetricComparison | null>,
+  comparisons: Array<{ id: string }>,
+) {
+  return new Set(
+    planMetricWinnerIds(
+      [
+        { id: SCENARIO_BASELINE_ID, value: descriptor.baseline },
+        ...metrics.map((metric, index) => ({
+          id: comparisons[index].id,
+          value: metric?.candidate ?? null,
+        })),
+      ],
+      descriptor.direction,
+    ),
+  )
+}
+
 function scenarioMetrics(scenario: PlanScenarioComparison) {
-  const metricIds: PlanMetricId[] = [
-    'cost',
-    'tokens',
-    'function_calls',
-    'function_errors',
-    'duration',
-  ]
-  const available = [...scenario.execution_metrics, ...scenario.metrics]
-  return metricIds.flatMap((id) => {
+  const available = [...scenario.metrics, ...scenario.execution_metrics]
+  return PLAN_SCENARIO_TABLE_METRICS.flatMap((id) => {
     const metric = available.find((candidate) => candidate.id === id)
     return metric ? [metric] : []
   })
@@ -1995,7 +2135,7 @@ export function LocalPlanDetailPage({ planId }: { planId: string }) {
         {plan && (
           <>
             <section
-              className="page-heading"
+              className="page-heading plan-detail-heading"
               aria-labelledby="plan-detail-title"
             >
               <div>
@@ -2009,26 +2149,32 @@ export function LocalPlanDetailPage({ planId }: { planId: string }) {
                     'Explicit local baseline and candidate scope.'}
                 </p>
               </div>
-              <div className="sync-block">
-                <span>Scope state</span>
-                <strong>
+              <div className="plan-detail-state">
+                <strong
+                  className={`status-pill ${plan.locked ? 'status-pass' : 'status-neutral'}`}
+                >
                   {plan.locked ? 'Locked after baseline' : 'Editable draft'}
                 </strong>
+                <small>
+                  {plan.locked ? 'Scope frozen' : 'Scope can still change'}
+                </small>
               </div>
             </section>
             <section className="plan-status-grid">
-              <article className="panel plan-status-card">
-                <div className="section-kicker">Comparison readiness</div>
-                <strong className={`status-pill ${readiness.tone}`}>
-                  {readiness.label}
-                </strong>
+              <article className="plan-status-card">
+                <div className="plan-status-card-heading">
+                  <div className="section-kicker">Comparison readiness</div>
+                  <strong className={`status-pill ${readiness.tone}`}>
+                    {readiness.label}
+                  </strong>
+                </div>
                 <p>{readiness.detail}</p>
                 <small>
                   Statistical maturity is reported separately; it does not block
                   a local baseline.
                 </small>
               </article>
-              <article className="panel plan-status-card">
+              <article className="plan-status-card">
                 <div className="section-kicker">Scope snapshot</div>
                 <strong>
                   {plan.scenarios.length} tests · {plan.runs} run

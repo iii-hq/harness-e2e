@@ -6,6 +6,7 @@ import {
   ShieldCheck,
 } from 'lucide-react'
 import { useEffect, useMemo, useRef, useState } from 'react'
+import { ScenarioChatAction } from '@/components/ScenarioChatAction'
 import type {
   AnalyzerIdentity,
   AnalyzerUsage,
@@ -935,7 +936,7 @@ function RunStatusBadges({
   )
 }
 
-function ChatButton({
+function TranscriptButton({
   run,
   onTranscript,
 }: {
@@ -948,23 +949,25 @@ function ChatButton({
       className="button inline-flex min-h-11 items-center justify-center gap-2"
       type="button"
       data-transcript-action={run.key}
-      aria-label={`Open chat transcript for ${titleCase(run.scenarioId)}`}
+      aria-label={`Open transcript for ${titleCase(run.scenarioId)}`}
       onClick={(event) => {
         event.stopPropagation()
         onTranscript(run, `${titleCase(run.scenarioId)} · ${run.runId}`)
       }}
     >
       <MessageCircle size={15} aria-hidden="true" />
-      Chat
+      Transcript
     </button>
   )
 }
 
 export function AssessmentDetailDialog({
   run,
+  detail,
   onClose,
 }: {
   run: AssessmentRunView
+  detail?: DashboardExecutionDetail | null
   onClose: () => void
   onTranscript?: (run: AssessmentRunView, title: string) => void
 }) {
@@ -1002,6 +1005,13 @@ export function AssessmentDetailDialog({
           </div>
           <div className="assessment-detail-actions">
             <RunStatusBadges run={run} aiLabel={aiLabel} />
+            <ScenarioChatAction
+              compact
+              detail={detail}
+              scenarioId={run.scenarioId}
+              subjectId={run.subjectId}
+              runId={run.runId}
+            />
             <button
               className="dialog-close bg-transparent"
               type="button"
@@ -1022,10 +1032,12 @@ export function AssessmentDetailDialog({
 
 function RunAssessment({
   run,
+  detail,
   onOpen,
   onTranscript,
 }: {
   run: AssessmentRunView
+  detail?: DashboardExecutionDetail | null
   onOpen: () => void
   onTranscript?: (run: AssessmentRunView, title: string) => void
 }) {
@@ -1065,8 +1077,14 @@ function RunAssessment({
         </p>
         <div className="flex flex-wrap gap-2">
           {onTranscript && run.transcript ? (
-            <ChatButton run={run} onTranscript={onTranscript} />
+            <TranscriptButton run={run} onTranscript={onTranscript} />
           ) : null}
+          <ScenarioChatAction
+            detail={detail}
+            scenarioId={run.scenarioId}
+            subjectId={run.subjectId}
+            runId={run.runId}
+          />
           <button
             className="button inline-flex min-h-11 items-center justify-center"
             type="button"
@@ -1083,11 +1101,13 @@ function RunAssessment({
 
 export function AssessmentPanel({
   model,
+  detail,
   filter,
   onFilter,
   onTranscript,
 }: {
   model: AssessmentWorkspaceModel
+  detail?: DashboardExecutionDetail | null
   filter: AssessmentFilter
   onFilter?: (filter: AssessmentFilter) => void
   onTranscript?: (run: AssessmentRunView, title: string) => void
@@ -1172,6 +1192,7 @@ export function AssessmentPanel({
           <RunAssessment
             key={run.key}
             run={run}
+            detail={detail}
             onOpen={() => setSelectedRunKey(run.key)}
             onTranscript={onTranscript}
           />
@@ -1185,6 +1206,7 @@ export function AssessmentPanel({
       {selectedRun && (
         <AssessmentDetailDialog
           run={selectedRun}
+          detail={detail}
           onClose={() => setSelectedRunKey(null)}
           onTranscript={onTranscript}
         />
@@ -1205,6 +1227,7 @@ export function AssessmentWorkspace({
   return (
     <AssessmentPanel
       model={model}
+      detail={detail}
       filter={filter}
       onFilter={setFilter}
       onTranscript={onTranscript}

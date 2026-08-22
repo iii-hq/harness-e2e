@@ -1,6 +1,7 @@
 import { ChevronDown } from 'lucide-react'
 import { type ReactNode, useEffect, useMemo, useState } from 'react'
 import { AssessmentWorkspace } from '@/components/AssessmentWorkspace'
+import { ScenarioChatAction } from '@/components/ScenarioChatAction'
 import { SemanticTestFlow } from '@/components/SemanticTestFlow'
 import { type OperationalStatus, StatusBadge } from '@/design-system'
 import type { AssessmentRunView } from '@/lib/assessment-view'
@@ -256,6 +257,22 @@ function ScenarioExpansion({
       aria-label={`${titleCase(item.scenarioId)} scenario result`}
     >
       <div className="overflow-hidden rounded-[var(--ds-radius-sm)] border border-[var(--color-rule)] bg-panel">
+        <div className="flex min-h-14 flex-col gap-3 border-b border-[var(--color-rule)] bg-panel px-4 py-3 sm:flex-row sm:items-center sm:justify-between md:px-5">
+          <div className="min-w-0">
+            <strong className="block truncate text-sm text-ink">
+              {titleCase(item.scenarioId)} run evidence
+            </strong>
+            <span className="mt-1 block font-mono text-[0.61rem] text-[var(--color-ink-ghost)]">
+              {item.runCount}{' '}
+              {item.runCount === 1 ? 'logical run' : 'logical runs'}
+            </span>
+          </div>
+          <ScenarioChatAction
+            detail={detail}
+            scenarioId={item.scenarioId}
+            subjectId={item.subjectId}
+          />
+        </div>
         <ScenarioResultBand item={item} />
         {!item.available ? (
           <div className="border-t border-[var(--color-rule)] px-4 py-6 text-sm leading-6 text-[var(--color-ink-ghost)] md:px-5">

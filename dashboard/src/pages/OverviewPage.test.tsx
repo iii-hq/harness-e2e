@@ -30,6 +30,7 @@ function workflowExecution(): DashboardExecutionSummary {
       report_coverage: 1,
       total_tokens: 12_500,
       wall_time_seconds: 80,
+      turns: 18,
     },
     workflow_metrics: {
       step_count: 5,
@@ -71,6 +72,7 @@ describe('overview workflow evidence', () => {
     expect(html).toContain('8 assets · 9 evaluations')
     expect(html).toContain('Workflow tokens')
     expect(html).toContain('10,250')
+    expect(html).toContain('18 turns')
     expect(html).toContain('17 function calls · 4/5 steps reported tokens')
     expect(html).toContain('Partial')
     expect(html).not.toContain('>Report coverage<')
