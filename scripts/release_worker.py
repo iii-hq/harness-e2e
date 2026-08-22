@@ -20,7 +20,9 @@ from typing import Any
 
 
 WORKER_NAME = "harness-e2e"
-TAG_RE = re.compile(r"^harness-e2e/v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$")
+SEMVER_CORE = r"(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)"
+VERSION_RE = re.compile(rf"^(?P<core>{SEMVER_CORE})(?P<experimental>-experimental)?$")
+TAG_RE = re.compile(rf"^harness-e2e/v(?P<version>{SEMVER_CORE}(?:-experimental)?)$")
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 SCHEMA_KEYS = frozenset(
     {"type", "properties", "$ref", "allOf", "anyOf", "oneOf", "enum", "items", "const"}
@@ -51,6 +53,12 @@ def read_yaml(path: pathlib.Path) -> Any:
     return yaml.safe_load(path.read_text(encoding="utf-8"))
 
 
+def release_is_experimental(version: str) -> bool:
+    if not VERSION_RE.fullmatch(version):
+        raise ValueError("version must be MAJOR.MINOR.PATCH with an optional -experimental suffix")
+    return version.endswith("-experimental")
+
+
 def git(*args: str, root: pathlib.Path) -> str:
     return subprocess.run(
         ["git", "-C", str(root), *args],
@@ -72,8 +80,9 @@ def github_output(**values: str) -> None:
 def validate_release(root: pathlib.Path, tag: str, event_sha: str) -> dict[str, str]:
     match = TAG_RE.fullmatch(tag)
     if not match:
-        raise ValueError("release tag must match harness-e2e/vX.Y.Z with a stable SemVer")
-    version = ".".join(match.groups())
+        raise ValueError("release tag must match harness-e2e/vX.Y.Z with an optional -experimental suffix")
+    version = match.group("version")
+    release_is_experimental(version)
 
     import tomllib
 
@@ -334,7 +343,7 @@ def build_payload(
         "config": config,
         "functions": functions,
         "triggers": interface.get("triggers") or [],
-        "experimental": False,
+        "experimental": release_is_experimental(version),
         "tags": manifest.get("tags") or [],
         "binaries": binaries,
     }

@@ -1,18 +1,25 @@
 import unittest
+from pathlib import Path
+from tempfile import TemporaryDirectory
 
-from scripts.release_worker import TARGETS, TAG_RE, schema_is_typed
+from scripts.release_worker import TARGETS, TAG_RE, build_payload, release_is_experimental, schema_is_typed
 
 
 class ReleaseWorkerTest(unittest.TestCase):
-    def test_release_tag_is_stable_and_namespaced(self):
+    def test_release_tag_supports_stable_and_experimental_versions(self):
         self.assertIsNotNone(TAG_RE.fullmatch("harness-e2e/v1.2.3"))
+        self.assertIsNotNone(TAG_RE.fullmatch("harness-e2e/v1.2.3-experimental"))
         for invalid in (
             "v1.2.3",
             "harness-e2e/1.2.3",
             "harness-e2e/v1.2.3-rc.1",
+            "harness-e2e/v1.2.3-alpha",
             "harness-e2e/v01.2.3",
         ):
             self.assertIsNone(TAG_RE.fullmatch(invalid))
+
+        self.assertFalse(release_is_experimental("1.2.3"))
+        self.assertTrue(release_is_experimental("1.2.3-experimental"))
 
     def test_release_matrix_matches_registry_binary_contract(self):
         self.assertEqual(len(TARGETS), 9)
@@ -24,6 +31,38 @@ class ReleaseWorkerTest(unittest.TestCase):
         self.assertTrue(schema_is_typed({"$ref": "#/definitions/Request"}))
         self.assertFalse(schema_is_typed({}))
         self.assertFalse(schema_is_typed({"title": "AnyValue"}))
+
+    def test_experimental_version_marks_registry_payload(self):
+        root = Path(__file__).parents[2]
+        interface = {
+            "functions": [
+                {
+                    "name": "e2e::run",
+                    "request_schema": {"type": "object", "properties": {}},
+                    "response_schema": {"type": "object", "properties": {}},
+                }
+            ],
+            "triggers": [],
+        }
+        with TemporaryDirectory() as temporary_directory:
+            checksums_dir = Path(temporary_directory)
+            for target in TARGETS:
+                (checksums_dir / f"harness-e2e-{target}.sha256").write_text(
+                    f"{'0' * 64}  harness-e2e-{target}\\n",
+                    encoding="utf-8",
+                )
+
+            payload = build_payload(
+                root=root,
+                version="0.2.0-experimental",
+                tag="harness-e2e/v0.2.0-experimental",
+                repo_url="https://github.com/iii-hq/harness-e2e",
+                interface=interface,
+                checksums_dir=checksums_dir,
+            )
+
+        self.assertEqual(payload["tag"], "next")
+        self.assertTrue(payload["experimental"])
 
 
 if __name__ == "__main__":
