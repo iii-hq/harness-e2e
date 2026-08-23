@@ -521,7 +521,7 @@ mod tests {
             provider: "provider".into(),
             judge_model: "judge".into(),
             judge_provider: "judge-provider".into(),
-            scenarios: vec![ScenarioId::DirectAnswer.as_str().into()],
+            scenarios: vec![ScenarioId::MinimalPath.as_str().into()],
             runs: 1,
             technical_retries: 1,
             seed: None,
@@ -535,10 +535,10 @@ mod tests {
         assert!(!plan.locked);
         assert_eq!(plan.runs, 1);
         assert_eq!(plan.scenarios.len(), 1);
-        assert_eq!(plan.scenarios[0].scenario_version, 2);
+        assert_eq!(plan.scenarios[0].scenario_version, 1);
         assert_eq!(
             plan.scenarios[0].seed,
-            ScenarioId::DirectAnswer.canonical_seed()
+            ScenarioId::MinimalPath.canonical_seed()
         );
         assert!(plan.baseline_execution_id.is_none());
     }
@@ -559,11 +559,7 @@ mod tests {
 
     #[test]
     fn todo_worker_plans_are_admitted_by_the_dashboard() {
-        for scenario in [
-            ScenarioId::TodoWorkerSimple,
-            ScenarioId::TodoWorkerPlanned,
-            ScenarioId::TodoWorkerSelfValidating,
-        ] {
+        for scenario in [ScenarioId::TodoWorkerSimple, ScenarioId::TodoWorkerPlanned] {
             let mut request = request();
             request.scenarios = vec![scenario.as_str().into()];
             request.technical_retries = 0;

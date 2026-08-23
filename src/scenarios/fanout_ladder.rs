@@ -1,11 +1,8 @@
-//! `fanout_ladder` — dose-response fan-out capacity, one rung per case.
+//! `fanout_ladder` — maximum fan-out coordination case.
 //!
-//! The same minimal coordination workload runs at fan-out 2, 4, 8, and 16;
-//! the case seed selects the rung (`RUNGS`), so every rung is its own
-//! longitudinally comparable case. The rung ladder turns pass/fail into a
-//! capability frontier: a Harness version is characterized by the largest
-//! rung it sustains, and version-over-version comparison reads as frontier
-//! movement instead of a single bit.
+//! The retained workload runs at fan-out 16. Earlier lower rungs were removed
+//! because they fragmented longitudinal history without adding a distinct
+//! behavioral contract.
 //!
 //! Per rung the coordinator must, in ONE live turn, arm a single named-set
 //! barrier wake over the run scope and then spawn all N leaf workers in the
@@ -31,38 +28,17 @@ use super::{
 };
 
 pub const ID: &str = "fanout_ladder";
-const VERSION: u32 = 1;
+const VERSION: u32 = 2;
 const ROWS_DELIVERABLE_ID: &str = "worker_rows";
 const REPORT_DELIVERABLE_ID: &str = "fanout_report";
 
-/// One ladder rung. The seed is the case selector: running the ladder means
-/// running the scenario once per rung seed, and each rung keeps its own
-/// longitudinal series.
 #[derive(Debug, Clone, Copy)]
 struct Rung {
-    seed: u64,
     fan_out: u8,
 }
 
-pub const CANONICAL_SEED: u64 = 2001;
-const RUNGS: [Rung; 4] = [
-    Rung {
-        seed: 2001,
-        fan_out: 2,
-    },
-    Rung {
-        seed: 2002,
-        fan_out: 4,
-    },
-    Rung {
-        seed: 2003,
-        fan_out: 8,
-    },
-    Rung {
-        seed: 2004,
-        fan_out: 16,
-    },
-];
+pub const CANONICAL_SEED: u64 = 2004;
+const RUNG: Rung = Rung { fan_out: 16 };
 
 const PARALLEL_FAN_OUT: AssessmentSpec = AssessmentSpec::hard_gated(
     "parallel_fan_out",
@@ -91,14 +67,6 @@ const ASSESSMENTS: &[AssessmentSpec] = &[
     BARRIER_FAN_IN,
     AGGREGATED_REPORT,
 ];
-
-fn rung(seed: u64) -> Rung {
-    RUNGS
-        .iter()
-        .copied()
-        .find(|rung| rung.seed == seed)
-        .unwrap_or_else(|| RUNGS[(seed as usize) % RUNGS.len()])
-}
 
 fn worker_key(index: u8) -> String {
     format!("worker-{index:02}")
@@ -130,21 +98,20 @@ fn expected_row(run_id: &str, index: u8) -> Value {
 }
 
 pub fn scenario(run_id: &str) -> ScenarioSpec {
-    scenario_for_case(run_id, rung(CANONICAL_SEED))
+    scenario_for_case(run_id, RUNG)
 }
 
-pub fn materialize(namespace: &str, seed: u64) -> anyhow::Result<MaterializedScenario> {
-    let rung = rung(seed);
+pub fn materialize(namespace: &str, _seed: u64) -> anyhow::Result<MaterializedScenario> {
+    let rung = RUNG;
     let case = ScenarioCase::new(
         ID,
         VERSION,
-        seed,
+        CANONICAL_SEED,
         json!({
             "fan_out": rung.fan_out,
             "worker_keys": worker_keys(rung.fan_out),
             "report_marker": report_marker(rung.fan_out),
             "token_derivation": "run-scoped",
-            "ladder_rungs": RUNGS.iter().map(|rung| rung.fan_out).collect::<Vec<_>>(),
         }),
         complexity_profile(rung.fan_out),
         vec![
@@ -301,7 +268,8 @@ async fn evaluate_rung(
         })
         .map(|session| session.session_id.clone())
         .collect();
-    let single_response_spawns = max_parallel_spawns(&observation.transcript) == usize::from(fan_out);
+    let single_response_spawns =
+        max_parallel_spawns(&observation.transcript) == usize::from(fan_out);
     let sessions_direct = observation.metrics.totals.sessions == u64::from(fan_out) + 1
         && worker_sessions.len() == usize::from(fan_out);
     let fanned_out =
@@ -453,9 +421,7 @@ fn parse_worker_index(key: &str, fan_out: u8) -> Option<u8> {
 }
 
 fn report_aggregates(response: &str, run_id: &str, fan_out: u8) -> bool {
-    response
-        .trim_start()
-        .starts_with(&report_marker(fan_out))
+    response.trim_start().starts_with(&report_marker(fan_out))
         && (0..fan_out).all(|index| response.contains(&worker_token(run_id, index)))
 }
 
@@ -505,7 +471,10 @@ fn capture<'a>(
                     CapturedInvariant {
                         id: "worker_rows_exact".to_string(),
                         passed: audit.rows_exact,
-                        reason: format!("observed {}/{fan_out} exact worker row(s)", audit.exact_rows),
+                        reason: format!(
+                            "observed {}/{fan_out} exact worker row(s)",
+                            audit.exact_rows
+                        ),
                     },
                     CapturedInvariant {
                         id: "direct_worker_provenance".to_string(),
@@ -654,15 +623,9 @@ fn cleanup<'a>(context: &'a E2eContext, run_id: &'a str) -> CleanupFuture<'a> {
                 )
                 .await?;
         }
-        // Delete every key the ladder can address (the largest rung), not just
-        // the current rung's, so a misbehaving run cannot leak rows between
-        // attempts sharing a scope prefix.
-        let widest = RUNGS
-            .iter()
-            .map(|rung| rung.fan_out)
-            .max()
-            .unwrap_or_default();
-        for key in worker_keys(widest) {
+        // Delete every key the retained workload can address so a misbehaving
+        // run cannot leak rows between attempts sharing a scope prefix.
+        for key in worker_keys(RUNG.fan_out) {
             let _: Value = context
                 .trigger("state::delete", json!({ "scope": names.scope, "key": key }))
                 .await?;
@@ -788,13 +751,12 @@ mod tests {
     use super::*;
 
     #[test]
-    fn ladder_seeds_select_their_rungs_and_fall_back_by_modulo() {
-        assert_eq!(rung(2001).fan_out, 2);
-        assert_eq!(rung(2002).fan_out, 4);
-        assert_eq!(rung(2003).fan_out, 8);
-        assert_eq!(rung(2004).fan_out, 16);
-        assert_eq!(rung(313).fan_out, RUNGS[313 % RUNGS.len()].fan_out);
-        assert_eq!(rung(CANONICAL_SEED).fan_out, RUNGS[0].fan_out);
+    fn every_seed_request_normalizes_to_the_maximum_case() {
+        assert_eq!(RUNG.fan_out, 16);
+        assert_eq!(
+            materialize("attempt", 2003).unwrap().case.seed,
+            CANONICAL_SEED
+        );
     }
 
     #[test]
@@ -806,47 +768,34 @@ mod tests {
     }
 
     #[test]
-    fn the_smallest_rung_is_concurrent_and_larger_rungs_are_coordinated() {
+    fn retained_case_is_coordinated() {
         use super::super::ComplexityTier;
 
-        let smallest = materialize("attempt-a", 2001).unwrap();
-        assert_eq!(
-            smallest.case.complexity.tier,
-            ComplexityTier::L3Concurrent
-        );
-        for seed in [2002, 2003, 2004] {
-            let rung_case = materialize("attempt-a", seed).unwrap();
-            assert_eq!(
-                rung_case.case.complexity.tier,
-                ComplexityTier::L4Coordinated,
-                "seed {seed}"
-            );
-        }
+        let retained = materialize("attempt-a", CANONICAL_SEED).unwrap();
+        assert_eq!(retained.case.complexity.tier, ComplexityTier::L4Coordinated);
     }
 
     #[test]
-    fn every_rung_publishes_a_reproducible_case_with_its_fan_out() {
-        for rung_spec in RUNGS {
-            let first = materialize("attempt-a", rung_spec.seed).unwrap();
-            let retry = materialize("attempt-b", rung_spec.seed).unwrap();
-            assert_eq!(first.case.case_id, retry.case.case_id);
-            assert_eq!(first.case.inputs, retry.case.inputs);
-            assert_eq!(
-                first.case.inputs.get("fan_out").and_then(Value::as_u64),
-                Some(u64::from(rung_spec.fan_out))
-            );
-            assert_eq!(
-                first
-                    .case
-                    .inputs
-                    .get("worker_keys")
-                    .and_then(Value::as_array)
-                    .map(Vec::len),
-                Some(usize::from(rung_spec.fan_out))
-            );
-            assert_eq!(first.case.deliverable_contract.artifacts.len(), 2);
-            assert_ne!(first.spec.prompt, retry.spec.prompt);
-        }
+    fn retained_case_is_reproducible_with_maximum_fan_out() {
+        let first = materialize("attempt-a", CANONICAL_SEED).unwrap();
+        let retry = materialize("attempt-b", CANONICAL_SEED).unwrap();
+        assert_eq!(first.case.case_id, retry.case.case_id);
+        assert_eq!(first.case.inputs, retry.case.inputs);
+        assert_eq!(
+            first.case.inputs.get("fan_out").and_then(Value::as_u64),
+            Some(16)
+        );
+        assert_eq!(
+            first
+                .case
+                .inputs
+                .get("worker_keys")
+                .and_then(Value::as_array)
+                .map(Vec::len),
+            Some(16)
+        );
+        assert_eq!(first.case.deliverable_contract.artifacts.len(), 2);
+        assert_ne!(first.spec.prompt, retry.spec.prompt);
     }
 
     #[test]

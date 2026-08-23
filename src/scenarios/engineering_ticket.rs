@@ -25,7 +25,7 @@ use crate::report::EvaluationDimension;
 
 use super::assessment::{self, AssessmentSpec};
 use super::common;
-use super::custom_validator::{HookEnvelope, HookVerdict};
+use super::validation_hook::{HookEnvelope, HookVerdict};
 use super::{
     ArtifactExpectation, CapturedDeliverable, CapturedDeliverableContent, CapturedInvariant,
     CleanupFuture, ComplexityProfile, DeliverableCaptureFuture, DeliverableContract,
@@ -34,8 +34,8 @@ use super::{
 };
 
 pub const ID: &str = "engineering_ticket";
-pub const VERSION: u32 = 1;
-pub const CANONICAL_SEED: u64 = 1001;
+pub const VERSION: u32 = 2;
+pub const CANONICAL_SEED: u64 = 1005;
 
 const FIXTURE_PATH_ENV: &str = "HARNESS_E2E_ENGINEERING_TICKET_FIXTURE_PATH";
 const HOOK_TYPE: &str = "harness::hook::post-turn";
@@ -234,70 +234,6 @@ struct HiddenProbe {
     command: CommandSpec,
 }
 
-const PAGINATION_HIDDEN: &[HiddenProbe] = &[
-    HiddenProbe {
-        id: "empty_last_page",
-        command: CommandSpec {
-            program: "python3",
-            args: &["-c", "from src.pagination import page; assert page(list(range(20)), 10, 20) == {'items': [], 'next_cursor': None}"],
-            display: "hidden:empty_last_page",
-        },
-    },
-    HiddenProbe {
-        id: "empty_collection",
-        command: CommandSpec {
-            program: "python3",
-            args: &["-c", "from src.pagination import page; assert page([], 10, 0) == {'items': [], 'next_cursor': None}"],
-            display: "hidden:empty_collection",
-        },
-    },
-];
-const CONFIG_HIDDEN: &[HiddenProbe] = &[
-    HiddenProbe {
-        id: "default_fallback",
-        command: CommandSpec {
-            program: "python3",
-            args: &["-c", "from src.config_loader import load_settings; assert load_settings({}, {}) == {'timeout': 30}"],
-            display: "hidden:default_fallback",
-        },
-    },
-    HiddenProbe {
-        id: "environment_without_file",
-        command: CommandSpec {
-            program: "python3",
-            args: &["-c", "from src.config_loader import load_settings; assert load_settings({'APP_TIMEOUT':'7'}, {}) == {'timeout': 7}"],
-            display: "hidden:environment_without_file",
-        },
-    },
-];
-const SERIALIZATION_HIDDEN: &[HiddenProbe] = &[
-    HiddenProbe {
-        id: "legacy_decode",
-        command: CommandSpec {
-            program: "python3",
-            args: &["-c", "from src.serialization import decode_event; assert decode_event({'id':'e','name':'n'}) == {'id':'e','name':'n'}"],
-            display: "hidden:legacy_decode",
-        },
-    },
-    HiddenProbe {
-        id: "optional_omission",
-        command: CommandSpec {
-            program: "python3",
-            args: &["-c", "from src.serialization import encode_event; assert 'trace_id' not in encode_event({'id':'e','name':'n'})"],
-            display: "hidden:optional_omission",
-        },
-    },
-];
-const CACHE_HIDDEN: &[HiddenProbe] = &[
-    HiddenProbe {
-        id: "unrelated_key_preserved",
-        command: CommandSpec {
-            program: "python3",
-            args: &["-c", "from src.repository import Repository; from src.service import DerivedService; r=Repository(); s=DerivedService(r); s.write('a',2); s.write('b',3); assert s.derived('a') == 4 and s.derived('b') == 6; s.write('a',5); assert s.derived('a') == 10 and s.derived('b') == 6"],
-            display: "hidden:unrelated_key_preserved",
-        },
-    },
-];
 const CANCELLATION_HIDDEN: &[HiddenProbe] = &[
     HiddenProbe {
         id: "cancelled_terminal_state",
@@ -309,30 +245,6 @@ const CANCELLATION_HIDDEN: &[HiddenProbe] = &[
     },
 ];
 
-const L2_PROFILE: ComplexityProfile = ComplexityProfile {
-    planning_depth: 2,
-    dependency_depth: 1,
-    parallel_branches: 1,
-    external_systems: 2,
-    state_transitions: 5,
-    wake_cycles: 0,
-    validation_loops: 2,
-    artifact_count: 8,
-    coordination_edges: 1,
-    ambiguity_level: 2,
-};
-const L3_PROFILE: ComplexityProfile = ComplexityProfile {
-    planning_depth: 3,
-    dependency_depth: 2,
-    parallel_branches: 2,
-    external_systems: 2,
-    state_transitions: 7,
-    wake_cycles: 0,
-    validation_loops: 2,
-    artifact_count: 8,
-    coordination_edges: 2,
-    ambiguity_level: 4,
-};
 const L4_PROFILE: ComplexityProfile = ComplexityProfile {
     planning_depth: 4,
     dependency_depth: 3,
@@ -347,90 +259,6 @@ const L4_PROFILE: ComplexityProfile = ComplexityProfile {
 };
 
 const CASES: &[TaskCase] = &[
-    TaskCase {
-        id: "pagination_boundary",
-        case_version: 1,
-        canonical_seed: 1001,
-        fixture_repository: "tests/fixtures/engineering-ticket/pagination_boundary",
-        fixture_revision: "7ae33a94304ff66fd6c95fdd4a04aa6755f447d4",
-        fixture_manifest_sha256: "sha256:de58f7e4e485f8a13084772988317b8c4dbc695e11bdefc50cca3c98daa2d1c0",
-        ticket: "Users report that pagination omits the final item when the total number of items is an exact multiple of page size. Preserve empty and partial-page behavior.",
-        focused_test: FOCUSED,
-        full_test: FULL,
-        allowed_production_paths: &["src/pagination.py"],
-        protected_paths: &["tests", ".harness-e2e/task-case.json"],
-        relevant_read_paths: &["src/pagination.py", "tests"],
-        public_probe_ids: &["pagination_exact_page"],
-        hidden_probe_manifest_sha256: "sha256:54d1bb224e68752b5cc245af751c9b65fcb38d4d0e54fc840f2bc54e49f2ff97",
-        hidden_probes: PAGINATION_HIDDEN,
-        maximum_validation_rounds: 2,
-        maximum_changed_files: 1,
-        maximum_patch_lines: 24,
-        complexity_profile: L2_PROFILE,
-    },
-    TaskCase {
-        id: "config_precedence",
-        case_version: 1,
-        canonical_seed: 1002,
-        fixture_repository: "tests/fixtures/engineering-ticket/config_precedence",
-        fixture_revision: "164d7714754dfb492dcb4eb5b46d300290b945dd",
-        fixture_manifest_sha256: "sha256:99a9d92ee488ce0ca4e78fa3c63afe76335123029fb8a5b4ecae556af3202bec",
-        ticket: "Restore configuration precedence so environment overrides file values and file values override defaults across the loader boundary.",
-        focused_test: FOCUSED,
-        full_test: FULL,
-        allowed_production_paths: &["src/config.py", "src/config_loader.py"],
-        protected_paths: &["tests", ".harness-e2e/task-case.json"],
-        relevant_read_paths: &["src/config.py", "src/config_loader.py", "tests"],
-        public_probe_ids: &["environment_precedence"],
-        hidden_probe_manifest_sha256: "sha256:4449c7de6390561769112570c9b92f15bb20297052cfe288d7fb1ae620ad16ce",
-        hidden_probes: CONFIG_HIDDEN,
-        maximum_validation_rounds: 2,
-        maximum_changed_files: 2,
-        maximum_patch_lines: 40,
-        complexity_profile: L2_PROFILE,
-    },
-    TaskCase {
-        id: "serialization_compatibility",
-        case_version: 1,
-        canonical_seed: 1003,
-        fixture_repository: "tests/fixtures/engineering-ticket/serialization_compatibility",
-        fixture_revision: "a59c5782e49af9cc1c7a6900c5d4fa7941c7dc8c",
-        fixture_manifest_sha256: "sha256:b9452ed00e790508ee25fb8c460d9dd6fef0a1a5aed27b78deb2e9677c54ba30",
-        ticket: "Add optional trace_id serialization while preserving decoding of legacy payloads and omission when the field is absent.",
-        focused_test: FOCUSED,
-        full_test: FULL,
-        allowed_production_paths: &["src/serialization.py"],
-        protected_paths: &["tests", ".harness-e2e/task-case.json"],
-        relevant_read_paths: &["src/serialization.py", "tests"],
-        public_probe_ids: &["optional_trace_id"],
-        hidden_probe_manifest_sha256: "sha256:7219940e30bd08b6cc728b92dbdaff0413034241af796c191a9214250568230e",
-        hidden_probes: SERIALIZATION_HIDDEN,
-        maximum_validation_rounds: 2,
-        maximum_changed_files: 1,
-        maximum_patch_lines: 36,
-        complexity_profile: L3_PROFILE,
-    },
-    TaskCase {
-        id: "cache_invalidation",
-        case_version: 1,
-        canonical_seed: 1004,
-        fixture_repository: "tests/fixtures/engineering-ticket/cache_invalidation",
-        fixture_revision: "1852f1caef07e8a6ac2560373dd9140f5fd6b577",
-        fixture_manifest_sha256: "sha256:cce4a877e62cef477ae87a5c22ed1506a29ccc636bed6b0b1dbf6d21d95e2cad",
-        ticket: "Prevent stale derived state after a write crosses the repository and service layers without invalidating unrelated keys.",
-        focused_test: FOCUSED,
-        full_test: FULL,
-        allowed_production_paths: &["src/repository.py", "src/service.py"],
-        protected_paths: &["tests", ".harness-e2e/task-case.json"],
-        relevant_read_paths: &["src/repository.py", "src/service.py", "tests"],
-        public_probe_ids: &["write_invalidates_cache"],
-        hidden_probe_manifest_sha256: "sha256:2a4f98bb791ddb17239ed1188ae2b454271996cc30ffbc167998d5c53db6e2a8",
-        hidden_probes: CACHE_HIDDEN,
-        maximum_validation_rounds: 2,
-        maximum_changed_files: 2,
-        maximum_patch_lines: 48,
-        complexity_profile: L3_PROFILE,
-    },
     TaskCase {
         id: "async_cancellation",
         case_version: 1,
@@ -518,8 +346,8 @@ pub fn scenario(run_id: &str) -> ScenarioSpec {
     scenario_for_case(run_id, &CASES[0])
 }
 
-pub fn materialize(namespace: &str, seed: u64) -> Result<MaterializedScenario> {
-    let task = task_case(seed);
+pub fn materialize(namespace: &str, _seed: u64) -> Result<MaterializedScenario> {
+    let task = task_case();
     task.validate()?;
     let inputs = json!({
         "task_case_id": task.id,
@@ -544,7 +372,7 @@ pub fn materialize(namespace: &str, seed: u64) -> Result<MaterializedScenario> {
     let case = ScenarioCase::new(
         ID,
         VERSION,
-        seed,
+        CANONICAL_SEED,
         inputs,
         task.complexity_profile,
         vec![
@@ -564,11 +392,8 @@ pub fn materialize(namespace: &str, seed: u64) -> Result<MaterializedScenario> {
     })
 }
 
-fn task_case(seed: u64) -> &'static TaskCase {
-    CASES
-        .iter()
-        .find(|case| case.canonical_seed == seed)
-        .unwrap_or_else(|| &CASES[(seed as usize) % CASES.len()])
+fn task_case() -> &'static TaskCase {
+    &CASES[0]
 }
 
 impl TaskCase {
@@ -2169,12 +1994,14 @@ mod tests {
     use std::collections::HashSet;
 
     #[test]
-    fn canonical_and_arbitrary_seeds_map_stably() {
-        for (offset, case) in CASES.iter().enumerate() {
-            assert_eq!(task_case(1001 + offset as u64).id, case.id);
-        }
-        assert_eq!(task_case(42).id, task_case(42).id);
-        assert_eq!(task_case(43).id, task_case(43).id);
+    fn only_the_async_cancellation_case_is_materialized() {
+        assert_eq!(task_case().id, "async_cancellation");
+        let materialized = materialize("catalog", 1004).unwrap();
+        assert_eq!(materialized.case.seed, CANONICAL_SEED);
+        assert_eq!(
+            materialized.case.inputs["task_case_id"],
+            "async_cancellation"
+        );
     }
 
     #[test]
@@ -2245,23 +2072,11 @@ mod tests {
     fn complexity_tiers_match_the_reviewed_catalog() {
         use super::super::ComplexityTier;
         assert_eq!(
-            materialize("a", 1001).unwrap().case.complexity.tier,
-            ComplexityTier::L2Stateful
-        );
-        assert_eq!(
-            materialize("b", 1002).unwrap().case.complexity.tier,
-            ComplexityTier::L2Stateful
-        );
-        assert_eq!(
-            materialize("c", 1003).unwrap().case.complexity.tier,
-            ComplexityTier::L3Concurrent
-        );
-        assert_eq!(
-            materialize("d", 1004).unwrap().case.complexity.tier,
-            ComplexityTier::L3Concurrent
-        );
-        assert_eq!(
-            materialize("e", 1005).unwrap().case.complexity.tier,
+            materialize("retained", CANONICAL_SEED)
+                .unwrap()
+                .case
+                .complexity
+                .tier,
             ComplexityTier::L4Coordinated
         );
     }
@@ -2328,7 +2143,7 @@ mod tests {
             "messages": [
                 { "message": { "role": "assistant", "content": [{
                     "type": "function_call", "id": "read-source", "function_id": "coder::read-file",
-                    "arguments": { "files": [{ "path": "src/pagination.py" }] }
+                    "arguments": { "files": [{ "path": "src/cancellation.py" }] }
                 }] } },
                 { "message": { "role": "assistant", "content": [{
                     "type": "function_call", "id": "read-test", "function_id": "coder::read-file",
@@ -2342,7 +2157,7 @@ mod tests {
                     "content": [], "details": { "exit_code": 1 } } },
                 { "message": { "role": "assistant", "content": [{
                     "type": "function_call", "id": "edit", "function_id": "coder::update-file",
-                    "arguments": { "files": [{ "path": "src/pagination.py" }] }
+                    "arguments": { "files": [{ "path": "src/cancellation.py" }] }
                 }] } }
             ]
         });

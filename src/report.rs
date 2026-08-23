@@ -2606,9 +2606,9 @@ mod tests {
             },
             attempt: 1,
             selected_cases: vec![ObservationSelectedCase {
-                scenario_id: crate::scenarios::ScenarioId::DirectAnswer,
+                scenario_id: crate::scenarios::ScenarioId::MinimalPath,
                 scenario_version: 1,
-                case_id: "direct_answer:v1:seed-0000000000000001".into(),
+                case_id: "minimal_path:v1:seed-0000000000000001".into(),
                 seed: 1,
                 inputs_sha256: format!("sha256:{}", "b".repeat(64)),
                 contract_sha256: format!("sha256:{}", "c".repeat(64)),

@@ -1,8 +1,7 @@
-//! `context_pressure` — long-horizon context survival, one rung per case.
+//! `context_pressure` — maximum long-horizon context-survival case.
 //!
-//! The same faithful-recall task runs under a growing distractor load; the
-//! case seed selects the rung (`RUNGS`: 4, 16, or 48 noise segments of about
-//! 8 KiB each), so every rung is its own longitudinally comparable case.
+//! The retained faithful-recall task uses 48 noise segments of about 8 KiB
+//! each. Earlier lower loads were removed to keep one comparable cohort.
 //! This is the only scenario that exercises the stack's context manager:
 //! the subject must ingest far more text than it can afford to keep
 //! verbatim, and the gates check what survives.
@@ -39,35 +38,17 @@ use super::{
 };
 
 pub const ID: &str = "context_pressure";
-const VERSION: u32 = 2;
+const VERSION: u32 = 3;
 const DELIVERABLE_ID: &str = "context_report";
 const SEGMENT_CHARS: usize = 8_192;
 
-/// One ladder rung: how many noise segments the subject must ingest before
-/// reporting. The seed is the case selector, exactly like `fanout_ladder`.
 #[derive(Debug, Clone, Copy)]
 struct Rung {
-    seed: u64,
     segments: u32,
 }
 
-pub const CANONICAL_SEED: u64 = 3001;
-const RUNGS: [Rung; 3] = [
-    Rung {
-        seed: 3001,
-        segments: 4,
-    },
-    Rung {
-        seed: 3002,
-        segments: 16,
-    },
-    Rung {
-        seed: 3003,
-        segments: 48,
-    },
-];
-/// Segments are served rung-independently up to the widest rung; the prompt
-/// bounds how many the subject may fetch.
+pub const CANONICAL_SEED: u64 = 3003;
+const RUNG: Rung = Rung { segments: 48 };
 const MAX_SEGMENTS: u32 = 48;
 
 const CHARTER_PRESERVED: AssessmentSpec = AssessmentSpec::hard_gated_in(
@@ -237,30 +218,21 @@ fn setup<'a>(context: &'a E2eContext, run_id: &'a str) -> CleanupFuture<'a> {
     })
 }
 
-fn rung(seed: u64) -> Rung {
-    RUNGS
-        .iter()
-        .copied()
-        .find(|rung| rung.seed == seed)
-        .unwrap_or_else(|| RUNGS[(seed as usize) % RUNGS.len()])
-}
-
 pub fn scenario(run_id: &str) -> ScenarioSpec {
-    scenario_for_case(run_id, rung(CANONICAL_SEED))
+    scenario_for_case(run_id, RUNG)
 }
 
-pub fn materialize(namespace: &str, seed: u64) -> anyhow::Result<MaterializedScenario> {
-    let rung = rung(seed);
+pub fn materialize(namespace: &str, _seed: u64) -> anyhow::Result<MaterializedScenario> {
+    let rung = RUNG;
     let case = ScenarioCase::new(
         ID,
         VERSION,
-        seed,
+        CANONICAL_SEED,
         json!({
             "segments": rung.segments,
             "segment_chars": SEGMENT_CHARS,
             "report_header": report_header(rung.segments),
             "token_derivation": "run-scoped",
-            "ladder_rungs": RUNGS.iter().map(|rung| rung.segments).collect::<Vec<_>>(),
         }),
         ComplexityProfile {
             planning_depth: 1,
@@ -274,7 +246,7 @@ pub fn materialize(namespace: &str, seed: u64) -> anyhow::Result<MaterializedSce
         ],
         deliverable_contract(),
     )?
-    // The ingest ladder is the workload: charter + every segment + report.
+    // The ingest workload is charter + every segment + report.
     .with_minimum_expected_work(u64::from(rung.segments) + 2)?;
     Ok(MaterializedScenario {
         spec: scenario_for_case(namespace, rung),
@@ -408,8 +380,8 @@ fn report_audit(response: &str, run_id: &str, segments: u32) -> ReportAudit {
             None => missing_needles += 1,
         }
     }
-    let needles_ordered = missing_needles == 0
-        && positions.windows(2).all(|window| window[0] < window[1]);
+    let needles_ordered =
+        missing_needles == 0 && positions.windows(2).all(|window| window[0] < window[1]);
     ReportAudit {
         charter_preserved,
         needles_ordered,
@@ -423,7 +395,9 @@ fn case_segments(case: &ScenarioCase) -> anyhow::Result<u32> {
         .and_then(Value::as_u64)
         .and_then(|segments| u32::try_from(segments).ok())
         .filter(|segments| *segments > 0)
-        .ok_or_else(|| anyhow::anyhow!("context_pressure case is missing a positive segments input"))
+        .ok_or_else(|| {
+            anyhow::anyhow!("context_pressure case is missing a positive segments input")
+        })
 }
 
 /// Report budget: the expected report plus slack, so pasting document text
@@ -604,12 +578,12 @@ mod tests {
     use super::*;
 
     #[test]
-    fn ladder_seeds_select_their_rungs_and_fall_back_by_modulo() {
-        assert_eq!(rung(3001).segments, 4);
-        assert_eq!(rung(3002).segments, 16);
-        assert_eq!(rung(3003).segments, 48);
-        assert_eq!(rung(7).segments, RUNGS[7 % RUNGS.len()].segments);
-        assert_eq!(rung(CANONICAL_SEED).segments, RUNGS[0].segments);
+    fn every_seed_request_normalizes_to_the_maximum_case() {
+        assert_eq!(RUNG.segments, 48);
+        assert_eq!(
+            materialize("attempt", 3002).unwrap().case.seed,
+            CANONICAL_SEED
+        );
     }
 
     #[test]
@@ -706,8 +680,17 @@ mod tests {
         assert_eq!(ingestion_audit(run_id, 4, &with_extra).other_calls, 1);
 
         let mut with_discovery = calls;
-        with_discovery.insert(0, call("engine::functions::list".to_string(), json!({ "search": "e2etest" })));
-        with_discovery.push(call("engine::functions::info".to_string(), json!({ "function_id": "x" })));
+        with_discovery.insert(
+            0,
+            call(
+                "engine::functions::list".to_string(),
+                json!({ "search": "e2etest" }),
+            ),
+        );
+        with_discovery.push(call(
+            "engine::functions::info".to_string(),
+            json!({ "function_id": "x" }),
+        ));
         let audit = ingestion_audit(run_id, 4, &with_discovery);
         assert_eq!(audit.other_calls, 0, "function discovery is exempt");
         assert!(audit.charter_first);
@@ -715,23 +698,18 @@ mod tests {
     }
 
     #[test]
-    fn every_rung_publishes_a_reproducible_l1_case_scaled_to_its_load() {
+    fn retained_case_is_reproducible_and_scaled_to_the_maximum_load() {
         use super::super::ComplexityTier;
 
-        for rung_spec in RUNGS {
-            let first = materialize("attempt-a", rung_spec.seed).unwrap();
-            let retry = materialize("attempt-b", rung_spec.seed).unwrap();
-            assert_eq!(first.case.case_id, retry.case.case_id);
-            assert_eq!(first.case.inputs, retry.case.inputs);
-            assert_eq!(first.case.complexity.tier, ComplexityTier::L1Sequential);
-            assert_eq!(
-                first.case.work.minimum_expected_work,
-                u64::from(rung_spec.segments) + 2
-            );
-            assert_eq!(
-                first.spec.execution.max_turns,
-                12 + rung_spec.segments
-            );
-        }
+        let first = materialize("attempt-a", CANONICAL_SEED).unwrap();
+        let retry = materialize("attempt-b", CANONICAL_SEED).unwrap();
+        assert_eq!(first.case.case_id, retry.case.case_id);
+        assert_eq!(first.case.inputs, retry.case.inputs);
+        assert_eq!(first.case.complexity.tier, ComplexityTier::L1Sequential);
+        assert_eq!(
+            first.case.work.minimum_expected_work,
+            u64::from(RUNG.segments) + 2
+        );
+        assert_eq!(first.spec.execution.max_turns, 12 + RUNG.segments);
     }
 }

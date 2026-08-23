@@ -1,12 +1,12 @@
-//! `wake_chain_soak` — long-horizon wake-chain endurance, one rung per case.
+//! `wake_chain_soak` — maximum wake-chain endurance case.
 //!
 //! A chain of N one-shot timer wakes: each woken turn advances one durable
-//! counter and arms the next timer, so a rung of N ticks keeps a session
+//! counter and arms the next timer, so 50 ticks keep a session
 //! alive for roughly N x 5 seconds of scheduler real time. No other scenario
 //! in this registry runs past minutes; this ladder measures whether the
 //! scheduler and session manager stay reliable over long horizons. The case
-//! seed selects the rung (`RUNGS`: 5, 20, or 50 ticks), so every rung is its
-//! own longitudinally comparable case, exactly like `fanout_ladder`.
+//! retained case uses the maximum 50-tick workload; shorter variants were
+//! removed to keep one comparable cohort.
 //!
 //! Label convention (single repeated label): every timer registration carries
 //! the same top-level label `soak-tick:{run_id}` — the run-scoped prefix with
@@ -42,7 +42,7 @@ use super::{
 };
 
 pub const ID: &str = "wake_chain_soak";
-const VERSION: u32 = 1;
+const VERSION: u32 = 2;
 const DELIVERABLE_ID: &str = "soak_trace";
 
 const COUNTER_KEY: &str = "chain-counter";
@@ -54,29 +54,13 @@ const MAX_TICK_INTERVAL_MS: u64 = 10_000;
 /// The completion reply is one marker line; anything long is chain noise.
 const MAX_REPORT_CHARS: usize = 200;
 
-/// One ladder rung: how many timer ticks the chain must sustain. The seed is
-/// the case selector, exactly like `fanout_ladder` and `context_pressure`.
 #[derive(Debug, Clone, Copy)]
 struct Rung {
-    seed: u64,
     ticks: u8,
 }
 
-pub const CANONICAL_SEED: u64 = 5001;
-const RUNGS: [Rung; 3] = [
-    Rung {
-        seed: 5001,
-        ticks: 5,
-    },
-    Rung {
-        seed: 5002,
-        ticks: 20,
-    },
-    Rung {
-        seed: 5003,
-        ticks: 50,
-    },
-];
+pub const CANONICAL_SEED: u64 = 5003;
+const RUNG: Rung = Rung { ticks: 50 };
 
 const CHAIN_COMPLETED: AssessmentSpec = AssessmentSpec::hard_gated_in(
     "chain_completed",
@@ -106,14 +90,6 @@ const ASSESSMENTS: &[AssessmentSpec] = &[
     QUIET_CHAIN,
 ];
 
-fn rung(seed: u64) -> Rung {
-    RUNGS
-        .iter()
-        .copied()
-        .find(|rung| rung.seed == seed)
-        .unwrap_or_else(|| RUNGS[(seed as usize) % RUNGS.len()])
-}
-
 fn report_marker(ticks: u8) -> String {
     format!("SOAK-COMPLETE {ticks}")
 }
@@ -132,21 +108,20 @@ fn report_completes(response: &str, ticks: u8) -> bool {
 }
 
 pub fn scenario(run_id: &str) -> ScenarioSpec {
-    scenario_for_case(run_id, rung(CANONICAL_SEED))
+    scenario_for_case(run_id, RUNG)
 }
 
-pub fn materialize(namespace: &str, seed: u64) -> anyhow::Result<MaterializedScenario> {
-    let rung = rung(seed);
+pub fn materialize(namespace: &str, _seed: u64) -> anyhow::Result<MaterializedScenario> {
+    let rung = RUNG;
     let case = ScenarioCase::new(
         ID,
         VERSION,
-        seed,
+        CANONICAL_SEED,
         json!({
             "ticks": rung.ticks,
             "interval_ms": INTERVAL_MS,
             "counter_key": COUNTER_KEY,
             "report_marker": report_marker(rung.ticks),
-            "ladder_rungs": RUNGS.iter().map(|rung| rung.ticks).collect::<Vec<_>>(),
         }),
         complexity_profile(rung.ticks),
         vec![
@@ -743,12 +718,12 @@ mod tests {
     use super::*;
 
     #[test]
-    fn ladder_seeds_select_their_rungs_and_fall_back_by_modulo() {
-        assert_eq!(rung(5001).ticks, 5);
-        assert_eq!(rung(5002).ticks, 20);
-        assert_eq!(rung(5003).ticks, 50);
-        assert_eq!(rung(313).ticks, RUNGS[313 % RUNGS.len()].ticks);
-        assert_eq!(rung(CANONICAL_SEED).ticks, RUNGS[0].ticks);
+    fn every_seed_request_normalizes_to_the_maximum_case() {
+        assert_eq!(RUNG.ticks, 50);
+        assert_eq!(
+            materialize("attempt", 5002).unwrap().case.seed,
+            CANONICAL_SEED
+        );
     }
 
     #[test]
@@ -984,38 +959,33 @@ mod tests {
     }
 
     #[test]
-    fn every_rung_publishes_a_reproducible_l2_case_scaled_to_its_ticks() {
+    fn retained_case_is_reproducible_and_scaled_to_maximum_ticks() {
         use super::super::ComplexityTier;
 
-        for rung_spec in RUNGS {
-            let first = materialize("attempt-a", rung_spec.seed).unwrap();
-            let retry = materialize("attempt-b", rung_spec.seed).unwrap();
-            first.validate().unwrap();
-            assert_eq!(first.case.case_id, retry.case.case_id);
-            assert_eq!(first.case.inputs, retry.case.inputs);
-            assert_ne!(first.spec.prompt, retry.spec.prompt);
-            assert_eq!(first.case.complexity.tier, ComplexityTier::L2Stateful);
-            assert_eq!(
-                first.case.work.minimum_expected_work,
-                2 + 2 * u64::from(rung_spec.ticks)
-            );
-            assert_eq!(
-                first.spec.execution.max_turns,
-                8 + 2 * u32::from(rung_spec.ticks)
-            );
-            assert_eq!(
-                first.case.inputs.get("ticks").and_then(Value::as_u64),
-                Some(u64::from(rung_spec.ticks))
-            );
-            assert_eq!(
-                first.case.inputs.get("ladder_rungs"),
-                Some(&json!([5, 20, 50]))
-            );
-            assert_eq!(first.case.deliverable_contract.artifacts.len(), 1);
-            assert_eq!(
-                usize::from(first.case.complexity.profile.artifact_count),
-                first.case.deliverable_contract.artifacts.len()
-            );
-        }
+        let first = materialize("attempt-a", CANONICAL_SEED).unwrap();
+        let retry = materialize("attempt-b", CANONICAL_SEED).unwrap();
+        first.validate().unwrap();
+        assert_eq!(first.case.case_id, retry.case.case_id);
+        assert_eq!(first.case.inputs, retry.case.inputs);
+        assert_ne!(first.spec.prompt, retry.spec.prompt);
+        assert_eq!(first.case.complexity.tier, ComplexityTier::L2Stateful);
+        assert_eq!(
+            first.case.work.minimum_expected_work,
+            2 + 2 * u64::from(RUNG.ticks)
+        );
+        assert_eq!(
+            first.spec.execution.max_turns,
+            8 + 2 * u32::from(RUNG.ticks)
+        );
+        assert_eq!(
+            first.case.inputs.get("ticks").and_then(Value::as_u64),
+            Some(50)
+        );
+        assert!(first.case.inputs.get("ladder_rungs").is_none());
+        assert_eq!(first.case.deliverable_contract.artifacts.len(), 1);
+        assert_eq!(
+            usize::from(first.case.complexity.profile.artifact_count),
+            first.case.deliverable_contract.artifacts.len()
+        );
     }
 }

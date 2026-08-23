@@ -35,7 +35,7 @@
     "revision": "preview-v5",
     "rows": [
       {
-        "test_id": "direct_answer",
+        "test_id": "minimal_path",
         "lifecycle": "active",
         "current_version": 1,
         "available_versions": [
@@ -49,7 +49,7 @@
         "selected_version": 1,
         "result": null,
         "shards": {
-          "1": "./tests/data/direct-answer-v1.json"
+          "1": "./tests/data/minimal-path-v1.json"
         },
         "version_results": {
           "1": {
@@ -80,7 +80,7 @@
                   }
                 },
                 "contracts": {
-                  "direct_answer:v1:seed-8": "preview-contract"
+                  "minimal_path:v1:seed-8": "preview-contract"
                 }
               },
               "preview-system-b": {
@@ -109,7 +109,7 @@
                   }
                 },
                 "contracts": {
-                  "direct_answer:v1:seed-8": "preview-contract"
+                  "minimal_path:v1:seed-8": "preview-contract"
                 }
               }
             }

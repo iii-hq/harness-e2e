@@ -1451,6 +1451,9 @@ fn preflight_run_contract(request: &RunRequest) -> Result<()> {
 }
 
 fn observation_case_seeds(scenario: ScenarioId, fixed: Option<u64>, rotating: &[u64]) -> Vec<u64> {
+    if scenario.canonical_seed_only() {
+        return vec![scenario.canonical_seed()];
+    }
     let mut seeds = vec![fixed.unwrap_or_else(|| scenario.canonical_seed())];
     for seed in rotating {
         if !seeds.contains(seed) {
@@ -1566,7 +1569,7 @@ fn materialize_scenario_descriptor(
         scenario_id,
         scenario_version: materialized.case.scenario_version,
         case_id: materialized.case.case_id,
-        seed,
+        seed: materialized.case.seed,
         inputs_sha256: materialized.case.inputs_sha256,
         contract_sha256,
         complexity: materialized.case.complexity.profile,
@@ -2073,11 +2076,18 @@ mod tests {
     fn scenarios_list_materializes_versioned_cases() {
         let response = scenarios_list(ScenariosListRequest { seed: Some(7) }).unwrap();
         assert_eq!(response.scenarios.len(), ScenarioId::ALL.len());
-        assert!(response.scenarios.iter().all(|scenario| scenario.seed == 7));
-        assert!(response
-            .scenarios
-            .iter()
-            .all(|scenario| scenario.case_id.contains("seed-0000000000000007")));
+        for scenario in &response.scenarios {
+            let id = scenario.scenario_id;
+            let expected_seed = if id.canonical_seed_only() {
+                id.canonical_seed()
+            } else {
+                7
+            };
+            assert_eq!(scenario.seed, expected_seed);
+            assert!(scenario
+                .case_id
+                .contains(&format!("seed-{expected_seed:016x}")));
+        }
         assert_eq!(response.schema, CATALOG_SCHEMA);
         assert!(response.catalog_sha256.starts_with("sha256:"));
         assert!(response.scenarios.iter().all(|scenario| {
@@ -2294,18 +2304,11 @@ mod tests {
 
     #[test]
     fn todo_worker_scenarios_are_admitted_by_the_control_plane() {
-        for scenario in [
-            ScenarioId::TodoWorkerSimple,
-            ScenarioId::TodoWorkerSelfValidating,
-        ] {
-            let mut request = request();
-            request.lane = "local".into();
-            request.scenarios = vec![scenario];
-            request.technical_retries = 0;
-            validate_run_request(&request).unwrap_or_else(|error| {
-                panic!("{scenario:?} should be Console-admitted: {error:#}")
-            });
-        }
+        let mut simple = request();
+        simple.lane = "local".into();
+        simple.scenarios = vec![ScenarioId::TodoWorkerSimple];
+        simple.technical_retries = 0;
+        validate_run_request(&simple).expect("todo_worker_simple should be Console-admitted");
 
         let mut planned = request();
         planned.lane = "local".into();
@@ -2317,7 +2320,7 @@ mod tests {
 
     #[test]
     fn subject_policy_hides_control_functions() {
-        let spec = ScenarioId::DirectAnswer.spec("policy");
+        let spec = ScenarioId::MinimalPath.spec("policy");
         let policy = crate::suite::e2e_function_policy(&spec);
         assert!(policy.deny.contains(&"e2e::*".to_string()));
     }

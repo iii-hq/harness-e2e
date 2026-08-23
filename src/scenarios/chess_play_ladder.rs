@@ -1,12 +1,9 @@
-//! `chess_play_ladder` — competitive strength against a deterministic engine,
-//! one rung per case.
+//! `chess_play_ladder` — competitive strength against a deterministic engine.
 //!
 //! The subject plays a full game of chess as White from the initial position
-//! against a deterministic negamax opponent whose search depth is the ladder
-//! rung (`RUNGS`: depth 1, 2, or 3). The case seed selects the rung, so every
-//! rung is its own longitudinally comparable cohort. Version over version the
-//! win rate per rung — over the suite's `runs` — is the visible evolution
-//! curve: a stronger Harness climbs the depth ladder.
+//! against a deterministic negamax opponent at the retained maximum search
+//! depth 3. Earlier easier opponents were removed to keep one comparable
+//! cohort. Version over version, the win rate is the visible evolution curve.
 //!
 //! Per run the game lives in a `static` registry keyed by `run_id` (the same
 //! stateful pattern `engineering_ticket` uses): `setup` inserts a fresh
@@ -17,18 +14,8 @@
 //! returns the new position. The evaluator reads the same live game state back
 //! out after the run.
 //!
-//! Getting the opponent's search depth into the `setup` hook is the one
-//! delicate point. `ScenarioSetup` is a plain `fn(&E2eContext, &str)` — it
-//! never sees the seed — so the depth cannot be captured in a closure. The
-//! `engineering_ticket` precedent resolves exactly this: generate ONE
-//! `ScenarioSetup` fn pointer per rung (the `rung_setup!` macro), each fixing
-//! its depth, and dispatch rung → fn with [`setup_for`]. `scenario_for_case`
-//! picks `setup_for(rung.depth)`; the depth is written into the [`ChessGame`]
-//! at insert time, and the handler reads it back from there. Deterministic and
-//! isolated per `run_id`. Because the runtime materializes the seed-specific
-//! spec (`materialize(&attempt_id, seed)`), the correct per-rung setup runs.
-//!
-//! VERSION 1.
+//! A generated setup function fixes depth 3 in the [`ChessGame`] while keeping
+//! runtime state isolated per `run_id`.
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, OnceLock};
@@ -45,13 +32,13 @@ use super::chess_engine;
 use super::validation_loop::suffix;
 use super::{
     ArtifactExpectation, CapturedDeliverable, CapturedInvariant, CleanupFuture, ComplexityProfile,
-    DeliverableCaptureFuture, DeliverableContract, EvaluationFuture, ExecutionPolicy, InvariantSpec,
-    MaterializedScenario, ObjectiveEvaluation, ProvenanceEvidence, ScenarioCase,
+    DeliverableCaptureFuture, DeliverableContract, EvaluationFuture, ExecutionPolicy,
+    InvariantSpec, MaterializedScenario, ObjectiveEvaluation, ProvenanceEvidence, ScenarioCase,
     ScenarioObservation, ScenarioSpec,
 };
 
 pub const ID: &str = "chess_play_ladder";
-const VERSION: u32 = 1;
+const VERSION: u32 = 2;
 const GAME_RECORD_ID: &str = "game_record";
 
 /// The line the subject must end on: `CHESS-RESULT <win|draw|loss>`.
@@ -68,37 +55,13 @@ const MOVE_CAP: u32 = 120;
 /// it toward the artifact count.
 const MINIMUM_EXPECTED_WORK: u64 = 20;
 
-/// One ladder rung: the case seed selects it, and the opponent's negamax search
-/// depth is the rung's difficulty knob.
 #[derive(Debug, Clone, Copy)]
 struct Rung {
-    seed: u64,
     depth: u32,
 }
 
-pub const CANONICAL_SEED: u64 = 6001;
-const RUNGS: [Rung; 3] = [
-    Rung {
-        seed: 6001,
-        depth: 1,
-    },
-    Rung {
-        seed: 6002,
-        depth: 2,
-    },
-    Rung {
-        seed: 6003,
-        depth: 3,
-    },
-];
-
-fn rung(seed: u64) -> Rung {
-    RUNGS
-        .iter()
-        .copied()
-        .find(|rung| rung.seed == seed)
-        .unwrap_or_else(|| RUNGS[(seed as usize) % RUNGS.len()])
-}
+pub const CANONICAL_SEED: u64 = 6003;
+const RUNG: Rung = Rung { depth: 3 };
 
 const ZERO_ILLEGAL_MOVES: AssessmentSpec = AssessmentSpec::hard_gated(
     "zero_illegal_moves",
@@ -351,9 +314,6 @@ fn setup_game<'a>(context: &'a E2eContext, run_id: &'a str, depth: u32) -> Clean
     })
 }
 
-// One `ScenarioSetup` fn pointer per rung, each fixing its opponent depth. The
-// setup hook is a plain fn pointer that never sees the seed, so the depth must
-// be resolved into the fn itself (the `engineering_ticket` precedent).
 macro_rules! rung_setup {
     ($name:ident, $depth:expr) => {
         fn $name<'a>(context: &'a E2eContext, run_id: &'a str) -> CleanupFuture<'a> {
@@ -362,29 +322,18 @@ macro_rules! rung_setup {
     };
 }
 
-rung_setup!(setup_depth_1, 1);
-rung_setup!(setup_depth_2, 2);
 rung_setup!(setup_depth_3, 3);
 
-fn setup_for(depth: u32) -> super::ScenarioSetup {
-    match depth {
-        1 => setup_depth_1,
-        2 => setup_depth_2,
-        3 => setup_depth_3,
-        _ => setup_depth_1,
-    }
-}
-
 pub fn scenario(run_id: &str) -> ScenarioSpec {
-    scenario_for_case(run_id, rung(CANONICAL_SEED))
+    scenario_for_case(run_id, RUNG)
 }
 
-pub fn materialize(namespace: &str, seed: u64) -> anyhow::Result<MaterializedScenario> {
-    let rung = rung(seed);
+pub fn materialize(namespace: &str, _seed: u64) -> anyhow::Result<MaterializedScenario> {
+    let rung = RUNG;
     let case = ScenarioCase::new(
         ID,
         VERSION,
-        seed,
+        CANONICAL_SEED,
         // Nothing here is run-scoped: inputs are identical across namespaces
         // for a given seed, so canonical identity stays stable across attempts.
         json!({
@@ -392,7 +341,6 @@ pub fn materialize(namespace: &str, seed: u64) -> anyhow::Result<MaterializedSce
             "move_cap_plies": MOVE_CAP,
             "start_fen": chess_engine::STARTPOS,
             "result_marker": RESULT_MARKER,
-            "ladder_rungs": RUNGS.iter().map(|rung| rung.depth).collect::<Vec<_>>(),
         }),
         complexity_profile(),
         vec![
@@ -448,7 +396,7 @@ fn scenario_for_case(run_id: &str, rung: Rung) -> ScenarioSpec {
         denied_functions: &["state::*"],
         criteria: assessment::criteria(ASSESSMENTS),
         judge_reference: None,
-        setup: Some(setup_for(rung.depth)),
+        setup: Some(setup_depth_3),
         evaluate,
         cleanup: Some(cleanup),
     }
@@ -688,14 +636,12 @@ mod tests {
     }
 
     #[test]
-    fn ladder_seeds_select_their_rungs_and_fall_back_by_modulo() {
-        assert_eq!(rung(6001).depth, 1);
-        assert_eq!(rung(6002).depth, 2);
-        assert_eq!(rung(6003).depth, 3);
-        // An unlisted seed falls back to the modulo rung, exactly like the
-        // other ladders.
-        assert_eq!(rung(42).depth, RUNGS[42 % RUNGS.len()].depth);
-        assert_eq!(rung(CANONICAL_SEED).depth, RUNGS[0].depth);
+    fn every_seed_request_normalizes_to_the_maximum_case() {
+        assert_eq!(RUNG.depth, 3);
+        assert_eq!(
+            materialize("attempt", 6002).unwrap().case.seed,
+            CANONICAL_SEED
+        );
     }
 
     #[test]
@@ -709,7 +655,10 @@ mod tests {
 
     #[test]
     fn result_marker_validator_requires_the_matching_token() {
-        assert!(response_reports_result("Good game.\nCHESS-RESULT win", "win"));
+        assert!(response_reports_result(
+            "Good game.\nCHESS-RESULT win",
+            "win"
+        ));
         assert!(response_reports_result(
             "CHESS-RESULT draw at depth 2",
             "draw"
@@ -783,35 +732,33 @@ mod tests {
     }
 
     #[test]
-    fn every_rung_publishes_a_reproducible_l2_case_and_execution_formula() {
+    fn retained_case_is_reproducible_and_uses_the_maximum_depth() {
         use super::super::ComplexityTier;
 
-        for rung_spec in RUNGS {
-            let first = materialize("attempt-a", rung_spec.seed).unwrap();
-            let retry = materialize("attempt-b", rung_spec.seed).unwrap();
-            // Inputs carry nothing run-scoped, so identity is stable across
-            // namespaces for a given seed.
-            assert_eq!(first.case.case_id, retry.case.case_id);
-            assert_eq!(first.case.inputs, retry.case.inputs);
-            assert_eq!(first.case.inputs_sha256, retry.case.inputs_sha256);
-            assert_eq!(
-                first.case.inputs.get("opponent_depth").and_then(Value::as_u64),
-                Some(u64::from(rung_spec.depth))
-            );
-            // Fixed tier across the whole ladder: strength scales difficulty,
-            // not the work vector.
-            assert_eq!(first.case.complexity.tier, ComplexityTier::L2Stateful);
-            assert_eq!(
-                usize::from(first.case.complexity.profile.artifact_count),
-                first.case.deliverable_contract.artifacts.len()
-            );
-            assert_eq!(first.case.deliverable_contract.artifacts.len(), 1);
-            assert_eq!(first.case.work.minimum_expected_work, MINIMUM_EXPECTED_WORK);
-            assert_eq!(first.spec.execution.max_turns, 8 + MOVE_CAP);
-            assert!(first.spec.execution.max_total_tokens.is_none());
-            assert!(first.capture.is_some());
-            first.validate().unwrap();
-        }
+        let first = materialize("attempt-a", CANONICAL_SEED).unwrap();
+        let retry = materialize("attempt-b", CANONICAL_SEED).unwrap();
+        assert_eq!(first.case.case_id, retry.case.case_id);
+        assert_eq!(first.case.inputs, retry.case.inputs);
+        assert_eq!(first.case.inputs_sha256, retry.case.inputs_sha256);
+        assert_eq!(
+            first
+                .case
+                .inputs
+                .get("opponent_depth")
+                .and_then(Value::as_u64),
+            Some(3)
+        );
+        assert_eq!(first.case.complexity.tier, ComplexityTier::L2Stateful);
+        assert_eq!(
+            usize::from(first.case.complexity.profile.artifact_count),
+            first.case.deliverable_contract.artifacts.len()
+        );
+        assert_eq!(first.case.deliverable_contract.artifacts.len(), 1);
+        assert_eq!(first.case.work.minimum_expected_work, MINIMUM_EXPECTED_WORK);
+        assert_eq!(first.spec.execution.max_turns, 8 + MOVE_CAP);
+        assert!(first.spec.execution.max_total_tokens.is_none());
+        assert!(first.capture.is_some());
+        first.validate().unwrap();
     }
 
     #[test]
@@ -829,6 +776,11 @@ mod tests {
             .map(|criterion| u16::from(criterion.weight))
             .sum();
         assert_eq!(weights, 100);
-        assert!(materialized.case.deliverable_contract.capture_before_cleanup);
+        assert!(
+            materialized
+                .case
+                .deliverable_contract
+                .capture_before_cleanup
+        );
     }
 }

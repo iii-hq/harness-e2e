@@ -751,9 +751,7 @@ fn final_assessment_input(
     if validation.is_none()
         && matches!(
             scenario.scenario_id.as_str(),
-            crate::scenarios::todo_worker::SIMPLE_ID
-                | crate::scenarios::todo_worker::PLANNED_ID
-                | crate::scenarios::todo_worker::SELF_VALIDATING_ID
+            crate::scenarios::todo_worker::SIMPLE_ID | crate::scenarios::todo_worker::PLANNED_ID
         )
     {
         limitations.push(
@@ -1153,6 +1151,9 @@ fn validate_config(config: &SuiteRunConfig) -> Result<()> {
 }
 
 fn case_seeds(scenario: ScenarioId, fixed: Option<u64>, rotating: &[u64]) -> Vec<u64> {
+    if scenario.canonical_seed_only() {
+        return vec![scenario.canonical_seed()];
+    }
     let mut seeds = vec![fixed.unwrap_or_else(|| scenario.canonical_seed())];
     for seed in rotating {
         if !seeds.contains(seed) {
@@ -2996,6 +2997,14 @@ mod tests {
         assert_eq!(
             case_seeds(ScenarioId::PersistentState, None, &[]),
             vec![ScenarioId::PersistentState.canonical_seed()]
+        );
+    }
+
+    #[test]
+    fn consolidated_scenarios_ignore_fixed_and_rotating_seed_matrices() {
+        assert_eq!(
+            case_seeds(ScenarioId::ChessPlayLadder, Some(7), &[8, 9]),
+            vec![ScenarioId::ChessPlayLadder.canonical_seed()]
         );
     }
 

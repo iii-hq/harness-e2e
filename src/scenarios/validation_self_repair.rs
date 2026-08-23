@@ -23,7 +23,7 @@ use crate::context::E2eContext;
 
 use super::assessment::{self, AssessmentSpec};
 use super::common;
-use super::custom_validator::{HookEnvelope, HookVerdict};
+use super::validation_hook::{HookEnvelope, HookVerdict};
 use super::validation_loop::suffix;
 use super::{
     CapturedDeliverable, CleanupFuture, DeliverableCaptureFuture, EvaluationFuture,

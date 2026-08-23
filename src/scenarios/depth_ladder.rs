@@ -1,11 +1,7 @@
-//! `depth_ladder` — dose-response delegation depth, one rung per case.
+//! `depth_ladder` — maximum delegation-depth case.
 //!
-//! The same single-lane relay workload runs at depth 2, 4, and 6; the case
-//! seed selects the rung (`RUNGS`), so every rung is its own longitudinally
-//! comparable case. The rung ladder turns pass/fail into a capability
-//! frontier: a Harness version is characterized by the deepest relay it
-//! sustains, and version-over-version comparison reads as frontier movement
-//! instead of a single bit.
+//! The retained single-lane relay workload runs at depth 6. Earlier shallower
+//! cases were removed to keep one comparable cohort.
 //!
 //! Per rung the coordinator (level 0) arms one one-shot wake on the terminal
 //! relay key, spawns exactly ONE child, and ends its turn with a dispatch
@@ -16,11 +12,8 @@
 //! chain and per-child transcripts prove each row was produced at its own
 //! depth rather than by the coordinator itself.
 //!
-//! Tier straddle, on purpose: the depth-2 rung derives `L2Stateful`
-//! (coordination_edges 2 < 3 and dependency_depth 2 < 3), while the depth-4
-//! and depth-6 rungs derive `L4Coordinated` (coordination_edges >= 3). The
-//! ladder therefore spans the stateful-to-coordinated boundary honestly
-//! instead of pinning every rung to one tier.
+//! The retained case derives `L4Coordinated` from its dependency and
+//! coordination depth.
 
 use serde_json::{json, Value};
 
@@ -37,34 +30,17 @@ use super::{
 };
 
 pub const ID: &str = "depth_ladder";
-const VERSION: u32 = 1;
+const VERSION: u32 = 2;
 const ROWS_DELIVERABLE_ID: &str = "relay_rows";
 const MAX_REPORT_CHARS: usize = 300;
 
-/// One ladder rung. The seed is the case selector: running the ladder means
-/// running the scenario once per rung seed, and each rung keeps its own
-/// longitudinal series.
 #[derive(Debug, Clone, Copy)]
 struct Rung {
-    seed: u64,
     depth: u8,
 }
 
-pub const CANONICAL_SEED: u64 = 4001;
-const RUNGS: [Rung; 3] = [
-    Rung {
-        seed: 4001,
-        depth: 2,
-    },
-    Rung {
-        seed: 4002,
-        depth: 4,
-    },
-    Rung {
-        seed: 4003,
-        depth: 6,
-    },
-];
+pub const CANONICAL_SEED: u64 = 4003;
+const RUNG: Rung = Rung { depth: 6 };
 
 const RELAY_DELIVERED: AssessmentSpec = AssessmentSpec::hard_gated_in(
     "relay_delivered",
@@ -98,14 +74,6 @@ const ASSESSMENTS: &[AssessmentSpec] = &[
     DISPATCH_REPORT,
 ];
 
-fn rung(seed: u64) -> Rung {
-    RUNGS
-        .iter()
-        .copied()
-        .find(|rung| rung.seed == seed)
-        .unwrap_or_else(|| RUNGS[(seed as usize) % RUNGS.len()])
-}
-
 fn relay_key(level: u8) -> String {
     format!("relay-{level:02}")
 }
@@ -136,21 +104,20 @@ fn expected_row(run_id: &str, level: u8) -> Value {
 }
 
 pub fn scenario(run_id: &str) -> ScenarioSpec {
-    scenario_for_case(run_id, rung(CANONICAL_SEED))
+    scenario_for_case(run_id, RUNG)
 }
 
-pub fn materialize(namespace: &str, seed: u64) -> anyhow::Result<MaterializedScenario> {
-    let rung = rung(seed);
+pub fn materialize(namespace: &str, _seed: u64) -> anyhow::Result<MaterializedScenario> {
+    let rung = RUNG;
     let case = ScenarioCase::new(
         ID,
         VERSION,
-        seed,
+        CANONICAL_SEED,
         json!({
             "depth": rung.depth,
             "relay_keys": relay_keys(rung.depth),
             "report_marker": report_marker(rung.depth),
             "token_derivation": "run-scoped",
-            "ladder_rungs": RUNGS.iter().map(|rung| rung.depth).collect::<Vec<_>>(),
         }),
         complexity_profile(rung.depth),
         vec![
@@ -169,10 +136,7 @@ pub fn materialize(namespace: &str, seed: u64) -> anyhow::Result<MaterializedSce
     })
 }
 
-/// The rung is the profile: depth 2 derives `L2Stateful` (coordination_edges
-/// 2 < 3 and dependency_depth 2 < 3) while depths 4 and 6 derive
-/// `L4Coordinated` (coordination_edges >= 3), so the ladder straddles the
-/// tier boundary on purpose.
+/// Depth 6 derives `L4Coordinated` from its dependency and coordination edges.
 fn complexity_profile(depth: u8) -> ComplexityProfile {
     ComplexityProfile {
         planning_depth: 2,
@@ -620,15 +584,9 @@ fn cleanup<'a>(context: &'a E2eContext, run_id: &'a str) -> CleanupFuture<'a> {
                 )
                 .await?;
         }
-        // Delete every key the ladder can address (the deepest rung), not
-        // just the current rung's, so a misbehaving run cannot leak rows
-        // between attempts sharing a scope prefix.
-        let deepest = RUNGS
-            .iter()
-            .map(|rung| rung.depth)
-            .max()
-            .unwrap_or_default();
-        for key in relay_keys(deepest) {
+        // Delete every key the retained workload can address so a misbehaving
+        // run cannot leak rows between attempts sharing a scope prefix.
+        for key in relay_keys(RUNG.depth) {
             let _: Value = context
                 .trigger("state::delete", json!({ "scope": names.scope, "key": key }))
                 .await?;
@@ -686,12 +644,12 @@ mod tests {
     use super::*;
 
     #[test]
-    fn ladder_seeds_select_their_rungs_and_fall_back_by_modulo() {
-        assert_eq!(rung(4001).depth, 2);
-        assert_eq!(rung(4002).depth, 4);
-        assert_eq!(rung(4003).depth, 6);
-        assert_eq!(rung(313).depth, RUNGS[313 % RUNGS.len()].depth);
-        assert_eq!(rung(CANONICAL_SEED).depth, RUNGS[0].depth);
+    fn every_seed_request_normalizes_to_the_maximum_case() {
+        assert_eq!(RUNG.depth, 6);
+        assert_eq!(
+            materialize("attempt", 4002).unwrap().case.seed,
+            CANONICAL_SEED
+        );
     }
 
     #[test]
@@ -703,44 +661,34 @@ mod tests {
     }
 
     #[test]
-    fn the_shallowest_rung_is_stateful_and_deeper_rungs_are_coordinated() {
+    fn retained_case_is_coordinated() {
         use super::super::ComplexityTier;
 
-        let shallowest = materialize("attempt-a", 4001).unwrap();
-        assert_eq!(shallowest.case.complexity.tier, ComplexityTier::L2Stateful);
-        for seed in [4002, 4003] {
-            let rung_case = materialize("attempt-a", seed).unwrap();
-            assert_eq!(
-                rung_case.case.complexity.tier,
-                ComplexityTier::L4Coordinated,
-                "seed {seed}"
-            );
-        }
+        let retained = materialize("attempt-a", CANONICAL_SEED).unwrap();
+        assert_eq!(retained.case.complexity.tier, ComplexityTier::L4Coordinated);
     }
 
     #[test]
-    fn every_rung_publishes_a_reproducible_case_with_its_depth() {
-        for rung_spec in RUNGS {
-            let first = materialize("attempt-a", rung_spec.seed).unwrap();
-            let retry = materialize("attempt-b", rung_spec.seed).unwrap();
-            assert_eq!(first.case.case_id, retry.case.case_id);
-            assert_eq!(first.case.inputs, retry.case.inputs);
-            assert_eq!(
-                first.case.inputs.get("depth").and_then(Value::as_u64),
-                Some(u64::from(rung_spec.depth))
-            );
-            assert_eq!(
-                first
-                    .case
-                    .inputs
-                    .get("relay_keys")
-                    .and_then(Value::as_array)
-                    .map(Vec::len),
-                Some(usize::from(rung_spec.depth))
-            );
-            assert_eq!(first.case.deliverable_contract.artifacts.len(), 1);
-            assert_ne!(first.spec.prompt, retry.spec.prompt);
-        }
+    fn retained_case_is_reproducible_with_maximum_depth() {
+        let first = materialize("attempt-a", CANONICAL_SEED).unwrap();
+        let retry = materialize("attempt-b", CANONICAL_SEED).unwrap();
+        assert_eq!(first.case.case_id, retry.case.case_id);
+        assert_eq!(first.case.inputs, retry.case.inputs);
+        assert_eq!(
+            first.case.inputs.get("depth").and_then(Value::as_u64),
+            Some(6)
+        );
+        assert_eq!(
+            first
+                .case
+                .inputs
+                .get("relay_keys")
+                .and_then(Value::as_array)
+                .map(Vec::len),
+            Some(6)
+        );
+        assert_eq!(first.case.deliverable_contract.artifacts.len(), 1);
+        assert_ne!(first.spec.prompt, retry.spec.prompt);
     }
 
     #[test]
@@ -765,7 +713,9 @@ mod tests {
 
     #[test]
     fn dispatch_reports_must_be_non_empty_and_within_the_limit() {
-        assert!(dispatch_report_compact("DEPTH-4-COMPLETE DPT-0000000000000000"));
+        assert!(dispatch_report_compact(
+            "DEPTH-4-COMPLETE DPT-0000000000000000"
+        ));
         assert!(dispatch_report_compact(&"x".repeat(MAX_REPORT_CHARS)));
         assert!(!dispatch_report_compact(&"x".repeat(MAX_REPORT_CHARS + 1)));
         assert!(!dispatch_report_compact("   "));
