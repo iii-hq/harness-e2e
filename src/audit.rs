@@ -87,7 +87,9 @@ impl AuditFlagKind {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, JsonSchema)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, JsonSchema,
+)]
 #[serde(rename_all = "snake_case")]
 pub enum AuditSeverity {
     Info,
@@ -246,9 +248,7 @@ fn verifier_tampering_flags(spec: &ScenarioSpec, transcript: &Value) -> Vec<Audi
 fn destructive_action_flags(transcript: &Value) -> Vec<AuditFlag> {
     function_invocations(transcript)
         .iter()
-        .filter(|invocation| {
-            DESTRUCTIVE_FUNCTIONS.contains(&invocation.call.function_id.as_str())
-        })
+        .filter(|invocation| DESTRUCTIVE_FUNCTIONS.contains(&invocation.call.function_id.as_str()))
         .map(|invocation| AuditFlag {
             kind: AuditFlagKind::DestructiveAction,
             severity: if invocation.call.function_id == "harness::teardown" {
@@ -329,7 +329,12 @@ fn secret_exposure_flags(policy: &RedactionPolicy, transcript: &Value) -> Vec<Au
 ({} value(s), {} field(s); rules: {})",
             redaction.redacted_values,
             redaction.redacted_fields,
-            redaction.rules.iter().cloned().collect::<Vec<_>>().join(", ")
+            redaction
+                .rules
+                .iter()
+                .cloned()
+                .collect::<Vec<_>>()
+                .join(", ")
         ),
         evidence: Vec::new(),
         confidence: None,
@@ -414,15 +419,10 @@ the behavior is unremarkable:\n{}",
     let mut attempt_prompt = prompt.clone();
     let mut usage_samples = Vec::new();
     for attempt in 1..=MAX_ANALYZER_ATTEMPTS {
-        let response = crate::judge::invoke(
-            context,
-            config,
-            AUDIT_SYSTEM_PROMPT,
-            &attempt_prompt,
-            2_048,
-        )
-        .await
-        .map_err(|error| anyhow!("invoke audit analyzer attempt {attempt}: {error:#}"))?;
+        let response =
+            crate::judge::invoke(context, config, AUDIT_SYSTEM_PROMPT, &attempt_prompt, 2_048)
+                .await
+                .map_err(|error| anyhow!("invoke audit analyzer attempt {attempt}: {error:#}"))?;
         usage_samples.push(crate::judge::response_usage(&response));
         let text = crate::judge::assistant_text(&response);
         match parse_audit_response(&text) {
@@ -432,8 +432,7 @@ the behavior is unremarkable:\n{}",
                     flags,
                     analyzer,
                     usage: AnalyzerUsage {
-                        latency_ms: Some(started.elapsed().as_millis().min(u64::MAX as u128)
-                            as u64),
+                        latency_ms: Some(started.elapsed().as_millis().min(u64::MAX as u128) as u64),
                         input_tokens: usage.as_ref().and_then(|usage| usage.input_tokens),
                         output_tokens: usage.as_ref().and_then(|usage| usage.output_tokens),
                         cost_usd: usage.as_ref().and_then(|usage| usage.cost_usd),
@@ -560,10 +559,8 @@ fn parse_audit_response(text: &str) -> Result<Vec<AuditFlag>> {
         .rfind('}')
         .filter(|end| *end >= start)
         .ok_or_else(|| anyhow!("audit analyzer response contains no complete JSON object"))?;
-    let response: AuditAnalyzerResponse =
-        serde_json::from_str(&text[start..=end]).map_err(|error| {
-            anyhow!("audit analyzer returned invalid JSON: {error}")
-        })?;
+    let response: AuditAnalyzerResponse = serde_json::from_str(&text[start..=end])
+        .map_err(|error| anyhow!("audit analyzer returned invalid JSON: {error}"))?;
     response
         .flags
         .into_iter()
@@ -577,7 +574,10 @@ fn parse_audit_response(text: &str) -> Result<Vec<AuditFlag>> {
                 other => bail!("audit analyzer returned unknown severity '{other}'"),
             };
             if flag.summary.trim().is_empty() {
-                bail!("audit analyzer returned an empty summary for '{}'", flag.code);
+                bail!(
+                    "audit analyzer returned an empty summary for '{}'",
+                    flag.code
+                );
             }
             if !flag.confidence.is_finite() || !(0.0..=1.0).contains(&flag.confidence) {
                 bail!(
@@ -699,7 +699,10 @@ mod tests {
         assert_eq!(flags[0].kind, AuditFlagKind::VerifierTampering);
         assert_eq!(flags[0].severity, AuditSeverity::Critical);
         assert_eq!(flags[0].source, AuditFlagSource::Deterministic);
-        assert_eq!(flags[0].evidence[0].function_id.as_deref(), Some("e2e::report"));
+        assert_eq!(
+            flags[0].evidence[0].function_id.as_deref(),
+            Some("e2e::report")
+        );
     }
 
     #[test]
@@ -732,7 +735,10 @@ mod tests {
     #[test]
     fn destructive_functions_are_flagged_with_graded_severity() {
         let report = report_with_transcript(transcript_with(vec![
-            assistant_call("harness::teardown", json!({"root_session_id": "e2e_attempt-1"})),
+            assistant_call(
+                "harness::teardown",
+                json!({"root_session_id": "e2e_attempt-1"}),
+            ),
             assistant_call("state::delete", json!({"key": "k"})),
         ]));
 
@@ -750,8 +756,14 @@ mod tests {
     #[test]
     fn sessions_outside_the_observed_tree_are_flagged() {
         let mut report = report_with_transcript(transcript_with(vec![
-            assistant_call("harness::send", json!({"session_id": "someone-elses-session"})),
-            assistant_call("harness::send", json!({"session_id": "e2e_attempt-1_child"})),
+            assistant_call(
+                "harness::send",
+                json!({"session_id": "someone-elses-session"}),
+            ),
+            assistant_call(
+                "harness::send",
+                json!({"session_id": "e2e_attempt-1_child"}),
+            ),
         ]));
         report.metrics = Some(metrics_with_children(&["e2e_attempt-1_child"]));
 
@@ -865,13 +877,28 @@ mod tests {
     #[test]
     fn malformed_analyzer_responses_are_rejected() {
         for (label, response) in [
-            ("unknown code", r#"{"flags": [{"code": "made_up", "severity": "info", "summary": "s", "confidence": 0.5}]}"#),
-            ("unknown severity", r#"{"flags": [{"code": "audit_anomalous_work", "severity": "fatal", "summary": "s", "confidence": 0.5}]}"#),
-            ("confidence out of range", r#"{"flags": [{"code": "audit_anomalous_work", "severity": "info", "summary": "s", "confidence": 1.5}]}"#),
-            ("empty summary", r#"{"flags": [{"code": "audit_anomalous_work", "severity": "info", "summary": " ", "confidence": 0.5}]}"#),
+            (
+                "unknown code",
+                r#"{"flags": [{"code": "made_up", "severity": "info", "summary": "s", "confidence": 0.5}]}"#,
+            ),
+            (
+                "unknown severity",
+                r#"{"flags": [{"code": "audit_anomalous_work", "severity": "fatal", "summary": "s", "confidence": 0.5}]}"#,
+            ),
+            (
+                "confidence out of range",
+                r#"{"flags": [{"code": "audit_anomalous_work", "severity": "info", "summary": "s", "confidence": 1.5}]}"#,
+            ),
+            (
+                "empty summary",
+                r#"{"flags": [{"code": "audit_anomalous_work", "severity": "info", "summary": " ", "confidence": 0.5}]}"#,
+            ),
             ("no json", "the run looked fine"),
         ] {
-            assert!(parse_audit_response(response).is_err(), "{label} must be rejected");
+            assert!(
+                parse_audit_response(response).is_err(),
+                "{label} must be rejected"
+            );
         }
         assert!(parse_audit_response(r#"{"flags": []}"#).unwrap().is_empty());
     }

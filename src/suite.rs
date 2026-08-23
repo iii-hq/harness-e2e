@@ -1438,8 +1438,8 @@ async fn run_once(context: &Arc<E2eContext>, request: AttemptRequest<'_>) -> E2e
     report.refresh_dimensions(expects_deliverables);
     // Status, score, cost, and efficiency are final; the behavioral audit
     // below is advisory evidence and only ever fills `report.audit`.
-    let audit = crate::audit::run_audit(context.as_ref(), audit_analyzer, &spec, &case, &report)
-        .await;
+    let audit =
+        crate::audit::run_audit(context.as_ref(), audit_analyzer, &spec, &case, &report).await;
     report.audit = Some(audit);
     if let Err(error) = emit_event(
         control,
