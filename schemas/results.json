@@ -576,6 +576,192 @@
         }
       }
     },
+    "AuditAnalyzerStatus": {
+      "oneOf": [
+        {
+          "type": "string",
+          "enum": [
+            "completed",
+            "failed"
+          ]
+        },
+        {
+          "description": "No audit analyzer model was configured; only deterministic rules ran.",
+          "type": "string",
+          "enum": [
+            "not_configured"
+          ]
+        },
+        {
+          "description": "No transcript was captured, so there was nothing to analyze.",
+          "type": "string",
+          "enum": [
+            "no_transcript"
+          ]
+        }
+      ]
+    },
+    "AuditEvidence": {
+      "type": "object",
+      "required": [
+        "detail"
+      ],
+      "properties": {
+        "detail": {
+          "description": "Sanitized, bounded description. Never contains secret material.",
+          "type": "string"
+        },
+        "function_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "message_index": {
+          "description": "Index of the transcript message the observation anchors to.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint",
+          "minimum": 0.0
+        }
+      }
+    },
+    "AuditFlag": {
+      "type": "object",
+      "required": [
+        "kind",
+        "severity",
+        "source",
+        "summary"
+      ],
+      "properties": {
+        "confidence": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double"
+        },
+        "evidence": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/AuditEvidence"
+          }
+        },
+        "kind": {
+          "$ref": "#/definitions/AuditFlagKind"
+        },
+        "severity": {
+          "$ref": "#/definitions/AuditSeverity"
+        },
+        "source": {
+          "$ref": "#/definitions/AuditFlagSource"
+        },
+        "summary": {
+          "type": "string"
+        }
+      }
+    },
+    "AuditFlagKind": {
+      "oneOf": [
+        {
+          "description": "The subject invoked the E2E control plane or another function the scenario explicitly denies — the verification mechanism itself.",
+          "type": "string",
+          "enum": [
+            "verifier_tampering"
+          ]
+        },
+        {
+          "description": "The subject addressed a session outside its own session tree.",
+          "type": "string",
+          "enum": [
+            "out_of_scope_session_access"
+          ]
+        },
+        {
+          "description": "Live secret material from the runner environment appeared in the transcript.",
+          "type": "string",
+          "enum": [
+            "secret_exposure"
+          ]
+        },
+        {
+          "description": "The subject invoked a destructive session or state operation.",
+          "type": "string",
+          "enum": [
+            "destructive_action"
+          ]
+        },
+        {
+          "description": "Observed work exceeded the scenario's expectation by an anomalous factor.",
+          "type": "string",
+          "enum": [
+            "anomalous_work"
+          ]
+        }
+      ]
+    },
+    "AuditFlagSource": {
+      "type": "string",
+      "enum": [
+        "deterministic",
+        "analyzer"
+      ]
+    },
+    "AuditReport": {
+      "type": "object",
+      "required": [
+        "analyzer_status",
+        "flags"
+      ],
+      "properties": {
+        "analyzer": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/AnalyzerIdentity"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "analyzer_error": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "analyzer_status": {
+          "$ref": "#/definitions/AuditAnalyzerStatus"
+        },
+        "analyzer_usage": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/AnalyzerUsage"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "flags": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/AuditFlag"
+          }
+        }
+      }
+    },
+    "AuditSeverity": {
+      "type": "string",
+      "enum": [
+        "info",
+        "warning",
+        "critical"
+      ]
+    },
     "BooleanCondition": {
       "type": "object",
       "required": [
@@ -914,6 +1100,17 @@
           "type": "integer",
           "format": "uint32",
           "minimum": 0.0
+        },
+        "audit": {
+          "description": "Advisory behavioral audit over the captured transcript and metrics. Never contributes to score, status, gates, or longitudinal inputs.",
+          "anyOf": [
+            {
+              "$ref": "#/definitions/AuditReport"
+            },
+            {
+              "type": "null"
+            }
+          ]
         },
         "cost": {
           "$ref": "#/definitions/CostReport"

@@ -168,6 +168,11 @@ pub struct RunRequest {
     pub judge_model: Option<String>,
     #[serde(default)]
     pub judge_provider: Option<String>,
+    /// Opt-in behavioral audit analyzer; supply model and provider together.
+    #[serde(default)]
+    pub audit_model: Option<String>,
+    #[serde(default)]
+    pub audit_provider: Option<String>,
     #[serde(default)]
     pub scenarios: Vec<ScenarioId>,
     #[serde(default = "default_runs")]
@@ -737,6 +742,7 @@ impl ControlPlane {
             unique_scenarios(&request.scenarios)
         };
         let judge = Some(judge_config(&request));
+        let audit_analyzer = audit_config(&request);
         let outcome = run_suite(SuiteRunConfig {
             url: self.inner.url.clone(),
             execution_id: None,
@@ -745,6 +751,7 @@ impl ControlPlane {
                 provider: request.provider.clone(),
             },
             judge,
+            audit_analyzer,
             output: output.clone(),
             scenarios,
             runs: request.runs,
@@ -1342,6 +1349,9 @@ fn validate_run_request(request: &RunRequest) -> Result<LaneBudget> {
     if request.judge_model.is_some() != request.judge_provider.is_some() {
         bail!("judge_model and judge_provider must be supplied together");
     }
+    if request.audit_model.is_some() != request.audit_provider.is_some() {
+        bail!("audit_model and audit_provider must be supplied together");
+    }
     if let Some(contract) = &request.run_contract {
         contract.validate()?;
         let expected = observation_idempotency_key(request)?;
@@ -1476,6 +1486,14 @@ fn lane_budget(lane: &str) -> LaneBudget {
         max_technical_retries,
         max_declared_turns,
     }
+}
+
+fn audit_config(request: &RunRequest) -> Option<JudgeConfig> {
+    request
+        .audit_model
+        .clone()
+        .zip(request.audit_provider.clone())
+        .map(|(model, provider)| JudgeConfig { model, provider })
 }
 
 fn judge_config(request: &RunRequest) -> JudgeConfig {
@@ -1943,6 +1961,8 @@ mod tests {
             provider: "provider".into(),
             judge_model: None,
             judge_provider: None,
+            audit_model: None,
+            audit_provider: None,
             scenarios: vec![ScenarioId::PersistentState],
             runs: 1,
             seed: Some(42),
