@@ -1,7 +1,7 @@
 # Fault injection and Weekly Stress
 
-Weekly Stress measures real recovery at L4 and L5. Repository code defines and
-evaluates perturbations, while an environment-owned supervisor applies them.
+Weekly Stress measures real recovery at L2 through L5. Repository code defines
+and evaluates perturbations, while an environment-owned supervisor applies them.
 This boundary prevents code from a source artifact or pull request from gaining
 host, network, provider, or storage credentials.
 
@@ -21,9 +21,41 @@ Each attempt has four immutable JSON documents:
    `structural_failure`, or `infrastructure_failure`.
 
 The checked-in profiles exercise delay, fail-first, duplicate delivery, child
-timeout, transient disconnect, out-of-order results, and cancellation. A
+timeout, transient disconnect, out-of-order results, malformed results (the
+supervisor corrupts the result payload of the first call to each named target,
+so the subject receives undecodable, contract-breaking bytes once), throttle
+bursts (the supervisor answers the target's next N calls with a
+provider-throttle 429-style rejection at a fixed spacing), and cancellation. A
 planned action that was not triggered is a benchmark infrastructure failure;
 it cannot be reported as a product failure or a successful recovery.
+
+The profiles form a per-tier ladder with a work-amplification budget that
+tightens as complexity drops: `weekly-l2-recovery` (subject family
+`stateful.2`, amplification ≤ 2.0) perturbs a childless stateful subject with
+delay, a failed first write, and duplicate delivery only — child perturbations
+would be untriggerable there and therefore benchmark infrastructure failures;
+`weekly-l3-recovery` (`coordination.3`, ≤ 3.0) adds a failed first child,
+child timeout, and out-of-order results; `weekly-l3-degraded`
+(`coordination.3`, ≤ 2.5) corrupts the first result of a coordination child
+with `malformed_result` under a delayed send and duplicate delivery and
+expects a degraded finish; `weekly-l4-recovery` (`coordination.4`, ≤ 3.5) and
+the two L5 profiles (`coordination.5`, ≤ 5.0 recovery and ≤ 3.0 cancellation)
+keep the existing coordinated coverage. The supervisor owns the mapping from
+each scenario family to a concrete subject workload.
+
+A `degraded` profile expects the subject to finish WITHOUT a correct
+deliverable: a hard-gate-failed but structurally clean, fully cleaned-up,
+bounded run. It classifies as `correct_recovery` only when every planned
+action was applied and recovered, cleanup completed, structural integrity
+held, work amplification stayed within budget, and the canonical results show
+the deliverable did not pass; a passed deliverable means the perturbation
+failed to bite and is a benchmark infrastructure failure. Structural breakage
+stays `structural_failure` and an over-budget run stays `excessive_recovery`.
+Degraded profiles must not declare a cancellation rule and require
+`--results`. The protected supervisor must implement the `malformed_result`
+and `throttle_burst` action kinds before `weekly-l3-degraded` can run; until
+it does, a planned-but-untriggered action correctly reports as a benchmark
+infrastructure failure rather than a product outcome.
 
 Materialize a plan with:
 
@@ -44,7 +76,8 @@ cargo run --locked -- fault-evaluate \
   --output target/fault-evaluation.json
 ```
 
-Cancellation profiles omit `--results`; the journal must prove that
+Cancellation profiles omit `--results`; recovered and degraded profiles
+require it. For cancellation the journal must prove that
 `e2e::cancel` reached a terminal cancelled state, the active attempt was
 cleared, child work was terminal, and scenario compensation completed.
 

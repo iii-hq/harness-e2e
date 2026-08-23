@@ -1,0 +1,13 @@
+{
+  "baseline_id": "default",
+  "review_notes": "2026-08-22 initial review: mirrors code defaults",
+  "thresholds": {
+    "deliverable_success_drop": 0.03,
+    "structural_integrity_drop": 0.02,
+    "technical_failure_increase": 0.02,
+    "cost_increase_ratio": 0.2,
+    "wall_time_increase_ratio": 0.2,
+    "p95_turns_increase_ratio": 0.25
+  },
+  "scenario_overrides": {}
+}

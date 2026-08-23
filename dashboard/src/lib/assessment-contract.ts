@@ -102,6 +102,7 @@ export type AiFinalAssessment = {
     facts: string[]
     strengths?: string[]
     concerns?: string[]
+    diagnosis?: string
     recommendation: string
     limitations?: string[]
     evidence?: EvidenceReference[]

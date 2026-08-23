@@ -14,12 +14,20 @@ use crate::report::{E2eReport, EvaluationDimension};
 const MAX_DELAY_MS: u64 = 120_000;
 const MAX_DISCONNECT_MS: u64 = 300_000;
 const MAX_ACTIONS: usize = 64;
+const MAX_THROTTLE_RESPONSES: u8 = 16;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum ExpectedTerminalOutcome {
     Recovered,
     Cancelled,
+    /// The subject is expected to finish WITHOUT a correct deliverable: a
+    /// hard-gate-failed but structurally clean, fully cleaned-up, bounded run.
+    /// A wrong-but-structural result is the expectation, so it classifies as
+    /// `correct_recovery`; a passed deliverable means the perturbation failed
+    /// to bite and is a benchmark infrastructure failure. Degraded profiles
+    /// must not declare a cancellation rule and require canonical results.
+    Degraded,
 }
 
 fn default_expected_outcome() -> ExpectedTerminalOutcome {
@@ -59,6 +67,16 @@ fn default_cancel_grace_ms() -> u64 {
     30_000
 }
 
+/// The supervisor answers the target's next `responses` calls with a
+/// provider-throttle (429-style) rejection, spaced `spacing_ms` apart.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ThrottleRule {
+    pub target: String,
+    pub responses: u8,
+    pub spacing_ms: u64,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct FaultProfile {
@@ -70,12 +88,19 @@ pub struct FaultProfile {
     pub delayed_calls: Vec<DelayRule>,
     #[serde(default)]
     pub fail_first_attempt: Vec<String>,
+    /// The supervisor corrupts the result payload of the first call to each
+    /// named target: the subject receives undecodable, contract-breaking
+    /// bytes exactly once per target.
+    #[serde(default)]
+    pub malformed_results: Vec<String>,
     #[serde(default)]
     pub duplicate_events: bool,
     #[serde(default)]
     pub child_timeout_ms: Option<u64>,
     #[serde(default)]
     pub transient_disconnect: Option<DisconnectRule>,
+    #[serde(default)]
+    pub throttle_burst: Option<ThrottleRule>,
     #[serde(default)]
     pub out_of_order_results: bool,
     #[serde(default)]
@@ -113,6 +138,22 @@ impl FaultProfile {
                 bail!("fail-first target '{target}' is duplicated");
             }
         }
+        let mut malformed_targets = BTreeSet::new();
+        for target in &self.malformed_results {
+            validate_target(target, "malformed-result target")?;
+            if !malformed_targets.insert(target) {
+                bail!("malformed-result target '{target}' is duplicated");
+            }
+        }
+        if let Some(throttle) = &self.throttle_burst {
+            validate_target(&throttle.target, "throttle target")?;
+            if throttle.responses == 0 || throttle.responses > MAX_THROTTLE_RESPONSES {
+                bail!("throttle responses must be between 1 and {MAX_THROTTLE_RESPONSES}");
+            }
+            if throttle.spacing_ms == 0 || throttle.spacing_ms > MAX_DELAY_MS {
+                bail!("throttle spacing_ms must be between 1 and {MAX_DELAY_MS}");
+            }
+        }
         if let Some(timeout_ms) = self.child_timeout_ms {
             if timeout_ms == 0 || timeout_ms > MAX_DELAY_MS {
                 bail!("child_timeout_ms must be between 1 and {MAX_DELAY_MS}");
@@ -131,6 +172,9 @@ impl FaultProfile {
             }
             (ExpectedTerminalOutcome::Recovered, Some(_)) => {
                 bail!("a recovered profile cannot declare a cancellation rule")
+            }
+            (ExpectedTerminalOutcome::Degraded, Some(_)) => {
+                bail!("a degraded profile cannot declare a cancellation rule")
             }
             (_, Some(cancellation)) => {
                 validate_identifier(&cancellation.after_action, "cancellation after_action")?;
@@ -178,6 +222,24 @@ impl FaultProfile {
                 None,
                 Some(1),
             ));
+        }
+        for target in &self.malformed_results {
+            planned.push(PlannedAction::new(
+                FaultActionKind::MalformedResult,
+                target.clone(),
+                None,
+                Some(1),
+            ));
+        }
+        if let Some(throttle) = &self.throttle_burst {
+            for response in 1..=throttle.responses {
+                planned.push(PlannedAction::new(
+                    FaultActionKind::ThrottleBurst,
+                    throttle.target.clone(),
+                    Some(throttle.spacing_ms),
+                    Some(u32::from(response)),
+                ));
+            }
         }
         if self.duplicate_events {
             planned.push(PlannedAction::new(
@@ -240,6 +302,11 @@ impl FaultProfile {
             .map(|rule| usize::from(rule.occurrences))
             .sum::<usize>()
             + self.fail_first_attempt.len()
+            + self.malformed_results.len()
+            + self
+                .throttle_burst
+                .as_ref()
+                .map_or(0, |throttle| usize::from(throttle.responses))
             + usize::from(self.duplicate_events)
             + usize::from(self.child_timeout_ms.is_some())
             + usize::from(self.transient_disconnect.is_some())
@@ -255,6 +322,8 @@ impl FaultProfile {
 pub enum FaultActionKind {
     DelayCall,
     FailFirstAttempt,
+    MalformedResult,
+    ThrottleBurst,
     DuplicateEvent,
     ChildTimeout,
     TransientDisconnect,
@@ -608,6 +677,30 @@ impl FaultEvaluation {
             ExpectedTerminalOutcome::Cancelled if !journal.cancellation_observed => {
                 reasons.push("cancellation was not observed by the control plane".into());
             }
+            // A degraded profile expects a hard-gate-failed but structurally
+            // clean, fully cleaned-up, bounded run. It requires canonical
+            // results, and a passed deliverable means the perturbation failed
+            // to bite: that is a benchmark infrastructure failure, never a
+            // product success.
+            ExpectedTerminalOutcome::Degraded if report.is_none() => {
+                reasons.push("a degraded profile requires canonical results".into());
+            }
+            ExpectedTerminalOutcome::Degraded if deliverable_correct.is_none() => {
+                infrastructure_failure = true;
+                reasons.push("canonical results have no deliverable outcome".into());
+            }
+            ExpectedTerminalOutcome::Degraded if structural_integrity.is_none() => {
+                infrastructure_failure = true;
+                reasons.push("canonical results have no structural outcome".into());
+            }
+            ExpectedTerminalOutcome::Degraded if deliverable_correct == Some(true) => {
+                infrastructure_failure = true;
+                reasons.push(
+                    "deliverable passed although the degraded profile expects the perturbation \
+                     to deny a correct deliverable"
+                        .into(),
+                );
+            }
             _ => {}
         }
         if report.is_none() && journal.results_sha256.is_some() {
@@ -636,6 +729,8 @@ impl FaultEvaluation {
             RecoveryClassification::StructuralFailure
         } else if (profile.expected_outcome == ExpectedTerminalOutcome::Recovered
             && deliverable_correct != Some(true))
+            || (profile.expected_outcome == ExpectedTerminalOutcome::Degraded
+                && deliverable_correct.is_none())
             || (profile.expected_outcome == ExpectedTerminalOutcome::Cancelled
                 && !journal.cancellation_observed)
         {
@@ -791,6 +886,7 @@ mod tests {
                 occurrences: 2,
             }],
             fail_first_attempt: vec!["child-2".into()],
+            malformed_results: Vec::new(),
             duplicate_events: true,
             child_timeout_ms: Some(1_000),
             transient_disconnect: Some(DisconnectRule {
@@ -798,10 +894,37 @@ mod tests {
                 after_action: "first-child-started".into(),
                 duration_ms: 500,
             }),
+            throttle_burst: None,
             out_of_order_results: true,
             cancellation: None,
             max_work_amplification: 4.0,
         }
+    }
+
+    fn degraded_profile() -> FaultProfile {
+        let mut profile = profile();
+        profile.profile_id = "weekly-l5-degraded".into();
+        profile.expected_outcome = ExpectedTerminalOutcome::Degraded;
+        profile.malformed_results = vec!["coordination-child-1".into()];
+        profile
+    }
+
+    fn degraded_report(work_amplification: f64) -> E2eReport {
+        let mut report = passing_report(work_amplification);
+        report.passed = false;
+        for scenario in &mut report.scenarios {
+            scenario.passed = false;
+            for run in &mut scenario.runs {
+                run.status = RunStatus::HardGateFailed;
+                run.score = Some(0);
+                for dimension in &mut run.dimensions {
+                    if dimension.dimension == EvaluationDimension::Deliverable {
+                        dimension.passed = Some(false);
+                    }
+                }
+            }
+        }
+        report
     }
 
     #[test]
@@ -836,7 +959,10 @@ mod tests {
     fn checked_in_weekly_profiles_are_valid_and_materializable() {
         let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("config/profiles");
         for name in [
+            "weekly-l2-recovery.json",
+            "weekly-l3-recovery.json",
             "weekly-l4-recovery.json",
+            "weekly-l3-degraded.json",
             "weekly-l5-recovery.json",
             "weekly-l5-cancellation.json",
         ] {
@@ -845,6 +971,99 @@ mod tests {
             plan.validate().unwrap();
             assert_eq!(plan.profile_id, name.trim_end_matches(".json"));
         }
+    }
+
+    #[test]
+    fn malformed_results_and_throttle_burst_materialize_deterministically() {
+        let mut profile = profile();
+        profile.malformed_results =
+            vec!["coordination-child-1".into(), "coordination-child-3".into()];
+        profile.throttle_burst = Some(ThrottleRule {
+            target: "provider::completion".into(),
+            responses: 3,
+            spacing_ms: 200,
+        });
+        let first = profile.materialize().unwrap();
+        let second = profile.materialize().unwrap();
+        assert_eq!(
+            serde_json::to_value(&first).unwrap(),
+            serde_json::to_value(&second).unwrap()
+        );
+        assert_eq!(first.actions.len(), 12);
+        first.validate().unwrap();
+        let malformed = first
+            .actions
+            .iter()
+            .filter(|action| action.kind == FaultActionKind::MalformedResult)
+            .collect::<Vec<_>>();
+        assert_eq!(malformed.len(), 2);
+        assert!(malformed
+            .iter()
+            .all(|action| action.trigger_attempt == Some(1) && action.duration_ms.is_none()));
+        assert_eq!(
+            malformed
+                .iter()
+                .map(|action| action.target.as_str())
+                .collect::<BTreeSet<_>>(),
+            BTreeSet::from(["coordination-child-1", "coordination-child-3"])
+        );
+        let throttled = first
+            .actions
+            .iter()
+            .filter(|action| action.kind == FaultActionKind::ThrottleBurst)
+            .collect::<Vec<_>>();
+        assert_eq!(throttled.len(), 3);
+        assert!(throttled
+            .iter()
+            .all(|action| action.target == "provider::completion"
+                && action.duration_ms == Some(200)));
+        assert_eq!(
+            throttled
+                .iter()
+                .filter_map(|action| action.trigger_attempt)
+                .collect::<BTreeSet<_>>(),
+            BTreeSet::from([1, 2, 3])
+        );
+    }
+
+    #[test]
+    fn throttle_burst_bounds_are_enforced() {
+        let mut profile = profile();
+        for (responses, spacing_ms) in [(0, 100), (17, 100), (1, 0), (1, MAX_DELAY_MS + 1)] {
+            profile.throttle_burst = Some(ThrottleRule {
+                target: "provider::completion".into(),
+                responses,
+                spacing_ms,
+            });
+            assert!(profile.validate().is_err());
+        }
+        profile.throttle_burst = Some(ThrottleRule {
+            target: "provider::completion".into(),
+            responses: 16,
+            spacing_ms: MAX_DELAY_MS,
+        });
+        assert!(profile.validate().is_ok());
+    }
+
+    #[test]
+    fn duplicate_malformed_result_targets_are_rejected() {
+        let mut profile = profile();
+        profile.malformed_results =
+            vec!["coordination-child-1".into(), "coordination-child-1".into()];
+        assert!(profile.validate().is_err());
+        profile.malformed_results = vec!["coordination-child-1".into()];
+        assert!(profile.validate().is_ok());
+    }
+
+    #[test]
+    fn degraded_profile_rejects_a_cancellation_rule() {
+        let mut profile = degraded_profile();
+        assert!(profile.validate().is_ok());
+        profile.cancellation = Some(CancellationRule {
+            after_action: "fail-first-attempt".into(),
+            grace_period_ms: 1_000,
+        });
+        assert!(profile.validate().is_err());
     }
 
     #[test]
@@ -939,6 +1158,48 @@ mod tests {
         assert_eq!(
             evaluation.classification,
             RecoveryClassification::StructuralFailure
+        );
+    }
+
+    #[test]
+    fn degraded_profile_expects_a_failed_deliverable() {
+        let profile = degraded_profile();
+        let plan = profile.materialize().unwrap();
+        let report = degraded_report(2.0);
+        let journal = recovered_journal(&plan, &report);
+        let evaluation =
+            FaultEvaluation::evaluate(&profile, &plan, &journal, Some(&report)).unwrap();
+        assert_eq!(
+            evaluation.classification,
+            RecoveryClassification::CorrectRecovery
+        );
+        assert_eq!(evaluation.deliverable_correct, Some(false));
+
+        let report = passing_report(2.0);
+        let journal = recovered_journal(&plan, &report);
+        let evaluation =
+            FaultEvaluation::evaluate(&profile, &plan, &journal, Some(&report)).unwrap();
+        assert_eq!(
+            evaluation.classification,
+            RecoveryClassification::InfrastructureFailure
+        );
+        assert!(evaluation
+            .reasons
+            .iter()
+            .any(|reason| reason.contains("degraded profile expects")));
+    }
+
+    #[test]
+    fn degraded_over_amplification_is_excessive_recovery() {
+        let profile = degraded_profile();
+        let plan = profile.materialize().unwrap();
+        let report = degraded_report(5.0);
+        let journal = recovered_journal(&plan, &report);
+        let evaluation =
+            FaultEvaluation::evaluate(&profile, &plan, &journal, Some(&report)).unwrap();
+        assert_eq!(
+            evaluation.classification,
+            RecoveryClassification::ExcessiveRecovery
         );
     }
 

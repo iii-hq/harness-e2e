@@ -15,29 +15,47 @@ use crate::report::HardGateReport;
 use crate::wire::SessionMetricsResponse;
 
 mod assessment;
+pub mod chess_engine;
+pub mod chess_engine_build;
+pub mod chess_play_ladder;
+pub mod cleanup_under_failure;
 pub mod common;
+pub mod contention_ledger;
+pub mod context_pressure;
 pub mod custom_validator;
+pub mod depth_ladder;
 pub mod direct_answer;
 mod domain;
 pub mod engineering_ticket;
+pub mod fanout_ladder;
 pub mod git_regression_forensics;
 pub mod incident_response;
 pub mod mechanical_reaction;
+pub mod minimal_path;
+pub mod moving_target;
 pub mod multi_subagent_validation;
+pub mod no_polling_discipline;
 pub mod persistent_state;
+pub mod poison_message;
+pub mod prompt_injection_resilience;
+pub mod quorum_fan_in;
 pub mod reactive_automation;
 pub mod receiving_operation;
 pub mod research_pipeline;
+pub mod secret_hygiene;
 pub mod security_review;
+pub mod sequential_pipeline;
 pub mod shell_coder_sandbox;
 pub mod subagent_validation;
 pub mod subagent_validation_failure;
 pub mod timer_wake;
 pub mod todo_worker;
+pub mod trend_blog;
 pub mod validation_chain;
 pub mod validation_loop;
 pub mod validation_scope_enforcement;
 pub mod validation_self_repair;
+pub mod wake_chain_soak;
 
 pub use domain::{
     scenario_contract_sha256, stable_seed, ArtifactExpectation, CapturedDeliverable,
@@ -358,6 +376,10 @@ fn captured_gate_invariants(objective: ObjectiveEvaluation) -> Vec<CapturedInvar
 pub enum ScenarioId {
     #[value(name = "direct_answer")]
     DirectAnswer,
+    #[value(name = "sequential_pipeline")]
+    SequentialPipeline,
+    #[value(name = "context_pressure")]
+    ContextPressure,
     #[value(name = "persistent_state")]
     PersistentState,
     #[value(name = "reactive_automation")]
@@ -366,6 +388,8 @@ pub enum ScenarioId {
     ShellCoderSandbox,
     #[value(name = "research_pipeline")]
     ResearchPipeline,
+    #[value(name = "fanout_ladder")]
+    FanoutLadder,
     #[value(name = "security_review")]
     SecurityReview,
     #[value(name = "incident_response")]
@@ -402,15 +426,46 @@ pub enum ScenarioId {
     ValidationScopeEnforcement,
     #[value(name = "validation_chain")]
     ValidationChain,
+    #[value(name = "secret_hygiene")]
+    SecretHygiene,
+    #[value(name = "prompt_injection_resilience")]
+    PromptInjectionResilience,
+    #[value(name = "moving_target")]
+    MovingTarget,
+    #[value(name = "poison_message")]
+    PoisonMessage,
+    #[value(name = "cleanup_under_failure")]
+    CleanupUnderFailure,
+    #[value(name = "depth_ladder")]
+    DepthLadder,
+    #[value(name = "quorum_fan_in")]
+    QuorumFanIn,
+    #[value(name = "contention_ledger")]
+    ContentionLedger,
+    #[value(name = "minimal_path")]
+    MinimalPath,
+    #[value(name = "no_polling_discipline")]
+    NoPollingDiscipline,
+    #[value(name = "wake_chain_soak")]
+    WakeChainSoak,
+    #[value(name = "chess_engine_build")]
+    ChessEngineBuild,
+    #[value(name = "chess_play_ladder")]
+    ChessPlayLadder,
+    #[value(name = "trend_blog")]
+    TrendBlog,
 }
 
 impl ScenarioId {
-    pub const ALL: [Self; 23] = [
+    pub const ALL: [Self; 40] = [
         Self::DirectAnswer,
+        Self::SequentialPipeline,
+        Self::ContextPressure,
         Self::PersistentState,
         Self::ReactiveAutomation,
         Self::ShellCoderSandbox,
         Self::ResearchPipeline,
+        Self::FanoutLadder,
         Self::SecurityReview,
         Self::IncidentResponse,
         Self::TodoWorkerSimple,
@@ -429,15 +484,32 @@ impl ScenarioId {
         Self::ValidationSelfRepair,
         Self::ValidationScopeEnforcement,
         Self::ValidationChain,
+        Self::SecretHygiene,
+        Self::PromptInjectionResilience,
+        Self::MovingTarget,
+        Self::PoisonMessage,
+        Self::CleanupUnderFailure,
+        Self::DepthLadder,
+        Self::QuorumFanIn,
+        Self::ContentionLedger,
+        Self::MinimalPath,
+        Self::NoPollingDiscipline,
+        Self::WakeChainSoak,
+        Self::ChessEngineBuild,
+        Self::ChessPlayLadder,
+        Self::TrendBlog,
     ];
 
     pub fn as_str(self) -> &'static str {
         match self {
             Self::DirectAnswer => direct_answer::ID,
+            Self::SequentialPipeline => sequential_pipeline::ID,
+            Self::ContextPressure => context_pressure::ID,
             Self::PersistentState => persistent_state::ID,
             Self::ReactiveAutomation => reactive_automation::ID,
             Self::ShellCoderSandbox => shell_coder_sandbox::ID,
             Self::ResearchPipeline => research_pipeline::ID,
+            Self::FanoutLadder => fanout_ladder::ID,
             Self::SecurityReview => security_review::ID,
             Self::IncidentResponse => incident_response::ID,
             Self::TodoWorkerSimple => todo_worker::SIMPLE_ID,
@@ -456,16 +528,33 @@ impl ScenarioId {
             Self::ValidationSelfRepair => validation_self_repair::ID,
             Self::ValidationScopeEnforcement => validation_scope_enforcement::ID,
             Self::ValidationChain => validation_chain::ID,
+            Self::SecretHygiene => secret_hygiene::ID,
+            Self::PromptInjectionResilience => prompt_injection_resilience::ID,
+            Self::MovingTarget => moving_target::ID,
+            Self::PoisonMessage => poison_message::ID,
+            Self::CleanupUnderFailure => cleanup_under_failure::ID,
+            Self::DepthLadder => depth_ladder::ID,
+            Self::QuorumFanIn => quorum_fan_in::ID,
+            Self::ContentionLedger => contention_ledger::ID,
+            Self::MinimalPath => minimal_path::ID,
+            Self::NoPollingDiscipline => no_polling_discipline::ID,
+            Self::WakeChainSoak => wake_chain_soak::ID,
+            Self::ChessEngineBuild => chess_engine_build::ID,
+            Self::ChessPlayLadder => chess_play_ladder::ID,
+            Self::TrendBlog => trend_blog::ID,
         }
     }
 
     pub fn spec(self, run_id: &str) -> ScenarioSpec {
         match self {
             Self::DirectAnswer => direct_answer::scenario(run_id),
+            Self::SequentialPipeline => sequential_pipeline::scenario(run_id),
+            Self::ContextPressure => context_pressure::scenario(run_id),
             Self::PersistentState => persistent_state::scenario(run_id),
             Self::ReactiveAutomation => reactive_automation::scenario(run_id),
             Self::ShellCoderSandbox => shell_coder_sandbox::scenario(run_id),
             Self::ResearchPipeline => research_pipeline::scenario(run_id),
+            Self::FanoutLadder => fanout_ladder::scenario(run_id),
             Self::SecurityReview => security_review::scenario(run_id),
             Self::IncidentResponse => incident_response::scenario(run_id),
             Self::TodoWorkerSimple => todo_worker::simple_scenario(run_id),
@@ -484,16 +573,33 @@ impl ScenarioId {
             Self::ValidationSelfRepair => validation_self_repair::scenario(run_id),
             Self::ValidationScopeEnforcement => validation_scope_enforcement::scenario(run_id),
             Self::ValidationChain => validation_chain::scenario(run_id),
+            Self::SecretHygiene => secret_hygiene::scenario(run_id),
+            Self::PromptInjectionResilience => prompt_injection_resilience::scenario(run_id),
+            Self::MovingTarget => moving_target::scenario(run_id),
+            Self::PoisonMessage => poison_message::scenario(run_id),
+            Self::CleanupUnderFailure => cleanup_under_failure::scenario(run_id),
+            Self::DepthLadder => depth_ladder::scenario(run_id),
+            Self::QuorumFanIn => quorum_fan_in::scenario(run_id),
+            Self::ContentionLedger => contention_ledger::scenario(run_id),
+            Self::MinimalPath => minimal_path::scenario(run_id),
+            Self::NoPollingDiscipline => no_polling_discipline::scenario(run_id),
+            Self::WakeChainSoak => wake_chain_soak::scenario(run_id),
+            Self::ChessEngineBuild => chess_engine_build::scenario(run_id),
+            Self::ChessPlayLadder => chess_play_ladder::scenario(run_id),
+            Self::TrendBlog => trend_blog::scenario(run_id),
         }
     }
 
     pub fn materialize(self, namespace: &str, seed: u64) -> Result<MaterializedScenario> {
         let materialized = match self {
             Self::DirectAnswer => direct_answer::materialize(namespace, seed)?,
+            Self::SequentialPipeline => sequential_pipeline::materialize(namespace, seed)?,
+            Self::ContextPressure => context_pressure::materialize(namespace, seed)?,
             Self::PersistentState => persistent_state::materialize(namespace, seed)?,
             Self::ReactiveAutomation => reactive_automation::materialize(namespace, seed)?,
             Self::ShellCoderSandbox => shell_coder_sandbox::materialize(namespace, seed)?,
             Self::ResearchPipeline => research_pipeline::materialize(namespace, seed)?,
+            Self::FanoutLadder => fanout_ladder::materialize(namespace, seed)?,
             Self::SecurityReview => security_review::materialize(namespace, seed)?,
             Self::IncidentResponse => incident_response::materialize(namespace, seed)?,
             Self::TodoWorkerSimple => todo_worker::simple_materialize(namespace, seed)?,
@@ -520,6 +626,22 @@ impl ScenarioId {
                 validation_scope_enforcement::materialize(namespace, seed)?
             }
             Self::ValidationChain => validation_chain::materialize(namespace, seed)?,
+            Self::SecretHygiene => secret_hygiene::materialize(namespace, seed)?,
+            Self::PromptInjectionResilience => {
+                prompt_injection_resilience::materialize(namespace, seed)?
+            }
+            Self::MovingTarget => moving_target::materialize(namespace, seed)?,
+            Self::PoisonMessage => poison_message::materialize(namespace, seed)?,
+            Self::CleanupUnderFailure => cleanup_under_failure::materialize(namespace, seed)?,
+            Self::DepthLadder => depth_ladder::materialize(namespace, seed)?,
+            Self::QuorumFanIn => quorum_fan_in::materialize(namespace, seed)?,
+            Self::ContentionLedger => contention_ledger::materialize(namespace, seed)?,
+            Self::MinimalPath => minimal_path::materialize(namespace, seed)?,
+            Self::NoPollingDiscipline => no_polling_discipline::materialize(namespace, seed)?,
+            Self::WakeChainSoak => wake_chain_soak::materialize(namespace, seed)?,
+            Self::ChessEngineBuild => chess_engine_build::materialize(namespace, seed)?,
+            Self::ChessPlayLadder => chess_play_ladder::materialize(namespace, seed)?,
+            Self::TrendBlog => trend_blog::materialize(namespace, seed)?,
         };
         materialized.validate()?;
         Ok(materialized)
@@ -528,6 +650,21 @@ impl ScenarioId {
     pub fn canonical_seed(self) -> u64 {
         if self == Self::EngineeringTicket {
             return engineering_ticket::CANONICAL_SEED;
+        }
+        if self == Self::FanoutLadder {
+            return fanout_ladder::CANONICAL_SEED;
+        }
+        if self == Self::ContextPressure {
+            return context_pressure::CANONICAL_SEED;
+        }
+        if self == Self::DepthLadder {
+            return depth_ladder::CANONICAL_SEED;
+        }
+        if self == Self::WakeChainSoak {
+            return wake_chain_soak::CANONICAL_SEED;
+        }
+        if self == Self::ChessPlayLadder {
+            return chess_play_ladder::CANONICAL_SEED;
         }
         // Stable FNV-1a keeps canonical cases reproducible without tying their
         // identity to a particular execution or retry attempt.
@@ -562,7 +699,7 @@ mod tests {
 
     use super::*;
     #[test]
-    fn registry_contains_twenty_three_unique_valid_scenarios() {
+    fn registry_contains_forty_unique_valid_scenarios() {
         let mut ids = HashSet::new();
         for scenario in ScenarioId::ALL {
             assert!(ids.insert(scenario.as_str()));
@@ -571,7 +708,7 @@ mod tests {
                 .materialize("run", scenario.canonical_seed())
                 .unwrap();
         }
-        assert_eq!(ids.len(), 23);
+        assert_eq!(ids.len(), 40);
     }
 
     #[test]

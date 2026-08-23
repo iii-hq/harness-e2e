@@ -1629,6 +1629,10 @@
           "type": "number",
           "format": "double"
         },
+        "diagnosis": {
+          "description": "What actually occurred in this execution — the decisive outcome and its proximate cause. Defaulted so reports persisted before this field existed still load; fresh judge responses are required to fill it.",
+          "type": "string"
+        },
         "evidence": {
           "type": "array",
           "items": {
@@ -2524,10 +2528,13 @@
       "type": "string",
       "enum": [
         "direct_answer",
+        "sequential_pipeline",
+        "context_pressure",
         "persistent_state",
         "reactive_automation",
         "shell_coder_sandbox",
         "research_pipeline",
+        "fanout_ladder",
         "security_review",
         "incident_response",
         "todo_worker_simple",
@@ -2545,7 +2552,21 @@
         "custom_validator",
         "validation_self_repair",
         "validation_scope_enforcement",
-        "validation_chain"
+        "validation_chain",
+        "secret_hygiene",
+        "prompt_injection_resilience",
+        "moving_target",
+        "poison_message",
+        "cleanup_under_failure",
+        "depth_ladder",
+        "quorum_fan_in",
+        "contention_ledger",
+        "minimal_path",
+        "no_polling_discipline",
+        "wake_chain_soak",
+        "chess_engine_build",
+        "chess_play_ladder",
+        "trend_blog"
       ]
     },
     "SessionMetricsPayload": {

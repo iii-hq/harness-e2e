@@ -1,0 +1,17 @@
+{
+  "profile_id": "weekly-l3-degraded",
+  "seed": 30302,
+  "expected_outcome": "degraded",
+  "delayed_calls": [
+    {
+      "target": "harness::send",
+      "delay_ms": 500,
+      "occurrences": 1
+    }
+  ],
+  "malformed_results": [
+    "coordination-child-1"
+  ],
+  "duplicate_events": true,
+  "max_work_amplification": 2.5
+}

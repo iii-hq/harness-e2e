@@ -733,15 +733,30 @@ function FinalAiCard({ run }: { run: AssessmentRunView }) {
       <div className="grid w-full gap-5 p-4">
         <section className="grid gap-2 lg:col-span-2">
           <h5 className="m-0 text-[0.62rem] font-semibold uppercase tracking-[0.06em] text-ink-muted">
-            AI recommended next steps
+            AI advisory
           </h5>
           <p className="m-0 text-xs text-ink-muted">
             Advisory guidance from the AI assessment. The objective system
             outcome remains authoritative.
           </p>
-          <p className="m-0 border-l-2 border-brand pl-3 text-sm leading-5 text-ink-soft">
-            {result.recommendation || buildHarnessRecommendation(run)}
-          </p>
+          {result.diagnosis ? (
+            <div className="grid gap-1">
+              <p className="m-0 text-[0.62rem] font-semibold uppercase tracking-[0.06em] text-ink-muted">
+                What happened
+              </p>
+              <p className="m-0 border-l-2 border-[var(--color-rule)] pl-3 text-sm leading-5 text-ink-soft">
+                {result.diagnosis}
+              </p>
+            </div>
+          ) : null}
+          <div className="grid gap-1">
+            <p className="m-0 text-[0.62rem] font-semibold uppercase tracking-[0.06em] text-ink-muted">
+              Suggested correction or improvement
+            </p>
+            <p className="m-0 border-l-2 border-brand pl-3 text-sm leading-5 text-ink-soft">
+              {result.recommendation || buildHarnessRecommendation(run)}
+            </p>
+          </div>
         </section>
         <section
           className="grid w-full gap-2 lg:col-span-2"

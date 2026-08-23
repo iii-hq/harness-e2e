@@ -285,8 +285,14 @@ pub struct ResultsListResponse {
 pub struct CompareRequest {
     pub from_execution_id: String,
     pub to_execution_id: String,
+    /// Explicit policy override. Omit to gate on the reviewed baseline.
     #[serde(default)]
-    pub policy: ComparisonPolicy,
+    pub policy: Option<ComparisonPolicy>,
+    /// Reviewed baseline file to load thresholds from. Omit to use the
+    /// checked-in `config/baselines/default.json` when it exists, falling back
+    /// to the code-default thresholds. Ignored when `policy` is set.
+    #[serde(default)]
+    pub baseline: Option<PathBuf>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -1016,7 +1022,11 @@ impl ControlPlane {
                 bail!("{side} execution must be completed before comparison");
             }
         }
-        let comparison = compare_records(&from, &to, request.policy)?;
+        let policy = match request.policy {
+            Some(policy) => policy,
+            None => longitudinal::load_comparison_policy(request.baseline.as_deref())?,
+        };
+        let comparison = compare_records(&from, &to, policy)?;
         let artifacts = longitudinal::write_comparison(
             &self.inner.output_root.join(&to.execution_id),
             &comparison,

@@ -75,6 +75,8 @@
       "enum": [
         "delay_call",
         "fail_first_attempt",
+        "malformed_result",
+        "throttle_burst",
         "duplicate_event",
         "child_timeout",
         "transient_disconnect",

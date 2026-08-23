@@ -64,6 +64,8 @@ const model: AssessmentWorkspaceModel = {
           facts: ['A response was produced.'],
           strengths: ['Clear wording'],
           concerns: ['The required durable result is missing.'],
+          diagnosis:
+            'The durable-result hard gate failed because no value was persisted.',
           recommendation: 'Fix the objective gate before release.',
           limitations: ['One sample'],
           evidence: [
@@ -142,9 +144,19 @@ describe('assessment workspace component', () => {
     expect(rendered).not.toContain('text-bg')
     expect(rendered.match(/role="tab"/g)).toHaveLength(4)
     expect(rendered).toContain('role="tabpanel"')
-    expect(detailHtml).toContain('AI recommended next steps')
+    expect(detailHtml).toContain('AI advisory')
     expect(detailHtml).toContain('Advisory guidance from the AI assessment')
+    expect(detailHtml).toContain('What happened')
+    expect(detailHtml).toContain(
+      'The durable-result hard gate failed because no value was persisted.',
+    )
+    expect(detailHtml).toContain('Suggested correction or improvement')
     expect(detailHtml).toContain('Fix the objective gate before release.')
+    expect(
+      detailHtml.indexOf(
+        'The durable-result hard gate failed because no value was persisted.',
+      ),
+    ).toBeLessThan(detailHtml.indexOf('Fix the objective gate before release.'))
     expect(detailHtml.indexOf('Objective hard gates')).toBeLessThan(
       detailHtml.indexOf('Outcome boundaries'),
     )
@@ -152,7 +164,7 @@ describe('assessment workspace component', () => {
       detailHtml.indexOf('Advisory AI conclusion'),
     )
     expect(detailHtml.indexOf('Advisory AI conclusion')).toBeLessThan(
-      detailHtml.indexOf('AI recommended next steps'),
+      detailHtml.indexOf('AI advisory'),
     )
     expect(rendered).toContain('Transcript')
     expect(rendered).toContain('data-transcript-action=')

@@ -32,11 +32,15 @@ an objective, technical, infrastructure, or resource failure. Keep factual obser
 When validation is supplied, assess construction only from that validation evidence. Describe an \
 in-run result such as 3/3 only as observed repeatability, never as broad reliability. If the \
 longitudinal cohort is ineligible, state that limitation explicitly. Never contradict a hard gate. \
-keep interpretations in strengths and concerns; make recommendation exclusively a concrete \
-harness or test remediation plan for the next execution (collection, serialization, fixtures, \
-scenario gates, provider transport, resource budgets, or assessment schema). Never recommend \
-shipping, changing product behavior, trusting or ignoring the AI, or making a model-quality \
-decision. Explicitly state evidence limitations. Return exactly one JSON object, without Markdown \
+keep interpretations in strengths and concerns. The advisory is two-part: make diagnosis a \
+plain-language account of what actually occurred in this execution — the decisive gate or \
+failure and its proximate cause, grounded only in the supplied facts and evidence — and make \
+recommendation exclusively one concrete correction or improvement for the next execution \
+(collection, serialization, fixtures, scenario gates, provider transport, resource budgets, or \
+assessment schema). Never restate the diagnosis inside the recommendation, and never recommend \
+rebuilding a check the supplied evidence shows already exists. Never recommend shipping, \
+changing product behavior, trusting or ignoring the AI, or making a model-quality decision. \
+Explicitly state evidence limitations. Return exactly one JSON object, without Markdown \
 or explanatory text.";
 pub const JUDGE_PROTOCOL: &str = "assessment-json";
 const MAX_JUDGE_ATTEMPTS: u8 = 3;
@@ -470,7 +474,8 @@ pub async fn evaluate_final_assessment(
         "facts": ["objective observation copied from the supplied input"],
         "strengths": ["evidence-grounded positive interpretation"],
         "concerns": ["evidence-grounded risk or quality concern"],
-        "recommendation": "one concrete harness/test action for the next execution",
+        "diagnosis": "what occurred: the decisive gate or failure and its proximate cause, from the supplied evidence",
+        "recommendation": "one concrete harness/test correction or improvement for the next execution",
         "limitations": ["what the bounded evidence cannot establish"],
         "evidence": evidence,
     });
@@ -481,8 +486,11 @@ Use only pass, pass_with_concerns, fail, or inconclusive for verdict. quality_sc
 integer from 0 through 100 and confidence a number from 0 through 1. Include at least one fact. \
 Every evidence entry must exactly copy an immutable identity from the supplied input; do not \
 invent or alter artifact ids, hashes, or locators. If evidence identities are available, cite at \
-least one. The recommendation must be a harness/test remediation step for the next execution, \
-never a release, product, or model-quality recommendation. Use this exact object shape and replace \
+least one. The diagnosis must first explain what occurred — the decisive gate or failure and its \
+proximate cause from the supplied facts — before any advice. The recommendation must then be one \
+concrete harness/test correction or improvement for the next execution, never a release, product, \
+or model-quality recommendation, and never a rebuild of a check the evidence shows already ran. \
+Use this exact object shape and replace \
 only the example conclusions. When the input contains validation, construction claims must come \
 only from its probes and bundle identity; in-run repeatability is not longitudinal reliability, \
 and an ineligible longitudinal cohort must appear in limitations. Never override or contradict \
@@ -706,6 +714,9 @@ fn validate_final_assessment_response(
     result: FinalAssessmentResult,
 ) -> Result<FinalAssessmentResult> {
     result.validate()?;
+    if result.diagnosis.trim().is_empty() {
+        bail!("final assessment must explain what occurred (diagnosis) before recommending");
+    }
     let allowed = input
         .evidence_references()
         .into_iter()
@@ -1006,7 +1017,7 @@ fn final_assessment_response_schema() -> Value {
         "additionalProperties": false,
         "required": [
             "verdict", "quality_score", "confidence", "summary", "facts", "strengths",
-            "concerns", "recommendation", "limitations", "evidence"
+            "concerns", "diagnosis", "recommendation", "limitations", "evidence"
         ],
         "properties": {
             "verdict": {
@@ -1032,6 +1043,7 @@ fn final_assessment_response_schema() -> Value {
                 "maxItems": 8,
                 "items": { "type": "string", "minLength": 1, "maxLength": 1000 }
             },
+            "diagnosis": { "type": "string", "minLength": 1, "maxLength": 1500 },
             "recommendation": { "type": "string", "minLength": 1, "maxLength": 1500 },
             "limitations": {
                 "type": "array",
@@ -1321,6 +1333,7 @@ mod tests {
             facts: vec!["The persisted system status is passed.".into()],
             strengths: vec!["The deterministic result is complete.".into()],
             concerns: Vec::new(),
+            diagnosis: "Every hard gate passed and the deliverable matched its contract.".into(),
             recommendation: "Keep the current hard gates.".into(),
             limitations: vec!["Raw transcript content was not analyzed.".into()],
             evidence: vec![evidence],

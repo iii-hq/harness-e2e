@@ -1,7 +1,8 @@
 use std::collections::{BTreeMap, BTreeSet};
-use std::path::Path;
+use std::fs;
+use std::path::{Path, PathBuf};
 
-use anyhow::{Context, Result};
+use anyhow::{bail, Context, Result};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
@@ -40,10 +41,197 @@ impl Default for RegressionThresholds {
     }
 }
 
+impl RegressionThresholds {
+    pub fn validate(&self) -> Result<()> {
+        for (name, value) in [
+            ("deliverable_success_drop", self.deliverable_success_drop),
+            ("structural_integrity_drop", self.structural_integrity_drop),
+            (
+                "technical_failure_increase",
+                self.technical_failure_increase,
+            ),
+        ] {
+            if !value.is_finite() || !(0.0..=1.0).contains(&value) {
+                bail!("{name} must be a finite rate between 0.0 and 1.0");
+            }
+        }
+        for (name, value) in [
+            ("cost_increase_ratio", self.cost_increase_ratio),
+            ("wall_time_increase_ratio", self.wall_time_increase_ratio),
+            ("p95_turns_increase_ratio", self.p95_turns_increase_ratio),
+        ] {
+            if !value.is_finite() || value <= 0.0 {
+                bail!("{name} must be a finite ratio greater than zero");
+            }
+        }
+        Ok(())
+    }
+}
+
+/// Partial per-scenario replacement for [`RegressionThresholds`]: a named field
+/// replaces the baseline value, an omitted field inherits it.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ThresholdOverrides {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub deliverable_success_drop: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub structural_integrity_drop: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub technical_failure_increase: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cost_increase_ratio: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub wall_time_increase_ratio: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub p95_turns_increase_ratio: Option<f64>,
+}
+
+impl ThresholdOverrides {
+    pub fn apply(&self, base: RegressionThresholds) -> RegressionThresholds {
+        RegressionThresholds {
+            deliverable_success_drop: self
+                .deliverable_success_drop
+                .unwrap_or(base.deliverable_success_drop),
+            structural_integrity_drop: self
+                .structural_integrity_drop
+                .unwrap_or(base.structural_integrity_drop),
+            technical_failure_increase: self
+                .technical_failure_increase
+                .unwrap_or(base.technical_failure_increase),
+            cost_increase_ratio: self.cost_increase_ratio.unwrap_or(base.cost_increase_ratio),
+            wall_time_increase_ratio: self
+                .wall_time_increase_ratio
+                .unwrap_or(base.wall_time_increase_ratio),
+            p95_turns_increase_ratio: self
+                .p95_turns_increase_ratio
+                .unwrap_or(base.p95_turns_increase_ratio),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct ComparisonPolicy {
     #[serde(default)]
     pub regression: RegressionThresholds,
+    /// Identifier of the reviewed baseline these thresholds came from, when one
+    /// was loaded. Absent when the code-default thresholds are in effect.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub baseline_id: Option<String>,
+    /// Per-scenario partial threshold overrides carried from the reviewed baseline.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub scenario_overrides: BTreeMap<String, ThresholdOverrides>,
+}
+
+impl ComparisonPolicy {
+    pub fn thresholds_for(&self, scenario_id: &str) -> RegressionThresholds {
+        self.scenario_overrides
+            .get(scenario_id)
+            .map_or(self.regression, |overrides| {
+                overrides.apply(self.regression)
+            })
+    }
+}
+
+/// Repo-relative location of the reviewed default comparison baseline.
+pub const DEFAULT_BASELINE_RELATIVE_PATH: &str = "config/baselines/default.json";
+
+/// A reviewed, checked-in comparison baseline: the regression thresholds a
+/// comparison gates on, owned by `config/baselines/` rather than code.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct BaselinePolicy {
+    pub baseline_id: String,
+    /// Review provenance: who or what produced these values, and when.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub review_notes: String,
+    pub thresholds: RegressionThresholds,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub scenario_overrides: BTreeMap<String, ThresholdOverrides>,
+}
+
+impl BaselinePolicy {
+    pub fn read(path: &Path) -> Result<Self> {
+        let bytes = fs::read(path).with_context(|| format!("read {}", path.display()))?;
+        let baseline: Self = serde_json::from_slice(&bytes)
+            .with_context(|| format!("decode comparison baseline {}", path.display()))?;
+        baseline
+            .validate()
+            .with_context(|| format!("validate comparison baseline {}", path.display()))?;
+        Ok(baseline)
+    }
+
+    pub fn validate(&self) -> Result<()> {
+        validate_identifier(&self.baseline_id, "baseline_id")?;
+        self.thresholds
+            .validate()
+            .context("baseline thresholds are invalid")?;
+        for (scenario_id, overrides) in &self.scenario_overrides {
+            validate_identifier(scenario_id, "scenario_overrides key")?;
+            overrides.apply(self.thresholds).validate().with_context(|| {
+                format!("merged thresholds for scenario '{scenario_id}' are invalid")
+            })?;
+        }
+        Ok(())
+    }
+
+    pub fn thresholds_for(&self, scenario_id: &str) -> RegressionThresholds {
+        self.scenario_overrides
+            .get(scenario_id)
+            .map_or(self.thresholds, |overrides| {
+                overrides.apply(self.thresholds)
+            })
+    }
+
+    pub fn into_policy(self) -> ComparisonPolicy {
+        ComparisonPolicy {
+            regression: self.thresholds,
+            baseline_id: Some(self.baseline_id),
+            scenario_overrides: self.scenario_overrides,
+        }
+    }
+}
+
+/// The checked-in default baseline: next to the crate manifest in source
+/// checkouts (which covers tests), otherwise relative to the working directory
+/// of the running binary.
+pub fn default_baseline_path() -> PathBuf {
+    let manifest = Path::new(env!("CARGO_MANIFEST_DIR")).join(DEFAULT_BASELINE_RELATIVE_PATH);
+    if manifest.is_file() {
+        manifest
+    } else {
+        PathBuf::from(DEFAULT_BASELINE_RELATIVE_PATH)
+    }
+}
+
+/// Resolve the comparison policy for a compare invocation. An explicit baseline
+/// path must load; without one the checked-in default baseline is used when it
+/// exists, otherwise the code-default thresholds apply and the returned policy
+/// carries no `baseline_id`.
+pub fn load_comparison_policy(baseline: Option<&Path>) -> Result<ComparisonPolicy> {
+    match baseline {
+        Some(path) => Ok(BaselinePolicy::read(path)?.into_policy()),
+        None => {
+            let path = default_baseline_path();
+            if path.is_file() {
+                Ok(BaselinePolicy::read(&path)?.into_policy())
+            } else {
+                Ok(ComparisonPolicy::default())
+            }
+        }
+    }
+}
+
+fn validate_identifier(value: &str, label: &str) -> Result<()> {
+    if value.is_empty()
+        || value.len() > 128
+        || !value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.' | b':'))
+    {
+        bail!("{label} must be a non-empty portable identifier up to 128 bytes");
+    }
+    Ok(())
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -207,6 +395,10 @@ pub struct ComparisonSummary {
     pub to_execution_id: String,
     pub from_revision: Option<String>,
     pub to_revision: Option<String>,
+    /// Reviewed baseline the regression thresholds came from; absent when the
+    /// code-default thresholds gated this comparison.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub baseline_id: Option<String>,
     pub comparable: bool,
     pub gate_passed: bool,
     pub reasons: Vec<String>,
@@ -315,7 +507,7 @@ pub fn compare_reports(
             &from_metrics,
             &to_metrics,
             &delta,
-            policy.regression,
+            policy.thresholds_for(&from_case.scenario_id),
         );
         cohort.included_case_ids.push(from_case.case_id.clone());
         cases.push(CaseComparison {
@@ -361,6 +553,7 @@ pub fn compare_reports(
         to_execution_id: to_execution_id.into(),
         from_revision: revision(from),
         to_revision: revision(to),
+        baseline_id: policy.baseline_id,
         comparable,
         gate_passed,
         reasons,
@@ -978,12 +1171,16 @@ fn comparison_markdown(comparison: &ComparisonSummary) -> String {
         "FAIL"
     };
     let mut output = format!(
-        "# Harness E2E comparison: {status}\n\nComparison: `{}`  \nFrom: `{}` at `{}`  \nTo: `{}` at `{}`  \nComparable cases: {}  \nExcluded cases: {}  \nExcluded runs: {}\n\n",
+        "# Harness E2E comparison: {status}\n\nComparison: `{}`  \nFrom: `{}` at `{}`  \nTo: `{}` at `{}`  \nBaseline: `{}`  \nComparable cases: {}  \nExcluded cases: {}  \nExcluded runs: {}\n\n",
         comparison.comparison_id,
         comparison.from_execution_id,
         comparison.from_revision.as_deref().unwrap_or("unknown"),
         comparison.to_execution_id,
         comparison.to_revision.as_deref().unwrap_or("unknown"),
+        comparison
+            .baseline_id
+            .as_deref()
+            .unwrap_or("code defaults (no reviewed baseline)"),
         comparison.cohort.included_case_ids.len(),
         comparison.cohort.excluded_cases.len(),
         comparison.cohort.excluded_runs.len(),
@@ -1266,6 +1463,169 @@ mod tests {
         assert!(!comparison.gate_passed);
         assert_eq!(comparison.cohort.excluded_runs.len(), 20);
         assert_eq!(comparison.cohort.excluded_cases.len(), 1);
+    }
+
+    fn checked_in_baseline() -> PathBuf {
+        Path::new(env!("CARGO_MANIFEST_DIR")).join(DEFAULT_BASELINE_RELATIVE_PATH)
+    }
+
+    #[test]
+    fn checked_in_default_baseline_matches_code_defaults() {
+        let path = checked_in_baseline();
+        let baseline = BaselinePolicy::read(&path).unwrap();
+        assert_eq!(baseline.baseline_id, "default");
+        assert!(!baseline.review_notes.is_empty());
+        assert_eq!(baseline.thresholds, RegressionThresholds::default());
+        assert!(baseline.scenario_overrides.is_empty());
+        assert_eq!(default_baseline_path(), path);
+
+        let policy = load_comparison_policy(None).unwrap();
+        assert_eq!(policy.baseline_id.as_deref(), Some("default"));
+        assert_eq!(policy.regression, RegressionThresholds::default());
+        assert!(policy.scenario_overrides.is_empty());
+    }
+
+    #[test]
+    fn scenario_overrides_replace_only_named_fields() {
+        let baseline = BaselinePolicy {
+            baseline_id: "default".into(),
+            scenario_overrides: BTreeMap::from([(
+                "todo_worker_simple".into(),
+                ThresholdOverrides {
+                    cost_increase_ratio: Some(0.50),
+                    ..ThresholdOverrides::default()
+                },
+            )]),
+            ..BaselinePolicy::default()
+        };
+        baseline.validate().unwrap();
+
+        let merged = baseline.thresholds_for("todo_worker_simple");
+        assert_eq!(merged.cost_increase_ratio, 0.50);
+        assert_eq!(
+            merged.deliverable_success_drop,
+            baseline.thresholds.deliverable_success_drop
+        );
+        assert_eq!(
+            merged.wall_time_increase_ratio,
+            baseline.thresholds.wall_time_increase_ratio
+        );
+        assert_eq!(
+            baseline.thresholds_for("some_other_scenario"),
+            baseline.thresholds
+        );
+
+        let policy = baseline.into_policy();
+        assert_eq!(policy.baseline_id.as_deref(), Some("default"));
+        assert_eq!(
+            policy.thresholds_for("todo_worker_simple").cost_increase_ratio,
+            0.50
+        );
+        assert_eq!(
+            policy.thresholds_for("some_other_scenario"),
+            policy.regression
+        );
+    }
+
+    #[test]
+    fn baseline_rejects_unknown_fields_bad_values_and_bad_keys() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("baseline.json");
+        let mut document: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(checked_in_baseline()).unwrap()).unwrap();
+        document["surprise"] = serde_json::json!(true);
+        std::fs::write(&path, serde_json::to_vec(&document).unwrap()).unwrap();
+        let error = BaselinePolicy::read(&path).unwrap_err();
+        assert!(format!("{error:#}").contains("decode comparison baseline"));
+
+        let valid = BaselinePolicy {
+            baseline_id: "default".into(),
+            ..BaselinePolicy::default()
+        };
+        valid.validate().unwrap();
+
+        let bad_ratio = BaselinePolicy {
+            thresholds: RegressionThresholds {
+                cost_increase_ratio: 0.0,
+                ..RegressionThresholds::default()
+            },
+            ..valid.clone()
+        };
+        assert!(bad_ratio.validate().is_err());
+
+        let bad_rate = BaselinePolicy {
+            thresholds: RegressionThresholds {
+                deliverable_success_drop: -0.01,
+                ..RegressionThresholds::default()
+            },
+            ..valid.clone()
+        };
+        assert!(bad_rate.validate().is_err());
+
+        let empty_key = BaselinePolicy {
+            scenario_overrides: BTreeMap::from([(String::new(), ThresholdOverrides::default())]),
+            ..valid.clone()
+        };
+        assert!(empty_key.validate().is_err());
+
+        let bad_merge = BaselinePolicy {
+            scenario_overrides: BTreeMap::from([(
+                "todo_worker_simple".into(),
+                ThresholdOverrides {
+                    wall_time_increase_ratio: Some(f64::NAN),
+                    ..ThresholdOverrides::default()
+                },
+            )]),
+            ..valid.clone()
+        };
+        assert!(bad_merge.validate().is_err());
+
+        let bad_id = BaselinePolicy {
+            baseline_id: "not portable!".into(),
+            ..valid
+        };
+        assert!(bad_id.validate().is_err());
+    }
+
+    #[test]
+    fn scenario_overrides_apply_per_case_in_compare_reports() {
+        let to = report("1111111111111111111111111111111111111111", true, false);
+        let from = report("2222222222222222222222222222222222222222", false, false);
+        let policy = ComparisonPolicy {
+            baseline_id: Some("default".into()),
+            scenario_overrides: BTreeMap::from([(
+                "todo_worker_simple".into(),
+                ThresholdOverrides {
+                    deliverable_success_drop: Some(0.10),
+                    structural_integrity_drop: Some(0.10),
+                    cost_increase_ratio: Some(0.50),
+                    wall_time_increase_ratio: Some(0.50),
+                    ..ThresholdOverrides::default()
+                },
+            )]),
+            ..ComparisonPolicy::default()
+        };
+        let comparison =
+            compare_reports("from", "daily", &from, "to", "daily", &to, policy).unwrap();
+
+        assert_eq!(comparison.baseline_id.as_deref(), Some("default"));
+        assert!(comparison.comparable);
+        assert!(comparison.regressions.is_empty());
+        assert!(comparison.gate_passed);
+
+        let strict = compare_reports(
+            "from",
+            "daily",
+            &from,
+            "to",
+            "daily",
+            &to,
+            ComparisonPolicy::default(),
+        )
+        .unwrap();
+        assert!(strict.baseline_id.is_none());
+        assert!(!strict.regressions.is_empty());
+        assert!(!strict.gate_passed);
     }
 
     fn report(revision: &str, regress: bool, include_infra: bool) -> E2eReport {

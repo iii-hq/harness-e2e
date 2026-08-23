@@ -722,6 +722,11 @@ pub struct FinalAssessmentResult {
     pub facts: Vec<String>,
     pub strengths: Vec<String>,
     pub concerns: Vec<String>,
+    /// What actually occurred in this execution — the decisive outcome and its
+    /// proximate cause. Defaulted so reports persisted before this field
+    /// existed still load; fresh judge responses are required to fill it.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub diagnosis: String,
     pub recommendation: String,
     pub limitations: Vec<String>,
     pub evidence: Vec<EvidenceReference>,
@@ -1562,6 +1567,7 @@ mod tests {
                 facts: vec!["The objective execution completed.".into()],
                 strengths: vec!["The observed result was internally coherent.".into()],
                 concerns: Vec::new(),
+                diagnosis: "Every hard gate passed on the first attempt.".into(),
                 recommendation: "Retain the objective checks as the release gate.".into(),
                 limitations: vec!["Only bounded persisted evidence was analyzed.".into()],
                 evidence: Vec::new(),
