@@ -572,7 +572,7 @@ system_status or hard-gate assessments:\n{}",
     unreachable!("final assessment attempt loop always returns")
 }
 
-async fn invoke(
+pub(crate) async fn invoke(
     context: &E2eContext,
     config: &JudgeConfig,
     system_prompt: &str,
@@ -879,7 +879,7 @@ fn score_outcome(awarded: u8, possible: u8) -> AssessmentOutcome {
     }
 }
 
-fn assistant_text(response: &Value) -> String {
+pub(crate) fn assistant_text(response: &Value) -> String {
     response
         .pointer("/message/content")
         .and_then(Value::as_array)
@@ -891,7 +891,7 @@ fn assistant_text(response: &Value) -> String {
         .join("")
 }
 
-fn response_usage(response: &Value) -> Option<ModelUsageReport> {
+pub(crate) fn response_usage(response: &Value) -> Option<ModelUsageReport> {
     let usage = response.get("usage")?;
     Some(ModelUsageReport {
         input_tokens: usage.get("input").and_then(Value::as_u64),
@@ -903,7 +903,7 @@ fn response_usage(response: &Value) -> Option<ModelUsageReport> {
     })
 }
 
-fn aggregate_usage(attempts: &[Option<ModelUsageReport>]) -> Option<ModelUsageReport> {
+pub(crate) fn aggregate_usage(attempts: &[Option<ModelUsageReport>]) -> Option<ModelUsageReport> {
     let usages: Option<Vec<_>> = attempts.iter().map(Option::as_ref).collect();
     let usages = usages?;
     if usages.is_empty() {

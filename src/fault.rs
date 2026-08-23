@@ -1000,6 +1000,7 @@ mod tests {
             }),
             retry_attempts: Vec::new(),
             failures: Vec::new(),
+            audit: None,
             terminal_status: None,
             assessment_results: Vec::new(),
             asset_assessments: Vec::new(),

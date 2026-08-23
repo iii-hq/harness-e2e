@@ -344,6 +344,10 @@ pub struct E2eRunReport {
     pub retry_attempts: Vec<RetryAttemptReport>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub failures: Vec<FailureRecord>,
+    /// Advisory behavioral audit over the captured transcript and metrics.
+    /// Never contributes to score, status, gates, or longitudinal inputs.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub audit: Option<crate::audit::AuditReport>,
     #[serde(skip)]
     #[schemars(skip)]
     pub terminal_status: Option<StatusReport>,
@@ -396,6 +400,7 @@ impl E2eRunReport {
             efficiency: None,
             retry_attempts: Vec::new(),
             failures: Vec::new(),
+            audit: None,
             terminal_status: None,
             assessment_results: Vec::new(),
             asset_assessments: Vec::new(),

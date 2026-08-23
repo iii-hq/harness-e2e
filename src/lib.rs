@@ -1,6 +1,7 @@
 pub mod artifact;
 pub mod assessment;
 pub mod asset;
+pub mod audit;
 pub mod catalog;
 pub mod configuration;
 pub mod console_ui;

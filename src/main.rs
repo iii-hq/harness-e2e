@@ -71,6 +71,15 @@ struct RunArgs {
     #[arg(long, env = "HARNESS_E2E_JUDGE_PROVIDER")]
     judge_provider: Option<String>,
 
+    /// Opt-in behavioral audit analyzer over each run's transcript. Supply
+    /// together with --audit-provider; omit both to keep the audit
+    /// deterministic-only.
+    #[arg(long, env = "HARNESS_E2E_AUDIT_MODEL", requires = "audit_provider")]
+    audit_model: Option<String>,
+
+    #[arg(long, env = "HARNESS_E2E_AUDIT_PROVIDER", requires = "audit_model")]
+    audit_provider: Option<String>,
+
     #[arg(long, env = "HARNESS_E2E_OUTPUT", default_value = "target/e2e")]
     output: PathBuf,
 
@@ -273,11 +282,16 @@ async fn run(args: RunArgs) -> Result<()> {
         args.judge_model,
         args.judge_provider,
     ));
+    let audit_analyzer = args
+        .audit_model
+        .zip(args.audit_provider)
+        .map(|(model, provider)| JudgeConfig { model, provider });
     let outcome = run_suite(SuiteRunConfig {
         url: args.url,
         execution_id,
         subject,
         judge,
+        audit_analyzer,
         output,
         scenarios: selected_scenarios,
         runs: args.runs,

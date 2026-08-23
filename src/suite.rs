@@ -77,6 +77,9 @@ pub struct SuiteRunConfig {
     pub execution_id: Option<String>,
     pub subject: SubjectConfig,
     pub judge: Option<JudgeConfig>,
+    /// Model that audits subject behavior from the captured transcript.
+    /// Opt-in: `None` keeps the audit deterministic-only.
+    pub audit_analyzer: Option<JudgeConfig>,
     pub output: PathBuf,
     pub scenarios: Vec<ScenarioId>,
     pub runs: u32,
@@ -266,6 +269,7 @@ pub async fn run_suite(config: SuiteRunConfig) -> Result<SuiteRunOutcome> {
                         scenario_id: *scenario_id,
                         subject: &config.subject,
                         judge_config: config.judge.as_ref(),
+                        audit_analyzer: config.audit_analyzer.as_ref(),
                         seed,
                         technical_retries: config.technical_retries,
                         progress_interval: config.progress_interval,
@@ -1203,6 +1207,7 @@ struct AttemptRequest<'a> {
     attempt_number: u32,
     subject: &'a SubjectConfig,
     judge_config: Option<&'a JudgeConfig>,
+    audit_analyzer: Option<&'a JudgeConfig>,
     seed: u64,
     progress_interval: Option<Duration>,
     control: Option<&'a SuiteControl>,
@@ -1216,6 +1221,7 @@ async fn run_once(context: &Arc<E2eContext>, request: AttemptRequest<'_>) -> E2e
         attempt_number,
         subject,
         judge_config,
+        audit_analyzer,
         seed,
         progress_interval,
         control,
@@ -1430,6 +1436,11 @@ async fn run_once(context: &Arc<E2eContext>, request: AttemptRequest<'_>) -> E2e
     );
     report.update_efficiency(case.work);
     report.refresh_dimensions(expects_deliverables);
+    // Status, score, cost, and efficiency are final; the behavioral audit
+    // below is advisory evidence and only ever fills `report.audit`.
+    let audit = crate::audit::run_audit(context.as_ref(), audit_analyzer, &spec, &case, &report)
+        .await;
+    report.audit = Some(audit);
     if let Err(error) = emit_event(
         control,
         SuiteEvent::AttemptFinished {
@@ -1767,6 +1778,7 @@ struct RetryRequest<'a> {
     scenario_id: ScenarioId,
     subject: &'a SubjectConfig,
     judge_config: Option<&'a JudgeConfig>,
+    audit_analyzer: Option<&'a JudgeConfig>,
     seed: u64,
     technical_retries: u8,
     progress_interval: Option<Duration>,
@@ -1782,6 +1794,7 @@ async fn run_with_technical_retries(
         scenario_id,
         subject,
         judge_config,
+        audit_analyzer,
         seed,
         technical_retries,
         progress_interval,
@@ -1800,6 +1813,7 @@ async fn run_with_technical_retries(
                 attempt_number,
                 subject,
                 judge_config,
+                audit_analyzer,
                 seed,
                 progress_interval,
                 control,

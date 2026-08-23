@@ -554,6 +554,8 @@ pub(super) fn control_request(
         provider: request.provider.clone(),
         judge_model,
         judge_provider,
+        audit_model: None,
+        audit_provider: None,
         scenarios,
         runs: request.runs,
         seed: request.seed,
