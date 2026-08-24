@@ -31,7 +31,7 @@ use super::{
 
 pub const SIMPLE_ID: &str = "todo_worker_simple";
 pub const PLANNED_ID: &str = "todo_worker_planned";
-pub const VERSION: u32 = 1;
+pub const VERSION: u32 = 2;
 pub const VALIDATION_ASSET_ID: &str = "todo_validation_evidence";
 pub const RAW_PLAN_FILE: &str = "validation-plan.json";
 pub const OWNER_MARKER: &str = ".harness-e2e-owner";

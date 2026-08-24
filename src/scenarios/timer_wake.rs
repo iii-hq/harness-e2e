@@ -16,7 +16,7 @@ use super::{
 };
 
 pub const ID: &str = "timer_wake";
-const VERSION: u32 = 5;
+const VERSION: u32 = 6;
 const DELIVERABLE_ID: &str = "timer_result";
 
 const RESULT_KEY: &str = "result";

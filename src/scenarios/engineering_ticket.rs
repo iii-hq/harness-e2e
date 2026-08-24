@@ -38,10 +38,10 @@ use super::{
 };
 
 pub const ID: &str = "engineering_ticket";
-pub const VERSION: u32 = 2;
+pub const VERSION: u32 = 3;
 pub const CANONICAL_SEED: u64 = 1005;
 pub const GIT_HANDOFF_ID: &str = "engineering_ticket_git_handoff";
-pub const GIT_HANDOFF_VERSION: u32 = 2;
+pub const GIT_HANDOFF_VERSION: u32 = 3;
 
 const FIXTURE_PATH_ENV: &str = "HARNESS_E2E_ENGINEERING_TICKET_FIXTURE_PATH";
 const HOOK_TYPE: &str = "harness::hook::post-turn";
@@ -419,6 +419,12 @@ const L4_PROFILE: ComplexityProfile = ComplexityProfile {
     artifact_count: 8,
     coordination_edges: 5,
     ambiguity_level: 6,
+    agent_owned_decomposition: false,
+    material_invalidation_events: 0,
+    replan_loops: 0,
+    compensable_mutations: 0,
+    durable_resume_cycles: 0,
+    coherent_long_horizon: false,
 };
 
 const CASES: &[TaskCase] = &[
@@ -2276,6 +2282,12 @@ pub fn git_handoff_materialize(namespace: &str, _seed: u64) -> Result<Materializ
             artifact_count: 10,
             coordination_edges: 8,
             ambiguity_level: 6,
+            agent_owned_decomposition: false,
+            material_invalidation_events: 0,
+            replan_loops: 0,
+            compensable_mutations: 0,
+            durable_resume_cycles: 0,
+            coherent_long_horizon: false,
         },
         vec![
             "e2e::control-plane-v1".into(),
@@ -4324,12 +4336,12 @@ mod tests {
     }
 
     #[test]
-    fn engineering_ticket_v2_remains_the_single_session_baseline() {
+    fn engineering_ticket_v3_remains_the_single_session_baseline() {
         let baseline = scenario("regression");
         let materialized = materialize("regression", CANONICAL_SEED).unwrap();
         assert_eq!(baseline.id, ID);
         assert_eq!(baseline.version, VERSION);
-        assert_eq!(VERSION, 2);
+        assert_eq!(VERSION, 3);
         assert!(!baseline.prompt.contains("harness::spawn"));
         assert!(!materialized
             .case
@@ -4339,11 +4351,11 @@ mod tests {
     }
 
     #[test]
-    fn git_handoff_materializes_a_distinct_ten_asset_contract() {
+    fn git_handoff_v3_materializes_a_distinct_ten_asset_contract() {
         let materialized = git_handoff_materialize("catalog", 42).unwrap();
         assert_eq!(materialized.spec.id, GIT_HANDOFF_ID);
         assert_eq!(materialized.spec.version, GIT_HANDOFF_VERSION);
-        assert_eq!(GIT_HANDOFF_VERSION, 2);
+        assert_eq!(GIT_HANDOFF_VERSION, 3);
         assert_eq!(materialized.case.seed, CANONICAL_SEED);
         assert_eq!(materialized.case.inputs["reference_scenario_id"], ID);
         assert_eq!(materialized.case.inputs["handoff_payload"], "git_only");

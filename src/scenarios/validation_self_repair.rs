@@ -32,7 +32,7 @@ use super::{
 };
 
 pub const ID: &str = "validation_self_repair";
-const VERSION: u32 = 4;
+const VERSION: u32 = 5;
 const DELIVERABLE_ID: &str = "repaired_dataset";
 
 const HOOK_TYPE: &str = "harness::hook::post-turn";

@@ -34,11 +34,12 @@ use crate::report::{
     RunnerIdentity, CATALOG_SCHEMA, OBSERVATION_SCHEMA,
 };
 use crate::scenarios::{
-    scenario_contract_sha256, ComplexityProfile, DeliverableContract, ScenarioId,
+    scenario_contract_sha256, ComplexityClassification, ComplexityProfile, DeliverableContract,
+    ExecutionPolicy, ScenarioCharacterization, ScenarioId,
 };
 use crate::suite::{
-    run_suite, SubjectConfig, SuiteControl, SuiteEvent, SuiteEventEnvelope, SuitePhase,
-    SuiteRunConfig,
+    run_suite, AdaptiveResumeAttempt, SubjectConfig, SuiteControl, SuiteEvent, SuiteEventEnvelope,
+    SuitePhase, SuiteRunConfig,
 };
 
 pub const CONTROL_CONTRACT_NAME: &str = "e2e-control-plane";
@@ -73,6 +74,7 @@ pub enum ExecutionPhase {
     Completed,
     Failed,
     Cancelled,
+    NeedsReconciliation,
     Unsupported,
 }
 
@@ -80,7 +82,11 @@ impl ExecutionPhase {
     fn terminal(self) -> bool {
         matches!(
             self,
-            Self::Completed | Self::Failed | Self::Cancelled | Self::Unsupported
+            Self::Completed
+                | Self::Failed
+                | Self::Cancelled
+                | Self::NeedsReconciliation
+                | Self::Unsupported
         )
     }
 }
@@ -111,8 +117,14 @@ pub struct PhaseTransition {
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct ActiveAttempt {
     pub scenario_id: ScenarioId,
+    #[serde(default)]
+    pub run_id: String,
     pub attempt_id: String,
     pub session_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resume_state_path: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resume_state_sha256: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -132,6 +144,10 @@ pub struct ExecutionRecord {
     pub transitions: Vec<PhaseTransition>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub active_attempt: Option<ActiveAttempt>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resume_state_path: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resume_state_sha256: Option<String>,
     pub cancel_requested: bool,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub error: String,
@@ -309,9 +325,32 @@ pub struct ScenarioDescriptor {
     pub seed: u64,
     pub inputs_sha256: String,
     pub contract_sha256: String,
+    pub classification: ComplexityClassification,
     pub complexity: ComplexityProfile,
+    pub characterization: ScenarioCharacterization,
+    pub resource_envelope: ScenarioResourceEnvelope,
     pub required_capabilities: Vec<String>,
     pub deliverable_contract: DeliverableContract,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct ScenarioResourceEnvelope {
+    pub execution: ExecutionPolicy,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workflow: Option<WorkflowResourceEnvelope>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct WorkflowResourceEnvelope {
+    pub max_parallel: u16,
+    pub max_nodes: u16,
+    pub step_timeout_seconds: u64,
+    pub workflow_timeout_seconds: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_total_tokens: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_cost_usd: Option<f64>,
+    pub technical_retries: u8,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -669,6 +708,8 @@ impl ControlPlane {
                 reason: "request accepted for admission".into(),
             }],
             active_attempt: None,
+            resume_state_path: None,
+            resume_state_sha256: None,
             cancel_requested: false,
             error: String::new(),
             result_path: None,
@@ -685,7 +726,8 @@ impl ControlPlane {
             "execution admitted",
         )
         .await?;
-        self.spawn_execution(execution_id.clone(), request).await;
+        self.spawn_execution(execution_id.clone(), request, None)
+            .await;
         Ok(RunAccepted {
             execution_id,
             phase: ExecutionPhase::Admitted,
@@ -695,7 +737,12 @@ impl ControlPlane {
         })
     }
 
-    async fn spawn_execution(&self, execution_id: String, request: RunRequest) {
+    async fn spawn_execution(
+        &self,
+        execution_id: String,
+        request: RunRequest,
+        adaptive_resume: Option<AdaptiveResumeAttempt>,
+    ) {
         let (cancellation, receiver) = watch::channel(false);
         self.inner
             .cancellations
@@ -704,7 +751,9 @@ impl ControlPlane {
             .insert(execution_id.clone(), cancellation);
         let control = self.clone();
         tokio::spawn(async move {
-            control.execute(execution_id, request, receiver).await;
+            control
+                .execute(execution_id, request, receiver, adaptive_resume)
+                .await;
         });
     }
 
@@ -713,6 +762,7 @@ impl ControlPlane {
         execution_id: String,
         request: RunRequest,
         cancellation: watch::Receiver<bool>,
+        adaptive_resume: Option<AdaptiveResumeAttempt>,
     ) {
         if let Err(error) = preflight_run_contract(&request) {
             let result = self
@@ -771,6 +821,7 @@ impl ControlPlane {
                 lane: request.lane.clone(),
                 events,
                 cancellation: cancellation.clone(),
+                adaptive_resume,
             }),
             observation_contract: request.run_contract.clone(),
         })
@@ -780,14 +831,24 @@ impl ControlPlane {
         let cancelled = *cancellation.borrow();
         let result = match outcome {
             Ok(outcome) => {
+                let reconciliation_error = outcome
+                    .report
+                    .scenarios
+                    .iter()
+                    .flat_map(|scenario| &scenario.runs)
+                    .flat_map(|run| &run.failures)
+                    .find(|failure| failure.message.starts_with("needs_reconciliation:"))
+                    .map(|failure| failure.message.clone());
                 self.finish(
                     &execution_id,
                     if cancelled {
                         ExecutionPhase::Cancelled
+                    } else if reconciliation_error.is_some() {
+                        ExecutionPhase::NeedsReconciliation
                     } else {
                         ExecutionPhase::Completed
                     },
-                    String::new(),
+                    reconciliation_error.unwrap_or_default(),
                     Some(outcome.report),
                     Some(outcome.manifest),
                     Some(relative_result_path(
@@ -831,15 +892,38 @@ impl ControlPlane {
             }
             SuiteEvent::AttemptStarted {
                 scenario_id,
+                run_id,
                 attempt_id,
                 session_id,
+                resume_state_path,
             } => {
                 self.update_record(execution_id, |record| {
                     record.active_attempt = Some(ActiveAttempt {
                         scenario_id: *scenario_id,
+                        run_id: run_id.clone(),
                         attempt_id: attempt_id.clone(),
                         session_id: session_id.clone(),
+                        resume_state_path: resume_state_path.clone(),
+                        resume_state_sha256: None,
                     });
+                    record.resume_state_path = resume_state_path.clone();
+                    record.resume_state_sha256 = None;
+                })
+                .await
+            }
+            SuiteEvent::AdaptiveResumeState {
+                attempt_id,
+                state_sha256,
+            } => {
+                self.update_record(execution_id, |record| {
+                    if let Some(active) = record
+                        .active_attempt
+                        .as_mut()
+                        .filter(|active| active.attempt_id == *attempt_id)
+                    {
+                        active.resume_state_sha256 = Some(state_sha256.clone());
+                    }
+                    record.resume_state_sha256 = Some(state_sha256.clone());
                 })
                 .await
             }
@@ -1052,6 +1136,25 @@ impl ControlPlane {
         for mut record in records {
             let execution_id = record.execution_id.clone();
             if !record.phase.terminal() {
+                let adaptive_resume = record
+                    .active_attempt
+                    .as_ref()
+                    .and_then(|active| self.adaptive_restore_attempt(&record, active));
+                if let Some(adaptive_resume) = adaptive_resume {
+                    record.error.clear();
+                    record.phase = ExecutionPhase::Admitted;
+                    record.updated_at = now();
+                    record.transitions.push(PhaseTransition {
+                        phase: ExecutionPhase::Admitted,
+                        at: record.updated_at.clone(),
+                        reason: "restart recovery re-enqueued the trusted adaptive attempt".into(),
+                    });
+                    let request = record.request.clone();
+                    self.persist_record(record).await?;
+                    self.spawn_execution(execution_id, request, Some(adaptive_resume))
+                        .await;
+                    continue;
+                }
                 if let Some(active) = record.active_attempt.take() {
                     self.compensate_attempt(&active).await;
                 }
@@ -1104,6 +1207,55 @@ impl ControlPlane {
             }
         }
         Ok(())
+    }
+
+    fn adaptive_restore_attempt(
+        &self,
+        record: &ExecutionRecord,
+        active: &ActiveAttempt,
+    ) -> Option<AdaptiveResumeAttempt> {
+        if record.cancel_requested
+            || active.scenario_id.execution_kind()
+                != crate::scenarios::ScenarioExecutionKind::AdaptiveFlow
+            || active.run_id.is_empty()
+            || record.request.runs != 1
+            || record.request.technical_retries != 0
+            || !record.request.rotating_seeds.is_empty()
+            || record.request.scenarios.as_slice() != [active.scenario_id]
+        {
+            return None;
+        }
+        let expected = self
+            .inner
+            .output_root
+            .join(".workflow-state")
+            .join("workflow-resume")
+            .join(&record.execution_id)
+            .join(&active.run_id)
+            .join(&active.attempt_id)
+            .join("state-v1.json");
+        if active.resume_state_path.as_deref() != Some(expected.to_string_lossy().as_ref()) {
+            return None;
+        }
+        let planner_state = self
+            .inner
+            .output_root
+            .join(".workflow-state")
+            .join("adaptive-plans")
+            .join(&record.execution_id)
+            .join(&active.run_id)
+            .join(&active.attempt_id)
+            .join("plans-v1.json");
+        if expected.is_file() && !planner_state.is_file() {
+            return None;
+        }
+        Some(AdaptiveResumeAttempt {
+            scenario_id: active.scenario_id,
+            run_id: active.run_id.clone(),
+            attempt_id: active.attempt_id.clone(),
+            resume_existing: expected.is_file(),
+            restore_planner: planner_state.is_file(),
+        })
     }
 
     async fn cleanup_active_attempt(&self, execution_id: &str) {
@@ -1565,6 +1717,14 @@ fn materialize_scenario_descriptor(
     let materialized = scenario_id.materialize(label, seed)?;
     let contract_sha256 =
         scenario_contract_sha256(&materialized.case, materialized.spec.execution)?;
+    let complexity = materialized.case.complexity.profile;
+    let resource_envelope = ScenarioResourceEnvelope {
+        execution: materialized.spec.execution,
+        workflow: serde_json::from_value(
+            materialized.case.inputs["workflow_resource_budgets"].clone(),
+        )
+        .ok(),
+    };
     Ok(ScenarioDescriptor {
         scenario_id,
         scenario_version: materialized.case.scenario_version,
@@ -1572,7 +1732,10 @@ fn materialize_scenario_descriptor(
         seed: materialized.case.seed,
         inputs_sha256: materialized.case.inputs_sha256,
         contract_sha256,
-        complexity: materialized.case.complexity.profile,
+        classification: materialized.case.complexity,
+        complexity,
+        characterization: materialized.case.characterization,
+        resource_envelope,
         required_capabilities: materialized.case.required_capabilities,
         deliverable_contract: materialized.case.deliverable_contract,
     })
@@ -2105,11 +2268,33 @@ mod tests {
                 .contains(&format!("seed-{expected_seed:016x}")));
         }
         assert_eq!(response.schema, CATALOG_SCHEMA);
+        assert_eq!(response.schema, "e2e-scenario-catalog/v2");
         assert!(response.catalog_sha256.starts_with("sha256:"));
         assert!(response.scenarios.iter().all(|scenario| {
             scenario.inputs_sha256.starts_with("sha256:")
                 && scenario.contract_sha256.starts_with("sha256:")
+                && scenario.classification.method
+                    == crate::scenarios::ComplexityMethod::CapabilityV2
         }));
+        let git = response
+            .scenarios
+            .iter()
+            .find(|scenario| scenario.scenario_id == ScenarioId::GitRegressionForensics)
+            .unwrap();
+        assert_eq!(
+            git.characterization.realism.execution,
+            crate::scenarios::ExecutionRealism::FrozenRealArtifact
+        );
+        let incident = response
+            .scenarios
+            .iter()
+            .find(|scenario| scenario.scenario_id == ScenarioId::IncidentResponse)
+            .unwrap();
+        let workflow = incident.resource_envelope.workflow.as_ref().unwrap();
+        assert_eq!(workflow.max_parallel, 3);
+        assert_eq!(workflow.max_total_tokens, Some(686_000));
+        assert_eq!(workflow.max_cost_usd, Some(25.0));
+        assert_eq!(workflow.technical_retries, 0);
     }
 
     #[test]
@@ -2191,6 +2376,8 @@ mod tests {
             lane_budget: lane_budget("pr-gate"),
             transitions: Vec::new(),
             active_attempt: None,
+            resume_state_path: None,
+            resume_state_sha256: None,
             cancel_requested: false,
             error: String::new(),
             result_path: None,
@@ -2278,6 +2465,7 @@ mod tests {
     fn terminal_phases_cannot_be_reopened_by_late_checkpoints() {
         assert!(ExecutionPhase::Completed.terminal());
         assert!(ExecutionPhase::Cancelled.terminal());
+        assert!(ExecutionPhase::NeedsReconciliation.terminal());
         assert!(!ExecutionPhase::Finalizing.terminal());
     }
 

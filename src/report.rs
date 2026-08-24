@@ -1158,7 +1158,8 @@ pub struct ModelArtifact {
 }
 
 pub const OBSERVATION_SCHEMA: &str = "e2e-observation/v1";
-pub const CATALOG_SCHEMA: &str = "e2e-scenario-catalog/v1";
+pub const CATALOG_SCHEMA: &str = "e2e-scenario-catalog/v2";
+pub const RESULTS_SCHEMA_VERSION: u32 = 3;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
@@ -1661,7 +1662,7 @@ impl E2eReport {
     ) -> Self {
         let passed = !scenarios.is_empty() && scenarios.iter().all(|scenario| scenario.passed);
         let mut report = Self {
-            schema_version: 2,
+            schema_version: RESULTS_SCHEMA_VERSION,
             execution,
             system_under_test,
             manifest: None,
@@ -1680,7 +1681,7 @@ impl E2eReport {
     }
 
     pub fn write_to(&mut self, output: &Path, manifest: &E2eManifest) -> Result<PathBuf> {
-        self.schema_version = 2;
+        self.schema_version = RESULTS_SCHEMA_VERSION;
         fs::create_dir_all(output)
             .with_context(|| format!("create report directory {}", output.display()))?;
         manifest.validate().context("validate E2E manifest")?;
@@ -1718,9 +1719,13 @@ impl E2eReport {
         match version {
             None => {
                 normalize_unversioned_v1(&mut value)?;
+                normalize_versioned_v2(&mut value)?;
             }
-            Some(2) => {}
-            Some(version) => bail!("unsupported results schema_version {version}; expected 2"),
+            Some(2) => normalize_versioned_v2(&mut value)?,
+            Some(3) => {}
+            Some(version) => {
+                bail!("unsupported results schema_version {version}; expected 2 or 3")
+            }
         }
         let report: Self = serde_json::from_value(value)
             .with_context(|| format!("decode typed E2E report {}", path.display()))?;
@@ -1742,8 +1747,8 @@ impl E2eReport {
     }
 
     fn validate(&self, manifest: &E2eManifest, output: &Path) -> Result<()> {
-        if self.schema_version != 2 {
-            bail!("results schema_version must be 2");
+        if !matches!(self.schema_version, 2 | RESULTS_SCHEMA_VERSION) {
+            bail!("results schema_version must be 2 or {RESULTS_SCHEMA_VERSION}");
         }
         if self.execution.execution_id != manifest.execution.execution_id {
             bail!("results and manifest execution identities differ");
@@ -1778,6 +1783,18 @@ impl E2eReport {
                 .as_ref()
                 .context("scenario is missing its materialized case")?;
             case.validate()?;
+            let expected_method = if self.schema_version == 2 {
+                crate::scenarios::ComplexityMethod::LegacyV1
+            } else {
+                crate::scenarios::ComplexityMethod::CapabilityV2
+            };
+            if case.complexity.method != expected_method {
+                bail!(
+                    "results schema_version {} requires {:?} complexity classification",
+                    self.schema_version,
+                    expected_method
+                );
+            }
             if scenario.case_id != case.case_id
                 || scenario.scenario_id != case.scenario_id
                 || scenario.scenario_version != case.scenario_version
@@ -2088,6 +2105,24 @@ fn normalize_unversioned_v1(value: &mut Value) -> Result<()> {
                 }
             }
         }
+    }
+    Ok(())
+}
+
+fn normalize_versioned_v2(value: &mut Value) -> Result<()> {
+    let scenarios = value
+        .get_mut("scenarios")
+        .and_then(Value::as_array_mut)
+        .context("results v2 scenarios must be an array")?;
+    for scenario in scenarios {
+        let Some(classification) = scenario
+            .get_mut("case")
+            .and_then(|case| case.get_mut("complexity"))
+            .and_then(Value::as_object_mut)
+        else {
+            continue;
+        };
+        classification.insert("method".into(), Value::String("legacy_v1".into()));
     }
     Ok(())
 }
@@ -3057,7 +3092,10 @@ mod tests {
         let value: Value =
             serde_json::from_slice(&std::fs::read(output.path().join("results.json")).unwrap())
                 .unwrap();
-        assert_eq!(value.get("schema_version"), Some(&serde_json::json!(2)));
+        assert_eq!(
+            value.get("schema_version"),
+            Some(&serde_json::json!(RESULTS_SCHEMA_VERSION))
+        );
         assert!(value.get("assessment_contract").is_some());
         assert!(value["scenarios"][0]["runs"][0].get("attempt_id").is_some());
     }
@@ -3080,21 +3118,38 @@ mod tests {
     }
 
     #[test]
-    fn read_accepts_unversioned_v1_and_rejects_unknown_versions() {
+    fn read_accepts_v2_with_legacy_classification_and_rejects_unknown_versions() {
         let output = tempfile::tempdir().unwrap();
         let mut report = report(vec![aggregate(vec![run(100, true)])]);
         let path = report.write_to(output.path(), &manifest()).unwrap();
         let mut value: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
-        value.as_object_mut().unwrap().remove("schema_version");
+        value["schema_version"] = serde_json::json!(2);
+        let complexity = &mut value["scenarios"][0]["case"]["complexity"];
+        complexity.as_object_mut().unwrap().remove("method");
+        complexity["tier"] = serde_json::json!("l5_adaptive");
+        complexity["profile"]["ambiguity_level"] = serde_json::json!(8);
+        complexity["profile"]["validation_loops"] = serde_json::json!(2);
+        value["scenarios"][0]["case"]
+            .as_object_mut()
+            .unwrap()
+            .remove("characterization");
         std::fs::write(&path, serde_json::to_vec_pretty(&value).unwrap()).unwrap();
         let (legacy, _) = E2eReport::read_from(&path).unwrap();
         assert_eq!(legacy.schema_version, 2);
+        assert_eq!(
+            legacy.scenarios[0].case.as_ref().unwrap().complexity.method,
+            crate::scenarios::ComplexityMethod::LegacyV1
+        );
+        assert_eq!(
+            legacy.scenarios[0].case.as_ref().unwrap().complexity.tier,
+            crate::scenarios::ComplexityTier::L5Adaptive
+        );
 
-        value["schema_version"] = serde_json::json!(3);
+        value["schema_version"] = serde_json::json!(4);
         std::fs::write(&path, serde_json::to_vec_pretty(&value).unwrap()).unwrap();
 
         let error = E2eReport::read_from(&path).unwrap_err();
-        assert!(format!("{error:#}").contains("unsupported results schema_version 3"));
+        assert!(format!("{error:#}").contains("unsupported results schema_version 4"));
     }
 
     #[test]

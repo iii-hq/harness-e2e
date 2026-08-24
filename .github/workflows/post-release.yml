@@ -17,5 +17,5 @@ jobs:
     uses: ./.github/workflows/run-campaign.yml
     with:
       campaign: post-release
-      timeout_minutes: 180
+      timeout_minutes: 360
     secrets: inherit

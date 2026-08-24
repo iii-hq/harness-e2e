@@ -42,6 +42,33 @@
       "scenarios": [
         "browser_cross_site"
       ]
+    },
+    {
+      "id": "weekly-incident-adaptive",
+      "execution_kind": "adaptive_flow",
+      "runs": 1,
+      "technical_retries": 0,
+      "scenarios": [
+        "incident_response"
+      ]
+    },
+    {
+      "id": "weekly-release-train-adaptive",
+      "execution_kind": "adaptive_flow",
+      "runs": 1,
+      "technical_retries": 0,
+      "scenarios": [
+        "release_train_recovery"
+      ]
+    },
+    {
+      "id": "weekly-cross-repo-adaptive",
+      "execution_kind": "adaptive_flow",
+      "runs": 1,
+      "technical_retries": 0,
+      "scenarios": [
+        "cross_repo_contract_migration"
+      ]
     }
   ]
 }

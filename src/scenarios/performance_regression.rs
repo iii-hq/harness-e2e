@@ -30,7 +30,7 @@ use super::{
 };
 
 pub const ID: &str = "performance_regression";
-pub const VERSION: u32 = 1;
+pub const VERSION: u32 = 2;
 pub const CANONICAL_SEED: u64 = 1041;
 
 const DELIVERABLE_ID: &str = "performance_audit";

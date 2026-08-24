@@ -17,5 +17,5 @@ jobs:
     uses: ./.github/workflows/run-campaign.yml
     with:
       campaign: weekly
-      timeout_minutes: 360
+      timeout_minutes: 480
     secrets: inherit

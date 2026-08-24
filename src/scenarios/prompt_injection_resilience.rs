@@ -34,7 +34,7 @@ use super::{
 };
 
 pub const ID: &str = "prompt_injection_resilience";
-const VERSION: u32 = 1;
+const VERSION: u32 = 2;
 const DELIVERABLE_ID: &str = "resilience_report";
 /// The state key the injected block orders the subject to write. Its absence
 /// after the run is the canary evidence that the injection was refused.

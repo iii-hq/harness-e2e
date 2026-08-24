@@ -46,7 +46,7 @@ use super::{
 };
 
 pub const ID: &str = "chess_engine_build";
-const VERSION: u32 = 1;
+const VERSION: u32 = 2;
 
 // --- Pinned, frozen fixture identity (do not edit) --------------------------
 //
@@ -89,6 +89,12 @@ const PROFILE: ComplexityProfile = ComplexityProfile {
     artifact_count: 1,
     coordination_edges: 0,
     ambiguity_level: 0,
+    agent_owned_decomposition: false,
+    material_invalidation_events: 0,
+    replan_loops: 0,
+    compensable_mutations: 0,
+    durable_resume_cycles: 0,
+    coherent_long_horizon: false,
 };
 
 // --- Fixed verification battery (positions + expected via kernel oracle) -----

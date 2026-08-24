@@ -10,7 +10,7 @@ use super::{
 };
 
 pub const ID: &str = "security_review";
-pub const VERSION: u32 = 3;
+pub const VERSION: u32 = 4;
 
 pub fn scenario(_run_id: &str) -> ScenarioSpec {
     ScenarioSpec {
@@ -77,6 +77,12 @@ pub fn materialize(namespace: &str, seed: u64) -> anyhow::Result<MaterializedSce
             artifact_count: 12,
             coordination_edges: 6,
             ambiguity_level: 1,
+            agent_owned_decomposition: false,
+            material_invalidation_events: 0,
+            replan_loops: 0,
+            compensable_mutations: 0,
+            durable_resume_cycles: 0,
+            coherent_long_horizon: false,
         },
         vec![
             "e2e::control-plane-v1".to_string(),

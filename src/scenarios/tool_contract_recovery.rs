@@ -40,7 +40,7 @@ use super::{
 };
 
 pub const ID: &str = "tool_contract_recovery";
-const VERSION: u32 = 1;
+const VERSION: u32 = 2;
 pub const CANONICAL_SEED: u64 = 0x746f_6f6c_0000_0001;
 const DELIVERABLE_ID: &str = "contract_recovery_receipt";
 const PROFILE_KEY: &str = "primary-owner";

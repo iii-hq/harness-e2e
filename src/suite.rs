@@ -39,9 +39,12 @@ use crate::wire::{
     SendResponse, SessionInit, StatusReport,
 };
 use crate::workflow::{
-    composite_definition, composite_descriptor_catalog, composite_runtime, execute_workflow,
-    observe_worker_contracts, WorkflowCleanupStatus, WorkflowExecutionRequest,
-    WorkflowFailurePhase, WorkflowStepStatus,
+    adaptive_runtime, composite_definition, composite_descriptor_catalog, composite_runtime,
+    execute_adaptive_workflow, execute_workflow, observe_worker_contracts, plan_adaptive_workflow,
+    AdaptivePlannerInvalidationV1, AdaptivePlannerMetadataV1, AdaptivePlannerReferenceCheckV1,
+    AgentPlannerRequest, ResumableWorkflowExecutionRequest, ResumableWorkflowOutcome,
+    WorkflowCleanupContext, WorkflowCleanupStatus, WorkflowExecutionRequest, WorkflowFailurePhase,
+    WorkflowResumeIdentityV1, WorkflowResumeStore, WorkflowStepStatus,
 };
 
 const MAX_RUNS: u32 = 20;
@@ -93,6 +96,15 @@ pub struct SuiteRunConfig {
     pub observation_contract: Option<ObservationRunContract>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AdaptiveResumeAttempt {
+    pub scenario_id: ScenarioId,
+    pub run_id: String,
+    pub attempt_id: String,
+    pub resume_existing: bool,
+    pub restore_planner: bool,
+}
+
 pub struct SuiteRunOutcome {
     pub report: E2eReport,
     pub manifest: E2eManifest,
@@ -117,8 +129,14 @@ pub enum SuiteEvent {
     Phase(SuitePhase),
     AttemptStarted {
         scenario_id: ScenarioId,
+        run_id: String,
         attempt_id: String,
         session_id: String,
+        resume_state_path: Option<String>,
+    },
+    AdaptiveResumeState {
+        attempt_id: String,
+        state_sha256: String,
     },
     AttemptFinished {
         attempt_id: String,
@@ -144,6 +162,7 @@ pub struct SuiteControl {
     pub lane: String,
     pub events: mpsc::Sender<SuiteEventEnvelope>,
     pub cancellation: watch::Receiver<bool>,
+    pub adaptive_resume: Option<AdaptiveResumeAttempt>,
 }
 
 pub async fn run_suite(config: SuiteRunConfig) -> Result<SuiteRunOutcome> {
@@ -176,6 +195,7 @@ pub async fn run_suite(config: SuiteRunConfig) -> Result<SuiteRunOutcome> {
         &control_plane,
     )
     .context("resolve system-under-test identity")?;
+    let system_identity_sha256 = artifact::sha256_value(&system_under_test)?;
     if let Some(contract) = &config.observation_contract {
         contract.validate_runtime(&system_under_test)?;
     }
@@ -277,6 +297,12 @@ pub async fn run_suite(config: SuiteRunConfig) -> Result<SuiteRunOutcome> {
                         progress_interval: config.progress_interval,
                         control: config.control.as_ref(),
                         output: &config.output,
+                        system_identity_sha256: &system_identity_sha256,
+                        adaptive_resume: config
+                            .control
+                            .as_ref()
+                            .and_then(|control| control.adaptive_resume.as_ref())
+                            .filter(|resume| resume.scenario_id == *scenario_id),
                     },
                 )
                 .await;
@@ -1163,6 +1189,19 @@ fn validate_config(config: &SuiteRunConfig) -> Result<()> {
     if config.scenarios.is_empty() {
         bail!("at least one scenario is required");
     }
+    if let Some(resume) = config
+        .control
+        .as_ref()
+        .and_then(|control| control.adaptive_resume.as_ref())
+    {
+        if config.scenarios.as_slice() != [resume.scenario_id]
+            || config.runs != 1
+            || config.technical_retries != 0
+            || !config.rotating_seeds.is_empty()
+        {
+            bail!("adaptive resume requires one isolated scenario, one run, and no replay");
+        }
+    }
     for scenario in &config.scenarios {
         let seed = config.seed.unwrap_or_else(|| scenario.canonical_seed());
         scenario.materialize("validation", seed)?;
@@ -1238,6 +1277,10 @@ struct AttemptRequest<'a> {
     progress_interval: Option<Duration>,
     control: Option<&'a SuiteControl>,
     output: &'a std::path::Path,
+    system_identity_sha256: &'a str,
+    existing_attempt_id: Option<&'a str>,
+    resume_existing: bool,
+    restore_planner: bool,
 }
 
 async fn run_once(context: &Arc<E2eContext>, request: AttemptRequest<'_>) -> E2eRunReport {
@@ -1252,10 +1295,36 @@ async fn run_once(context: &Arc<E2eContext>, request: AttemptRequest<'_>) -> E2e
         progress_interval,
         control,
         output,
+        system_identity_sha256,
+        existing_attempt_id,
+        resume_existing,
+        restore_planner,
     } = request;
     let started = Instant::now();
-    let attempt_id = Uuid::new_v4().simple().to_string();
+    let attempt_id = existing_attempt_id
+        .map(str::to_string)
+        .unwrap_or_else(|| Uuid::new_v4().simple().to_string());
     let session_id = format!("e2e_{attempt_id}");
+    if scenario_id.execution_kind() == ScenarioExecutionKind::AdaptiveFlow {
+        return run_adaptive_once(
+            context,
+            AdaptiveAttemptRequest {
+                scenario_id,
+                run_id,
+                attempt_number,
+                subject,
+                seed,
+                control,
+                output,
+                attempt_id,
+                started,
+                system_identity_sha256,
+                resume_existing,
+                restore_planner,
+            },
+        )
+        .await;
+    }
     if scenario_id.execution_kind() == ScenarioExecutionKind::CompositeFlow {
         return run_composite_once(
             context,
@@ -1313,8 +1382,10 @@ async fn run_once(context: &Arc<E2eContext>, request: AttemptRequest<'_>) -> E2e
         control,
         SuiteEvent::AttemptStarted {
             scenario_id,
+            run_id: run_id.to_string(),
             attempt_id: attempt_id.clone(),
             session_id: session_id.clone(),
+            resume_state_path: None,
         },
     )
     .await
@@ -1497,6 +1568,428 @@ struct CompositeAttemptRequest<'a> {
     started: Instant,
 }
 
+struct AdaptiveAttemptRequest<'a> {
+    scenario_id: ScenarioId,
+    run_id: &'a str,
+    attempt_number: u32,
+    subject: &'a SubjectConfig,
+    seed: u64,
+    control: Option<&'a SuiteControl>,
+    output: &'a std::path::Path,
+    attempt_id: String,
+    started: Instant,
+    system_identity_sha256: &'a str,
+    resume_existing: bool,
+    restore_planner: bool,
+}
+
+async fn run_adaptive_once(
+    context: &Arc<E2eContext>,
+    request: AdaptiveAttemptRequest<'_>,
+) -> E2eRunReport {
+    let AdaptiveAttemptRequest {
+        scenario_id,
+        run_id,
+        attempt_number,
+        subject,
+        seed,
+        control,
+        output,
+        attempt_id,
+        started,
+        system_identity_sha256,
+        resume_existing,
+        restore_planner,
+    } = request;
+    let session_id = format!("adaptive_{attempt_id}");
+    let materialized = match scenario_id.materialize(&attempt_id, seed) {
+        Ok(materialized) => materialized,
+        Err(error) => {
+            let spec = scenario_id.spec(&attempt_id);
+            let mut report = E2eRunReport::new(
+                run_id.to_string(),
+                attempt_id,
+                attempt_number,
+                session_id,
+                spec.prompt.clone(),
+            );
+            report.push_failure(
+                RunStatus::InfrastructureError,
+                FailurePhase::Setup,
+                format!("adaptive scenario materialization failed: {error:#}"),
+            );
+            report.wall_time_ms = started.elapsed().as_millis().min(u64::MAX as u128) as u64;
+            ensure_assessment_results(&spec, &mut report);
+            report.refresh_dimensions(false);
+            return report;
+        }
+    };
+    let MaterializedScenario { spec, case, .. } = materialized;
+    let mut report = E2eRunReport::new(
+        run_id.to_string(),
+        attempt_id.clone(),
+        attempt_number,
+        session_id.clone(),
+        spec.prompt.clone(),
+    );
+    let execution_id = control
+        .map(|control| control.execution_id.clone())
+        .unwrap_or_else(|| run_id.to_string());
+    let state_root = output.parent().unwrap_or(output).join(".workflow-state");
+    let resume_store = WorkflowResumeStore::new(&state_root, &execution_id, run_id, &attempt_id);
+    let resume_state_path = resume_store
+        .as_ref()
+        .ok()
+        .map(|store| store.path().to_string_lossy().into_owned());
+    if let Err(error) = emit_event(
+        control,
+        SuiteEvent::AttemptStarted {
+            scenario_id,
+            run_id: run_id.to_string(),
+            attempt_id: attempt_id.clone(),
+            session_id,
+            resume_state_path,
+        },
+    )
+    .await
+    {
+        report.push_failure(
+            RunStatus::InfrastructureError,
+            FailurePhase::Setup,
+            format!("persist adaptive attempt checkpoint: {error:#}"),
+        );
+    }
+    if report.failures.is_empty() {
+        let _ = emit_phase(control, SuitePhase::SettingUp).await;
+        match adaptive_runtime(
+            scenario_id,
+            context.clone(),
+            &subject.model,
+            &subject.provider,
+            output,
+            &attempt_id,
+        ) {
+            Ok(mut runtime) => {
+                let cancellation = control.map_or_else(
+                    || watch::channel(false).1,
+                    |control| control.cancellation.clone(),
+                );
+                let planner = match adaptive_planner_metadata(scenario_id, &spec) {
+                    Ok(metadata) => {
+                        plan_adaptive_workflow(AgentPlannerRequest {
+                            context,
+                            model: &subject.model,
+                            provider: &subject.provider,
+                            scenario_prompt: &spec.prompt,
+                            policy: &runtime.policy,
+                            catalog: &runtime.catalog,
+                            metadata: &metadata,
+                            execution_id: &execution_id,
+                            run_id,
+                            attempt_id: &attempt_id,
+                            state_root: &state_root,
+                            restored_attempt: restore_planner,
+                            cancellation: Some(&cancellation),
+                        })
+                        .await
+                    }
+                    Err(error) => Err(error),
+                };
+                match planner {
+                    Err(error) => {
+                        let cleanup_result = runtime
+                            .cleanup_hook
+                            .cleanup(&WorkflowCleanupContext {
+                                workflow_id: runtime.materialized.definition.id.clone(),
+                                workflow_sha256: runtime
+                                    .materialized
+                                    .definition
+                                    .canonical_sha256()
+                                    .unwrap_or_default(),
+                                run_id: run_id.into(),
+                                attempt_id: attempt_id.clone(),
+                                output_dir: output.into(),
+                            })
+                            .await;
+                        let rendered = format!("{error:#}");
+                        report.push_failure(
+                            adaptive_planner_failure_status(&rendered),
+                            FailurePhase::Execute,
+                            format!("adaptive planning failed: {rendered}"),
+                        );
+                        if let Err(cleanup_error) = cleanup_result {
+                            report.push_failure(
+                                RunStatus::InfrastructureError,
+                                FailurePhase::Cleanup,
+                                format!(
+                                    "cleanup after adaptive planning failure: {cleanup_error:#}"
+                                ),
+                            );
+                        }
+                    }
+                    Ok(planner) => {
+                        runtime.plans = planner.plans;
+                        runtime.completed_node_ids = planner.completed_node_ids;
+                        runtime.materialized = planner.materialized;
+                        let planner_cost = planner
+                            .evidence
+                            .usage
+                            .as_ref()
+                            .and_then(|usage| usage.cost_usd);
+                        match artifact::write_json(
+                            output,
+                            &PathBuf::from("evidence")
+                                .join(run_id)
+                                .join(&attempt_id)
+                                .join("adaptive-plan-evidence.json"),
+                            "adaptive-plan-evidence",
+                            "adaptive_plan_evidence",
+                            &planner.evidence,
+                        ) {
+                            Ok(evidence) => report.evidence.push(evidence),
+                            Err(error) => report.push_failure(
+                                RunStatus::InfrastructureError,
+                                FailurePhase::Collect,
+                                format!("persist adaptive plan evidence: {error:#}"),
+                            ),
+                        }
+                        if report.failures.is_empty() {
+                            let uses_harness = runtime
+                                .materialized
+                                .definition
+                                .nodes
+                                .iter()
+                                .any(|node| node.step_type == crate::workflow::HARNESS_STEP_ID);
+                            let bind_result = if uses_harness {
+                                context.bind_turn_completed().await
+                            } else {
+                                Ok(())
+                            };
+                            if let Err(error) = bind_result {
+                                report.push_failure(
+                                    RunStatus::InfrastructureError,
+                                    FailurePhase::Setup,
+                                    format!("bind adaptive Harness observation: {error:#}"),
+                                );
+                            } else {
+                                let _ = emit_phase(control, SuitePhase::Executing).await;
+                                let scenario_contract_sha256 =
+                                    crate::scenarios::scenario_contract_sha256(
+                                        &case,
+                                        spec.execution,
+                                    );
+                                let catalog_sha256 = runtime.catalog.canonical_sha256();
+                                let workflow_sha256 =
+                                    runtime.materialized.definition.canonical_sha256();
+                                let identity =
+                                    scenario_contract_sha256.and_then(|scenario_contract_sha256| {
+                                        Ok(WorkflowResumeIdentityV1 {
+                                            execution_id: execution_id.clone(),
+                                            scenario_id: scenario_id.as_str().into(),
+                                            scenario_contract_sha256,
+                                            workflow_id: runtime.materialized.definition.id.clone(),
+                                            workflow_sha256: workflow_sha256?,
+                                            catalog_sha256: catalog_sha256?,
+                                            policy_sha256: runtime
+                                                .materialized
+                                                .policy_sha256
+                                                .clone(),
+                                            plan_sha256: runtime
+                                                .materialized
+                                                .latest_plan_sha256
+                                                .clone(),
+                                            system_identity_sha256: system_identity_sha256.into(),
+                                            model: subject.model.clone(),
+                                            provider: subject.provider.clone(),
+                                        })
+                                    });
+                                let outcome = match (identity, resume_store) {
+                                    (Ok(identity), Ok(_)) => {
+                                        execute_adaptive_workflow(
+                                            &runtime.policy,
+                                            &runtime.plans,
+                                            &runtime.completed_node_ids,
+                                            runtime.catalog,
+                                            WorkflowExecutionRequest {
+                                                output_dir: output.to_path_buf(),
+                                                run_id: run_id.to_string(),
+                                                attempt_id: Some(attempt_id.clone()),
+                                                attempt_number,
+                                                cancellation,
+                                                cleanup_hook: runtime.cleanup_hook,
+                                            },
+                                            ResumableWorkflowExecutionRequest {
+                                                state_root,
+                                                identity,
+                                                plan_revisions: Vec::new(),
+                                                resume_existing,
+                                            },
+                                        )
+                                        .await
+                                    }
+                                    (Err(error), _) | (_, Err(error)) => Err(error),
+                                };
+                                if uses_harness {
+                                    if let Err(error) = context.unbind_turn_completed().await {
+                                        report.push_failure(
+                                            RunStatus::InfrastructureError,
+                                            FailurePhase::Cleanup,
+                                            format!(
+                                                "unbind adaptive Harness observation: {error:#}"
+                                            ),
+                                        );
+                                    }
+                                }
+                                match outcome {
+                                    Ok(ResumableWorkflowOutcome::Completed(workflow)) => {
+                                        populate_composite_report(&mut report, *workflow)
+                                    }
+                                    Ok(ResumableWorkflowOutcome::ExplicitlyCancelled) => {
+                                        report.push_failure(
+                                            RunStatus::InfrastructureError,
+                                            FailurePhase::Execute,
+                                            "adaptive workflow was cancelled",
+                                        );
+                                    }
+                                    Ok(ResumableWorkflowOutcome::NeedsReconciliation(needs)) => {
+                                        let _ = emit_event(
+                                            control,
+                                            SuiteEvent::AdaptiveResumeState {
+                                                attempt_id: attempt_id.clone(),
+                                                state_sha256: needs.resume_state_sha256.clone(),
+                                            },
+                                        )
+                                        .await;
+                                        report.push_failure(
+                                            RunStatus::InfrastructureError,
+                                            FailurePhase::Execute,
+                                            format!(
+                                                "needs_reconciliation:{}:{}",
+                                                needs.node_id, needs.reason
+                                            ),
+                                        );
+                                    }
+                                    Err(error) => report.push_failure(
+                                        RunStatus::InfrastructureError,
+                                        FailurePhase::Execute,
+                                        format!("execute adaptive scenario: {error:#}"),
+                                    ),
+                                }
+                                if let Some(planner_cost) = planner_cost {
+                                    let workflow_cost = report.cost.subject_usd.unwrap_or(0.0);
+                                    report.cost.subject_usd = Some(workflow_cost + planner_cost);
+                                    report.cost.total_usd = report.cost.subject_usd;
+                                }
+                                if let (Some(actual), Some(limit)) = (
+                                    report.cost.subject_usd,
+                                    case.inputs["workflow_resource_budgets"]["max_cost_usd"]
+                                        .as_f64(),
+                                ) {
+                                    if actual > limit {
+                                        report.push_failure(
+                                            RunStatus::ResourceLimit,
+                                            FailurePhase::Execute,
+                                            format!(
+                                                "adaptive aggregate subject cost ${actual:.6} exceeded the scenario envelope ${limit:.6}"
+                                            ),
+                                        );
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            Err(error) => report.push_failure(
+                RunStatus::InfrastructureError,
+                FailurePhase::Setup,
+                format!("materialize adaptive runtime: {error:#}"),
+            ),
+        }
+    }
+    report.wall_time_ms = started.elapsed().as_millis().min(u64::MAX as u128) as u64;
+    if report.assessment_results.is_empty() {
+        ensure_assessment_results(&spec, &mut report);
+    }
+    report.update_efficiency(case.work);
+    report.refresh_dimensions(false);
+    let _ = emit_phase(control, SuitePhase::Persisting).await;
+    let _ = emit_event(
+        control,
+        SuiteEvent::AttemptFinished {
+            attempt_id: attempt_id.clone(),
+        },
+    )
+    .await;
+    report
+}
+
+fn adaptive_planner_failure_status(message: &str) -> RunStatus {
+    if [
+        "strict adaptive planner JSON",
+        "agent-authored adaptive plans",
+        "adaptive plan revision",
+        "adaptive planner response",
+        "trusted evidence ids",
+        "unknown template",
+        "node bound",
+        "plan depth",
+    ]
+    .iter()
+    .any(|signal| message.contains(signal))
+    {
+        RunStatus::SubjectError
+    } else {
+        RunStatus::InfrastructureError
+    }
+}
+
+fn adaptive_planner_metadata(
+    scenario_id: ScenarioId,
+    spec: &ScenarioSpec,
+) -> Result<AdaptivePlannerMetadataV1> {
+    let invalidation = match scenario_id {
+        ScenarioId::IncidentResponse => AdaptivePlannerInvalidationV1 {
+            description: "A trusted candidate-validation probe invalidated the initial diagnosis-only plan and requires bounded remediation plus revalidation before terminal action."
+                .into(),
+            evidence_ids: vec![
+                crate::workflow::incident_response::INVALIDATION_EVIDENCE_ID.into(),
+            ],
+        },
+        ScenarioId::ReleaseTrainRecovery => AdaptivePlannerInvalidationV1 {
+            description: "The trusted promotion preview exposed an incompatible historical latest graph and invalidated the stale null-CAS operation."
+                .into(),
+            evidence_ids: vec![
+                crate::workflow::release_train_recovery::INVALIDATION_EVIDENCE_ID.into(),
+            ],
+        },
+        ScenarioId::CrossRepoContractMigration => AdaptivePlannerInvalidationV1 {
+            description: "The trusted canary revealed consumer B and proved that the v2-only route plan breaks backwards compatibility."
+                .into(),
+            evidence_ids: vec![
+                crate::workflow::cross_repo_contract_migration::CANARY_EVIDENCE_ID.into(),
+            ],
+        },
+        _ => bail!(
+            "scenario '{}' has no runner-owned adaptive invalidation",
+            scenario_id.as_str()
+        ),
+    };
+    Ok(AdaptivePlannerMetadataV1 {
+        scenario_id: scenario_id.as_str().into(),
+        objective: spec.prompt.clone(),
+        reference_checks: spec
+            .criteria
+            .iter()
+            .map(|criterion| AdaptivePlannerReferenceCheckV1 {
+                id: criterion.id.into(),
+                description: criterion.description.into(),
+            })
+            .collect(),
+        invalidation,
+    })
+}
+
 async fn run_composite_once(
     context: &Arc<E2eContext>,
     request: CompositeAttemptRequest<'_>,
@@ -1547,8 +2040,10 @@ async fn run_composite_once(
         control,
         SuiteEvent::AttemptStarted {
             scenario_id,
+            run_id: run_id.to_string(),
             attempt_id: attempt_id.clone(),
             session_id,
+            resume_state_path: None,
         },
     )
     .await
@@ -1810,6 +2305,8 @@ struct RetryRequest<'a> {
     progress_interval: Option<Duration>,
     control: Option<&'a SuiteControl>,
     output: &'a std::path::Path,
+    system_identity_sha256: &'a str,
+    adaptive_resume: Option<&'a AdaptiveResumeAttempt>,
 }
 
 async fn run_with_technical_retries(
@@ -1826,8 +2323,12 @@ async fn run_with_technical_retries(
         progress_interval,
         control,
         output,
+        system_identity_sha256,
+        adaptive_resume,
     } = request;
-    let run_id = Uuid::new_v4().simple().to_string();
+    let run_id = adaptive_resume
+        .map(|resume| resume.run_id.clone())
+        .unwrap_or_else(|| Uuid::new_v4().simple().to_string());
     let mut retry_attempts = Vec::with_capacity(technical_retries as usize);
     loop {
         let attempt_number = retry_attempts.len() as u32 + 1;
@@ -1844,6 +2345,10 @@ async fn run_with_technical_retries(
                 progress_interval,
                 control,
                 output,
+                system_identity_sha256,
+                existing_attempt_id: adaptive_resume.map(|resume| resume.attempt_id.as_str()),
+                resume_existing: adaptive_resume.is_some_and(|resume| resume.resume_existing),
+                restore_planner: adaptive_resume.is_some_and(|resume| resume.restore_planner),
             },
         )
         .await;

@@ -30,7 +30,7 @@ use super::{
 };
 
 pub const ID: &str = "browser_cross_site";
-const VERSION: u32 = 1;
+const VERSION: u32 = 2;
 pub const CANONICAL_SEED: u64 = 0x6272_6f77_7365_0001;
 const DELIVERABLE_ID: &str = "browser_cross_site_evidence";
 const TARGET_TICKET: &str = "TCK-42";

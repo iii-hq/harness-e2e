@@ -404,7 +404,9 @@
         "cross_app_transaction",
         "database_migration_recovery",
         "performance_regression",
-        "browser_cross_site"
+        "browser_cross_site",
+        "release_train_recovery",
+        "cross_repo_contract_migration"
       ]
     },
     "StackIdentity": {

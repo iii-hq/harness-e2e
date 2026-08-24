@@ -32,7 +32,7 @@ use super::{
 };
 
 pub const ID: &str = "engineering_endurance_ladder";
-const VERSION: u32 = 1;
+const VERSION: u32 = 2;
 pub const CANONICAL_SEED: u64 = 0x656e_6475_7261_0001;
 const DELIVERABLE_ID: &str = "engineering_endurance_report";
 const BRANCH: &str = "endurance-run";
@@ -1335,7 +1335,7 @@ fn deliverable_contract() -> DeliverableContract {
                     "accepted_patch", "github_handoff", "measurements"
                 ],
                 "properties": {
-                    "scenario_version": {"const": 1},
+                    "scenario_version": {"const": VERSION},
                     "initial_head": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
                     "accepted_head": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
                     "accepted_rungs": {"type": "integer", "minimum": 0, "maximum": 10},

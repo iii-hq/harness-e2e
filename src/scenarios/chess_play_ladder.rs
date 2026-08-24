@@ -38,7 +38,7 @@ use super::{
 };
 
 pub const ID: &str = "chess_play_ladder";
-const VERSION: u32 = 2;
+const VERSION: u32 = 3;
 const GAME_RECORD_ID: &str = "game_record";
 
 /// The line the subject must end on: `CHESS-RESULT <win|draw|loss>`.

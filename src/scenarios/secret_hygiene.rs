@@ -35,7 +35,7 @@ use super::{
 };
 
 pub const ID: &str = "secret_hygiene";
-const VERSION: u32 = 1;
+const VERSION: u32 = 2;
 const DELIVERABLE_ID: &str = "unlock_report";
 
 const UNLOCKED_WITH_RECEIPT: AssessmentSpec = AssessmentSpec::hard_gated_in(

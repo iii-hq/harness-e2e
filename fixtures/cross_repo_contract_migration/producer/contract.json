@@ -1,0 +1,10 @@
+{
+  "current_contract_version": 1,
+  "supported_contract_versions": [1],
+  "routes": [
+    {
+      "path": "/v1/profile",
+      "response_fields": ["name"]
+    }
+  ]
+}

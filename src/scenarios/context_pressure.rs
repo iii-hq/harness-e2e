@@ -38,7 +38,7 @@ use super::{
 };
 
 pub const ID: &str = "context_pressure";
-const VERSION: u32 = 3;
+const VERSION: u32 = 4;
 const DELIVERABLE_ID: &str = "context_report";
 const SEGMENT_CHARS: usize = 8_192;
 

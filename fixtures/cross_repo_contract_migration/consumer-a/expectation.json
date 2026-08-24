@@ -1,0 +1,6 @@
+{
+  "consumer_id": "consumer-a",
+  "required_contract_version": 1,
+  "route": "/v1/profile",
+  "required_fields": ["name"]
+}

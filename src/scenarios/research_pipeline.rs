@@ -25,7 +25,7 @@ use super::{
 };
 
 pub const ID: &str = "research_pipeline";
-const VERSION: u32 = 5;
+const VERSION: u32 = 6;
 pub const CANONICAL_SEED: u64 = 0x7265_7365_6172_0005;
 const EVIDENCE_KEY: &str = "evidence";
 const CONFLICTS_KEY: &str = "conflicts";

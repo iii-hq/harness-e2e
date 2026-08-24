@@ -24,6 +24,7 @@ pub mod common;
 pub mod contention_ledger;
 pub mod context_pressure;
 pub mod cross_app_transaction;
+pub mod cross_repo_contract_migration;
 pub mod database_migration_recovery;
 pub mod depth_ladder;
 mod domain;
@@ -42,6 +43,7 @@ pub mod policy_bound_action;
 pub mod prompt_injection_resilience;
 pub mod quorum_fan_in;
 pub mod receiving_operation;
+pub mod release_train_recovery;
 pub mod research_pipeline;
 pub mod secret_hygiene;
 pub mod security_review;
@@ -62,8 +64,10 @@ pub mod wake_chain_soak;
 
 pub use domain::{
     scenario_contract_sha256, stable_seed, ArtifactExpectation, CapturedDeliverable,
-    CapturedDeliverableContent, CapturedInvariant, ComplexityProfile, ComplexityTier,
-    DeliverableContract, InvariantSpec, ProvenanceEvidence, ScenarioCase, WorkExpectation,
+    CapturedDeliverableContent, CapturedInvariant, ComplexityClassification, ComplexityMethod,
+    ComplexityProfile, ComplexityTier, DeliverableContract, ExecutionRealism, HumanHorizon,
+    HumanHorizonBasis, InvariantSpec, ProvenanceEvidence, ScenarioCase, ScenarioCharacterization,
+    ScenarioRealism, ShadowMode, WorkExpectation,
 };
 
 pub type EvaluationFuture<'a> =
@@ -355,6 +359,7 @@ pub enum ScenarioExecutionKind {
     HarnessTurn,
     ScriptedDialogue,
     CompositeFlow,
+    AdaptiveFlow,
 }
 
 impl ScenarioExecutionKind {
@@ -468,10 +473,14 @@ pub enum ScenarioId {
     PerformanceRegression,
     #[value(name = "browser_cross_site")]
     BrowserCrossSite,
+    #[value(name = "release_train_recovery")]
+    ReleaseTrainRecovery,
+    #[value(name = "cross_repo_contract_migration")]
+    CrossRepoContractMigration,
 }
 
 impl ScenarioId {
-    pub const ALL: [Self; 42] = [
+    pub const ALL: [Self; 44] = [
         Self::SequentialPipeline,
         Self::ContextPressure,
         Self::PersistentState,
@@ -514,6 +523,8 @@ impl ScenarioId {
         Self::DatabaseMigrationRecovery,
         Self::PerformanceRegression,
         Self::BrowserCrossSite,
+        Self::ReleaseTrainRecovery,
+        Self::CrossRepoContractMigration,
     ];
 
     pub fn as_str(self) -> &'static str {
@@ -560,6 +571,8 @@ impl ScenarioId {
             Self::DatabaseMigrationRecovery => database_migration_recovery::ID,
             Self::PerformanceRegression => performance_regression::ID,
             Self::BrowserCrossSite => browser_cross_site::ID,
+            Self::ReleaseTrainRecovery => release_train_recovery::ID,
+            Self::CrossRepoContractMigration => cross_repo_contract_migration::ID,
         }
     }
 
@@ -607,6 +620,8 @@ impl ScenarioId {
             Self::DatabaseMigrationRecovery => database_migration_recovery::scenario(run_id),
             Self::PerformanceRegression => performance_regression::scenario(run_id),
             Self::BrowserCrossSite => browser_cross_site::scenario(run_id),
+            Self::ReleaseTrainRecovery => release_train_recovery::scenario(run_id),
+            Self::CrossRepoContractMigration => cross_repo_contract_migration::scenario(run_id),
         }
     }
 
@@ -666,6 +681,10 @@ impl ScenarioId {
             }
             Self::PerformanceRegression => performance_regression::materialize(namespace, seed)?,
             Self::BrowserCrossSite => browser_cross_site::materialize(namespace, seed)?,
+            Self::ReleaseTrainRecovery => release_train_recovery::materialize(namespace, seed)?,
+            Self::CrossRepoContractMigration => {
+                cross_repo_contract_migration::materialize(namespace, seed)?
+            }
         };
         materialized.validate()?;
         Ok(materialized)
@@ -717,6 +736,12 @@ impl ScenarioId {
         if self == Self::BrowserCrossSite {
             return browser_cross_site::CANONICAL_SEED;
         }
+        if self == Self::ReleaseTrainRecovery {
+            return release_train_recovery::CANONICAL_SEED;
+        }
+        if self == Self::CrossRepoContractMigration {
+            return cross_repo_contract_migration::CANONICAL_SEED;
+        }
         // Stable FNV-1a keeps canonical cases reproducible without tying their
         // identity to a particular execution or retry attempt.
         stable_seed(self.as_str())
@@ -742,14 +767,17 @@ impl ScenarioId {
                 | Self::ResearchPipeline
                 | Self::PerformanceRegression
                 | Self::BrowserCrossSite
+                | Self::ReleaseTrainRecovery
+                | Self::CrossRepoContractMigration
         )
     }
 
     pub fn execution_kind(self) -> ScenarioExecutionKind {
         match self {
-            Self::SecurityReview | Self::IncidentResponse | Self::TodoWorkerPlanned => {
-                ScenarioExecutionKind::CompositeFlow
-            }
+            Self::SecurityReview | Self::TodoWorkerPlanned => ScenarioExecutionKind::CompositeFlow,
+            Self::IncidentResponse
+            | Self::ReleaseTrainRecovery
+            | Self::CrossRepoContractMigration => ScenarioExecutionKind::AdaptiveFlow,
             Self::PolicyBoundAction => ScenarioExecutionKind::ScriptedDialogue,
             _ => ScenarioExecutionKind::HarnessTurn,
         }
@@ -820,7 +848,7 @@ mod tests {
 
     use super::*;
     #[test]
-    fn registry_contains_forty_two_unique_valid_scenarios() {
+    fn registry_contains_forty_four_unique_valid_scenarios() {
         let mut ids = HashSet::new();
         for scenario in ScenarioId::ALL {
             assert!(ids.insert(scenario.as_str()));
@@ -829,7 +857,7 @@ mod tests {
                 .materialize("run", scenario.canonical_seed())
                 .unwrap();
         }
-        assert_eq!(ids.len(), 42);
+        assert_eq!(ids.len(), 44);
     }
 
     #[test]
@@ -859,6 +887,89 @@ mod tests {
     }
 
     #[test]
+    fn classification_v2_migrates_all_42_existing_scenario_contracts() {
+        // These are the 42 scenarios present when capability_v2 was introduced.
+        // The two AdaptiveFlow scenarios added by the following delivery stages
+        // start independently at v1 and bring the catalog to 44 entries.
+        let expected = [
+            (ScenarioId::SequentialPipeline, 3),
+            (ScenarioId::ContextPressure, 4),
+            (ScenarioId::PersistentState, 5),
+            (ScenarioId::ShellCoderSandbox, 5),
+            (ScenarioId::ResearchPipeline, 6),
+            (ScenarioId::FanoutLadder, 3),
+            (ScenarioId::SecurityReview, 4),
+            (ScenarioId::IncidentResponse, 3),
+            (ScenarioId::TodoWorkerSimple, 2),
+            (ScenarioId::TodoWorkerPlanned, 2),
+            (ScenarioId::EngineeringTicket, 3),
+            (ScenarioId::EngineeringTicketGitHandoff, 3),
+            (ScenarioId::EngineeringEnduranceLadder, 2),
+            (ScenarioId::GitRegressionForensics, 2),
+            (ScenarioId::MechanicalReaction, 5),
+            (ScenarioId::TimerWake, 6),
+            (ScenarioId::ReceivingOperation, 6),
+            (ScenarioId::ValidationLoop, 5),
+            (ScenarioId::SubagentValidation, 5),
+            (ScenarioId::SubagentValidationFailure, 5),
+            (ScenarioId::ValidationSelfRepair, 5),
+            (ScenarioId::ValidationScopeEnforcement, 5),
+            (ScenarioId::ValidationChain, 5),
+            (ScenarioId::SecretHygiene, 2),
+            (ScenarioId::PromptInjectionResilience, 2),
+            (ScenarioId::MovingTarget, 2),
+            (ScenarioId::PoisonMessage, 2),
+            (ScenarioId::CleanupUnderFailure, 2),
+            (ScenarioId::DepthLadder, 3),
+            (ScenarioId::QuorumFanIn, 2),
+            (ScenarioId::ContentionLedger, 2),
+            (ScenarioId::MinimalPath, 2),
+            (ScenarioId::WakeChainSoak, 3),
+            (ScenarioId::ChessEngineBuild, 2),
+            (ScenarioId::ChessPlayLadder, 3),
+            (ScenarioId::TrendBlog, 3),
+            (ScenarioId::ToolContractRecovery, 2),
+            (ScenarioId::PolicyBoundAction, 2),
+            (ScenarioId::CrossAppTransaction, 2),
+            (ScenarioId::DatabaseMigrationRecovery, 2),
+            (ScenarioId::PerformanceRegression, 2),
+            (ScenarioId::BrowserCrossSite, 2),
+        ];
+        assert_eq!(expected.len(), 42);
+        for (scenario, version) in expected {
+            let materialized = scenario
+                .materialize("classification-v2", scenario.canonical_seed())
+                .unwrap();
+            assert_eq!(materialized.case.scenario_version, version, "{scenario:?}");
+            assert_eq!(
+                materialized.case.complexity.method,
+                domain::ComplexityMethod::CapabilityV2,
+                "{scenario:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn capability_v2_reclassifies_the_former_l5_cases() {
+        for (scenario, tier) in [
+            (ScenarioId::MovingTarget, domain::ComplexityTier::L2Stateful),
+            (
+                ScenarioId::PolicyBoundAction,
+                domain::ComplexityTier::L4Coordinated,
+            ),
+            (
+                ScenarioId::IncidentResponse,
+                domain::ComplexityTier::L5Adaptive,
+            ),
+        ] {
+            let materialized = scenario
+                .materialize("classification-v2", scenario.canonical_seed())
+                .unwrap();
+            assert_eq!(materialized.case.complexity.tier, tier, "{scenario:?}");
+        }
+    }
+
+    #[test]
     fn materialized_cases_are_stable_across_attempt_namespaces() {
         let first = ScenarioId::PersistentState
             .materialize("attempt-a", 42)
@@ -876,7 +987,7 @@ mod tests {
         assert_ne!(first.spec.prompt, retry.spec.prompt);
         assert_ne!(first.case.case_id, other_seed.case.case_id);
         assert_ne!(first.case.inputs, other_seed.case.inputs);
-        assert_eq!(first.case.scenario_version, 4);
+        assert_eq!(first.case.scenario_version, 5);
     }
 
     #[test]
@@ -992,7 +1103,10 @@ mod tests {
                 "{scenario:?}"
             );
 
-            if scenario.execution_kind() == ScenarioExecutionKind::CompositeFlow {
+            if matches!(
+                scenario.execution_kind(),
+                ScenarioExecutionKind::CompositeFlow | ScenarioExecutionKind::AdaptiveFlow
+            ) {
                 assert!(first.case.deliverable_contract.artifacts.is_empty());
                 assert!(first.capture.is_none());
                 continue;

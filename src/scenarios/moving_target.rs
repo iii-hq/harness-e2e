@@ -1,4 +1,4 @@
-//! `moving_target` — the L5Adaptive rung for mid-run requirement change.
+//! `moving_target` — a stateful mid-run requirement change.
 //!
 //! The suite's own engine connection registers two run-scoped functions
 //! before the prompt is sent (the `setup` hook):
@@ -39,7 +39,7 @@ use super::{
 };
 
 pub const ID: &str = "moving_target";
-const VERSION: u32 = 1;
+const VERSION: u32 = 2;
 const DELIVERABLE_ID: &str = "adaptation_receipt";
 const REPORT_BUDGET_CHARS: usize = 300;
 
@@ -735,7 +735,7 @@ mod tests {
         assert_eq!(first.case.inputs_sha256, retry.case.inputs_sha256);
         assert_eq!(
             first.case.complexity.tier,
-            super::super::ComplexityTier::L5Adaptive
+            super::super::ComplexityTier::L2Stateful
         );
         assert_eq!(first.case.deliverable_contract.artifacts.len(), 1);
         assert!(first.case.deliverable_contract.capture_before_cleanup);

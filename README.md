@@ -56,6 +56,10 @@ python3 scripts/run_e2e_campaign.py config/campaigns/weekly.json \
   --output-root target/e2e-campaigns
 ```
 
+Adaptive L5 classification, trusted planning boundaries, resume semantics, and
+the canonical incident/release/cross-repository cases are documented in
+[`docs/l5-adaptive-scenarios.md`](docs/l5-adaptive-scenarios.md).
+
 Campaign manifests never select or rotate seeds. They separate replay-safe
 turns from scripted dialogue and composite flows, persist a summary for every
 group, and are advisory by default while their longitudinal history is being

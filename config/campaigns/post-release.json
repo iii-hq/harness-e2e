@@ -23,6 +23,33 @@
       "scenarios": [
         "policy_bound_action"
       ]
+    },
+    {
+      "id": "release-incident-adaptive",
+      "execution_kind": "adaptive_flow",
+      "runs": 1,
+      "technical_retries": 0,
+      "scenarios": [
+        "incident_response"
+      ]
+    },
+    {
+      "id": "release-train-recovery-adaptive",
+      "execution_kind": "adaptive_flow",
+      "runs": 1,
+      "technical_retries": 0,
+      "scenarios": [
+        "release_train_recovery"
+      ]
+    },
+    {
+      "id": "release-cross-repo-adaptive",
+      "execution_kind": "adaptive_flow",
+      "runs": 1,
+      "technical_retries": 0,
+      "scenarios": [
+        "cross_repo_contract_migration"
+      ]
     }
   ]
 }

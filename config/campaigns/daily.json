@@ -13,7 +13,8 @@
         "tool_contract_recovery",
         "cross_app_transaction",
         "database_migration_recovery",
-        "research_pipeline"
+        "research_pipeline",
+        "moving_target"
       ]
     },
     {

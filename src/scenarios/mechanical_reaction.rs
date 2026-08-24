@@ -11,7 +11,7 @@ use super::{
 };
 
 pub const ID: &str = "mechanical_reaction";
-const VERSION: u32 = 4;
+const VERSION: u32 = 5;
 const DELIVERABLE_ID: &str = "mechanical_mirror";
 
 const SOURCE_KEY: &str = "source";

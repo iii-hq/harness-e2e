@@ -33,7 +33,7 @@ use super::{
 };
 
 pub const ID: &str = "quorum_fan_in";
-const VERSION: u32 = 1;
+const VERSION: u32 = 2;
 const DELIVERABLE_ID: &str = "quorum_record";
 
 const MEMBER_COUNT: u8 = 3;

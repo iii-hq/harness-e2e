@@ -535,7 +535,10 @@ mod tests {
         assert!(!plan.locked);
         assert_eq!(plan.runs, 1);
         assert_eq!(plan.scenarios.len(), 1);
-        assert_eq!(plan.scenarios[0].scenario_version, 1);
+        assert_eq!(
+            plan.scenarios[0].scenario_version,
+            ScenarioId::MinimalPath.spec("version-check").version
+        );
         assert_eq!(
             plan.scenarios[0].seed,
             ScenarioId::MinimalPath.canonical_seed()

@@ -1,3 +1,4 @@
+import json
 import pathlib
 import unittest
 
@@ -20,6 +21,34 @@ class WorkflowBoundaryTests(unittest.TestCase):
         self.assertIn("e2e::archive", (ROOT / "docs/fault-injection.md").read_text())
         self.assertNotIn("sudo ", workflow)
         self.assertNotIn("docker ", workflow)
+        self.assertNotIn("coordination.5", workflow)
+        self.assertFalse(
+            (ROOT / "config/profiles/weekly-l5-recovery.json").exists()
+        )
+        self.assertFalse(
+            (ROOT / "config/profiles/weekly-l5-cancellation.json").exists()
+        )
+
+    def test_l5_campaigns_are_advisory_isolated_and_bounded(self):
+        post_release = (ROOT / ".github/workflows/post-release.yml").read_text(
+            encoding="utf-8"
+        )
+        weekly = (ROOT / ".github/workflows/weekly.yml").read_text(encoding="utf-8")
+        self.assertIn("timeout_minutes: 360", post_release)
+        self.assertIn("timeout_minutes: 480", weekly)
+
+        for name in ("post-release.json", "weekly.json"):
+            manifest = json.loads(
+                (ROOT / "config/campaigns" / name).read_text(encoding="utf-8")
+            )
+            adaptive = [
+                group
+                for group in manifest["groups"]
+                if group["execution_kind"] == "adaptive_flow"
+            ]
+            self.assertEqual(len(adaptive), 3)
+            self.assertTrue(all(group["runs"] == 1 for group in adaptive))
+            self.assertTrue(all(group["technical_retries"] == 0 for group in adaptive))
 
     def test_canonical_gate_pins_and_authorizes_the_e2e_revision(self):
         workflow = (ROOT / ".github/workflows/canonical-gate.yml").read_text(

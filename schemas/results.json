@@ -808,6 +808,14 @@
         "tier"
       ],
       "properties": {
+        "method": {
+          "default": "legacy_v1",
+          "allOf": [
+            {
+              "$ref": "#/definitions/ComplexityMethod"
+            }
+          ]
+        },
         "profile": {
           "$ref": "#/definitions/ComplexityProfile"
         },
@@ -815,6 +823,13 @@
           "$ref": "#/definitions/ComplexityTier"
         }
       }
+    },
+    "ComplexityMethod": {
+      "type": "string",
+      "enum": [
+        "legacy_v1",
+        "capability_v2"
+      ]
     },
     "ComplexityProfile": {
       "type": "object",
@@ -831,12 +846,26 @@
         "wake_cycles"
       ],
       "properties": {
+        "agent_owned_decomposition": {
+          "default": false,
+          "type": "boolean"
+        },
         "ambiguity_level": {
           "type": "integer",
           "format": "uint8",
           "minimum": 0.0
         },
         "artifact_count": {
+          "type": "integer",
+          "format": "uint8",
+          "minimum": 0.0
+        },
+        "coherent_long_horizon": {
+          "default": false,
+          "type": "boolean"
+        },
+        "compensable_mutations": {
+          "default": 0,
           "type": "integer",
           "format": "uint8",
           "minimum": 0.0
@@ -851,7 +880,19 @@
           "format": "uint8",
           "minimum": 0.0
         },
+        "durable_resume_cycles": {
+          "default": 0,
+          "type": "integer",
+          "format": "uint8",
+          "minimum": 0.0
+        },
         "external_systems": {
+          "type": "integer",
+          "format": "uint8",
+          "minimum": 0.0
+        },
+        "material_invalidation_events": {
+          "default": 0,
           "type": "integer",
           "format": "uint8",
           "minimum": 0.0
@@ -862,6 +903,12 @@
           "minimum": 0.0
         },
         "planning_depth": {
+          "type": "integer",
+          "format": "uint8",
+          "minimum": 0.0
+        },
+        "replan_loops": {
+          "default": 0,
           "type": "integer",
           "format": "uint8",
           "minimum": 0.0
@@ -1579,6 +1626,14 @@
         }
       }
     },
+    "ExecutionRealism": {
+      "type": "string",
+      "enum": [
+        "synthetic",
+        "realistic_simulator",
+        "frozen_real_artifact"
+      ]
+    },
     "FailureDomain": {
       "type": "string",
       "enum": [
@@ -1709,6 +1764,43 @@
           "type": "string"
         }
       }
+    },
+    "HumanHorizon": {
+      "type": "object",
+      "properties": {
+        "basis": {
+          "default": "unknown",
+          "allOf": [
+            {
+              "$ref": "#/definitions/HumanHorizonBasis"
+            }
+          ]
+        },
+        "max_minutes": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0.0
+        },
+        "min_minutes": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0.0
+        }
+      }
+    },
+    "HumanHorizonBasis": {
+      "type": "string",
+      "enum": [
+        "unknown",
+        "author_estimate",
+        "measured"
+      ]
     },
     "InvariantSpec": {
       "type": "object",
@@ -2508,6 +2600,22 @@
         "case_id": {
           "type": "string"
         },
+        "characterization": {
+          "default": {
+            "human_horizon": {
+              "basis": "unknown"
+            },
+            "realism": {
+              "execution": "synthetic",
+              "shadow": "none"
+            }
+          },
+          "allOf": [
+            {
+              "$ref": "#/definitions/ScenarioCharacterization"
+            }
+          ]
+        },
         "complexity": {
           "$ref": "#/definitions/ComplexityClassification"
         },
@@ -2539,6 +2647,32 @@
         },
         "work": {
           "$ref": "#/definitions/WorkExpectation"
+        }
+      }
+    },
+    "ScenarioCharacterization": {
+      "type": "object",
+      "properties": {
+        "human_horizon": {
+          "default": {
+            "basis": "unknown"
+          },
+          "allOf": [
+            {
+              "$ref": "#/definitions/HumanHorizon"
+            }
+          ]
+        },
+        "realism": {
+          "default": {
+            "execution": "synthetic",
+            "shadow": "none"
+          },
+          "allOf": [
+            {
+              "$ref": "#/definitions/ScenarioRealism"
+            }
+          ]
         }
       }
     },
@@ -2608,7 +2742,9 @@
         "cross_app_transaction",
         "database_migration_recovery",
         "performance_regression",
-        "browser_cross_site"
+        "browser_cross_site",
+        "release_train_recovery",
+        "cross_repo_contract_migration"
       ]
     },
     "ScenarioMeasurement": {
@@ -2635,6 +2771,27 @@
         }
       },
       "additionalProperties": false
+    },
+    "ScenarioRealism": {
+      "type": "object",
+      "properties": {
+        "execution": {
+          "default": "synthetic",
+          "allOf": [
+            {
+              "$ref": "#/definitions/ExecutionRealism"
+            }
+          ]
+        },
+        "shadow": {
+          "default": "none",
+          "allOf": [
+            {
+              "$ref": "#/definitions/ShadowMode"
+            }
+          ]
+        }
+      }
     },
     "SessionMetricsPayload": {
       "type": "object",
@@ -2900,6 +3057,13 @@
           "minimum": 0.0
         }
       }
+    },
+    "ShadowMode": {
+      "type": "string",
+      "enum": [
+        "none",
+        "read_only"
+      ]
     },
     "StackIdentity": {
       "oneOf": [

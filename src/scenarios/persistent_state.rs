@@ -13,7 +13,7 @@ use super::{
 };
 
 pub const ID: &str = "persistent_state";
-const VERSION: u32 = 4;
+const VERSION: u32 = 5;
 const DELIVERABLE_ID: &str = "stored_state";
 const KEY: &str = "persistent_state";
 const DURABLE_RESULT: AssessmentSpec = AssessmentSpec::hard_gated_in(

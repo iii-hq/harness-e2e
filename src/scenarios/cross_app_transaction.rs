@@ -28,7 +28,7 @@ use super::{
 
 pub const ID: &str = "cross_app_transaction";
 pub const CANONICAL_SEED: u64 = 0x6372_6f73_7361_7070;
-const VERSION: u32 = 1;
+const VERSION: u32 = 2;
 const DELIVERABLE_ID: &str = "cross_app_transaction_audit";
 const TARGET_ACCOUNT: &str = "acct-42";
 const SENTINEL_ACCOUNT: &str = "acct-99";

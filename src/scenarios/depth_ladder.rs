@@ -30,7 +30,7 @@ use super::{
 };
 
 pub const ID: &str = "depth_ladder";
-const VERSION: u32 = 2;
+const VERSION: u32 = 3;
 const ROWS_DELIVERABLE_ID: &str = "relay_rows";
 const MAX_REPORT_CHARS: usize = 300;
 

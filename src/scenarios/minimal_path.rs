@@ -22,7 +22,7 @@ use super::{
 };
 
 pub const ID: &str = "minimal_path";
-const VERSION: u32 = 1;
+const VERSION: u32 = 2;
 const DELIVERABLE_ID: &str = "minimal_result";
 const KEY: &str = "minimal_result";
 /// Band: a two-call session keeps just under half of `LEAN_CALLS`.

@@ -35,7 +35,7 @@ use super::{
 };
 
 pub const ID: &str = "poison_message";
-const VERSION: u32 = 1;
+const VERSION: u32 = 2;
 const DELIVERABLE_ID: &str = "quarantine_record";
 const ITEMS: [&str; 3] = ["item-01", "item-02", "item-03"];
 const GOOD_ITEMS: [&str; 2] = ["item-01", "item-03"];

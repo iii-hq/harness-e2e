@@ -20,6 +20,7 @@ use super::{
     WorkflowInputBinding, WorkflowLimits, WorkflowNodeV1, WorkflowProvenance,
 };
 
+mod adaptive_runtime;
 mod definition;
 mod evaluation;
 mod executor;
@@ -31,6 +32,7 @@ mod schemas;
 #[cfg(test)]
 mod tests;
 
+pub use adaptive_runtime::{adaptive_contract, IncidentAdaptiveContract, INVALIDATION_EVIDENCE_ID};
 pub use definition::definition;
 use definition::descriptors;
 use executor::{IncidentExecutor, IncidentStepKind};

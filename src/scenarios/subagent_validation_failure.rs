@@ -28,7 +28,7 @@ use super::{
 };
 
 pub const ID: &str = "subagent_validation_failure";
-const VERSION: u32 = 4;
+const VERSION: u32 = 5;
 const DELIVERABLE_ID: &str = "bounded_failure_record";
 
 const HOOK_TYPE: &str = "harness::hook::post-turn";
@@ -86,6 +86,12 @@ pub fn materialize(namespace: &str, seed: u64) -> anyhow::Result<MaterializedSce
             artifact_count: 1,
             coordination_edges: 4,
             ambiguity_level: 4,
+            agent_owned_decomposition: false,
+            material_invalidation_events: 0,
+            replan_loops: 0,
+            compensable_mutations: 0,
+            durable_resume_cycles: 0,
+            coherent_long_horizon: false,
         },
         vec![
             "e2e::control-plane-v1".to_string(),

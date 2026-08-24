@@ -42,7 +42,7 @@ use super::{
 };
 
 pub const ID: &str = "wake_chain_soak";
-const VERSION: u32 = 2;
+const VERSION: u32 = 3;
 const DELIVERABLE_ID: &str = "soak_trace";
 
 const COUNTER_KEY: &str = "chain-counter";

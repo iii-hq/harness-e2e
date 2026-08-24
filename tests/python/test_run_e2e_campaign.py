@@ -79,7 +79,7 @@ class CanonicalManifestTests(unittest.TestCase):
         self.assertEqual(group.runs, 1)
         self.assertEqual(group.technical_retries, 0)
 
-    def test_post_release_has_the_four_required_scenarios(self):
+    def test_post_release_has_core_and_isolated_adaptive_scenarios(self):
         campaign = load_campaign(CAMPAIGN_DIR / "post-release.json")
         selected = {
             scenario
@@ -93,6 +93,9 @@ class CanonicalManifestTests(unittest.TestCase):
                 "policy_bound_action",
                 "cross_app_transaction",
                 "database_migration_recovery",
+                "incident_response",
+                "release_train_recovery",
+                "cross_repo_contract_migration",
             },
         )
         policy_group = next(
@@ -102,6 +105,14 @@ class CanonicalManifestTests(unittest.TestCase):
         )
         self.assertEqual(policy_group.execution_kind, "scripted_dialogue")
         self.assertEqual(policy_group.technical_retries, 0)
+        adaptive = [
+            group for group in campaign.groups if group.execution_kind == "adaptive_flow"
+        ]
+        self.assertEqual(len(adaptive), 3)
+        for group in adaptive:
+            self.assertEqual(group.runs, 1)
+            self.assertEqual(group.technical_retries, 0)
+            self.assertEqual(len(group.scenarios), 1)
 
     def test_daily_has_core_research_and_isolated_policy(self):
         campaign = load_campaign(CAMPAIGN_DIR / "daily.json")
@@ -113,6 +124,7 @@ class CanonicalManifestTests(unittest.TestCase):
                 "cross_app_transaction",
                 "database_migration_recovery",
                 "research_pipeline",
+                "moving_target",
             },
         )
         policy = next(
@@ -149,6 +161,12 @@ class CanonicalManifestTests(unittest.TestCase):
             groups["weekly-browser-smoke"].execution_kind, "harness_turn"
         )
         self.assertEqual(groups["weekly-browser-smoke"].technical_retries, 0)
+        adaptive = [
+            group for group in campaign.groups if group.execution_kind == "adaptive_flow"
+        ]
+        self.assertEqual(len(adaptive), 3)
+        self.assertTrue(all(group.runs == 1 for group in adaptive))
+        self.assertTrue(all(len(group.scenarios) == 1 for group in adaptive))
 
 
 class CampaignValidationTests(unittest.TestCase):
@@ -180,6 +198,27 @@ class CampaignValidationTests(unittest.TestCase):
         policy["scenarios"].append("tool_contract_recovery")
         with self.assertRaisesRegex(CampaignError, "not scripted_dialogue"):
             parse_campaign(manifest([policy]))
+
+    def test_adaptive_flow_is_single_scenario_single_run_and_non_retryable(self):
+        adaptive = {
+            "id": "adaptive",
+            "execution_kind": "adaptive_flow",
+            "runs": 1,
+            "technical_retries": 1,
+            "scenarios": ["incident_response"],
+        }
+        with self.assertRaisesRegex(CampaignError, "technical_retries=0"):
+            parse_campaign(manifest([adaptive]))
+
+        adaptive["technical_retries"] = 0
+        adaptive["runs"] = 2
+        with self.assertRaisesRegex(CampaignError, "exactly one scenario with runs=1"):
+            parse_campaign(manifest([adaptive]))
+
+        adaptive["runs"] = 1
+        adaptive["scenarios"].append("release_train_recovery")
+        with self.assertRaisesRegex(CampaignError, "exactly one scenario with runs=1"):
+            parse_campaign(manifest([adaptive]))
 
     def test_scenario_cannot_appear_in_multiple_groups(self):
         first = manifest()["groups"][0]

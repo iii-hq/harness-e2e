@@ -38,7 +38,7 @@ use super::{
 };
 
 pub const ID: &str = "trend_blog";
-const VERSION: u32 = 2;
+const VERSION: u32 = 3;
 const DELIVERABLE_ID: &str = "blog_site";
 const TOP_K: usize = 3;
 const MIN_QUOTE_CHARS: usize = 20;

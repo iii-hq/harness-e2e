@@ -877,7 +877,7 @@ mod tests {
 
     fn profile() -> FaultProfile {
         FaultProfile {
-            profile_id: "weekly-l5-recovery".into(),
+            profile_id: "test-composite-recovery".into(),
             seed: 44,
             expected_outcome: ExpectedTerminalOutcome::Recovered,
             delayed_calls: vec![DelayRule {
@@ -903,7 +903,7 @@ mod tests {
 
     fn degraded_profile() -> FaultProfile {
         let mut profile = profile();
-        profile.profile_id = "weekly-l5-degraded".into();
+        profile.profile_id = "test-composite-degraded".into();
         profile.expected_outcome = ExpectedTerminalOutcome::Degraded;
         profile.malformed_results = vec!["coordination-child-1".into()];
         profile
@@ -963,8 +963,6 @@ mod tests {
             "weekly-l3-recovery.json",
             "weekly-l4-recovery.json",
             "weekly-l3-degraded.json",
-            "weekly-l5-recovery.json",
-            "weekly-l5-cancellation.json",
         ] {
             let profile = FaultProfile::read(&root.join(name)).unwrap();
             let plan = profile.materialize().unwrap();

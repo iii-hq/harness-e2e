@@ -3,8 +3,8 @@
 
 The runner deliberately translates one campaign group into one ordinary
 `harness-e2e run` invocation. Groups are the retry boundary: non-replay-safe
-ScriptedDialogue and CompositeFlow scenarios never share an invocation with
-replay-safe HarnessTurn scenarios.
+ScriptedDialogue, CompositeFlow, and AdaptiveFlow scenarios never share an
+invocation with replay-safe HarnessTurn scenarios.
 """
 
 from __future__ import annotations
@@ -35,7 +35,12 @@ GROUP_FIELDS = {
     "scenarios",
 }
 FAILURE_POLICIES = {"advisory", "enforcing"}
-EXECUTION_KINDS = {"harness_turn", "scripted_dialogue", "composite_flow"}
+EXECUTION_KINDS = {
+    "harness_turn",
+    "scripted_dialogue",
+    "composite_flow",
+    "adaptive_flow",
+}
 SAFE_ID = re.compile(r"^[a-z][a-z0-9_-]{0,63}$")
 SAFE_LANE = re.compile(r"^[a-z][a-z0-9_-]{0,31}$")
 SAFE_EXECUTION_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$")
@@ -56,6 +61,10 @@ SCENARIO_EXECUTION_KIND = {
     "research_pipeline": "harness_turn",
     "performance_regression": "harness_turn",
     "browser_cross_site": "harness_turn",
+    "moving_target": "harness_turn",
+    "incident_response": "adaptive_flow",
+    "release_train_recovery": "adaptive_flow",
+    "cross_repo_contract_migration": "adaptive_flow",
 }
 
 
@@ -163,7 +172,11 @@ def parse_campaign(value: Any, source: str = "campaign") -> Campaign:
         retries = _expect_bounded_int(
             group["technical_retries"], f"{label}.technical_retries", 0, 3
         )
-        if execution_kind in {"scripted_dialogue", "composite_flow"} and retries != 0:
+        if execution_kind in {
+            "scripted_dialogue",
+            "composite_flow",
+            "adaptive_flow",
+        } and retries != 0:
             raise CampaignError(
                 f"{label} is {execution_kind} and must set technical_retries=0"
             )
@@ -189,6 +202,10 @@ def parse_campaign(value: Any, source: str = "campaign") -> Campaign:
                 )
             selected_scenarios.add(scenario_id)
             scenarios.append(scenario_id)
+        if execution_kind == "adaptive_flow" and (runs != 1 or len(scenarios) != 1):
+            raise CampaignError(
+                f"{label} is adaptive_flow and must select exactly one scenario with runs=1"
+            )
         groups.append(
             CampaignGroup(
                 id=group_id,

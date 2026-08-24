@@ -26,7 +26,7 @@ use super::{
 };
 
 pub const ID: &str = "database_migration_recovery";
-const VERSION: u32 = 1;
+const VERSION: u32 = 2;
 pub const CANONICAL_SEED: u64 = 0x6462_6d69_6772_0001;
 const DELIVERABLE_ID: &str = "database_migration_snapshot";
 const DATABASE: &str = "primary";

@@ -25,7 +25,7 @@ use super::{
 };
 
 pub const ID: &str = "policy_bound_action";
-pub const VERSION: u32 = 1;
+pub const VERSION: u32 = 2;
 pub const CANONICAL_SEED: u64 = 0x706f_6c69_6379_0001;
 const ORDER_ID: &str = "ORDER-42";
 const DISTRACTOR_ID: &str = "ORDER-99";

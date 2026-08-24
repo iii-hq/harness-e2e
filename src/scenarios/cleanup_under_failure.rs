@@ -28,7 +28,7 @@ use super::{
 };
 
 pub const ID: &str = "cleanup_under_failure";
-const VERSION: u32 = 1;
+const VERSION: u32 = 2;
 const DELIVERABLE_ID: &str = "teardown_report";
 
 const MARKER_KEY: &str = "work-marker";

@@ -28,7 +28,7 @@ use super::{
 };
 
 pub const ID: &str = "fanout_ladder";
-const VERSION: u32 = 2;
+const VERSION: u32 = 3;
 const ROWS_DELIVERABLE_ID: &str = "worker_rows";
 const REPORT_DELIVERABLE_ID: &str = "fanout_report";
 

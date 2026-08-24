@@ -31,7 +31,7 @@ use super::{
 };
 
 pub const ID: &str = "sequential_pipeline";
-const VERSION: u32 = 2;
+const VERSION: u32 = 3;
 const DELIVERABLE_ID: &str = "pipeline_receipt";
 const STAGES: [&str; 3] = ["ingest", "refine", "publish"];
 /// Token indexes 0..=2 feed the stages; index 3 is the receipt the terminal

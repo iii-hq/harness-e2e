@@ -27,7 +27,7 @@ use super::{
 };
 
 pub const ID: &str = "contention_ledger";
-const VERSION: u32 = 1;
+const VERSION: u32 = 2;
 const DELIVERABLE_ID: &str = "ledger_totals";
 
 const DATABASE: &str = "primary";

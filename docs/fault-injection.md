@@ -1,6 +1,6 @@
 # Fault injection and Weekly Stress
 
-Weekly Stress measures real recovery at L2 through L5. Repository code defines
+Weekly Stress measures real recovery at L2 through L4. Repository code defines
 and evaluates perturbations, while an environment-owned supervisor applies them.
 This boundary prevents code from a source artifact or pull request from gaining
 host, network, provider, or storage credentials.
@@ -20,12 +20,12 @@ Each attempt has four immutable JSON documents:
    one outcome: `correct_recovery`, `excessive_recovery`, `incorrect_result`,
    `structural_failure`, or `infrastructure_failure`.
 
-The checked-in profiles exercise delay, fail-first, duplicate delivery, child
-timeout, transient disconnect, out-of-order results, malformed results (the
+The fault contract supports delay, fail-first, duplicate delivery, child
+timeout, transient disconnect, out-of-order results, cancellation, malformed results (the
 supervisor corrupts the result payload of the first call to each named target,
 so the subject receives undecodable, contract-breaking bytes once), throttle
 bursts (the supervisor answers the target's next N calls with a
-provider-throttle 429-style rejection at a fixed spacing), and cancellation. A
+provider-throttle 429-style rejection at a fixed spacing). A
 planned action that was not triggered is a benchmark infrastructure failure;
 it cannot be reported as a product failure or a successful recovery.
 
@@ -38,10 +38,11 @@ would be untriggerable there and therefore benchmark infrastructure failures;
 child timeout, and out-of-order results; `weekly-l3-degraded`
 (`coordination.3`, ≤ 2.5) corrupts the first result of a coordination child
 with `malformed_result` under a delayed send and duplicate delivery and
-expects a degraded finish; `weekly-l4-recovery` (`coordination.4`, ≤ 3.5) and
-the two L5 profiles (`coordination.5`, ≤ 5.0 recovery and ≤ 3.0 cancellation)
-keep the existing coordinated coverage. The supervisor owns the mapping from
-each scenario family to a concrete subject workload.
+expects a degraded finish; `weekly-l4-recovery` (`coordination.4`, ≤ 3.5)
+keeps the highest coordinated fault-injection coverage. L5 behavior is covered
+by adaptive scenario campaigns, where invalidation and replanning are observed
+directly rather than inferred from a synthetic fault profile. The supervisor
+owns the mapping from each scenario family to a concrete subject workload.
 
 A `degraded` profile expects the subject to finish WITHOUT a correct
 deliverable: a hard-gate-failed but structurally clean, fully cleaned-up,
@@ -61,7 +62,7 @@ Materialize a plan with:
 
 ```bash
 cargo run --locked -- fault-plan \
-  --profile config/profiles/weekly-l5-recovery.json \
+  --profile config/profiles/weekly-l4-recovery.json \
   --output target/fault-plan.json
 ```
 
@@ -69,7 +70,7 @@ Evaluate the supervisor journal with:
 
 ```bash
 cargo run --locked -- fault-evaluate \
-  --profile config/profiles/weekly-l5-recovery.json \
+  --profile config/profiles/weekly-l4-recovery.json \
   --plan target/fault-plan.json \
   --journal target/fault-journal.json \
   --results target/results \

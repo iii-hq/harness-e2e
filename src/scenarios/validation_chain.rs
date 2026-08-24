@@ -30,7 +30,7 @@ use super::{
 };
 
 pub const ID: &str = "validation_chain";
-const VERSION: u32 = 4;
+const VERSION: u32 = 5;
 const DELIVERABLE_ID: &str = "validation_chain_result";
 
 const HOOK_TYPE: &str = "harness::hook::post-turn";
