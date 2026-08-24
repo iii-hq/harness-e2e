@@ -121,7 +121,10 @@ fn parse_topics(feed: &str) -> Vec<Topic> {
                     rank: topic["rank"].as_u64().unwrap_or(u64::MAX),
                     title: topic["title"].as_str().unwrap_or_default().to_string(),
                     url: topic["url"].as_str().unwrap_or_default().to_string(),
-                    source_body: topic["source_body"].as_str().unwrap_or_default().to_string(),
+                    source_body: topic["source_body"]
+                        .as_str()
+                        .unwrap_or_default()
+                        .to_string(),
                 })
                 .collect()
         })
@@ -132,7 +135,11 @@ fn parse_topics(feed: &str) -> Vec<Topic> {
 
 /// Ids of the top-K topics by rank — the correct editorial selection.
 fn top_ids(topics: &[Topic]) -> Vec<String> {
-    topics.iter().take(TOP_K).map(|topic| topic.id.clone()).collect()
+    topics
+        .iter()
+        .take(TOP_K)
+        .map(|topic| topic.id.clone())
+        .collect()
 }
 
 fn workspace_root(run_id: &str) -> PathBuf {
@@ -140,7 +147,8 @@ fn workspace_root(run_id: &str) -> PathBuf {
         .map(PathBuf::from)
         .unwrap_or_else(std::env::temp_dir);
     let base = fs::canonicalize(&base).unwrap_or(base);
-    base.join("scenario-workspaces").join(format!("{ID}-{run_id}"))
+    base.join("scenario-workspaces")
+        .join(format!("{ID}-{run_id}"))
 }
 
 fn load_feed(root: &Path) -> String {
@@ -207,7 +215,10 @@ fn remove_workspace(run_id: &str) -> anyhow::Result<()> {
             .components()
             .any(|component| component.as_os_str() == "scenario-workspaces");
         if !looks_scoped {
-            anyhow::bail!("refusing to remove workspace outside the scenario base: {}", root.display());
+            anyhow::bail!(
+                "refusing to remove workspace outside the scenario base: {}",
+                root.display()
+            );
         }
         fs::remove_dir_all(&root)
             .map_err(|error| anyhow::anyhow!("remove workspace {}: {error}", root.display()))?;
@@ -318,7 +329,9 @@ fn setup<'a>(_context: &'a E2eContext, run_id: &'a str) -> CleanupFuture<'a> {
             .map(PathBuf::from)
             .filter(|path| !path.as_os_str().is_empty())
             .ok_or_else(|| {
-                anyhow::anyhow!("{FIXTURE_ENV} is not set; a checkout of iii-hq/e2e-fixture is required")
+                anyhow::anyhow!(
+                    "{FIXTURE_ENV} is not set; a checkout of iii-hq/e2e-fixture is required"
+                )
             })?;
         let subtree = checkout.join(FIXTURE_SUBTREE);
         let feed_path = subtree.join(FEED_IN_SUBTREE);
@@ -342,13 +355,15 @@ fn setup<'a>(_context: &'a E2eContext, run_id: &'a str) -> CleanupFuture<'a> {
             {
                 let head = String::from_utf8_lossy(&output.stdout).trim().to_string();
                 if output.status.success() && head != FIXTURE_REVISION {
-                    anyhow::bail!("trends fixture HEAD {head} does not match pinned {FIXTURE_REVISION}");
+                    anyhow::bail!(
+                        "trends fixture HEAD {head} does not match pinned {FIXTURE_REVISION}"
+                    );
                 }
             }
         }
         let root = workspace_root(run_id);
-        let feed = fs::read(&feed_path)
-            .map_err(|error| anyhow::anyhow!("read trends feed: {error}"))?;
+        let feed =
+            fs::read(&feed_path).map_err(|error| anyhow::anyhow!("read trends feed: {error}"))?;
         write_exact(&root.join(SOURCE_RELATIVE), &feed)
             .map_err(|error| anyhow::anyhow!("seed trends feed into workspace: {error}"))?;
         fs::create_dir_all(root.join("site"))
@@ -373,10 +388,26 @@ fn parse_manifest(manifest: &str) -> Option<Vec<Post>> {
         posts
             .iter()
             .map(|post| Post {
-                topic_id: post.get("topic_id").and_then(Value::as_str).unwrap_or_default().to_string(),
-                source_url: post.get("source_url").and_then(Value::as_str).unwrap_or_default().to_string(),
-                quote: post.get("quote").and_then(Value::as_str).unwrap_or_default().to_string(),
-                summary: post.get("summary").and_then(Value::as_str).unwrap_or_default().to_string(),
+                topic_id: post
+                    .get("topic_id")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default()
+                    .to_string(),
+                source_url: post
+                    .get("source_url")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default()
+                    .to_string(),
+                quote: post
+                    .get("quote")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default()
+                    .to_string(),
+                summary: post
+                    .get("summary")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default()
+                    .to_string(),
             })
             .collect(),
     )
@@ -489,12 +520,18 @@ fn audit_site(root: &Path) -> SiteAudit {
         };
         if post.source_url != topic.url {
             anchoring_ok = false;
-            notes.push(format!("`{}` links {} not {}", topic.id, post.source_url, topic.url));
+            notes.push(format!(
+                "`{}` links {} not {}",
+                topic.id, post.source_url, topic.url
+            ));
         }
         let quote = post.quote.trim();
         if quote.chars().count() < MIN_QUOTE_CHARS || !topic.source_body.contains(quote) {
             anchoring_ok = false;
-            notes.push(format!("`{}` quote is not a verbatim source substring", topic.id));
+            notes.push(format!(
+                "`{}` quote is not a verbatim source substring",
+                topic.id
+            ));
         }
     }
     let stray_hrefs: Vec<String> = external_hrefs(&index)
@@ -520,7 +557,10 @@ fn audit_site(root: &Path) -> SiteAudit {
         let fabrications = ungrounded_fabrications(&post.summary, grounded);
         if !fabrications.is_empty() {
             no_fabrication_ok = false;
-            notes.push(format!("`{}` summary fabricates {fabrications:?}", post.topic_id));
+            notes.push(format!(
+                "`{}` summary fabricates {fabrications:?}",
+                post.topic_id
+            ));
         }
     }
 
@@ -693,7 +733,11 @@ mod tests {
 
     fn first_sentence(body: &str) -> String {
         let s = body.split(". ").next().unwrap().to_string();
-        if s.ends_with('.') { s } else { format!("{s}.") }
+        if s.ends_with('.') {
+            s
+        } else {
+            format!("{s}.")
+        }
     }
 
     fn valid_posts() -> Vec<Value> {
@@ -750,7 +794,10 @@ mod tests {
     fn synthetic_feed_parses_with_ranked_topics() {
         let topics = topics();
         assert_eq!(topics.len(), 4);
-        assert_eq!(top_ids(&topics), vec!["orbital-solar", "quantum-funding", "reef-restoration"]);
+        assert_eq!(
+            top_ids(&topics),
+            vec!["orbital-solar", "quantum-funding", "reef-restoration"]
+        );
     }
 
     #[test]
@@ -773,7 +820,11 @@ mod tests {
         write_case(dir.path(), &posts);
         let audit = audit_site(dir.path());
         assert!(!audit.anchoring_ok, "fabricated quote must fail anchoring");
-        assert!(audit.no_fabrication_ok, "summaries are still clean: {}", audit.detail);
+        assert!(
+            audit.no_fabrication_ok,
+            "summaries are still clean: {}",
+            audit.detail
+        );
         assert!(audit.coverage_ok);
     }
 
@@ -794,8 +845,16 @@ mod tests {
         posts[1]["summary"] = json!("Lattice Dynamics raised $50 million to expand its fab.");
         write_case(dir.path(), &posts);
         let audit = audit_site(dir.path());
-        assert!(!audit.no_fabrication_ok, "invented currency must fail: {}", audit.detail);
-        assert!(audit.anchoring_ok, "quotes/urls still valid: {}", audit.detail);
+        assert!(
+            !audit.no_fabrication_ok,
+            "invented currency must fail: {}",
+            audit.detail
+        );
+        assert!(
+            audit.anchoring_ok,
+            "quotes/urls still valid: {}",
+            audit.detail
+        );
     }
 
     #[test]
@@ -805,7 +864,10 @@ mod tests {
         // The reef topic withholds a date; inventing a year is a hallucination.
         posts[2]["summary"] = json!("The team plans to expand to neighbouring sites by 2027.");
         write_case(dir.path(), &posts);
-        assert!(!audit_site(dir.path()).no_fabrication_ok, "invented year must fail");
+        assert!(
+            !audit_site(dir.path()).no_fabrication_ok,
+            "invented year must fail"
+        );
     }
 
     #[test]
@@ -833,9 +895,13 @@ mod tests {
     #[test]
     fn ungrounded_fabrications_flags_currency_and_years_only_when_absent_from_source() {
         // Present in source → grounded → not flagged.
-        assert!(ungrounded_fabrications("reached 8 percent", "the link reached 8 percent").is_empty());
+        assert!(
+            ungrounded_fabrications("reached 8 percent", "the link reached 8 percent").is_empty()
+        );
         // Absent from source → flagged.
-        assert!(!ungrounded_fabrications("raised $50 million", "declined to state the size").is_empty());
+        assert!(
+            !ungrounded_fabrications("raised $50 million", "declined to state the size").is_empty()
+        );
         assert!(!ungrounded_fabrications("shipping by 2027", "no target date was set").is_empty());
         // A grounded year would not be flagged (general closed-corpus rule).
         assert!(ungrounded_fabrications("since 2019", "founded in 2019").is_empty());
@@ -877,7 +943,10 @@ mod tests {
         let retry = materialize("attempt-b", 7).unwrap();
         assert_eq!(first.case.case_id, retry.case.case_id);
         assert_eq!(first.case.inputs, retry.case.inputs);
-        assert_eq!(first.case.complexity.tier, super::super::ComplexityTier::L2Stateful);
+        assert_eq!(
+            first.case.complexity.tier,
+            super::super::ComplexityTier::L2Stateful
+        );
         assert_eq!(first.case.deliverable_contract.artifacts.len(), 1);
         assert!(first.capture.is_some());
         first.validate().unwrap();

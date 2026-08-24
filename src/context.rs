@@ -12,6 +12,7 @@ use serde_json::{json, Value};
 use tokio::sync::watch;
 
 use crate::observe::{self, ObserveHub, ObserveSubscription, TreeObserver};
+use crate::report::ObservedWorkerContract;
 use crate::wire::{
     self, ControlPlaneEvidence, SessionMetricsResponse, SessionTreeResponse, StatusReport,
     StopResponse, TeardownResponse, TurnCompletedEvent, TurnStatus,
@@ -115,6 +116,60 @@ impl E2eContext {
         wire::validate_control_plane(&info)
     }
 
+    pub async fn observe_function_contracts(
+        &self,
+        function_ids: &[String],
+    ) -> Result<Vec<ObservedWorkerContract>> {
+        if function_ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        let response = self
+            .trigger_value(
+                "engine::functions::info",
+                json!({ "function_ids": function_ids }),
+            )
+            .await
+            .context("observe scenario function contracts")?;
+        let functions = response
+            .get("functions")
+            .and_then(Value::as_array)
+            .context("engine::functions::info response is missing functions[]")?;
+        function_ids
+            .iter()
+            .map(|function_id| {
+                let function = functions
+                    .iter()
+                    .find(|function| {
+                        function.get("function_id").and_then(Value::as_str)
+                            == Some(function_id.as_str())
+                    })
+                    .with_context(|| {
+                        format!("engine::functions::info omitted required function {function_id}")
+                    })?;
+                if let Some(error) = function.get("error").and_then(Value::as_str) {
+                    bail!("required function {function_id} is unavailable: {error}");
+                }
+                let request_schema = function
+                    .get("request_schema")
+                    .filter(|schema| schema.is_object())
+                    .with_context(|| format!("{function_id} has no JSON request schema"))?;
+                let response_schema = function
+                    .get("response_schema")
+                    .filter(|schema| schema.is_object())
+                    .with_context(|| format!("{function_id} has no JSON response schema"))?;
+                Ok(ObservedWorkerContract {
+                    function_id: function_id.clone(),
+                    request_schema_sha256: crate::artifact::sha256_value(request_schema)?,
+                    response_schema_sha256: crate::artifact::sha256_value(response_schema)?,
+                })
+            })
+            .collect()
+    }
+
+    pub(crate) fn drain_turn_completed_events(&self) {
+        self.hub.drain();
+    }
+
     pub async fn runtime_versions(&self) -> Result<RuntimeVersions> {
         let health = self
             .trigger_value("engine::health::check", json!({}))
@@ -208,10 +263,41 @@ impl E2eContext {
             &observer,
             scenario_id,
             session_id,
-            stuck_timeout,
-            PROGRESS_SAMPLE_INTERVAL,
-            log_heartbeat,
-            cancellation,
+            observe::WaitOptions {
+                stuck_timeout,
+                sample_interval: PROGRESS_SAMPLE_INTERVAL,
+                log_heartbeat,
+                cancellation,
+                expected_turn_id: None,
+            },
+        )
+        .await
+    }
+
+    pub async fn wait_for_turn(
+        &self,
+        scenario_id: &str,
+        session_id: &str,
+        turn_id: &str,
+        stuck_timeout: Duration,
+        log_heartbeat: bool,
+        cancellation: Option<&watch::Receiver<bool>>,
+    ) -> Result<SessionMetricsResponse> {
+        let observer = ContextTreeObserver {
+            context: self,
+            subscription: self.hub.subscribe(),
+        };
+        observe::wait_until_complete(
+            &observer,
+            scenario_id,
+            session_id,
+            observe::WaitOptions {
+                stuck_timeout,
+                sample_interval: PROGRESS_SAMPLE_INTERVAL,
+                log_heartbeat,
+                cancellation,
+                expected_turn_id: Some(turn_id),
+            },
         )
         .await
     }

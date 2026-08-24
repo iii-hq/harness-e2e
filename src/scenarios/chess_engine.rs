@@ -60,11 +60,7 @@ fn result_string(position: &Chess) -> Option<String> {
 /// Legal moves from `fen`, as UCI strings in a stable total order.
 pub fn legal_moves(fen: &str) -> Result<Vec<String>> {
     let position = parse_position(fen)?;
-    let mut moves: Vec<String> = position
-        .legal_moves()
-        .iter()
-        .map(move_to_uci)
-        .collect();
+    let mut moves: Vec<String> = position.legal_moves().iter().map(move_to_uci).collect();
     moves.sort();
     Ok(moves)
 }
@@ -87,7 +83,8 @@ pub fn apply_move(fen: &str, uci: &str) -> Result<MoveOutcome> {
         is_check: next.is_check(),
         is_checkmate: next.is_checkmate(),
         is_stalemate: next.is_stalemate(),
-        is_draw: next.is_insufficient_material() || matches!(result_string(&next).as_deref(), Some("draw")),
+        is_draw: next.is_insufficient_material()
+            || matches!(result_string(&next).as_deref(), Some("draw")),
         result: result_string(&next),
     })
 }
@@ -127,7 +124,11 @@ fn evaluate(position: &Chess) -> i32 {
     }
     // Mobility: legal-move count for the side to move (cheap, deterministic).
     let mobility = position.legal_moves().len() as i32;
-    let perspective = if position.turn() == Color::White { 1 } else { -1 };
+    let perspective = if position.turn() == Color::White {
+        1
+    } else {
+        -1
+    };
     material * perspective + mobility
 }
 

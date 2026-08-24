@@ -1302,11 +1302,11 @@ fn validate_run_request(request: &RunRequest) -> Result<LaneBudget> {
         unique_scenarios(&request.scenarios)
     };
     if request.technical_retries > 0
-        && scenarios.iter().any(|scenario| {
-            scenario.execution_kind() == crate::scenarios::ScenarioExecutionKind::CompositeFlow
-        })
+        && scenarios
+            .iter()
+            .any(|scenario| !scenario.execution_kind().replay_safe())
     {
-        bail!("composite scenarios with non-repeatable steps require technical_retries=0");
+        bail!("non-replayable scenarios require technical_retries=0");
     }
     let base_seed_count = 1_usize;
     let unique_rotating_seeds = request
@@ -1725,7 +1725,10 @@ fn observation_samples(report: &E2eReport) -> Vec<ObservationSample> {
                     origin: ObservationMetricOrigin::Observed,
                     data_availability,
                     metrics: run.efficiency.clone(),
-                    metric_values: observation_metric_values(run.efficiency.as_ref()),
+                    metric_values: observation_metric_values(
+                        run.efficiency.as_ref(),
+                        &run.scenario_measurements,
+                    ),
                     derivations,
                 }
             })
@@ -1735,6 +1738,7 @@ fn observation_samples(report: &E2eReport) -> Vec<ObservationSample> {
 
 fn observation_metric_values(
     metrics: Option<&crate::report::EfficiencyReport>,
+    scenario_measurements: &[crate::report::ScenarioMeasurement],
 ) -> BTreeMap<String, ObservationMetric> {
     const METRICS: &[(&str, &str)] = &[
         ("wall_time_ms", "ms"),
@@ -1757,7 +1761,7 @@ fn observation_metric_values(
         ("work_amplification", "ratio"),
         ("technical_attempts", "attempts"),
     ];
-    METRICS
+    let mut values = METRICS
         .iter()
         .map(|(name, unit)| {
             let (value, origin) = match (metrics, *name) {
@@ -1860,7 +1864,19 @@ fn observation_metric_values(
                 },
             )
         })
-        .collect()
+        .collect::<BTreeMap<_, _>>();
+    for measurement in scenario_measurements {
+        values.insert(
+            measurement.id.clone(),
+            ObservationMetric {
+                value: Some(measurement.value),
+                unit: measurement.unit.clone(),
+                availability: ObservationDataAvailability::Complete,
+                origin: measurement.origin,
+            },
+        );
+    }
+    values
 }
 
 fn observation_data_availability(samples: &[ObservationSample]) -> ObservationDataAvailability {
@@ -2230,7 +2246,7 @@ mod tests {
             origin: ObservationMetricOrigin::Observed,
             data_availability: ObservationDataAvailability::Complete,
             metrics: Some(metrics.clone()),
-            metric_values: observation_metric_values(Some(&metrics)),
+            metric_values: observation_metric_values(Some(&metrics), &[]),
             derivations: Vec::new(),
         };
         let unavailable = ObservationSample {
@@ -2298,7 +2314,7 @@ mod tests {
         request.technical_retries = 1;
         assert_eq!(
             validate_run_request(&request).unwrap_err().to_string(),
-            "composite scenarios with non-repeatable steps require technical_retries=0"
+            "non-replayable scenarios require technical_retries=0"
         );
     }
 
@@ -2321,7 +2337,7 @@ mod tests {
     #[test]
     fn subject_policy_hides_control_functions() {
         let spec = ScenarioId::MinimalPath.spec("policy");
-        let policy = crate::suite::e2e_function_policy(&spec);
+        let policy = crate::suite::e2e_function_policy(&spec, "test-run");
         assert!(policy.deny.contains(&"e2e::*".to_string()));
     }
 

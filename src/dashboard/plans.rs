@@ -10,7 +10,7 @@ use serde_json::json;
 
 use super::RunRequest;
 use crate::artifact;
-use crate::scenarios::{ScenarioExecutionKind, ScenarioId};
+use crate::scenarios::ScenarioId;
 
 const PLAN_SCHEMA_VERSION: u32 = 1;
 
@@ -457,9 +457,9 @@ fn validate_values(request: &PlanCreateRequest) -> Result<()> {
     if request.technical_retries > 0
         && selected
             .iter()
-            .any(|scenario| scenario.execution_kind() == ScenarioExecutionKind::CompositeFlow)
+            .any(|scenario| !scenario.execution_kind().replay_safe())
     {
-        bail!("composite scenarios with non-repeatable steps require technical_retries=0");
+        bail!("non-replayable scenarios require technical_retries=0");
     }
     Ok(())
 }

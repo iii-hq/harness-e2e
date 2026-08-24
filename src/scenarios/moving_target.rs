@@ -599,7 +599,9 @@ mod tests {
         assert!(verdict.notice.is_some());
         assert!(verdict.instruction.is_some());
         assert!(verdict.receipt.is_none());
-        let revision = verdict.revision.expect("revised verdict carries the revision");
+        let revision = verdict
+            .revision
+            .expect("revised verdict carries the revision");
         assert_eq!(revision, manifest_b(run_id));
         assert_eq!(revision["stamp"], json!(stamp_b(run_id)));
     }
@@ -676,7 +678,10 @@ mod tests {
     fn a_lucky_b_first_submission_passes_the_pure_function_but_fails_the_order_audit() {
         let run_id = "order-run";
         // The pure function cannot know history; the transcript audit can.
-        assert_eq!(submit_verdict(run_id, &manifest_b(run_id)).status, "accepted");
+        assert_eq!(
+            submit_verdict(run_id, &manifest_b(run_id)).status,
+            "accepted"
+        );
         assert!(!audit_of(run_id, &[B]).revision_honored());
         assert!(!audit_of(run_id, &[B, A]).revision_honored());
 

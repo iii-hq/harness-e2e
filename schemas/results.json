@@ -1212,6 +1212,12 @@
             }
           ]
         },
+        "scenario_measurements": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/ScenarioMeasurement"
+          }
+        },
         "score": {
           "type": [
             "integer",
@@ -1238,6 +1244,13 @@
           "type": "integer",
           "format": "uint64",
           "minimum": 0.0
+        },
+        "worker_contracts": {
+          "description": "Exact request/response schemas observed after this scenario's setup. Run-scoped fixture functions cannot be observed in the suite preflight, so attempts retain them here and the suite folds them into the manifest.",
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/ObservedWorkerContract"
+          }
         }
       }
     },
@@ -1835,6 +1848,13 @@
         "demonstration"
       ]
     },
+    "ObservationMetricOrigin": {
+      "type": "string",
+      "enum": [
+        "observed",
+        "derived_from_observed"
+      ]
+    },
     "ObservationMode": {
       "type": "object",
       "required": [
@@ -2068,6 +2088,26 @@
           "minimum": 0.0
         }
       }
+    },
+    "ObservedWorkerContract": {
+      "type": "object",
+      "required": [
+        "function_id",
+        "request_schema_sha256",
+        "response_schema_sha256"
+      ],
+      "properties": {
+        "function_id": {
+          "type": "string"
+        },
+        "request_schema_sha256": {
+          "type": "string"
+        },
+        "response_schema_sha256": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
     },
     "PortValueKind": {
       "type": "string",
@@ -2538,6 +2578,8 @@
         "todo_worker_simple",
         "todo_worker_planned",
         "engineering_ticket",
+        "engineering_ticket_git_handoff",
+        "engineering_endurance_ladder",
         "git_regression_forensics",
         "mechanical_reaction",
         "timer_wake",
@@ -2560,8 +2602,39 @@
         "wake_chain_soak",
         "chess_engine_build",
         "chess_play_ladder",
-        "trend_blog"
+        "trend_blog",
+        "tool_contract_recovery",
+        "policy_bound_action",
+        "cross_app_transaction",
+        "database_migration_recovery",
+        "performance_regression",
+        "browser_cross_site"
       ]
+    },
+    "ScenarioMeasurement": {
+      "type": "object",
+      "required": [
+        "id",
+        "origin",
+        "unit",
+        "value"
+      ],
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "origin": {
+          "$ref": "#/definitions/ObservationMetricOrigin"
+        },
+        "unit": {
+          "type": "string"
+        },
+        "value": {
+          "type": "number",
+          "format": "double"
+        }
+      },
+      "additionalProperties": false
     },
     "SessionMetricsPayload": {
       "type": "object",

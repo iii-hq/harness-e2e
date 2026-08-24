@@ -30,6 +30,35 @@ class WorkflowBoundaryTests(unittest.TestCase):
         self.assertIn("compare/$E2E_REVISION...$default_sha", workflow)
         self.assertIn("/opt/iii-harness-e2e/resolve-cutover-evidence", workflow)
 
+    def test_daily_campaign_uses_a_protected_disposable_engineering_fixture(self):
+        workflow = (ROOT / ".github/workflows/run-campaign.yml").read_text(
+            encoding="utf-8"
+        )
+        launcher = "/opt/iii-harness-e2e/engineering-ticket-fixture"
+        self.assertGreaterEqual(workflow.count(launcher), 3)
+        self.assertIn("HARNESS_E2E_ENGINEERING_TICKET_FIXTURE_PATH", workflow)
+        self.assertIn("prepare", workflow)
+        self.assertIn("cleanup --lease-id", workflow)
+        self.assertNotIn("git commit", workflow)
+
+    def test_endurance_keeps_github_authority_in_the_post_run_publisher(self):
+        workflow = (ROOT / ".github/workflows/engineering-endurance.yml").read_text(
+            encoding="utf-8"
+        )
+        scenario = (
+            ROOT / "src/scenarios/engineering_endurance_ladder.rs"
+        ).read_text(encoding="utf-8")
+        publisher = (
+            ROOT / "scripts/publish_engineering_endurance.py"
+        ).read_text(encoding="utf-8")
+        self.assertIn("timeout-minutes: 240", workflow)
+        self.assertIn("E2E_FIXTURE_GITHUB_TOKEN", workflow)
+        self.assertIn("Publish sanitized GitHub handoff", workflow)
+        self.assertIn('"github::*"', scenario)
+        self.assertIn('ALLOWED_REPOSITORY = "iii-hq/e2e-fixture"', publisher)
+        self.assertNotIn("E2E_FIXTURE_GITHUB_TOKEN", scenario)
+        self.assertNotIn("hidden_output", publisher.split("def public_projection", 1)[1].split("def create_blob", 1)[0])
+
 
 if __name__ == "__main__":
     unittest.main()

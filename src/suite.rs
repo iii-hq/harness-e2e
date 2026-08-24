@@ -24,8 +24,9 @@ use crate::identity::{self, ExecutionIdentity, SystemUnderTestIdentity};
 use crate::judge::{self, JudgeConfig};
 use crate::report::{
     CostReport, CriterionReport, E2eManifest, E2eReport, E2eRunReport, E2eScenarioReport,
-    EvaluationDimension, FailurePhase, HardGateReport, ModelArtifact, ObservationRunContract,
-    RetryAttemptReport, RunStatus, ScenarioFlowEvidence,
+    EvaluationDimension, FailurePhase, HardGateReport, ModelArtifact, ObservationMetricOrigin,
+    ObservationRunContract, RetryAttemptReport, RunStatus, ScenarioFlowEvidence,
+    ScenarioMeasurement,
 };
 use crate::scenarios::common;
 use crate::scenarios::{
@@ -50,7 +51,7 @@ const MAX_TECHNICAL_RETRIES: u8 = 3;
 // indefinitely; timing out the advisory assessment never changes run status.
 const FINAL_ASSESSMENT_BATCH_TIMEOUT: Duration = Duration::from_secs(120);
 
-pub(crate) fn e2e_function_policy(spec: &ScenarioSpec) -> FunctionPolicy {
+pub(crate) fn e2e_function_policy(spec: &ScenarioSpec, run_id: &str) -> FunctionPolicy {
     let mut deny = vec!["e2e::*".to_string()];
     deny.extend(
         spec.denied_functions
@@ -60,7 +61,8 @@ pub(crate) fn e2e_function_policy(spec: &ScenarioSpec) -> FunctionPolicy {
     deny.sort();
     deny.dedup();
     FunctionPolicy {
-        allow: vec!["*".into()],
+        allow: crate::scenarios::allowed_functions(spec.id, run_id)
+            .unwrap_or_else(|| vec!["*".into()]),
         deny,
         ..FunctionPolicy::default()
     }
@@ -296,6 +298,29 @@ pub async fn run_suite(config: SuiteRunConfig) -> Result<SuiteRunOutcome> {
             ));
         }
     }
+
+    crate::scenarios::engineering_ticket::apply_paired_efficiency(&mut scenario_reports);
+
+    for contract in scenario_reports
+        .iter()
+        .flat_map(|scenario| &scenario.runs)
+        .flat_map(|run| &run.worker_contracts)
+    {
+        if let Some(existing) = worker_contracts
+            .iter()
+            .find(|existing| existing.function_id == contract.function_id)
+        {
+            if existing != contract {
+                bail!(
+                    "function contract '{}' changed between preflight and scenario execution",
+                    contract.function_id
+                );
+            }
+        } else {
+            worker_contracts.push(contract.clone());
+        }
+    }
+    worker_contracts.sort_by(|left, right| left.function_id.cmp(&right.function_id));
 
     let completed_at = Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true);
     let execution = ExecutionIdentity {
@@ -1131,9 +1156,9 @@ fn validate_config(config: &SuiteRunConfig) -> Result<()> {
         && config
             .scenarios
             .iter()
-            .any(|scenario| scenario.execution_kind() == ScenarioExecutionKind::CompositeFlow)
+            .any(|scenario| !scenario.execution_kind().replay_safe())
     {
-        bail!("composite scenarios with non-repeatable steps require --technical-retries 0");
+        bail!("non-replayable scenarios require --technical-retries 0");
     }
     if config.scenarios.is_empty() {
         bail!("at least one scenario is required");
@@ -1899,6 +1924,13 @@ async fn execute(
             .await
             .map_err(|error| scenario_setup_failure(error.to_string()))?;
     }
+    let required_functions = crate::scenarios::required_functions(spec.id, run_id);
+    report.worker_contracts = context
+        .observe_function_contracts(&required_functions)
+        .await
+        .map_err(|error| {
+            scenario_setup_failure(format!("required function preflight: {error:#}"))
+        })?;
     emit_phase(control, SuitePhase::Executing)
         .await
         .map_err(|error| infrastructure_failure(FailurePhase::Execute, error.to_string()))?;
@@ -1908,62 +1940,78 @@ async fn execute(
         .bind_turn_completed()
         .await
         .map_err(|error| infrastructure_failure(FailurePhase::Execute, error.to_string()))?;
-    let response: SendResponse = context
-        .trigger(
-            "harness::send",
-            SendRequest {
-                session_id: Some(session_id.to_string()),
-                message: MessageInput::Text(spec.prompt.clone()),
-                model: Some(subject.model.clone()),
-                provider: Some(subject.provider.clone()),
-                idempotency_key: Some(format!("e2e:{run_id}:{}:send", spec.id)),
-                session: Some(SessionInit {
-                    title: Some(format!("Harness E2E: {}", spec.id)),
-                    metadata: Some(json!({
-                        "e2e_run_id": run_id,
-                        "e2e_scenario": spec.id,
-                    })),
-                }),
-                options: Some(SendOptions {
-                    max_turns: Some(spec.execution.max_turns),
-                    max_output_tokens: spec.execution.max_output_tokens,
-                    max_total_tokens: spec.execution.max_total_tokens,
-                    max_validation_retries: spec.execution.max_validation_retries,
-                    functions: Some(e2e_function_policy(spec)),
-                    metadata: filesystem_metadata,
-                }),
-            },
-        )
-        .await
-        .map_err(|error| subject_failure(FailurePhase::Execute, error.to_string()))?;
-    if !response.accepted
-        || response.session_id != session_id
-        || response.merged == Some(true)
-        || response.queued == Some(true)
-    {
-        return Err(RunFailure::new(
-            RunStatus::SubjectError,
-            FailurePhase::Execute,
-            format!("harness::send returned an unexpected response: {response:?}"),
-        ));
-    }
-
-    let metrics = match context
-        .wait_for_tree(
-            spec.id,
-            session_id,
-            stuck_timeout,
-            progress_interval.is_some(),
-            control.map(|control| &control.cancellation),
-        )
-        .await
-    {
-        Ok(metrics) => metrics,
-        Err(error) => {
-            capture_partial_observation(context, session_id, report).await;
-            return Err(subject_failure(FailurePhase::Execute, error.to_string()));
+    let mut messages = vec![spec.prompt.clone()];
+    messages.extend(crate::scenarios::dialogue_followups(spec.id, run_id));
+    let scripted_dialogue = messages.len() > 1;
+    let mut metrics = None;
+    for (exchange, message) in messages.into_iter().enumerate() {
+        context.drain_turn_completed_events();
+        let response: SendResponse = context
+            .trigger(
+                "harness::send",
+                SendRequest {
+                    session_id: Some(session_id.to_string()),
+                    message: MessageInput::Text(message),
+                    model: Some(subject.model.clone()),
+                    provider: Some(subject.provider.clone()),
+                    idempotency_key: Some(format!(
+                        "e2e:{run_id}:{}:send:{exchange}",
+                        spec.id
+                    )),
+                    session: (exchange == 0).then(|| SessionInit {
+                        title: Some(format!("Harness E2E: {}", spec.id)),
+                        metadata: Some(json!({
+                            "e2e_run_id": run_id,
+                            "e2e_scenario": spec.id,
+                            "e2e_execution_kind": if scripted_dialogue { "scripted_dialogue" } else { "harness_turn" },
+                        })),
+                    }),
+                    options: Some(SendOptions {
+                        max_turns: Some(spec.execution.max_turns),
+                        max_output_tokens: spec.execution.max_output_tokens,
+                        max_total_tokens: spec.execution.max_total_tokens,
+                        max_validation_retries: spec.execution.max_validation_retries,
+                        functions: Some(e2e_function_policy(spec, run_id)),
+                        metadata: filesystem_metadata.clone(),
+                    }),
+                },
+            )
+            .await
+            .map_err(|error| subject_failure(FailurePhase::Execute, error.to_string()))?;
+        if !response.accepted
+            || response.session_id != session_id
+            || response.merged == Some(true)
+            || response.queued == Some(true)
+        {
+            return Err(RunFailure::new(
+                RunStatus::SubjectError,
+                FailurePhase::Execute,
+                format!(
+                    "harness::send exchange {exchange} returned an unexpected response: {response:?}"
+                ),
+            ));
         }
-    };
+        metrics = Some(
+            match context
+                .wait_for_turn(
+                    spec.id,
+                    session_id,
+                    &response.turn_id,
+                    stuck_timeout,
+                    progress_interval.is_some(),
+                    control.map(|control| &control.cancellation),
+                )
+                .await
+            {
+                Ok(metrics) => metrics,
+                Err(error) => {
+                    capture_partial_observation(context, session_id, report).await;
+                    return Err(subject_failure(FailurePhase::Execute, error.to_string()));
+                }
+            },
+        );
+    }
+    let metrics = metrics.expect("every scenario has at least one scripted message");
     let terminal_status = match context
         .trigger::<_, Option<StatusReport>>("harness::status", json!({ "session_id": session_id }))
         .await
@@ -2079,6 +2127,16 @@ async fn execute(
         report.asset_redaction.merge(evaluation.redaction);
         report.asset_capture_manifest = Some(manifest.clone());
         report.evidence.push(manifest);
+        report.scenario_measurements = captured_measurements(&captured).map_err(|error| {
+            RunFailure::new(
+                RunStatus::InfrastructureError,
+                FailurePhase::Collect,
+                format!(
+                    "scenario '{}' emitted invalid longitudinal measurements: {error:#}",
+                    spec.id
+                ),
+            )
+        })?;
         observation.deliverables = captured;
     }
     emit_phase(control, SuitePhase::Evaluating)
@@ -2209,6 +2267,52 @@ async fn execute(
         }
     }
     Ok(())
+}
+
+fn captured_measurements(
+    deliverables: &[crate::scenarios::CapturedDeliverable],
+) -> Result<Vec<ScenarioMeasurement>> {
+    let mut measurements = Vec::new();
+    let mut ids = HashSet::new();
+    for measurement in deliverables
+        .iter()
+        .filter_map(|deliverable| deliverable.content.as_json())
+        .filter_map(|content| {
+            content
+                .get("measurements")
+                .and_then(serde_json::Value::as_array)
+        })
+        .flatten()
+    {
+        let id = measurement
+            .get("id")
+            .and_then(serde_json::Value::as_str)
+            .map(str::trim)
+            .filter(|id| !id.is_empty())
+            .context("measurement id must be a non-empty string")?;
+        let value = measurement
+            .get("value")
+            .and_then(serde_json::Value::as_f64)
+            .filter(|value| value.is_finite())
+            .context("measurement value must be a finite number")?;
+        let unit = measurement
+            .get("unit")
+            .and_then(serde_json::Value::as_str)
+            .map(str::trim)
+            .filter(|unit| !unit.is_empty())
+            .context("measurement unit must be a non-empty string")?;
+        if !ids.insert(id.to_string()) {
+            bail!("measurement id '{id}' is duplicated");
+        }
+        measurements.push(ScenarioMeasurement {
+            id: id.to_string(),
+            value,
+            unit: unit.to_string(),
+            origin: ObservationMetricOrigin::Observed,
+        });
+    }
+    measurements.sort_by(|left, right| left.id.cmp(&right.id));
+    Ok(measurements)
 }
 
 enum CriterionJudgeState {
@@ -2724,6 +2828,46 @@ fn criterion_reports(spec: &ScenarioSpec, awards: Vec<CriterionAward>) -> Vec<Cr
 mod tests {
     use super::*;
 
+    fn measurement_deliverable(
+        measurements: serde_json::Value,
+    ) -> crate::scenarios::CapturedDeliverable {
+        crate::scenarios::CapturedDeliverable {
+            id: "performance_evidence".into(),
+            kind: "benchmark".into(),
+            content: CapturedDeliverableContent::Json(serde_json::json!({
+                "measurements": measurements,
+            })),
+            invariants: Vec::new(),
+            provenance: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn captured_scenario_measurements_are_strict_and_stably_ordered() {
+        let captured = captured_measurements(&[measurement_deliverable(serde_json::json!([
+            {"id": "z_work", "value": 2, "unit": "operations"},
+            {"id": "a_ratio", "value": 0.5, "unit": "ratio"}
+        ]))])
+        .unwrap();
+        assert_eq!(
+            captured
+                .iter()
+                .map(|metric| metric.id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["a_ratio", "z_work"]
+        );
+        assert!(captured.iter().all(|metric| {
+            metric.origin == ObservationMetricOrigin::Observed && metric.value.is_finite()
+        }));
+
+        let duplicate = captured_measurements(&[measurement_deliverable(serde_json::json!([
+            {"id": "work", "value": 2, "unit": "operations"},
+            {"id": "work", "value": 1, "unit": "operations"}
+        ]))])
+        .unwrap_err();
+        assert_eq!(duplicate.to_string(), "measurement id 'work' is duplicated");
+    }
+
     fn control_plane(hash: &str) -> ControlPlaneEvidence {
         ControlPlaneEvidence {
             functions: vec![crate::wire::FunctionContractEvidence {
@@ -2972,7 +3116,7 @@ mod tests {
 
     #[test]
     fn e2e_policy_denies_the_control_plane_without_scenario_overrides() {
-        let policy = e2e_function_policy(&spec());
+        let policy = e2e_function_policy(&spec(), "test-run");
         assert_eq!(policy.allow, ["*"]);
         assert_eq!(policy.deny, ["e2e::*"]);
         assert_eq!(policy.expose, Default::default());
@@ -2982,7 +3126,7 @@ mod tests {
     fn e2e_policy_applies_scenario_denies() {
         let mut scenario = spec();
         scenario.denied_functions = &["state::*"];
-        let policy = e2e_function_policy(&scenario);
+        let policy = e2e_function_policy(&scenario, "test-run");
 
         assert_eq!(policy.allow, ["*"]);
         assert_eq!(policy.deny, ["e2e::*", "state::*"]);

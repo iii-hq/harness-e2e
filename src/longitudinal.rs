@@ -168,9 +168,12 @@ impl BaselinePolicy {
             .context("baseline thresholds are invalid")?;
         for (scenario_id, overrides) in &self.scenario_overrides {
             validate_identifier(scenario_id, "scenario_overrides key")?;
-            overrides.apply(self.thresholds).validate().with_context(|| {
-                format!("merged thresholds for scenario '{scenario_id}' are invalid")
-            })?;
+            overrides
+                .apply(self.thresholds)
+                .validate()
+                .with_context(|| {
+                    format!("merged thresholds for scenario '{scenario_id}' are invalid")
+                })?;
         }
         Ok(())
     }
@@ -1518,7 +1521,9 @@ mod tests {
         let policy = baseline.into_policy();
         assert_eq!(policy.baseline_id.as_deref(), Some("default"));
         assert_eq!(
-            policy.thresholds_for("todo_worker_simple").cost_increase_ratio,
+            policy
+                .thresholds_for("todo_worker_simple")
+                .cost_increase_ratio,
             0.50
         );
         assert_eq!(

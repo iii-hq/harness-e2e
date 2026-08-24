@@ -15,6 +15,7 @@ use crate::report::HardGateReport;
 use crate::wire::SessionMetricsResponse;
 
 mod assessment;
+pub mod browser_cross_site;
 pub mod chess_engine;
 pub mod chess_engine_build;
 pub mod chess_play_ladder;
@@ -22,8 +23,11 @@ pub mod cleanup_under_failure;
 pub mod common;
 pub mod contention_ledger;
 pub mod context_pressure;
+pub mod cross_app_transaction;
+pub mod database_migration_recovery;
 pub mod depth_ladder;
 mod domain;
+pub mod engineering_endurance_ladder;
 pub mod engineering_ticket;
 pub mod fanout_ladder;
 pub mod git_regression_forensics;
@@ -31,8 +35,10 @@ pub mod incident_response;
 pub mod mechanical_reaction;
 pub mod minimal_path;
 pub mod moving_target;
+pub mod performance_regression;
 pub mod persistent_state;
 pub mod poison_message;
+pub mod policy_bound_action;
 pub mod prompt_injection_resilience;
 pub mod quorum_fan_in;
 pub mod receiving_operation;
@@ -45,6 +51,7 @@ pub mod subagent_validation;
 pub mod subagent_validation_failure;
 pub mod timer_wake;
 pub mod todo_worker;
+pub mod tool_contract_recovery;
 pub mod trend_blog;
 pub mod validation_chain;
 pub mod validation_hook;
@@ -346,7 +353,14 @@ pub struct ObjectiveEvaluation {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ScenarioExecutionKind {
     HarnessTurn,
+    ScriptedDialogue,
     CompositeFlow,
+}
+
+impl ScenarioExecutionKind {
+    pub const fn replay_safe(self) -> bool {
+        matches!(self, Self::HarnessTurn)
+    }
 }
 
 pub struct CriterionAward {
@@ -392,6 +406,10 @@ pub enum ScenarioId {
     TodoWorkerPlanned,
     #[value(name = "engineering_ticket")]
     EngineeringTicket,
+    #[value(name = "engineering_ticket_git_handoff")]
+    EngineeringTicketGitHandoff,
+    #[value(name = "engineering_endurance_ladder")]
+    EngineeringEnduranceLadder,
     #[value(name = "git_regression_forensics")]
     GitRegressionForensics,
     #[value(name = "mechanical_reaction")]
@@ -438,10 +456,22 @@ pub enum ScenarioId {
     ChessPlayLadder,
     #[value(name = "trend_blog")]
     TrendBlog,
+    #[value(name = "tool_contract_recovery")]
+    ToolContractRecovery,
+    #[value(name = "policy_bound_action")]
+    PolicyBoundAction,
+    #[value(name = "cross_app_transaction")]
+    CrossAppTransaction,
+    #[value(name = "database_migration_recovery")]
+    DatabaseMigrationRecovery,
+    #[value(name = "performance_regression")]
+    PerformanceRegression,
+    #[value(name = "browser_cross_site")]
+    BrowserCrossSite,
 }
 
 impl ScenarioId {
-    pub const ALL: [Self; 34] = [
+    pub const ALL: [Self; 42] = [
         Self::SequentialPipeline,
         Self::ContextPressure,
         Self::PersistentState,
@@ -453,6 +483,8 @@ impl ScenarioId {
         Self::TodoWorkerSimple,
         Self::TodoWorkerPlanned,
         Self::EngineeringTicket,
+        Self::EngineeringTicketGitHandoff,
+        Self::EngineeringEnduranceLadder,
         Self::GitRegressionForensics,
         Self::MechanicalReaction,
         Self::TimerWake,
@@ -476,6 +508,12 @@ impl ScenarioId {
         Self::ChessEngineBuild,
         Self::ChessPlayLadder,
         Self::TrendBlog,
+        Self::ToolContractRecovery,
+        Self::PolicyBoundAction,
+        Self::CrossAppTransaction,
+        Self::DatabaseMigrationRecovery,
+        Self::PerformanceRegression,
+        Self::BrowserCrossSite,
     ];
 
     pub fn as_str(self) -> &'static str {
@@ -491,6 +529,8 @@ impl ScenarioId {
             Self::TodoWorkerSimple => todo_worker::SIMPLE_ID,
             Self::TodoWorkerPlanned => todo_worker::PLANNED_ID,
             Self::EngineeringTicket => engineering_ticket::ID,
+            Self::EngineeringTicketGitHandoff => engineering_ticket::GIT_HANDOFF_ID,
+            Self::EngineeringEnduranceLadder => engineering_endurance_ladder::ID,
             Self::GitRegressionForensics => git_regression_forensics::ID,
             Self::MechanicalReaction => mechanical_reaction::ID,
             Self::TimerWake => timer_wake::ID,
@@ -514,6 +554,12 @@ impl ScenarioId {
             Self::ChessEngineBuild => chess_engine_build::ID,
             Self::ChessPlayLadder => chess_play_ladder::ID,
             Self::TrendBlog => trend_blog::ID,
+            Self::ToolContractRecovery => tool_contract_recovery::ID,
+            Self::PolicyBoundAction => policy_bound_action::ID,
+            Self::CrossAppTransaction => cross_app_transaction::ID,
+            Self::DatabaseMigrationRecovery => database_migration_recovery::ID,
+            Self::PerformanceRegression => performance_regression::ID,
+            Self::BrowserCrossSite => browser_cross_site::ID,
         }
     }
 
@@ -530,6 +576,8 @@ impl ScenarioId {
             Self::TodoWorkerSimple => todo_worker::simple_scenario(run_id),
             Self::TodoWorkerPlanned => todo_worker::planned_scenario(run_id),
             Self::EngineeringTicket => engineering_ticket::scenario(run_id),
+            Self::EngineeringTicketGitHandoff => engineering_ticket::git_handoff_scenario(run_id),
+            Self::EngineeringEnduranceLadder => engineering_endurance_ladder::scenario(run_id),
             Self::GitRegressionForensics => git_regression_forensics::scenario(run_id),
             Self::MechanicalReaction => mechanical_reaction::scenario(run_id),
             Self::TimerWake => timer_wake::scenario(run_id),
@@ -553,6 +601,12 @@ impl ScenarioId {
             Self::ChessEngineBuild => chess_engine_build::scenario(run_id),
             Self::ChessPlayLadder => chess_play_ladder::scenario(run_id),
             Self::TrendBlog => trend_blog::scenario(run_id),
+            Self::ToolContractRecovery => tool_contract_recovery::scenario(run_id),
+            Self::PolicyBoundAction => policy_bound_action::scenario(run_id),
+            Self::CrossAppTransaction => cross_app_transaction::scenario(run_id),
+            Self::DatabaseMigrationRecovery => database_migration_recovery::scenario(run_id),
+            Self::PerformanceRegression => performance_regression::scenario(run_id),
+            Self::BrowserCrossSite => browser_cross_site::scenario(run_id),
         }
     }
 
@@ -569,6 +623,12 @@ impl ScenarioId {
             Self::TodoWorkerSimple => todo_worker::simple_materialize(namespace, seed)?,
             Self::TodoWorkerPlanned => todo_worker::planned_materialize(namespace, seed)?,
             Self::EngineeringTicket => engineering_ticket::materialize(namespace, seed)?,
+            Self::EngineeringTicketGitHandoff => {
+                engineering_ticket::git_handoff_materialize(namespace, seed)?
+            }
+            Self::EngineeringEnduranceLadder => {
+                engineering_endurance_ladder::materialize(namespace, seed)?
+            }
             Self::GitRegressionForensics => git_regression_forensics::materialize(namespace, seed)?,
             Self::MechanicalReaction => mechanical_reaction::materialize(namespace, seed)?,
             Self::TimerWake => timer_wake::materialize(namespace, seed)?,
@@ -598,6 +658,14 @@ impl ScenarioId {
             Self::ChessEngineBuild => chess_engine_build::materialize(namespace, seed)?,
             Self::ChessPlayLadder => chess_play_ladder::materialize(namespace, seed)?,
             Self::TrendBlog => trend_blog::materialize(namespace, seed)?,
+            Self::ToolContractRecovery => tool_contract_recovery::materialize(namespace, seed)?,
+            Self::PolicyBoundAction => policy_bound_action::materialize(namespace, seed)?,
+            Self::CrossAppTransaction => cross_app_transaction::materialize(namespace, seed)?,
+            Self::DatabaseMigrationRecovery => {
+                database_migration_recovery::materialize(namespace, seed)?
+            }
+            Self::PerformanceRegression => performance_regression::materialize(namespace, seed)?,
+            Self::BrowserCrossSite => browser_cross_site::materialize(namespace, seed)?,
         };
         materialized.validate()?;
         Ok(materialized)
@@ -606,6 +674,12 @@ impl ScenarioId {
     pub fn canonical_seed(self) -> u64 {
         if self == Self::EngineeringTicket {
             return engineering_ticket::CANONICAL_SEED;
+        }
+        if self == Self::EngineeringTicketGitHandoff {
+            return engineering_ticket::CANONICAL_SEED;
+        }
+        if self == Self::EngineeringEnduranceLadder {
+            return engineering_endurance_ladder::CANONICAL_SEED;
         }
         if self == Self::FanoutLadder {
             return fanout_ladder::CANONICAL_SEED;
@@ -622,6 +696,27 @@ impl ScenarioId {
         if self == Self::ChessPlayLadder {
             return chess_play_ladder::CANONICAL_SEED;
         }
+        if self == Self::ToolContractRecovery {
+            return tool_contract_recovery::CANONICAL_SEED;
+        }
+        if self == Self::PolicyBoundAction {
+            return policy_bound_action::CANONICAL_SEED;
+        }
+        if self == Self::CrossAppTransaction {
+            return cross_app_transaction::CANONICAL_SEED;
+        }
+        if self == Self::DatabaseMigrationRecovery {
+            return database_migration_recovery::CANONICAL_SEED;
+        }
+        if self == Self::ResearchPipeline {
+            return research_pipeline::CANONICAL_SEED;
+        }
+        if self == Self::PerformanceRegression {
+            return performance_regression::CANONICAL_SEED;
+        }
+        if self == Self::BrowserCrossSite {
+            return browser_cross_site::CANONICAL_SEED;
+        }
         // Stable FNV-1a keeps canonical cases reproducible without tying their
         // identity to a particular execution or retry attempt.
         stable_seed(self.as_str())
@@ -633,11 +728,20 @@ impl ScenarioId {
         matches!(
             self,
             Self::EngineeringTicket
+                | Self::EngineeringTicketGitHandoff
+                | Self::EngineeringEnduranceLadder
                 | Self::FanoutLadder
                 | Self::ContextPressure
                 | Self::DepthLadder
                 | Self::WakeChainSoak
                 | Self::ChessPlayLadder
+                | Self::ToolContractRecovery
+                | Self::PolicyBoundAction
+                | Self::CrossAppTransaction
+                | Self::DatabaseMigrationRecovery
+                | Self::ResearchPipeline
+                | Self::PerformanceRegression
+                | Self::BrowserCrossSite
         )
     }
 
@@ -646,8 +750,55 @@ impl ScenarioId {
             Self::SecurityReview | Self::IncidentResponse | Self::TodoWorkerPlanned => {
                 ScenarioExecutionKind::CompositeFlow
             }
+            Self::PolicyBoundAction => ScenarioExecutionKind::ScriptedDialogue,
             _ => ScenarioExecutionKind::HarnessTurn,
         }
+    }
+}
+
+pub fn required_functions(scenario_id: &str, run_id: &str) -> Vec<String> {
+    match scenario_id {
+        engineering_ticket::GIT_HANDOFF_ID => {
+            engineering_ticket::git_handoff_required_functions(run_id)
+        }
+        engineering_endurance_ladder::ID => {
+            engineering_endurance_ladder::required_functions(run_id)
+        }
+        tool_contract_recovery::ID => tool_contract_recovery::required_functions(run_id),
+        policy_bound_action::ID => policy_bound_action::required_functions(run_id),
+        cross_app_transaction::ID => cross_app_transaction::required_functions(run_id),
+        database_migration_recovery::ID => database_migration_recovery::required_functions(run_id),
+        research_pipeline::ID => research_pipeline::required_functions(run_id),
+        browser_cross_site::ID => browser_cross_site::required_functions(run_id),
+        _ => Vec::new(),
+    }
+}
+
+pub fn allowed_functions(scenario_id: &str, run_id: &str) -> Option<Vec<String>> {
+    match scenario_id {
+        engineering_ticket::GIT_HANDOFF_ID => {
+            Some(engineering_ticket::git_handoff_allowed_functions(run_id))
+        }
+        engineering_endurance_ladder::ID => {
+            Some(engineering_endurance_ladder::allowed_functions(run_id))
+        }
+        tool_contract_recovery::ID => Some(tool_contract_recovery::allowed_functions(run_id)),
+        policy_bound_action::ID => Some(policy_bound_action::allowed_functions(run_id)),
+        cross_app_transaction::ID => Some(cross_app_transaction::allowed_functions(run_id)),
+        database_migration_recovery::ID => {
+            Some(database_migration_recovery::allowed_functions(run_id))
+        }
+        research_pipeline::ID => Some(research_pipeline::allowed_functions(run_id)),
+        performance_regression::ID => Some(performance_regression::allowed_functions(run_id)),
+        browser_cross_site::ID => Some(browser_cross_site::allowed_functions(run_id)),
+        _ => None,
+    }
+}
+
+pub fn dialogue_followups(scenario_id: &str, run_id: &str) -> Vec<String> {
+    match scenario_id {
+        policy_bound_action::ID => policy_bound_action::dialogue_followups(run_id),
+        _ => Vec::new(),
     }
 }
 
@@ -669,7 +820,7 @@ mod tests {
 
     use super::*;
     #[test]
-    fn registry_contains_thirty_four_unique_valid_scenarios() {
+    fn registry_contains_forty_two_unique_valid_scenarios() {
         let mut ids = HashSet::new();
         for scenario in ScenarioId::ALL {
             assert!(ids.insert(scenario.as_str()));
@@ -678,7 +829,7 @@ mod tests {
                 .materialize("run", scenario.canonical_seed())
                 .unwrap();
         }
-        assert_eq!(ids.len(), 34);
+        assert_eq!(ids.len(), 42);
     }
 
     #[test]
@@ -699,6 +850,8 @@ mod tests {
         assert!(selected.contains(&ScenarioId::SecurityReview));
         assert!(selected.contains(&ScenarioId::IncidentResponse));
         assert!(selected.contains(&ScenarioId::EngineeringTicket));
+        assert!(selected.contains(&ScenarioId::EngineeringTicketGitHandoff));
+        assert!(selected.contains(&ScenarioId::EngineeringEnduranceLadder));
         assert!(selected.contains(&ScenarioId::GitRegressionForensics));
         assert!(selected.contains(&ScenarioId::TodoWorkerSimple));
         assert!(selected.contains(&ScenarioId::TodoWorkerPlanned));

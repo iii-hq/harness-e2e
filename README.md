@@ -46,6 +46,25 @@ cargo run --locked --bin harness-e2e -- run \
   --scenario todo_worker_simple
 ```
 
+Run one of the checked-in canonical campaigns:
+
+```bash
+python3 scripts/run_e2e_campaign.py config/campaigns/post-release.json --validate-only
+python3 scripts/run_e2e_campaign.py config/campaigns/daily.json --dry-run
+python3 scripts/run_e2e_campaign.py config/campaigns/weekly.json \
+  --e2e-bin target/release/harness-e2e \
+  --output-root target/e2e-campaigns
+```
+
+Campaign manifests never select or rotate seeds. They separate replay-safe
+turns from scripted dialogue and composite flows, persist a summary for every
+group, and are advisory by default while their longitudinal history is being
+calibrated. The scheduled workflows use the `harness-e2e-trusted` environment
+and archive every materialized group through the environment-owned durable
+archiver.
+The daily engineering comparison uses the protected disposable fixture described in
+[docs/engineering-ticket-git-handoff.md](docs/engineering-ticket-git-handoff.md).
+
 ## Dashboard
 
 Build and start the dashboard from the repository root:

@@ -150,6 +150,15 @@ pub struct CostReport {
     pub total_usd: Option<f64>,
 }
 
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ScenarioMeasurement {
+    pub id: String,
+    pub value: f64,
+    pub unit: String,
+    pub origin: ObservationMetricOrigin,
+}
+
 #[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
 pub struct ObservedComplexityReport {
     pub planning_depth: Option<u64>,
@@ -326,6 +335,13 @@ pub struct E2eRunReport {
     pub cost: CostReport,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub evidence: Vec<ArtifactReference>,
+    /// Exact request/response schemas observed after this scenario's setup.
+    /// Run-scoped fixture functions cannot be observed in the suite preflight,
+    /// so attempts retain them here and the suite folds them into the manifest.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub worker_contracts: Vec<ObservedWorkerContract>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub scenario_measurements: Vec<ScenarioMeasurement>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub deliverables: Vec<DeliverableReport>,
     /// Semantic tests executed inside a code-defined composite scenario. Product
@@ -393,6 +409,8 @@ impl E2eRunReport {
             judge_usage: None,
             cost: CostReport::default(),
             evidence: Vec::new(),
+            worker_contracts: Vec::new(),
+            scenario_measurements: Vec::new(),
             deliverables: Vec::new(),
             semantic_tests: Vec::new(),
             scenario_flow: None,
@@ -1768,6 +1786,39 @@ impl E2eReport {
             }
             for run in &scenario.runs {
                 validate_attempt_identity(run)?;
+                let mut measurement_ids = HashSet::new();
+                for measurement in &run.scenario_measurements {
+                    if measurement.id.trim().is_empty()
+                        || measurement.unit.trim().is_empty()
+                        || !measurement.value.is_finite()
+                    {
+                        bail!("run '{}' has an invalid scenario measurement", run.run_id);
+                    }
+                    if !measurement_ids.insert(measurement.id.as_str()) {
+                        bail!(
+                            "run '{}' repeats scenario measurement '{}'",
+                            run.run_id,
+                            measurement.id
+                        );
+                    }
+                }
+                let mut run_contract_ids = HashSet::new();
+                for contract in &run.worker_contracts {
+                    if !run_contract_ids.insert(contract.function_id.as_str()) {
+                        bail!(
+                            "run '{}' repeats observed worker contract '{}'",
+                            run.run_id,
+                            contract.function_id
+                        );
+                    }
+                    if !manifest.worker_contracts.contains(contract) {
+                        bail!(
+                            "run '{}' observed worker contract '{}' that is absent from the manifest",
+                            run.run_id,
+                            contract.function_id
+                        );
+                    }
+                }
                 for reference in &run.evidence {
                     reference.verify(output)?;
                 }

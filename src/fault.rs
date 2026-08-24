@@ -1013,10 +1013,9 @@ mod tests {
             .filter(|action| action.kind == FaultActionKind::ThrottleBurst)
             .collect::<Vec<_>>();
         assert_eq!(throttled.len(), 3);
-        assert!(throttled
-            .iter()
-            .all(|action| action.target == "provider::completion"
-                && action.duration_ms == Some(200)));
+        assert!(throttled.iter().all(
+            |action| action.target == "provider::completion" && action.duration_ms == Some(200)
+        ));
         assert_eq!(
             throttled
                 .iter()
@@ -1221,6 +1220,8 @@ mod tests {
             judge_usage: None,
             cost: CostReport::default(),
             evidence: Vec::new(),
+            worker_contracts: Vec::new(),
+            scenario_measurements: Vec::new(),
             deliverables: Vec::new(),
             semantic_tests: Vec::new(),
             scenario_flow: None,

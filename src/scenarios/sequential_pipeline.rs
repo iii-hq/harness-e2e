@@ -349,7 +349,12 @@ fn evaluate<'a>(
         let per_stage = audit
             .stages
             .iter()
-            .map(|stage| format!("{}={} call(s) exact={}", stage.stage, stage.calls, stage.exact))
+            .map(|stage| {
+                format!(
+                    "{}={} call(s) exact={}",
+                    stage.stage, stage.calls, stage.exact
+                )
+            })
             .collect::<Vec<_>>()
             .join(", ");
         Ok(assessment::build_evaluation([
@@ -518,7 +523,10 @@ mod tests {
         assert!(rejected.receipt.is_none());
         let guidance = rejected.guidance.expect("rejection carries guidance");
         assert!(guidance.contains("`ingest`"));
-        assert!(!guidance.contains("SEQ-ok"), "guidance must not leak the expected token");
+        assert!(
+            !guidance.contains("SEQ-ok"),
+            "guidance must not leak the expected token"
+        );
     }
 
     #[test]
@@ -570,7 +578,10 @@ mod tests {
 
         assert!(audit.ordered_exact);
         assert_eq!(audit.other_calls, 0);
-        assert!(audit.stages.iter().all(|stage| stage.calls == 1 && stage.exact));
+        assert!(audit
+            .stages
+            .iter()
+            .all(|stage| stage.calls == 1 && stage.exact));
     }
 
     #[test]
@@ -594,13 +605,19 @@ mod tests {
         calls.push(("state::set".to_string(), json!({ "key": "extra" })));
         let audit = chain_audit(run_id, &transcript_of(&calls));
 
-        assert!(audit.ordered_exact, "trailing non-chain calls do not break the chain itself");
+        assert!(
+            audit.ordered_exact,
+            "trailing non-chain calls do not break the chain itself"
+        );
         assert_eq!(audit.other_calls, 1);
 
         let mut with_discovery = exact_calls(run_id);
         with_discovery.insert(
             0,
-            ("engine::functions::list".to_string(), json!({ "search": "e2etest" })),
+            (
+                "engine::functions::list".to_string(),
+                json!({ "search": "e2etest" }),
+            ),
         );
         let audit = chain_audit(run_id, &transcript_of(&with_discovery));
         assert!(audit.ordered_exact);

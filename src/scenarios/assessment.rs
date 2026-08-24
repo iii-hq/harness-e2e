@@ -55,12 +55,26 @@ impl AssessmentSpec {
         weight: u8,
         description: &'static str,
     ) -> Self {
+        Self::score_only_in(
+            id,
+            weight,
+            description,
+            EvaluationDimension::StructuralIntegrity,
+        )
+    }
+
+    pub(super) const fn score_only_in(
+        id: &'static str,
+        weight: u8,
+        description: &'static str,
+        dimension: EvaluationDimension,
+    ) -> Self {
         Self {
             id,
             weight,
             description,
             gate_policy: GatePolicy::ScoreOnly,
-            dimension: EvaluationDimension::StructuralIntegrity,
+            dimension,
         }
     }
 

@@ -1,0 +1,8 @@
+{
+  "id": "stable-unique-quadratic-regression",
+  "allowed_production_paths": ["src/deduplicate.py"],
+  "protected_paths": ["tests/test_deduplicate.py", "task.json"],
+  "public_command": "python3 -m unittest discover -s tests -p test_*.py",
+  "required_behavior": "preserve the first occurrence of each hashable value",
+  "deterministic_work_limit_at_256": 2048
+}

@@ -297,9 +297,7 @@ fn setup<'a>(context: &'a E2eContext, run_id: &'a str) -> CleanupFuture<'a> {
         let manifest = compute_chess_manifest_sha256(&chess_dir)
             .context("recompute frozen chess/ fixture manifest")?;
         if manifest != CHESS_MANIFEST_SHA256 {
-            bail!(
-                "chess fixture manifest {manifest} differs from pinned {CHESS_MANIFEST_SHA256}"
-            );
+            bail!("chess fixture manifest {manifest} differs from pinned {CHESS_MANIFEST_SHA256}");
         }
 
         // The revision is advisory when this is a git checkout, best-effort.
@@ -524,8 +522,7 @@ async fn run_engine(engine_path: &Path, args: &[String]) -> Result<EngineRun> {
         .env("no_proxy", "*");
     match tokio::time::timeout(ENGINE_TIMEOUT, command.output()).await {
         Ok(output) => {
-            let output =
-                output.with_context(|| format!("run engine {}", engine_path.display()))?;
+            let output = output.with_context(|| format!("run engine {}", engine_path.display()))?;
             Ok(EngineRun {
                 stdout_trimmed: String::from_utf8_lossy(&output.stdout).trim().to_string(),
                 stderr: String::from_utf8_lossy(&output.stderr).trim().to_string(),
@@ -578,7 +575,10 @@ fn parse_uci_line(stdout: &str) -> Option<Vec<String>> {
         return None;
     }
     let tokens: Vec<String> = stdout.split_whitespace().map(str::to_string).collect();
-    tokens.iter().all(|token| is_uci_move(token)).then_some(tokens)
+    tokens
+        .iter()
+        .all(|token| is_uci_move(token))
+        .then_some(tokens)
 }
 
 fn is_uci_move(token: &str) -> bool {
@@ -665,7 +665,9 @@ fn evaluate<'a>(
         Ok(assessment::build_evaluation([
             PERFT_EXACT.full_or_zero(
                 battery.perft_exact(),
-                reason_over("perft_exact", battery.perft.iter(), |report| report.value_ok),
+                reason_over("perft_exact", battery.perft.iter(), |report| {
+                    report.value_ok
+                }),
             ),
             LEGAL_MOVES_CORRECT.full_or_zero(
                 battery.legal_moves_correct(),
@@ -700,7 +702,9 @@ fn capture<'a>(
         let source = read_engine_source(&engine);
         let battery = run_full_battery(&engine).await.ok();
         let perft_exact = battery.as_ref().is_some_and(BatteryReport::perft_exact);
-        let legal_correct = battery.as_ref().is_some_and(BatteryReport::legal_moves_correct);
+        let legal_correct = battery
+            .as_ref()
+            .is_some_and(BatteryReport::legal_moves_correct);
 
         // Provenance is asserted only once both correctness gates pass.
         let provenance = if perft_exact && legal_correct {
@@ -722,11 +726,11 @@ fn capture<'a>(
                     id: "perft_exact".to_string(),
                     passed: perft_exact,
                     reason: match battery.as_ref() {
-                        Some(battery) => reason_over(
-                            "perft_exact",
-                            battery.perft.iter(),
-                            |report| report.value_ok,
-                        ),
+                        Some(battery) => {
+                            reason_over("perft_exact", battery.perft.iter(), |report| {
+                                report.value_ok
+                            })
+                        }
                         None => "engine battery did not run".to_string(),
                     },
                 },
@@ -734,11 +738,11 @@ fn capture<'a>(
                     id: "legal_moves_correct".to_string(),
                     passed: legal_correct,
                     reason: match battery.as_ref() {
-                        Some(battery) => reason_over(
-                            "legal_moves_correct",
-                            battery.legal.iter(),
-                            |report| report.value_ok,
-                        ),
+                        Some(battery) => {
+                            reason_over("legal_moves_correct", battery.legal.iter(), |report| {
+                                report.value_ok
+                            })
+                        }
                         None => "engine battery did not run".to_string(),
                     },
                 },
@@ -825,7 +829,9 @@ mod tests {
             .bytes()
             .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase()));
         assert_eq!(FIXTURE_REVISION.len(), 40);
-        assert!(FIXTURE_REVISION.bytes().all(|byte| byte.is_ascii_hexdigit()));
+        assert!(FIXTURE_REVISION
+            .bytes()
+            .all(|byte| byte.is_ascii_hexdigit()));
     }
 
     /// Independently recompute the documented manifest over a controlled tiny
@@ -847,7 +853,11 @@ mod tests {
         }
         // Excluded content must not affect the digest.
         fs::create_dir_all(chess.join("engine/__pycache__")).unwrap();
-        fs::write(chess.join("engine/__pycache__/moves.cpython-311.pyc"), b"junk").unwrap();
+        fs::write(
+            chess.join("engine/__pycache__/moves.cpython-311.pyc"),
+            b"junk",
+        )
+        .unwrap();
         fs::write(chess.join("engine/rules/moves.pyc"), b"more junk").unwrap();
 
         let computed = compute_chess_manifest_sha256(&chess).unwrap();
@@ -883,7 +893,10 @@ mod tests {
 
         for fen in legalmoves_fens() {
             let moves = chess_engine::legal_moves(fen).unwrap();
-            assert!(!moves.is_empty(), "legal moves for `{fen}` should be non-empty");
+            assert!(
+                !moves.is_empty(),
+                "legal moves for `{fen}` should be non-empty"
+            );
             let mut sorted = moves.clone();
             sorted.sort();
             assert_eq!(moves, sorted, "kernel oracle returns ascending UCI");
@@ -901,8 +914,7 @@ mod tests {
         assert!(wrong.interface_ok && !wrong.value_ok);
 
         // Non-integer stdout is a shape (interface) failure.
-        let malformed =
-            evaluate_perft_run("startpos d1".to_string(), &run_ok("twenty"), expected);
+        let malformed = evaluate_perft_run("startpos d1".to_string(), &run_ok("twenty"), expected);
         assert!(!malformed.interface_ok && !malformed.value_ok);
 
         // Non-empty stderr fails the interface even with correct stdout.
@@ -941,8 +953,11 @@ mod tests {
         assert!(wrong.interface_ok && !wrong.value_ok);
 
         // A token that is not a UCI move is a shape failure.
-        let malformed =
-            evaluate_legalmoves_run("startpos".to_string(), &run_ok("e2e4 not-a-move"), &expected);
+        let malformed = evaluate_legalmoves_run(
+            "startpos".to_string(),
+            &run_ok("e2e4 not-a-move"),
+            &expected,
+        );
         assert!(!malformed.interface_ok);
 
         // Non-empty stderr fails the interface even with the correct set.
@@ -973,7 +988,11 @@ mod tests {
 
         let run = run_engine(
             &engine,
-            &["perft".to_string(), chess_engine::STARTPOS.to_string(), "1".to_string()],
+            &[
+                "perft".to_string(),
+                chess_engine::STARTPOS.to_string(),
+                "1".to_string(),
+            ],
         )
         .await
         .unwrap();

@@ -374,6 +374,8 @@
         "todo_worker_simple",
         "todo_worker_planned",
         "engineering_ticket",
+        "engineering_ticket_git_handoff",
+        "engineering_endurance_ladder",
         "git_regression_forensics",
         "mechanical_reaction",
         "timer_wake",
@@ -396,7 +398,13 @@
         "wake_chain_soak",
         "chess_engine_build",
         "chess_play_ladder",
-        "trend_blog"
+        "trend_blog",
+        "tool_contract_recovery",
+        "policy_bound_action",
+        "cross_app_transaction",
+        "database_migration_recovery",
+        "performance_regression",
+        "browser_cross_site"
       ]
     },
     "StackIdentity": {

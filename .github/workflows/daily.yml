@@ -1,0 +1,21 @@
+name: Harness E2E daily
+
+on:
+  schedule:
+    - cron: '17 5 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: harness-e2e-daily
+  cancel-in-progress: false
+
+jobs:
+  daily:
+    uses: ./.github/workflows/run-campaign.yml
+    with:
+      campaign: daily
+      timeout_minutes: 180
+    secrets: inherit

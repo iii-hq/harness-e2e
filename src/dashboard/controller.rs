@@ -23,7 +23,7 @@ use crate::control::{
     ControlPlane, ExecutionPhase, ExecutionRecord, RunRequest as ControlRunRequest,
 };
 use crate::report::{E2eReport, RunStatus};
-use crate::scenarios::{ScenarioExecutionKind, ScenarioId};
+use crate::scenarios::ScenarioId;
 
 const MAX_LOG_TAIL_BYTES: u64 = 256 * 1024;
 const MAX_LOG_CHUNK_BYTES: u64 = 64 * 1024;
@@ -760,11 +760,9 @@ pub(super) fn validate_request(request: &mut RunRequest) -> std::result::Result<
     if request.technical_retries > 0
         && selected
             .iter()
-            .any(|scenario| scenario.execution_kind() == ScenarioExecutionKind::CompositeFlow)
+            .any(|scenario| !scenario.execution_kind().replay_safe())
     {
-        return Err(
-            "composite scenarios with non-repeatable steps require technical_retries=0".into(),
-        );
+        return Err("non-replayable scenarios require technical_retries=0".into());
     }
     Ok(())
 }
