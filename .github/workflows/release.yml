@@ -111,6 +111,7 @@ jobs:
         env:
           VERSION: ${{ needs.validate.outputs.version }}
           REVISION: ${{ needs.validate.outputs.commit_sha }}
+          SKIP_DASHBOARD_BUILD: '1'
         run: |
           set -euo pipefail
           mkdir -p target/campaign-assets
