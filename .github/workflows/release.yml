@@ -95,7 +95,7 @@ jobs:
 
   campaign-assets:
     name: Publish immutable campaign assets
-    needs: [validate, github-release]
+    needs: [validate, github-release, dashboard]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -103,6 +103,15 @@ jobs:
       - uses: actions/checkout@v5
         with:
           ref: ${{ needs.validate.outputs.commit_sha }}
+      - uses: actions/download-artifact@v7
+        with:
+          name: dashboard-dist
+          path: release-frontend
+      - name: Restore dashboard bundle
+        run: |
+          mkdir -p dashboard/dist dashboard/dist-console
+          cp -a release-frontend/dashboard/dist/. dashboard/dist/
+          cp -a release-frontend/dashboard/dist-console/. dashboard/dist-console/
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
         with:
