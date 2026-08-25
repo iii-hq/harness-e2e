@@ -1,16 +1,14 @@
 name: Harness E2E weekly stress
 
 on:
-  schedule:
-    - cron: '23 4 * * 0'
   workflow_dispatch:
     inputs:
       repetitions:
-        description: Minimum executions per fault profile
+        description: Minimum executions per recovery-matrix phase
         type: number
         default: 3
       soak_minutes:
-        description: Minimum wall time per fault profile
+        description: Minimum wall time per recovery-matrix phase
         type: number
         default: 60
 
@@ -59,7 +57,7 @@ jobs:
         run: |
           test -x /opt/iii-harness-e2e/run-weekly-stress
           test -x /opt/iii-harness-e2e/archive-trusted-execution
-      - name: Exercise the fault profile
+      - name: Exercise the fault-recovery matrix phase
         env:
           PROFILE: ${{ matrix.profile }}
           SCENARIO: ${{ matrix.scenario }}

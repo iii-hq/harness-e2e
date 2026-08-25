@@ -49,7 +49,7 @@ const MIN_QUOTE_CHARS: usize = 20;
 const FIXTURE_ENV: &str = "HARNESS_E2E_FIXTURE_PATH";
 const FIXTURE_SUBTREE: &str = "trends";
 const FEED_IN_SUBTREE: &str = "feed.json";
-const FIXTURE_REVISION: &str = "8cc9648e0181a0b30682214d6d054ad8b97ac918";
+const FIXTURE_REVISION: &str = "16f6b9e05e34e09c824191eed0631d77f85be6a9";
 const TRENDS_MANIFEST_SHA256: &str =
     "sha256:8b2d66ae15256ffdda85d69a80bd73571ef2d0de8730695af6d708b7c58ce902";
 /// Pinned edition string (mirrors the fixture's `edition`) so `materialize`

@@ -3,12 +3,14 @@
   "campaign_id": "endurance",
   "lane": "endurance",
   "failure_policy": "advisory",
+  "scoring_profile": "difficulty-weighted-v1",
   "groups": [
     {
       "id": "engineering-endurance",
       "execution_kind": "harness_turn",
       "runs": 1,
       "technical_retries": 0,
+      "difficulty_weight": 4,
       "scenarios": [
         "engineering_endurance_ladder"
       ]

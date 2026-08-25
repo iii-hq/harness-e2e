@@ -26,6 +26,7 @@ jobs:
       HARNESS_E2E_PROVIDER: ${{ vars.HARNESS_E2E_PROVIDER }}
       HARNESS_E2E_ENGINEERING_FIXTURE_REPOSITORY: ${{ vars.HARNESS_E2E_ENGINEERING_FIXTURE_REPOSITORY }}
       ENGINEERING_TICKET_FIXTURE_REVISION: 7a6b25b3cd12d66af74a358ae86e0d2b846bd384
+      SHARED_FIXTURE_REVISION: 16f6b9e05e34e09c824191eed0631d77f85be6a9
       III_URL: ${{ vars.III_URL }}
     steps:
       - uses: actions/checkout@v4
@@ -54,26 +55,38 @@ jobs:
           test -n "${HARNESS_E2E_MODEL:-}"
           test -n "${HARNESS_E2E_PROVIDER:-}"
           test -n "${III_URL:-}"
-          if [[ "$CAMPAIGN" == "daily" ]]; then
-            test -x /opt/iii-harness-e2e/engineering-ticket-fixture
-            test -n "${HARNESS_E2E_ENGINEERING_FIXTURE_REPOSITORY:-}"
+          test -x /opt/iii-harness-e2e/engineering-ticket-fixture
+          test -n "${HARNESS_E2E_ENGINEERING_FIXTURE_REPOSITORY:-}"
+          if [[ "$CAMPAIGN" == "weekly" ]]; then
+            test -x /opt/iii-harness-e2e/run-weekly-stress
           fi
-      - name: Prepare the disposable engineering fixture
-        if: inputs.campaign == 'daily'
+      - name: Prepare the disposable code fixtures
         run: |
           execution_id="${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
-          fixture_json="$RUNNER_TEMP/engineering-ticket-fixture-${execution_id}.json"
+          engineering_json="$RUNNER_TEMP/engineering-ticket-fixture-${execution_id}.json"
+          shared_json="$RUNNER_TEMP/shared-fixture-${execution_id}.json"
           /opt/iii-harness-e2e/engineering-ticket-fixture prepare \
-            --execution-id "$execution_id" \
-            --revision "$ENGINEERING_TICKET_FIXTURE_REVISION" > "$fixture_json"
-          lease=$(jq -er .lease_id "$fixture_json")
-          trap '/opt/iii-harness-e2e/engineering-ticket-fixture cleanup --lease-id "$lease"' ERR
+            --execution-id "${execution_id}-engineering" \
+            --revision "$ENGINEERING_TICKET_FIXTURE_REVISION" > "$engineering_json"
+          engineering_lease=$(jq -er .lease_id "$engineering_json")
+          trap '/opt/iii-harness-e2e/engineering-ticket-fixture cleanup --lease-id "$engineering_lease"' ERR
           jq -e \
             --arg revision "$ENGINEERING_TICKET_FIXTURE_REVISION" \
             '.revision == $revision and (.path | startswith("/")) and (.lease_id | length == 32)' \
-            "$fixture_json"
-          echo "HARNESS_E2E_ENGINEERING_TICKET_FIXTURE_PATH=$(jq -er .path "$fixture_json")" >> "$GITHUB_ENV"
-          echo "HARNESS_E2E_ENGINEERING_TICKET_FIXTURE_LEASE=$lease" >> "$GITHUB_ENV"
+            "$engineering_json"
+          /opt/iii-harness-e2e/engineering-ticket-fixture prepare \
+            --execution-id "${execution_id}-shared" \
+            --revision "$SHARED_FIXTURE_REVISION" > "$shared_json"
+          shared_lease=$(jq -er .lease_id "$shared_json")
+          trap 'trap - ERR; /opt/iii-harness-e2e/engineering-ticket-fixture cleanup --lease-id "$shared_lease" || true; /opt/iii-harness-e2e/engineering-ticket-fixture cleanup --lease-id "$engineering_lease" || true' ERR
+          jq -e \
+            --arg revision "$SHARED_FIXTURE_REVISION" \
+            '.revision == $revision and (.path | startswith("/")) and (.lease_id | length == 32)' \
+            "$shared_json"
+          echo "HARNESS_E2E_ENGINEERING_TICKET_FIXTURE_PATH=$(jq -er .path "$engineering_json")" >> "$GITHUB_ENV"
+          echo "HARNESS_E2E_ENGINEERING_TICKET_FIXTURE_LEASE=$engineering_lease" >> "$GITHUB_ENV"
+          echo "HARNESS_E2E_FIXTURE_PATH=$(jq -er .path "$shared_json")" >> "$GITHUB_ENV"
+          echo "HARNESS_E2E_SHARED_FIXTURE_LEASE=$shared_lease" >> "$GITHUB_ENV"
           trap - ERR
       - name: Run the advisory campaign
         env:
@@ -85,13 +98,24 @@ jobs:
             --e2e-bin "$PWD/target/release/harness-e2e" \
             --output-root "$PWD/campaign-results" \
             --execution-id "$execution_id" \
-            --summary "$PWD/campaign-results/campaign-summary.json"
-      - name: Remove the disposable engineering fixture
+            --summary "$PWD/campaign-results/campaign-summary.json" \
+            --bundle "$PWD/campaign-results/campaign-bundle.json" \
+            --fault-runner /opt/iii-harness-e2e/run-weekly-stress
+      - name: Remove the disposable code fixtures
         if: always()
         run: |
-          lease="${HARNESS_E2E_ENGINEERING_TICKET_FIXTURE_LEASE:-}"
-          test -z "$lease" || \
-            /opt/iii-harness-e2e/engineering-ticket-fixture cleanup --lease-id "$lease"
+          shared_lease="${HARNESS_E2E_SHARED_FIXTURE_LEASE:-}"
+          engineering_lease="${HARNESS_E2E_ENGINEERING_TICKET_FIXTURE_LEASE:-}"
+          cleanup_failed=0
+          if [[ -n "$shared_lease" ]]; then
+            /opt/iii-harness-e2e/engineering-ticket-fixture cleanup \
+              --lease-id "$shared_lease" || cleanup_failed=1
+          fi
+          if [[ -n "$engineering_lease" ]]; then
+            /opt/iii-harness-e2e/engineering-ticket-fixture cleanup \
+              --lease-id "$engineering_lease" || cleanup_failed=1
+          fi
+          exit "$cleanup_failed"
       - name: Archive every materialized group
         if: always()
         run: |
@@ -123,6 +147,24 @@ jobs:
               ((.archive.manifest.sha256 | sub("^sha256:"; "") | length) == 64)
             ' "$output/archive-head.json"
           done < <(jq -r '.groups[].output' "$summary")
+          while IFS= read -r evaluation; do
+            output=$(dirname "$evaluation")
+            execution_id=$(jq -er .execution_id "$evaluation")
+            archive=(
+              /opt/iii-harness-e2e/archive-trusted-execution
+              --execution-id "$execution_id"
+              --retention longitudinal
+              --include "$(dirname "$output")/fault-plan.json"
+              --include "$output/fault-journal.json"
+              --include "$evaluation"
+              --include "$summary"
+              --output "$output/archive-head.json"
+            )
+            if [[ -f "$output/results/results.json" ]]; then
+              archive+=(--include "$output/results/results.json")
+            fi
+            "${archive[@]}"
+          done < <(find "$PWD/campaign-results" -path '*/run-*/fault-evaluation.json' -type f | sort)
       - name: Publish the advisory summary
         if: always()
         run: |

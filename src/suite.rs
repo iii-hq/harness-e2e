@@ -325,7 +325,7 @@ pub async fn run_suite(config: SuiteRunConfig) -> Result<SuiteRunOutcome> {
         }
     }
 
-    crate::scenarios::engineering_ticket::apply_paired_efficiency(&mut scenario_reports);
+    crate::scenarios::engineering_ticket::apply_handoff_efficiency(&mut scenario_reports);
 
     for contract in scenario_reports
         .iter()

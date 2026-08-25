@@ -55,7 +55,7 @@ const VERSION: u32 = 2;
 const FIXTURE_PATH_ENV: &str = "HARNESS_E2E_FIXTURE_PATH";
 const FIXTURE_REPOSITORY: &str = "iii-hq/e2e-fixture";
 const CHESS_SUBTREE: &str = "chess";
-const FIXTURE_REVISION: &str = "c4b68b8dc9588e730cd903ef679007a1a9974e80";
+const FIXTURE_REVISION: &str = "16f6b9e05e34e09c824191eed0631d77f85be6a9";
 const CHESS_MANIFEST_SHA256: &str =
     "sha256:b2166cc0001a75a2afa0fdc1275d9252ac0e45bec6d4e59e6d04b2d53bd5f9f7";
 const NETWORK_PROFILE: &str = "offline-v1";
