@@ -14,11 +14,17 @@ sys.path.insert(0, str(ROOT / "scripts"))
 
 from run_e2e_campaign import (
     CampaignError,
+    FAULT_PROFILE_WEIGHT,
+    SCENARIO_DIFFICULTY_WEIGHT,
+    aggregate_existing_campaign,
+    build_campaign_bundle,
     build_group_command,
     execute_campaign,
     load_campaign,
     main,
     parse_campaign,
+    score_campaign,
+    validate_campaign_bundle,
 )
 
 
@@ -26,12 +32,8 @@ CAMPAIGN_DIR = ROOT / "config" / "campaigns"
 
 
 def manifest(groups=None):
-    return {
-        "kind": "harness-e2e-campaign",
-        "campaign_id": "test-campaign",
-        "lane": "daily",
-        "failure_policy": "enforcing",
-        "groups": groups
+    selected = copy.deepcopy(
+        groups
         or [
             {
                 "id": "core",
@@ -40,7 +42,30 @@ def manifest(groups=None):
                 "technical_retries": 1,
                 "scenarios": ["tool_contract_recovery"],
             }
-        ],
+        ]
+    )
+    for group in selected:
+        if "difficulty_weight" in group:
+            continue
+        if group.get("execution_kind") == "fault_injection":
+            group["difficulty_weight"] = FAULT_PROFILE_WEIGHT.get(
+                group.get("fault_profile"), 1
+            )
+        else:
+            group["difficulty_weight"] = max(
+                (
+                    SCENARIO_DIFFICULTY_WEIGHT.get(scenario, 1)
+                    for scenario in group.get("scenarios", [])
+                ),
+                default=1,
+            )
+    return {
+        "kind": "harness-e2e-campaign",
+        "campaign_id": "test-campaign",
+        "lane": "daily",
+        "failure_policy": "enforcing",
+        "scoring_profile": "difficulty-weighted-v1",
+        "groups": selected,
     }
 
 
@@ -79,7 +104,7 @@ class CanonicalManifestTests(unittest.TestCase):
         self.assertEqual(group.runs, 1)
         self.assertEqual(group.technical_retries, 0)
 
-    def test_post_release_has_core_and_isolated_adaptive_scenarios(self):
+    def test_post_release_covers_canary_code_integration_and_release_recovery(self):
         campaign = load_campaign(CAMPAIGN_DIR / "post-release.json")
         selected = {
             scenario
@@ -89,84 +114,103 @@ class CanonicalManifestTests(unittest.TestCase):
         self.assertEqual(
             selected,
             {
+                "minimal_path",
                 "tool_contract_recovery",
-                "policy_bound_action",
+                "shell_coder_sandbox",
+                "performance_regression",
+                "chess_engine_build",
+                "engineering_ticket_git_handoff",
                 "cross_app_transaction",
                 "database_migration_recovery",
-                "incident_response",
+                "browser_cross_site",
                 "release_train_recovery",
-                "cross_repo_contract_migration",
             },
         )
-        policy_group = next(
-            group
-            for group in campaign.groups
-            if "policy_bound_action" in group.scenarios
-        )
-        self.assertEqual(policy_group.execution_kind, "scripted_dialogue")
-        self.assertEqual(policy_group.technical_retries, 0)
         adaptive = [
             group for group in campaign.groups if group.execution_kind == "adaptive_flow"
         ]
-        self.assertEqual(len(adaptive), 3)
+        self.assertEqual(len(adaptive), 1)
         for group in adaptive:
             self.assertEqual(group.runs, 1)
             self.assertEqual(group.technical_retries, 0)
             self.assertEqual(len(group.scenarios), 1)
 
-    def test_daily_has_core_research_and_isolated_policy(self):
+    def test_daily_prioritizes_code_with_a_hard_code_group(self):
         campaign = load_campaign(CAMPAIGN_DIR / "daily.json")
-        core = next(group for group in campaign.groups if group.id == "daily-core")
+        groups = {group.id: group for group in campaign.groups}
         self.assertEqual(
-            set(core.scenarios),
+            set(groups["daily-canary"].scenarios),
             {
+                "minimal_path",
                 "tool_contract_recovery",
-                "cross_app_transaction",
-                "database_migration_recovery",
-                "research_pipeline",
-                "moving_target",
             },
         )
-        policy = next(
-            group for group in campaign.groups if group.id == "daily-policy-dialogue"
-        )
-        self.assertEqual(policy.scenarios, ("policy_bound_action",))
-        self.assertEqual(policy.technical_retries, 0)
-        engineering = next(
-            group
-            for group in campaign.groups
-            if group.id == "daily-engineering-comparison"
+        self.assertEqual(
+            groups["daily-code"].scenarios,
+            (
+                "shell_coder_sandbox",
+                "performance_regression",
+                "database_migration_recovery",
+                "engineering_ticket_git_handoff",
+            ),
         )
         self.assertEqual(
-            engineering.scenarios,
-            ("engineering_ticket", "engineering_ticket_git_handoff"),
+            groups["daily-hard-code"].scenarios,
+            ("chess_engine_build", "git_regression_forensics"),
         )
-        self.assertEqual(engineering.execution_kind, "harness_turn")
-        self.assertEqual(engineering.runs, 1)
-        self.assertEqual(engineering.technical_retries, 1)
+        self.assertTrue(all(group.runs == 1 for group in campaign.groups))
+        self.assertTrue(all(group.technical_retries == 1 for group in campaign.groups))
 
-    def test_weekly_separates_repeatability_performance_and_browser(self):
+    def test_weekly_repeats_hard_code_and_isolates_complex_flows(self):
         campaign = load_campaign(CAMPAIGN_DIR / "weekly.json")
         groups = {group.id: group for group in campaign.groups}
-        self.assertEqual(groups["weekly-repeatability"].runs, 5)
+        self.assertEqual(groups["weekly-shell-parity"].runs, 3)
+        self.assertEqual(groups["weekly-performance"].runs, 5)
+        self.assertEqual(groups["weekly-chess-build"].runs, 3)
+        self.assertEqual(groups["weekly-git-forensics"].runs, 3)
+        self.assertEqual(groups["weekly-engineering-handoff"].runs, 3)
+        self.assertEqual(groups["weekly-contention"].runs, 3)
         self.assertEqual(
             groups["weekly-performance"].scenarios,
             ("performance_regression",),
         )
         self.assertEqual(
-            groups["weekly-browser-smoke"].scenarios,
-            ("browser_cross_site",),
+            groups["weekly-security-review"].scenarios,
+            ("security_review",),
         )
         self.assertEqual(
-            groups["weekly-browser-smoke"].execution_kind, "harness_turn"
+            groups["weekly-security-review"].execution_kind, "composite_flow"
         )
-        self.assertEqual(groups["weekly-browser-smoke"].technical_retries, 0)
+        self.assertEqual(groups["weekly-security-review"].technical_retries, 0)
         adaptive = [
             group for group in campaign.groups if group.execution_kind == "adaptive_flow"
         ]
-        self.assertEqual(len(adaptive), 3)
+        self.assertEqual(len(adaptive), 2)
         self.assertTrue(all(group.runs == 1 for group in adaptive))
         self.assertTrue(all(len(group.scenarios) == 1 for group in adaptive))
+        faults = [
+            group for group in campaign.groups if group.execution_kind == "fault_injection"
+        ]
+        self.assertEqual(len(faults), 3)
+        self.assertEqual([group.difficulty_weight for group in faults], [2, 3, 4])
+        self.assertTrue(all(group.runs == 3 for group in faults))
+        self.assertTrue(all(group.soak_minutes == 60 for group in faults))
+
+    def test_revised_plans_exclude_removed_scenarios(self):
+        removed = {
+            "validation_scope_enforcement",
+            "cleanup_under_failure",
+            "policy_bound_action",
+            "engineering_ticket",
+        }
+        for name in ("daily.json", "weekly.json", "post-release.json"):
+            campaign = load_campaign(CAMPAIGN_DIR / name)
+            selected = {
+                scenario
+                for group in campaign.groups
+                for scenario in group.scenarios
+            }
+            self.assertTrue(removed.isdisjoint(selected), name)
 
 
 class CampaignValidationTests(unittest.TestCase):
@@ -406,6 +450,148 @@ class CampaignRunnerTests(unittest.TestCase):
             self.assertEqual(
                 [group["exit_code"] for group in summary["groups"]], [7, 0]
             )
+
+    def test_bundle_preserves_native_bytes_and_rejects_tampering(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = pathlib.Path(directory)
+            group_output = root / "groups" / "core"
+            group_output.mkdir(parents=True)
+            results = group_output / "results.json"
+            results.write_text('{"native":true}\n', encoding="utf-8")
+            summary_path = root / "campaign-summary.json"
+            summary = {
+                "campaign_id": "test-campaign",
+                "execution_id": "execution-1",
+                "lane": "daily",
+                "groups": [
+                    {
+                        "group_id": "core",
+                        "execution_kind": "harness_turn",
+                        "status": "passed",
+                        "difficulty_weight": 4,
+                        "objective_score": 91.0,
+                        "score_availability": "complete",
+                        "output": str(group_output),
+                    }
+                ],
+            }
+            summary_path.write_text(json.dumps(summary), encoding="utf-8")
+            campaign_path = root / "campaign.json"
+            campaign_path.write_text(json.dumps(manifest()), encoding="utf-8")
+            scoring_path = ROOT / "config" / "scoring" / "difficulty-weighted-v1.json"
+            bundle = build_campaign_bundle(
+                summary,
+                summary_path=summary_path,
+                manifest_path=campaign_path,
+                scoring_profile_path=scoring_path,
+            )
+            validate_campaign_bundle(bundle, root=root)
+            results.write_text('{"native":false}\n', encoding="utf-8")
+            with self.assertRaisesRegex(CampaignError, "digest mismatch"):
+                validate_campaign_bundle(bundle, root=root)
+
+    def test_difficulty_weighted_score_uses_native_scenario_medians(self):
+        campaign = parse_campaign(
+            manifest(
+                [
+                    {
+                        "id": "l4",
+                        "execution_kind": "harness_turn",
+                        "runs": 1,
+                        "technical_retries": 0,
+                        "difficulty_weight": 4,
+                        "scenarios": ["tool_contract_recovery"],
+                    },
+                    {
+                        "id": "l2",
+                        "execution_kind": "harness_turn",
+                        "runs": 1,
+                        "technical_retries": 0,
+                        "difficulty_weight": 2,
+                        "scenarios": ["performance_regression"],
+                    },
+                ]
+            )
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            root = pathlib.Path(directory)
+            groups = []
+            for group_id, tier, median in [
+                ("l4", "l4_coordinated", 80.0),
+                ("l2", "l2_stateful", 100.0),
+            ]:
+                output = root / group_id
+                output.mkdir()
+                (output / "results.json").write_text(
+                    json.dumps(
+                        {
+                            "passed": True,
+                            "scenarios": [
+                                {
+                                    "case": {"complexity": {"tier": tier}},
+                                    "aggregate": {
+                                        "median_score": median,
+                                        "scored_runs": 1,
+                                        "technical_failures": 0,
+                                    },
+                                }
+                            ],
+                        }
+                    ),
+                    encoding="utf-8",
+                )
+                groups.append({"group_id": group_id, "output": str(output)})
+            scoring = score_campaign(campaign, groups)
+        self.assertAlmostEqual(scoring["harness_score"], (80 * 4 + 100 * 2) / 6)
+        self.assertEqual(scoring["coverage"], 1.0)
+        self.assertEqual(scoring["score_availability"], "complete")
+
+    def test_fault_infrastructure_is_null_not_zero_and_reduces_coverage(self):
+        campaign = parse_campaign(
+            manifest(
+                [
+                    {
+                        "id": "fault",
+                        "execution_kind": "fault_injection",
+                        "runs": 3,
+                        "technical_retries": 0,
+                        "difficulty_weight": 2,
+                        "fault_profile": "weekly-l2-recovery",
+                        "fault_scenario": "stateful.2",
+                        "soak_minutes": 60,
+                    }
+                ]
+            )
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            output = pathlib.Path(directory) / "fault"
+            for index, classification in enumerate(
+                ["correct_recovery", "infrastructure_failure"], start=1
+            ):
+                run = output / f"run-{index}"
+                run.mkdir(parents=True)
+                (run / "fault-evaluation.json").write_text(
+                    json.dumps({"classification": classification}), encoding="utf-8"
+                )
+            scoring = score_campaign(
+                campaign, [{"group_id": "fault", "output": str(output)}]
+            )
+        self.assertEqual(scoring["harness_score"], 100.0)
+        self.assertAlmostEqual(scoring["coverage"], 1 / 3)
+        self.assertFalse(scoring["infrastructure_valid"])
+        self.assertEqual(scoring["score_availability"], "partial")
+
+    def test_aggregate_existing_campaign_keeps_missing_group_as_infrastructure(self):
+        campaign = parse_campaign(manifest())
+        with tempfile.TemporaryDirectory() as directory:
+            summary = aggregate_existing_campaign(
+                campaign,
+                group_root=pathlib.Path(directory),
+                execution_id="workflow-1",
+            )
+        self.assertIsNone(summary["scoring"]["harness_score"])
+        self.assertFalse(summary["scoring"]["infrastructure_valid"])
+        self.assertEqual(summary["process_exit_code"], 0)
 
     @staticmethod
     def campaign_groups():

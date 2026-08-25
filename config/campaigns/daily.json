@@ -3,37 +3,41 @@
   "campaign_id": "daily",
   "lane": "daily",
   "failure_policy": "advisory",
+  "scoring_profile": "difficulty-weighted-v1",
   "groups": [
     {
-      "id": "daily-core",
+      "id": "daily-canary",
       "execution_kind": "harness_turn",
       "runs": 1,
       "technical_retries": 1,
+      "difficulty_weight": 4,
       "scenarios": [
-        "tool_contract_recovery",
-        "cross_app_transaction",
-        "database_migration_recovery",
-        "research_pipeline",
-        "moving_target"
+        "minimal_path",
+        "tool_contract_recovery"
       ]
     },
     {
-      "id": "daily-engineering-comparison",
+      "id": "daily-code",
       "execution_kind": "harness_turn",
       "runs": 1,
       "technical_retries": 1,
+      "difficulty_weight": 4,
       "scenarios": [
-        "engineering_ticket",
+        "shell_coder_sandbox",
+        "performance_regression",
+        "database_migration_recovery",
         "engineering_ticket_git_handoff"
       ]
     },
     {
-      "id": "daily-policy-dialogue",
-      "execution_kind": "scripted_dialogue",
+      "id": "daily-hard-code",
+      "execution_kind": "harness_turn",
       "runs": 1,
-      "technical_retries": 0,
+      "technical_retries": 1,
+      "difficulty_weight": 4,
       "scenarios": [
-        "policy_bound_action"
+        "chess_engine_build",
+        "git_regression_forensics"
       ]
     }
   ]

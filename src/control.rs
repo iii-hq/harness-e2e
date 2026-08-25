@@ -1686,7 +1686,7 @@ fn unique_scenarios(scenarios: &[ScenarioId]) -> Vec<ScenarioId> {
         })
 }
 
-fn scenarios_list(request: ScenariosListRequest) -> Result<ScenariosListResponse> {
+pub fn scenarios_list(request: ScenariosListRequest) -> Result<ScenariosListResponse> {
     let scenarios = ScenarioId::ALL
         .into_iter()
         .map(|scenario_id| {

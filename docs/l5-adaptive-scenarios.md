@@ -73,10 +73,10 @@ tokens, reported cost up to USD 25, 20 nodes, parallelism 3, two revisions.
 
 ## Campaign admission and calibration
 
-The three adaptive cases run as separate, single-run, zero-retry groups in the
-post-release and weekly advisory campaigns. `moving_target`, now an L2 case,
-runs daily as a cheap invalidation precursor. Campaign manifests do not select
-or rotate seeds.
+Adaptive cases run as separate, single-run, zero-retry groups. The weekly
+campaign exercises incident response and cross-repository migration; the
+post-release campaign reserves the release-train recovery case for the exact
+published-version path. Campaign manifests do not select or rotate seeds.
 
 A deterministic reference run establishes `reference_verified`. Five
 compatible samples establish `repeatable`; twenty establish

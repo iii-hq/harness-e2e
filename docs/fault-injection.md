@@ -1,9 +1,13 @@
 # Fault injection and Weekly Stress
 
-Weekly Stress measures real recovery at L2 through L4. Repository code defines
-and evaluates perturbations, while an environment-owned supervisor applies them.
-This boundary prevents code from a source artifact or pull request from gaining
-host, network, provider, or storage credentials.
+Weekly Stress measures one logical `fault_recovery_matrix` scenario from L2
+through L4. Its three phases retain separate technical profiles because each
+complexity tier has a different subject and amplification budget, but the team
+tracks and presents one capability: recover stateful and coordinated work
+without corrupting results, duplicating effects, or leaking resources.
+Repository code defines and evaluates perturbations, while an environment-owned
+supervisor applies them. This boundary prevents code from a source artifact or
+pull request from gaining host, network, provider, or storage credentials.
 
 ## Evidence contracts
 
@@ -29,13 +33,13 @@ provider-throttle 429-style rejection at a fixed spacing). A
 planned action that was not triggered is a benchmark infrastructure failure;
 it cannot be reported as a product failure or a successful recovery.
 
-The profiles form a per-tier ladder with a work-amplification budget that
-tightens as complexity drops: `weekly-l2-recovery` (subject family
-`stateful.2`, amplification ≤ 2.0) perturbs a childless stateful subject with
-delay, a failed first write, and duplicate delivery only — child perturbations
-would be untriggerable there and therefore benchmark infrastructure failures;
-`weekly-l3-recovery` (`coordination.3`, ≤ 3.0) adds a failed first child,
-child timeout, and out-of-order results; `weekly-l3-degraded`
+The recovery matrix has a work-amplification budget calibrated per phase:
+`weekly-l2-recovery` (subject family `stateful.2`, amplification ≤ 2.0)
+perturbs a childless stateful subject with delay, a failed first write, and
+duplicate delivery only — child perturbations would be untriggerable there and
+therefore benchmark infrastructure failures; `weekly-l3-recovery`
+(`coordination.3`, ≤ 3.0) adds a failed first child, child timeout, and
+out-of-order results; `weekly-l3-degraded`
 (`coordination.3`, ≤ 2.5) corrupts the first result of a coordination child
 with `malformed_result` under a delayed send and duplicate delivery and
 expects a degraded finish; `weekly-l4-recovery` (`coordination.4`, ≤ 3.5)

@@ -66,8 +66,14 @@ group, and are advisory by default while their longitudinal history is being
 calibrated. The scheduled workflows use the `harness-e2e-trusted` environment
 and archive every materialized group through the environment-owned durable
 archiver.
-The daily engineering comparison uses the protected disposable fixture described in
+The code-focused campaigns use protected disposable checkouts of
+`iii-hq/e2e-fixture`. The engineering handoff uses its dedicated pinned
+revision, while `shell_coder_sandbox`, `chess_engine_build`, and `trend_blog`
+share a second pinned revision through `HARNESS_E2E_FIXTURE_PATH`. The protected
+launcher and cleanup boundary are described in
 [docs/engineering-ticket-git-handoff.md](docs/engineering-ticket-git-handoff.md).
+The team-facing composition and didactic description of every daily, weekly,
+and post-release scenario is in [docs/e2e-test-plans.md](docs/e2e-test-plans.md).
 
 ## Dashboard
 

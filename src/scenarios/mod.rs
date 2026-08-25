@@ -691,6 +691,9 @@ impl ScenarioId {
     }
 
     pub fn canonical_seed(self) -> u64 {
+        if self == Self::ShellCoderSandbox {
+            return shell_coder_sandbox::CANONICAL_SEED;
+        }
         if self == Self::EngineeringTicket {
             return engineering_ticket::CANONICAL_SEED;
         }
@@ -747,12 +750,13 @@ impl ScenarioId {
         stable_seed(self.as_str())
     }
 
-    /// Scenarios consolidated from an explicit seed matrix always materialize
-    /// the retained final case and do not participate in rotating-seed runs.
+    /// Scenarios with one retained canonical cohort do not participate in
+    /// rotating-seed runs.
     pub fn canonical_seed_only(self) -> bool {
         matches!(
             self,
-            Self::EngineeringTicket
+            Self::ShellCoderSandbox
+                | Self::EngineeringTicket
                 | Self::EngineeringTicketGitHandoff
                 | Self::EngineeringEnduranceLadder
                 | Self::FanoutLadder

@@ -1,9 +1,8 @@
 # Engineering ticket Git handoff fixture
 
-`engineering_ticket_git_handoff` v2 and its `engineering_ticket` v2 reference run
-against the same disposable, offline Git clone. The campaign workflow never
-creates a checkpoint commit: the planner and implementer Harness sessions own
-all commits made after the reviewed baseline.
+`engineering_ticket_git_handoff` v3 runs against a disposable, offline Git
+clone. The campaign workflow never creates a checkpoint commit: the planner and
+implementer Harness sessions own all commits made after the reviewed baseline.
 
 ## Verdict and calibrated score
 
@@ -17,22 +16,17 @@ The 100-point score is intentionally more discriminating:
 - Git handoff integrity: 20 hard-gated points;
 - ticket acceptance: 35 hard-gated points;
 - scope and lifecycle: 10 hard-gated points;
-- efficiency paired with the matching `engineering_ticket` repetition: 15
-  advisory points;
+- execution efficiency against stable absolute budgets: 15 advisory points;
 - first-pass handoff convergence: 5 advisory points.
 
-Paired efficiency weights total tokens most heavily, followed by turns,
-function calls, wall time, and work amplification. Each ratio uses stable bands:
-at most 1.25x receives full component credit, followed by 75%, 50%, and 25%
-credit through 2.00x; ratios above 2.00x receive zero for that component. Wall
-time has a deliberately small weight because it is more sensitive to runner and
-provider noise.
-
-Pairing happens after every scenario in the suite has completed and before the
-first `results.json` persistence. It requires the same canonical seed, task case
-and repetition ordinal. If the matching baseline was not executed, failed, or
-lacks complete efficiency evidence, the handoff may still pass its hard gates
-but its score is unavailable; missing evidence is never converted into zero.
+Execution efficiency weights total tokens most heavily (6 points), followed by
+turns (3), function calls (2), wall time (2), and work amplification (2). Stable
+absolute bands make the scenario independently scorable: the best bands are at
+most 150k tokens, 28 turns, 30 calls, 180 seconds, and 2x amplification. Missing
+or over-budget measurements receive zero for that component, so the Harness
+still emits a numeric score instead of hiding the score when no reference case
+is present. Wall time remains low-weight because it is more sensitive to runner
+and provider noise.
 
 The protected runner installs `scripts/engineering_ticket_fixture.py` as
 `/opt/iii-harness-e2e/engineering-ticket-fixture`. Its environment must set:

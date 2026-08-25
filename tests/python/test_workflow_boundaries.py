@@ -37,7 +37,8 @@ class WorkflowBoundaryTests(unittest.TestCase):
         self.assertIn("timeout_minutes: 360", post_release)
         self.assertIn("timeout_minutes: 480", weekly)
 
-        for name in ("post-release.json", "weekly.json"):
+        expected_adaptive = {"post-release.json": 1, "weekly.json": 2}
+        for name, expected_count in expected_adaptive.items():
             manifest = json.loads(
                 (ROOT / "config/campaigns" / name).read_text(encoding="utf-8")
             )
@@ -46,7 +47,7 @@ class WorkflowBoundaryTests(unittest.TestCase):
                 for group in manifest["groups"]
                 if group["execution_kind"] == "adaptive_flow"
             ]
-            self.assertEqual(len(adaptive), 3)
+            self.assertEqual(len(adaptive), expected_count)
             self.assertTrue(all(group["runs"] == 1 for group in adaptive))
             self.assertTrue(all(group["technical_retries"] == 0 for group in adaptive))
 
@@ -59,13 +60,17 @@ class WorkflowBoundaryTests(unittest.TestCase):
         self.assertIn("compare/$E2E_REVISION...$default_sha", workflow)
         self.assertIn("/opt/iii-harness-e2e/resolve-cutover-evidence", workflow)
 
-    def test_daily_campaign_uses_a_protected_disposable_engineering_fixture(self):
+    def test_campaigns_use_protected_disposable_code_fixtures(self):
         workflow = (ROOT / ".github/workflows/run-campaign.yml").read_text(
             encoding="utf-8"
         )
         launcher = "/opt/iii-harness-e2e/engineering-ticket-fixture"
         self.assertGreaterEqual(workflow.count(launcher), 3)
         self.assertIn("HARNESS_E2E_ENGINEERING_TICKET_FIXTURE_PATH", workflow)
+        self.assertIn("HARNESS_E2E_FIXTURE_PATH", workflow)
+        self.assertIn("SHARED_FIXTURE_REVISION", workflow)
+        self.assertIn("HARNESS_E2E_SHARED_FIXTURE_LEASE", workflow)
+        self.assertNotIn("HARNESS_E2E_CHESS_FIXTURE_LEASE", workflow)
         self.assertIn("prepare", workflow)
         self.assertIn("cleanup --lease-id", workflow)
         self.assertNotIn("git commit", workflow)

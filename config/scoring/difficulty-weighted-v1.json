@@ -1,0 +1,21 @@
+{
+  "profile": "difficulty-weighted-v1",
+  "difficulty_weights": {
+    "l0_atomic": 1,
+    "l1_sequential": 1,
+    "l2_stateful": 2,
+    "l3_concurrent": 3,
+    "l4_coordinated": 4,
+    "l5_adaptive": 5
+  },
+  "group_score": "mean_of_scenario_median_scores",
+  "fault_scores": {
+    "correct_recovery": 100,
+    "excessive_recovery": 0,
+    "incorrect_result": 0,
+    "structural_failure": 0,
+    "infrastructure_failure": null
+  },
+  "campaign_score": "sum(group_score*difficulty_weight)/sum(available_difficulty_weight)",
+  "infrastructure_policy": "exclude_from_score_and_reduce_coverage"
+}

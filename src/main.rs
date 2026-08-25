@@ -2,6 +2,7 @@ use std::path::PathBuf;
 
 use anyhow::{bail, Context, Result};
 use clap::{Args, Parser, Subcommand};
+use harness_e2e::control::{scenarios_list, ScenariosListRequest};
 use harness_e2e::dashboard;
 use harness_e2e::fault::{FaultEvaluation, FaultJournal, FaultPlan, FaultProfile};
 use harness_e2e::judge::JudgeConfig;
@@ -28,6 +29,12 @@ enum Command {
     Worker(WorkerArgs),
     /// Print the code-defined scenario ids as a JSON array.
     List,
+    /// Print the canonical materialized scenario catalog used by campaign tooling.
+    Catalog {
+        /// Fixed catalog materialization seed embedded in campaign revisions.
+        #[arg(long, default_value_t = 4404)]
+        seed: u64,
+    },
     /// List models registered in the running stack.
     Models(ModelsArgs),
     /// Execute one or more quality scenarios against a running stack.
@@ -182,6 +189,11 @@ async fn main() -> Result<()> {
                 .map(|scenario| scenario.as_str())
                 .collect();
             println!("{}", serde_json::to_string(&ids)?);
+            Ok(())
+        }
+        Some(Command::Catalog { seed }) => {
+            let catalog = scenarios_list(ScenariosListRequest { seed: Some(seed) })?;
+            println!("{}", serde_json::to_string(&catalog)?);
             Ok(())
         }
         Some(Command::Models(args)) => models(args).await,

@@ -1,54 +1,54 @@
 {
   "kind": "harness-e2e-campaign",
   "campaign_id": "post-release",
-  "lane": "release",
+  "lane": "post-release",
   "failure_policy": "advisory",
+  "scoring_profile": "difficulty-weighted-v1",
   "groups": [
     {
-      "id": "release-core",
+      "id": "release-canary",
       "execution_kind": "harness_turn",
       "runs": 1,
       "technical_retries": 0,
+      "difficulty_weight": 4,
       "scenarios": [
-        "tool_contract_recovery",
+        "minimal_path",
+        "tool_contract_recovery"
+      ]
+    },
+    {
+      "id": "release-code",
+      "execution_kind": "harness_turn",
+      "runs": 1,
+      "technical_retries": 0,
+      "difficulty_weight": 4,
+      "scenarios": [
+        "shell_coder_sandbox",
+        "performance_regression",
+        "chess_engine_build",
+        "engineering_ticket_git_handoff"
+      ]
+    },
+    {
+      "id": "release-integration",
+      "execution_kind": "harness_turn",
+      "runs": 1,
+      "technical_retries": 0,
+      "difficulty_weight": 4,
+      "scenarios": [
+        "database_migration_recovery",
         "cross_app_transaction",
-        "database_migration_recovery"
+        "browser_cross_site"
       ]
     },
     {
-      "id": "release-policy-dialogue",
-      "execution_kind": "scripted_dialogue",
-      "runs": 1,
-      "technical_retries": 0,
-      "scenarios": [
-        "policy_bound_action"
-      ]
-    },
-    {
-      "id": "release-incident-adaptive",
+      "id": "release-train-adaptive",
       "execution_kind": "adaptive_flow",
       "runs": 1,
       "technical_retries": 0,
-      "scenarios": [
-        "incident_response"
-      ]
-    },
-    {
-      "id": "release-train-recovery-adaptive",
-      "execution_kind": "adaptive_flow",
-      "runs": 1,
-      "technical_retries": 0,
+      "difficulty_weight": 5,
       "scenarios": [
         "release_train_recovery"
-      ]
-    },
-    {
-      "id": "release-cross-repo-adaptive",
-      "execution_kind": "adaptive_flow",
-      "runs": 1,
-      "technical_retries": 0,
-      "scenarios": [
-        "cross_repo_contract_migration"
       ]
     }
   ]

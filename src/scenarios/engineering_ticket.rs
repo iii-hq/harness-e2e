@@ -23,9 +23,9 @@ use tokio::process::Command;
 use crate::artifact;
 use crate::assessment::{AssessmentOutcome, AssessmentScore};
 use crate::context::E2eContext;
-use crate::report::{
-    E2eRunReport, E2eScenarioReport, EfficiencyReport, EvaluationDimension, RunStatus,
-};
+use crate::report::{E2eRunReport, E2eScenarioReport, EvaluationDimension};
+#[cfg(test)]
+use crate::report::{EfficiencyReport, RunStatus};
 
 use super::assessment::{self, AssessmentSpec};
 use super::common;
@@ -42,6 +42,7 @@ pub const VERSION: u32 = 3;
 pub const CANONICAL_SEED: u64 = 1005;
 pub const GIT_HANDOFF_ID: &str = "engineering_ticket_git_handoff";
 pub const GIT_HANDOFF_VERSION: u32 = 3;
+const GIT_HANDOFF_DIFFICULTY_PROFILE: &str = "code-hard-2026-08";
 
 const FIXTURE_PATH_ENV: &str = "HARNESS_E2E_ENGINEERING_TICKET_FIXTURE_PATH";
 const HOOK_TYPE: &str = "harness::hook::post-turn";
@@ -109,10 +110,10 @@ const HANDOFF_SCOPE_AND_LIFECYCLE: AssessmentSpec = AssessmentSpec::hard_gated_i
     "The root did not edit, child effects remained in scope, protected content stayed exact, and the complete three-session tree terminated cleanly.",
     EvaluationDimension::StructuralIntegrity,
 );
-const HANDOFF_PAIRED_EFFICIENCY: AssessmentSpec = AssessmentSpec::score_only_in(
-    "paired_efficiency",
+const HANDOFF_EXECUTION_EFFICIENCY: AssessmentSpec = AssessmentSpec::score_only_in(
+    "execution_efficiency",
     15,
-    "Efficiency relative to the matching engineering_ticket baseline from the same suite, weighted toward tokens and observed work rather than wall-clock noise.",
+    "Execution efficiency against stable absolute budgets, weighted toward tokens and observed work rather than wall-clock noise.",
     EvaluationDimension::Efficiency,
 );
 const HANDOFF_CONVERGENCE: AssessmentSpec = AssessmentSpec::score_only_in(
@@ -132,7 +133,7 @@ const GIT_HANDOFF_ASSESSMENTS: &[AssessmentSpec] = &[
     HANDOFF_GIT_INTEGRITY,
     HANDOFF_TICKET_ACCEPTANCE,
     HANDOFF_SCOPE_AND_LIFECYCLE,
-    HANDOFF_PAIRED_EFFICIENCY,
+    HANDOFF_EXECUTION_EFFICIENCY,
     HANDOFF_CONVERGENCE,
 ];
 
@@ -2246,6 +2247,7 @@ pub fn git_handoff_materialize(namespace: &str, _seed: u64) -> Result<Materializ
         "task_case_id": task.id,
         "case_version": task.case_version,
         "canonical_seed": task.canonical_seed,
+        "difficulty_profile": GIT_HANDOFF_DIFFICULTY_PROFILE,
         "reference_scenario_id": ID,
         "workflow_mode": "git_handoff",
         "fixture_repository": task.fixture_repository,
@@ -3640,9 +3642,9 @@ async fn evaluate_git_handoff_evidence(
                 repair_budget
             ),
         ),
-        HANDOFF_PAIRED_EFFICIENCY.award(
-            HANDOFF_PAIRED_EFFICIENCY.weight(),
-            "pending suite-level comparison with the matching engineering_ticket baseline",
+        HANDOFF_EXECUTION_EFFICIENCY.award(
+            HANDOFF_EXECUTION_EFFICIENCY.weight(),
+            "pending suite-level execution-efficiency measurements",
         )?,
         HANDOFF_CONVERGENCE.award(
             convergence_points,
@@ -3716,88 +3718,23 @@ async fn evaluate_git_handoff_evidence(
     Ok(evaluation)
 }
 
-#[derive(Debug, Clone, Copy)]
-struct EfficiencySnapshot {
-    wall_time_ms: u64,
-    turns: u64,
-    function_calls: u64,
-    total_tokens: u64,
-    work_amplification: f64,
-}
-
 #[derive(Debug)]
-struct PairedEfficiencyScore {
+struct HandoffEfficiencyScore {
     awarded: u8,
     reason: String,
 }
 
 /// Re-scores the advisory efficiency criterion after all scenarios have run.
-/// The comparison is suite-local, so model, stack and execution environment
-/// are identical while seed, task case and repetition align the samples.
+/// Stable absolute budgets keep the handoff independently scorable now that
+/// canonical campaigns no longer execute the single-session reference case.
 /// Hard gates and run status are deliberately left untouched.
-pub(crate) fn apply_paired_efficiency(scenarios: &mut [E2eScenarioReport]) {
-    let mut baselines = HashMap::<(u64, String), Vec<Option<EfficiencySnapshot>>>::new();
-    for scenario in scenarios
-        .iter()
-        .filter(|scenario| scenario.scenario_id == ID && scenario.scenario_version == VERSION)
-    {
-        let Some(case) = scenario.case.as_ref() else {
-            continue;
-        };
-        let Some(task_case_id) = case.inputs.get("task_case_id").and_then(Value::as_str) else {
-            continue;
-        };
-        baselines.insert(
-            (case.seed, task_case_id.to_string()),
-            scenario
-                .runs
-                .iter()
-                .map(|run| {
-                    (run.status == RunStatus::Passed)
-                        .then(|| efficiency_snapshot(run))
-                        .flatten()
-                })
-                .collect(),
-        );
-    }
-
+pub(crate) fn apply_handoff_efficiency(scenarios: &mut [E2eScenarioReport]) {
     for scenario in scenarios.iter_mut().filter(|scenario| {
         scenario.scenario_id == GIT_HANDOFF_ID && scenario.scenario_version == GIT_HANDOFF_VERSION
     }) {
-        let comparison_key = scenario.case.as_ref().and_then(|case| {
-            case.inputs
-                .get("task_case_id")
-                .and_then(Value::as_str)
-                .map(|task_case_id| (case.seed, task_case_id.to_string()))
-        });
-        let paired_baselines = comparison_key.as_ref().and_then(|key| baselines.get(key));
-
-        for (index, run) in scenario.runs.iter_mut().enumerate() {
-            let outcome = paired_baselines
-                .and_then(|runs| runs.get(index))
-                .and_then(|baseline| *baseline)
-                .and_then(|baseline| {
-                    efficiency_snapshot(run)
-                        .and_then(|handoff| paired_efficiency_score(baseline, handoff))
-                });
-            let unavailable_reason = match (comparison_key.as_ref(), paired_baselines) {
-                (None, _) => {
-                    "paired efficiency unavailable: handoff task-case identity is missing"
-                }
-                (Some(_), None) => {
-                    "paired efficiency unavailable: matching engineering_ticket baseline was not executed in this suite"
-                }
-                (Some(_), Some(runs)) if runs.get(index).is_none() => {
-                    "paired efficiency unavailable: matching baseline repetition is missing"
-                }
-                (Some(_), Some(runs)) if runs[index].is_none() => {
-                    "paired efficiency unavailable: matching baseline did not pass with complete efficiency metrics"
-                }
-                _ => {
-                    "paired efficiency unavailable: handoff efficiency metrics are incomplete or invalid"
-                }
-            };
-            apply_paired_efficiency_to_run(run, outcome, unavailable_reason);
+        for run in &mut scenario.runs {
+            let outcome = handoff_efficiency_score(run);
+            apply_handoff_efficiency_to_run(run, outcome);
         }
 
         let Some(case) = scenario.case.clone() else {
@@ -3809,105 +3746,109 @@ pub(crate) fn apply_paired_efficiency(scenarios: &mut [E2eScenarioReport]) {
     }
 }
 
-fn efficiency_snapshot(run: &E2eRunReport) -> Option<EfficiencySnapshot> {
-    efficiency_snapshot_from_report(run.efficiency.as_ref()?)
-}
-
-fn efficiency_snapshot_from_report(efficiency: &EfficiencyReport) -> Option<EfficiencySnapshot> {
-    let turns = efficiency
-        .root_turns?
-        .checked_add(efficiency.child_turns?)?;
-    let snapshot = EfficiencySnapshot {
-        wall_time_ms: efficiency.wall_time_ms,
-        turns,
-        function_calls: efficiency.function_calls?,
-        total_tokens: efficiency.total_tokens?,
-        work_amplification: efficiency.work_amplification?,
-    };
-    (snapshot.wall_time_ms > 0
-        && snapshot.turns > 0
-        && snapshot.function_calls > 0
-        && snapshot.total_tokens > 0
-        && snapshot.work_amplification.is_finite()
-        && snapshot.work_amplification > 0.0)
-        .then_some(snapshot)
-}
-
-fn paired_efficiency_score(
-    baseline: EfficiencySnapshot,
-    handoff: EfficiencySnapshot,
-) -> Option<PairedEfficiencyScore> {
-    let ratios = [
+fn handoff_efficiency_score(run: &E2eRunReport) -> HandoffEfficiencyScore {
+    let efficiency = run.efficiency.as_ref();
+    let turns = efficiency.and_then(|report| {
+        report
+            .root_turns
+            .and_then(|root| report.child_turns.and_then(|child| root.checked_add(child)))
+    });
+    let values = [
         (
             "tokens",
-            handoff.total_tokens as f64 / baseline.total_tokens as f64,
+            efficiency
+                .and_then(|report| report.total_tokens)
+                .map(|value| value as f64),
+            budget_points(
+                efficiency
+                    .and_then(|report| report.total_tokens)
+                    .map(|value| value as f64),
+                &[
+                    (150_000.0, 6),
+                    (250_000.0, 5),
+                    (350_000.0, 3),
+                    (450_000.0, 2),
+                ],
+            ),
             6,
         ),
-        ("turns", handoff.turns as f64 / baseline.turns as f64, 3),
+        (
+            "turns",
+            turns.map(|value| value as f64),
+            budget_points(
+                turns.map(|value| value as f64),
+                &[(28.0, 3), (40.0, 2), (52.0, 1)],
+            ),
+            3,
+        ),
         (
             "calls",
-            handoff.function_calls as f64 / baseline.function_calls as f64,
+            efficiency
+                .and_then(|report| report.function_calls)
+                .map(|value| value as f64),
+            budget_points(
+                efficiency
+                    .and_then(|report| report.function_calls)
+                    .map(|value| value as f64),
+                &[(30.0, 2), (45.0, 1)],
+            ),
             2,
         ),
         (
-            "wall_time",
-            handoff.wall_time_ms as f64 / baseline.wall_time_ms as f64,
+            "wall_time_ms",
+            efficiency
+                .map(|report| report.wall_time_ms as f64)
+                .filter(|value| *value > 0.0),
+            budget_points(
+                efficiency
+                    .map(|report| report.wall_time_ms as f64)
+                    .filter(|value| *value > 0.0),
+                &[(180_000.0, 2), (360_000.0, 1)],
+            ),
             2,
         ),
         (
             "work_amplification",
-            handoff.work_amplification / baseline.work_amplification,
+            efficiency.and_then(|report| report.work_amplification),
+            budget_points(
+                efficiency.and_then(|report| report.work_amplification),
+                &[(2.0, 2), (3.0, 1)],
+            ),
             2,
         ),
     ];
-    if ratios.iter().any(|(_, ratio, _)| !ratio.is_finite()) {
-        return None;
-    }
-    let components = ratios
-        .iter()
-        .map(|(name, ratio, possible)| (*name, *ratio, ratio_points(*ratio, *possible), *possible))
-        .collect::<Vec<_>>();
-    let awarded = components.iter().map(|(_, _, awarded, _)| *awarded).sum();
+    let awarded = values.iter().map(|(_, _, awarded, _)| *awarded).sum();
     let reason = format!(
-        "paired efficiency v1 against engineering_ticket: {}; bands are <=1.25x full, <=1.50x 75%, <=1.75x 50%, <=2.00x 25%, >2.00x zero",
-        components
+        "absolute execution-efficiency budgets: {}",
+        values
             .iter()
-            .map(|(name, ratio, awarded, possible)| {
-                format!("{name}={ratio:.3}x ({awarded}/{possible})")
+            .map(|(name, value, awarded, possible)| match value {
+                Some(value) if value.is_finite() => {
+                    format!("{name}={value:.3} ({awarded}/{possible})")
+                }
+                _ => format!("{name}=unavailable ({awarded}/{possible})"),
             })
             .collect::<Vec<_>>()
             .join(", ")
     );
-    Some(PairedEfficiencyScore { awarded, reason })
+    HandoffEfficiencyScore { awarded, reason }
 }
 
-fn ratio_points(ratio: f64, possible: u8) -> u8 {
-    let quartiles = if ratio <= 1.25 {
-        4
-    } else if ratio <= 1.50 {
-        3
-    } else if ratio <= 1.75 {
-        2
-    } else if ratio <= 2.00 {
-        1
-    } else {
-        0
+fn budget_points(value: Option<f64>, bands: &[(f64, u8)]) -> u8 {
+    let Some(value) = value.filter(|value| value.is_finite() && *value > 0.0) else {
+        return 0;
     };
-    (u16::from(possible) * quartiles + 2)
-        .checked_div(4)
-        .and_then(|points| u8::try_from(points).ok())
+    bands
+        .iter()
+        .find_map(|(maximum, points)| (value <= *maximum).then_some(*points))
         .unwrap_or(0)
 }
 
-fn apply_paired_efficiency_to_run(
-    run: &mut E2eRunReport,
-    outcome: Option<PairedEfficiencyScore>,
-    unavailable_reason: &str,
-) {
+fn apply_handoff_efficiency_to_run(run: &mut E2eRunReport, outcome: HandoffEfficiencyScore) {
     let Some(criterion) = run
         .criteria
         .iter_mut()
-        .find(|criterion| criterion.id == HANDOFF_PAIRED_EFFICIENCY.id())
+        .find(|criterion| criterion.id == HANDOFF_EXECUTION_EFFICIENCY.id())
     else {
         return;
     };
@@ -3915,35 +3856,22 @@ fn apply_paired_efficiency_to_run(
     let assessment = run
         .assessment_results
         .iter_mut()
-        .find(|assessment| assessment.criterion_id == HANDOFF_PAIRED_EFFICIENCY.id());
-    match outcome {
-        Some(outcome) => {
-            criterion.awarded = Some(outcome.awarded);
-            criterion.reason.clone_from(&outcome.reason);
-            if let Some(assessment) = assessment {
-                assessment.outcome = if outcome.awarded == possible {
-                    AssessmentOutcome::Passed
-                } else if outcome.awarded == 0 {
-                    AssessmentOutcome::Failed
-                } else {
-                    AssessmentOutcome::Partial
-                };
-                assessment.score = Some(AssessmentScore {
-                    awarded: outcome.awarded,
-                    possible,
-                });
-                assessment.summary = outcome.reason;
-            }
-        }
-        None => {
-            criterion.awarded = None;
-            criterion.reason = unavailable_reason.to_string();
-            if let Some(assessment) = assessment {
-                assessment.outcome = AssessmentOutcome::Unavailable;
-                assessment.score = None;
-                assessment.summary = unavailable_reason.to_string();
-            }
-        }
+        .find(|assessment| assessment.criterion_id == HANDOFF_EXECUTION_EFFICIENCY.id());
+    criterion.awarded = Some(outcome.awarded);
+    criterion.reason.clone_from(&outcome.reason);
+    if let Some(assessment) = assessment {
+        assessment.outcome = if outcome.awarded == possible {
+            AssessmentOutcome::Passed
+        } else if outcome.awarded == 0 {
+            AssessmentOutcome::Failed
+        } else {
+            AssessmentOutcome::Partial
+        };
+        assessment.score = Some(AssessmentScore {
+            awarded: outcome.awarded,
+            possible,
+        });
+        assessment.summary = outcome.reason;
     }
     run.score = run.criteria.iter().try_fold(0_u8, |score, criterion| {
         criterion
@@ -4356,6 +4284,10 @@ mod tests {
         assert_eq!(materialized.spec.id, GIT_HANDOFF_ID);
         assert_eq!(materialized.spec.version, GIT_HANDOFF_VERSION);
         assert_eq!(GIT_HANDOFF_VERSION, 3);
+        assert_eq!(
+            materialized.case.inputs["difficulty_profile"],
+            GIT_HANDOFF_DIFFICULTY_PROFILE
+        );
         assert_eq!(materialized.case.seed, CANONICAL_SEED);
         assert_eq!(materialized.case.inputs["reference_scenario_id"], ID);
         assert_eq!(materialized.case.inputs["handoff_payload"], "git_only");
@@ -4377,7 +4309,7 @@ mod tests {
     }
 
     #[test]
-    fn git_handoff_v2_separates_hard_gates_from_graded_signals() {
+    fn git_handoff_v3_separates_hard_gates_from_graded_signals() {
         let spec = git_handoff_scenario("rubric");
         let rubric = spec
             .criteria
@@ -4419,7 +4351,7 @@ mod tests {
                     EvaluationDimension::StructuralIntegrity,
                 ),
                 (
-                    "paired_efficiency",
+                    "execution_efficiency",
                     15,
                     crate::assessment::AssessmentPolicy::Advisory,
                     EvaluationDimension::Efficiency,
@@ -4446,30 +4378,25 @@ mod tests {
             .collect::<HashSet<_>>();
         assert!(invariant_ids.contains("orchestration_discipline"));
         assert!(invariant_ids.contains("git_handoff_integrity"));
-        assert!(!invariant_ids.contains("paired_efficiency"));
+        assert!(!invariant_ids.contains("execution_efficiency"));
         assert!(!invariant_ids.contains("handoff_convergence"));
     }
 
     #[test]
-    fn paired_efficiency_uses_quartile_bands() {
-        assert_eq!(ratio_points(1.25, 6), 6);
-        assert_eq!(ratio_points(1.50, 6), 5);
-        assert_eq!(ratio_points(1.75, 6), 3);
-        assert_eq!(ratio_points(2.00, 6), 2);
-        assert_eq!(ratio_points(2.01, 6), 0);
-        assert_eq!(ratio_points(1.50, 3), 2);
-        assert_eq!(ratio_points(2.00, 2), 1);
+    fn execution_efficiency_uses_absolute_bands() {
+        assert_eq!(budget_points(Some(150_000.0), &[(150_000.0, 6)]), 6);
+        assert_eq!(
+            budget_points(Some(150_001.0), &[(150_000.0, 6), (250_000.0, 5)]),
+            5
+        );
+        assert_eq!(budget_points(Some(250_001.0), &[(250_000.0, 5)]), 0);
+        assert_eq!(budget_points(None, &[(150_000.0, 6)]), 0);
+        assert_eq!(budget_points(Some(0.0), &[(150_000.0, 6)]), 0);
+        assert_eq!(budget_points(Some(f64::NAN), &[(150_000.0, 6)]), 0);
     }
 
     #[test]
-    fn suite_local_pairing_reduces_score_without_changing_pass_status() {
-        let baseline = comparison_scenario(
-            materialize("comparison", CANONICAL_SEED).unwrap(),
-            comparison_run(
-                ID,
-                test_efficiency(168_631, 12, 17, 60_830, 1.380_952_380_952_381),
-            ),
-        );
+    fn standalone_handoff_has_a_numeric_efficiency_score() {
         let handoff = comparison_scenario(
             git_handoff_materialize("comparison", CANONICAL_SEED).unwrap(),
             comparison_run(
@@ -4477,60 +4404,66 @@ mod tests {
                 test_efficiency(260_537, 36, 37, 121_439, 2.433_333_333_333_333),
             ),
         );
-        let mut scenarios = vec![baseline, handoff];
-
-        apply_paired_efficiency(&mut scenarios);
-
-        let run = &scenarios[1].runs[0];
-        assert_eq!(run.status, RunStatus::Passed);
-        assert_eq!(run.score, Some(89));
-        let efficiency = run
-            .criteria
-            .iter()
-            .find(|criterion| criterion.id == "paired_efficiency")
-            .unwrap();
-        assert_eq!(efficiency.awarded, Some(4));
-        assert!(efficiency.reason.contains("tokens=1.996x (2/6)"));
-        assert!(efficiency.reason.contains("turns=3.000x (0/3)"));
-        let assessment = run
-            .assessment_results
-            .iter()
-            .find(|assessment| assessment.criterion_id == "paired_efficiency")
-            .unwrap();
-        assert_eq!(assessment.outcome, AssessmentOutcome::Partial);
-        assert_eq!(assessment.score.as_ref().unwrap().awarded, 4);
-        assert_eq!(scenarios[1].aggregate.median_score, Some(89.0));
-        assert!(scenarios[1].passed);
-    }
-
-    #[test]
-    fn unpaired_handoff_passes_with_an_unavailable_score() {
-        let handoff = comparison_scenario(
-            git_handoff_materialize("comparison", CANONICAL_SEED).unwrap(),
-            comparison_run(GIT_HANDOFF_ID, test_efficiency(100, 10, 10, 10_000, 1.0)),
-        );
         let mut scenarios = vec![handoff];
 
-        apply_paired_efficiency(&mut scenarios);
+        apply_handoff_efficiency(&mut scenarios);
 
         let run = &scenarios[0].runs[0];
         assert_eq!(run.status, RunStatus::Passed);
-        assert_eq!(run.score, None);
+        assert_eq!(run.score, Some(96));
         let efficiency = run
             .criteria
             .iter()
-            .find(|criterion| criterion.id == "paired_efficiency")
+            .find(|criterion| criterion.id == "execution_efficiency")
             .unwrap();
-        assert_eq!(efficiency.awarded, None);
-        assert!(efficiency.reason.contains("baseline was not executed"));
+        assert_eq!(efficiency.awarded, Some(11));
+        assert!(efficiency.reason.contains("tokens=121439.000 (6/6)"));
+        assert!(efficiency.reason.contains("turns=36.000 (2/3)"));
         let assessment = run
             .assessment_results
             .iter()
-            .find(|assessment| assessment.criterion_id == "paired_efficiency")
+            .find(|assessment| assessment.criterion_id == "execution_efficiency")
             .unwrap();
-        assert_eq!(assessment.outcome, AssessmentOutcome::Unavailable);
-        assert_eq!(assessment.score, None);
-        assert_eq!(scenarios[0].aggregate.scored_runs, 0);
+        assert_eq!(assessment.outcome, AssessmentOutcome::Partial);
+        assert_eq!(assessment.score.as_ref().unwrap().awarded, 11);
+        assert_eq!(scenarios[0].aggregate.median_score, Some(96.0));
+        assert!(scenarios[0].passed);
+    }
+
+    #[test]
+    fn missing_efficiency_metrics_reduce_score_instead_of_hiding_it() {
+        let mut metrics = test_efficiency(0, 1, 1, 1, 1.0);
+        metrics.root_turns = None;
+        metrics.child_turns = None;
+        metrics.function_calls = None;
+        metrics.total_tokens = None;
+        metrics.work_amplification = None;
+        let handoff = comparison_scenario(
+            git_handoff_materialize("comparison", CANONICAL_SEED).unwrap(),
+            comparison_run(GIT_HANDOFF_ID, metrics),
+        );
+        let mut scenarios = vec![handoff];
+
+        apply_handoff_efficiency(&mut scenarios);
+
+        let run = &scenarios[0].runs[0];
+        assert_eq!(run.status, RunStatus::Passed);
+        assert_eq!(run.score, Some(85));
+        let efficiency = run
+            .criteria
+            .iter()
+            .find(|criterion| criterion.id == "execution_efficiency")
+            .unwrap();
+        assert_eq!(efficiency.awarded, Some(0));
+        assert!(efficiency.reason.contains("tokens=unavailable"));
+        let assessment = run
+            .assessment_results
+            .iter()
+            .find(|assessment| assessment.criterion_id == "execution_efficiency")
+            .unwrap();
+        assert_eq!(assessment.outcome, AssessmentOutcome::Failed);
+        assert_eq!(assessment.score.as_ref().unwrap().awarded, 0);
+        assert_eq!(scenarios[0].aggregate.scored_runs, 1);
         assert!(scenarios[0].passed);
     }
 
