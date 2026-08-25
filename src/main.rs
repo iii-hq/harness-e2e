@@ -254,9 +254,10 @@ fn report(args: ReportArgs) -> Result<()> {
 async fn run(args: RunArgs) -> Result<()> {
     let selected_scenarios = scenarios::selected(&args.scenario);
     let technical_retries = args.technical_retries.unwrap_or_else(|| {
-        if selected_scenarios.iter().any(|scenario| {
-            scenario.execution_kind() == scenarios::ScenarioExecutionKind::CompositeFlow
-        }) {
+        if selected_scenarios
+            .iter()
+            .any(|scenario| !scenario.execution_kind().replay_safe())
+        {
             0
         } else {
             1

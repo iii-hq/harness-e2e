@@ -1,0 +1,21 @@
+name: Harness E2E post-release
+
+on:
+  repository_dispatch:
+    types: [harness-release-published]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: harness-e2e-post-release
+  cancel-in-progress: false
+
+jobs:
+  post-release:
+    uses: ./.github/workflows/run-campaign.yml
+    with:
+      campaign: post-release
+      timeout_minutes: 360
+    secrets: inherit

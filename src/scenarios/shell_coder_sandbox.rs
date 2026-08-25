@@ -14,7 +14,7 @@ use super::{
 };
 
 pub const ID: &str = "shell_coder_sandbox";
-const VERSION: u32 = 4;
+const VERSION: u32 = 5;
 const CODE_DELIVERABLE_ID: &str = "verified_code_file";
 const EXECUTION_DELIVERABLE_ID: &str = "execution_evidence";
 const DRAFT_NAME: &str = "draft_check.py";

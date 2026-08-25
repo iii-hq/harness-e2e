@@ -36,6 +36,18 @@ pub struct ComplexityProfile {
     pub artifact_count: u8,
     pub coordination_edges: u16,
     pub ambiguity_level: u8,
+    #[serde(default)]
+    pub agent_owned_decomposition: bool,
+    #[serde(default)]
+    pub material_invalidation_events: u8,
+    #[serde(default)]
+    pub replan_loops: u8,
+    #[serde(default)]
+    pub compensable_mutations: u8,
+    #[serde(default)]
+    pub durable_resume_cycles: u8,
+    #[serde(default)]
+    pub coherent_long_horizon: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -49,40 +61,221 @@ pub enum ComplexityTier {
     L5Adaptive,
 }
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum ComplexityMethod {
+    #[default]
+    LegacyV1,
+    CapabilityV2,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct ComplexityClassification {
+    #[serde(default)]
+    pub method: ComplexityMethod,
     pub tier: ComplexityTier,
     pub profile: ComplexityProfile,
 }
 
 impl ComplexityClassification {
     pub fn derive(profile: ComplexityProfile) -> Self {
-        let tier = if profile.ambiguity_level >= 7
-            && (profile.validation_loops >= 2 || profile.wake_cycles >= 2)
-        {
-            ComplexityTier::L5Adaptive
-        } else if profile.coordination_edges >= 3
-            || (profile.dependency_depth >= 3
-                && (profile.parallel_branches >= 2 || profile.validation_loops > 0))
-        {
-            ComplexityTier::L4Coordinated
-        } else if profile.parallel_branches >= 2 {
-            ComplexityTier::L3Concurrent
-        } else if profile.external_systems > 0
-            || profile.state_transitions > 0
-            || profile.wake_cycles > 0
-            || profile.validation_loops > 0
-        {
-            ComplexityTier::L2Stateful
-        } else if profile.planning_depth > 1
-            || profile.dependency_depth > 0
-            || profile.artifact_count > 0
-        {
-            ComplexityTier::L1Sequential
-        } else {
-            ComplexityTier::L0Atomic
+        Self::derive_for_method(profile, ComplexityMethod::CapabilityV2)
+    }
+
+    pub fn derive_for_method(profile: ComplexityProfile, method: ComplexityMethod) -> Self {
+        let tier = match method {
+            ComplexityMethod::LegacyV1 => legacy_tier(profile),
+            ComplexityMethod::CapabilityV2 => capability_v2_tier(profile),
         };
-        Self { tier, profile }
+        Self {
+            method,
+            tier,
+            profile,
+        }
+    }
+}
+
+fn legacy_tier(profile: ComplexityProfile) -> ComplexityTier {
+    if profile.ambiguity_level >= 7 && (profile.validation_loops >= 2 || profile.wake_cycles >= 2) {
+        ComplexityTier::L5Adaptive
+    } else {
+        lower_tier(profile)
+    }
+}
+
+fn capability_v2_tier(profile: ComplexityProfile) -> ComplexityTier {
+    let stretch_signals = [
+        profile.external_systems >= 2,
+        profile.parallel_branches >= 2,
+        profile.compensable_mutations >= 1,
+        profile.durable_resume_cycles >= 1,
+        profile.coherent_long_horizon,
+    ]
+    .into_iter()
+    .filter(|present| *present)
+    .count();
+    if profile.agent_owned_decomposition
+        && profile.material_invalidation_events >= 1
+        && profile.replan_loops >= 1
+        && stretch_signals >= 2
+    {
+        ComplexityTier::L5Adaptive
+    } else {
+        lower_tier(profile)
+    }
+}
+
+fn lower_tier(profile: ComplexityProfile) -> ComplexityTier {
+    if profile.coordination_edges >= 3
+        || (profile.dependency_depth >= 3
+            && (profile.parallel_branches >= 2 || profile.validation_loops > 0))
+    {
+        ComplexityTier::L4Coordinated
+    } else if profile.parallel_branches >= 2 {
+        ComplexityTier::L3Concurrent
+    } else if profile.external_systems > 0
+        || profile.state_transitions > 0
+        || profile.wake_cycles > 0
+        || profile.validation_loops > 0
+    {
+        ComplexityTier::L2Stateful
+    } else if profile.planning_depth > 1
+        || profile.dependency_depth > 0
+        || profile.artifact_count > 0
+    {
+        ComplexityTier::L1Sequential
+    } else {
+        ComplexityTier::L0Atomic
+    }
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum HumanHorizonBasis {
+    #[default]
+    Unknown,
+    AuthorEstimate,
+    Measured,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct HumanHorizon {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub min_minutes: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_minutes: Option<u32>,
+    #[serde(default)]
+    pub basis: HumanHorizonBasis,
+}
+
+impl HumanHorizon {
+    pub fn author_estimate(min_minutes: u32, max_minutes: u32) -> Result<Self> {
+        Self::bounded(min_minutes, max_minutes, HumanHorizonBasis::AuthorEstimate)
+    }
+
+    pub fn measured(min_minutes: u32, max_minutes: u32) -> Result<Self> {
+        Self::bounded(min_minutes, max_minutes, HumanHorizonBasis::Measured)
+    }
+
+    fn bounded(min_minutes: u32, max_minutes: u32, basis: HumanHorizonBasis) -> Result<Self> {
+        let horizon = Self {
+            min_minutes: Some(min_minutes),
+            max_minutes: Some(max_minutes),
+            basis,
+        };
+        horizon.validate()?;
+        Ok(horizon)
+    }
+
+    fn validate(self) -> Result<()> {
+        match (self.min_minutes, self.max_minutes, self.basis) {
+            (None, None, HumanHorizonBasis::Unknown) => Ok(()),
+            (Some(min), Some(max), basis)
+                if basis != HumanHorizonBasis::Unknown && min > 0 && min <= max =>
+            {
+                Ok(())
+            }
+            _ => bail!("scenario human horizon is inconsistent"),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum ExecutionRealism {
+    #[default]
+    Synthetic,
+    RealisticSimulator,
+    FrozenRealArtifact,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum ShadowMode {
+    #[default]
+    None,
+    ReadOnly,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct ScenarioRealism {
+    #[serde(default)]
+    pub execution: ExecutionRealism,
+    #[serde(default)]
+    pub shadow: ShadowMode,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct ScenarioCharacterization {
+    #[serde(default)]
+    pub human_horizon: HumanHorizon,
+    #[serde(default)]
+    pub realism: ScenarioRealism,
+}
+
+impl ScenarioCharacterization {
+    pub fn new(
+        human_horizon: HumanHorizon,
+        execution: ExecutionRealism,
+        shadow: ShadowMode,
+    ) -> Result<Self> {
+        let characterization = Self {
+            human_horizon,
+            realism: ScenarioRealism { execution, shadow },
+        };
+        characterization.validate()?;
+        Ok(characterization)
+    }
+
+    fn for_scenario(scenario_id: &str) -> Self {
+        let execution = match scenario_id {
+            "git_regression_forensics" => ExecutionRealism::FrozenRealArtifact,
+            "research_pipeline"
+            | "security_review"
+            | "incident_response"
+            | "todo_worker_simple"
+            | "todo_worker_planned"
+            | "engineering_ticket"
+            | "trend_blog"
+            | "tool_contract_recovery"
+            | "policy_bound_action"
+            | "cross_app_transaction"
+            | "database_migration_recovery"
+            | "performance_regression"
+            | "browser_cross_site" => ExecutionRealism::RealisticSimulator,
+            _ => ExecutionRealism::Synthetic,
+        };
+        Self {
+            human_horizon: HumanHorizon::default(),
+            realism: ScenarioRealism {
+                execution,
+                shadow: ShadowMode::None,
+            },
+        }
+    }
+
+    fn validate(self) -> Result<()> {
+        self.human_horizon.validate()
     }
 }
 
@@ -165,6 +358,8 @@ pub struct ScenarioCase {
     pub inputs: Value,
     pub inputs_sha256: String,
     pub complexity: ComplexityClassification,
+    #[serde(default)]
+    pub characterization: ScenarioCharacterization,
     pub work: WorkExpectation,
     pub required_capabilities: Vec<String>,
     pub deliverable_contract: DeliverableContract,
@@ -189,6 +384,7 @@ impl ScenarioCase {
         let work = WorkExpectation {
             minimum_expected_work: minimum_expected_work(profile),
         };
+        let characterization = ScenarioCharacterization::for_scenario(&scenario_id);
         let case = Self {
             case_id: format!("{scenario_id}:v{scenario_version}:seed-{seed:016x}"),
             scenario_id,
@@ -197,6 +393,7 @@ impl ScenarioCase {
             inputs_sha256: sha256_value(&inputs)?,
             inputs,
             complexity: ComplexityClassification::derive(profile),
+            characterization,
             work,
             required_capabilities,
             deliverable_contract,
@@ -207,6 +404,15 @@ impl ScenarioCase {
 
     pub fn with_minimum_expected_work(mut self, minimum_expected_work: u64) -> Result<Self> {
         self.work.minimum_expected_work = minimum_expected_work;
+        self.validate()?;
+        Ok(self)
+    }
+
+    pub fn with_characterization(
+        mut self,
+        characterization: ScenarioCharacterization,
+    ) -> Result<Self> {
+        self.characterization = characterization;
         self.validate()?;
         Ok(self)
     }
@@ -228,9 +434,15 @@ impl ScenarioCase {
         if sha256_value(&self.inputs)? != self.inputs_sha256 {
             bail!("scenario case inputs do not match inputs_sha256");
         }
-        if self.complexity != ComplexityClassification::derive(self.complexity.profile) {
+        if self.complexity
+            != ComplexityClassification::derive_for_method(
+                self.complexity.profile,
+                self.complexity.method,
+            )
+        {
             bail!("scenario case complexity classification is inconsistent");
         }
+        self.characterization.validate()?;
         if self.work.minimum_expected_work == 0 {
             bail!("scenario case minimum work expectation is invalid");
         }
@@ -347,6 +559,35 @@ mod tests {
             .tier,
             ComplexityTier::L4Coordinated
         );
+        let formerly_adaptive = ComplexityProfile {
+            ambiguity_level: 8,
+            validation_loops: 2,
+            ..ComplexityProfile::default()
+        };
+        assert_eq!(
+            ComplexityClassification::derive_for_method(
+                formerly_adaptive,
+                ComplexityMethod::LegacyV1,
+            )
+            .tier,
+            ComplexityTier::L5Adaptive
+        );
+        assert_eq!(
+            ComplexityClassification::derive(formerly_adaptive).tier,
+            ComplexityTier::L2Stateful
+        );
+        assert_eq!(
+            ComplexityClassification::derive(ComplexityProfile {
+                agent_owned_decomposition: true,
+                material_invalidation_events: 1,
+                replan_loops: 1,
+                external_systems: 2,
+                compensable_mutations: 1,
+                ..ComplexityProfile::default()
+            })
+            .tier,
+            ComplexityTier::L5Adaptive
+        );
     }
 
     #[test]
@@ -363,5 +604,58 @@ mod tests {
         .unwrap();
         case.inputs = serde_json::json!({"value": 2});
         assert!(case.validate().is_err());
+    }
+
+    #[test]
+    fn legacy_classification_defaults_when_the_method_and_v2_fields_are_absent() {
+        let classification: ComplexityClassification = serde_json::from_value(serde_json::json!({
+            "tier": "l5_adaptive",
+            "profile": {
+                "planning_depth": 3,
+                "dependency_depth": 2,
+                "parallel_branches": 0,
+                "external_systems": 0,
+                "state_transitions": 0,
+                "wake_cycles": 0,
+                "validation_loops": 2,
+                "artifact_count": 1,
+                "coordination_edges": 0,
+                "ambiguity_level": 8
+            }
+        }))
+        .unwrap();
+        assert_eq!(classification.method, ComplexityMethod::LegacyV1);
+        assert_eq!(
+            classification,
+            ComplexityClassification::derive_for_method(
+                classification.profile,
+                ComplexityMethod::LegacyV1,
+            )
+        );
+    }
+
+    #[test]
+    fn characterization_builders_validate_horizon_and_shadow() {
+        assert!(HumanHorizon::author_estimate(0, 60).is_err());
+        assert!(HumanHorizon::measured(120, 60).is_err());
+        let characterization = ScenarioCharacterization::new(
+            HumanHorizon::author_estimate(60, 120).unwrap(),
+            ExecutionRealism::RealisticSimulator,
+            ShadowMode::ReadOnly,
+        )
+        .unwrap();
+        let case = ScenarioCase::new(
+            "future_l5",
+            1,
+            7,
+            serde_json::json!({}),
+            ComplexityProfile::default(),
+            vec![],
+            DeliverableContract::default(),
+        )
+        .unwrap()
+        .with_characterization(characterization)
+        .unwrap();
+        assert_eq!(case.characterization, characterization);
     }
 }

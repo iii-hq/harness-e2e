@@ -11,8 +11,9 @@ pub fn definition() -> WorkflowDefinitionV1 {
             max_nodes: 20,
             step_timeout_seconds: 600,
             workflow_timeout_seconds: 3_600,
-            max_total_tokens: Some(900_000),
-            max_cost_usd: Some(30.0),
+            // Reserve 64k tokens for the agent-owned two-revision planner.
+            max_total_tokens: Some(686_000),
+            max_cost_usd: Some(25.0),
             technical_retries: 0,
         },
         nodes: vec![

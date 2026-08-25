@@ -30,7 +30,7 @@ use super::{
 };
 
 pub const ID: &str = "git_regression_forensics";
-const VERSION: u32 = 1;
+const VERSION: u32 = 2;
 
 const ACQUISITION_ID: &str = "repository_acquisition";
 const TRACE_ID: &str = "investigation_trace";

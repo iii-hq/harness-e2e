@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -8,7 +8,7 @@ use chrono::{SecondsFormat, Utc};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use tokio::sync::watch;
+use tokio::sync::{watch, Mutex};
 use tokio::task::JoinSet;
 use uuid::Uuid;
 
@@ -17,12 +17,16 @@ use crate::redaction::{RedactionPolicy, RedactionReport};
 
 use super::catalog::{
     CapturedWorkflowAsset, NoopWorkflowCleanupHook, StepCatalog, StepEvaluation,
-    StepExecutorContext, StepExecutorOutput, TypedPortValue, WorkflowAssetContent,
-    WorkflowCleanupContext, WorkflowCleanupHook, WorkflowEvaluationResult, WorkflowGateResult,
+    StepExecutorContext, StepExecutorOutput, StepReconcileOutcome, StepReconcileState,
+    TypedPortValue, WorkflowAssetContent, WorkflowCleanupContext, WorkflowCleanupHook,
+    WorkflowEvaluationResult, WorkflowGateResult,
 };
 use super::{
-    ActivationPolicy, DependencyPolicy, MaterializedWorkflow, WorkflowDefinitionV1,
-    WorkflowInputBinding, WorkflowNodeV1,
+    ActivationPolicy, AdaptivePlanRevisionEvidence, AdaptiveWorkflowPlanV1,
+    AdaptiveWorkflowPolicyV1, DependencyPolicy, MaterializedWorkflow, ReplayPolicy,
+    ResumeDisposition, StepResumePhase, WorkflowDefinitionV1, WorkflowInputBinding, WorkflowNodeV1,
+    WorkflowResumeIdentityV1, WorkflowResumeStateV1, WorkflowResumeStepV1, WorkflowResumeStore,
+    WORKFLOW_RESUME_SCHEMA_VERSION,
 };
 
 const MAX_PORT_VALUE_BYTES: usize = 64 * 1024;
@@ -50,6 +54,96 @@ impl WorkflowExecutionRequest {
             cancellation,
             cleanup_hook: Arc::new(NoopWorkflowCleanupHook),
         }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct ResumableWorkflowExecutionRequest {
+    /// Durable, runner-owned root. This is not the public artifact directory.
+    pub state_root: PathBuf,
+    pub identity: WorkflowResumeIdentityV1,
+    pub plan_revisions: Vec<AdaptivePlanRevisionEvidence>,
+    pub resume_existing: bool,
+}
+
+#[derive(Debug, Clone)]
+pub struct WorkflowNeedsReconciliation {
+    pub node_id: String,
+    pub reason: String,
+    pub resume_state_sha256: String,
+}
+
+#[derive(Debug, Clone)]
+pub enum ResumableWorkflowOutcome {
+    Completed(Box<WorkflowAttemptReport>),
+    ExplicitlyCancelled,
+    NeedsReconciliation(WorkflowNeedsReconciliation),
+}
+
+#[derive(Clone)]
+struct ResumeCoordinator {
+    store: WorkflowResumeStore,
+    state: Arc<Mutex<WorkflowResumeStateV1>>,
+}
+
+impl ResumeCoordinator {
+    async fn persist_step(
+        &self,
+        phase: StepResumePhase,
+        replay_policy: ReplayPolicy,
+        report: WorkflowStepReport,
+    ) -> Result<String> {
+        let mut state = self.state.lock().await;
+        state.steps.insert(
+            report.node_id.clone(),
+            WorkflowResumeStepV1 {
+                phase,
+                replay_policy,
+                report,
+            },
+        );
+        state.advance();
+        self.store.persist(&state)
+    }
+
+    async fn mark_cancelled(&self) -> Result<String> {
+        let mut state = self.state.lock().await;
+        state.explicit_cancellation = true;
+        state.disposition = ResumeDisposition::ExplicitlyCancelled;
+        state.advance();
+        self.store.persist(&state)
+    }
+
+    async fn mark_needs_reconciliation(&self, node_id: String, reason: String) -> Result<String> {
+        let mut state = self.state.lock().await;
+        state.disposition = ResumeDisposition::NeedsReconciliation;
+        state.reconciliation_node_id = Some(node_id);
+        state.reconciliation_reason = Some(reason);
+        state.advance();
+        self.store.persist(&state)
+    }
+
+    async fn finish(
+        &self,
+        disposition: ResumeDisposition,
+        report: Option<WorkflowAttemptReport>,
+    ) -> Result<String> {
+        let mut state = self.state.lock().await;
+        state.disposition = disposition;
+        state.cleanup_completed = true;
+        state.final_report = report.map(Box::new);
+        state.advance();
+        self.store.persist(&state)
+    }
+
+    async fn mark_cleanup_started(&self) -> Result<String> {
+        let mut state = self.state.lock().await;
+        if state.cleanup_started {
+            bail!("workflow cleanup already started; refusing a second invocation");
+        }
+        state.cleanup_started = true;
+        state.advance();
+        self.store.persist(&state)
     }
 }
 
@@ -319,20 +413,22 @@ pub async fn execute_workflow(
         attempt_id: attempt_id.clone(),
         output_dir: request.output_dir.clone(),
     };
-    let result = execute_materialized_workflow(materialized, catalog, &request, attempt_id).await;
+    let result =
+        execute_materialized_workflow(materialized, catalog, &request, attempt_id, None, None)
+            .await;
     let cleanup_started = Instant::now();
     let cleanup_result = request.cleanup_hook.cleanup(&cleanup_context).await;
     let cleanup_duration_ms = elapsed_ms(cleanup_started);
     match (result, cleanup_result) {
-        (Ok(mut report), Ok(())) => {
+        (Ok(MaterializedRunOutcome::Completed(mut report)), Ok(())) => {
             report.cleanup = WorkflowCleanupReport {
                 status: WorkflowCleanupStatus::Succeeded,
                 duration_ms: cleanup_duration_ms,
                 failure: None,
             };
-            Ok(report)
+            Ok(*report)
         }
-        (Ok(mut report), Err(error)) => {
+        (Ok(MaterializedRunOutcome::Completed(mut report)), Err(error)) => {
             report.passed = false;
             report.technical_failure = true;
             report.cleanup = WorkflowCleanupReport {
@@ -340,7 +436,10 @@ pub async fn execute_workflow(
                 duration_ms: cleanup_duration_ms,
                 failure: Some(format!("{error:#}")),
             };
-            Ok(report)
+            Ok(*report)
+        }
+        (Ok(MaterializedRunOutcome::NeedsReconciliation(_)), _) => {
+            bail!("non-resumable workflow unexpectedly requested reconciliation")
         }
         (Err(error), Ok(())) => Err(error),
         (Err(error), Err(cleanup_error)) => Err(error.context(format!(
@@ -349,12 +448,579 @@ pub async fn execute_workflow(
     }
 }
 
+pub async fn execute_resumable_workflow(
+    definition: &WorkflowDefinitionV1,
+    catalog: Arc<StepCatalog>,
+    request: WorkflowExecutionRequest,
+    resume_request: ResumableWorkflowExecutionRequest,
+) -> Result<ResumableWorkflowOutcome> {
+    let materialized = definition.validate(&catalog)?;
+    let attempt_id = request
+        .attempt_id
+        .clone()
+        .context("resumable workflow requires a stable attempt_id")?;
+    resume_request.identity.validate()?;
+    if resume_request.identity.workflow_id != materialized.definition.id
+        || resume_request.identity.workflow_sha256 != materialized.sha256
+    {
+        bail!("resume identity does not match the materialized workflow");
+    }
+    if resume_request.identity.catalog_sha256 != catalog.canonical_sha256()? {
+        bail!("resume identity does not match the registered step catalog");
+    }
+    let store = WorkflowResumeStore::new(
+        &resume_request.state_root,
+        &resume_request.identity.execution_id,
+        &request.run_id,
+        &attempt_id,
+    )?;
+    let mut existing = store.load(&resume_request.identity)?;
+    if existing.is_some() && !resume_request.resume_existing {
+        bail!("trusted resume state already exists; explicit resume_existing is required");
+    }
+    if let Some(state) = &mut existing {
+        if state.run_id != request.run_id || state.attempt_id != attempt_id {
+            bail!("trusted resume state run or attempt identity changed");
+        }
+        if state.cleanup_started && !state.cleanup_completed {
+            state.disposition = ResumeDisposition::NeedsReconciliation;
+            state.reconciliation_node_id = Some("workflow_cleanup".into());
+            state.reconciliation_reason = Some(
+                "worker stopped after durable cleanup-start receipt; cleanup will not run twice"
+                    .into(),
+            );
+            state.advance();
+            let digest = store.persist(state)?;
+            return Ok(ResumableWorkflowOutcome::NeedsReconciliation(
+                WorkflowNeedsReconciliation {
+                    node_id: "workflow_cleanup".into(),
+                    reason: state
+                        .reconciliation_reason
+                        .clone()
+                        .expect("reconciliation reason set"),
+                    resume_state_sha256: digest,
+                },
+            ));
+        }
+        match state.disposition {
+            ResumeDisposition::Completed => {
+                let report = state
+                    .final_report
+                    .as_deref()
+                    .cloned()
+                    .context("completed resume state is missing its report")?;
+                return Ok(ResumableWorkflowOutcome::Completed(Box::new(report)));
+            }
+            ResumeDisposition::ExplicitlyCancelled => {
+                return Ok(ResumableWorkflowOutcome::ExplicitlyCancelled);
+            }
+            ResumeDisposition::NeedsReconciliation => {
+                return Ok(ResumableWorkflowOutcome::NeedsReconciliation(
+                    WorkflowNeedsReconciliation {
+                        node_id: state
+                            .reconciliation_node_id
+                            .clone()
+                            .context("resume state is missing reconciliation node")?,
+                        reason: state
+                            .reconciliation_reason
+                            .clone()
+                            .context("resume state is missing reconciliation reason")?,
+                        resume_state_sha256: state.canonical_sha256()?,
+                    },
+                ));
+            }
+            ResumeDisposition::Active => {}
+        }
+    }
+
+    let state = existing.unwrap_or_else(|| WorkflowResumeStateV1 {
+        schema_version: WORKFLOW_RESUME_SCHEMA_VERSION,
+        sequence: 1,
+        identity: resume_request.identity,
+        run_id: request.run_id.clone(),
+        attempt_id: attempt_id.clone(),
+        updated_at: timestamp(),
+        disposition: ResumeDisposition::Active,
+        explicit_cancellation: false,
+        cleanup_started: false,
+        cleanup_completed: false,
+        reconciliation_node_id: None,
+        reconciliation_reason: None,
+        final_report: None,
+        plan_revisions: resume_request.plan_revisions,
+        steps: materialized
+            .definition
+            .nodes
+            .iter()
+            .map(|node| {
+                let replay_policy = catalog
+                    .get(&node.step_type, node.step_version)
+                    .expect("validated catalog entry")
+                    .descriptor
+                    .replay_policy;
+                (
+                    node.id.clone(),
+                    WorkflowResumeStepV1 {
+                        phase: StepResumePhase::Pending,
+                        replay_policy,
+                        report: WorkflowStepReport::pending(node),
+                    },
+                )
+            })
+            .collect(),
+    });
+    if state.sequence == 1 {
+        store.persist(&state)?;
+    }
+    let coordinator = ResumeCoordinator {
+        store,
+        state: Arc::new(Mutex::new(state.clone())),
+    };
+    let cleanup_context = WorkflowCleanupContext {
+        workflow_id: materialized.definition.id.clone(),
+        workflow_sha256: materialized.sha256.clone(),
+        run_id: request.run_id.clone(),
+        attempt_id: attempt_id.clone(),
+        output_dir: request.output_dir.clone(),
+    };
+    let result = execute_materialized_workflow(
+        materialized,
+        catalog,
+        &request,
+        attempt_id,
+        Some(coordinator.clone()),
+        existing_state_for_recovery(resume_request.resume_existing, state),
+    )
+    .await;
+    coordinator.mark_cleanup_started().await?;
+    let cleanup_started = Instant::now();
+    let cleanup_result = request.cleanup_hook.cleanup(&cleanup_context).await;
+    let cleanup_duration_ms = elapsed_ms(cleanup_started);
+
+    match (result, cleanup_result) {
+        (Ok(MaterializedRunOutcome::Completed(mut report)), cleanup) => {
+            report.cleanup = match cleanup {
+                Ok(()) => WorkflowCleanupReport {
+                    status: WorkflowCleanupStatus::Succeeded,
+                    duration_ms: cleanup_duration_ms,
+                    failure: None,
+                },
+                Err(error) => {
+                    report.passed = false;
+                    report.technical_failure = true;
+                    WorkflowCleanupReport {
+                        status: WorkflowCleanupStatus::Failed,
+                        duration_ms: cleanup_duration_ms,
+                        failure: Some(format!("{error:#}")),
+                    }
+                }
+            };
+            let disposition = if coordinator.state.lock().await.explicit_cancellation {
+                ResumeDisposition::ExplicitlyCancelled
+            } else {
+                ResumeDisposition::Completed
+            };
+            coordinator
+                .finish(disposition, Some((*report).clone()))
+                .await?;
+            if disposition == ResumeDisposition::ExplicitlyCancelled {
+                Ok(ResumableWorkflowOutcome::ExplicitlyCancelled)
+            } else {
+                Ok(ResumableWorkflowOutcome::Completed(report))
+            }
+        }
+        (Ok(MaterializedRunOutcome::NeedsReconciliation(needs)), cleanup) => {
+            let cleanup_completed = cleanup.is_ok();
+            if let Err(error) = cleanup {
+                tracing::warn!(error = %format!("{error:#}"), "cleanup after reconciliation stop failed");
+            }
+            {
+                let mut state = coordinator.state.lock().await;
+                state.cleanup_completed = cleanup_completed;
+                state.advance();
+                coordinator.store.persist(&state)?;
+            }
+            Ok(ResumableWorkflowOutcome::NeedsReconciliation(needs))
+        }
+        (Err(error), Ok(())) => {
+            coordinator
+                .mark_needs_reconciliation("workflow".into(), format!("{error:#}"))
+                .await
+                .ok();
+            let mut state = coordinator.state.lock().await;
+            state.cleanup_completed = true;
+            state.advance();
+            coordinator.store.persist(&state).ok();
+            Err(error)
+        }
+        (Err(error), Err(cleanup_error)) => Err(error.context(format!(
+            "mandatory cleanup hook also failed: {cleanup_error:#}"
+        ))),
+    }
+}
+
+/// Freeze the latest validated adaptive-plan revision and execute it through
+/// the resumable scheduler. This is the suite integration point: caller-owned
+/// planner output is never executed before policy validation/materialization.
+pub async fn execute_adaptive_workflow(
+    policy: &AdaptiveWorkflowPolicyV1,
+    plans: &[AdaptiveWorkflowPlanV1],
+    completed_node_ids: &BTreeSet<String>,
+    catalog: Arc<StepCatalog>,
+    request: WorkflowExecutionRequest,
+    mut resume_request: ResumableWorkflowExecutionRequest,
+) -> Result<ResumableWorkflowOutcome> {
+    let adaptive = policy.materialize(plans, completed_node_ids, &catalog)?;
+    if resume_request.identity.policy_sha256 != adaptive.policy_sha256
+        || resume_request.identity.plan_sha256 != adaptive.latest_plan_sha256
+        || resume_request.identity.workflow_sha256 != adaptive.definition.canonical_sha256()?
+    {
+        bail!("adaptive resume identity does not match the frozen policy, plan and workflow");
+    }
+    resume_request.plan_revisions = adaptive.revisions;
+    execute_resumable_workflow(&adaptive.definition, catalog, request, resume_request).await
+}
+
+fn existing_state_for_recovery(
+    resume_existing: bool,
+    state: WorkflowResumeStateV1,
+) -> Option<WorkflowResumeStateV1> {
+    resume_existing.then_some(state)
+}
+
+enum MaterializedRunOutcome {
+    Completed(Box<WorkflowAttemptReport>),
+    NeedsReconciliation(WorkflowNeedsReconciliation),
+}
+
+enum ResumeRecovery {
+    Ready {
+        reports: HashMap<String, WorkflowStepReport>,
+        outputs: HashMap<String, BTreeMap<String, TypedPortValue>>,
+    },
+    NeedsReconciliation(WorkflowNeedsReconciliation),
+}
+
+async fn recover_resume_state(
+    materialized: &MaterializedWorkflow,
+    catalog: &StepCatalog,
+    request: &WorkflowExecutionRequest,
+    attempt_id: &str,
+    cancellation: watch::Receiver<bool>,
+    coordinator: &ResumeCoordinator,
+    state: WorkflowResumeStateV1,
+) -> Result<ResumeRecovery> {
+    state.validate()?;
+    let expected_ids = materialized
+        .definition
+        .nodes
+        .iter()
+        .map(|node| node.id.as_str())
+        .collect::<HashSet<_>>();
+    let stored_ids = state
+        .steps
+        .keys()
+        .map(String::as_str)
+        .collect::<HashSet<_>>();
+    if expected_ids != stored_ids {
+        return stop_for_reconciliation(
+            coordinator,
+            "workflow".into(),
+            "trusted resume state node inventory changed".into(),
+        )
+        .await;
+    }
+    let mut reports = HashMap::new();
+    let mut outputs = HashMap::new();
+    for id in &materialized.topological_order {
+        let node = materialized
+            .definition
+            .nodes
+            .iter()
+            .find(|node| &node.id == id)
+            .expect("validated node");
+        let registered = catalog
+            .get(&node.step_type, node.step_version)
+            .expect("validated catalog entry");
+        let stored = &state.steps[id];
+        if stored.replay_policy != registered.descriptor.replay_policy
+            || stored.report.step_type != node.step_type
+            || stored.report.step_version != node.step_version
+            || stored.report.dependencies != node.depends_on
+        {
+            return stop_for_reconciliation(
+                coordinator,
+                id.clone(),
+                "step contract or replay policy changed since interruption".into(),
+            )
+            .await;
+        }
+        match stored.phase {
+            StepResumePhase::Pending => {
+                reports.insert(id.clone(), WorkflowStepReport::pending(node));
+            }
+            StepResumePhase::Terminal => {
+                if !matches!(
+                    stored.report.status,
+                    WorkflowStepStatus::Succeeded
+                        | WorkflowStepStatus::HardGateFailed
+                        | WorkflowStepStatus::Skipped
+                ) {
+                    return stop_for_reconciliation(
+                        coordinator,
+                        id.clone(),
+                        format!(
+                            "interrupted state contains terminal {:?} step",
+                            stored.report.status
+                        ),
+                    )
+                    .await;
+                }
+                if matches!(
+                    stored.report.status,
+                    WorkflowStepStatus::Succeeded | WorkflowStepStatus::HardGateFailed
+                ) {
+                    for asset in &stored.report.assets {
+                        if let Err(error) = asset.artifact.verify(&request.output_dir) {
+                            return stop_for_reconciliation(
+                                coordinator,
+                                id.clone(),
+                                format!("persisted asset receipt no longer verifies: {error:#}"),
+                            )
+                            .await;
+                        }
+                    }
+                    if let Err(error) =
+                        validate_outputs(&registered.descriptor, stored.report.outputs.clone())
+                    {
+                        return stop_for_reconciliation(
+                            coordinator,
+                            id.clone(),
+                            format!("persisted step outputs no longer validate: {error:#}"),
+                        )
+                        .await;
+                    }
+                    outputs.insert(id.clone(), stored.report.outputs.clone());
+                }
+                reports.insert(id.clone(), stored.report.clone());
+            }
+            StepResumePhase::Running
+            | StepResumePhase::Executed
+            | StepResumePhase::Captured
+            | StepResumePhase::Evaluated => {
+                let context = StepExecutorContext {
+                    workflow_id: materialized.definition.id.clone(),
+                    workflow_sha256: materialized.sha256.clone(),
+                    run_id: request.run_id.clone(),
+                    attempt_id: attempt_id.to_string(),
+                    node: node.clone(),
+                    replay_policy: registered.descriptor.replay_policy,
+                    inputs: BTreeMap::new(),
+                    output_dir: request.output_dir.clone(),
+                    cancellation: cancellation.clone(),
+                };
+                let previous = StepReconcileState {
+                    phase: stored.phase,
+                    outputs: stored.report.outputs.clone(),
+                    harness_session_id: stored.report.harness_session_id.clone(),
+                    artifact_sha256: stored
+                        .report
+                        .assets
+                        .iter()
+                        .map(|asset| (asset.namespaced_id.clone(), asset.content_sha256.clone()))
+                        .collect(),
+                };
+                let outcome = match registered.executor.reconcile(&context, &previous).await {
+                    Ok(outcome) => outcome,
+                    Err(error) => {
+                        return stop_for_reconciliation(
+                            coordinator,
+                            id.clone(),
+                            format!("step reconciliation failed: {error:#}"),
+                        )
+                        .await;
+                    }
+                };
+                match outcome {
+                    StepReconcileOutcome::RetrySafe | StepReconcileOutcome::Compensated => {
+                        let report = WorkflowStepReport::pending(node);
+                        coordinator
+                            .persist_step(
+                                StepResumePhase::Pending,
+                                registered.descriptor.replay_policy,
+                                report.clone(),
+                            )
+                            .await?;
+                        reports.insert(id.clone(), report);
+                    }
+                    StepReconcileOutcome::Completed(execution) => {
+                        let report = match complete_reconciled_step(
+                            registered,
+                            context,
+                            execution,
+                            coordinator.clone(),
+                        )
+                        .await
+                        {
+                            Ok(report) => report,
+                            Err(error) => {
+                                return stop_for_reconciliation(
+                                    coordinator,
+                                    id.clone(),
+                                    format!(
+                                        "reconciled completion could not be verified: {error:#}"
+                                    ),
+                                )
+                                .await;
+                            }
+                        };
+                        if matches!(
+                            report.status,
+                            WorkflowStepStatus::Succeeded | WorkflowStepStatus::HardGateFailed
+                        ) {
+                            outputs.insert(id.clone(), report.outputs.clone());
+                        }
+                        reports.insert(id.clone(), report);
+                    }
+                    StepReconcileOutcome::NeedsReconciliation { reason } => {
+                        return stop_for_reconciliation(coordinator, id.clone(), reason).await;
+                    }
+                }
+            }
+        }
+    }
+    Ok(ResumeRecovery::Ready { reports, outputs })
+}
+
+async fn stop_for_reconciliation(
+    coordinator: &ResumeCoordinator,
+    node_id: String,
+    reason: String,
+) -> Result<ResumeRecovery> {
+    let digest = coordinator
+        .mark_needs_reconciliation(node_id.clone(), reason.clone())
+        .await?;
+    Ok(ResumeRecovery::NeedsReconciliation(
+        WorkflowNeedsReconciliation {
+            node_id,
+            reason,
+            resume_state_sha256: digest,
+        },
+    ))
+}
+
+async fn sync_scheduler_resume_state(
+    coordinator: &ResumeCoordinator,
+    catalog: &StepCatalog,
+    reports: &HashMap<String, WorkflowStepReport>,
+) -> Result<()> {
+    for report in reports.values() {
+        let next_phase = if report.status.terminal() {
+            Some(StepResumePhase::Terminal)
+        } else if report.status == WorkflowStepStatus::Running {
+            Some(StepResumePhase::Running)
+        } else {
+            None
+        };
+        let Some(next_phase) = next_phase else {
+            continue;
+        };
+        let should_persist = {
+            let state = coordinator.state.lock().await;
+            let current = &state.steps[&report.node_id];
+            current.phase == StepResumePhase::Pending || next_phase == StepResumePhase::Terminal
+        };
+        if !should_persist {
+            continue;
+        }
+        let replay_policy = catalog
+            .get(&report.step_type, report.step_version)
+            .expect("validated catalog entry")
+            .descriptor
+            .replay_policy;
+        coordinator
+            .persist_step(next_phase, replay_policy, report.clone())
+            .await?;
+    }
+    Ok(())
+}
+
+async fn complete_reconciled_step(
+    registered: &super::RegisteredStepType,
+    context: StepExecutorContext,
+    mut execution: StepExecutorOutput,
+    coordinator: ResumeCoordinator,
+) -> Result<WorkflowStepReport> {
+    let started = Instant::now();
+    let mut report = WorkflowStepReport::pending(&context.node);
+    report.status = WorkflowStepStatus::Running;
+    report.started_at = Some(timestamp());
+    report.harness_session_id = execution.harness_session_id.clone();
+    coordinator
+        .persist_step(
+            StepResumePhase::Executed,
+            registered.descriptor.replay_policy,
+            report.clone(),
+        )
+        .await?;
+    let assets = registered.executor.capture(&context, &execution).await?;
+    let assets_for_evaluation = assets.clone();
+    let (assets, redaction) = persist_assets(&context, assets)?;
+    report.assets = assets;
+    report.redaction = redaction;
+    coordinator
+        .persist_step(
+            StepResumePhase::Captured,
+            registered.descriptor.replay_policy,
+            report.clone(),
+        )
+        .await?;
+    let evaluation = registered
+        .executor
+        .evaluate(&context, &execution, &assets_for_evaluation)
+        .await?;
+    report.outputs = validate_outputs(
+        &registered.descriptor,
+        std::mem::take(&mut execution.outputs),
+    )?;
+    let declared_technical_failure = execution.technical_failure.clone();
+    apply_execution(&mut report, execution, evaluation);
+    coordinator
+        .persist_step(
+            StepResumePhase::Evaluated,
+            registered.descriptor.replay_policy,
+            report.clone(),
+        )
+        .await?;
+    registered.executor.cleanup(&context).await?;
+    if let Some(message) = declared_technical_failure {
+        bail!("reconciled step declared a technical failure: {message}");
+    }
+    report.status = if report.hard_gates.iter().any(|gate| !gate.passed) {
+        WorkflowStepStatus::HardGateFailed
+    } else {
+        WorkflowStepStatus::Succeeded
+    };
+    report.completed_at = Some(timestamp());
+    report.duration_ms = elapsed_ms(started);
+    coordinator
+        .persist_step(
+            StepResumePhase::Terminal,
+            registered.descriptor.replay_policy,
+            report.clone(),
+        )
+        .await?;
+    Ok(report)
+}
+
 async fn execute_materialized_workflow(
     materialized: MaterializedWorkflow,
     catalog: Arc<StepCatalog>,
     request: &WorkflowExecutionRequest,
     attempt_id: String,
-) -> Result<WorkflowAttemptReport> {
+    resume: Option<ResumeCoordinator>,
+    resume_state: Option<WorkflowResumeStateV1>,
+) -> Result<MaterializedRunOutcome> {
     let started = Instant::now();
     let workflow_deadline = tokio::time::Instant::now()
         + Duration::from_secs(materialized.definition.limits.workflow_timeout_seconds);
@@ -383,6 +1049,30 @@ async fn execute_materialized_workflow(
         .map(|(id, node)| (id.clone(), WorkflowStepReport::pending(node)))
         .collect::<HashMap<_, _>>();
     let mut outputs: HashMap<String, BTreeMap<String, TypedPortValue>> = HashMap::new();
+    if let (Some(coordinator), Some(state)) = (&resume, resume_state) {
+        match recover_resume_state(
+            &materialized,
+            &catalog,
+            request,
+            &attempt_id,
+            abort_receiver.clone(),
+            coordinator,
+            state,
+        )
+        .await?
+        {
+            ResumeRecovery::Ready {
+                reports: recovered_reports,
+                outputs: recovered_outputs,
+            } => {
+                reports = recovered_reports;
+                outputs = recovered_outputs;
+            }
+            ResumeRecovery::NeedsReconciliation(needs) => {
+                return Ok(MaterializedRunOutcome::NeedsReconciliation(needs));
+            }
+        }
+    }
     let mut active_contexts: HashMap<String, StepExecutorContext> = HashMap::new();
     let mut running = JoinSet::new();
     let mut technical_failure = false;
@@ -390,6 +1080,9 @@ async fn execute_materialized_workflow(
 
     loop {
         if *external_cancellation.borrow() && !technical_failure {
+            if let Some(coordinator) = &resume {
+                coordinator.mark_cancelled().await?;
+            }
             technical_failure = true;
             workflow_failure = Some(WorkflowStepFailure {
                 phase: WorkflowFailurePhase::Cancel,
@@ -494,6 +1187,7 @@ async fn execute_materialized_workflow(
                         run_id: request.run_id.clone(),
                         attempt_id: attempt_id.clone(),
                         node: node.clone(),
+                        replay_policy: registered.descriptor.replay_policy,
                         inputs,
                         output_dir: request.output_dir.clone(),
                         cancellation: abort_receiver.clone(),
@@ -504,8 +1198,9 @@ async fn execute_materialized_workflow(
                     active_contexts.insert(id.clone(), context.clone());
                     let timeout =
                         Duration::from_secs(materialized.definition.limits.step_timeout_seconds);
+                    let resume_for_step = resume.clone();
                     running.spawn(async move {
-                        let report = run_step(registered, context, timeout).await;
+                        let report = run_step(registered, context, timeout, resume_for_step).await;
                         (id, report)
                     });
                     changed = true;
@@ -514,6 +1209,9 @@ async fn execute_materialized_workflow(
         }
 
         if changed {
+            if let Some(coordinator) = &resume {
+                sync_scheduler_resume_state(coordinator, &catalog, &reports).await?;
+            }
             persist_checkpoint(
                 &checkpoint_store,
                 &materialized,
@@ -535,6 +1233,9 @@ async fn execute_materialized_workflow(
         let joined = tokio::select! {
             changed = external_cancellation.changed() => {
                 if changed.is_ok() && *external_cancellation.borrow() {
+                    if let Some(coordinator) = &resume {
+                        coordinator.mark_cancelled().await?;
+                    }
                     technical_failure = true;
                     workflow_failure.get_or_insert(WorkflowStepFailure {
                         phase: WorkflowFailurePhase::Cancel,
@@ -603,6 +1304,9 @@ async fn execute_materialized_workflow(
         }
         report.completed_at.get_or_insert_with(timestamp);
         reports.insert(id, report);
+        if let Some(coordinator) = &resume {
+            sync_scheduler_resume_state(coordinator, &catalog, &reports).await?;
+        }
         persist_checkpoint(
             &checkpoint_store,
             &materialized,
@@ -655,29 +1359,31 @@ async fn execute_materialized_workflow(
         std::iter::empty::<&String>(),
     ))?;
     let flow_snapshot = evidence_snapshot(&materialized);
-    Ok(WorkflowAttemptReport {
-        workflow_id: materialized.definition.id,
-        workflow_scenario_version: materialized.definition.scenario_version,
-        workflow_sha256: materialized.sha256,
-        run_id: request.run_id.clone(),
-        attempt_id,
-        attempt_number: request.attempt_number,
-        started_at,
-        completed_at: timestamp(),
-        duration_ms: elapsed_ms(started),
-        passed,
-        technical_failure,
-        flow_snapshot,
-        steps,
-        criteria,
-        aggregate_cost_usd,
-        checkpoint: final_checkpoint,
-        cleanup: WorkflowCleanupReport {
-            status: WorkflowCleanupStatus::Succeeded,
-            duration_ms: 0,
-            failure: None,
+    Ok(MaterializedRunOutcome::Completed(Box::new(
+        WorkflowAttemptReport {
+            workflow_id: materialized.definition.id,
+            workflow_scenario_version: materialized.definition.scenario_version,
+            workflow_sha256: materialized.sha256,
+            run_id: request.run_id.clone(),
+            attempt_id,
+            attempt_number: request.attempt_number,
+            started_at,
+            completed_at: timestamp(),
+            duration_ms: elapsed_ms(started),
+            passed,
+            technical_failure,
+            flow_snapshot,
+            steps,
+            criteria,
+            aggregate_cost_usd,
+            checkpoint: final_checkpoint,
+            cleanup: WorkflowCleanupReport {
+                status: WorkflowCleanupStatus::Succeeded,
+                duration_ms: 0,
+                failure: None,
+            },
         },
-    })
+    )))
 }
 
 async fn preflight_all(
@@ -705,6 +1411,7 @@ async fn preflight_all(
                 run_id: request.run_id.clone(),
                 attempt_id: attempt_id.to_string(),
                 node: node.clone(),
+                replay_policy: registered.descriptor.replay_policy,
                 inputs: BTreeMap::new(),
                 output_dir: request.output_dir.clone(),
                 cancellation: cancellation.clone(),
@@ -719,6 +1426,7 @@ async fn run_step(
     registered: super::RegisteredStepType,
     context: StepExecutorContext,
     timeout: Duration,
+    resume: Option<ResumeCoordinator>,
 ) -> WorkflowStepReport {
     let started = Instant::now();
     let mut report = WorkflowStepReport::pending(&context.node);
@@ -732,7 +1440,7 @@ async fn run_step(
                 report
                     .failures
                     .push(step_failure(WorkflowFailurePhase::Execute, error));
-                finish_failed_step(&registered, &context, &mut report, started).await;
+                finish_failed_step(&registered, &context, &mut report, started, &resume).await;
                 return report;
             }
             Err(_) => {
@@ -746,10 +1454,16 @@ async fn run_step(
                         .failures
                         .push(step_failure(WorkflowFailurePhase::Cancel, error));
                 }
-                finish_failed_step(&registered, &context, &mut report, started).await;
+                finish_failed_step(&registered, &context, &mut report, started, &resume).await;
                 return report;
             }
         };
+
+    report.harness_session_id = execution.harness_session_id.clone();
+    if !persist_resume_phase(&resume, &registered, StepResumePhase::Executed, &mut report).await {
+        finish_failed_step(&registered, &context, &mut report, started, &resume).await;
+        return report;
+    }
 
     let assets = match registered.executor.capture(&context, &execution).await {
         Ok(assets) => assets,
@@ -757,7 +1471,7 @@ async fn run_step(
             report
                 .failures
                 .push(step_failure(WorkflowFailurePhase::Capture, error));
-            finish_failed_step(&registered, &context, &mut report, started).await;
+            finish_failed_step(&registered, &context, &mut report, started, &resume).await;
             return report;
         }
     };
@@ -766,12 +1480,18 @@ async fn run_step(
         Ok((assets, redaction)) => {
             report.assets = assets;
             report.redaction = redaction;
+            if !persist_resume_phase(&resume, &registered, StepResumePhase::Captured, &mut report)
+                .await
+            {
+                finish_failed_step(&registered, &context, &mut report, started, &resume).await;
+                return report;
+            }
         }
         Err(error) => {
             report
                 .failures
                 .push(step_failure(WorkflowFailurePhase::Persist, error));
-            finish_failed_step(&registered, &context, &mut report, started).await;
+            finish_failed_step(&registered, &context, &mut report, started, &resume).await;
             return report;
         }
     }
@@ -786,7 +1506,7 @@ async fn run_step(
             report
                 .failures
                 .push(step_failure(WorkflowFailurePhase::Evaluate, error));
-            finish_failed_step(&registered, &context, &mut report, started).await;
+            finish_failed_step(&registered, &context, &mut report, started, &resume).await;
             return report;
         }
     };
@@ -801,11 +1521,22 @@ async fn run_step(
             report
                 .failures
                 .push(step_failure(WorkflowFailurePhase::Evaluate, error));
-            finish_failed_step(&registered, &context, &mut report, started).await;
+            finish_failed_step(&registered, &context, &mut report, started, &resume).await;
             return report;
         }
     }
     apply_execution(&mut report, execution, evaluation);
+    if !persist_resume_phase(
+        &resume,
+        &registered,
+        StepResumePhase::Evaluated,
+        &mut report,
+    )
+    .await
+    {
+        finish_failed_step(&registered, &context, &mut report, started, &resume).await;
+        return report;
+    }
     if let Err(error) = registered.executor.cleanup(&context).await {
         report
             .failures
@@ -826,7 +1557,30 @@ async fn run_step(
     }
     report.completed_at = Some(timestamp());
     report.duration_ms = elapsed_ms(started);
+    let _ =
+        persist_resume_phase(&resume, &registered, StepResumePhase::Terminal, &mut report).await;
     report
+}
+
+async fn persist_resume_phase(
+    resume: &Option<ResumeCoordinator>,
+    registered: &super::RegisteredStepType,
+    phase: StepResumePhase,
+    report: &mut WorkflowStepReport,
+) -> bool {
+    let Some(resume) = resume else {
+        return true;
+    };
+    if let Err(error) = resume
+        .persist_step(phase, registered.descriptor.replay_policy, report.clone())
+        .await
+    {
+        report
+            .failures
+            .push(step_failure(WorkflowFailurePhase::Persist, error));
+        return false;
+    }
+    true
 }
 
 fn apply_execution(
@@ -876,6 +1630,7 @@ async fn finish_failed_step(
     context: &StepExecutorContext,
     report: &mut WorkflowStepReport,
     started: Instant,
+    resume: &Option<ResumeCoordinator>,
 ) {
     if let Err(error) = registered.executor.cleanup(context).await {
         report
@@ -889,6 +1644,7 @@ async fn finish_failed_step(
     };
     report.completed_at = Some(timestamp());
     report.duration_ms = elapsed_ms(started);
+    let _ = persist_resume_phase(resume, registered, StepResumePhase::Terminal, report).await;
 }
 
 fn validate_outputs(
@@ -1756,6 +2512,7 @@ mod tests {
             run_id: "run".into(),
             attempt_id: "attempt".into(),
             node: node("producer", vec![], true),
+            replay_policy: ReplayPolicy::Idempotent,
             inputs: BTreeMap::new(),
             output_dir: output.path().to_path_buf(),
             cancellation,
@@ -1811,5 +2568,356 @@ mod tests {
         );
         assert!(criteria[0].score.is_none());
         assert!(criteria[0].summary.contains("branch condition"));
+    }
+
+    fn digest(character: char) -> String {
+        format!("sha256:{}", character.to_string().repeat(64))
+    }
+
+    fn resume_identity(
+        definition: &WorkflowDefinitionV1,
+        catalog: &StepCatalog,
+    ) -> WorkflowResumeIdentityV1 {
+        WorkflowResumeIdentityV1 {
+            execution_id: "execution-1".into(),
+            scenario_id: definition.id.clone(),
+            scenario_contract_sha256: digest('1'),
+            workflow_id: definition.id.clone(),
+            workflow_sha256: definition.canonical_sha256().unwrap(),
+            catalog_sha256: catalog.canonical_sha256().unwrap(),
+            policy_sha256: digest('2'),
+            plan_sha256: digest('3'),
+            system_identity_sha256: digest('4'),
+            model: "test-model".into(),
+            provider: "test-provider".into(),
+        }
+    }
+
+    fn resume_request(
+        output_dir: &Path,
+        cleanup: Arc<dyn WorkflowCleanupHook>,
+    ) -> WorkflowExecutionRequest {
+        let (_sender, cancellation) = watch::channel(false);
+        WorkflowExecutionRequest {
+            output_dir: output_dir.to_path_buf(),
+            run_id: "run-1".into(),
+            attempt_id: Some("attempt-1".into()),
+            attempt_number: 1,
+            cancellation,
+            cleanup_hook: cleanup,
+        }
+    }
+
+    fn one_node_definition() -> WorkflowDefinitionV1 {
+        WorkflowDefinitionV1 {
+            schema_version: 1,
+            id: "resume.test".into(),
+            scenario_version: 1,
+            description: "resumable workflow".into(),
+            limits: WorkflowLimits::default(),
+            nodes: vec![node("work", vec![], true)],
+            criteria: Vec::new(),
+        }
+    }
+
+    fn seed_interrupted_state(
+        state_root: &Path,
+        definition: &WorkflowDefinitionV1,
+        catalog: &StepCatalog,
+        replay_policy: ReplayPolicy,
+    ) {
+        let mut report = WorkflowStepReport::pending(&definition.nodes[0]);
+        report.status = WorkflowStepStatus::Running;
+        report.started_at = Some(timestamp());
+        let identity = resume_identity(definition, catalog);
+        let state = WorkflowResumeStateV1 {
+            schema_version: WORKFLOW_RESUME_SCHEMA_VERSION,
+            sequence: 1,
+            identity,
+            run_id: "run-1".into(),
+            attempt_id: "attempt-1".into(),
+            updated_at: timestamp(),
+            disposition: ResumeDisposition::Active,
+            explicit_cancellation: false,
+            cleanup_started: false,
+            cleanup_completed: false,
+            reconciliation_node_id: None,
+            reconciliation_reason: None,
+            final_report: None,
+            plan_revisions: Vec::new(),
+            steps: BTreeMap::from([(
+                "work".into(),
+                WorkflowResumeStepV1 {
+                    phase: StepResumePhase::Running,
+                    replay_policy,
+                    report,
+                },
+            )]),
+        };
+        WorkflowResumeStore::new(state_root, "execution-1", "run-1", "attempt-1")
+            .unwrap()
+            .persist(&state)
+            .unwrap();
+    }
+
+    fn compensable_catalog(active: Arc<AtomicUsize>) -> StepCatalog {
+        let mut catalog = StepCatalog::new();
+        catalog
+            .register(
+                StepTypeDescriptor {
+                    id: "test.delay".into(),
+                    version: 1,
+                    description: "compensable step".into(),
+                    config_schema: json!({"type": "object", "additionalProperties": false}),
+                    inputs: BTreeMap::new(),
+                    outputs: BTreeMap::from([(
+                        "ok".into(),
+                        StepPortDescriptor {
+                            kind: PortValueKind::Boolean,
+                            optional: false,
+                            control_source: Some(ControlSource::Deterministic),
+                        },
+                    )]),
+                    capabilities: Vec::new(),
+                    required_functions: Vec::new(),
+                    replay_policy: ReplayPolicy::Compensable,
+                    operational_kind: StepOperationalKind::Product,
+                },
+                Arc::new(Delayed {
+                    active,
+                    maximum: Arc::new(AtomicUsize::new(0)),
+                }),
+            )
+            .unwrap();
+        catalog
+    }
+
+    #[tokio::test]
+    async fn completed_resume_state_is_returned_without_running_cleanup_twice() {
+        let output = tempfile::tempdir().unwrap();
+        let state_root = tempfile::tempdir().unwrap();
+        let catalog = Arc::new(catalog(
+            Arc::new(AtomicUsize::new(0)),
+            Arc::new(AtomicUsize::new(0)),
+        ));
+        let definition = one_node_definition();
+        let identity = resume_identity(&definition, &catalog);
+        let cleanup_count = Arc::new(AtomicUsize::new(0));
+        let outcome = execute_resumable_workflow(
+            &definition,
+            catalog.clone(),
+            resume_request(
+                output.path(),
+                Arc::new(CountingWorkflowCleanup(cleanup_count.clone())),
+            ),
+            ResumableWorkflowExecutionRequest {
+                state_root: state_root.path().to_path_buf(),
+                identity: identity.clone(),
+                plan_revisions: Vec::new(),
+                resume_existing: false,
+            },
+        )
+        .await
+        .unwrap();
+        assert!(matches!(outcome, ResumableWorkflowOutcome::Completed(_)));
+        assert_eq!(cleanup_count.load(Ordering::SeqCst), 1);
+
+        let outcome = execute_resumable_workflow(
+            &definition,
+            catalog,
+            resume_request(
+                output.path(),
+                Arc::new(CountingWorkflowCleanup(cleanup_count.clone())),
+            ),
+            ResumableWorkflowExecutionRequest {
+                state_root: state_root.path().to_path_buf(),
+                identity,
+                plan_revisions: Vec::new(),
+                resume_existing: true,
+            },
+        )
+        .await
+        .unwrap();
+        assert!(matches!(outcome, ResumableWorkflowOutcome::Completed(_)));
+        assert_eq!(cleanup_count.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn interrupted_idempotent_step_reconciles_to_retry_safe() {
+        let output = tempfile::tempdir().unwrap();
+        let state_root = tempfile::tempdir().unwrap();
+        let active = Arc::new(AtomicUsize::new(0));
+        let catalog = Arc::new(catalog(active, Arc::new(AtomicUsize::new(0))));
+        let definition = one_node_definition();
+        seed_interrupted_state(
+            state_root.path(),
+            &definition,
+            &catalog,
+            ReplayPolicy::Idempotent,
+        );
+        let outcome = execute_resumable_workflow(
+            &definition,
+            catalog.clone(),
+            resume_request(output.path(), Arc::new(NoopWorkflowCleanupHook)),
+            ResumableWorkflowExecutionRequest {
+                state_root: state_root.path().to_path_buf(),
+                identity: resume_identity(&definition, &catalog),
+                plan_revisions: Vec::new(),
+                resume_existing: true,
+            },
+        )
+        .await
+        .unwrap();
+        assert!(matches!(outcome, ResumableWorkflowOutcome::Completed(_)));
+    }
+
+    #[tokio::test]
+    async fn interrupted_compensable_step_never_blindly_retries() {
+        let output = tempfile::tempdir().unwrap();
+        let state_root = tempfile::tempdir().unwrap();
+        let active = Arc::new(AtomicUsize::new(0));
+        let catalog = Arc::new(compensable_catalog(active.clone()));
+        let definition = one_node_definition();
+        seed_interrupted_state(
+            state_root.path(),
+            &definition,
+            &catalog,
+            ReplayPolicy::Compensable,
+        );
+        let cleanup_count = Arc::new(AtomicUsize::new(0));
+        let outcome = execute_resumable_workflow(
+            &definition,
+            catalog.clone(),
+            resume_request(
+                output.path(),
+                Arc::new(CountingWorkflowCleanup(cleanup_count.clone())),
+            ),
+            ResumableWorkflowExecutionRequest {
+                state_root: state_root.path().to_path_buf(),
+                identity: resume_identity(&definition, &catalog),
+                plan_revisions: Vec::new(),
+                resume_existing: true,
+            },
+        )
+        .await
+        .unwrap();
+        assert!(matches!(
+            outcome,
+            ResumableWorkflowOutcome::NeedsReconciliation(_)
+        ));
+        assert_eq!(active.load(Ordering::SeqCst), 0);
+        assert_eq!(cleanup_count.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn explicit_cancellation_is_terminal_and_never_resumed() {
+        let output = tempfile::tempdir().unwrap();
+        let state_root = tempfile::tempdir().unwrap();
+        let catalog = Arc::new(cancellable_catalog(
+            Arc::new(AtomicUsize::new(0)),
+            Arc::new(AtomicUsize::new(0)),
+        ));
+        let mut definition = one_node_definition();
+        definition.nodes[0].step_type = "test.cancellable".into();
+        let identity = resume_identity(&definition, &catalog);
+        let cleanup_count = Arc::new(AtomicUsize::new(0));
+        let (sender, cancellation) = watch::channel(false);
+        let execution = execute_resumable_workflow(
+            &definition,
+            catalog.clone(),
+            WorkflowExecutionRequest {
+                output_dir: output.path().to_path_buf(),
+                run_id: "run-1".into(),
+                attempt_id: Some("attempt-1".into()),
+                attempt_number: 1,
+                cancellation,
+                cleanup_hook: Arc::new(CountingWorkflowCleanup(cleanup_count.clone())),
+            },
+            ResumableWorkflowExecutionRequest {
+                state_root: state_root.path().to_path_buf(),
+                identity: identity.clone(),
+                plan_revisions: Vec::new(),
+                resume_existing: false,
+            },
+        );
+        let cancel = async move {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+            sender.send(true).unwrap();
+        };
+        let (outcome, _) = tokio::join!(execution, cancel);
+        assert!(matches!(
+            outcome.unwrap(),
+            ResumableWorkflowOutcome::ExplicitlyCancelled
+        ));
+        assert_eq!(cleanup_count.load(Ordering::SeqCst), 1);
+
+        let outcome = execute_resumable_workflow(
+            &definition,
+            catalog,
+            resume_request(
+                output.path(),
+                Arc::new(CountingWorkflowCleanup(cleanup_count.clone())),
+            ),
+            ResumableWorkflowExecutionRequest {
+                state_root: state_root.path().to_path_buf(),
+                identity,
+                plan_revisions: Vec::new(),
+                resume_existing: true,
+            },
+        )
+        .await
+        .unwrap();
+        assert!(matches!(
+            outcome,
+            ResumableWorkflowOutcome::ExplicitlyCancelled
+        ));
+        assert_eq!(cleanup_count.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn interrupted_cleanup_is_not_invoked_a_second_time() {
+        let output = tempfile::tempdir().unwrap();
+        let state_root = tempfile::tempdir().unwrap();
+        let catalog = Arc::new(catalog(
+            Arc::new(AtomicUsize::new(0)),
+            Arc::new(AtomicUsize::new(0)),
+        ));
+        let definition = one_node_definition();
+        seed_interrupted_state(
+            state_root.path(),
+            &definition,
+            &catalog,
+            ReplayPolicy::Idempotent,
+        );
+        let identity = resume_identity(&definition, &catalog);
+        let store =
+            WorkflowResumeStore::new(state_root.path(), "execution-1", "run-1", "attempt-1")
+                .unwrap();
+        let mut state = store.load(&identity).unwrap().unwrap();
+        state.cleanup_started = true;
+        state.advance();
+        store.persist(&state).unwrap();
+        let cleanup_count = Arc::new(AtomicUsize::new(0));
+        let outcome = execute_resumable_workflow(
+            &definition,
+            catalog,
+            resume_request(
+                output.path(),
+                Arc::new(CountingWorkflowCleanup(cleanup_count.clone())),
+            ),
+            ResumableWorkflowExecutionRequest {
+                state_root: state_root.path().to_path_buf(),
+                identity,
+                plan_revisions: Vec::new(),
+                resume_existing: true,
+            },
+        )
+        .await
+        .unwrap();
+        assert!(matches!(
+            outcome,
+            ResumableWorkflowOutcome::NeedsReconciliation(_)
+        ));
+        assert_eq!(cleanup_count.load(Ordering::SeqCst), 0);
     }
 }

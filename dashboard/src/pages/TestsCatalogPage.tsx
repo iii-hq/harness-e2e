@@ -44,6 +44,106 @@ const lifecyclePresentation: Record<
   },
 }
 
+const complexityTierLabels = {
+  l0_atomic: 'L0 atomic',
+  l1_sequential: 'L1 sequential',
+  l2_stateful: 'L2 stateful',
+  l3_concurrent: 'L3 concurrent',
+  l4_coordinated: 'L4 coordinated',
+  l5_adaptive: 'L5 adaptive',
+} as const
+
+export function catalogComplexityPresentation(row: TestCatalogRow) {
+  if (!row.complexity) return { value: 'Not declared', detail: null }
+  return {
+    value: complexityTierLabels[row.complexity.tier],
+    detail:
+      row.complexity.method === 'capability_v2'
+        ? 'capability v2'
+        : row.complexity.method === 'legacy_v1'
+          ? 'legacy v1'
+          : null,
+  }
+}
+
+export function catalogHorizonPresentation(row: TestCatalogRow) {
+  const horizon = row.characterization?.human_horizon
+  const min = horizon?.min_minutes
+  const max = horizon?.max_minutes
+  if (min === undefined || max === undefined) {
+    return { value: 'Unknown', detail: null }
+  }
+  const value = min === max ? `${min} min` : `${min}–${max} min`
+  return {
+    value,
+    detail:
+      horizon?.basis === 'measured'
+        ? 'measured'
+        : horizon?.basis === 'author_estimate'
+          ? 'author estimate'
+          : null,
+  }
+}
+
+export function catalogRealismPresentation(row: TestCatalogRow) {
+  const realism = row.characterization?.realism
+  const value =
+    realism?.execution === 'realistic_simulator'
+      ? 'Realistic simulator'
+      : realism?.execution === 'frozen_real_artifact'
+        ? 'Frozen real artifact'
+        : realism?.execution === 'synthetic'
+          ? 'Synthetic'
+          : 'Not declared'
+  return {
+    value,
+    detail: realism?.shadow === 'read_only' ? 'read-only shadow' : null,
+  }
+}
+
+export function catalogCalibrationPresentation(row: TestCatalogRow) {
+  const maturity = row.calibration?.maturity
+  const sampleCount = row.calibration?.compatible_sample_count
+  const value =
+    maturity === 'tail_calibrated'
+      ? 'Tail calibrated'
+      : maturity === 'repeatable'
+        ? 'Repeatable'
+        : maturity === 'observed'
+          ? 'Observed'
+          : maturity === 'reference_verified'
+            ? 'Reference verified'
+            : 'Candidate'
+  return {
+    value,
+    detail:
+      sampleCount === undefined
+        ? null
+        : `${sampleCount} compatible sample${sampleCount === 1 ? '' : 's'}`,
+  }
+}
+
+function DimensionCell({
+  value,
+  detail,
+}: {
+  value: string
+  detail: string | null
+}) {
+  return (
+    <>
+      <span className="block text-xs text-[var(--color-ink-faint)]">
+        {value}
+      </span>
+      {detail ? (
+        <small className="block text-[11px] text-[var(--color-ink-ghost)]">
+          {detail}
+        </small>
+      ) : null}
+    </>
+  )
+}
+
 export function TestsCatalogPage() {
   const [bridge, setBridge] = useState<DashboardDataBridge | null>(null)
   const [data, setData] = useState<TestsListResponse | null>(null)
@@ -185,12 +285,16 @@ export function TestsCatalogPage() {
             </p>
           ) : (
             <div className="mt-3 overflow-x-auto">
-              <table className="w-full min-w-[48rem] border-collapse text-left [&_td]:border-0 [&_td]:px-3 [&_td]:py-2.5 [&_th]:border-0 [&_th]:px-3 [&_th]:py-2 [&_th]:font-mono [&_th]:text-[11px] [&_th]:font-medium [&_th]:uppercase [&_th]:tracking-[0.06em] [&_th]:text-[var(--color-ink-ghost)] [&_tbody_tr]:transition-colors [&_tbody_tr:hover]:bg-[var(--surface-soft)]">
+              <table className="w-full min-w-[82rem] border-collapse text-left [&_td]:border-0 [&_td]:px-3 [&_td]:py-2.5 [&_th]:border-0 [&_th]:px-3 [&_th]:py-2 [&_th]:font-mono [&_th]:text-[11px] [&_th]:font-medium [&_th]:uppercase [&_th]:tracking-[0.06em] [&_th]:text-[var(--color-ink-ghost)] [&_tbody_tr]:transition-colors [&_tbody_tr:hover]:bg-[var(--surface-soft)]">
                 <thead>
                   <tr>
                     <th scope="col">Test</th>
                     <th scope="col">Version</th>
                     <th scope="col">Lifecycle</th>
+                    <th scope="col">Complexity</th>
+                    <th scope="col">Human horizon</th>
+                    <th scope="col">Realism</th>
+                    <th scope="col">Calibration</th>
                     <th scope="col">Executions</th>
                     <th scope="col">
                       <span className="visually-hidden">History</span>
@@ -201,6 +305,10 @@ export function TestsCatalogPage() {
                   {rows.map((row) => {
                     const version = currentVersion(row)
                     const tone = lifecyclePresentation[row.lifecycle]
+                    const complexity = catalogComplexityPresentation(row)
+                    const horizon = catalogHorizonPresentation(row)
+                    const realism = catalogRealismPresentation(row)
+                    const calibration = catalogCalibrationPresentation(row)
                     return (
                       <tr key={row.test_id}>
                         <td data-label="Test">
@@ -229,6 +337,18 @@ export function TestsCatalogPage() {
                             />
                             {tone.label}
                           </span>
+                        </td>
+                        <td data-label="Complexity">
+                          <DimensionCell {...complexity} />
+                        </td>
+                        <td data-label="Human horizon">
+                          <DimensionCell {...horizon} />
+                        </td>
+                        <td data-label="Realism">
+                          <DimensionCell {...realism} />
+                        </td>
+                        <td data-label="Calibration">
+                          <DimensionCell {...calibration} />
                         </td>
                         <td data-label="Executions">
                           <span className="font-mono text-xs text-[var(--color-ink-faint)]">

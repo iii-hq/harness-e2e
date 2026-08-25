@@ -1,0 +1,21 @@
+name: Harness E2E weekly benchmark
+
+on:
+  schedule:
+    - cron: '41 5 * * 0'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: harness-e2e-weekly-benchmark
+  cancel-in-progress: false
+
+jobs:
+  weekly:
+    uses: ./.github/workflows/run-campaign.yml
+    with:
+      campaign: weekly
+      timeout_minutes: 480
+    secrets: inherit

@@ -1,0 +1,86 @@
+name: Engineering endurance benchmark
+
+on:
+  schedule:
+    - cron: '47 3 * * 6'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: engineering-endurance
+  cancel-in-progress: false
+
+jobs:
+  endurance:
+    if: endsWith(github.workflow_ref, '@refs/heads/main')
+    runs-on: [self-hosted, harness-e2e]
+    environment: harness-e2e-trusted
+    timeout-minutes: 240
+    env:
+      HARNESS_E2E_MODEL: ${{ vars.HARNESS_E2E_MODEL }}
+      HARNESS_E2E_PROVIDER: ${{ vars.HARNESS_E2E_PROVIDER }}
+      III_URL: ${{ vars.III_URL }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Build the trusted evaluator
+        run: cargo build --locked --release --bin harness-e2e
+      - name: Validate the endurance campaign
+        run: |
+          python3 scripts/run_e2e_campaign.py config/campaigns/endurance.json --validate-only
+          test -x /opt/iii-harness-e2e/archive-trusted-execution
+          test -n "${HARNESS_E2E_MODEL:-}"
+          test -n "${HARNESS_E2E_PROVIDER:-}"
+          test -n "${III_URL:-}"
+          test -n "${{ secrets.E2E_FIXTURE_GITHUB_TOKEN }}"
+      - name: Run until the capability boundary
+        id: benchmark
+        continue-on-error: true
+        run: |
+          execution_id="${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          python3 scripts/run_e2e_campaign.py config/campaigns/endurance.json \
+            --advisory \
+            --e2e-bin "$PWD/target/release/harness-e2e" \
+            --output-root "$PWD/endurance-results" \
+            --execution-id "$execution_id" \
+            --summary "$PWD/endurance-results/campaign-summary.json"
+      - name: Publish sanitized GitHub handoff
+        if: always()
+        env:
+          GH_TOKEN: ${{ secrets.E2E_FIXTURE_GITHUB_TOKEN }}
+        run: |
+          report=$(find endurance-results -type f -path '*/deliverables/*/engineering_endurance_report.json' -print -quit)
+          test -n "$report"
+          execution_id="${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          run_url="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+          python3 scripts/publish_engineering_endurance.py \
+            --execution-id "$execution_id" \
+            --report "$report" \
+            --run-url "$run_url" \
+            --output endurance-results/github-publication.json
+      - name: Archive trusted evidence
+        if: always()
+        run: |
+          summary="$PWD/endurance-results/campaign-summary.json"
+          test -f "$summary" || exit 0
+          archive=(/opt/iii-harness-e2e/archive-trusted-execution \
+            --execution-id "${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" \
+            --retention longitudinal \
+            --output "$PWD/endurance-results/archive-head.json")
+          while IFS= read -r evidence; do
+            archive+=(--include "$evidence")
+          done < <(find "$PWD/endurance-results" -type f ! -name archive-head.json -print)
+          "${archive[@]}"
+      - name: Retain diagnostic fallback
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: engineering-endurance-${{ github.run_id }}-${{ github.run_attempt }}
+          path: endurance-results
+          retention-days: 90
+          if-no-files-found: warn

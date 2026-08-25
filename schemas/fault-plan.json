@@ -34,10 +34,21 @@
   "additionalProperties": false,
   "definitions": {
     "ExpectedTerminalOutcome": {
-      "type": "string",
-      "enum": [
-        "recovered",
-        "cancelled"
+      "oneOf": [
+        {
+          "type": "string",
+          "enum": [
+            "recovered",
+            "cancelled"
+          ]
+        },
+        {
+          "description": "The subject is expected to finish WITHOUT a correct deliverable: a hard-gate-failed but structurally clean, fully cleaned-up, bounded run. A wrong-but-structural result is the expectation, so it classifies as `correct_recovery`; a passed deliverable means the perturbation failed to bite and is a benchmark infrastructure failure. Degraded profiles must not declare a cancellation rule and require canonical results.",
+          "type": "string",
+          "enum": [
+            "degraded"
+          ]
+        }
       ]
     },
     "FaultAction": {
@@ -87,6 +98,8 @@
       "enum": [
         "delay_call",
         "fail_first_attempt",
+        "malformed_result",
+        "throttle_burst",
         "duplicate_event",
         "child_timeout",
         "transient_disconnect",

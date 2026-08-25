@@ -250,19 +250,6 @@ pub(super) fn evidence_reason(bundle: &ValidationEvidenceBundle) -> String {
     )
 }
 
-pub(super) fn factual_failures(attempt: &ValidationAttempt, run_key: &str) -> String {
-    let facts = attempt
-        .probes
-        .iter()
-        .filter(|probe| probe.outcome != ProbeOutcome::Passed)
-        .map(|probe| format!("{} observed {}", probe.id, bounded_value(&probe.observed)))
-        .collect::<Vec<_>>();
-    format!(
-        "Todo validation failed for run {run_key}: {}. Inspect the facts, decide your own correction, test it, and report completion again.",
-        facts.join("; ")
-    )
-}
-
 pub(super) fn probe(
     id: &str,
     kind: &str,

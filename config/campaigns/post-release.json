@@ -1,0 +1,55 @@
+{
+  "kind": "harness-e2e-campaign",
+  "campaign_id": "post-release",
+  "lane": "release",
+  "failure_policy": "advisory",
+  "groups": [
+    {
+      "id": "release-core",
+      "execution_kind": "harness_turn",
+      "runs": 1,
+      "technical_retries": 0,
+      "scenarios": [
+        "tool_contract_recovery",
+        "cross_app_transaction",
+        "database_migration_recovery"
+      ]
+    },
+    {
+      "id": "release-policy-dialogue",
+      "execution_kind": "scripted_dialogue",
+      "runs": 1,
+      "technical_retries": 0,
+      "scenarios": [
+        "policy_bound_action"
+      ]
+    },
+    {
+      "id": "release-incident-adaptive",
+      "execution_kind": "adaptive_flow",
+      "runs": 1,
+      "technical_retries": 0,
+      "scenarios": [
+        "incident_response"
+      ]
+    },
+    {
+      "id": "release-train-recovery-adaptive",
+      "execution_kind": "adaptive_flow",
+      "runs": 1,
+      "technical_retries": 0,
+      "scenarios": [
+        "release_train_recovery"
+      ]
+    },
+    {
+      "id": "release-cross-repo-adaptive",
+      "execution_kind": "adaptive_flow",
+      "runs": 1,
+      "technical_retries": 0,
+      "scenarios": [
+        "cross_repo_contract_migration"
+      ]
+    }
+  ]
+}

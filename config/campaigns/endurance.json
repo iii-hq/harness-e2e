@@ -1,0 +1,17 @@
+{
+  "kind": "harness-e2e-campaign",
+  "campaign_id": "endurance",
+  "lane": "endurance",
+  "failure_policy": "advisory",
+  "groups": [
+    {
+      "id": "engineering-endurance",
+      "execution_kind": "harness_turn",
+      "runs": 1,
+      "technical_retries": 0,
+      "scenarios": [
+        "engineering_endurance_ladder"
+      ]
+    }
+  ]
+}

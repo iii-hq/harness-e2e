@@ -1,0 +1,9 @@
+{
+  "github_run_id": 424242,
+  "github_run_attempt": 2,
+  "tag": "workers/v0.21.8",
+  "exact_registry_version": "0.21.8",
+  "registry_latest": "0.21.8",
+  "release_operation_id": "promotion-fresh-001",
+  "workers_observed_version": "0.21.8"
+}

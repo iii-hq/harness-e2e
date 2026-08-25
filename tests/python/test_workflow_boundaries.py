@@ -1,3 +1,4 @@
+import json
 import pathlib
 import unittest
 
@@ -20,6 +21,34 @@ class WorkflowBoundaryTests(unittest.TestCase):
         self.assertIn("e2e::archive", (ROOT / "docs/fault-injection.md").read_text())
         self.assertNotIn("sudo ", workflow)
         self.assertNotIn("docker ", workflow)
+        self.assertNotIn("coordination.5", workflow)
+        self.assertFalse(
+            (ROOT / "config/profiles/weekly-l5-recovery.json").exists()
+        )
+        self.assertFalse(
+            (ROOT / "config/profiles/weekly-l5-cancellation.json").exists()
+        )
+
+    def test_l5_campaigns_are_advisory_isolated_and_bounded(self):
+        post_release = (ROOT / ".github/workflows/post-release.yml").read_text(
+            encoding="utf-8"
+        )
+        weekly = (ROOT / ".github/workflows/weekly.yml").read_text(encoding="utf-8")
+        self.assertIn("timeout_minutes: 360", post_release)
+        self.assertIn("timeout_minutes: 480", weekly)
+
+        for name in ("post-release.json", "weekly.json"):
+            manifest = json.loads(
+                (ROOT / "config/campaigns" / name).read_text(encoding="utf-8")
+            )
+            adaptive = [
+                group
+                for group in manifest["groups"]
+                if group["execution_kind"] == "adaptive_flow"
+            ]
+            self.assertEqual(len(adaptive), 3)
+            self.assertTrue(all(group["runs"] == 1 for group in adaptive))
+            self.assertTrue(all(group["technical_retries"] == 0 for group in adaptive))
 
     def test_canonical_gate_pins_and_authorizes_the_e2e_revision(self):
         workflow = (ROOT / ".github/workflows/canonical-gate.yml").read_text(
@@ -29,6 +58,35 @@ class WorkflowBoundaryTests(unittest.TestCase):
         self.assertIn("ref: ${{ inputs.e2e_revision }}", workflow)
         self.assertIn("compare/$E2E_REVISION...$default_sha", workflow)
         self.assertIn("/opt/iii-harness-e2e/resolve-cutover-evidence", workflow)
+
+    def test_daily_campaign_uses_a_protected_disposable_engineering_fixture(self):
+        workflow = (ROOT / ".github/workflows/run-campaign.yml").read_text(
+            encoding="utf-8"
+        )
+        launcher = "/opt/iii-harness-e2e/engineering-ticket-fixture"
+        self.assertGreaterEqual(workflow.count(launcher), 3)
+        self.assertIn("HARNESS_E2E_ENGINEERING_TICKET_FIXTURE_PATH", workflow)
+        self.assertIn("prepare", workflow)
+        self.assertIn("cleanup --lease-id", workflow)
+        self.assertNotIn("git commit", workflow)
+
+    def test_endurance_keeps_github_authority_in_the_post_run_publisher(self):
+        workflow = (ROOT / ".github/workflows/engineering-endurance.yml").read_text(
+            encoding="utf-8"
+        )
+        scenario = (
+            ROOT / "src/scenarios/engineering_endurance_ladder.rs"
+        ).read_text(encoding="utf-8")
+        publisher = (
+            ROOT / "scripts/publish_engineering_endurance.py"
+        ).read_text(encoding="utf-8")
+        self.assertIn("timeout-minutes: 240", workflow)
+        self.assertIn("E2E_FIXTURE_GITHUB_TOKEN", workflow)
+        self.assertIn("Publish sanitized GitHub handoff", workflow)
+        self.assertIn('"github::*"', scenario)
+        self.assertIn('ALLOWED_REPOSITORY = "iii-hq/e2e-fixture"', publisher)
+        self.assertNotIn("E2E_FIXTURE_GITHUB_TOKEN", scenario)
+        self.assertNotIn("hidden_output", publisher.split("def public_projection", 1)[1].split("def create_blob", 1)[0])
 
 
 if __name__ == "__main__":

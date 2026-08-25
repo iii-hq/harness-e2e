@@ -646,9 +646,9 @@ mod tests {
     }
 
     fn spec_and_case() -> (ScenarioSpec, ScenarioCase) {
-        let materialized = ScenarioId::DirectAnswer
+        let materialized = ScenarioId::MinimalPath
             .materialize("audit-test", 7)
-            .expect("materialize direct_answer");
+            .expect("materialize minimal_path");
         (materialized.spec, materialized.case)
     }
 

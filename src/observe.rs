@@ -186,6 +186,7 @@ impl From<&SessionMetricsResponse> for MetricsProgress {
 
 struct ObserveMachine {
     root_session_id: String,
+    expected_turn_id: Option<String>,
     seen: HashSet<(String, String)>,
 }
 
@@ -197,9 +198,10 @@ enum EventKind {
 }
 
 impl ObserveMachine {
-    fn new(root_session_id: impl Into<String>) -> Self {
+    fn new(root_session_id: impl Into<String>, expected_turn_id: Option<&str>) -> Self {
         Self {
             root_session_id: root_session_id.into(),
+            expected_turn_id: expected_turn_id.map(str::to_owned),
             seen: HashSet::new(),
         }
     }
@@ -211,6 +213,14 @@ impl ObserveMachine {
         }
         if event.session_id != self.root_session_id {
             return EventKind::Unrelated;
+        }
+        if let Some(expected) = self.expected_turn_id.as_deref() {
+            if expected != event.turn_id {
+                return EventKind::Unrelated;
+            }
+            // Once the initiating turn has been observed, later completions
+            // from the same root are legitimate wake-driven resumptions.
+            self.expected_turn_id = None;
         }
         if event.session_id == self.root_session_id
             && matches!(event.status, TurnStatus::Failed | TurnStatus::Cancelled)
@@ -274,19 +284,31 @@ pub(crate) trait TreeObserver: Send + Sync {
     async fn stop_tree(&self, root_session_id: &str);
 }
 
+pub(crate) struct WaitOptions<'a> {
+    pub stuck_timeout: Duration,
+    pub sample_interval: Duration,
+    pub log_heartbeat: bool,
+    pub cancellation: Option<&'a watch::Receiver<bool>>,
+    pub expected_turn_id: Option<&'a str>,
+}
+
 pub(crate) async fn wait_until_complete<O: TreeObserver>(
     observer: &O,
     scenario_id: &str,
     root_session_id: &str,
-    stuck_timeout: Duration,
-    sample_interval: Duration,
-    log_heartbeat: bool,
-    cancellation: Option<&watch::Receiver<bool>>,
+    options: WaitOptions<'_>,
 ) -> Result<SessionMetricsResponse> {
+    let WaitOptions {
+        stuck_timeout,
+        sample_interval,
+        log_heartbeat,
+        cancellation,
+        expected_turn_id,
+    } = options;
     let started = tokio::time::Instant::now();
     let mut last_progress = started;
     let mut previous_metrics = None;
-    let mut machine = ObserveMachine::new(root_session_id);
+    let mut machine = ObserveMachine::new(root_session_id, expected_turn_id);
     let mut cancellation = cancellation.cloned();
 
     loop {
@@ -351,9 +373,19 @@ pub(crate) async fn wait_until_complete<O: TreeObserver>(
                 continue;
             }
         };
+        let mut current_turn_observed = machine.expected_turn_id.is_none();
         match observer.pull_root_status(root_session_id).await {
             Ok(Some(status)) => {
                 status_is_fatal(&status)?;
+                let expected_completed =
+                    machine.expected_turn_id.as_deref().is_some_and(|expected| {
+                        status.turn_id.as_deref() == Some(expected)
+                            && status.status == TurnStatus::Completed
+                    });
+                if expected_completed {
+                    machine.expected_turn_id = None;
+                    current_turn_observed = true;
+                }
                 if log_heartbeat {
                     tracing::info!(
                         scenario = scenario_id,
@@ -382,7 +414,7 @@ pub(crate) async fn wait_until_complete<O: TreeObserver>(
                 "could not sample E2E root status"
             ),
         }
-        if metrics.complete {
+        if metrics.complete && current_turn_observed {
             return Ok(metrics);
         }
         if totals_changed(&mut previous_metrics, &metrics) {
@@ -515,10 +547,13 @@ mod tests {
             observer,
             "direct_answer",
             "root",
-            stuck,
-            sample,
-            false,
-            cancellation,
+            WaitOptions {
+                stuck_timeout: stuck,
+                sample_interval: sample,
+                log_heartbeat: false,
+                cancellation,
+                expected_turn_id: None,
+            },
         )
         .await
     }
@@ -606,8 +641,8 @@ mod tests {
                 .collect::<Vec<_>>()
         );
 
-        let mut session_a = ObserveMachine::new("session-a");
-        let mut session_b = ObserveMachine::new("session-b");
+        let mut session_a = ObserveMachine::new("session-a", None);
+        let mut session_b = ObserveMachine::new("session-b", None);
         assert!(matches!(
             session_a.classify(&first_events[0]),
             EventKind::Progress
@@ -624,6 +659,80 @@ mod tests {
             session_b.classify(&second_events[1]),
             EventKind::Progress
         ));
+    }
+
+    #[test]
+    fn scripted_dialogue_ignores_completion_from_an_older_turn() {
+        let mut machine = ObserveMachine::new("session-a", Some("turn-current"));
+        assert!(matches!(
+            machine.classify(&event(
+                "session-a",
+                "turn-old",
+                TurnStatus::Completed,
+                true,
+                None
+            )),
+            EventKind::Unrelated
+        ));
+        assert!(matches!(
+            machine.classify(&event(
+                "session-a",
+                "turn-current",
+                TurnStatus::Completed,
+                true,
+                None
+            )),
+            EventKind::Progress
+        ));
+        assert!(matches!(
+            machine.classify(&event(
+                "session-a",
+                "turn-after-wake",
+                TurnStatus::Completed,
+                true,
+                None
+            )),
+            EventKind::Progress
+        ));
+    }
+
+    #[tokio::test]
+    async fn expected_initial_turn_allows_a_later_wake_turn_to_complete_the_tree() {
+        let observer = Injected::new(metrics(false, 1, 0), status(TurnStatus::Completed, true));
+        let wait_fut = wait_until_complete(
+            &observer,
+            "wake_flow",
+            "root",
+            WaitOptions {
+                stuck_timeout: Duration::from_secs(2),
+                sample_interval: Duration::from_millis(20),
+                log_heartbeat: false,
+                cancellation: None,
+                expected_turn_id: Some("turn-1"),
+            },
+        );
+        let drive = async {
+            observer.push(event(
+                "root",
+                "turn-older",
+                TurnStatus::Completed,
+                true,
+                None,
+            ));
+            observer.push(event("root", "turn-1", TurnStatus::Completed, false, None));
+            tokio::time::sleep(Duration::from_millis(30)).await;
+            observer.set_metrics(metrics(true, 3, 10));
+            observer.push(event(
+                "root",
+                "turn-after-wake",
+                TurnStatus::Completed,
+                true,
+                None,
+            ));
+        };
+        let (result, _) = tokio::join!(wait_fut, drive);
+        assert!(result.unwrap().complete);
+        assert!(!observer.stopped.load(Ordering::SeqCst));
     }
 
     #[tokio::test]

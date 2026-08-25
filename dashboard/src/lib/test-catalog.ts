@@ -186,6 +186,36 @@ export type TestCatalogRow = {
   test_id: string
   lifecycle: 'active' | 'retired' | 'never_run'
   current_version: number | null
+  complexity?: {
+    method?: 'legacy_v1' | 'capability_v2'
+    tier:
+      | 'l0_atomic'
+      | 'l1_sequential'
+      | 'l2_stateful'
+      | 'l3_concurrent'
+      | 'l4_coordinated'
+      | 'l5_adaptive'
+  } | null
+  characterization?: {
+    human_horizon?: {
+      min_minutes?: number
+      max_minutes?: number
+      basis?: 'unknown' | 'author_estimate' | 'measured'
+    }
+    realism?: {
+      execution?: 'synthetic' | 'realistic_simulator' | 'frozen_real_artifact'
+      shadow?: 'none' | 'read_only'
+    }
+  } | null
+  calibration?: {
+    maturity?:
+      | 'candidate'
+      | 'reference_verified'
+      | 'observed'
+      | 'repeatable'
+      | 'tail_calibrated'
+    compatible_sample_count?: number
+  } | null
   available_versions: Array<{
     version: number
     execution_count: number

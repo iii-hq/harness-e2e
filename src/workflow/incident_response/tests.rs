@@ -60,6 +60,26 @@ fn complete_definition_validates_against_descriptor_catalog() {
 }
 
 #[test]
+fn adaptive_contract_is_evidence_bound_and_materializes_the_full_recovery_graph() {
+    let contract = adaptive_contract().unwrap();
+    let materialized = contract
+        .policy
+        .materialize(
+            &contract.plans,
+            &contract.completed_node_ids,
+            &descriptor_catalog(),
+        )
+        .unwrap();
+    assert_eq!(contract.plans.len(), 2);
+    assert_eq!(contract.plans[1].evidence_ids, [INVALIDATION_EVIDENCE_ID]);
+    assert_eq!(
+        materialized.definition.nodes.len(),
+        definition().nodes.len()
+    );
+    assert_eq!(materialized.revisions.len(), 2);
+}
+
+#[test]
 fn descriptors_are_code_owned_and_have_no_configurable_function_ids() {
     let descriptors = descriptors_only().unwrap();
     assert_eq!(descriptors.len(), 12);

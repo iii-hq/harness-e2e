@@ -1,0 +1,23 @@
+{
+  "tag": {
+    "name": "workers/v0.21.8",
+    "version": "0.21.8",
+    "digest": "7a9a625855ee1ee6f27f4bff64989b46206a33e33bc2b8731b93c6fba49b36a7"
+  },
+  "run": {
+    "run_id": 424242,
+    "attempt": 1,
+    "status": "cancelled",
+    "required_assets": ["checksums.txt", "manifest.json", "worker-linux-amd64.tar.gz"],
+    "published_assets": ["manifest.json"]
+  },
+  "exact_version_published": false,
+  "latest_version": "0.20.4",
+  "latest_graph_compatible": false,
+  "stale_operation": {
+    "id": "promotion-stale-001",
+    "expected_latest": null,
+    "target_version": "0.21.8",
+    "status": "pending"
+  }
+}

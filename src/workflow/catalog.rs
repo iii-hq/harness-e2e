@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use tokio::sync::watch;
 
-use super::{PortValueKind, StepTypeDescriptor, WorkflowNodeV1};
+use super::{PortValueKind, ReplayPolicy, StepResumePhase, StepTypeDescriptor, WorkflowNodeV1};
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
@@ -104,9 +104,26 @@ pub struct StepExecutorContext {
     pub run_id: String,
     pub attempt_id: String,
     pub node: WorkflowNodeV1,
+    pub replay_policy: ReplayPolicy,
     pub inputs: BTreeMap<String, TypedPortValue>,
     pub output_dir: PathBuf,
     pub cancellation: watch::Receiver<bool>,
+}
+
+#[derive(Debug, Clone)]
+pub struct StepReconcileState {
+    pub phase: StepResumePhase,
+    pub outputs: BTreeMap<String, TypedPortValue>,
+    pub harness_session_id: Option<String>,
+    pub artifact_sha256: BTreeMap<String, String>,
+}
+
+#[derive(Debug, Clone)]
+pub enum StepReconcileOutcome {
+    Completed(StepExecutorOutput),
+    RetrySafe,
+    Compensated,
+    NeedsReconciliation { reason: String },
 }
 
 #[derive(Debug, Clone)]
@@ -143,6 +160,27 @@ pub trait StepExecutor: Send + Sync {
     }
 
     async fn execute(&self, context: StepExecutorContext) -> Result<StepExecutorOutput>;
+
+    /// Reconcile an interrupted step before considering another execution.
+    /// Idempotent steps are retry-safe by default. Compensable and
+    /// non-repeatable steps must prove a safe outcome explicitly.
+    async fn reconcile(
+        &self,
+        context: &StepExecutorContext,
+        _previous: &StepReconcileState,
+    ) -> Result<StepReconcileOutcome> {
+        Ok(match context.replay_policy {
+            ReplayPolicy::Idempotent => StepReconcileOutcome::RetrySafe,
+            ReplayPolicy::Compensable | ReplayPolicy::NonRepeatable => {
+                StepReconcileOutcome::NeedsReconciliation {
+                    reason: format!(
+                        "step '{}@{}' must implement reconciliation for {:?} replay",
+                        context.node.step_type, context.node.step_version, context.replay_policy
+                    ),
+                }
+            }
+        })
+    }
 
     async fn capture(
         &self,
@@ -244,6 +282,10 @@ impl StepCatalog {
                 .then_with(|| left.version.cmp(&right.version))
         });
         descriptors
+    }
+
+    pub fn canonical_sha256(&self) -> Result<String> {
+        crate::artifact::sha256_value(&self.descriptors())
     }
 }
 

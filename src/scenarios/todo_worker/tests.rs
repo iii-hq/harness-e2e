@@ -83,7 +83,7 @@ fn passing_bundle(contract: &TodoTaskContract) -> ValidationEvidenceBundle {
 }
 
 #[test]
-fn contract_is_run_scoped_and_self_validating() {
+fn contract_is_run_scoped_and_complete() {
     let contract = task_contract("ABC-123").unwrap();
     assert_eq!(contract.worker_name, "todo-e2e-ABC12300");
     assert!(contract.workspace_root.ends_with(&contract.worker_name));
@@ -93,12 +93,9 @@ fn contract_is_run_scoped_and_self_validating() {
 }
 
 #[test]
-fn self_validating_scenario_uses_unbounded_harness_tokens() {
-    let scenario = self_validating_scenario("ABC-123");
-    assert_eq!(scenario.execution.max_total_tokens, None);
-
-    let simple = simple_scenario("ABC-123");
-    assert_eq!(simple.execution.max_total_tokens, Some(600_000));
+fn simple_scenario_has_a_bounded_harness_budget() {
+    let scenario = simple_scenario("ABC-123");
+    assert_eq!(scenario.execution.max_total_tokens, Some(600_000));
 }
 
 #[test]

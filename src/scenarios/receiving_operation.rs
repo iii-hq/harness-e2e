@@ -14,7 +14,7 @@ use super::{
 };
 
 pub const ID: &str = "receiving_operation";
-const VERSION: u32 = 5;
+const VERSION: u32 = 6;
 const DATABASE_DELIVERABLE_ID: &str = "receiving_database";
 const COORDINATION_DELIVERABLE_ID: &str = "receiving_coordination";
 

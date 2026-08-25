@@ -1,0 +1,15 @@
+{
+  "kind": "engineering-endurance-case",
+  "version": 1,
+  "service": "append-only durable job queue",
+  "language": "python",
+  "production_paths": ["src/durable_queue.py"],
+  "protected_paths": [
+    ".harness-e2e/endurance-case.json",
+    "tests/test_durable_queue.py"
+  ],
+  "public_test": "python3 -m unittest discover -s tests -p 'test_*.py'",
+  "checkpoint_function": "provided in the run prompt",
+  "commit_policy": "one or more non-merge commits per accepted rung",
+  "network_policy": "forbidden"
+}

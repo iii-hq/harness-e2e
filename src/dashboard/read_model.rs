@@ -16,7 +16,9 @@ use crate::artifact;
 use crate::assessment::RunAssessmentContract;
 use crate::identity::StackIdentity;
 use crate::report::{E2eRunReport, E2eScenarioReport, RunStatus};
-use crate::scenarios::ScenarioId;
+use crate::scenarios::{
+    stable_seed, ComplexityClassification, ScenarioCharacterization, ScenarioId,
+};
 
 const DEFAULT_PAGE_SIZE: u16 = 25;
 
@@ -271,9 +273,21 @@ pub(super) struct TestCatalogRow {
     pub test_id: String,
     pub lifecycle: String,
     pub current_version: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub complexity: Option<ComplexityClassification>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub characterization: Option<ScenarioCharacterization>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub calibration: Option<CalibrationProjection>,
     pub available_versions: Vec<VersionDescriptor>,
     pub selected_version: Option<u32>,
     pub result: Option<TestVersionResult>,
+}
+
+#[derive(Debug, Clone, Serialize, JsonSchema)]
+pub(super) struct CalibrationProjection {
+    pub maturity: String,
+    pub compatible_sample_count: usize,
 }
 
 #[derive(Debug, Clone, Serialize, JsonSchema)]
@@ -331,6 +345,9 @@ struct TestVersionEntry {
 #[derive(Debug, Clone, Default)]
 struct TestEntry {
     current_version: Option<u32>,
+    current_classification: Option<ComplexityClassification>,
+    current_characterization: Option<ScenarioCharacterization>,
+    current_reference_verified: bool,
     versions: BTreeMap<u32, TestVersionEntry>,
 }
 
@@ -376,7 +393,7 @@ impl DashboardReadModel {
             summaries,
             cohorts: BTreeMap::new(),
             evaluated_versions: BTreeMap::new(),
-            tests: current_tests(),
+            tests: current_tests()?,
         };
         for run in &stored {
             model.index_run(run)?;
@@ -642,6 +659,13 @@ impl DashboardReadModel {
             test_id: test_id.into(),
             lifecycle: lifecycle.into(),
             current_version: entry.current_version,
+            complexity: entry.current_classification.clone(),
+            characterization: entry.current_characterization,
+            calibration: entry.current_version.and_then(|version| {
+                entry.versions.get(&version).map(|version| {
+                    calibration_projection(version, entry.current_reference_verified)
+                })
+            }),
             available_versions,
             selected_version,
             result,
@@ -877,20 +901,76 @@ impl DashboardReadModel {
     }
 }
 
-fn current_tests() -> BTreeMap<String, TestEntry> {
+fn current_tests() -> Result<BTreeMap<String, TestEntry>> {
     ScenarioId::ALL
         .iter()
         .map(|id| {
-            let spec = id.spec("dashboard-catalog");
-            (
+            let materialized = id.materialize("dashboard-catalog", stable_seed(id.as_str()))?;
+            Ok((
                 id.as_str().to_string(),
                 TestEntry {
-                    current_version: Some(spec.version),
-                    versions: BTreeMap::from([(spec.version, TestVersionEntry::default())]),
+                    current_version: Some(materialized.spec.version),
+                    current_classification: Some(materialized.case.complexity),
+                    current_characterization: Some(materialized.case.characterization),
+                    current_reference_verified: matches!(
+                        id,
+                        ScenarioId::IncidentResponse
+                            | ScenarioId::ReleaseTrainRecovery
+                            | ScenarioId::CrossRepoContractMigration
+                    ),
+                    versions: BTreeMap::from([(
+                        materialized.spec.version,
+                        TestVersionEntry::default(),
+                    )]),
                 },
-            )
+            ))
         })
         .collect()
+}
+
+type CalibrationGroupKey = (String, String, String, String, String);
+
+fn calibration_projection(
+    entry: &TestVersionEntry,
+    reference_verified: bool,
+) -> CalibrationProjection {
+    let compatible_sample_count =
+        largest_compatible_sample_group(entry.observations.iter().map(|observation| {
+            (
+                (
+                    observation.cohort_id.clone(),
+                    observation.case_id.clone(),
+                    observation.contract_sha256.clone(),
+                    observation.assessment_profile_sha256.clone(),
+                    observation.analyzer_profile_sha256.clone(),
+                ),
+                observation.runs.len(),
+            )
+        }));
+    CalibrationProjection {
+        maturity: calibration_maturity(compatible_sample_count, reference_verified).into(),
+        compatible_sample_count,
+    }
+}
+
+fn calibration_maturity(compatible_sample_count: usize, reference_verified: bool) -> &'static str {
+    match compatible_sample_count {
+        0 if reference_verified => "reference_verified",
+        0 => "candidate",
+        1..=4 => "observed",
+        5..=19 => "repeatable",
+        _ => "tail_calibrated",
+    }
+}
+
+fn largest_compatible_sample_group(
+    samples: impl IntoIterator<Item = (CalibrationGroupKey, usize)>,
+) -> usize {
+    let mut groups = BTreeMap::<CalibrationGroupKey, usize>::new();
+    for (key, sample_count) in samples {
+        *groups.entry(key).or_default() += sample_count;
+    }
+    groups.into_values().max().unwrap_or_default()
 }
 
 fn evaluated_version(
@@ -1506,4 +1586,107 @@ fn median(mut values: Vec<f64>) -> Option<f64> {
     } else {
         values[midpoint]
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::scenarios::{ComplexityMethod, ExecutionRealism};
+
+    fn calibration_key(suffix: &str) -> CalibrationGroupKey {
+        (
+            format!("cohort-{suffix}"),
+            format!("case-{suffix}"),
+            format!("contract-{suffix}"),
+            format!("assessment-{suffix}"),
+            format!("analyzer-{suffix}"),
+        )
+    }
+
+    #[test]
+    fn current_catalog_projects_materialized_classification_and_realism() {
+        let root = tempfile::tempdir().expect("temporary dashboard store should exist");
+        let model = DashboardReadModel::load(root.path())
+            .expect("current scenarios should materialize into the read model");
+        let response = model
+            .tests_list(TestsListRequest {
+                query: Some(ScenarioId::MinimalPath.as_str().into()),
+                ..TestsListRequest::default()
+            })
+            .expect("current catalog should be readable");
+        let minimal = response
+            .rows
+            .first()
+            .expect("minimal path should be registered");
+        assert_eq!(
+            minimal
+                .complexity
+                .as_ref()
+                .expect("classification should be projected")
+                .method,
+            ComplexityMethod::CapabilityV2
+        );
+        assert_eq!(
+            minimal
+                .characterization
+                .expect("characterization should be projected")
+                .realism
+                .execution,
+            ExecutionRealism::Synthetic
+        );
+        assert_eq!(
+            minimal
+                .calibration
+                .as_ref()
+                .expect("calibration should be projected")
+                .maturity,
+            "candidate"
+        );
+
+        let forensics = model
+            .tests_list(TestsListRequest {
+                query: Some(ScenarioId::GitRegressionForensics.as_str().into()),
+                ..TestsListRequest::default()
+            })
+            .expect("git forensics should be readable")
+            .rows
+            .into_iter()
+            .next()
+            .expect("git forensics should be registered");
+        assert_eq!(
+            forensics
+                .characterization
+                .expect("characterization should be projected")
+                .realism
+                .execution,
+            ExecutionRealism::FrozenRealArtifact
+        );
+    }
+
+    #[test]
+    fn calibration_uses_only_the_largest_compatible_sample_group() {
+        let primary = calibration_key("primary");
+        let secondary = calibration_key("secondary");
+        assert_eq!(
+            largest_compatible_sample_group([(primary.clone(), 3), (primary, 2), (secondary, 19),]),
+            19
+        );
+    }
+
+    #[test]
+    fn calibration_thresholds_do_not_label_observed_evidence_as_robust() {
+        for (sample_count, expected) in [
+            (0, "candidate"),
+            (1, "observed"),
+            (4, "observed"),
+            (5, "repeatable"),
+            (19, "repeatable"),
+            (20, "tail_calibrated"),
+        ] {
+            let maturity = calibration_maturity(sample_count, false);
+            assert_eq!(maturity, expected);
+            assert!(!maturity.contains("robust"));
+        }
+        assert_eq!(calibration_maturity(0, true), "reference_verified");
+    }
 }

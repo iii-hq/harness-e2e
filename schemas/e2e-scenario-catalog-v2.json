@@ -1,0 +1,590 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "ScenariosListResponse",
+  "type": "object",
+  "required": [
+    "catalog_sha256",
+    "runner",
+    "scenarios",
+    "schema"
+  ],
+  "properties": {
+    "catalog_sha256": {
+      "type": "string"
+    },
+    "runner": {
+      "$ref": "#/definitions/RunnerIdentity"
+    },
+    "scenarios": {
+      "type": "array",
+      "items": {
+        "$ref": "#/definitions/ScenarioDescriptor"
+      }
+    },
+    "schema": {
+      "type": "string"
+    }
+  },
+  "definitions": {
+    "ArtifactExpectation": {
+      "type": "object",
+      "required": [
+        "id",
+        "kind",
+        "max_size_bytes",
+        "media_type",
+        "schema"
+      ],
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "kind": {
+          "type": "string"
+        },
+        "max_size_bytes": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "media_type": {
+          "type": "string"
+        },
+        "schema": true
+      }
+    },
+    "ComplexityClassification": {
+      "type": "object",
+      "required": [
+        "profile",
+        "tier"
+      ],
+      "properties": {
+        "method": {
+          "default": "legacy_v1",
+          "allOf": [
+            {
+              "$ref": "#/definitions/ComplexityMethod"
+            }
+          ]
+        },
+        "profile": {
+          "$ref": "#/definitions/ComplexityProfile"
+        },
+        "tier": {
+          "$ref": "#/definitions/ComplexityTier"
+        }
+      }
+    },
+    "ComplexityMethod": {
+      "type": "string",
+      "enum": [
+        "legacy_v1",
+        "capability_v2"
+      ]
+    },
+    "ComplexityProfile": {
+      "type": "object",
+      "required": [
+        "ambiguity_level",
+        "artifact_count",
+        "coordination_edges",
+        "dependency_depth",
+        "external_systems",
+        "parallel_branches",
+        "planning_depth",
+        "state_transitions",
+        "validation_loops",
+        "wake_cycles"
+      ],
+      "properties": {
+        "agent_owned_decomposition": {
+          "default": false,
+          "type": "boolean"
+        },
+        "ambiguity_level": {
+          "type": "integer",
+          "format": "uint8",
+          "minimum": 0.0
+        },
+        "artifact_count": {
+          "type": "integer",
+          "format": "uint8",
+          "minimum": 0.0
+        },
+        "coherent_long_horizon": {
+          "default": false,
+          "type": "boolean"
+        },
+        "compensable_mutations": {
+          "default": 0,
+          "type": "integer",
+          "format": "uint8",
+          "minimum": 0.0
+        },
+        "coordination_edges": {
+          "type": "integer",
+          "format": "uint16",
+          "minimum": 0.0
+        },
+        "dependency_depth": {
+          "type": "integer",
+          "format": "uint8",
+          "minimum": 0.0
+        },
+        "durable_resume_cycles": {
+          "default": 0,
+          "type": "integer",
+          "format": "uint8",
+          "minimum": 0.0
+        },
+        "external_systems": {
+          "type": "integer",
+          "format": "uint8",
+          "minimum": 0.0
+        },
+        "material_invalidation_events": {
+          "default": 0,
+          "type": "integer",
+          "format": "uint8",
+          "minimum": 0.0
+        },
+        "parallel_branches": {
+          "type": "integer",
+          "format": "uint8",
+          "minimum": 0.0
+        },
+        "planning_depth": {
+          "type": "integer",
+          "format": "uint8",
+          "minimum": 0.0
+        },
+        "replan_loops": {
+          "default": 0,
+          "type": "integer",
+          "format": "uint8",
+          "minimum": 0.0
+        },
+        "state_transitions": {
+          "type": "integer",
+          "format": "uint16",
+          "minimum": 0.0
+        },
+        "validation_loops": {
+          "type": "integer",
+          "format": "uint8",
+          "minimum": 0.0
+        },
+        "wake_cycles": {
+          "type": "integer",
+          "format": "uint8",
+          "minimum": 0.0
+        }
+      }
+    },
+    "ComplexityTier": {
+      "type": "string",
+      "enum": [
+        "l0_atomic",
+        "l1_sequential",
+        "l2_stateful",
+        "l3_concurrent",
+        "l4_coordinated",
+        "l5_adaptive"
+      ]
+    },
+    "DeliverableContract": {
+      "type": "object",
+      "required": [
+        "artifacts",
+        "capture_before_cleanup",
+        "invariants",
+        "provenance_required"
+      ],
+      "properties": {
+        "artifacts": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/ArtifactExpectation"
+          }
+        },
+        "capture_before_cleanup": {
+          "type": "boolean"
+        },
+        "invariants": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/InvariantSpec"
+          }
+        },
+        "provenance_required": {
+          "type": "boolean"
+        }
+      }
+    },
+    "ExecutionPolicy": {
+      "type": "object",
+      "required": [
+        "max_turns",
+        "stuck_timeout_seconds"
+      ],
+      "properties": {
+        "max_output_tokens": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "max_total_tokens": {
+          "description": "Shared Harness token budget. `None` leaves the Harness budget unbounded for this scenario.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "max_turns": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0.0
+        },
+        "max_validation_retries": {
+          "description": "Optional per-session cap for post-turn validation denials. `None` preserves the Harness-configured default.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0.0
+        },
+        "stuck_timeout_seconds": {
+          "description": "Stop only after this many seconds without observable useful progress. Large scenarios have no fixed wall-clock deadline.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        }
+      }
+    },
+    "ExecutionRealism": {
+      "type": "string",
+      "enum": [
+        "synthetic",
+        "realistic_simulator",
+        "frozen_real_artifact"
+      ]
+    },
+    "HumanHorizon": {
+      "type": "object",
+      "properties": {
+        "basis": {
+          "default": "unknown",
+          "allOf": [
+            {
+              "$ref": "#/definitions/HumanHorizonBasis"
+            }
+          ]
+        },
+        "max_minutes": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0.0
+        },
+        "min_minutes": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0.0
+        }
+      }
+    },
+    "HumanHorizonBasis": {
+      "type": "string",
+      "enum": [
+        "unknown",
+        "author_estimate",
+        "measured"
+      ]
+    },
+    "InvariantSpec": {
+      "type": "object",
+      "required": [
+        "description",
+        "id"
+      ],
+      "properties": {
+        "description": {
+          "type": "string"
+        },
+        "id": {
+          "type": "string"
+        }
+      }
+    },
+    "RunnerIdentity": {
+      "type": "object",
+      "required": [
+        "name",
+        "revision",
+        "version"
+      ],
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "revision": {
+          "type": "string"
+        },
+        "version": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "ScenarioCharacterization": {
+      "type": "object",
+      "properties": {
+        "human_horizon": {
+          "default": {
+            "basis": "unknown"
+          },
+          "allOf": [
+            {
+              "$ref": "#/definitions/HumanHorizon"
+            }
+          ]
+        },
+        "realism": {
+          "default": {
+            "execution": "synthetic",
+            "shadow": "none"
+          },
+          "allOf": [
+            {
+              "$ref": "#/definitions/ScenarioRealism"
+            }
+          ]
+        }
+      }
+    },
+    "ScenarioDescriptor": {
+      "type": "object",
+      "required": [
+        "case_id",
+        "characterization",
+        "classification",
+        "complexity",
+        "contract_sha256",
+        "deliverable_contract",
+        "inputs_sha256",
+        "required_capabilities",
+        "resource_envelope",
+        "scenario_id",
+        "scenario_version",
+        "seed"
+      ],
+      "properties": {
+        "case_id": {
+          "type": "string"
+        },
+        "characterization": {
+          "$ref": "#/definitions/ScenarioCharacterization"
+        },
+        "classification": {
+          "$ref": "#/definitions/ComplexityClassification"
+        },
+        "complexity": {
+          "$ref": "#/definitions/ComplexityProfile"
+        },
+        "contract_sha256": {
+          "type": "string"
+        },
+        "deliverable_contract": {
+          "$ref": "#/definitions/DeliverableContract"
+        },
+        "inputs_sha256": {
+          "type": "string"
+        },
+        "required_capabilities": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "resource_envelope": {
+          "$ref": "#/definitions/ScenarioResourceEnvelope"
+        },
+        "scenario_id": {
+          "$ref": "#/definitions/ScenarioId"
+        },
+        "scenario_version": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0.0
+        },
+        "seed": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        }
+      }
+    },
+    "ScenarioId": {
+      "type": "string",
+      "enum": [
+        "sequential_pipeline",
+        "context_pressure",
+        "persistent_state",
+        "shell_coder_sandbox",
+        "research_pipeline",
+        "fanout_ladder",
+        "security_review",
+        "incident_response",
+        "todo_worker_simple",
+        "todo_worker_planned",
+        "engineering_ticket",
+        "engineering_ticket_git_handoff",
+        "engineering_endurance_ladder",
+        "git_regression_forensics",
+        "mechanical_reaction",
+        "timer_wake",
+        "receiving_operation",
+        "validation_loop",
+        "subagent_validation",
+        "subagent_validation_failure",
+        "validation_self_repair",
+        "validation_scope_enforcement",
+        "validation_chain",
+        "secret_hygiene",
+        "prompt_injection_resilience",
+        "moving_target",
+        "poison_message",
+        "cleanup_under_failure",
+        "depth_ladder",
+        "quorum_fan_in",
+        "contention_ledger",
+        "minimal_path",
+        "wake_chain_soak",
+        "chess_engine_build",
+        "chess_play_ladder",
+        "trend_blog",
+        "tool_contract_recovery",
+        "policy_bound_action",
+        "cross_app_transaction",
+        "database_migration_recovery",
+        "performance_regression",
+        "browser_cross_site",
+        "release_train_recovery",
+        "cross_repo_contract_migration"
+      ]
+    },
+    "ScenarioRealism": {
+      "type": "object",
+      "properties": {
+        "execution": {
+          "default": "synthetic",
+          "allOf": [
+            {
+              "$ref": "#/definitions/ExecutionRealism"
+            }
+          ]
+        },
+        "shadow": {
+          "default": "none",
+          "allOf": [
+            {
+              "$ref": "#/definitions/ShadowMode"
+            }
+          ]
+        }
+      }
+    },
+    "ScenarioResourceEnvelope": {
+      "type": "object",
+      "required": [
+        "execution"
+      ],
+      "properties": {
+        "execution": {
+          "$ref": "#/definitions/ExecutionPolicy"
+        },
+        "workflow": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/WorkflowResourceEnvelope"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      }
+    },
+    "ShadowMode": {
+      "type": "string",
+      "enum": [
+        "none",
+        "read_only"
+      ]
+    },
+    "WorkflowResourceEnvelope": {
+      "type": "object",
+      "required": [
+        "max_nodes",
+        "max_parallel",
+        "step_timeout_seconds",
+        "technical_retries",
+        "workflow_timeout_seconds"
+      ],
+      "properties": {
+        "max_cost_usd": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double"
+        },
+        "max_nodes": {
+          "type": "integer",
+          "format": "uint16",
+          "minimum": 0.0
+        },
+        "max_parallel": {
+          "type": "integer",
+          "format": "uint16",
+          "minimum": 0.0
+        },
+        "max_total_tokens": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "step_timeout_seconds": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "technical_retries": {
+          "type": "integer",
+          "format": "uint8",
+          "minimum": 0.0
+        },
+        "workflow_timeout_seconds": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        }
+      }
+    }
+  }
+}

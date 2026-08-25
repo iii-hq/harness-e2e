@@ -10,7 +10,7 @@ use serde_json::json;
 
 use super::RunRequest;
 use crate::artifact;
-use crate::scenarios::{ScenarioExecutionKind, ScenarioId};
+use crate::scenarios::ScenarioId;
 
 const PLAN_SCHEMA_VERSION: u32 = 1;
 
@@ -457,9 +457,9 @@ fn validate_values(request: &PlanCreateRequest) -> Result<()> {
     if request.technical_retries > 0
         && selected
             .iter()
-            .any(|scenario| scenario.execution_kind() == ScenarioExecutionKind::CompositeFlow)
+            .any(|scenario| !scenario.execution_kind().replay_safe())
     {
-        bail!("composite scenarios with non-repeatable steps require technical_retries=0");
+        bail!("non-replayable scenarios require technical_retries=0");
     }
     Ok(())
 }
@@ -521,7 +521,7 @@ mod tests {
             provider: "provider".into(),
             judge_model: "judge".into(),
             judge_provider: "judge-provider".into(),
-            scenarios: vec![ScenarioId::DirectAnswer.as_str().into()],
+            scenarios: vec![ScenarioId::MinimalPath.as_str().into()],
             runs: 1,
             technical_retries: 1,
             seed: None,
@@ -535,10 +535,13 @@ mod tests {
         assert!(!plan.locked);
         assert_eq!(plan.runs, 1);
         assert_eq!(plan.scenarios.len(), 1);
-        assert_eq!(plan.scenarios[0].scenario_version, 2);
+        assert_eq!(
+            plan.scenarios[0].scenario_version,
+            ScenarioId::MinimalPath.spec("version-check").version
+        );
         assert_eq!(
             plan.scenarios[0].seed,
-            ScenarioId::DirectAnswer.canonical_seed()
+            ScenarioId::MinimalPath.canonical_seed()
         );
         assert!(plan.baseline_execution_id.is_none());
     }
@@ -559,11 +562,7 @@ mod tests {
 
     #[test]
     fn todo_worker_plans_are_admitted_by_the_dashboard() {
-        for scenario in [
-            ScenarioId::TodoWorkerSimple,
-            ScenarioId::TodoWorkerPlanned,
-            ScenarioId::TodoWorkerSelfValidating,
-        ] {
+        for scenario in [ScenarioId::TodoWorkerSimple, ScenarioId::TodoWorkerPlanned] {
             let mut request = request();
             request.scenarios = vec![scenario.as_str().into()];
             request.technical_retries = 0;

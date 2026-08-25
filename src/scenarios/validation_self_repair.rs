@@ -23,7 +23,7 @@ use crate::context::E2eContext;
 
 use super::assessment::{self, AssessmentSpec};
 use super::common;
-use super::custom_validator::{HookEnvelope, HookVerdict};
+use super::validation_hook::{HookEnvelope, HookVerdict};
 use super::validation_loop::suffix;
 use super::{
     CapturedDeliverable, CleanupFuture, DeliverableCaptureFuture, EvaluationFuture,
@@ -32,7 +32,7 @@ use super::{
 };
 
 pub const ID: &str = "validation_self_repair";
-const VERSION: u32 = 4;
+const VERSION: u32 = 5;
 const DELIVERABLE_ID: &str = "repaired_dataset";
 
 const HOOK_TYPE: &str = "harness::hook::post-turn";

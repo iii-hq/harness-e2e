@@ -4,16 +4,15 @@
 //! the scenario constructors and the workflow consumes the contract/evidence
 //! types. The implementation details live in focused sibling modules.
 
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
 use anyhow::{bail, Context, Result};
 use futures_util::future::join_all;
 use iii_sdk::protocol::TriggerRequest;
-use iii_sdk::{IIIClient, RegisterFunction};
+use iii_sdk::IIIClient;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -23,8 +22,6 @@ use crate::context::E2eContext;
 use crate::report::EvaluationDimension;
 
 use super::assessment::{self, AssessmentSpec};
-use super::common;
-use super::custom_validator::{HookEnvelope, HookVerdict};
 use super::{
     ArtifactExpectation, CapturedDeliverable, CapturedDeliverableContent, CapturedInvariant,
     CleanupFuture, ComplexityProfile, CriterionSpec, DeliverableCaptureFuture, DeliverableContract,
@@ -33,14 +30,11 @@ use super::{
 };
 
 pub const SIMPLE_ID: &str = "todo_worker_simple";
-pub const SELF_VALIDATING_ID: &str = "todo_worker_self_validating";
 pub const PLANNED_ID: &str = "todo_worker_planned";
-pub const VERSION: u32 = 1;
+pub const VERSION: u32 = 2;
 pub const VALIDATION_ASSET_ID: &str = "todo_validation_evidence";
 pub const RAW_PLAN_FILE: &str = "validation-plan.json";
 pub const OWNER_MARKER: &str = ".harness-e2e-owner";
-pub const HOOK_TYPE: &str = "harness::hook::post-turn";
-
 pub const REQUIRED_PROBES: [&str; 5] = [
     "manifest_valid",
     "worker_live",
@@ -66,63 +60,6 @@ const SIMPLE_ASSESSMENTS: &[AssessmentSpec] = &[
         10,
         "The validation bundle is complete, bounded, and bound to the observed candidate.",
         EvaluationDimension::Deliverable,
-    ),
-];
-
-const SELF_ASSESSMENTS: &[AssessmentSpec] = &[
-    AssessmentSpec::hard_gated_in(
-        "manifest_valid",
-        8,
-        "The generated worker manifest satisfies the fixed contract.",
-        EvaluationDimension::Deliverable,
-    ),
-    AssessmentSpec::hard_gated("worker_live", 8, "The worker is installed and running."),
-    AssessmentSpec::hard_gated(
-        "function_surface",
-        8,
-        "The exact Todo function surface is live.",
-    ),
-    AssessmentSpec::hard_gated(
-        "todo_crud_isolated",
-        20,
-        "The final candidate passes isolated CRUD behavior.",
-    ),
-    AssessmentSpec::hard_gated(
-        "todo_invalid_contracts",
-        8,
-        "The final candidate rejects invalid inputs.",
-    ),
-    AssessmentSpec::hard_gated_in(
-        "evidence_complete",
-        8,
-        "The final validation evidence is complete.",
-        EvaluationDimension::Deliverable,
-    ),
-    AssessmentSpec::hard_gated(
-        "auditor_bound_once",
-        8,
-        "Exactly one runner-owned post-turn auditor was bound.",
-    ),
-    AssessmentSpec::hard_gated(
-        "validation_attempt_observed",
-        8,
-        "At least one completion attempt was independently audited.",
-    ),
-    AssessmentSpec::hard_gated_in(
-        "attempts_persisted_before_feedback",
-        8,
-        "Every audit attempt was persisted before its verdict.",
-        EvaluationDimension::Deliverable,
-    ),
-    AssessmentSpec::hard_gated(
-        "accepted_candidate_is_current",
-        8,
-        "The final candidate matches the candidate accepted by the auditor.",
-    ),
-    AssessmentSpec::hard_gated(
-        "repeatability_3_of_3",
-        8,
-        "The final candidate passes three independent CRUD cycles.",
     ),
 ];
 

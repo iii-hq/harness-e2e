@@ -340,6 +340,16 @@ export function DecisionSection({
 
       <div className="mt-6 grid overflow-hidden rounded-lg border border-[var(--color-rule)] lg:grid-cols-[minmax(0,1.35fr)_minmax(24rem,0.65fr)]">
         <section className="grid content-start gap-3 p-4 md:p-5">
+          {aiResult?.diagnosis ? (
+            <>
+              <p className="m-0 font-mono text-[0.65rem] font-semibold uppercase tracking-[0.06em] text-[var(--color-accent)]">
+                What happened
+              </p>
+              <p className="m-0 max-w-4xl text-sm leading-6 text-ink">
+                {aiResult.diagnosis}
+              </p>
+            </>
+          ) : null}
           <p className="m-0 font-mono text-[0.65rem] font-semibold uppercase tracking-[0.06em] text-[var(--color-accent)]">
             Recommended next step
           </p>

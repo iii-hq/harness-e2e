@@ -17,6 +17,17 @@ pub struct ObservedFunctionInvocation {
     pub call: ObservedFunctionCall,
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub struct ObservedFunctionOutcome {
+    pub ordinal: usize,
+    pub call_id: Option<String>,
+    pub function_id: String,
+    pub arguments: Value,
+    pub is_error: Option<bool>,
+    pub error_code: Option<String>,
+    pub details: Option<Value>,
+}
+
 pub fn final_response(transcript: &Value) -> String {
     transcript
         .get("messages")
@@ -110,6 +121,52 @@ pub fn function_result<'a>(
                     == Some(invocation.call.function_id.as_str())
                 && message.get("is_error").and_then(Value::as_bool) == Some(false)
         })
+}
+
+/// Function calls paired with their result when one was durably captured.
+/// Unlike `function_result`, this deliberately retains failed outcomes so
+/// scenario evaluators can distinguish a recovered contract error from an
+/// unobserved or silently retried call.
+pub fn function_outcomes(transcript: &Value) -> Vec<ObservedFunctionOutcome> {
+    function_invocations(transcript)
+        .into_iter()
+        .enumerate()
+        .map(|(ordinal, invocation)| {
+            let result = invocation.call_id.as_deref().and_then(|call_id| {
+                transcript
+                    .get("messages")
+                    .and_then(Value::as_array)
+                    .into_iter()
+                    .flatten()
+                    .filter_map(|entry| entry.get("message"))
+                    .find(|message| {
+                        message.get("role").and_then(Value::as_str) == Some("function_result")
+                            && message.get("function_call_id").and_then(Value::as_str)
+                                == Some(call_id)
+                            && message.get("function_id").and_then(Value::as_str)
+                                == Some(invocation.call.function_id.as_str())
+                    })
+            });
+            ObservedFunctionOutcome {
+                ordinal,
+                call_id: invocation.call_id,
+                function_id: invocation.call.function_id,
+                arguments: invocation.call.arguments,
+                is_error: result
+                    .and_then(|value| value.get("is_error"))
+                    .and_then(Value::as_bool),
+                error_code: result
+                    .and_then(|value| {
+                        value
+                            .get("error_code")
+                            .or_else(|| value.pointer("/details/code"))
+                    })
+                    .and_then(Value::as_str)
+                    .map(str::to_owned),
+                details: result.and_then(|value| value.get("details")).cloned(),
+            }
+        })
+        .collect()
 }
 
 pub fn gate(id: &str, passed: bool, reason: impl Into<String>) -> HardGateReport {
@@ -322,6 +379,26 @@ mod tests {
             result.pointer("/details/ok").and_then(Value::as_bool),
             Some(true)
         );
+    }
+
+    #[test]
+    fn outcomes_keep_successes_errors_and_missing_results_in_call_order() {
+        let transcript = json!({"messages": [
+            {"message": {"role": "assistant", "content": [
+                {"type": "function_call", "id": "ok", "function_id": "fixture::read", "arguments": {"id": 1}},
+                {"type": "function_call", "id": "bad", "function_id": "fixture::write", "arguments": {"id": 2}},
+                {"type": "function_call", "id": "lost", "function_id": "fixture::write", "arguments": {"id": 3}}
+            ]}},
+            {"message": {"role": "function_result", "function_call_id": "ok", "function_id": "fixture::read", "is_error": false, "details": {"ok": true}}},
+            {"message": {"role": "function_result", "function_call_id": "bad", "function_id": "fixture::write", "is_error": true, "details": {"code": "version_conflict"}}}
+        ]});
+
+        let outcomes = function_outcomes(&transcript);
+        assert_eq!(outcomes.len(), 3);
+        assert_eq!(outcomes[0].ordinal, 0);
+        assert_eq!(outcomes[0].is_error, Some(false));
+        assert_eq!(outcomes[1].error_code.as_deref(), Some("version_conflict"));
+        assert_eq!(outcomes[2].is_error, None);
     }
 
     #[test]

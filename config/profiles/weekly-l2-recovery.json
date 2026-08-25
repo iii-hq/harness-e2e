@@ -1,0 +1,17 @@
+{
+  "profile_id": "weekly-l2-recovery",
+  "seed": 20201,
+  "expected_outcome": "recovered",
+  "delayed_calls": [
+    {
+      "target": "harness::send",
+      "delay_ms": 500,
+      "occurrences": 1
+    }
+  ],
+  "fail_first_attempt": [
+    "state-write"
+  ],
+  "duplicate_events": true,
+  "max_work_amplification": 2.0
+}

@@ -808,6 +808,14 @@
         "tier"
       ],
       "properties": {
+        "method": {
+          "default": "legacy_v1",
+          "allOf": [
+            {
+              "$ref": "#/definitions/ComplexityMethod"
+            }
+          ]
+        },
         "profile": {
           "$ref": "#/definitions/ComplexityProfile"
         },
@@ -815,6 +823,13 @@
           "$ref": "#/definitions/ComplexityTier"
         }
       }
+    },
+    "ComplexityMethod": {
+      "type": "string",
+      "enum": [
+        "legacy_v1",
+        "capability_v2"
+      ]
     },
     "ComplexityProfile": {
       "type": "object",
@@ -831,12 +846,26 @@
         "wake_cycles"
       ],
       "properties": {
+        "agent_owned_decomposition": {
+          "default": false,
+          "type": "boolean"
+        },
         "ambiguity_level": {
           "type": "integer",
           "format": "uint8",
           "minimum": 0.0
         },
         "artifact_count": {
+          "type": "integer",
+          "format": "uint8",
+          "minimum": 0.0
+        },
+        "coherent_long_horizon": {
+          "default": false,
+          "type": "boolean"
+        },
+        "compensable_mutations": {
+          "default": 0,
           "type": "integer",
           "format": "uint8",
           "minimum": 0.0
@@ -851,7 +880,19 @@
           "format": "uint8",
           "minimum": 0.0
         },
+        "durable_resume_cycles": {
+          "default": 0,
+          "type": "integer",
+          "format": "uint8",
+          "minimum": 0.0
+        },
         "external_systems": {
+          "type": "integer",
+          "format": "uint8",
+          "minimum": 0.0
+        },
+        "material_invalidation_events": {
+          "default": 0,
           "type": "integer",
           "format": "uint8",
           "minimum": 0.0
@@ -862,6 +903,12 @@
           "minimum": 0.0
         },
         "planning_depth": {
+          "type": "integer",
+          "format": "uint8",
+          "minimum": 0.0
+        },
+        "replan_loops": {
+          "default": 0,
           "type": "integer",
           "format": "uint8",
           "minimum": 0.0
@@ -1212,6 +1259,12 @@
             }
           ]
         },
+        "scenario_measurements": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/ScenarioMeasurement"
+          }
+        },
         "score": {
           "type": [
             "integer",
@@ -1238,6 +1291,13 @@
           "type": "integer",
           "format": "uint64",
           "minimum": 0.0
+        },
+        "worker_contracts": {
+          "description": "Exact request/response schemas observed after this scenario's setup. Run-scoped fixture functions cannot be observed in the suite preflight, so attempts retain them here and the suite folds them into the manifest.",
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/ObservedWorkerContract"
+          }
         }
       }
     },
@@ -1566,6 +1626,14 @@
         }
       }
     },
+    "ExecutionRealism": {
+      "type": "string",
+      "enum": [
+        "synthetic",
+        "realistic_simulator",
+        "frozen_real_artifact"
+      ]
+    },
     "FailureDomain": {
       "type": "string",
       "enum": [
@@ -1628,6 +1696,10 @@
         "confidence": {
           "type": "number",
           "format": "double"
+        },
+        "diagnosis": {
+          "description": "What actually occurred in this execution — the decisive outcome and its proximate cause. Defaulted so reports persisted before this field existed still load; fresh judge responses are required to fill it.",
+          "type": "string"
         },
         "evidence": {
           "type": "array",
@@ -1692,6 +1764,43 @@
           "type": "string"
         }
       }
+    },
+    "HumanHorizon": {
+      "type": "object",
+      "properties": {
+        "basis": {
+          "default": "unknown",
+          "allOf": [
+            {
+              "$ref": "#/definitions/HumanHorizonBasis"
+            }
+          ]
+        },
+        "max_minutes": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0.0
+        },
+        "min_minutes": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0.0
+        }
+      }
+    },
+    "HumanHorizonBasis": {
+      "type": "string",
+      "enum": [
+        "unknown",
+        "author_estimate",
+        "measured"
+      ]
     },
     "InvariantSpec": {
       "type": "object",
@@ -1829,6 +1938,13 @@
       "type": "string",
       "enum": [
         "demonstration"
+      ]
+    },
+    "ObservationMetricOrigin": {
+      "type": "string",
+      "enum": [
+        "observed",
+        "derived_from_observed"
       ]
     },
     "ObservationMode": {
@@ -2064,6 +2180,26 @@
           "minimum": 0.0
         }
       }
+    },
+    "ObservedWorkerContract": {
+      "type": "object",
+      "required": [
+        "function_id",
+        "request_schema_sha256",
+        "response_schema_sha256"
+      ],
+      "properties": {
+        "function_id": {
+          "type": "string"
+        },
+        "request_schema_sha256": {
+          "type": "string"
+        },
+        "response_schema_sha256": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
     },
     "PortValueKind": {
       "type": "string",
@@ -2464,6 +2600,22 @@
         "case_id": {
           "type": "string"
         },
+        "characterization": {
+          "default": {
+            "human_horizon": {
+              "basis": "unknown"
+            },
+            "realism": {
+              "execution": "synthetic",
+              "shadow": "none"
+            }
+          },
+          "allOf": [
+            {
+              "$ref": "#/definitions/ScenarioCharacterization"
+            }
+          ]
+        },
         "complexity": {
           "$ref": "#/definitions/ComplexityClassification"
         },
@@ -2498,6 +2650,32 @@
         }
       }
     },
+    "ScenarioCharacterization": {
+      "type": "object",
+      "properties": {
+        "human_horizon": {
+          "default": {
+            "basis": "unknown"
+          },
+          "allOf": [
+            {
+              "$ref": "#/definitions/HumanHorizon"
+            }
+          ]
+        },
+        "realism": {
+          "default": {
+            "execution": "synthetic",
+            "shadow": "none"
+          },
+          "allOf": [
+            {
+              "$ref": "#/definitions/ScenarioRealism"
+            }
+          ]
+        }
+      }
+    },
     "ScenarioFlowEvidence": {
       "type": "object",
       "required": [
@@ -2523,30 +2701,97 @@
     "ScenarioId": {
       "type": "string",
       "enum": [
-        "direct_answer",
+        "sequential_pipeline",
+        "context_pressure",
         "persistent_state",
-        "reactive_automation",
         "shell_coder_sandbox",
         "research_pipeline",
+        "fanout_ladder",
         "security_review",
         "incident_response",
         "todo_worker_simple",
         "todo_worker_planned",
-        "todo_worker_self_validating",
         "engineering_ticket",
+        "engineering_ticket_git_handoff",
+        "engineering_endurance_ladder",
         "git_regression_forensics",
         "mechanical_reaction",
         "timer_wake",
         "receiving_operation",
         "validation_loop",
         "subagent_validation",
-        "multi_subagent_validation",
         "subagent_validation_failure",
-        "custom_validator",
         "validation_self_repair",
         "validation_scope_enforcement",
-        "validation_chain"
+        "validation_chain",
+        "secret_hygiene",
+        "prompt_injection_resilience",
+        "moving_target",
+        "poison_message",
+        "cleanup_under_failure",
+        "depth_ladder",
+        "quorum_fan_in",
+        "contention_ledger",
+        "minimal_path",
+        "wake_chain_soak",
+        "chess_engine_build",
+        "chess_play_ladder",
+        "trend_blog",
+        "tool_contract_recovery",
+        "policy_bound_action",
+        "cross_app_transaction",
+        "database_migration_recovery",
+        "performance_regression",
+        "browser_cross_site",
+        "release_train_recovery",
+        "cross_repo_contract_migration"
       ]
+    },
+    "ScenarioMeasurement": {
+      "type": "object",
+      "required": [
+        "id",
+        "origin",
+        "unit",
+        "value"
+      ],
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "origin": {
+          "$ref": "#/definitions/ObservationMetricOrigin"
+        },
+        "unit": {
+          "type": "string"
+        },
+        "value": {
+          "type": "number",
+          "format": "double"
+        }
+      },
+      "additionalProperties": false
+    },
+    "ScenarioRealism": {
+      "type": "object",
+      "properties": {
+        "execution": {
+          "default": "synthetic",
+          "allOf": [
+            {
+              "$ref": "#/definitions/ExecutionRealism"
+            }
+          ]
+        },
+        "shadow": {
+          "default": "none",
+          "allOf": [
+            {
+              "$ref": "#/definitions/ShadowMode"
+            }
+          ]
+        }
+      }
     },
     "SessionMetricsPayload": {
       "type": "object",
@@ -2812,6 +3057,13 @@
           "minimum": 0.0
         }
       }
+    },
+    "ShadowMode": {
+      "type": "string",
+      "enum": [
+        "none",
+        "read_only"
+      ]
     },
     "StackIdentity": {
       "oneOf": [

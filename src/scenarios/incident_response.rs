@@ -1,9 +1,9 @@
-//! Contract for the code-owned `incident_response` composite scenario.
+//! Contract for the bounded `incident_response` adaptive scenario.
 //!
 //! The executable graph and the environment-owned fixture functions live in
 //! `workflow::incident_response`. This module deliberately owns only the
 //! stable scenario identity, materialized case, deterministic assessment
-//! declarations, and the domain-asset catalog. Composite workflow assets are
+//! declarations, and the domain-asset catalog. Adaptive workflow assets are
 //! persisted by the workflow scheduler before its mandatory cleanup, so they
 //! are not duplicated as ordinary `ScenarioDeliverableCapture` hooks here.
 
@@ -15,11 +15,12 @@ use crate::report::EvaluationDimension;
 
 use super::{
     ComplexityProfile, CriterionSpec, DeliverableContract, EvaluationFuture, ExecutionPolicy,
-    MaterializedScenario, ScenarioCase, ScenarioObservation, ScenarioSpec,
+    ExecutionRealism, HumanHorizon, MaterializedScenario, ScenarioCase, ScenarioCharacterization,
+    ScenarioObservation, ScenarioSpec, ShadowMode,
 };
 
 pub const ID: &str = "incident_response";
-pub const VERSION: u32 = 1;
+pub const VERSION: u32 = 3;
 pub const FIXTURE_PATH_ENV: &str = "HARNESS_E2E_INCIDENT_FIXTURE_PATH";
 pub const KNOWN_GOOD_REF: &str = "refs/tags/known_good";
 pub const INCIDENT_REF: &str = "refs/tags/incident";
@@ -164,14 +165,14 @@ pub fn scenario(_run_id: &str) -> ScenarioSpec {
     ScenarioSpec {
         id: ID,
         version: VERSION,
-        // Composite scenarios retain a purpose prompt for the common scenario
+        // Adaptive scenarios retain a purpose prompt for the common scenario
         // contract. The workflow sends bounded node-specific prompts.
         prompt: "Investigate, reproduce, diagnose, remediate, validate, and safely resolve an isolated synthetic software incident in an environment-prepared disposable repository. Preserve deterministic evidence, choose exactly one safe terminal action, and leave fixture restoration to mandatory cleanup.".into(),
         filesystem_root: None,
         execution: ExecutionPolicy {
             max_turns: 1,
             max_output_tokens: None,
-            max_total_tokens: Some(900_000),
+            max_total_tokens: Some(750_000),
             stuck_timeout_seconds: 600,
             max_validation_retries: None,
         },
@@ -200,10 +201,15 @@ pub fn materialize(namespace: &str, seed: u64) -> anyhow::Result<MaterializedSce
             "iii::shell".to_string(),
             "incident_fixture::v1".to_string(),
         ],
-        // Composite assets belong to semantic workflow steps and are captured
+        // Adaptive assets belong to semantic workflow steps and are captured
         // by the scheduler. Ordinary scenario captures are intentionally empty.
         DeliverableContract::default(),
-    )?;
+    )?
+    .with_characterization(ScenarioCharacterization::new(
+        HumanHorizon::author_estimate(60, 120)?,
+        ExecutionRealism::RealisticSimulator,
+        ShadowMode::None,
+    )?)?;
     Ok(MaterializedScenario {
         spec,
         case,
@@ -223,6 +229,12 @@ pub fn complexity_profile() -> ComplexityProfile {
         artifact_count: ASSETS.len() as u8,
         coordination_edges: 16,
         ambiguity_level: 7,
+        agent_owned_decomposition: true,
+        material_invalidation_events: 1,
+        replan_loops: 1,
+        compensable_mutations: 1,
+        durable_resume_cycles: 1,
+        coherent_long_horizon: true,
     }
 }
 
@@ -275,8 +287,9 @@ fn materialized_inputs() -> anyhow::Result<Value> {
             "max_nodes": 20,
             "step_timeout_seconds": 600,
             "workflow_timeout_seconds": 3600,
-            "max_total_tokens": 900000,
-            "max_cost_usd": 30.0,
+            "max_total_tokens": 686000,
+            "planner_max_total_tokens": 64000,
+            "max_cost_usd": 25.0,
             "technical_retries": 0,
         },
     }))
@@ -288,7 +301,7 @@ fn composite_only_evaluator<'a>(
     _run_id: &'a str,
 ) -> EvaluationFuture<'a> {
     Box::pin(async move {
-        bail!("incident_response must be executed through the registered CompositeFlow driver")
+        bail!("incident_response must be executed through the registered AdaptiveFlow driver")
     })
 }
 
@@ -432,8 +445,9 @@ mod tests {
         assert_eq!(budgets["max_nodes"], 20);
         assert_eq!(budgets["step_timeout_seconds"], 600);
         assert_eq!(budgets["workflow_timeout_seconds"], 3_600);
-        assert_eq!(budgets["max_total_tokens"], 900_000);
-        assert_eq!(budgets["max_cost_usd"], 30.0);
+        assert_eq!(budgets["max_total_tokens"], 686_000);
+        assert_eq!(budgets["planner_max_total_tokens"], 64_000);
+        assert_eq!(budgets["max_cost_usd"], 25.0);
         assert_eq!(budgets["technical_retries"], 0);
     }
 }

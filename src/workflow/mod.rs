@@ -1,6 +1,11 @@
+mod adaptive;
+mod agent_planner;
 mod builtin;
 mod catalog;
+pub mod cross_repo_contract_migration;
 pub mod incident_response;
+pub mod release_train_recovery;
+mod resume;
 mod run;
 mod scheduler;
 pub mod security_scan;
@@ -8,6 +13,16 @@ pub mod todo_worker;
 
 use std::sync::Arc;
 
+pub use adaptive::{
+    AdaptiveAnchorPlacement, AdaptiveMaterializedWorkflow, AdaptiveNodeTemplateV1,
+    AdaptivePlanNodeV1, AdaptivePlanRevisionEvidence, AdaptiveTrustedAnchorV1,
+    AdaptiveWorkflowPlanV1, AdaptiveWorkflowPolicyV1, ADAPTIVE_WORKFLOW_SCHEMA_VERSION,
+};
+pub use agent_planner::{
+    plan_adaptive_workflow, AdaptivePlannerInvalidationV1, AdaptivePlannerMetadataV1,
+    AdaptivePlannerReferenceCheckV1, AgentPlannerEvidenceV1, AgentPlannerOutcome,
+    AgentPlannerRequest, AgentPlannerUsageEvidenceV1,
+};
 pub use builtin::{
     harness_descriptor, harness_descriptor_v2, register_harness_step, register_harness_step_v2,
     HarnessStepConfig, HarnessStepConfigV2, HarnessStepPolicy, HARNESS_STEP_ID,
@@ -15,16 +30,23 @@ pub use builtin::{
 };
 pub use catalog::{
     CapturedWorkflowAsset, NoopWorkflowCleanupHook, RegisteredStepType, StepCatalog,
-    StepEvaluation, StepExecutor, StepExecutorContext, StepExecutorOutput, TypedPortValue,
-    WorkflowAssetContent, WorkflowCleanupContext, WorkflowCleanupHook, WorkflowEvaluationOutcome,
-    WorkflowEvaluationResult, WorkflowGateResult, WorkflowProvenance,
+    StepEvaluation, StepExecutor, StepExecutorContext, StepExecutorOutput, StepReconcileOutcome,
+    StepReconcileState, TypedPortValue, WorkflowAssetContent, WorkflowCleanupContext,
+    WorkflowCleanupHook, WorkflowEvaluationOutcome, WorkflowEvaluationResult, WorkflowGateResult,
+    WorkflowProvenance,
+};
+pub use resume::{
+    ResumeDisposition, StepResumePhase, WorkflowResumeEnvelopeV1, WorkflowResumeIdentityV1,
+    WorkflowResumeStateV1, WorkflowResumeStepV1, WorkflowResumeStore,
+    WORKFLOW_RESUME_SCHEMA_VERSION,
 };
 pub(crate) use run::observe_worker_contracts;
 pub use scheduler::{
-    execute_workflow, CheckpointStore, WorkflowAssetReport, WorkflowAttemptReport,
-    WorkflowCheckpointV1, WorkflowCleanupReport, WorkflowCleanupStatus, WorkflowCriterionResult,
-    WorkflowExecutionRequest, WorkflowFailurePhase, WorkflowStepFailure, WorkflowStepReport,
-    WorkflowStepStatus,
+    execute_adaptive_workflow, execute_resumable_workflow, execute_workflow, CheckpointStore,
+    ResumableWorkflowExecutionRequest, ResumableWorkflowOutcome, WorkflowAssetReport,
+    WorkflowAttemptReport, WorkflowCheckpointV1, WorkflowCleanupReport, WorkflowCleanupStatus,
+    WorkflowCriterionResult, WorkflowExecutionRequest, WorkflowFailurePhase,
+    WorkflowNeedsReconciliation, WorkflowStepFailure, WorkflowStepReport, WorkflowStepStatus,
 };
 
 use crate::context::E2eContext;
@@ -37,6 +59,92 @@ pub struct CompositeScenarioRuntime {
     pub definition: WorkflowDefinitionV1,
     pub catalog: Arc<StepCatalog>,
     pub cleanup_hook: Arc<dyn WorkflowCleanupHook>,
+}
+
+/// Fully frozen adaptive runtime for one attempt. The agent-authored plan
+/// shape has already passed the runner-owned policy before this value reaches
+/// the scheduler.
+pub struct AdaptiveScenarioRuntime {
+    pub policy: AdaptiveWorkflowPolicyV1,
+    pub plans: Vec<AdaptiveWorkflowPlanV1>,
+    pub completed_node_ids: std::collections::BTreeSet<String>,
+    pub materialized: AdaptiveMaterializedWorkflow,
+    pub catalog: Arc<StepCatalog>,
+    pub cleanup_hook: Arc<dyn WorkflowCleanupHook>,
+}
+
+pub fn adaptive_runtime(
+    scenario: ScenarioId,
+    context: Arc<E2eContext>,
+    model: &str,
+    provider: &str,
+    output: &std::path::Path,
+    attempt_id: &str,
+) -> Result<AdaptiveScenarioRuntime> {
+    match scenario {
+        ScenarioId::IncidentResponse => {
+            let source = incident_response::definition();
+            let mut catalog = StepCatalog::new();
+            if source.nodes.iter().any(|node| {
+                node.step_type == builtin::HARNESS_STEP_ID
+                    && node.step_version == builtin::HARNESS_STEP_VERSION_V2
+            }) {
+                register_harness_step_v2(
+                    &mut catalog,
+                    context.clone(),
+                    model,
+                    provider,
+                    incident_response::harness_policy()?,
+                )?;
+            }
+            let cleanup_hook =
+                incident_response::register_incident_response_steps(&mut catalog, context)?;
+            let contract = incident_response::adaptive_contract()?;
+            let catalog = Arc::new(catalog);
+            let materialized = contract.policy.materialize(
+                &contract.plans,
+                &contract.completed_node_ids,
+                &catalog,
+            )?;
+            Ok(AdaptiveScenarioRuntime {
+                policy: contract.policy,
+                plans: contract.plans,
+                completed_node_ids: contract.completed_node_ids,
+                materialized,
+                catalog,
+                cleanup_hook,
+            })
+        }
+        ScenarioId::ReleaseTrainRecovery => {
+            let fixture = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("fixtures/release_train_recovery/initial_state.json");
+            let runtime = release_train_recovery::build_adaptive_runtime(&fixture)?;
+            Ok(AdaptiveScenarioRuntime {
+                policy: runtime.policy,
+                plans: runtime.plans,
+                completed_node_ids: runtime.completed_before_replan,
+                materialized: runtime.materialized,
+                catalog: runtime.catalog,
+                cleanup_hook: runtime.cleanup_hook,
+            })
+        }
+        ScenarioId::CrossRepoContractMigration => {
+            let fixture = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("fixtures/cross_repo_contract_migration");
+            let workspace = output.join(".adaptive-workspaces").join(attempt_id);
+            let runtime =
+                cross_repo_contract_migration::build_adaptive_runtime(&fixture, &workspace)?;
+            Ok(AdaptiveScenarioRuntime {
+                policy: runtime.policy,
+                plans: runtime.plans,
+                completed_node_ids: runtime.completed_before_replan,
+                materialized: runtime.materialized,
+                catalog: runtime.catalog,
+                cleanup_hook: runtime.cleanup_hook,
+            })
+        }
+        _ => bail!("scenario '{}' is not adaptive", scenario.as_str()),
+    }
 }
 
 /// Return the Rust-owned definition for a composite scenario. Adding a future

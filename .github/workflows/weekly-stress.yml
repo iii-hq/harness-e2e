@@ -31,12 +31,12 @@ jobs:
       fail-fast: false
       matrix:
         include:
+          - profile: weekly-l2-recovery
+            scenario: stateful.2
+          - profile: weekly-l3-recovery
+            scenario: coordination.3
           - profile: weekly-l4-recovery
             scenario: coordination.4
-          - profile: weekly-l5-recovery
-            scenario: coordination.5
-          - profile: weekly-l5-cancellation
-            scenario: coordination.5
     steps:
       - uses: actions/checkout@v4
         with:

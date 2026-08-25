@@ -1,4 +1,3 @@
-use super::scenarios::{audit_states, SharedAuditState};
 use super::*;
 pub async fn cleanup_contract(context: &E2eContext, contract: &TodoTaskContract) -> Result<()> {
     let mut failures = Vec::new();
@@ -253,25 +252,6 @@ pub(super) fn validation_bundle_path(contract: &TodoTaskContract) -> PathBuf {
     Path::new(&contract.workspace_root)
         .join(".harness-e2e")
         .join("validation-evidence.json")
-}
-
-pub(super) fn audit_attempt_path(contract: &TodoTaskContract, ordinal: u32) -> PathBuf {
-    Path::new(&contract.workspace_root)
-        .join(".harness-e2e")
-        .join("attempts")
-        .join(format!("attempt-{ordinal}.json"))
-}
-
-pub(super) fn audit_state(run_id: &str) -> Option<SharedAuditState> {
-    audit_states()
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner())
-        .get(run_id)
-        .cloned()
-}
-
-pub(super) fn auditor_function_id(run_id: &str) -> String {
-    format!("e2etest::todo_audit_{}", safe_suffix(run_id))
 }
 
 pub(super) fn safe_suffix(value: &str) -> String {
