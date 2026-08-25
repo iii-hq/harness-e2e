@@ -75,6 +75,13 @@ launcher and cleanup boundary are described in
 The team-facing composition and didactic description of every daily, weekly,
 and post-release scenario is in [docs/e2e-test-plans.md](docs/e2e-test-plans.md).
 
+Release Control dispatches `.github/workflows/release-control-campaign.yml`
+directly in this repository. The workflow validates the campaign v3 contract,
+executes every common group in an isolated ephemeral stack, routes fault groups
+to the protected runner, and produces one root bundle without rebuilding the
+native Harness artifacts. `workers` supplies versioned components of the stack
+under test; it does not orchestrate campaigns.
+
 ## Dashboard
 
 Build and start the dashboard from the repository root:

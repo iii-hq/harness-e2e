@@ -7,6 +7,18 @@ ROOT = pathlib.Path(__file__).resolve().parents[2]
 
 
 class WorkflowBoundaryTests(unittest.TestCase):
+    def test_release_control_campaign_execution_is_owned_here(self):
+        workflow = (
+            ROOT / ".github/workflows/release-control-campaign.yml"
+        ).read_text(encoding="utf-8")
+        self.assertIn("strategy:\n      fail-fast: false", workflow)
+        self.assertIn("scripts/run_release_control_group.sh", workflow)
+        self.assertIn("scripts/run_release_control_fault.sh", workflow)
+        self.assertIn("scripts/release_control_campaign.py", workflow)
+        self.assertIn("runs-on: ${{ matrix.runs_on }}", workflow)
+        self.assertIn("environment: harness-e2e-trusted", workflow)
+        self.assertNotIn("iii-hq/workers", workflow)
+
     def test_cross_repository_shadow_checks_out_the_e2e_repository(self):
         workflow = (ROOT / ".github/workflows/shadow.yml").read_text(encoding="utf-8")
         self.assertEqual(workflow.count("repository: iii-hq/harness-e2e"), 2)
