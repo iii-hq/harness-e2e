@@ -39,6 +39,18 @@ SUPPORTED_CATALOG_SCHEMAS = {
     "e2e-scenario-catalog/v1",
     "e2e-scenario-catalog/v2",
 }
+SHARED_FIXTURE_SCENARIOS = frozenset(
+    {
+        "shell_coder_sandbox",
+        "chess_engine_build",
+        "trend_blog",
+    }
+)
+ENGINEERING_FIXTURE_SCENARIOS = frozenset(
+    {
+        "engineering_ticket_git_handoff",
+    }
+)
 
 # These workers are hosted by the pinned iii engine rather than installed from
 # the Registry. `iii worker add` intentionally reports them as built-in, so a
@@ -203,11 +215,25 @@ def campaign_matrix(contract: dict[str, Any]) -> dict[str, Any]:
     include = []
     for group in definition["groups"]:
         is_fault = group["executionKind"] == "fault_injection"
+        scenarios = set(group.get("scenarios") or [])
+        requires_shared_fixture = bool(scenarios & SHARED_FIXTURE_SCENARIOS)
+        requires_engineering_fixture = bool(
+            scenarios & ENGINEERING_FIXTURE_SCENARIOS
+        )
+        requires_trusted_runner = (
+            is_fault or requires_shared_fixture or requires_engineering_fixture
+        )
         include.append(
             {
                 "group_id": group["id"],
                 "execution_kind": group["executionKind"],
-                "runs_on": ["self-hosted", "harness-e2e"] if is_fault else ["ubuntu-latest"],
+                "requires_shared_fixture": requires_shared_fixture,
+                "requires_engineering_fixture": requires_engineering_fixture,
+                "runs_on": (
+                    ["self-hosted", "harness-e2e"]
+                    if requires_trusted_runner
+                    else ["ubuntu-latest"]
+                ),
             }
         )
     return {"include": include}
