@@ -218,14 +218,42 @@ class ReleaseControlCampaignTest(unittest.TestCase):
                 campaign_contract(), changed, group_id="daily-core"
             )
 
-    def test_rejects_catalog_seed_drift(self):
+    def test_accepts_exact_v2_case_seed_independent_of_the_catalog_seed(self):
         changed = catalog()
+        changed["scenarios"][0]["seed"] = 8390047140461674497
+        contract = campaign_contract()
+        digest = MODULE.canonical_sha256(changed)
+        contract["plan"]["definition"]["catalog"]["sha256"] = digest
+        contract["runner"]["catalog_sha256"] = digest
+        request = MODULE.materialize_request(
+            contract, changed, group_id="daily-core"
+        )
+        self.assertEqual(
+            request["run_contract"]["selected_cases"][0]["seed"],
+            8390047140461674497,
+        )
+
+    def test_rejects_legacy_v1_catalog_seed_drift(self):
+        changed = catalog()
+        changed["schema"] = "e2e-scenario-catalog/v1"
         changed["scenarios"][0]["seed"] = 9
         contract = campaign_contract()
         digest = MODULE.canonical_sha256(changed)
         contract["plan"]["definition"]["catalog"]["sha256"] = digest
         contract["runner"]["catalog_sha256"] = digest
         with self.assertRaisesRegex(ValueError, "seed does not match"):
+            MODULE.materialize_request(
+                contract, changed, group_id="daily-core"
+            )
+
+    def test_rejects_an_invalid_v2_case_seed(self):
+        changed = catalog()
+        changed["scenarios"][0]["seed"] = 1 << 64
+        contract = campaign_contract()
+        digest = MODULE.canonical_sha256(changed)
+        contract["plan"]["definition"]["catalog"]["sha256"] = digest
+        contract["runner"]["catalog_sha256"] = digest
+        with self.assertRaisesRegex(ValueError, "invalid seed"):
             MODULE.materialize_request(
                 contract, changed, group_id="daily-core"
             )

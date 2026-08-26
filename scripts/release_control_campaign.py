@@ -411,7 +411,8 @@ def materialize_request(
     contract: dict[str, Any], catalog: dict[str, Any], group_id: str | None = None
 ) -> dict[str, Any]:
     validate_contract(contract)
-    if catalog.get("schema") not in SUPPORTED_CATALOG_SCHEMAS:
+    catalog_schema = catalog.get("schema")
+    if catalog_schema not in SUPPORTED_CATALOG_SCHEMAS:
         raise ValueError("unsupported scenario catalog schema")
     runner = catalog.get("runner")
     if not isinstance(runner, dict):
@@ -457,7 +458,17 @@ def materialize_request(
         descriptor_seed = descriptor.get("seed")
         if not isinstance(scenario_version, int) or scenario_version < 1:
             raise ValueError(f"scenario {scenario_id} has an invalid version")
-        if descriptor_seed != plan_seed:
+        if (
+            not isinstance(descriptor_seed, int)
+            or isinstance(descriptor_seed, bool)
+            or descriptor_seed < 0
+            or descriptor_seed > (1 << 64) - 1
+        ):
+            raise ValueError(f"scenario {scenario_id} has an invalid seed")
+        if (
+            catalog_schema == "e2e-scenario-catalog/v1"
+            and descriptor_seed != plan_seed
+        ):
             raise ValueError(f"scenario {scenario_id} seed does not match the plan")
         selected_cases.append(
             {
