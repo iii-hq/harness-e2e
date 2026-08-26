@@ -35,6 +35,10 @@ DIFFICULTY_WEIGHTS = {
 }
 CAMPAIGN_REPOSITORY = "iii-hq/harness-e2e"
 CAMPAIGN_WORKFLOW = "release-control-campaign.yml"
+SUPPORTED_CATALOG_SCHEMAS = {
+    "e2e-scenario-catalog/v1",
+    "e2e-scenario-catalog/v2",
+}
 
 # These workers are hosted by the pinned iii engine rather than installed from
 # the Registry. `iii worker add` intentionally reports them as built-in, so a
@@ -407,7 +411,7 @@ def materialize_request(
     contract: dict[str, Any], catalog: dict[str, Any], group_id: str | None = None
 ) -> dict[str, Any]:
     validate_contract(contract)
-    if catalog.get("schema") != "e2e-scenario-catalog/v1":
+    if catalog.get("schema") not in SUPPORTED_CATALOG_SCHEMAS:
         raise ValueError("unsupported scenario catalog schema")
     runner = catalog.get("runner")
     if not isinstance(runner, dict):
