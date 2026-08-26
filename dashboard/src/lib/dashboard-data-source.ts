@@ -301,6 +301,28 @@ export type DashboardRunProjection = JsonObject & {
   assessment: RunAssessmentContract
   transcript?: JsonObject
   status?: string
+  score?: number | null
+  validation_score?: number | null
+  instruction_adherence?:
+    | (JsonObject & {
+        availability: 'available' | 'unavailable' | 'failed'
+        score?: number | null
+        summary?: string
+        requirements?: JsonValue[]
+      })
+    | null
+  markdown_execution?:
+    | (JsonObject & {
+        pipeline_complete: boolean
+        source_path?: string
+        source_sha256?: string
+        behavior_sha256?: string
+        compiled_sha256?: string
+        materialized_plan_sha256?: string | null
+        phases?: JsonValue[]
+      })
+    | null
+  failures?: Array<JsonObject & { phase?: string; message?: string }>
   wall_time_ms?: number | null
   metrics?: DashboardRunMetrics | null
   cost?: DashboardRunCost | null

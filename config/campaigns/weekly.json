@@ -12,7 +12,6 @@
       "technical_retries": 1,
       "difficulty_weight": 2,
       "scenarios": [
-        "minimal_path",
         "timer_wake"
       ]
     },

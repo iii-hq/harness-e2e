@@ -26,6 +26,7 @@ use crate::fault::{
 };
 use crate::judge::JudgeConfig;
 use crate::longitudinal::{self, ComparisonPolicy, ComparisonResponse};
+use crate::markdown::ScenarioKey;
 use crate::report::{
     E2eManifest, E2eObservationEnvelope, E2eReport, ObservationDataAvailability,
     ObservationEvidence, ObservationExecutionIdentity, ObservationIdentity, ObservationMetric,
@@ -33,9 +34,11 @@ use crate::report::{
     ObservationProvenance, ObservationRunContract, ObservationSample, ObservationSelectedCase,
     RunnerIdentity, CATALOG_SCHEMA, OBSERVATION_SCHEMA,
 };
+#[cfg(test)]
+use crate::scenarios::ScenarioId;
 use crate::scenarios::{
     scenario_contract_sha256, ComplexityClassification, ComplexityProfile, DeliverableContract,
-    ExecutionPolicy, ScenarioCharacterization, ScenarioId,
+    ExecutionPolicy, ScenarioCharacterization,
 };
 use crate::suite::{
     run_suite, AdaptiveResumeAttempt, SubjectConfig, SuiteControl, SuiteEvent, SuiteEventEnvelope,
@@ -116,7 +119,7 @@ pub struct PhaseTransition {
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct ActiveAttempt {
-    pub scenario_id: ScenarioId,
+    pub scenario_id: ScenarioKey,
     #[serde(default)]
     pub run_id: String,
     pub attempt_id: String,
@@ -190,7 +193,7 @@ pub struct RunRequest {
     #[serde(default)]
     pub audit_provider: Option<String>,
     #[serde(default)]
-    pub scenarios: Vec<ScenarioId>,
+    pub scenarios: Vec<ScenarioKey>,
     #[serde(default = "default_runs")]
     pub runs: u32,
     #[serde(default)]
@@ -287,7 +290,7 @@ pub struct ResultsListRequest {
     #[serde(default)]
     pub lane: Option<String>,
     #[serde(default)]
-    pub scenario_id: Option<ScenarioId>,
+    pub scenario_id: Option<ScenarioKey>,
     #[serde(default = "default_results_limit")]
     pub limit: u16,
 }
@@ -319,7 +322,20 @@ pub struct ScenariosListRequest {
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct ScenarioDescriptor {
-    pub scenario_id: ScenarioId,
+    pub scenario_id: ScenarioKey,
+    pub origin: ScenarioOrigin,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub plans: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub author_version: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_path: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_sha256: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub behavior_sha256: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub compiled_sha256: Option<String>,
     pub scenario_version: u32,
     pub case_id: String,
     pub seed: u64,
@@ -331,6 +347,14 @@ pub struct ScenarioDescriptor {
     pub resource_envelope: ScenarioResourceEnvelope,
     pub required_capabilities: Vec<String>,
     pub deliverable_contract: DeliverableContract,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum ScenarioOrigin {
+    #[default]
+    BuiltIn,
+    Markdown,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -793,7 +817,7 @@ impl ControlPlane {
         });
         let output = self.inner.output_root.join(&execution_id);
         let scenarios = if request.scenarios.is_empty() {
-            crate::scenarios::selected(&[])
+            crate::markdown::default_keys()
         } else {
             unique_scenarios(&request.scenarios)
         };
@@ -824,6 +848,7 @@ impl ControlPlane {
                 adaptive_resume,
             }),
             observation_contract: request.run_contract.clone(),
+            materialized_markdown_plan: None,
         })
         .await;
         checkpoint_task.abort();
@@ -899,7 +924,7 @@ impl ControlPlane {
             } => {
                 self.update_record(execution_id, |record| {
                     record.active_attempt = Some(ActiveAttempt {
-                        scenario_id: *scenario_id,
+                        scenario_id: scenario_id.clone(),
                         run_id: run_id.clone(),
                         attempt_id: attempt_id.clone(),
                         session_id: session_id.clone(),
@@ -1081,9 +1106,9 @@ impl ControlPlane {
                     .lane
                     .as_ref()
                     .is_none_or(|lane| &record.request.lane == lane)
-                    && request.scenario_id.is_none_or(|scenario| {
+                    && request.scenario_id.as_ref().is_none_or(|scenario| {
                         record.request.scenarios.is_empty()
-                            || record.request.scenarios.contains(&scenario)
+                            || record.request.scenarios.contains(scenario)
                     })
             })
             .cloned()
@@ -1214,6 +1239,7 @@ impl ControlPlane {
         record: &ExecutionRecord,
         active: &ActiveAttempt,
     ) -> Option<AdaptiveResumeAttempt> {
+        let scenario_id = active.scenario_id.built_in()?;
         if record.cancel_requested
             || active.scenario_id.execution_kind()
                 != crate::scenarios::ScenarioExecutionKind::AdaptiveFlow
@@ -1221,7 +1247,7 @@ impl ControlPlane {
             || record.request.runs != 1
             || record.request.technical_retries != 0
             || !record.request.rotating_seeds.is_empty()
-            || record.request.scenarios.as_slice() != [active.scenario_id]
+            || record.request.scenarios.as_slice() != [active.scenario_id.clone()]
         {
             return None;
         }
@@ -1250,7 +1276,7 @@ impl ControlPlane {
             return None;
         }
         Some(AdaptiveResumeAttempt {
-            scenario_id: active.scenario_id,
+            scenario_id,
             run_id: active.run_id.clone(),
             attempt_id: active.attempt_id.clone(),
             resume_existing: expected.is_file(),
@@ -1278,7 +1304,11 @@ impl ControlPlane {
                 json!({ "root_session_id": active.session_id }),
             )
             .await;
-        if let Some(cleanup) = active.scenario_id.spec(&active.attempt_id).cleanup {
+        if let Some(cleanup) = active
+            .scenario_id
+            .built_in()
+            .and_then(|scenario| scenario.spec(&active.attempt_id).cleanup)
+        {
             let context = E2eContext::from_client(self.inner.iii.clone());
             if let Err(error) = cleanup(&context, &active.attempt_id).await {
                 tracing::warn!(
@@ -1449,7 +1479,7 @@ fn validate_run_request(request: &RunRequest) -> Result<LaneBudget> {
     }
     let budget = lane_budget(&request.lane);
     let scenarios = if request.scenarios.is_empty() {
-        crate::scenarios::selected(&[])
+        crate::markdown::default_keys()
     } else {
         unique_scenarios(&request.scenarios)
     };
@@ -1492,11 +1522,26 @@ fn validate_run_request(request: &RunRequest) -> Result<LaneBudget> {
             budget.max_technical_retries
         );
     }
-    let turns_per_run = scenarios.iter().try_fold(0_u64, |total, scenario| {
-        total.checked_add(u64::from(scenario.spec("budget").execution.max_turns))
-    });
+    let turns_per_run = scenarios
+        .iter()
+        .try_fold(0_u64, |total, scenario| -> Result<u64> {
+            let max_turns = scenario.built_in().map_or_else(
+                || {
+                    crate::markdown::embedded_scenario(scenario.as_str()).map(|compiled| {
+                        16_u64
+                            + u64::from(crate::markdown::execution_policy().max_turns)
+                            + 8_u64.saturating_mul(compiled.validations.len() as u64)
+                            + 16
+                    })
+                },
+                |built_in| Ok(u64::from(built_in.spec("budget").execution.max_turns)),
+            )?;
+            total
+                .checked_add(max_turns)
+                .context("declared turn budget overflow")
+        })?;
     let declared_turns = turns_per_run
-        .and_then(|turns| turns.checked_mul(seed_count.try_into().unwrap_or(u64::MAX)))
+        .checked_mul(seed_count.try_into().unwrap_or(u64::MAX))
         .and_then(|turns| turns.checked_mul(u64::from(request.runs)))
         .and_then(|turns| turns.checked_mul(u64::from(request.technical_retries) + 1))
         .context("declared turn budget overflow")?;
@@ -1510,6 +1555,15 @@ fn validate_run_request(request: &RunRequest) -> Result<LaneBudget> {
     }
     if request.judge_model.is_some() != request.judge_provider.is_some() {
         bail!("judge_model and judge_provider must be supplied together");
+    }
+    if scenarios
+        .iter()
+        .any(|scenario| scenario.built_in().is_none())
+        && (request.judge_model.is_none() || request.judge_provider.is_none())
+    {
+        bail!(
+            "Markdown scenarios require an explicit judge_model and judge_provider for setup, validation, adherence, and cleanup"
+        );
     }
     if request.audit_model.is_some() != request.audit_provider.is_some() {
         bail!("audit_model and audit_provider must be supplied together");
@@ -1575,14 +1629,15 @@ fn preflight_run_contract(request: &RunRequest) -> Result<()> {
         );
     }
     let scenarios = if request.scenarios.is_empty() {
-        crate::scenarios::selected(&[])
+        crate::markdown::default_keys()
     } else {
         unique_scenarios(&request.scenarios)
     };
     let mut expected = Vec::new();
     for scenario in scenarios {
-        for seed in observation_case_seeds(scenario, request.seed, &request.rotating_seeds) {
-            let descriptor = materialize_scenario_descriptor(scenario, seed, "run-contract")?;
+        for seed in observation_case_seeds(&scenario, request.seed, &request.rotating_seeds) {
+            let descriptor =
+                materialize_scenario_descriptor(scenario.clone(), seed, "run-contract")?;
             expected.push(ObservationSelectedCase {
                 scenario_id: descriptor.scenario_id,
                 scenario_version: descriptor.scenario_version,
@@ -1602,7 +1657,11 @@ fn preflight_run_contract(request: &RunRequest) -> Result<()> {
     Ok(())
 }
 
-fn observation_case_seeds(scenario: ScenarioId, fixed: Option<u64>, rotating: &[u64]) -> Vec<u64> {
+fn observation_case_seeds(
+    scenario: &ScenarioKey,
+    fixed: Option<u64>,
+    rotating: &[u64],
+) -> Vec<u64> {
     if scenario.canonical_seed_only() {
         return vec![scenario.canonical_seed()];
     }
@@ -1674,10 +1733,10 @@ fn judge_config(request: &RunRequest) -> JudgeConfig {
     }
 }
 
-fn unique_scenarios(scenarios: &[ScenarioId]) -> Vec<ScenarioId> {
+fn unique_scenarios(scenarios: &[ScenarioKey]) -> Vec<ScenarioKey> {
     scenarios
         .iter()
-        .copied()
+        .cloned()
         .fold(Vec::new(), |mut result, id| {
             if !result.contains(&id) {
                 result.push(id);
@@ -1687,7 +1746,7 @@ fn unique_scenarios(scenarios: &[ScenarioId]) -> Vec<ScenarioId> {
 }
 
 pub fn scenarios_list(request: ScenariosListRequest) -> Result<ScenariosListResponse> {
-    let scenarios = ScenarioId::ALL
+    let scenarios = crate::markdown::all_keys()?
         .into_iter()
         .map(|scenario_id| {
             let seed = request.seed.unwrap_or_else(|| scenario_id.canonical_seed());
@@ -1710,35 +1769,77 @@ pub fn scenarios_list(request: ScenariosListRequest) -> Result<ScenariosListResp
 }
 
 fn materialize_scenario_descriptor(
-    scenario_id: ScenarioId,
+    scenario_id: ScenarioKey,
     seed: u64,
     label: &str,
 ) -> Result<ScenarioDescriptor> {
-    let materialized = scenario_id.materialize(label, seed)?;
-    let contract_sha256 =
-        scenario_contract_sha256(&materialized.case, materialized.spec.execution)?;
-    let complexity = materialized.case.complexity.profile;
-    let resource_envelope = ScenarioResourceEnvelope {
-        execution: materialized.spec.execution,
-        workflow: serde_json::from_value(
-            materialized.case.inputs["workflow_resource_budgets"].clone(),
-        )
-        .ok(),
-    };
-    Ok(ScenarioDescriptor {
-        scenario_id,
-        scenario_version: materialized.case.scenario_version,
-        case_id: materialized.case.case_id,
-        seed: materialized.case.seed,
-        inputs_sha256: materialized.case.inputs_sha256,
-        contract_sha256,
-        classification: materialized.case.complexity,
-        complexity,
-        characterization: materialized.case.characterization,
-        resource_envelope,
-        required_capabilities: materialized.case.required_capabilities,
-        deliverable_contract: materialized.case.deliverable_contract,
-    })
+    match scenario_id.clone() {
+        ScenarioKey::BuiltIn(id) => {
+            let materialized = id.materialize(label, seed)?;
+            let contract_sha256 =
+                scenario_contract_sha256(&materialized.case, materialized.spec.execution)?;
+            let complexity = materialized.case.complexity.profile;
+            let resource_envelope = ScenarioResourceEnvelope {
+                execution: materialized.spec.execution,
+                workflow: serde_json::from_value(
+                    materialized.case.inputs["workflow_resource_budgets"].clone(),
+                )
+                .ok(),
+            };
+            Ok(ScenarioDescriptor {
+                scenario_id,
+                origin: ScenarioOrigin::BuiltIn,
+                plans: Vec::new(),
+                author_version: None,
+                source_path: None,
+                source_sha256: None,
+                behavior_sha256: None,
+                compiled_sha256: None,
+                scenario_version: materialized.case.scenario_version,
+                case_id: materialized.case.case_id,
+                seed: materialized.case.seed,
+                inputs_sha256: materialized.case.inputs_sha256,
+                contract_sha256,
+                classification: materialized.case.complexity,
+                complexity,
+                characterization: materialized.case.characterization,
+                resource_envelope,
+                required_capabilities: materialized.case.required_capabilities,
+                deliverable_contract: materialized.case.deliverable_contract,
+            })
+        }
+        ScenarioKey::Markdown(id) => {
+            let scenario = crate::markdown::embedded_scenario(&id)?;
+            let case = crate::suite::markdown_case(&scenario, seed)?;
+            let execution = crate::markdown::execution_policy();
+            let contract_sha256 = scenario_contract_sha256(&case, execution)?;
+            let complexity = case.complexity.profile;
+            Ok(ScenarioDescriptor {
+                scenario_id,
+                origin: ScenarioOrigin::Markdown,
+                plans: scenario.plans,
+                author_version: Some(scenario.version),
+                source_path: Some(scenario.source_path),
+                source_sha256: Some(scenario.source_sha256),
+                behavior_sha256: Some(scenario.behavior_sha256),
+                compiled_sha256: Some(scenario.compiled_sha256),
+                scenario_version: case.scenario_version,
+                case_id: case.case_id,
+                seed: case.seed,
+                inputs_sha256: case.inputs_sha256,
+                contract_sha256,
+                classification: case.complexity,
+                complexity,
+                characterization: case.characterization,
+                resource_envelope: ScenarioResourceEnvelope {
+                    execution,
+                    workflow: None,
+                },
+                required_capabilities: case.required_capabilities,
+                deliverable_contract: case.deliverable_contract,
+            })
+        }
+    }
 }
 
 fn terminal_observation(
@@ -2155,7 +2256,7 @@ mod tests {
             judge_provider: None,
             audit_model: None,
             audit_provider: None,
-            scenarios: vec![ScenarioId::PersistentState],
+            scenarios: vec![ScenarioId::ContextPressure.into()],
             runs: 1,
             seed: Some(42),
             rotating_seeds: Vec::new(),
@@ -2189,7 +2290,7 @@ mod tests {
         let scenario = catalog
             .scenarios
             .iter()
-            .find(|scenario| scenario.scenario_id == ScenarioId::PersistentState)
+            .find(|scenario| scenario.scenario_id == ScenarioId::ContextPressure.into())
             .unwrap()
             .clone();
         request.run_contract = Some(ObservationRunContract {
@@ -2254,9 +2355,12 @@ mod tests {
     #[test]
     fn scenarios_list_materializes_versioned_cases() {
         let response = scenarios_list(ScenariosListRequest { seed: Some(7) }).unwrap();
-        assert_eq!(response.scenarios.len(), ScenarioId::ALL.len());
+        assert_eq!(
+            response.scenarios.len(),
+            crate::markdown::all_keys().unwrap().len()
+        );
         for scenario in &response.scenarios {
-            let id = scenario.scenario_id;
+            let id = scenario.scenario_id.clone();
             let expected_seed = if id.canonical_seed_only() {
                 id.canonical_seed()
             } else {
@@ -2268,7 +2372,7 @@ mod tests {
                 .contains(&format!("seed-{expected_seed:016x}")));
         }
         assert_eq!(response.schema, CATALOG_SCHEMA);
-        assert_eq!(response.schema, "e2e-scenario-catalog/v2");
+        assert_eq!(response.schema, "e2e-scenario-catalog/v3");
         assert!(response.catalog_sha256.starts_with("sha256:"));
         assert!(response.scenarios.iter().all(|scenario| {
             scenario.inputs_sha256.starts_with("sha256:")
@@ -2279,7 +2383,7 @@ mod tests {
         let git = response
             .scenarios
             .iter()
-            .find(|scenario| scenario.scenario_id == ScenarioId::GitRegressionForensics)
+            .find(|scenario| scenario.scenario_id == ScenarioId::GitRegressionForensics.into())
             .unwrap();
         assert_eq!(
             git.characterization.realism.execution,
@@ -2288,13 +2392,26 @@ mod tests {
         let incident = response
             .scenarios
             .iter()
-            .find(|scenario| scenario.scenario_id == ScenarioId::IncidentResponse)
+            .find(|scenario| scenario.scenario_id == ScenarioId::IncidentResponse.into())
             .unwrap();
         let workflow = incident.resource_envelope.workflow.as_ref().unwrap();
         assert_eq!(workflow.max_parallel, 3);
         assert_eq!(workflow.max_total_tokens, Some(686_000));
         assert_eq!(workflow.max_cost_usd, Some(25.0));
         assert_eq!(workflow.technical_retries, 0);
+        let markdown = response
+            .scenarios
+            .iter()
+            .find(|scenario| scenario.scenario_id.as_str() == "insert_record")
+            .unwrap();
+        assert_eq!(markdown.origin, ScenarioOrigin::Markdown);
+        assert_eq!(markdown.plans, ["daily", "weekly"]);
+        assert_eq!(markdown.author_version, Some(1));
+        assert!(markdown
+            .source_sha256
+            .as_deref()
+            .unwrap()
+            .starts_with("sha256:"));
     }
 
     #[test]
@@ -2495,7 +2612,7 @@ mod tests {
     fn security_review_is_admitted_only_without_technical_retries() {
         let mut request = request();
         request.lane = "local".into();
-        request.scenarios = vec![ScenarioId::SecurityReview];
+        request.scenarios = vec![ScenarioId::SecurityReview.into()];
         request.technical_retries = 0;
         validate_run_request(&request).expect("security review should use the control plane");
 
@@ -2510,13 +2627,13 @@ mod tests {
     fn todo_worker_scenarios_are_admitted_by_the_control_plane() {
         let mut simple = request();
         simple.lane = "local".into();
-        simple.scenarios = vec![ScenarioId::TodoWorkerSimple];
+        simple.scenarios = vec![ScenarioId::TodoWorkerSimple.into()];
         simple.technical_retries = 0;
         validate_run_request(&simple).expect("todo_worker_simple should be Console-admitted");
 
         let mut planned = request();
         planned.lane = "local".into();
-        planned.scenarios = vec![ScenarioId::TodoWorkerPlanned];
+        planned.scenarios = vec![ScenarioId::TodoWorkerPlanned.into()];
         planned.technical_retries = 0;
         validate_run_request(&planned)
             .expect("planned Todo worker should be Console-admitted without technical retries");
@@ -2524,7 +2641,7 @@ mod tests {
 
     #[test]
     fn subject_policy_hides_control_functions() {
-        let spec = ScenarioId::MinimalPath.spec("policy");
+        let spec = ScenarioId::ContextPressure.spec("policy");
         let policy = crate::suite::e2e_function_policy(&spec, "test-run");
         assert!(policy.deny.contains(&"e2e::*".to_string()));
     }

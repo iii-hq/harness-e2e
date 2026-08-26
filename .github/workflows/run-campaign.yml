@@ -24,6 +24,8 @@ jobs:
     env:
       HARNESS_E2E_MODEL: ${{ vars.HARNESS_E2E_MODEL }}
       HARNESS_E2E_PROVIDER: ${{ vars.HARNESS_E2E_PROVIDER }}
+      HARNESS_E2E_JUDGE_MODEL: ${{ vars.HARNESS_E2E_JUDGE_MODEL }}
+      HARNESS_E2E_JUDGE_PROVIDER: ${{ vars.HARNESS_E2E_JUDGE_PROVIDER }}
       HARNESS_E2E_ENGINEERING_FIXTURE_REPOSITORY: ${{ vars.HARNESS_E2E_ENGINEERING_FIXTURE_REPOSITORY }}
       ENGINEERING_TICKET_FIXTURE_REVISION: 7a6b25b3cd12d66af74a358ae86e0d2b846bd384
       SHARED_FIXTURE_REVISION: 16f6b9e05e34e09c824191eed0631d77f85be6a9
@@ -54,6 +56,8 @@ jobs:
           test -x /opt/iii-harness-e2e/archive-trusted-execution
           test -n "${HARNESS_E2E_MODEL:-}"
           test -n "${HARNESS_E2E_PROVIDER:-}"
+          test -n "${HARNESS_E2E_JUDGE_MODEL:-}"
+          test -n "${HARNESS_E2E_JUDGE_PROVIDER:-}"
           test -n "${III_URL:-}"
           test -x /opt/iii-harness-e2e/engineering-ticket-fixture
           test -n "${HARNESS_E2E_ENGINEERING_FIXTURE_REPOSITORY:-}"

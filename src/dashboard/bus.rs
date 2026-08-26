@@ -25,7 +25,6 @@ use super::store::read_stored_run;
 use super::RunRequest;
 use crate::catalog::CatalogModel;
 use crate::context::E2eContext;
-use crate::scenarios::ScenarioId;
 
 pub(super) const EXECUTIONS_LIST: &str = "e2e::dashboard::executions-list";
 pub(super) const EXECUTION_GET: &str = "e2e::dashboard::execution-get";
@@ -683,9 +682,9 @@ pub(super) async fn catalog(
             if models.is_empty() {
                 bail!("the running Harness has no registered models");
             }
-            let scenarios = ScenarioId::ALL
-                .iter()
-                .map(|value| value.as_str().to_string())
+            let scenarios = crate::markdown::all_keys()?
+                .into_iter()
+                .map(|value| value.to_string())
                 .collect();
             return Ok(CatalogResponse {
                 url,
@@ -706,9 +705,9 @@ pub(super) async fn catalog(
         if models.is_empty() {
             bail!("the running Harness has no registered models");
         }
-        let scenarios = ScenarioId::ALL
-            .iter()
-            .map(|value| value.as_str().to_string())
+        let scenarios = crate::markdown::all_keys()?
+            .into_iter()
+            .map(|value| value.to_string())
             .collect();
         Ok(CatalogResponse {
             url,

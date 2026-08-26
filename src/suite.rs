@@ -1,10 +1,11 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use anyhow::{bail, Context, Result};
 use chrono::{SecondsFormat, Utc};
+use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use serde_json::json;
 use tokio::sync::{mpsc, oneshot, watch};
 use uuid::Uuid;
@@ -22,17 +23,21 @@ use crate::asset::{self, AssetCaptureLimits};
 use crate::context::E2eContext;
 use crate::identity::{self, ExecutionIdentity, SystemUnderTestIdentity};
 use crate::judge::{self, JudgeConfig};
+use crate::markdown::{
+    CompiledMarkdownScenario, MarkdownCriterion, RenderedMarkdownScenario, ScenarioKey,
+};
 use crate::report::{
-    CostReport, CriterionReport, E2eManifest, E2eReport, E2eRunReport, E2eScenarioReport,
-    EvaluationDimension, FailurePhase, HardGateReport, ModelArtifact, ObservationMetricOrigin,
-    ObservationRunContract, RetryAttemptReport, RunStatus, ScenarioFlowEvidence,
-    ScenarioMeasurement,
+    AdherenceAvailability, AdherenceRequirement, CostReport, CriterionReport, E2eManifest,
+    E2eReport, E2eRunReport, E2eScenarioReport, EvaluationDimension, FailurePhase, HardGateReport,
+    InstructionAdherenceReport, MarkdownExecutionReport, MarkdownPhaseReport, MarkdownPhaseStatus,
+    ModelArtifact, ObservationMetricOrigin, ObservationRunContract, RetryAttemptReport, RunStatus,
+    ScenarioFlowEvidence, ScenarioMeasurement,
 };
 use crate::scenarios::common;
 use crate::scenarios::{
-    CapturedDeliverableContent, CriterionAward, MaterializedScenario, ObjectiveEvaluation,
-    ScenarioCase, ScenarioDeliverableCapture, ScenarioExecutionKind, ScenarioId,
-    ScenarioObservation, ScenarioSpec,
+    CapturedDeliverableContent, ComplexityProfile, CriterionAward, DeliverableContract,
+    MaterializedScenario, ObjectiveEvaluation, ScenarioCase, ScenarioDeliverableCapture,
+    ScenarioExecutionKind, ScenarioId, ScenarioObservation, ScenarioSpec,
 };
 use crate::wire::{
     ControlPlaneEvidence, FunctionPolicy, MessageInput, Model, SendOptions, SendRequest,
@@ -86,7 +91,7 @@ pub struct SuiteRunConfig {
     /// Opt-in: `None` keeps the audit deterministic-only.
     pub audit_analyzer: Option<JudgeConfig>,
     pub output: PathBuf,
-    pub scenarios: Vec<ScenarioId>,
+    pub scenarios: Vec<ScenarioKey>,
     pub runs: u32,
     pub seed: Option<u64>,
     pub rotating_seeds: Vec<u64>,
@@ -94,6 +99,9 @@ pub struct SuiteRunConfig {
     pub progress_interval: Option<Duration>,
     pub control: Option<SuiteControl>,
     pub observation_contract: Option<ObservationRunContract>,
+    /// Exact immutable Markdown plan used by materialized replay. The runner
+    /// recomputes and compares every field before executing any phase.
+    pub materialized_markdown_plan: Option<serde_json::Value>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -128,7 +136,7 @@ pub enum SuitePhase {
 pub enum SuiteEvent {
     Phase(SuitePhase),
     AttemptStarted {
-        scenario_id: ScenarioId,
+        scenario_id: ScenarioKey,
         run_id: String,
         attempt_id: String,
         session_id: String,
@@ -202,9 +210,18 @@ pub async fn run_suite(config: SuiteRunConfig) -> Result<SuiteRunOutcome> {
     let subject_model = resolve_model(&context, &config.subject.model, &config.subject.provider)
         .await
         .context("resolve subject model")?;
+    let has_markdown = config
+        .scenarios
+        .iter()
+        .any(|scenario| scenario.built_in().is_none());
     let judge_model = match config.judge.as_ref() {
         Some(judge) => match resolve_model(&context, &judge.model, &judge.provider).await {
             Ok(model) => Some(model),
+            Err(error) if has_markdown => {
+                return Err(error).context(
+                    "resolve the explicit auxiliary model required by Markdown scenarios",
+                );
+            }
             Err(error) => {
                 tracing::warn!(
                     provider = judge.provider,
@@ -217,17 +234,21 @@ pub async fn run_suite(config: SuiteRunConfig) -> Result<SuiteRunOutcome> {
         },
         None => None,
     };
-    if config.scenarios.contains(&ScenarioId::SecurityReview) {
+    let built_in_scenarios = config
+        .scenarios
+        .iter()
+        .filter_map(ScenarioKey::built_in)
+        .collect::<Vec<_>>();
+    if built_in_scenarios.contains(&ScenarioId::SecurityReview) {
         crate::workflow::security_scan::register_local_adapter_if_configured(context.as_ref())
             .await
             .context("register fixture-backed local security-scan adapter")?;
     }
-    let composite_definitions = config
-        .scenarios
+    let composite_definitions = built_in_scenarios
         .iter()
         .filter_map(|scenario| composite_definition(*scenario))
         .collect::<Vec<_>>();
-    let composite_catalog = composite_descriptor_catalog(&config.scenarios)?;
+    let composite_catalog = composite_descriptor_catalog(&built_in_scenarios)?;
     for definition in &composite_definitions {
         definition
             .validate(&composite_catalog)
@@ -268,60 +289,113 @@ pub async fn run_suite(config: SuiteRunConfig) -> Result<SuiteRunOutcome> {
     emit_phase(config.control.as_ref(), SuitePhase::Materializing).await?;
     let mut scenario_reports = Vec::new();
 
-    for scenario_id in &config.scenarios {
+    for scenario_key in &config.scenarios {
         ensure_not_cancelled(config.control.as_ref())?;
-        for seed in case_seeds(*scenario_id, config.seed, &config.rotating_seeds) {
-            let definition = scenario_id
-                .materialize("validation", seed)
-                .with_context(|| format!("materialize scenario {}", scenario_id.as_str()))?;
-            preflight_case(&context, &control_plane, &definition.case).await?;
-            let mut runs = Vec::with_capacity(config.runs as usize);
-            for repetition in 0..config.runs {
-                tracing::info!(
-                    scenario = scenario_id.as_str(),
-                    case_id = definition.case.case_id,
-                    seed,
-                    run = repetition + 1,
-                    total_runs = config.runs,
-                    "running E2E quality scenario case"
-                );
-                let run = run_with_technical_retries(
-                    &context,
-                    RetryRequest {
-                        scenario_id: *scenario_id,
-                        subject: &config.subject,
-                        judge_config: config.judge.as_ref(),
-                        audit_analyzer: config.audit_analyzer.as_ref(),
-                        seed,
-                        technical_retries: config.technical_retries,
-                        progress_interval: config.progress_interval,
-                        control: config.control.as_ref(),
-                        output: &config.output,
-                        system_identity_sha256: &system_identity_sha256,
-                        adaptive_resume: config
-                            .control
-                            .as_ref()
-                            .and_then(|control| control.adaptive_resume.as_ref())
-                            .filter(|resume| resume.scenario_id == *scenario_id),
-                    },
-                )
-                .await;
-                let stop = run.status.is_technical_failure();
-                runs.push(run);
-                if stop {
-                    tracing::warn!(
+        for seed in case_seeds_for_key(scenario_key, config.seed, &config.rotating_seeds) {
+            if let Some(scenario_id) = scenario_key.built_in() {
+                let definition = scenario_id
+                    .materialize("validation", seed)
+                    .with_context(|| format!("materialize scenario {}", scenario_id.as_str()))?;
+                preflight_case(&context, &control_plane, &definition.case).await?;
+                let mut runs = Vec::with_capacity(config.runs as usize);
+                for repetition in 0..config.runs {
+                    tracing::info!(
                         scenario = scenario_id.as_str(),
+                        case_id = definition.case.case_id,
                         seed,
-                        "stopping case after a technical failure"
+                        run = repetition + 1,
+                        total_runs = config.runs,
+                        "running E2E quality scenario case"
                     );
-                    break;
+                    let run = run_with_technical_retries(
+                        &context,
+                        RetryRequest {
+                            scenario_id,
+                            subject: &config.subject,
+                            judge_config: config.judge.as_ref(),
+                            audit_analyzer: config.audit_analyzer.as_ref(),
+                            seed,
+                            technical_retries: config.technical_retries,
+                            progress_interval: config.progress_interval,
+                            control: config.control.as_ref(),
+                            output: &config.output,
+                            system_identity_sha256: &system_identity_sha256,
+                            adaptive_resume: config
+                                .control
+                                .as_ref()
+                                .and_then(|control| control.adaptive_resume.as_ref())
+                                .filter(|resume| resume.scenario_id == scenario_id),
+                        },
+                    )
+                    .await;
+                    let stop = run.status.is_technical_failure();
+                    runs.push(run);
+                    if stop {
+                        tracing::warn!(
+                            scenario = scenario_id.as_str(),
+                            seed,
+                            "stopping case after a technical failure"
+                        );
+                        break;
+                    }
                 }
+                scenario_reports.push(E2eScenarioReport::aggregate_case(
+                    definition.case,
+                    definition.spec.execution,
+                    runs,
+                ));
+            } else {
+                let scenario = crate::markdown::embedded_scenario(scenario_key.as_str())?;
+                let case = markdown_case(&scenario, seed)?;
+                preflight_case(&context, &control_plane, &case).await?;
+                let mut runs = Vec::with_capacity(config.runs as usize);
+                for repetition in 0..config.runs {
+                    tracing::info!(
+                        scenario = scenario.id,
+                        case_id = case.case_id,
+                        seed,
+                        run = repetition + 1,
+                        total_runs = config.runs,
+                        "running Markdown-authored E2E scenario"
+                    );
+                    let run = run_markdown_with_technical_retries(
+                        &context,
+                        MarkdownRetryRequest {
+                            scenario: &scenario,
+                            subject: &config.subject,
+                            auxiliary: config
+                                .judge
+                                .as_ref()
+                                .expect("validated Markdown auxiliary model"),
+                            audit_analyzer: config.audit_analyzer.as_ref(),
+                            seed,
+                            technical_retries: config.technical_retries,
+                            progress_interval: config.progress_interval,
+                            control: config.control.as_ref(),
+                            output: &config.output,
+                            system_identity_sha256: &system_identity_sha256,
+                            runs: config.runs,
+                            materialized_plan: config.materialized_markdown_plan.as_ref(),
+                        },
+                    )
+                    .await;
+                    let stop = run.status.is_technical_failure();
+                    runs.push(run);
+                    if stop {
+                        tracing::warn!(
+                            scenario = scenario.id,
+                            seed,
+                            "stopping Markdown case after a technical failure"
+                        );
+                        break;
+                    }
+                }
+                scenario_reports.push(E2eScenarioReport::aggregate_case(
+                    case,
+                    crate::markdown::execution_policy(),
+                    runs,
+                ));
             }
-            scenario_reports.push(E2eScenarioReport::aggregate_case(
-                definition.case,
-                definition.spec.execution,
-                runs,
-            ));
         }
     }
 
@@ -1194,7 +1268,7 @@ fn validate_config(config: &SuiteRunConfig) -> Result<()> {
         .as_ref()
         .and_then(|control| control.adaptive_resume.as_ref())
     {
-        if config.scenarios.as_slice() != [resume.scenario_id]
+        if config.scenarios.as_slice() != [ScenarioKey::BuiltIn(resume.scenario_id)]
             || config.runs != 1
             || config.technical_retries != 0
             || !config.rotating_seeds.is_empty()
@@ -1204,7 +1278,24 @@ fn validate_config(config: &SuiteRunConfig) -> Result<()> {
     }
     for scenario in &config.scenarios {
         let seed = config.seed.unwrap_or_else(|| scenario.canonical_seed());
-        scenario.materialize("validation", seed)?;
+        if let Some(scenario) = scenario.built_in() {
+            scenario.materialize("validation", seed)?;
+        } else {
+            crate::markdown::embedded_scenario(scenario.as_str())?;
+        }
+    }
+    if config
+        .scenarios
+        .iter()
+        .any(|scenario| scenario.built_in().is_none())
+        && config.judge.is_none()
+    {
+        bail!("Markdown scenarios require an explicit auxiliary model and provider");
+    }
+    if config.materialized_markdown_plan.is_some()
+        && (config.scenarios.len() != 1 || config.scenarios[0].built_in().is_some())
+    {
+        bail!("materialized Markdown replay requires exactly one Markdown scenario");
     }
     if let Some(judge) = &config.judge {
         if judge.model.trim().is_empty() || judge.provider.trim().is_empty() {
@@ -1217,6 +1308,19 @@ fn validate_config(config: &SuiteRunConfig) -> Result<()> {
 fn case_seeds(scenario: ScenarioId, fixed: Option<u64>, rotating: &[u64]) -> Vec<u64> {
     if scenario.canonical_seed_only() {
         return vec![scenario.canonical_seed()];
+    }
+    let mut seeds = vec![fixed.unwrap_or_else(|| scenario.canonical_seed())];
+    for seed in rotating {
+        if !seeds.contains(seed) {
+            seeds.push(*seed);
+        }
+    }
+    seeds
+}
+
+fn case_seeds_for_key(scenario: &ScenarioKey, fixed: Option<u64>, rotating: &[u64]) -> Vec<u64> {
+    if let Some(scenario) = scenario.built_in() {
+        return case_seeds(scenario, fixed, rotating);
     }
     let mut seeds = vec![fixed.unwrap_or_else(|| scenario.canonical_seed())];
     for seed in rotating {
@@ -1381,7 +1485,7 @@ async fn run_once(context: &Arc<E2eContext>, request: AttemptRequest<'_>) -> E2e
     if let Err(error) = emit_event(
         control,
         SuiteEvent::AttemptStarted {
-            scenario_id,
+            scenario_id: scenario_id.into(),
             run_id: run_id.to_string(),
             attempt_id: attempt_id.clone(),
             session_id: session_id.clone(),
@@ -1644,7 +1748,7 @@ async fn run_adaptive_once(
     if let Err(error) = emit_event(
         control,
         SuiteEvent::AttemptStarted {
-            scenario_id,
+            scenario_id: scenario_id.into(),
             run_id: run_id.to_string(),
             attempt_id: attempt_id.clone(),
             session_id,
@@ -2039,7 +2143,7 @@ async fn run_composite_once(
     if let Err(error) = emit_event(
         control,
         SuiteEvent::AttemptStarted {
-            scenario_id,
+            scenario_id: scenario_id.into(),
             run_id: run_id.to_string(),
             attempt_id: attempt_id.clone(),
             session_id,
@@ -2292,6 +2396,1740 @@ fn workflow_failure_phase(phase: WorkflowFailurePhase) -> FailurePhase {
         WorkflowFailurePhase::Capture | WorkflowFailurePhase::Persist => FailurePhase::Collect,
         WorkflowFailurePhase::Evaluate => FailurePhase::Evaluate,
         WorkflowFailurePhase::Cleanup => FailurePhase::Cleanup,
+    }
+}
+
+pub(crate) fn markdown_case(
+    scenario: &CompiledMarkdownScenario,
+    seed: u64,
+) -> Result<ScenarioCase> {
+    ScenarioCase::new(
+        scenario.id.clone(),
+        scenario.version,
+        seed,
+        json!({
+            "source_path": scenario.source_path,
+            "plans": scenario.plans,
+            "source_sha256": scenario.source_sha256,
+            "behavior_sha256": scenario.behavior_sha256,
+            "compiled_sha256": scenario.compiled_sha256,
+        }),
+        ComplexityProfile {
+            planning_depth: 2,
+            dependency_depth: 1,
+            external_systems: 1,
+            state_transitions: 2,
+            validation_loops: 1,
+            compensable_mutations: 1,
+            ..ComplexityProfile::default()
+        },
+        vec![
+            "iii::functions".into(),
+            "iii::database".into(),
+            "iii::state".into(),
+        ],
+        DeliverableContract::default(),
+    )
+}
+
+struct MarkdownRetryRequest<'a> {
+    scenario: &'a CompiledMarkdownScenario,
+    subject: &'a SubjectConfig,
+    auxiliary: &'a JudgeConfig,
+    audit_analyzer: Option<&'a JudgeConfig>,
+    seed: u64,
+    technical_retries: u8,
+    progress_interval: Option<Duration>,
+    control: Option<&'a SuiteControl>,
+    output: &'a std::path::Path,
+    system_identity_sha256: &'a str,
+    runs: u32,
+    materialized_plan: Option<&'a serde_json::Value>,
+}
+
+async fn run_markdown_with_technical_retries(
+    context: &Arc<E2eContext>,
+    request: MarkdownRetryRequest<'_>,
+) -> E2eRunReport {
+    let run_id = Uuid::new_v4().simple().to_string();
+    let mut retry_attempts = Vec::with_capacity(request.technical_retries as usize);
+    loop {
+        let attempt_number = retry_attempts.len() as u32 + 1;
+        let mut report = run_markdown_once(
+            context,
+            MarkdownAttemptRequest {
+                scenario: request.scenario,
+                subject: request.subject,
+                auxiliary: request.auxiliary,
+                audit_analyzer: request.audit_analyzer,
+                run_id: &run_id,
+                attempt_number,
+                seed: request.seed,
+                progress_interval: request.progress_interval,
+                control: request.control,
+                output: request.output,
+                system_identity_sha256: request.system_identity_sha256,
+                technical_retries: request.technical_retries,
+                runs: request.runs,
+                materialized_plan: request.materialized_plan,
+            },
+        )
+        .await;
+        if retry_attempts.len() < request.technical_retries as usize
+            && is_retryable_technical_failure(&report)
+            && request
+                .control
+                .is_none_or(|control| !*control.cancellation.borrow())
+        {
+            let reason = report
+                .failures
+                .first()
+                .map(|failure| failure.message.as_str())
+                .unwrap_or("transient technical failure");
+            tracing::warn!(
+                scenario = request.scenario.id,
+                attempt = attempt_number,
+                max_retries = request.technical_retries,
+                reason,
+                "retrying Markdown scenario after a technical failure"
+            );
+            retry_attempts.push(RetryAttemptReport::from(&report));
+            continue;
+        }
+        report.attach_retry_attempts(retry_attempts);
+        return report;
+    }
+}
+
+struct MarkdownAttemptRequest<'a> {
+    scenario: &'a CompiledMarkdownScenario,
+    subject: &'a SubjectConfig,
+    auxiliary: &'a JudgeConfig,
+    audit_analyzer: Option<&'a JudgeConfig>,
+    run_id: &'a str,
+    attempt_number: u32,
+    seed: u64,
+    progress_interval: Option<Duration>,
+    control: Option<&'a SuiteControl>,
+    output: &'a std::path::Path,
+    system_identity_sha256: &'a str,
+    technical_retries: u8,
+    runs: u32,
+    materialized_plan: Option<&'a serde_json::Value>,
+}
+
+struct MarkdownSessionObservation {
+    session_id: String,
+    metrics: crate::wire::SessionMetricsResponse,
+    transcript: serde_json::Value,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ValidatorDecision {
+    verdict: String,
+    reason: String,
+    #[serde(default)]
+    evidence: Vec<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct AdherenceDecision {
+    summary: String,
+    requirements: Vec<AdherenceRequirement>,
+}
+
+async fn run_markdown_once(
+    context: &Arc<E2eContext>,
+    request: MarkdownAttemptRequest<'_>,
+) -> E2eRunReport {
+    let started = Instant::now();
+    let attempt_id = Uuid::new_v4().simple().to_string();
+    let subject_session_id = format!("e2e_{attempt_id}");
+    let rendered_run_id = request
+        .materialized_plan
+        .and_then(|plan| plan.pointer("/rendered/run_id"))
+        .and_then(serde_json::Value::as_str)
+        .filter(|run_id| safe_markdown_run_id(run_id))
+        .unwrap_or(request.run_id);
+    let rendered = crate::markdown::render(request.scenario, rendered_run_id, request.seed);
+    let mut report = E2eRunReport::new(
+        request.run_id.to_string(),
+        attempt_id.clone(),
+        request.attempt_number,
+        subject_session_id.clone(),
+        rendered.prompt.clone(),
+    );
+    let mut phases = markdown_phases(&rendered);
+    let mut session_ids = Vec::new();
+    let mut setup_receipts = Vec::new();
+    let mut subject_receipts = Vec::new();
+    let mut cleanup_receipts = Vec::new();
+    let mut setup_started = false;
+    let generated_plan = materialized_markdown_plan(&request, &rendered);
+    let plan = request
+        .materialized_plan
+        .cloned()
+        .unwrap_or_else(|| generated_plan.clone());
+    if plan != generated_plan {
+        report.push_failure(
+            RunStatus::InfrastructureError,
+            FailurePhase::Setup,
+            "materialized Markdown plan does not match the current scenario, models, policies, budgets, stack, runner, runs, or retries",
+        );
+    }
+    let plan_sha256 = match artifact::sha256_value(&plan) {
+        Ok(hash) => Some(hash),
+        Err(error) => {
+            report.push_failure(
+                RunStatus::InfrastructureError,
+                FailurePhase::Setup,
+                format!("hash materialized Markdown plan: {error:#}"),
+            );
+            None
+        }
+    };
+    report.markdown_execution = Some(MarkdownExecutionReport {
+        source_path: request.scenario.source_path.clone(),
+        source_sha256: request.scenario.source_sha256.clone(),
+        behavior_sha256: request.scenario.behavior_sha256.clone(),
+        compiled_sha256: request.scenario.compiled_sha256.clone(),
+        materialized_plan_sha256: plan_sha256.clone(),
+        prompt_sha256: artifact::sha256_bytes(rendered.prompt.as_bytes()),
+        pipeline_complete: false,
+        phases: Vec::new(),
+    });
+
+    if let Err(error) = emit_event(
+        request.control,
+        SuiteEvent::AttemptStarted {
+            scenario_id: ScenarioKey::Markdown(request.scenario.id.clone()),
+            run_id: request.run_id.to_string(),
+            attempt_id: attempt_id.clone(),
+            session_id: subject_session_id.clone(),
+            resume_state_path: None,
+        },
+    )
+    .await
+    {
+        report.push_failure(
+            RunStatus::InfrastructureError,
+            FailurePhase::Setup,
+            format!("persist Markdown attempt checkpoint: {error:#}"),
+        );
+    }
+
+    if report.failures.is_empty() {
+        if let Err(error) = persist_markdown_inputs(
+            request.output,
+            request.scenario,
+            request.run_id,
+            &attempt_id,
+            &plan,
+            &mut report,
+        ) {
+            report.push_failure(
+                RunStatus::InfrastructureError,
+                FailurePhase::Setup,
+                format!("persist immutable Markdown inputs: {error:#}"),
+            );
+        }
+    }
+    if report.failures.is_empty() {
+        if let Err(error) = emit_phase(request.control, SuitePhase::SettingUp).await {
+            report.push_failure(
+                RunStatus::InfrastructureError,
+                FailurePhase::Setup,
+                format!("persist setup checkpoint: {error:#}"),
+            );
+        }
+    }
+    if report.failures.is_empty() {
+        if let Err(error) = context.bind_turn_completed().await {
+            report.push_failure(
+                RunStatus::InfrastructureError,
+                FailurePhase::Setup,
+                format!("bind harness::turn-completed: {error:#}"),
+            );
+        }
+    }
+
+    if report.failures.is_empty() {
+        let setup_session_id = format!("e2e_{attempt_id}_setup");
+        setup_started = true;
+        session_ids.push(setup_session_id.clone());
+        let setup_prompt = format!(
+            "Prepare the isolated environment for the upcoming test. Execute only the authored setup instructions below. Do not attempt the test task itself. Every mutation must be run-scoped and reversible.\n\n{}",
+            rendered.before_test
+        );
+        match run_markdown_session(
+            context,
+            MarkdownSessionRequest {
+                scenario_id: &request.scenario.id,
+                phase: "setup",
+                session_id: &setup_session_id,
+                prompt: &setup_prompt,
+                model: &request.auxiliary.model,
+                provider: &request.auxiliary.provider,
+                functions: markdown_setup_policy(),
+                max_turns: 16,
+                max_output_tokens: Some(4_096),
+                max_total_tokens: Some(80_000),
+                max_validation_retries: Some(1),
+                stuck_timeout: Duration::from_secs(180),
+                progress_interval: request.progress_interval,
+                control: request.control,
+                idempotency_key: format!("e2e:{}:setup", attempt_id),
+            },
+        )
+        .await
+        {
+            Ok(observation) => {
+                setup_receipts = function_call_receipts(&observation.transcript);
+                let setup_gaps = markdown_setup_gaps(
+                    &rendered.before_test,
+                    &setup_receipts,
+                    observation.metrics.totals.function_call_errors,
+                );
+                if setup_gaps.is_empty() {
+                    complete_markdown_phase(&mut phases, "setup", &observation, "");
+                } else {
+                    let reason = format!(
+                        "setup did not perform the required operations: {}",
+                        setup_gaps.join(", ")
+                    );
+                    fail_markdown_phase(&mut phases, "setup", &setup_session_id, &reason);
+                    report.push_failure(
+                        RunStatus::InfrastructureError,
+                        FailurePhase::Setup,
+                        format!("Markdown {reason}"),
+                    );
+                }
+                if let Err(error) = persist_markdown_session(
+                    request.output,
+                    request.run_id,
+                    &attempt_id,
+                    "setup",
+                    &observation,
+                    &mut report,
+                ) {
+                    report.push_failure(
+                        RunStatus::InfrastructureError,
+                        FailurePhase::Collect,
+                        format!("persist setup evidence: {error:#}"),
+                    );
+                }
+            }
+            Err(error) => {
+                fail_markdown_phase(&mut phases, "setup", &setup_session_id, &error.to_string());
+                report.push_failure(
+                    RunStatus::InfrastructureError,
+                    FailurePhase::Setup,
+                    format!("Markdown setup failed: {error:#}"),
+                );
+            }
+        }
+    }
+
+    if report.failures.is_empty() {
+        let _ = emit_phase(request.control, SuitePhase::Executing).await;
+        session_ids.push(subject_session_id.clone());
+        match run_markdown_session(
+            context,
+            MarkdownSessionRequest {
+                scenario_id: &request.scenario.id,
+                phase: "subject",
+                session_id: &subject_session_id,
+                prompt: &rendered.prompt,
+                model: &request.subject.model,
+                provider: &request.subject.provider,
+                functions: markdown_subject_policy(),
+                max_turns: crate::markdown::execution_policy().max_turns,
+                max_output_tokens: crate::markdown::execution_policy().max_output_tokens,
+                max_total_tokens: crate::markdown::execution_policy().max_total_tokens,
+                max_validation_retries: crate::markdown::execution_policy().max_validation_retries,
+                stuck_timeout: Duration::from_secs(
+                    crate::markdown::execution_policy().stuck_timeout_seconds,
+                ),
+                progress_interval: request.progress_interval,
+                control: request.control,
+                idempotency_key: format!("e2e:{}:subject", attempt_id),
+            },
+        )
+        .await
+        {
+            Ok(observation) => {
+                subject_receipts = function_call_receipts(&observation.transcript);
+                report.metrics = Some(observation.metrics.clone());
+                report.transcript = Some(observation.transcript.clone());
+                complete_markdown_phase(&mut phases, "subject", &observation, "");
+                if let Err(error) = persist_markdown_session(
+                    request.output,
+                    request.run_id,
+                    &attempt_id,
+                    "subject",
+                    &observation,
+                    &mut report,
+                ) {
+                    report.push_failure(
+                        RunStatus::InfrastructureError,
+                        FailurePhase::Collect,
+                        format!("persist subject evidence: {error:#}"),
+                    );
+                }
+            }
+            Err(error) => {
+                fail_markdown_phase(
+                    &mut phases,
+                    "subject",
+                    &subject_session_id,
+                    &error.to_string(),
+                );
+                report.push_failure(
+                    RunStatus::SubjectError,
+                    FailurePhase::Execute,
+                    format!("Markdown subject failed: {error:#}"),
+                );
+            }
+        }
+    }
+
+    if report.failures.is_empty() {
+        let _ = emit_phase(request.control, SuitePhase::Collecting).await;
+        evaluate_markdown_validations(
+            context,
+            &request,
+            &rendered.validations,
+            &attempt_id,
+            &mut session_ids,
+            &mut phases,
+            &mut report,
+        )
+        .await;
+    }
+
+    if report.transcript.is_some() {
+        let mut adherence_input = markdown_adherence_input(&rendered.prompt, &report);
+        let mut adherence = match redact_markdown_artifact(&mut report, &mut adherence_input) {
+            Ok(()) => {
+                evaluate_markdown_adherence(context, request.auxiliary, &adherence_input).await
+            }
+            Err(error) => {
+                report.push_failure(
+                    RunStatus::InfrastructureError,
+                    FailurePhase::Collect,
+                    format!("prepare instruction-adherence evidence: {error:#}"),
+                );
+                InstructionAdherenceReport {
+                    availability: AdherenceAvailability::Failed,
+                    score: None,
+                    summary: format!("instruction-adherence evidence was unavailable: {error:#}"),
+                    requirements: Vec::new(),
+                    analyzer: None,
+                    analyzer_usage: None,
+                }
+            }
+        };
+        let adherence_phase = phases
+            .iter_mut()
+            .find(|phase| phase.phase == "adherence")
+            .expect("adherence phase exists");
+        adherence_phase.status = MarkdownPhaseStatus::Completed;
+        adherence_phase.reason = format!("{:?}", adherence.availability).to_ascii_lowercase();
+        let root = std::path::PathBuf::from("evidence")
+            .join(request.run_id)
+            .join(&attempt_id);
+        let adherence_artifact =
+            redact_markdown_artifact(&mut report, &mut adherence).and_then(|()| {
+                artifact::write_json(
+                    request.output,
+                    &root.join("instruction-adherence.json"),
+                    format!("{attempt_id}-instruction-adherence"),
+                    "instruction-adherence",
+                    &adherence,
+                )
+            });
+        match adherence_artifact {
+            Ok(reference) => report.evidence.push(reference),
+            Err(error) => {
+                adherence_phase.status = MarkdownPhaseStatus::Failed;
+                adherence_phase.reason = format!("persist adherence evidence: {error:#}");
+                report.push_failure(
+                    RunStatus::InfrastructureError,
+                    FailurePhase::Collect,
+                    format!("persist instruction-adherence evidence: {error:#}"),
+                );
+            }
+        }
+        report.instruction_adherence = Some(adherence);
+    }
+
+    let _ = emit_phase(request.control, SuitePhase::CleaningUp).await;
+    if setup_started || !subject_receipts.is_empty() {
+        let cleanup_session_id = format!("e2e_{attempt_id}_cleanup");
+        session_ids.push(cleanup_session_id.clone());
+        let cleanup_actions =
+            markdown_cleanup_actions(&setup_receipts, &subject_receipts).join("\n");
+        let cleanup_prompt = format!(
+            "Clean up only the run-scoped mutations represented by the trusted receipts below. Perform exactly the required cleanup actions, verify them with the corresponding read-only checks, and then stop. Never inspect, list, modify, delete, drop, or remove resources that are not named in the receipts. A surface with no mutating receipt is outside the cleanup scope. Do not create new persistent state.\n\nRequired cleanup actions derived from the receipts:\n{}\n\nAuthored setup:\n{}\n\nSetup receipts:\n{}\n\nSubject receipts:\n{}",
+            cleanup_actions,
+            rendered.before_test,
+            serde_json::to_string(&setup_receipts).unwrap_or_else(|_| "[]".into()),
+            serde_json::to_string(&subject_receipts).unwrap_or_else(|_| "[]".into()),
+        );
+        match run_markdown_session(
+            context,
+            MarkdownSessionRequest {
+                scenario_id: &request.scenario.id,
+                phase: "cleanup",
+                session_id: &cleanup_session_id,
+                prompt: &cleanup_prompt,
+                model: &request.auxiliary.model,
+                provider: &request.auxiliary.provider,
+                functions: markdown_cleanup_policy(&setup_receipts, &subject_receipts),
+                max_turns: 16,
+                max_output_tokens: Some(4_096),
+                max_total_tokens: Some(160_000),
+                max_validation_retries: Some(1),
+                stuck_timeout: Duration::from_secs(180),
+                progress_interval: request.progress_interval,
+                control: request.control,
+                idempotency_key: format!("e2e:{}:cleanup", attempt_id),
+            },
+        )
+        .await
+        {
+            Ok(observation) => {
+                cleanup_receipts = function_call_receipts(&observation.transcript);
+                let cleanup_gaps =
+                    markdown_cleanup_gaps(&setup_receipts, &subject_receipts, &cleanup_receipts);
+                if !cleanup_gaps.is_empty() {
+                    let reason = format!(
+                        "cleanup did not reverse the required mutations: {}",
+                        cleanup_gaps.join(", ")
+                    );
+                    fail_markdown_phase(&mut phases, "cleanup", &cleanup_session_id, &reason);
+                    report.push_failure(
+                        RunStatus::InfrastructureError,
+                        FailurePhase::Cleanup,
+                        format!("Markdown {reason}"),
+                    );
+                } else {
+                    complete_markdown_phase(&mut phases, "cleanup", &observation, "");
+                }
+                if let Err(error) = persist_markdown_session(
+                    request.output,
+                    request.run_id,
+                    &attempt_id,
+                    "cleanup",
+                    &observation,
+                    &mut report,
+                ) {
+                    report.push_failure(
+                        RunStatus::InfrastructureError,
+                        FailurePhase::Collect,
+                        format!("persist cleanup evidence: {error:#}"),
+                    );
+                }
+            }
+            Err(error) => {
+                fail_markdown_phase(
+                    &mut phases,
+                    "cleanup",
+                    &cleanup_session_id,
+                    &error.to_string(),
+                );
+                report.push_failure(
+                    RunStatus::InfrastructureError,
+                    FailurePhase::Cleanup,
+                    format!("Markdown cleanup failed: {error:#}"),
+                );
+            }
+        }
+    } else {
+        let cleanup = phases
+            .iter_mut()
+            .find(|phase| phase.phase == "cleanup")
+            .expect("cleanup phase exists");
+        cleanup.status = MarkdownPhaseStatus::Completed;
+        cleanup.reason = "no mutable function receipts were observed".into();
+    }
+
+    let receipt_root = std::path::PathBuf::from("evidence")
+        .join(request.run_id)
+        .join(&attempt_id);
+    let mut receipts = json!({
+        "setup": setup_receipts,
+        "subject": subject_receipts,
+        "cleanup": cleanup_receipts,
+    });
+    let receipt_artifact = redact_markdown_artifact(&mut report, &mut receipts).and_then(|()| {
+        artifact::write_json(
+            request.output,
+            &receipt_root.join("receipts.json"),
+            format!("{attempt_id}-receipts"),
+            "markdown-function-receipts",
+            &receipts,
+        )
+    });
+    match receipt_artifact {
+        Ok(reference) => report.evidence.push(reference),
+        Err(error) => report.push_failure(
+            RunStatus::InfrastructureError,
+            FailurePhase::Collect,
+            format!("persist Markdown function receipts: {error:#}"),
+        ),
+    }
+
+    for session_id in session_ids.iter().rev() {
+        if let Err(error) = context.teardown(session_id).await {
+            report.push_failure(
+                RunStatus::InfrastructureError,
+                FailurePhase::Cleanup,
+                format!("teardown Markdown session '{session_id}': {error:#}"),
+            );
+        }
+    }
+    if let Err(error) = context.unbind_turn_completed().await {
+        report.push_failure(
+            RunStatus::InfrastructureError,
+            FailurePhase::Cleanup,
+            format!("unbind harness::turn-completed: {error:#}"),
+        );
+    }
+
+    let pipeline_complete = phases
+        .iter()
+        .all(|phase| phase.status == MarkdownPhaseStatus::Completed);
+    if let Some(execution) = report.markdown_execution.as_mut() {
+        execution.pipeline_complete = pipeline_complete;
+        execution.phases = phases;
+    }
+    report.wall_time_ms = started.elapsed().as_millis().min(u64::MAX as u128) as u64;
+    if report.failures.is_empty() {
+        if report.validation_score.is_some() && pipeline_complete {
+            report.finish(RunStatus::Passed);
+        } else {
+            report.push_failure(
+                RunStatus::InfrastructureError,
+                FailurePhase::Evaluate,
+                "Markdown evaluation completed without an available score or complete pipeline",
+            );
+        }
+    }
+    report.update_cost(true);
+    if let Ok(case) = markdown_case(request.scenario, request.seed) {
+        report.update_efficiency(case.work);
+    }
+    report.refresh_dimensions(false);
+    let audit_case = markdown_case(request.scenario, request.seed).ok();
+    report.audit = Some(
+        crate::audit::run_markdown_audit(
+            context.as_ref(),
+            request.audit_analyzer,
+            &rendered.prompt,
+            &markdown_subject_policy().deny,
+            audit_case.as_ref(),
+            &report,
+        )
+        .await,
+    );
+    if let Err(error) = emit_event(
+        request.control,
+        SuiteEvent::AttemptFinished {
+            attempt_id: attempt_id.clone(),
+        },
+    )
+    .await
+    {
+        report.push_failure(
+            RunStatus::InfrastructureError,
+            FailurePhase::Cleanup,
+            format!("persist Markdown attempt completion: {error:#}"),
+        );
+    }
+    report
+}
+
+struct MarkdownSessionRequest<'a> {
+    scenario_id: &'a str,
+    phase: &'a str,
+    session_id: &'a str,
+    prompt: &'a str,
+    model: &'a str,
+    provider: &'a str,
+    functions: FunctionPolicy,
+    max_turns: u32,
+    max_output_tokens: Option<u64>,
+    max_total_tokens: Option<u64>,
+    max_validation_retries: Option<u32>,
+    stuck_timeout: Duration,
+    progress_interval: Option<Duration>,
+    control: Option<&'a SuiteControl>,
+    idempotency_key: String,
+}
+
+async fn run_markdown_session(
+    context: &E2eContext,
+    request: MarkdownSessionRequest<'_>,
+) -> Result<MarkdownSessionObservation> {
+    ensure_not_cancelled(request.control)?;
+    context.drain_turn_completed_events();
+    let response: SendResponse = context
+        .trigger(
+            "harness::send",
+            SendRequest {
+                session_id: Some(request.session_id.to_string()),
+                message: MessageInput::Text(request.prompt.to_string()),
+                model: Some(request.model.to_string()),
+                provider: Some(request.provider.to_string()),
+                idempotency_key: Some(request.idempotency_key),
+                session: Some(SessionInit {
+                    title: Some(format!(
+                        "Harness E2E Markdown: {} ({})",
+                        request.scenario_id, request.phase
+                    )),
+                    metadata: Some(json!({
+                        "e2e_scenario": request.scenario_id,
+                        "e2e_markdown_phase": request.phase,
+                    })),
+                }),
+                options: Some(SendOptions {
+                    max_turns: Some(request.max_turns),
+                    max_output_tokens: request.max_output_tokens,
+                    max_total_tokens: request.max_total_tokens,
+                    max_validation_retries: request.max_validation_retries,
+                    functions: Some(request.functions),
+                    metadata: None,
+                }),
+            },
+        )
+        .await
+        .with_context(|| format!("send Markdown {} session", request.phase))?;
+    if !response.accepted
+        || response.session_id != request.session_id
+        || response.merged == Some(true)
+        || response.queued == Some(true)
+    {
+        bail!(
+            "harness::send returned an unexpected response for Markdown {}: {response:?}",
+            request.phase
+        );
+    }
+    let metrics = context
+        .wait_for_turn(
+            request.scenario_id,
+            request.session_id,
+            &response.turn_id,
+            request.stuck_timeout,
+            request.progress_interval.is_some(),
+            request.control.map(|control| &control.cancellation),
+        )
+        .await
+        .with_context(|| format!("wait for Markdown {} session", request.phase))?;
+    let transcript = context
+        .transcript(request.session_id)
+        .await
+        .with_context(|| format!("collect Markdown {} transcript", request.phase))?;
+    Ok(MarkdownSessionObservation {
+        session_id: request.session_id.to_string(),
+        metrics,
+        transcript,
+    })
+}
+
+async fn evaluate_markdown_validations(
+    context: &E2eContext,
+    request: &MarkdownAttemptRequest<'_>,
+    validations: &[MarkdownCriterion],
+    attempt_id: &str,
+    session_ids: &mut Vec<String>,
+    phases: &mut [MarkdownPhaseReport],
+    report: &mut E2eRunReport,
+) {
+    let Some(transcript) = report.transcript.as_ref() else {
+        return;
+    };
+    let evidence_digest = json!({
+        "subject_transcript_sha256": artifact::sha256_value(transcript).ok(),
+        "final_response": common::final_response(transcript),
+        "function_calls": function_call_receipts(transcript),
+        "trusted_metrics": report.metrics,
+    });
+    let mut score = 0u8;
+    let mut available = true;
+    for (index, criterion) in validations.iter().enumerate() {
+        let session_id = format!("e2e_{attempt_id}_validation_{:02}", index + 1);
+        session_ids.push(session_id.clone());
+        let prompt = format!(
+            "Evaluate exactly one criterion using only the trusted evidence digest and the read-only tools available to you. Return one JSON object and no Markdown: {{\"verdict\":\"passed|failed|inconclusive\",\"reason\":\"brief evidence-based reason\",\"evidence\":[\"specific evidence\"]}}. Use inconclusive whenever the evidence or a required read is unavailable.\n\nCriterion: {}\nWeight: {}%\nInstructions:\n{}\n\nTrusted evidence digest:\n{}",
+            criterion.title,
+            criterion.weight,
+            criterion.instructions,
+            serde_json::to_string(&evidence_digest).unwrap_or_else(|_| "{}".into()),
+        );
+        match run_markdown_session(
+            context,
+            MarkdownSessionRequest {
+                scenario_id: &request.scenario.id,
+                phase: "validation",
+                session_id: &session_id,
+                prompt: &prompt,
+                model: &request.auxiliary.model,
+                provider: &request.auxiliary.provider,
+                functions: markdown_validator_policy(),
+                max_turns: 8,
+                max_output_tokens: Some(2_048),
+                max_total_tokens: Some(80_000),
+                max_validation_retries: Some(1),
+                stuck_timeout: Duration::from_secs(120),
+                progress_interval: request.progress_interval,
+                control: request.control,
+                idempotency_key: format!("e2e:{attempt_id}:validation:{index}"),
+            },
+        )
+        .await
+        {
+            Ok(observation) => {
+                if let Err(error) = persist_markdown_session(
+                    request.output,
+                    request.run_id,
+                    attempt_id,
+                    &format!("validation-{:02}", index + 1),
+                    &observation,
+                    report,
+                ) {
+                    available = false;
+                    report.push_failure(
+                        RunStatus::InfrastructureError,
+                        FailurePhase::Collect,
+                        format!("persist validator evidence: {error:#}"),
+                    );
+                    continue;
+                }
+                let response = common::final_response(&observation.transcript);
+                match parse_json_object::<ValidatorDecision>(&response)
+                    .and_then(validate_validator_decision)
+                {
+                    Ok(decision) if decision.verdict == "passed" => {
+                        score = score.saturating_add(criterion.weight);
+                        report.criteria.push(CriterionReport {
+                            id: criterion.id.clone(),
+                            possible: criterion.weight,
+                            awarded: Some(criterion.weight),
+                            reason: validation_reason(&decision),
+                        });
+                    }
+                    Ok(decision) if decision.verdict == "failed" => {
+                        report.criteria.push(CriterionReport {
+                            id: criterion.id.clone(),
+                            possible: criterion.weight,
+                            awarded: Some(0),
+                            reason: validation_reason(&decision),
+                        });
+                    }
+                    Ok(decision) => {
+                        available = false;
+                        report.criteria.push(CriterionReport {
+                            id: criterion.id.clone(),
+                            possible: criterion.weight,
+                            awarded: None,
+                            reason: validation_reason(&decision),
+                        });
+                        report.push_failure(
+                            RunStatus::JudgeError,
+                            FailurePhase::Evaluate,
+                            format!("validator '{}' returned inconclusive", criterion.id),
+                        );
+                    }
+                    Err(error) => {
+                        available = false;
+                        report.criteria.push(CriterionReport {
+                            id: criterion.id.clone(),
+                            possible: criterion.weight,
+                            awarded: None,
+                            reason: format!("validator output was invalid: {error:#}"),
+                        });
+                        report.push_failure(
+                            RunStatus::JudgeError,
+                            FailurePhase::Evaluate,
+                            format!("validator '{}' failed: {error:#}", criterion.id),
+                        );
+                    }
+                }
+            }
+            Err(error) => {
+                available = false;
+                report.criteria.push(CriterionReport {
+                    id: criterion.id.clone(),
+                    possible: criterion.weight,
+                    awarded: None,
+                    reason: format!("validator session failed: {error:#}"),
+                });
+                report.push_failure(
+                    RunStatus::JudgeError,
+                    FailurePhase::Evaluate,
+                    format!("validator '{}' session failed: {error:#}", criterion.id),
+                );
+            }
+        }
+    }
+    let phase = phases
+        .iter_mut()
+        .find(|phase| phase.phase == "validations")
+        .expect("validations phase exists");
+    if available && report.criteria.len() == request.scenario.validations.len() {
+        report.validation_score = Some(score);
+        report.score = Some(score);
+        phase.status = MarkdownPhaseStatus::Completed;
+        phase.reason = format!("{} validators completed", report.criteria.len());
+    } else {
+        phase.status = MarkdownPhaseStatus::Failed;
+        phase.reason = "one or more validators were unavailable or inconclusive".into();
+    }
+}
+
+async fn evaluate_markdown_adherence(
+    context: &E2eContext,
+    config: &JudgeConfig,
+    input: &serde_json::Value,
+) -> InstructionAdherenceReport {
+    let input_sha256 =
+        artifact::sha256_value(input).unwrap_or_else(|_| artifact::sha256_bytes(b"unavailable"));
+    let analyzer = AnalyzerIdentity {
+        analyzer: "instruction-adherence".into(),
+        provider: Some(config.provider.clone()),
+        model: Some(config.model.clone()),
+        input_sha256,
+    };
+    let prompt = format!(
+        "Assess how faithfully the subject followed the authored prompt. Identify each atomic requirement and decide only whether it was followed. The runner calculates the numeric score deterministically; do not return a score. Use only the supplied evidence. Function outcomes are authoritative: a failed call has no successful side effect, and must not violate an outcome requirement when a later successful call plus validation evidence proves the required final state, unless the prompt explicitly prohibits failed attempts. Return one JSON object and no Markdown: {{\"summary\":\"brief conclusion\",\"requirements\":[{{\"id\":\"requirement_1\",\"instruction\":\"requirement text\",\"followed\":false,\"reason\":\"evidence-based reason\",\"confidence\":0.0,\"evidence\":[\"specific evidence\"]}}]}}. Confidence must be from 0 through 1.\n\nInput:\n{}",
+        serde_json::to_string(input).unwrap_or_else(|_| "{}".into()),
+    );
+    let started = Instant::now();
+    match judge::invoke(
+        context,
+        config,
+        "You are an impartial instruction-adherence evaluator. Return exactly one JSON object without Markdown.",
+        &prompt,
+        4_096,
+    )
+    .await
+    {
+        Ok(response) => {
+            let usage = judge::response_usage(&response);
+            let analyzer_usage = AnalyzerUsage {
+                latency_ms: Some(started.elapsed().as_millis().min(u64::MAX as u128) as u64),
+                input_tokens: usage.as_ref().and_then(|usage| usage.input_tokens),
+                output_tokens: usage.as_ref().and_then(|usage| usage.output_tokens),
+                cost_usd: usage.as_ref().and_then(|usage| usage.cost_usd),
+            };
+            match parse_json_object::<AdherenceDecision>(&judge::assistant_text(&response))
+                .and_then(validate_adherence_decision)
+            {
+                Ok(decision) => InstructionAdherenceReport {
+                    availability: AdherenceAvailability::Available,
+                    score: Some(deterministic_adherence_score(&decision.requirements)),
+                    summary: decision.summary,
+                    requirements: decision.requirements,
+                    analyzer: Some(analyzer),
+                    analyzer_usage: Some(analyzer_usage),
+                },
+                Err(error) => InstructionAdherenceReport {
+                    availability: AdherenceAvailability::Failed,
+                    score: None,
+                    summary: format!("instruction-adherence output was invalid: {error:#}"),
+                    requirements: Vec::new(),
+                    analyzer: Some(analyzer),
+                    analyzer_usage: Some(analyzer_usage),
+                },
+            }
+        }
+        Err(error) => InstructionAdherenceReport {
+            availability: AdherenceAvailability::Failed,
+            score: None,
+            summary: format!("instruction-adherence analyzer failed: {error:#}"),
+            requirements: Vec::new(),
+            analyzer: Some(analyzer),
+            analyzer_usage: Some(AnalyzerUsage {
+                latency_ms: Some(started.elapsed().as_millis().min(u64::MAX as u128) as u64),
+                ..AnalyzerUsage::default()
+            }),
+        },
+    }
+}
+
+fn markdown_adherence_input(prompt: &str, report: &E2eRunReport) -> serde_json::Value {
+    let transcript = report
+        .transcript
+        .as_ref()
+        .unwrap_or(&serde_json::Value::Null);
+    json!({
+        "prompt": prompt,
+        "final_response": common::final_response(transcript),
+        "function_outcomes": adherence_function_outcomes(transcript),
+        "trusted_metrics": report.metrics,
+        "validation_results": adherence_validation_results(&report.criteria),
+    })
+}
+
+fn adherence_function_outcomes(transcript: &serde_json::Value) -> Vec<serde_json::Value> {
+    common::function_outcomes(transcript)
+        .into_iter()
+        .map(|outcome| {
+            let mut result = serde_json::Map::new();
+            if let Some(details) = outcome.details.as_ref() {
+                for field in ["affected_rows", "row_count"] {
+                    if let Some(value) = details.get(field).filter(|value| value.is_number()) {
+                        result.insert(field.into(), value.clone());
+                    }
+                }
+                for (field, count_field) in [
+                    ("returned_rows", "returned_rows_count"),
+                    ("rows", "rows_count"),
+                ] {
+                    if let Some(count) = details.get(field).and_then(serde_json::Value::as_array) {
+                        result.insert(count_field.into(), json!(count.len()));
+                    }
+                }
+            }
+            let status = match outcome.is_error {
+                Some(false) => "succeeded",
+                Some(true) => "failed",
+                None => "missing_result",
+            };
+            let mut evidence = json!({
+                "ordinal": outcome.ordinal,
+                "function_id": outcome.function_id,
+                "arguments": outcome.arguments,
+                "status": status,
+            });
+            if let Some(error_code) = outcome.error_code {
+                evidence["error_code"] = json!(error_code);
+            }
+            if !result.is_empty() {
+                evidence["result"] = serde_json::Value::Object(result);
+            }
+            evidence
+        })
+        .collect()
+}
+
+fn adherence_validation_results(criteria: &[CriterionReport]) -> Vec<serde_json::Value> {
+    criteria
+        .iter()
+        .map(|criterion| {
+            let verdict = match criterion.awarded {
+                Some(awarded) if awarded == criterion.possible => "passed",
+                Some(0) => "failed",
+                Some(_) => "partial",
+                None => "inconclusive",
+            };
+            json!({
+                "criterion_id": criterion.id,
+                "verdict": verdict,
+                "reason": criterion.reason,
+            })
+        })
+        .collect()
+}
+
+fn deterministic_adherence_score(requirements: &[AdherenceRequirement]) -> u8 {
+    let followed = requirements
+        .iter()
+        .filter(|requirement| requirement.followed)
+        .count();
+    let total = requirements.len();
+    if total == 0 {
+        return 0;
+    }
+    u8::try_from((followed * 100 + total / 2) / total).unwrap_or(100)
+}
+
+fn materialized_markdown_plan(
+    request: &MarkdownAttemptRequest<'_>,
+    rendered: &RenderedMarkdownScenario,
+) -> serde_json::Value {
+    json!({
+        "schema": "harness-e2e-materialized-markdown-plan/v2",
+        "scenario": request.scenario,
+        "rendered": rendered,
+        "seed": request.seed,
+        "subject": {
+            "model": request.subject.model,
+            "provider": request.subject.provider,
+            "functions": markdown_subject_policy(),
+            "execution": crate::markdown::execution_policy(),
+        },
+        "auxiliary": {
+            "model": request.auxiliary.model,
+            "provider": request.auxiliary.provider,
+            "setup_functions": markdown_setup_policy(),
+            "validator_functions": markdown_validator_policy(),
+            "cleanup_functions": markdown_cleanup_capability_policy(),
+            "cleanup_function_selection": "receipt-scoped/v1",
+            "setup_execution": {
+                "max_turns": 16,
+                "max_output_tokens": 4096,
+                "max_total_tokens": 80000,
+                "max_validation_retries": 1,
+                "stuck_timeout_seconds": 180,
+            },
+            "validator_execution": {
+                "sessions_per_criterion": 1,
+                "max_turns": 8,
+                "max_output_tokens": 2048,
+                "max_total_tokens": 80000,
+                "max_validation_retries": 1,
+                "stuck_timeout_seconds": 120,
+            },
+            "adherence_execution": {
+                "max_output_tokens": 4096,
+                "evidence": "bounded-function-outcomes-and-validation-results/v1",
+                "scoring": "equal-weight-binary-requirements/v1",
+            },
+            "cleanup_execution": {
+                "max_turns": 16,
+                "max_output_tokens": 4096,
+                "max_total_tokens": 160000,
+                "max_validation_retries": 1,
+                "stuck_timeout_seconds": 180,
+            },
+        },
+        "audit": request.audit_analyzer.map(|analyzer| json!({
+            "model": analyzer.model,
+            "provider": analyzer.provider,
+        })),
+        "runner": {
+            "identity": crate::report::RunnerIdentity::runtime(),
+            "system_identity_sha256": request.system_identity_sha256,
+        },
+        "campaign": {
+            "runs": request.runs,
+            "technical_retries": request.technical_retries,
+        },
+    })
+}
+
+fn persist_markdown_inputs(
+    output: &std::path::Path,
+    scenario: &CompiledMarkdownScenario,
+    run_id: &str,
+    attempt_id: &str,
+    materialized_plan: &serde_json::Value,
+    report: &mut E2eRunReport,
+) -> Result<()> {
+    let root = std::path::PathBuf::from("evidence")
+        .join(run_id)
+        .join(attempt_id);
+    let source = crate::markdown::embedded_source(scenario)?;
+    let source_reference = artifact::write_bytes(
+        output,
+        &root.join("scenario.md"),
+        format!("{attempt_id}-markdown-source"),
+        "markdown-scenario-source",
+        "text/markdown; charset=utf-8",
+        &source,
+    )?;
+    if artifact::sha256_bytes(&source) != scenario.source_sha256 {
+        bail!("embedded Markdown source differs from its compiled hash");
+    }
+    let compiled_reference = artifact::write_json(
+        output,
+        &root.join("compiled-scenario.json"),
+        format!("{attempt_id}-compiled-scenario"),
+        "compiled-markdown-scenario",
+        scenario,
+    )?;
+    let plan_reference = artifact::write_json(
+        output,
+        &root.join("materialized-plan.json"),
+        format!("{attempt_id}-materialized-plan"),
+        "materialized-markdown-plan",
+        materialized_plan,
+    )?;
+    report
+        .evidence
+        .extend([source_reference, compiled_reference, plan_reference]);
+    Ok(())
+}
+
+fn persist_markdown_session(
+    output: &std::path::Path,
+    run_id: &str,
+    attempt_id: &str,
+    phase: &str,
+    observation: &MarkdownSessionObservation,
+    report: &mut E2eRunReport,
+) -> Result<()> {
+    let root = std::path::PathBuf::from("evidence")
+        .join(run_id)
+        .join(attempt_id);
+    let mut value = json!({
+        "session_id": observation.session_id,
+        "metrics": observation.metrics,
+        "transcript": observation.transcript,
+    });
+    redact_markdown_artifact(report, &mut value)?;
+    let reference = artifact::write_json(
+        output,
+        &root.join(format!("{phase}.json")),
+        format!("{attempt_id}-{phase}"),
+        "markdown-phase-evidence",
+        &value,
+    )?;
+    report.evidence.push(reference);
+    Ok(())
+}
+
+fn redact_markdown_artifact<T>(report: &mut E2eRunReport, value: &mut T) -> Result<()>
+where
+    T: Serialize + DeserializeOwned,
+{
+    let policy = crate::redaction::RedactionPolicy::from_environment();
+    let mut encoded = serde_json::to_value(&*value).context("serialize Markdown evidence")?;
+    report
+        .asset_redaction
+        .merge(policy.redact_value(&mut encoded));
+    policy.assert_clean(
+        &serde_json::to_vec(&encoded).context("encode redacted Markdown evidence")?,
+    )?;
+    *value = serde_json::from_value(encoded).context("decode redacted Markdown evidence")?;
+    Ok(())
+}
+
+fn markdown_phases(scenario: &RenderedMarkdownScenario) -> Vec<MarkdownPhaseReport> {
+    let pending = |phase: &str, input_sha256: String| MarkdownPhaseReport {
+        phase: phase.into(),
+        status: MarkdownPhaseStatus::Pending,
+        session_id: None,
+        input_sha256,
+        transcript_sha256: None,
+        reason: String::new(),
+    };
+    vec![
+        pending(
+            "setup",
+            artifact::sha256_bytes(scenario.before_test.as_bytes()),
+        ),
+        pending(
+            "subject",
+            artifact::sha256_bytes(scenario.prompt.as_bytes()),
+        ),
+        pending(
+            "validations",
+            artifact::sha256_value(&scenario.validations)
+                .unwrap_or_else(|_| artifact::sha256_bytes(b"unavailable")),
+        ),
+        pending(
+            "adherence",
+            artifact::sha256_bytes(scenario.prompt.as_bytes()),
+        ),
+        pending("cleanup", artifact::sha256_bytes(b"receipt-driven cleanup")),
+    ]
+}
+
+fn safe_markdown_run_id(run_id: &str) -> bool {
+    !run_id.is_empty()
+        && run_id.len() <= 128
+        && run_id
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-'))
+}
+
+fn complete_markdown_phase(
+    phases: &mut [MarkdownPhaseReport],
+    phase: &str,
+    observation: &MarkdownSessionObservation,
+    reason: &str,
+) {
+    let phase = phases
+        .iter_mut()
+        .find(|candidate| candidate.phase == phase)
+        .expect("Markdown phase exists");
+    phase.status = MarkdownPhaseStatus::Completed;
+    phase.session_id = Some(observation.session_id.clone());
+    phase.transcript_sha256 = artifact::sha256_value(&observation.transcript).ok();
+    phase.reason = reason.into();
+}
+
+fn fail_markdown_phase(
+    phases: &mut [MarkdownPhaseReport],
+    phase: &str,
+    session_id: &str,
+    reason: &str,
+) {
+    let phase = phases
+        .iter_mut()
+        .find(|candidate| candidate.phase == phase)
+        .expect("Markdown phase exists");
+    phase.status = MarkdownPhaseStatus::Failed;
+    phase.session_id = Some(session_id.into());
+    phase.reason = reason.into();
+}
+
+fn function_call_receipts(transcript: &serde_json::Value) -> Vec<serde_json::Value> {
+    common::function_calls(transcript)
+        .into_iter()
+        .map(|call| {
+            json!({
+                "function_id": call.function_id,
+                "arguments": call.arguments,
+            })
+        })
+        .collect()
+}
+
+fn receipt_function_id(receipt: &serde_json::Value) -> Option<&str> {
+    receipt
+        .get("function_id")
+        .and_then(serde_json::Value::as_str)
+}
+
+fn markdown_setup_gaps(
+    instructions: &str,
+    receipts: &[serde_json::Value],
+    function_call_errors: u64,
+) -> Vec<String> {
+    let mut gaps = Vec::new();
+    for function_id in [
+        "worker::add",
+        "database::execute",
+        "database::executeBatch",
+        "state::set",
+    ] {
+        if markdown_instructions_reference_function(instructions, function_id)
+            && !receipts
+                .iter()
+                .any(|receipt| receipt_function_id(receipt) == Some(function_id))
+        {
+            gaps.push(format!("{function_id} was not called"));
+        }
+    }
+    if function_call_errors > 0 {
+        gaps.push(format!(
+            "setup reported {function_call_errors} function-call error(s)"
+        ));
+    }
+    let mut ever_created = BTreeSet::new();
+    let mut live_created = BTreeSet::new();
+    for statement in receipts.iter().flat_map(receipt_sql_statements) {
+        if let Some(object) = sql_database_object(statement, "CREATE") {
+            ever_created.insert(object.clone());
+            live_created.insert(object);
+        }
+        if let Some(object) = sql_database_object(statement, "DROP") {
+            live_created.remove(&object);
+        }
+    }
+    for (kind, name) in ever_created.difference(&live_created) {
+        gaps.push(format!(
+            "setup removed created {kind} '{name}' before subject execution"
+        ));
+    }
+    gaps
+}
+
+fn markdown_instructions_reference_function(instructions: &str, function_id: &str) -> bool {
+    instructions.match_indices(function_id).any(|(offset, _)| {
+        let bytes = instructions.as_bytes();
+        let is_function_character =
+            |byte: u8| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b':' | b'-');
+        let starts_at_boundary = offset == 0 || !is_function_character(bytes[offset - 1]);
+        let end = offset + function_id.len();
+        let ends_at_boundary = end == bytes.len() || !is_function_character(bytes[end]);
+        starts_at_boundary && ends_at_boundary
+    })
+}
+
+fn markdown_cleanup_gaps(
+    setup: &[serde_json::Value],
+    subject: &[serde_json::Value],
+    cleanup: &[serde_json::Value],
+) -> Vec<String> {
+    let mutations = setup.iter().chain(subject);
+    let mut gaps = BTreeSet::new();
+
+    let added_workers = mutations
+        .clone()
+        .filter(|receipt| receipt_function_id(receipt) == Some("worker::add"))
+        .map(|receipt| receipt_target(receipt, &["worker", "worker_id", "name", "slug"]))
+        .collect::<Vec<_>>();
+    for target in added_workers {
+        if !cleanup.iter().any(|receipt| {
+            receipt_function_id(receipt) == Some("worker::remove")
+                && target.as_deref().is_none_or(|target| {
+                    receipt_target(receipt, &["worker", "worker_id", "name", "slug"]).as_deref()
+                        == Some(target)
+                })
+        }) {
+            gaps.insert(match target {
+                Some(target) => format!("worker '{target}' was not removed"),
+                None => "an added worker was not removed".into(),
+            });
+        }
+    }
+
+    let state_keys = mutations
+        .clone()
+        .filter(|receipt| receipt_function_id(receipt) == Some("state::set"))
+        .map(|receipt| receipt_target(receipt, &["key"]))
+        .collect::<Vec<_>>();
+    for key in state_keys {
+        if !cleanup.iter().any(|receipt| {
+            receipt_function_id(receipt) == Some("state::delete")
+                && key
+                    .as_deref()
+                    .is_none_or(|key| receipt_target(receipt, &["key"]).as_deref() == Some(key))
+        }) {
+            gaps.insert(match key {
+                Some(key) => format!("state key '{key}' was not deleted"),
+                None => "run-scoped state was not deleted".into(),
+            });
+        }
+    }
+
+    let database_mutation = mutations.clone().any(|receipt| {
+        matches!(
+            receipt_function_id(receipt),
+            Some("database::execute" | "database::executeBatch" | "database::transaction")
+        )
+    });
+    let database_cleanup = cleanup.iter().any(|receipt| {
+        matches!(
+            receipt_function_id(receipt),
+            Some("database::execute" | "database::executeBatch" | "database::transaction")
+        )
+    });
+    if database_mutation && !database_cleanup {
+        gaps.insert("database mutations had no reversing database operation".into());
+    }
+
+    let created_objects = mutations
+        .flat_map(receipt_sql_statements)
+        .filter_map(|sql| sql_database_object(sql, "CREATE"))
+        .collect::<BTreeSet<_>>();
+    let dropped_objects = cleanup
+        .iter()
+        .flat_map(receipt_sql_statements)
+        .filter_map(|sql| sql_database_object(sql, "DROP"))
+        .collect::<BTreeSet<_>>();
+    for (kind, name) in created_objects.difference(&dropped_objects) {
+        gaps.insert(format!("created {kind} '{name}' was not dropped"));
+    }
+
+    gaps.into_iter().collect()
+}
+
+fn markdown_cleanup_actions(
+    setup: &[serde_json::Value],
+    subject: &[serde_json::Value],
+) -> Vec<String> {
+    let mutations = setup.iter().chain(subject).collect::<Vec<_>>();
+    let mut actions = BTreeSet::new();
+
+    for receipt in &mutations {
+        if receipt_function_id(receipt) == Some("worker::add") {
+            if let Some(worker) = receipt_target(receipt, &["worker", "worker_id", "name", "slug"])
+            {
+                actions.insert(format!(
+                    "- Remove exactly worker `{worker}` with `worker::remove`, then verify that worker only with `worker::status`."
+                ));
+            }
+        }
+        if receipt_function_id(receipt) == Some("state::set") {
+            let scope = receipt_target(receipt, &["scope"]);
+            let key = receipt_target(receipt, &["key"]);
+            if let (Some(scope), Some(key)) = (scope, key) {
+                actions.insert(format!(
+                    "- Delete exactly scope `{scope}`, key `{key}` with one `state::delete`, then verify that exact target is absent with one `state::get`."
+                ));
+            }
+        }
+        for (kind, name) in receipt_sql_statements(receipt)
+            .into_iter()
+            .filter_map(|sql| sql_database_object(sql, "CREATE"))
+        {
+            actions.insert(format!(
+                "- Drop exactly {kind} `{name}` with `database::execute`, then verify that exact {kind} is absent with `database::query`."
+            ));
+        }
+    }
+
+    if actions.is_empty() {
+        actions.insert("- No reversible mutation target was derived; make no mutations.".into());
+    }
+    actions.into_iter().collect()
+}
+
+fn receipt_target(receipt: &serde_json::Value, fields: &[&str]) -> Option<String> {
+    let arguments = receipt.get("arguments")?.as_object()?;
+    fields.iter().find_map(|field| {
+        arguments
+            .get(*field)
+            .and_then(serde_json::Value::as_str)
+            .map(str::to_string)
+    })
+}
+
+fn receipt_sql_statements(receipt: &serde_json::Value) -> Vec<&str> {
+    match receipt_function_id(receipt) {
+        Some("database::execute") => receipt
+            .pointer("/arguments/sql")
+            .and_then(serde_json::Value::as_str)
+            .into_iter()
+            .collect(),
+        Some("database::executeBatch" | "database::transaction") => receipt
+            .pointer("/arguments/statements")
+            .and_then(serde_json::Value::as_array)
+            .into_iter()
+            .flatten()
+            .filter_map(|statement| {
+                statement
+                    .as_str()
+                    .or_else(|| statement.get("sql").and_then(serde_json::Value::as_str))
+            })
+            .collect(),
+        _ => Vec::new(),
+    }
+}
+
+fn sql_database_object(sql: &str, operation: &str) -> Option<(String, String)> {
+    let tokens = sql
+        .split_whitespace()
+        .map(|token| token.trim_matches(['`', '"', '\'', ';', '(', ')', ',']))
+        .collect::<Vec<_>>();
+    let operation_index = tokens
+        .iter()
+        .position(|token| token.eq_ignore_ascii_case(operation))?;
+    let object_offset = tokens[operation_index + 1..].iter().position(|token| {
+        token.eq_ignore_ascii_case("TABLE") || token.eq_ignore_ascii_case("VIEW")
+    })?;
+    let kind_index = operation_index + object_offset + 1;
+    let kind = tokens.get(kind_index)?.to_ascii_lowercase();
+    let mut index = kind_index + 1;
+    if tokens.get(index..index + 3).is_some_and(|tokens| {
+        tokens[0].eq_ignore_ascii_case("IF")
+            && tokens[1].eq_ignore_ascii_case("NOT")
+            && tokens[2].eq_ignore_ascii_case("EXISTS")
+    }) {
+        index += 3;
+    } else if tokens.get(index..index + 2).is_some_and(|tokens| {
+        tokens[0].eq_ignore_ascii_case("IF") && tokens[1].eq_ignore_ascii_case("EXISTS")
+    }) {
+        index += 2;
+    }
+    let name = tokens
+        .get(index)?
+        .trim_matches(['`', '"', '\'', ';', '(', ')', ',']);
+    (!name.is_empty()).then(|| (kind, name.to_ascii_lowercase()))
+}
+
+fn parse_json_object<T>(text: &str) -> Result<T>
+where
+    T: for<'de> Deserialize<'de>,
+{
+    let start = text.find('{').context("response contains no JSON object")?;
+    let end = text
+        .rfind('}')
+        .context("response contains no complete JSON object")?;
+    serde_json::from_str(&text[start..=end]).context("decode response JSON object")
+}
+
+fn validate_validator_decision(decision: ValidatorDecision) -> Result<ValidatorDecision> {
+    if !matches!(
+        decision.verdict.as_str(),
+        "passed" | "failed" | "inconclusive"
+    ) {
+        bail!("validator verdict must be passed, failed, or inconclusive");
+    }
+    if decision.reason.trim().is_empty() {
+        bail!("validator reason cannot be empty");
+    }
+    Ok(decision)
+}
+
+fn validation_reason(decision: &ValidatorDecision) -> String {
+    if decision.evidence.is_empty() {
+        return decision.reason.clone();
+    }
+    format!(
+        "{} Evidence: {}",
+        decision.reason,
+        decision.evidence.join("; ")
+    )
+}
+
+fn validate_adherence_decision(decision: AdherenceDecision) -> Result<AdherenceDecision> {
+    if decision.summary.trim().is_empty() {
+        bail!("adherence summary is invalid");
+    }
+    if decision.requirements.is_empty() {
+        bail!("adherence response must identify at least one requirement");
+    }
+    let mut ids = BTreeSet::new();
+    for requirement in &decision.requirements {
+        if requirement.id.trim().is_empty()
+            || requirement.instruction.trim().is_empty()
+            || requirement.reason.trim().is_empty()
+            || !(0.0..=1.0).contains(&requirement.confidence)
+            || !ids.insert(requirement.id.as_str())
+        {
+            bail!("adherence requirement is invalid");
+        }
+    }
+    Ok(decision)
+}
+
+fn markdown_setup_policy() -> FunctionPolicy {
+    FunctionPolicy {
+        allow: [
+            "engine::functions::list",
+            "engine::functions::info",
+            "worker::validate",
+            "worker::add",
+            "worker::status",
+            "database::execute",
+            "database::executeBatch",
+            "database::query",
+            "state::get",
+            "state::set",
+        ]
+        .into_iter()
+        .map(str::to_string)
+        .collect(),
+        deny: [
+            "e2e::*",
+            "harness::teardown",
+            "worker::remove",
+            "worker::clear",
+            "state::clear",
+        ]
+        .into_iter()
+        .map(str::to_string)
+        .collect(),
+        ..FunctionPolicy::default()
+    }
+}
+
+fn markdown_subject_policy() -> FunctionPolicy {
+    FunctionPolicy {
+        allow: [
+            "engine::functions::list",
+            "engine::functions::info",
+            "worker::status",
+            "database::query",
+            "database::execute",
+            "database::executeBatch",
+            "database::transaction",
+            "state::get",
+            "state::set",
+        ]
+        .into_iter()
+        .map(str::to_string)
+        .collect(),
+        deny: [
+            "e2e::*",
+            "harness::teardown",
+            "worker::add",
+            "worker::remove",
+            "worker::clear",
+            "state::delete",
+            "state::clear",
+            "shell::*",
+            "coder::*",
+        ]
+        .into_iter()
+        .map(str::to_string)
+        .collect(),
+        ..FunctionPolicy::default()
+    }
+}
+
+fn markdown_validator_policy() -> FunctionPolicy {
+    FunctionPolicy {
+        allow: [
+            "engine::functions::list",
+            "engine::functions::info",
+            "database::query",
+            "state::get",
+            "worker::status",
+        ]
+        .into_iter()
+        .map(str::to_string)
+        .collect(),
+        deny: [
+            "e2e::*",
+            "database::execute",
+            "database::executeBatch",
+            "database::transaction",
+            "state::set",
+            "state::delete",
+            "state::clear",
+            "worker::add",
+            "worker::remove",
+            "worker::clear",
+            "shell::*",
+            "coder::*",
+        ]
+        .into_iter()
+        .map(str::to_string)
+        .collect(),
+        ..FunctionPolicy::default()
+    }
+}
+
+fn markdown_cleanup_policy(
+    setup: &[serde_json::Value],
+    subject: &[serde_json::Value],
+) -> FunctionPolicy {
+    let mutations = setup.iter().chain(subject).collect::<Vec<_>>();
+    let worker = mutations
+        .iter()
+        .any(|receipt| receipt_function_id(receipt) == Some("worker::add"));
+    let state = mutations
+        .iter()
+        .any(|receipt| receipt_function_id(receipt) == Some("state::set"));
+    let database = mutations.iter().any(|receipt| {
+        matches!(
+            receipt_function_id(receipt),
+            Some("database::execute" | "database::executeBatch" | "database::transaction")
+        )
+    });
+    markdown_cleanup_policy_for_surfaces(worker, database, state)
+}
+
+fn markdown_cleanup_capability_policy() -> FunctionPolicy {
+    markdown_cleanup_policy_for_surfaces(true, true, true)
+}
+
+fn markdown_cleanup_policy_for_surfaces(
+    worker: bool,
+    database: bool,
+    state: bool,
+) -> FunctionPolicy {
+    let mut allow = Vec::new();
+    if worker {
+        allow.extend(["worker::status", "worker::remove"]);
+    }
+    if database {
+        allow.extend([
+            "database::query",
+            "database::execute",
+            "database::executeBatch",
+        ]);
+    }
+    if state {
+        allow.extend(["state::get", "state::delete"]);
+    }
+    FunctionPolicy {
+        allow: allow.into_iter().map(str::to_string).collect(),
+        deny: ["e2e::*", "worker::add", "state::set"]
+            .into_iter()
+            .map(str::to_string)
+            .collect(),
+        ..FunctionPolicy::default()
     }
 }
 
@@ -3640,12 +5478,12 @@ mod tests {
     #[test]
     fn fixed_and_rotating_seeds_materialize_distinct_deduplicated_cases() {
         assert_eq!(
-            case_seeds(ScenarioId::PersistentState, Some(7), &[7, 8, 9, 8]),
+            case_seeds(ScenarioId::MechanicalReaction, Some(7), &[7, 8, 9, 8]),
             vec![7, 8, 9]
         );
         assert_eq!(
-            case_seeds(ScenarioId::PersistentState, None, &[]),
-            vec![ScenarioId::PersistentState.canonical_seed()]
+            case_seeds(ScenarioId::MechanicalReaction, None, &[]),
+            vec![ScenarioId::MechanicalReaction.canonical_seed()]
         );
     }
 
@@ -3938,6 +5776,335 @@ mod tests {
             .as_deref()
             .unwrap()
             .contains("objective system status is unchanged"));
+    }
+
+    #[test]
+    fn markdown_policies_isolate_subject_and_read_only_validators() {
+        let subject = markdown_subject_policy();
+        assert!(!subject.allow.contains(&"*".to_string()));
+        assert!(subject.allow.contains(&"database::execute".to_string()));
+        assert!(subject.allow.contains(&"state::set".to_string()));
+        assert!(subject.deny.contains(&"e2e::*".to_string()));
+        for denied in ["worker::add", "worker::remove", "shell::*", "coder::*"] {
+            assert!(!subject.allow.contains(&denied.to_string()));
+            assert!(subject.deny.contains(&denied.to_string()));
+        }
+
+        let validator = markdown_validator_policy();
+        for mutable in [
+            "database::execute",
+            "database::transaction",
+            "state::set",
+            "state::delete",
+            "worker::add",
+            "worker::remove",
+            "shell::*",
+            "coder::*",
+        ] {
+            assert!(validator.deny.contains(&mutable.to_string()));
+            assert!(!validator.allow.contains(&mutable.to_string()));
+        }
+        assert!(validator.allow.contains(&"database::query".to_string()));
+        assert!(validator.allow.contains(&"state::get".to_string()));
+
+        let state_receipts = vec![json!({
+            "function_id": "state::set",
+            "arguments": {"scope": "owned-scope", "key": "owned-key", "value": 1}
+        })];
+        let cleanup = markdown_cleanup_policy(&state_receipts, &[]);
+        assert_eq!(
+            cleanup.allow,
+            vec!["state::get".to_string(), "state::delete".to_string()]
+        );
+        for unrelated in [
+            "engine::functions::info",
+            "worker::remove",
+            "database::query",
+            "database::execute",
+        ] {
+            assert!(!cleanup.allow.contains(&unrelated.to_string()));
+        }
+        assert_eq!(
+            markdown_cleanup_actions(&state_receipts, &[]),
+            vec![
+                "- Delete exactly scope `owned-scope`, key `owned-key` with one `state::delete`, then verify that exact target is absent with one `state::get`."
+            ]
+        );
+    }
+
+    #[test]
+    fn markdown_dynamic_artifacts_use_the_shared_redaction_policy() {
+        let mut report = E2eRunReport::new(
+            "run".into(),
+            "attempt".into(),
+            1,
+            "session".into(),
+            "prompt".into(),
+        );
+        let mut value = json!({
+            "password": "must-not-survive",
+            "evidence": "safe",
+        });
+
+        redact_markdown_artifact(&mut report, &mut value).unwrap();
+
+        assert_eq!(value["password"], "[REDACTED]");
+        assert!(report.asset_redaction.changed());
+    }
+
+    #[test]
+    fn markdown_cleanup_requires_matching_worker_database_and_state_reversals() {
+        let setup = vec![
+            json!({"function_id": "worker::add", "arguments": {"name": "database-fixture"}}),
+            json!({"function_id": "database::executeBatch", "arguments": {
+                "db": "primary",
+                "statements": [
+                    "CREATE TABLE IF NOT EXISTS markdown_case (id INTEGER)",
+                    {"sql": "CREATE VIEW markdown_case_view AS SELECT id FROM markdown_case"}
+                ]
+            }}),
+            json!({"function_id": "state::set", "arguments": {"key": "e2e/run/value"}}),
+        ];
+        let incomplete = vec![json!({"function_id": "database::execute", "arguments": {
+            "db": "primary",
+            "sql": "DELETE FROM markdown_case"
+        }})];
+
+        let gaps = markdown_cleanup_gaps(&setup, &[], &incomplete);
+        assert!(gaps
+            .iter()
+            .any(|gap| gap == "worker 'database-fixture' was not removed"));
+        assert!(gaps
+            .iter()
+            .any(|gap| gap == "created table 'markdown_case' was not dropped"));
+        assert!(gaps
+            .iter()
+            .any(|gap| gap == "created view 'markdown_case_view' was not dropped"));
+        assert!(gaps
+            .iter()
+            .any(|gap| gap == "state key 'e2e/run/value' was not deleted"));
+
+        let complete = vec![
+            json!({"function_id": "worker::remove", "arguments": {"name": "database-fixture"}}),
+            json!({"function_id": "database::transaction", "arguments": {
+                "db": "primary",
+                "statements": [
+                    {"sql": "DROP VIEW IF EXISTS markdown_case_view"},
+                    {"sql": "DROP TABLE IF EXISTS markdown_case"}
+                ]
+            }}),
+            json!({"function_id": "state::delete", "arguments": {"key": "e2e/run/value"}}),
+        ];
+        assert!(markdown_cleanup_gaps(&setup, &[], &complete).is_empty());
+        let actions = markdown_cleanup_actions(&setup, &[]);
+        assert!(actions
+            .iter()
+            .any(|action| action.contains("view `markdown_case_view`")));
+        assert!(actions
+            .iter()
+            .any(|action| action.contains("table `markdown_case`")));
+    }
+
+    #[test]
+    fn markdown_setup_requires_authored_mutations_to_be_called_without_errors() {
+        let instructions = "Use `state::set` for the baseline and `worker::add` for the fixture.";
+        let state_only = vec![json!({
+            "function_id": "state::set",
+            "arguments": {"scope": "run", "key": "value"}
+        })];
+
+        assert_eq!(
+            markdown_setup_gaps(instructions, &state_only, 0),
+            vec!["worker::add was not called"]
+        );
+        assert_eq!(
+            markdown_setup_gaps(instructions, &state_only, 1),
+            vec![
+                "worker::add was not called",
+                "setup reported 1 function-call error(s)",
+            ]
+        );
+
+        let complete = vec![
+            json!({"function_id": "state::set", "arguments": {}}),
+            json!({"function_id": "worker::add", "arguments": {}}),
+        ];
+        assert!(markdown_setup_gaps(instructions, &complete, 0).is_empty());
+
+        let batch_instructions = "Call `database::executeBatch` exactly once.";
+        let batch = vec![json!({
+            "function_id": "database::executeBatch",
+            "arguments": {"db": "primary", "statements": []}
+        })];
+        assert!(markdown_setup_gaps(batch_instructions, &batch, 0).is_empty());
+
+        let reverted = vec![json!({
+            "function_id": "database::executeBatch",
+            "arguments": {"db": "primary", "statements": [
+                "DROP TABLE IF EXISTS owned_table",
+                "CREATE TABLE owned_table (id INTEGER)",
+                "DROP TABLE owned_table"
+            ]}
+        })];
+        assert_eq!(
+            markdown_setup_gaps(batch_instructions, &reverted, 0),
+            vec!["setup removed created table 'owned_table' before subject execution"]
+        );
+    }
+
+    #[test]
+    fn markdown_adherence_evidence_distinguishes_failed_calls_from_side_effects() {
+        let transcript = json!({"messages": [
+            {"message": {"role": "assistant", "content": [{
+                "type": "function_call",
+                "id": "failed-insert",
+                "function_id": "agent_trigger",
+                "arguments": {
+                    "function": "database::execute",
+                    "payload": {
+                        "db": "primary",
+                        "sql": "INSERT INTO markdown_insert_record (text) VALUES (?)",
+                        "params": ["harness-e2e-markdown"]
+                    }
+                }
+            }]}},
+            {"message": {
+                "role": "function_result",
+                "function_call_id": "failed-insert",
+                "function_id": "database::execute",
+                "is_error": true,
+                "details": {"error": {
+                    "code": "DRIVER_ERROR",
+                    "message": "sensitive driver detail must not enter adherence evidence"
+                }}
+            }},
+            {"message": {"role": "assistant", "content": [{
+                "type": "function_call",
+                "id": "successful-insert",
+                "function_id": "agent_trigger",
+                "arguments": {
+                    "function": "database::execute",
+                    "payload": {
+                        "db": "primary",
+                        "sql": "INSERT INTO markdown_insert_record (value) VALUES (?)",
+                        "params": ["harness-e2e-markdown"]
+                    }
+                }
+            }]}},
+            {"message": {
+                "role": "function_result",
+                "function_call_id": "successful-insert",
+                "function_id": "database::execute",
+                "is_error": false,
+                "details": {"affected_rows": 1, "returned_rows": []}
+            }}
+        ]});
+
+        let outcomes = adherence_function_outcomes(&transcript);
+        assert_eq!(outcomes.len(), 2);
+        assert_eq!(outcomes[0]["status"], "failed");
+        assert_eq!(outcomes[0]["error_code"], "DRIVER_ERROR");
+        assert!(outcomes[0].get("result").is_none());
+        assert_eq!(outcomes[1]["status"], "succeeded");
+        assert_eq!(outcomes[1]["result"]["affected_rows"], 1);
+        assert_eq!(outcomes[1]["result"]["returned_rows_count"], 0);
+        assert!(!serde_json::to_string(&outcomes)
+            .unwrap()
+            .contains("sensitive driver detail"));
+    }
+
+    #[test]
+    fn markdown_adherence_input_includes_completed_validation_evidence() {
+        let scenario = crate::markdown::embedded_scenario("minimal_path").unwrap();
+        let mut report = test_run_report();
+        report.transcript = Some(json!({"messages": [{"message": {
+            "role": "assistant",
+            "content": [{"type": "text", "text": "Inserted exactly one row."}]
+        }}]}));
+        report.criteria.push(CriterionReport {
+            id: "01_record_created".into(),
+            possible: 80,
+            awarded: Some(80),
+            reason: "Read-only query found exactly one matching row".into(),
+        });
+
+        let input = markdown_adherence_input(&scenario.prompt, &report);
+        assert_eq!(input["validation_results"][0]["verdict"], "passed");
+        assert_eq!(
+            input["validation_results"][0]["reason"],
+            "Read-only query found exactly one matching row"
+        );
+    }
+
+    #[test]
+    fn markdown_adherence_score_is_runner_owned_and_deterministic() {
+        let requirement = |id: &str, followed| AdherenceRequirement {
+            id: id.into(),
+            instruction: format!("requirement {id}"),
+            followed,
+            reason: "trusted evidence".into(),
+            confidence: 1.0,
+            evidence: Vec::new(),
+        };
+        let mut requirements = vec![
+            requirement("one", true),
+            requirement("two", true),
+            requirement("three", true),
+            requirement("four", false),
+        ];
+        assert_eq!(deterministic_adherence_score(&requirements), 75);
+        requirements[3].followed = true;
+        assert_eq!(deterministic_adherence_score(&requirements), 100);
+        assert_eq!(deterministic_adherence_score(&[]), 0);
+
+        let duplicate = AdherenceDecision {
+            summary: "duplicate requirement ids".into(),
+            requirements: vec![requirement("same", true), requirement("same", true)],
+        };
+        assert!(validate_adherence_decision(duplicate).is_err());
+    }
+
+    #[test]
+    fn identical_markdown_inputs_materialize_the_same_plan() {
+        let scenario = crate::markdown::embedded_scenario("insert_record").unwrap();
+        let subject = SubjectConfig {
+            model: "subject-model".into(),
+            provider: "subject-provider".into(),
+        };
+        let auxiliary = JudgeConfig {
+            model: "auxiliary-model".into(),
+            provider: "auxiliary-provider".into(),
+        };
+        let output = tempfile::tempdir().unwrap();
+        let request = MarkdownAttemptRequest {
+            scenario: &scenario,
+            subject: &subject,
+            auxiliary: &auxiliary,
+            audit_analyzer: None,
+            run_id: "run",
+            attempt_number: 1,
+            seed: 7,
+            progress_interval: None,
+            control: None,
+            output: output.path(),
+            system_identity_sha256: "sha256:system",
+            technical_retries: 1,
+            runs: 3,
+            materialized_plan: None,
+        };
+        let rendered = crate::markdown::render(&scenario, "run-123", request.seed);
+        let first = materialized_markdown_plan(&request, &rendered);
+        let second = materialized_markdown_plan(&request, &rendered);
+        assert_eq!(first, second);
+        assert_eq!(
+            artifact::sha256_value(&first).unwrap(),
+            artifact::sha256_value(&second).unwrap()
+        );
+        assert_eq!(first["schema"], "harness-e2e-materialized-markdown-plan/v2");
+        assert_eq!(first["rendered"]["run_id"], "run-123");
+        assert_eq!(first["rendered"]["seed"], 7);
+        assert!(!first["rendered"]["prompt"].as_str().unwrap().contains("{{"));
+        assert!(!first.to_string().contains("attempt_id"));
     }
 
     fn test_run_report() -> E2eRunReport {

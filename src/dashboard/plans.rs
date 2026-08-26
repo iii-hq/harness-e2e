@@ -10,6 +10,8 @@ use serde_json::json;
 
 use super::RunRequest;
 use crate::artifact;
+use crate::markdown::ScenarioKey;
+#[cfg(test)]
 use crate::scenarios::ScenarioId;
 
 const PLAN_SCHEMA_VERSION: u32 = 1;
@@ -446,14 +448,15 @@ fn validate_values(request: &PlanCreateRequest) -> Result<()> {
     }
     let selected = ids
         .into_iter()
-        .map(|value| {
-            ScenarioId::ALL
-                .iter()
-                .copied()
-                .find(|id| id.as_str() == value)
-                .with_context(|| format!("unknown scenario '{value}'"))
-        })
+        .map(|value| value.parse::<ScenarioKey>())
         .collect::<Result<Vec<_>>>()?;
+    if selected
+        .iter()
+        .any(|scenario| scenario.built_in().is_none())
+        && (request.judge_model.trim().is_empty() || request.judge_provider.trim().is_empty())
+    {
+        bail!("Markdown scenarios require an explicit judge model and provider");
+    }
     if request.technical_retries > 0
         && selected
             .iter()
@@ -468,27 +471,32 @@ fn resolve_scope(scenario_ids: &[String], seed: Option<u64>) -> Result<Vec<PlanS
     scenario_ids
         .iter()
         .map(|value| {
-            let id = ScenarioId::ALL
-                .iter()
-                .copied()
-                .find(|candidate| candidate.as_str() == value)
-                .with_context(|| format!("unknown scenario '{value}'"))?;
+            let id = value.parse::<ScenarioKey>()?;
             let case_seed = seed.unwrap_or_else(|| id.canonical_seed());
-            let materialized = id.materialize("local-plan", case_seed)?;
+            let (case, execution) = if let Some(built_in) = id.built_in() {
+                let materialized = built_in.materialize("local-plan", case_seed)?;
+                (materialized.case, materialized.spec.execution)
+            } else {
+                let scenario = crate::markdown::embedded_scenario(id.as_str())?;
+                (
+                    crate::suite::markdown_case(&scenario, case_seed)?,
+                    crate::markdown::execution_policy(),
+                )
+            };
             let contract_sha256 = artifact::sha256_value(&json!({
-                "scenario_id": materialized.case.scenario_id,
-                "scenario_version": materialized.case.scenario_version,
-                "case": materialized.case,
-                "execution_policy": materialized.spec.execution,
+                "scenario_id": case.scenario_id,
+                "scenario_version": case.scenario_version,
+                "case": case,
+                "execution_policy": execution,
             }))?;
             Ok(PlanScopeItem {
                 scenario_id: id.as_str().into(),
-                scenario_version: materialized.case.scenario_version,
-                case_id: materialized.case.case_id,
-                seed: materialized.case.seed,
-                inputs_sha256: materialized.case.inputs_sha256,
+                scenario_version: case.scenario_version,
+                case_id: case.case_id,
+                seed: case.seed,
+                inputs_sha256: case.inputs_sha256,
                 contract_sha256,
-                complexity_tier: format!("{:?}", materialized.case.complexity.tier),
+                complexity_tier: format!("{:?}", case.complexity.tier),
             })
         })
         .collect()
@@ -521,7 +529,7 @@ mod tests {
             provider: "provider".into(),
             judge_model: "judge".into(),
             judge_provider: "judge-provider".into(),
-            scenarios: vec![ScenarioId::MinimalPath.as_str().into()],
+            scenarios: vec![ScenarioId::ContextPressure.as_str().into()],
             runs: 1,
             technical_retries: 1,
             seed: None,
@@ -537,11 +545,11 @@ mod tests {
         assert_eq!(plan.scenarios.len(), 1);
         assert_eq!(
             plan.scenarios[0].scenario_version,
-            ScenarioId::MinimalPath.spec("version-check").version
+            ScenarioId::ContextPressure.spec("version-check").version
         );
         assert_eq!(
             plan.scenarios[0].seed,
-            ScenarioId::MinimalPath.canonical_seed()
+            ScenarioId::ContextPressure.canonical_seed()
         );
         assert!(plan.baseline_execution_id.is_none());
     }

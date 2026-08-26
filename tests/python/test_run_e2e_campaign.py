@@ -17,8 +17,10 @@ from run_e2e_campaign import (
     FAULT_PROFILE_WEIGHT,
     SCENARIO_DIFFICULTY_WEIGHT,
     aggregate_existing_campaign,
+    attach_markdown_group,
     build_campaign_bundle,
     build_group_command,
+    discover_markdown_scenarios,
     execute_campaign,
     load_campaign,
     main,
@@ -82,6 +84,34 @@ def contains_seed_field(value):
 
 
 class CanonicalManifestTests(unittest.TestCase):
+    def test_markdown_plan_membership_materializes_a_campaign_group(self):
+        daily = attach_markdown_group(
+            load_campaign(CAMPAIGN_DIR / "daily.json"), ROOT / "scenarios"
+        )
+        group = daily.groups[-1]
+        self.assertEqual(group.id, "daily-markdown")
+        self.assertEqual(group.execution_kind, "harness_turn")
+        self.assertEqual(group.runs, 1)
+        self.assertEqual(group.technical_retries, 1)
+        self.assertEqual(group.difficulty_weight, 2)
+        self.assertIn("insert_record", group.scenarios)
+        self.assertIn("database_migration_recovery", group.scenarios)
+        self.assertIn("minimal_path", group.scenarios)
+        self.assertIn("sequential_pipeline", group.scenarios)
+
+        weekly = attach_markdown_group(
+            load_campaign(CAMPAIGN_DIR / "weekly.json"), ROOT / "scenarios"
+        )
+        self.assertEqual(weekly.groups[-1].runs, 3)
+
+    def test_markdown_discovery_reads_only_the_plans_section(self):
+        scenarios = discover_markdown_scenarios(ROOT / "scenarios", "daily")
+        self.assertIn("insert_record", scenarios)
+        self.assertIn("persistent_state", scenarios)
+        self.assertIn("database_migration_recovery", scenarios)
+        self.assertIn("minimal_path", scenarios)
+        self.assertIn("sequential_pipeline", scenarios)
+
     def test_every_checked_in_campaign_is_valid_and_seedless(self):
         paths = sorted(CAMPAIGN_DIR.glob("*.json"))
         self.assertEqual(
@@ -114,14 +144,12 @@ class CanonicalManifestTests(unittest.TestCase):
         self.assertEqual(
             selected,
             {
-                "minimal_path",
                 "tool_contract_recovery",
                 "shell_coder_sandbox",
                 "performance_regression",
                 "chess_engine_build",
                 "engineering_ticket_git_handoff",
                 "cross_app_transaction",
-                "database_migration_recovery",
                 "browser_cross_site",
                 "release_train_recovery",
             },
@@ -141,7 +169,6 @@ class CanonicalManifestTests(unittest.TestCase):
         self.assertEqual(
             set(groups["daily-canary"].scenarios),
             {
-                "minimal_path",
                 "tool_contract_recovery",
             },
         )
@@ -150,7 +177,6 @@ class CanonicalManifestTests(unittest.TestCase):
             (
                 "shell_coder_sandbox",
                 "performance_regression",
-                "database_migration_recovery",
                 "engineering_ticket_git_handoff",
             ),
         )
@@ -323,6 +349,57 @@ class CampaignRunnerTests(unittest.TestCase):
         self.assertIn("--technical-retries", command)
         self.assertNotIn("--seed", command)
         self.assertNotIn("--rotating-seed", command)
+
+    def test_markdown_groups_require_and_freeze_an_explicit_auxiliary_model(self):
+        markdown_campaign = parse_campaign(manifest())
+        markdown_campaign = type(markdown_campaign)(
+            campaign_id=markdown_campaign.campaign_id,
+            lane=markdown_campaign.lane,
+            failure_policy=markdown_campaign.failure_policy,
+            scoring_profile=markdown_campaign.scoring_profile,
+            groups=(
+                type(markdown_campaign.groups[0])(
+                    id=f"{markdown_campaign.campaign_id}-markdown",
+                    execution_kind="harness_turn",
+                    runs=1,
+                    technical_retries=1,
+                    difficulty_weight=2,
+                    scenarios=("insert_record",),
+                ),
+            ),
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            with self.assertRaisesRegex(CampaignError, "explicit judge"):
+                execute_campaign(
+                    markdown_campaign,
+                    e2e_bin=pathlib.Path("bin/harness-e2e"),
+                    output_root=pathlib.Path(directory),
+                    execution_id="markdown-no-judge",
+                    dry_run=False,
+                    advisory=True,
+                    model="model",
+                    provider="provider",
+                    environ={},
+                )
+
+            summary = execute_campaign(
+                markdown_campaign,
+                e2e_bin=pathlib.Path("bin/harness-e2e"),
+                output_root=pathlib.Path(directory),
+                execution_id="markdown-with-judge",
+                dry_run=False,
+                advisory=True,
+                model="model",
+                provider="provider",
+                judge_model="judge-model",
+                judge_provider="judge-provider",
+                environ={},
+                run_process=lambda *_args, **_kwargs: types.SimpleNamespace(returncode=0),
+            )
+        command = summary["groups"][0]["command"]
+        self.assertIn("--judge-model", command)
+        self.assertIn("judge-model", command)
+        self.assertTrue(summary["groups"][0]["materialized_group_sha256"].startswith("sha256:"))
 
     def test_advisory_runs_every_group_and_returns_zero_with_failed_objective(self):
         calls = []

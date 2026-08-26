@@ -323,7 +323,40 @@ function primaryMetrics(
           ? missingDetail
           : 'Subject execution time',
   }
+  const markdownMetrics = run?.markdown_execution
+    ? [
+        {
+          label: 'Validation score',
+          value:
+            finiteNumber(run.validation_score) == null
+              ? 'Unavailable'
+              : `${finiteNumber(run.validation_score)}/100`,
+          detail: 'Deterministic sum of isolated validator outcomes',
+        },
+        {
+          label: 'Instruction adherence',
+          value:
+            finiteNumber(run.instruction_adherence?.score) == null
+              ? title(run.instruction_adherence?.availability ?? 'unavailable')
+              : `${finiteNumber(run.instruction_adherence?.score)}/100`,
+          detail: 'Advisory prompt-following assessment',
+        },
+        {
+          label: 'Pipeline integrity',
+          value: run.markdown_execution.pipeline_complete
+            ? 'Complete'
+            : 'Incomplete',
+          detail: 'Correct revision, section routing, and phase completion',
+        },
+        {
+          label: 'Technical failures',
+          value: formatCount(run.failures?.length ?? 0),
+          detail: 'Infrastructure, evaluator, resource, or cleanup failures',
+        },
+      ]
+    : []
   return [
+    ...markdownMetrics,
     runtimeMetric,
     {
       label: 'Total tokens',
@@ -372,6 +405,12 @@ function primaryMetrics(
             : missingDetail,
     },
   ]
+}
+
+function title(value: string) {
+  return value
+    .replaceAll('_', ' ')
+    .replace(/\b\w/g, (letter) => letter.toUpperCase())
 }
 
 export type StepMetricSignal = {

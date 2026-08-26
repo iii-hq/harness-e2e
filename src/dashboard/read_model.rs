@@ -1610,16 +1610,16 @@ mod tests {
             .expect("current scenarios should materialize into the read model");
         let response = model
             .tests_list(TestsListRequest {
-                query: Some(ScenarioId::MinimalPath.as_str().into()),
+                query: Some(ScenarioId::ContextPressure.as_str().into()),
                 ..TestsListRequest::default()
             })
             .expect("current catalog should be readable");
-        let minimal = response
+        let context_pressure = response
             .rows
             .first()
-            .expect("minimal path should be registered");
+            .expect("context pressure should be registered");
         assert_eq!(
-            minimal
+            context_pressure
                 .complexity
                 .as_ref()
                 .expect("classification should be projected")
@@ -1627,7 +1627,7 @@ mod tests {
             ComplexityMethod::CapabilityV2
         );
         assert_eq!(
-            minimal
+            context_pressure
                 .characterization
                 .expect("characterization should be projected")
                 .realism
@@ -1635,7 +1635,7 @@ mod tests {
             ExecutionRealism::Synthetic
         );
         assert_eq!(
-            minimal
+            context_pressure
                 .calibration
                 .as_ref()
                 .expect("calibration should be projected")
