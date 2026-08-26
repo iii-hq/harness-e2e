@@ -419,13 +419,13 @@ def materialize_request(
     for field in ("name", "version", "revision"):
         require_text(runner.get(field), f"catalog.runner.{field}")
     require_digest(catalog.get("catalog_sha256"), "catalog.catalog_sha256")
-    catalog_sha256 = canonical_sha256(catalog)
+    catalog_asset_sha256 = canonical_sha256(catalog)
     expected_runner = contract["runner"]
     if runner.get("name") != expected_runner["registry_worker"] or runner.get("version") != expected_runner["registry_ref"]:
         raise ValueError("scenario catalog runner does not match the exact runner pin")
     if runner.get("revision") != expected_runner["revision"]:
         raise ValueError("scenario catalog runner revision does not match the contract")
-    if catalog_sha256 != expected_runner["catalog_sha256"]:
+    if catalog_asset_sha256 != expected_runner["catalog_sha256"]:
         raise ValueError("scenario catalog digest does not match the contract")
     descriptors = catalog.get("scenarios")
     if not isinstance(descriptors, list):
@@ -496,7 +496,7 @@ def materialize_request(
             "id": contract["plan"]["id"],
             "revision": str(contract["plan"]["revision"]),
             "sha256": contract["plan"]["sha256"],
-            "catalog_sha256": catalog_sha256,
+            "catalog_sha256": catalog["catalog_sha256"],
         },
         "runner": runner,
         "attempt": contract["attempt"],
