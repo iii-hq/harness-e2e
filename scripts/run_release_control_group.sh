@@ -13,6 +13,9 @@ wait_seconds=${HARNESS_E2E_WAIT_SECONDS:-300}
 stack_settle_seconds=${HARNESS_E2E_STACK_SETTLE_SECONDS:-60}
 admission_timeout_seconds=${HARNESS_E2E_ADMISSION_TIMEOUT_SECONDS:-180}
 run_timeout_seconds=${HARNESS_E2E_RUN_TIMEOUT_SECONDS:-10800}
+fixture_launcher=${HARNESS_E2E_FIXTURE_LAUNCHER:-/opt/iii-harness-e2e/engineering-ticket-fixture}
+engineering_fixture_revision=7a6b25b3cd12d66af74a358ae86e0d2b846bd384
+shared_fixture_revision=16f6b9e05e34e09c824191eed0631d77f85be6a9
 
 case "$artifact_dir" in
   "$repo_root"/target/*) ;;
@@ -64,6 +67,8 @@ iii_bin=""
 engine_pid=""
 failure_phase=bootstrap
 failure_reason=""
+engineering_fixture_lease=""
+shared_fixture_lease=""
 
 log() {
   printf '\n[%s] %s\n' "$(date -u +%H:%M:%S)" "$*" >&2
@@ -86,12 +91,24 @@ snapshot_stack() {
 
 cleanup() {
   local status=$?
+  local fixture_cleanup_failed=0
   trap - EXIT INT TERM ERR
   set +e
   snapshot_stack
   if [[ -n "$engine_pid" ]] && kill -0 "$engine_pid" 2>/dev/null; then
     kill -- "-$engine_pid" 2>/dev/null || kill "$engine_pid" 2>/dev/null || true
     wait "$engine_pid" 2>/dev/null || true
+  fi
+  if [[ -n "$shared_fixture_lease" ]]; then
+    "$fixture_launcher" cleanup --lease-id "$shared_fixture_lease" || fixture_cleanup_failed=1
+  fi
+  if [[ -n "$engineering_fixture_lease" ]]; then
+    "$fixture_launcher" cleanup --lease-id "$engineering_fixture_lease" || fixture_cleanup_failed=1
+  fi
+  if ((status == 0 && fixture_cleanup_failed != 0)); then
+    status=1
+    failure_phase=fixture_cleanup
+    failure_reason="disposable code fixture cleanup failed"
   fi
   if ((status != 0)); then
     [[ -n "$failure_reason" ]] || failure_reason="shadow execution failed during $failure_phase (exit $status)"
@@ -113,6 +130,42 @@ trap 'on_error "$LINENO"' ERR
 trap cleanup EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM
+
+prepare_code_fixtures() {
+  local requires_engineering requires_shared fixture_json execution_prefix
+  requires_shared=${HARNESS_E2E_REQUIRES_SHARED_FIXTURE:-false}
+  requires_engineering=${HARNESS_E2E_REQUIRES_ENGINEERING_FIXTURE:-false}
+  [[ "$requires_shared" == true || "$requires_shared" == false ]] || \
+    fail "HARNESS_E2E_REQUIRES_SHARED_FIXTURE must be true or false"
+  [[ "$requires_engineering" == true || "$requires_engineering" == false ]] || \
+    fail "HARNESS_E2E_REQUIRES_ENGINEERING_FIXTURE must be true or false"
+  if [[ "$requires_shared" != true && "$requires_engineering" != true ]]; then
+    return 0
+  fi
+  [[ -x "$fixture_launcher" ]] || fail "protected fixture launcher is unavailable: $fixture_launcher"
+  execution_prefix="${GITHUB_RUN_ID:-local}-${GITHUB_RUN_ATTEMPT:-1}-${campaign_group_id}"
+  if [[ "$requires_engineering" == true ]]; then
+    fixture_json="$run_root/engineering-fixture.json"
+    "$fixture_launcher" prepare \
+      --execution-id "${execution_prefix}-engineering" \
+      --revision "$engineering_fixture_revision" >"$fixture_json"
+    engineering_fixture_lease=$(jq -er .lease_id "$fixture_json")
+    export HARNESS_E2E_ENGINEERING_TICKET_FIXTURE_PATH
+    HARNESS_E2E_ENGINEERING_TICKET_FIXTURE_PATH=$(jq -er .path "$fixture_json")
+  fi
+  if [[ "$requires_shared" == true ]]; then
+    fixture_json="$run_root/shared-fixture.json"
+    "$fixture_launcher" prepare \
+      --execution-id "${execution_prefix}-shared" \
+      --revision "$shared_fixture_revision" >"$fixture_json"
+    shared_fixture_lease=$(jq -er .lease_id "$fixture_json")
+    export HARNESS_E2E_FIXTURE_PATH
+    HARNESS_E2E_FIXTURE_PATH=$(jq -er .path "$fixture_json")
+  fi
+}
+
+failure_phase=fixture_setup
+prepare_code_fixtures
 
 wait_for_engine() {
   local response

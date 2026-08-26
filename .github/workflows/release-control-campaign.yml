@@ -135,6 +135,9 @@ jobs:
     env:
       HARNESS_E2E_ARTIFACTS_DIR: ${{ github.workspace }}/target/harness-e2e-shadow
       HARNESS_E2E_CAMPAIGN_GROUP_ID: ${{ matrix.group_id }}
+      HARNESS_E2E_ENGINEERING_FIXTURE_REPOSITORY: ${{ vars.HARNESS_E2E_ENGINEERING_FIXTURE_REPOSITORY }}
+      HARNESS_E2E_REQUIRES_ENGINEERING_FIXTURE: ${{ matrix.requires_engineering_fixture }}
+      HARNESS_E2E_REQUIRES_SHARED_FIXTURE: ${{ matrix.requires_shared_fixture }}
     steps:
       - uses: actions/checkout@v5
         with:

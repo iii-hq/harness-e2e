@@ -17,6 +17,16 @@ class WorkflowBoundaryTests(unittest.TestCase):
         self.assertIn("scripts/release_control_campaign.py", workflow)
         self.assertIn("runs-on: ${{ matrix.runs_on }}", workflow)
         self.assertIn("environment: harness-e2e-trusted", workflow)
+        self.assertIn("HARNESS_E2E_ENGINEERING_FIXTURE_REPOSITORY", workflow)
+        self.assertIn("HARNESS_E2E_REQUIRES_ENGINEERING_FIXTURE", workflow)
+        self.assertIn("HARNESS_E2E_REQUIRES_SHARED_FIXTURE", workflow)
+        launcher = (ROOT / "scripts/run_release_control_group.sh").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("engineering-ticket-fixture", launcher)
+        self.assertIn("HARNESS_E2E_ENGINEERING_TICKET_FIXTURE_PATH", launcher)
+        self.assertIn("HARNESS_E2E_FIXTURE_PATH", launcher)
+        self.assertIn("cleanup --lease-id", launcher)
         self.assertNotIn("iii-hq/workers", workflow)
 
     def test_cross_repository_shadow_checks_out_the_e2e_repository(self):
