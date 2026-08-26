@@ -196,6 +196,10 @@ class ReleaseControlCampaignTest(unittest.TestCase):
             set(request["run_contract"]["plan"]),
             {"id", "revision", "sha256", "catalog_sha256"},
         )
+        self.assertEqual(
+            request["run_contract"]["plan"]["catalog_sha256"],
+            catalog()["catalog_sha256"],
+        )
         self.assertEqual(request["run_contract"]["mode"]["decision"], "observe_only")
         self.assertEqual(
             request["idempotency_key"], MODULE.observation_idempotency_key(request)
