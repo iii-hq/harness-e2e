@@ -20,7 +20,9 @@ use super::{
 };
 use crate::artifact;
 use crate::control::{
-    ControlPlane, ExecutionPhase, ExecutionRecord, RunRequest as ControlRunRequest,
+    ControlPlane, ExecutionPhase, ExecutionRecord, LocalScenarioCreateRequest,
+    LocalScenarioCreateResponse, RunRequest as ControlRunRequest, ScenariosListRequest,
+    ScenariosListResponse,
 };
 use crate::markdown::ScenarioKey;
 use crate::report::{E2eReport, RunStatus};
@@ -119,6 +121,25 @@ impl Controller {
 
     pub(super) fn default_url(&self) -> &str {
         &self.defaults.url
+    }
+
+    pub(super) async fn scenario_catalog(&self) -> Result<ScenariosListResponse> {
+        self.control
+            .as_ref()
+            .context("the E2E control plane is not available")?
+            .scenario_catalog(ScenariosListRequest { seed: None })
+            .await
+    }
+
+    pub(super) async fn create_local_scenario(
+        &self,
+        request: LocalScenarioCreateRequest,
+    ) -> Result<LocalScenarioCreateResponse> {
+        self.control
+            .as_ref()
+            .context("the E2E control plane is not available")?
+            .create_local_scenario(request)
+            .await
     }
 
     pub(super) async fn snapshot(&self, after: Option<u64>) -> Result<RunSnapshot> {
@@ -555,6 +576,7 @@ pub(super) fn control_request(
         audit_model: None,
         audit_provider: None,
         scenarios,
+        local_markdown_scenarios: Vec::new(),
         runs: request.runs,
         seed: request.seed,
         rotating_seeds: Vec::new(),
@@ -736,8 +758,7 @@ pub(super) fn validate_request(request: &mut RunRequest) -> std::result::Result<
     if request.technical_retries > 3 {
         return Err("technical_retries must be between 0 and 3".into());
     }
-    let all_scenarios = crate::markdown::all_keys().map_err(|error| format!("{error:#}"))?;
-    if request.scenarios.is_empty() || request.scenarios.len() > all_scenarios.len() {
+    if request.scenarios.is_empty() || request.scenarios.len() > 256 {
         return Err("select at least one valid scenario".into());
     }
     request.scenarios.sort();

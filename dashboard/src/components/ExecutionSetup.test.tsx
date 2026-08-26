@@ -88,4 +88,20 @@ describe('execution setup workspace', () => {
     expect(html).toContain('Execution model')
     expect(html).toContain('Create draft plan')
   })
+
+  it('marks local scenarios without mixing authoring into execution setup', () => {
+    const html = renderToStaticMarkup(
+      <ExecutionSetup
+        {...sharedProps}
+        mode="quick"
+        availableScenarios={['markdown_console_draft']}
+        localScenarioIds={['markdown_console_draft']}
+        selectedScenarios={[]}
+      />,
+    )
+
+    expect(html).not.toContain('New local scenario')
+    expect(html).toContain('Markdown Console Draft')
+    expect(html).toContain('Local')
+  })
 })
