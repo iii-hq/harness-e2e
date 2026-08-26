@@ -125,7 +125,7 @@ def campaign_contract(versions: dict[str, str] | None = None):
 
 def catalog():
     return {
-        "schema": "e2e-scenario-catalog/v1",
+        "schema": "e2e-scenario-catalog/v2",
         "runner": {
             "name": "harness-e2e",
             "version": "0.2.1-experimental",
@@ -192,6 +192,22 @@ class ReleaseControlCampaignTest(unittest.TestCase):
         self.assertEqual(
             request["idempotency_key"], MODULE.observation_idempotency_key(request)
         )
+
+    def test_keeps_legacy_v1_catalogs_readable(self):
+        legacy = catalog()
+        legacy["schema"] = "e2e-scenario-catalog/v1"
+        request = MODULE.materialize_request(
+            campaign_contract(), legacy, group_id="daily-core"
+        )
+        self.assertEqual(request["scenarios"], ["direct_answer"])
+
+    def test_rejects_unknown_catalog_schema(self):
+        changed = catalog()
+        changed["schema"] = "e2e-scenario-catalog/v3"
+        with self.assertRaisesRegex(ValueError, "unsupported scenario catalog schema"):
+            MODULE.materialize_request(
+                campaign_contract(), changed, group_id="daily-core"
+            )
 
     def test_rejects_catalog_seed_drift(self):
         changed = catalog()
