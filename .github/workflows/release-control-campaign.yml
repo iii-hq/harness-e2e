@@ -135,13 +135,10 @@ jobs:
     env:
       HARNESS_E2E_ARTIFACTS_DIR: ${{ github.workspace }}/target/harness-e2e-shadow
       HARNESS_E2E_CAMPAIGN_GROUP_ID: ${{ matrix.group_id }}
-      HARNESS_E2E_ENGINEERING_FIXTURE_REPOSITORY: ${{ vars.HARNESS_E2E_ENGINEERING_FIXTURE_REPOSITORY }}
-      HARNESS_E2E_REQUIRES_ENGINEERING_FIXTURE: ${{ matrix.requires_engineering_fixture }}
-      HARNESS_E2E_REQUIRES_SHARED_FIXTURE: ${{ matrix.requires_shared_fixture }}
     steps:
       - uses: actions/checkout@v5
         with:
-          ref: ${{ github.sha }}
+          ref: ${{ needs.prepare.outputs.runner_revision }}
 
       - uses: actions/download-artifact@v7
         with:
@@ -154,27 +151,18 @@ jobs:
           mkdir -p target/harness-e2e-shadow
           cp target/harness-e2e-contract/execution-contract.json target/harness-e2e-shadow/execution-contract.json
 
-      - name: Check out exact Harness runner source for fault evaluation
-        if: matrix.execution_kind == 'fault_injection'
-        uses: actions/checkout@v5
-        with:
-          repository: iii-hq/harness-e2e
-          ref: ${{ needs.prepare.outputs.runner_revision }}
-          path: target/harness-source
-
       - uses: dtolnay/rust-toolchain@1.97.1
         if: matrix.execution_kind == 'fault_injection'
 
       - uses: Swatinem/rust-cache@v2
         if: matrix.execution_kind == 'fault_injection'
         with:
-          workspaces: target/harness-source
+          workspaces: .
           key: harness-e2e-fault-${{ needs.prepare.outputs.runner_revision }}
 
       - name: Build exact fault evaluator
         if: matrix.execution_kind == 'fault_injection'
         run: cargo build --locked --release --bin harness-e2e
-        working-directory: target/harness-source
 
       - name: Install stack verification tooling
         if: matrix.execution_kind != 'fault_injection'
@@ -196,7 +184,7 @@ jobs:
         continue-on-error: true
         env:
           HARNESS_E2E_EXECUTION_CONTRACT: ${{ inputs.execution_contract }}
-          HARNESS_E2E_HARNESS_ROOT: ${{ github.workspace }}/target/harness-source
+          HARNESS_E2E_HARNESS_ROOT: ${{ github.workspace }}
         run: scripts/run_release_control_fault.sh
 
       - name: Package factual group evidence
@@ -234,14 +222,7 @@ jobs:
     steps:
       - uses: actions/checkout@v5
         with:
-          ref: ${{ github.sha }}
-
-      - name: Check out exact Harness aggregator
-        uses: actions/checkout@v5
-        with:
-          repository: iii-hq/harness-e2e
           ref: ${{ needs.prepare.outputs.runner_revision }}
-          path: target/harness-source
 
       - uses: actions/download-artifact@v7
         with:
@@ -269,8 +250,8 @@ jobs:
       - name: Aggregate with exact Harness scoring implementation
         run: |
           set -euo pipefail
-          python3 target/harness-source/scripts/run_e2e_campaign.py \
-            "target/harness-source/config/campaigns/${{ needs.prepare.outputs.manifest_id }}.json" \
+          python3 scripts/run_e2e_campaign.py \
+            "config/campaigns/${{ needs.prepare.outputs.manifest_id }}.json" \
             --aggregate-existing-root target/harness-e2e-campaign/groups \
             --execution-id '${{ inputs.execution_id }}' \
             --summary target/harness-e2e-campaign/campaign-summary.json \

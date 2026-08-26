@@ -13,7 +13,8 @@ wait_seconds=${HARNESS_E2E_WAIT_SECONDS:-300}
 stack_settle_seconds=${HARNESS_E2E_STACK_SETTLE_SECONDS:-60}
 admission_timeout_seconds=${HARNESS_E2E_ADMISSION_TIMEOUT_SECONDS:-180}
 run_timeout_seconds=${HARNESS_E2E_RUN_TIMEOUT_SECONDS:-10800}
-fixture_launcher=${HARNESS_E2E_FIXTURE_LAUNCHER:-/opt/iii-harness-e2e/engineering-ticket-fixture}
+fixture_launcher=${HARNESS_E2E_FIXTURE_LAUNCHER:-"$repo_root/scripts/engineering_ticket_fixture.py"}
+fixture_source_root=${HARNESS_E2E_FIXTURE_SOURCE_ROOT:-"$repo_root/tests/fixtures/campaign"}
 engineering_fixture_revision=7a6b25b3cd12d66af74a358ae86e0d2b846bd384
 shared_fixture_revision=16f6b9e05e34e09c824191eed0631d77f85be6a9
 
@@ -133,18 +134,22 @@ trap 'exit 143' TERM
 
 prepare_code_fixtures() {
   local requires_engineering requires_shared fixture_json execution_prefix
-  requires_shared=${HARNESS_E2E_REQUIRES_SHARED_FIXTURE:-false}
-  requires_engineering=${HARNESS_E2E_REQUIRES_ENGINEERING_FIXTURE:-false}
-  [[ "$requires_shared" == true || "$requires_shared" == false ]] || \
-    fail "HARNESS_E2E_REQUIRES_SHARED_FIXTURE must be true or false"
-  [[ "$requires_engineering" == true || "$requires_engineering" == false ]] || \
-    fail "HARNESS_E2E_REQUIRES_ENGINEERING_FIXTURE must be true or false"
+  requires_shared=$(jq -r --arg group "$campaign_group_id" '
+    .plan.definition.groups[] | select(.id == $group) |
+    any(.scenarios[]?; . == "shell_coder_sandbox" or . == "chess_engine_build" or . == "trend_blog")
+  ' "$contract_path")
+  requires_engineering=$(jq -r --arg group "$campaign_group_id" '
+    .plan.definition.groups[] | select(.id == $group) |
+    any(.scenarios[]?; . == "engineering_ticket_git_handoff")
+  ' "$contract_path")
   if [[ "$requires_shared" != true && "$requires_engineering" != true ]]; then
     return 0
   fi
-  [[ -x "$fixture_launcher" ]] || fail "protected fixture launcher is unavailable: $fixture_launcher"
+  [[ -x "$fixture_launcher" ]] || fail "fixture launcher is unavailable: $fixture_launcher"
+  export HARNESS_E2E_ENGINEERING_FIXTURE_ROOT="$run_root/fixture-leases"
   execution_prefix="${GITHUB_RUN_ID:-local}-${GITHUB_RUN_ATTEMPT:-1}-${campaign_group_id}"
   if [[ "$requires_engineering" == true ]]; then
+    export HARNESS_E2E_ENGINEERING_FIXTURE_REPOSITORY="$fixture_source_root/engineering-ticket.bundle"
     fixture_json="$run_root/engineering-fixture.json"
     "$fixture_launcher" prepare \
       --execution-id "${execution_prefix}-engineering" \
@@ -154,6 +159,7 @@ prepare_code_fixtures() {
     HARNESS_E2E_ENGINEERING_TICKET_FIXTURE_PATH=$(jq -er .path "$fixture_json")
   fi
   if [[ "$requires_shared" == true ]]; then
+    export HARNESS_E2E_ENGINEERING_FIXTURE_REPOSITORY="$fixture_source_root/shared-fixture.bundle"
     fixture_json="$run_root/shared-fixture.json"
     "$fixture_launcher" prepare \
       --execution-id "${execution_prefix}-shared" \

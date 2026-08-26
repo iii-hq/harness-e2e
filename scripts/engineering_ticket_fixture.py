@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""Protected local-only fixture launcher for engineering-ticket benchmarks.
+"""Offline fixture launcher for engineering-ticket benchmarks.
 
-The reviewed source repository and lease root are operator-owned configuration.
-The benchmark workflow receives only a disposable clone path and an opaque
-lease id; cleanup resolves the path from the protected lease record.
+The reviewed source is either a local Git repository or an immutable Git
+bundle. The benchmark receives only a disposable clone path and an opaque lease
+id; cleanup resolves the path from the owned lease record.
 """
 
 from __future__ import annotations
@@ -75,7 +75,22 @@ def _configured_repository(
         repository = repository.resolve(strict=True)
     except FileNotFoundError as error:
         raise LauncherError(f"reviewed fixture repository does not exist: {repository}") from error
-    _run_git(repository, "rev-parse", "--git-dir")
+    if repository.is_dir():
+        _run_git(repository, "rev-parse", "--git-dir")
+    elif repository.is_file():
+        completed = subprocess.run(
+            ["git", "bundle", "verify", str(repository)],
+            check=False,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+        if completed.returncode != 0:
+            detail = completed.stderr.strip() or completed.stdout.strip()
+            raise LauncherError(f"invalid fixture bundle {repository}: {detail}")
+    else:
+        raise LauncherError(f"reviewed fixture source is not a repository or bundle: {repository}")
     return repository
 
 
@@ -125,7 +140,17 @@ def prepare(
     repository = _configured_repository(environ)
     root = _configured_root(environ)
     branch = f"e2e/{execution_id}"
-    _run_git(repository, "check-ref-format", "--branch", branch)
+    branch_check = subprocess.run(
+        ["git", "check-ref-format", "--branch", branch],
+        check=False,
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    if branch_check.returncode != 0:
+        detail = branch_check.stderr.strip() or branch_check.stdout.strip()
+        raise LauncherError(f"fixture branch is invalid: {detail}")
     worktrees = root / "worktrees"
     leases = root / "leases"
     worktrees.mkdir(parents=True, exist_ok=True)
@@ -133,24 +158,16 @@ def prepare(
     root.chmod(0o700)
     worktrees.chmod(0o700)
     leases.chmod(0o700)
-    resolved = _run_git(repository, "rev-parse", f"{revision}^{{commit}}")
-    if resolved.lower() != revision:
-        raise LauncherError(f"reviewed repository did not resolve exact revision {revision}")
-
     lease_id = uuid.uuid4().hex
     worktree = _owned_worktree(root, worktrees / f"{execution_id}-{lease_id}")
     lease_path = leases / f"{lease_id}.json"
     try:
+        clone_args = ["git", "clone", "--quiet", "--no-checkout"]
+        if repository.is_dir():
+            clone_args.append("--shared")
+        clone_args.extend([str(repository), str(worktree)])
         cloned = subprocess.run(
-            [
-                "git",
-                "clone",
-                "--quiet",
-                "--no-checkout",
-                "--shared",
-                str(repository),
-                str(worktree),
-            ],
+            clone_args,
             check=False,
             stdin=subprocess.DEVNULL,
             stdout=subprocess.PIPE,

@@ -17,13 +17,13 @@ class WorkflowBoundaryTests(unittest.TestCase):
         self.assertIn("scripts/release_control_campaign.py", workflow)
         self.assertIn("runs-on: ${{ matrix.runs_on }}", workflow)
         self.assertIn("environment: harness-e2e-trusted", workflow)
-        self.assertIn("HARNESS_E2E_ENGINEERING_FIXTURE_REPOSITORY", workflow)
-        self.assertIn("HARNESS_E2E_REQUIRES_ENGINEERING_FIXTURE", workflow)
-        self.assertIn("HARNESS_E2E_REQUIRES_SHARED_FIXTURE", workflow)
+        self.assertIn("ref: ${{ needs.prepare.outputs.runner_revision }}", workflow)
+        self.assertNotIn("matrix.requires_", workflow)
         launcher = (ROOT / "scripts/run_release_control_group.sh").read_text(
             encoding="utf-8"
         )
-        self.assertIn("engineering-ticket-fixture", launcher)
+        self.assertIn("engineering-ticket.bundle", launcher)
+        self.assertIn("shared-fixture.bundle", launcher)
         self.assertIn("HARNESS_E2E_ENGINEERING_TICKET_FIXTURE_PATH", launcher)
         self.assertIn("HARNESS_E2E_FIXTURE_PATH", launcher)
         self.assertIn("cleanup --lease-id", launcher)

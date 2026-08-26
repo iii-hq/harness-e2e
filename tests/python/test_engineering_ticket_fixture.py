@@ -108,6 +108,36 @@ class EngineeringTicketFixtureLauncherTests(unittest.TestCase):
         with self.assertRaisesRegex(LauncherError, "lease id"):
             cleanup("../../reviewed", environ=self.environ)
 
+    def test_prepare_accepts_an_immutable_git_bundle(self):
+        bundle = self.root / "reviewed.bundle"
+        self.git("bundle", "create", str(bundle), "refs/heads/master")
+        bundle_environ = {
+            REPOSITORY_ENV: str(bundle.resolve()),
+            ROOT_ENV: str((self.root / "bundle-leases").resolve()),
+        }
+
+        lease = prepare("bundle-run", self.revision, environ=bundle_environ)
+        path = pathlib.Path(lease["path"])
+        self.assertEqual(
+            subprocess.run(
+                ["git", "-C", str(path), "rev-parse", "HEAD"],
+                check=True,
+                stdout=subprocess.PIPE,
+                text=True,
+            ).stdout.strip(),
+            self.revision,
+        )
+        self.assertEqual(
+            subprocess.run(
+                ["git", "-C", str(path), "remote"],
+                check=True,
+                stdout=subprocess.PIPE,
+                text=True,
+            ).stdout.strip(),
+            "",
+        )
+        cleanup(lease["lease_id"], environ=bundle_environ)
+
     def test_prepare_rejects_non_exact_revisions_and_unsafe_ids(self):
         with self.assertRaisesRegex(LauncherError, "full 40-character"):
             prepare("run", "main", environ=self.environ)
