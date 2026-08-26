@@ -2084,21 +2084,78 @@ fn import_report_evidence(
 ) -> Result<()> {
     for scenario in &mut report.scenarios {
         for run in &mut scenario.runs {
-            for reference in &mut run.evidence {
-                reference.verify(source)?;
-                let bytes = fs::read(source.join(&reference.path))
-                    .with_context(|| format!("read source evidence artifact {}", reference.path))?;
-                *reference = crate::artifact::write_bytes(
+            import_attempt_evidence(
+                &mut run.evidence,
+                &mut run.asset_capture_manifest,
+                run.scenario_flow.as_mut(),
+                &mut run.semantic_tests,
+                source,
+                output,
+                prefix,
+            )?;
+            if let Some(reference) = &mut run.final_assessment_input {
+                import_evidence_reference(reference, source, output, prefix)?;
+            }
+            for attempt in &mut run.retry_attempts {
+                import_attempt_evidence(
+                    &mut attempt.evidence,
+                    &mut attempt.asset_capture_manifest,
+                    attempt.scenario_flow.as_mut(),
+                    &mut attempt.semantic_tests,
+                    source,
                     output,
-                    &prefix.join(&reference.path),
-                    reference.id.clone(),
-                    reference.kind.clone(),
-                    reference.media_type.clone(),
-                    &bytes,
+                    prefix,
                 )?;
             }
         }
     }
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+fn import_attempt_evidence(
+    evidence: &mut [crate::artifact::ArtifactReference],
+    asset_capture_manifest: &mut Option<crate::artifact::ArtifactReference>,
+    scenario_flow: Option<&mut crate::report::ScenarioFlowEvidence>,
+    semantic_tests: &mut [crate::workflow::WorkflowStepReport],
+    source: &Path,
+    output: &Path,
+    prefix: &Path,
+) -> Result<()> {
+    for reference in evidence {
+        import_evidence_reference(reference, source, output, prefix)?;
+    }
+    if let Some(reference) = asset_capture_manifest {
+        import_evidence_reference(reference, source, output, prefix)?;
+    }
+    if let Some(flow) = scenario_flow {
+        import_evidence_reference(&mut flow.checkpoint, source, output, prefix)?;
+    }
+    for test in semantic_tests {
+        for asset in &mut test.assets {
+            import_evidence_reference(&mut asset.artifact, source, output, prefix)?;
+        }
+    }
+    Ok(())
+}
+
+fn import_evidence_reference(
+    reference: &mut crate::artifact::ArtifactReference,
+    source: &Path,
+    output: &Path,
+    prefix: &Path,
+) -> Result<()> {
+    reference.verify(source)?;
+    let bytes = fs::read(source.join(&reference.path))
+        .with_context(|| format!("read source evidence artifact {}", reference.path))?;
+    *reference = crate::artifact::write_bytes(
+        output,
+        &prefix.join(&reference.path),
+        reference.id.clone(),
+        reference.kind.clone(),
+        reference.media_type.clone(),
+        &bytes,
+    )?;
     Ok(())
 }
 
@@ -2306,7 +2363,8 @@ mod tests {
         )
         .unwrap();
         let mut report = trace_report("redacted-test-value");
-        report.scenarios[0].runs[0].evidence.push(evidence);
+        report.scenarios[0].runs[0].evidence.push(evidence.clone());
+        report.scenarios[0].runs[0].final_assessment_input = Some(evidence);
 
         import_report_evidence(&mut report, &source, &output, Path::new("sources/group-00"))
             .unwrap();
@@ -2314,6 +2372,12 @@ mod tests {
         let imported = &report.scenarios[0].runs[0].evidence[0];
         assert_eq!(imported.path, "sources/group-00/evidence/run/metrics.json");
         imported.verify(&output).unwrap();
+        let hidden = report.scenarios[0].runs[0]
+            .final_assessment_input
+            .as_ref()
+            .unwrap();
+        assert_eq!(hidden.path, imported.path);
+        hidden.verify(&output).unwrap();
     }
 
     #[test]
