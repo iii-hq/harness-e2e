@@ -490,13 +490,13 @@ def materialize_request(
             },
         },
         "plan": {
+            # Keep this shape aligned with the runner's native
+            # ObservationPlanIdentity. Campaign-only group, manifest, and
+            # scoring identity remain in the execution contract and root bundle.
             "id": contract["plan"]["id"],
             "revision": str(contract["plan"]["revision"]),
             "sha256": contract["plan"]["sha256"],
             "catalog_sha256": catalog_sha256,
-            "group_id": group_id,
-            "manifest_sha256": definition.get("manifest", {}).get("sha256"),
-            "scoring_profile": definition.get("scoring"),
         },
         "runner": runner,
         "attempt": contract["attempt"],
