@@ -248,6 +248,11 @@ impl Controller {
             .get_plan(id)
             .await
             .map_err(|error| ApiError::not_found(error.to_string()))?;
+        if plan.supervised {
+            return Err(ApiError::conflict(
+                "this locked plan is owned by the Harness improvement supervisor",
+            ));
+        }
         self.require_current_url(&plan.url)?;
         match role {
             PlanRunRole::Baseline
@@ -338,6 +343,11 @@ impl Controller {
         if context.plan_hash != plan.scope_hash {
             return Err(ApiError::conflict(
                 "plan context does not match the frozen scope",
+            ));
+        }
+        if plan.supervised {
+            return Err(ApiError::conflict(
+                "this locked plan is owned by the Harness improvement supervisor",
             ));
         }
         match context.role {

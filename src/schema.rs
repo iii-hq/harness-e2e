@@ -7,6 +7,10 @@ use crate::asset::AssetCaptureManifest;
 use crate::control::ScenariosListResponse;
 use crate::durable::{DurableArchiveManifest, HistoryRecord};
 use crate::fault::{FaultEvaluation, FaultJournal, FaultPlan, FaultProfile};
+use crate::improvement::{
+    HarnessImprovementInputV1, HarnessImprovementProposalV1, ImprovementLoopRecord,
+    ImprovementLoopSpecV1,
+};
 use crate::report::{E2eManifest, E2eObservationEnvelope, E2eReport};
 use crate::workflow::WorkflowCheckpointV1;
 
@@ -89,6 +93,22 @@ pub fn fault_evaluation() -> RootSchema {
     root_schema_for::<FaultEvaluation>()
 }
 
+pub fn improvement_loop_spec() -> RootSchema {
+    root_schema_for::<ImprovementLoopSpecV1>()
+}
+
+pub fn harness_improvement_input() -> RootSchema {
+    root_schema_for::<HarnessImprovementInputV1>()
+}
+
+pub fn harness_improvement_proposal() -> RootSchema {
+    root_schema_for::<HarnessImprovementProposalV1>()
+}
+
+pub fn improvement_loop_record() -> RootSchema {
+    root_schema_for::<ImprovementLoopRecord>()
+}
+
 fn root_schema_for<T: JsonSchema>() -> RootSchema {
     SchemaSettings::draft07()
         .into_generator()
@@ -153,6 +173,24 @@ mod tests {
             ("fault-plan.json", fault_plan()),
             ("fault-journal.json", fault_journal()),
             ("fault-evaluation.json", fault_evaluation()),
+        ] {
+            assert_snapshot(name, &schema);
+        }
+    }
+
+    #[test]
+    fn improvement_loop_schemas_match_snapshots() {
+        for (name, schema) in [
+            ("improvement-loop-spec-v1.json", improvement_loop_spec()),
+            (
+                "harness-improvement-input-v1.json",
+                harness_improvement_input(),
+            ),
+            (
+                "harness-improvement-proposal-v1.json",
+                harness_improvement_proposal(),
+            ),
+            ("improvement-loop-record-v1.json", improvement_loop_record()),
         ] {
             assert_snapshot(name, &schema);
         }

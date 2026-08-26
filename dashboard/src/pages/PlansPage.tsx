@@ -3,6 +3,7 @@ import {
   DashboardPageActions,
   dashboardHeaderActionClassName,
 } from '@/components/DashboardPageActions'
+import { ImprovementLoopsPanel } from '@/components/ImprovementLoopsPanel'
 import {
   hashForNewPlan,
   hashForPlan,
@@ -457,6 +458,7 @@ export function PlansPage() {
           </section>
         ) : (
           <>
+            <ImprovementLoopsPanel bridge={bridge} />
             <section className="plans-how-it-works" aria-label="Plan workflow">
               <div>
                 <span>01</span>

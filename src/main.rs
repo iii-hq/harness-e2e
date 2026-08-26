@@ -5,6 +5,7 @@ use clap::{Args, Parser, Subcommand};
 use harness_e2e::control::{scenarios_list, ScenariosListRequest};
 use harness_e2e::dashboard;
 use harness_e2e::fault::{FaultEvaluation, FaultJournal, FaultPlan, FaultProfile};
+use harness_e2e::improvement::{ImprovementLoopSpecV1, ImprovementSupervisor};
 use harness_e2e::judge::JudgeConfig;
 use harness_e2e::manifest;
 use harness_e2e::markdown::{self, ScenarioKey};
@@ -56,6 +57,51 @@ enum Command {
     FaultPlan(FaultPlanArgs),
     /// Classify observed recovery from a protected supervisor's fault journal.
     FaultEvaluate(FaultEvaluateArgs),
+    /// Run and inspect the bounded autonomous Harness improvement supervisor.
+    Improve(ImproveArgs),
+}
+
+#[derive(Debug, Args)]
+struct ImproveArgs {
+    #[command(subcommand)]
+    command: ImproveCommand,
+}
+
+#[derive(Debug, Subcommand)]
+enum ImproveCommand {
+    /// Create a loop from a frozen spec and run it to a terminal decision.
+    Start {
+        #[arg(long)]
+        spec: PathBuf,
+    },
+    /// Print one loop, or list every loop in a runs directory.
+    Status {
+        #[arg(long)]
+        runs_dir: PathBuf,
+        #[arg(long)]
+        loop_id: Option<String>,
+    },
+    /// Reconcile persisted checkpoints and continue a stopped loop.
+    Resume {
+        #[arg(long)]
+        runs_dir: PathBuf,
+        #[arg(long)]
+        loop_id: String,
+    },
+    /// Request cancellation of a local loop.
+    Cancel {
+        #[arg(long)]
+        runs_dir: PathBuf,
+        #[arg(long)]
+        loop_id: String,
+    },
+    /// Print the complete persisted loop report as JSON.
+    Report {
+        #[arg(long)]
+        runs_dir: PathBuf,
+        #[arg(long)]
+        loop_id: String,
+    },
 }
 
 #[derive(Debug, Args)]
@@ -266,7 +312,48 @@ async fn main() -> Result<()> {
         Some(Command::Dashboard(args)) => dashboard::serve(args).await,
         Some(Command::FaultPlan(args)) => fault_plan(args),
         Some(Command::FaultEvaluate(args)) => fault_evaluate(args),
+        Some(Command::Improve(args)) => improve(args).await,
     }
+}
+
+async fn improve(args: ImproveArgs) -> Result<()> {
+    match args.command {
+        ImproveCommand::Start { spec } => {
+            let spec = ImprovementLoopSpecV1::read(&spec)?;
+            let supervisor = ImprovementSupervisor::new(spec.runs_dir.clone());
+            let record = supervisor.create(spec)?;
+            println!("loop: {}", record.id);
+            let final_record = supervisor.run_to_completion(&record.id).await?;
+            println!("{}", serde_json::to_string_pretty(&final_record)?);
+        }
+        ImproveCommand::Status { runs_dir, loop_id } => {
+            let supervisor = ImprovementSupervisor::new(runs_dir);
+            let value = if let Some(id) = loop_id {
+                serde_json::to_value(supervisor.get(&id)?)?
+            } else {
+                serde_json::to_value(supervisor.list()?)?
+            };
+            println!("{}", serde_json::to_string_pretty(&value)?);
+        }
+        ImproveCommand::Resume { runs_dir, loop_id } => {
+            let supervisor = ImprovementSupervisor::new(runs_dir);
+            let record = supervisor.resume_to_completion(&loop_id).await?;
+            println!("{}", serde_json::to_string_pretty(&record)?);
+        }
+        ImproveCommand::Cancel { runs_dir, loop_id } => {
+            let supervisor = ImprovementSupervisor::new(runs_dir);
+            let record = supervisor.cancel(&loop_id).await?;
+            println!("{}", serde_json::to_string_pretty(&record)?);
+        }
+        ImproveCommand::Report { runs_dir, loop_id } => {
+            let supervisor = ImprovementSupervisor::new(runs_dir);
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&supervisor.report(&loop_id)?)?
+            );
+        }
+    }
+    Ok(())
 }
 
 fn validate_scenarios(args: ValidateScenariosArgs) -> Result<()> {
@@ -403,6 +490,7 @@ async fn run(args: RunArgs) -> Result<()> {
         control: None,
         observation_contract: None,
         materialized_markdown_plan: None,
+        source_identity_override: None,
     })
     .await
     .context("run E2E quality suite")?;
@@ -463,6 +551,7 @@ async fn replay_materialized(args: ReplayMaterializedArgs) -> Result<()> {
         control: None,
         observation_contract: None,
         materialized_markdown_plan: Some(value),
+        source_identity_override: None,
     })
     .await
     .context("replay immutable Markdown plan")?;
@@ -613,12 +702,52 @@ mod tests {
             assert_eq!(args.listen.to_string(), "0.0.0.0:4173");
             assert_eq!(args.url, "ws://127.0.0.1:49134");
             assert!(!args.view_only);
+            assert!(!args.enable_improvement_loop);
         }
         let cli = Cli::try_parse_from(["harness-e2e", "dashboard", "--view-only"]).unwrap();
         let Some(Command::Dashboard(args)) = cli.command else {
             panic!("expected dashboard command");
         };
         assert!(args.view_only);
+
+        let cli =
+            Cli::try_parse_from(["harness-e2e", "dashboard", "--enable-improvement-loop"]).unwrap();
+        let Some(Command::Dashboard(args)) = cli.command else {
+            panic!("expected dashboard command");
+        };
+        assert!(args.enable_improvement_loop);
+    }
+
+    #[test]
+    fn improve_commands_require_explicit_specs_and_loop_storage() {
+        let cli = Cli::try_parse_from(["harness-e2e", "improve", "start", "--spec", "pilot.json"])
+            .unwrap();
+        let Some(Command::Improve(ImproveArgs {
+            command: ImproveCommand::Start { spec },
+        })) = cli.command
+        else {
+            panic!("expected improve start command");
+        };
+        assert_eq!(spec, PathBuf::from("pilot.json"));
+
+        let cli = Cli::try_parse_from([
+            "harness-e2e",
+            "improve",
+            "status",
+            "--runs-dir",
+            "target/runs",
+            "--loop-id",
+            "improve-1",
+        ])
+        .unwrap();
+        let Some(Command::Improve(ImproveArgs {
+            command: ImproveCommand::Status { runs_dir, loop_id },
+        })) = cli.command
+        else {
+            panic!("expected improve status command");
+        };
+        assert_eq!(runs_dir, PathBuf::from("target/runs"));
+        assert_eq!(loop_id.as_deref(), Some("improve-1"));
     }
 
     #[test]

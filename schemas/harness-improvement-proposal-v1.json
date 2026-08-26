@@ -1,0 +1,339 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "HarnessImprovementProposalV1",
+  "type": "object",
+  "required": [
+    "action",
+    "analysis",
+    "expected_impact",
+    "hypothesis",
+    "input_sha256",
+    "objective",
+    "schema",
+    "validation_method"
+  ],
+  "properties": {
+    "action": {
+      "$ref": "#/definitions/ImprovementAction"
+    },
+    "analysis": {
+      "$ref": "#/definitions/AnalysisResponse"
+    },
+    "expected_impact": {
+      "type": "string"
+    },
+    "hypothesis": {
+      "$ref": "#/definitions/ImprovementHypothesis"
+    },
+    "input_sha256": {
+      "type": "string"
+    },
+    "limitations": {
+      "default": [],
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "objective": {
+      "$ref": "#/definitions/ImprovementObjective"
+    },
+    "schema": {
+      "type": "string"
+    },
+    "validation_method": {
+      "type": "string"
+    }
+  },
+  "additionalProperties": false,
+  "definitions": {
+    "AnalysisFact": {
+      "type": "object",
+      "required": [
+        "evidence",
+        "summary"
+      ],
+      "properties": {
+        "evidence": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/EvidenceReference"
+          }
+        },
+        "summary": {
+          "type": "string"
+        }
+      }
+    },
+    "AnalysisInterpretation": {
+      "type": "object",
+      "required": [
+        "confidence",
+        "evidence",
+        "summary"
+      ],
+      "properties": {
+        "confidence": {
+          "type": "number",
+          "format": "double"
+        },
+        "evidence": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/EvidenceReference"
+          }
+        },
+        "summary": {
+          "type": "string"
+        }
+      }
+    },
+    "AnalysisLimitation": {
+      "type": "object",
+      "required": [
+        "summary"
+      ],
+      "properties": {
+        "evidence": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/EvidenceReference"
+          }
+        },
+        "summary": {
+          "type": "string"
+        }
+      }
+    },
+    "AnalysisOpportunity": {
+      "type": "object",
+      "required": [
+        "evidence",
+        "expected_impact",
+        "priority",
+        "summary",
+        "validation_method"
+      ],
+      "properties": {
+        "evidence": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/EvidenceReference"
+          }
+        },
+        "expected_impact": {
+          "type": "string"
+        },
+        "priority": {
+          "type": "integer",
+          "format": "uint8",
+          "minimum": 0.0
+        },
+        "summary": {
+          "type": "string"
+        },
+        "validation_method": {
+          "type": "string"
+        }
+      }
+    },
+    "AnalysisResponse": {
+      "type": "object",
+      "required": [
+        "analyzer",
+        "input_sha256"
+      ],
+      "properties": {
+        "analyzer": {
+          "$ref": "#/definitions/AnalyzerIdentity"
+        },
+        "facts": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/AnalysisFact"
+          }
+        },
+        "input_sha256": {
+          "type": "string"
+        },
+        "interpretations": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/AnalysisInterpretation"
+          }
+        },
+        "limitations": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/AnalysisLimitation"
+          }
+        },
+        "opportunities": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/AnalysisOpportunity"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "AnalyzerIdentity": {
+      "type": "object",
+      "required": [
+        "analyzer",
+        "input_sha256"
+      ],
+      "properties": {
+        "analyzer": {
+          "type": "string"
+        },
+        "input_sha256": {
+          "type": "string"
+        },
+        "model": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "provider": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "EvidenceReference": {
+      "type": "object",
+      "required": [
+        "artifact_id",
+        "artifact_sha256"
+      ],
+      "properties": {
+        "artifact_id": {
+          "type": "string"
+        },
+        "artifact_sha256": {
+          "type": "string"
+        },
+        "locator": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      }
+    },
+    "ImprovementAction": {
+      "type": "object",
+      "required": [
+        "behavior_change",
+        "surfaces"
+      ],
+      "properties": {
+        "behavior_change": {
+          "type": "string"
+        },
+        "surfaces": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "ImprovementDirection": {
+      "type": "string",
+      "enum": [
+        "increase",
+        "decrease"
+      ]
+    },
+    "ImprovementHypothesis": {
+      "type": "object",
+      "required": [
+        "confidence",
+        "evidence",
+        "root_cause",
+        "summary"
+      ],
+      "properties": {
+        "confidence": {
+          "type": "number",
+          "format": "double"
+        },
+        "evidence": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/EvidenceReference"
+          }
+        },
+        "root_cause": {
+          "$ref": "#/definitions/ImprovementRootCause"
+        },
+        "summary": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "ImprovementMetric": {
+      "type": "string",
+      "enum": [
+        "deliverable_success_rate",
+        "structural_integrity_rate",
+        "technical_failure_rate",
+        "median_score",
+        "function_calls",
+        "function_call_errors",
+        "validation_retries",
+        "turns",
+        "wall_time",
+        "total_tokens",
+        "cost",
+        "work_amplification"
+      ]
+    },
+    "ImprovementObjective": {
+      "type": "object",
+      "required": [
+        "direction",
+        "metric",
+        "minimum_change",
+        "scenario_id"
+      ],
+      "properties": {
+        "direction": {
+          "$ref": "#/definitions/ImprovementDirection"
+        },
+        "metric": {
+          "$ref": "#/definitions/ImprovementMetric"
+        },
+        "minimum_change": {
+          "type": "number",
+          "format": "double"
+        },
+        "scenario_id": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "ImprovementRootCause": {
+      "type": "string",
+      "enum": [
+        "prompt_strategy",
+        "tool_discovery",
+        "runtime_policy",
+        "context_management",
+        "retry_behavior",
+        "validation_behavior",
+        "configuration",
+        "unknown"
+      ]
+    }
+  }
+}

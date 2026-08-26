@@ -138,6 +138,11 @@ port only on a trusted network. Use `--listen 127.0.0.1:4173` when access should
 remain local. See [dashboard/README.md](dashboard/README.md) for view-only mode
 and the complete dashboard behavior.
 
+The bounded Harness improvement supervisor is local-only and remains disabled
+unless the dashboard starts with `--enable-improvement-loop`. Its spec, CLI,
+worktree protections and recovery model are documented in
+[docs/harness-improvement-loop.md](docs/harness-improvement-loop.md).
+
 ## Real control-plane demo
 
 With an iii stack already running, exercise the complete asynchronous

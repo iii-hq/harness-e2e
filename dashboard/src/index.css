@@ -6960,6 +6960,160 @@ footer {
 }
 
 /* Local evidence plans and test metric history */
+.improvement-panel {
+  margin-bottom: 24px;
+  padding: 24px;
+}
+
+.improvement-create {
+  margin: 16px 0;
+  border: 1px solid var(--border-subtle);
+  border-radius: 10px;
+  padding: 14px;
+}
+
+.improvement-create summary {
+  cursor: pointer;
+  font-weight: 600;
+}
+
+.improvement-create textarea {
+  display: block;
+  width: 100%;
+  margin: 12px 0;
+  resize: vertical;
+  font-family: var(--font-mono);
+  font-size: 12px;
+}
+
+.improvement-layout {
+  display: grid;
+  grid-template-columns: minmax(210px, 0.28fr) minmax(0, 1fr);
+  gap: 20px;
+}
+
+.improvement-layout > nav {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.improvement-layout > nav button {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  width: 100%;
+  border: 1px solid var(--border-subtle);
+  border-radius: 8px;
+  background: transparent;
+  padding: 12px;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.improvement-layout > nav button.is-active {
+  border-color: var(--accent);
+  background: var(--surface-raised);
+}
+
+.improvement-layout > nav span,
+.improvement-layout > nav small,
+.improvement-controls span,
+.improvement-answer-grid small {
+  color: var(--text-muted);
+}
+
+.improvement-detail,
+.improvement-answer,
+.improvement-variant,
+.improvement-timeline {
+  min-width: 0;
+}
+
+.improvement-controls {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin: 14px 0 20px;
+}
+
+.improvement-answer-grid,
+.improvement-evidence-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.improvement-answer-grid article,
+.improvement-evidence-grid section {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  min-width: 0;
+  border: 1px solid var(--border-subtle);
+  border-radius: 8px;
+  padding: 12px;
+}
+
+.improvement-evidence-grid {
+  margin: 16px 0;
+}
+
+.improvement-evidence-grid pre,
+.improvement-variant pre {
+  max-height: 300px;
+  overflow: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-size: 11px;
+}
+
+.improvement-checks {
+  display: grid;
+  gap: 7px;
+  margin: 12px 0;
+}
+
+.improvement-checks > div {
+  display: grid;
+  grid-template-columns: 18px minmax(100px, 0.25fr) 1fr;
+  gap: 8px;
+  align-items: start;
+}
+
+.improvement-timeline ol {
+  display: grid;
+  gap: 8px;
+  margin: 12px 0 0;
+  padding-left: 20px;
+}
+
+.improvement-timeline li {
+  display: grid;
+  grid-template-columns: minmax(120px, 0.25fr) 1fr auto;
+  gap: 10px;
+}
+
+.improvement-timeline time {
+  color: var(--text-muted);
+  font-size: 11px;
+}
+
+@media (max-width: 900px) {
+  .improvement-layout,
+  .improvement-answer-grid,
+  .improvement-evidence-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .improvement-timeline li {
+    grid-template-columns: 1fr;
+    gap: 2px;
+  }
+}
+
 .current-work-panel,
 .plan-lifecycle-panel,
 .history-series-panel {

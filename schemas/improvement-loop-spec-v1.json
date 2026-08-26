@@ -1,0 +1,344 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "ImprovementLoopSpecV1",
+  "type": "object",
+  "required": [
+    "advisor",
+    "allowed_paths",
+    "base_revision",
+    "budget",
+    "controller_identity",
+    "controller_url",
+    "e2e_revision",
+    "judge",
+    "label",
+    "patcher",
+    "protected_paths",
+    "runs",
+    "runs_dir",
+    "scenarios",
+    "schema",
+    "seed",
+    "stack",
+    "subject",
+    "target_scenario",
+    "technical_retries",
+    "workers_repository",
+    "worktree_root"
+  ],
+  "properties": {
+    "acceptance_policy": {
+      "default": {
+        "judge_and_advisor_are_consultative": true,
+        "preserve_rejected_candidates": true,
+        "required_runs_per_case": 5,
+        "stop_after_first_acceptance": true,
+        "validation_campaign_runs": 20
+      },
+      "allOf": [
+        {
+          "$ref": "#/definitions/ImprovementAcceptancePolicy"
+        }
+      ]
+    },
+    "advisor": {
+      "$ref": "#/definitions/ImprovementModel"
+    },
+    "allowed_paths": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "base_revision": {
+      "type": "string"
+    },
+    "budget": {
+      "$ref": "#/definitions/ImprovementBudget"
+    },
+    "controller_identity": {
+      "$ref": "#/definitions/ImprovementControllerIdentity"
+    },
+    "controller_url": {
+      "type": "string"
+    },
+    "e2e_revision": {
+      "type": "string"
+    },
+    "judge": {
+      "$ref": "#/definitions/ImprovementModel"
+    },
+    "label": {
+      "type": "string"
+    },
+    "patcher": {
+      "$ref": "#/definitions/ImprovementModel"
+    },
+    "protected_paths": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "runs": {
+      "type": "integer",
+      "format": "uint32",
+      "minimum": 0.0
+    },
+    "runs_dir": {
+      "type": "string"
+    },
+    "scenarios": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "schema": {
+      "type": "string"
+    },
+    "seed": {
+      "type": "integer",
+      "format": "uint64",
+      "minimum": 0.0
+    },
+    "stack": {
+      "$ref": "#/definitions/ImprovementStackSpec"
+    },
+    "subject": {
+      "$ref": "#/definitions/ImprovementModel"
+    },
+    "target_scenario": {
+      "type": "string"
+    },
+    "technical_retries": {
+      "type": "integer",
+      "format": "uint8",
+      "minimum": 0.0
+    },
+    "thresholds": {
+      "default": {
+        "continuous_minimum_ratio": 0.1,
+        "correctness_rate_minimum_change": 0.2,
+        "discrete_minimum_change": 1.0,
+        "score_minimum_change": 5.0,
+        "sentinel_discrete_increase": 1.0,
+        "sentinel_resource_increase_ratio": 0.2,
+        "sentinel_turns_increase_ratio": 0.25
+      },
+      "allOf": [
+        {
+          "$ref": "#/definitions/ImprovementThresholds"
+        }
+      ]
+    },
+    "workers_repository": {
+      "type": "string"
+    },
+    "worktree_root": {
+      "type": "string"
+    }
+  },
+  "additionalProperties": false,
+  "definitions": {
+    "ImprovementAcceptancePolicy": {
+      "type": "object",
+      "required": [
+        "judge_and_advisor_are_consultative",
+        "preserve_rejected_candidates",
+        "required_runs_per_case",
+        "stop_after_first_acceptance",
+        "validation_campaign_runs"
+      ],
+      "properties": {
+        "judge_and_advisor_are_consultative": {
+          "type": "boolean"
+        },
+        "preserve_rejected_candidates": {
+          "type": "boolean"
+        },
+        "required_runs_per_case": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0.0
+        },
+        "stop_after_first_acceptance": {
+          "type": "boolean"
+        },
+        "validation_campaign_runs": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0.0
+        }
+      },
+      "additionalProperties": false
+    },
+    "ImprovementBudget": {
+      "type": "object",
+      "required": [
+        "advisor_max_output_tokens",
+        "max_changed_files",
+        "max_changed_lines",
+        "max_repairs_per_variant",
+        "max_total_cost_usd",
+        "max_variants",
+        "max_wall_time_seconds",
+        "patcher_max_cost_usd",
+        "patcher_max_total_tokens"
+      ],
+      "properties": {
+        "advisor_max_output_tokens": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "max_changed_files": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0.0
+        },
+        "max_changed_lines": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0.0
+        },
+        "max_repairs_per_variant": {
+          "type": "integer",
+          "format": "uint8",
+          "minimum": 0.0
+        },
+        "max_total_cost_usd": {
+          "type": "number",
+          "format": "double"
+        },
+        "max_variants": {
+          "type": "integer",
+          "format": "uint8",
+          "minimum": 0.0
+        },
+        "max_wall_time_seconds": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "patcher_max_cost_usd": {
+          "type": "number",
+          "format": "double"
+        },
+        "patcher_max_total_tokens": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        }
+      },
+      "additionalProperties": false
+    },
+    "ImprovementControllerIdentity": {
+      "type": "object",
+      "required": [
+        "engine_version",
+        "harness_version"
+      ],
+      "properties": {
+        "engine_version": {
+          "type": "string"
+        },
+        "harness_version": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "ImprovementModel": {
+      "type": "object",
+      "required": [
+        "model",
+        "provider"
+      ],
+      "properties": {
+        "model": {
+          "type": "string"
+        },
+        "provider": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "ImprovementStackSpec": {
+      "type": "object",
+      "required": [
+        "binary_sha256",
+        "iii_bin",
+        "workers_binary_root"
+      ],
+      "properties": {
+        "binary_sha256": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          }
+        },
+        "iii_bin": {
+          "type": "string"
+        },
+        "preferred_port": {
+          "default": null,
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint16",
+          "minimum": 0.0
+        },
+        "workers_binary_root": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "ImprovementThresholds": {
+      "type": "object",
+      "required": [
+        "continuous_minimum_ratio",
+        "correctness_rate_minimum_change",
+        "discrete_minimum_change",
+        "score_minimum_change",
+        "sentinel_discrete_increase",
+        "sentinel_resource_increase_ratio",
+        "sentinel_turns_increase_ratio"
+      ],
+      "properties": {
+        "continuous_minimum_ratio": {
+          "type": "number",
+          "format": "double"
+        },
+        "correctness_rate_minimum_change": {
+          "type": "number",
+          "format": "double"
+        },
+        "discrete_minimum_change": {
+          "type": "number",
+          "format": "double"
+        },
+        "score_minimum_change": {
+          "type": "number",
+          "format": "double"
+        },
+        "sentinel_discrete_increase": {
+          "type": "number",
+          "format": "double"
+        },
+        "sentinel_resource_increase_ratio": {
+          "type": "number",
+          "format": "double"
+        },
+        "sentinel_turns_increase_ratio": {
+          "type": "number",
+          "format": "double"
+        }
+      },
+      "additionalProperties": false
+    }
+  }
+}

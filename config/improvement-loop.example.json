@@ -1,0 +1,100 @@
+{
+  "schema": "harness-e2e-improvement-loop-spec/v1",
+  "label": "Harness tool contract recovery pilot",
+  "workers_repository": "/absolute/path/to/workers",
+  "base_revision": "0000000000000000000000000000000000000000",
+  "e2e_revision": "0000000000000000000000000000000000000000",
+  "worktree_root": "/absolute/path/to/worktrees/harness-improvement",
+  "runs_dir": "/absolute/path/to/harness-e2e-runs",
+  "controller_url": "ws://127.0.0.1:49134",
+  "controller_identity": {
+    "engine_version": "replace-with-engine-version",
+    "harness_version": "replace-with-harness-version"
+  },
+  "subject": {
+    "model": "replace-with-subject-model",
+    "provider": "replace-with-provider"
+  },
+  "judge": {
+    "model": "replace-with-judge-model",
+    "provider": "replace-with-provider"
+  },
+  "advisor": {
+    "model": "replace-with-advisor-model",
+    "provider": "replace-with-provider"
+  },
+  "patcher": {
+    "model": "replace-with-controller-model",
+    "provider": "replace-with-provider"
+  },
+  "stack": {
+    "iii_bin": "/absolute/path/to/iii",
+    "workers_binary_root": "/absolute/path/to/workers",
+    "binary_sha256": {
+      "engine": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+      "database": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+      "state": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+      "queue": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+      "fp": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+      "session-manager": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+      "llm-router": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+      "context-manager": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+      "iii-directory": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+      "cron": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+      "provider-replace-with-provider": "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+    },
+    "preferred_port": null
+  },
+  "target_scenario": "tool_contract_recovery",
+  "scenarios": [
+    "tool_contract_recovery",
+    "minimal_path",
+    "validation_self_repair",
+    "policy_bound_action",
+    "secret_hygiene"
+  ],
+  "seed": 4404,
+  "runs": 5,
+  "technical_retries": 1,
+  "budget": {
+    "max_variants": 3,
+    "max_repairs_per_variant": 2,
+    "max_changed_files": 8,
+    "max_changed_lines": 600,
+    "max_wall_time_seconds": 21600,
+    "max_total_cost_usd": 25.0,
+    "patcher_max_total_tokens": 120000,
+    "patcher_max_cost_usd": 8.0,
+    "advisor_max_output_tokens": 4096
+  },
+  "thresholds": {
+    "correctness_rate_minimum_change": 0.2,
+    "discrete_minimum_change": 1.0,
+    "continuous_minimum_ratio": 0.1,
+    "score_minimum_change": 5.0,
+    "sentinel_resource_increase_ratio": 0.2,
+    "sentinel_turns_increase_ratio": 0.25,
+    "sentinel_discrete_increase": 1.0
+  },
+  "acceptance_policy": {
+    "required_runs_per_case": 5,
+    "stop_after_first_acceptance": true,
+    "judge_and_advisor_are_consultative": true,
+    "preserve_rejected_candidates": true,
+    "validation_campaign_runs": 20
+  },
+  "allowed_paths": [
+    "harness/src/",
+    "harness/prompts/",
+    "harness/config/",
+    "harness/skills/"
+  ],
+  "protected_paths": [
+    ".git",
+    ".github/",
+    "harness/tests/e2e/",
+    "harness/Cargo.toml",
+    "Cargo.toml",
+    "Cargo.lock"
+  ]
+}

@@ -26,6 +26,7 @@ use super::read_model::{
 use super::store::read_stored_run;
 use super::{ApiError, DashboardArgs, RunRequest, RunSnapshot};
 use crate::control::{ControlPlane, LocalScenarioCreateRequest, LocalScenarioCreateResponse};
+use crate::improvement::{ImprovementLoopRecord, ImprovementLoopSpecV1, ImprovementSupervisor};
 
 const MAX_REQUEST_BYTES: usize = 320 * 1024;
 
@@ -34,6 +35,8 @@ struct AppState {
     controller: Arc<Controller>,
     view_only: bool,
     engine_url: Arc<String>,
+    improvement: Option<Arc<ImprovementSupervisor>>,
+    improvement_runs_dir: Option<Arc<std::path::PathBuf>>,
 }
 
 impl FromRef<AppState> for Arc<String> {
@@ -50,6 +53,10 @@ struct CatalogQuery {
 pub(super) async fn serve(args: DashboardArgs) -> Result<()> {
     let listen = args.listen;
     let view_only = args.view_only;
+    let improvement_enabled = args.enable_improvement_loop && !view_only;
+    let improvement_runs_dir = improvement_enabled.then(|| Arc::new(args.runs_dir.clone()));
+    let improvement =
+        improvement_enabled.then(|| Arc::new(ImprovementSupervisor::new(args.runs_dir.clone())));
     let engine_url = Arc::new(args.url.clone());
     let iii = (!view_only).then(|| bus::connect(&engine_url));
     let events = iii.as_deref().map(bus::DashboardEvents::register);
@@ -69,6 +76,8 @@ pub(super) async fn serve(args: DashboardArgs) -> Result<()> {
         controller,
         view_only,
         engine_url,
+        improvement,
+        improvement_runs_dir,
     };
     let app = Router::new()
         .route("/data.js", get(benchmark_data))
@@ -99,6 +108,30 @@ pub(super) async fn serve(args: DashboardArgs) -> Result<()> {
                 "/api/dashboard/plans/:id/runs",
                 axum::routing::post(plan_run),
             )
+    };
+    let app = if improvement_enabled {
+        app.route(
+            "/api/local/improvement-loops",
+            get(improvement_loops_list).post(improvement_loop_create),
+        )
+        .route(
+            "/api/local/improvement-loops/:id",
+            get(improvement_loop_get),
+        )
+        .route(
+            "/api/local/improvement-loops/:id/start",
+            axum::routing::post(improvement_loop_start),
+        )
+        .route(
+            "/api/local/improvement-loops/:id/resume",
+            axum::routing::post(improvement_loop_resume),
+        )
+        .route(
+            "/api/local/improvement-loops/:id/cancel",
+            axum::routing::post(improvement_loop_cancel),
+        )
+    } else {
+        app
     }
     .layer(axum::extract::DefaultBodyLimit::max(MAX_REQUEST_BYTES))
     .with_state(state);
@@ -129,6 +162,7 @@ pub(super) async fn register_worker_functions(
         url: control.url().to_string(),
         runs_dir: control.output_root().to_path_buf(),
         view_only: false,
+        enable_improvement_loop: false,
     };
     let events = Some(bus::DashboardEvents::register(iii));
     let controller = Controller::new(args, events, Some(control)).await?;
@@ -141,6 +175,7 @@ async fn dashboard_config(State(state): State<AppState>) -> Json<Value> {
         "mode": if state.view_only { "observed" } else { "local" },
         "transport": if state.view_only { "static" } else { "iii" },
         "page_size": 25,
+        "improvement_loop_enabled": state.improvement.is_some(),
         "functions": {
             "executions_list": bus::EXECUTIONS_LIST,
             "execution_get": bus::EXECUTION_GET,
@@ -161,6 +196,83 @@ async fn dashboard_config(State(state): State<AppState>) -> Json<Value> {
             "changed_trigger": bus::CHANGED_TRIGGER,
         }
     }))
+}
+
+fn improvement_supervisor(state: &AppState) -> Result<Arc<ImprovementSupervisor>, ApiError> {
+    state
+        .improvement
+        .clone()
+        .ok_or_else(|| ApiError::not_found("improvement loops require --enable-improvement-loop"))
+}
+
+async fn improvement_loops_list(State(state): State<AppState>) -> Result<Json<Value>, ApiError> {
+    let records = improvement_supervisor(&state)?
+        .list()
+        .map_err(ApiError::internal)?;
+    Ok(Json(json!({"mode": "local", "improvement_loops": records})))
+}
+
+async fn improvement_loop_get(
+    State(state): State<AppState>,
+    AxumPath(id): AxumPath<String>,
+) -> Result<Json<Value>, ApiError> {
+    improvement_supervisor(&state)?
+        .report(&id)
+        .map(Json)
+        .map_err(|error| ApiError::not_found(error.to_string()))
+}
+
+async fn improvement_loop_create(
+    State(state): State<AppState>,
+    Json(spec): Json<ImprovementLoopSpecV1>,
+) -> Result<(StatusCode, Json<ImprovementLoopRecord>), ApiError> {
+    let expected = state
+        .improvement_runs_dir
+        .as_ref()
+        .expect("enabled improvement state has a runs directory");
+    if spec.runs_dir != **expected {
+        return Err(ApiError::bad_request(format!(
+            "spec runs_dir must equal the dashboard runs directory {}",
+            expected.display()
+        )));
+    }
+    let record = improvement_supervisor(&state)?
+        .create(spec)
+        .map_err(|error| ApiError::bad_request(error.to_string()))?;
+    Ok((StatusCode::CREATED, Json(record)))
+}
+
+async fn improvement_loop_start(
+    State(state): State<AppState>,
+    AxumPath(id): AxumPath<String>,
+) -> Result<(StatusCode, Json<ImprovementLoopRecord>), ApiError> {
+    let record = improvement_supervisor(&state)?
+        .start_background(&id)
+        .await
+        .map_err(|error| ApiError::conflict(error.to_string()))?;
+    Ok((StatusCode::ACCEPTED, Json(record)))
+}
+
+async fn improvement_loop_resume(
+    State(state): State<AppState>,
+    AxumPath(id): AxumPath<String>,
+) -> Result<(StatusCode, Json<ImprovementLoopRecord>), ApiError> {
+    let record = improvement_supervisor(&state)?
+        .resume_background(&id)
+        .await
+        .map_err(|error| ApiError::conflict(error.to_string()))?;
+    Ok((StatusCode::ACCEPTED, Json(record)))
+}
+
+async fn improvement_loop_cancel(
+    State(state): State<AppState>,
+    AxumPath(id): AxumPath<String>,
+) -> Result<Json<ImprovementLoopRecord>, ApiError> {
+    improvement_supervisor(&state)?
+        .cancel(&id)
+        .await
+        .map(Json)
+        .map_err(ApiError::internal)
 }
 
 async fn plans_list(State(state): State<AppState>) -> Result<Json<Value>, ApiError> {

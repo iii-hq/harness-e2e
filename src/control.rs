@@ -1031,6 +1031,7 @@ impl ControlPlane {
             }),
             observation_contract: request.run_contract.clone(),
             materialized_markdown_plan: None,
+            source_identity_override: None,
         })
         .await;
         checkpoint_task.abort();

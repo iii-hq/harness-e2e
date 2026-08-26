@@ -42,6 +42,7 @@ export type LocalPlan = {
   updated_at: string
   state: LocalPlanState
   locked: boolean
+  supervised?: boolean
   scope_hash: string
   url: string
   model: string
@@ -71,6 +72,64 @@ export type LocalPlan = {
 export type LocalPlansResponse = {
   mode: 'local'
   plans: LocalPlan[]
+}
+
+export type ImprovementLoopRecord = JsonObject & {
+  id: string
+  phase: string
+  created_at: string
+  updated_at: string
+  deadline_at: string
+  consumed_cost_usd: number
+  accepted_revision?: string | null
+  error: string
+  spec: JsonObject & {
+    label: string
+    base_revision: string
+    target_scenario: string
+    runs: number
+    scenarios: string[]
+  }
+  transitions: Array<{
+    phase: string
+    at: string
+    reason: string
+  }>
+  iterations: Array<
+    JsonObject & {
+      number: number
+      branch: string
+      candidate_revision?: string | null
+      checks: Array<
+        JsonObject & { kind: string; passed: boolean; summary: string }
+      >
+      comparison?: JsonObject | null
+      decision?: (JsonObject & { accepted: boolean; reasons: string[] }) | null
+    }
+  >
+}
+
+export type ImprovementLoopsResponse = {
+  mode: 'local'
+  improvement_loops: ImprovementLoopRecord[]
+}
+
+export type ImprovementLoopReport = {
+  record: ImprovementLoopRecord
+  artifacts: {
+    iterations: Array<{
+      number: number
+      advisor_input?: JsonObject | null
+      advisor_response?: JsonObject | null
+      proposal?: JsonObject | null
+      patch?: string | null
+      checks: ImprovementLoopRecord['iterations'][number]['checks']
+      comparison?: JsonObject | null
+      decision?: JsonObject | null
+      candidate_revision?: string | null
+      branch: string
+    }>
+  }
 }
 
 export type ExecutionTotals = JsonObject & {
@@ -396,6 +455,7 @@ export type RuntimeConfig = {
   mode: 'local' | 'observed'
   transport: 'iii' | 'static'
   page_size: number
+  improvement_loop_enabled?: boolean
   http_fallback?: boolean
   functions: {
     executions_list: string
@@ -443,6 +503,13 @@ export type DashboardDataBridge = {
   createPlan(request: JsonObject): Promise<LocalPlan>
   updatePlan(planId: string, request: JsonObject): Promise<LocalPlan>
   startPlan(planId: string, role: 'baseline' | 'candidate'): Promise<LocalPlan>
+  improvementLoopEnabled: boolean
+  listImprovementLoops(): Promise<ImprovementLoopsResponse>
+  getImprovementLoop(loopId: string): Promise<ImprovementLoopReport>
+  createImprovementLoop(spec: JsonObject): Promise<ImprovementLoopRecord>
+  startImprovementLoop(loopId: string): Promise<ImprovementLoopRecord>
+  resumeImprovementLoop(loopId: string): Promise<ImprovementLoopRecord>
+  cancelImprovementLoop(loopId: string): Promise<ImprovementLoopRecord>
   getCatalog(url?: string): Promise<JsonObject>
   createLocalScenario(request: {
     file_name: string
@@ -524,6 +591,7 @@ function makeBridge(runtime: RuntimeConfig): DashboardDataBridge {
   return {
     mode: runtime.mode,
     remotePaging: true,
+    improvementLoopEnabled: runtime.improvement_loop_enabled === true,
     listExecutions,
     getExecution: (executionId) =>
       getExecution(runtime, executionId).then((bundle) => bundle.detail),
@@ -585,6 +653,32 @@ function makeBridge(runtime: RuntimeConfig): DashboardDataBridge {
             `./api/dashboard/plans/${encodeURIComponent(planId)}/runs`,
             { method: 'POST', body: JSON.stringify({ role }) },
           ),
+      ),
+    listImprovementLoops: () =>
+      httpJson<ImprovementLoopsResponse>('./api/local/improvement-loops'),
+    getImprovementLoop: (loopId) =>
+      httpJson<ImprovementLoopReport>(
+        `./api/local/improvement-loops/${encodeURIComponent(loopId)}`,
+      ),
+    createImprovementLoop: (spec) =>
+      httpJson<ImprovementLoopRecord>('./api/local/improvement-loops', {
+        method: 'POST',
+        body: JSON.stringify(spec),
+      }),
+    startImprovementLoop: (loopId) =>
+      httpJson<ImprovementLoopRecord>(
+        `./api/local/improvement-loops/${encodeURIComponent(loopId)}/start`,
+        { method: 'POST' },
+      ),
+    resumeImprovementLoop: (loopId) =>
+      httpJson<ImprovementLoopRecord>(
+        `./api/local/improvement-loops/${encodeURIComponent(loopId)}/resume`,
+        { method: 'POST' },
+      ),
+    cancelImprovementLoop: (loopId) =>
+      httpJson<ImprovementLoopRecord>(
+        `./api/local/improvement-loops/${encodeURIComponent(loopId)}/cancel`,
+        { method: 'POST' },
       ),
     getCatalog: (url) =>
       call(runtime.functions.catalog_get, url ? { url } : {}, () =>
@@ -694,6 +788,7 @@ function makeStaticBridge(): DashboardDataBridge {
   return {
     mode: 'published',
     remotePaging: false,
+    improvementLoopEnabled: false,
     listExecutions: async (input = {}) => {
       const manifest = await staticExecutionManifest()
       return filterStaticExecutions(manifest, input)
@@ -764,6 +859,24 @@ function makeStaticBridge(): DashboardDataBridge {
     },
     startPlan: async () => {
       throw new Error('Local plans are available only in the local dashboard')
+    },
+    listImprovementLoops: async () => {
+      throw new Error('Harness improvement loops are disabled')
+    },
+    getImprovementLoop: async () => {
+      throw new Error('Harness improvement loops are disabled')
+    },
+    createImprovementLoop: async () => {
+      throw new Error('Harness improvement loops are disabled')
+    },
+    startImprovementLoop: async () => {
+      throw new Error('Harness improvement loops are disabled')
+    },
+    resumeImprovementLoop: async () => {
+      throw new Error('Harness improvement loops are disabled')
+    },
+    cancelImprovementLoop: async () => {
+      throw new Error('Harness improvement loops are disabled')
     },
     getCatalog: () => Promise.reject(new Error('Catalog unavailable')),
     createLocalScenario: () =>

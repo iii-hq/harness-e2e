@@ -10,6 +10,7 @@ use serde_json::json;
 
 use super::RunRequest;
 use crate::artifact;
+use crate::improvement::{ImprovementLoopPhase, ImprovementLoopRecord, ImprovementLoopSpecV1};
 use crate::markdown::ScenarioKey;
 #[cfg(test)]
 use crate::scenarios::ScenarioId;
@@ -61,6 +62,8 @@ pub(super) struct LocalPlan {
     pub updated_at: String,
     pub state: PlanState,
     pub locked: bool,
+    #[serde(default)]
+    pub supervised: bool,
     pub scope_hash: String,
     pub url: String,
     pub model: String,
@@ -223,6 +226,7 @@ pub(super) fn new_plan(request: &PlanCreateRequest, id: String) -> Result<LocalP
         updated_at: now,
         state: PlanState::Draft,
         locked: false,
+        supervised: false,
         scope_hash,
         url: request.url.trim().to_string(),
         model: request.model.trim().to_string(),
@@ -240,6 +244,110 @@ pub(super) fn new_plan(request: &PlanCreateRequest, id: String) -> Result<LocalP
         incomplete_execution_ids: Vec::new(),
         last_attempt_id: None,
     })
+}
+
+pub(crate) fn materialize_locked_improvement_plan(
+    spec: &ImprovementLoopSpecV1,
+    loop_id: &str,
+) -> Result<String> {
+    let id = format!("improvement-{loop_id}");
+    let request = PlanCreateRequest {
+        _caller_worker_id: None,
+        label: format!("{} · Harness improvement", spec.label),
+        purpose: "Frozen baseline and sentinel cohort owned by the protected Harness improvement supervisor.".into(),
+        url: spec.controller_url.clone(),
+        model: spec.subject.model.clone(),
+        provider: spec.subject.provider.clone(),
+        judge_model: spec.judge.model.clone(),
+        judge_provider: spec.judge.provider.clone(),
+        scenarios: spec.scenarios.clone(),
+        runs: spec.runs,
+        technical_retries: spec.technical_retries,
+        seed: Some(spec.seed),
+    };
+    let scenarios = resolve_scope(&request.scenarios, request.seed)?;
+    let scope_hash = scope_hash(&request, &scenarios)?;
+    let now = Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true);
+    // Read-only projection of the supervisor cohort. The LocalPlan preserves
+    // the outer retry budget; the runner still applies zero retries to each
+    // non-replayable scenario when the supervisor splits the cohort.
+    let plan = LocalPlan {
+        schema_version: PLAN_SCHEMA_VERSION,
+        id: id.clone(),
+        label: request.label,
+        purpose: request.purpose,
+        created_at: now.clone(),
+        updated_at: now,
+        state: PlanState::Draft,
+        locked: true,
+        supervised: true,
+        scope_hash,
+        url: request.url,
+        model: request.model,
+        provider: request.provider,
+        judge_model: request.judge_model,
+        judge_provider: request.judge_provider,
+        scenario_ids: request.scenarios,
+        scenarios,
+        runs: request.runs,
+        technical_retries: request.technical_retries,
+        seed: request.seed,
+        baseline_execution_id: None,
+        candidate_execution_ids: Vec::new(),
+        candidate_labels: BTreeMap::new(),
+        incomplete_execution_ids: Vec::new(),
+        last_attempt_id: None,
+    };
+    write_plan(&plans_dir(&spec.runs_dir), &plan)?;
+    Ok(id)
+}
+
+pub(crate) fn sync_locked_improvement_plan(record: &ImprovementLoopRecord) -> Result<()> {
+    let directory = plans_dir(&record.spec.runs_dir);
+    let Some(mut plan) = read_plan(&directory, &record.local_plan_id)? else {
+        bail!(
+            "locked improvement LocalPlan '{}' is missing",
+            record.local_plan_id
+        );
+    };
+    if !plan.supervised
+        || !plan.locked
+        || plan.scenario_ids != record.spec.scenarios
+        || plan.runs != record.spec.runs
+        || plan.technical_retries != record.spec.technical_retries
+        || plan.seed != Some(record.spec.seed)
+    {
+        bail!("improvement LocalPlan differs from its frozen supervisor scope");
+    }
+    plan.baseline_execution_id = record.baseline_execution_id.clone();
+    plan.candidate_execution_ids = record
+        .iterations
+        .iter()
+        .filter_map(|iteration| iteration.candidate_execution_id.clone())
+        .collect();
+    plan.state = match record.phase {
+        ImprovementLoopPhase::BaselineRunning => PlanState::BaselineRunning,
+        ImprovementLoopPhase::CandidateRunning
+        | ImprovementLoopPhase::Patching
+        | ImprovementLoopPhase::Checking
+        | ImprovementLoopPhase::Comparing => PlanState::CandidateRunning,
+        ImprovementLoopPhase::Draft | ImprovementLoopPhase::Preflight
+            if record.baseline_execution_id.is_none() =>
+        {
+            PlanState::Draft
+        }
+        ImprovementLoopPhase::AcceptedRepeatable
+        | ImprovementLoopPhase::Validated
+        | ImprovementLoopPhase::RejectedExhausted
+            if !plan.candidate_execution_ids.is_empty() =>
+        {
+            PlanState::ComparisonReady
+        }
+        _ if record.baseline_execution_id.is_some() => PlanState::BaselineReady,
+        _ => PlanState::Draft,
+    };
+    plan.updated_at = Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true);
+    write_plan(&directory, &plan)
 }
 
 pub(super) fn apply_update(plan: &mut LocalPlan, update: &PlanUpdateRequest) -> Result<()> {

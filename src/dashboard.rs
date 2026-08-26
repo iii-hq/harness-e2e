@@ -3,7 +3,7 @@ mod assessment_projection;
 mod assets;
 mod bus;
 mod controller;
-mod plans;
+pub(crate) mod plans;
 mod presenter;
 mod proxy;
 mod read_model;
@@ -38,6 +38,10 @@ pub struct DashboardArgs {
     /// Present retained reports without exposing local execution endpoints.
     #[arg(long)]
     pub view_only: bool,
+
+    /// Enable local host mutations for the protected Harness improvement loop.
+    #[arg(long)]
+    pub enable_improvement_loop: bool,
 }
 
 #[derive(Debug, Clone, Serialize, JsonSchema)]

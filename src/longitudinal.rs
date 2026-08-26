@@ -309,6 +309,14 @@ pub struct CaseMetrics {
     pub p95_wall_time_ms: Option<f64>,
     pub p50_turns: Option<f64>,
     pub p95_turns: Option<f64>,
+    pub p50_function_calls: Option<f64>,
+    pub p95_function_calls: Option<f64>,
+    pub p50_function_call_errors: Option<f64>,
+    pub p95_function_call_errors: Option<f64>,
+    pub p50_validation_retries: Option<f64>,
+    pub p95_validation_retries: Option<f64>,
+    pub p50_total_tokens: Option<f64>,
+    pub p95_total_tokens: Option<f64>,
     pub retry_rate: Option<f64>,
     pub p50_work_amplification: Option<f64>,
     pub p95_work_amplification: Option<f64>,
@@ -335,6 +343,14 @@ pub struct BenchmarkDelta {
     pub p95_wall_time_ms: Option<DeltaValue>,
     pub p50_turns: Option<DeltaValue>,
     pub p95_turns: Option<DeltaValue>,
+    pub p50_function_calls: Option<DeltaValue>,
+    pub p95_function_calls: Option<DeltaValue>,
+    pub p50_function_call_errors: Option<DeltaValue>,
+    pub p95_function_call_errors: Option<DeltaValue>,
+    pub p50_validation_retries: Option<DeltaValue>,
+    pub p95_validation_retries: Option<DeltaValue>,
+    pub p50_total_tokens: Option<DeltaValue>,
+    pub p95_total_tokens: Option<DeltaValue>,
     pub retry_rate: Option<DeltaValue>,
     pub p50_work_amplification: Option<DeltaValue>,
     pub p95_work_amplification: Option<DeltaValue>,
@@ -801,6 +817,30 @@ fn case_metrics(runs: &[&E2eRunReport], total_runs: usize) -> CaseMetrics {
             .and_then(|value| value.root_turns.zip(value.child_turns))
             .map(|(root, child)| (root + child) as f64)
     });
+    let function_calls = collect_complete(runs, |run| {
+        run.efficiency
+            .as_ref()?
+            .function_calls
+            .map(|value| value as f64)
+    });
+    let function_call_errors = collect_complete(runs, |run| {
+        run.efficiency
+            .as_ref()?
+            .function_call_errors
+            .map(|value| value as f64)
+    });
+    let validation_retries = collect_complete(runs, |run| {
+        run.efficiency
+            .as_ref()?
+            .validation_retries
+            .map(|value| value as f64)
+    });
+    let total_tokens = collect_complete(runs, |run| {
+        run.efficiency
+            .as_ref()?
+            .total_tokens
+            .map(|value| value as f64)
+    });
     let amplification = collect_complete(runs, |run| run.efficiency.as_ref()?.work_amplification);
     let retry_rate = (!runs.is_empty()).then(|| {
         runs.iter()
@@ -815,6 +855,18 @@ fn case_metrics(runs: &[&E2eRunReport], total_runs: usize) -> CaseMetrics {
         &mut unavailable,
     );
     let p95_turns = tail_metric(&turns, "p95_turns", &mut unavailable);
+    let p95_function_calls = tail_metric(&function_calls, "p95_function_calls", &mut unavailable);
+    let p95_function_call_errors = tail_metric(
+        &function_call_errors,
+        "p95_function_call_errors",
+        &mut unavailable,
+    );
+    let p95_validation_retries = tail_metric(
+        &validation_retries,
+        "p95_validation_retries",
+        &mut unavailable,
+    );
+    let p95_total_tokens = tail_metric(&total_tokens, "p95_total_tokens", &mut unavailable);
     let p95_work_amplification =
         tail_metric(&amplification, "p95_work_amplification", &mut unavailable);
     if costs.is_none() {
@@ -828,6 +880,19 @@ fn case_metrics(runs: &[&E2eRunReport], total_runs: usize) -> CaseMetrics {
             "turns".into(),
             "one or more included runs lacks turn metrics".into(),
         );
+    }
+    for (name, values) in [
+        ("function_calls", &function_calls),
+        ("function_call_errors", &function_call_errors),
+        ("validation_retries", &validation_retries),
+        ("total_tokens", &total_tokens),
+    ] {
+        if values.is_none() {
+            unavailable.insert(
+                name.into(),
+                format!("one or more included runs lacks {name} metrics"),
+            );
+        }
     }
     if amplification.is_none() {
         unavailable.insert(
@@ -852,6 +917,14 @@ fn case_metrics(runs: &[&E2eRunReport], total_runs: usize) -> CaseMetrics {
         p95_wall_time_ms,
         p50_turns: turns.as_deref().and_then(median),
         p95_turns,
+        p50_function_calls: function_calls.as_deref().and_then(median),
+        p95_function_calls,
+        p50_function_call_errors: function_call_errors.as_deref().and_then(median),
+        p95_function_call_errors,
+        p50_validation_retries: validation_retries.as_deref().and_then(median),
+        p95_validation_retries,
+        p50_total_tokens: total_tokens.as_deref().and_then(median),
+        p95_total_tokens,
         retry_rate,
         p50_work_amplification: amplification.as_deref().and_then(median),
         p95_work_amplification,
@@ -905,6 +978,46 @@ fn benchmark_delta(from: &CaseMetrics, to: &CaseMetrics) -> BenchmarkDelta {
         ),
         p50_turns: delta!("p50_turns", from.p50_turns, to.p50_turns),
         p95_turns: delta!("p95_turns", from.p95_turns, to.p95_turns),
+        p50_function_calls: delta!(
+            "p50_function_calls",
+            from.p50_function_calls,
+            to.p50_function_calls
+        ),
+        p95_function_calls: delta!(
+            "p95_function_calls",
+            from.p95_function_calls,
+            to.p95_function_calls
+        ),
+        p50_function_call_errors: delta!(
+            "p50_function_call_errors",
+            from.p50_function_call_errors,
+            to.p50_function_call_errors
+        ),
+        p95_function_call_errors: delta!(
+            "p95_function_call_errors",
+            from.p95_function_call_errors,
+            to.p95_function_call_errors
+        ),
+        p50_validation_retries: delta!(
+            "p50_validation_retries",
+            from.p50_validation_retries,
+            to.p50_validation_retries
+        ),
+        p95_validation_retries: delta!(
+            "p95_validation_retries",
+            from.p95_validation_retries,
+            to.p95_validation_retries
+        ),
+        p50_total_tokens: delta!(
+            "p50_total_tokens",
+            from.p50_total_tokens,
+            to.p50_total_tokens
+        ),
+        p95_total_tokens: delta!(
+            "p95_total_tokens",
+            from.p95_total_tokens,
+            to.p95_total_tokens
+        ),
         retry_rate: delta!("retry_rate", from.retry_rate, to.retry_rate),
         p50_work_amplification: delta!(
             "p50_work_amplification",

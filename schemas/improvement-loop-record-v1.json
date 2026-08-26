@@ -1,0 +1,1632 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "ImprovementLoopRecord",
+  "type": "object",
+  "required": [
+    "cancel_requested",
+    "consumed_cost_usd",
+    "created_at",
+    "deadline_at",
+    "error",
+    "id",
+    "immutable_plan_sha256",
+    "incumbent_revision",
+    "iterations",
+    "local_plan_id",
+    "phase",
+    "schema",
+    "spec",
+    "spec_sha256",
+    "transitions",
+    "updated_at"
+  ],
+  "properties": {
+    "accepted_revision": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "baseline_execution_id": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "cancel_requested": {
+      "type": "boolean"
+    },
+    "consumed_cost_usd": {
+      "type": "number",
+      "format": "double"
+    },
+    "created_at": {
+      "type": "string"
+    },
+    "deadline_at": {
+      "type": "string"
+    },
+    "error": {
+      "type": "string"
+    },
+    "id": {
+      "type": "string"
+    },
+    "immutable_plan_sha256": {
+      "type": "string"
+    },
+    "incumbent_revision": {
+      "type": "string"
+    },
+    "iterations": {
+      "type": "array",
+      "items": {
+        "$ref": "#/definitions/ImprovementIteration"
+      }
+    },
+    "local_plan_id": {
+      "type": "string"
+    },
+    "phase": {
+      "$ref": "#/definitions/ImprovementLoopPhase"
+    },
+    "schema": {
+      "type": "string"
+    },
+    "spec": {
+      "$ref": "#/definitions/ImprovementLoopSpecV1"
+    },
+    "spec_sha256": {
+      "type": "string"
+    },
+    "transitions": {
+      "type": "array",
+      "items": {
+        "$ref": "#/definitions/ImprovementTransition"
+      }
+    },
+    "updated_at": {
+      "type": "string"
+    }
+  },
+  "additionalProperties": false,
+  "definitions": {
+    "ArtifactReference": {
+      "type": "object",
+      "required": [
+        "id",
+        "kind",
+        "media_type",
+        "path",
+        "sha256",
+        "size_bytes"
+      ],
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "kind": {
+          "type": "string"
+        },
+        "media_type": {
+          "type": "string"
+        },
+        "path": {
+          "type": "string"
+        },
+        "sha256": {
+          "type": "string"
+        },
+        "size_bytes": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        }
+      }
+    },
+    "BenchmarkDelta": {
+      "type": "object",
+      "properties": {
+        "deliverable_success_rate": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/DeltaValue"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "flaky_rate": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/DeltaValue"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "median_score": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/DeltaValue"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "p50_cost_usd": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/DeltaValue"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "p50_function_call_errors": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/DeltaValue"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "p50_function_calls": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/DeltaValue"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "p50_total_tokens": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/DeltaValue"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "p50_turns": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/DeltaValue"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "p50_validation_retries": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/DeltaValue"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "p50_wall_time_ms": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/DeltaValue"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "p50_work_amplification": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/DeltaValue"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "p95_cost_usd": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/DeltaValue"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "p95_function_call_errors": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/DeltaValue"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "p95_function_calls": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/DeltaValue"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "p95_total_tokens": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/DeltaValue"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "p95_turns": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/DeltaValue"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "p95_validation_retries": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/DeltaValue"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "p95_wall_time_ms": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/DeltaValue"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "p95_work_amplification": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/DeltaValue"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "retry_rate": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/DeltaValue"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "structural_integrity_rate": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/DeltaValue"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "technical_failure_rate": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/DeltaValue"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "unavailable": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "CaseCohortKey": {
+      "type": "object",
+      "required": [
+        "case_id",
+        "contract_sha256",
+        "execution",
+        "inputs_sha256",
+        "scenario_id",
+        "scenario_version",
+        "seed"
+      ],
+      "properties": {
+        "case_id": {
+          "type": "string"
+        },
+        "contract_sha256": {
+          "type": "string"
+        },
+        "execution": {
+          "$ref": "#/definitions/ExecutionCohortIdentity"
+        },
+        "inputs_sha256": {
+          "type": "string"
+        },
+        "scenario_id": {
+          "type": "string"
+        },
+        "scenario_version": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0.0
+        },
+        "seed": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        }
+      }
+    },
+    "CaseComparison": {
+      "type": "object",
+      "required": [
+        "complexity_tier",
+        "delta",
+        "from",
+        "from_run_ids",
+        "key",
+        "regressions",
+        "to",
+        "to_run_ids"
+      ],
+      "properties": {
+        "complexity_tier": {
+          "$ref": "#/definitions/ComplexityTier"
+        },
+        "delta": {
+          "$ref": "#/definitions/BenchmarkDelta"
+        },
+        "from": {
+          "$ref": "#/definitions/CaseMetrics"
+        },
+        "from_run_ids": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "key": {
+          "$ref": "#/definitions/CaseCohortKey"
+        },
+        "regressions": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/RegressionSignal"
+          }
+        },
+        "to": {
+          "$ref": "#/definitions/CaseMetrics"
+        },
+        "to_run_ids": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "CaseMetrics": {
+      "type": "object",
+      "required": [
+        "excluded_infrastructure_runs",
+        "included_runs"
+      ],
+      "properties": {
+        "deliverable_success": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/RateEstimate"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "excluded_infrastructure_runs": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0.0
+        },
+        "flaky_rate": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double"
+        },
+        "included_runs": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0.0
+        },
+        "median_score": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double"
+        },
+        "p50_cost_usd": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double"
+        },
+        "p50_function_call_errors": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double"
+        },
+        "p50_function_calls": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double"
+        },
+        "p50_total_tokens": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double"
+        },
+        "p50_turns": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double"
+        },
+        "p50_validation_retries": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double"
+        },
+        "p50_wall_time_ms": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double"
+        },
+        "p50_work_amplification": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double"
+        },
+        "p95_cost_usd": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double"
+        },
+        "p95_function_call_errors": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double"
+        },
+        "p95_function_calls": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double"
+        },
+        "p95_total_tokens": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double"
+        },
+        "p95_turns": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double"
+        },
+        "p95_validation_retries": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double"
+        },
+        "p95_wall_time_ms": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double"
+        },
+        "p95_work_amplification": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double"
+        },
+        "retry_rate": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double"
+        },
+        "structural_integrity": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/RateEstimate"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "technical_failure": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/RateEstimate"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "unavailable": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "CohortAudit": {
+      "type": "object",
+      "required": [
+        "excluded_cases",
+        "excluded_runs",
+        "included_case_ids"
+      ],
+      "properties": {
+        "excluded_cases": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/ExcludedCase"
+          }
+        },
+        "excluded_runs": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/ExcludedRun"
+          }
+        },
+        "included_case_ids": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "ComparisonSide": {
+      "type": "string",
+      "enum": [
+        "from",
+        "to"
+      ]
+    },
+    "ComparisonSummary": {
+      "type": "object",
+      "required": [
+        "cases",
+        "cohort",
+        "comparable",
+        "comparison_id",
+        "from_execution_id",
+        "gate_passed",
+        "reasons",
+        "regressions",
+        "to_execution_id"
+      ],
+      "properties": {
+        "baseline_id": {
+          "description": "Reviewed baseline the regression thresholds came from; absent when the code-default thresholds gated this comparison.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "cases": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/CaseComparison"
+          }
+        },
+        "cohort": {
+          "$ref": "#/definitions/CohortAudit"
+        },
+        "comparable": {
+          "type": "boolean"
+        },
+        "comparison_id": {
+          "type": "string"
+        },
+        "from_execution_id": {
+          "type": "string"
+        },
+        "from_revision": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "gate_passed": {
+          "type": "boolean"
+        },
+        "reasons": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "regressions": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/RegressionSignal"
+          }
+        },
+        "to_execution_id": {
+          "type": "string"
+        },
+        "to_revision": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      }
+    },
+    "ComplexityTier": {
+      "type": "string",
+      "enum": [
+        "l0_atomic",
+        "l1_sequential",
+        "l2_stateful",
+        "l3_concurrent",
+        "l4_coordinated",
+        "l5_adaptive"
+      ]
+    },
+    "DeltaValue": {
+      "type": "object",
+      "required": [
+        "absolute"
+      ],
+      "properties": {
+        "absolute": {
+          "type": "number",
+          "format": "double"
+        },
+        "relative_ratio": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double"
+        }
+      }
+    },
+    "ExcludedCase": {
+      "type": "object",
+      "required": [
+        "case_id",
+        "reasons",
+        "scenario_id",
+        "side"
+      ],
+      "properties": {
+        "case_id": {
+          "type": "string"
+        },
+        "reasons": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "scenario_id": {
+          "type": "string"
+        },
+        "side": {
+          "$ref": "#/definitions/ComparisonSide"
+        }
+      }
+    },
+    "ExcludedRun": {
+      "type": "object",
+      "required": [
+        "attempt_id",
+        "case_id",
+        "reason",
+        "run_id",
+        "scenario_id",
+        "side"
+      ],
+      "properties": {
+        "attempt_id": {
+          "type": "string"
+        },
+        "case_id": {
+          "type": "string"
+        },
+        "reason": {
+          "type": "string"
+        },
+        "run_id": {
+          "type": "string"
+        },
+        "scenario_id": {
+          "type": "string"
+        },
+        "side": {
+          "$ref": "#/definitions/ComparisonSide"
+        }
+      }
+    },
+    "ExecutionCohortIdentity": {
+      "type": "object",
+      "required": [
+        "lane",
+        "stack_mode",
+        "subject_model",
+        "subject_provider"
+      ],
+      "properties": {
+        "e2e_repository": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "judge_model": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "judge_protocol": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "judge_provider": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "lane": {
+          "type": "string"
+        },
+        "stack_mode": {
+          "type": "string"
+        },
+        "subject_model": {
+          "type": "string"
+        },
+        "subject_provider": {
+          "type": "string"
+        }
+      }
+    },
+    "ImprovementAcceptancePolicy": {
+      "type": "object",
+      "required": [
+        "judge_and_advisor_are_consultative",
+        "preserve_rejected_candidates",
+        "required_runs_per_case",
+        "stop_after_first_acceptance",
+        "validation_campaign_runs"
+      ],
+      "properties": {
+        "judge_and_advisor_are_consultative": {
+          "type": "boolean"
+        },
+        "preserve_rejected_candidates": {
+          "type": "boolean"
+        },
+        "required_runs_per_case": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0.0
+        },
+        "stop_after_first_acceptance": {
+          "type": "boolean"
+        },
+        "validation_campaign_runs": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0.0
+        }
+      },
+      "additionalProperties": false
+    },
+    "ImprovementBudget": {
+      "type": "object",
+      "required": [
+        "advisor_max_output_tokens",
+        "max_changed_files",
+        "max_changed_lines",
+        "max_repairs_per_variant",
+        "max_total_cost_usd",
+        "max_variants",
+        "max_wall_time_seconds",
+        "patcher_max_cost_usd",
+        "patcher_max_total_tokens"
+      ],
+      "properties": {
+        "advisor_max_output_tokens": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "max_changed_files": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0.0
+        },
+        "max_changed_lines": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0.0
+        },
+        "max_repairs_per_variant": {
+          "type": "integer",
+          "format": "uint8",
+          "minimum": 0.0
+        },
+        "max_total_cost_usd": {
+          "type": "number",
+          "format": "double"
+        },
+        "max_variants": {
+          "type": "integer",
+          "format": "uint8",
+          "minimum": 0.0
+        },
+        "max_wall_time_seconds": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "patcher_max_cost_usd": {
+          "type": "number",
+          "format": "double"
+        },
+        "patcher_max_total_tokens": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        }
+      },
+      "additionalProperties": false
+    },
+    "ImprovementCheckKind": {
+      "type": "string",
+      "enum": [
+        "format",
+        "clippy",
+        "test",
+        "build",
+        "diff_policy"
+      ]
+    },
+    "ImprovementCheckResult": {
+      "type": "object",
+      "required": [
+        "command",
+        "duration_ms",
+        "kind",
+        "passed",
+        "summary"
+      ],
+      "properties": {
+        "command": {
+          "type": "string"
+        },
+        "duration_ms": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "exit_code": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "int32"
+        },
+        "kind": {
+          "$ref": "#/definitions/ImprovementCheckKind"
+        },
+        "output_artifact": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ArtifactReference"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "passed": {
+          "type": "boolean"
+        },
+        "summary": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "ImprovementControllerIdentity": {
+      "type": "object",
+      "required": [
+        "engine_version",
+        "harness_version"
+      ],
+      "properties": {
+        "engine_version": {
+          "type": "string"
+        },
+        "harness_version": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "ImprovementDecision": {
+      "type": "object",
+      "required": [
+        "accepted",
+        "comparison_gate_passed",
+        "maturity",
+        "objective_met",
+        "objective_metric",
+        "outcome",
+        "reasons"
+      ],
+      "properties": {
+        "accepted": {
+          "type": "boolean"
+        },
+        "comparison_gate_passed": {
+          "type": "boolean"
+        },
+        "maturity": {
+          "type": "string"
+        },
+        "objective_delta": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/DeltaValue"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "objective_met": {
+          "type": "boolean"
+        },
+        "objective_metric": {
+          "$ref": "#/definitions/ImprovementMetric"
+        },
+        "outcome": {
+          "$ref": "#/definitions/ImprovementDecisionOutcome"
+        },
+        "reasons": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "ImprovementDecisionOutcome": {
+      "type": "string",
+      "enum": [
+        "accepted_repeatable",
+        "rejected",
+        "insufficient_evidence"
+      ]
+    },
+    "ImprovementIteration": {
+      "type": "object",
+      "required": [
+        "branch",
+        "checks",
+        "completed_at",
+        "incumbent_revision",
+        "number",
+        "started_at",
+        "worktree"
+      ],
+      "properties": {
+        "advisor_input": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ArtifactReference"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "advisor_response": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ArtifactReference"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "branch": {
+          "type": "string"
+        },
+        "candidate_execution_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "candidate_revision": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "check_runs": {
+          "default": 0,
+          "type": "integer",
+          "format": "uint8",
+          "minimum": 0.0
+        },
+        "checks": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/ImprovementCheckResult"
+          }
+        },
+        "comparison": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ComparisonSummary"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "completed_at": {
+          "type": "string"
+        },
+        "decision": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ImprovementDecision"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "incumbent_revision": {
+          "type": "string"
+        },
+        "number": {
+          "type": "integer",
+          "format": "uint8",
+          "minimum": 0.0
+        },
+        "patch": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ArtifactReference"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "patcher_session_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "proposal": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ArtifactReference"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "remainder_execution_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "smoke_execution_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "started_at": {
+          "type": "string"
+        },
+        "worktree": {
+          "type": "string"
+        },
+        "worktree_git_file_sha256": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "ImprovementLoopPhase": {
+      "type": "string",
+      "enum": [
+        "draft",
+        "preflight",
+        "baseline_running",
+        "advising",
+        "patching",
+        "checking",
+        "candidate_running",
+        "comparing",
+        "revising",
+        "accepted_repeatable",
+        "validated",
+        "no_actionable_opportunity",
+        "rejected_exhausted",
+        "budget_exhausted",
+        "cancelled",
+        "needs_reconciliation",
+        "failed"
+      ]
+    },
+    "ImprovementLoopSpecV1": {
+      "type": "object",
+      "required": [
+        "advisor",
+        "allowed_paths",
+        "base_revision",
+        "budget",
+        "controller_identity",
+        "controller_url",
+        "e2e_revision",
+        "judge",
+        "label",
+        "patcher",
+        "protected_paths",
+        "runs",
+        "runs_dir",
+        "scenarios",
+        "schema",
+        "seed",
+        "stack",
+        "subject",
+        "target_scenario",
+        "technical_retries",
+        "workers_repository",
+        "worktree_root"
+      ],
+      "properties": {
+        "acceptance_policy": {
+          "default": {
+            "judge_and_advisor_are_consultative": true,
+            "preserve_rejected_candidates": true,
+            "required_runs_per_case": 5,
+            "stop_after_first_acceptance": true,
+            "validation_campaign_runs": 20
+          },
+          "allOf": [
+            {
+              "$ref": "#/definitions/ImprovementAcceptancePolicy"
+            }
+          ]
+        },
+        "advisor": {
+          "$ref": "#/definitions/ImprovementModel"
+        },
+        "allowed_paths": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "base_revision": {
+          "type": "string"
+        },
+        "budget": {
+          "$ref": "#/definitions/ImprovementBudget"
+        },
+        "controller_identity": {
+          "$ref": "#/definitions/ImprovementControllerIdentity"
+        },
+        "controller_url": {
+          "type": "string"
+        },
+        "e2e_revision": {
+          "type": "string"
+        },
+        "judge": {
+          "$ref": "#/definitions/ImprovementModel"
+        },
+        "label": {
+          "type": "string"
+        },
+        "patcher": {
+          "$ref": "#/definitions/ImprovementModel"
+        },
+        "protected_paths": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "runs": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0.0
+        },
+        "runs_dir": {
+          "type": "string"
+        },
+        "scenarios": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "schema": {
+          "type": "string"
+        },
+        "seed": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "stack": {
+          "$ref": "#/definitions/ImprovementStackSpec"
+        },
+        "subject": {
+          "$ref": "#/definitions/ImprovementModel"
+        },
+        "target_scenario": {
+          "type": "string"
+        },
+        "technical_retries": {
+          "type": "integer",
+          "format": "uint8",
+          "minimum": 0.0
+        },
+        "thresholds": {
+          "default": {
+            "continuous_minimum_ratio": 0.1,
+            "correctness_rate_minimum_change": 0.2,
+            "discrete_minimum_change": 1.0,
+            "score_minimum_change": 5.0,
+            "sentinel_discrete_increase": 1.0,
+            "sentinel_resource_increase_ratio": 0.2,
+            "sentinel_turns_increase_ratio": 0.25
+          },
+          "allOf": [
+            {
+              "$ref": "#/definitions/ImprovementThresholds"
+            }
+          ]
+        },
+        "workers_repository": {
+          "type": "string"
+        },
+        "worktree_root": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "ImprovementMetric": {
+      "type": "string",
+      "enum": [
+        "deliverable_success_rate",
+        "structural_integrity_rate",
+        "technical_failure_rate",
+        "median_score",
+        "function_calls",
+        "function_call_errors",
+        "validation_retries",
+        "turns",
+        "wall_time",
+        "total_tokens",
+        "cost",
+        "work_amplification"
+      ]
+    },
+    "ImprovementModel": {
+      "type": "object",
+      "required": [
+        "model",
+        "provider"
+      ],
+      "properties": {
+        "model": {
+          "type": "string"
+        },
+        "provider": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "ImprovementStackSpec": {
+      "type": "object",
+      "required": [
+        "binary_sha256",
+        "iii_bin",
+        "workers_binary_root"
+      ],
+      "properties": {
+        "binary_sha256": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          }
+        },
+        "iii_bin": {
+          "type": "string"
+        },
+        "preferred_port": {
+          "default": null,
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint16",
+          "minimum": 0.0
+        },
+        "workers_binary_root": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "ImprovementThresholds": {
+      "type": "object",
+      "required": [
+        "continuous_minimum_ratio",
+        "correctness_rate_minimum_change",
+        "discrete_minimum_change",
+        "score_minimum_change",
+        "sentinel_discrete_increase",
+        "sentinel_resource_increase_ratio",
+        "sentinel_turns_increase_ratio"
+      ],
+      "properties": {
+        "continuous_minimum_ratio": {
+          "type": "number",
+          "format": "double"
+        },
+        "correctness_rate_minimum_change": {
+          "type": "number",
+          "format": "double"
+        },
+        "discrete_minimum_change": {
+          "type": "number",
+          "format": "double"
+        },
+        "score_minimum_change": {
+          "type": "number",
+          "format": "double"
+        },
+        "sentinel_discrete_increase": {
+          "type": "number",
+          "format": "double"
+        },
+        "sentinel_resource_increase_ratio": {
+          "type": "number",
+          "format": "double"
+        },
+        "sentinel_turns_increase_ratio": {
+          "type": "number",
+          "format": "double"
+        }
+      },
+      "additionalProperties": false
+    },
+    "ImprovementTransition": {
+      "type": "object",
+      "required": [
+        "at",
+        "phase",
+        "reason"
+      ],
+      "properties": {
+        "at": {
+          "type": "string"
+        },
+        "phase": {
+          "$ref": "#/definitions/ImprovementLoopPhase"
+        },
+        "reason": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "RateEstimate": {
+      "type": "object",
+      "required": [
+        "ci95_lower",
+        "ci95_upper",
+        "rate",
+        "sample_size",
+        "successes"
+      ],
+      "properties": {
+        "ci95_lower": {
+          "type": "number",
+          "format": "double"
+        },
+        "ci95_upper": {
+          "type": "number",
+          "format": "double"
+        },
+        "rate": {
+          "type": "number",
+          "format": "double"
+        },
+        "sample_size": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0.0
+        },
+        "successes": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0.0
+        }
+      }
+    },
+    "RegressionDimension": {
+      "type": "string",
+      "enum": [
+        "deliverable",
+        "structural_integrity",
+        "technical_reliability",
+        "cost",
+        "wall_time",
+        "turns"
+      ]
+    },
+    "RegressionSignal": {
+      "type": "object",
+      "required": [
+        "blocking",
+        "case_id",
+        "dimension",
+        "observed_delta",
+        "reason",
+        "scenario_id",
+        "threshold"
+      ],
+      "properties": {
+        "blocking": {
+          "type": "boolean"
+        },
+        "case_id": {
+          "type": "string"
+        },
+        "dimension": {
+          "$ref": "#/definitions/RegressionDimension"
+        },
+        "maturity": {
+          "default": "",
+          "type": "string"
+        },
+        "n_from": {
+          "default": 0,
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0.0
+        },
+        "n_to": {
+          "default": 0,
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0.0
+        },
+        "observed_delta": {
+          "type": "number",
+          "format": "double"
+        },
+        "reason": {
+          "type": "string"
+        },
+        "scenario_id": {
+          "type": "string"
+        },
+        "statistic": {
+          "default": "",
+          "type": "string"
+        },
+        "threshold": {
+          "type": "number",
+          "format": "double"
+        }
+      }
+    }
+  }
+}

@@ -83,6 +83,14 @@ pub struct SubjectConfig {
     pub provider: String,
 }
 
+#[derive(Debug, Clone)]
+pub struct SourceIdentityOverride {
+    pub workers_repository: String,
+    pub workers_revision: String,
+    pub e2e_repository: String,
+    pub e2e_revision: String,
+}
+
 pub struct SuiteRunConfig {
     pub url: String,
     pub execution_id: Option<String>,
@@ -106,6 +114,10 @@ pub struct SuiteRunConfig {
     /// Exact immutable Markdown plan used by materialized replay. The runner
     /// recomputes and compares every field before executing any phase.
     pub materialized_markdown_plan: Option<serde_json::Value>,
+    /// Trusted source identity supplied by an external supervisor that builds
+    /// an exact candidate revision. Ordinary executions resolve identity from
+    /// the build environment and leave this unset.
+    pub source_identity_override: Option<SourceIdentityOverride>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -201,12 +213,23 @@ pub async fn run_suite(config: SuiteRunConfig) -> Result<SuiteRunOutcome> {
         .runtime_versions()
         .await
         .context("discover iii and Harness versions")?;
-    let system_under_test = SystemUnderTestIdentity::from_environment(
+    let mut system_under_test = SystemUnderTestIdentity::from_environment(
         runtime_versions.engine,
         runtime_versions.harness,
         &control_plane,
     )
     .context("resolve system-under-test identity")?;
+    if let Some(identity) = config.source_identity_override.as_ref() {
+        system_under_test.stack = crate::identity::StackIdentity::Source {
+            workers_repository: identity.workers_repository.clone(),
+            workers_revision: identity.workers_revision.clone(),
+        };
+        system_under_test.e2e_repository = identity.e2e_repository.clone();
+        system_under_test.e2e_revision = identity.e2e_revision.clone();
+        system_under_test
+            .validate()
+            .context("validate supervisor-provided source identity")?;
+    }
     let system_identity_sha256 = artifact::sha256_value(&system_under_test)?;
     if let Some(contract) = &config.observation_contract {
         contract.validate_runtime(&system_under_test)?;
