@@ -418,7 +418,8 @@ def materialize_request(
         raise ValueError("scenario catalog has no runner identity")
     for field in ("name", "version", "revision"):
         require_text(runner.get(field), f"catalog.runner.{field}")
-    catalog_sha256 = require_digest(catalog.get("catalog_sha256"), "catalog.catalog_sha256")
+    require_digest(catalog.get("catalog_sha256"), "catalog.catalog_sha256")
+    catalog_sha256 = canonical_sha256(catalog)
     expected_runner = contract["runner"]
     if runner.get("name") != expected_runner["registry_worker"] or runner.get("version") != expected_runner["registry_ref"]:
         raise ValueError("scenario catalog runner does not match the exact runner pin")

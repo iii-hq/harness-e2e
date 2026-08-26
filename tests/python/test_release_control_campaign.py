@@ -17,6 +17,7 @@ SPEC.loader.exec_module(MODULE)
 def campaign_contract(versions: dict[str, str] | None = None):
     versions = versions or {"harness": "1.9.0", "state": "0.22.1"}
     stack_digest = MODULE.canonical_sha256(versions)
+    catalog_digest = MODULE.canonical_sha256(catalog())
     provenance = [
         {"worker": worker, "version": version}
         for worker, version in sorted(versions.items())
@@ -72,7 +73,7 @@ def campaign_contract(versions: dict[str, str] | None = None):
                 },
                 "catalog": {
                     "revision": "catalog-1",
-                    "sha256": f"sha256:{'f' * 64}",
+                    "sha256": catalog_digest,
                     "seed": 4404,
                 },
                 "groups": [
@@ -104,7 +105,7 @@ def campaign_contract(versions: dict[str, str] | None = None):
             "registry_worker": "harness-e2e",
             "registry_ref": "0.2.1-experimental",
             "revision": "e" * 40,
-            "catalog_sha256": f"sha256:{'f' * 64}",
+            "catalog_sha256": catalog_digest,
             "manifest_sha256": f"sha256:{'3' * 64}",
             "scoring_profile_sha256": f"sha256:{'4' * 64}",
             "assets_sha256": f"sha256:{'5' * 64}",
@@ -183,6 +184,10 @@ class ReleaseControlCampaignTest(unittest.TestCase):
             MODULE.validate_contract(value)
 
     def test_materializes_one_observe_only_group(self):
+        self.assertNotEqual(
+            catalog()["catalog_sha256"],
+            campaign_contract()["runner"]["catalog_sha256"],
+        )
         request = MODULE.materialize_request(
             campaign_contract(), catalog(), group_id="daily-core"
         )
@@ -196,8 +201,12 @@ class ReleaseControlCampaignTest(unittest.TestCase):
     def test_keeps_legacy_v1_catalogs_readable(self):
         legacy = catalog()
         legacy["schema"] = "e2e-scenario-catalog/v1"
+        contract = campaign_contract()
+        digest = MODULE.canonical_sha256(legacy)
+        contract["plan"]["definition"]["catalog"]["sha256"] = digest
+        contract["runner"]["catalog_sha256"] = digest
         request = MODULE.materialize_request(
-            campaign_contract(), legacy, group_id="daily-core"
+            contract, legacy, group_id="daily-core"
         )
         self.assertEqual(request["scenarios"], ["direct_answer"])
 
@@ -212,9 +221,13 @@ class ReleaseControlCampaignTest(unittest.TestCase):
     def test_rejects_catalog_seed_drift(self):
         changed = catalog()
         changed["scenarios"][0]["seed"] = 9
+        contract = campaign_contract()
+        digest = MODULE.canonical_sha256(changed)
+        contract["plan"]["definition"]["catalog"]["sha256"] = digest
+        contract["runner"]["catalog_sha256"] = digest
         with self.assertRaisesRegex(ValueError, "seed does not match"):
             MODULE.materialize_request(
-                campaign_contract(), changed, group_id="daily-core"
+                contract, changed, group_id="daily-core"
             )
 
     def test_accepts_exact_registry_prerelease_versions(self):
