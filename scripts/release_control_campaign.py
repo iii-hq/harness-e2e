@@ -457,8 +457,8 @@ def materialize_request(
         descriptor_seed = descriptor.get("seed")
         if not isinstance(scenario_version, int) or scenario_version < 1:
             raise ValueError(f"scenario {scenario_id} has an invalid version")
-        if descriptor_seed != plan_seed:
-            raise ValueError(f"scenario {scenario_id} seed does not match the plan")
+        if not isinstance(descriptor_seed, int) or descriptor_seed < 0:
+            raise ValueError(f"scenario {scenario_id} has an invalid seed")
         selected_cases.append(
             {
                 "scenario_id": scenario_id,
