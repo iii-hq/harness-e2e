@@ -21,7 +21,7 @@ describe('local Markdown scenario editor', () => {
     expect(html).toContain('does not start an execution')
     expect(html).toContain('Import .md')
     expect(html).toContain('Create test')
-    expect(html).toContain('markdown_local_scenario')
+    expect(html).toContain('local_local_scenario')
     expect(html).toContain('100%')
     for (const section of [
       '## Plans',

@@ -1,10 +1,16 @@
+import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
+import type { LocalScenarioSummary } from '@/lib/local-scenario-catalog'
 import type { TestCatalogRow } from '@/lib/test-catalog'
 import {
   catalogCalibrationPresentation,
   catalogComplexityPresentation,
   catalogHorizonPresentation,
   catalogRealismPresentation,
+  LocalTestBadge,
+  mergeLocalScenariosIntoCatalog,
+  nextLocalScenarioFileName,
+  TestsCatalogActions,
 } from '@/pages/TestsCatalogPage'
 
 function row(overrides: Partial<TestCatalogRow> = {}): TestCatalogRow {
@@ -38,7 +44,90 @@ function row(overrides: Partial<TestCatalogRow> = {}): TestCatalogRow {
   }
 }
 
+function localScenario(
+  overrides: Partial<LocalScenarioSummary> = {},
+): LocalScenarioSummary {
+  return {
+    id: 'local_example',
+    title: 'Local example',
+    version: 1,
+    source_path: 'local-scenarios/example.md',
+    source_sha256: 'sha256:test',
+    ...overrides,
+  }
+}
+
 describe('test catalog L5 dimensions', () => {
+  it('places local test creation in the actual Tests catalog actions', () => {
+    const html = renderToStaticMarkup(
+      <TestsCatalogActions local localReady onNewTest={() => undefined} />,
+    )
+
+    expect(html).toContain('New test')
+    expect(html).toContain('Create a new local test')
+    expect(html).toContain('New plan')
+    expect(html).toContain('Compare')
+    expect(html).not.toContain('disabled=""')
+  })
+
+  it('suggests a new file name instead of colliding with a saved test', () => {
+    expect(nextLocalScenarioFileName([])).toBe('local-scenario.md')
+    expect(
+      nextLocalScenarioFileName([
+        localScenario({
+          source_path: 'local-scenarios/local-scenario.md',
+        }),
+        localScenario({
+          source_path: 'local-scenarios/local-scenario-2.md',
+        }),
+      ]),
+    ).toBe('local-scenario-3.md')
+  })
+
+  it('lists local definitions as normal catalog rows without duplicates', () => {
+    const local = localScenario()
+    const [synthetic] = mergeLocalScenariosIntoCatalog([], [local])
+    expect(synthetic).toMatchObject({
+      localScenario: local,
+      row: {
+        test_id: 'local_example',
+        lifecycle: 'never_run',
+        current_version: 1,
+        available_versions: [{ version: 1, execution_count: 0 }],
+      },
+    })
+
+    const executed = row({
+      test_id: local.id,
+      lifecycle: 'retired',
+      current_version: null,
+      available_versions: [
+        {
+          version: local.version,
+          execution_count: 1,
+          run_count: 1,
+          last_seen: '2026-08-26T19:53:13.315Z',
+        },
+      ],
+    })
+    const merged = mergeLocalScenariosIntoCatalog([executed], [local])
+    expect(merged).toHaveLength(1)
+    expect(merged[0]).toMatchObject({
+      localScenario: local,
+      row: {
+        test_id: local.id,
+        lifecycle: 'active',
+        current_version: local.version,
+      },
+    })
+  })
+
+  it('renders a compact local-origin badge', () => {
+    const html = renderToStaticMarkup(<LocalTestBadge />)
+    expect(html).toContain('Local')
+    expect(html).toContain('bg-brand-soft')
+  })
+
   it('presents classification, horizon, and realism independently', () => {
     expect(catalogComplexityPresentation(row())).toEqual({
       value: 'L5 adaptive',

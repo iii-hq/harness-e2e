@@ -45,12 +45,12 @@ function compiledId(fileName: string) {
     .toLowerCase()
     .replace(/[- ]/g, '_')
     .replace(/[^a-z0-9_]/g, '')
-  return normalized ? `markdown_${normalized}` : 'markdown_…'
+  return normalized ? `local_${normalized}` : 'local_…'
 }
 
 function safeLocalFileName(fileName: string) {
   if (!/^[a-zA-Z0-9][a-zA-Z0-9 _-]*\.md$/.test(fileName)) return false
-  const id = compiledId(fileName).replace(/^markdown_/, '')
+  const id = compiledId(fileName).replace(/^local_/, '')
   return id !== '' && !id.includes('__')
 }
 
@@ -76,16 +76,18 @@ function responseScenarioId(value: Record<string, unknown>) {
 export function LocalScenarioEditor({
   bridge,
   disabled = false,
+  initialFileName = 'local-scenario.md',
   onClose,
   onCreated,
 }: {
   bridge: DashboardDataBridge
   disabled?: boolean
+  initialFileName?: string
   onClose: () => void
   onCreated: (scenarioId: string) => void
 }) {
   const fileRef = useRef<HTMLInputElement>(null)
-  const [fileName, setFileName] = useState('local-scenario.md')
+  const [fileName, setFileName] = useState(initialFileName)
   const [source, setSource] = useState(LOCAL_SCENARIO_TEMPLATE)
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)

@@ -1,20 +1,9 @@
 import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
 import type { TestSideSummary } from '@/lib/test-catalog'
-import { SideResult, TestsPageActions } from '@/pages/TestsPage'
+import { SideResult } from '@/pages/TestsPage'
 
 describe('versioned test side presentation', () => {
-  it('places local test creation in the Tests page actions', () => {
-    const html = renderToStaticMarkup(
-      <TestsPageActions localReady onNewTest={() => undefined} />,
-    )
-
-    expect(html).toContain('New test')
-    expect(html).toContain('Create a new local test')
-    expect(html).toContain('New run')
-    expect(html).not.toContain('disabled=""')
-  })
-
   it('renders retained legacy summaries without inventing assessment results', () => {
     const legacy: TestSideSummary = {
       evaluated_version_id: 'legacy-version',
