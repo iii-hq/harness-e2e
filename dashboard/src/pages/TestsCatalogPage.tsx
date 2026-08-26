@@ -1,9 +1,16 @@
-import { Search } from 'lucide-react'
-import { useEffect, useState } from 'react'
+import {
+  AlertTriangle,
+  CheckCircle2,
+  Plus,
+  RefreshCw,
+  Search,
+} from 'lucide-react'
+import { useCallback, useEffect, useState } from 'react'
 import {
   DashboardPageActions,
   dashboardHeaderActionClassName,
 } from '@/components/DashboardPageActions'
+import { LocalScenarioEditor } from '@/components/LocalScenarioEditor'
 import {
   hashForComparison,
   hashForNewPlan,
@@ -13,6 +20,10 @@ import {
   type DashboardDataBridge,
   getDashboardDataBridge,
 } from '@/lib/dashboard-data-source'
+import {
+  type LocalScenarioSummary,
+  localScenariosFromCatalog,
+} from '@/lib/local-scenario-catalog'
 import type { TestCatalogRow, TestsListResponse } from '@/lib/test-catalog'
 
 type LifecycleFilter = 'all' | TestCatalogRow['lifecycle']
@@ -144,6 +155,139 @@ function DimensionCell({
   )
 }
 
+export function nextLocalScenarioFileName(
+  scenarios: LocalScenarioSummary[],
+): string {
+  const existing = new Set(
+    scenarios.map((scenario) => scenario.source_path.split('/').at(-1)),
+  )
+  if (!existing.has('local-scenario.md')) return 'local-scenario.md'
+  let suffix = 2
+  while (existing.has(`local-scenario-${suffix}.md`)) suffix += 1
+  return `local-scenario-${suffix}.md`
+}
+
+export type CatalogDisplayRow = {
+  row: TestCatalogRow
+  localScenario: LocalScenarioSummary | null
+}
+
+export function mergeLocalScenariosIntoCatalog(
+  rows: TestCatalogRow[],
+  localScenarios: LocalScenarioSummary[],
+): CatalogDisplayRow[] {
+  const localById = new Map(
+    localScenarios.map((scenario) => [scenario.id, scenario]),
+  )
+  const seen = new Set(rows.map((row) => row.test_id))
+  return [
+    ...rows.map((row) => {
+      const localScenario = localById.get(row.test_id) ?? null
+      if (!localScenario) return { row, localScenario }
+
+      const currentVersion = row.available_versions.find(
+        (version) => version.version === localScenario.version,
+      )
+      const availableVersions = currentVersion
+        ? row.available_versions
+        : [
+            {
+              version: localScenario.version,
+              execution_count: 0,
+              run_count: 0,
+              last_seen: null,
+            },
+            ...row.available_versions,
+          ]
+      const observed = availableVersions.some(
+        (version) => version.execution_count > 0,
+      )
+
+      return {
+        localScenario,
+        row: {
+          ...row,
+          lifecycle: observed ? ('active' as const) : ('never_run' as const),
+          current_version: localScenario.version,
+          available_versions: availableVersions,
+          selected_version: localScenario.version,
+        },
+      }
+    }),
+    ...localScenarios
+      .filter((scenario) => !seen.has(scenario.id))
+      .map((scenario) => ({
+        localScenario: scenario,
+        row: {
+          test_id: scenario.id,
+          lifecycle: 'never_run' as const,
+          current_version: scenario.version,
+          available_versions: [
+            {
+              version: scenario.version,
+              execution_count: 0,
+              run_count: 0,
+              last_seen: null,
+            },
+          ],
+          selected_version: scenario.version,
+          result: null,
+        },
+      })),
+  ]
+}
+
+export function TestsCatalogActions({
+  local,
+  localReady,
+  onNewTest,
+}: {
+  local: boolean
+  localReady: boolean
+  onNewTest: () => void
+}) {
+  return (
+    <>
+      {local ? (
+        <button
+          className={dashboardHeaderActionClassName({ primary: true })}
+          type="button"
+          onClick={onNewTest}
+          disabled={!localReady}
+          aria-label="Create a new local test"
+        >
+          <Plus size={13} aria-hidden="true" />
+          New test
+        </button>
+      ) : null}
+      {local ? (
+        <a
+          className={dashboardHeaderActionClassName()}
+          href={hashForNewPlan()}
+          aria-label="New local plan"
+        >
+          New plan
+        </a>
+      ) : null}
+      <a
+        className={dashboardHeaderActionClassName()}
+        href={hashForComparison()}
+        aria-label="System comparison"
+      >
+        Compare
+      </a>
+    </>
+  )
+}
+
+export function LocalTestBadge() {
+  return (
+    <span className="inline-flex shrink-0 items-center rounded-full border border-brand/25 bg-brand-soft px-1.5 py-0.5 font-sans text-[9px] leading-none font-semibold tracking-[0.05em] text-brand uppercase">
+      Local
+    </span>
+  )
+}
+
 export function TestsCatalogPage() {
   const [bridge, setBridge] = useState<DashboardDataBridge | null>(null)
   const [data, setData] = useState<TestsListResponse | null>(null)
@@ -151,6 +295,17 @@ export function TestsCatalogPage() {
   const [lifecycle, setLifecycle] = useState<LifecycleFilter>('all')
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
+  const [localScenarios, setLocalScenarios] = useState<LocalScenarioSummary[]>(
+    [],
+  )
+  const [localCatalogLoading, setLocalCatalogLoading] = useState(true)
+  const [localCatalogError, setLocalCatalogError] = useState<string | null>(
+    null,
+  )
+  const [authoringScenario, setAuthoringScenario] = useState(false)
+  const [createdScenarioId, setCreatedScenarioId] = useState<string | null>(
+    null,
+  )
 
   useEffect(() => {
     let cancelled = false
@@ -172,12 +327,44 @@ export function TestsCatalogPage() {
     }
   }, [])
 
-  const allRows = data?.rows ?? []
-  const rows = allRows.filter((row) => {
+  const loadLocalScenarios = useCallback(
+    async (target = bridge) => {
+      if (target?.mode !== 'local') {
+        setLocalCatalogLoading(false)
+        return
+      }
+      setLocalCatalogLoading(true)
+      setLocalCatalogError(null)
+      try {
+        setLocalScenarios(localScenariosFromCatalog(await target.getCatalog()))
+      } catch (cause) {
+        setLocalCatalogError(
+          cause instanceof Error ? cause.message : String(cause),
+        )
+      } finally {
+        setLocalCatalogLoading(false)
+      }
+    },
+    [bridge],
+  )
+
+  useEffect(() => {
+    if (bridge) void loadLocalScenarios(bridge)
+  }, [bridge, loadLocalScenarios])
+
+  const allRows = mergeLocalScenariosIntoCatalog(
+    data?.rows ?? [],
+    localScenarios,
+  )
+  const rows = allRows.filter(({ row, localScenario }) => {
     if (lifecycle !== 'all' && row.lifecycle !== lifecycle) return false
-    return row.test_id.toLowerCase().includes(query.trim().toLowerCase())
+    return `${row.test_id} ${localScenario?.title ?? ''}`
+      .toLowerCase()
+      .includes(query.trim().toLowerCase())
   })
-  const local = bridge?.mode === 'local'
+  const localBridge = bridge?.mode === 'local' ? bridge : null
+  const local = Boolean(localBridge)
+  const suggestedLocalFileName = nextLocalScenarioFileName(localScenarios)
 
   return (
     <>
@@ -188,30 +375,78 @@ export function TestsCatalogPage() {
         active="tests"
         actionsLabel="Test catalog actions"
         actions={
-          <>
-            {local ? (
-              <a
-                className={dashboardHeaderActionClassName({ primary: true })}
-                href={hashForNewPlan()}
-                aria-label="New local plan"
-              >
-                New plan
-              </a>
-            ) : null}
-            <a
-              className={dashboardHeaderActionClassName()}
-              href={hashForComparison()}
-              aria-label="System comparison"
-            >
-              Compare
-            </a>
-          </>
+          <TestsCatalogActions
+            local={local}
+            localReady={local && !localCatalogLoading}
+            onNewTest={() => {
+              setCreatedScenarioId(null)
+              setAuthoringScenario(true)
+            }}
+          />
         }
       />
       <main
         id="tests-catalog-main"
         className="page-shell w-[calc(100%_-_1.5rem)] max-w-[1420px] pt-5 pb-16 md:w-[calc(100%_-_3rem)]"
       >
+        {localBridge && authoringScenario ? (
+          <div className="panel mb-5 overflow-hidden">
+            <LocalScenarioEditor
+              bridge={localBridge}
+              initialFileName={suggestedLocalFileName}
+              onClose={() => setAuthoringScenario(false)}
+              onCreated={(scenarioId) => {
+                setCreatedScenarioId(scenarioId)
+                setAuthoringScenario(false)
+                void loadLocalScenarios(localBridge)
+              }}
+            />
+          </div>
+        ) : null}
+
+        {createdScenarioId ? (
+          <p
+            className="mb-4 flex items-center gap-2 rounded-[6px] bg-success/5 px-3 py-2 text-sm text-success"
+            role="status"
+          >
+            <CheckCircle2 size={15} aria-hidden="true" />
+            Created <code className="font-mono">{createdScenarioId}</code>. No
+            execution was started.
+          </p>
+        ) : null}
+
+        {localCatalogError ? (
+          <div
+            className="mb-4 flex items-start justify-between gap-4 rounded-[6px] border border-danger/30 bg-danger/5 p-3"
+            role="alert"
+          >
+            <div className="flex gap-2.5">
+              <AlertTriangle
+                className="mt-0.5 text-danger"
+                size={16}
+                aria-hidden="true"
+              />
+              <div>
+                <strong className="block text-sm text-ink">
+                  Local tests could not be loaded
+                </strong>
+                <span className="text-sm text-ink-muted">
+                  {localCatalogError}
+                </span>
+              </div>
+            </div>
+            {localBridge ? (
+              <button
+                className="button"
+                type="button"
+                onClick={() => void loadLocalScenarios(localBridge)}
+              >
+                Retry
+              </button>
+            ) : null}
+          </div>
+        ) : null}
+
         <section
           className="flex flex-wrap items-center gap-2.5"
           aria-label="Test catalog filters"
@@ -246,6 +481,22 @@ export function TestsCatalogPage() {
               <option value="retired">Retired</option>
             </select>
           </label>
+          {localBridge ? (
+            <button
+              className="inline-flex min-h-9 items-center gap-2 rounded-[6px] bg-[var(--surface-fill)] px-3 text-xs font-medium text-[var(--color-ink-faint)] transition-colors hover:bg-[var(--surface-soft)] hover:text-ink disabled:cursor-wait disabled:opacity-50"
+              type="button"
+              onClick={() => void loadLocalScenarios(localBridge)}
+              disabled={localCatalogLoading}
+              aria-label="Refresh local tests"
+            >
+              <RefreshCw
+                className={localCatalogLoading ? 'animate-spin' : ''}
+                size={13}
+                aria-hidden="true"
+              />
+              Local tests
+            </button>
+          ) : null}
           <span className="ms-auto font-mono text-xs text-[var(--color-ink-ghost)]">
             {allRows.length} tests
             {data?.revision ? (
@@ -302,7 +553,7 @@ export function TestsCatalogPage() {
                   </tr>
                 </thead>
                 <tbody>
-                  {rows.map((row) => {
+                  {rows.map(({ row, localScenario }) => {
                     const version = currentVersion(row)
                     const tone = lifecyclePresentation[row.lifecycle]
                     const complexity = catalogComplexityPresentation(row)
@@ -312,12 +563,19 @@ export function TestsCatalogPage() {
                     return (
                       <tr key={row.test_id}>
                         <td data-label="Test">
-                          <span className="block font-mono text-[13px] leading-5 font-medium text-ink">
-                            {row.test_id}
+                          <span className="flex items-center gap-2 font-mono text-[13px] leading-5 font-medium text-ink">
+                            <span>{row.test_id}</span>
+                            {localScenario ? <LocalTestBadge /> : null}
                           </span>
                           <small className="block text-xs text-[var(--color-ink-ghost)]">
-                            {row.available_versions.length} contract version
-                            {row.available_versions.length === 1 ? '' : 's'}
+                            {localScenario ? (
+                              localScenario.title
+                            ) : (
+                              <>
+                                {row.available_versions.length} contract version
+                                {row.available_versions.length === 1 ? '' : 's'}
+                              </>
+                            )}
                           </small>
                         </td>
                         <td data-label="Version">

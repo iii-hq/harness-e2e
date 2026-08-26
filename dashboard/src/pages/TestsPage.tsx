@@ -1,10 +1,8 @@
 import {
   AlertTriangle,
   ArrowLeftRight,
-  CheckCircle2,
   ChevronDown,
   ExternalLink,
-  Plus,
   RefreshCw,
   Search,
 } from 'lucide-react'
@@ -14,7 +12,6 @@ import {
   dashboardHeaderActionClassName,
 } from '@/components/DashboardPageActions'
 import { requestQuickExecution } from '@/components/ExecutionSetup'
-import { LocalScenarioEditor } from '@/components/LocalScenarioEditor'
 import { ScenarioChatAction } from '@/components/ScenarioChatAction'
 import { hashForExecution, hashForWorkspace } from '@/hooks/use-hash-route'
 import { summarizeAssessmentContract } from '@/lib/assessment-contract'
@@ -22,10 +19,6 @@ import {
   type DashboardDataBridge,
   getDashboardDataBridge,
 } from '@/lib/dashboard-data-source'
-import {
-  type LocalScenarioSummary,
-  localScenariosFromCatalog,
-} from '@/lib/local-scenario-catalog'
 import type {
   CohortDescriptor,
   EvaluatedVersionsResponse,
@@ -46,37 +39,6 @@ import {
 
 const inputClass =
   'min-h-11 w-full rounded-lg border border-line bg-panel-raised px-3 text-sm text-ink outline-none transition focus:border-brand focus:ring-2 focus:ring-brand-soft'
-
-export function TestsPageActions({
-  localReady,
-  onNewTest,
-}: {
-  localReady: boolean
-  onNewTest: () => void
-}) {
-  return (
-    <>
-      <button
-        className={dashboardHeaderActionClassName({ primary: true })}
-        type="button"
-        onClick={onNewTest}
-        disabled={!localReady}
-        aria-label="Create a new local test"
-      >
-        <Plus size={13} aria-hidden="true" />
-        New test
-      </button>
-      <a
-        className={dashboardHeaderActionClassName()}
-        href={hashForWorkspace()}
-        onClick={requestQuickExecution}
-        aria-label="New execution"
-      >
-        New run
-      </a>
-    </>
-  )
-}
 
 function displayTestName(value: string) {
   return value.replaceAll('_', ' ').replaceAll('.', ' / ')
@@ -375,20 +337,6 @@ export function TestsPage({
   const [detailsLoaded, setDetailsLoaded] = useState<Set<string>>(new Set())
   const [comparisonNotice, setComparisonNotice] = useState('')
   const [reloadKey, setReloadKey] = useState(0)
-  const [localBridge, setLocalBridge] = useState<DashboardDataBridge | null>(
-    null,
-  )
-  const [localScenarios, setLocalScenarios] = useState<LocalScenarioSummary[]>(
-    [],
-  )
-  const [localCatalogLoading, setLocalCatalogLoading] = useState(true)
-  const [localCatalogError, setLocalCatalogError] = useState<string | null>(
-    null,
-  )
-  const [authoringScenario, setAuthoringScenario] = useState(false)
-  const [createdScenarioId, setCreatedScenarioId] = useState<string | null>(
-    null,
-  )
   const comparisonKey = `${cohortId}:${fromVersionId}:${toVersionId}`
   comparisonContext.current = comparisonKey
   selectedCohort.current = cohortId
@@ -403,28 +351,6 @@ export function TestsPage({
     setDetailsLoaded(new Set())
     setExpanded(new Set())
   }, [comparisonKey])
-
-  const loadLocalScenarios = useCallback(
-    async (target = localBridge) => {
-      if (target?.mode !== 'local') return
-      setLocalCatalogLoading(true)
-      setLocalCatalogError(null)
-      try {
-        setLocalScenarios(localScenariosFromCatalog(await target.getCatalog()))
-      } catch (cause) {
-        setLocalCatalogError(
-          cause instanceof Error ? cause.message : String(cause),
-        )
-      } finally {
-        setLocalCatalogLoading(false)
-      }
-    },
-    [localBridge],
-  )
-
-  useEffect(() => {
-    if (localBridge) void loadLocalScenarios(localBridge)
-  }, [loadLocalScenarios, localBridge])
 
   const chooseVersions = useCallback(
     (
@@ -482,12 +408,6 @@ export function TestsPage({
     try {
       const bridge = await getDashboardDataBridge()
       bridgeRef.current = bridge
-      if (bridge.mode === 'local') {
-        setLocalBridge(bridge)
-      } else {
-        setLocalBridge(null)
-        setLocalCatalogLoading(false)
-      }
       const data = await bridge.listEvaluatedVersions()
       if (evaluatedRevision.current !== data.revision) {
         evaluatedRevision.current = data.revision
@@ -875,13 +795,14 @@ export function TestsPage({
         active="tests"
         actionsLabel="Test actions"
         actions={
-          <TestsPageActions
-            localReady={Boolean(localBridge)}
-            onNewTest={() => {
-              setCreatedScenarioId(null)
-              setAuthoringScenario(true)
-            }}
-          />
+          <a
+            className={dashboardHeaderActionClassName({ primary: true })}
+            href={hashForWorkspace()}
+            onClick={requestQuickExecution}
+            aria-label="New execution"
+          >
+            New run
+          </a>
         }
       />
 
@@ -905,152 +826,6 @@ export function TestsPage({
             </strong>
           </div>
         </section>
-
-        {localBridge && authoringScenario && (
-          <div className="panel mt-5 overflow-hidden">
-            <LocalScenarioEditor
-              bridge={localBridge}
-              onClose={() => setAuthoringScenario(false)}
-              onCreated={(scenarioId) => {
-                setCreatedScenarioId(scenarioId)
-                setAuthoringScenario(false)
-                void loadLocalScenarios(localBridge)
-              }}
-            />
-          </div>
-        )}
-
-        {localBridge && (
-          <section
-            className="panel mt-5"
-            aria-labelledby="local-test-library-title"
-          >
-            <div className="panel-heading items-end gap-5">
-              <div>
-                <div className="section-kicker">Local test library</div>
-                <h2 id="local-test-library-title">Definitions ready to run</h2>
-                <p className="trend-description">
-                  Create and keep Markdown tests independently from execution.
-                  They remain outside Git until you deliberately move them into
-                  the project.
-                </p>
-              </div>
-              <button
-                className="button button-secondary"
-                type="button"
-                onClick={() => void loadLocalScenarios(localBridge)}
-                disabled={localCatalogLoading}
-              >
-                <RefreshCw
-                  className={localCatalogLoading ? 'animate-spin' : ''}
-                  size={14}
-                  aria-hidden="true"
-                />
-                {localCatalogLoading ? 'Refreshing' : 'Refresh'}
-              </button>
-            </div>
-
-            {createdScenarioId && (
-              <p
-                className="m-0 flex items-center gap-2 border-t border-line bg-success/5 px-5 py-3 text-sm text-success"
-                role="status"
-              >
-                <CheckCircle2 size={16} aria-hidden="true" />
-                Created <code className="font-mono">{createdScenarioId}</code>.
-                No execution was started.
-              </p>
-            )}
-
-            {localCatalogError && (
-              <div
-                className="m-4 flex items-start justify-between gap-4 rounded-lg border border-danger/30 bg-danger/5 p-4"
-                role="alert"
-              >
-                <div className="flex gap-3">
-                  <AlertTriangle
-                    className="mt-0.5 text-danger"
-                    size={18}
-                    aria-hidden="true"
-                  />
-                  <div>
-                    <strong className="block text-sm text-ink">
-                      Local tests could not be loaded
-                    </strong>
-                    <span className="text-sm text-ink-muted">
-                      {localCatalogError}
-                    </span>
-                  </div>
-                </div>
-                <button
-                  className="button"
-                  type="button"
-                  onClick={() => void loadLocalScenarios(localBridge)}
-                >
-                  Retry
-                </button>
-              </div>
-            )}
-
-            {localCatalogLoading && localScenarios.length === 0 ? (
-              <div className="grid gap-px border-t border-line bg-line p-px sm:grid-cols-2 lg:grid-cols-3">
-                {['first', 'second', 'third'].map((placeholder) => (
-                  <div
-                    key={placeholder}
-                    className="h-32 animate-pulse bg-panel-raised"
-                  />
-                ))}
-              </div>
-            ) : localScenarios.length === 0 && !localCatalogError ? (
-              <div className="empty-state m-4">
-                <h3>No local tests yet</h3>
-                <p>
-                  Create a Markdown definition now and decide when to execute it
-                  later.
-                </p>
-                <button
-                  className="button button-primary"
-                  type="button"
-                  onClick={() => setAuthoringScenario(true)}
-                >
-                  <Plus size={14} aria-hidden="true" /> Create first test
-                </button>
-              </div>
-            ) : (
-              <div className="grid grid-flow-dense grid-cols-1 gap-px border-t border-line bg-line p-px sm:grid-cols-2 lg:grid-cols-3">
-                {localScenarios.map((scenario) => (
-                  <article
-                    className="grid min-w-0 content-between gap-5 bg-panel p-5"
-                    key={scenario.id}
-                  >
-                    <div className="min-w-0">
-                      <div className="flex items-start justify-between gap-3">
-                        <h3 className="m-0 text-base font-semibold tracking-[-0.025em] text-ink">
-                          {scenario.title}
-                        </h3>
-                        <span className="shrink-0 rounded-full border border-line px-2 py-1 font-mono text-[0.62rem] text-ink-muted">
-                          v{scenario.version}
-                        </span>
-                      </div>
-                      <code className="mt-2 block break-all font-mono text-[0.68rem] text-brand">
-                        {scenario.id}
-                      </code>
-                      <p className="mt-4 mb-0 truncate font-mono text-[0.65rem] text-ink-muted">
-                        {scenario.source_path}
-                      </p>
-                    </div>
-                    <a
-                      className="w-fit font-mono text-xs font-semibold text-brand no-underline hover:underline"
-                      href={hashForWorkspace()}
-                      onClick={requestQuickExecution}
-                    >
-                      Open Quick run →
-                    </a>
-                  </article>
-                ))}
-              </div>
-            )}
-          </section>
-        )}
 
         <section
           className="panel overflow-visible"
