@@ -25,9 +25,9 @@ use super::read_model::{
 };
 use super::store::read_stored_run;
 use super::{ApiError, DashboardArgs, RunRequest, RunSnapshot};
-use crate::control::ControlPlane;
+use crate::control::{ControlPlane, LocalScenarioCreateRequest, LocalScenarioCreateResponse};
 
-const MAX_REQUEST_BYTES: usize = 64 * 1024;
+const MAX_REQUEST_BYTES: usize = 320 * 1024;
 
 #[derive(Clone)]
 struct AppState {
@@ -89,6 +89,10 @@ pub(super) async fn serve(args: DashboardArgs) -> Result<()> {
             .route("/api/local/run", get(run_snapshot).post(start_run))
             .route("/api/local/run/cancel", axum::routing::post(cancel_run))
             .route("/api/local/catalog", get(catalog))
+            .route(
+                "/api/local/scenarios",
+                axum::routing::post(local_scenario_create),
+            )
             .route("/api/dashboard/plans", get(plans_list).post(plan_create))
             .route("/api/dashboard/plans/:id", get(plan_get).patch(plan_update))
             .route(
@@ -145,6 +149,7 @@ async fn dashboard_config(State(state): State<AppState>) -> Json<Value> {
             "test_version_get": bus::TEST_VERSION_GET,
             "test_history_get": bus::TEST_HISTORY_GET,
             "catalog_get": bus::CATALOG_GET,
+            "local_scenario_create": bus::LOCAL_SCENARIO_CREATE,
             "run_status": bus::RUN_STATUS,
             "run_start": bus::RUN_START,
             "run_cancel": bus::RUN_CANCEL,
@@ -347,6 +352,16 @@ async fn catalog(
         .await
         .map(Json)
         .map_err(ApiError::internal)
+}
+
+async fn local_scenario_create(
+    State(state): State<AppState>,
+    Json(request): Json<LocalScenarioCreateRequest>,
+) -> Result<(StatusCode, Json<LocalScenarioCreateResponse>), ApiError> {
+    let response = bus::local_scenario_create(&state.controller, request)
+        .await
+        .map_err(|error| ApiError::bad_request(format!("{error:#}")))?;
+    Ok((StatusCode::CREATED, Json(response)))
 }
 
 async fn benchmark_data() -> Response {

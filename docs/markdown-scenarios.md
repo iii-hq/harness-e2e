@@ -47,6 +47,38 @@ resolves both before any session starts and freezes the rendered bodies in the
 materialized plan. Any other placeholder, or an unclosed placeholder, is a
 compile error.
 
+## Local scenarios from Console
+
+Open **Tests** in the Harness E2E Console and choose **New test**. You can start
+from the editor template or import a `.md` file. Creating the test only validates
+and persists its definition; it does not select the test or start an execution.
+Local documents use the same contract above except that `Plans` must contain
+only `local`:
+
+```md
+## Plans
+
+- local
+```
+
+The worker validates the document before saving it under
+`<data_dir>/local-scenarios/`. This directory is outside the repository, so
+creating a local scenario does not modify Git or require a commit. The new
+scenario appears in the local test library and in the Quick run catalog. Open
+**Quick run** later when you want to select and execute it. It does not join
+daily, weekly, post-release, or reusable baseline plans.
+
+Harness agents can discover the same workflow through iii. Call
+`e2e::scenarios-authoring-guide` with `{}` for the copy-ready template and exact
+rules, call `e2e::scenarios-create` with `file_name` and `source` to persist the
+definition, then call `e2e::scenarios-list` to confirm it has `origin: "local"`.
+None of those functions starts a run; `e2e::run` remains a separate, explicit
+operation.
+
+When a local scenario starts, the control plane freezes its compiled definition
+and exact source inside the execution request. Later file changes therefore do
+not alter an admitted or restart-restored run.
+
 Run `cargo run --locked -- validate-scenarios` before committing. On pull
 requests, CI also compares the Markdown files with the base revision. A change
 to `Before Test`, `Prompt`, validation text, or weights requires a version

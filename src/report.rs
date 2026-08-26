@@ -1246,7 +1246,7 @@ pub struct ModelArtifact {
 }
 
 pub const OBSERVATION_SCHEMA: &str = "e2e-observation/v1";
-pub const CATALOG_SCHEMA: &str = "e2e-scenario-catalog/v3";
+pub const CATALOG_SCHEMA: &str = "e2e-scenario-catalog/v4";
 pub const RESULTS_SCHEMA_VERSION: u32 = 3;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]

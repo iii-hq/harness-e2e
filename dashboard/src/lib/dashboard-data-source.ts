@@ -405,6 +405,7 @@ export type RuntimeConfig = {
     test_version_get: string
     test_history_get: string
     catalog_get: string
+    local_scenario_create: string
     run_status: string
     run_start: string
     run_cancel: string
@@ -443,6 +444,10 @@ export type DashboardDataBridge = {
   updatePlan(planId: string, request: JsonObject): Promise<LocalPlan>
   startPlan(planId: string, role: 'baseline' | 'candidate'): Promise<LocalPlan>
   getCatalog(url?: string): Promise<JsonObject>
+  createLocalScenario(request: {
+    file_name: string
+    source: string
+  }): Promise<JsonObject>
   getRunSnapshot(after?: number): Promise<JsonObject>
   startRun(request: JsonObject): Promise<JsonObject>
   cancelRun(): Promise<JsonObject>
@@ -586,6 +591,13 @@ function makeBridge(runtime: RuntimeConfig): DashboardDataBridge {
         httpJson(
           `./api/local/catalog${url ? `?url=${encodeURIComponent(url)}` : ''}`,
         ),
+      ),
+    createLocalScenario: (request) =>
+      call(runtime.functions.local_scenario_create, request, () =>
+        httpJson('./api/local/scenarios', {
+          method: 'POST',
+          body: JSON.stringify(request),
+        }),
       ),
     getRunSnapshot: (after) =>
       call(
@@ -754,6 +766,8 @@ function makeStaticBridge(): DashboardDataBridge {
       throw new Error('Local plans are available only in the local dashboard')
     },
     getCatalog: () => Promise.reject(new Error('Catalog unavailable')),
+    createLocalScenario: () =>
+      Promise.reject(new Error('Local scenario authoring unavailable')),
     getRunSnapshot: () => Promise.reject(new Error('Runner unavailable')),
     startRun: () => Promise.reject(new Error('Runner unavailable')),
     cancelRun: () => Promise.reject(new Error('Runner unavailable')),

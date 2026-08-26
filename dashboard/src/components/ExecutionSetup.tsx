@@ -33,6 +33,8 @@ type ExecutionSetupProps = {
   judge: string
   modelGroups: ExecutionModelGroup[]
   availableScenarios: string[]
+  localScenarioIds?: string[]
+  scenarioTitles?: Record<string, string>
   selectedScenarios: string[]
   query: string
   runs: string
@@ -122,6 +124,8 @@ export function ExecutionSetup({
   judge,
   modelGroups,
   availableScenarios,
+  localScenarioIds = [],
+  scenarioTitles = {},
   selectedScenarios,
   query,
   runs,
@@ -145,7 +149,7 @@ export function ExecutionSetup({
   const normalizedQuery = query.trim().toLocaleLowerCase()
   const visibleScenarios = normalizedQuery
     ? availableScenarios.filter((scenario) =>
-        `${scenario} ${scenarioDisplayName(scenario)}`
+        `${scenario} ${scenarioTitles[scenario] ?? scenarioDisplayName(scenario)}`
           .toLocaleLowerCase()
           .includes(normalizedQuery),
       )
@@ -385,6 +389,7 @@ export function ExecutionSetup({
           <div className="grid max-h-[25rem] grid-cols-1 gap-2 overflow-auto rounded-lg border border-[var(--color-rule)] bg-panel-raised p-2 sm:grid-cols-2">
             {visibleScenarios.map((scenario) => {
               const selected = selectedScenarios.includes(scenario)
+              const local = localScenarioIds.includes(scenario)
               return (
                 <label
                   className={`flex min-h-16 min-w-0 cursor-pointer items-start gap-3 rounded-lg border p-3 transition-colors duration-[var(--ds-duration-fast)] ${
@@ -404,9 +409,17 @@ export function ExecutionSetup({
                     }
                   />
                   <span className="grid min-w-0 gap-1">
-                    <strong className="text-xs font-semibold leading-4 text-ink">
-                      {scenarioDisplayName(scenario)}
-                    </strong>
+                    <span className="flex flex-wrap items-center gap-2">
+                      <strong className="text-xs font-semibold leading-4 text-ink">
+                        {scenarioTitles[scenario] ??
+                          scenarioDisplayName(scenario)}
+                      </strong>
+                      {local && (
+                        <span className="rounded-full border border-[color-mix(in_srgb,var(--color-accent)_35%,var(--color-rule))] px-2 py-0.5 font-mono text-[0.58rem] font-semibold uppercase tracking-[0.05em] text-[var(--color-accent)]">
+                          Local
+                        </span>
+                      )}
+                    </span>
                     <code className="break-all font-mono text-[0.62rem] leading-4 text-[var(--color-ink-ghost)]">
                       {scenario}
                     </code>

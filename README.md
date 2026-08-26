@@ -90,7 +90,6 @@ launcher and cleanup boundary are described in
 [docs/engineering-ticket-git-handoff.md](docs/engineering-ticket-git-handoff.md).
 The team-facing composition and didactic description of every daily, weekly,
 and post-release scenario is in [docs/e2e-test-plans.md](docs/e2e-test-plans.md).
-
 Release Control dispatches `.github/workflows/release-control-campaign.yml`
 directly in this repository. The workflow validates the campaign v3 contract,
 executes every common group in an isolated ephemeral stack, routes fault groups
@@ -170,7 +169,8 @@ existing directories are never moved or deleted automatically.
 
 The worker exposes `e2e::run`, `e2e::status`, `e2e::cancel`,
 `e2e::results-get`, `e2e::results-list`, `e2e::compare`,
-`e2e::scenarios-list`, `e2e::archive`, `e2e::archive-head`,
+`e2e::scenarios-list`, `e2e::scenarios-create`,
+`e2e::scenarios-authoring-guide`, `e2e::archive`, `e2e::archive-head`,
 `e2e::archive-restore`,
 `e2e::history-list`, and `e2e::retention-sweep`.
 Fault supervisors use `e2e::fault-plan` and `e2e::fault-evaluate` so plan

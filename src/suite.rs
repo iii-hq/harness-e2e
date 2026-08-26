@@ -24,7 +24,8 @@ use crate::context::E2eContext;
 use crate::identity::{self, ExecutionIdentity, SystemUnderTestIdentity};
 use crate::judge::{self, JudgeConfig};
 use crate::markdown::{
-    CompiledMarkdownScenario, MarkdownCriterion, RenderedMarkdownScenario, ScenarioKey,
+    CompiledMarkdownScenario, MarkdownCriterion, MarkdownScenarioSource, RenderedMarkdownScenario,
+    ScenarioKey,
 };
 use crate::report::{
     AdherenceAvailability, AdherenceRequirement, CostReport, CriterionReport, E2eManifest,
@@ -92,6 +93,9 @@ pub struct SuiteRunConfig {
     pub audit_analyzer: Option<JudgeConfig>,
     pub output: PathBuf,
     pub scenarios: Vec<ScenarioKey>,
+    /// Frozen local Markdown definitions captured when the execution was
+    /// admitted. Embedded scenarios remain resolved from the binary catalog.
+    pub local_markdown_scenarios: Vec<MarkdownScenarioSource>,
     pub runs: u32,
     pub seed: Option<u64>,
     pub rotating_seeds: Vec<u64>,
@@ -345,8 +349,9 @@ pub async fn run_suite(config: SuiteRunConfig) -> Result<SuiteRunOutcome> {
                     runs,
                 ));
             } else {
-                let scenario = crate::markdown::embedded_scenario(scenario_key.as_str())?;
-                let case = markdown_case(&scenario, seed)?;
+                let definition = markdown_definition(&config, scenario_key.as_str())?;
+                let scenario = &definition.scenario;
+                let case = markdown_case(scenario, seed)?;
                 preflight_case(&context, &control_plane, &case).await?;
                 let mut runs = Vec::with_capacity(config.runs as usize);
                 for repetition in 0..config.runs {
@@ -361,7 +366,8 @@ pub async fn run_suite(config: SuiteRunConfig) -> Result<SuiteRunOutcome> {
                     let run = run_markdown_with_technical_retries(
                         &context,
                         MarkdownRetryRequest {
-                            scenario: &scenario,
+                            scenario,
+                            source: &definition.source,
                             subject: &config.subject,
                             auxiliary: config
                                 .judge
@@ -1237,6 +1243,18 @@ fn ensure_not_cancelled(control: Option<&SuiteControl>) -> Result<()> {
     Ok(())
 }
 
+fn markdown_definition(config: &SuiteRunConfig, id: &str) -> Result<MarkdownScenarioSource> {
+    if let Some(definition) = config
+        .local_markdown_scenarios
+        .iter()
+        .find(|definition| definition.scenario.id == id)
+    {
+        crate::markdown::validate_local_definition(definition)?;
+        return Ok(definition.clone());
+    }
+    crate::markdown::embedded_definition(id)
+}
+
 fn validate_config(config: &SuiteRunConfig) -> Result<()> {
     for (name, value) in [
         ("model", config.subject.model.as_str()),
@@ -1281,7 +1299,7 @@ fn validate_config(config: &SuiteRunConfig) -> Result<()> {
         if let Some(scenario) = scenario.built_in() {
             scenario.materialize("validation", seed)?;
         } else {
-            crate::markdown::embedded_scenario(scenario.as_str())?;
+            markdown_definition(config, scenario.as_str())?;
         }
     }
     if config
@@ -2434,6 +2452,7 @@ pub(crate) fn markdown_case(
 
 struct MarkdownRetryRequest<'a> {
     scenario: &'a CompiledMarkdownScenario,
+    source: &'a str,
     subject: &'a SubjectConfig,
     auxiliary: &'a JudgeConfig,
     audit_analyzer: Option<&'a JudgeConfig>,
@@ -2459,6 +2478,7 @@ async fn run_markdown_with_technical_retries(
             context,
             MarkdownAttemptRequest {
                 scenario: request.scenario,
+                source: request.source,
                 subject: request.subject,
                 auxiliary: request.auxiliary,
                 audit_analyzer: request.audit_analyzer,
@@ -2503,6 +2523,7 @@ async fn run_markdown_with_technical_retries(
 
 struct MarkdownAttemptRequest<'a> {
     scenario: &'a CompiledMarkdownScenario,
+    source: &'a str,
     subject: &'a SubjectConfig,
     auxiliary: &'a JudgeConfig,
     audit_analyzer: Option<&'a JudgeConfig>,
@@ -2624,6 +2645,7 @@ async fn run_markdown_once(
         if let Err(error) = persist_markdown_inputs(
             request.output,
             request.scenario,
+            request.source,
             request.run_id,
             &attempt_id,
             &plan,
@@ -3515,6 +3537,7 @@ fn materialized_markdown_plan(
 fn persist_markdown_inputs(
     output: &std::path::Path,
     scenario: &CompiledMarkdownScenario,
+    source: &str,
     run_id: &str,
     attempt_id: &str,
     materialized_plan: &serde_json::Value,
@@ -3523,17 +3546,17 @@ fn persist_markdown_inputs(
     let root = std::path::PathBuf::from("evidence")
         .join(run_id)
         .join(attempt_id);
-    let source = crate::markdown::embedded_source(scenario)?;
+    let source = source.as_bytes();
     let source_reference = artifact::write_bytes(
         output,
         &root.join("scenario.md"),
         format!("{attempt_id}-markdown-source"),
         "markdown-scenario-source",
         "text/markdown; charset=utf-8",
-        &source,
+        source,
     )?;
-    if artifact::sha256_bytes(&source) != scenario.source_sha256 {
-        bail!("embedded Markdown source differs from its compiled hash");
+    if artifact::sha256_bytes(source) != scenario.source_sha256 {
+        bail!("Markdown source differs from its compiled hash");
     }
     let compiled_reference = artifact::write_json(
         output,
@@ -6066,7 +6089,8 @@ mod tests {
 
     #[test]
     fn identical_markdown_inputs_materialize_the_same_plan() {
-        let scenario = crate::markdown::embedded_scenario("insert_record").unwrap();
+        let definition = crate::markdown::embedded_definition("insert_record").unwrap();
+        let scenario = definition.scenario;
         let subject = SubjectConfig {
             model: "subject-model".into(),
             provider: "subject-provider".into(),
@@ -6078,6 +6102,7 @@ mod tests {
         let output = tempfile::tempdir().unwrap();
         let request = MarkdownAttemptRequest {
             scenario: &scenario,
+            source: &definition.source,
             subject: &subject,
             auxiliary: &auxiliary,
             audit_analyzer: None,

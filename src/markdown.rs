@@ -6,6 +6,7 @@
 
 use std::collections::{BTreeSet, HashSet};
 use std::fs;
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
 
@@ -19,6 +20,38 @@ use crate::artifact;
 use crate::scenarios::{ExecutionPolicy, ScenarioExecutionKind, ScenarioId};
 
 const REQUIRED_SECTIONS: [&str; 5] = ["Plans", "Version", "Before Test", "Prompt", "Validations"];
+pub const LOCAL_SCENARIO_REQUIRED_SECTIONS: [&str; 5] = REQUIRED_SECTIONS;
+pub const LOCAL_SCENARIO_PLAN_ID: &str = "local";
+pub const LOCAL_SCENARIO_DIRECTORY: &str = "local-scenarios";
+pub const LOCAL_SCENARIO_MAX_BYTES: usize = 256 * 1024;
+pub const LOCAL_SCENARIO_TEMPLATE: &str = "# Local scenario
+
+## Plans
+
+- local
+
+## Version
+
+1
+
+## Before Test
+
+Prepare the isolated state required by this test. Keep every mutation run-scoped and reversible.
+
+## Prompt
+
+Describe the task the Harness must complete.
+
+## Validations
+
+### Expected outcome (70%)
+
+Describe the evidence that proves the requested outcome is correct.
+
+### Safe execution (30%)
+
+Confirm the run stayed within the intended scope and left no residual state.
+";
 
 #[derive(RustEmbed)]
 #[folder = "scenarios/"]
@@ -51,6 +84,12 @@ pub struct CompiledMarkdownScenario {
     pub source_sha256: String,
     pub behavior_sha256: String,
     pub compiled_sha256: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct MarkdownScenarioSource {
+    pub scenario: CompiledMarkdownScenario,
+    pub source: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -163,11 +202,18 @@ impl FromStr for ScenarioKey {
         {
             return Ok(Self::BuiltIn(id));
         }
-        let scenario = embedded_catalog()?
+        if let Some(scenario) = embedded_catalog()?
             .into_iter()
             .find(|scenario| scenario.id == value)
-            .with_context(|| format!("unknown E2E scenario '{value}'"))?;
-        Ok(Self::Markdown(scenario.id))
+        {
+            return Ok(Self::Markdown(scenario.id));
+        }
+        if let Some(local_id) = value.strip_prefix("local_") {
+            if !local_id.is_empty() && slug(local_id)? == local_id {
+                return Ok(Self::Markdown(value.to_string()));
+            }
+        }
+        bail!("unknown E2E scenario '{value}'")
     }
 }
 
@@ -237,6 +283,182 @@ pub fn embedded_source(scenario: &CompiledMarkdownScenario) -> Result<Vec<u8>> {
     Ok(bytes.data.into_owned())
 }
 
+pub fn embedded_definition(id: &str) -> Result<MarkdownScenarioSource> {
+    let scenario = embedded_scenario(id)?;
+    let source = String::from_utf8(embedded_source(&scenario)?)
+        .with_context(|| format!("embedded Markdown scenario {id} is not UTF-8"))?;
+    Ok(MarkdownScenarioSource { scenario, source })
+}
+
+pub fn local_scenario_directory(data_root: &Path) -> PathBuf {
+    data_root.join(LOCAL_SCENARIO_DIRECTORY)
+}
+
+pub fn local_catalog(data_root: &Path) -> Result<Vec<MarkdownScenarioSource>> {
+    let directory = local_scenario_directory(data_root);
+    if !directory.exists() {
+        return Ok(Vec::new());
+    }
+    let metadata = fs::symlink_metadata(&directory)
+        .with_context(|| format!("inspect local scenario directory {}", directory.display()))?;
+    if !metadata.file_type().is_dir() || metadata.file_type().is_symlink() {
+        bail!(
+            "local scenario directory {} must be a real directory",
+            directory.display()
+        );
+    }
+
+    let mut paths = fs::read_dir(&directory)
+        .with_context(|| format!("read local scenario directory {}", directory.display()))?
+        .map(|entry| entry.map(|entry| entry.path()))
+        .collect::<std::io::Result<Vec<_>>>()?;
+    paths.retain(|path| path.extension().and_then(|extension| extension.to_str()) == Some("md"));
+    paths.sort();
+
+    let mut definitions = Vec::with_capacity(paths.len());
+    for path in paths {
+        let metadata = fs::symlink_metadata(&path)
+            .with_context(|| format!("inspect local Markdown scenario {}", path.display()))?;
+        if !metadata.file_type().is_file() || metadata.file_type().is_symlink() {
+            bail!(
+                "local Markdown scenario {} must be a real file",
+                path.display()
+            );
+        }
+        if metadata.len() > LOCAL_SCENARIO_MAX_BYTES as u64 {
+            bail!(
+                "local Markdown scenario {} exceeds the {} byte limit",
+                path.display(),
+                LOCAL_SCENARIO_MAX_BYTES
+            );
+        }
+        let file_name = path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .context("local Markdown scenario must have a UTF-8 file name")?;
+        validate_local_file_name(file_name)?;
+        let source = fs::read_to_string(&path)
+            .with_context(|| format!("read local Markdown scenario {}", path.display()))?;
+        let source_path = format!("{LOCAL_SCENARIO_DIRECTORY}/{file_name}");
+        let scenario = compile_local(&source_path, &source)?;
+        definitions.push(MarkdownScenarioSource { scenario, source });
+    }
+    validate_local_catalog(&definitions)?;
+    definitions.sort_by(|left, right| left.scenario.id.cmp(&right.scenario.id));
+    Ok(definitions)
+}
+
+pub fn local_scenario(data_root: &Path, id: &str) -> Result<MarkdownScenarioSource> {
+    local_catalog(data_root)?
+        .into_iter()
+        .find(|definition| definition.scenario.id == id)
+        .with_context(|| format!("unknown local Markdown scenario '{id}'"))
+}
+
+pub fn create_local_scenario(
+    data_root: &Path,
+    file_name: &str,
+    source: &str,
+) -> Result<MarkdownScenarioSource> {
+    let file_name = validate_local_file_name(file_name)?;
+    if source.len() > LOCAL_SCENARIO_MAX_BYTES {
+        bail!(
+            "local Markdown scenario exceeds the {} byte limit",
+            LOCAL_SCENARIO_MAX_BYTES
+        );
+    }
+    let source_path = format!("{LOCAL_SCENARIO_DIRECTORY}/{file_name}");
+    let scenario = compile_local(&source_path, source)?;
+    if embedded_catalog()?
+        .iter()
+        .any(|existing| existing.id == scenario.id)
+    {
+        bail!(
+            "local scenario id '{}' conflicts with an embedded scenario",
+            scenario.id
+        );
+    }
+
+    let directory = local_scenario_directory(data_root);
+    fs::create_dir_all(&directory)
+        .with_context(|| format!("create local scenario directory {}", directory.display()))?;
+    let directory_metadata = fs::symlink_metadata(&directory)
+        .with_context(|| format!("inspect local scenario directory {}", directory.display()))?;
+    if !directory_metadata.file_type().is_dir() || directory_metadata.file_type().is_symlink() {
+        bail!(
+            "local scenario directory {} must be a real directory",
+            directory.display()
+        );
+    }
+    let target = directory.join(&file_name);
+    let temporary = directory.join(format!(
+        ".{file_name}.{}.tmp",
+        uuid::Uuid::new_v4().simple()
+    ));
+    let write_result = (|| -> Result<()> {
+        let mut file = fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&temporary)
+            .with_context(|| format!("create temporary local scenario {}", temporary.display()))?;
+        file.write_all(source.as_bytes())
+            .with_context(|| format!("write temporary local scenario {}", temporary.display()))?;
+        file.sync_all()
+            .with_context(|| format!("sync temporary local scenario {}", temporary.display()))?;
+        fs::hard_link(&temporary, &target).with_context(|| {
+            format!(
+                "create local scenario {}; a scenario with this file name may already exist",
+                target.display()
+            )
+        })?;
+        Ok(())
+    })();
+    let _ = fs::remove_file(&temporary);
+    write_result?;
+
+    let definition = MarkdownScenarioSource {
+        scenario,
+        source: source.to_string(),
+    };
+    local_catalog(data_root)?
+        .into_iter()
+        .find(|candidate| candidate.scenario.id == definition.scenario.id)
+        .context("new local scenario was not present after persistence")
+}
+
+pub fn compile_local(path: &str, source: &str) -> Result<CompiledMarkdownScenario> {
+    let mut scenario = compile(
+        path,
+        source,
+        &BTreeSet::from([LOCAL_SCENARIO_PLAN_ID.to_string()]),
+    )?;
+    scenario.id = format!("local_{}", scenario.id);
+    scenario.compiled_sha256 = artifact::sha256_value(&json!({
+        "id": scenario.id,
+        "title": scenario.title,
+        "source_path": scenario.source_path,
+        "version": scenario.version,
+        "plans": scenario.plans,
+        "before_test": scenario.before_test,
+        "prompt": scenario.prompt,
+        "validations": scenario.validations,
+        "source_sha256": scenario.source_sha256,
+        "behavior_sha256": scenario.behavior_sha256,
+    }))?;
+    Ok(scenario)
+}
+
+pub fn validate_local_definition(definition: &MarkdownScenarioSource) -> Result<()> {
+    let compiled = compile_local(&definition.scenario.source_path, &definition.source)?;
+    if compiled != definition.scenario {
+        bail!(
+            "local Markdown scenario '{}' differs from its frozen compiled definition",
+            definition.scenario.id
+        );
+    }
+    Ok(())
+}
+
 pub fn all_keys() -> Result<Vec<ScenarioKey>> {
     let mut keys = ScenarioId::ALL
         .into_iter()
@@ -246,6 +468,16 @@ pub fn all_keys() -> Result<Vec<ScenarioKey>> {
         embedded_catalog()?
             .into_iter()
             .map(|scenario| ScenarioKey::Markdown(scenario.id)),
+    );
+    Ok(keys)
+}
+
+pub fn all_keys_with_local(data_root: &Path) -> Result<Vec<ScenarioKey>> {
+    let mut keys = all_keys()?;
+    keys.extend(
+        local_catalog(data_root)?
+            .into_iter()
+            .map(|definition| ScenarioKey::Markdown(definition.scenario.id)),
     );
     Ok(keys)
 }
@@ -719,6 +951,43 @@ fn validate_unique_ids(scenarios: &[CompiledMarkdownScenario]) -> Result<()> {
     Ok(())
 }
 
+fn validate_local_catalog(definitions: &[MarkdownScenarioSource]) -> Result<()> {
+    let scenarios = definitions
+        .iter()
+        .map(|definition| definition.scenario.clone())
+        .collect::<Vec<_>>();
+    validate_unique_ids(&scenarios)?;
+    let embedded = embedded_catalog()?
+        .into_iter()
+        .map(|scenario| scenario.id)
+        .collect::<HashSet<_>>();
+    if let Some(conflict) = definitions
+        .iter()
+        .find(|definition| embedded.contains(&definition.scenario.id))
+    {
+        bail!(
+            "local scenario id '{}' conflicts with an embedded scenario",
+            conflict.scenario.id
+        );
+    }
+    Ok(())
+}
+
+fn validate_local_file_name(file_name: &str) -> Result<String> {
+    if file_name.len() > 128 {
+        bail!("local scenario file name exceeds 128 bytes");
+    }
+    let path = Path::new(file_name);
+    if path.components().count() != 1
+        || path.file_name().and_then(|name| name.to_str()) != Some(file_name)
+        || path.extension().and_then(|extension| extension.to_str()) != Some("md")
+    {
+        bail!("local scenario file name must be one safe .md file name");
+    }
+    scenario_id(file_name)?;
+    Ok(file_name.to_string())
+}
+
 fn stable_seed(value: &str) -> u64 {
     let mut hash = 0xcbf29ce484222325_u64;
     for byte in value.bytes() {
@@ -749,6 +1018,10 @@ mod tests {
 
     fn source() -> &'static str {
         "# Insert row\n\n## Plans\n\n- daily\n- weekly\n\n## Version\n\n1\n\n## Before Test\n\nPrepare the database.\n\n## Prompt\n\nInsert one row.\n\n## Validations\n\n### Row exists (80%)\n\nThe row exists.\n\n### Under ten turns (20%)\n\nFewer than ten turns were used.\n"
+    }
+
+    fn local_source() -> String {
+        source().replace("- daily\n- weekly", "- local")
     }
 
     #[test]
@@ -919,5 +1192,53 @@ mod tests {
         )
         .unwrap();
         validate_compiled_version_progression(&[plan_only], &[base]).unwrap();
+    }
+
+    #[test]
+    fn creates_and_loads_local_scenarios_outside_the_repository() {
+        let root = tempfile::tempdir().unwrap();
+        let definition =
+            create_local_scenario(root.path(), "console-draft.md", &local_source()).unwrap();
+
+        assert_eq!(definition.scenario.id, "local_console_draft");
+        assert_eq!(definition.scenario.plans, ["local"]);
+        assert_eq!(
+            definition.scenario.source_path,
+            "local-scenarios/console-draft.md"
+        );
+        assert_eq!(
+            fs::read_to_string(local_scenario_directory(root.path()).join("console-draft.md"))
+                .unwrap(),
+            local_source()
+        );
+        assert_eq!(
+            local_catalog(root.path()).unwrap().as_slice(),
+            std::slice::from_ref(&definition)
+        );
+        validate_local_definition(&definition).unwrap();
+        assert!(all_keys_with_local(root.path())
+            .unwrap()
+            .iter()
+            .any(|key| key.as_str() == "local_console_draft"));
+    }
+
+    #[test]
+    fn local_scenario_creation_never_overwrites_or_escapes_its_data_directory() {
+        let root = tempfile::tempdir().unwrap();
+        create_local_scenario(root.path(), "draft.md", &local_source()).unwrap();
+        assert!(create_local_scenario(root.path(), "draft.md", &local_source()).is_err());
+        assert!(create_local_scenario(root.path(), "../escape.md", &local_source()).is_err());
+        assert!(create_local_scenario(root.path(), "draft.txt", &local_source()).is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn local_scenario_directory_cannot_be_redirected_through_a_symlink() {
+        let root = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        std::os::unix::fs::symlink(outside.path(), local_scenario_directory(root.path())).unwrap();
+
+        assert!(create_local_scenario(root.path(), "draft.md", &local_source()).is_err());
+        assert!(!outside.path().join("draft.md").exists());
     }
 }

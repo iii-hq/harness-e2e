@@ -87,12 +87,22 @@ function catalogValue(value: JsonObject): Catalog {
           : []
       })
     : []
+  const localScenarioIds = new Set(
+    Array.isArray(value.local_scenarios)
+      ? value.local_scenarios.flatMap((candidate) => {
+          if (!candidate || typeof candidate !== 'object') return []
+          const id = (candidate as JsonObject).id
+          return typeof id === 'string' ? [id] : []
+        })
+      : [],
+  )
   return {
     url: typeof value.url === 'string' ? value.url : '',
     models,
     scenarios: Array.isArray(value.scenarios)
       ? value.scenarios.filter(
-          (item): item is string => typeof item === 'string',
+          (item): item is string =>
+            typeof item === 'string' && !localScenarioIds.has(item),
         )
       : [],
   }
