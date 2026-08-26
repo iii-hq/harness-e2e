@@ -265,32 +265,29 @@ class ReleaseControlCampaignTest(unittest.TestCase):
         matrix = MODULE.campaign_matrix(campaign_contract())
         self.assertEqual(len(matrix["include"]), 2)
         self.assertEqual(matrix["include"][0]["runs_on"], ["ubuntu-latest"])
-        self.assertFalse(matrix["include"][0]["requires_shared_fixture"])
-        self.assertFalse(matrix["include"][0]["requires_engineering_fixture"])
-        self.assertFalse(matrix["include"][0]["requires_browser"])
         self.assertEqual(
             matrix["include"][1]["runs_on"], ["self-hosted", "harness-e2e"]
         )
 
-    def test_campaign_matrix_routes_fixture_groups_to_the_trusted_runner(self):
+    def test_campaign_matrix_keeps_fixture_groups_ephemeral(self):
         value = campaign_contract()
         value["plan"]["definition"]["groups"][0]["scenarios"] = [
             "shell_coder_sandbox",
             "engineering_ticket_git_handoff",
         ]
         common = MODULE.campaign_matrix(value)["include"][0]
-        self.assertEqual(common["runs_on"], ["self-hosted", "harness-e2e"])
-        self.assertTrue(common["requires_shared_fixture"])
-        self.assertTrue(common["requires_engineering_fixture"])
+        self.assertEqual(common["runs_on"], ["ubuntu-latest"])
+        self.assertEqual(
+            set(common), {"group_id", "execution_kind", "runs_on"}
+        )
 
-    def test_campaign_matrix_routes_browser_groups_to_the_trusted_runner(self):
+    def test_campaign_matrix_keeps_browser_groups_ephemeral(self):
         value = campaign_contract()
         value["plan"]["definition"]["groups"][0]["scenarios"] = [
             "browser_cross_site",
         ]
         common = MODULE.campaign_matrix(value)["include"][0]
-        self.assertEqual(common["runs_on"], ["self-hosted", "harness-e2e"])
-        self.assertTrue(common["requires_browser"])
+        self.assertEqual(common["runs_on"], ["ubuntu-latest"])
 
     def test_rejects_a_foreign_executor_repository(self):
         value = campaign_contract()

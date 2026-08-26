@@ -51,3 +51,10 @@ protected lease record; it never accepts a filesystem path from the workflow.
 The workflow exports the returned path as
 `HARNESS_E2E_ENGINEERING_TICKET_FIXTURE_PATH`, captures all native Harness
 artifacts before cleanup, and removes the lease in an `always()` step.
+
+Release Control campaign groups use the same launcher against the immutable
+`tests/fixtures/campaign/engineering-ticket.bundle` shipped by the exact runner
+revision. Those common groups stay on an ephemeral GitHub-hosted runner; only
+fault injection requires the protected self-hosted runner. The bundle is
+cloned offline, has its remote removed, and is cleaned through the same opaque
+lease contract.

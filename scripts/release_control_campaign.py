@@ -39,24 +39,6 @@ SUPPORTED_CATALOG_SCHEMAS = {
     "e2e-scenario-catalog/v1",
     "e2e-scenario-catalog/v2",
 }
-SHARED_FIXTURE_SCENARIOS = frozenset(
-    {
-        "shell_coder_sandbox",
-        "chess_engine_build",
-        "trend_blog",
-    }
-)
-ENGINEERING_FIXTURE_SCENARIOS = frozenset(
-    {
-        "engineering_ticket_git_handoff",
-    }
-)
-BROWSER_SCENARIOS = frozenset(
-    {
-        "browser_cross_site",
-    }
-)
-
 # These workers are hosted by the pinned iii engine rather than installed from
 # the Registry. `iii worker add` intentionally reports them as built-in, so a
 # Registry resolution of a transitive dependency cannot force their internal
@@ -220,28 +202,13 @@ def campaign_matrix(contract: dict[str, Any]) -> dict[str, Any]:
     include = []
     for group in definition["groups"]:
         is_fault = group["executionKind"] == "fault_injection"
-        scenarios = set(group.get("scenarios") or [])
-        requires_shared_fixture = bool(scenarios & SHARED_FIXTURE_SCENARIOS)
-        requires_engineering_fixture = bool(
-            scenarios & ENGINEERING_FIXTURE_SCENARIOS
-        )
-        requires_browser = bool(scenarios & BROWSER_SCENARIOS)
-        requires_trusted_runner = (
-            is_fault
-            or requires_shared_fixture
-            or requires_engineering_fixture
-            or requires_browser
-        )
         include.append(
             {
                 "group_id": group["id"],
                 "execution_kind": group["executionKind"],
-                "requires_shared_fixture": requires_shared_fixture,
-                "requires_engineering_fixture": requires_engineering_fixture,
-                "requires_browser": requires_browser,
                 "runs_on": (
                     ["self-hosted", "harness-e2e"]
-                    if requires_trusted_runner
+                    if is_fault
                     else ["ubuntu-latest"]
                 ),
             }
