@@ -69,7 +69,6 @@ FORBIDDEN_SEED_FIELDS = {"seed", "seeds", "rotating_seed", "rotating_seeds"}
 # critically, preventing a ScriptedDialogue from silently entering a retryable
 # HarnessTurn group.
 SCENARIO_EXECUTION_KIND = {
-    "minimal_path": "harness_turn",
     "timer_wake": "harness_turn",
     "shell_coder_sandbox": "harness_turn",
     "chess_engine_build": "harness_turn",
@@ -82,7 +81,6 @@ SCENARIO_EXECUTION_KIND = {
     "tool_contract_recovery": "harness_turn",
     "policy_bound_action": "scripted_dialogue",
     "cross_app_transaction": "harness_turn",
-    "database_migration_recovery": "harness_turn",
     "research_pipeline": "harness_turn",
     "performance_regression": "harness_turn",
     "browser_cross_site": "harness_turn",
@@ -96,7 +94,6 @@ SCENARIO_EXECUTION_KIND = {
 # against the same canonical capability tier later embedded in results.json.
 # L0/L1 map to 1; L2..L5 map directly to 2..5.
 SCENARIO_DIFFICULTY_WEIGHT = {
-    "minimal_path": 2,
     "timer_wake": 2,
     "shell_coder_sandbox": 4,
     "chess_engine_build": 2,
@@ -109,7 +106,6 @@ SCENARIO_DIFFICULTY_WEIGHT = {
     "tool_contract_recovery": 4,
     "policy_bound_action": 4,
     "cross_app_transaction": 4,
-    "database_migration_recovery": 4,
     "research_pipeline": 4,
     "performance_regression": 2,
     "browser_cross_site": 4,
@@ -123,6 +119,20 @@ FAULT_PROFILE_WEIGHT = {
     "weekly-l2-recovery": 2,
     "weekly-l3-recovery": 3,
     "weekly-l4-recovery": 4,
+}
+
+MARKDOWN_SCENARIO_SECTIONS = {
+    "Plans",
+    "Version",
+    "Before Test",
+    "Prompt",
+    "Validations",
+}
+MARKDOWN_PLAN_EXECUTION = {
+    "daily": (1, 1),
+    "weekly": (3, 1),
+    "post-release": (1, 0),
+    "endurance": (1, 0),
 }
 
 
@@ -358,6 +368,108 @@ def load_campaign(path: pathlib.Path) -> Campaign:
     return parse_campaign(value, str(path))
 
 
+def discover_markdown_scenarios(
+    directory: pathlib.Path, campaign_id: str
+) -> tuple[str, ...]:
+    """Read plan participation only; the Rust compiler remains authoritative."""
+    if not directory.exists():
+        return ()
+    selected: list[str] = []
+    for path in sorted(directory.glob("*.md")):
+        source = path.read_text(encoding="utf-8")
+        structural_source = _without_fenced_markdown(source, path)
+        headings = re.findall(
+            r"^## ([^\r\n]+)\r?$", structural_source, flags=re.MULTILINE
+        )
+        if set(headings) != MARKDOWN_SCENARIO_SECTIONS or len(headings) != len(
+            MARKDOWN_SCENARIO_SECTIONS
+        ):
+            raise CampaignError(
+                f"{path} must contain each canonical Markdown section exactly once"
+            )
+        plans_match = re.search(
+            r"^## Plans\r?\n(?P<body>.*?)(?=^## )",
+            structural_source,
+            flags=re.MULTILINE | re.DOTALL,
+        )
+        if plans_match is None:
+            raise CampaignError(f"{path} has no parseable Plans section")
+        plans = [
+            line.removeprefix("- ").strip()
+            for line in plans_match.group("body").splitlines()
+            if line.strip()
+        ]
+        if any(
+            not line.startswith("- ")
+            for line in plans_match.group("body").splitlines()
+            if line.strip()
+        ):
+            raise CampaignError(f"{path} Plans section must be a Markdown bullet list")
+        if campaign_id not in plans:
+            continue
+        stem = path.stem.lower().replace("-", "_").replace(" ", "_")
+        if not re.fullmatch(r"[a-z][a-z0-9_]*", stem) or "__" in stem:
+            raise CampaignError(f"{path} cannot produce a safe Markdown scenario id")
+        selected.append(stem)
+    if len(selected) != len(set(selected)):
+        raise CampaignError("Markdown scenarios produce duplicate ids")
+    return tuple(selected)
+
+
+def _without_fenced_markdown(source: str, path: pathlib.Path) -> str:
+    lines: list[str] = []
+    fence: str | None = None
+    for line in source.splitlines(keepends=True):
+        stripped = line.lstrip()
+        marker = stripped[:1] if stripped[:1] in {"`", "~"} else None
+        is_fence = marker is not None and len(stripped) - len(stripped.lstrip(marker)) >= 3
+        if is_fence:
+            if fence is None:
+                fence = marker
+            elif fence == marker:
+                fence = None
+            lines.append("\n" if line.endswith("\n") else "")
+        elif fence is None:
+            lines.append(line)
+        else:
+            lines.append("\n" if line.endswith("\n") else "")
+    if fence is not None:
+        raise CampaignError(f"{path} contains an unclosed fenced code block")
+    return "".join(lines)
+
+
+def attach_markdown_group(
+    campaign: Campaign, directory: pathlib.Path
+) -> Campaign:
+    scenarios = discover_markdown_scenarios(directory, campaign.campaign_id)
+    if not scenarios:
+        return campaign
+    selected = {scenario for group in campaign.groups for scenario in group.scenarios}
+    duplicate = selected.intersection(scenarios)
+    if duplicate:
+        raise CampaignError(
+            f"campaign already selects Markdown scenario(s): {', '.join(sorted(duplicate))}"
+        )
+    group_id = f"{campaign.campaign_id}-markdown"
+    if any(group.id == group_id for group in campaign.groups):
+        raise CampaignError(f"campaign already contains reserved group id {group_id!r}")
+    try:
+        runs, technical_retries = MARKDOWN_PLAN_EXECUTION[campaign.campaign_id]
+    except KeyError as error:
+        raise CampaignError(
+            f"campaign {campaign.campaign_id!r} has no canonical Markdown execution policy"
+        ) from error
+    group = CampaignGroup(
+        id=group_id,
+        execution_kind="harness_turn",
+        runs=runs,
+        technical_retries=technical_retries,
+        difficulty_weight=2,
+        scenarios=scenarios,
+    )
+    return dataclasses.replace(campaign, groups=(*campaign.groups, group))
+
+
 def build_group_command(
     campaign: Campaign,
     group: CampaignGroup,
@@ -366,6 +478,8 @@ def build_group_command(
     output: pathlib.Path,
     model: str | None = None,
     provider: str | None = None,
+    judge_model: str | None = None,
+    judge_provider: str | None = None,
     url: str | None = None,
     progress_interval_seconds: int | None = None,
 ) -> list[str]:
@@ -385,6 +499,10 @@ def build_group_command(
         command.extend(["--model", model])
     if provider:
         command.extend(["--provider", provider])
+    if judge_model:
+        command.extend(["--judge-model", judge_model])
+    if judge_provider:
+        command.extend(["--judge-provider", judge_provider])
     if url:
         command.extend(["--url", url])
     if progress_interval_seconds is not None:
@@ -722,6 +840,8 @@ def execute_campaign(
     advisory: bool,
     model: str | None = None,
     provider: str | None = None,
+    judge_model: str | None = None,
+    judge_provider: str | None = None,
     url: str | None = None,
     progress_interval_seconds: int | None = None,
     fault_runner: pathlib.Path = pathlib.Path(
@@ -735,6 +855,8 @@ def execute_campaign(
     if not SAFE_EXECUTION_ID.fullmatch(execution_id):
         raise CampaignError("execution_id contains unsafe characters")
     base_environment = dict(os.environ if environ is None else environ)
+    if bool(judge_model) != bool(judge_provider):
+        raise CampaignError("judge_model and judge_provider must be supplied together")
     if not dry_run:
         if not model and not base_environment.get("HARNESS_E2E_MODEL"):
             raise CampaignError(
@@ -743,6 +865,20 @@ def execute_campaign(
         if not provider and not base_environment.get("HARNESS_E2E_PROVIDER"):
             raise CampaignError(
                 "provider is required via --provider or HARNESS_E2E_PROVIDER"
+            )
+        has_markdown = any(
+            group.id == f"{campaign.campaign_id}-markdown"
+            for group in campaign.groups
+        )
+        resolved_judge_model = judge_model or base_environment.get(
+            "HARNESS_E2E_JUDGE_MODEL"
+        )
+        resolved_judge_provider = judge_provider or base_environment.get(
+            "HARNESS_E2E_JUDGE_PROVIDER"
+        )
+        if has_markdown and (not resolved_judge_model or not resolved_judge_provider):
+            raise CampaignError(
+                "Markdown campaign groups require an explicit judge model and provider"
             )
 
     execution_root = output_root / campaign.campaign_id / execution_id
@@ -760,6 +896,8 @@ def execute_campaign(
                 output=group_output,
                 model=model,
                 provider=provider,
+                judge_model=judge_model,
+                judge_provider=judge_provider,
                 url=url,
                 progress_interval_seconds=progress_interval_seconds,
             )
@@ -791,6 +929,30 @@ def execute_campaign(
         child_environment["HARNESS_E2E_LANE"] = campaign.lane
         child_environment["HARNESS_E2E_CAMPAIGN_ID"] = campaign.campaign_id
         child_environment["HARNESS_E2E_CAMPAIGN_GROUP"] = group.id
+        materialized_group = {
+            "schema": "harness-e2e-materialized-campaign-group/v1",
+            "campaign_id": campaign.campaign_id,
+            "lane": campaign.lane,
+            "failure_policy": campaign.failure_policy,
+            "group": dataclasses.asdict(group),
+            "runner": str(e2e_bin),
+            "model": model or child_environment.get("HARNESS_E2E_MODEL"),
+            "provider": provider or child_environment.get("HARNESS_E2E_PROVIDER"),
+            "judge_model": judge_model
+            or child_environment.get("HARNESS_E2E_JUDGE_MODEL"),
+            "judge_provider": judge_provider
+            or child_environment.get("HARNESS_E2E_JUDGE_PROVIDER"),
+            "url": url or child_environment.get("III_URL", "ws://127.0.0.1:49134"),
+            "progress_interval_seconds": progress_interval_seconds,
+        }
+        canonical = json.dumps(
+            materialized_group, sort_keys=True, separators=(",", ":")
+        ).encode("utf-8")
+        materialized_group["sha256"] = f"sha256:{hashlib.sha256(canonical).hexdigest()}"
+        materialized_path = group_output / "materialized-campaign-group.json"
+        _write_json_atomic(materialized_path, materialized_group)
+        result["materialized_group"] = str(materialized_path)
+        result["materialized_group_sha256"] = materialized_group["sha256"]
         started = monotonic()
         if group.execution_kind == "fault_injection":
             return_code, error_message, commands = _execute_fault_group(
@@ -1057,7 +1219,12 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--model")
     parser.add_argument("--provider")
+    parser.add_argument("--judge-model")
+    parser.add_argument("--judge-provider")
     parser.add_argument("--url")
+    parser.add_argument(
+        "--scenarios-directory", type=pathlib.Path, default=pathlib.Path("scenarios")
+    )
     parser.add_argument("--progress-interval-seconds", type=int)
     return parser
 
@@ -1065,7 +1232,9 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: Sequence[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     try:
-        campaign = load_campaign(args.manifest)
+        campaign = attach_markdown_group(
+            load_campaign(args.manifest), args.scenarios_directory
+        )
         scoring_profile = _load_json(args.scoring_profile)
         if scoring_profile.get("profile") != SCORING_PROFILE:
             raise CampaignError("scoring profile identity does not match the campaign")
@@ -1112,6 +1281,8 @@ def main(argv: Sequence[str] | None = None) -> int:
                 advisory=advisory,
                 model=args.model,
                 provider=args.provider,
+                judge_model=args.judge_model,
+                judge_provider=args.judge_provider,
                 url=args.url,
                 progress_interval_seconds=args.progress_interval_seconds,
                 fault_runner=args.fault_runner,

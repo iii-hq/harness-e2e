@@ -12,7 +12,6 @@
       "technical_retries": 0,
       "difficulty_weight": 4,
       "scenarios": [
-        "minimal_path",
         "tool_contract_recovery"
       ]
     },
@@ -36,7 +35,6 @@
       "technical_retries": 0,
       "difficulty_weight": 4,
       "scenarios": [
-        "database_migration_recovery",
         "cross_app_transaction",
         "browser_cross_site"
       ]

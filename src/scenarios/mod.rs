@@ -25,7 +25,6 @@ pub mod contention_ledger;
 pub mod context_pressure;
 pub mod cross_app_transaction;
 pub mod cross_repo_contract_migration;
-pub mod database_migration_recovery;
 pub mod depth_ladder;
 mod domain;
 pub mod engineering_endurance_ladder;
@@ -34,10 +33,8 @@ pub mod fanout_ladder;
 pub mod git_regression_forensics;
 pub mod incident_response;
 pub mod mechanical_reaction;
-pub mod minimal_path;
 pub mod moving_target;
 pub mod performance_regression;
-pub mod persistent_state;
 pub mod poison_message;
 pub mod policy_bound_action;
 pub mod prompt_injection_resilience;
@@ -47,7 +44,6 @@ pub mod release_train_recovery;
 pub mod research_pipeline;
 pub mod secret_hygiene;
 pub mod security_review;
-pub mod sequential_pipeline;
 pub mod shell_coder_sandbox;
 pub mod subagent_validation;
 pub mod subagent_validation_failure;
@@ -389,12 +385,8 @@ fn captured_gate_invariants(objective: ObjectiveEvaluation) -> Vec<CapturedInvar
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema, ValueEnum)]
 #[serde(rename_all = "snake_case")]
 pub enum ScenarioId {
-    #[value(name = "sequential_pipeline")]
-    SequentialPipeline,
     #[value(name = "context_pressure")]
     ContextPressure,
-    #[value(name = "persistent_state")]
-    PersistentState,
     #[value(name = "shell_coder_sandbox")]
     ShellCoderSandbox,
     #[value(name = "research_pipeline")]
@@ -451,8 +443,6 @@ pub enum ScenarioId {
     QuorumFanIn,
     #[value(name = "contention_ledger")]
     ContentionLedger,
-    #[value(name = "minimal_path")]
-    MinimalPath,
     #[value(name = "wake_chain_soak")]
     WakeChainSoak,
     #[value(name = "chess_engine_build")]
@@ -467,8 +457,6 @@ pub enum ScenarioId {
     PolicyBoundAction,
     #[value(name = "cross_app_transaction")]
     CrossAppTransaction,
-    #[value(name = "database_migration_recovery")]
-    DatabaseMigrationRecovery,
     #[value(name = "performance_regression")]
     PerformanceRegression,
     #[value(name = "browser_cross_site")]
@@ -480,10 +468,8 @@ pub enum ScenarioId {
 }
 
 impl ScenarioId {
-    pub const ALL: [Self; 44] = [
-        Self::SequentialPipeline,
+    pub const ALL: [Self; 40] = [
         Self::ContextPressure,
-        Self::PersistentState,
         Self::ShellCoderSandbox,
         Self::ResearchPipeline,
         Self::FanoutLadder,
@@ -512,7 +498,6 @@ impl ScenarioId {
         Self::DepthLadder,
         Self::QuorumFanIn,
         Self::ContentionLedger,
-        Self::MinimalPath,
         Self::WakeChainSoak,
         Self::ChessEngineBuild,
         Self::ChessPlayLadder,
@@ -520,7 +505,6 @@ impl ScenarioId {
         Self::ToolContractRecovery,
         Self::PolicyBoundAction,
         Self::CrossAppTransaction,
-        Self::DatabaseMigrationRecovery,
         Self::PerformanceRegression,
         Self::BrowserCrossSite,
         Self::ReleaseTrainRecovery,
@@ -529,9 +513,7 @@ impl ScenarioId {
 
     pub fn as_str(self) -> &'static str {
         match self {
-            Self::SequentialPipeline => sequential_pipeline::ID,
             Self::ContextPressure => context_pressure::ID,
-            Self::PersistentState => persistent_state::ID,
             Self::ShellCoderSandbox => shell_coder_sandbox::ID,
             Self::ResearchPipeline => research_pipeline::ID,
             Self::FanoutLadder => fanout_ladder::ID,
@@ -560,7 +542,6 @@ impl ScenarioId {
             Self::DepthLadder => depth_ladder::ID,
             Self::QuorumFanIn => quorum_fan_in::ID,
             Self::ContentionLedger => contention_ledger::ID,
-            Self::MinimalPath => minimal_path::ID,
             Self::WakeChainSoak => wake_chain_soak::ID,
             Self::ChessEngineBuild => chess_engine_build::ID,
             Self::ChessPlayLadder => chess_play_ladder::ID,
@@ -568,7 +549,6 @@ impl ScenarioId {
             Self::ToolContractRecovery => tool_contract_recovery::ID,
             Self::PolicyBoundAction => policy_bound_action::ID,
             Self::CrossAppTransaction => cross_app_transaction::ID,
-            Self::DatabaseMigrationRecovery => database_migration_recovery::ID,
             Self::PerformanceRegression => performance_regression::ID,
             Self::BrowserCrossSite => browser_cross_site::ID,
             Self::ReleaseTrainRecovery => release_train_recovery::ID,
@@ -578,9 +558,7 @@ impl ScenarioId {
 
     pub fn spec(self, run_id: &str) -> ScenarioSpec {
         match self {
-            Self::SequentialPipeline => sequential_pipeline::scenario(run_id),
             Self::ContextPressure => context_pressure::scenario(run_id),
-            Self::PersistentState => persistent_state::scenario(run_id),
             Self::ShellCoderSandbox => shell_coder_sandbox::scenario(run_id),
             Self::ResearchPipeline => research_pipeline::scenario(run_id),
             Self::FanoutLadder => fanout_ladder::scenario(run_id),
@@ -609,7 +587,6 @@ impl ScenarioId {
             Self::DepthLadder => depth_ladder::scenario(run_id),
             Self::QuorumFanIn => quorum_fan_in::scenario(run_id),
             Self::ContentionLedger => contention_ledger::scenario(run_id),
-            Self::MinimalPath => minimal_path::scenario(run_id),
             Self::WakeChainSoak => wake_chain_soak::scenario(run_id),
             Self::ChessEngineBuild => chess_engine_build::scenario(run_id),
             Self::ChessPlayLadder => chess_play_ladder::scenario(run_id),
@@ -617,7 +594,6 @@ impl ScenarioId {
             Self::ToolContractRecovery => tool_contract_recovery::scenario(run_id),
             Self::PolicyBoundAction => policy_bound_action::scenario(run_id),
             Self::CrossAppTransaction => cross_app_transaction::scenario(run_id),
-            Self::DatabaseMigrationRecovery => database_migration_recovery::scenario(run_id),
             Self::PerformanceRegression => performance_regression::scenario(run_id),
             Self::BrowserCrossSite => browser_cross_site::scenario(run_id),
             Self::ReleaseTrainRecovery => release_train_recovery::scenario(run_id),
@@ -627,9 +603,7 @@ impl ScenarioId {
 
     pub fn materialize(self, namespace: &str, seed: u64) -> Result<MaterializedScenario> {
         let materialized = match self {
-            Self::SequentialPipeline => sequential_pipeline::materialize(namespace, seed)?,
             Self::ContextPressure => context_pressure::materialize(namespace, seed)?,
-            Self::PersistentState => persistent_state::materialize(namespace, seed)?,
             Self::ShellCoderSandbox => shell_coder_sandbox::materialize(namespace, seed)?,
             Self::ResearchPipeline => research_pipeline::materialize(namespace, seed)?,
             Self::FanoutLadder => fanout_ladder::materialize(namespace, seed)?,
@@ -668,7 +642,6 @@ impl ScenarioId {
             Self::DepthLadder => depth_ladder::materialize(namespace, seed)?,
             Self::QuorumFanIn => quorum_fan_in::materialize(namespace, seed)?,
             Self::ContentionLedger => contention_ledger::materialize(namespace, seed)?,
-            Self::MinimalPath => minimal_path::materialize(namespace, seed)?,
             Self::WakeChainSoak => wake_chain_soak::materialize(namespace, seed)?,
             Self::ChessEngineBuild => chess_engine_build::materialize(namespace, seed)?,
             Self::ChessPlayLadder => chess_play_ladder::materialize(namespace, seed)?,
@@ -676,9 +649,6 @@ impl ScenarioId {
             Self::ToolContractRecovery => tool_contract_recovery::materialize(namespace, seed)?,
             Self::PolicyBoundAction => policy_bound_action::materialize(namespace, seed)?,
             Self::CrossAppTransaction => cross_app_transaction::materialize(namespace, seed)?,
-            Self::DatabaseMigrationRecovery => {
-                database_migration_recovery::materialize(namespace, seed)?
-            }
             Self::PerformanceRegression => performance_regression::materialize(namespace, seed)?,
             Self::BrowserCrossSite => browser_cross_site::materialize(namespace, seed)?,
             Self::ReleaseTrainRecovery => release_train_recovery::materialize(namespace, seed)?,
@@ -727,9 +697,6 @@ impl ScenarioId {
         if self == Self::CrossAppTransaction {
             return cross_app_transaction::CANONICAL_SEED;
         }
-        if self == Self::DatabaseMigrationRecovery {
-            return database_migration_recovery::CANONICAL_SEED;
-        }
         if self == Self::ResearchPipeline {
             return research_pipeline::CANONICAL_SEED;
         }
@@ -767,7 +734,6 @@ impl ScenarioId {
                 | Self::ToolContractRecovery
                 | Self::PolicyBoundAction
                 | Self::CrossAppTransaction
-                | Self::DatabaseMigrationRecovery
                 | Self::ResearchPipeline
                 | Self::PerformanceRegression
                 | Self::BrowserCrossSite
@@ -799,7 +765,6 @@ pub fn required_functions(scenario_id: &str, run_id: &str) -> Vec<String> {
         tool_contract_recovery::ID => tool_contract_recovery::required_functions(run_id),
         policy_bound_action::ID => policy_bound_action::required_functions(run_id),
         cross_app_transaction::ID => cross_app_transaction::required_functions(run_id),
-        database_migration_recovery::ID => database_migration_recovery::required_functions(run_id),
         research_pipeline::ID => research_pipeline::required_functions(run_id),
         browser_cross_site::ID => browser_cross_site::required_functions(run_id),
         _ => Vec::new(),
@@ -817,9 +782,6 @@ pub fn allowed_functions(scenario_id: &str, run_id: &str) -> Option<Vec<String>>
         tool_contract_recovery::ID => Some(tool_contract_recovery::allowed_functions(run_id)),
         policy_bound_action::ID => Some(policy_bound_action::allowed_functions(run_id)),
         cross_app_transaction::ID => Some(cross_app_transaction::allowed_functions(run_id)),
-        database_migration_recovery::ID => {
-            Some(database_migration_recovery::allowed_functions(run_id))
-        }
         research_pipeline::ID => Some(research_pipeline::allowed_functions(run_id)),
         performance_regression::ID => Some(performance_regression::allowed_functions(run_id)),
         browser_cross_site::ID => Some(browser_cross_site::allowed_functions(run_id)),
@@ -852,7 +814,7 @@ mod tests {
 
     use super::*;
     #[test]
-    fn registry_contains_forty_four_unique_valid_scenarios() {
+    fn registry_contains_forty_unique_valid_scenarios() {
         let mut ids = HashSet::new();
         for scenario in ScenarioId::ALL {
             assert!(ids.insert(scenario.as_str()));
@@ -861,18 +823,18 @@ mod tests {
                 .materialize("run", scenario.canonical_seed())
                 .unwrap();
         }
-        assert_eq!(ids.len(), 44);
+        assert_eq!(ids.len(), 40);
     }
 
     #[test]
     fn explicit_selection_preserves_order_and_deduplicates() {
         assert_eq!(
             selected(&[
-                ScenarioId::SequentialPipeline,
-                ScenarioId::PersistentState,
-                ScenarioId::SequentialPipeline,
+                ScenarioId::ContextPressure,
+                ScenarioId::ShellCoderSandbox,
+                ScenarioId::ContextPressure,
             ]),
-            vec![ScenarioId::SequentialPipeline, ScenarioId::PersistentState]
+            vec![ScenarioId::ContextPressure, ScenarioId::ShellCoderSandbox]
         );
     }
 
@@ -891,14 +853,13 @@ mod tests {
     }
 
     #[test]
-    fn classification_v2_migrates_all_42_existing_scenario_contracts() {
-        // These are the 42 scenarios present when capability_v2 was introduced.
+    fn classification_v2_covers_all_38_retained_scenario_contracts() {
+        // These are the 38 built-in scenarios that remain from the catalog
+        // present when capability_v2 was introduced.
         // The two AdaptiveFlow scenarios added by the following delivery stages
-        // start independently at v1 and bring the catalog to 44 entries.
+        // start independently at v1 and bring the built-in catalog to 40 entries.
         let expected = [
-            (ScenarioId::SequentialPipeline, 3),
             (ScenarioId::ContextPressure, 4),
-            (ScenarioId::PersistentState, 5),
             (ScenarioId::ShellCoderSandbox, 5),
             (ScenarioId::ResearchPipeline, 6),
             (ScenarioId::FanoutLadder, 3),
@@ -927,7 +888,6 @@ mod tests {
             (ScenarioId::DepthLadder, 3),
             (ScenarioId::QuorumFanIn, 2),
             (ScenarioId::ContentionLedger, 2),
-            (ScenarioId::MinimalPath, 2),
             (ScenarioId::WakeChainSoak, 3),
             (ScenarioId::ChessEngineBuild, 2),
             (ScenarioId::ChessPlayLadder, 3),
@@ -935,11 +895,10 @@ mod tests {
             (ScenarioId::ToolContractRecovery, 2),
             (ScenarioId::PolicyBoundAction, 2),
             (ScenarioId::CrossAppTransaction, 2),
-            (ScenarioId::DatabaseMigrationRecovery, 2),
             (ScenarioId::PerformanceRegression, 2),
             (ScenarioId::BrowserCrossSite, 2),
         ];
-        assert_eq!(expected.len(), 42);
+        assert_eq!(expected.len(), 38);
         for (scenario, version) in expected {
             let materialized = scenario
                 .materialize("classification-v2", scenario.canonical_seed())
@@ -975,13 +934,13 @@ mod tests {
 
     #[test]
     fn materialized_cases_are_stable_across_attempt_namespaces() {
-        let first = ScenarioId::PersistentState
+        let first = ScenarioId::MechanicalReaction
             .materialize("attempt-a", 42)
             .unwrap();
-        let retry = ScenarioId::PersistentState
+        let retry = ScenarioId::MechanicalReaction
             .materialize("attempt-b", 42)
             .unwrap();
-        let other_seed = ScenarioId::PersistentState
+        let other_seed = ScenarioId::MechanicalReaction
             .materialize("attempt-c", 43)
             .unwrap();
 
@@ -996,7 +955,7 @@ mod tests {
 
     #[test]
     fn converted_scenarios_publish_expected_complexity_tiers_and_contracts() {
-        let state = ScenarioId::PersistentState.materialize("state", 7).unwrap();
+        let state = ScenarioId::MovingTarget.materialize("state", 7).unwrap();
         let coordination = ScenarioId::SubagentValidation
             .materialize("coordination", 7)
             .unwrap();
@@ -1139,12 +1098,12 @@ mod tests {
 
     #[test]
     fn validation_rejects_a_zero_scenario_version() {
-        let mut spec = ScenarioId::PersistentState.spec("run");
+        let mut spec = ScenarioId::ContextPressure.spec("run");
         spec.version = 0;
 
         assert_eq!(
             spec.validate().unwrap_err().to_string(),
-            "scenario 'persistent_state': version=0; expected version >= 1"
+            "scenario 'context_pressure': version=0; expected version >= 1"
         );
     }
 
@@ -1156,32 +1115,32 @@ mod tests {
             (
                 "max_turns",
                 |execution| execution.max_turns = 0,
-                "scenario 'persistent_state': execution.max_turns=0; expected at least 1",
+                "scenario 'context_pressure': execution.max_turns=0; expected at least 1",
             ),
             (
                 "max_output_tokens",
                 |execution| execution.max_output_tokens = Some(0),
-                "scenario 'persistent_state': execution.max_output_tokens=0; expected None (provider limit) or at least 1",
+                "scenario 'context_pressure': execution.max_output_tokens=0; expected None (provider limit) or at least 1",
             ),
             (
                 "max_total_tokens",
                 |execution| execution.max_total_tokens = Some(0),
-                "scenario 'persistent_state': execution.max_total_tokens=0; expected None (unbounded) or at least 1",
+                "scenario 'context_pressure': execution.max_total_tokens=0; expected None (unbounded) or at least 1",
             ),
             (
                 "stuck_timeout_seconds",
                 |execution| execution.stuck_timeout_seconds = 0,
-                "scenario 'persistent_state': execution.stuck_timeout_seconds=0; expected at least 1",
+                "scenario 'context_pressure': execution.stuck_timeout_seconds=0; expected at least 1",
             ),
             (
                 "total_token_order",
                 |execution| execution.max_total_tokens = Some(1),
-                "scenario 'persistent_state': execution.max_total_tokens=1 is lower than execution.max_output_tokens=8192; expected max_total_tokens >= max_output_tokens",
+                "scenario 'context_pressure': execution.max_total_tokens=1 is lower than execution.max_output_tokens=16384; expected max_total_tokens >= max_output_tokens",
             ),
         ];
 
         for (field, mutate, expected) in cases {
-            let mut spec = ScenarioId::PersistentState.spec("run");
+            let mut spec = ScenarioId::ContextPressure.spec("run");
             mutate(&mut spec.execution);
             assert_eq!(
                 spec.validate().unwrap_err().to_string(),
@@ -1193,7 +1152,7 @@ mod tests {
 
     #[test]
     fn validation_reports_criterion_values_before_weight_total() {
-        let mut spec = ScenarioId::PersistentState.spec("run");
+        let mut spec = ScenarioId::ContextPressure.spec("run");
         spec.criteria = vec![CriterionSpec::advisory_judge(
             "durable_result",
             0,
@@ -1202,13 +1161,13 @@ mod tests {
 
         assert_eq!(
             spec.validate().unwrap_err().to_string(),
-            "scenario 'persistent_state': criterion 'durable_result' has weight=0; expected at least 1"
+            "scenario 'context_pressure': criterion 'durable_result' has weight=0; expected at least 1"
         );
     }
 
     #[test]
     fn validation_reports_duplicate_criterion_indexes() {
-        let mut spec = ScenarioId::PersistentState.spec("run");
+        let mut spec = ScenarioId::ContextPressure.spec("run");
         spec.criteria = vec![
             CriterionSpec::advisory_judge("duplicate", 50, "first"),
             CriterionSpec::advisory_judge("duplicate", 50, "second"),
@@ -1216,7 +1175,7 @@ mod tests {
 
         assert_eq!(
             spec.validate().unwrap_err().to_string(),
-            "scenario 'persistent_state': criterion id 'duplicate' is duplicated at indexes 0 and 1; criterion ids must be unique"
+            "scenario 'context_pressure': criterion id 'duplicate' is duplicated at indexes 0 and 1; criterion ids must be unique"
         );
     }
 

@@ -86,7 +86,7 @@ const detail = {
         scenarios: [
           {
             scenario_id: 'persistent_state',
-            scenario_version: 3,
+            scenario_version: 1,
             passed: false,
             runs: [
               {

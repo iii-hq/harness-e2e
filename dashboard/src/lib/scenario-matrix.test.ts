@@ -116,7 +116,7 @@ function executionDetail() {
           scenarios: [
             {
               scenario_id: 'persistent_state',
-              scenario_version: 3,
+              scenario_version: 1,
               passed: false,
               runs: [
                 {
@@ -163,6 +163,48 @@ function executionDetail() {
 }
 
 describe('scenario matrix presentation model', () => {
+  it('keeps Markdown validation, adherence, pipeline, and technical failures separate', () => {
+    const detail = executionDetail()
+    const run = detail.reports[1]?.report?.scenarios[0]?.runs[0]
+    if (!run) throw new Error('expected fixture run')
+    run.validation_score = 80
+    run.instruction_adherence = {
+      availability: 'available',
+      score: 92,
+      summary: 'Most requirements were followed.',
+    }
+    run.markdown_execution = {
+      pipeline_complete: true,
+      source_path: 'insert-record.md',
+    }
+    run.failures = []
+
+    expect(
+      buildScenarioMatrix(detail).items[1]?.primaryMetrics.slice(0, 4),
+    ).toEqual([
+      {
+        label: 'Validation score',
+        value: '80/100',
+        detail: 'Deterministic sum of isolated validator outcomes',
+      },
+      {
+        label: 'Instruction adherence',
+        value: '92/100',
+        detail: 'Advisory prompt-following assessment',
+      },
+      {
+        label: 'Pipeline integrity',
+        value: 'Complete',
+        detail: 'Correct revision, section routing, and phase completion',
+      },
+      {
+        label: 'Technical failures',
+        value: '0',
+        detail: 'Infrastructure, evaluator, resource, or cleanup failures',
+      },
+    ])
+  })
+
   it('keeps objective states separate and associates workflows with scenarios', () => {
     const detail = executionDetail()
     const model = buildScenarioMatrix(detail)

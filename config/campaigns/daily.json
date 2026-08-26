@@ -12,7 +12,6 @@
       "technical_retries": 1,
       "difficulty_weight": 4,
       "scenarios": [
-        "minimal_path",
         "tool_contract_recovery"
       ]
     },
@@ -25,7 +24,6 @@
       "scenarios": [
         "shell_coder_sandbox",
         "performance_regression",
-        "database_migration_recovery",
         "engineering_ticket_git_handoff"
       ]
     },

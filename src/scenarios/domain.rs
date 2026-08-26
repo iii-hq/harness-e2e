@@ -260,7 +260,6 @@ impl ScenarioCharacterization {
             | "tool_contract_recovery"
             | "policy_bound_action"
             | "cross_app_transaction"
-            | "database_migration_recovery"
             | "performance_regression"
             | "browser_cross_site" => ExecutionRealism::RealisticSimulator,
             _ => ExecutionRealism::Synthetic,

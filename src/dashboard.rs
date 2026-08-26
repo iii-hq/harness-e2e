@@ -218,7 +218,7 @@ mod tests {
             provider: "provider".into(),
             judge_model: String::new(),
             judge_provider: String::new(),
-            scenarios: vec!["minimal_path".into()],
+            scenarios: vec!["context_pressure".into()],
             runs: 1,
             technical_retries: 1,
             seed: Some(42),
@@ -340,7 +340,7 @@ mod tests {
     #[test]
     fn local_requests_allow_rust_defined_composite_scenarios() {
         let mut value = request();
-        value.scenarios = vec!["security_review".into(), "minimal_path".into()];
+        value.scenarios = vec!["security_review".into(), "context_pressure".into()];
         value.technical_retries = 0;
         validate_request(&mut value).expect("local plans must start composite scenarios");
     }
@@ -362,7 +362,10 @@ mod tests {
         let converted = control_request(&request()).expect("request should map");
         assert_eq!(converted.label, " first run ");
         assert_eq!(converted.lane, "local");
-        assert_eq!(converted.scenarios, vec![ScenarioId::MinimalPath]);
+        assert_eq!(
+            converted.scenarios,
+            vec![ScenarioId::ContextPressure.into()]
+        );
         assert!(converted.idempotency_key.starts_with("dashboard:"));
     }
 

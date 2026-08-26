@@ -128,7 +128,7 @@ mod tests {
     #[test]
     fn observation_contract_schemas_match_snapshots() {
         assert_snapshot("e2e-observation-v1.json", &observation());
-        assert_snapshot("e2e-scenario-catalog-v2.json", &scenario_catalog());
+        assert_snapshot("e2e-scenario-catalog-v3.json", &scenario_catalog());
     }
 
     #[test]

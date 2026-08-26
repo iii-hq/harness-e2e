@@ -14,6 +14,7 @@ pub mod identity;
 pub mod judge;
 pub mod longitudinal;
 pub mod manifest;
+pub mod markdown;
 mod observe;
 pub mod redaction;
 pub mod report;

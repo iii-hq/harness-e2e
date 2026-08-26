@@ -160,6 +160,7 @@ pub fn function_outcomes(transcript: &Value) -> Vec<ObservedFunctionOutcome> {
                         value
                             .get("error_code")
                             .or_else(|| value.pointer("/details/code"))
+                            .or_else(|| value.pointer("/details/error/code"))
                     })
                     .and_then(Value::as_str)
                     .map(str::to_owned),
@@ -390,7 +391,7 @@ mod tests {
                 {"type": "function_call", "id": "lost", "function_id": "fixture::write", "arguments": {"id": 3}}
             ]}},
             {"message": {"role": "function_result", "function_call_id": "ok", "function_id": "fixture::read", "is_error": false, "details": {"ok": true}}},
-            {"message": {"role": "function_result", "function_call_id": "bad", "function_id": "fixture::write", "is_error": true, "details": {"code": "version_conflict"}}}
+            {"message": {"role": "function_result", "function_call_id": "bad", "function_id": "fixture::write", "is_error": true, "details": {"error": {"code": "version_conflict"}}}}
         ]});
 
         let outcomes = function_outcomes(&transcript);

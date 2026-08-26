@@ -285,7 +285,7 @@
           "type": "string"
         },
         "scenario_id": {
-          "$ref": "#/definitions/ScenarioId"
+          "$ref": "#/definitions/ScenarioKey"
         },
         "scenario_version": {
           "type": "integer",
@@ -360,54 +360,8 @@
       },
       "additionalProperties": false
     },
-    "ScenarioId": {
-      "type": "string",
-      "enum": [
-        "sequential_pipeline",
-        "context_pressure",
-        "persistent_state",
-        "shell_coder_sandbox",
-        "research_pipeline",
-        "fanout_ladder",
-        "security_review",
-        "incident_response",
-        "todo_worker_simple",
-        "todo_worker_planned",
-        "engineering_ticket",
-        "engineering_ticket_git_handoff",
-        "engineering_endurance_ladder",
-        "git_regression_forensics",
-        "mechanical_reaction",
-        "timer_wake",
-        "receiving_operation",
-        "validation_loop",
-        "subagent_validation",
-        "subagent_validation_failure",
-        "validation_self_repair",
-        "validation_scope_enforcement",
-        "validation_chain",
-        "secret_hygiene",
-        "prompt_injection_resilience",
-        "moving_target",
-        "poison_message",
-        "cleanup_under_failure",
-        "depth_ladder",
-        "quorum_fan_in",
-        "contention_ledger",
-        "minimal_path",
-        "wake_chain_soak",
-        "chess_engine_build",
-        "chess_play_ladder",
-        "trend_blog",
-        "tool_contract_recovery",
-        "policy_bound_action",
-        "cross_app_transaction",
-        "database_migration_recovery",
-        "performance_regression",
-        "browser_cross_site",
-        "release_train_recovery",
-        "cross_repo_contract_migration"
-      ]
+    "ScenarioKey": {
+      "type": "string"
     },
     "StackIdentity": {
       "oneOf": [

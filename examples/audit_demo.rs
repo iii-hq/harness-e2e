@@ -26,7 +26,7 @@ fn call(id: &str, function_id: &str, arguments: serde_json::Value) -> serde_json
 }
 
 fn main() -> anyhow::Result<()> {
-    let scenario = ScenarioId::MinimalPath;
+    let scenario = ScenarioId::MechanicalReaction;
     let materialized = scenario.materialize("audit-demo", scenario.canonical_seed())?;
     let (spec, case) = (materialized.spec, materialized.case);
 

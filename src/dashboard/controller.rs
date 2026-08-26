@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::{BTreeSet, HashMap};
 use std::env;
 use std::fs::{self, File};
 use std::io::{Read, Seek, SeekFrom};
@@ -22,8 +22,8 @@ use crate::artifact;
 use crate::control::{
     ControlPlane, ExecutionPhase, ExecutionRecord, RunRequest as ControlRunRequest,
 };
+use crate::markdown::ScenarioKey;
 use crate::report::{E2eReport, RunStatus};
-use crate::scenarios::ScenarioId;
 
 const MAX_LOG_TAIL_BYTES: u64 = 256 * 1024;
 const MAX_LOG_CHUNK_BYTES: u64 = 64 * 1024;
@@ -527,11 +527,9 @@ pub(super) fn control_request(
         .scenarios
         .iter()
         .map(|value| {
-            ScenarioId::ALL
-                .iter()
-                .copied()
-                .find(|scenario| scenario.as_str() == value)
-                .ok_or_else(|| format!("unknown scenario '{value}'"))
+            value
+                .parse::<ScenarioKey>()
+                .map_err(|_| format!("unknown scenario '{value}'"))
         })
         .collect::<std::result::Result<Vec<_>, _>>()?;
     let (judge_model, judge_provider) = match (
@@ -738,25 +736,28 @@ pub(super) fn validate_request(request: &mut RunRequest) -> std::result::Result<
     if request.technical_retries > 3 {
         return Err("technical_retries must be between 0 and 3".into());
     }
-    if request.scenarios.is_empty() || request.scenarios.len() > ScenarioId::ALL.len() {
+    let all_scenarios = crate::markdown::all_keys().map_err(|error| format!("{error:#}"))?;
+    if request.scenarios.is_empty() || request.scenarios.len() > all_scenarios.len() {
         return Err("select at least one valid scenario".into());
     }
-    let valid: BTreeMap<_, _> = ScenarioId::ALL
-        .iter()
-        .map(|value| (value.as_str(), *value))
-        .collect();
     request.scenarios.sort();
     request.scenarios.dedup();
     let selected = request
         .scenarios
         .iter()
         .map(|value| {
-            valid
-                .get(value.as_str())
-                .copied()
-                .ok_or_else(|| "request contains an unknown scenario".to_string())
+            value
+                .parse::<ScenarioKey>()
+                .map_err(|_| "request contains an unknown scenario".to_string())
         })
         .collect::<std::result::Result<Vec<_>, _>>()?;
+    if selected
+        .iter()
+        .any(|scenario| scenario.built_in().is_none())
+        && request.judge_model.is_empty()
+    {
+        return Err("Markdown scenarios require an explicit judge model and provider".into());
+    }
     if request.technical_retries > 0
         && selected
             .iter()

@@ -34,6 +34,22 @@ List the materialized scenarios and their scenario versions:
 
 ```bash
 cargo run --locked --bin harness-e2e -- list
+cargo run --locked --bin harness-e2e -- catalog
+cargo run --locked --bin harness-e2e -- validate-scenarios
+```
+
+New declarative scenarios are authored only as `scenarios/*.md`. The compiler
+embeds the exact source, validates the canonical English section structure,
+and exposes the resulting file-stem id through the CLI, worker catalog,
+campaign runner, dashboard, and canonical result artifacts. See
+[docs/markdown-scenarios.md](docs/markdown-scenarios.md).
+
+Replay an archived input only through its immutable plan (the runner rejects
+any scenario, model, policy, budget, stack, runner, run-count, or retry drift):
+
+```bash
+cargo run --locked -- replay-materialized \
+  target/e2e/evidence/<run-id>/<attempt-id>/materialized-plan.json
 ```
 
 Run against an existing stack:

@@ -13,6 +13,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - uses: pnpm/action-setup@v4
         with:
           version: 11.13.1
@@ -30,6 +32,17 @@ jobs:
         with:
           components: clippy,rustfmt
       - uses: Swatinem/rust-cache@v2
+      - name: Validate Markdown scenarios and author versions
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          if [[ -n "$BASE_SHA" ]] && git cat-file -e "$BASE_SHA:scenarios" 2>/dev/null; then
+            scenario_base=$(mktemp -d)
+            git archive "$BASE_SHA" scenarios | tar -x -C "$scenario_base"
+            cargo run --locked -- validate-scenarios --base-directory "$scenario_base/scenarios"
+          else
+            cargo run --locked -- validate-scenarios
+          fi
       - name: Verify repository independence
         run: |
           cargo metadata --locked --format-version 1 --no-deps > metadata.json

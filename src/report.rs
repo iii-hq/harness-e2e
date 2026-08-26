@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{bail, Context, Result};
 use schemars::JsonSchema;
-use serde::{Deserialize, Serialize};
+use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::artifact::{self, ArtifactReference};
@@ -125,6 +125,74 @@ pub struct CriterionReport {
     pub possible: u8,
     pub awarded: Option<u8>,
     pub reason: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum MarkdownPhaseStatus {
+    Pending,
+    Completed,
+    Failed,
+    Skipped,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct MarkdownPhaseReport {
+    pub phase: String,
+    pub status: MarkdownPhaseStatus,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_id: Option<String>,
+    pub input_sha256: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub transcript_sha256: Option<String>,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub reason: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct MarkdownExecutionReport {
+    pub source_path: String,
+    pub source_sha256: String,
+    pub behavior_sha256: String,
+    pub compiled_sha256: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub materialized_plan_sha256: Option<String>,
+    pub prompt_sha256: String,
+    pub pipeline_complete: bool,
+    pub phases: Vec<MarkdownPhaseReport>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum AdherenceAvailability {
+    Available,
+    Unavailable,
+    Failed,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct AdherenceRequirement {
+    pub id: String,
+    pub instruction: String,
+    pub followed: bool,
+    pub reason: String,
+    pub confidence: f64,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub evidence: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct InstructionAdherenceReport {
+    pub availability: AdherenceAvailability,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub score: Option<u8>,
+    pub summary: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub requirements: Vec<AdherenceRequirement>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub analyzer: Option<crate::assessment::AnalyzerIdentity>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub analyzer_usage: Option<crate::assessment::AnalyzerUsage>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
@@ -271,6 +339,12 @@ pub struct RetryAttemptReport {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub efficiency: Option<EfficiencyReport>,
     pub failures: Vec<FailureRecord>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub validation_score: Option<u8>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub markdown_execution: Option<MarkdownExecutionReport>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub instruction_adherence: Option<InstructionAdherenceReport>,
     #[serde(skip)]
     #[schemars(skip)]
     pub assessment_results: Vec<AssessmentResult>,
@@ -304,6 +378,9 @@ impl From<&E2eRunReport> for RetryAttemptReport {
             dimensions: report.dimensions.clone(),
             efficiency: report.efficiency.clone(),
             failures: report.failures.clone(),
+            validation_score: report.validation_score,
+            markdown_execution: report.markdown_execution.clone(),
+            instruction_adherence: report.instruction_adherence.clone(),
             assessment_results: report.assessment_results.clone(),
             asset_assessments: report.asset_assessments.clone(),
             asset_capture_manifest: report.asset_capture_manifest.clone(),
@@ -321,6 +398,10 @@ pub struct E2eRunReport {
     pub prompt: String,
     pub wall_time_ms: u64,
     pub score: Option<u8>,
+    /// Explicit Markdown validation score. Mirrors `score` for Markdown-authored
+    /// scenarios while keeping the legacy aggregate field compatible.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub validation_score: Option<u8>,
     pub status: RunStatus,
     pub hard_gates: Vec<HardGateReport>,
     pub criteria: Vec<CriterionReport>,
@@ -360,6 +441,10 @@ pub struct E2eRunReport {
     pub retry_attempts: Vec<RetryAttemptReport>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub failures: Vec<FailureRecord>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub markdown_execution: Option<MarkdownExecutionReport>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub instruction_adherence: Option<InstructionAdherenceReport>,
     /// Advisory behavioral audit over the captured transcript and metrics.
     /// Never contributes to score, status, gates, or longitudinal inputs.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -400,6 +485,7 @@ impl E2eRunReport {
             prompt,
             wall_time_ms: 0,
             score: None,
+            validation_score: None,
             status: RunStatus::InfrastructureError,
             hard_gates: Vec::new(),
             criteria: Vec::new(),
@@ -418,6 +504,8 @@ impl E2eRunReport {
             efficiency: None,
             retry_attempts: Vec::new(),
             failures: Vec::new(),
+            markdown_execution: None,
+            instruction_adherence: None,
             audit: None,
             terminal_status: None,
             assessment_results: Vec::new(),
@@ -1158,7 +1246,7 @@ pub struct ModelArtifact {
 }
 
 pub const OBSERVATION_SCHEMA: &str = "e2e-observation/v1";
-pub const CATALOG_SCHEMA: &str = "e2e-scenario-catalog/v2";
+pub const CATALOG_SCHEMA: &str = "e2e-scenario-catalog/v3";
 pub const RESULTS_SCHEMA_VERSION: u32 = 3;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -1225,7 +1313,7 @@ pub struct ObservationMode {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct ObservationSelectedCase {
-    pub scenario_id: crate::scenarios::ScenarioId,
+    pub scenario_id: crate::markdown::ScenarioKey,
     pub scenario_version: u32,
     pub case_id: String,
     pub seed: u64,
@@ -1894,6 +1982,18 @@ impl E2eReport {
                     &mut run.scenario_flow,
                     &mut run.semantic_tests,
                 );
+                redact_optional_report_value(
+                    &policy,
+                    &mut redaction,
+                    &mut run.markdown_execution,
+                    "Markdown execution",
+                )?;
+                redact_optional_report_value(
+                    &policy,
+                    &mut redaction,
+                    &mut run.instruction_adherence,
+                    "instruction adherence",
+                )?;
                 for retry in &mut run.retry_attempts {
                     redaction.merge(retry.asset_redaction.clone());
                     if let Some(transcript) = &mut retry.transcript {
@@ -1921,6 +2021,18 @@ impl E2eReport {
                         &mut retry.scenario_flow,
                         &mut retry.semantic_tests,
                     );
+                    redact_optional_report_value(
+                        &policy,
+                        &mut redaction,
+                        &mut retry.markdown_execution,
+                        "retry Markdown execution",
+                    )?;
+                    redact_optional_report_value(
+                        &policy,
+                        &mut redaction,
+                        &mut retry.instruction_adherence,
+                        "retry instruction adherence",
+                    )?;
                 }
             }
         }
@@ -1941,6 +2053,11 @@ impl E2eReport {
                 for attempt in &run.retry_attempts {
                     validate_retry_identity(run, attempt)?;
                 }
+                let markdown_evidence = if run.markdown_execution.is_some() {
+                    std::mem::take(&mut run.evidence)
+                } else {
+                    Vec::new()
+                };
                 run.evidence.clear();
                 materialize_attempt_evidence(
                     output,
@@ -1960,8 +2077,14 @@ impl E2eReport {
                     run.scenario_flow.as_ref(),
                     &run.semantic_tests,
                 );
+                append_verified_references(output, &mut run.evidence, markdown_evidence)?;
                 bind_assessment_evidence(&mut run.assessment_results, &run.evidence);
                 for attempt in &mut run.retry_attempts {
+                    let markdown_evidence = if attempt.markdown_execution.is_some() {
+                        std::mem::take(&mut attempt.evidence)
+                    } else {
+                        Vec::new()
+                    };
                     attempt.evidence.clear();
                     materialize_attempt_evidence(
                         output,
@@ -1981,12 +2104,58 @@ impl E2eReport {
                         attempt.scenario_flow.as_ref(),
                         &attempt.semantic_tests,
                     );
+                    append_verified_references(output, &mut attempt.evidence, markdown_evidence)?;
                     bind_assessment_evidence(&mut attempt.assessment_results, &attempt.evidence);
                 }
             }
         }
         Ok(())
     }
+}
+
+fn redact_optional_report_value<T>(
+    policy: &crate::redaction::RedactionPolicy,
+    redaction: &mut crate::redaction::RedactionReport,
+    field: &mut Option<T>,
+    label: &str,
+) -> Result<()>
+where
+    T: Serialize + DeserializeOwned,
+{
+    let Some(current) = field.as_ref() else {
+        return Ok(());
+    };
+    let mut value = serde_json::to_value(current)
+        .with_context(|| format!("serialize {label} before redaction"))?;
+    redaction.merge(policy.redact_value(&mut value));
+    *field = Some(
+        serde_json::from_value(value).with_context(|| format!("decode {label} after redaction"))?,
+    );
+    Ok(())
+}
+
+fn append_verified_references(
+    output: &Path,
+    references: &mut Vec<ArtifactReference>,
+    additional: Vec<ArtifactReference>,
+) -> Result<()> {
+    for reference in additional {
+        reference.verify(output)?;
+        if references.iter().any(|existing| existing == &reference) {
+            continue;
+        }
+        if references
+            .iter()
+            .any(|existing| existing.id == reference.id || existing.path == reference.path)
+        {
+            bail!(
+                "Markdown evidence conflicts with an existing artifact reference: {}",
+                reference.path
+            );
+        }
+        references.push(reference);
+    }
+    Ok(())
 }
 
 fn validate_semantic_evidence(
@@ -2692,9 +2861,9 @@ mod tests {
             },
             attempt: 1,
             selected_cases: vec![ObservationSelectedCase {
-                scenario_id: crate::scenarios::ScenarioId::MinimalPath,
-                scenario_version: 1,
-                case_id: "minimal_path:v1:seed-0000000000000001".into(),
+                scenario_id: crate::scenarios::ScenarioId::ContextPressure.into(),
+                scenario_version: 4,
+                case_id: "context_pressure:v4:seed-0000000000000001".into(),
                 seed: 1,
                 inputs_sha256: format!("sha256:{}", "b".repeat(64)),
                 contract_sha256: format!("sha256:{}", "c".repeat(64)),
@@ -3098,6 +3267,43 @@ mod tests {
         );
         assert!(value.get("assessment_contract").is_some());
         assert!(value["scenarios"][0]["runs"][0].get("attempt_id").is_some());
+    }
+
+    #[test]
+    fn write_preserves_verified_markdown_phase_evidence() {
+        let output = tempfile::tempdir().unwrap();
+        let mut run = run(100, true);
+        run.markdown_execution = Some(MarkdownExecutionReport {
+            source_path: "case.md".into(),
+            source_sha256: format!("sha256:{}", "a".repeat(64)),
+            behavior_sha256: format!("sha256:{}", "b".repeat(64)),
+            compiled_sha256: format!("sha256:{}", "c".repeat(64)),
+            materialized_plan_sha256: Some(format!("sha256:{}", "d".repeat(64))),
+            prompt_sha256: format!("sha256:{}", "e".repeat(64)),
+            pipeline_complete: true,
+            phases: Vec::new(),
+        });
+        let phase = artifact::write_json(
+            output.path(),
+            Path::new("evidence/run/attempt/setup.json"),
+            "attempt-setup",
+            "markdown-phase-evidence",
+            &serde_json::json!({"session_id": "setup"}),
+        )
+        .unwrap();
+        run.evidence.push(phase.clone());
+        let mut report = report(vec![aggregate(vec![run])]);
+
+        report.write_to(output.path(), &manifest()).unwrap();
+        report.write_to(output.path(), &manifest()).unwrap();
+
+        let evidence = &report.scenarios[0].runs[0].evidence;
+        assert!(evidence.iter().any(|reference| reference == &phase));
+        let (decoded, _) = E2eReport::read_from(output.path()).unwrap();
+        assert!(decoded.scenarios[0].runs[0]
+            .evidence
+            .iter()
+            .any(|reference| reference == &phase));
     }
 
     #[test]
