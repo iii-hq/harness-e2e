@@ -1946,11 +1946,31 @@ async fn wait_for_patcher(
 }
 
 fn merge_candidate_runs(
-    smoke: SuiteRunOutcome,
-    remainder: SuiteRunOutcome,
+    mut smoke: SuiteRunOutcome,
+    mut remainder: SuiteRunOutcome,
     output: &Path,
 ) -> Result<E2eReport> {
     ensure_compatible_outcomes(&smoke, &remainder)?;
+    let smoke_root = smoke
+        .report_path
+        .parent()
+        .context("smoke result path has no parent")?;
+    import_report_evidence(
+        &mut smoke.report,
+        smoke_root,
+        output,
+        Path::new("sources/smoke"),
+    )?;
+    let remainder_root = remainder
+        .report_path
+        .parent()
+        .context("remainder result path has no parent")?;
+    import_report_evidence(
+        &mut remainder.report,
+        remainder_root,
+        output,
+        Path::new("sources/remainder"),
+    )?;
     let mut manifest = smoke.manifest;
     let observation_contract = smoke.report.observation_contract;
     let mut scenarios = smoke.report.scenarios;
@@ -2000,6 +2020,18 @@ fn merge_scenario_groups(
     if outcomes.is_empty() {
         bail!("the frozen improvement cohort produced no scenario groups");
     }
+    for (index, outcome) in outcomes.iter_mut().enumerate() {
+        let source = outcome
+            .report_path
+            .parent()
+            .context("scenario-group result path has no parent")?;
+        import_report_evidence(
+            &mut outcome.report,
+            source,
+            output,
+            &PathBuf::from(format!("sources/group-{index:02}")),
+        )?;
+    }
     let first = outcomes.remove(0);
     for outcome in &outcomes {
         ensure_compatible_outcomes(&first, outcome)?;
@@ -2042,6 +2074,32 @@ fn merge_scenario_groups(
         manifest,
         report_path,
     })
+}
+
+fn import_report_evidence(
+    report: &mut E2eReport,
+    source: &Path,
+    output: &Path,
+    prefix: &Path,
+) -> Result<()> {
+    for scenario in &mut report.scenarios {
+        for run in &mut scenario.runs {
+            for reference in &mut run.evidence {
+                reference.verify(source)?;
+                let bytes = fs::read(source.join(&reference.path))
+                    .with_context(|| format!("read source evidence artifact {}", reference.path))?;
+                *reference = crate::artifact::write_bytes(
+                    output,
+                    &prefix.join(&reference.path),
+                    reference.id.clone(),
+                    reference.kind.clone(),
+                    reference.media_type.clone(),
+                    &bytes,
+                )?;
+            }
+        }
+    }
+    Ok(())
 }
 
 fn ensure_compatible_outcomes(left: &SuiteRunOutcome, right: &SuiteRunOutcome) -> Result<()> {
@@ -2232,7 +2290,31 @@ async fn git_bytes<'a>(cwd: &Path, args: impl IntoIterator<Item = &'a str>) -> R
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::improvement::tests::valid_spec;
+    use crate::improvement::tests::{trace_report, valid_spec};
+
+    #[test]
+    fn merged_reports_rehome_and_verify_split_evidence() {
+        let temp = tempfile::tempdir().unwrap();
+        let source = temp.path().join("split-results");
+        let output = temp.path().join("merged-results");
+        let evidence = crate::artifact::write_json(
+            &source,
+            Path::new("evidence/run/metrics.json"),
+            "metrics",
+            "metrics",
+            &json!({"function_calls": 2}),
+        )
+        .unwrap();
+        let mut report = trace_report("redacted-test-value");
+        report.scenarios[0].runs[0].evidence.push(evidence);
+
+        import_report_evidence(&mut report, &source, &output, Path::new("sources/group-00"))
+            .unwrap();
+
+        let imported = &report.scenarios[0].runs[0].evidence[0];
+        assert_eq!(imported.path, "sources/group-00/evidence/run/metrics.json");
+        imported.verify(&output).unwrap();
+    }
 
     #[test]
     fn policy_paths_are_component_bounded() {
