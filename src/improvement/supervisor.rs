@@ -2084,6 +2084,15 @@ fn import_report_evidence(
 ) -> Result<()> {
     for scenario in &mut report.scenarios {
         for run in &mut scenario.runs {
+            prepare_attempt_evidence_for_merge(
+                &mut run.evidence,
+                run.markdown_execution.is_some(),
+                run.asset_capture_manifest.as_ref(),
+                run.final_assessment_input.as_ref(),
+                &run.deliverables,
+                run.scenario_flow.as_ref(),
+                &run.semantic_tests,
+            );
             import_attempt_evidence(
                 &mut run.evidence,
                 &mut run.asset_capture_manifest,
@@ -2097,6 +2106,15 @@ fn import_report_evidence(
                 import_evidence_reference(reference, source, output, prefix)?;
             }
             for attempt in &mut run.retry_attempts {
+                prepare_attempt_evidence_for_merge(
+                    &mut attempt.evidence,
+                    attempt.markdown_execution.is_some(),
+                    attempt.asset_capture_manifest.as_ref(),
+                    None,
+                    &attempt.deliverables,
+                    attempt.scenario_flow.as_ref(),
+                    &attempt.semantic_tests,
+                );
                 import_attempt_evidence(
                     &mut attempt.evidence,
                     &mut attempt.asset_capture_manifest,
@@ -2110,6 +2128,43 @@ fn import_report_evidence(
         }
     }
     Ok(())
+}
+
+fn prepare_attempt_evidence_for_merge(
+    evidence: &mut Vec<crate::artifact::ArtifactReference>,
+    preserve_additional: bool,
+    asset_capture_manifest: Option<&crate::artifact::ArtifactReference>,
+    final_assessment_input: Option<&crate::artifact::ArtifactReference>,
+    deliverables: &[crate::report::DeliverableReport],
+    scenario_flow: Option<&crate::report::ScenarioFlowEvidence>,
+    semantic_tests: &[crate::workflow::WorkflowStepReport],
+) {
+    if !preserve_additional {
+        evidence.clear();
+        return;
+    }
+    let mut rematerialized = BTreeSet::new();
+    for reference in asset_capture_manifest
+        .into_iter()
+        .chain(final_assessment_input)
+        .chain(
+            deliverables
+                .iter()
+                .filter_map(|deliverable| deliverable.artifact.as_ref()),
+        )
+        .chain(scenario_flow.map(|flow| &flow.checkpoint))
+        .chain(
+            semantic_tests
+                .iter()
+                .flat_map(|test| test.assets.iter().map(|asset| &asset.artifact)),
+        )
+    {
+        rematerialized.insert((reference.id.clone(), reference.sha256.clone()));
+    }
+    evidence.retain(|reference| {
+        !matches!(reference.id.as_str(), "transcript" | "metrics")
+            && !rematerialized.contains(&(reference.id.clone(), reference.sha256.clone()))
+    });
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -2369,15 +2424,43 @@ mod tests {
         import_report_evidence(&mut report, &source, &output, Path::new("sources/group-00"))
             .unwrap();
 
-        let imported = &report.scenarios[0].runs[0].evidence[0];
-        assert_eq!(imported.path, "sources/group-00/evidence/run/metrics.json");
-        imported.verify(&output).unwrap();
+        assert!(report.scenarios[0].runs[0].evidence.is_empty());
         let hidden = report.scenarios[0].runs[0]
             .final_assessment_input
             .as_ref()
             .unwrap();
-        assert_eq!(hidden.path, imported.path);
+        assert_eq!(hidden.path, "sources/group-00/evidence/run/metrics.json");
         hidden.verify(&output).unwrap();
+
+        let mut markdown_evidence = vec![
+            crate::artifact::write_json(
+                &source,
+                Path::new("evidence/run/transcript.json"),
+                "transcript",
+                "transcript",
+                &json!({"messages": []}),
+            )
+            .unwrap(),
+            crate::artifact::write_json(
+                &source,
+                Path::new("evidence/run/materialized-plan.json"),
+                "materialized-plan",
+                "materialized_markdown_plan",
+                &json!({"nodes": []}),
+            )
+            .unwrap(),
+        ];
+        prepare_attempt_evidence_for_merge(
+            &mut markdown_evidence,
+            true,
+            None,
+            None,
+            &[],
+            None,
+            &[],
+        );
+        assert_eq!(markdown_evidence.len(), 1);
+        assert_eq!(markdown_evidence[0].id, "materialized-plan");
     }
 
     #[test]
