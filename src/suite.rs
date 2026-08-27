@@ -355,7 +355,10 @@ pub async fn run_suite(config: SuiteRunConfig) -> Result<SuiteRunOutcome> {
                         },
                     )
                     .await;
-                    let stop = run.status.is_technical_failure();
+                    let stop = should_stop_repetitions(
+                        run.status,
+                        config.control.as_ref().map(|control| control.lane.as_str()),
+                    );
                     runs.push(run);
                     if stop {
                         tracing::warn!(
@@ -408,7 +411,10 @@ pub async fn run_suite(config: SuiteRunConfig) -> Result<SuiteRunOutcome> {
                         },
                     )
                     .await;
-                    let stop = run.status.is_technical_failure();
+                    let stop = should_stop_repetitions(
+                        run.status,
+                        config.control.as_ref().map(|control| control.lane.as_str()),
+                    );
                     runs.push(run);
                     if stop {
                         tracing::warn!(
@@ -5005,6 +5011,11 @@ fn is_resource_limit(message: &str) -> bool {
     .any(|needle| lower.contains(needle))
 }
 
+fn should_stop_repetitions(status: RunStatus, lane: Option<&str>) -> bool {
+    status.is_technical_failure()
+        && !(status == RunStatus::JudgeError && lane == Some("improvement"))
+}
+
 fn is_retryable_technical_failure(report: &E2eRunReport) -> bool {
     if !matches!(
         report.status,
@@ -5733,6 +5744,30 @@ mod tests {
             "scenario exceeded its deadline",
         );
         assert!(!is_retryable_technical_failure(&budget));
+    }
+
+    #[test]
+    fn improvement_lane_keeps_collecting_after_consultative_judge_errors() {
+        assert!(!should_stop_repetitions(
+            RunStatus::JudgeError,
+            Some("improvement")
+        ));
+        assert!(should_stop_repetitions(
+            RunStatus::JudgeError,
+            Some("local")
+        ));
+        assert!(should_stop_repetitions(
+            RunStatus::SubjectError,
+            Some("improvement")
+        ));
+        assert!(should_stop_repetitions(
+            RunStatus::ResourceLimit,
+            Some("improvement")
+        ));
+        assert!(should_stop_repetitions(
+            RunStatus::InfrastructureError,
+            Some("improvement")
+        ));
     }
 
     #[test]

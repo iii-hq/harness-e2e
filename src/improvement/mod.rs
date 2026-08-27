@@ -86,7 +86,7 @@ impl Default for ImprovementBudget {
             max_changed_lines: 600,
             max_wall_time_seconds: 6 * 60 * 60,
             max_total_cost_usd: 25.0,
-            patcher_max_total_tokens: 120_000,
+            patcher_max_total_tokens: 500_000,
             patcher_max_cost_usd: 8.0,
             advisor_max_output_tokens: 4_096,
         }

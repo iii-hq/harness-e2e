@@ -184,27 +184,22 @@ fn sentinel_status_regressions(
                 .scenarios
                 .iter()
                 .find(|scenario| &scenario.scenario_id == scenario_id)
-                .is_some_and(|scenario| {
-                    scenario
-                        .runs
-                        .iter()
-                        .all(|run| run.status == RunStatus::Passed)
-                });
+                .is_some_and(|scenario| scenario.runs.iter().all(deterministic_run_passed));
             let candidate_passed = candidate
                 .scenarios
                 .iter()
                 .find(|scenario| &scenario.scenario_id == scenario_id)
-                .is_some_and(|scenario| {
-                    scenario
-                        .runs
-                        .iter()
-                        .all(|run| run.status == RunStatus::Passed)
-                });
+                .is_some_and(|scenario| scenario.runs.iter().all(deterministic_run_passed));
             (baseline_passed && !candidate_passed).then(|| {
                 format!("sentinel '{scenario_id}' introduced a non-passing deterministic result")
             })
         })
         .collect()
+}
+
+fn deterministic_run_passed(run: &crate::report::E2eRunReport) -> bool {
+    matches!(run.status, RunStatus::Passed | RunStatus::JudgeError)
+        && run.hard_gates.iter().all(|gate| gate.passed)
 }
 
 fn sentinel_metric_regressions(
@@ -360,6 +355,27 @@ mod tests {
     }
 
     #[test]
+    fn judge_error_is_advisory_but_failed_hard_gate_is_not() {
+        let mut run = crate::report::E2eRunReport::new(
+            "run".into(),
+            "attempt".into(),
+            1,
+            "session".into(),
+            "prompt".into(),
+        );
+        run.status = RunStatus::JudgeError;
+        assert!(deterministic_run_passed(&run));
+
+        run.hard_gates.push(crate::report::HardGateReport {
+            id: "durable_effect".into(),
+            dimension: crate::report::EvaluationDimension::StructuralIntegrity,
+            passed: false,
+            reason: "missing deterministic state".into(),
+        });
+        assert!(!deterministic_run_passed(&run));
+    }
+
+    #[test]
     fn sentinel_resource_regression_is_reported_at_repeatable_sample_size() {
         let temp = tempfile::tempdir().unwrap();
         let spec = super::super::tests::valid_spec(temp.path());
@@ -370,6 +386,7 @@ mod tests {
             from_revision: Some(spec.base_revision.clone()),
             to_revision: Some("c".repeat(40)),
             baseline_id: None,
+            judge_errors_advisory: true,
             comparable: true,
             gate_passed: true,
             reasons: Vec::new(),
@@ -398,6 +415,7 @@ mod tests {
             from_revision: Some(spec.base_revision.clone()),
             to_revision: Some("c".repeat(40)),
             baseline_id: None,
+            judge_errors_advisory: true,
             comparable: true,
             gate_passed: true,
             reasons: Vec::new(),

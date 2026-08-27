@@ -63,7 +63,7 @@
     "max_changed_lines": 600,
     "max_wall_time_seconds": 21600,
     "max_total_cost_usd": 25.0,
-    "patcher_max_total_tokens": 120000,
+    "patcher_max_total_tokens": 500000,
     "patcher_max_cost_usd": 8.0,
     "advisor_max_output_tokens": 4096
   },

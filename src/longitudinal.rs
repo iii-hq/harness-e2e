@@ -114,6 +114,11 @@ impl ThresholdOverrides {
 pub struct ComparisonPolicy {
     #[serde(default)]
     pub regression: RegressionThresholds,
+    /// When true, judge-only failures remain visible in the cohort but do not
+    /// count as technical reliability regressions. Intended for supervised
+    /// improvement loops, where the judge is explicitly consultative.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub judge_errors_advisory: bool,
     /// Identifier of the reviewed baseline these thresholds came from, when one
     /// was loaded. Absent when the code-default thresholds are in effect.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -189,6 +194,7 @@ impl BaselinePolicy {
     pub fn into_policy(self) -> ComparisonPolicy {
         ComparisonPolicy {
             regression: self.thresholds,
+            judge_errors_advisory: false,
             baseline_id: Some(self.baseline_id),
             scenario_overrides: self.scenario_overrides,
         }
@@ -418,6 +424,10 @@ pub struct ComparisonSummary {
     /// code-default thresholds gated this comparison.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub baseline_id: Option<String>,
+    /// Records whether judge-only failures were excluded from the technical
+    /// reliability gate for this comparison.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub judge_errors_advisory: bool,
     pub comparable: bool,
     pub gate_passed: bool,
     pub reasons: Vec<String>,
@@ -517,8 +527,12 @@ pub fn compare_reports(
             }
             continue;
         }
-        let from_metrics = case_metrics(&from_runs, from_case.runs.len());
-        let to_metrics = case_metrics(&to_runs, to_case.runs.len());
+        let from_metrics = case_metrics(
+            &from_runs,
+            from_case.runs.len(),
+            policy.judge_errors_advisory,
+        );
+        let to_metrics = case_metrics(&to_runs, to_case.runs.len(), policy.judge_errors_advisory);
         let delta = benchmark_delta(&from_metrics, &to_metrics);
         let regressions = regression_signals(
             &from_case.scenario_id,
@@ -573,6 +587,7 @@ pub fn compare_reports(
         from_revision: revision(from),
         to_revision: revision(to),
         baseline_id: policy.baseline_id,
+        judge_errors_advisory: policy.judge_errors_advisory,
         comparable,
         gate_passed,
         reasons,
@@ -759,7 +774,11 @@ fn exclude_case(
         }));
 }
 
-fn case_metrics(runs: &[&E2eRunReport], total_runs: usize) -> CaseMetrics {
+fn case_metrics(
+    runs: &[&E2eRunReport],
+    total_runs: usize,
+    judge_errors_advisory: bool,
+) -> CaseMetrics {
     let mut unavailable = BTreeMap::new();
     let deliverable_success = dimension_rate(runs, EvaluationDimension::Deliverable);
     if deliverable_success.is_none() {
@@ -781,8 +800,8 @@ fn case_metrics(runs: &[&E2eRunReport], total_runs: usize) -> CaseMetrics {
                 .filter(|run| {
                     matches!(
                         run.status,
-                        RunStatus::SubjectError | RunStatus::JudgeError | RunStatus::ResourceLimit
-                    )
+                        RunStatus::SubjectError | RunStatus::ResourceLimit
+                    ) || (!judge_errors_advisory && run.status == RunStatus::JudgeError)
                 })
                 .count(),
             runs.len(),
@@ -930,6 +949,10 @@ fn case_metrics(runs: &[&E2eRunReport], total_runs: usize) -> CaseMetrics {
         p95_work_amplification,
         unavailable,
     }
+}
+
+fn is_false(value: &bool) -> bool {
+    !*value
 }
 
 fn benchmark_delta(from: &CaseMetrics, to: &CaseMetrics) -> BenchmarkDelta {
@@ -1486,6 +1509,55 @@ mod tests {
             .iter()
             .any(|signal| signal.dimension == RegressionDimension::WallTime));
         assert!(!comparison.gate_passed);
+    }
+
+    #[test]
+    fn consultative_judge_errors_do_not_regress_technical_reliability() {
+        let from = report("2222222222222222222222222222222222222222", false, false);
+        let mut to = report("1111111111111111111111111111111111111111", false, false);
+        to.scenarios[0].runs[0].status = RunStatus::JudgeError;
+
+        let strict = compare_reports(
+            "from",
+            "daily",
+            &from,
+            "to",
+            "daily",
+            &to,
+            ComparisonPolicy::default(),
+        )
+        .unwrap();
+        assert!(strict.regressions.iter().any(|signal| {
+            signal.dimension == RegressionDimension::TechnicalReliability && signal.blocking
+        }));
+
+        let advisory = compare_reports(
+            "from",
+            "improvement",
+            &from,
+            "to",
+            "improvement",
+            &to,
+            ComparisonPolicy {
+                judge_errors_advisory: true,
+                ..ComparisonPolicy::default()
+            },
+        )
+        .unwrap();
+        assert!(advisory.judge_errors_advisory);
+        assert_eq!(
+            advisory.cases[0]
+                .to
+                .technical_failure
+                .as_ref()
+                .unwrap()
+                .rate,
+            0.0
+        );
+        assert!(advisory.regressions.iter().all(|signal| {
+            signal.dimension != RegressionDimension::TechnicalReliability || !signal.blocking
+        }));
+        assert!(advisory.gate_passed);
     }
 
     #[test]

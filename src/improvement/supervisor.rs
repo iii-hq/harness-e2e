@@ -711,6 +711,8 @@ impl ImprovementSupervisor {
             ImprovementLoopPhase::Comparing,
             format!("comparing frozen cohorts for candidate {number}"),
         )?;
+        let mut comparison_policy = load_comparison_policy(None)?;
+        comparison_policy.judge_errors_advisory = true;
         let comparison = compare_reports(
             &baseline.execution.execution_id,
             "improvement",
@@ -718,7 +720,7 @@ impl ImprovementSupervisor {
             &candidate.execution.execution_id,
             "improvement",
             &candidate,
-            load_comparison_policy(None)?,
+            comparison_policy,
         )?;
         self.store.write_artifact(
             &record.id,

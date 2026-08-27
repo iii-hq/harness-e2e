@@ -713,6 +713,10 @@
         "gate_passed": {
           "type": "boolean"
         },
+        "judge_errors_advisory": {
+          "description": "Records whether judge-only failures were excluded from the technical reliability gate for this comparison.",
+          "type": "boolean"
+        },
         "reasons": {
           "type": "array",
           "items": {
