@@ -16,21 +16,39 @@ SPEC.loader.exec_module(MODULE)
 
 def campaign_contract(versions: dict[str, str] | None = None):
     versions = versions or {"harness": "1.9.0", "state": "0.22.1"}
-    stack_digest = MODULE.canonical_sha256(versions)
     catalog_digest = MODULE.canonical_sha256(catalog())
-    provenance = [
-        {"worker": worker, "version": version}
-        for worker, version in sorted(versions.items())
+    target_workers = sorted(versions)
+    roots = [
+        {"worker": "harness-e2e", "version": "0.5.0-experimental", "role": "runner"},
+        {"worker": "fp", "version": "0.2.6", "role": "runtime"},
+        {"worker": "harness", "version": versions["harness"], "role": "target"},
     ]
-    harness = next(item for item in provenance if item["worker"] == "harness")
-    harness.update(
-        {
-            "source_sha": "b" * 40,
-            "operation_id": "33333333-3333-4333-8333-333333333333",
-        }
+    nodes = []
+    all_versions = {
+        **versions,
+        "fp": "0.2.6",
+        "harness-e2e": "0.5.0-experimental",
+    }
+    for worker, version in sorted(all_versions.items()):
+        nodes.append(
+            {
+                "worker": worker,
+                "version": version,
+                "kind": "binary",
+                "artifact": {
+                    "target": "x86_64-unknown-linux-gnu",
+                    "url": f"https://registry.example/{worker}/{version}",
+                    "sha256": f"sha256:{len(nodes) + 1:064x}",
+                },
+            }
+        )
+    edges = sorted(
+        [{"from": "harness", "to": worker} for worker in target_workers if worker != "harness"]
+        + [{"from": "harness-e2e", "to": "state"}],
+        key=lambda edge: (edge["from"], edge["to"]),
     )
+    graph = {"roots": roots, "nodes": nodes, "edges": edges}
     return {
-        "schema_version": 3,
         "campaign_id": "11111111-1111-4111-8111-111111111111",
         "execution_id": "22222222-2222-4222-8222-222222222222",
         "attempt": 1,
@@ -40,18 +58,10 @@ def campaign_contract(versions: dict[str, str] | None = None):
             "version": versions["harness"],
             "source_sha": "b" * 40,
             "deployment_id": "33333333-3333-4333-8333-333333333333",
-            "stack_versions": versions,
-            "stack_digest": stack_digest,
             "origin": None,
             "base": {
                 "kind": "deployment",
                 "id": "33333333-3333-4333-8333-333333333333",
-            },
-            "stack": {
-                "requested_versions": versions,
-                "resolved_versions": versions,
-                "resolution_sha256": stack_digest,
-                "provenance": provenance,
             },
         },
         "plan": {
@@ -99,11 +109,36 @@ def campaign_contract(versions: dict[str, str] | None = None):
                         "soakMinutes": 60,
                     },
                 ],
+                "progressIntervalSeconds": 15,
+                "retentionClass": "longitudinal",
+                "executor": {
+                    "provider": "github_actions",
+                    "repository": "iii-hq/harness-e2e",
+                    "workflow": "release-control-campaign.yml",
+                    "ref": "main",
+                    "oidcAudience": "release-control-harness-e2e",
+                },
+                "runner": {
+                    "registryWorker": "harness-e2e",
+                    "registryRef": "0.5.0-experimental",
+                    "revision": "e" * 40,
+                    "catalogSha256": catalog_digest,
+                    "manifestSha256": f"sha256:{'3' * 64}",
+                    "scoringProfileSha256": f"sha256:{'4' * 64}",
+                    "assetsSha256": f"sha256:{'5' * 64}",
+                },
+                "testRuntime": {
+                    "cliVersion": "0.23.0-rc.4",
+                    "cliTarget": "x86_64-unknown-linux-gnu",
+                    "cliAsset": "iii-x86_64-unknown-linux-gnu.tar.gz",
+                    "cliSha256": f"sha256:{'6' * 64}",
+                    "workers": {"fp": "0.2.6"},
+                },
             },
         },
         "runner": {
             "registry_worker": "harness-e2e",
-            "registry_ref": "0.2.1-experimental",
+            "registry_ref": "0.5.0-experimental",
             "revision": "e" * 40,
             "catalog_sha256": catalog_digest,
             "manifest_sha256": f"sha256:{'3' * 64}",
@@ -116,11 +151,15 @@ def campaign_contract(versions: dict[str, str] | None = None):
             "ref": "main",
         },
         "runtime": {
-            "cli": {"version": "0.22.1"},
-            "stack_versions": {"fp": "0.2.6"},
-            "stack_digest": MODULE.canonical_sha256({"fp": "0.2.6"}),
+            "cli": {
+                "version": "0.23.0-rc.4",
+                "target": "x86_64-unknown-linux-gnu",
+                "asset": "iii-x86_64-unknown-linux-gnu.tar.gz",
+                "sha256": f"sha256:{'6' * 64}",
+            },
         },
         "security": {"oidc_audience": "release-control-harness-e2e"},
+        "orchestration": {**graph, "graph_sha256": MODULE.canonical_sha256(graph)},
     }
 
 
@@ -129,7 +168,7 @@ def catalog():
         "schema": "e2e-scenario-catalog/v2",
         "runner": {
             "name": "harness-e2e",
-            "version": "0.2.1-experimental",
+            "version": "0.5.0-experimental",
             "revision": "e" * 40,
         },
         "catalog_sha256": f"sha256:{'f' * 64}",
@@ -144,43 +183,28 @@ def catalog():
             }
         ],
     }
-
-
-def write_lock(path: Path, workers: dict[str, dict[str, str]]):
-    path.write_text(json.dumps({"version": 1, "workers": workers}))
-
-
 class ReleaseControlCampaignTest(unittest.TestCase):
-    def test_common_runner_contains_only_the_exact_v3_path(self):
+    def test_common_runner_contains_only_the_compose_path(self):
         runner = RUNNER_SCRIPT.read_text()
-        self.assertIn('export III_CONFIG_PATH="$project_config"', runner)
-        self.assertIn(
-            'install_exact_stack stack-bootstrap "$exact_stack_versions" false',
-            runner,
-        )
-        self.assertIn(
-            'install_exact_stack stack-repin "$exact_stack_versions" false',
-            runner,
-        )
-        self.assertIn("Release Control campaign schema v3 is required", runner)
-        self.assertNotIn("verify_registry_lock.py", runner)
-        self.assertNotIn("III_CLI_CHANNEL", runner)
+        self.assertIn("compose::validate", runner)
+        self.assertIn("compose::up", runner)
+        self.assertIn("compose::status", runner)
+        self.assertIn("compose::down", runner)
+        self.assertNotIn("iii " + "worker", runner)
+        self.assertNotIn("iii-" + "worker", runner)
+        self.assertNotIn("iii." + "lock", runner)
 
-    def test_common_runner_waits_for_a_stable_persistence_plane(self):
+    def test_common_runner_uses_isolated_namespaces_and_restricted_secrets(self):
         runner = RUNNER_SCRIPT.read_text()
-        self.assertIn("HARNESS_E2E_STACK_SETTLE_SECONDS", runner)
-        self.assertIn("HARNESS_E2E_ADMISSION_TIMEOUT_SECONDS", runner)
-        self.assertIn("state::list state::get state::set", runner)
-        self.assertIn(
-            "storage::putObject storage::getObject database::execute database::query",
-            runner,
-        )
-        self.assertIn("verify_target_harness_runtime", runner)
+        self.assertIn("daemon_namespace=", runner)
+        self.assertIn("project_namespace=", runner)
+        self.assertIn("chmod 600", runner)
+        self.assertIn("--namespace \"$project_namespace\"", runner)
 
-    def test_rejects_legacy_contracts(self):
+    def test_rejects_contract_discriminators(self):
         value = campaign_contract()
-        value["schema_version"] = 2
-        with self.assertRaisesRegex(ValueError, "schema_version must be 3"):
+        value["schema" + "_version"] = 2
+        with self.assertRaisesRegex(ValueError, "unknown fields"):
             MODULE.validate_contract(value)
 
     def test_materializes_one_observe_only_group(self):
@@ -211,6 +235,7 @@ class ReleaseControlCampaignTest(unittest.TestCase):
         contract = campaign_contract()
         digest = MODULE.canonical_sha256(legacy)
         contract["plan"]["definition"]["catalog"]["sha256"] = digest
+        contract["plan"]["definition"]["runner"]["catalogSha256"] = digest
         contract["runner"]["catalog_sha256"] = digest
         request = MODULE.materialize_request(
             contract, legacy, group_id="daily-core"
@@ -235,6 +260,7 @@ class ReleaseControlCampaignTest(unittest.TestCase):
         contract = campaign_contract()
         digest = MODULE.canonical_sha256(changed)
         contract["plan"]["definition"]["catalog"]["sha256"] = digest
+        contract["plan"]["definition"]["runner"]["catalogSha256"] = digest
         contract["runner"]["catalog_sha256"] = digest
         request = MODULE.materialize_request(
             contract, changed, group_id="daily-core"
@@ -250,6 +276,7 @@ class ReleaseControlCampaignTest(unittest.TestCase):
         contract = campaign_contract()
         digest = MODULE.canonical_sha256(changed)
         contract["plan"]["definition"]["catalog"]["sha256"] = digest
+        contract["plan"]["definition"]["runner"]["catalogSha256"] = digest
         contract["runner"]["catalog_sha256"] = digest
         with self.assertRaisesRegex(ValueError, "invalid seed"):
             MODULE.materialize_request(
@@ -306,63 +333,104 @@ class ReleaseControlCampaignTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "does not match L4"):
             MODULE.validate_contract(weight)
 
-    def test_rejects_a_tampered_stack_digest(self):
+    def test_rejects_a_tampered_graph_digest(self):
         changed = campaign_contract()
-        changed["target"]["stack"]["resolution_sha256"] = f"sha256:{'0' * 64}"
-        with self.assertRaisesRegex(ValueError, "resolution_sha256 does not match"):
+        changed["orchestration"]["graph_sha256"] = f"sha256:{'0' * 64}"
+        with self.assertRaisesRegex(ValueError, "graph_sha256 does not match"):
             MODULE.validate_contract(changed)
 
-    def test_verify_lock_records_engine_managed_workers(self):
-        value = campaign_contract(
+    def test_materializes_deterministic_compose(self):
+        contract = campaign_contract()
+        with tempfile.TemporaryDirectory() as directory:
+            data_dir = Path(directory).resolve() / "runs"
+            first = MODULE.materialize_compose(contract, "project-one", data_dir, {}, {})
+            second = MODULE.materialize_compose(contract, "project-one", data_dir, {}, {})
+        self.assertEqual(first, second)
+        nodes = {
+            node["worker"]: node
+            for node in contract["orchestration"]["nodes"]
+            if node["kind"] == "binary"
+        }
+        for worker, node in nodes.items():
+            container = first["containers"][worker]
+            self.assertEqual(container["worker"], f"package://{worker}")
+            self.assertEqual(container["version"], node["version"])
+            self.assertNotEqual(container["version"], "next")
+            self.assertNotIn("scripts", container)
+            self.assertNotIn("start_after", container)
+        self.assertEqual(first["containers"]["harness-e2e"]["version"], "0.5.0-experimental")
+        self.assertEqual(first["containers"]["harness-e2e"]["depends_on"], ["state"])
+
+    def test_rejects_forbidden_artifacts_and_version_conflicts(self):
+        forbidden = campaign_contract()
+        forbidden["orchestration"]["nodes"][0]["kind"] = "bundle"
+        with self.assertRaisesRegex(ValueError, "forbidden kind bundle"):
+            MODULE.validate_contract(forbidden)
+
+        conflict = campaign_contract()
+        conflict["orchestration"]["nodes"].append(
             {
-                "harness": "1.9.0",
-                "iii-observability": "0.22.1",
-                "state": "0.22.1",
+                **conflict["orchestration"]["nodes"][0],
+                "version": "9.9.9",
             }
         )
-        with tempfile.TemporaryDirectory() as directory:
-            lock_path = Path(directory) / "iii.lock"
-            write_lock(
-                lock_path,
-                {
-                    "harness": {"version": "1.9.0", "type": "binary"},
-                    "iii-observability": {
-                        "version": "0.21.8",
-                        "type": "engine",
-                    },
-                    "state": {"version": "0.22.1", "type": "binary"},
-                    "fp": {"version": "0.2.6", "type": "binary"},
-                    "harness-e2e": {
-                        "version": "0.2.1-experimental",
-                        "type": "binary",
-                    },
-                },
-            )
-            manifest = MODULE.verify_lock(value, lock_path)
-        observed = manifest["verification"]["engine_managed"]["workers"][
-            "iii-observability"
-        ]
-        self.assertEqual(observed["declared_version"], "0.22.1")
-        self.assertEqual(observed["observed_version"], "0.21.8")
+        conflict["orchestration"]["nodes"].sort(key=lambda node: node["worker"])
+        with self.assertRaisesRegex(ValueError, "more than one version"):
+            MODULE.validate_contract(conflict)
 
-    def test_verify_lock_rejects_registry_version_drift(self):
-        value = campaign_contract()
+    def test_compose_evidence_binds_graph_yaml_namespaces_and_lifecycle(self):
+        contract = campaign_contract()
+        expected = {
+            node["worker"]: node["version"]
+            for node in contract["orchestration"]["nodes"]
+            if node["kind"] == "binary"
+        }
         with tempfile.TemporaryDirectory() as directory:
-            lock_path = Path(directory) / "iii.lock"
-            write_lock(
-                lock_path,
+            compose_path = Path(directory) / "worker-compose.yaml"
+            compose_path.write_text("namespace: project-one\ncontainers: {}\n")
+            evidence = MODULE.compose_evidence(
+                contract,
+                compose_path,
+                "compose-one",
+                "project-one",
+                {name: {"status": "ok"} for name in ("validate", "up", "status", "down")},
                 {
-                    "harness": {"version": "1.9.0", "type": "binary"},
-                    "state": {"version": "0.22.0", "type": "binary"},
-                    "fp": {"version": "0.2.6", "type": "binary"},
-                    "harness-e2e": {
-                        "version": "0.2.1-experimental",
-                        "type": "binary",
-                    },
+                    "workers": [
+                        {"name": worker, "version": version, "namespace": "project-one"}
+                        for worker, version in expected.items()
+                    ]
                 },
+                {"before": [], "during": [], "after": []},
             )
-            with self.assertRaisesRegex(ValueError, "stack_version_mismatch: state"):
-                MODULE.verify_lock(value, lock_path)
+        self.assertEqual(evidence["orchestration_graph_sha256"], contract["orchestration"]["graph_sha256"])
+        self.assertEqual(evidence["namespaces"], {"daemon": "compose-one", "project": "project-one"})
+        self.assertEqual(set(evidence["lifecycle"]), {"validate", "up", "status", "down"})
+        self.assertNotIn("schema" + "_version", json.dumps(evidence))
+
+    def test_compose_evidence_rejects_the_removed_lifecycle_executable(self):
+        contract = campaign_contract()
+        expected = {
+            node["worker"]: node["version"]
+            for node in contract["orchestration"]["nodes"]
+            if node["kind"] == "binary"
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            compose_path = Path(directory) / "worker-compose.yaml"
+            compose_path.write_text("namespace: project-one\ncontainers: {}\n")
+            with self.assertRaisesRegex(ValueError, "forbidden lifecycle executable"):
+                MODULE.compose_evidence(
+                    contract,
+                    compose_path,
+                    "compose-one",
+                    "project-one",
+                    {name: {} for name in ("validate", "up", "status", "down")},
+                    {"workers": [{"name": worker, "version": version} for worker, version in expected.items()]},
+                    {
+                        "before": [],
+                        "during": [{"comm": "iii-" + "worker", "args": "iii-" + "worker"}],
+                        "after": [],
+                    },
+                )
 
     def test_packages_raw_file_digests(self):
         with tempfile.TemporaryDirectory() as directory:

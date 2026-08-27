@@ -39,21 +39,8 @@ SUPPORTED_CATALOG_SCHEMAS = {
     "e2e-scenario-catalog/v1",
     "e2e-scenario-catalog/v2",
 }
-# These workers are hosted by the pinned iii engine rather than installed from
-# the Registry. `iii worker add` intentionally reports them as built-in, so a
-# Registry resolution of a transitive dependency cannot force their internal
-# version. Their observed lock entries remain evidence, while the exact CLI
-# pin is the reproducibility boundary for their runtime implementation.
-ENGINE_MANAGED_WORKERS = frozenset(
-    {
-        "configuration",
-        "iii-observability",
-        "iii-state",
-        "iii-stream",
-        "iii-worker-manager",
-        "iii-worker-ops",
-    }
-)
+ORCHESTRATION_ROLES = {"target", "runtime", "runner"}
+ORCHESTRATION_KINDS = {"binary", "engine"}
 
 
 def load_object(path: Path, label: str) -> dict[str, Any]:
@@ -118,15 +105,56 @@ def require_nonnegative_integer(value: Any, label: str) -> int:
     return value
 
 
+def require_keys(
+    value: Any,
+    required: set[str],
+    optional: set[str],
+    label: str,
+) -> dict[str, Any]:
+    if not isinstance(value, dict):
+        raise ValueError(f"{label} must be an object")
+    keys = set(value)
+    missing = sorted(required - keys)
+    unknown = sorted(keys - required - optional)
+    if missing:
+        raise ValueError(f"{label} is missing fields: {', '.join(missing)}")
+    if unknown:
+        raise ValueError(f"{label} contains unknown fields: {', '.join(unknown)}")
+    return value
+
+
 def validate_identity(definition: dict[str, Any], role: str) -> None:
-    identity = definition.get(role)
-    if not isinstance(identity, dict):
-        raise ValueError(f"plan.definition.{role} must be an object")
+    identity = require_keys(
+        definition.get(role), {"provider", "model"}, set(), f"plan.definition.{role}"
+    )
     require_text(identity.get("provider"), f"plan.definition.{role}.provider")
     require_text(identity.get("model"), f"plan.definition.{role}.model")
 
 
 def validate_campaign_definition(definition: dict[str, Any]) -> None:
+    require_keys(
+        definition,
+        {
+            "mode",
+            "entrypoint",
+            "lane",
+            "label",
+            "failurePolicy",
+            "subject",
+            "judge",
+            "manifest",
+            "scoring",
+            "catalog",
+            "groups",
+            "progressIntervalSeconds",
+            "retentionClass",
+            "executor",
+            "runner",
+            "testRuntime",
+        },
+        set(),
+        "plan.definition",
+    )
     if definition.get("entrypoint") != "e2e::run":
         raise ValueError("campaign plan must use e2e::run")
     require_text(definition.get("label"), "plan.definition.label")
@@ -138,23 +166,74 @@ def validate_campaign_definition(definition: dict[str, Any]) -> None:
     validate_identity(definition, "subject")
     validate_identity(definition, "judge")
 
-    manifest = definition.get("manifest")
-    if not isinstance(manifest, dict):
-        raise ValueError("plan.definition.manifest must be an object")
+    manifest = require_keys(
+        definition.get("manifest"), {"id", "sha256"}, set(), "plan.definition.manifest"
+    )
     require_text(manifest.get("id"), "plan.definition.manifest.id")
     require_digest(manifest.get("sha256"), "plan.definition.manifest.sha256")
 
-    scoring = definition.get("scoring")
-    if not isinstance(scoring, dict) or scoring.get("profile") != "difficulty-weighted-v1":
+    scoring = require_keys(
+        definition.get("scoring"), {"profile", "sha256"}, set(), "plan.definition.scoring"
+    )
+    if scoring.get("profile") != "difficulty-weighted-v1":
         raise ValueError("campaign scoring profile must be difficulty-weighted-v1")
     require_digest(scoring.get("sha256"), "plan.definition.scoring.sha256")
 
-    catalog = definition.get("catalog")
-    if not isinstance(catalog, dict):
-        raise ValueError("plan.definition.catalog must be an object")
+    catalog = require_keys(
+        definition.get("catalog"), {"revision", "sha256", "seed"}, set(), "plan.definition.catalog"
+    )
     require_text(catalog.get("revision"), "plan.definition.catalog.revision")
     require_digest(catalog.get("sha256"), "plan.definition.catalog.sha256")
     require_positive_integer(catalog.get("seed"), "plan.definition.catalog.seed")
+    require_positive_integer(
+        definition.get("progressIntervalSeconds"), "plan.definition.progressIntervalSeconds"
+    )
+    if definition.get("retentionClass") != "longitudinal":
+        raise ValueError("plan.definition.retentionClass must be longitudinal")
+
+    executor = require_keys(
+        definition.get("executor"),
+        {"provider", "repository", "workflow", "ref", "oidcAudience"},
+        set(),
+        "plan.definition.executor",
+    )
+    if executor != {
+        "provider": "github_actions",
+        "repository": CAMPAIGN_REPOSITORY,
+        "workflow": CAMPAIGN_WORKFLOW,
+        "ref": "main",
+        "oidcAudience": "release-control-harness-e2e",
+    }:
+        raise ValueError("plan.definition.executor must name the canonical advisory workflow")
+    plan_runner = require_keys(
+        definition.get("runner"),
+        {
+            "registryWorker",
+            "registryRef",
+            "revision",
+            "catalogSha256",
+            "manifestSha256",
+            "scoringProfileSha256",
+            "assetsSha256",
+        },
+        set(),
+        "plan.definition.runner",
+    )
+    for field in ("catalogSha256", "manifestSha256", "scoringProfileSha256", "assetsSha256"):
+        require_digest(plan_runner.get(field), f"plan.definition.runner.{field}")
+    runtime = require_keys(
+        definition.get("testRuntime"),
+        {"cliVersion", "cliTarget", "cliAsset", "cliSha256", "workers"},
+        set(),
+        "plan.definition.testRuntime",
+    )
+    cli_version = require_text(runtime.get("cliVersion"), "plan.definition.testRuntime.cliVersion")
+    if not VERSION.fullmatch(cli_version):
+        raise ValueError("plan.definition.testRuntime.cliVersion must be exact")
+    require_text(runtime.get("cliTarget"), "plan.definition.testRuntime.cliTarget")
+    require_text(runtime.get("cliAsset"), "plan.definition.testRuntime.cliAsset")
+    require_digest(runtime.get("cliSha256"), "plan.definition.testRuntime.cliSha256")
+    require_version_map(runtime.get("workers"), "plan.definition.testRuntime.workers")
 
     groups = definition.get("groups")
     if not isinstance(groups, list) or not groups:
@@ -164,6 +243,14 @@ def validate_campaign_definition(definition: dict[str, Any]) -> None:
         label = f"plan.definition.groups[{index}]"
         if not isinstance(group, dict):
             raise ValueError(f"{label} must be an object")
+        is_fault_shape = group.get("executionKind") == "fault_injection"
+        require_keys(
+            group,
+            {"id", "executionKind", "scenarios", "runs", "technicalRetries", "difficultyTier", "difficultyWeight"}
+            | ({"faultProfile", "faultScenario", "soakMinutes"} if is_fault_shape else set()),
+            set(),
+            label,
+        )
         group_id = require_text(group.get("id"), f"{label}.id")
         if not re.fullmatch(r"[a-z][a-z0-9-]{0,63}", group_id) or group_id in seen:
             raise ValueError("campaign group ids must be unique kebab-case values")
@@ -216,154 +303,200 @@ def campaign_matrix(contract: dict[str, Any]) -> dict[str, Any]:
     return {"include": include}
 
 
-def validate_exact_contract(contract: dict[str, Any], target: dict[str, Any], runner: dict[str, Any]) -> None:
-    stack = target.get("stack")
-    if not isinstance(stack, dict):
-        raise ValueError("target.stack must be an object")
-    requested = require_version_map(stack.get("requested_versions"), "target.stack.requested_versions")
-    resolved = require_version_map(stack.get("resolved_versions"), "target.stack.resolved_versions")
-    if requested != resolved:
-        raise ValueError("target stack requested_versions must equal resolved_versions")
-    if resolved != target["stack_versions"]:
-        raise ValueError("target stack resolved_versions must match target.stack_versions")
-    resolution_sha256 = require_digest(stack.get("resolution_sha256"), "target.stack.resolution_sha256")
-    if resolution_sha256 != canonical_sha256(resolved):
-        raise ValueError("target stack resolution_sha256 does not match resolved_versions")
-    if resolution_sha256 != target["stack_digest"]:
-        raise ValueError("target stack resolution_sha256 must match target.stack_digest")
+def role_versions(orchestration: dict[str, Any], role: str) -> dict[str, str]:
+    adjacency: dict[str, set[str]] = {}
+    for edge in orchestration["edges"]:
+        adjacency.setdefault(edge["from"], set()).add(edge["to"])
+    pending = [root["worker"] for root in orchestration["roots"] if root["role"] == role]
+    reachable: set[str] = set()
+    while pending:
+        worker = pending.pop()
+        if worker in reachable:
+            continue
+        reachable.add(worker)
+        pending.extend(sorted(adjacency.get(worker, set()), reverse=True))
+    versions = {node["worker"]: node["version"] for node in orchestration["nodes"] if node["worker"] in reachable}
+    return dict(sorted(versions.items()))
 
+
+def validate_exact_contract(contract: dict[str, Any], target: dict[str, Any], runner: dict[str, Any]) -> None:
     origin = target.get("origin")
-    origin_worker = None
     if origin is not None:
-        if not isinstance(origin, dict):
-            raise ValueError("target.origin must be an object or null")
+        require_keys(
+            origin,
+            {"operation_id", "step_id", "worker", "version", "source_sha", "release_run_id", "release_run_attempt"},
+            set(),
+            "target.origin",
+        )
         require_uuid(origin.get("operation_id"), "target.origin.operation_id")
         require_uuid(origin.get("step_id"), "target.origin.step_id")
-        origin_worker = require_text(origin.get("worker"), "target.origin.worker")
+        require_text(origin.get("worker"), "target.origin.worker")
         origin_version = require_text(origin.get("version"), "target.origin.version")
-        if resolved.get(origin_worker) != origin_version:
-            raise ValueError("target origin worker/version must be present in the resolved stack")
+        if not VERSION.fullmatch(origin_version):
+            raise ValueError("target.origin.version must be exact")
         origin_sha = require_text(origin.get("source_sha"), "target.origin.source_sha")
         if not re.fullmatch(r"[0-9a-f]{40}", origin_sha):
             raise ValueError("target.origin.source_sha must be a full lowercase git SHA")
         require_positive_integer(origin.get("release_run_id"), "target.origin.release_run_id")
         require_positive_integer(origin.get("release_run_attempt"), "target.origin.release_run_attempt")
 
-    base = target.get("base")
-    if not isinstance(base, dict) or base.get("kind") not in {"deployment", "snapshot"}:
+    base = require_keys(target.get("base"), {"kind", "id"}, set(), "target.base")
+    if base.get("kind") not in {"deployment", "snapshot"}:
         raise ValueError("target.base.kind must be deployment or snapshot")
     require_uuid(base.get("id"), "target.base.id")
 
-    provenance = stack.get("provenance")
-    if not isinstance(provenance, list) or len(provenance) != len(resolved):
-        raise ValueError("target.stack.provenance must describe every resolved worker")
-    provenance_workers: list[str] = []
-    for index, item in enumerate(provenance):
-        if not isinstance(item, dict):
-            raise ValueError(f"target.stack.provenance[{index}] must be an object")
-        worker = require_text(item.get("worker"), f"target.stack.provenance[{index}].worker")
-        version = require_text(item.get("version"), f"target.stack.provenance[{index}].version")
-        if resolved.get(worker) != version:
-            raise ValueError(f"target stack provenance does not match resolved version for {worker}")
-        provenance_workers.append(worker)
-        source_sha = item.get("source_sha")
-        if source_sha is not None and (not isinstance(source_sha, str) or not re.fullmatch(r"[0-9a-f]{40}", source_sha)):
-            raise ValueError(f"target.stack.provenance[{index}].source_sha is invalid")
-        for field in ("operation_id", "step_id"):
-            if item.get(field) is not None:
-                require_uuid(item[field], f"target.stack.provenance[{index}].{field}")
-        run_id = item.get("release_run_id")
-        run_attempt = item.get("release_run_attempt")
-        if (run_id is None) != (run_attempt is None):
-            raise ValueError("target stack provenance release run id and attempt must be paired")
-        if run_id is not None:
-            require_positive_integer(run_id, f"target.stack.provenance[{index}].release_run_id")
-            require_positive_integer(run_attempt, f"target.stack.provenance[{index}].release_run_attempt")
-    if provenance_workers != sorted(provenance_workers) or len(set(provenance_workers)) != len(provenance_workers):
-        raise ValueError("target.stack.provenance must be unique and ordered by worker")
-    if origin_worker is not None:
-        origin_provenance = next((item for item in provenance if item.get("worker") == origin_worker), None)
-        if not origin_provenance or any(
-            origin_provenance.get(field) != origin.get(field)
-            for field in (
-                "worker",
-                "version",
-                "source_sha",
-                "operation_id",
-                "step_id",
-                "release_run_id",
-                "release_run_attempt",
-            )
-        ):
-            raise ValueError("target origin must match its stack provenance entry")
-
-    runtime = contract.get("runtime")
-    if not isinstance(runtime, dict):
-        raise ValueError("runtime must be an object")
-    cli = runtime.get("cli")
-    if not isinstance(cli, dict):
-        raise ValueError("runtime.cli must be an object")
+    runtime = require_keys(contract.get("runtime"), {"cli"}, set(), "runtime")
+    cli = require_keys(runtime.get("cli"), {"version", "target", "asset", "sha256"}, set(), "runtime.cli")
     cli_version = require_text(cli.get("version"), "runtime.cli.version")
     if not VERSION.fullmatch(cli_version):
         raise ValueError("runtime.cli.version must be an exact version")
-    runtime_versions = require_version_map(runtime.get("stack_versions"), "runtime.stack_versions")
-    runtime_digest = require_digest(runtime.get("stack_digest"), "runtime.stack_digest")
-    if runtime_digest != canonical_sha256(runtime_versions):
-        raise ValueError("runtime.stack_digest does not match runtime.stack_versions")
-    conflicts = sorted(
-        worker for worker in runtime_versions.keys() & resolved.keys() if runtime_versions[worker] != resolved[worker]
-    )
-    if conflicts:
-        raise ValueError(f"runtime and target stack pins conflict: {', '.join(conflicts)}")
+    require_text(cli.get("target"), "runtime.cli.target")
+    asset = require_text(cli.get("asset"), "runtime.cli.asset")
+    if not asset.startswith("iii-") or asset.startswith("iii-" + "worker"):
+        raise ValueError("runtime.cli.asset must name the iii CLI archive")
+    require_digest(cli.get("sha256"), "runtime.cli.sha256")
 
     runner_ref = require_text(runner.get("registry_ref"), "runner.registry_ref")
     if not VERSION.fullmatch(runner_ref):
-        raise ValueError("runner.registry_ref must be an exact version for schema v2")
+        raise ValueError("runner.registry_ref must be an exact version")
     runner_revision = runner.get("revision")
-    if runner_revision is not None and (
-        not isinstance(runner_revision, str) or not re.fullmatch(r"[0-9a-f]{40}", runner_revision)
-    ):
+    if not isinstance(runner_revision, str) or not re.fullmatch(r"[0-9a-f]{40}", runner_revision):
         raise ValueError("runner.revision must be a full lowercase git SHA")
-    if runner.get("catalog_sha256") is not None:
-        require_digest(runner["catalog_sha256"], "runner.catalog_sha256")
 
-    security = contract.get("security")
-    if not isinstance(security, dict):
-        raise ValueError("security must be an object")
+    security = require_keys(contract.get("security"), {"oidc_audience"}, set(), "security")
     audience = require_text(security.get("oidc_audience"), "security.oidc_audience")
     if not re.fullmatch(r"[A-Za-z0-9._:/-]+", audience):
         raise ValueError("security.oidc_audience contains unsupported characters")
 
 
+def validate_orchestration(contract: dict[str, Any]) -> dict[str, Any]:
+    orchestration = require_keys(
+        contract.get("orchestration"),
+        {"roots", "nodes", "edges", "graph_sha256"},
+        set(),
+        "orchestration",
+    )
+    roots = orchestration["roots"]
+    nodes = orchestration["nodes"]
+    edges = orchestration["edges"]
+    if not isinstance(roots, list) or not roots:
+        raise ValueError("orchestration.roots must be a non-empty array")
+    if not isinstance(nodes, list) or not nodes:
+        raise ValueError("orchestration.nodes must be a non-empty array")
+    if not isinstance(edges, list):
+        raise ValueError("orchestration.edges must be an array")
+
+    root_keys: list[tuple[str, str, str]] = []
+    for index, root in enumerate(roots):
+        root = require_keys(root, {"worker", "version", "role"}, set(), f"orchestration.roots[{index}]")
+        worker = require_text(root["worker"], f"orchestration.roots[{index}].worker")
+        version = require_text(root["version"], f"orchestration.roots[{index}].version")
+        role = require_text(root["role"], f"orchestration.roots[{index}].role")
+        if not VERSION.fullmatch(version) or role not in ORCHESTRATION_ROLES:
+            raise ValueError("orchestration roots require an exact version and a known role")
+        root_keys.append((role, worker, version))
+    if root_keys != sorted(root_keys) or len(set(root_keys)) != len(root_keys):
+        raise ValueError("orchestration.roots must be unique and ordered by role, worker, version")
+
+    node_versions: dict[str, str] = {}
+    node_kinds: dict[str, str] = {}
+    for index, node in enumerate(nodes):
+        node = require_keys(node, {"worker", "version", "kind"}, {"artifact"}, f"orchestration.nodes[{index}]")
+        worker = require_text(node["worker"], f"orchestration.nodes[{index}].worker")
+        version = require_text(node["version"], f"orchestration.nodes[{index}].version")
+        kind = require_text(node["kind"], f"orchestration.nodes[{index}].kind")
+        if not VERSION.fullmatch(version):
+            raise ValueError(f"orchestration node {worker} does not have an exact version")
+        if kind not in ORCHESTRATION_KINDS:
+            raise ValueError(f"orchestration node {worker} has forbidden kind {kind}")
+        if worker in node_versions:
+            raise ValueError(f"orchestration contains more than one version of {worker}")
+        node_versions[worker] = version
+        node_kinds[worker] = kind
+        if kind == "binary":
+            artifact = require_keys(
+                node.get("artifact"), {"target", "url", "sha256"}, set(), f"orchestration.nodes[{index}].artifact"
+            )
+            require_text(artifact["target"], f"orchestration.nodes[{index}].artifact.target")
+            url = require_text(artifact["url"], f"orchestration.nodes[{index}].artifact.url")
+            if not url.startswith("https://"):
+                raise ValueError(f"orchestration node {worker} artifact URL must use https")
+            require_digest(artifact["sha256"], f"orchestration.nodes[{index}].artifact.sha256")
+        elif "artifact" in node:
+            raise ValueError(f"engine node {worker} must not carry an artifact")
+    if [node["worker"] for node in nodes] != sorted(node_versions):
+        raise ValueError("orchestration.nodes must be ordered by worker")
+
+    normalized_edges: list[tuple[str, str]] = []
+    for index, edge in enumerate(edges):
+        edge = require_keys(edge, {"from", "to"}, set(), f"orchestration.edges[{index}]")
+        source = require_text(edge["from"], f"orchestration.edges[{index}].from")
+        destination = require_text(edge["to"], f"orchestration.edges[{index}].to")
+        if source not in node_versions or destination not in node_versions or source == destination:
+            raise ValueError("orchestration edge must connect two distinct declared nodes")
+        normalized_edges.append((source, destination))
+    if normalized_edges != sorted(normalized_edges) or len(set(normalized_edges)) != len(normalized_edges):
+        raise ValueError("orchestration.edges must be unique and ordered by from, to")
+
+    for role, worker, version in root_keys:
+        if node_versions.get(worker) != version:
+            raise ValueError(f"orchestration root {role}:{worker}@{version} is absent from nodes")
+    if node_versions.get("harness") != contract["target"]["version"]:
+        raise ValueError("target.version must match the orchestrated harness node")
+    runner = contract["runner"]
+    if node_versions.get(runner["registry_worker"]) != runner["registry_ref"]:
+        raise ValueError("runner pin must match its orchestrated node")
+
+    graph = {"roots": roots, "nodes": nodes, "edges": edges}
+    if require_digest(orchestration["graph_sha256"], "orchestration.graph_sha256") != canonical_sha256(graph):
+        raise ValueError("orchestration.graph_sha256 does not match the canonical graph")
+    return orchestration
+
+
 def validate_contract(contract: dict[str, Any]) -> dict[str, Any]:
-    schema_version = contract.get("schema_version")
-    if schema_version != 3:
-        raise ValueError("execution contract schema_version must be 3")
+    require_keys(
+        contract,
+        {
+            "campaign_id",
+            "execution_id",
+            "attempt",
+            "idempotency_key",
+            "target",
+            "plan",
+            "runner",
+            "workflow",
+            "runtime",
+            "security",
+            "orchestration",
+        },
+        set(),
+        "execution contract",
+    )
     require_uuid(contract.get("campaign_id"), "campaign_id")
     require_uuid(contract.get("execution_id"), "execution_id")
     attempt = contract.get("attempt")
     if not isinstance(attempt, int) or attempt < 1:
         raise ValueError("attempt must be a positive integer")
     key = require_text(contract.get("idempotency_key"), "idempotency_key")
-    if not re.fullmatch(r"rc:(?:d0|e2e):[0-9a-f]{64}", key):
-        raise ValueError("idempotency_key must be rc:d0:<sha256> or rc:e2e:<sha256>")
+    if not re.fullmatch(r"rc:e2e:[0-9a-f]{64}", key):
+        raise ValueError("idempotency_key must be rc:e2e:<sha256>")
 
-    target = contract.get("target")
-    if not isinstance(target, dict) or target.get("application") != "harness":
+    target = require_keys(
+        contract.get("target"),
+        {"application", "version", "source_sha", "deployment_id", "origin", "base"},
+        set(),
+        "target",
+    )
+    if target.get("application") != "harness":
         raise ValueError("target application must be harness")
-    require_text(target.get("version"), "target.version")
+    target_version = require_text(target.get("version"), "target.version")
+    if not VERSION.fullmatch(target_version):
+        raise ValueError("target.version must be exact")
     if target.get("source_sha") is not None and not re.fullmatch(r"[0-9a-f]{40}", target["source_sha"]):
         raise ValueError("target.source_sha must be a full lowercase git SHA when present")
     if target.get("deployment_id") is not None:
         require_uuid(target["deployment_id"], "target.deployment_id")
-    stack = require_version_map(target.get("stack_versions"), "target.stack_versions")
-    if stack.get("harness") != target.get("version"):
-        raise ValueError("target version must match stack_versions.harness")
-    require_digest(target.get("stack_digest"), "target.stack_digest")
-
-    plan = contract.get("plan")
-    if not isinstance(plan, dict):
-        raise ValueError("plan must be an object")
+    plan = require_keys(contract.get("plan"), {"id", "revision", "sha256", "definition"}, set(), "plan")
     require_uuid(plan.get("id"), "plan.id")
     revision = plan.get("revision")
     if not isinstance(revision, int) or revision < 1:
@@ -373,12 +506,23 @@ def validate_contract(contract: dict[str, Any]) -> dict[str, Any]:
     if not isinstance(definition, dict):
         raise ValueError("plan.definition must be an object")
     if definition.get("mode") != "campaign":
-        raise ValueError("schema v3 plan mode must be campaign")
+        raise ValueError("plan mode must be campaign")
     validate_campaign_definition(definition)
 
-    runner = contract.get("runner")
-    if not isinstance(runner, dict):
-        raise ValueError("runner must be an object")
+    runner = require_keys(
+        contract.get("runner"),
+        {
+            "registry_worker",
+            "registry_ref",
+            "revision",
+            "catalog_sha256",
+            "manifest_sha256",
+            "scoring_profile_sha256",
+            "assets_sha256",
+        },
+        set(),
+        "runner",
+    )
     if require_text(runner.get("registry_worker"), "runner.registry_worker") != "harness-e2e":
         raise ValueError("runner.registry_worker must be harness-e2e")
     runner_ref = require_text(runner.get("registry_ref"), "runner.registry_ref")
@@ -398,15 +542,48 @@ def validate_contract(contract: dict[str, Any]) -> dict[str, Any]:
         raise ValueError("runner manifest digest must match the campaign definition")
     if runner.get("scoring_profile_sha256") != definition["scoring"]["sha256"]:
         raise ValueError("runner scoring digest must match the campaign definition")
-    workflow = contract.get("workflow")
-    if not isinstance(workflow, dict):
-        raise ValueError("workflow must be an object")
+    definition_runner = definition["runner"]
+    if {
+        "registry_worker": definition_runner["registryWorker"],
+        "registry_ref": definition_runner["registryRef"],
+        "revision": definition_runner["revision"],
+        "catalog_sha256": definition_runner["catalogSha256"],
+        "manifest_sha256": definition_runner["manifestSha256"],
+        "scoring_profile_sha256": definition_runner["scoringProfileSha256"],
+        "assets_sha256": definition_runner["assetsSha256"],
+    } != runner:
+        raise ValueError("runner identity must match the immutable campaign definition")
+    workflow = require_keys(contract.get("workflow"), {"repository", "file", "ref"}, set(), "workflow")
     if workflow.get("repository") != CAMPAIGN_REPOSITORY:
         raise ValueError(f"workflow.repository must be {CAMPAIGN_REPOSITORY}")
     if workflow.get("file") != CAMPAIGN_WORKFLOW:
         raise ValueError(f"workflow.file must be {CAMPAIGN_WORKFLOW}")
     if workflow.get("ref") != "main":
         raise ValueError("workflow.ref must be main")
+    if workflow != {
+        "repository": definition["executor"]["repository"],
+        "file": definition["executor"]["workflow"],
+        "ref": definition["executor"]["ref"],
+    }:
+        raise ValueError("workflow must match the immutable campaign definition")
+    if contract["security"]["oidc_audience"] != definition["executor"]["oidcAudience"]:
+        raise ValueError("security audience must match the immutable campaign definition")
+    orchestration = validate_orchestration(contract)
+    runtime_definition = definition["testRuntime"]
+    if contract["runtime"]["cli"] != {
+        "version": runtime_definition["cliVersion"],
+        "target": runtime_definition["cliTarget"],
+        "asset": runtime_definition["cliAsset"],
+        "sha256": runtime_definition["cliSha256"],
+    }:
+        raise ValueError("runtime.cli must match the immutable campaign definition")
+    runtime_roots = {
+        root["worker"]: root["version"]
+        for root in orchestration["roots"]
+        if root["role"] == "runtime"
+    }
+    if runtime_roots != runtime_definition["workers"]:
+        raise ValueError("orchestration runtime roots must match the immutable campaign definition")
     return contract
 
 
@@ -477,11 +654,9 @@ def materialize_request(
             }
         )
 
-    stack = contract["target"]["stack"]
-    target_stack = stack["resolved_versions"]
-    target_stack_digest = stack["resolution_sha256"]
+    target_stack = role_versions(contract["orchestration"], "target")
+    target_stack_digest = canonical_sha256(target_stack)
     run_contract = {
-        "schema_version": 1,
         "mode": {"environment": "demonstration", "decision": "observe_only"},
         "target": {
             "application": "harness",
@@ -525,7 +700,7 @@ def materialize_request(
         "progress_interval_seconds": definition.get("progressIntervalSeconds", 15),
         "run_contract": run_contract,
     }
-    # The runner validates a D0 key over the fully materialized request,
+    # The runner validates a Release Control key over the fully materialized request,
     # including cases and their contract fingerprints. Those fields only exist
     # after scenarios-list, so the GitHub dispatch key cannot be reused here.
     # This remains deterministic for transport retries of the same catalog.
@@ -547,100 +722,152 @@ def observation_idempotency_key(request: dict[str, Any]) -> str:
         "rotating_seeds": request["rotating_seeds"],
         "technical_retries": request["technical_retries"],
     }
-    return f"rc:d0:{canonical_sha256(intent).removeprefix('sha256:')}"
+    return f"rc:e2e:{canonical_sha256(intent).removeprefix('sha256:')}"
 
 
-def verify_lock(contract: dict[str, Any], lock_path: Path) -> dict[str, Any]:
+def assignments(values: list[str], label: str) -> dict[str, str]:
+    result: dict[str, str] = {}
+    for value in values:
+        key, separator, resolved = value.partition("=")
+        if not separator or not key or key in result:
+            raise ValueError(f"{label} values must be unique KEY=VALUE assignments")
+        result[key] = resolved
+    return result
+
+
+def materialize_compose(
+    contract: dict[str, Any],
+    namespace: str,
+    data_dir: Path,
+    env_files: dict[str, str],
+    environment: dict[str, str],
+) -> dict[str, Any]:
     validate_contract(contract)
-    try:
-        import yaml
-    except ImportError as error:  # pragma: no cover - CI installs PyYAML explicitly.
-        raise ValueError("PyYAML is required to verify iii.lock") from error
+    if not re.fullmatch(r"[a-z0-9][a-z0-9-]{0,62}[a-z0-9]", namespace):
+        raise ValueError("project namespace must be lowercase kebab-case")
+    if not data_dir.is_absolute():
+        raise ValueError("data directory must be absolute")
 
-    lock = yaml.safe_load(lock_path.read_text()) or {}
-    workers = lock.get("workers") if isinstance(lock, dict) else None
-    if not isinstance(workers, dict):
-        raise ValueError("iii.lock workers must be an object")
-    observed = {
-        str(worker): str(record.get("version"))
-        for worker, record in workers.items()
-        if isinstance(record, dict) and isinstance(record.get("version"), str)
-    }
+    orchestration = contract["orchestration"]
+    nodes = {node["worker"]: node for node in orchestration["nodes"]}
+    binary_workers = {worker for worker, node in nodes.items() if node["kind"] == "binary"}
+    unknown_env_files = sorted(set(env_files) - binary_workers)
+    if unknown_env_files:
+        raise ValueError(f"env files name unknown containers: {', '.join(unknown_env_files)}")
 
-    target = contract["target"]
-    stack = target["stack"]
-    expected_target = stack["resolved_versions"]
-    target_digest = stack["resolution_sha256"]
-    runtime = contract["runtime"]
-    expected_runtime = runtime["stack_versions"]
-    runtime_digest = runtime["stack_digest"]
+    declared_environment: dict[str, dict[str, str]] = {}
+    for key, value in environment.items():
+        worker, separator, name = key.partition(".")
+        if not separator or worker not in binary_workers or not re.fullmatch(r"[A-Z][A-Z0-9_]*", name):
+            raise ValueError(f"invalid container environment assignment: {key}")
+        declared_environment.setdefault(worker, {})[name] = value
 
-    expected = {**expected_runtime, **expected_target, contract["runner"]["registry_worker"]: contract["runner"]["registry_ref"]}
-    engine_managed = {
-        worker
-        for worker in expected
-        if worker in ENGINE_MANAGED_WORKERS
-        and isinstance(workers.get(worker), dict)
-        and workers[worker].get("type") == "engine"
-        and worker != contract["runner"]["registry_worker"]
-    }
-    mismatches = [
-        f"{worker}: expected {version}, resolved {observed.get(worker, 'missing')}"
-        for worker, version in sorted(expected.items())
-        if observed.get(worker) != version and worker not in engine_managed
-    ]
-    if mismatches:
-        raise ValueError("stack_version_mismatch: " + "; ".join(mismatches))
+    dependencies: dict[str, list[str]] = {worker: [] for worker in binary_workers}
+    for edge in orchestration["edges"]:
+        if edge["from"] in binary_workers and edge["to"] in binary_workers:
+            dependencies[edge["from"]].append(edge["to"])
 
-    registry_pins = {worker: version for worker, version in expected.items() if worker not in engine_managed}
-    engine_managed_evidence = {
-        worker: {
-            "declared_version": expected[worker],
-            "observed_version": observed[worker],
-            "lock_type": workers[worker]["type"],
+    runner_worker = contract["runner"]["registry_worker"]
+    runner_environment = declared_environment.setdefault(runner_worker, {})
+    runner_environment.update(
+        {
+            "HARNESS_E2E_WORKERS_REPOSITORY": "iii-hq/workers",
+            "HARNESS_E2E_WORKERS_REVISION": contract["target"]["source_sha"],
+            "HARNESS_E2E_STACK_MODE": "registry",
+            "HARNESS_E2E_STACK_DIGEST": contract["orchestration"]["graph_sha256"],
         }
-        for worker in sorted(engine_managed)
-    }
+    )
+
+    containers: dict[str, Any] = {}
+    for worker in sorted(binary_workers):
+        node = nodes[worker]
+        container: dict[str, Any] = {
+            "worker": f"package://{worker}",
+            "version": node["version"],
+        }
+        needs = sorted(set(dependencies[worker]))
+        if needs:
+            container["depends_on"] = needs
+        if worker in env_files:
+            env_file = Path(env_files[worker])
+            if not env_file.is_absolute():
+                raise ValueError(f"env file for {worker} must be absolute")
+            container["env_file"] = [str(env_file)]
+        if worker in declared_environment:
+            container["environment"] = dict(sorted(declared_environment[worker].items()))
+        if worker == runner_worker:
+            container["config_name"] = f"{namespace}-harness-e2e"
+            container["config_override"] = {"data_dir": str(data_dir)}
+        containers[worker] = container
 
     return {
-        "schema": "e2e-stack-manifest/v1",
-        "contract_schema_version": contract["schema_version"],
-        "target": {
-            "application": target["application"],
-            "version": target["version"],
-            "requested_versions": stack["requested_versions"],
-            "resolved_versions": expected_target,
-            "observed_versions": {worker: observed[worker] for worker in sorted(expected_target)},
-            "resolution_sha256": target_digest,
-            "provenance": stack["provenance"],
-        },
+        "namespace": namespace,
+        "startup_timeout": "5m",
+        "stop_timeout": "30s",
+        "containers": containers,
+    }
+
+
+def compose_evidence(
+    contract: dict[str, Any],
+    compose_path: Path,
+    daemon_namespace: str,
+    project_namespace: str,
+    lifecycle: dict[str, Any],
+    workers_payload: dict[str, Any],
+    processes: dict[str, Any],
+) -> dict[str, Any]:
+    validate_contract(contract)
+    worker_rows = workers_payload.get("workers")
+    if not isinstance(worker_rows, list):
+        raise ValueError("engine worker evidence must contain a workers array")
+    expected = {
+        node["worker"]: node["version"]
+        for node in contract["orchestration"]["nodes"]
+        if node["kind"] == "binary"
+    }
+    observed: dict[str, str] = {}
+    for row in worker_rows:
+        if not isinstance(row, dict) or row.get("namespace") not in (None, project_namespace):
+            continue
+        name = row.get("name")
+        version = row.get("version")
+        if isinstance(name, str) and isinstance(version, str) and name in expected:
+            observed[name] = version
+    mismatches = [
+        f"{worker}: expected {version}, observed {observed.get(worker, 'missing')}"
+        for worker, version in sorted(expected.items())
+        if observed.get(worker) != version
+    ]
+    if mismatches:
+        raise ValueError("compose runtime version mismatch: " + "; ".join(mismatches))
+
+    forbidden = "iii" + "-worker"
+    for phase, rows in processes.items():
+        if not isinstance(rows, list):
+            raise ValueError(f"process inventory {phase} must be an array")
+        for row in rows:
+            if not isinstance(row, dict):
+                raise ValueError(f"process inventory {phase} contains an invalid row")
+            command = str(row.get("comm", ""))
+            executable = str(row.get("args", "")).split(maxsplit=1)[0]
+            if Path(command).name == forbidden or Path(executable).name == forbidden:
+                raise ValueError(f"forbidden lifecycle executable observed during {phase}")
+
+    compose_bytes = compose_path.read_bytes()
+    return {
+        "execution_contract_sha256": canonical_sha256(contract),
+        "orchestration_graph_sha256": contract["orchestration"]["graph_sha256"],
+        "compose_sha256": f"sha256:{hashlib.sha256(compose_bytes).hexdigest()}",
+        "namespaces": {"daemon": daemon_namespace, "project": project_namespace},
         "runtime": {
-            "cli": contract.get("runtime", {}).get("cli"),
-            "stack_versions": expected_runtime,
-            "observed_versions": {worker: observed[worker] for worker in sorted(expected_runtime)},
-            "stack_digest": runtime_digest,
+            "cli": contract["runtime"]["cli"],
+            "expected_versions": dict(sorted(expected.items())),
+            "observed_versions": dict(sorted(observed.items())),
         },
-        "runner": {
-            **contract["runner"],
-            "observed_version": observed[contract["runner"]["registry_worker"]],
-        },
-        "verification": {
-            "registry_pins": {
-                "expected_versions": dict(sorted(registry_pins.items())),
-                "observed_versions": {worker: observed[worker] for worker in sorted(registry_pins)},
-            },
-            "engine_managed": {
-                "runtime_cli": contract.get("runtime", {}).get("cli"),
-                "workers": engine_managed_evidence,
-            },
-        },
-        "lock": {
-            "sha256": f"sha256:{hashlib.sha256(lock_path.read_bytes()).hexdigest()}",
-            "worker_count": len(observed),
-            "resolved_versions": dict(sorted(observed.items())),
-        },
-        "origin": target.get("origin"),
-        "base": target["base"],
+        "lifecycle": lifecycle,
+        "processes": processes,
+        "forbidden_lifecycle_executable_absent": True,
     }
 
 
@@ -688,10 +915,21 @@ def main() -> int:
     materialize.add_argument("--group-id")
     matrix = commands.add_parser("matrix")
     matrix.add_argument("--contract", type=Path, required=True)
-    lock = commands.add_parser("verify-lock")
-    lock.add_argument("--contract", type=Path, required=True)
-    lock.add_argument("--lock", type=Path, required=True)
-    lock.add_argument("--output", type=Path, required=True)
+    compose = commands.add_parser("compose")
+    compose.add_argument("--contract", type=Path, required=True)
+    compose.add_argument("--namespace", required=True)
+    compose.add_argument("--data-dir", type=Path, required=True)
+    compose.add_argument("--env-file", action="append", default=[])
+    compose.add_argument("--environment", action="append", default=[])
+    compose.add_argument("--output", type=Path, required=True)
+    evidence = commands.add_parser("compose-evidence")
+    evidence.add_argument("--contract", type=Path, required=True)
+    evidence.add_argument("--compose", type=Path, required=True)
+    evidence.add_argument("--daemon-namespace", required=True)
+    evidence.add_argument("--project-namespace", required=True)
+    for name in ("validate", "up", "status", "down", "workers", "process-before", "process-during", "process-after"):
+        evidence.add_argument(f"--{name}", type=Path, required=True)
+    evidence.add_argument("--output", type=Path, required=True)
     package = commands.add_parser("package")
     package.add_argument("--root", type=Path, required=True)
     package.add_argument("--contract", type=Path, required=True)
@@ -713,8 +951,38 @@ def main() -> int:
             args.output.write_text(json.dumps(request, indent=2, sort_keys=True) + "\n")
         elif args.command == "matrix":
             print(canonical(campaign_matrix(contract)))
-        elif args.command == "verify-lock":
-            manifest = verify_lock(contract, args.lock)
+        elif args.command == "compose":
+            try:
+                import yaml
+            except ImportError as error:  # pragma: no cover - CI installs PyYAML explicitly.
+                raise ValueError("PyYAML is required to materialize worker-compose.yaml") from error
+            manifest = materialize_compose(
+                contract,
+                args.namespace,
+                args.data_dir,
+                assignments(args.env_file, "env-file"),
+                assignments(args.environment, "environment"),
+            )
+            args.output.write_text(yaml.safe_dump(manifest, sort_keys=False))
+        elif args.command == "compose-evidence":
+            lifecycle = {
+                name: load_object(getattr(args, name), f"compose {name}")
+                for name in ("validate", "up", "status", "down")
+            }
+            processes = {
+                "before": json.loads(args.process_before.read_text()),
+                "during": json.loads(args.process_during.read_text()),
+                "after": json.loads(args.process_after.read_text()),
+            }
+            manifest = compose_evidence(
+                contract,
+                args.compose,
+                args.daemon_namespace,
+                args.project_namespace,
+                lifecycle,
+                load_object(args.workers, "engine workers"),
+                processes,
+            )
             args.output.write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n")
         else:
             workflow = json.loads(args.workflow)

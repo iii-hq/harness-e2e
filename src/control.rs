@@ -1826,7 +1826,7 @@ fn validate_run_request(request: &RunRequest) -> Result<LaneBudget> {
         contract.validate()?;
         let expected = observation_idempotency_key(request)?;
         if request.idempotency_key != expected {
-            bail!("D0 idempotency_key must equal {expected}");
+            bail!("Release Control idempotency_key must equal {expected}");
         }
     }
     Ok(budget)
@@ -1836,7 +1836,7 @@ fn observation_intent_sha256(request: &RunRequest) -> Result<String> {
     let contract = request
         .run_contract
         .as_ref()
-        .context("D0 observation intent requires run_contract")?;
+        .context("Release Control observation intent requires run_contract")?;
     artifact::sha256_value(&json!({
         "run_contract": contract,
         "lane": request.lane,
@@ -1855,7 +1855,7 @@ fn observation_intent_sha256(request: &RunRequest) -> Result<String> {
 fn observation_idempotency_key(request: &RunRequest) -> Result<String> {
     let digest = observation_intent_sha256(request)?;
     Ok(format!(
-        "rc:d0:{}",
+        "rc:e2e:{}",
         digest.strip_prefix("sha256:").unwrap_or(&digest)
     ))
 }
@@ -2240,7 +2240,7 @@ fn terminal_observation(
         .request
         .run_contract
         .as_ref()
-        .context("terminal D0 observation is missing run_contract")?;
+        .context("terminal Release Control observation is missing run_contract")?;
     let request_sha256 = if record.request_sha256.is_empty() {
         artifact::sha256_value(&record.request)?
     } else {
@@ -2737,7 +2737,6 @@ mod tests {
             .unwrap()
             .clone();
         request.run_contract = Some(ObservationRunContract {
-            schema_version: 1,
             mode: crate::report::ObservationMode {
                 environment: crate::report::ObservationEnvironment::Demonstration,
                 decision: crate::report::ObservationDecision::ObserveOnly,
@@ -2961,7 +2960,7 @@ mod tests {
     }
 
     #[test]
-    fn d0_idempotency_key_is_bound_to_the_canonical_intent() {
+    fn release_control_idempotency_key_is_bound_to_the_canonical_intent() {
         let request = d0_request();
         assert_eq!(
             request.idempotency_key,
@@ -2972,7 +2971,7 @@ mod tests {
         assert!(validate_run_request(&tampered)
             .unwrap_err()
             .to_string()
-            .contains("D0 idempotency_key"));
+            .contains("Release Control idempotency_key"));
     }
 
     #[test]

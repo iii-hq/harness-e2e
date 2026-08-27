@@ -259,20 +259,22 @@ jobs:
           ref: ${{ needs.validate.outputs.commit_sha }}
       - name: Install release tooling
         run: python3 -m pip install --quiet pyyaml
-      - name: Install iii CLI
+      - name: Install checksum-pinned iii CLI
         env:
-          # Keep the engine on the iii-sdk protocol line used by this worker.
-          # 0.21.8 also includes recoverable trigger bindings.
-          VERSION: '0.21.8'
-          GITHUB_TOKEN: ${{ github.token }}
+          III_VERSION: '0.23.0-rc.4'
+          III_TARGET: x86_64-unknown-linux-gnu
+          III_ARCHIVE_SHA256: d9ab056f17daefc2f04ed892092a3df2fe76ffde5587335918606048047cf40a
         run: |
           set -euo pipefail
-          curl -fsSL https://install.iii.dev/iii/main/install.sh -o /tmp/install-iii.sh
-          sh /tmp/install-iii.sh
-          {
-            echo "$HOME/.local/bin"
-            echo "$HOME/.iii/bin"
-          } >> "$GITHUB_PATH"
+          asset="iii-${III_TARGET}.tar.gz"
+          url="https://github.com/iii-hq/iii/releases/download/iii/v${III_VERSION}/${asset}"
+          mkdir -p iii-tools
+          curl --fail --location --retry 3 "$url" --output "iii-tools/$asset"
+          printf '%s  %s\n' "$III_ARCHIVE_SHA256" "iii-tools/$asset" | sha256sum --check --strict
+          tar -xzf "iii-tools/$asset" -C iii-tools iii
+          chmod 755 iii-tools/iii
+          iii-tools/iii --version | grep -F "$III_VERSION"
+          printf '%s\n' "$GITHUB_WORKSPACE/iii-tools" >> "$GITHUB_PATH"
       - name: Download release assets
         env:
           GH_TOKEN: ${{ github.token }}
@@ -292,7 +294,7 @@ jobs:
       - name: Start isolated iii engine
         run: |
           set -euo pipefail
-          mkdir -p interface-project
+          mkdir -p interface-project interface-compose-state target/interface-collection
           printf 'workers: []\n' > interface-project/config.yaml
           (
             cd interface-project
@@ -311,41 +313,86 @@ jobs:
           done
           echo "::error::iii engine did not become ready"
           exit 1
-      - name: Install state dependency and capture baselines
+      - name: Start isolated Compose daemon
         run: |
           set -euo pipefail
-          for attempt in 1 2 3; do
-            if (cd interface-project && iii worker add state@0.22.0); then
-              break
-            fi
-            if [[ "$attempt" == '3' ]]; then
-              echo "::error::could not install state@0.22.0"
+          III_COMPOSE_STATE_DIR="$GITHUB_WORKSPACE/interface-compose-state" \
+            iii compose \
+              --engine ws://127.0.0.1:49134 \
+              --namespace release-interface-daemon \
+              > compose-daemon.log 2>&1 &
+          echo "$!" > compose-daemon.pid
+          for _ in {1..60}; do
+            if ! kill -0 "$(cat compose-daemon.pid)" 2>/dev/null; then
+              echo "::error::Compose daemon exited before becoming ready"
               exit 1
             fi
-            sleep 10
-          done
-          for _ in {1..60}; do
-            if iii trigger 'state::list' \
-              --json '{"scope":"__harness_e2e_release_probe__"}' >/dev/null 2>&1; then
-              iii trigger 'engine::workers::list' --json '{}' > baseline-workers.json
-              iii trigger 'engine::triggers::list' \
-                --json '{"include_internal": false}' > baseline-triggers.json
+            if iii trigger compose::list \
+              --namespace release-interface-daemon --json '{}' >/dev/null 2>&1; then
               exit 0
             fi
             sleep 1
           done
-          echo "::error::state@0.22.0 did not register state::list"
+          echo "::error::Compose daemon did not become ready"
           exit 1
-      - name: Start release worker
-        env:
-          III_URL: ws://127.0.0.1:49134
+      - name: Materialize publication Compose files
         run: |
           set -euo pipefail
-          release-worker/harness-e2e worker \
-            --config config.collect.yaml > harness-e2e-worker.log 2>&1 &
-          echo "$!" > worker.pid
-          sleep 2
-          kill -0 "$(cat worker.pid)"
+          jq -n '{
+            namespace: "release-interface",
+            startup_timeout: "2m",
+            stop_timeout: "30s",
+            containers: {
+              state: {worker: "package://state", version: "0.22.2"}
+            }
+          }' > baseline-compose.yaml
+          jq -n --arg data_dir "$GITHUB_WORKSPACE/target/interface-collection" '{
+            namespace: "release-interface",
+            startup_timeout: "2m",
+            stop_timeout: "30s",
+            containers: {
+              state: {worker: "package://state", version: "0.22.2"},
+              "harness-e2e": {
+                worker: "path://.",
+                depends_on: ["state"],
+                scripts: {run: "./release-worker/harness-e2e worker"},
+                config_name: "release-interface-harness-e2e",
+                config_override: {data_dir: $data_dir}
+              }
+            }
+          }' > interface-compose.yaml
+      - name: Capture baseline through Compose
+        run: |
+          set -euo pipefail
+          baseline="$GITHUB_WORKSPACE/baseline-compose.yaml"
+          iii trigger compose::validate --namespace release-interface-daemon "file=$baseline"
+          iii trigger compose::up --namespace release-interface-daemon "file=$baseline"
+          iii trigger compose::status --namespace release-interface-daemon "file=$baseline" \
+            > baseline-compose-status.json
+          for _ in {1..60}; do
+            if iii trigger 'state::list' \
+              --namespace release-interface \
+              --json '{"scope":"__harness_e2e_release_probe__"}' >/dev/null 2>&1; then
+              iii trigger 'engine::workers::list' --json '{}' > baseline-workers.json
+              iii trigger 'engine::triggers::list' \
+                --json '{"include_internal": false}' > baseline-triggers.json
+              iii trigger compose::down --namespace release-interface-daemon "file=$baseline"
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "::error::baseline state package did not register state::list"
+          exit 1
+      - name: Validate and start local release candidate through Compose
+        run: |
+          set -euo pipefail
+          compose_file="$GITHUB_WORKSPACE/interface-compose.yaml"
+          iii trigger compose::validate --namespace release-interface-daemon "file=$compose_file" \
+            > interface-compose-validate.json
+          iii trigger compose::up --namespace release-interface-daemon "file=$compose_file" \
+            > interface-compose-up.json
+          iii trigger compose::status --namespace release-interface-daemon "file=$compose_file" \
+            > interface-compose-status.json
       - name: Collect and require typed interface
         run: |
           python3 scripts/release_worker.py collect-interface \
@@ -404,14 +451,18 @@ jobs:
           echo "::group::iii engine"
           tail -n 200 iii-engine.log || true
           echo "::endgroup::"
-          echo "::group::harness-e2e worker"
-          tail -n 200 harness-e2e-worker.log || true
+          echo "::group::Compose daemon"
+          tail -n 200 compose-daemon.log || true
           echo "::endgroup::"
       - name: Stop interface processes
         if: always()
         run: |
-          if [[ -f worker.pid ]]; then
-            kill "$(cat worker.pid)" 2>/dev/null || true
+          if [[ -f compose-daemon.pid ]]; then
+            for file in "$GITHUB_WORKSPACE/interface-compose.yaml" "$GITHUB_WORKSPACE/baseline-compose.yaml"; do
+              iii trigger compose::down --namespace release-interface-daemon "file=$file" >/dev/null 2>&1 || true
+            done
+            iii trigger compose::stop --namespace release-interface-daemon --json '{}' >/dev/null 2>&1 || true
+            kill "$(cat compose-daemon.pid)" 2>/dev/null || true
           fi
           if [[ -f iii-engine.pid ]]; then
             kill "$(cat iii-engine.pid)" 2>/dev/null || true

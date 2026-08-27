@@ -7,6 +7,32 @@ ROOT = pathlib.Path(__file__).resolve().parents[2]
 
 
 class WorkflowBoundaryTests(unittest.TestCase):
+    def test_migrated_operational_paths_are_compose_only_and_unversioned(self):
+        paths = [
+            ROOT / "README.md",
+            ROOT / "scripts/release_control_campaign.py",
+            ROOT / "scripts/run_release_control_group.sh",
+            ROOT / "scripts/run_release_control_fault.sh",
+            ROOT / "supervisor/run-weekly-stress",
+            ROOT / "supervisor/install.sh",
+            ROOT / ".github/workflows/release.yml",
+            ROOT / ".github/workflows/release-control-campaign.yml",
+            ROOT / "src/worker.rs",
+            ROOT / "src/main.rs",
+        ]
+        forbidden = [
+            "iii " + "worker",
+            "iii-" + "worker",
+            "iii." + "lock",
+            "HARNESS_E2E_" + "DATA_DIR",
+            "contract_" + "schema_version",
+            "schema" + "_version",
+        ]
+        for path in paths:
+            content = path.read_text()
+            for token in forbidden:
+                self.assertNotIn(token, content, f"{path.relative_to(ROOT)} contains {token}")
+
     def test_release_control_campaign_execution_is_owned_here(self):
         workflow = (
             ROOT / ".github/workflows/release-control-campaign.yml"
@@ -29,35 +55,51 @@ class WorkflowBoundaryTests(unittest.TestCase):
         self.assertIn("cleanup --lease-id", launcher)
         self.assertNotIn("iii-hq/workers", workflow)
 
+    def test_publication_compose_uses_the_rc4_manifest_schema(self):
+        workflow = (ROOT / ".github/workflows/release.yml").read_text()
+        self.assertIn('worker: "path://."', workflow)
+        self.assertIn('worker: "package://state"', workflow)
+        self.assertIn('depends_on: ["state"]', workflow)
+        self.assertIn('scripts: {run: "./release-worker/harness-e2e worker"}', workflow)
+        self.assertNotIn("start_after", workflow)
+
     def test_cross_repository_shadow_checks_out_the_e2e_repository(self):
         workflow = (ROOT / ".github/workflows/shadow.yml").read_text(encoding="utf-8")
         self.assertEqual(workflow.count("repository: iii-hq/harness-e2e"), 2)
         self.assertNotIn("sudo ", workflow)
 
     def test_weekly_stress_delegates_privileged_actions_to_protected_launchers(self):
-        workflow = (ROOT / ".github/workflows/weekly-stress.yml").read_text(
-            encoding="utf-8"
-        )
-        self.assertIn("environment: harness-e2e-trusted", workflow)
-        self.assertIn("/opt/iii-harness-e2e/run-weekly-stress", workflow)
         self.assertIn("e2e::archive", (ROOT / "docs/fault-injection.md").read_text())
-        self.assertNotIn("sudo ", workflow)
-        self.assertNotIn("docker ", workflow)
-        self.assertNotIn("coordination.5", workflow)
         self.assertFalse(
             (ROOT / "config/profiles/weekly-l5-recovery.json").exists()
         )
         self.assertFalse(
             (ROOT / "config/profiles/weekly-l5-cancellation.json").exists()
         )
+        supervisor = (ROOT / "supervisor/run-weekly-stress").read_text()
+        installer = (ROOT / "supervisor/install.sh").read_text()
+        for operation in ("validate", "up", "status", "down"):
+            self.assertIn(f"compose::{operation}", supervisor)
+        self.assertIn("III_COMPOSE_STATE_DIR", supervisor)
+        self.assertIn("--namespace \"$project_namespace\"", supervisor)
+        self.assertIn("0.23.0-rc.4", installer)
+        self.assertIn("d9ab056f17daefc2f04ed892092a3df2fe76ffde5587335918606048047cf40a", installer)
+        self.assertNotIn("iii " + "worker", supervisor + installer)
+        self.assertNotIn("iii-" + "worker", supervisor + installer)
 
-    def test_l5_campaigns_are_advisory_isolated_and_bounded(self):
-        post_release = (ROOT / ".github/workflows/post-release.yml").read_text(
-            encoding="utf-8"
-        )
-        weekly = (ROOT / ".github/workflows/weekly.yml").read_text(encoding="utf-8")
-        self.assertIn("timeout_minutes: 360", post_release)
-        self.assertIn("timeout_minutes: 480", weekly)
+    def test_release_control_is_the_only_operational_campaign_dispatch(self):
+        for name in (
+            "daily.yml",
+            "post-release.yml",
+            "weekly.yml",
+            "weekly-stress.yml",
+            "run-campaign.yml",
+        ):
+            self.assertFalse((ROOT / ".github/workflows" / name).exists())
+        workflow = (ROOT / ".github/workflows/release-control-campaign.yml").read_text()
+        self.assertIn("Release Control", workflow)
+        contract_tool = (ROOT / "scripts/release_control_campaign.py").read_text()
+        self.assertIn('definition.get("failurePolicy") != "advisory"', contract_tool)
 
         expected_adaptive = {"post-release.json": 1, "weekly.json": 2}
         for name, expected_count in expected_adaptive.items():
@@ -82,20 +124,15 @@ class WorkflowBoundaryTests(unittest.TestCase):
         self.assertIn("compare/$E2E_REVISION...$default_sha", workflow)
         self.assertIn("/opt/iii-harness-e2e/resolve-cutover-evidence", workflow)
 
-    def test_campaigns_use_protected_disposable_code_fixtures(self):
-        workflow = (ROOT / ".github/workflows/run-campaign.yml").read_text(
-            encoding="utf-8"
-        )
-        launcher = "/opt/iii-harness-e2e/engineering-ticket-fixture"
-        self.assertGreaterEqual(workflow.count(launcher), 3)
-        self.assertIn("HARNESS_E2E_ENGINEERING_TICKET_FIXTURE_PATH", workflow)
-        self.assertIn("HARNESS_E2E_FIXTURE_PATH", workflow)
-        self.assertIn("SHARED_FIXTURE_REVISION", workflow)
-        self.assertIn("HARNESS_E2E_SHARED_FIXTURE_LEASE", workflow)
-        self.assertNotIn("HARNESS_E2E_CHESS_FIXTURE_LEASE", workflow)
-        self.assertIn("prepare", workflow)
-        self.assertIn("cleanup --lease-id", workflow)
-        self.assertNotIn("git commit", workflow)
+    def test_compose_campaigns_use_disposable_code_fixtures(self):
+        launcher = (ROOT / "scripts/run_release_control_group.sh").read_text()
+        self.assertIn("HARNESS_E2E_ENGINEERING_TICKET_FIXTURE_PATH", launcher)
+        self.assertIn("HARNESS_E2E_FIXTURE_PATH", launcher)
+        self.assertIn("engineering_fixture_revision=", launcher)
+        self.assertIn("shared_fixture_revision=", launcher)
+        self.assertIn("prepare --execution-id", launcher)
+        self.assertIn("cleanup --lease-id", launcher)
+        self.assertNotIn("git commit", launcher)
 
     def test_endurance_keeps_github_authority_in_the_post_run_publisher(self):
         workflow = (ROOT / ".github/workflows/engineering-endurance.yml").read_text(

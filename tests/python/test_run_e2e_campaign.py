@@ -222,6 +222,22 @@ class CanonicalManifestTests(unittest.TestCase):
         self.assertTrue(all(group.runs == 3 for group in faults))
         self.assertTrue(all(group.soak_minutes == 60 for group in faults))
 
+    def test_fault_execution_has_no_legacy_supervisor_path(self):
+        campaign = load_campaign(CAMPAIGN_DIR / "weekly.json")
+        with tempfile.TemporaryDirectory() as directory:
+            with self.assertRaisesRegex(CampaignError, "Release Control Compose dispatch"):
+                execute_campaign(
+                    campaign,
+                    e2e_bin=pathlib.Path("bin/harness-e2e"),
+                    output_root=pathlib.Path(directory),
+                    execution_id="legacy-fault-dispatch",
+                    dry_run=False,
+                    advisory=True,
+                    model="model",
+                    provider="provider",
+                    environ={},
+                )
+
     def test_revised_plans_exclude_removed_scenarios(self):
         removed = {
             "validation_scope_enforcement",

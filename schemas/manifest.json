@@ -225,7 +225,6 @@
         "mode",
         "plan",
         "runner",
-        "schema_version",
         "selected_cases",
         "target"
       ],
@@ -246,11 +245,6 @@
         },
         "runner": {
           "$ref": "#/definitions/RunnerIdentity"
-        },
-        "schema_version": {
-          "type": "integer",
-          "format": "uint32",
-          "minimum": 0.0
         },
         "selected_cases": {
           "type": "array",

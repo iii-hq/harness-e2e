@@ -164,8 +164,7 @@ jobs:
         if: matrix.execution_kind == 'fault_injection'
         run: cargo build --locked --release --bin harness-e2e
 
-      - name: Install stack verification tooling
-        if: matrix.execution_kind != 'fault_injection'
+      - name: Install Compose materialization tooling
         run: python3 -m pip install --quiet pyyaml
 
       - name: Execute common campaign group

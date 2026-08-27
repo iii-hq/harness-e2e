@@ -2,15 +2,14 @@
 set -Eeuo pipefail
 
 : "${HARNESS_E2E_EXECUTION_CONTRACT:?HARNESS_E2E_EXECUTION_CONTRACT is required}"
+: "${HARNESS_E2E_CAMPAIGN_GROUP_ID:?HARNESS_E2E_CAMPAIGN_GROUP_ID is required}"
 
 script_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 repo_root=$(cd -- "$script_dir/.." && pwd)
 contract_tool="$repo_root/scripts/release_control_campaign.py"
 artifact_dir=${HARNESS_E2E_ARTIFACTS_DIR:-"$repo_root/target/harness-e2e-shadow"}
-install_url=${III_INSTALL_URL:-https://install.iii.dev/iii/main/install.sh}
 engine_port=${HARNESS_E2E_ENGINE_PORT:-49134}
 wait_seconds=${HARNESS_E2E_WAIT_SECONDS:-300}
-stack_settle_seconds=${HARNESS_E2E_STACK_SETTLE_SECONDS:-60}
 admission_timeout_seconds=${HARNESS_E2E_ADMISSION_TIMEOUT_SECONDS:-180}
 run_timeout_seconds=${HARNESS_E2E_RUN_TIMEOUT_SECONDS:-10800}
 fixture_launcher=${HARNESS_E2E_FIXTURE_LAUNCHER:-"$repo_root/scripts/engineering_ticket_fixture.py"}
@@ -28,44 +27,34 @@ contract_path="$artifact_dir/execution-contract.json"
 printf '%s\n' "$HARNESS_E2E_EXECUTION_CONTRACT" >"$contract_path"
 python3 "$contract_tool" validate --contract "$contract_path" >/dev/null
 
-contract_schema=$(jq -r '.schema_version' "$contract_path")
-[[ "$contract_schema" == 3 ]] || { echo "Release Control campaign schema v3 is required" >&2; exit 2; }
-stack_versions=$(jq -c '.target.stack.resolved_versions' "$contract_path")
-stack_digest=$(jq -r '.target.stack.resolution_sha256' "$contract_path")
-runtime_versions=$(jq -c '.runtime.stack_versions' "$contract_path")
-cli_version=$(jq -r '.runtime.cli.version' "$contract_path")
-runner_worker=$(jq -r '.runner.registry_worker' "$contract_path")
-runner_ref=$(jq -r '.runner.registry_ref' "$contract_path")
-campaign_group_id=${HARNESS_E2E_CAMPAIGN_GROUP_ID:?HARNESS_E2E_CAMPAIGN_GROUP_ID is required}
+campaign_group_id=$HARNESS_E2E_CAMPAIGN_GROUP_ID
 jq -e --arg group "$campaign_group_id" \
   '.plan.definition.groups | any(.id == $group and .executionKind != "fault_injection")' \
   "$contract_path" >/dev/null
 seed=$(jq -r '.plan.definition.catalog.seed' "$contract_path")
+execution_id=$(jq -r '.execution_id' "$contract_path")
+short_execution=${execution_id%%-*}
+project_namespace="e2e-${short_execution}-${campaign_group_id}"
+daemon_namespace="compose-${short_execution}-${campaign_group_id}"
 
-run_root=$(mktemp -d "${TMPDIR:-/tmp}/harness-e2e-shadow.XXXXXX")
+run_root=$(mktemp -d "${TMPDIR:-/tmp}/harness-e2e-compose.XXXXXX")
 project_dir="$run_root/project"
-project_config="$project_dir/iii.config.yaml"
-e2e_home="$run_root/home"
-mkdir -p "$project_dir" "$e2e_home" "$artifact_dir/logs" "$artifact_dir/stack"
+engine_config="$project_dir/iii.config.yaml"
+compose_file="$artifact_dir/stack/worker-compose.yaml"
+compose_state="$run_root/compose-state"
+tools_dir="$run_root/bin"
+secrets_dir="$run_root/secrets"
+e2e_data="$run_root/e2e-data"
+engine_url="ws://127.0.0.1:${engine_port}"
+mkdir -p "$project_dir" "$compose_state" "$tools_dir" "$secrets_dir" "$e2e_data" \
+  "$artifact_dir/logs" "$artifact_dir/stack"
+chmod 700 "$secrets_dir" "$compose_state"
 
-export HOME="$e2e_home"
-export XDG_CONFIG_HOME="$e2e_home/.config"
-export PATH="$e2e_home/.local/bin:$e2e_home/.iii/bin:$PATH"
-# The CLI historically defaults to ./config.yaml, while the ephemeral engine
-# is deliberately started with the canonical iii.config.yaml. Pin both sides
-# to the same file; otherwise installs succeed into an unwatched config and
-# no target worker can register.
-export III_CONFIG_PATH="$project_config"
-export HARNESS_E2E_STACK_MODE=registry
-export HARNESS_E2E_STACK_VERSIONS="$stack_versions"
-export HARNESS_E2E_STACK_DIGEST="$stack_digest"
-export HARNESS_E2E_DATA_DIR="$run_root/e2e-data"
-export HARNESS_E2E_RUN_DIR="$project_dir"
-export HARNESS_E2E_LANE=$(jq -r '.plan.definition.lane' "$contract_path")
-export HARNESS_E2E_CAMPAIGN_GROUP="$campaign_group_id"
-
-iii_bin=""
+iii_bin="$tools_dir/iii"
 engine_pid=""
+compose_pid=""
+compose_started=false
+compose_down=false
 failure_phase=bootstrap
 failure_reason=""
 engineering_fixture_lease=""
@@ -81,13 +70,34 @@ fail() {
   return 1
 }
 
-snapshot_stack() {
-  for file in iii.config.yaml config.yaml iii.lock workers.json; do
-    [[ -f "$project_dir/$file" ]] && cp "$project_dir/$file" "$artifact_dir/stack/$file"
-  done
-  if [[ -f "$project_dir/iii.lock" ]]; then
-    sha256sum "$project_dir/iii.lock" | awk '{print "sha256:" $1}' >"$artifact_dir/stack/iii-lock.sha256"
-  fi
+capture_processes() {
+  local output=$1
+  ps -eo pid=,comm=,args= --no-headers | jq -Rn \
+    '[inputs | capture("^\\s*(?<pid>[0-9]+)\\s+(?<comm>\\S+)\\s*(?<args>.*)$") | {pid:(.pid|tonumber),comm,args}]' \
+    >"$output"
+}
+
+compose_trigger() {
+  local function_id=$1
+  shift
+  "$iii_bin" trigger "$function_id" \
+    --address 127.0.0.1 \
+    --port "$engine_port" \
+    --namespace "$daemon_namespace" \
+    --timeout-ms 600000 \
+    "$@"
+}
+
+project_trigger() {
+  local function_id=$1
+  local payload=$2
+  local timeout_ms=${3:-30000}
+  "$iii_bin" trigger "$function_id" \
+    --address 127.0.0.1 \
+    --port "$engine_port" \
+    --namespace "$project_namespace" \
+    --timeout-ms "$timeout_ms" \
+    --json "$payload"
 }
 
 cleanup() {
@@ -95,7 +105,17 @@ cleanup() {
   local fixture_cleanup_failed=0
   trap - EXIT INT TERM ERR
   set +e
-  snapshot_stack
+  if [[ "$compose_started" == true && "$compose_down" != true ]] && kill -0 "$compose_pid" 2>/dev/null; then
+    compose_trigger compose::down "file=$compose_file" >"$artifact_dir/stack/down.json" 2>>"$artifact_dir/logs/compose-commands.log"
+    compose_down=true
+  fi
+  [[ -f "$artifact_dir/stack/down.json" ]] || jq -n \
+    --arg phase "$failure_phase" '{status:"not_reached",phase:$phase}' >"$artifact_dir/stack/down.json"
+  capture_processes "$artifact_dir/stack/processes-after.json"
+  if [[ -n "$compose_pid" ]] && kill -0 "$compose_pid" 2>/dev/null; then
+    kill -- "-$compose_pid" 2>/dev/null || kill "$compose_pid" 2>/dev/null || true
+    wait "$compose_pid" 2>/dev/null || true
+  fi
   if [[ -n "$engine_pid" ]] && kill -0 "$engine_pid" 2>/dev/null; then
     kill -- "-$engine_pid" 2>/dev/null || kill "$engine_pid" 2>/dev/null || true
     wait "$engine_pid" 2>/dev/null || true
@@ -112,10 +132,27 @@ cleanup() {
     failure_reason="disposable code fixture cleanup failed"
   fi
   if ((status != 0)); then
-    [[ -n "$failure_reason" ]] || failure_reason="shadow execution failed during $failure_phase (exit $status)"
+    [[ -n "$failure_reason" ]] || failure_reason="Compose execution failed during $failure_phase (exit $status)"
     jq -n --arg phase "$failure_phase" --arg error "$failure_reason" --argjson exit_code "$status" \
-      '{schema:"e2e-shadow-failure/v1",phase:$phase,outcome:"infra_failed",error:$error,exit_code:$exit_code}' \
-      >"$artifact_dir/failure.json"
+      '{phase:$phase,outcome:"infra_failed",error:$error,exit_code:$exit_code}' >"$artifact_dir/failure.json"
+  fi
+  if [[ -f "$compose_file" && -f "$artifact_dir/stack/validate.json" && -f "$artifact_dir/stack/up.json" \
+        && -f "$artifact_dir/stack/status.json" && -f "$artifact_dir/stack/workers.json" \
+        && -f "$artifact_dir/stack/processes-before.json" && -f "$artifact_dir/stack/processes-during.json" ]]; then
+    python3 "$contract_tool" compose-evidence \
+      --contract "$contract_path" \
+      --compose "$compose_file" \
+      --daemon-namespace "$daemon_namespace" \
+      --project-namespace "$project_namespace" \
+      --validate "$artifact_dir/stack/validate.json" \
+      --up "$artifact_dir/stack/up.json" \
+      --status "$artifact_dir/stack/status.json" \
+      --down "$artifact_dir/stack/down.json" \
+      --workers "$artifact_dir/stack/workers.json" \
+      --process-before "$artifact_dir/stack/processes-before.json" \
+      --process-during "$artifact_dir/stack/processes-during.json" \
+      --process-after "$artifact_dir/stack/processes-after.json" \
+      --output "$artifact_dir/compose-evidence.json" || status=1
   fi
   rm -rf "$run_root"
   exit "$status"
@@ -151,184 +188,150 @@ prepare_code_fixtures() {
   if [[ "$requires_engineering" == true ]]; then
     export HARNESS_E2E_ENGINEERING_FIXTURE_REPOSITORY="$fixture_source_root/engineering-ticket.bundle"
     fixture_json="$run_root/engineering-fixture.json"
-    "$fixture_launcher" prepare \
-      --execution-id "${execution_prefix}-engineering" \
+    "$fixture_launcher" prepare --execution-id "${execution_prefix}-engineering" \
       --revision "$engineering_fixture_revision" >"$fixture_json"
     engineering_fixture_lease=$(jq -er .lease_id "$fixture_json")
-    export HARNESS_E2E_ENGINEERING_TICKET_FIXTURE_PATH
     HARNESS_E2E_ENGINEERING_TICKET_FIXTURE_PATH=$(jq -er .path "$fixture_json")
+    export HARNESS_E2E_ENGINEERING_TICKET_FIXTURE_PATH
   fi
   if [[ "$requires_shared" == true ]]; then
     export HARNESS_E2E_ENGINEERING_FIXTURE_REPOSITORY="$fixture_source_root/shared-fixture.bundle"
     fixture_json="$run_root/shared-fixture.json"
-    "$fixture_launcher" prepare \
-      --execution-id "${execution_prefix}-shared" \
+    "$fixture_launcher" prepare --execution-id "${execution_prefix}-shared" \
       --revision "$shared_fixture_revision" >"$fixture_json"
     shared_fixture_lease=$(jq -er .lease_id "$fixture_json")
-    export HARNESS_E2E_FIXTURE_PATH
     HARNESS_E2E_FIXTURE_PATH=$(jq -er .path "$fixture_json")
+    export HARNESS_E2E_FIXTURE_PATH
   fi
 }
 
-failure_phase=fixture_setup
-prepare_code_fixtures
+write_provider_secret() {
+  local worker=$1 variable=$2 value=${!2:-}
+  jq -e --arg worker "$worker" \
+    '.orchestration.nodes | any(.worker == $worker and .kind == "binary")' "$contract_path" >/dev/null || return 0
+  [[ -n "$value" ]] || fail "$variable is required by orchestrated worker $worker"
+  printf '%s=%s\n' "$variable" "$value" >"$secrets_dir/$worker.env"
+  chmod 600 "$secrets_dir/$worker.env"
+}
 
 wait_for_engine() {
   local response
   for ((attempt = 0; attempt < wait_seconds; attempt++)); do
     kill -0 "$engine_pid" 2>/dev/null || fail "iii engine exited before becoming ready"
-    response=$("$iii_bin" trigger engine::workers::list --port "$engine_port" --json '{}' 2>/dev/null || true)
+    response=$("$iii_bin" trigger engine::workers::list --address 127.0.0.1 --port "$engine_port" --json '{}' 2>/dev/null || true)
     jq -e '.workers != null' <<<"$response" >/dev/null 2>&1 && return 0
     sleep 1
   done
   fail "iii engine did not become ready within ${wait_seconds}s"
 }
 
-wait_for_functions() {
-  local required response missing stable_since deadline
-  required=$(printf '%s\n' "$@" | jq -R . | jq -s .)
-  deadline=$((SECONDS + wait_seconds))
-  stable_since=""
-  while ((SECONDS < deadline)); do
-    response=$("$iii_bin" trigger engine::functions::list --port "$engine_port" \
-      --json '{"include_internal":true}' 2>/dev/null || true)
-    missing=$(jq -r --argjson required "$required" \
-      '(.functions // [] | map(.function_id)) as $available | ($required - $available) | join(" ")' \
-      <<<"$response" 2>/dev/null || printf 'function discovery failed')
-    if [[ -z "$missing" ]] && timeout --signal=TERM --kill-after=2s 5 \
-      "$iii_bin" trigger state::list --port "$engine_port" \
-      --json '{"scope":"harness_e2e_execution"}' >/dev/null 2>&1; then
-      [[ -n "$stable_since" ]] || stable_since=$SECONDS
-      if ((SECONDS - stable_since >= stack_settle_seconds)); then
-        return 0
-      fi
-    else
-      stable_since=""
+wait_for_compose() {
+  for ((attempt = 0; attempt < wait_seconds; attempt++)); do
+    kill -0 "$compose_pid" 2>/dev/null || fail "iii compose exited before becoming ready"
+    if compose_trigger compose::list --json '{}' >/dev/null 2>&1; then
+      return 0
     fi
     sleep 1
   done
-  fail "required functions did not remain ready for ${stack_settle_seconds}s: ${missing:-state::list}"
+  fail "iii compose did not become ready within ${wait_seconds}s"
 }
 
-add_with_retry() {
-  local label=$1
-  shift
-  for attempt in 1 2 3; do
-    # `wait_for_functions` below is the single readiness barrier for the
-    # complete pinned stack. Waiting here makes one slow worker serially hold
-    # every add invocation even though the engine can boot them together.
-    if (cd "$project_dir" && timeout --signal=TERM --kill-after=15s 600 "$iii_bin" worker add -y --no-wait "$@") \
-      2>&1 | tee -a "$artifact_dir/logs/$label.log"; then
-      return 0
-    fi
-    log "worker add ($label) failed on attempt $attempt"
-    sleep 15
-  done
-  return 1
-}
+failure_phase=fixture_setup
+prepare_code_fixtures
+write_provider_secret provider-deepseek DEEPSEEK_API_KEY
+write_provider_secret provider-zai ZAI_API_KEY
 
-install_exact_stack() {
-  local label=$1
-  local versions_json=$2
-  local force=${3:-false}
-  local -a pins=()
-  mapfile -t pins < <(jq -r 'to_entries | sort_by(.key)[] | "\(.key)@\(.value)"' <<<"$versions_json")
-  ((${#pins[@]} > 0)) || return 0
-  log "Installing ${#pins[@]} exact workers ($label)"
-  if [[ "$force" == true ]]; then
-    add_with_retry "$label" "${pins[@]}" --force
-  else
-    add_with_retry "$label" "${pins[@]}"
-  fi
-}
+capture_processes "$artifact_dir/stack/processes-before.json"
 
-capture_workers() {
-  "$iii_bin" trigger engine::workers::list --port "$engine_port" --json '{}' >"$project_dir/workers.json"
-}
-
-verify_target_harness_runtime() {
-  local expected observed
-  expected=$(jq -r '.target.version' "$contract_path")
-  observed=$(jq -r --arg name harness \
-    '(.workers // [] | map(select(.name == $name)) | last | .version) // empty' \
-    "$project_dir/workers.json")
-  [[ "$observed" == "$expected" ]] && return 0
-  fail "harness runtime version mismatch: expected $expected, observed ${observed:-unreported}"
-}
-
-log "Installing exact iii CLI $cli_version"
-curl -fsSL --retry 3 --retry-all-errors --retry-delay 5 "$install_url" -o "$run_root/install.sh"
-VERSION="$cli_version" sh "$run_root/install.sh" 2>&1 | tee "$artifact_dir/logs/install.log"
-iii_bin=$(command -v iii)
+failure_phase=cli_install
+cli_version=$(jq -r '.runtime.cli.version' "$contract_path")
+cli_asset=$(jq -r '.runtime.cli.asset' "$contract_path")
+cli_sha=$(jq -r '.runtime.cli.sha256' "$contract_path" | sed 's/^sha256://')
+cli_archive="$run_root/$cli_asset"
+cli_url="https://github.com/iii-hq/iii/releases/download/iii/v${cli_version}/${cli_asset}"
+log "Downloading exact iii CLI $cli_version"
+curl -fsSL --retry 3 --retry-all-errors --retry-delay 5 "$cli_url" -o "$cli_archive"
+printf '%s  %s\n' "$cli_sha" "$cli_archive" | sha256sum --check --status
+tar -xzf "$cli_archive" -C "$tools_dir"
+chmod +x "$iii_bin"
 observed_cli_version=$("$iii_bin" --version 2>&1)
 printf '%s\n' "$observed_cli_version" >"$artifact_dir/iii-version.txt"
-if [[ "$observed_cli_version" != *"$cli_version"* ]]; then
-  fail "iii CLI version mismatch: expected $cli_version, observed $observed_cli_version"
+[[ "$observed_cli_version" == *"$cli_version"* ]] || fail \
+  "iii CLI version mismatch: expected $cli_version, observed $observed_cli_version"
+forbidden_name="iii""-worker"
+if find "$tools_dir" -type f -name "$forbidden_name" -print -quit | grep -q .; then
+  fail "forbidden lifecycle helper was installed"
 fi
-export HARNESS_E2E_ENGINE_REVISION="$observed_cli_version"
 
-printf 'workers: []\n' >"$project_config"
-(cd "$project_dir" && exec setsid "$iii_bin" -c iii.config.yaml --no-update-check) \
+compose_args=(
+  --contract "$contract_path"
+  --namespace "$project_namespace"
+  --data-dir "$e2e_data"
+  --environment "harness-e2e.HARNESS_E2E_RUN_DIR=$project_dir"
+  --environment "harness-e2e.HARNESS_E2E_LANE=$(jq -r '.plan.definition.lane' "$contract_path")"
+  --environment "harness-e2e.HARNESS_E2E_CAMPAIGN_GROUP=$campaign_group_id"
+  --output "$compose_file"
+)
+for secret_file in "$secrets_dir"/*.env; do
+  [[ -f "$secret_file" ]] || continue
+  compose_args+=(--env-file "$(basename "$secret_file" .env)=$secret_file")
+done
+if [[ -n "${HARNESS_E2E_FIXTURE_PATH:-}" ]]; then
+  compose_args+=(--environment "harness-e2e.HARNESS_E2E_FIXTURE_PATH=$HARNESS_E2E_FIXTURE_PATH")
+fi
+if [[ -n "${HARNESS_E2E_ENGINEERING_TICKET_FIXTURE_PATH:-}" ]]; then
+  compose_args+=(--environment \
+    "harness-e2e.HARNESS_E2E_ENGINEERING_TICKET_FIXTURE_PATH=$HARNESS_E2E_ENGINEERING_TICKET_FIXTURE_PATH")
+fi
+python3 "$contract_tool" compose "${compose_args[@]}"
+
+failure_phase=engine_start
+manager_name="iii""-worker-manager"
+printf 'workers:\n  - name: %s\n    config:\n      host: 127.0.0.1\n      port: %s\n' \
+  "$manager_name" "$engine_port" >"$engine_config"
+(cd "$project_dir" && exec setsid "$iii_bin" -c "$engine_config" --no-update-check) \
   >"$artifact_dir/logs/engine.log" 2>&1 &
 engine_pid=$!
 wait_for_engine
 
-failure_phase=registry
-# Resolve runtime and tested-stack pins once before the runner and once after
-# it. Every campaign job starts clean, so force would only create avoidable
-# restarts during transient Registry retries.
-exact_stack_versions=$(jq -cn \
-  --argjson runtime "$runtime_versions" \
-  --argjson target "$stack_versions" \
-  '$runtime + $target')
-install_exact_stack stack-bootstrap "$exact_stack_versions" false
+failure_phase=compose_start
+III_COMPOSE_STATE_DIR="$compose_state" setsid "$iii_bin" compose \
+  --engine "$engine_url" --namespace "$daemon_namespace" \
+  >"$artifact_dir/logs/compose.log" 2>&1 &
+compose_pid=$!
+compose_started=true
+wait_for_compose
 
-log "Installing ephemeral runner: $runner_worker@$runner_ref"
-add_with_retry runner "$runner_worker@$runner_ref" --force
+failure_phase=compose_validate
+compose_trigger compose::validate "file=$compose_file" >"$artifact_dir/stack/validate.json"
 
-# A runner dependency may resolve a different version in the lock. Reapply
-# exact pins without force: force restarts an already-correct target worker
-# while the engine's file watcher can revive its previous executable between
-# removal and download. The lock and runtime checks below remain fail-closed.
-install_exact_stack stack-repin "$exact_stack_versions" false
-
-python3 "$contract_tool" verify-lock \
-  --contract "$contract_path" \
-  --lock "$project_dir/iii.lock" \
-  --output "$artifact_dir/stack/stack-manifest.json"
-
-wait_for_functions \
-  e2e::scenarios-list e2e::run e2e::status e2e::results-get e2e::archive e2e::archive-head \
-  harness::send harness::status router::models::get \
-  state::list state::get state::set \
-  storage::putObject storage::getObject database::execute database::query
-capture_workers
-verify_target_harness_runtime
+failure_phase=compose_up
+compose_trigger compose::up "file=$compose_file" >"$artifact_dir/stack/up.json"
+compose_trigger compose::status "file=$compose_file" >"$artifact_dir/stack/status.json"
+"$iii_bin" trigger engine::workers::list --address 127.0.0.1 --port "$engine_port" --json '{}' \
+  >"$artifact_dir/stack/workers.json"
+capture_processes "$artifact_dir/stack/processes-during.json"
 
 failure_phase=materialization
-"$iii_bin" trigger e2e::scenarios-list --port "$engine_port" \
-  --json "$(jq -cn --argjson seed "$seed" '{seed:$seed}')" >"$artifact_dir/catalog.json"
-materialize_args=(
-  --contract "$contract_path"
-  --catalog "$artifact_dir/catalog.json"
-  --output "$artifact_dir/run-request.json"
+project_trigger e2e::scenarios-list "$(jq -cn --argjson seed "$seed" '{seed:$seed}')" 120000 \
+  >"$artifact_dir/catalog.json"
+python3 "$contract_tool" materialize \
+  --contract "$contract_path" \
+  --catalog "$artifact_dir/catalog.json" \
+  --output "$artifact_dir/run-request.json" \
   --group-id "$campaign_group_id"
-)
-python3 "$contract_tool" materialize "${materialize_args[@]}"
 
 failure_phase=execution
-timeout --signal=TERM --kill-after=30s "$admission_timeout_seconds" \
-  "$iii_bin" trigger e2e::run --port "$engine_port" \
-  --json "$(jq -c . "$artifact_dir/run-request.json")" >"$artifact_dir/accepted.json"
+project_trigger e2e::run "$(jq -c . "$artifact_dir/run-request.json")" "$((admission_timeout_seconds * 1000))" \
+  >"$artifact_dir/accepted.json"
 remote_execution_id=$(jq -er '.execution_id | select(type == "string" and length > 0)' "$artifact_dir/accepted.json")
 printf '%s\n' "$remote_execution_id" >"$artifact_dir/remote-execution-id.txt"
 
 started_at=$SECONDS
 poll_index=0
 while true; do
-  timeout --signal=TERM --kill-after=30s 60 \
-    "$iii_bin" trigger e2e::status --port "$engine_port" \
-    --json "$(jq -cn --arg execution_id "$remote_execution_id" '{execution_id:$execution_id}')" \
+  project_trigger e2e::status \
+    "$(jq -cn --arg execution_id "$remote_execution_id" '{execution_id:$execution_id}')" 60000 \
     >"$artifact_dir/status.json"
   jq -e --arg id "$remote_execution_id" '.execution_id == $id' "$artifact_dir/status.json" >/dev/null
   [[ "$(jq -r '.terminal // false' "$artifact_dir/status.json")" == true ]] && break
@@ -342,20 +345,15 @@ done
 
 failure_phase=results
 results_response="$artifact_dir/results-get.json"
-timeout --signal=TERM --kill-after=30s 120 \
-  "$iii_bin" trigger e2e::results-get --port "$engine_port" \
-  --json "$(jq -cn --arg execution_id "$remote_execution_id" '{execution_id:$execution_id}')" \
+project_trigger e2e::results-get \
+  "$(jq -cn --arg execution_id "$remote_execution_id" '{execution_id:$execution_id}')" 120000 \
   >"$results_response"
 jq -e --arg id "$remote_execution_id" '.execution_id == $id' "$results_response" >/dev/null
-
-# Preserve the exact Harness-authored bytes. The API envelope is retained as
-# results-get.json for transport evidence, but it is never used to rebuild
-# results.json, manifest.json, or observation.json.
 native_result_path=$(jq -er '.result_path | select(type == "string" and length > 0)' "$results_response")
 case "$native_result_path" in
   /*|*".."*) fail "unsafe native result path: $native_result_path" ;;
 esac
-native_dir="$HARNESS_E2E_DATA_DIR/$(dirname -- "$native_result_path")"
+native_dir="$e2e_data/$(dirname -- "$native_result_path")"
 for native_name in results.json manifest.json observation.json; do
   test -f "$native_dir/$native_name"
   cp -- "$native_dir/$native_name" "$artifact_dir/$native_name"
@@ -367,14 +365,16 @@ observed_manifest_sha="sha256:$(sha256sum "$artifact_dir/manifest.json" | cut -d
 [[ "$observed_results_sha" == "$expected_results_sha" ]]
 [[ "$observed_manifest_sha" == "$expected_manifest_sha" ]]
 
-# This proves the archive contract while the runner is alive. GitHub Artifact,
-# not this ephemeral local storage, is the D0 retention boundary.
-if "$iii_bin" trigger e2e::archive --port "$engine_port" \
-  --json "$(jq -cn --arg execution_id "$remote_execution_id" '{execution_id:$execution_id,retention_class:"longitudinal"}')" \
+if project_trigger e2e::archive \
+  "$(jq -cn --arg execution_id "$remote_execution_id" '{execution_id:$execution_id,retention_class:"longitudinal"}')" 120000 \
   >"$artifact_dir/archive.json" 2>"$artifact_dir/logs/archive.log"; then
-  "$iii_bin" trigger e2e::archive-head --port "$engine_port" \
-    --json "$(jq -cn --arg execution_id "$remote_execution_id" '{execution_id:$execution_id}')" \
+  project_trigger e2e::archive-head \
+    "$(jq -cn --arg execution_id "$remote_execution_id" '{execution_id:$execution_id}')" 120000 \
     >"$artifact_dir/archive-head.json" 2>>"$artifact_dir/logs/archive.log" || true
 fi
 
+failure_phase=compose_down
+compose_trigger compose::down "file=$compose_file" >"$artifact_dir/stack/down.json"
+compose_down=true
+capture_processes "$artifact_dir/stack/processes-after.json"
 failure_phase=complete
