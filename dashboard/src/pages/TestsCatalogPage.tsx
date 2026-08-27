@@ -390,18 +390,16 @@ export function TestsCatalogPage() {
         className="page-shell w-[calc(100%_-_1.5rem)] max-w-[1420px] pt-5 pb-16 md:w-[calc(100%_-_3rem)]"
       >
         {localBridge && authoringScenario ? (
-          <div className="panel mb-5 overflow-hidden">
-            <LocalScenarioEditor
-              bridge={localBridge}
-              initialFileName={suggestedLocalFileName}
-              onClose={() => setAuthoringScenario(false)}
-              onCreated={(scenarioId) => {
-                setCreatedScenarioId(scenarioId)
-                setAuthoringScenario(false)
-                void loadLocalScenarios(localBridge)
-              }}
-            />
-          </div>
+          <LocalScenarioEditor
+            bridge={localBridge}
+            initialFileName={suggestedLocalFileName}
+            onClose={() => setAuthoringScenario(false)}
+            onCreated={(scenarioId) => {
+              setCreatedScenarioId(scenarioId)
+              setAuthoringScenario(false)
+              void loadLocalScenarios(localBridge)
+            }}
+          />
         ) : null}
 
         {createdScenarioId ? (
