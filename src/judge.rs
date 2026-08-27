@@ -587,10 +587,35 @@ pub(crate) async fn invoke(
     prompt: &str,
     max_output_tokens: u64,
 ) -> Result<Value> {
+    invoke_with_thinking_level(
+        context,
+        config,
+        system_prompt,
+        prompt,
+        max_output_tokens,
+        None,
+    )
+    .await
+}
+
+pub(crate) async fn invoke_with_thinking_level(
+    context: &E2eContext,
+    config: &JudgeConfig,
+    system_prompt: &str,
+    prompt: &str,
+    max_output_tokens: u64,
+    thinking_level: Option<&str>,
+) -> Result<Value> {
     context
         .trigger_value(
             "router::complete",
-            judge_request(config, system_prompt, prompt, max_output_tokens),
+            judge_request(
+                config,
+                system_prompt,
+                prompt,
+                max_output_tokens,
+                thinking_level,
+            ),
         )
         .await
 }
@@ -600,8 +625,9 @@ fn judge_request(
     system_prompt: &str,
     prompt: &str,
     max_output_tokens: u64,
+    thinking_level: Option<&str>,
 ) -> Value {
-    json!({
+    let mut request = json!({
         "model": config.model,
         "provider": config.provider,
         "system_prompt": system_prompt,
@@ -614,7 +640,11 @@ fn judge_request(
             "timestamp": now_ms() as i64,
         }],
         "max_output_tokens": max_output_tokens,
-    })
+    });
+    if let Some(level) = thinking_level {
+        request["thinking_level"] = json!(level);
+    }
+    request
 }
 
 fn repair_prompt(base_prompt: &str, error: &anyhow::Error, response: &str, attempt: u8) -> String {
@@ -1446,9 +1476,28 @@ mod tests {
             JUDGE_SYSTEM_PROMPT,
             "evaluate",
             2_048,
+            None,
         );
         assert!(request.get("response_format").is_none());
+        assert!(request.get("thinking_level").is_none());
         assert_eq!(request["max_output_tokens"], 2_048);
+    }
+
+    #[test]
+    fn bounded_json_request_can_lower_reasoning_without_changing_model_identity() {
+        let request = judge_request(
+            &JudgeConfig {
+                model: "advisor".into(),
+                provider: "provider".into(),
+            },
+            JUDGE_SYSTEM_PROMPT,
+            "analyze",
+            4_096,
+            Some("minimal"),
+        );
+        assert_eq!(request["model"], "advisor");
+        assert_eq!(request["provider"], "provider");
+        assert_eq!(request["thinking_level"], "minimal");
     }
 
     #[test]

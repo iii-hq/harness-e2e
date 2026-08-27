@@ -148,12 +148,13 @@ Minimum effect policy:\n{}\n\nRequired response shape:\n{}",
     let mut attempt_prompt = prompt.clone();
     let mut usage_samples = Vec::new();
     for attempt in 1..=MAX_ATTEMPTS {
-        let response = judge::invoke(
+        let response = judge::invoke_with_thinking_level(
             context,
             &config,
             SYSTEM_PROMPT,
             &attempt_prompt,
             spec.budget.advisor_max_output_tokens,
+            Some("minimal"),
         )
         .await
         .with_context(|| format!("invoke Harness improvement advisor attempt {attempt}"))?;
