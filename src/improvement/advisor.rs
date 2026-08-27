@@ -105,7 +105,7 @@ pub async fn run_advisor(
             "facts": [{"summary": "observed fact", "evidence": [template_evidence.clone()]}],
             "interpretations": [{"summary": "bounded causal interpretation", "confidence": 0.8, "evidence": [template_evidence.clone()]}],
             "opportunities": [{"priority": 1, "summary": "one Harness change", "expected_impact": "measurable impact", "validation_method": "frozen E2E plan", "evidence": [template_evidence.clone()]}],
-            "limitations": [],
+            "limitations": [{"summary": "bounded evidence limitation", "evidence": [template_evidence.clone()]}],
         },
         "hypothesis": {
             "root_cause": "tool_discovery",
@@ -125,7 +125,7 @@ pub async fn run_advisor(
         },
         "expected_impact": "why this should be faster or more accurate",
         "validation_method": "five compatible runs of the frozen target and sentinels",
-        "limitations": [],
+        "limitations": ["bounded implementation limitation"],
         "reason": null,
     });
     let prompt = format!(
@@ -255,5 +255,50 @@ fn evidence(artifact_id: &str, artifact_sha256: &str, locator: &str) -> Evidence
         artifact_id: artifact_id.into(),
         artifact_sha256: artifact_sha256.into(),
         locator: Some(locator.into()),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn raw_response(analysis_limitations: serde_json::Value) -> serde_json::Value {
+        json!({
+            "actionable": false,
+            "analysis": {
+                "input_sha256": format!("sha256:{}", "a".repeat(64)),
+                "analyzer": {
+                    "analyzer": "harness-improvement-advisor",
+                    "input_sha256": format!("sha256:{}", "a".repeat(64)),
+                },
+                "facts": [],
+                "interpretations": [],
+                "opportunities": [],
+                "limitations": analysis_limitations,
+            },
+            "limitations": ["implementation limitation"],
+            "reason": "no measurable opportunity",
+        })
+    }
+
+    #[test]
+    fn analysis_limitations_use_structured_entries() {
+        let valid = raw_response(json!([{
+            "summary": "validation-gate details are unavailable",
+            "evidence": [],
+        }]));
+        let parsed: RawAdvisorResponse = serde_json::from_value(valid).unwrap();
+        assert_eq!(parsed.analysis.limitations.len(), 1);
+        assert_eq!(parsed.limitations, ["implementation limitation"]);
+
+        let malformed = raw_response(json!(["validation-gate details are unavailable"]));
+        assert!(serde_json::from_value::<RawAdvisorResponse>(malformed).is_err());
+    }
+
+    #[test]
+    fn unknown_advisor_root_cause_maps_to_bounded_unknown_category() {
+        let root_cause: super::super::ImprovementRootCause =
+            serde_json::from_value(json!("contract_discovery_staleness")).unwrap();
+        assert_eq!(root_cause, super::super::ImprovementRootCause::Unknown);
     }
 }

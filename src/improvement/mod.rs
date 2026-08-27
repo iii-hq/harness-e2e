@@ -631,6 +631,7 @@ pub enum ImprovementRootCause {
     RetryBehavior,
     ValidationBehavior,
     Configuration,
+    #[serde(other)]
     Unknown,
 }
 
