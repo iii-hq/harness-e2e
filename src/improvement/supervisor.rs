@@ -867,6 +867,9 @@ impl ImprovementSupervisor {
         check_run: u8,
     ) -> Result<HarnessCheckOutcome> {
         let harness = worktree.join("harness");
+        // The frozen external runner evaluates the candidate after these checks. The legacy
+        // in-tree `harness-e2e` package is protected from candidate edits and is intentionally
+        // excluded here; Harness and its internal integration workspace remain fully checked.
         let commands: [(ImprovementCheckKind, &[&str]); 4] = [
             (ImprovementCheckKind::Format, &["cargo", "fmt", "--all"]),
             (
@@ -876,6 +879,8 @@ impl ImprovementSupervisor {
                     "clippy",
                     "--workspace",
                     "--all-targets",
+                    "--exclude",
+                    "harness-e2e",
                     "--",
                     "-D",
                     "warnings",
@@ -883,7 +888,7 @@ impl ImprovementSupervisor {
             ),
             (
                 ImprovementCheckKind::Test,
-                &["cargo", "test", "--workspace"],
+                &["cargo", "test", "--workspace", "--exclude", "harness-e2e"],
             ),
             (
                 ImprovementCheckKind::Build,
