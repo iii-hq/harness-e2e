@@ -1332,7 +1332,6 @@ pub struct ObservationCorrelation {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct ObservationRunContract {
-    pub schema_version: u32,
     pub mode: ObservationMode,
     pub target: ObservationTargetIdentity,
     pub plan: ObservationPlanIdentity,
@@ -1344,9 +1343,6 @@ pub struct ObservationRunContract {
 
 impl ObservationRunContract {
     pub fn validate(&self) -> Result<()> {
-        if self.schema_version != 1 {
-            bail!("run_contract schema_version must be 1");
-        }
         if self.target.application != "harness" {
             bail!("run_contract target application must be 'harness'");
         }
@@ -2838,7 +2834,6 @@ mod tests {
 
     fn observation_contract() -> ObservationRunContract {
         ObservationRunContract {
-            schema_version: 1,
             mode: ObservationMode {
                 environment: ObservationEnvironment::Demonstration,
                 decision: ObservationDecision::ObserveOnly,

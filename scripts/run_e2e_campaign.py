@@ -745,91 +745,6 @@ def _run_process(
         return 127, str(error)
 
 
-def _execute_fault_group(
-    group: CampaignGroup,
-    *,
-    e2e_bin: pathlib.Path,
-    fault_runner: pathlib.Path,
-    profile_root: pathlib.Path,
-    output: pathlib.Path,
-    environment: Mapping[str, str],
-    run_process: Callable[..., Any],
-    monotonic: Callable[[], float],
-) -> tuple[int, str | None, list[list[str]]]:
-    if not group.fault_profile or not group.fault_scenario:
-        raise CampaignError(f"fault group {group.id} is incomplete")
-    output.mkdir(parents=True, exist_ok=True)
-    profile = profile_root / f"{group.fault_profile}.json"
-    plan = output / "fault-plan.json"
-    commands: list[list[str]] = []
-    plan_command = [
-        str(e2e_bin),
-        "fault-plan",
-        "--profile",
-        str(profile),
-        "--output",
-        str(plan),
-    ]
-    commands.append(plan_command)
-    return_code, error = _run_process(
-        plan_command, environment=environment, run_process=run_process
-    )
-    if return_code != 0:
-        return return_code, error, commands
-
-    deadline = monotonic() + group.soak_minutes * 60
-    iteration = 0
-    while iteration < group.runs or monotonic() < deadline:
-        iteration += 1
-        iteration_output = output / f"run-{iteration}"
-        iteration_output.mkdir(parents=True, exist_ok=True)
-        supervisor_command = [
-            str(fault_runner),
-            "--e2e-bin",
-            str(e2e_bin),
-            "--profile",
-            str(profile),
-            "--plan",
-            str(plan),
-            "--scenario",
-            group.fault_scenario,
-            "--iteration",
-            str(iteration),
-            "--output",
-            str(iteration_output),
-        ]
-        commands.append(supervisor_command)
-        return_code, error = _run_process(
-            supervisor_command, environment=environment, run_process=run_process
-        )
-        if return_code != 0:
-            return return_code, error, commands
-        journal = iteration_output / "fault-journal.json"
-        evaluation = iteration_output / "fault-evaluation.json"
-        evaluation_command = [
-            str(e2e_bin),
-            "fault-evaluate",
-            "--profile",
-            str(profile),
-            "--plan",
-            str(plan),
-            "--journal",
-            str(journal),
-            "--output",
-            str(evaluation),
-        ]
-        results = iteration_output / "results"
-        if results.exists():
-            evaluation_command.extend(["--results", str(results)])
-        commands.append(evaluation_command)
-        return_code, error = _run_process(
-            evaluation_command, environment=environment, run_process=run_process
-        )
-        if return_code != 0:
-            return return_code, error, commands
-    return 0, None, commands
-
-
 def execute_campaign(
     campaign: Campaign,
     *,
@@ -844,10 +759,6 @@ def execute_campaign(
     judge_provider: str | None = None,
     url: str | None = None,
     progress_interval_seconds: int | None = None,
-    fault_runner: pathlib.Path = pathlib.Path(
-        "/opt/iii-harness-e2e/run-weekly-stress"
-    ),
-    profile_root: pathlib.Path = pathlib.Path("config/profiles"),
     environ: Mapping[str, str] | None = None,
     run_process: Callable[..., Any] = subprocess.run,
     monotonic: Callable[[], float] = time.monotonic,
@@ -855,6 +766,12 @@ def execute_campaign(
     if not SAFE_EXECUTION_ID.fullmatch(execution_id):
         raise CampaignError("execution_id contains unsafe characters")
     base_environment = dict(os.environ if environ is None else environ)
+    if not dry_run and any(
+        group.execution_kind == "fault_injection" for group in campaign.groups
+    ):
+        raise CampaignError(
+            "fault injection execution requires Release Control Compose dispatch"
+        )
     if bool(judge_model) != bool(judge_provider):
         raise CampaignError("judge_model and judge_provider must be supplied together")
     if not dry_run:
@@ -887,7 +804,7 @@ def execute_campaign(
     for group in campaign.groups:
         group_output = execution_root / group.id
         command = (
-            [str(fault_runner), "--profile", str(group.fault_profile)]
+            ["release-control-compose-dispatch", group.id]
             if group.execution_kind == "fault_injection"
             else build_group_command(
                 campaign,
@@ -954,22 +871,9 @@ def execute_campaign(
         result["materialized_group"] = str(materialized_path)
         result["materialized_group_sha256"] = materialized_group["sha256"]
         started = monotonic()
-        if group.execution_kind == "fault_injection":
-            return_code, error_message, commands = _execute_fault_group(
-                group,
-                e2e_bin=e2e_bin,
-                fault_runner=fault_runner,
-                profile_root=profile_root,
-                output=group_output,
-                environment=child_environment,
-                run_process=run_process,
-                monotonic=monotonic,
-            )
-            result["commands"] = commands
-        else:
-            return_code, error_message = _run_process(
-                command, environment=child_environment, run_process=run_process
-            )
+        return_code, error_message = _run_process(
+            command, environment=child_environment, run_process=run_process
+        )
         duration_ms = max(0, round((monotonic() - started) * 1000))
         result.update(
             {
@@ -1202,21 +1106,6 @@ def build_parser() -> argparse.ArgumentParser:
         / "scoring"
         / "difficulty-weighted-v1.json",
     )
-    parser.add_argument(
-        "--fault-runner",
-        type=pathlib.Path,
-        default=pathlib.Path(
-            os.environ.get(
-                "HARNESS_E2E_FAULT_RUNNER",
-                "/opt/iii-harness-e2e/run-weekly-stress",
-            )
-        ),
-    )
-    parser.add_argument(
-        "--profile-root",
-        type=pathlib.Path,
-        default=pathlib.Path(__file__).resolve().parents[1] / "config" / "profiles",
-    )
     parser.add_argument("--model")
     parser.add_argument("--provider")
     parser.add_argument("--judge-model")
@@ -1285,8 +1174,6 @@ def main(argv: Sequence[str] | None = None) -> int:
                 judge_provider=args.judge_provider,
                 url=args.url,
                 progress_interval_seconds=args.progress_interval_seconds,
-                fault_runner=args.fault_runner,
-                profile_root=args.profile_root,
             )
         summary["manifest_sha256"] = _canonical_sha256(
             json.loads(args.manifest.read_text(encoding="utf-8"))

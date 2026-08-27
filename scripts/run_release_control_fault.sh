@@ -41,7 +41,7 @@ cleanup() {
   if ((status != 0)); then
     [[ -n "$failure_reason" ]] || failure_reason="fault execution failed during $failure_phase"
     jq -n --arg phase "$failure_phase" --arg error "$failure_reason" --argjson exit_code "$status" \
-      '{schema:"e2e-campaign-group-failure/v1",phase:$phase,outcome:"infra_failed",error:$error,exit_code:$exit_code}' \
+      '{phase:$phase,outcome:"infra_failed",error:$error,exit_code:$exit_code}' \
       >"$artifact_dir/failure.json"
   fi
   exit "$status"
@@ -79,7 +79,7 @@ while ((iteration < runs || SECONDS < deadline)); do
   output="$artifact_dir/run-${iteration}"
   mkdir -p "$output"
   "$supervisor" \
-    --e2e-bin "$e2e_bin" \
+    --contract "$contract_path" \
     --profile "$profile_path" \
     --plan "$plan" \
     --scenario "$scenario" \

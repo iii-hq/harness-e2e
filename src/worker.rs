@@ -1,4 +1,3 @@
-use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -7,23 +6,15 @@ use clap::Args;
 use iii_sdk::protocol::TriggerRequest;
 use iii_sdk::runtime::WorkerMetadata;
 use iii_sdk::{register_worker, InitOptions};
-use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
 
 use crate::control::ControlPlane;
 use crate::manifest::WORKER_NAME;
 
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct WorkerConfig {
-    /// Directory where E2E execution records, plans, reports and dashboard
-    /// state are persisted and loaded on worker startup. This value is seeded
-    /// into the `configuration` worker and can be edited from Console.
-    #[schemars(
-        description = "Directory for persisted Harness E2E data. Changes apply after restarting the worker.",
-        length(min = 1)
-    )]
+    /// Directory where E2E execution records, plans, reports and dashboard state live.
     pub data_dir: String,
 }
 
@@ -36,33 +27,6 @@ impl Default for WorkerConfig {
 }
 
 impl WorkerConfig {
-    pub fn to_json(&self) -> Value {
-        serde_json::to_value(self).expect("WorkerConfig serializes")
-    }
-
-    pub fn from_json(value: &Value) -> Result<Self, String> {
-        let config: Self = serde_json::from_value(value.clone())
-            .map_err(|error| format!("json parse: {error}"))?;
-        config.validate()
-    }
-
-    pub fn json_schema() -> Value {
-        let root = schemars::schema_for!(Self);
-        let mut schema =
-            serde_json::to_value(&root.schema).expect("WorkerConfig schema serializes");
-        if let Some(object) = schema.as_object_mut() {
-            if !root.definitions.is_empty() {
-                object.insert(
-                    "definitions".into(),
-                    serde_json::to_value(&root.definitions)
-                        .expect("WorkerConfig definitions serialize"),
-                );
-            }
-            object.insert("example".into(), Self::default().to_json());
-        }
-        schema
-    }
-
     fn validate(self) -> Result<Self, String> {
         if self.data_dir.trim().is_empty() {
             return Err("data_dir cannot be empty".into());
@@ -71,118 +35,73 @@ impl WorkerConfig {
     }
 }
 
-#[derive(Debug, Clone, Args)]
-pub struct WorkerArgs {
-    #[arg(long, env = "III_URL", default_value = "ws://127.0.0.1:49134")]
-    pub url: String,
+#[derive(Debug, Clone, Default, Args)]
+pub struct WorkerArgs {}
 
-    /// Static worker configuration written by `iii worker add`.
-    #[arg(long, default_value = "config.yaml")]
-    pub config: PathBuf,
-
-    /// Override the configured data directory for local development.
-    #[arg(long, alias = "output-root", env = "HARNESS_E2E_DATA_DIR")]
-    pub data_dir: Option<PathBuf>,
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct WorkerEnvironment {
+    url: String,
+    namespace: String,
+    worker_name: String,
+    config: PathBuf,
 }
 
-impl Default for WorkerArgs {
-    fn default() -> Self {
-        Self::from_environment(|name| std::env::var_os(name))
+impl WorkerEnvironment {
+    fn read() -> Result<Self> {
+        Self::from_environment(|name| std::env::var(name).ok())
     }
-}
 
-impl WorkerArgs {
-    /// Resolve the same environment-backed defaults that clap applies to the
-    /// explicit `worker` subcommand.
-    ///
-    /// Registry workers are launched as the bare binary, without that
-    /// subcommand. In that form clap never gets a chance to apply `III_URL`
-    /// and `HARNESS_E2E_DATA_DIR`; using these defaults keeps the managed
-    /// worker attached to the engine that spawned it.
-    fn from_environment(mut environment: impl FnMut(&str) -> Option<OsString>) -> Self {
-        let managed = environment("III_WORKER_NAME")
-            .as_deref()
-            .is_some_and(|name| name == WORKER_NAME);
-        Self {
-            url: environment("III_URL")
-                .filter(|url| !url.is_empty())
-                .unwrap_or_else(|| OsString::from("ws://127.0.0.1:49134"))
-                .to_string_lossy()
-                .into_owned(),
-            // The engine project may itself use `config.yaml`. That file is
-            // not this worker's static configuration and must not be decoded
-            // as `WorkerConfig`; the absent managed path selects the safe
-            // `WorkerConfig::default()` unless an explicit --config is used.
-            config: if managed {
-                PathBuf::from("harness-e2e-managed-config.yaml")
-            } else {
-                PathBuf::from("config.yaml")
-            },
-            data_dir: environment("HARNESS_E2E_DATA_DIR")
-                .filter(|path| !path.is_empty())
-                .map(PathBuf::from),
+    fn from_environment(mut environment: impl FnMut(&str) -> Option<String>) -> Result<Self> {
+        let required = |name: &str, value: Option<String>| -> Result<String> {
+            value
+                .filter(|value| !value.trim().is_empty())
+                .with_context(|| format!("{name} is required; start harness-e2e through iii compose"))
+        };
+        let worker_name = required("III_WORKER_NAME", environment("III_WORKER_NAME"))?;
+        if worker_name != WORKER_NAME {
+            bail!("III_WORKER_NAME must be '{WORKER_NAME}', got '{worker_name}'");
         }
+        Ok(Self {
+            url: required("III_URL", environment("III_URL"))?,
+            namespace: required("III_NAMESPACE", environment("III_NAMESPACE"))?,
+            worker_name,
+            config: PathBuf::from(required("III_CONFIG", environment("III_CONFIG"))?),
+        })
     }
 }
 
-pub async fn serve(args: WorkerArgs) -> Result<()> {
-    // The local YAML is only a seed. The Console-editable configuration entry
-    // is authoritative unless the CLI/environment explicitly overrides it.
-    let seed = load_config(&args.config, None)?;
+pub async fn serve(_args: WorkerArgs) -> Result<()> {
+    let environment = WorkerEnvironment::read()?;
+    let config = load_config(&environment.config)?;
 
     let iii = register_worker(
-        &args.url,
+        &environment.url,
         InitOptions {
             metadata: Some(WorkerMetadata {
                 runtime: "rust".into(),
                 version: env!("CARGO_PKG_VERSION").into(),
-                name: WORKER_NAME.into(),
+                name: environment.worker_name.clone(),
                 os: std::env::consts::OS.into(),
                 pid: Some(std::process::id()),
+                namespace: Some(environment.namespace.clone()),
                 ..WorkerMetadata::default()
             }),
+            namespace: Some(environment.namespace.clone()),
             ..InitOptions::default()
         },
     );
     wait_for_state(&iii).await?;
 
-    let configuration_registered = match crate::configuration::register_config(&iii, &seed).await {
-        Ok(()) => true,
-        Err(error) => {
-            tracing::warn!(%error, "configuration worker unavailable; using the local seed");
-            false
-        }
-    };
-    let config = if configuration_registered {
-        match crate::configuration::fetch_config(&iii).await {
-            Ok(config) => config,
-            Err(error) => {
-                tracing::warn!(%error, "could not load Console configuration; using the local seed");
-                seed.clone()
-            }
-        }
-    } else {
-        seed.clone()
-    };
-    if configuration_registered {
-        crate::configuration::register_config_trigger(&iii)
-            .context("register configuration update trigger")?;
-    }
-
-    let (configured_data_dir, data_dir_source) = args
-        .data_dir
-        .as_deref()
-        .map(|path| (path.to_string_lossy().into_owned(), "cli"))
-        .unwrap_or_else(|| (config.data_dir.clone(), "configuration"));
-    let data_dir = resolve_data_dir(&configured_data_dir)?;
+    let data_dir = resolve_data_dir(&config.data_dir)?;
     std::fs::create_dir_all(&data_dir)
         .with_context(|| format!("create worker data directory {}", data_dir.display()))?;
     tracing::info!(
         data_dir = %data_dir.display(),
-        source = data_dir_source,
+        namespace = %environment.namespace,
+        config = %environment.config.display(),
         "Harness E2E storage directory selected"
     );
-    let control = ControlPlane::new(iii.clone(), args.url, data_dir)
+    let control = ControlPlane::new(iii.clone(), environment.url, data_dir)
         .await
         .context("restore the E2E control plane")?;
     control.register();
@@ -196,18 +115,11 @@ pub async fn serve(args: WorkerArgs) -> Result<()> {
     Ok(())
 }
 
-fn load_config(path: &Path, override_dir: Option<&Path>) -> Result<WorkerConfig> {
-    let mut config = if path.is_file() {
-        let source = std::fs::read_to_string(path)
-            .with_context(|| format!("read worker config {}", path.display()))?;
-        serde_yaml::from_str(&source)
-            .with_context(|| format!("decode worker config {}", path.display()))?
-    } else {
-        WorkerConfig::default()
-    };
-    if let Some(data_dir) = override_dir {
-        config.data_dir = data_dir.to_string_lossy().into_owned();
-    }
+fn load_config(path: &Path) -> Result<WorkerConfig> {
+    let source = std::fs::read_to_string(path)
+        .with_context(|| format!("read III_CONFIG {}", path.display()))?;
+    let config: WorkerConfig = serde_yaml::from_str(&source)
+        .with_context(|| format!("decode III_CONFIG {}", path.display()))?;
     config.validate().map_err(anyhow::Error::msg)
 }
 
@@ -277,18 +189,9 @@ mod tests {
     use std::collections::BTreeMap;
 
     #[test]
-    fn config_defaults_without_a_file_and_accepts_a_cli_override() {
+    fn config_must_be_the_compose_materialized_file() {
         let missing = PathBuf::from("definitely-missing-harness-e2e-config.yaml");
-        assert_eq!(
-            load_config(&missing, None).unwrap(),
-            WorkerConfig::default()
-        );
-        assert_eq!(
-            load_config(&missing, Some(Path::new("target/custom")))
-                .unwrap()
-                .data_dir,
-            "target/custom"
-        );
+        assert!(load_config(&missing).unwrap_err().to_string().contains("read III_CONFIG"));
     }
 
     #[test]
@@ -296,35 +199,32 @@ mod tests {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("config.yaml");
         std::fs::write(&path, "data_dir: ''\n").unwrap();
-        assert!(load_config(&path, None)
+        assert!(load_config(&path)
             .unwrap_err()
             .to_string()
             .contains("data_dir cannot be empty"));
     }
 
     #[test]
-    fn managed_defaults_keep_engine_and_data_dir_environment() {
+    fn compose_environment_is_required_and_preserved() {
         let values = BTreeMap::from([
-            ("III_WORKER_NAME", OsString::from(WORKER_NAME)),
-            ("III_URL", OsString::from("ws://127.0.0.1:49259")),
-            ("HARNESS_E2E_DATA_DIR", OsString::from("/tmp/harness-e2e")),
+            ("III_WORKER_NAME", WORKER_NAME.to_string()),
+            ("III_URL", "ws://127.0.0.1:49259".to_string()),
+            ("III_NAMESPACE", "campaign-123".to_string()),
+            ("III_CONFIG", "/tmp/compose/harness-e2e.yaml".to_string()),
         ]);
-        let args = WorkerArgs::from_environment(|name| values.get(name).cloned());
+        let environment =
+            WorkerEnvironment::from_environment(|name| values.get(name).cloned()).unwrap();
 
-        assert_eq!(args.url, "ws://127.0.0.1:49259");
-        assert_eq!(args.data_dir, Some(PathBuf::from("/tmp/harness-e2e")));
-        assert_eq!(
-            args.config,
-            PathBuf::from("harness-e2e-managed-config.yaml")
-        );
+        assert_eq!(environment.url, "ws://127.0.0.1:49259");
+        assert_eq!(environment.namespace, "campaign-123");
+        assert_eq!(environment.worker_name, WORKER_NAME);
+        assert_eq!(environment.config, PathBuf::from("/tmp/compose/harness-e2e.yaml"));
     }
 
     #[test]
-    fn standalone_defaults_keep_the_local_config_file() {
-        let args = WorkerArgs::from_environment(|_| None);
-
-        assert_eq!(args.url, "ws://127.0.0.1:49134");
-        assert_eq!(args.data_dir, None);
-        assert_eq!(args.config, PathBuf::from("config.yaml"));
+    fn standalone_start_is_rejected() {
+        let error = WorkerEnvironment::from_environment(|_| None).unwrap_err();
+        assert!(error.to_string().contains("III_WORKER_NAME is required"));
     }
 }

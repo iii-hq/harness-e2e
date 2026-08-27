@@ -91,6 +91,12 @@ cleared, child work was terminal, and scenario compensation completed.
 `/opt/iii-harness-e2e/run-weekly-stress` is deployed independently of this
 repository and receives the plan as data. It must:
 
+- verify the protected iii `0.23.0-rc.4` binary checksum on every invocation;
+- start an empty Engine and a Compose daemon with unique daemon/project
+  namespaces and a dedicated state directory;
+- run `compose::validate`, `compose::up`, `compose::status`, and
+  `compose::down`, persisting the lifecycle responses, process inventories,
+  namespaces, and PIDs even on failure;
 - reject a profile or plan hash mismatch;
 - apply only the bounded actions represented in `FaultPlan`;
 - isolate process/network controls to the ephemeral subject stack;
@@ -101,6 +107,17 @@ repository and receives the plan as data. It must:
 - verify no active attempt, pending child, namespace, binding, or timer remains;
 - restore every proxy, latency rule, process, and temporary resource even when
   the subject, evaluator, or workflow is cancelled.
+
+The source-controlled protected boundary lives in `supervisor/`. Installation
+is atomic and requires a separately protected fault driver that answers
+`--protocol-check` with `compose-fault-driver`; this prevents activation with
+an injector that assumes a different lifecycle. The installer atomically
+replaces only the owned `compose-supervisor` bundle, preserves other protected
+utilities and separately provisioned secrets, removes retired supervisor state,
+downloads only the checksum-pinned iii CLI archive, and installs no auxiliary
+lifecycle binary. Provider credentials are root-owned `0600` files in
+`/opt/iii-harness-e2e/secrets` and are referenced only through Compose
+`env_file` entries.
 
 `/opt/iii-harness-e2e/archive-trusted-execution` attaches the plan, journal,
 and evaluation before invoking `e2e::archive`, then invokes

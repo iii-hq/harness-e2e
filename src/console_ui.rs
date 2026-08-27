@@ -74,6 +74,8 @@ fn register_asset(iii: &IIIClient, trigger_type: &str, path: &str) {
         function_id: CONTENT_FUNCTION_ID.to_owned(),
         config: json!({ "path": path }),
         metadata: None,
+        namespace: None,
+        trigger_namespace: None,
     }) {
         tracing::warn!(%error, %path, "failed to register Harness E2E Console asset");
     }

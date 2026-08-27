@@ -28,7 +28,7 @@ struct Cli {
 
 #[derive(Debug, Subcommand)]
 enum Command {
-    /// Run the harness-e2e worker explicitly (the default when no command is given).
+    /// Run the Compose-managed harness-e2e service (the default when no command is given).
     Worker(WorkerArgs),
     /// Print every built-in and Markdown scenario id as a JSON array.
     List,
@@ -514,21 +514,13 @@ mod tests {
     }
 
     #[test]
-    fn worker_subcommand_accepts_local_overrides() {
-        let cli = Cli::try_parse_from([
-            "harness-e2e",
-            "worker",
-            "--url",
-            "ws://127.0.0.1:5000",
-            "--data-dir",
-            "target/worker-data",
-        ])
-        .unwrap();
-        let Some(Command::Worker(args)) = cli.command else {
+    fn worker_subcommand_has_no_lifecycle_overrides() {
+        let cli = Cli::try_parse_from(["harness-e2e", "worker"]).unwrap();
+        let Some(Command::Worker(_args)) = cli.command else {
             panic!("expected worker command");
         };
-        assert_eq!(args.url, "ws://127.0.0.1:5000");
-        assert_eq!(args.data_dir, Some(PathBuf::from("target/worker-data")));
+        assert!(Cli::try_parse_from(["harness-e2e", "worker", "--url", "ws://localhost:1"])
+            .is_err());
     }
 
     #[test]

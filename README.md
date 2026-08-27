@@ -11,8 +11,8 @@ subject artifact or an already-running iii stack.
 
 ## Binaries
 
-- `harness-e2e` starts the iii worker by default and registers the asynchronous
-  `e2e::*` control plane plus the injectable Console dashboard. Explicit
+- `harness-e2e` is started by Compose and registers the asynchronous `e2e::*`
+  control plane plus the injectable Console dashboard. Explicit
   subcommands keep direct scenario execution, report inspection, and the
   standalone dashboard available from the same binary.
 
@@ -62,15 +62,17 @@ cargo run --locked --bin harness-e2e -- run \
   --scenario todo_worker_simple
 ```
 
-Run one of the checked-in canonical campaigns:
+Validate one of the checked-in canonical campaign assets:
 
 ```bash
 python3 scripts/run_e2e_campaign.py config/campaigns/post-release.json --validate-only
 python3 scripts/run_e2e_campaign.py config/campaigns/daily.json --dry-run
-python3 scripts/run_e2e_campaign.py config/campaigns/weekly.json \
-  --e2e-bin target/release/harness-e2e \
-  --output-root target/e2e-campaigns
 ```
+
+Operational campaign execution is dispatched only by Release Control through
+`.github/workflows/release-control-campaign.yml`. The repository no longer
+publishes independent daily, weekly, post-release, or fault-stress dispatch
+workflows.
 
 Adaptive L5 classification, trusted planning boundaries, resume semantics, and
 the canonical incident/release/cross-repository cases are documented in
@@ -79,9 +81,9 @@ the canonical incident/release/cross-repository cases are documented in
 Campaign manifests never select or rotate seeds. They separate replay-safe
 turns from scripted dialogue and composite flows, persist a summary for every
 group, and are advisory by default while their longitudinal history is being
-calibrated. The scheduled workflows use the `harness-e2e-trusted` environment
-and archive every materialized group through the environment-owned durable
-archiver.
+calibrated. Release Control owns scheduling and dispatch; the executor keeps
+the result advisory and archives each materialized group through the
+environment-owned durable archiver.
 The code-focused campaigns use protected disposable checkouts of
 `iii-hq/e2e-fixture`. The engineering handoff uses its dedicated pinned
 revision, while `shell_coder_sandbox`, `chess_engine_build`, and `trend_blog`
@@ -91,7 +93,7 @@ launcher and cleanup boundary are described in
 The team-facing composition and didactic description of every daily, weekly,
 and post-release scenario is in [docs/e2e-test-plans.md](docs/e2e-test-plans.md).
 Release Control dispatches `.github/workflows/release-control-campaign.yml`
-directly in this repository. The workflow validates the campaign v3 contract,
+directly in this repository. The workflow validates the single strict campaign contract,
 executes every common group in an isolated ephemeral stack, routes fault groups
 to the protected runner, and produces one root bundle without rebuilding the
 native Harness artifacts. `workers` supplies versioned components of the stack
@@ -138,34 +140,24 @@ port only on a trusted network. Use `--listen 127.0.0.1:4173` when access should
 remain local. See [dashboard/README.md](dashboard/README.md) for view-only mode
 and the complete dashboard behavior.
 
-## Real control-plane demo
+## Compose lifecycle
 
-With an iii stack already running, exercise the complete asynchronous
-`e2e::*` path using a real Todo Worker scenario:
+Release Control materializes the immutable dependency graph and this repository
+renders it as `worker-compose.yaml`. Every execution starts an empty Engine and
+a dedicated Compose daemon, then runs `compose::validate`, `compose::up`,
+`compose::status`, and `compose::down`. The project and daemon namespaces are
+unique per execution.
 
-```bash
-HARNESS_E2E_WORKERS_REPOSITORY=iii-hq/workers \
-HARNESS_E2E_WORKERS_REVISION=<full-subject-git-sha> \
-  ./scripts/demo_e2e_control_plane.sh
-```
+Compose supplies `III_URL`, `III_NAMESPACE`, `III_WORKER_NAME`, and `III_CONFIG`
+to the `harness-e2e` process. All four values are mandatory. The referenced
+configuration file contains the execution-specific `data_dir`; there is no
+local fallback, command-line override, or runtime self-registration.
 
-Use `--catalog-only` for a no-model smoke check.
-
-Start the asynchronous worker:
-
-```bash
-cargo run --locked --bin harness-e2e -- worker \
-  --url ws://127.0.0.1:49134 \
-  --data-dir target/e2e-worker
-```
-
-The worker uses `~/.iii/data/harness-e2e` by default. Its storage setting is
-registered as the `harness-e2e` configuration entry, so it can be changed from
-Console → Workers → configure harness-e2e. The YAML passed with `--config` is
-only the first-boot seed; a value already saved in Console wins. The command
-line `--data-dir` (or `HARNESS_E2E_DATA_DIR`) is an explicit local override and
-wins over both. A Console change is applied after restarting the E2E worker;
-existing directories are never moved or deleted automatically.
+Publication validates the locally built binary through a `path://` Compose
+container before the package is uploaded. Published campaigns use only exact
+Registry package versions. Provider secrets are written to temporary
+permission-restricted `env_file` files and are never included in contract,
+Compose, evidence, or archive artifacts.
 
 The worker exposes `e2e::run`, `e2e::status`, `e2e::cancel`,
 `e2e::results-get`, `e2e::results-list`, `e2e::compare`,

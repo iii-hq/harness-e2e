@@ -1,0 +1,234 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+
+install_root=${HARNESS_E2E_PROTECTED_ROOT:-/opt/iii-harness-e2e}
+protected_root="$install_root/compose-supervisor"
+iii_bin="$protected_root/bin/iii"
+fault_driver="$protected_root/bin/compose-fault-driver"
+contract_tool="$protected_root/lib/release_control_campaign.py"
+state_root="$protected_root/state"
+secret_root="$install_root/secrets"
+
+contract=""
+profile=""
+plan=""
+scenario=""
+iteration=""
+output=""
+while (($#)); do
+  case "$1" in
+    --contract) contract=$2; shift 2 ;;
+    --profile) profile=$2; shift 2 ;;
+    --plan) plan=$2; shift 2 ;;
+    --scenario) scenario=$2; shift 2 ;;
+    --iteration) iteration=$2; shift 2 ;;
+    --output) output=$2; shift 2 ;;
+    *) echo "unknown argument: $1" >&2; exit 2 ;;
+  esac
+done
+
+for value in contract profile plan scenario iteration output; do
+  [[ -n "${!value}" ]] || { echo "--${value//_/-} is required" >&2; exit 2; }
+done
+[[ "$iteration" =~ ^[1-9][0-9]*$ ]]
+for path in "$contract" "$profile" "$plan"; do test -f "$path"; done
+for path in "$iii_bin" "$fault_driver" "$contract_tool"; do test -x "$path" || test -r "$path"; done
+
+mkdir -p "$output"
+output=$(cd "$output" && pwd)
+python3 "$contract_tool" validate --contract "$contract" >/dev/null
+
+expected_cli=$(jq -er '.runtime.cli.version' "$contract")
+expected_runner=$(jq -er '.runner.registry_ref' "$contract")
+expected_cli_sha=$(cut -d ' ' -f1 "$protected_root/checksums/iii.sha256")
+observed_cli_sha=$(sha256sum "$iii_bin" | cut -d ' ' -f1)
+[[ "$expected_cli_sha" == "$observed_cli_sha" ]]
+"$iii_bin" --version | grep -F "$expected_cli" >/dev/null
+"$fault_driver" --protocol-check | grep -Fx 'compose-fault-driver' >/dev/null
+
+profile_sha=$(jq -S -c . "$profile" | tr -d '\n' | sha256sum | cut -d ' ' -f1)
+[[ "sha256:$profile_sha" == "$(jq -er '.profile_sha256' "$plan")" ]]
+
+execution_id=$(jq -er '.execution_id' "$contract")
+short_execution=${execution_id%%-*}
+project_namespace="fault-${short_execution}-${iteration}"
+daemon_namespace="compose-fault-${short_execution}-${iteration}"
+run_state="$state_root/$execution_id/$iteration"
+compose_state="$run_state/compose"
+data_dir="$run_state/data"
+engine_dir="$run_state/engine"
+compose_file="$output/worker-compose.yaml"
+mkdir -p "$compose_state" "$data_dir" "$engine_dir" "$output/logs"
+chmod 700 "$run_state" "$compose_state" "$data_dir"
+
+engine_port=$(python3 - <<'PY'
+import socket
+with socket.socket() as sock:
+    sock.bind(('127.0.0.1', 0))
+    print(sock.getsockname()[1])
+PY
+)
+engine_url="ws://127.0.0.1:$engine_port"
+manager_name="iii""-worker-manager"
+printf 'workers:\n  - name: %s\n    config:\n      host: 127.0.0.1\n      port: %s\n' \
+  "$manager_name" "$engine_port" >"$engine_dir/config.yaml"
+
+compose_args=(
+  --contract "$contract"
+  --namespace "$project_namespace"
+  --data-dir "$data_dir"
+  --environment "harness-e2e.HARNESS_E2E_LANE=weekly"
+  --environment "harness-e2e.HARNESS_E2E_FAULT_SCENARIO=$scenario"
+  --output "$compose_file"
+)
+while IFS= read -r worker; do
+  secret_file="$secret_root/$worker.env"
+  [[ -f "$secret_file" ]] || { echo "protected secret file is missing for $worker" >&2; exit 1; }
+  [[ "$(stat -c '%a' "$secret_file")" == 600 ]]
+  compose_args+=(--env-file "$worker=$secret_file")
+done < <(jq -r '.orchestration.nodes[] | select(.worker == "provider-deepseek" or .worker == "provider-zai") | .worker' "$contract")
+python3 "$contract_tool" compose "${compose_args[@]}"
+
+engine_pid=""
+compose_pid=""
+down_reached=false
+phase=engine_start
+failure=""
+
+capture_processes() {
+  ps -eo pid=,comm=,args= --no-headers | jq -Rn \
+    '[inputs | capture("^\\s*(?<pid>[0-9]+)\\s+(?<comm>\\S+)\\s*(?<args>.*)$") | {pid:(.pid|tonumber),comm,args}]'
+}
+
+trigger_engine() {
+  "$iii_bin" trigger "$1" --address 127.0.0.1 --port "$engine_port" --json "${2:-{}}"
+}
+
+trigger_compose() {
+  local function_id=$1
+  shift
+  "$iii_bin" trigger "$function_id" --address 127.0.0.1 --port "$engine_port" \
+    --namespace "$daemon_namespace" --timeout-ms 600000 "$@"
+}
+
+write_status() {
+  local exit_code=$1
+  jq -n \
+    --arg phase "$phase" \
+    --arg error "$failure" \
+    --arg execution_id "$execution_id" \
+    --arg runner_version "$expected_runner" \
+    --arg cli_version "$expected_cli" \
+    --arg daemon_namespace "$daemon_namespace" \
+    --arg project_namespace "$project_namespace" \
+    --arg state_dir "$run_state" \
+    --argjson iteration "$iteration" \
+    --argjson exit_code "$exit_code" \
+    --argjson engine_pid "${engine_pid:-null}" \
+    --argjson compose_pid "${compose_pid:-null}" \
+    '{execution_id:$execution_id,iteration:$iteration,phase:$phase,error:(if $error == "" then null else $error end),exit_code:$exit_code,
+      runtime:{cli_version:$cli_version,runner_version:$runner_version},
+      namespaces:{daemon:$daemon_namespace,project:$project_namespace},state_dir:$state_dir,
+      pids:{engine:$engine_pid,compose:$compose_pid}}' >"$output/supervisor-status.json"
+}
+
+cleanup() {
+  local status=$?
+  trap - EXIT ERR INT TERM
+  set +e
+  if [[ "$down_reached" != true && -n "$compose_pid" ]] && kill -0 "$compose_pid" 2>/dev/null; then
+    trigger_compose compose::down "file=$compose_file" >"$output/down.json" 2>>"$output/logs/compose-commands.log"
+    down_reached=true
+  fi
+  capture_processes >"$output/processes-after.json"
+  if [[ -n "$compose_pid" ]] && kill -0 "$compose_pid" 2>/dev/null; then
+    kill -- "-$compose_pid" 2>/dev/null || kill "$compose_pid" 2>/dev/null || true
+    wait "$compose_pid" 2>/dev/null || true
+  fi
+  if [[ -n "$engine_pid" ]] && kill -0 "$engine_pid" 2>/dev/null; then
+    kill -- "-$engine_pid" 2>/dev/null || kill "$engine_pid" 2>/dev/null || true
+    wait "$engine_pid" 2>/dev/null || true
+  fi
+  if [[ "$down_reached" != true ]]; then
+    jq -n --arg phase "$phase" '{status:"not_reached",phase:$phase}' >"$output/down.json"
+  fi
+  if [[ -f "$compose_file" && -f "$output/validate.json" && -f "$output/up.json" \
+        && -f "$output/status.json" && -f "$output/workers.json" ]]; then
+    python3 "$contract_tool" compose-evidence \
+      --contract "$contract" \
+      --compose "$compose_file" \
+      --daemon-namespace "$daemon_namespace" \
+      --project-namespace "$project_namespace" \
+      --validate "$output/validate.json" \
+      --up "$output/up.json" \
+      --status "$output/status.json" \
+      --down "$output/down.json" \
+      --workers "$output/workers.json" \
+      --process-before "$output/processes-before.json" \
+      --process-during "$output/processes-during.json" \
+      --process-after "$output/processes-after.json" \
+      --output "$output/compose-evidence.json" || status=1
+  fi
+  if ((status != 0)); then
+    [[ -n "$failure" ]] || failure="protected Compose supervisor failed during $phase"
+  fi
+  write_status "$status"
+  exit "$status"
+}
+trap cleanup EXIT
+trap 'failure="command failed at line $LINENO"' ERR
+trap 'exit 130' INT
+trap 'exit 143' TERM
+
+removed_helper="iii""-worker"
+if find "$protected_root/bin" -maxdepth 1 -type f -name "$removed_helper" -print -quit | grep -q .; then
+  failure="removed lifecycle helper exists in protected tools"
+  exit 1
+fi
+capture_processes >"$output/processes-before.json"
+
+setsid "$iii_bin" -c "$engine_dir/config.yaml" --no-update-check >"$output/logs/engine.log" 2>&1 &
+engine_pid=$!
+for _ in {1..60}; do
+  kill -0 "$engine_pid" 2>/dev/null
+  trigger_engine engine::workers::list >/dev/null 2>&1 && break
+  sleep 1
+done
+trigger_engine engine::workers::list >/dev/null
+
+phase=compose_start
+III_COMPOSE_STATE_DIR="$compose_state" setsid "$iii_bin" compose \
+  --engine "$engine_url" --namespace "$daemon_namespace" >"$output/logs/compose.log" 2>&1 &
+compose_pid=$!
+for _ in {1..60}; do
+  kill -0 "$compose_pid" 2>/dev/null
+  trigger_compose compose::list --json '{}' >/dev/null 2>&1 && break
+  sleep 1
+done
+trigger_compose compose::list --json '{}' >/dev/null
+
+phase=compose_validate
+trigger_compose compose::validate "file=$compose_file" >"$output/validate.json"
+phase=compose_up
+trigger_compose compose::up "file=$compose_file" >"$output/up.json"
+trigger_compose compose::status "file=$compose_file" >"$output/status.json"
+trigger_engine engine::workers::list >"$output/workers.json"
+capture_processes >"$output/processes-during.json"
+
+phase=fault_execution
+"$fault_driver" \
+  --iii "$iii_bin" \
+  --address 127.0.0.1 \
+  --port "$engine_port" \
+  --namespace "$project_namespace" \
+  --profile "$profile" \
+  --plan "$plan" \
+  --scenario "$scenario" \
+  --iteration "$iteration" \
+  --output "$output"
+test -f "$output/fault-journal.json"
+
+phase=compose_down
+trigger_compose compose::down "file=$compose_file" >"$output/down.json"
+down_reached=true
+phase=complete
