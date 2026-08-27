@@ -87,7 +87,8 @@
     "harness/src/",
     "harness/prompts/",
     "harness/config/",
-    "harness/skills/"
+    "harness/skills/",
+    "harness/tests/integration/"
   ],
   "protected_paths": [
     ".git",

@@ -369,6 +369,7 @@ impl ImprovementLoopSpecV1 {
                 "harness/prompts",
                 "harness/config",
                 "harness/skills",
+                "harness/tests/integration",
             ]
             .iter()
             .any(|root| {
@@ -1570,7 +1571,11 @@ mod tests {
             budget: ImprovementBudget::default(),
             thresholds: ImprovementThresholds::default(),
             acceptance_policy: ImprovementAcceptancePolicy::default(),
-            allowed_paths: vec!["harness/src/".into(), "harness/prompts/".into()],
+            allowed_paths: vec![
+                "harness/src/".into(),
+                "harness/prompts/".into(),
+                "harness/tests/integration/".into(),
+            ],
             protected_paths: vec!["harness/tests/e2e/".into(), ".git".into()],
         }
     }
