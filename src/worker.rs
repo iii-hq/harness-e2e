@@ -55,7 +55,9 @@ impl WorkerEnvironment {
         let required = |name: &str, value: Option<String>| -> Result<String> {
             value
                 .filter(|value| !value.trim().is_empty())
-                .with_context(|| format!("{name} is required; start harness-e2e through iii compose"))
+                .with_context(|| {
+                    format!("{name} is required; start harness-e2e through iii compose")
+                })
         };
         let worker_name = required("III_WORKER_NAME", environment("III_WORKER_NAME"))?;
         if worker_name != WORKER_NAME {
@@ -191,7 +193,10 @@ mod tests {
     #[test]
     fn config_must_be_the_compose_materialized_file() {
         let missing = PathBuf::from("definitely-missing-harness-e2e-config.yaml");
-        assert!(load_config(&missing).unwrap_err().to_string().contains("read III_CONFIG"));
+        assert!(load_config(&missing)
+            .unwrap_err()
+            .to_string()
+            .contains("read III_CONFIG"));
     }
 
     #[test]
@@ -219,7 +224,10 @@ mod tests {
         assert_eq!(environment.url, "ws://127.0.0.1:49259");
         assert_eq!(environment.namespace, "campaign-123");
         assert_eq!(environment.worker_name, WORKER_NAME);
-        assert_eq!(environment.config, PathBuf::from("/tmp/compose/harness-e2e.yaml"));
+        assert_eq!(
+            environment.config,
+            PathBuf::from("/tmp/compose/harness-e2e.yaml")
+        );
     }
 
     #[test]

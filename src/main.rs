@@ -519,8 +519,9 @@ mod tests {
         let Some(Command::Worker(_args)) = cli.command else {
             panic!("expected worker command");
         };
-        assert!(Cli::try_parse_from(["harness-e2e", "worker", "--url", "ws://localhost:1"])
-            .is_err());
+        assert!(
+            Cli::try_parse_from(["harness-e2e", "worker", "--url", "ws://localhost:1"]).is_err()
+        );
     }
 
     #[test]
