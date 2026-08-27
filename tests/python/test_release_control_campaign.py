@@ -346,6 +346,18 @@ class ReleaseControlCampaignTest(unittest.TestCase):
             first = MODULE.materialize_compose(contract, "project-one", data_dir, {}, {})
             second = MODULE.materialize_compose(contract, "project-one", data_dir, {}, {})
         self.assertEqual(first, second)
+        nodes = {
+            node["worker"]: node
+            for node in contract["orchestration"]["nodes"]
+            if node["kind"] == "binary"
+        }
+        for worker, node in nodes.items():
+            container = first["containers"][worker]
+            self.assertEqual(container["worker"], f"package://{worker}")
+            self.assertEqual(container["version"], node["version"])
+            self.assertNotEqual(container["version"], "next")
+            self.assertNotIn("scripts", container)
+            self.assertNotIn("start_after", container)
         self.assertEqual(first["containers"]["harness-e2e"]["version"], "0.5.0-experimental")
         self.assertEqual(first["containers"]["harness-e2e"]["depends_on"], ["state"])
 

@@ -55,6 +55,14 @@ class WorkflowBoundaryTests(unittest.TestCase):
         self.assertIn("cleanup --lease-id", launcher)
         self.assertNotIn("iii-hq/workers", workflow)
 
+    def test_publication_compose_uses_the_rc4_manifest_schema(self):
+        workflow = (ROOT / ".github/workflows/release.yml").read_text()
+        self.assertIn('worker: "path://."', workflow)
+        self.assertIn('worker: "package://state"', workflow)
+        self.assertIn('depends_on: ["state"]', workflow)
+        self.assertIn('scripts: {run: "./release-worker/harness-e2e worker"}', workflow)
+        self.assertNotIn("start_after", workflow)
+
     def test_cross_repository_shadow_checks_out_the_e2e_repository(self):
         workflow = (ROOT / ".github/workflows/shadow.yml").read_text(encoding="utf-8")
         self.assertEqual(workflow.count("repository: iii-hq/harness-e2e"), 2)
