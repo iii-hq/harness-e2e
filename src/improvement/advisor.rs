@@ -92,6 +92,24 @@ pub async fn run_advisor(
             "locator": "events/0",
         })
     });
+    let objective_policy = json!({
+        "absolute_rate_change": {
+            "metrics": ["deliverable_success_rate", "structural_integrity_rate", "technical_failure_rate"],
+            "minimum_change": spec.thresholds.correctness_rate_minimum_change,
+        },
+        "absolute_count_change": {
+            "metrics": ["function_call_errors", "validation_retries"],
+            "minimum_change": spec.thresholds.discrete_minimum_change,
+        },
+        "relative_ratio_change": {
+            "metrics": ["function_calls", "turns", "wall_time", "total_tokens", "cost", "work_amplification"],
+            "minimum_change": spec.thresholds.continuous_minimum_ratio,
+        },
+        "absolute_score_change": {
+            "metrics": ["median_score"],
+            "minimum_change": spec.thresholds.score_minimum_change,
+        },
+    });
     let response_shape = json!({
         "actionable": true,
         "analysis": {
@@ -119,9 +137,9 @@ pub async fn run_advisor(
         },
         "objective": {
             "scenario_id": input.target_scenario,
-            "metric": "function_call_errors",
+            "metric": "function_calls",
             "direction": "decrease",
-            "minimum_change": spec.thresholds.discrete_minimum_change,
+            "minimum_change": spec.thresholds.continuous_minimum_ratio,
         },
         "expected_impact": "why this should be faster or more accurate",
         "validation_method": "five compatible runs of the frozen target and sentinels",
@@ -137,7 +155,7 @@ Immutable input:\n{}\n\nAvailable trace evidence identities:\n{}\n\n\
 Minimum effect policy:\n{}\n\nRequired response shape:\n{}",
         serde_json::to_string(input).context("serialize Harness improvement input")?,
         serde_json::to_string(&evidence)?,
-        serde_json::to_string(&spec.thresholds)?,
+        serde_json::to_string(&objective_policy)?,
         serde_json::to_string(&response_shape)?,
     );
     let config = JudgeConfig {

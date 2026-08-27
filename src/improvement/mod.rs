@@ -793,11 +793,12 @@ impl HarnessImprovementProposalV1 {
             bail!("proposal objective direction differs from the metric policy");
         }
         let required = thresholds.minimum_for(self.objective.metric);
+        let threshold_tolerance = f64::EPSILON * required.abs().max(1.0) * 8.0;
         if !self.objective.minimum_change.is_finite()
-            || self.objective.minimum_change + f64::EPSILON < required
+            || (self.objective.minimum_change - required).abs() > threshold_tolerance
         {
             bail!(
-                "proposal minimum change {} is below policy {}",
+                "proposal minimum change {} must equal the supervisor-owned policy {}",
                 self.objective.minimum_change,
                 required
             );
@@ -1744,6 +1745,21 @@ mod tests {
         assert!(proposal
             .validate_for(&input, &ImprovementThresholds::default())
             .is_err());
+    }
+
+    #[test]
+    fn proposal_requires_the_exact_supervisor_owned_objective_threshold() {
+        let (input, mut proposal) = valid_input_and_proposal();
+        proposal.objective.metric = ImprovementMetric::FunctionCalls;
+        proposal.objective.minimum_change = 1.0;
+        let thresholds = ImprovementThresholds::default();
+        let error = proposal.validate_for(&input, &thresholds).unwrap_err();
+        assert!(error
+            .to_string()
+            .contains("must equal the supervisor-owned policy 0.1"));
+
+        proposal.objective.minimum_change = thresholds.continuous_minimum_ratio;
+        proposal.validate_for(&input, &thresholds).unwrap();
     }
 
     #[test]
