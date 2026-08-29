@@ -37,7 +37,7 @@ fn passing_bundle(contract: &TodoTaskContract) -> ValidationEvidenceBundle {
             worker_name: contract.worker_name.clone(),
             candidate_sha256: Some(candidate.clone()),
             source_sha256: Some(candidate.clone()),
-            manifest_sha256: Some(format!("sha256:{}", "e".repeat(64))),
+            compose_sha256: Some(format!("sha256:{}", "e".repeat(64))),
             accepted_candidate_sha256: Some(candidate),
             accepted_candidate_is_current: true,
             function_schema_sha256: BTreeMap::new(),
@@ -113,7 +113,7 @@ fn evidence_requires_every_mandatory_probe() {
             worker_name: contract.worker_name,
             candidate_sha256: Some("candidate".into()),
             source_sha256: Some("candidate".into()),
-            manifest_sha256: Some("manifest".into()),
+            compose_sha256: Some("compose".into()),
             accepted_candidate_sha256: Some("candidate".into()),
             accepted_candidate_is_current: true,
             function_schema_sha256: BTreeMap::new(),
@@ -146,7 +146,7 @@ fn evidence_requires_every_mandatory_probe() {
         limitations: Vec::new(),
     };
     assert!(!bundle.evidence_complete());
-    assert!(!bundle.probe_passed("manifest_valid"));
+    assert!(!bundle.probe_passed("compose_valid"));
 }
 
 #[test]
@@ -224,8 +224,8 @@ fn arbitrary_probe_is_rejected_and_never_compiled() {
 #[test]
 fn final_candidate_pass_is_not_invalidated_by_an_earlier_failed_attempt() {
     let failed = ProbeObservation {
-        id: "manifest_valid".into(),
-        kind: "manifest".into(),
+        id: "compose_valid".into(),
+        kind: "worker_compose".into(),
         expected: json!({"valid": true}),
         observed: json!({"valid": false}),
         outcome: ProbeOutcome::Failed,
@@ -250,14 +250,14 @@ fn final_candidate_pass_is_not_invalidated_by_an_earlier_failed_attempt() {
             worker_name: contract.worker_name,
             candidate_sha256: Some(format!("sha256:{}", "a".repeat(64))),
             source_sha256: Some(format!("sha256:{}", "a".repeat(64))),
-            manifest_sha256: None,
+            compose_sha256: None,
             accepted_candidate_sha256: None,
             accepted_candidate_is_current: false,
             function_schema_sha256: BTreeMap::new(),
         },
         coverage: ValidationCoverage {
-            required: vec!["manifest_valid".into()],
-            covered: vec!["manifest_valid".into()],
+            required: vec!["compose_valid".into()],
+            covered: vec!["compose_valid".into()],
             omitted: Vec::new(),
             complete: true,
         },
@@ -285,7 +285,7 @@ fn final_candidate_pass_is_not_invalidated_by_an_earlier_failed_attempt() {
         },
         limitations: Vec::new(),
     };
-    assert!(bundle.probe_passed("manifest_valid"));
+    assert!(bundle.probe_passed("compose_valid"));
 }
 
 #[test]
@@ -303,15 +303,15 @@ fn remote_product_rejections_are_distinct_from_transport_failures() {
 }
 
 #[test]
-fn cleanup_retries_only_the_known_worker_lock() {
+fn cleanup_retries_only_the_known_compose_lock() {
     assert!(retryable_worker_lock(&anyhow::anyhow!(
-        "worker::remove: W900 project lock busy: another worker operation is active"
+        "compose::down: W900 project lock busy: another worker operation is active"
     )));
     assert!(!retryable_worker_lock(&anyhow::anyhow!(
-        "worker::remove: W900 invalid project manifest"
+        "compose::down: W900 invalid Compose project"
     )));
     assert!(!retryable_worker_lock(&anyhow::anyhow!(
-        "worker::remove: connection closed"
+        "compose::down: connection closed"
     )));
 }
 

@@ -62,7 +62,7 @@ pub struct ValidatedSubject {
     pub worker_name: String,
     pub candidate_sha256: Option<String>,
     pub source_sha256: Option<String>,
-    pub manifest_sha256: Option<String>,
+    pub compose_sha256: Option<String>,
     pub accepted_candidate_sha256: Option<String>,
     pub accepted_candidate_is_current: bool,
     pub function_schema_sha256: BTreeMap<String, String>,

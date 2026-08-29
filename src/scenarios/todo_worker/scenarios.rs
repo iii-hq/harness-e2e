@@ -12,7 +12,7 @@ pub fn simple_scenario(run_id: &str) -> ScenarioSpec {
         id: SIMPLE_ID,
         version: VERSION,
         prompt: format!(
-            "Create a todo worker and make it live.\n\n<todo_task_contract>\n{}\n</todo_task_contract>\n\nCreate the worker only inside the supplied workspace. Validate the manifest with worker::validate, install it from the local path with wait=false, poll worker::status until it is running, inspect all four function contracts, and test the behavior before reporting completion.",
+            "Create a todo worker and make it live.\n\n<todo_task_contract>\n{}\n</todo_task_contract>\n\nCreate the worker only inside the supplied workspace. Declare it in the root worker-compose.yaml, validate with compose::validate, start its local stack with compose::up and wait=false, poll worker::status until it is running, inspect all four function contracts, and test the behavior before reporting completion.",
             serde_json::to_string_pretty(&contract).expect("serialize Todo contract")
         ),
         filesystem_root: Some(PathBuf::from(&contract.workspace_root)),
@@ -58,6 +58,7 @@ pub fn simple_materialize(namespace: &str, seed: u64) -> Result<MaterializedScen
         },
         vec![
             "e2e::control-plane-v1".into(),
+            "iii::compose".into(),
             "iii::functions".into(),
             "iii::workers".into(),
         ],
@@ -120,6 +121,7 @@ pub fn planned_materialize(namespace: &str, seed: u64) -> Result<MaterializedSce
         vec![
             "e2e::control-plane-v1".into(),
             "harness::independent_session".into(),
+            "iii::compose".into(),
             "iii::functions".into(),
             "iii::workers".into(),
         ],
@@ -170,10 +172,10 @@ async fn preflight_validation_mechanism(
     post_turn_auditor: bool,
 ) -> Result<()> {
     let mut required = vec![
-        "worker::validate",
-        "worker::add",
+        "compose::validate",
+        "compose::up",
+        "compose::down",
         "worker::status",
-        "worker::remove",
         "engine::functions::info",
     ];
     if post_turn_auditor {
@@ -215,8 +217,8 @@ fn evaluate_simple<'a>(
         let bundle = captured_bundle(observation)?;
         Ok(assessment::build_evaluation([
             SIMPLE_ASSESSMENTS[0].full_or_zero(
-                bundle.probe_passed("manifest_valid"),
-                probe_reason(&bundle, "manifest_valid"),
+                bundle.probe_passed("compose_valid"),
+                probe_reason(&bundle, "compose_valid"),
             ),
             SIMPLE_ASSESSMENTS[1].full_or_zero(
                 bundle.probe_passed("worker_live"),

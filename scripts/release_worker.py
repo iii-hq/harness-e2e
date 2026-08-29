@@ -9,20 +9,23 @@ secrets.
 from __future__ import annotations
 
 import argparse
+import gzip
+import hashlib
 import json
 import os
 import pathlib
 import re
+import shutil
+import stat
 import subprocess
 import sys
+import tarfile
 import time
+import zipfile
 from typing import Any
 
 
 WORKER_NAME = "harness-e2e"
-SEMVER_CORE = r"(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)"
-VERSION_RE = re.compile(rf"^(?P<core>{SEMVER_CORE})(?P<experimental>-experimental)?$")
-TAG_RE = re.compile(rf"^harness-e2e/v(?P<version>{SEMVER_CORE}(?:-experimental)?)$")
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 SCHEMA_KEYS = frozenset(
     {"type", "properties", "$ref", "allOf", "anyOf", "oneOf", "enum", "items", "const"}
@@ -47,25 +50,215 @@ def read_json(path: str | pathlib.Path) -> dict[str, Any]:
     return value
 
 
-def read_yaml(path: pathlib.Path) -> Any:
-    import yaml
-
-    return yaml.safe_load(path.read_text(encoding="utf-8"))
-
-
-def release_is_experimental(version: str) -> bool:
-    if not VERSION_RE.fullmatch(version):
-        raise ValueError("version must be MAJOR.MINOR.PATCH with an optional -experimental suffix")
-    return version.endswith("-experimental")
+def descriptor_sha256(package: dict[str, Any]) -> str:
+    canonical = json.dumps(
+        package,
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=False,
+    ).encode("utf-8")
+    return hashlib.sha256(canonical).hexdigest()
 
 
-def git(*args: str, root: pathlib.Path) -> str:
-    return subprocess.run(
-        ["git", "-C", str(root), *args],
-        check=True,
-        capture_output=True,
-        text=True,
-    ).stdout.strip()
+def load_release_descriptor(
+    path: str | pathlib.Path,
+    *,
+    expected_source_sha: str = "",
+    expected_digest: str = "",
+    expected_version: str = "",
+) -> dict[str, Any]:
+    descriptor = read_json(path)
+    required = {
+        "contract",
+        "worker",
+        "version",
+        "source_sha",
+        "descriptor_sha256",
+        "package",
+        "build_units",
+    }
+    if set(descriptor) != required:
+        raise ValueError(f"release descriptor must contain exactly {sorted(required)}")
+    if descriptor["contract"] != "release-descriptor" or descriptor["worker"] != WORKER_NAME:
+        raise ValueError("release descriptor has the wrong contract or worker")
+    package = descriptor.get("package")
+    if not isinstance(package, dict):
+        raise ValueError("release descriptor package must be an object")
+    if package.get("name") != WORKER_NAME or package.get("version") != descriptor.get("version"):
+        raise ValueError("release descriptor package identity does not match its subject")
+    digest = descriptor_sha256(package)
+    if descriptor.get("descriptor_sha256") != digest:
+        raise ValueError("release descriptor package digest is invalid")
+    if expected_source_sha and descriptor.get("source_sha") != expected_source_sha:
+        raise ValueError("release descriptor source SHA does not match the dispatch")
+    if expected_digest and digest != expected_digest:
+        raise ValueError("release descriptor digest does not match the dispatch")
+    if expected_version and descriptor.get("version") != expected_version:
+        raise ValueError("release descriptor version does not match the dispatch")
+    artifact = package.get("artifact")
+    if not isinstance(artifact, dict) or artifact.get("kind") != "rust-binary":
+        raise ValueError("harness-e2e release descriptor must describe a rust-binary")
+    if artifact.get("binary") != WORKER_NAME or tuple(artifact.get("targets") or ()) != TARGETS:
+        raise ValueError("harness-e2e release descriptor has an unexpected binary target matrix")
+    if artifact.get("toolchain") != {"name": "rust", "version": "1.97.1"}:
+        raise ValueError("harness-e2e release descriptor has an unexpected Rust toolchain")
+    return descriptor
+
+
+def safe_relative(value: Any, field: str, *, allow_dot: bool = False) -> pathlib.Path:
+    if not isinstance(value, str) or not value or (value == "." and not allow_dot):
+        raise ValueError(f"{field} must be a non-empty relative path")
+    path = pathlib.Path(value)
+    if path.is_absolute() or ".." in path.parts:
+        raise ValueError(f"{field} must remain within the repository")
+    return path
+
+
+def argv(value: Any, field: str) -> tuple[str, ...]:
+    if not isinstance(value, list) or not value or any(not isinstance(part, str) or not part for part in value):
+        raise ValueError(f"{field} must be a non-empty argv")
+    return tuple(value)
+
+
+def frontend_specs(descriptor: dict[str, Any]) -> list[dict[str, Any]]:
+    artifact = descriptor["package"]["artifact"]
+    raw = artifact.get("frontends", [])
+    if not isinstance(raw, list):
+        raise ValueError("artifact.frontends must be an array")
+    required = {
+        "workspace_root",
+        "source_path",
+        "runtime",
+        "package_manager",
+        "lockfile",
+        "install_command",
+        "build_command",
+        "outputs",
+    }
+    normalized: list[dict[str, Any]] = []
+    for index, value in enumerate(raw):
+        if not isinstance(value, dict) or set(value) != required:
+            raise ValueError(f"artifact.frontends[{index}] differs from compiler contract")
+        runtime = value["runtime"]
+        package_manager = value["package_manager"]
+        if runtime != {"name": "node", "version": "22"}:
+            raise ValueError("Harness dashboard requires Node 22")
+        if package_manager != {"name": "pnpm", "version": "11.13.1"}:
+            raise ValueError("Harness dashboard requires pnpm 11.13.1")
+        outputs = value["outputs"]
+        if not isinstance(outputs, list) or not outputs:
+            raise ValueError(f"artifact.frontends[{index}].outputs must be non-empty")
+        normalized.append(
+            {
+                **value,
+                "workspace_root": safe_relative(
+                    value["workspace_root"],
+                    f"artifact.frontends[{index}].workspace_root",
+                    allow_dot=True,
+                ),
+                "source_path": safe_relative(value["source_path"], f"artifact.frontends[{index}].source_path"),
+                "lockfile": safe_relative(value["lockfile"], f"artifact.frontends[{index}].lockfile"),
+                "install_command": argv(value["install_command"], f"artifact.frontends[{index}].install_command"),
+                "build_command": argv(value["build_command"], f"artifact.frontends[{index}].build_command"),
+                "outputs": [safe_relative(output, f"artifact.frontends[{index}].outputs") for output in outputs],
+            }
+        )
+    return normalized
+
+
+def frontend_metadata(descriptor_path: pathlib.Path) -> dict[str, str]:
+    descriptor = load_release_descriptor(descriptor_path)
+    specs = frontend_specs(descriptor)
+    if len(specs) != 1:
+        raise ValueError("Harness release requires exactly one declared dashboard frontend")
+    spec = specs[0]
+    lockfile = pathlib.Path(spec["workspace_root"]) / spec["lockfile"]
+    if not lockfile.is_file() or not stat.S_ISREG(lockfile.lstat().st_mode):
+        raise ValueError(f"frontend lockfile is missing or not regular: {lockfile}")
+    result = {
+        "runtime_version": str(spec["runtime"]["version"]),
+        "package_manager_version": str(spec["package_manager"]["version"]),
+        "rust_toolchain_version": str(descriptor["package"]["artifact"]["toolchain"]["version"]),
+        "lockfile": lockfile.as_posix(),
+        "lock_sha256": hashlib.sha256(lockfile.read_bytes()).hexdigest(),
+    }
+    github_output(**result)
+    return result
+
+
+def build_frontends(descriptor_path: pathlib.Path, output: pathlib.Path) -> dict[str, Any]:
+    descriptor = load_release_descriptor(descriptor_path)
+    specs = frontend_specs(descriptor)
+    output.mkdir(parents=True, exist_ok=False)
+    repository = pathlib.Path.cwd().resolve()
+    copied: list[str] = []
+    installed: set[tuple[str, tuple[str, ...]]] = set()
+    for spec in specs:
+        workspace = (repository / spec["workspace_root"]).resolve()
+        source = (repository / spec["source_path"]).resolve()
+        if not workspace.is_dir() or not workspace.is_relative_to(repository):
+            raise ValueError(f"frontend workspace escapes repository: {workspace}")
+        if not source.is_dir() or not source.is_relative_to(repository):
+            raise ValueError(f"frontend source escapes repository: {source}")
+        install_identity = (workspace.as_posix(), spec["install_command"])
+        if install_identity not in installed:
+            subprocess.run(spec["install_command"], cwd=workspace, check=True)
+            installed.add(install_identity)
+        subprocess.run(spec["build_command"], cwd=source, check=True)
+        for relative in spec["outputs"]:
+            source_output = source / relative
+            resolved = source_output.resolve(strict=True)
+            if not resolved.is_relative_to(source):
+                raise ValueError(f"frontend output escapes source: {source_output}")
+            candidates = [source_output, *source_output.rglob("*")] if source_output.is_dir() else [source_output]
+            if any(candidate.is_symlink() for candidate in candidates):
+                raise ValueError(f"frontend output contains a symlink: {source_output}")
+            destination = output / spec["source_path"] / relative
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            if source_output.is_dir():
+                shutil.copytree(source_output, destination)
+            elif source_output.is_file():
+                shutil.copy2(source_output, destination)
+            else:
+                raise ValueError(f"frontend output is not a file or directory: {source_output}")
+            copied.append(destination.as_posix())
+    return {"frontends": len(specs), "outputs": copied}
+
+
+def package_binary(binary_path: pathlib.Path, target: str, output: pathlib.Path) -> dict[str, Any]:
+    if target not in TARGETS:
+        raise ValueError(f"unsupported Harness release target: {target}")
+    if not binary_path.is_file() or binary_path.is_symlink():
+        raise ValueError(f"binary is missing, not regular, or a symlink: {binary_path}")
+    output.mkdir(parents=True, exist_ok=False)
+    body = binary_path.read_bytes()
+    executable_name = f"{WORKER_NAME}.exe" if "windows" in target else WORKER_NAME
+    if "windows" in target:
+        archive = output / f"{WORKER_NAME}-{target}.zip"
+        member = zipfile.ZipInfo(executable_name, date_time=(1980, 1, 1, 0, 0, 0))
+        member.create_system = 3
+        member.external_attr = 0o755 << 16
+        member.compress_type = zipfile.ZIP_DEFLATED
+        with zipfile.ZipFile(archive, "w", compression=zipfile.ZIP_DEFLATED, compresslevel=9) as bundle:
+            bundle.writestr(member, body)
+    else:
+        archive = output / f"{WORKER_NAME}-{target}.tar.gz"
+        member = tarfile.TarInfo(executable_name)
+        member.size = len(body)
+        member.mode = 0o755
+        member.uid = member.gid = 0
+        member.uname = member.gname = ""
+        member.mtime = 0
+        with archive.open("wb") as raw:
+            with gzip.GzipFile(filename="", mode="wb", fileobj=raw, mtime=0, compresslevel=9) as compressed:
+                with tarfile.open(fileobj=compressed, mode="w", format=tarfile.GNU_FORMAT) as bundle:
+                    import io
+
+                    bundle.addfile(member, io.BytesIO(body))
+    digest = hashlib.sha256(archive.read_bytes()).hexdigest()
+    checksum = archive.with_name(f"{archive.name}.sha256")
+    checksum.write_text(f"{digest}  {archive.name}\n", encoding="utf-8")
+    return {"archive": archive.as_posix(), "sha256": digest, "size": archive.stat().st_size}
 
 
 def github_output(**values: str) -> None:
@@ -77,61 +270,23 @@ def github_output(**values: str) -> None:
             output.write(f"{key}={value}\n")
 
 
-def validate_release(root: pathlib.Path, tag: str, event_sha: str) -> dict[str, str]:
-    match = TAG_RE.fullmatch(tag)
-    if not match:
-        raise ValueError("release tag must match harness-e2e/vX.Y.Z with an optional -experimental suffix")
-    version = match.group("version")
-    release_is_experimental(version)
-
-    import tomllib
-
-    cargo = tomllib.loads((root / "Cargo.toml").read_text(encoding="utf-8"))
-    package = cargo.get("package") or {}
-    if package.get("name") != WORKER_NAME:
-        raise ValueError(f"Cargo package name must be {WORKER_NAME}")
-    if package.get("version") != version:
-        raise ValueError(
-            f"tag version {version} does not match Cargo.toml version {package.get('version')!r}"
-        )
-
-    manifest = read_yaml(root / "iii.worker.yaml")
-    if not isinstance(manifest, dict):
-        raise ValueError("iii.worker.yaml must contain an object")
-    expected = {
-        "iii": "v1",
-        "name": WORKER_NAME,
-        "language": "rust",
-        "deploy": "binary",
-        "manifest": "Cargo.toml",
-        "bin": WORKER_NAME,
+def validate_release_descriptor(
+    descriptor_path: str | pathlib.Path,
+    source_sha: str,
+    digest: str,
+    version: str,
+) -> dict[str, str]:
+    descriptor = load_release_descriptor(
+        descriptor_path,
+        expected_source_sha=source_sha,
+        expected_digest=digest,
+        expected_version=version,
+    )
+    result = {
+        "version": str(descriptor["version"]),
+        "commit_sha": str(descriptor["source_sha"]),
+        "descriptor_sha256": str(descriptor["descriptor_sha256"]),
     }
-    for key, value in expected.items():
-        if manifest.get(key) != value:
-            raise ValueError(f"iii.worker.yaml {key!r} must be {value!r}")
-    if manifest.get("interface_smoke") is False:
-        raise ValueError("harness-e2e must not opt out of Registry interface smoke")
-    dependencies = manifest.get("dependencies")
-    if not isinstance(dependencies, dict) or not dependencies:
-        raise ValueError("iii.worker.yaml dependencies must be a non-empty map")
-    if not all(isinstance(name, str) and isinstance(constraint, str) for name, constraint in dependencies.items()):
-        raise ValueError("iii.worker.yaml dependency names and constraints must be strings")
-
-    config = read_yaml(root / "config.yaml")
-    if not isinstance(config, dict):
-        raise ValueError("config.yaml must contain an object")
-
-    head_commit = git("rev-parse", "HEAD^{commit}", root=root)
-    tag_commit = git("rev-parse", f"{tag}^{{commit}}", root=root)
-    tag_object = git("rev-parse", tag, root=root)
-    if head_commit != tag_commit:
-        raise ValueError(f"checked out commit {head_commit} differs from tag commit {tag_commit}")
-    if event_sha and event_sha not in {tag_object, tag_commit}:
-        raise ValueError(
-            f"GitHub event SHA {event_sha} is neither the tag object nor tagged commit"
-        )
-
-    result = {"tag": tag, "version": version, "commit_sha": tag_commit}
     github_output(**result)
     return result
 
@@ -282,26 +437,20 @@ def collect_interface(
     return {"functions": normalized_functions, "triggers": normalized_triggers}
 
 
-def normalize_dependencies(raw: Any) -> list[dict[str, str]]:
-    if not isinstance(raw, dict):
-        raise ValueError("dependencies must be a map")
-    return [{"name": name, "version": version} for name, version in raw.items()]
-
-
 def build_payload(
     root: pathlib.Path,
-    version: str,
+    descriptor_path: pathlib.Path,
     tag: str,
     repo_url: str,
     interface: dict[str, Any],
     checksums_dir: pathlib.Path,
 ) -> dict[str, Any]:
+    descriptor = load_release_descriptor(descriptor_path)
+    package = descriptor["package"]
+    assert isinstance(package, dict)
+    version = str(descriptor["version"])
     if tag != f"harness-e2e/v{version}":
-        raise ValueError("tag and version do not identify the same release")
-    manifest = read_yaml(root / "iii.worker.yaml")
-    config = read_yaml(root / "config.yaml")
-    if not isinstance(manifest, dict) or not isinstance(config, dict):
-        raise ValueError("worker manifest and config must be objects")
+        raise ValueError("tag and descriptor version do not identify the same release")
 
     binaries: dict[str, dict[str, str]] = {}
     for target in TARGETS:
@@ -331,21 +480,16 @@ def build_payload(
         raise ValueError("untyped function schemas: " + ", ".join(violations))
 
     return {
-        "worker_name": WORKER_NAME,
-        "version": version,
-        "tag": "next",
-        "type": "binary",
+        "package_descriptor": package,
+        "descriptor_sha256": descriptor["descriptor_sha256"],
+        "channel": "next",
         "readme": (root / "README.md").read_text(encoding="utf-8"),
         "repo": repo_url,
-        "description": manifest.get("description", ""),
-        "license": manifest.get("license", ""),
-        "dependencies": normalize_dependencies(manifest.get("dependencies")),
-        "config": config,
-        "functions": functions,
-        "triggers": interface.get("triggers") or [],
-        "experimental": release_is_experimental(version),
-        "tags": manifest.get("tags") or [],
-        "binaries": binaries,
+        "interface": {
+            "functions": functions,
+            "triggers": interface.get("triggers") or [],
+        },
+        "artifacts": {"kind": "rust-binary", "binaries": binaries},
     }
 
 
@@ -353,10 +497,23 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     subparsers = parser.add_subparsers(dest="command", required=True)
 
-    validate = subparsers.add_parser("validate")
-    validate.add_argument("--root", default=".")
-    validate.add_argument("--tag", required=True)
-    validate.add_argument("--event-sha", default="")
+    validate = subparsers.add_parser("validate-descriptor")
+    validate.add_argument("--descriptor", required=True)
+    validate.add_argument("--source-sha", required=True)
+    validate.add_argument("--descriptor-sha256", required=True)
+    validate.add_argument("--version", required=True)
+
+    frontend = subparsers.add_parser("frontend-metadata")
+    frontend.add_argument("--descriptor", required=True)
+
+    build_frontend = subparsers.add_parser("build-frontends")
+    build_frontend.add_argument("--descriptor", required=True)
+    build_frontend.add_argument("--out", required=True)
+
+    package = subparsers.add_parser("package-binary")
+    package.add_argument("--binary", required=True)
+    package.add_argument("--target", required=True)
+    package.add_argument("--out", required=True)
 
     collect = subparsers.add_parser("collect-interface")
     collect.add_argument("--worker", default=WORKER_NAME)
@@ -368,7 +525,7 @@ def main() -> int:
 
     payload = subparsers.add_parser("build-payload")
     payload.add_argument("--root", default=".")
-    payload.add_argument("--version", required=True)
+    payload.add_argument("--descriptor", required=True)
     payload.add_argument("--tag", required=True)
     payload.add_argument("--repo-url", required=True)
     payload.add_argument("--interface", required=True)
@@ -377,8 +534,29 @@ def main() -> int:
 
     args = parser.parse_args()
     try:
-        if args.command == "validate":
-            print(json.dumps(validate_release(pathlib.Path(args.root), args.tag, args.event_sha), indent=2))
+        if args.command == "validate-descriptor":
+            print(
+                json.dumps(
+                    validate_release_descriptor(
+                        args.descriptor,
+                        args.source_sha,
+                        args.descriptor_sha256,
+                        args.version,
+                    ),
+                    indent=2,
+                )
+            )
+        elif args.command == "frontend-metadata":
+            print(json.dumps(frontend_metadata(pathlib.Path(args.descriptor)), indent=2))
+        elif args.command == "build-frontends":
+            print(json.dumps(build_frontends(pathlib.Path(args.descriptor), pathlib.Path(args.out)), indent=2))
+        elif args.command == "package-binary":
+            print(
+                json.dumps(
+                    package_binary(pathlib.Path(args.binary), args.target, pathlib.Path(args.out)),
+                    indent=2,
+                )
+            )
         elif args.command == "collect-interface":
             interface = collect_interface(
                 worker=args.worker,
@@ -392,14 +570,14 @@ def main() -> int:
         elif args.command == "build-payload":
             release_payload = build_payload(
                 root=pathlib.Path(args.root),
-                version=args.version,
+                descriptor_path=pathlib.Path(args.descriptor),
                 tag=args.tag,
                 repo_url=args.repo_url,
                 interface=read_json(args.interface),
                 checksums_dir=pathlib.Path(args.checksums_dir),
             )
             pathlib.Path(args.out).write_text(json.dumps(release_payload, indent=2) + "\n", encoding="utf-8")
-            print(json.dumps({"worker_name": WORKER_NAME, "version": args.version, "tag": "next", "targets": list(TARGETS)}, indent=2))
+            print(json.dumps({"worker": WORKER_NAME, "channel": "next", "targets": list(TARGETS)}, indent=2))
     except (OSError, ValueError, RuntimeError, subprocess.SubprocessError) as error:
         print(f"error: {error}", file=sys.stderr)
         return 1

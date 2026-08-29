@@ -1,0 +1,6 @@
+{
+  "repository": "iii-hq/iii",
+  "commit": "f2fe1b9027d8913c3f578102e1a8c1218e64c4a7",
+  "cargo_manifest": "engine/Cargo.toml",
+  "binary": "iii"
+}

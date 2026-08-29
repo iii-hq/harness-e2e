@@ -39,11 +39,11 @@ const PLANNER_PROMPT: &str = r#"Planeje a criação de um Todo Worker para o con
 
 Não implemente o worker e não instale nada. Escreva exatamente um arquivo validation-plan.json na raiz do workspace. O arquivo deve ser JSON estrito com scenario_version=1, task_contract_sha256, summary, implementation_tasks (1..8) e validation_checks (1..12). Cada task contém apenas id, objective e completion_signal. Cada check contém id, probe_id, rationale e, somente quando aplicável, repetitions ou concurrency.
 
-O catálogo fechado de probes é: manifest_valid, worker_live, function_surface, todo_crud_isolated, todo_invalid_contracts, todo_repeatability e todo_concurrent_create. Os cinco primeiros são obrigatórios. todo_repeatability aceita repetitions de 1 a 3. todo_concurrent_create aceita concurrency de 1 a 5. Não escreva shell, SQL, function ids ou expressões executáveis como probes. Revise o JSON contra o contrato antes de concluir."#;
+O catálogo fechado de probes é: compose_valid, worker_live, function_surface, todo_crud_isolated, todo_invalid_contracts, todo_repeatability e todo_concurrent_create. Os cinco primeiros são obrigatórios. todo_repeatability aceita repetitions de 1 a 3. todo_concurrent_create aceita concurrency de 1 a 5. Não escreva shell, SQL, function ids ou expressões executáveis como probes. Revise o JSON contra o contrato antes de concluir."#;
 
 const BUILDER_PROMPT: &str = r#"Execute o plano compilado fornecido e construa o Todo Worker.
 
-O plano compilado e seu task_contract são autoritativos. Trabalhe somente no workspace_root indicado. Preserve exatamente worker_name, function_ids e request_response_schemas. O iii.worker.yaml deve declarar o nome run-scoped, scripts.start explícito e não pode declarar scripts.setup. Você pode escolher linguagem e armazenamento. Valide o manifest, instale a origem local com wait=false, acompanhe worker::status e teste o comportamento antes de concluir. Não modifique o plano compilado."#;
+O plano compilado e seu task_contract são autoritativos. Trabalhe somente no workspace_root indicado. Preserve exatamente worker_name, function_ids e request_response_schemas. O worker-compose.yaml raiz deve declarar o worker run-scoped no catálogo, runtime.exec explícito e uma stack com o mesmo nome. Você pode escolher linguagem e armazenamento. Valide o Compose, inicie a stack local com wait=false, acompanhe worker::status e teste o comportamento antes de concluir. Não modifique o plano compilado."#;
 
 pub fn definition() -> WorkflowDefinitionV1 {
     WorkflowDefinitionV1 {
@@ -266,10 +266,10 @@ impl StepExecutor for TodoExecutor {
     async fn preflight(&self, _context: &StepExecutorContext) -> Result<()> {
         if self.kind == TodoStepKind::Validate {
             for function in [
-                "worker::validate",
-                "worker::add",
+                "compose::validate",
+                "compose::up",
+                "compose::down",
                 "worker::status",
-                "worker::remove",
                 "engine::functions::info",
             ] {
                 if !self.context.function_exists(function).await? {
@@ -417,7 +417,7 @@ async fn execute_validate(
         .await?;
     todo_worker::persist_planned_validation_bundle(&contract, &bundle)?;
     let evidence = serde_json::to_value(&bundle)?;
-    let construction_passed = ["manifest_valid", "worker_live", "function_surface"]
+    let construction_passed = ["compose_valid", "worker_live", "function_surface"]
         .into_iter()
         .all(|probe| bundle.probe_passed(probe));
     let functional_passed = compiled
@@ -555,12 +555,12 @@ fn harness_config(
         "function_allow": if planner {
             vec!["coder::*", "shell::exec"]
         } else {
-            vec!["coder::*", "shell::exec", "worker::validate", "worker::add", "worker::status", "engine::functions::info"]
+            vec!["coder::*", "shell::exec", "compose::validate", "compose::up", "worker::status", "engine::functions::info"]
         },
         "function_deny": if planner {
             vec!["worker::*", "engine::*", "harness::*", "e2e::*", "state::*", "database::*"]
         } else {
-            vec!["harness::*", "e2e::*", "state::*", "database::*", "worker::remove", "worker::clear"]
+            vec!["harness::*", "e2e::*", "state::*", "database::*", "compose::down", "worker::remove", "worker::clear"]
         }
     })
 }
