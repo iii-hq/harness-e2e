@@ -1,4 +1,5 @@
 import json
+import re
 import pathlib
 import unittest
 
@@ -7,9 +8,15 @@ ROOT = pathlib.Path(__file__).resolve().parents[2]
 
 
 class WorkflowBoundaryTests(unittest.TestCase):
+    def test_external_actions_are_pinned_to_immutable_commits(self):
+        action_ref = re.compile(r"^\s*uses:\s*([^\s#]+)", re.MULTILINE)
+        immutable = re.compile(r"^[^\s]+@[0-9a-f]{40}$")
+        for path in (ROOT / ".github/workflows").glob("*.yml"):
+            for action in action_ref.findall(path.read_text(encoding="utf-8")):
+                self.assertRegex(action, immutable, f"{path.name}: {action}")
+
     def test_migrated_operational_paths_are_compose_only_and_unversioned(self):
         paths = [
-            ROOT / "README.md",
             ROOT / "scripts/release_control_campaign.py",
             ROOT / "scripts/run_release_control_group.sh",
             ROOT / "scripts/run_release_control_fault.sh",
@@ -55,13 +62,13 @@ class WorkflowBoundaryTests(unittest.TestCase):
         self.assertIn("cleanup --lease-id", launcher)
         self.assertNotIn("iii-hq/workers", workflow)
 
-    def test_publication_compose_uses_the_rc4_manifest_schema(self):
+    def test_publication_compose_uses_the_current_manifest_schema(self):
         workflow = (ROOT / ".github/workflows/release.yml").read_text()
         self.assertIn('worker: "path://."', workflow)
         self.assertIn('worker: "package://state"', workflow)
-        self.assertIn('depends_on: ["state"]', workflow)
+        self.assertIn('start_after: ["state"]', workflow)
         self.assertIn('scripts: {run: "./release-worker/harness-e2e worker"}', workflow)
-        self.assertNotIn("start_after", workflow)
+        self.assertNotIn('depends_on: ["state"]', workflow)
 
     def test_cross_repository_shadow_checks_out_the_e2e_repository(self):
         workflow = (ROOT / ".github/workflows/shadow.yml").read_text(encoding="utf-8")

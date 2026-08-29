@@ -252,7 +252,16 @@ baseline/candidate cohort.
 
 ## Worker releases
 
-Namespaced stable SemVer tags (`harness-e2e/vX.Y.Z`) build the standard nine
-Registry binary targets, create a GitHub prerelease, collect the live typed iii
-interface from the released Linux binary, and publish only the Registry
-`next` channel.
+Release Control is the only caller of the worker release workflow. It selects
+an immutable source SHA and a descriptor compiled once from
+`.release/workers.yaml`, `iii.worker.yaml`, and `Cargo.toml` by the
+Workers-owned compiler, then the workflow builds the standard nine Registry
+binary targets before publishing any external effect. The same prepared bytes
+are attached to the namespaced GitHub prerelease, used to collect the typed iii
+interface, and published to the Registry `next` channel. Recovery is requested
+through Release Control; this repository has no direct promotion workflow.
+
+The root `iii.worker.yaml` remains the public manifest for local `iii worker`
+development and package compatibility. The root `worker-compose.yaml` remains
+a normal public Compose document. Release Control and post-prepare workflow
+phases deliberately read neither source contract.

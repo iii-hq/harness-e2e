@@ -1,7 +1,7 @@
 use super::evidence::{bounded_value, outcome, probe};
 use super::probes::{
     install_and_wait, is_remote_invocation_failure, run_concurrent_create, run_crud_cycle,
-    validate_function_surface, validate_invalid_inputs, validate_manifest,
+    validate_compose, validate_function_surface, validate_invalid_inputs,
 };
 use super::workspace::{candidate_sha256, file_sha256};
 use super::*;
@@ -27,31 +27,31 @@ impl TodoProbeRunner {
             bail!("Todo validation repetitions must be between one and three");
         }
         let candidate_sha256 = candidate_sha256(Path::new(&self.contract.workspace_root))?;
-        let manifest_sha256 =
-            file_sha256(&Path::new(&self.contract.workspace_root).join("iii.worker.yaml"))?;
+        let compose_sha256 =
+            file_sha256(&Path::new(&self.contract.workspace_root).join("worker-compose.yaml"))?;
         let mut probes = Vec::new();
         let mut limitations = Vec::new();
 
-        let manifest_started = Instant::now();
-        let manifest_result = validate_manifest(client, &self.contract).await?;
-        let manifest_passed = manifest_result.1 == ProbeOutcome::Passed;
+        let compose_started = Instant::now();
+        let compose_result = validate_compose(client, &self.contract).await?;
+        let compose_passed = compose_result.1 == ProbeOutcome::Passed;
         probes.push(probe(
-            "manifest_valid",
-            "manifest",
-            json!({"valid": true, "name": self.contract.worker_name, "scripts_start": true, "scripts_setup": false}),
-            manifest_result.0,
-            manifest_result.1,
-            manifest_started,
+            "compose_valid",
+            "worker_compose",
+            json!({"valid": true, "name": self.contract.worker_name, "runtime_exec": true, "stack_present": true}),
+            compose_result.0,
+            compose_result.1,
+            compose_started,
             1,
         ));
 
         let status_started = Instant::now();
-        let (status, worker_live, worker_outcome) = if manifest_passed {
+        let (status, worker_live, worker_outcome) = if compose_passed {
             let (status, running) = install_and_wait(client, &self.contract).await?;
             (status, running, outcome(running))
         } else {
             (
-                json!({"skipped": "manifest_valid is a prerequisite"}),
+                json!({"skipped": "compose_valid is a prerequisite"}),
                 false,
                 ProbeOutcome::NotEvaluated,
             )
@@ -205,7 +205,7 @@ impl TodoProbeRunner {
                 worker_name: self.contract.worker_name.clone(),
                 candidate_sha256: candidate_sha256.clone(),
                 source_sha256: candidate_sha256.clone(),
-                manifest_sha256,
+                compose_sha256,
                 accepted_candidate_sha256: candidate_sha256.clone(),
                 accepted_candidate_is_current: candidate_sha256.is_some(),
                 function_schema_sha256: schema_hashes,

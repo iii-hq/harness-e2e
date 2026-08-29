@@ -31,12 +31,12 @@ use super::{
 
 pub const SIMPLE_ID: &str = "todo_worker_simple";
 pub const PLANNED_ID: &str = "todo_worker_planned";
-pub const VERSION: u32 = 2;
+pub const VERSION: u32 = 3;
 pub const VALIDATION_ASSET_ID: &str = "todo_validation_evidence";
 pub const RAW_PLAN_FILE: &str = "validation-plan.json";
 pub const OWNER_MARKER: &str = ".harness-e2e-owner";
 pub const REQUIRED_PROBES: [&str; 5] = [
-    "manifest_valid",
+    "compose_valid",
     "worker_live",
     "function_surface",
     "todo_crud_isolated",
@@ -46,9 +46,9 @@ pub const OPTIONAL_PROBES: [&str; 2] = ["todo_repeatability", "todo_concurrent_c
 
 const SIMPLE_ASSESSMENTS: &[AssessmentSpec] = &[
     AssessmentSpec::hard_gated_in(
-        "manifest_valid",
+        "compose_valid",
         15,
-        "The generated iii.worker.yaml is valid, run-scoped, starts explicitly, and has no setup script.",
+        "The generated worker-compose.yaml is valid, run-scoped, has an explicit runtime, and exposes a matching stack.",
         EvaluationDimension::Deliverable,
     ),
     AssessmentSpec::hard_gated("worker_live", 15, "The expected local worker is installed and running."),

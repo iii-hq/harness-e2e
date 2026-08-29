@@ -1,0 +1,123 @@
+name: Release Descriptor Index
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      source_sha:
+        description: Full source commit; defaults to the dispatched workflow SHA
+        required: false
+        type: string
+
+permissions: {}
+
+jobs:
+  compile:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Resolve immutable source
+        id: source
+        env:
+          REQUESTED_SOURCE_SHA: ${{ inputs.source_sha }}
+        run: |
+          set -euo pipefail
+          source_sha="${REQUESTED_SOURCE_SHA:-${GITHUB_SHA}}"
+          [[ "$source_sha" =~ ^[0-9a-f]{40}$ ]]
+          echo "sha=$source_sha" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          ref: ${{ steps.source.outputs.sha }}
+          persist-credentials: false
+
+      - name: Validate immutable Workers compiler pin
+        id: compiler
+        run: python3 scripts/release_compiler.py --github-output "$GITHUB_OUTPUT"
+
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          repository: ${{ steps.compiler.outputs.repository }}
+          ref: ${{ steps.compiler.outputs.commit }}
+          path: release-compiler
+          persist-credentials: false
+          sparse-checkout: |
+            .github/scripts/release_compiler.py
+            .github/contracts/release-descriptor.schema.json
+
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.12'
+
+      - name: Install descriptor validators
+        run: python -m pip install --disable-pip-version-check --quiet pyyaml jsonschema
+
+      - name: Verify and run the pinned Workers compiler
+        env:
+          COMPILER_PATH: ${{ steps.compiler.outputs.compiler_path }}
+          SCHEMA_PATH: ${{ steps.compiler.outputs.schema_path }}
+          EXPECTED_COMPILER_DIGEST: ${{ steps.compiler.outputs.digest }}
+          COMPILER_REPOSITORY: ${{ steps.compiler.outputs.repository }}
+          COMPILER_COMMIT: ${{ steps.compiler.outputs.commit }}
+          SOURCE_SHA: ${{ steps.source.outputs.sha }}
+        run: |
+          set -euo pipefail
+          compiler="release-compiler/$COMPILER_PATH"
+          schema="release-compiler/$SCHEMA_PATH"
+          test -f "$compiler"
+          test -f "$schema"
+          actual=$(python3 "$compiler" digest --schema "$schema")
+          test "$actual" = "$EXPECTED_COMPILER_DIGEST"
+          python3 "$compiler" compile-index \
+            --root "$GITHUB_WORKSPACE" \
+            --release-spec .release/workers.yaml \
+            --schema "$schema" \
+            --source-sha "$SOURCE_SHA" \
+            --compiler-repository "$COMPILER_REPOSITORY" \
+            --compiler-commit "$COMPILER_COMMIT" \
+            --output-dir release-descriptor-index
+
+      - name: Validate exact descriptor index and schema
+        env:
+          SOURCE_SHA: ${{ steps.source.outputs.sha }}
+          COMPILER_REPOSITORY: ${{ steps.compiler.outputs.repository }}
+          COMPILER_COMMIT: ${{ steps.compiler.outputs.commit }}
+          COMPILER_DIGEST: ${{ steps.compiler.outputs.digest }}
+          SCHEMA_PATH: ${{ steps.compiler.outputs.schema_path }}
+        run: |
+          python3 - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+          from jsonschema import Draft202012Validator
+
+          root = Path("release-descriptor-index")
+          index = json.loads((root / "release-descriptor-index.json").read_text())
+          expected_compiler = {
+              "repository": os.environ["COMPILER_REPOSITORY"],
+              "commit": os.environ["COMPILER_COMMIT"],
+              "digest": os.environ["COMPILER_DIGEST"],
+          }
+          assert set(index) == {"contract", "source_sha", "compiler", "workers"}
+          assert index["contract"] == "release-descriptor-index"
+          assert index["source_sha"] == os.environ["SOURCE_SHA"]
+          assert index["compiler"] == expected_compiler
+          assert set(index["workers"]) == {"harness-e2e"}
+          entry = index["workers"]["harness-e2e"]
+          descriptor = json.loads((root / entry["path"]).read_text())
+          schema = json.loads((Path("release-compiler") / os.environ["SCHEMA_PATH"]).read_text())
+          Draft202012Validator(schema).validate(descriptor)
+          assert descriptor["descriptor_sha256"] == entry["digest"]
+          assert descriptor["compiler_digest"] == os.environ["COMPILER_DIGEST"]
+          assert descriptor["public_manifest_sha256"] == entry["public_manifest_sha256"]
+          assert descriptor["registry_projection_sha256"] == entry["registry_projection_sha256"]
+          PY
+
+      - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: release-descriptor-index-${{ steps.source.outputs.sha }}
+          path: release-descriptor-index/
+          if-no-files-found: error
+          retention-days: 30

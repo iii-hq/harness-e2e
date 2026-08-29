@@ -1,0 +1,9 @@
+namespace: harness-e2e
+
+containers:
+  harness-e2e:
+    worker: path://.
+    config_override:
+      data_dir: ~/.iii/data/harness-e2e
+    scripts:
+      run: cargo run --locked --bin harness-e2e

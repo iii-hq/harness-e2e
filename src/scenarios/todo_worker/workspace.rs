@@ -1,8 +1,8 @@
 use super::*;
 pub async fn cleanup_contract(context: &E2eContext, contract: &TodoTaskContract) -> Result<()> {
     let mut failures = Vec::new();
-    let remove_available = context
-        .function_exists("worker::remove")
+    let down_available = context
+        .function_exists("compose::down")
         .await
         .unwrap_or(false);
     let status_available = context
@@ -14,7 +14,7 @@ pub async fn cleanup_contract(context: &E2eContext, contract: &TodoTaskContract)
         .await
         .unwrap_or(false);
     let mut withdrawn = false;
-    if !remove_available || !status_available || !info_available {
+    if !down_available || !status_available || !info_available {
         failures.push("Todo cleanup control plane is unavailable".into());
     } else {
         let initial_status = context
@@ -28,9 +28,9 @@ pub async fn cleanup_contract(context: &E2eContext, contract: &TodoTaskContract)
                 withdrawn = true;
             }
             (Ok(_), Ok(_)) => {
-                if let Err(error) = remove_worker_with_retry(context, contract).await {
+                if let Err(error) = stop_compose_with_retry(context, contract).await {
                     failures.push(format!(
-                        "remove worker '{}': {error:#}",
+                        "stop Compose stack '{}': {error:#}",
                         contract.worker_name
                     ));
                 } else {
@@ -51,7 +51,7 @@ pub async fn cleanup_contract(context: &E2eContext, contract: &TodoTaskContract)
                     }
                     if !withdrawn {
                         failures.push(format!(
-                            "worker '{}' or its functions remained registered after removal",
+                            "worker '{}' or its functions remained registered after Compose shutdown",
                             contract.worker_name
                         ));
                     }
@@ -78,13 +78,16 @@ pub async fn cleanup_contract(context: &E2eContext, contract: &TodoTaskContract)
     }
 }
 
-async fn remove_worker_with_retry(context: &E2eContext, contract: &TodoTaskContract) -> Result<()> {
+async fn stop_compose_with_retry(context: &E2eContext, contract: &TodoTaskContract) -> Result<()> {
     const MAX_ATTEMPTS: usize = 240;
     for attempt in 1..=MAX_ATTEMPTS {
         match context
             .trigger_value(
-                "worker::remove",
-                json!({"names": [contract.worker_name], "all": false, "yes": true}),
+                "compose::down",
+                json!({
+                    "path": Path::new(&contract.workspace_root).join("worker-compose.yaml"),
+                    "stack": contract.worker_name
+                }),
             )
             .await
         {

@@ -1,58 +1,71 @@
 use super::contracts::bounded_text;
 use super::evidence::{bounded_value, outcome};
 use super::*;
-pub(super) async fn validate_manifest(
+pub(super) async fn validate_compose(
     client: &IIIClient,
     contract: &TodoTaskContract,
 ) -> Result<(Value, ProbeOutcome)> {
-    let path = Path::new(&contract.workspace_root).join("iii.worker.yaml");
+    let path = Path::new(&contract.workspace_root).join("worker-compose.yaml");
     let local = fs::read_to_string(&path).ok();
     if local.is_none() {
         return Ok((
             json!({
-                "manifest_present": false,
+                "compose_present": false,
                 "name_exact": false,
-                "scripts_start": false,
-                "scripts_setup_absent": false
+                "runtime_exec": false,
+                "stack_present": false
             }),
             ProbeOutcome::Failed,
         ));
     }
     let response = trigger_value(
         client,
-        "worker::validate",
-        json!({"path": contract.workspace_root}),
+        "compose::validate",
+        json!({"path": path, "stack": contract.worker_name}),
     )
     .await?;
     let yaml = local
         .as_deref()
         .and_then(|text| serde_yaml::from_str::<Value>(text).ok());
-    let name_ok = yaml
+    let worker = yaml
         .as_ref()
-        .and_then(|value| value.get("name"))
+        .and_then(|value| value.get("workers"))
+        .and_then(|value| value.get(&contract.worker_name));
+    let name_ok = worker.is_some();
+    let source_ok = worker
+        .and_then(|value| value.pointer("/source/path"))
         .and_then(Value::as_str)
-        == Some(contract.worker_name.as_str());
-    let start_ok = yaml
+        == Some(".");
+    let runtime_exec = worker
+        .and_then(|value| value.pointer("/runtime/exec"))
+        .and_then(Value::as_array)
+        .is_some_and(|values| !values.is_empty() && values.iter().all(Value::is_string));
+    let expected_ref = format!("catalog://{}", contract.worker_name);
+    let stack_present = yaml
         .as_ref()
-        .and_then(|value| value.pointer("/scripts/start"))
-        .and_then(Value::as_str)
-        .is_some_and(|value| !value.trim().is_empty());
-    let setup_absent = yaml
-        .as_ref()
-        .and_then(|value| value.pointer("/scripts/setup"))
-        .is_none();
-    let valid = response.get("valid").and_then(Value::as_bool) == Some(true)
-        && response.get("name").and_then(Value::as_str) == Some(contract.worker_name.as_str())
-        && name_ok
-        && start_ok
-        && setup_absent;
+        .and_then(|value| value.get("stacks"))
+        .and_then(|value| value.get(&contract.worker_name))
+        .and_then(|value| value.get("containers"))
+        .and_then(Value::as_object)
+        .is_some_and(|containers| {
+            containers.values().any(|container| {
+                container.get("worker").and_then(Value::as_str) == Some(expected_ref.as_str())
+            })
+        });
+    let remotely_valid = response.get("namespace").and_then(Value::as_str).is_some()
+        && response
+            .get("start_order")
+            .and_then(Value::as_array)
+            .is_some_and(|order| !order.is_empty());
+    let valid = remotely_valid && name_ok && source_ok && runtime_exec && stack_present;
     Ok((
         json!({
-            "worker_validate": bounded_value(&response),
-            "manifest_present": local.is_some(),
+            "compose_validate": bounded_value(&response),
+            "compose_present": local.is_some(),
             "name_exact": name_ok,
-            "scripts_start": start_ok,
-            "scripts_setup_absent": setup_absent
+            "source_path": source_ok,
+            "runtime_exec": runtime_exec,
+            "stack_present": stack_present
         }),
         outcome(valid),
     ))
@@ -93,9 +106,10 @@ pub(super) async fn install_and_wait(
 
     let add = trigger_value(
         client,
-        "worker::add",
+        "compose::up",
         json!({
-            "source": {"kind": "local", "path": contract.workspace_root},
+            "path": Path::new(&contract.workspace_root).join("worker-compose.yaml"),
+            "stack": contract.worker_name,
             "wait": false
         }),
     )
