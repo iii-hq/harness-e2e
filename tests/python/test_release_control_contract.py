@@ -31,6 +31,13 @@ def test_contract_schema_is_pinned_to_release_control():
     )
 
 
+def test_executor_callbacks_use_the_root_mounted_release_control_routes():
+    source = SCRIPT.read_text(encoding="utf-8")
+    assert 'args.api_url.rstrip("/") + "/executor-dispatches/authorize"' in source
+    assert 'args.api_url.rstrip("/") + "/executor-results"' in source
+    assert 'args.api_url.rstrip("/") + "/api/executor' not in source
+
+
 def test_mutating_harness_reruns_are_rejected():
     common = [
         "validate-dispatch",
