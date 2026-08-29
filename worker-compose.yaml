@@ -1,54 +1,9 @@
-workers:
-  harness-e2e:
-    source:
-      path: .
-      package_manifest: Cargo.toml
-    artifact:
-      kind: rust-binary
-      binary: harness-e2e
-      toolchain:
-        name: rust
-        version: 1.97.1
-      targets:
-        - x86_64-apple-darwin
-        - aarch64-apple-darwin
-        - x86_64-pc-windows-msvc
-        - i686-pc-windows-msvc
-        - aarch64-pc-windows-msvc
-        - x86_64-unknown-linux-gnu
-        - x86_64-unknown-linux-musl
-        - aarch64-unknown-linux-gnu
-        - armv7-unknown-linux-gnueabihf
-      frontends:
-        - workspace_root: dashboard
-          source_path: dashboard
-          runtime:
-            name: node
-            version: "22"
-          package_manager:
-            name: pnpm
-            version: 11.13.1
-          lockfile: pnpm-lock.yaml
-          install_command: [pnpm, install, --frozen-lockfile]
-          build_command: [pnpm, build]
-          outputs: [dist, dist-console]
-    runtime:
-      exec: [harness-e2e]
-    registry:
-      description: Measure Harness capability, retain reproducible evidence, and expose the E2E dashboard.
-      license: Apache-2.0
-      tags: [harness, e2e, evaluation, benchmark, dashboard]
-      dependencies:
-        database: "^0.5.0"
-        storage: "^0.1.10"
-      config:
-        defaults_file: config.yaml
-    validation:
-      interface: required
+namespace: harness-e2e
 
-stacks:
+containers:
   harness-e2e:
-    namespace: harness-e2e
-    containers:
-      harness-e2e:
-        worker: catalog://harness-e2e
+    worker: path://.
+    config_override:
+      data_dir: ~/.iii/data/harness-e2e
+    scripts:
+      run: cargo run --locked --bin harness-e2e

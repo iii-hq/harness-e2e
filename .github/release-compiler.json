@@ -1,6 +1,7 @@
 {
-  "repository": "iii-hq/iii",
-  "commit": "224627db36c35142be34a687b70a0565bb69155c",
-  "cargo_manifest": "engine/Cargo.toml",
-  "binary": "iii"
+  "repository": "iii-hq/workers",
+  "commit": "b3bde6061840b2bbd526d7a3dd731d0d0fd94f6e",
+  "compiler_path": ".github/scripts/release_compiler.py",
+  "schema_path": ".github/contracts/release-descriptor.schema.json",
+  "digest": "72b4a2c33f293d57235ad527f6f74c8d4bc2067e381554c94eb360250c2256f7"
 }

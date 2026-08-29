@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Validate the immutable iii compiler pin used by release workflows."""
+"""Validate the immutable Workers release compiler pin."""
 
 from __future__ import annotations
 
@@ -9,7 +9,7 @@ import re
 from pathlib import Path
 
 
-FIELDS = {"repository", "commit", "cargo_manifest", "binary"}
+FIELDS = {"repository", "commit", "compiler_path", "schema_path", "digest"}
 
 
 def read_pin(path: Path) -> dict[str, str]:
@@ -24,9 +24,11 @@ def read_pin(path: Path) -> dict[str, str]:
         raise SystemExit(f"{path}: compiler pin must fail closed")
     if not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", value["repository"]):
         raise SystemExit(f"{path}: repository must be an owner/name pair")
-    for field in ("cargo_manifest", "binary"):
+    if not re.fullmatch(r"[0-9a-f]{64}", value["digest"]):
+        raise SystemExit(f"{path}: digest must be a lowercase SHA-256")
+    for field in ("compiler_path", "schema_path"):
         candidate = Path(value[field])
-        if candidate.is_absolute() or ".." in candidate.parts:
+        if candidate.is_absolute() or ".." in candidate.parts or candidate.suffix not in {".py", ".json"}:
             raise SystemExit(f"{path}: {field} must be a safe relative path")
     return value
 

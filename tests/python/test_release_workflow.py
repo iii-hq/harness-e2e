@@ -60,7 +60,7 @@ class ReleaseWorkflowTests(unittest.TestCase):
             all("workers-release-macos-12core" in entry["os"] for entry in mac)
         )
 
-    def test_result_and_registry_publication_are_descriptor_native(self):
+    def test_result_and_registry_publication_use_current_registry_contract(self):
         text = WORKFLOW.read_text(encoding="utf-8")
         self.assertNotIn("iii.worker.yaml", text)
         self.assertIn("validate-descriptor", text)
@@ -75,23 +75,25 @@ class ReleaseWorkflowTests(unittest.TestCase):
         self.assertIn(
             "--descriptor release-descriptor-input/release-descriptor.json", text
         )
-        self.assertIn("--data-binary @registry-payload.json", text)
+        self.assertIn("scripts/publish_registry.py", text)
+        self.assertNotIn("package_descriptor", text)
         self.assertEqual(workflow()["jobs"]["report"]["if"], "${{ always() }}")
 
-    def test_descriptor_index_is_compiled_once_by_the_pinned_iii(self):
+    def test_descriptor_index_is_compiled_once_by_pinned_workers_compiler(self):
         text = INDEX_WORKFLOW.read_text(encoding="utf-8")
-        self.assertNotIn("iii.worker.yaml", text)
         self.assertNotIn("iii compose descriptor-index", text)
-        self.assertIn('"$III_BIN" compose descriptor-index', text)
-        self.assertIn("--compiler-sha '${{ steps.compiler.outputs.commit }}'", text)
+        self.assertIn('python3 "$compiler" compile-index', text)
+        self.assertIn("--compiler-commit \"$COMPILER_COMMIT\"", text)
+        self.assertIn("--release-spec .release/workers.yaml", text)
         self.assertIn(
             "release-descriptor-index-${{ steps.source.outputs.sha }}", text
         )
 
     def test_compiler_pin_is_full_and_fails_closed(self):
         pin = read_pin(ROOT / ".github" / "release-compiler.json")
-        self.assertEqual(pin["repository"], "iii-hq/iii")
+        self.assertEqual(pin["repository"], "iii-hq/workers")
         self.assertRegex(pin["commit"], r"^[0-9a-f]{40}$")
+        self.assertRegex(pin["digest"], r"^[0-9a-f]{64}$")
 
         with tempfile.TemporaryDirectory() as directory:
             invalid = pathlib.Path(directory) / "pin.json"

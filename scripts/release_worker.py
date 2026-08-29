@@ -50,9 +50,10 @@ def read_json(path: str | pathlib.Path) -> dict[str, Any]:
     return value
 
 
-def descriptor_sha256(package: dict[str, Any]) -> str:
+def descriptor_sha256(descriptor: dict[str, Any]) -> str:
+    subject = {key: value for key, value in descriptor.items() if key != "descriptor_sha256"}
     canonical = json.dumps(
-        package,
+        subject,
         sort_keys=True,
         separators=(",", ":"),
         ensure_ascii=False,
@@ -69,24 +70,16 @@ def load_release_descriptor(
 ) -> dict[str, Any]:
     descriptor = read_json(path)
     required = {
-        "contract",
-        "worker",
-        "version",
-        "source_sha",
-        "descriptor_sha256",
-        "package",
-        "build_units",
+        "contract", "worker", "version", "source_sha", "release_spec_sha256",
+        "public_manifest_sha256", "registry_projection_sha256", "compiler_digest",
+        "descriptor_sha256", "source", "artifact", "runtime", "validation",
+        "publish", "build_units", "registry_projection",
     }
     if set(descriptor) != required:
         raise ValueError(f"release descriptor must contain exactly {sorted(required)}")
     if descriptor["contract"] != "release-descriptor" or descriptor["worker"] != WORKER_NAME:
         raise ValueError("release descriptor has the wrong contract or worker")
-    package = descriptor.get("package")
-    if not isinstance(package, dict):
-        raise ValueError("release descriptor package must be an object")
-    if package.get("name") != WORKER_NAME or package.get("version") != descriptor.get("version"):
-        raise ValueError("release descriptor package identity does not match its subject")
-    digest = descriptor_sha256(package)
+    digest = descriptor_sha256(descriptor)
     if descriptor.get("descriptor_sha256") != digest:
         raise ValueError("release descriptor package digest is invalid")
     if expected_source_sha and descriptor.get("source_sha") != expected_source_sha:
@@ -95,7 +88,7 @@ def load_release_descriptor(
         raise ValueError("release descriptor digest does not match the dispatch")
     if expected_version and descriptor.get("version") != expected_version:
         raise ValueError("release descriptor version does not match the dispatch")
-    artifact = package.get("artifact")
+    artifact = descriptor.get("artifact")
     if not isinstance(artifact, dict) or artifact.get("kind") != "rust-binary":
         raise ValueError("harness-e2e release descriptor must describe a rust-binary")
     if artifact.get("binary") != WORKER_NAME or tuple(artifact.get("targets") or ()) != TARGETS:
@@ -121,7 +114,7 @@ def argv(value: Any, field: str) -> tuple[str, ...]:
 
 
 def frontend_specs(descriptor: dict[str, Any]) -> list[dict[str, Any]]:
-    artifact = descriptor["package"]["artifact"]
+    artifact = descriptor["artifact"]
     raw = artifact.get("frontends", [])
     if not isinstance(raw, list):
         raise ValueError("artifact.frontends must be an array")
@@ -178,7 +171,7 @@ def frontend_metadata(descriptor_path: pathlib.Path) -> dict[str, str]:
     result = {
         "runtime_version": str(spec["runtime"]["version"]),
         "package_manager_version": str(spec["package_manager"]["version"]),
-        "rust_toolchain_version": str(descriptor["package"]["artifact"]["toolchain"]["version"]),
+        "rust_toolchain_version": str(descriptor["artifact"]["toolchain"]["version"]),
         "lockfile": lockfile.as_posix(),
         "lock_sha256": hashlib.sha256(lockfile.read_bytes()).hexdigest(),
     }
@@ -438,7 +431,6 @@ def collect_interface(
 
 
 def build_payload(
-    root: pathlib.Path,
     descriptor_path: pathlib.Path,
     tag: str,
     repo_url: str,
@@ -446,8 +438,19 @@ def build_payload(
     checksums_dir: pathlib.Path,
 ) -> dict[str, Any]:
     descriptor = load_release_descriptor(descriptor_path)
-    package = descriptor["package"]
-    assert isinstance(package, dict)
+    projection = descriptor["registry_projection"]
+    required_projection = {
+        "worker_name", "version", "type", "description", "license", "tags",
+        "dependencies", "config", "experimental", "readme",
+    }
+    if not isinstance(projection, dict) or set(projection) != required_projection:
+        raise ValueError("release descriptor Registry projection differs from the current API")
+    if (
+        projection.get("worker_name") != WORKER_NAME
+        or projection.get("version") != descriptor.get("version")
+        or projection.get("type") != "binary"
+    ):
+        raise ValueError("release descriptor Registry projection identity is invalid")
     version = str(descriptor["version"])
     if tag != f"harness-e2e/v{version}":
         raise ValueError("tag and descriptor version do not identify the same release")
@@ -480,16 +483,12 @@ def build_payload(
         raise ValueError("untyped function schemas: " + ", ".join(violations))
 
     return {
-        "package_descriptor": package,
-        "descriptor_sha256": descriptor["descriptor_sha256"],
-        "channel": "next",
-        "readme": (root / "README.md").read_text(encoding="utf-8"),
+        **projection,
+        "tag": "next",
         "repo": repo_url,
-        "interface": {
-            "functions": functions,
-            "triggers": interface.get("triggers") or [],
-        },
-        "artifacts": {"kind": "rust-binary", "binaries": binaries},
+        "functions": functions,
+        "triggers": interface.get("triggers") or [],
+        "binaries": binaries,
     }
 
 
@@ -524,7 +523,6 @@ def main() -> int:
     collect.add_argument("--out", required=True)
 
     payload = subparsers.add_parser("build-payload")
-    payload.add_argument("--root", default=".")
     payload.add_argument("--descriptor", required=True)
     payload.add_argument("--tag", required=True)
     payload.add_argument("--repo-url", required=True)
@@ -569,7 +567,6 @@ def main() -> int:
             print(json.dumps({"functions": len(interface["functions"]), "triggers": len(interface["triggers"])}, indent=2))
         elif args.command == "build-payload":
             release_payload = build_payload(
-                root=pathlib.Path(args.root),
                 descriptor_path=pathlib.Path(args.descriptor),
                 tag=args.tag,
                 repo_url=args.repo_url,

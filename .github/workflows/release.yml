@@ -74,13 +74,23 @@ jobs:
       - name: Restore the compiled descriptor selected by Release Control
         run: |
           set -euo pipefail
-          compiler=$(jq -r .commit .github/release-compiler.json)
+          compiler_repository=$(jq -r .repository .github/release-compiler.json)
+          compiler_commit=$(jq -r .commit .github/release-compiler.json)
+          compiler_digest=$(jq -r .digest .github/release-compiler.json)
           jq -e \
             --arg source "$RELEASE_SOURCE_SHA" \
-            --arg compiler "$compiler" \
+            --arg compiler_repository "$compiler_repository" \
+            --arg compiler_commit "$compiler_commit" \
+            --arg compiler_digest "$compiler_digest" \
             --arg digest "$RELEASE_DESCRIPTOR_SHA256" \
             --arg version "$RELEASE_CANDIDATE_VERSION" \
-            '.contract == "release-descriptor-index" and .source_sha == $source and .compiler_sha == $compiler and .workers["harness-e2e"] == {path:"descriptors/harness-e2e.json",digest:$digest,version:$version,publish:true}' \
+            '.contract == "release-descriptor-index"
+             and .source_sha == $source
+             and .compiler == {repository:$compiler_repository,commit:$compiler_commit,digest:$compiler_digest}
+             and .workers["harness-e2e"].path == "descriptors/harness-e2e.json"
+             and .workers["harness-e2e"].digest == $digest
+             and .workers["harness-e2e"].version == $version
+             and .workers["harness-e2e"].publish == true' \
             release-descriptor-index/release-descriptor-index.json
           cp release-descriptor-index/descriptors/harness-e2e.json release-descriptor.json
       - name: Validate compiled identity and authorize dispatch
@@ -576,7 +586,7 @@ jobs:
               state: {worker: "package://state", version: "0.22.2"},
               "harness-e2e": {
                 worker: "path://.",
-                depends_on: ["state"],
+                start_after: ["state"],
                 scripts: {run: "./release-worker/harness-e2e worker"},
                 config_name: "release-interface-harness-e2e",
                 config_override: {data_dir: $data_dir}
@@ -635,38 +645,26 @@ jobs:
             --interface worker-interface.json \
             --checksums-dir release-assets \
             --out registry-payload.json
-      - name: POST immutable release to Registry next
+      - name: POST candidate and next atomically with exact readback
         env:
-          API_URL: https://api.workers.iii.dev
-          API_KEY: ${{ secrets.WORKERS_REGISTRY_API_KEY }}
-          WORKER: harness-e2e
-          VERSION: ${{ needs.validate.outputs.version }}
+          WORKERS_REGISTRY_API_KEY: ${{ secrets.WORKERS_REGISTRY_API_KEY }}
+          RELEASE_VERSION: ${{ needs.validate.outputs.version }}
         run: |
           set -euo pipefail
-          if [[ -z "$API_KEY" ]]; then
-            echo "::error::WORKERS_REGISTRY_API_KEY is not configured"
-            exit 1
-          fi
-          http=$(curl -sS -o registry-response.json -w '%{http_code}' \
-            -H "X-API-Key: $API_KEY" \
-            -H 'Content-Type: application/json' \
-            -X POST "$API_URL/publish" \
-            --data-binary @registry-payload.json)
-          if [[ "$http" == '409' ]]; then
-            resolve_http=$(curl -sS -o registry-resolve.json -w '%{http_code}' \
-              -H 'Content-Type: application/json' \
-              -X POST "$API_URL/resolve" \
-              --data "$(jq -cn --arg worker "$WORKER" '{worker: $worker, version: "next"}')")
-            resolved=$(jq -r '.root.version // empty' registry-resolve.json)
-            if [[ "$resolve_http" != '200' || "$resolved" != "$VERSION" ]]; then
-              echo "::error::HTTP 409 was not an idempotent retry; next does not resolve to $VERSION"
-              exit 1
-            fi
-            echo "::notice::$WORKER@$VERSION already published on next"
-          elif [[ "$http" != '200' && "$http" != '201' ]]; then
-            echo "::error::Registry publish failed with HTTP $http"
-            exit 1
-          fi
+          python3 scripts/publish_registry.py \
+            --api-url https://api.workers.iii.dev \
+            --worker harness-e2e \
+            --version "$RELEASE_VERSION" \
+            --payload registry-payload.json \
+            --out registry-publication-receipt.json
+      - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: registry-publication-harness-e2e-${{ needs.validate.outputs.version }}
+          path: |
+            registry-payload.json
+            registry-publication-receipt.json
+          if-no-files-found: error
+          retention-days: 30
       - name: Dump interface logs
         if: failure()
         run: |
@@ -690,10 +688,96 @@ jobs:
             kill "$(cat iii-engine.pid)" 2>/dev/null || true
           fi
 
+  candidate-smoke:
+    name: Boot published candidate with current iii
+    needs: [validate, registry-next]
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - name: Install checksum-pinned current iii CLI
+        env:
+          III_VERSION: '0.23.0-rc.7'
+          III_TARGET: x86_64-unknown-linux-gnu
+          III_ARCHIVE_SHA256: a64afb84fe0fd466db15ae6598f82914a8b6829fe934c3eb084c6558a5e39b03
+        run: |
+          set -euo pipefail
+          asset="iii-${III_TARGET}.tar.gz"
+          url="https://github.com/iii-hq/iii/releases/download/iii/v${III_VERSION}/${asset}"
+          mkdir -p iii-tools
+          curl --fail --location --retry 3 "$url" --output "iii-tools/$asset"
+          printf '%s  %s\n' "$III_ARCHIVE_SHA256" "iii-tools/$asset" | sha256sum --check --strict
+          tar -xzf "iii-tools/$asset" -C iii-tools iii
+          chmod 755 iii-tools/iii
+          iii-tools/iii --version | grep -F "$III_VERSION"
+          printf '%s\n' "$GITHUB_WORKSPACE/iii-tools" >> "$GITHUB_PATH"
+      - name: Start empty engine and Compose daemon
+        run: |
+          set -euo pipefail
+          mkdir -p engine-project compose-state smoke-data
+          printf 'workers: []\n' >engine-project/config.yaml
+          (cd engine-project && exec iii --config config.yaml --no-update-check) >engine.log 2>&1 &
+          echo "$!" >engine.pid
+          for _ in {1..60}; do
+            kill -0 "$(cat engine.pid)" 2>/dev/null || { cat engine.log; exit 1; }
+            iii trigger 'engine::workers::list' --json '{}' >/dev/null 2>&1 && break
+            sleep 1
+          done
+          III_COMPOSE_STATE_DIR="$GITHUB_WORKSPACE/compose-state" \
+            iii compose --engine ws://127.0.0.1:49134 --namespace release-candidate-smoke-daemon \
+            >compose.log 2>&1 &
+          echo "$!" >compose.pid
+          for _ in {1..60}; do
+            kill -0 "$(cat compose.pid)" 2>/dev/null || { cat compose.log; exit 1; }
+            iii trigger compose::list --namespace release-candidate-smoke-daemon --json '{}' \
+              >/dev/null 2>&1 && break
+            sleep 1
+          done
+      - name: Install and boot exact next candidate
+        env:
+          DATA_DIR: ${{ github.workspace }}/smoke-data
+        run: |
+          set -euo pipefail
+          jq -n --arg data_dir "$DATA_DIR" '{
+            namespace: "release-candidate-smoke",
+            startup_timeout: "5m",
+            stop_timeout: "30s",
+            containers: {
+              "harness-e2e": {
+                worker: "package://harness-e2e",
+                version: "next",
+                config_override: {data_dir: $data_dir}
+              }
+            }
+          }' >candidate-compose.yaml
+          file="$GITHUB_WORKSPACE/candidate-compose.yaml"
+          iii trigger compose::validate --namespace release-candidate-smoke-daemon "file=$file"
+          iii trigger compose::up --namespace release-candidate-smoke-daemon "file=$file"
+          for _ in {1..120}; do
+            if iii trigger 'e2e::scenarios-list' --json '{}' >/dev/null 2>&1; then
+              iii trigger compose::status --namespace release-candidate-smoke-daemon "file=$file" \
+                >candidate-compose-status.json
+              exit 0
+            fi
+            sleep 2
+          done
+          echo 'published harness-e2e candidate did not register e2e::scenarios-list' >&2
+          exit 1
+      - name: Stop candidate smoke
+        if: always()
+        run: |
+          if [[ -f candidate-compose.yaml ]]; then
+            iii trigger compose::down --namespace release-candidate-smoke-daemon \
+              "file=$GITHUB_WORKSPACE/candidate-compose.yaml" >/dev/null 2>&1 || true
+          fi
+          if [[ -f compose.pid ]]; then kill "$(cat compose.pid)" 2>/dev/null || true; fi
+          if [[ -f engine.pid ]]; then kill "$(cat engine.pid)" 2>/dev/null || true; fi
+
   report:
     name: Report byte-exact release result
     if: ${{ always() }}
-    needs: [validate, binaries, campaign-assets, github-release, registry-next]
+    needs: [validate, binaries, campaign-assets, github-release, registry-next, candidate-smoke]
     runs-on: ubuntu-latest
     permissions:
       actions: read
@@ -722,22 +806,26 @@ jobs:
           CAMPAIGN_RESULT: ${{ needs['campaign-assets'].result }}
           GITHUB_RESULT: ${{ needs['github-release'].result }}
           REGISTRY_RESULT: ${{ needs['registry-next'].result }}
+          SMOKE_RESULT: ${{ needs['candidate-smoke'].result }}
         run: |
           set -euo pipefail
           outcome=succeeded
           error=null
           github_state=present
           registry_state=present
-          if [[ "$VALIDATE_RESULT" == cancelled || "$BINARIES_RESULT" == cancelled || "$CAMPAIGN_RESULT" == cancelled || "$GITHUB_RESULT" == cancelled || "$REGISTRY_RESULT" == cancelled ]]; then
+          smoke_state=present
+          if [[ "$VALIDATE_RESULT" == cancelled || "$BINARIES_RESULT" == cancelled || "$CAMPAIGN_RESULT" == cancelled || "$GITHUB_RESULT" == cancelled || "$REGISTRY_RESULT" == cancelled || "$SMOKE_RESULT" == cancelled ]]; then
             outcome=canceled
             error='{"code":"harness_release_canceled","category":"release","retryable":true,"message":"Harness release execution was canceled"}'
             github_state=unknown
             registry_state=unknown
-          elif [[ "$VALIDATE_RESULT" != success || "$BINARIES_RESULT" != success || "$CAMPAIGN_RESULT" != success || "$GITHUB_RESULT" != success || "$REGISTRY_RESULT" != success ]]; then
+            smoke_state=unknown
+          elif [[ "$VALIDATE_RESULT" != success || "$BINARIES_RESULT" != success || "$CAMPAIGN_RESULT" != success || "$GITHUB_RESULT" != success || "$REGISTRY_RESULT" != success || "$SMOKE_RESULT" != success ]]; then
             outcome=failed
             error='{"code":"harness_release_failed","category":"release","retryable":true,"message":"Harness release did not complete"}'
             if [[ "$GITHUB_RESULT" == skipped ]]; then github_state=absent; elif [[ "$GITHUB_RESULT" != success ]]; then github_state=unknown; fi
             if [[ "$REGISTRY_RESULT" == skipped ]]; then registry_state=absent; elif [[ "$REGISTRY_RESULT" != success ]]; then registry_state=unknown; fi
+            if [[ "$SMOKE_RESULT" == skipped ]]; then smoke_state=absent; elif [[ "$SMOKE_RESULT" != success ]]; then smoke_state=unknown; fi
           fi
           artifacts=$(python3 - <<'PY'
           import hashlib, json
@@ -755,9 +843,10 @@ jobs:
           effects=$(jq -nc \
             --arg github_state "$github_state" \
             --arg registry_state "$registry_state" \
+            --arg smoke_state "$smoke_state" \
             --arg tag "harness-e2e/v$RELEASE_CANDIDATE_VERSION" \
             --arg version "$RELEASE_CANDIDATE_VERSION" \
-            '[{surface:"github-release",state:$github_state,immutable_id:$tag},{surface:"registry-next",state:$registry_state,after:$version}]')
+            '[{surface:"github-release",state:$github_state,immutable_id:$tag},{surface:"registry-next",state:$registry_state,after:$version},{surface:"candidate-smoke",state:$smoke_state,immutable_id:$version}]')
           python3 scripts/release_control_contract.py write-result \
             --repository '${{ github.repository }}' \
             --operation-id "$RELEASE_OPERATION_ID" \

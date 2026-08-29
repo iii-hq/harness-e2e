@@ -21,9 +21,15 @@ class ReleaseWorkerTest(unittest.TestCase):
         self.assertEqual(len(TARGETS), len(set(TARGETS)))
 
     def descriptor(self, version: str = "0.5.0-experimental"):
-        package = {
-            "name": "harness-e2e",
+        descriptor = {
+            "contract": "release-descriptor",
+            "worker": "harness-e2e",
             "version": version,
+            "source_sha": "a" * 40,
+            "release_spec_sha256": "b" * 64,
+            "public_manifest_sha256": "c" * 64,
+            "registry_projection_sha256": "d" * 64,
+            "compiler_digest": "e" * 64,
             "source": {"path": ".", "package_manifest": "Cargo.toml"},
             "artifact": {
                 "kind": "rust-binary",
@@ -43,26 +49,28 @@ class ReleaseWorkerTest(unittest.TestCase):
                     }
                 ],
             },
-            "runtime": {"exec": ["harness-e2e"]},
-            "registry": {
+            "runtime": {"exec": ["harness-e2e"], "environment": {}, "resources": {}},
+            "validation": {"interface": "required"},
+            "publish": True,
+            "build_units": [
+                {"id": f"harness-e2e-{target}", "kind": "rust-binary", "target": target}
+                for target in TARGETS
+            ],
+            "registry_projection": {
+                "worker_name": "harness-e2e",
+                "version": version,
+                "type": "binary",
                 "description": "Harness E2E",
                 "license": "MIT",
                 "tags": ["e2e"],
-                "dependencies": {"state": "^0.22.2"},
-                "publish": True,
+                "dependencies": [{"name": "state", "version": "^0.22.2"}],
+                "config": {},
+                "experimental": "-experimental" in version,
+                "readme": "# Harness E2E\n",
             },
-            "validation": {"interface": "required"},
         }
-        digest = descriptor_sha256(package)
-        return {
-            "contract": "release-descriptor",
-            "worker": "harness-e2e",
-            "version": version,
-            "source_sha": "a" * 40,
-            "descriptor_sha256": digest,
-            "package": package,
-            "build_units": [],
-        }
+        descriptor["descriptor_sha256"] = descriptor_sha256(descriptor)
+        return descriptor
 
     def test_compiled_descriptor_is_the_only_release_metadata_input(self):
         with TemporaryDirectory() as temporary_directory:
@@ -105,7 +113,6 @@ class ReleaseWorkerTest(unittest.TestCase):
         self.assertFalse(schema_is_typed({"title": "AnyValue"}))
 
     def test_experimental_version_marks_registry_payload(self):
-        root = Path(__file__).parents[2]
         interface = {
             "functions": [
                 {
@@ -128,7 +135,6 @@ class ReleaseWorkerTest(unittest.TestCase):
                 )
 
             payload = build_payload(
-                root=root,
                 descriptor_path=descriptor_path,
                 tag="harness-e2e/v0.2.0-experimental",
                 repo_url="https://github.com/iii-hq/harness-e2e",
@@ -136,24 +142,21 @@ class ReleaseWorkerTest(unittest.TestCase):
                 checksums_dir=checksums_dir,
             )
 
-        self.assertEqual(payload["channel"], "next")
+        self.assertEqual(payload["tag"], "next")
         self.assertEqual(
             set(payload),
             {
-                "package_descriptor",
-                "descriptor_sha256",
-                "channel",
-                "readme",
-                "repo",
-                "interface",
-                "artifacts",
+                "worker_name", "version", "type", "tag", "description", "license",
+                "tags", "dependencies", "config", "experimental", "readme", "repo",
+                "functions", "triggers", "binaries",
             },
         )
-        self.assertEqual(payload["package_descriptor"]["version"], "0.2.0-experimental")
-        self.assertRegex(payload["descriptor_sha256"], r"^[0-9a-f]{64}$")
-        self.assertEqual(payload["artifacts"]["kind"], "rust-binary")
-        self.assertEqual(len(payload["artifacts"]["binaries"]), len(TARGETS))
-        self.assertEqual(payload["interface"], interface)
+        self.assertEqual(payload["version"], "0.2.0-experimental")
+        self.assertNotIn("package_descriptor", payload)
+        self.assertNotIn("descriptor_sha256", payload)
+        self.assertEqual(len(payload["binaries"]), len(TARGETS))
+        self.assertEqual(payload["functions"], interface["functions"])
+        self.assertEqual(payload["triggers"], interface["triggers"])
 
 
 if __name__ == "__main__":
