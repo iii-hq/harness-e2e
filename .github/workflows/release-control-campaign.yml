@@ -43,7 +43,7 @@ jobs:
       runner_revision: ${{ steps.contract.outputs.runner_revision }}
       manifest_id: ${{ steps.contract.outputs.manifest_id }}
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
           ref: ${{ github.sha }}
 
@@ -116,7 +116,7 @@ jobs:
           printf '%s\n' "$response" > target/harness-e2e-contract/admission.json
           jq -e '.admitted == true' target/harness-e2e-contract/admission.json >/dev/null
 
-      - uses: actions/upload-artifact@v6
+      - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
         with:
           name: e2e-contract-${{ inputs.campaign_id }}-${{ inputs.execution_id }}-${{ inputs.attempt }}-gh-${{ github.run_attempt }}
           path: target/harness-e2e-contract/
@@ -136,11 +136,11 @@ jobs:
       HARNESS_E2E_ARTIFACTS_DIR: ${{ github.workspace }}/target/harness-e2e-shadow
       HARNESS_E2E_CAMPAIGN_GROUP_ID: ${{ matrix.group_id }}
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
           ref: ${{ needs.prepare.outputs.runner_revision }}
 
-      - uses: actions/download-artifact@v7
+      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
         with:
           name: e2e-contract-${{ inputs.campaign_id }}-${{ inputs.execution_id }}-${{ inputs.attempt }}-gh-${{ github.run_attempt }}
           path: target/harness-e2e-contract
@@ -151,10 +151,10 @@ jobs:
           mkdir -p target/harness-e2e-shadow
           cp target/harness-e2e-contract/execution-contract.json target/harness-e2e-shadow/execution-contract.json
 
-      - uses: dtolnay/rust-toolchain@1.97.1
+      - uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # 1.97.1
         if: matrix.execution_kind == 'fault_injection'
 
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
         if: matrix.execution_kind == 'fault_injection'
         with:
           workspaces: .
@@ -201,7 +201,7 @@ jobs:
 
       - name: Upload group observation bundle
         if: always()
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
         with:
           name: e2e-observation-${{ inputs.campaign_id }}-${{ inputs.execution_id }}-${{ inputs.attempt }}-${{ matrix.group_id }}-gh-${{ github.run_attempt }}
           path: target/harness-e2e-shadow/
@@ -219,16 +219,16 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
           ref: ${{ needs.prepare.outputs.runner_revision }}
 
-      - uses: actions/download-artifact@v7
+      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
         with:
           name: e2e-contract-${{ inputs.campaign_id }}-${{ inputs.execution_id }}-${{ inputs.attempt }}-gh-${{ github.run_attempt }}
           path: target/harness-e2e-campaign
 
-      - uses: actions/download-artifact@v7
+      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
         with:
           pattern: e2e-observation-${{ inputs.campaign_id }}-${{ inputs.execution_id }}-${{ inputs.attempt }}-*-gh-${{ github.run_attempt }}
           path: target/downloaded-groups
@@ -262,7 +262,7 @@ jobs:
             --output target/harness-e2e-campaign/bundle-manifest.json
 
       - name: Upload root observation bundle
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
         with:
           name: e2e-observation-${{ inputs.campaign_id }}-${{ inputs.execution_id }}-${{ inputs.attempt }}-gh-${{ github.run_attempt }}
           path: target/harness-e2e-campaign/

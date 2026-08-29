@@ -1,4 +1,5 @@
 import json
+import re
 import pathlib
 import unittest
 
@@ -7,6 +8,13 @@ ROOT = pathlib.Path(__file__).resolve().parents[2]
 
 
 class WorkflowBoundaryTests(unittest.TestCase):
+    def test_external_actions_are_pinned_to_immutable_commits(self):
+        action_ref = re.compile(r"^\s*uses:\s*([^\s#]+)", re.MULTILINE)
+        immutable = re.compile(r"^[^\s]+@[0-9a-f]{40}$")
+        for path in (ROOT / ".github/workflows").glob("*.yml"):
+            for action in action_ref.findall(path.read_text(encoding="utf-8")):
+                self.assertRegex(action, immutable, f"{path.name}: {action}")
+
     def test_migrated_operational_paths_are_compose_only_and_unversioned(self):
         paths = [
             ROOT / "scripts/release_control_campaign.py",
