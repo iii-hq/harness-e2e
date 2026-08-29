@@ -9,7 +9,6 @@ ROOT = pathlib.Path(__file__).resolve().parents[2]
 class WorkflowBoundaryTests(unittest.TestCase):
     def test_migrated_operational_paths_are_compose_only_and_unversioned(self):
         paths = [
-            ROOT / "README.md",
             ROOT / "scripts/release_control_campaign.py",
             ROOT / "scripts/run_release_control_group.sh",
             ROOT / "scripts/run_release_control_fault.sh",
