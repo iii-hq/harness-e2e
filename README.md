@@ -259,3 +259,7 @@ binary targets before publishing any external effect. The same prepared bytes
 are attached to the namespaced GitHub prerelease, used to collect the typed iii
 interface, and published to the Registry `next` channel. Recovery is requested
 through Release Control; this repository has no direct promotion workflow.
+
+The root `iii.worker.yaml` remains the public manifest for local `iii worker`
+development and package compatibility. Release Control and the release
+workflow deliberately do not read it.

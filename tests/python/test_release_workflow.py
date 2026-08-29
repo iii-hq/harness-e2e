@@ -62,6 +62,7 @@ class ReleaseWorkflowTests(unittest.TestCase):
 
     def test_result_and_registry_publication_are_descriptor_native(self):
         text = WORKFLOW.read_text(encoding="utf-8")
+        self.assertNotIn("iii.worker.yaml", text)
         self.assertIn("validate-descriptor", text)
         self.assertIn("frontend-metadata", text)
         self.assertIn("build-frontends", text)
@@ -79,6 +80,7 @@ class ReleaseWorkflowTests(unittest.TestCase):
 
     def test_descriptor_index_is_compiled_once_by_the_pinned_iii(self):
         text = INDEX_WORKFLOW.read_text(encoding="utf-8")
+        self.assertNotIn("iii.worker.yaml", text)
         self.assertNotIn("iii compose descriptor-index", text)
         self.assertIn('"$III_BIN" compose descriptor-index', text)
         self.assertIn("--compiler-sha '${{ steps.compiler.outputs.commit }}'", text)
