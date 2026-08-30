@@ -66,7 +66,7 @@ The worker validates the document before saving it under
 creating a local scenario does not modify Git or require a commit. The new
 scenario appears in the local test library and in the Quick run catalog. Open
 **Quick run** later when you want to select and execute it. It does not join
-daily, weekly, post-release, or reusable baseline plans.
+daily, weekly, post-deploy, or reusable baseline plans.
 
 Harness agents can discover the same workflow through iii. Call
 `e2e::scenarios-authoring-guide` with `{}` for the copy-ready template and exact

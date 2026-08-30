@@ -4,7 +4,7 @@
 
 - daily
 - weekly
-- post-release
+- post-deploy
 
 ## Version
 

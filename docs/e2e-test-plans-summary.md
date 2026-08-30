@@ -1,6 +1,6 @@
 # E2E Test Plans Summary
 
-The canonical plans are `daily`, `weekly`, and `post-release`. All plans are
+The canonical plans are `daily`, `weekly`, and `post-deploy`. All plans are
 advisory while longitudinal history is being calibrated. Objective failures,
 infrastructure failures, coverage gaps, budget violations, and quality scores
 remain separate signals; a scenario failure does not automatically become a
@@ -119,7 +119,7 @@ recovery and endurance are specialized weekly tracks.
     to measure the maximum sustained engineering capability before the session
     reaches its first capability boundary.
 
-## plan: post-release
+## plan: post-deploy
 
 Purpose: validate the exact published version through a path close to real
 consumption and recovery. Every scenario runs once with no technical retry, so
