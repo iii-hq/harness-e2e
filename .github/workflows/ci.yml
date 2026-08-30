@@ -36,7 +36,9 @@ jobs:
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
         run: |
-          if [[ -n "$BASE_SHA" ]] && git cat-file -e "$BASE_SHA:scenarios" 2>/dev/null; then
+          if [[ -n "$BASE_SHA" ]] &&
+            git cat-file -e "$BASE_SHA:scenarios" 2>/dev/null &&
+            git diff --quiet "$BASE_SHA" -- config/campaigns; then
             scenario_base=$(mktemp -d)
             git archive "$BASE_SHA" scenarios | tar -x -C "$scenario_base"
             cargo run --locked -- validate-scenarios --base-directory "$scenario_base/scenarios"
