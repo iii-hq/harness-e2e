@@ -116,7 +116,7 @@ class CanonicalManifestTests(unittest.TestCase):
         paths = sorted(CAMPAIGN_DIR.glob("*.json"))
         self.assertEqual(
             [path.name for path in paths],
-            ["daily.json", "endurance.json", "post-release.json", "weekly.json"],
+            ["daily.json", "endurance.json", "post-deploy.json", "weekly.json"],
         )
         for path in paths:
             raw = json.loads(path.read_text(encoding="utf-8"))
@@ -135,7 +135,7 @@ class CanonicalManifestTests(unittest.TestCase):
         self.assertEqual(group.technical_retries, 0)
 
     def test_post_release_covers_canary_code_integration_and_release_recovery(self):
-        campaign = load_campaign(CAMPAIGN_DIR / "post-release.json")
+        campaign = load_campaign(CAMPAIGN_DIR / "post-deploy.json")
         selected = {
             scenario
             for group in campaign.groups
@@ -245,7 +245,7 @@ class CanonicalManifestTests(unittest.TestCase):
             "policy_bound_action",
             "engineering_ticket",
         }
-        for name in ("daily.json", "weekly.json", "post-release.json"):
+        for name in ("daily.json", "weekly.json", "post-deploy.json"):
             campaign = load_campaign(CAMPAIGN_DIR / name)
             selected = {
                 scenario
@@ -495,7 +495,7 @@ class CampaignRunnerTests(unittest.TestCase):
     def test_validate_only_cli_needs_no_model_or_binary(self):
         with contextlib.redirect_stdout(io.StringIO()):
             self.assertEqual(
-                main([str(CAMPAIGN_DIR / "post-release.json"), "--validate-only"]),
+                main([str(CAMPAIGN_DIR / "post-deploy.json"), "--validate-only"]),
                 0,
             )
 

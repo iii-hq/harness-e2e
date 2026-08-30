@@ -6,9 +6,9 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).parents[2]
-SCRIPT = ROOT / "scripts" / "release_control_campaign.py"
-RUNNER_SCRIPT = ROOT / "scripts" / "run_release_control_group.sh"
-SPEC = importlib.util.spec_from_file_location("release_control_campaign", SCRIPT)
+SCRIPT = ROOT / "scripts" / "exact_stack_campaign.py"
+RUNNER_SCRIPT = ROOT / "scripts" / "run_exact_stack_group.sh"
+SPEC = importlib.util.spec_from_file_location("exact_stack_campaign", SCRIPT)
 assert SPEC and SPEC.loader
 MODULE = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(MODULE)
@@ -114,7 +114,7 @@ def campaign_contract(versions: dict[str, str] | None = None):
                 "executor": {
                     "provider": "github_actions",
                     "repository": "iii-hq/harness-e2e",
-                    "workflow": "release-control-campaign.yml",
+                    "workflow": "exact-stack-e2e.yml",
                     "ref": "main",
                     "oidcAudience": "release-control-harness-e2e",
                 },
@@ -147,7 +147,7 @@ def campaign_contract(versions: dict[str, str] | None = None):
         },
         "workflow": {
             "repository": "iii-hq/harness-e2e",
-            "file": "release-control-campaign.yml",
+            "file": "exact-stack-e2e.yml",
             "ref": "main",
         },
         "runtime": {

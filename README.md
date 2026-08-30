@@ -65,13 +65,13 @@ cargo run --locked --bin harness-e2e -- run \
 Validate one of the checked-in canonical campaign assets:
 
 ```bash
-python3 scripts/run_e2e_campaign.py config/campaigns/post-release.json --validate-only
+python3 scripts/run_e2e_campaign.py config/campaigns/post-deploy.json --validate-only
 python3 scripts/run_e2e_campaign.py config/campaigns/daily.json --dry-run
 ```
 
 Operational campaign execution is dispatched only by Release Control through
-`.github/workflows/release-control-campaign.yml`. The repository no longer
-publishes independent daily, weekly, post-release, or fault-stress dispatch
+`.github/workflows/exact-stack-e2e.yml`. The repository no longer
+publishes independent daily, weekly, post-deploy, or fault-stress dispatch
 workflows.
 
 Adaptive L5 classification, trusted planning boundaries, resume semantics, and
@@ -91,8 +91,8 @@ share a second pinned revision through `HARNESS_E2E_FIXTURE_PATH`. The protected
 launcher and cleanup boundary are described in
 [docs/engineering-ticket-git-handoff.md](docs/engineering-ticket-git-handoff.md).
 The team-facing composition and didactic description of every daily, weekly,
-and post-release scenario is in [docs/e2e-test-plans.md](docs/e2e-test-plans.md).
-Release Control dispatches `.github/workflows/release-control-campaign.yml`
+and post-deploy scenario is in [docs/e2e-test-plans.md](docs/e2e-test-plans.md).
+Release Control dispatches `.github/workflows/exact-stack-e2e.yml`
 directly in this repository. The workflow validates the single strict campaign contract,
 executes every common group in an isolated ephemeral stack, routes fault groups
 to the protected runner, and produces one root bundle without rebuilding the
@@ -250,16 +250,12 @@ runs satisfy the deliverable, structural, and technical thresholds. Cost and
 wall-time are reported as observed metrics and compared only within a compatible
 baseline/candidate cohort.
 
-## Worker releases
+## Runtime-only package boundary
 
-Release Control is the only caller of the worker release workflow. It selects
-an immutable source SHA and a descriptor compiled once from
-`.release/workers.yaml`, `iii.worker.yaml`, and `Cargo.toml` by the
-Workers-owned compiler, then the workflow builds the standard nine Registry
-binary targets before publishing any external effect. The same prepared bytes
-are attached to the namespaced GitHub prerelease, used to collect the typed iii
-interface, and published to the Registry `next` channel. Recovery is requested
-through Release Control; this repository has no direct promotion workflow.
+This repository executes exact-stack Test Plans and never publishes itself as
+a Registry worker. Release Control supplies a digest-locked stack and an
+immutable executor SHA to `exact-stack-e2e.yml`; every Registry version in the
+lock is exact, including historical candidates.
 
 The root `iii.worker.yaml` remains the public manifest for local `iii worker`
 development and package compatibility. The root `worker-compose.yaml` remains
