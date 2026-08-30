@@ -1,0 +1,422 @@
+name: Release harness-e2e worker
+
+on:
+  push:
+    tags:
+      - 'harness-e2e/v*'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: aarch64-linux-gnu-gcc
+  CARGO_TARGET_ARMV7_UNKNOWN_LINUX_GNUEABIHF_LINKER: arm-linux-gnueabihf-gcc
+
+jobs:
+  validate:
+    name: Validate immutable release identity
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.release.outputs.version }}
+      tag: ${{ steps.release.outputs.tag }}
+      commit_sha: ${{ steps.release.outputs.commit_sha }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+          ref: ${{ github.ref }}
+      - name: Install manifest parser
+        run: python3 -m pip install --quiet pyyaml
+      - name: Validate tag, Cargo version, manifest, and SHA
+        id: release
+        run: |
+          python3 scripts/release_worker.py validate \
+            --tag "$GITHUB_REF_NAME" \
+            --event-sha "$GITHUB_SHA"
+      - name: Validate release helper
+        run: python3 -m py_compile scripts/release_worker.py
+
+  dashboard:
+    name: Build immutable dashboard bundle
+    needs: validate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ needs.validate.outputs.commit_sha }}
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11.13.1
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: dashboard/pnpm-lock.yaml
+      - run: pnpm --dir dashboard install --frozen-lockfile
+      - run: pnpm --dir dashboard build
+      - name: Fingerprint dashboard bytes
+        run: |
+          set -euo pipefail
+          test -f dashboard/dist/index.html
+          test -f dashboard/dist-console/page.js
+          test -f dashboard/dist-console/styles.css
+          find dashboard/dist dashboard/dist-console -type f -print0 |
+            LC_ALL=C sort -z |
+            xargs -0 sha256sum > dashboard-dist.sha256
+          sha256sum dashboard-dist.sha256
+      - uses: actions/upload-artifact@v6
+        with:
+          name: dashboard-dist
+          path: |
+            dashboard/dist/
+            dashboard/dist-console/
+            dashboard-dist.sha256
+          if-no-files-found: error
+          retention-days: 1
+
+  github-release:
+    name: Create GitHub prerelease
+    needs: validate
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ needs.validate.outputs.tag }}
+          name: harness-e2e v${{ needs.validate.outputs.version }}
+          prerelease: true
+          generate_release_notes: true
+
+  campaign-assets:
+    name: Publish immutable campaign assets
+    needs: [validate, github-release, dashboard]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ needs.validate.outputs.commit_sha }}
+      - uses: actions/download-artifact@v7
+        with:
+          name: dashboard-dist
+          path: release-frontend
+      - name: Restore dashboard bundle
+        run: |
+          mkdir -p dashboard/dist dashboard/dist-console
+          cp -a release-frontend/dashboard/dist/. dashboard/dist/
+          cp -a release-frontend/dashboard/dist-console/. dashboard/dist-console/
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: harness-e2e-campaign-assets-${{ needs.validate.outputs.commit_sha }}
+      - name: Validate and materialize campaign assets
+        env:
+          VERSION: ${{ needs.validate.outputs.version }}
+          REVISION: ${{ needs.validate.outputs.commit_sha }}
+          SKIP_DASHBOARD_BUILD: '1'
+        run: |
+          set -euo pipefail
+          mkdir -p target/campaign-assets
+          for manifest in config/campaigns/*.json; do
+            python3 scripts/run_e2e_campaign.py "$manifest" --validate-only
+          done
+          cargo run --locked --quiet --bin harness-e2e -- catalog \
+            > target/campaign-assets/scenario-catalog.json
+          python3 scripts/build_campaign_assets.py \
+            --version "$VERSION" \
+            --revision "$REVISION" \
+            --catalog target/campaign-assets/scenario-catalog.json \
+            --output target/campaign-assets/campaign-assets.json
+          tar -czf "target/harness-e2e-campaign-assets-${VERSION}.tar.gz" \
+            config/campaigns config/scoring config/profiles \
+            target/campaign-assets/scenario-catalog.json \
+            target/campaign-assets/campaign-assets.json
+          sha256sum "target/harness-e2e-campaign-assets-${VERSION}.tar.gz" \
+            > "target/harness-e2e-campaign-assets-${VERSION}.tar.gz.sha256"
+      - name: Attach campaign assets to the immutable release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ needs.validate.outputs.tag }}
+          VERSION: ${{ needs.validate.outputs.version }}
+        run: |
+          gh release upload "$RELEASE_TAG" \
+            "target/harness-e2e-campaign-assets-${VERSION}.tar.gz" \
+            "target/harness-e2e-campaign-assets-${VERSION}.tar.gz.sha256" \
+            --clobber
+
+  binaries:
+    name: Build ${{ matrix.target }}
+    needs: [validate, dashboard, github-release]
+    runs-on: ${{ matrix.os }}
+    permissions:
+      contents: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-apple-darwin
+            os: macos-latest
+          - target: aarch64-apple-darwin
+            os: macos-latest
+          - target: x86_64-pc-windows-msvc
+            os: windows-latest
+          - target: i686-pc-windows-msvc
+            os: windows-latest
+          - target: aarch64-pc-windows-msvc
+            os: windows-latest
+          - target: x86_64-unknown-linux-gnu
+            os: ubuntu-22.04
+          - target: x86_64-unknown-linux-musl
+            os: ubuntu-latest
+          - target: aarch64-unknown-linux-gnu
+            os: ubuntu-22.04
+          - target: armv7-unknown-linux-gnueabihf
+            os: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ needs.validate.outputs.commit_sha }}
+      - uses: actions/download-artifact@v7
+        with:
+          name: dashboard-dist
+          path: release-frontend
+      - name: Restore and verify dashboard bundle
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf dashboard/dist dashboard/dist-console
+          mkdir -p dashboard/dist dashboard/dist-console
+          cp -a release-frontend/dashboard/dist/. dashboard/dist/
+          cp -a release-frontend/dashboard/dist-console/. dashboard/dist-console/
+          python3 - <<'PY'
+          import hashlib
+          import pathlib
+
+          for line in pathlib.Path('release-frontend/dashboard-dist.sha256').read_text().splitlines():
+              expected, relative = line.split(maxsplit=1)
+              path = pathlib.Path(relative)
+              actual = hashlib.sha256(path.read_bytes()).hexdigest()
+              if actual != expected:
+                  raise SystemExit(f'dashboard digest mismatch: {path}')
+          PY
+      - name: Install cross-compilation tools
+        if: runner.os == 'Linux'
+        shell: bash
+        env:
+          BUILD_TARGET: ${{ matrix.target }}
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          case "$BUILD_TARGET" in
+            x86_64-unknown-linux-musl)
+              sudo apt-get install -y musl-tools
+              ;;
+            aarch64-unknown-linux-gnu)
+              sudo apt-get install -y gcc-aarch64-linux-gnu libc6-dev-arm64-cross
+              ;;
+            armv7-unknown-linux-gnueabihf)
+              sudo apt-get install -y gcc-arm-linux-gnueabihf libc6-dev-armhf-cross
+              ;;
+          esac
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: harness-e2e-${{ matrix.target }}-${{ needs.validate.outputs.commit_sha }}
+      - name: Build and attach binary
+        uses: taiki-e/upload-rust-binary-action@v1
+        env:
+          SKIP_DASHBOARD_BUILD: '1'
+        with:
+          bin: harness-e2e
+          target: ${{ matrix.target }}
+          ref: refs/tags/${{ needs.validate.outputs.tag }}
+          tar: unix
+          zip: windows
+          checksum: sha256
+          manifest-path: Cargo.toml
+          token: ${{ github.token }}
+
+  registry-next:
+    name: Collect typed interface and publish next
+    needs: [validate, binaries, campaign-assets]
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    environment: workers-registry-next
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ needs.validate.outputs.commit_sha }}
+      - name: Install release tooling
+        run: python3 -m pip install --quiet pyyaml
+      - name: Install iii CLI
+        env:
+          # Keep the engine on the iii-sdk protocol line used by this worker
+          # (iii-sdk =0.23.0-rc.4 since the runtime-only refactor).
+          VERSION: '0.23.0-rc.4'
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          curl -fsSL https://install.iii.dev/iii/main/install.sh -o /tmp/install-iii.sh
+          sh /tmp/install-iii.sh
+          {
+            echo "$HOME/.local/bin"
+            echo "$HOME/.iii/bin"
+          } >> "$GITHUB_PATH"
+      - name: Download release assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ needs.validate.outputs.tag }}
+        run: |
+          set -euo pipefail
+          mkdir -p release-assets release-worker
+          gh release download "$RELEASE_TAG" \
+            --pattern 'harness-e2e-*.sha256' \
+            --dir release-assets
+          gh release download "$RELEASE_TAG" \
+            --pattern 'harness-e2e-x86_64-unknown-linux-gnu.tar.gz' \
+            --dir release-assets
+          tar -xzf release-assets/harness-e2e-x86_64-unknown-linux-gnu.tar.gz \
+            -C release-worker
+          chmod +x release-worker/harness-e2e
+      - name: Start isolated iii engine
+        run: |
+          set -euo pipefail
+          mkdir -p interface-project
+          printf 'workers: []\n' > interface-project/config.yaml
+          (
+            cd interface-project
+            exec iii --config config.yaml --no-update-check
+          ) > iii-engine.log 2>&1 &
+          echo "$!" > iii-engine.pid
+          for _ in {1..60}; do
+            if ! kill -0 "$(cat iii-engine.pid)" 2>/dev/null; then
+              echo "::error::iii engine exited before becoming ready"
+              exit 1
+            fi
+            if iii trigger 'engine::workers::list' --json '{}' >/dev/null 2>&1; then
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "::error::iii engine did not become ready"
+          exit 1
+      - name: Install worker dependencies and capture baselines
+        run: |
+          set -euo pipefail
+          for worker in state@0.22.2 database@0.5.4 storage@0.1.13; do
+            for attempt in 1 2 3; do
+              if (cd interface-project && iii worker add "$worker"); then
+                break
+              fi
+              if [[ "$attempt" == '3' ]]; then
+                echo "::error::could not install $worker"
+                exit 1
+              fi
+              sleep 10
+            done
+          done
+          for _ in {1..60}; do
+            if iii trigger 'state::list' \
+              --json '{"scope":"__harness_e2e_release_probe__"}' >/dev/null 2>&1; then
+              iii trigger 'engine::workers::list' --json '{}' > baseline-workers.json
+              iii trigger 'engine::triggers::list' \
+                --json '{"include_internal": false}' > baseline-triggers.json
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "::error::state@0.22.2 did not register state::list"
+          exit 1
+      - name: Start release worker
+        env:
+          III_URL: ws://127.0.0.1:49134
+          III_WORKER_NAME: harness-e2e
+          III_NAMESPACE: default
+          III_CONFIG: config.collect.yaml
+        run: |
+          set -euo pipefail
+          release-worker/harness-e2e worker > harness-e2e-worker.log 2>&1 &
+          echo "$!" > worker.pid
+          sleep 2
+          kill -0 "$(cat worker.pid)"
+      - name: Collect and require typed interface
+        run: |
+          python3 scripts/release_worker.py collect-interface \
+            --baseline-workers baseline-workers.json \
+            --baseline-triggers baseline-triggers.json \
+            --wait-seconds 120 \
+            --out worker-interface.json
+      - name: Build Registry payload for next
+        env:
+          RELEASE_VERSION: ${{ needs.validate.outputs.version }}
+          RELEASE_TAG: ${{ needs.validate.outputs.tag }}
+          REPOSITORY_URL: https://github.com/${{ github.repository }}
+        run: |
+          python3 scripts/release_worker.py build-payload \
+            --version "$RELEASE_VERSION" \
+            --tag "$RELEASE_TAG" \
+            --repo-url "$REPOSITORY_URL" \
+            --interface worker-interface.json \
+            --checksums-dir release-assets \
+            --out registry-payload.json
+      - name: POST immutable release to Registry next
+        env:
+          API_URL: https://api.workers.iii.dev
+          API_KEY: ${{ secrets.WORKERS_REGISTRY_API_KEY }}
+          WORKER: harness-e2e
+          VERSION: ${{ needs.validate.outputs.version }}
+        run: |
+          set -euo pipefail
+          if [[ -z "$API_KEY" ]]; then
+            echo "::error::WORKERS_REGISTRY_API_KEY is not configured"
+            exit 1
+          fi
+          http=$(curl -sS -o registry-response.json -w '%{http_code}' \
+            -H "X-API-Key: $API_KEY" \
+            -H 'Content-Type: application/json' \
+            -X POST "$API_URL/publish" \
+            --data-binary @registry-payload.json)
+          if [[ "$http" == '409' ]]; then
+            resolve_http=$(curl -sS -o registry-resolve.json -w '%{http_code}' \
+              -H 'Content-Type: application/json' \
+              -X POST "$API_URL/resolve" \
+              --data "$(jq -cn --arg worker "$WORKER" '{worker: $worker, version: "next"}')")
+            resolved=$(jq -r '.root.version // empty' registry-resolve.json)
+            if [[ "$resolve_http" != '200' || "$resolved" != "$VERSION" ]]; then
+              echo "::error::HTTP 409 was not an idempotent retry; next does not resolve to $VERSION"
+              exit 1
+            fi
+            echo "::notice::$WORKER@$VERSION already published on next"
+          elif [[ "$http" != '200' ]]; then
+            echo "::error::Registry publish failed with HTTP $http"
+            exit 1
+          fi
+      - name: Dump interface logs
+        if: failure()
+        run: |
+          echo "::group::iii engine"
+          tail -n 200 iii-engine.log || true
+          echo "::endgroup::"
+          echo "::group::harness-e2e worker"
+          tail -n 200 harness-e2e-worker.log || true
+          echo "::endgroup::"
+      - name: Stop interface processes
+        if: always()
+        run: |
+          if [[ -f worker.pid ]]; then
+            kill "$(cat worker.pid)" 2>/dev/null || true
+          fi
+          if [[ -f iii-engine.pid ]]; then
+            kill "$(cat iii-engine.pid)" 2>/dev/null || true
+          fi
