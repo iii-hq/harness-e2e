@@ -131,7 +131,7 @@ MARKDOWN_SCENARIO_SECTIONS = {
 MARKDOWN_PLAN_EXECUTION = {
     "daily": (1, 1),
     "weekly": (3, 1),
-    "post-release": (1, 0),
+    "post-deploy": (1, 0),
     "endurance": (1, 0),
 }
 

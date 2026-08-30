@@ -1,7 +1,7 @@
 {
   "kind": "harness-e2e-campaign",
-  "campaign_id": "post-release",
-  "lane": "post-release",
+  "campaign_id": "post-deploy",
+  "lane": "post-deploy",
   "failure_policy": "advisory",
   "scoring_profile": "difficulty-weighted-v1",
   "groups": [

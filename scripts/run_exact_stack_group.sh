@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-: "${HARNESS_E2E_EXECUTION_CONTRACT:?HARNESS_E2E_EXECUTION_CONTRACT is required}"
+: "${HARNESS_E2E_STACK_LOCK:?HARNESS_E2E_STACK_LOCK is required}"
 : "${HARNESS_E2E_CAMPAIGN_GROUP_ID:?HARNESS_E2E_CAMPAIGN_GROUP_ID is required}"
 
 script_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 repo_root=$(cd -- "$script_dir/.." && pwd)
-contract_tool="$repo_root/scripts/release_control_campaign.py"
+contract_tool="$repo_root/scripts/exact_stack_campaign.py"
 artifact_dir=${HARNESS_E2E_ARTIFACTS_DIR:-"$repo_root/target/harness-e2e-shadow"}
 engine_port=${HARNESS_E2E_ENGINE_PORT:-49134}
 wait_seconds=${HARNESS_E2E_WAIT_SECONDS:-300}
@@ -23,8 +23,8 @@ case "$artifact_dir" in
 esac
 mkdir -p "$artifact_dir"
 artifact_dir=$(cd "$artifact_dir" && pwd)
-contract_path="$artifact_dir/execution-contract.json"
-printf '%s\n' "$HARNESS_E2E_EXECUTION_CONTRACT" >"$contract_path"
+contract_path="$artifact_dir/stack-lock.json"
+printf '%s\n' "$HARNESS_E2E_STACK_LOCK" >"$contract_path"
 python3 "$contract_tool" validate --contract "$contract_path" >/dev/null
 
 campaign_group_id=$HARNESS_E2E_CAMPAIGN_GROUP_ID

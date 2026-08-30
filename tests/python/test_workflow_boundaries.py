@@ -17,13 +17,12 @@ class WorkflowBoundaryTests(unittest.TestCase):
 
     def test_migrated_operational_paths_are_compose_only_and_unversioned(self):
         paths = [
-            ROOT / "scripts/release_control_campaign.py",
-            ROOT / "scripts/run_release_control_group.sh",
-            ROOT / "scripts/run_release_control_fault.sh",
+            ROOT / "scripts/exact_stack_campaign.py",
+            ROOT / "scripts/run_exact_stack_group.sh",
+            ROOT / "scripts/run_exact_stack_fault.sh",
             ROOT / "supervisor/run-weekly-stress",
             ROOT / "supervisor/install.sh",
-            ROOT / ".github/workflows/release.yml",
-            ROOT / ".github/workflows/release-control-campaign.yml",
+            ROOT / ".github/workflows/exact-stack-e2e.yml",
             ROOT / "src/worker.rs",
             ROOT / "src/main.rs",
         ]
@@ -40,19 +39,19 @@ class WorkflowBoundaryTests(unittest.TestCase):
             for token in forbidden:
                 self.assertNotIn(token, content, f"{path.relative_to(ROOT)} contains {token}")
 
-    def test_release_control_campaign_execution_is_owned_here(self):
+    def test_exact_stack_campaign_execution_is_owned_here(self):
         workflow = (
-            ROOT / ".github/workflows/release-control-campaign.yml"
+            ROOT / ".github/workflows/exact-stack-e2e.yml"
         ).read_text(encoding="utf-8")
         self.assertIn("strategy:\n      fail-fast: false", workflow)
-        self.assertIn("scripts/run_release_control_group.sh", workflow)
-        self.assertIn("scripts/run_release_control_fault.sh", workflow)
-        self.assertIn("scripts/release_control_campaign.py", workflow)
+        self.assertIn("scripts/run_exact_stack_group.sh", workflow)
+        self.assertIn("scripts/run_exact_stack_fault.sh", workflow)
+        self.assertIn("scripts/exact_stack_campaign.py", workflow)
         self.assertIn("runs-on: ${{ matrix.runs_on }}", workflow)
         self.assertIn("environment: harness-e2e-trusted", workflow)
-        self.assertIn("ref: ${{ needs.prepare.outputs.runner_revision }}", workflow)
+        self.assertIn("ref: ${{ inputs.runner_sha }}", workflow)
         self.assertNotIn("matrix.requires_", workflow)
-        launcher = (ROOT / "scripts/run_release_control_group.sh").read_text(
+        launcher = (ROOT / "scripts/run_exact_stack_group.sh").read_text(
             encoding="utf-8"
         )
         self.assertIn("engineering-ticket.bundle", launcher)
@@ -62,18 +61,11 @@ class WorkflowBoundaryTests(unittest.TestCase):
         self.assertIn("cleanup --lease-id", launcher)
         self.assertNotIn("iii-hq/workers", workflow)
 
-    def test_publication_compose_uses_the_current_manifest_schema(self):
-        workflow = (ROOT / ".github/workflows/release.yml").read_text()
-        self.assertIn('worker: "path://."', workflow)
-        self.assertIn('worker: "package://state"', workflow)
-        self.assertIn('start_after: ["state"]', workflow)
-        self.assertIn('scripts: {run: "./release-worker/harness-e2e worker"}', workflow)
-        self.assertNotIn('depends_on: ["state"]', workflow)
-
-    def test_cross_repository_shadow_checks_out_the_e2e_repository(self):
-        workflow = (ROOT / ".github/workflows/shadow.yml").read_text(encoding="utf-8")
-        self.assertEqual(workflow.count("repository: iii-hq/harness-e2e"), 2)
-        self.assertNotIn("sudo ", workflow)
+    def test_exact_stack_is_the_only_release_control_executor(self):
+        workflows = {path.name for path in (ROOT / ".github/workflows").glob("*.yml")}
+        self.assertIn("exact-stack-e2e.yml", workflows)
+        self.assertNotIn("shadow.yml", workflows)
+        self.assertNotIn("release.yml", workflows)
 
     def test_weekly_stress_delegates_privileged_actions_to_protected_launchers(self):
         self.assertIn("e2e::archive", (ROOT / "docs/fault-injection.md").read_text())
@@ -97,18 +89,18 @@ class WorkflowBoundaryTests(unittest.TestCase):
     def test_release_control_is_the_only_operational_campaign_dispatch(self):
         for name in (
             "daily.yml",
-            "post-release.yml",
+            "post-deploy.yml",
             "weekly.yml",
             "weekly-stress.yml",
             "run-campaign.yml",
         ):
             self.assertFalse((ROOT / ".github/workflows" / name).exists())
-        workflow = (ROOT / ".github/workflows/release-control-campaign.yml").read_text()
-        self.assertIn("Release Control", workflow)
-        contract_tool = (ROOT / "scripts/release_control_campaign.py").read_text()
+        workflow = (ROOT / ".github/workflows/exact-stack-e2e.yml").read_text()
+        self.assertIn("exact-stack", workflow)
+        contract_tool = (ROOT / "scripts/exact_stack_campaign.py").read_text()
         self.assertIn('definition.get("failurePolicy") != "advisory"', contract_tool)
 
-        expected_adaptive = {"post-release.json": 1, "weekly.json": 2}
+        expected_adaptive = {"post-deploy.json": 1, "weekly.json": 2}
         for name, expected_count in expected_adaptive.items():
             manifest = json.loads(
                 (ROOT / "config/campaigns" / name).read_text(encoding="utf-8")
@@ -132,7 +124,7 @@ class WorkflowBoundaryTests(unittest.TestCase):
         self.assertIn("/opt/iii-harness-e2e/resolve-cutover-evidence", workflow)
 
     def test_compose_campaigns_use_disposable_code_fixtures(self):
-        launcher = (ROOT / "scripts/run_release_control_group.sh").read_text()
+        launcher = (ROOT / "scripts/run_exact_stack_group.sh").read_text()
         self.assertIn("HARNESS_E2E_ENGINEERING_TICKET_FIXTURE_PATH", launcher)
         self.assertIn("HARNESS_E2E_FIXTURE_PATH", launcher)
         self.assertIn("engineering_fixture_revision=", launcher)

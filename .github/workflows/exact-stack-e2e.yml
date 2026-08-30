@@ -1,5 +1,5 @@
-name: Execute Release Control Harness E2E campaign
-run-name: RC · e2e_shadow · ${{ inputs.campaign_id }} · ${{ inputs.execution_id }} · ${{ inputs.attempt }}
+name: Execute exact-stack Harness E2E campaign
+run-name: E2E · ${{ inputs.test_plan_id }} · ${{ inputs.campaign_id }} · ${{ inputs.attempt }}
 
 on:
   workflow_dispatch:
@@ -16,8 +16,16 @@ on:
         description: Explicit Release Control campaign attempt
         required: true
         type: number
-      execution_contract:
-        description: Canonical execution contract JSON
+      test_plan_id:
+        description: Immutable Test Plan identifier
+        required: true
+        type: string
+      runner_sha:
+        description: Immutable Harness E2E executor commit
+        required: true
+        type: string
+      stack_lock:
+        description: Canonical stack lock JSON
         required: true
         type: string
 
@@ -27,7 +35,7 @@ permissions:
   id-token: write
 
 concurrency:
-  group: harness-e2e-shadow-${{ inputs.execution_id }}-${{ inputs.attempt }}
+  group: harness-e2e-exact-stack-${{ inputs.execution_id }}-${{ inputs.attempt }}
   cancel-in-progress: false
 
 jobs:
@@ -40,12 +48,12 @@ jobs:
       contract_sha256: ${{ steps.contract.outputs.contract_sha256 }}
       matrix: ${{ steps.contract.outputs.matrix }}
       oidc_audience: ${{ steps.contract.outputs.oidc_audience }}
-      runner_revision: ${{ steps.contract.outputs.runner_revision }}
-      manifest_id: ${{ steps.contract.outputs.manifest_id }}
+      runner_revision: ${{ inputs.runner_sha }}
+      manifest_id: ${{ inputs.test_plan_id }}
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
-          ref: ${{ github.sha }}
+          ref: ${{ inputs.runner_sha }}
 
       - name: Validate Release Control dispatch
         env:
@@ -58,24 +66,25 @@ jobs:
           test "$GITHUB_RUN_ATTEMPT" = 1
           [[ '${{ inputs.campaign_id }}' =~ ^[0-9a-f-]{36}$ ]]
           [[ '${{ inputs.execution_id }}' =~ ^[0-9a-f-]{36}$ ]]
+          [[ '${{ inputs.runner_sha }}' =~ ^[0-9a-f]{40}$ ]]
 
-      - name: Prepare execution contract and group matrix
+      - name: Prepare stack lock and group matrix
         id: contract
         env:
-          EXECUTION_CONTRACT: ${{ inputs.execution_contract }}
+          STACK_LOCK: ${{ inputs.stack_lock }}
         run: |
           set -euo pipefail
           mkdir -p target/harness-e2e-contract
-          printf '%s\n' "$EXECUTION_CONTRACT" > target/harness-e2e-contract/execution-contract.json
-          python3 scripts/release_control_campaign.py validate \
-            --contract target/harness-e2e-contract/execution-contract.json >/dev/null
-          contract_sha256=$(python3 scripts/release_control_campaign.py digest \
-            --contract target/harness-e2e-contract/execution-contract.json)
-          matrix=$(python3 scripts/release_control_campaign.py matrix \
-            --contract target/harness-e2e-contract/execution-contract.json)
-          oidc_audience=$(jq -er '.security.oidc_audience' target/harness-e2e-contract/execution-contract.json)
-          runner_revision=$(jq -er '.runner.revision' target/harness-e2e-contract/execution-contract.json)
-          manifest_id=$(jq -er '.plan.definition.manifest.id' target/harness-e2e-contract/execution-contract.json)
+          printf '%s\n' "$STACK_LOCK" > target/harness-e2e-contract/stack-lock.json
+          python3 scripts/exact_stack_campaign.py validate \
+            --contract target/harness-e2e-contract/stack-lock.json >/dev/null
+          contract_sha256=$(python3 scripts/exact_stack_campaign.py digest \
+            --contract target/harness-e2e-contract/stack-lock.json)
+          matrix=$(python3 scripts/exact_stack_campaign.py matrix \
+            --contract target/harness-e2e-contract/stack-lock.json)
+          oidc_audience=$(jq -er '.security.oidc_audience' target/harness-e2e-contract/stack-lock.json)
+          runner_revision=$(jq -er '.runner.revision' target/harness-e2e-contract/stack-lock.json)
+          manifest_id=$(jq -er '.plan.definition.manifest.id' target/harness-e2e-contract/stack-lock.json)
           {
             printf 'contract_sha256=%s\n' "$contract_sha256"
             printf 'matrix=%s\n' "$matrix"
@@ -87,13 +96,18 @@ jobs:
             --arg campaign '${{ inputs.campaign_id }}' \
             --arg execution '${{ inputs.execution_id }}' \
             --argjson attempt '${{ inputs.attempt }}' \
-            '.campaign_id == $campaign and .execution_id == $execution and .attempt == $attempt' \
-            target/harness-e2e-contract/execution-contract.json >/dev/null
+            --arg runner '${{ inputs.runner_sha }}' \
+            --arg test_plan '${{ inputs.test_plan_id }}' \
+            '.campaign_id == $campaign and .execution_id == $execution and .attempt == $attempt
+             and .runner.revision == $runner
+             and .plan.definition.manifest.id == $test_plan
+             and (.plan.definition.testRuntime.workers | to_entries | all(.value | test("^[0-9]+\\.[0-9]+\\.[0-9]+(?:-[0-9A-Za-z-]+(?:\\.[0-9A-Za-z-]+)*)?(?:\\+[0-9A-Za-z-]+(?:\\.[0-9A-Za-z-]+)*)?$")))' \
+            target/harness-e2e-contract/stack-lock.json >/dev/null
 
       - name: Acquire single-use execution admission
         env:
           RELEASE_CONTROL_API_URL: ${{ vars.RELEASE_CONTROL_API_URL }}
-          EXECUTION_CONTRACT_SHA256: ${{ steps.contract.outputs.contract_sha256 }}
+          STACK_LOCK_SHA256: ${{ steps.contract.outputs.contract_sha256 }}
           OIDC_AUDIENCE: ${{ steps.contract.outputs.oidc_audience }}
         run: |
           set -euo pipefail
@@ -111,8 +125,8 @@ jobs:
               --argjson run_id '${{ github.run_id }}' \
               --argjson run_attempt '${{ github.run_attempt }}' \
               --arg workflow_sha '${{ github.sha }}' \
-              --arg execution_contract_sha256 "$EXECUTION_CONTRACT_SHA256" \
-              '{campaign_id:$campaign_id,run_id:$run_id,run_attempt:$run_attempt,workflow_sha:$workflow_sha,execution_contract_sha256:$execution_contract_sha256}')")
+              --arg stack_lock_sha256 "$STACK_LOCK_SHA256" \
+              '{campaign_id:$campaign_id,run_id:$run_id,run_attempt:$run_attempt,workflow_sha:$workflow_sha,stack_lock_sha256:$stack_lock_sha256}')")
           printf '%s\n' "$response" > target/harness-e2e-contract/admission.json
           jq -e '.admitted == true' target/harness-e2e-contract/admission.json >/dev/null
 
@@ -133,23 +147,23 @@ jobs:
       fail-fast: false
       matrix: ${{ fromJSON(needs.prepare.outputs.matrix) }}
     env:
-      HARNESS_E2E_ARTIFACTS_DIR: ${{ github.workspace }}/target/harness-e2e-shadow
+      HARNESS_E2E_ARTIFACTS_DIR: ${{ github.workspace }}/target/harness-e2e-exact-stack
       HARNESS_E2E_CAMPAIGN_GROUP_ID: ${{ matrix.group_id }}
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
-          ref: ${{ needs.prepare.outputs.runner_revision }}
+          ref: ${{ inputs.runner_sha }}
 
       - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
         with:
           name: e2e-contract-${{ inputs.campaign_id }}-${{ inputs.execution_id }}-${{ inputs.attempt }}-gh-${{ github.run_attempt }}
           path: target/harness-e2e-contract
 
-      - name: Restore execution contract
+      - name: Restore stack lock
         run: |
           set -euo pipefail
-          mkdir -p target/harness-e2e-shadow
-          cp target/harness-e2e-contract/execution-contract.json target/harness-e2e-shadow/execution-contract.json
+          mkdir -p target/harness-e2e-exact-stack
+          cp target/harness-e2e-contract/stack-lock.json target/harness-e2e-exact-stack/stack-lock.json
 
       - uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # 1.97.1
         if: matrix.execution_kind == 'fault_injection'
@@ -174,37 +188,37 @@ jobs:
         env:
           ZAI_API_KEY: ${{ secrets.ZAI_API_KEY }}
           DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
-          HARNESS_E2E_EXECUTION_CONTRACT: ${{ inputs.execution_contract }}
-        run: scripts/run_release_control_group.sh
+          HARNESS_E2E_STACK_LOCK: ${{ inputs.stack_lock }}
+        run: scripts/run_exact_stack_group.sh
 
       - name: Execute protected fault campaign group
         id: fault
         if: matrix.execution_kind == 'fault_injection'
         continue-on-error: true
         env:
-          HARNESS_E2E_EXECUTION_CONTRACT: ${{ inputs.execution_contract }}
+          HARNESS_E2E_STACK_LOCK: ${{ inputs.stack_lock }}
           HARNESS_E2E_HARNESS_ROOT: ${{ github.workspace }}
-        run: scripts/run_release_control_fault.sh
+        run: scripts/run_exact_stack_fault.sh
 
       - name: Package factual group evidence
         if: always()
         env:
           WORKFLOW_IDENTITY: >-
-            {"repository":"${{ github.repository }}","workflow":"release-control-campaign.yml","workflow_sha":"${{ github.sha }}","run_id":${{ github.run_id }},"run_attempt":${{ github.run_attempt }},"group_id":"${{ matrix.group_id }}","job":"${{ github.job }}"}
+            {"repository":"${{ github.repository }}","workflow":"exact-stack-e2e.yml","workflow_sha":"${{ github.sha }}","run_id":${{ github.run_id }},"run_attempt":${{ github.run_attempt }},"group_id":"${{ matrix.group_id }}","job":"${{ github.job }}"}
         run: |
           set -euo pipefail
-          python3 scripts/release_control_campaign.py package \
-            --root target/harness-e2e-shadow \
-            --contract target/harness-e2e-shadow/execution-contract.json \
+          python3 scripts/exact_stack_campaign.py package \
+            --root target/harness-e2e-exact-stack \
+            --contract target/harness-e2e-exact-stack/stack-lock.json \
             --workflow "$WORKFLOW_IDENTITY" \
-            --output target/harness-e2e-shadow/bundle-manifest.json
+            --output target/harness-e2e-exact-stack/bundle-manifest.json
 
       - name: Upload group observation bundle
         if: always()
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
         with:
           name: e2e-observation-${{ inputs.campaign_id }}-${{ inputs.execution_id }}-${{ inputs.attempt }}-${{ matrix.group_id }}-gh-${{ github.run_attempt }}
-          path: target/harness-e2e-shadow/
+          path: target/harness-e2e-exact-stack/
           retention-days: 90
           if-no-files-found: error
 
@@ -221,7 +235,7 @@ jobs:
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
-          ref: ${{ needs.prepare.outputs.runner_revision }}
+          ref: ${{ inputs.runner_sha }}
 
       - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
         with:
@@ -236,7 +250,7 @@ jobs:
 
       - name: Restore deterministic group paths
         env:
-          EXECUTION_CONTRACT: ${{ inputs.execution_contract }}
+          STACK_LOCK: ${{ inputs.stack_lock }}
         run: |
           set -euo pipefail
           mkdir -p target/harness-e2e-campaign/groups
@@ -244,7 +258,7 @@ jobs:
             source="target/downloaded-groups/e2e-observation-${{ inputs.campaign_id }}-${{ inputs.execution_id }}-${{ inputs.attempt }}-${group}-gh-${{ github.run_attempt }}"
             test -d "$source"
             mv "$source" "target/harness-e2e-campaign/groups/$group"
-          done < <(jq -r '.plan.definition.groups[].id' <<<"$EXECUTION_CONTRACT")
+          done < <(jq -r '.plan.definition.groups[].id' <<<"$STACK_LOCK")
 
       - name: Aggregate with exact Harness scoring implementation
         run: |
@@ -255,10 +269,10 @@ jobs:
             --execution-id '${{ inputs.execution_id }}' \
             --summary target/harness-e2e-campaign/campaign-summary.json \
             --bundle target/harness-e2e-campaign/campaign-bundle.json
-          python3 scripts/release_control_campaign.py package \
+          python3 scripts/exact_stack_campaign.py package \
             --root target/harness-e2e-campaign \
-            --contract target/harness-e2e-campaign/execution-contract.json \
-            --workflow '{"repository":"${{ github.repository }}","workflow":"release-control-campaign.yml","workflow_sha":"${{ github.sha }}","run_id":${{ github.run_id }},"run_attempt":${{ github.run_attempt }},"job":"finalize"}' \
+            --contract target/harness-e2e-campaign/stack-lock.json \
+            --workflow '{"repository":"${{ github.repository }}","workflow":"exact-stack-e2e.yml","workflow_sha":"${{ github.sha }}","run_id":${{ github.run_id }},"run_attempt":${{ github.run_attempt }},"job":"finalize"}' \
             --output target/harness-e2e-campaign/bundle-manifest.json
 
       - name: Upload root observation bundle

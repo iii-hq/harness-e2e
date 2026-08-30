@@ -34,7 +34,7 @@ DIFFICULTY_WEIGHTS = {
     "L5": 5,
 }
 CAMPAIGN_REPOSITORY = "iii-hq/harness-e2e"
-CAMPAIGN_WORKFLOW = "release-control-campaign.yml"
+CAMPAIGN_WORKFLOW = "exact-stack-e2e.yml"
 SUPPORTED_CATALOG_SCHEMAS = {
     "e2e-scenario-catalog/v1",
     "e2e-scenario-catalog/v2",
@@ -159,8 +159,8 @@ def validate_campaign_definition(definition: dict[str, Any]) -> None:
         raise ValueError("campaign plan must use e2e::run")
     require_text(definition.get("label"), "plan.definition.label")
     lane = require_text(definition.get("lane"), "plan.definition.lane")
-    if lane not in {"manual", "daily", "weekly", "post-release"}:
-        raise ValueError("campaign lane must be manual, daily, weekly, or post-release")
+    if lane not in {"manual", "daily", "weekly", "post-deploy"}:
+        raise ValueError("campaign lane must be manual, daily, weekly, or post-deploy")
     if definition.get("failurePolicy") != "advisory":
         raise ValueError("campaign failurePolicy must be advisory")
     validate_identity(definition, "subject")
@@ -324,7 +324,7 @@ def validate_exact_contract(contract: dict[str, Any], target: dict[str, Any], ru
     if origin is not None:
         require_keys(
             origin,
-            {"operation_id", "step_id", "worker", "version", "source_sha", "release_run_id", "release_run_attempt"},
+            {"operation_id", "step_id", "worker", "version", "source_sha", "deployment_run_id", "deployment_run_attempt"},
             set(),
             "target.origin",
         )
@@ -337,8 +337,8 @@ def validate_exact_contract(contract: dict[str, Any], target: dict[str, Any], ru
         origin_sha = require_text(origin.get("source_sha"), "target.origin.source_sha")
         if not re.fullmatch(r"[0-9a-f]{40}", origin_sha):
             raise ValueError("target.origin.source_sha must be a full lowercase git SHA")
-        require_positive_integer(origin.get("release_run_id"), "target.origin.release_run_id")
-        require_positive_integer(origin.get("release_run_attempt"), "target.origin.release_run_attempt")
+        require_positive_integer(origin.get("deployment_run_id"), "target.origin.deployment_run_id")
+        require_positive_integer(origin.get("deployment_run_attempt"), "target.origin.deployment_run_attempt")
 
     base = require_keys(target.get("base"), {"kind", "id"}, set(), "target.base")
     if base.get("kind") not in {"deployment", "snapshot"}:
@@ -470,7 +470,7 @@ def validate_contract(contract: dict[str, Any]) -> dict[str, Any]:
             "orchestration",
         },
         set(),
-        "execution contract",
+        "stack lock",
     )
     require_uuid(contract.get("campaign_id"), "campaign_id")
     require_uuid(contract.get("execution_id"), "execution_id")
@@ -670,7 +670,7 @@ def materialize_request(
         "plan": {
             # Keep this shape aligned with the runner's native
             # ObservationPlanIdentity. Campaign-only group, manifest, and
-            # scoring identity remain in the execution contract and root bundle.
+            # scoring identity remain in the stack lock and root bundle.
             "id": contract["plan"]["id"],
             "revision": str(contract["plan"]["revision"]),
             "sha256": contract["plan"]["sha256"],
@@ -856,7 +856,7 @@ def compose_evidence(
 
     compose_bytes = compose_path.read_bytes()
     return {
-        "execution_contract_sha256": canonical_sha256(contract),
+        "stack_lock_sha256": canonical_sha256(contract),
         "orchestration_graph_sha256": contract["orchestration"]["graph_sha256"],
         "compose_sha256": f"sha256:{hashlib.sha256(compose_bytes).hexdigest()}",
         "namespaces": {"daemon": daemon_namespace, "project": project_namespace},
@@ -893,7 +893,7 @@ def package_bundle(root: Path, contract: dict[str, Any], workflow: dict[str, Any
         "campaign_id": contract["campaign_id"],
         "execution_id": contract["execution_id"],
         "attempt": contract["attempt"],
-        "execution_contract_sha256": canonical_sha256(contract),
+        "stack_lock_sha256": canonical_sha256(contract),
         "workflow": workflow,
         "terminal_payload": "results.json" if terminal.is_file() else None,
         "failure_payload": "failure.json" if failure.is_file() else None,
@@ -937,7 +937,7 @@ def main() -> int:
     package.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
     try:
-        contract = validate_contract(load_object(args.contract, "execution contract"))
+        contract = validate_contract(load_object(args.contract, "stack lock"))
         if args.command == "validate":
             print(canonical(contract))
         elif args.command == "digest":

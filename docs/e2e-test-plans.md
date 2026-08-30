@@ -1,6 +1,6 @@
 # Planos de testes E2E
 
-Os planos canônicos são `daily`, `weekly` e `post-release`. Não existe plano de
+Os planos canônicos são `daily`, `weekly` e `post-deploy`. Não existe plano de
 PR. Todos permanecem advisory enquanto o histórico longitudinal é calibrado:
 falha objetiva, infraestrutura, cobertura, orçamento e nota continuam sinais
 separados.

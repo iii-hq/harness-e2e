@@ -1,24 +1,24 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-: "${HARNESS_E2E_EXECUTION_CONTRACT:?HARNESS_E2E_EXECUTION_CONTRACT is required}"
+: "${HARNESS_E2E_STACK_LOCK:?HARNESS_E2E_STACK_LOCK is required}"
 : "${HARNESS_E2E_CAMPAIGN_GROUP_ID:?HARNESS_E2E_CAMPAIGN_GROUP_ID is required}"
 : "${HARNESS_E2E_HARNESS_ROOT:?HARNESS_E2E_HARNESS_ROOT is required}"
 
 script_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 repo_root=$(cd -- "$script_dir/.." && pwd)
-contract_tool="$repo_root/scripts/release_control_campaign.py"
+contract_tool="$repo_root/scripts/exact_stack_campaign.py"
 artifact_dir=${HARNESS_E2E_ARTIFACTS_DIR:-"$repo_root/target/harness-e2e-shadow"}
 supervisor=${HARNESS_E2E_FAULT_SUPERVISOR:-/opt/iii-harness-e2e/run-weekly-stress}
 e2e_bin="$HARNESS_E2E_HARNESS_ROOT/target/release/harness-e2e"
-contract_path="$artifact_dir/execution-contract.json"
+contract_path="$artifact_dir/stack-lock.json"
 
 case "$artifact_dir" in
   "$repo_root"/target/*) ;;
   *) echo "HARNESS_E2E_ARTIFACTS_DIR must be below $repo_root/target" >&2; exit 2 ;;
 esac
 mkdir -p "$artifact_dir"
-printf '%s\n' "$HARNESS_E2E_EXECUTION_CONTRACT" >"$contract_path"
+printf '%s\n' "$HARNESS_E2E_STACK_LOCK" >"$contract_path"
 python3 "$contract_tool" validate --contract "$contract_path" >/dev/null
 
 group=$(jq -ce --arg id "$HARNESS_E2E_CAMPAIGN_GROUP_ID" '
