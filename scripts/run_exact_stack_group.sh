@@ -307,14 +307,54 @@ compose_trigger compose::validate "file=$compose_file" >"$artifact_dir/stack/val
 
 failure_phase=compose_up
 compose_trigger compose::up "file=$compose_file" >"$artifact_dir/stack/up.json"
+
+# compose::up returns once containers are spawned; SDK registration and function
+# exposure land seconds later. Hold materialization until every pinned binary
+# worker is registered in the campaign namespace and the Harness control plane
+# answers, so preflight never races the boot.
+failure_phase=stack_ready
+mapfile -t expected_binary_workers < <(jq -r \
+  '.orchestration.nodes[] | select(.kind == "binary") | .worker' "$contract_path")
+stack_ready=false
+for ((attempt = 0; attempt < wait_seconds; attempt += 5)); do
+  "$iii_bin" trigger engine::workers::list --address 127.0.0.1 --port "$engine_port" --json '{}' \
+    >"$artifact_dir/stack/workers.json" 2>/dev/null || true
+  ready=true
+  for worker in "${expected_binary_workers[@]}"; do
+    jq -e --arg ns "$project_namespace" --arg name "$worker" \
+      '.workers[]? | select(.name == $name and ((.namespace // $ns) == $ns))' \
+      "$artifact_dir/stack/workers.json" >/dev/null 2>&1 || { ready=false; break; }
+  done
+  if [[ "$ready" == true ]] && "$iii_bin" trigger engine::functions::list \
+      --address 127.0.0.1 --port "$engine_port" --json '{"include_internal": false}' 2>/dev/null |
+    jq -e --arg ns "$project_namespace" \
+      '.functions[]? | select(((.function_id // .id) == "harness::send") and ((.namespace // $ns) == $ns))' \
+      >/dev/null; then
+    stack_ready=true
+    break
+  fi
+  sleep 5
+done
+[[ "$stack_ready" == true ]] || fail "exact stack did not become ready within ${wait_seconds}s"
 compose_trigger compose::status "file=$compose_file" >"$artifact_dir/stack/status.json"
 "$iii_bin" trigger engine::workers::list --address 127.0.0.1 --port "$engine_port" --json '{}' \
   >"$artifact_dir/stack/workers.json"
 capture_processes "$artifact_dir/stack/processes-during.json"
 
 failure_phase=materialization
-project_trigger e2e::scenarios-list "$(jq -cn --argjson seed "$seed" '{seed:$seed}')" 120000 \
-  >"$artifact_dir/catalog.json"
+scenarios_listed=false
+for ((attempt = 0; attempt < 24; attempt++)); do
+  if project_trigger e2e::scenarios-list "$(jq -cn --argjson seed "$seed" '{seed:$seed}')" 120000 \
+    >"$artifact_dir/catalog.json" 2>"$artifact_dir/logs/scenarios-list.log"; then
+    scenarios_listed=true
+    break
+  fi
+  sleep 5
+done
+if [[ "$scenarios_listed" != true ]]; then
+  cat "$artifact_dir/logs/scenarios-list.log" >&2
+  fail "e2e::scenarios-list did not become available"
+fi
 python3 "$contract_tool" materialize \
   --contract "$contract_path" \
   --catalog "$artifact_dir/catalog.json" \

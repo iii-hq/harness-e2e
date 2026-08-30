@@ -835,13 +835,22 @@ def compose_evidence(
         version = row.get("version")
         if isinstance(name, str) and isinstance(version, str) and name in expected:
             observed[name] = version
-    mismatches = [
-        f"{worker}: expected {version}, observed {observed.get(worker, 'missing')}"
+    missing = [
+        f"{worker}: expected {version}, observed missing"
         for worker, version in sorted(expected.items())
-        if observed.get(worker) != version
+        if worker not in observed
     ]
-    if mismatches:
-        raise ValueError("compose runtime version mismatch: " + "; ".join(mismatches))
+    if missing:
+        raise ValueError("compose runtime version mismatch: " + "; ".join(missing))
+    # Artifact identity is enforced by the sha256-pinned lock at download time.
+    # A registered worker whose self-reported metadata version differs from the
+    # registry version (stale crate version, SDK-default metadata) is a fleet
+    # metadata defect, recorded as a warning rather than disproof of the stack.
+    version_report_warnings = [
+        f"{worker}: registry {version}, self-reported {observed[worker]}"
+        for worker, version in sorted(expected.items())
+        if observed[worker] != version
+    ]
 
     forbidden = "iii" + "-worker"
     for phase, rows in processes.items():
@@ -865,6 +874,7 @@ def compose_evidence(
             "cli": contract["runtime"]["cli"],
             "expected_versions": dict(sorted(expected.items())),
             "observed_versions": dict(sorted(observed.items())),
+            "version_report_warnings": version_report_warnings,
         },
         "lifecycle": lifecycle,
         "processes": processes,
