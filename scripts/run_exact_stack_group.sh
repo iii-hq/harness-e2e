@@ -306,7 +306,25 @@ failure_phase=compose_validate
 compose_trigger compose::validate "file=$compose_file" >"$artifact_dir/stack/validate.json"
 
 failure_phase=compose_up
-compose_trigger compose::up "file=$compose_file" >"$artifact_dir/stack/up.json"
+# Registry resolution from hosted runners fails transiently under the 21-package
+# burst ("error sending request"). compose::up reconciles the declared graph, so
+# re-running it retries only the containers that did not come up.
+up_clean=false
+for up_attempt in 1 2 3 4 5; do
+  compose_trigger compose::up "file=$compose_file" >"$artifact_dir/stack/up.json" || true
+  if jq -e '(.containers // []) | length > 0 and all(.state != "failed")' \
+    "$artifact_dir/stack/up.json" >/dev/null 2>&1; then
+    up_clean=true
+    break
+  fi
+  log "compose up attempt $up_attempt left failed containers; retrying"
+  sleep $((10 * up_attempt))
+done
+if [[ "$up_clean" != true ]]; then
+  jq -r '.containers[]? | select(.state == "failed") | "  " + .container + ": " + (.error // "failed")' \
+    "$artifact_dir/stack/up.json" >&2 || true
+  fail "compose up could not start every container"
+fi
 
 # compose::up returns once containers are spawned; SDK registration and function
 # exposure land seconds later. Hold materialization until every pinned binary
