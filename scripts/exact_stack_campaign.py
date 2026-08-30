@@ -38,6 +38,7 @@ CAMPAIGN_WORKFLOW = "exact-stack-e2e.yml"
 SUPPORTED_CATALOG_SCHEMAS = {
     "e2e-scenario-catalog/v1",
     "e2e-scenario-catalog/v2",
+    "e2e-scenario-catalog/v4",
 }
 ORCHESTRATION_ROLES = {"target", "runtime", "runner"}
 ORCHESTRATION_KINDS = {"binary", "engine"}

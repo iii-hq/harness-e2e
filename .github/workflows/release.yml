@@ -262,17 +262,21 @@ jobs:
       - name: Install iii CLI
         env:
           # Keep the engine on the iii-sdk protocol line used by this worker
-          # (iii-sdk =0.23.0-rc.4 since the runtime-only refactor).
+          # (iii-sdk =0.23.0-rc.4 since the runtime-only refactor). Installed
+          # by pinned digest because install.sh refuses prereleases.
           VERSION: '0.23.0-rc.4'
-          GITHUB_TOKEN: ${{ github.token }}
+          CLI_SHA256: d9ab056f17daefc2f04ed892092a3df2fe76ffde5587335918606048047cf40a
         run: |
           set -euo pipefail
-          curl -fsSL https://install.iii.dev/iii/main/install.sh -o /tmp/install-iii.sh
-          sh /tmp/install-iii.sh
-          {
-            echo "$HOME/.local/bin"
-            echo "$HOME/.iii/bin"
-          } >> "$GITHUB_PATH"
+          curl -fsSL --retry 3 \
+            "https://github.com/iii-hq/iii/releases/download/iii/v${VERSION}/iii-x86_64-unknown-linux-gnu.tar.gz" \
+            -o /tmp/iii-cli.tar.gz
+          printf '%s  %s\n' "$CLI_SHA256" /tmp/iii-cli.tar.gz | sha256sum --check --status
+          mkdir -p "$HOME/.local/bin"
+          tar -xzf /tmp/iii-cli.tar.gz -C "$HOME/.local/bin"
+          chmod +x "$HOME/.local/bin/iii"
+          "$HOME/.local/bin/iii" --version
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
       - name: Download release assets
         env:
           GH_TOKEN: ${{ github.token }}
