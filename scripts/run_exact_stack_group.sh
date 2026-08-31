@@ -312,8 +312,11 @@ failure_phase=compose_up
 # graph, so recycle until every container reports ready.
 expected_container_count=$(jq \
   '[.orchestration.nodes[] | select(.kind == "binary")] | length' "$contract_path")
+# Sibling groups of one run otherwise resolve their packages in one synchronized
+# burst that the registry sheds connections from; jitter decorrelates them.
+sleep $((RANDOM % 45))
 up_clean=false
-for up_attempt in 1 2 3 4 5; do
+for up_attempt in 1 2 3 4 5 6 7 8; do
   compose_trigger compose::up "file=$compose_file" >"$artifact_dir/stack/up.json" || true
   if jq -e --argjson expected "$expected_container_count" \
     '(.containers // []) | length == $expected and all(.state == "ready")' \
@@ -326,7 +329,7 @@ for up_attempt in 1 2 3 4 5; do
     "$artifact_dir/stack/up.json" >&2 || true
   compose_trigger compose::down "file=$compose_file" \
     >"$artifact_dir/stack/down-attempt-$up_attempt.json" 2>>"$artifact_dir/logs/compose-commands.log" || true
-  sleep $((15 * up_attempt))
+  sleep $(( (RANDOM % 20) + 10 * up_attempt ))
 done
 [[ "$up_clean" == true ]] || fail "compose up could not bring the full stack to ready"
 
