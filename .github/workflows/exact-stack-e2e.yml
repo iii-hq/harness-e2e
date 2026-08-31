@@ -49,7 +49,6 @@ jobs:
       matrix: ${{ steps.contract.outputs.matrix }}
       oidc_audience: ${{ steps.contract.outputs.oidc_audience }}
       runner_revision: ${{ inputs.runner_sha }}
-      manifest_id: ${{ inputs.test_plan_id }}
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
@@ -83,25 +82,18 @@ jobs:
           matrix=$(python3 scripts/exact_stack_campaign.py matrix \
             --contract target/harness-e2e-contract/stack-lock.json)
           oidc_audience=$(jq -er '.security.oidc_audience' target/harness-e2e-contract/stack-lock.json)
-          runner_revision=$(jq -er '.runner.revision' target/harness-e2e-contract/stack-lock.json)
-          manifest_id=$(jq -er '.plan.definition.manifest.id' target/harness-e2e-contract/stack-lock.json)
           {
             printf 'contract_sha256=%s\n' "$contract_sha256"
             printf 'matrix=%s\n' "$matrix"
             printf 'oidc_audience=%s\n' "$oidc_audience"
-            printf 'runner_revision=%s\n' "$runner_revision"
-            printf 'manifest_id=%s\n' "$manifest_id"
           } >> "$GITHUB_OUTPUT"
           jq -e \
             --arg campaign '${{ inputs.campaign_id }}' \
             --arg execution '${{ inputs.execution_id }}' \
             --argjson attempt '${{ inputs.attempt }}' \
-            --arg runner '${{ inputs.runner_sha }}' \
             --arg test_plan '${{ inputs.test_plan_id }}' \
             '.campaign_id == $campaign and .execution_id == $execution and .attempt == $attempt
-             and .runner.revision == $runner
-             and .plan.definition.manifest.id == $test_plan
-             and (.plan.definition.testRuntime.workers | to_entries | all(.value | test("^[0-9]+\\.[0-9]+\\.[0-9]+(?:-[0-9A-Za-z-]+(?:\\.[0-9A-Za-z-]+)*)?(?:\\+[0-9A-Za-z-]+(?:\\.[0-9A-Za-z-]+)*)?$")))' \
+             and .suite.id == $test_plan' \
             target/harness-e2e-contract/stack-lock.json >/dev/null
 
       - name: Acquire single-use execution admission
@@ -258,13 +250,16 @@ jobs:
             source="target/downloaded-groups/e2e-observation-${{ inputs.campaign_id }}-${{ inputs.execution_id }}-${{ inputs.attempt }}-${group}-gh-${{ github.run_attempt }}"
             test -d "$source"
             mv "$source" "target/harness-e2e-campaign/groups/$group"
-          done < <(jq -r '.plan.definition.groups[].id' <<<"$STACK_LOCK")
+          done < <(jq -r '.suite.groups[].id' <<<"$STACK_LOCK")
 
       - name: Aggregate with exact Harness scoring implementation
         run: |
           set -euo pipefail
+          python3 scripts/exact_stack_campaign.py manifest \
+            --contract target/harness-e2e-campaign/stack-lock.json \
+            --output target/harness-e2e-campaign/campaign-manifest.json
           python3 scripts/run_e2e_campaign.py \
-            "config/campaigns/${{ needs.prepare.outputs.manifest_id }}.json" \
+            target/harness-e2e-campaign/campaign-manifest.json \
             --aggregate-existing-root target/harness-e2e-campaign/groups \
             --execution-id '${{ inputs.execution_id }}' \
             --summary target/harness-e2e-campaign/campaign-summary.json \

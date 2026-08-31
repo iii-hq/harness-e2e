@@ -98,7 +98,10 @@ class WorkflowBoundaryTests(unittest.TestCase):
         workflow = (ROOT / ".github/workflows/exact-stack-e2e.yml").read_text()
         self.assertIn("exact-stack", workflow)
         contract_tool = (ROOT / "scripts/exact_stack_campaign.py").read_text()
-        self.assertIn('definition.get("failurePolicy") != "advisory"', contract_tool)
+        # Release Control owns the campaign; this repository states the policy it
+        # materializes for the aggregator and reads none of it back from config.
+        self.assertIn('"failure_policy": "advisory"', contract_tool)
+        self.assertNotIn("config/campaigns", contract_tool)
 
         expected_adaptive = {"post-deploy.json": 1, "weekly.json": 2}
         for name, expected_count in expected_adaptive.items():
