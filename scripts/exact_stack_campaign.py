@@ -334,6 +334,34 @@ def campaign_matrix(contract: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def admission_outputs(
+    contract: dict[str, Any],
+    campaign_id: str,
+    execution_id: str,
+    attempt: int,
+    test_plan_id: str,
+) -> list[str]:
+    """Everything the workflow needs, so the workflow needs to know nothing.
+
+    The dispatch inputs are checked against the contract here rather than in
+    YAML: this file is pinned per campaign by runner_sha, so the contract can
+    change shape without the workflow — which is read from the default branch —
+    ever having to change with it.
+    """
+    if (
+        contract["campaign_id"] != campaign_id
+        or contract["execution_id"] != execution_id
+        or contract["attempt"] != attempt
+        or contract["suite"]["id"] != test_plan_id
+    ):
+        raise ValueError("dispatch inputs do not describe this contract")
+    return [
+        f"contract_sha256={canonical_sha256(contract)}",
+        f"matrix={canonical(campaign_matrix(contract))}",
+        f"oidc_audience={contract['security']['oidc_audience']}",
+    ]
+
+
 def campaign_manifest(contract: dict[str, Any]) -> dict[str, Any]:
     """The suite, in the shape the campaign aggregator consumes."""
     suite = contract["suite"]
@@ -651,11 +679,17 @@ def package_bundle(root: Path, contract: dict[str, Any], workflow: dict[str, Any
 def main() -> int:
     parser = argparse.ArgumentParser()
     commands = parser.add_subparsers(dest="command", required=True)
-    for name in ("validate", "digest", "matrix", "manifest"):
+    for name in ("validate", "digest", "matrix", "manifest", "groups"):
         command = commands.add_parser(name)
         command.add_argument("--contract", type=Path, required=True)
         if name == "manifest":
             command.add_argument("--output", type=Path, required=True)
+    admit = commands.add_parser("admit")
+    admit.add_argument("--contract", type=Path, required=True)
+    admit.add_argument("--campaign-id", required=True)
+    admit.add_argument("--execution-id", required=True)
+    admit.add_argument("--attempt", type=int, required=True)
+    admit.add_argument("--test-plan-id", required=True)
     materialize = commands.add_parser("materialize")
     materialize.add_argument("--contract", type=Path, required=True)
     materialize.add_argument("--catalog", type=Path, required=True)
@@ -691,6 +725,14 @@ def main() -> int:
             print(canonical_sha256(contract))
         elif args.command == "matrix":
             print(canonical(campaign_matrix(contract)))
+        elif args.command == "groups":
+            for group in contract["suite"]["groups"]:
+                print(group["id"])
+        elif args.command == "admit":
+            for line in admission_outputs(
+                contract, args.campaign_id, args.execution_id, args.attempt, args.test_plan_id
+            ):
+                print(line)
         elif args.command == "manifest":
             args.output.write_text(json.dumps(campaign_manifest(contract), indent=2) + "\n")
         elif args.command == "materialize":

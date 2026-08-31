@@ -165,6 +165,33 @@ class ReleaseControlCampaignTest(unittest.TestCase):
         )
         self.assertEqual(request["idempotency_key"], MODULE.observation_idempotency_key(request))
 
+    def test_admission_emits_the_workflow_outputs_and_binds_the_dispatch(self):
+        contract = campaign_contract()
+        outputs = dict(
+            line.split("=", 1)
+            for line in MODULE.admission_outputs(
+                contract,
+                "11111111-1111-4111-8111-111111111111",
+                "22222222-2222-4222-8222-222222222222",
+                1,
+                "daily",
+            )
+        )
+        self.assertEqual(set(outputs), {"contract_sha256", "matrix", "oidc_audience"})
+        self.assertEqual(outputs["contract_sha256"], MODULE.canonical_sha256(contract))
+        self.assertEqual(outputs["oidc_audience"], "release-control-harness-e2e")
+        self.assertEqual(json.loads(outputs["matrix"]), MODULE.campaign_matrix(contract))
+
+    def test_admission_rejects_a_dispatch_that_describes_another_campaign(self):
+        with self.assertRaisesRegex(ValueError, "dispatch inputs do not describe this contract"):
+            MODULE.admission_outputs(
+                campaign_contract(),
+                "11111111-1111-4111-8111-111111111111",
+                "22222222-2222-4222-8222-222222222222",
+                1,
+                "weekly",
+            )
+
     def test_suite_materializes_the_manifest_the_aggregator_consumes(self):
         manifest = MODULE.campaign_manifest(campaign_contract())
         self.assertEqual(manifest["kind"], "harness-e2e-campaign")

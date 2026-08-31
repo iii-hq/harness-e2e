@@ -75,26 +75,14 @@ jobs:
           set -euo pipefail
           mkdir -p target/harness-e2e-contract
           printf '%s\n' "$STACK_LOCK" > target/harness-e2e-contract/stack-lock.json
-          python3 scripts/exact_stack_campaign.py validate \
-            --contract target/harness-e2e-contract/stack-lock.json >/dev/null
-          contract_sha256=$(python3 scripts/exact_stack_campaign.py digest \
-            --contract target/harness-e2e-contract/stack-lock.json)
-          matrix=$(python3 scripts/exact_stack_campaign.py matrix \
-            --contract target/harness-e2e-contract/stack-lock.json)
-          oidc_audience=$(jq -er '.security.oidc_audience' target/harness-e2e-contract/stack-lock.json)
-          {
-            printf 'contract_sha256=%s\n' "$contract_sha256"
-            printf 'matrix=%s\n' "$matrix"
-            printf 'oidc_audience=%s\n' "$oidc_audience"
-          } >> "$GITHUB_OUTPUT"
-          jq -e \
-            --arg campaign '${{ inputs.campaign_id }}' \
-            --arg execution '${{ inputs.execution_id }}' \
-            --argjson attempt '${{ inputs.attempt }}' \
-            --arg test_plan '${{ inputs.test_plan_id }}' \
-            '.campaign_id == $campaign and .execution_id == $execution and .attempt == $attempt
-             and .suite.id == $test_plan' \
-            target/harness-e2e-contract/stack-lock.json >/dev/null
+          # The executor pinned by runner_sha validates the contract, checks it
+          # against the dispatch inputs, and emits every output this job needs.
+          python3 scripts/exact_stack_campaign.py admit \
+            --contract target/harness-e2e-contract/stack-lock.json \
+            --campaign-id '${{ inputs.campaign_id }}' \
+            --execution-id '${{ inputs.execution_id }}' \
+            --attempt '${{ inputs.attempt }}' \
+            --test-plan-id '${{ inputs.test_plan_id }}' >> "$GITHUB_OUTPUT"
 
       - name: Acquire single-use execution admission
         env:
@@ -241,8 +229,6 @@ jobs:
           merge-multiple: false
 
       - name: Restore deterministic group paths
-        env:
-          STACK_LOCK: ${{ inputs.stack_lock }}
         run: |
           set -euo pipefail
           mkdir -p target/harness-e2e-campaign/groups
@@ -250,7 +236,8 @@ jobs:
             source="target/downloaded-groups/e2e-observation-${{ inputs.campaign_id }}-${{ inputs.execution_id }}-${{ inputs.attempt }}-${group}-gh-${{ github.run_attempt }}"
             test -d "$source"
             mv "$source" "target/harness-e2e-campaign/groups/$group"
-          done < <(jq -r '.suite.groups[].id' <<<"$STACK_LOCK")
+          done < <(python3 scripts/exact_stack_campaign.py groups \
+            --contract target/harness-e2e-campaign/stack-lock.json)
 
       - name: Aggregate with exact Harness scoring implementation
         run: |
