@@ -22,12 +22,12 @@ printf '%s\n' "$HARNESS_E2E_STACK_LOCK" >"$contract_path"
 python3 "$contract_tool" validate --contract "$contract_path" >/dev/null
 
 group=$(jq -ce --arg id "$HARNESS_E2E_CAMPAIGN_GROUP_ID" '
-  .suite.groups
-  | map(select(.id == $id and .execution_kind == "fault_injection"))
+  .plan.definition.groups
+  | map(select(.id == $id and .executionKind == "fault_injection"))
   | if length == 1 then .[0] else error("fault group not found") end
 ' "$contract_path")
-profile=$(jq -r '.fault_profile' <<<"$group")
-scenario=$(jq -r '.fault_scenario' <<<"$group")
+profile=$(jq -r '.faultProfile' <<<"$group")
+scenario=$(jq -r '.faultScenario' <<<"$group")
 runs=$(jq -r '.runs' <<<"$group")
 soak_minutes=$(jq -r '.soakMinutes' <<<"$group")
 profile_path="$HARNESS_E2E_HARNESS_ROOT/config/profiles/${profile}.json"
@@ -52,13 +52,21 @@ trap 'failure_reason="command failed at line $LINENO"' ERR
 test -x "$supervisor"
 test -x "$e2e_bin"
 test -f "$profile_path"
+observed_revision=$(git -C "$HARNESS_E2E_HARNESS_ROOT" rev-parse HEAD)
+expected_revision=$(jq -r '.runner.revision' "$contract_path")
+[[ "$observed_revision" == "$expected_revision" ]]
 observed_version=$($e2e_bin --version | awk '{print $2}')
-expected_version=$(jq -r '.orchestration.roots[] | select(.role == "runner") | .version' "$contract_path")
+expected_version=$(jq -r '.runner.registry_ref' "$contract_path")
 [[ "$observed_version" == "$expected_version" ]]
-python3 "$contract_tool" manifest --contract "$contract_path" \
-  --output "$artifact_dir/campaign-manifest.json"
-python3 "$HARNESS_E2E_HARNESS_ROOT/scripts/run_e2e_campaign.py" \
-  "$artifact_dir/campaign-manifest.json" --validate-only >/dev/null
+manifest_id=$(jq -r '.plan.definition.manifest.id' "$contract_path")
+asset_validation=$(python3 "$HARNESS_E2E_HARNESS_ROOT/scripts/run_e2e_campaign.py" \
+  "$HARNESS_E2E_HARNESS_ROOT/config/campaigns/${manifest_id}.json" --validate-only)
+observed_manifest=$(jq -er '.manifest_sha256' <<<"$asset_validation")
+observed_scoring=$(jq -er '.scoring_profile_sha256' <<<"$asset_validation")
+expected_manifest=$(jq -r '.runner.manifest_sha256' "$contract_path")
+expected_scoring=$(jq -r '.runner.scoring_profile_sha256' "$contract_path")
+[[ "$observed_manifest" == "$expected_manifest" ]]
+[[ "$observed_scoring" == "$expected_scoring" ]]
 
 failure_phase=plan
 "$e2e_bin" fault-plan --profile "$profile_path" --output "$plan"
