@@ -61,6 +61,16 @@ class WorkflowBoundaryTests(unittest.TestCase):
         self.assertIn("cleanup --lease-id", launcher)
         self.assertNotIn("iii-hq/workers", workflow)
 
+    def test_the_campaign_workflow_knows_nothing_about_the_contract(self):
+        """The workflow is read from the default branch; the executor is pinned
+        per campaign by runner_sha. Any contract field the workflow reads itself
+        would have to change in lockstep with the contract, so it reads none."""
+        workflow = (ROOT / ".github/workflows/exact-stack-e2e.yml").read_text(encoding="utf-8")
+        for selector in (".suite", ".plan.definition", ".security.", ".orchestration", ".runner."):
+            self.assertNotIn(selector, workflow, f"workflow selects contract field {selector}")
+        self.assertIn("exact_stack_campaign.py admit", workflow)
+        self.assertIn("exact_stack_campaign.py groups", workflow)
+
     def test_exact_stack_is_the_only_release_control_executor(self):
         workflows = {path.name for path in (ROOT / ".github/workflows").glob("*.yml")}
         self.assertIn("exact-stack-e2e.yml", workflows)
@@ -98,7 +108,10 @@ class WorkflowBoundaryTests(unittest.TestCase):
         workflow = (ROOT / ".github/workflows/exact-stack-e2e.yml").read_text()
         self.assertIn("exact-stack", workflow)
         contract_tool = (ROOT / "scripts/exact_stack_campaign.py").read_text()
-        self.assertIn('definition.get("failurePolicy") != "advisory"', contract_tool)
+        # Release Control owns the campaign; this repository states the policy it
+        # materializes for the aggregator and reads none of it back from config.
+        self.assertIn('"failure_policy": "advisory"', contract_tool)
+        self.assertNotIn("config/campaigns", contract_tool)
 
         expected_adaptive = {"post-deploy.json": 1, "weekly.json": 2}
         for name, expected_count in expected_adaptive.items():
