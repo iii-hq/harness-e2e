@@ -770,12 +770,16 @@ def materialize_compose(
 
     runner_worker = contract["runner"]["registry_worker"]
     runner_environment = declared_environment.setdefault(runner_worker, {})
+    # The runner's registry identity mirrors the materialized run contract:
+    # the target-role stack map and its canonical digest.
+    target_stack = role_versions(orchestration, "target")
     runner_environment.update(
         {
             "HARNESS_E2E_WORKERS_REPOSITORY": "iii-hq/workers",
             "HARNESS_E2E_WORKERS_REVISION": contract["target"]["source_sha"],
             "HARNESS_E2E_STACK_MODE": "registry",
-            "HARNESS_E2E_STACK_DIGEST": contract["orchestration"]["graph_sha256"],
+            "HARNESS_E2E_STACK_VERSIONS": canonical(target_stack),
+            "HARNESS_E2E_STACK_DIGEST": canonical_sha256(target_stack),
         }
     )
 
