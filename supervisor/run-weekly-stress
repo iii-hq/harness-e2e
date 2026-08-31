@@ -39,7 +39,7 @@ output=$(cd "$output" && pwd)
 python3 "$contract_tool" validate --contract "$contract" >/dev/null
 
 expected_cli=$(jq -er '.runtime.cli.version' "$contract")
-expected_runner=$(jq -er '.runner.registry_ref' "$contract")
+expected_runner=$(jq -er '.orchestration.roots[] | select(.role == "runner") | .version' "$contract")
 expected_cli_sha=$(cut -d ' ' -f1 "$protected_root/checksums/iii.sha256")
 observed_cli_sha=$(sha256sum "$iii_bin" | cut -d ' ' -f1)
 [[ "$expected_cli_sha" == "$observed_cli_sha" ]]

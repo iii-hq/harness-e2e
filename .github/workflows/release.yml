@@ -93,64 +93,6 @@ jobs:
           prerelease: true
           generate_release_notes: true
 
-  campaign-assets:
-    name: Publish immutable campaign assets
-    needs: [validate, github-release, dashboard]
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write
-    steps:
-      - uses: actions/checkout@v5
-        with:
-          ref: ${{ needs.validate.outputs.commit_sha }}
-      - uses: actions/download-artifact@v7
-        with:
-          name: dashboard-dist
-          path: release-frontend
-      - name: Restore dashboard bundle
-        run: |
-          mkdir -p dashboard/dist dashboard/dist-console
-          cp -a release-frontend/dashboard/dist/. dashboard/dist/
-          cp -a release-frontend/dashboard/dist-console/. dashboard/dist-console/
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
-        with:
-          key: harness-e2e-campaign-assets-${{ needs.validate.outputs.commit_sha }}
-      - name: Validate and materialize campaign assets
-        env:
-          VERSION: ${{ needs.validate.outputs.version }}
-          REVISION: ${{ needs.validate.outputs.commit_sha }}
-          SKIP_DASHBOARD_BUILD: '1'
-        run: |
-          set -euo pipefail
-          mkdir -p target/campaign-assets
-          for manifest in config/campaigns/*.json; do
-            python3 scripts/run_e2e_campaign.py "$manifest" --validate-only
-          done
-          cargo run --locked --quiet --bin harness-e2e -- catalog \
-            > target/campaign-assets/scenario-catalog.json
-          python3 scripts/build_campaign_assets.py \
-            --version "$VERSION" \
-            --revision "$REVISION" \
-            --catalog target/campaign-assets/scenario-catalog.json \
-            --output target/campaign-assets/campaign-assets.json
-          tar -czf "target/harness-e2e-campaign-assets-${VERSION}.tar.gz" \
-            config/campaigns config/scoring config/profiles \
-            target/campaign-assets/scenario-catalog.json \
-            target/campaign-assets/campaign-assets.json
-          sha256sum "target/harness-e2e-campaign-assets-${VERSION}.tar.gz" \
-            > "target/harness-e2e-campaign-assets-${VERSION}.tar.gz.sha256"
-      - name: Attach campaign assets to the immutable release
-        env:
-          GH_TOKEN: ${{ github.token }}
-          RELEASE_TAG: ${{ needs.validate.outputs.tag }}
-          VERSION: ${{ needs.validate.outputs.version }}
-        run: |
-          gh release upload "$RELEASE_TAG" \
-            "target/harness-e2e-campaign-assets-${VERSION}.tar.gz" \
-            "target/harness-e2e-campaign-assets-${VERSION}.tar.gz.sha256" \
-            --clobber
-
   binaries:
     name: Build ${{ matrix.target }}
     needs: [validate, dashboard, github-release]
@@ -247,7 +189,7 @@ jobs:
 
   registry-next:
     name: Collect typed interface and publish next
-    needs: [validate, binaries, campaign-assets]
+    needs: [validate, binaries]
     runs-on: ubuntu-latest
     timeout-minutes: 20
     environment: workers-registry-next

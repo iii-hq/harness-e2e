@@ -29,9 +29,9 @@ python3 "$contract_tool" validate --contract "$contract_path" >/dev/null
 
 campaign_group_id=$HARNESS_E2E_CAMPAIGN_GROUP_ID
 jq -e --arg group "$campaign_group_id" \
-  '.plan.definition.groups | any(.id == $group and .executionKind != "fault_injection")' \
+  '.suite.groups | any(.id == $group and .execution_kind != "fault_injection")' \
   "$contract_path" >/dev/null
-seed=$(jq -r '.plan.definition.catalog.seed' "$contract_path")
+seed=$(jq -r '.suite.seed' "$contract_path")
 execution_id=$(jq -r '.execution_id' "$contract_path")
 short_execution=${execution_id%%-*}
 project_namespace="e2e-${short_execution}-${campaign_group_id}"
@@ -172,11 +172,11 @@ trap 'exit 143' TERM
 prepare_code_fixtures() {
   local requires_engineering requires_shared fixture_json execution_prefix
   requires_shared=$(jq -r --arg group "$campaign_group_id" '
-    .plan.definition.groups[] | select(.id == $group) |
+    .suite.groups[] | select(.id == $group) |
     any(.scenarios[]?; . == "shell_coder_sandbox" or . == "chess_engine_build" or . == "trend_blog")
   ' "$contract_path")
   requires_engineering=$(jq -r --arg group "$campaign_group_id" '
-    .plan.definition.groups[] | select(.id == $group) |
+    .suite.groups[] | select(.id == $group) |
     any(.scenarios[]?; . == "engineering_ticket_git_handoff")
   ' "$contract_path")
   if [[ "$requires_shared" != true && "$requires_engineering" != true ]]; then
@@ -268,7 +268,7 @@ compose_args=(
   --namespace "$project_namespace"
   --data-dir "$e2e_data"
   --environment "harness-e2e.HARNESS_E2E_RUN_DIR=$project_dir"
-  --environment "harness-e2e.HARNESS_E2E_LANE=$(jq -r '.plan.definition.lane' "$contract_path")"
+  --environment "harness-e2e.HARNESS_E2E_LANE=$(jq -r '.suite.lane' "$contract_path")"
   --environment "harness-e2e.HARNESS_E2E_CAMPAIGN_GROUP=$campaign_group_id"
   --output "$compose_file"
 )
