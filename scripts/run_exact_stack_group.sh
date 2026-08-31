@@ -347,8 +347,10 @@ for ((attempt = 0; attempt < wait_seconds; attempt += 5)); do
       '.workers[]? | select(.name == $name and ((.namespace // $ns) == $ns))' \
       "$artifact_dir/stack/workers.json" >/dev/null 2>&1 || { ready=false; break; }
   done
+  # harness::send is registered as an INTERNAL function — it only appears in
+  # the listing when internal functions are included.
   if [[ "$ready" == true ]] && "$iii_bin" trigger engine::functions::list \
-      --address 127.0.0.1 --port "$engine_port" --json '{"include_internal": false}' 2>/dev/null |
+      --address 127.0.0.1 --port "$engine_port" --json '{"include_internal": true}' 2>/dev/null |
     jq -e --arg ns "$project_namespace" \
       '.functions[]? | select(((.function_id // .id) == "harness::send") and ((.namespace // $ns) == $ns))' \
       >/dev/null; then
