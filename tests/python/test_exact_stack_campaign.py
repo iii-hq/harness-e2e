@@ -125,12 +125,9 @@ class ReleaseControlCampaignTest(unittest.TestCase):
         self.assertNotIn("iii-" + "worker", runner)
         self.assertNotIn("iii." + "lock", runner)
 
-    def test_common_runner_uses_isolated_namespaces_and_restricted_secrets(self):
+    def test_common_runner_restricts_secret_files(self):
         runner = RUNNER_SCRIPT.read_text()
-        self.assertIn("daemon_namespace=", runner)
-        self.assertIn("project_namespace=", runner)
         self.assertIn("chmod 600", runner)
-        self.assertIn("--namespace \"$project_namespace\"", runner)
 
     def test_a_field_this_version_does_not_know_is_carried_not_rejected(self):
         value = campaign_contract()
@@ -294,7 +291,7 @@ class ReleaseControlCampaignTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "more than one version"):
             MODULE.validate_contract(conflict)
 
-    def test_compose_evidence_binds_graph_yaml_namespaces_and_lifecycle(self):
+    def test_compose_evidence_binds_graph_yaml_namespace_and_lifecycle(self):
         contract = campaign_contract()
         expected = {
             node["worker"]: node["version"]
@@ -307,7 +304,6 @@ class ReleaseControlCampaignTest(unittest.TestCase):
             evidence = MODULE.compose_evidence(
                 contract,
                 compose_path,
-                "compose-one",
                 "project-one",
                 {name: {"status": "ok"} for name in ("add", "up", "status", "down")},
                 {
@@ -322,7 +318,7 @@ class ReleaseControlCampaignTest(unittest.TestCase):
             evidence["orchestration_graph_sha256"], contract["orchestration"]["graph_sha256"]
         )
         self.assertEqual(evidence["contract_sha256"], MODULE.canonical_sha256(contract))
-        self.assertEqual(evidence["namespaces"], {"daemon": "compose-one", "project": "project-one"})
+        self.assertEqual(evidence["namespace"], "project-one")
         self.assertEqual(set(evidence["lifecycle"]), {"add", "up", "status", "down"})
         self.assertEqual(
             evidence["runtime"]["requested_roots"],
@@ -339,7 +335,6 @@ class ReleaseControlCampaignTest(unittest.TestCase):
                 MODULE.compose_evidence(
                     contract,
                     compose_path,
-                    "compose-one",
                     "project-one",
                     {name: {} for name in ("add", "up", "status", "down")},
                     {
@@ -366,7 +361,6 @@ class ReleaseControlCampaignTest(unittest.TestCase):
                 MODULE.compose_evidence(
                     contract,
                     compose_path,
-                    "compose-one",
                     "project-one",
                     {name: {} for name in ("add", "up", "status", "down")},
                     {"workers": [{"name": worker, "version": version} for worker, version in expected.items()]},
