@@ -134,6 +134,20 @@
       "fault_profile": "weekly-l4-recovery",
       "fault_scenario": "coordination.4",
       "soak_minutes": 60
+    },
+    {
+      "id": "weekly-markdown",
+      "execution_kind": "harness_turn",
+      "runs": 3,
+      "technical_retries": 1,
+      "difficulty_weight": 2,
+      "scenarios": [
+        "database_migration_recovery",
+        "insert_record",
+        "minimal_path",
+        "persistent_state",
+        "sequential_pipeline"
+      ]
     }
   ]
 }

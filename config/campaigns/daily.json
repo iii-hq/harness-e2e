@@ -37,6 +37,20 @@
         "chess_engine_build",
         "git_regression_forensics"
       ]
+    },
+    {
+      "id": "daily-markdown",
+      "execution_kind": "harness_turn",
+      "runs": 1,
+      "technical_retries": 1,
+      "difficulty_weight": 2,
+      "scenarios": [
+        "database_migration_recovery",
+        "insert_record",
+        "minimal_path",
+        "persistent_state",
+        "sequential_pipeline"
+      ]
     }
   ]
 }
