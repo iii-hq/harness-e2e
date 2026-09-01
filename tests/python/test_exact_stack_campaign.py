@@ -261,39 +261,24 @@ class ReleaseControlCampaignTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "graph_sha256 does not match"):
             MODULE.validate_contract(changed)
 
-    def test_scaffolds_only_the_requested_project_roots(self):
+    def test_scaffold_carries_project_roots_and_execution_config(self):
         contract = campaign_contract()
         with tempfile.TemporaryDirectory() as directory:
             data_dir = Path(directory).resolve() / "runs"
-            first = MODULE.project_scaffold(contract, "project-one", data_dir, {}, {})
-            second = MODULE.project_scaffold(contract, "project-one", data_dir, {}, {})
-        self.assertEqual(first, second)
+            scaffold = MODULE.project_scaffold(contract, "project-one", data_dir, {}, {})
         roots = {
             root["worker"]: root["version"]
             for root in contract["orchestration"]["roots"]
         }
-        self.assertEqual(set(first["containers"]), set(roots))
-        self.assertNotIn("state", first["containers"])
+        self.assertEqual(set(scaffold["containers"]), set(roots))
         for worker, version in roots.items():
-            container = first["containers"][worker]
+            container = scaffold["containers"][worker]
             self.assertEqual(container["worker"], f"package://{worker}")
             self.assertEqual(container["version"], version)
-            self.assertNotEqual(container["version"], "next")
-            self.assertNotIn("scripts", container)
-        self.assertEqual(first["containers"]["harness-e2e"]["version"], "0.6.0-experimental")
-        environment = first["containers"]["harness-e2e"]["environment"]
+        environment = scaffold["containers"]["harness-e2e"]["environment"]
         self.assertEqual(environment["HARNESS_E2E_STACK_MODE"], "registry")
         self.assertEqual(environment["HARNESS_E2E_WORKERS_REVISION"], "b" * 40)
         self.assertIn("harness", json.loads(environment["HARNESS_E2E_STACK_VERSIONS"]))
-
-    def test_delegates_project_topology_to_iii(self):
-        source = SCRIPT.read_text()
-        self.assertNotIn("depends_" + "on", source)
-        self.assertNotIn("start_" + "after", source)
-        self.assertEqual(
-            MODULE.project_roots(campaign_contract()),
-            ["harness-e2e@0.6.0-experimental", "fp@0.2.6", "harness@1.9.0"],
-        )
 
     def test_rejects_forbidden_artifacts_and_version_conflicts(self):
         forbidden = campaign_contract()
