@@ -208,9 +208,6 @@ pub async fn run_suite(config: SuiteRunConfig) -> Result<SuiteRunOutcome> {
     )
     .context("resolve system-under-test identity")?;
     let system_identity_sha256 = artifact::sha256_value(&system_under_test)?;
-    if let Some(contract) = &config.observation_contract {
-        contract.validate_runtime(&system_under_test)?;
-    }
     let subject_model = resolve_model(&context, &config.subject.model, &config.subject.provider)
         .await
         .context("resolve subject model")?;

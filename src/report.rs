@@ -1375,24 +1375,6 @@ impl ObservationRunContract {
         required_observation_value(&self.correlation.operation_id, "operation id")?;
         Ok(())
     }
-
-    pub fn validate_runtime(&self, system: &SystemUnderTestIdentity) -> Result<()> {
-        if self.target.version != system.harness_version
-            || self.target.stack != system.stack
-            || self.runner.revision != system.e2e_revision
-        {
-            bail!(
-                "E2E observation identity mismatch: expected Harness {} with {:?} on runner {}, observed {} with {:?} on runner {}",
-                self.target.version,
-                self.target.stack,
-                self.runner.revision,
-                system.harness_version,
-                system.stack,
-                system.e2e_revision
-            );
-        }
-        Ok(())
-    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -1848,7 +1830,6 @@ impl E2eReport {
         }
         if let Some(contract) = &self.observation_contract {
             contract.validate()?;
-            contract.validate_runtime(&self.system_under_test)?;
         }
         let reference = self
             .manifest
@@ -3186,7 +3167,6 @@ mod tests {
     fn observation_contract_is_persisted_in_report_and_manifest() {
         let output = tempfile::tempdir().unwrap();
         let contract = observation_contract();
-        contract.validate_runtime(&system()).unwrap();
         let mut manifest = manifest();
         manifest.observation_contract = Some(contract.clone());
         let mut report = report(vec![aggregate(vec![run(100, true)])]);
@@ -3198,14 +3178,23 @@ mod tests {
     }
 
     #[test]
-    fn observation_target_mismatch_is_rejected_by_preflight() {
+    fn observation_records_requested_and_observed_versions_independently() {
+        let output = tempfile::tempdir().unwrap();
         let mut contract = observation_contract();
         contract.target.version = "other".into();
-        assert!(contract
-            .validate_runtime(&system())
-            .unwrap_err()
-            .to_string()
-            .contains("identity mismatch"));
+        let mut manifest = manifest();
+        manifest.observation_contract = Some(contract.clone());
+        let mut report = report(vec![aggregate(vec![run(100, true)])]);
+        report.observation_contract = Some(contract);
+
+        report.write_to(output.path(), &manifest).unwrap();
+
+        let (decoded, _) = E2eReport::read_from(output.path()).unwrap();
+        assert_eq!(
+            decoded.observation_contract.unwrap().target.version,
+            "other"
+        );
+        assert_eq!(decoded.system_under_test.harness_version, "1.8.0");
     }
 
     #[test]
