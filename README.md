@@ -142,9 +142,11 @@ and the complete dashboard behavior.
 
 ## Compose lifecycle
 
-Release Control materializes the immutable dependency graph and this repository
-renders it as `worker-compose.yaml`. Every execution starts an empty Engine and
-a dedicated Compose daemon, then runs `compose::validate`, `compose::up`,
+Release Control names the exact project roots. This repository writes only the
+root configuration and passes those `worker@version` references to
+`compose::add`; iii resolves the Registry graph, writes the project topology,
+and reconciles its containers. Every execution starts an empty Engine and a
+dedicated Compose daemon, then runs `compose::add`, `compose::up`,
 `compose::status`, and `compose::down`. The project and daemon namespaces are
 unique per execution.
 
