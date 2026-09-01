@@ -203,11 +203,10 @@ jobs:
         run: python3 -m pip install --quiet pyyaml
       - name: Install iii CLI
         env:
-          # Keep the engine on the iii-sdk protocol line used by this worker
-          # (iii-sdk =0.23.0-rc.4 since the runtime-only refactor). Installed
-          # by pinned digest because install.sh refuses prereleases.
-          VERSION: '0.23.0-rc.4'
-          CLI_SHA256: d9ab056f17daefc2f04ed892092a3df2fe76ffde5587335918606048047cf40a
+          # Use the current iii RC, which owns worker installation and remains
+          # protocol-compatible with the SDK used by this worker.
+          VERSION: '0.23.0-rc.10'
+          CLI_SHA256: 4f6b8da4ee81c5a3aae4bca64929836405343365cdec75f1678b4668a92251a7
         run: |
           set -euo pipefail
           curl -fsSL --retry 3 \
@@ -238,8 +237,9 @@ jobs:
       - name: Start isolated iii engine
         run: |
           set -euo pipefail
-          mkdir -p interface-project
+          mkdir -p interface-project interface-compose-state
           printf 'workers: []\n' > interface-project/config.yaml
+          printf 'namespace: default\ncontainers: {}\n' > interface-project/worker-compose.yaml
           (
             cd interface-project
             exec iii --config config.yaml --no-update-check
@@ -257,21 +257,33 @@ jobs:
           done
           echo "::error::iii engine did not become ready"
           exit 1
-      - name: Install worker dependencies and capture baselines
+      - name: Start Compose
         run: |
           set -euo pipefail
-          for worker in state@0.22.2 database@0.5.4 storage@0.1.13; do
-            for attempt in 1 2 3; do
-              if (cd interface-project && iii worker add "$worker"); then
-                break
-              fi
-              if [[ "$attempt" == '3' ]]; then
-                echo "::error::could not install $worker"
-                exit 1
-              fi
-              sleep 10
-            done
+          III_COMPOSE_STATE_DIR="$PWD/interface-compose-state" \
+            iii compose --engine ws://127.0.0.1:49134 --namespace default \
+            > iii-compose.log 2>&1 &
+          echo "$!" > iii-compose.pid
+          for _ in {1..60}; do
+            if ! kill -0 "$(cat iii-compose.pid)" 2>/dev/null; then
+              echo "::error::iii compose exited before becoming ready"
+              exit 1
+            fi
+            if iii trigger compose::list --json '{}' >/dev/null 2>&1; then
+              exit 0
+            fi
+            sleep 1
           done
+          echo "::error::iii compose did not become ready"
+          exit 1
+      - name: Assemble worker dependencies and capture baselines
+        run: |
+          set -euo pipefail
+          iii trigger compose::add --timeout-ms 600000 \
+            file=interface-project/worker-compose.yaml \
+            worker=state@0.22.2 worker=database@0.5.4 worker=storage@0.1.13
+          iii trigger compose::up --timeout-ms 600000 \
+            file=interface-project/worker-compose.yaml
           for _ in {1..60}; do
             if iii trigger 'state::list' \
               --json '{"scope":"__harness_e2e_release_probe__"}' >/dev/null 2>&1; then
@@ -357,11 +369,19 @@ jobs:
           echo "::group::harness-e2e worker"
           tail -n 200 harness-e2e-worker.log || true
           echo "::endgroup::"
+          echo "::group::iii compose"
+          tail -n 200 iii-compose.log || true
+          echo "::endgroup::"
       - name: Stop interface processes
         if: always()
         run: |
           if [[ -f worker.pid ]]; then
             kill "$(cat worker.pid)" 2>/dev/null || true
+          fi
+          if [[ -f iii-compose.pid ]]; then
+            iii trigger compose::down --timeout-ms 600000 \
+              file=interface-project/worker-compose.yaml >/dev/null 2>&1 || true
+            kill "$(cat iii-compose.pid)" 2>/dev/null || true
           fi
           if [[ -f iii-engine.pid ]]; then
             kill "$(cat iii-engine.pid)" 2>/dev/null || true
