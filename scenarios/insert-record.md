@@ -7,11 +7,11 @@
 
 ## Version
 
-1
+2
 
 ## Before Test
 
-The `markdown_insert_record` table is owned exclusively by this scenario. Use `database::execute` on the `primary` database to drop it if an interrupted earlier run left it behind, then create it with the columns `id INTEGER PRIMARY KEY AUTOINCREMENT` and `value TEXT`. During cleanup, drop this test-owned table and verify that it no longer exists. Make no other changes.
+The `markdown_insert_record` table is owned exclusively by this scenario. Use `database::execute` on the `primary` database to drop it if it already exists, then create it with the columns `id INTEGER PRIMARY KEY AUTOINCREMENT` and `value TEXT`. Leave the created table in place for the subject. Make no other changes.
 
 ## Prompt
 
