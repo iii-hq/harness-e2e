@@ -2845,7 +2845,7 @@ mod tests {
             .unwrap();
         assert_eq!(markdown.origin, ScenarioOrigin::Markdown);
         assert_eq!(markdown.plans, ["daily", "weekly"]);
-        assert_eq!(markdown.author_version, Some(1));
+        assert_eq!(markdown.author_version, Some(2));
         assert!(markdown
             .source_sha256
             .as_deref()
