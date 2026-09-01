@@ -20,6 +20,7 @@ from run_e2e_campaign import (
     markdown_group,
     build_campaign_bundle,
     build_group_command,
+    compact_aggregate_artifacts,
     discover_markdown_scenarios,
     execute_campaign,
     load_campaign,
@@ -603,6 +604,27 @@ class CampaignRunnerTests(unittest.TestCase):
             results.write_text('{"native":false}\n', encoding="utf-8")
             with self.assertRaisesRegex(CampaignError, "digest mismatch"):
                 validate_campaign_bundle(bundle, root=root)
+
+    def test_compact_aggregate_keeps_only_bundle_references(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = pathlib.Path(directory)
+            group = root / "groups" / "core"
+            group.mkdir(parents=True)
+            results = group / "results.json"
+            results.write_text('{"native":true}\n', encoding="utf-8")
+            runtime = group / "session.jsonl"
+            runtime.write_text("large runtime state\n", encoding="utf-8")
+            contract = root / "stack-lock.json"
+            contract.write_text("{}\n", encoding="utf-8")
+            bundle = {
+                "groups": [{"artifacts": [{"path": "groups/core/results.json"}]}]
+            }
+
+            compact_aggregate_artifacts(bundle, root=root, group_root=root / "groups")
+
+            self.assertTrue(results.is_file())
+            self.assertTrue(contract.is_file())
+            self.assertFalse(runtime.exists())
 
     def test_difficulty_weighted_score_uses_native_scenario_medians(self):
         campaign = parse_campaign(
