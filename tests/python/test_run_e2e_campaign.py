@@ -17,7 +17,7 @@ from run_e2e_campaign import (
     FAULT_PROFILE_WEIGHT,
     SCENARIO_DIFFICULTY_WEIGHT,
     aggregate_existing_campaign,
-    attach_markdown_group,
+    markdown_group,
     build_campaign_bundle,
     build_group_command,
     discover_markdown_scenarios,
@@ -84,25 +84,44 @@ def contains_seed_field(value):
 
 
 class CanonicalManifestTests(unittest.TestCase):
-    def test_markdown_plan_membership_materializes_a_campaign_group(self):
-        daily = attach_markdown_group(
-            load_campaign(CAMPAIGN_DIR / "daily.json"), ROOT / "scenarios"
-        )
-        group = daily.groups[-1]
-        self.assertEqual(group.id, "daily-markdown")
-        self.assertEqual(group.execution_kind, "harness_turn")
-        self.assertEqual(group.runs, 1)
-        self.assertEqual(group.technical_retries, 1)
-        self.assertEqual(group.difficulty_weight, 2)
-        self.assertIn("insert_record", group.scenarios)
-        self.assertIn("database_migration_recovery", group.scenarios)
-        self.assertIn("minimal_path", group.scenarios)
-        self.assertIn("sequential_pipeline", group.scenarios)
+    def test_every_markdown_plan_membership_is_declared_by_its_manifest(self):
+        """The manifest is the suite; discovery only holds it honest.
 
-        weekly = attach_markdown_group(
-            load_campaign(CAMPAIGN_DIR / "weekly.json"), ROOT / "scenarios"
-        )
-        self.assertEqual(weekly.groups[-1].runs, 3)
+        The runner used to append this group at run time, so it never appeared
+        in the job matrix built from the manifest and was scored as a failure
+        against every campaign that had one.
+        """
+        for path in sorted(CAMPAIGN_DIR.glob("*.json")):
+            campaign = load_campaign(path, ROOT / "scenarios")
+            expected = markdown_group(campaign.campaign_id, ROOT / "scenarios")
+            declared = [
+                group
+                for group in campaign.groups
+                if group.id == f"{campaign.campaign_id}-markdown"
+            ]
+            if expected is None:
+                self.assertEqual(declared, [], f"{path.name} declares an unearned group")
+                continue
+            self.assertEqual(len(declared), 1, f"{path.name} must declare {expected.id}")
+            self.assertEqual(declared[0], expected, f"{path.name} drifted from its Markdown plans")
+
+    def test_markdown_group_carries_the_canonical_execution_policy(self):
+        daily = markdown_group("daily", ROOT / "scenarios")
+        self.assertIsNotNone(daily)
+        assert daily is not None
+        self.assertEqual(daily.id, "daily-markdown")
+        self.assertEqual(daily.execution_kind, "harness_turn")
+        self.assertEqual(daily.runs, 1)
+        self.assertEqual(daily.technical_retries, 1)
+        self.assertEqual(daily.difficulty_weight, 2)
+        self.assertIn("insert_record", daily.scenarios)
+        self.assertIn("database_migration_recovery", daily.scenarios)
+        self.assertIn("minimal_path", daily.scenarios)
+        self.assertIn("sequential_pipeline", daily.scenarios)
+
+        weekly = markdown_group("weekly", ROOT / "scenarios")
+        assert weekly is not None
+        self.assertEqual(weekly.runs, 3)
 
     def test_markdown_discovery_reads_only_the_plans_section(self):
         scenarios = discover_markdown_scenarios(ROOT / "scenarios", "daily")
@@ -121,11 +140,11 @@ class CanonicalManifestTests(unittest.TestCase):
         for path in paths:
             raw = json.loads(path.read_text(encoding="utf-8"))
             self.assertFalse(contains_seed_field(raw), path)
-            campaign = load_campaign(path)
+            campaign = load_campaign(path, ROOT / "scenarios")
             self.assertTrue(campaign.groups)
 
     def test_endurance_is_single_run_advisory_and_not_technically_retried(self):
-        campaign = load_campaign(CAMPAIGN_DIR / "endurance.json")
+        campaign = load_campaign(CAMPAIGN_DIR / "endurance.json", ROOT / "scenarios")
         self.assertEqual(campaign.failure_policy, "advisory")
         self.assertEqual(len(campaign.groups), 1)
         group = campaign.groups[0]
@@ -135,7 +154,7 @@ class CanonicalManifestTests(unittest.TestCase):
         self.assertEqual(group.technical_retries, 0)
 
     def test_post_release_covers_canary_code_integration_and_release_recovery(self):
-        campaign = load_campaign(CAMPAIGN_DIR / "post-deploy.json")
+        campaign = load_campaign(CAMPAIGN_DIR / "post-deploy.json", ROOT / "scenarios")
         selected = {
             scenario
             for group in campaign.groups
@@ -152,6 +171,8 @@ class CanonicalManifestTests(unittest.TestCase):
                 "cross_app_transaction",
                 "browser_cross_site",
                 "release_train_recovery",
+                # Declared through the Markdown plan membership, and now actually run.
+                "database_migration_recovery",
             },
         )
         adaptive = [
@@ -164,7 +185,7 @@ class CanonicalManifestTests(unittest.TestCase):
             self.assertEqual(len(group.scenarios), 1)
 
     def test_daily_prioritizes_code_with_a_hard_code_group(self):
-        campaign = load_campaign(CAMPAIGN_DIR / "daily.json")
+        campaign = load_campaign(CAMPAIGN_DIR / "daily.json", ROOT / "scenarios")
         groups = {group.id: group for group in campaign.groups}
         self.assertEqual(
             set(groups["daily-canary"].scenarios),
@@ -188,7 +209,7 @@ class CanonicalManifestTests(unittest.TestCase):
         self.assertTrue(all(group.technical_retries == 1 for group in campaign.groups))
 
     def test_weekly_repeats_hard_code_and_isolates_complex_flows(self):
-        campaign = load_campaign(CAMPAIGN_DIR / "weekly.json")
+        campaign = load_campaign(CAMPAIGN_DIR / "weekly.json", ROOT / "scenarios")
         groups = {group.id: group for group in campaign.groups}
         self.assertEqual(groups["weekly-shell-parity"].runs, 3)
         self.assertEqual(groups["weekly-performance"].runs, 5)
@@ -223,7 +244,7 @@ class CanonicalManifestTests(unittest.TestCase):
         self.assertTrue(all(group.soak_minutes == 60 for group in faults))
 
     def test_fault_execution_has_no_legacy_supervisor_path(self):
-        campaign = load_campaign(CAMPAIGN_DIR / "weekly.json")
+        campaign = load_campaign(CAMPAIGN_DIR / "weekly.json", ROOT / "scenarios")
         with tempfile.TemporaryDirectory() as directory:
             with self.assertRaisesRegex(CampaignError, "Release Control Compose dispatch"):
                 execute_campaign(
@@ -246,7 +267,7 @@ class CanonicalManifestTests(unittest.TestCase):
             "engineering_ticket",
         }
         for name in ("daily.json", "weekly.json", "post-deploy.json"):
-            campaign = load_campaign(CAMPAIGN_DIR / name)
+            campaign = load_campaign(CAMPAIGN_DIR / name, ROOT / "scenarios")
             selected = {
                 scenario
                 for group in campaign.groups

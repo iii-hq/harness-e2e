@@ -121,6 +121,8 @@ FAULT_PROFILE_WEIGHT = {
     "weekly-l4-recovery": 4,
 }
 
+MARKDOWN_SCENARIO_KIND = "harness_turn"
+MARKDOWN_SCENARIO_WEIGHT = 2
 MARKDOWN_SCENARIO_SECTIONS = {
     "Plans",
     "Version",
@@ -203,7 +205,19 @@ def _expect_bounded_int(value: Any, label: str, minimum: int, maximum: int) -> i
     return value
 
 
-def parse_campaign(value: Any, source: str = "campaign") -> Campaign:
+def parse_campaign(
+    value: Any,
+    source: str = "campaign",
+    markdown_scenarios: frozenset[str] = frozenset(),
+) -> Campaign:
+    scenario_kinds = {
+        **SCENARIO_EXECUTION_KIND,
+        **{scenario: MARKDOWN_SCENARIO_KIND for scenario in markdown_scenarios},
+    }
+    scenario_weights = {
+        **SCENARIO_DIFFICULTY_WEIGHT,
+        **{scenario: MARKDOWN_SCENARIO_WEIGHT for scenario in markdown_scenarios},
+    }
     root = _expect_object(value, source)
     _reject_seed_fields(root)
     _reject_unknown_fields(root, ROOT_FIELDS, source)
@@ -314,7 +328,7 @@ def parse_campaign(value: Any, source: str = "campaign") -> Campaign:
             scenario_label = f"{label}.scenarios[{scenario_index}]"
             if not isinstance(scenario_id, str):
                 raise CampaignError(f"{scenario_label} must be a string")
-            expected_kind = SCENARIO_EXECUTION_KIND.get(scenario_id)
+            expected_kind = scenario_kinds.get(scenario_id)
             if expected_kind is None:
                 raise CampaignError(f"{scenario_label} has unknown scenario id {scenario_id!r}")
             if expected_kind != execution_kind:
@@ -331,7 +345,7 @@ def parse_campaign(value: Any, source: str = "campaign") -> Campaign:
             raise CampaignError(
                 f"{label} is adaptive_flow and must select exactly one scenario with runs=1"
             )
-        expected_weight = max(SCENARIO_DIFFICULTY_WEIGHT[item] for item in scenarios)
+        expected_weight = max(scenario_weights[item] for item in scenarios)
         if difficulty_weight != expected_weight:
             raise CampaignError(
                 f"{label}.difficulty_weight must be {expected_weight} for its canonical cases"
@@ -356,7 +370,9 @@ def parse_campaign(value: Any, source: str = "campaign") -> Campaign:
     )
 
 
-def load_campaign(path: pathlib.Path) -> Campaign:
+def load_campaign(
+    path: pathlib.Path, scenarios_directory: pathlib.Path | None = None
+) -> Campaign:
     try:
         value = json.loads(path.read_text(encoding="utf-8"))
     except FileNotFoundError as error:
@@ -365,7 +381,14 @@ def load_campaign(path: pathlib.Path) -> Campaign:
         raise CampaignError(
             f"{path}:{error.lineno}:{error.colno}: invalid JSON: {error.msg}"
         ) from error
-    return parse_campaign(value, str(path))
+    markdown: frozenset[str] = frozenset()
+    if scenarios_directory is not None:
+        campaign_id = value.get("campaign_id") if isinstance(value, dict) else None
+        if isinstance(campaign_id, str) and campaign_id:
+            markdown = frozenset(
+                discover_markdown_scenarios(scenarios_directory, campaign_id)
+            )
+    return parse_campaign(value, str(path), markdown)
 
 
 def discover_markdown_scenarios(
@@ -438,36 +461,30 @@ def _without_fenced_markdown(source: str, path: pathlib.Path) -> str:
     return "".join(lines)
 
 
-def attach_markdown_group(
-    campaign: Campaign, directory: pathlib.Path
-) -> Campaign:
-    scenarios = discover_markdown_scenarios(directory, campaign.campaign_id)
+def markdown_group(campaign_id: str, directory: pathlib.Path) -> CampaignGroup | None:
+    """The group a campaign's Markdown plan membership describes, or None.
+
+    Nothing calls this while a campaign runs. The manifest is the only authority
+    on which groups exist, so the checked-in manifests carry this group verbatim
+    and a test holds them to what discovery would produce.
+    """
+    scenarios = discover_markdown_scenarios(directory, campaign_id)
     if not scenarios:
-        return campaign
-    selected = {scenario for group in campaign.groups for scenario in group.scenarios}
-    duplicate = selected.intersection(scenarios)
-    if duplicate:
-        raise CampaignError(
-            f"campaign already selects Markdown scenario(s): {', '.join(sorted(duplicate))}"
-        )
-    group_id = f"{campaign.campaign_id}-markdown"
-    if any(group.id == group_id for group in campaign.groups):
-        raise CampaignError(f"campaign already contains reserved group id {group_id!r}")
+        return None
     try:
-        runs, technical_retries = MARKDOWN_PLAN_EXECUTION[campaign.campaign_id]
+        runs, technical_retries = MARKDOWN_PLAN_EXECUTION[campaign_id]
     except KeyError as error:
         raise CampaignError(
-            f"campaign {campaign.campaign_id!r} has no canonical Markdown execution policy"
+            f"campaign {campaign_id!r} has no canonical Markdown execution policy"
         ) from error
-    group = CampaignGroup(
-        id=group_id,
+    return CampaignGroup(
+        id=f"{campaign_id}-markdown",
         execution_kind="harness_turn",
         runs=runs,
         technical_retries=technical_retries,
-        difficulty_weight=2,
+        difficulty_weight=MARKDOWN_SCENARIO_WEIGHT,
         scenarios=scenarios,
     )
-    return dataclasses.replace(campaign, groups=(*campaign.groups, group))
 
 
 def build_group_command(
@@ -1121,9 +1138,7 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: Sequence[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     try:
-        campaign = attach_markdown_group(
-            load_campaign(args.manifest), args.scenarios_directory
-        )
+        campaign = load_campaign(args.manifest, args.scenarios_directory)
         scoring_profile = _load_json(args.scoring_profile)
         if scoring_profile.get("profile") != SCORING_PROFILE:
             raise CampaignError("scoring profile identity does not match the campaign")
