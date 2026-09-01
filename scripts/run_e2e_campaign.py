@@ -1079,6 +1079,20 @@ def validate_campaign_bundle(
             raise CampaignError(f"campaign bundle size mismatch: {relative}")
 
 
+def compact_aggregate_artifacts(
+    bundle: Mapping[str, Any], *, root: pathlib.Path, group_root: pathlib.Path
+) -> None:
+    """Keep only group files referenced by the validated campaign bundle."""
+    keep = {
+        (root / reference["path"]).resolve()
+        for group in bundle["groups"]
+        for reference in group["artifacts"]
+    }
+    for path in group_root.rglob("*"):
+        if path.is_file() and path.resolve() not in keep:
+            path.unlink()
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="Validate and run a canonical Harness E2E campaign"
@@ -1217,6 +1231,12 @@ def main(argv: Sequence[str] | None = None) -> int:
                 )
                 _write_json_atomic(bundle_path, bundle)
                 validate_campaign_bundle(bundle, root=summary_path.parent)
+                if args.aggregate_existing_root is not None:
+                    compact_aggregate_artifacts(
+                        bundle,
+                        root=summary_path.parent,
+                        group_root=args.aggregate_existing_root,
+                    )
                 print(f"bundle: {bundle_path}")
         print(json.dumps(summary, sort_keys=True))
         return int(summary["process_exit_code"])
