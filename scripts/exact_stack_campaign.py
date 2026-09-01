@@ -581,8 +581,7 @@ def project_scaffold(
 def compose_evidence(
     contract: dict[str, Any],
     compose_path: Path,
-    daemon_namespace: str,
-    project_namespace: str,
+    namespace: str,
     lifecycle: dict[str, Any],
     workers_payload: dict[str, Any],
     processes: dict[str, Any],
@@ -596,7 +595,7 @@ def compose_evidence(
     }
     observed: dict[str, str] = {}
     for row in worker_rows:
-        if not isinstance(row, dict) or row.get("namespace") not in (None, project_namespace):
+        if not isinstance(row, dict) or row.get("namespace") not in (None, namespace):
             continue
         name = row.get("name")
         version = row.get("version")
@@ -631,7 +630,7 @@ def compose_evidence(
         "contract_sha256": canonical_sha256(contract),
         "orchestration_graph_sha256": contract["orchestration"]["graph_sha256"],
         "compose_sha256": f"sha256:{hashlib.sha256(compose_path.read_bytes()).hexdigest()}",
-        "namespaces": {"daemon": daemon_namespace, "project": project_namespace},
+        "namespace": namespace,
         "runtime": {
             "cli": contract["runtime"]["cli"],
             "requested_roots": dict(sorted(requested.items())),
@@ -701,8 +700,7 @@ def main() -> int:
     evidence = commands.add_parser("compose-evidence")
     evidence.add_argument("--contract", type=Path, required=True)
     evidence.add_argument("--compose", type=Path, required=True)
-    evidence.add_argument("--daemon-namespace", required=True)
-    evidence.add_argument("--project-namespace", required=True)
+    evidence.add_argument("--namespace", required=True)
     for name in ("add", "up", "status", "down", "workers", "process-before", "process-during", "process-after"):
         evidence.add_argument(f"--{name}", type=Path, required=True)
     evidence.add_argument("--output", type=Path, required=True)
@@ -756,8 +754,7 @@ def main() -> int:
             manifest = compose_evidence(
                 contract,
                 args.compose,
-                args.daemon_namespace,
-                args.project_namespace,
+                args.namespace,
                 {name: load_object(getattr(args, name), f"compose {name}") for name in ("add", "up", "status", "down")},
                 load_object(args.workers, "engine workers"),
                 {
