@@ -147,8 +147,8 @@ root configuration and passes those `worker@version` references to
 `compose::add`; iii resolves the Registry graph, writes the project topology,
 and reconciles its containers. Every execution starts an empty Engine and a
 dedicated Compose daemon, then runs `compose::add`, `compose::up`,
-`compose::status`, and `compose::down`. The project and daemon namespaces are
-unique per execution.
+`compose::status`, and `compose::down`. Each execution uses one isolated
+namespace for both Compose and the project functions it starts.
 
 Compose supplies `III_URL`, `III_NAMESPACE`, `III_WORKER_NAME`, and `III_CONFIG`
 to the `harness-e2e` process. All four values are mandatory. The referenced

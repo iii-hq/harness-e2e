@@ -34,8 +34,7 @@ jq -e --arg group "$campaign_group_id" \
 seed=$(jq -r '.suite.seed' "$contract_path")
 execution_id=$(jq -r '.execution_id' "$contract_path")
 short_execution=${execution_id%%-*}
-project_namespace="e2e-${short_execution}-${campaign_group_id}"
-daemon_namespace="compose-${short_execution}-${campaign_group_id}"
+namespace="e2e-${short_execution}-${campaign_group_id}"
 
 run_root=$(mktemp -d "${TMPDIR:-/tmp}/harness-e2e-compose.XXXXXX")
 project_dir="$run_root/project"
@@ -83,7 +82,7 @@ compose_trigger() {
   "$iii_bin" trigger "$function_id" \
     --address 127.0.0.1 \
     --port "$engine_port" \
-    --namespace "$daemon_namespace" \
+    --namespace "$namespace" \
     --timeout-ms 600000 \
     "$@"
 }
@@ -95,7 +94,7 @@ project_trigger() {
   "$iii_bin" trigger "$function_id" \
     --address 127.0.0.1 \
     --port "$engine_port" \
-    --namespace "$project_namespace" \
+    --namespace "$namespace" \
     --timeout-ms "$timeout_ms" \
     --json "$payload"
 }
@@ -142,8 +141,7 @@ cleanup() {
     python3 "$contract_tool" compose-evidence \
       --contract "$contract_path" \
       --compose "$compose_file" \
-      --daemon-namespace "$daemon_namespace" \
-      --project-namespace "$project_namespace" \
+      --namespace "$namespace" \
       --add "$artifact_dir/stack/add.json" \
       --up "$artifact_dir/stack/up.json" \
       --status "$artifact_dir/stack/status.json" \
@@ -265,7 +263,7 @@ fi
 
 project_args=(
   --contract "$contract_path"
-  --namespace "$project_namespace"
+  --namespace "$namespace"
   --data-dir "$e2e_data"
   --environment "harness-e2e.HARNESS_E2E_RUN_DIR=$project_dir"
   --environment "harness-e2e.HARNESS_E2E_LANE=$(jq -r '.suite.lane' "$contract_path")"
@@ -296,7 +294,7 @@ wait_for_engine
 
 failure_phase=compose_start
 III_COMPOSE_STATE_DIR="$compose_state" setsid "$iii_bin" compose \
-  --engine "$engine_url" --namespace "$daemon_namespace" \
+  --engine "$engine_url" --namespace "$namespace" \
   >"$artifact_dir/logs/compose.log" 2>&1 &
 compose_pid=$!
 compose_started=true
