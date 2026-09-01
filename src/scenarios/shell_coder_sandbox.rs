@@ -759,13 +759,19 @@ fn evaluate<'a>(
             ),
             HIDDEN_CORRECTNESS.full_or_zero(
                 fixture.hidden.passed,
-                format!("checks={:?}; output={:?}", fixture.hidden.checks, fixture.hidden_output),
+                format!(
+                    "checks={:?}; output={:?}",
+                    fixture.hidden.checks, fixture.hidden_output
+                ),
             ),
             HOST_EXECUTION.full_or_zero(
                 host_execution,
                 format!(
                     "subject demo={:?}, runner success={}, stdout={:?}, stderr={:?}",
-                    workflow.host_demo, fixture.demo.success, fixture.demo.stdout, fixture.demo.stderr
+                    workflow.host_demo,
+                    fixture.demo.success,
+                    fixture.demo.stdout,
+                    fixture.demo.stderr
                 ),
             ),
             SANDBOX_PARITY.full_or_zero(sandbox.complete(), sandbox.summary()),
