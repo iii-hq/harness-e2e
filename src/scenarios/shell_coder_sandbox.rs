@@ -187,7 +187,7 @@ if __name__ == "__main__":
 const WORKER_SETUP: AssessmentSpec = AssessmentSpec::hard_gated(
     "worker_setup",
     5,
-    "The shell and sandbox workers are installed and expose every required code-execution surface.",
+    "The assembled project exposes every required code-execution surface.",
 );
 const INVESTIGATION: AssessmentSpec = AssessmentSpec::hard_gated(
     "investigation_and_red_baseline",
@@ -295,20 +295,21 @@ fn scenario_for_case(run_id: &str) -> ScenarioSpec {
         prompt: format!(
             r#"Repair the event reconciliation implementation in the isolated workspace `{root}`.
 
+The project is already assembled. Do not install workers or change its engine or Compose configuration.
+
 Follow this evidence order:
-1. Add the `shell` worker from the public registry and wait. Then add `iii-sandbox` and wait.
-2. Call `coder::info`, then read `{source}`, `{tests}`, and `{task}` with `coder::read-file`.
-3. Before any edit, reproduce the failing baseline with exactly:
+1. Call `coder::info`, then read `{source}`, `{tests}`, and `{task}` with `coder::read-file`.
+2. Before any edit, reproduce the failing baseline with exactly:
    `python3 -m unittest discover -s tests -p test_*.py`
-4. Create `{diagnosis_draft}` with a concise diagnosis grounded in the failure.
-5. Repair only `{source}` with `coder::update-file`. Use the standard library only.
-6. Rerun the complete public suite until green, read the final source, and run
+3. Create `{diagnosis_draft}` with a concise diagnosis grounded in the failure.
+4. Repair only `{source}` with `coder::update-file`. Use the standard library only.
+5. Rerun the complete public suite until green, read the final source, and run
    `python3 {source} --demo`. Its stdout must be exactly `{host_stdout}`.
-7. Move `{diagnosis_draft}` to `{diagnosis}` using `coder::move`. Add no other files.
-8. Create one sandbox named `{sandbox_name}` with image `python`, exactly 1 CPU, 256 MB,
+6. Move `{diagnosis_draft}` to `{diagnosis}` using `coder::move`. Add no other files.
+7. Create one sandbox named `{sandbox_name}` with image `python`, exactly 1 CPU, 256 MB,
    and networking disabled. With `sandbox::fs::write` and `parents: true`, copy the exact
    final source to `{sandbox_source}` and unchanged public tests to `{sandbox_test}`.
-9. In sandbox workdir `{sandbox_workdir}`, run the same unittest discovery command with
+8. In sandbox workdir `{sandbox_workdir}`, run the same unittest discovery command with
    `sandbox::exec`, then run `python3 {sandbox_source} --demo`. Require green tests and the
    same compact JSON. List the active sandbox, then stop it with `wait: true`.
 
@@ -569,10 +570,6 @@ async fn audit_fixture(run_id: &str, assets: &FixtureAssets) -> Result<FixtureAu
 
 #[derive(Debug)]
 struct WorkflowAudit {
-    installed_shell: Option<usize>,
-    installed_sandbox: Option<usize>,
-    shell_install_succeeded: bool,
-    sandbox_install_succeeded: bool,
     coder_info: Option<usize>,
     source_read: Option<usize>,
     tests_read: Option<usize>,
@@ -614,18 +611,6 @@ impl WorkflowAudit {
 
 fn workflow_audit(observation: &ScenarioObservation, root: &Path) -> WorkflowAudit {
     let invocations = common::function_invocations(&observation.transcript);
-    let installed_shell = invocation_index(&invocations, |call| is_registry_install(call, "shell"));
-    let installed_sandbox = invocation_index(&invocations, |call| {
-        is_registry_install(call, "iii-sandbox")
-    });
-    let shell_install_succeeded = invocations.iter().any(|invocation| {
-        is_registry_install(&invocation.call, "shell")
-            && common::function_result(&observation.transcript, invocation).is_some()
-    });
-    let sandbox_install_succeeded = invocations.iter().any(|invocation| {
-        is_registry_install(&invocation.call, "iii-sandbox")
-            && common::function_result(&observation.transcript, invocation).is_some()
-    });
     let coder_info = invocation_index(&invocations, |call| call.function_id == "coder::info");
     let source_read = invocation_index(&invocations, |call| is_coder_read(call, root, SOURCE_PATH));
     let tests_read = invocation_index(&invocations, |call| {
@@ -680,10 +665,6 @@ fn workflow_audit(observation: &ScenarioObservation, root: &Path) -> WorkflowAud
             if red < diagnosis && diagnosis < edit && edit < green && green < read && read < demo && demo < moved
     );
     WorkflowAudit {
-        installed_shell,
-        installed_sandbox,
-        shell_install_succeeded,
-        sandbox_install_succeeded,
         coder_info,
         source_read,
         tests_read,
@@ -722,17 +703,7 @@ fn evaluate<'a>(
         ] {
             sandbox_ready &= context.function_exists(function).await?;
         }
-        let worker_setup = workflow.installed_shell.is_some()
-            && workflow.installed_sandbox.is_some()
-            && workflow.shell_install_succeeded
-            && workflow.sandbox_install_succeeded
-            && workflow
-                .installed_shell
-                .zip(workflow.installed_sandbox)
-                .is_some_and(|(shell, sandbox)| shell < sandbox)
-            && shell_ready
-            && coder_ready
-            && sandbox_ready;
+        let worker_setup = shell_ready && coder_ready && sandbox_ready;
         let sandbox = sandbox_evidence(
             &observation.transcript,
             &sandbox_name(run_id),
@@ -749,13 +720,7 @@ fn evaluate<'a>(
         Ok(assessment::build_evaluation([
             WORKER_SETUP.full_or_zero(
                 worker_setup,
-                format!(
-                    "shell add={:?}/ok={}, sandbox add={:?}/ok={}, shell={shell_ready}, coder={coder_ready}, sandbox={sandbox_ready}",
-                    workflow.installed_shell,
-                    workflow.shell_install_succeeded,
-                    workflow.installed_sandbox,
-                    workflow.sandbox_install_succeeded,
-                ),
+                format!("shell={shell_ready}, coder={coder_ready}, sandbox={sandbox_ready}"),
             ),
             INVESTIGATION.gate_and_points(
                 workflow.investigation_complete(),
@@ -1064,20 +1029,6 @@ fn invocation_indexes(
         .enumerate()
         .filter_map(|(index, invocation)| predicate(&invocation.call).then_some(index))
         .collect()
-}
-
-fn is_registry_install(call: &common::ObservedFunctionCall, worker: &str) -> bool {
-    call.function_id == "worker::add"
-        && call
-            .arguments
-            .pointer("/source/kind")
-            .and_then(Value::as_str)
-            == Some("registry")
-        && call
-            .arguments
-            .pointer("/source/name")
-            .and_then(Value::as_str)
-            == Some(worker)
 }
 
 fn is_coder_read(call: &common::ObservedFunctionCall, root: &Path, relative: &str) -> bool {
