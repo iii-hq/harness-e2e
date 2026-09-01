@@ -1067,17 +1067,14 @@ impl ControlPlane {
             }
             Err(error) => {
                 self.cleanup_active_attempt(&execution_id).await;
-                let rendered = format!("{error:#}");
                 self.finish(
                     &execution_id,
                     if cancelled || format!("{error:#}").contains("was cancelled") {
                         ExecutionPhase::Cancelled
-                    } else if rendered.contains("E2E observation identity mismatch") {
-                        ExecutionPhase::Unsupported
                     } else {
                         ExecutionPhase::Failed
                     },
-                    rendered,
+                    format!("{error:#}"),
                     None,
                     None,
                     None,
