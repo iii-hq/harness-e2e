@@ -136,7 +136,7 @@ cleanup() {
     jq -n --arg phase "$failure_phase" --arg error "$failure_reason" --argjson exit_code "$status" \
       '{phase:$phase,outcome:"infra_failed",error:$error,exit_code:$exit_code}' >"$artifact_dir/failure.json"
   fi
-  if [[ -f "$compose_file" && -f "$artifact_dir/stack/validate.json" && -f "$artifact_dir/stack/up.json" \
+  if [[ -f "$compose_file" && -f "$artifact_dir/stack/add.json" && -f "$artifact_dir/stack/up.json" \
         && -f "$artifact_dir/stack/status.json" && -f "$artifact_dir/stack/workers.json" \
         && -f "$artifact_dir/stack/processes-before.json" && -f "$artifact_dir/stack/processes-during.json" ]]; then
     python3 "$contract_tool" compose-evidence \
@@ -144,7 +144,7 @@ cleanup() {
       --compose "$compose_file" \
       --daemon-namespace "$daemon_namespace" \
       --project-namespace "$project_namespace" \
-      --validate "$artifact_dir/stack/validate.json" \
+      --add "$artifact_dir/stack/add.json" \
       --up "$artifact_dir/stack/up.json" \
       --status "$artifact_dir/stack/status.json" \
       --down "$artifact_dir/stack/down.json" \
@@ -208,7 +208,7 @@ prepare_code_fixtures() {
 write_provider_secret() {
   local worker=$1 variable=$2 value=${!2:-}
   jq -e --arg worker "$worker" \
-    '.orchestration.nodes | any(.worker == $worker and .kind == "binary")' "$contract_path" >/dev/null || return 0
+    '.orchestration.roots | any(.worker == $worker)' "$contract_path" >/dev/null || return 0
   [[ -n "$value" ]] || fail "$variable is required by orchestrated worker $worker"
   printf '%s=%s\n' "$variable" "$value" >"$secrets_dir/$worker.env"
   chmod 600 "$secrets_dir/$worker.env"
@@ -263,7 +263,7 @@ if find "$tools_dir" -type f -name "$forbidden_name" -print -quit | grep -q .; t
   fail "forbidden lifecycle helper was installed"
 fi
 
-compose_args=(
+project_args=(
   --contract "$contract_path"
   --namespace "$project_namespace"
   --data-dir "$e2e_data"
@@ -274,16 +274,16 @@ compose_args=(
 )
 for secret_file in "$secrets_dir"/*.env; do
   [[ -f "$secret_file" ]] || continue
-  compose_args+=(--env-file "$(basename "$secret_file" .env)=$secret_file")
+  project_args+=(--env-file "$(basename "$secret_file" .env)=$secret_file")
 done
 if [[ -n "${HARNESS_E2E_FIXTURE_PATH:-}" ]]; then
-  compose_args+=(--environment "harness-e2e.HARNESS_E2E_FIXTURE_PATH=$HARNESS_E2E_FIXTURE_PATH")
+  project_args+=(--environment "harness-e2e.HARNESS_E2E_FIXTURE_PATH=$HARNESS_E2E_FIXTURE_PATH")
 fi
 if [[ -n "${HARNESS_E2E_ENGINEERING_TICKET_FIXTURE_PATH:-}" ]]; then
-  compose_args+=(--environment \
+  project_args+=(--environment \
     "harness-e2e.HARNESS_E2E_ENGINEERING_TICKET_FIXTURE_PATH=$HARNESS_E2E_ENGINEERING_TICKET_FIXTURE_PATH")
 fi
-python3 "$contract_tool" compose "${compose_args[@]}"
+python3 "$contract_tool" project "${project_args[@]}"
 
 failure_phase=engine_start
 manager_name="iii""-worker-manager"
@@ -302,67 +302,17 @@ compose_pid=$!
 compose_started=true
 wait_for_compose
 
-failure_phase=compose_validate
-compose_trigger compose::validate "file=$compose_file" >"$artifact_dir/stack/validate.json"
+failure_phase=project_assembly
+add_args=("file=$compose_file")
+while IFS= read -r root; do
+  add_args+=("worker=$root")
+done < <(python3 "$contract_tool" roots --contract "$contract_path")
+compose_trigger compose::add "${add_args[@]}" >"$artifact_dir/stack/add.json"
+jq -e '.status == "ok"' "$artifact_dir/stack/add.json" >/dev/null
 
-failure_phase=compose_up
-# Registry resolution from hosted runners fails transiently under the package
-# burst ("error sending request"), and up treats survivors of a cascaded stop
-# as already in place — only a full down/up cycle re-resolves and restarts the
-# graph, so recycle until every container reports ready.
-expected_container_count=$(jq \
-  '[.orchestration.nodes[] | select(.kind == "binary")] | length' "$contract_path")
-# Sibling groups of one run otherwise resolve their packages in one synchronized
-# burst that the registry sheds connections from; jitter decorrelates them.
-sleep $((RANDOM % 45))
-up_clean=false
-for up_attempt in 1 2 3 4 5 6 7 8; do
-  compose_trigger compose::up "file=$compose_file" >"$artifact_dir/stack/up.json" || true
-  if jq -e --argjson expected "$expected_container_count" \
-    '(.containers // []) | length == $expected and all(.state == "ready")' \
-    "$artifact_dir/stack/up.json" >/dev/null 2>&1; then
-    up_clean=true
-    break
-  fi
-  log "compose up attempt $up_attempt did not leave the full stack ready; recycling"
-  jq -r '.containers[]? | select(.state != "ready") | "  " + .container + ": " + .state + (if .error then " (" + (.error | tostring | .[0:80]) + ")" else "" end)' \
-    "$artifact_dir/stack/up.json" >&2 || true
-  compose_trigger compose::down "file=$compose_file" \
-    >"$artifact_dir/stack/down-attempt-$up_attempt.json" 2>>"$artifact_dir/logs/compose-commands.log" || true
-  sleep $(( (RANDOM % 20) + 10 * up_attempt ))
-done
-[[ "$up_clean" == true ]] || fail "compose up could not bring the full stack to ready"
-
-# compose::up returns once containers are spawned; SDK registration and function
-# exposure land seconds later. Hold materialization until every pinned binary
-# worker is registered in the campaign namespace and the Harness control plane
-# answers, so preflight never races the boot.
-failure_phase=stack_ready
-mapfile -t expected_binary_workers < <(jq -r \
-  '.orchestration.nodes[] | select(.kind == "binary") | .worker' "$contract_path")
-stack_ready=false
-for ((attempt = 0; attempt < wait_seconds; attempt += 5)); do
-  "$iii_bin" trigger engine::workers::list --address 127.0.0.1 --port "$engine_port" --json '{}' \
-    >"$artifact_dir/stack/workers.json" 2>/dev/null || true
-  ready=true
-  for worker in "${expected_binary_workers[@]}"; do
-    jq -e --arg ns "$project_namespace" --arg name "$worker" \
-      '.workers[]? | select(.name == $name and ((.namespace // $ns) == $ns))' \
-      "$artifact_dir/stack/workers.json" >/dev/null 2>&1 || { ready=false; break; }
-  done
-  # harness::send is registered as an INTERNAL function — it only appears in
-  # the listing when internal functions are included.
-  if [[ "$ready" == true ]] && "$iii_bin" trigger engine::functions::list \
-      --address 127.0.0.1 --port "$engine_port" --json '{"include_internal": true}' 2>/dev/null |
-    jq -e --arg ns "$project_namespace" \
-      '.functions[]? | select(((.function_id // .id) == "harness::send") and ((.namespace // $ns) == $ns))' \
-      >/dev/null; then
-    stack_ready=true
-    break
-  fi
-  sleep 5
-done
-[[ "$stack_ready" == true ]] || fail "exact stack did not become ready within ${wait_seconds}s"
+failure_phase=project_start
+compose_trigger compose::up "file=$compose_file" >"$artifact_dir/stack/up.json"
+jq -e '.status == "ok"' "$artifact_dir/stack/up.json" >/dev/null
 compose_trigger compose::status "file=$compose_file" >"$artifact_dir/stack/status.json"
 "$iii_bin" trigger engine::workers::list --address 127.0.0.1 --port "$engine_port" --json '{}' \
   >"$artifact_dir/stack/workers.json"
