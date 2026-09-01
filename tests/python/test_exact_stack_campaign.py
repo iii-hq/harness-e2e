@@ -117,7 +117,7 @@ def catalog():
 class ReleaseControlCampaignTest(unittest.TestCase):
     def test_common_runner_contains_only_the_compose_path(self):
         runner = RUNNER_SCRIPT.read_text()
-        self.assertIn("compose::validate", runner)
+        self.assertIn("compose::add", runner)
         self.assertIn("compose::up", runner)
         self.assertIn("compose::status", runner)
         self.assertIn("compose::down", runner)
@@ -261,31 +261,39 @@ class ReleaseControlCampaignTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "graph_sha256 does not match"):
             MODULE.validate_contract(changed)
 
-    def test_materializes_deterministic_compose(self):
+    def test_scaffolds_only_the_requested_project_roots(self):
         contract = campaign_contract()
         with tempfile.TemporaryDirectory() as directory:
             data_dir = Path(directory).resolve() / "runs"
-            first = MODULE.materialize_compose(contract, "project-one", data_dir, {}, {})
-            second = MODULE.materialize_compose(contract, "project-one", data_dir, {}, {})
+            first = MODULE.project_scaffold(contract, "project-one", data_dir, {}, {})
+            second = MODULE.project_scaffold(contract, "project-one", data_dir, {}, {})
         self.assertEqual(first, second)
-        nodes = {
-            node["worker"]: node
-            for node in contract["orchestration"]["nodes"]
-            if node["kind"] == "binary"
+        roots = {
+            root["worker"]: root["version"]
+            for root in contract["orchestration"]["roots"]
         }
-        for worker, node in nodes.items():
+        self.assertEqual(set(first["containers"]), set(roots))
+        self.assertNotIn("state", first["containers"])
+        for worker, version in roots.items():
             container = first["containers"][worker]
             self.assertEqual(container["worker"], f"package://{worker}")
-            self.assertEqual(container["version"], node["version"])
+            self.assertEqual(container["version"], version)
             self.assertNotEqual(container["version"], "next")
             self.assertNotIn("scripts", container)
-            self.assertNotIn("start_after", container)
         self.assertEqual(first["containers"]["harness-e2e"]["version"], "0.6.0-experimental")
-        self.assertEqual(first["containers"]["harness-e2e"]["depends_on"], ["state"])
         environment = first["containers"]["harness-e2e"]["environment"]
         self.assertEqual(environment["HARNESS_E2E_STACK_MODE"], "registry")
         self.assertEqual(environment["HARNESS_E2E_WORKERS_REVISION"], "b" * 40)
         self.assertIn("harness", json.loads(environment["HARNESS_E2E_STACK_VERSIONS"]))
+
+    def test_delegates_project_topology_to_iii(self):
+        source = SCRIPT.read_text()
+        self.assertNotIn("depends_" + "on", source)
+        self.assertNotIn("start_" + "after", source)
+        self.assertEqual(
+            MODULE.project_roots(campaign_contract()),
+            ["harness-e2e@0.6.0-experimental", "fp@0.2.6", "harness@1.9.0"],
+        )
 
     def test_rejects_forbidden_artifacts_and_version_conflicts(self):
         forbidden = campaign_contract()
@@ -316,7 +324,7 @@ class ReleaseControlCampaignTest(unittest.TestCase):
                 compose_path,
                 "compose-one",
                 "project-one",
-                {name: {"status": "ok"} for name in ("validate", "up", "status", "down")},
+                {name: {"status": "ok"} for name in ("add", "up", "status", "down")},
                 {
                     "workers": [
                         {"name": worker, "version": version, "namespace": "project-one"}
@@ -330,20 +338,25 @@ class ReleaseControlCampaignTest(unittest.TestCase):
         )
         self.assertEqual(evidence["contract_sha256"], MODULE.canonical_sha256(contract))
         self.assertEqual(evidence["namespaces"], {"daemon": "compose-one", "project": "project-one"})
-        self.assertEqual(set(evidence["lifecycle"]), {"validate", "up", "status", "down"})
+        self.assertEqual(set(evidence["lifecycle"]), {"add", "up", "status", "down"})
+        self.assertEqual(
+            evidence["runtime"]["requested_roots"],
+            {"fp": "0.2.6", "harness": "1.9.0", "harness-e2e": "0.6.0-experimental"},
+        )
+        self.assertEqual(evidence["runtime"]["observed_versions"]["state"], "0.22.1")
 
     def test_compose_evidence_reports_a_missing_container(self):
         contract = campaign_contract()
         with tempfile.TemporaryDirectory() as directory:
             compose_path = Path(directory) / "worker-compose.yaml"
             compose_path.write_text("namespace: project-one\ncontainers: {}\n")
-            with self.assertRaisesRegex(ValueError, "missing containers: fp"):
+            with self.assertRaisesRegex(ValueError, "missing requested roots: fp"):
                 MODULE.compose_evidence(
                     contract,
                     compose_path,
                     "compose-one",
                     "project-one",
-                    {name: {} for name in ("validate", "up", "status", "down")},
+                    {name: {} for name in ("add", "up", "status", "down")},
                     {
                         "workers": [
                             {"name": node["worker"], "version": node["version"], "namespace": "project-one"}
@@ -370,7 +383,7 @@ class ReleaseControlCampaignTest(unittest.TestCase):
                     compose_path,
                     "compose-one",
                     "project-one",
-                    {name: {} for name in ("validate", "up", "status", "down")},
+                    {name: {} for name in ("add", "up", "status", "down")},
                     {"workers": [{"name": worker, "version": version} for worker, version in expected.items()]},
                     {
                         "before": [],

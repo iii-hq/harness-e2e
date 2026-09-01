@@ -136,7 +136,7 @@ cleanup() {
     jq -n --arg phase "$failure_phase" --arg error "$failure_reason" --argjson exit_code "$status" \
       '{phase:$phase,outcome:"infra_failed",error:$error,exit_code:$exit_code}' >"$artifact_dir/failure.json"
   fi
-  if [[ -f "$compose_file" && -f "$artifact_dir/stack/validate.json" && -f "$artifact_dir/stack/up.json" \
+  if [[ -f "$compose_file" && -f "$artifact_dir/stack/add.json" && -f "$artifact_dir/stack/up.json" \
         && -f "$artifact_dir/stack/status.json" && -f "$artifact_dir/stack/workers.json" \
         && -f "$artifact_dir/stack/processes-before.json" && -f "$artifact_dir/stack/processes-during.json" ]]; then
     python3 "$contract_tool" compose-evidence \
@@ -144,7 +144,7 @@ cleanup() {
       --compose "$compose_file" \
       --daemon-namespace "$daemon_namespace" \
       --project-namespace "$project_namespace" \
-      --validate "$artifact_dir/stack/validate.json" \
+      --add "$artifact_dir/stack/add.json" \
       --up "$artifact_dir/stack/up.json" \
       --status "$artifact_dir/stack/status.json" \
       --down "$artifact_dir/stack/down.json" \
@@ -208,7 +208,7 @@ prepare_code_fixtures() {
 write_provider_secret() {
   local worker=$1 variable=$2 value=${!2:-}
   jq -e --arg worker "$worker" \
-    '.orchestration.nodes | any(.worker == $worker and .kind == "binary")' "$contract_path" >/dev/null || return 0
+    '.orchestration.roots | any(.worker == $worker)' "$contract_path" >/dev/null || return 0
   [[ -n "$value" ]] || fail "$variable is required by orchestrated worker $worker"
   printf '%s=%s\n' "$variable" "$value" >"$secrets_dir/$worker.env"
   chmod 600 "$secrets_dir/$worker.env"
@@ -263,7 +263,7 @@ if find "$tools_dir" -type f -name "$forbidden_name" -print -quit | grep -q .; t
   fail "forbidden lifecycle helper was installed"
 fi
 
-compose_args=(
+project_args=(
   --contract "$contract_path"
   --namespace "$project_namespace"
   --data-dir "$e2e_data"
@@ -274,16 +274,16 @@ compose_args=(
 )
 for secret_file in "$secrets_dir"/*.env; do
   [[ -f "$secret_file" ]] || continue
-  compose_args+=(--env-file "$(basename "$secret_file" .env)=$secret_file")
+  project_args+=(--env-file "$(basename "$secret_file" .env)=$secret_file")
 done
 if [[ -n "${HARNESS_E2E_FIXTURE_PATH:-}" ]]; then
-  compose_args+=(--environment "harness-e2e.HARNESS_E2E_FIXTURE_PATH=$HARNESS_E2E_FIXTURE_PATH")
+  project_args+=(--environment "harness-e2e.HARNESS_E2E_FIXTURE_PATH=$HARNESS_E2E_FIXTURE_PATH")
 fi
 if [[ -n "${HARNESS_E2E_ENGINEERING_TICKET_FIXTURE_PATH:-}" ]]; then
-  compose_args+=(--environment \
+  project_args+=(--environment \
     "harness-e2e.HARNESS_E2E_ENGINEERING_TICKET_FIXTURE_PATH=$HARNESS_E2E_ENGINEERING_TICKET_FIXTURE_PATH")
 fi
-python3 "$contract_tool" compose "${compose_args[@]}"
+python3 "$contract_tool" project "${project_args[@]}"
 
 failure_phase=engine_start
 manager_name="iii""-worker-manager"
@@ -302,11 +302,17 @@ compose_pid=$!
 compose_started=true
 wait_for_compose
 
-failure_phase=compose_validate
-compose_trigger compose::validate "file=$compose_file" >"$artifact_dir/stack/validate.json"
+failure_phase=project_assembly
+add_args=("file=$compose_file")
+while IFS= read -r root; do
+  add_args+=("worker=$root")
+done < <(python3 "$contract_tool" roots --contract "$contract_path")
+compose_trigger compose::add "${add_args[@]}" >"$artifact_dir/stack/add.json"
+jq -e '.status == "ok"' "$artifact_dir/stack/add.json" >/dev/null
 
-failure_phase=compose_up
+failure_phase=project_start
 compose_trigger compose::up "file=$compose_file" >"$artifact_dir/stack/up.json"
+jq -e '.status == "ok"' "$artifact_dir/stack/up.json" >/dev/null
 compose_trigger compose::status "file=$compose_file" >"$artifact_dir/stack/status.json"
 "$iii_bin" trigger engine::workers::list --address 127.0.0.1 --port "$engine_port" --json '{}' \
   >"$artifact_dir/stack/workers.json"

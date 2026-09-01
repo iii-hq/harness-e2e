@@ -511,7 +511,11 @@ def assignments(values: list[str], label: str) -> dict[str, str]:
     return result
 
 
-def materialize_compose(
+def project_roots(contract: dict[str, Any]) -> list[str]:
+    return [f"{root['worker']}@{root['version']}" for root in contract["orchestration"]["roots"]]
+
+
+def project_scaffold(
     contract: dict[str, Any],
     namespace: str,
     data_dir: Path,
@@ -524,23 +528,17 @@ def materialize_compose(
         raise ValueError("data directory must be absolute")
 
     orchestration = contract["orchestration"]
-    nodes = {node["worker"]: node for node in orchestration["nodes"]}
-    binary_workers = {worker for worker, node in nodes.items() if node["kind"] == "binary"}
-    unknown_env_files = sorted(set(env_files) - binary_workers)
+    roots = {root["worker"]: root["version"] for root in orchestration["roots"]}
+    unknown_env_files = sorted(set(env_files) - set(roots))
     if unknown_env_files:
-        raise ValueError(f"env files name unknown containers: {', '.join(unknown_env_files)}")
+        raise ValueError(f"env files name unknown project roots: {', '.join(unknown_env_files)}")
 
     declared_environment: dict[str, dict[str, str]] = {}
     for key, value in environment.items():
         worker, separator, name = key.partition(".")
-        if not separator or worker not in binary_workers or not re.fullmatch(r"[A-Z][A-Z0-9_]*", name):
+        if not separator or worker not in roots or not re.fullmatch(r"[A-Z][A-Z0-9_]*", name):
             raise ValueError(f"invalid container environment assignment: {key}")
         declared_environment.setdefault(worker, {})[name] = value
-
-    dependencies: dict[str, list[str]] = {worker: [] for worker in binary_workers}
-    for edge in orchestration["edges"]:
-        if edge["from"] in binary_workers and edge["to"] in binary_workers:
-            dependencies[edge["from"]].append(edge["to"])
 
     # The runner reads its own registry stack identity from the environment.
     target_stack = role_versions(orchestration, "target")
@@ -555,14 +553,11 @@ def materialize_compose(
     )
 
     containers: dict[str, Any] = {}
-    for worker in sorted(binary_workers):
+    for worker in sorted(roots):
         container: dict[str, Any] = {
             "worker": f"package://{worker}",
-            "version": nodes[worker]["version"],
+            "version": roots[worker],
         }
-        needs = sorted(set(dependencies[worker]))
-        if needs:
-            container["depends_on"] = needs
         if worker in env_files:
             env_file = Path(env_files[worker])
             if not env_file.is_absolute():
@@ -595,10 +590,9 @@ def compose_evidence(
     worker_rows = workers_payload.get("workers")
     if not isinstance(worker_rows, list):
         raise ValueError("engine worker evidence must contain a workers array")
-    expected = {
-        node["worker"]: node["version"]
-        for node in contract["orchestration"]["nodes"]
-        if node["kind"] == "binary"
+    requested = {
+        root["worker"]: root["version"]
+        for root in contract["orchestration"]["roots"]
     }
     observed: dict[str, str] = {}
     for row in worker_rows:
@@ -606,18 +600,18 @@ def compose_evidence(
             continue
         name = row.get("name")
         version = row.get("version")
-        if isinstance(name, str) and isinstance(version, str) and name in expected:
+        if isinstance(name, str) and isinstance(version, str):
             observed[name] = version
-    missing = [worker for worker in sorted(expected) if worker not in observed]
+    missing = [worker for worker in sorted(requested) if worker not in observed]
     if missing:
-        raise ValueError("compose runtime is missing containers: " + ", ".join(missing))
+        raise ValueError("iii project is missing requested roots: " + ", ".join(missing))
     # Artifact identity is enforced by the sha256-pinned lock at download time.
     # A registered worker whose self-reported metadata version differs from the
     # registry version is a fleet metadata defect, recorded as a warning rather
     # than disproof of the stack.
     version_report_warnings = [
         f"{worker}: registry {version}, self-reported {observed[worker]}"
-        for worker, version in sorted(expected.items())
+        for worker, version in sorted(requested.items())
         if observed[worker] != version
     ]
 
@@ -640,7 +634,7 @@ def compose_evidence(
         "namespaces": {"daemon": daemon_namespace, "project": project_namespace},
         "runtime": {
             "cli": contract["runtime"]["cli"],
-            "expected_versions": dict(sorted(expected.items())),
+            "requested_roots": dict(sorted(requested.items())),
             "observed_versions": dict(sorted(observed.items())),
             "version_report_warnings": version_report_warnings,
         },
@@ -695,19 +689,21 @@ def main() -> int:
     materialize.add_argument("--catalog", type=Path, required=True)
     materialize.add_argument("--output", type=Path, required=True)
     materialize.add_argument("--group-id")
-    compose = commands.add_parser("compose")
-    compose.add_argument("--contract", type=Path, required=True)
-    compose.add_argument("--namespace", required=True)
-    compose.add_argument("--data-dir", type=Path, required=True)
-    compose.add_argument("--env-file", action="append", default=[])
-    compose.add_argument("--environment", action="append", default=[])
-    compose.add_argument("--output", type=Path, required=True)
+    roots = commands.add_parser("roots")
+    roots.add_argument("--contract", type=Path, required=True)
+    project = commands.add_parser("project")
+    project.add_argument("--contract", type=Path, required=True)
+    project.add_argument("--namespace", required=True)
+    project.add_argument("--data-dir", type=Path, required=True)
+    project.add_argument("--env-file", action="append", default=[])
+    project.add_argument("--environment", action="append", default=[])
+    project.add_argument("--output", type=Path, required=True)
     evidence = commands.add_parser("compose-evidence")
     evidence.add_argument("--contract", type=Path, required=True)
     evidence.add_argument("--compose", type=Path, required=True)
     evidence.add_argument("--daemon-namespace", required=True)
     evidence.add_argument("--project-namespace", required=True)
-    for name in ("validate", "up", "status", "down", "workers", "process-before", "process-during", "process-after"):
+    for name in ("add", "up", "status", "down", "workers", "process-before", "process-during", "process-after"):
         evidence.add_argument(f"--{name}", type=Path, required=True)
     evidence.add_argument("--output", type=Path, required=True)
     package = commands.add_parser("package")
@@ -740,12 +736,15 @@ def main() -> int:
                 contract, load_object(args.catalog, "scenario catalog"), group_id=args.group_id
             )
             args.output.write_text(json.dumps(request, indent=2, sort_keys=True) + "\n")
-        elif args.command == "compose":
+        elif args.command == "roots":
+            for root in project_roots(contract):
+                print(root)
+        elif args.command == "project":
             try:
                 import yaml
             except ImportError as error:  # pragma: no cover - CI installs PyYAML explicitly.
-                raise ValueError("PyYAML is required to materialize worker-compose.yaml") from error
-            manifest = materialize_compose(
+                raise ValueError("PyYAML is required to create the iii project scaffold") from error
+            manifest = project_scaffold(
                 contract,
                 args.namespace,
                 args.data_dir,
@@ -759,7 +758,7 @@ def main() -> int:
                 args.compose,
                 args.daemon_namespace,
                 args.project_namespace,
-                {name: load_object(getattr(args, name), f"compose {name}") for name in ("validate", "up", "status", "down")},
+                {name: load_object(getattr(args, name), f"compose {name}") for name in ("add", "up", "status", "down")},
                 load_object(args.workers, "engine workers"),
                 {
                     "before": json.loads(args.process_before.read_text()),
