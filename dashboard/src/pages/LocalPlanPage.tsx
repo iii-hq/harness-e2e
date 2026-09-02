@@ -2,11 +2,14 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { DashboardPageActions } from '@/components/DashboardPageActions'
 import { DiscardDraftDialog } from '@/components/DiscardDraftDialog'
 import {
+  consumePlanScopeRequest,
   ExecutionSetup,
-  ExecutionSetupReview,
+  ExecutionSetupFooter,
+  focusFirstInvalid,
   requestQuickExecution,
+  validateExecutionSetup,
 } from '@/components/ExecutionSetup'
-import { buttonClassName } from '@/design-system'
+import { buttonClassName, PageHeader } from '@/design-system'
 import { useDirtyNavigation } from '@/hooks/use-dirty-navigation'
 import {
   hashForPlan,
@@ -20,7 +23,13 @@ import {
 } from '@/lib/dashboard-data-source'
 
 type Model = { provider: string; model: string }
-type Catalog = { url: string; models: Model[]; scenarios: string[] }
+type Catalog = {
+  url: string
+  models: Model[]
+  scenarios: string[]
+  /** Markdown tests the catalog lists but plans cannot run (audit PN-06). */
+  localScenarioIds: string[]
+}
 
 function modelKey(model: Model) {
   return [model.provider, model.model].join('\n')
@@ -67,6 +76,7 @@ function catalogValue(value: JsonObject): Catalog {
   return {
     url: typeof value.url === 'string' ? value.url : '',
     models,
+    localScenarioIds: [...localScenarioIds],
     scenarios: Array.isArray(value.scenarios)
       ? value.scenarios.filter(
           (item): item is string =>
@@ -136,19 +146,30 @@ export function LocalPlanCreatePage() {
   const [seed, setSeed] = useState(PLAN_FORM_DEFAULTS.seed)
   const [loading, setLoading] = useState(true)
   const [submitting, setSubmitting] = useState(false)
+  const [attempted, setAttempted] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const initialValues = useRef<PlanFormValues>({ ...PLAN_FORM_DEFAULTS })
 
   const loadCatalog = useCallback(async (source: DashboardDataBridge) => {
     const loaded = catalogValue(await source.getCatalog())
     const firstModel = loaded.models[0] ? modelKey(loaded.models[0]) : ''
+    // Audit RS-13: a scope chosen in the run-suite dialog arrives preselected.
+    const handedOver = consumePlanScopeRequest().filter((id) =>
+      loaded.scenarios.includes(id),
+    )
     setCatalog(loaded)
     setUrl((current) => current || loaded.url)
     setSubject((current) => current || firstModel)
+    if (handedOver.length > 0)
+      setScenarios((current) => (current.length > 0 ? current : handedOver))
     initialValues.current = {
       ...initialValues.current,
       url: initialValues.current.url || loaded.url,
       subject: initialValues.current.subject || firstModel,
+      scenarios:
+        initialValues.current.scenarios.length > 0
+          ? initialValues.current.scenarios
+          : handedOver,
     }
   }, [])
 
@@ -206,14 +227,17 @@ export function LocalPlanCreatePage() {
   }))
   const runsPerTest = Math.max(1, Number(runs) || 1)
   const retryCount = Math.max(0, Number(technicalRetries) || 0)
-  const plannedRuns = scenarios.length * runsPerTest
-  const hasPlanLabel = label.trim().length > 0
-  const canCreate =
-    !loading &&
-    !submitting &&
-    Boolean(selectedSubject) &&
-    scenarios.length > 0 &&
-    hasPlanLabel
+  // Audit PN-05 / PN-15: the primary stays enabled; after a submit attempt
+  // the pending items show inline and next to the button.
+  const errors = attempted
+    ? validateExecutionSetup({
+        mode: 'plan',
+        label,
+        subject,
+        selectedScenarios: scenarios,
+        url,
+      })
+    : {}
 
   const dirty = planFormDirty(
     {
@@ -235,15 +259,22 @@ export function LocalPlanCreatePage() {
 
   const create = async (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault()
+    const nextErrors = validateExecutionSetup({
+      mode: 'plan',
+      label,
+      subject,
+      selectedScenarios: scenarios,
+      url,
+    })
     if (
+      Object.keys(nextErrors).length > 0 ||
       bridge?.mode !== 'local' ||
-      !selectedSubject ||
-      scenarios.length === 0 ||
-      !hasPlanLabel
+      !selectedSubject
     ) {
-      setError(
-        'Add a plan label, choose an execution model and select at least one test.',
-      )
+      setAttempted(true)
+      focusFirstInvalid('plan-create', nextErrors)
+      if (bridge?.mode !== 'local')
+        setError('Plans can only be created from the local dashboard.')
       return
     }
     setSubmitting(true)
@@ -282,6 +313,22 @@ export function LocalPlanCreatePage() {
     }
   }
 
+  const summary = {
+    mode: 'plan' as const,
+    selectedScenarios: scenarios.length,
+    runsPerScenario: runsPerTest,
+    technicalRetries: retryCount,
+    seed,
+    subject: selectedSubject
+      ? `${selectedSubject.provider} / ${selectedSubject.model}`
+      : '',
+    judge: selectedJudge
+      ? `${selectedJudge.provider} / ${selectedJudge.model}`
+      : '',
+    url,
+  }
+  const localCount = catalog?.localScenarioIds.length ?? 0
+
   return (
     <>
       <DiscardDraftDialog
@@ -290,159 +337,116 @@ export function LocalPlanCreatePage() {
         onKeep={dirtyNavigation.cancelNavigation}
         onDiscard={dirtyNavigation.confirmNavigation}
       />
-      <DashboardPageActions active="plans" />
-      <div className="ds-root mx-auto w-[calc(100%_-_1.5rem)] max-w-[1420px] py-8 sm:w-[calc(100%_-_3rem)] sm:py-10">
-        <header className="grid items-end gap-6 border-b border-[var(--color-rule)] pb-6 lg:grid-cols-[minmax(0,1fr)_auto]">
-          <div className="min-w-0">
-            <p className="m-0 font-mono text-[0.68rem] font-semibold uppercase tracking-[0.08em] text-[var(--color-accent)]">
-              Execution setup
-            </p>
-            <h1
-              className="mt-2 mb-0 max-w-4xl font-mono text-xl font-semibold tracking-[-0.01em] text-ink"
-              id="plan-create-title"
-            >
-              Create a benchmark plan
-            </h1>
-            <p className="mt-3 mb-0 max-w-3xl text-sm leading-6 text-[var(--color-ink-faint)]">
-              Save a focused scope, capture its baseline, then run the same
-              scenarios after your change to measure improvement.
-            </p>
-          </div>
-          <nav
-            className="grid min-w-[18rem] grid-cols-2 gap-px overflow-hidden rounded-lg border border-[var(--color-rule)] bg-[var(--color-rule)] max-[390px]:min-w-0"
-            aria-label="Execution setup mode"
-          >
+      <DashboardPageActions active="plans" context="new plan" />
+      <div className="ds-root page-shell w-[calc(100%_-_1.5rem)] max-w-[1420px] pt-5 pb-8 md:w-[calc(100%_-_3rem)]">
+        {/* Audit PN-18 / PN-25: a breadcrumb back to plans and the DS heading scale. */}
+        <PageHeader
+          title="new plan"
+          summary="Save a focused scope, capture its baseline, then run the same tests after your change to measure the difference."
+          headingId="plan-create-title"
+          breadcrumb={[
+            { label: 'plans', href: hashForPlans() },
+            { label: 'new plan' },
+          ]}
+          actions={
             <a
-              className="grid min-h-14 content-center gap-0.5 bg-panel-raised px-4 text-xs text-[var(--color-ink-faint)] no-underline transition-colors hover:text-ink"
+              className={buttonClassName({
+                variant: 'quiet',
+                className: 'no-underline',
+              })}
               href={hashForWorkspace()}
               onClick={requestQuickExecution}
             >
-              <strong className="font-semibold">Quick execution</strong>
-              <span className="text-[0.65rem] text-ink-muted">
-                One result now
-              </span>
+              quick execution instead
             </a>
-            <span
-              className="grid min-h-14 content-center gap-0.5 bg-[var(--color-surface-hover)] px-4 text-xs text-ink"
-              aria-current="page"
-            >
-              <strong className="font-semibold">Reusable plan</strong>
-              <span className="text-[0.65rem] text-ink-muted">
-                Baseline + candidates
-              </span>
-            </span>
-          </nav>
-        </header>
-
-        {error && (
-          <section
-            className="mt-6 rounded-lg border border-[color-mix(in_srgb,var(--color-alert)_35%,transparent)] bg-[color-mix(in_srgb,var(--color-alert)_8%,var(--surface))] p-5"
-            role="alert"
-          >
-            <h2 className="m-0 text-sm font-semibold text-danger">
-              Plan cannot be created
-            </h2>
-            <p className="mt-2 mb-0 text-xs leading-5 text-[var(--color-ink-faint)]">
-              {error}
-            </p>
-          </section>
-        )}
-
+          }
+        />
         <form
-          className="mt-6 grid min-w-0 gap-px overflow-hidden rounded-[6px] border border-[var(--color-edge)] bg-[var(--color-rule)] lg:grid-cols-12"
+          className="mt-6 grid min-w-0 gap-8"
           onSubmit={create}
+          noValidate
+          aria-labelledby="plan-create-title"
         >
-          <div className="min-w-0 bg-panel lg:col-span-8">
-            <ExecutionSetup
-              idPrefix="plan-create"
-              mode="plan"
-              label={label}
-              purpose={purpose}
-              url={url}
-              subject={subject}
-              judge={judge}
-              modelGroups={modelOptions}
-              availableScenarios={catalog?.scenarios ?? []}
-              selectedScenarios={scenarios}
-              query={testQuery}
-              runs={runs}
-              technicalRetries={technicalRetries}
-              seed={seed}
-              disabled={submitting}
-              catalogLoading={loading}
-              catalogSummary={
-                loading
-                  ? 'Loading local catalog'
-                  : catalog
-                    ? `${catalog.models.length} registered model${catalog.models.length === 1 ? '' : 's'} · ${catalog.scenarios.length} tests`
-                    : 'Catalog unavailable'
+          <ExecutionSetup
+            idPrefix="plan-create"
+            mode="plan"
+            stickyOffset="page"
+            label={label}
+            purpose={purpose}
+            url={url}
+            subject={subject}
+            judge={judge}
+            modelGroups={modelOptions}
+            availableScenarios={catalog?.scenarios ?? []}
+            localScenarioIds={catalog?.localScenarioIds ?? []}
+            unavailableScenarios={
+              localCount > 0
+                ? {
+                    ids: catalog?.localScenarioIds ?? [],
+                    reason: 'Local Markdown tests are not available in plans.',
+                  }
+                : undefined
+            }
+            selectedScenarios={scenarios}
+            query={testQuery}
+            runs={runs}
+            technicalRetries={technicalRetries}
+            seed={seed}
+            disabled={submitting}
+            catalogLoading={loading}
+            catalogStatus={
+              loading
+                ? { tone: 'loading', text: 'loading catalog…' }
+                : catalog
+                  ? {
+                      tone: 'ready',
+                      text: `catalog ready · ${catalog.models.length} model${catalog.models.length === 1 ? '' : 's'} · ${catalog.scenarios.length} test${catalog.scenarios.length === 1 ? '' : 's'}${localCount > 0 ? ` · ${localCount} local not available in plans` : ''}`,
+                    }
+                  : { tone: 'unavailable', text: 'catalog unavailable' }
+            }
+            errors={errors}
+            onRefreshCatalog={() => void refreshCatalog()}
+            onLabelChange={setLabel}
+            onPurposeChange={setPurpose}
+            onUrlChange={setUrl}
+            onSubjectChange={setSubject}
+            onJudgeChange={setJudge}
+            onSelectedScenariosChange={setScenarios}
+            onQueryChange={setTestQuery}
+            onRunsChange={setRuns}
+            onTechnicalRetriesChange={setTechnicalRetries}
+            onSeedChange={setSeed}
+          />
+          {/* Audit PN-02 / RS-03: the action bar stays in view at every width. */}
+          <div className="sticky bottom-0 z-10 border-t border-line bg-panel py-3">
+            <ExecutionSetupFooter
+              summary={summary}
+              pending={Object.values(errors)}
+              error={error}
+              status={
+                Object.keys(errors).length === 0
+                  ? 'Creates a draft. The scope stays editable until the baseline starts.'
+                  : null
               }
-              onRefreshCatalog={() => void refreshCatalog()}
-              onLabelChange={setLabel}
-              onPurposeChange={setPurpose}
-              onUrlChange={setUrl}
-              onSubjectChange={setSubject}
-              onJudgeChange={setJudge}
-              onSelectedScenariosChange={setScenarios}
-              onQueryChange={setTestQuery}
-              onRunsChange={setRuns}
-              onTechnicalRetriesChange={setTechnicalRetries}
-              onSeedChange={setSeed}
-            />
-          </div>
-
-          <div className="min-w-0 bg-panel-raised lg:col-span-4">
-            <ExecutionSetupReview
-              mode="plan"
-              status={canCreate ? 'Ready' : 'Incomplete'}
-              subject={
-                selectedSubject
-                  ? `${selectedSubject.provider} / ${selectedSubject.model}`
-                  : ''
-              }
-              judge={
-                selectedJudge
-                  ? `${selectedJudge.provider} / ${selectedJudge.model}`
-                  : ''
-              }
-              url={url}
-              selectedScenarios={scenarios.length}
-              plannedRuns={plannedRuns}
-              runsPerScenario={runsPerTest}
-              technicalRetries={retryCount}
-              ready={canCreate}
             >
-              <p
-                className="m-0 text-xs leading-5 text-ink-muted"
-                id="plan-create-requirements"
-              >
-                {hasPlanLabel && scenarios.length > 0
-                  ? 'Ready to create a draft. The scope stays editable until the baseline starts.'
-                  : `Before creating: ${hasPlanLabel ? 'select at least one test' : 'add a plan label'}${hasPlanLabel || scenarios.length === 0 ? '' : ' and select at least one test'}.`}
-              </p>
-              <button
-                className={buttonClassName({
-                  variant: 'primary',
-                  size: 'large',
-                  className: 'w-full',
-                })}
-                type="submit"
-                disabled={!canCreate}
-                aria-describedby="plan-create-requirements"
-              >
-                {submitting ? 'creating…' : 'create draft plan'}
-              </button>
               <a
                 className={buttonClassName({
                   variant: 'secondary',
-                  size: 'large',
-                  className: 'w-full no-underline',
+                  className: 'no-underline',
                 })}
                 href={hashForPlans()}
               >
                 cancel
               </a>
-            </ExecutionSetupReview>
+              <button
+                className={buttonClassName({ variant: 'primary' })}
+                type="submit"
+                disabled={submitting || loading}
+                aria-busy={submitting}
+              >
+                {submitting ? 'creating…' : 'create draft plan'}
+              </button>
+            </ExecutionSetupFooter>
           </div>
         </form>
       </div>

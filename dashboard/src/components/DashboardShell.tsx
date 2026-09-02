@@ -241,10 +241,13 @@ export function DashboardShell({
           >
             Skip to content
           </a>
+          {/* No overflow on the standalone main: the document scrolls, and an
+              overflow: auto here without a fixed height would make every
+              sticky element (section nav, sheet footers) stick to nothing. */}
           <PageMain
             id={MAIN_ID}
             tabIndex={-1}
-            className="harness-e2e-console-main min-h-0 min-w-0 overflow-auto p-0 outline-none"
+            className="harness-e2e-console-main min-h-0 min-w-0 p-0 outline-none"
           >
             <div
               ref={mainRef}

@@ -197,17 +197,26 @@ test('keeps metric history rows readable and opens details on demand', () => {
 })
 
 test('makes local plan scope selection focused and readable', () => {
-  assert.match(planPage, /Create a benchmark plan/)
+  // Audit PN-18 / PN-25 / PN-02: DS header with a breadcrumb, one column,
+  // and the sticky footer instead of the review aside.
+  assert.match(planPage, /title="new plan"/)
+  assert.match(planPage, /breadcrumb=\{\[/)
   assert.match(planPage, /ExecutionSetup/)
-  assert.match(planPage, /ExecutionSetupReview/)
-  assert.match(planPage, /Quick execution/)
+  assert.match(planPage, /ExecutionSetupFooter/)
+  assert.doesNotMatch(planPage, /ExecutionSetupReview|lg:grid-cols-12/)
+  assert.match(planPage, /sticky bottom-0/)
+  assert.match(planPage, /quick execution instead/)
   assert.match(planPage, /requestQuickExecution/)
+  assert.match(planPage, /validateExecutionSetup/)
+  assert.match(planPage, /unavailableScenarios/)
   assert.match(executionSetup, /Find a test/)
   assert.match(executionSetup, /Search by name or id/)
   assert.match(executionSetup, /select visible/i)
+  assert.match(executionSetup, /select group/)
   assert.match(executionSetup, /Pick the tests/)
-  assert.match(executionSetup, /Sampling, retries and seed/)
+  assert.match(executionSetup, /Advanced · sampling, retries and seed/)
   assert.match(executionSetup, /Runs per test/)
+  assert.doesNotMatch(executionSetup, /max-h-\[25rem\]|type="search"/)
   assert.doesNotMatch(planPage, /plan-test-option|plan-advanced-control/)
 })
 
@@ -311,8 +320,14 @@ test('keeps an empty local execution label serializable and its action visible',
   assert.doesNotMatch(runner, /label: form\.label \|\| null/)
   assert.match(runner, /form="local-runner-form"/)
   assert.match(read('src', 'design-system', 'primitives.css'), /\.ds-dialog\[open\] \{\s*display: grid;/)
-  assert.match(runner, /lg:grid-cols-12/)
-  assert.match(runner, /Create a reusable plan instead/)
+  // Audit RS-03 / RS-07 / RS-13: one column, the summary and actions in the
+  // dialog footer, the selection handed over to plans/new.
+  assert.doesNotMatch(runner, /lg:grid-cols-12|ExecutionSetupReview/)
+  assert.match(runner, /footer=\{/)
+  assert.match(runner, /ExecutionSetupFooter/)
+  assert.match(runner, /requestPlanFromSelection\(form\.scenarios\)/)
+  assert.match(runner, /create a reusable plan instead/)
+  assert.match(runner, /validateExecutionSetup/)
   assert.match(executionSetup, /mode === 'plan'/)
 })
 

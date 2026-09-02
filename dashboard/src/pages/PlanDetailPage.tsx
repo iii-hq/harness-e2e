@@ -1494,6 +1494,12 @@ function PlanScenarioComparisonTable({
                       )
                       const descriptor = metrics.find((metric) => metric)
                       if (!descriptor) return null
+                      // Audit PD-12: a metric nobody reports is not a row.
+                      if (
+                        descriptor.baseline === null &&
+                        metrics.every((metric) => metric?.candidate == null)
+                      )
+                        return null
                       const winnerIds = scenarioMetricWinnerIds(
                         descriptor,
                         metrics,
