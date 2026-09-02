@@ -4,6 +4,7 @@ import {
   DashboardPageActions,
   dashboardHeaderActionClassName,
 } from '@/components/DashboardPageActions'
+import { requestPlanFromSelection } from '@/components/ExecutionSetup'
 import { LocalScenarioEditor } from '@/components/LocalScenarioEditor'
 import {
   buttonClassName,
@@ -804,6 +805,11 @@ export function TestsCatalogPage() {
     if (bridge) void loadLocalScenarios(bridge)
   }, [bridge, loadLocalScenarios])
 
+  const allRows = useMemo(
+    () => mergeLocalScenariosIntoCatalog(data?.rows ?? [], localScenarios),
+    [data, localScenarios],
+  )
+
   // Audit T-07: cursor pagination instead of a silent cap at 100.
   const loadMore = async () => {
     if (!bridge || !data?.next_cursor) return
@@ -868,20 +874,26 @@ export function TestsCatalogPage() {
 
   useEffect(() => {
     if (loading || restoredScroll.current) return
-    restoredScroll.current = true
     if (highlightId) {
-      const rowElement = document.getElementById(`test-${highlightId}`)
-      rowElement?.scrollIntoView({ block: 'center' })
+      // The row may arrive with the next local catalog load; wait for it.
+      const known = allRows.some((entry) => entry.row.test_id === highlightId)
+      const rowElement = known
+        ? document.getElementById(`test-${highlightId}`)
+        : null
+      if (!rowElement) return
+      restoredScroll.current = true
+      rowElement.scrollIntoView({ block: 'center' })
       const timer = window.setTimeout(() => setHighlightId(null), 2000)
       return () => window.clearTimeout(timer)
     }
+    restoredScroll.current = true
     try {
       const saved = window.sessionStorage.getItem(CATALOG_SCROLL_KEY)
       if (saved) window.scrollTo(0, Number(saved))
     } catch {
       // storage unavailable
     }
-  }, [loading, highlightId])
+  }, [loading, highlightId, allRows])
 
   // Audit NT-08: the toast dismisses itself.
   useEffect(() => {
@@ -890,10 +902,6 @@ export function TestsCatalogPage() {
     return () => window.clearTimeout(timer)
   }, [createdScenarioId])
 
-  const allRows = useMemo(
-    () => mergeLocalScenariosIntoCatalog(data?.rows ?? [], localScenarios),
-    [data, localScenarios],
-  )
   const visibleRows = sortCatalogDisplayRows(
     filterCatalogRows(allRows, filters),
     filters.sort,
@@ -975,9 +983,14 @@ export function TestsCatalogPage() {
             bridge={localBridge}
             initialFileName={suggestedLocalFileName}
             onClose={() => setAuthoringScenario(false)}
-            onCreated={(scenarioId) => {
-              setCreatedScenarioId(scenarioId)
+            onCreated={(scenarioId, intent) => {
               setAuthoringScenario(false)
+              if (intent === 'plan') {
+                requestPlanFromSelection([scenarioId])
+                window.location.hash = hashForNewPlan()
+                return
+              }
+              setCreatedScenarioId(scenarioId)
               setHighlightId(scenarioId)
               restoredScroll.current = false
               void loadLocalScenarios(localBridge)
@@ -1010,16 +1023,7 @@ export function TestsCatalogPage() {
                   size: 'compact',
                 })}
                 href={hashForNewPlan()}
-                onClick={() => {
-                  try {
-                    window.sessionStorage.setItem(
-                      'harness-e2e:plan-scope',
-                      JSON.stringify([createdScenarioId]),
-                    )
-                  } catch {
-                    // storage unavailable
-                  }
-                }}
+                onClick={() => requestPlanFromSelection([createdScenarioId])}
               >
                 new plan with this test
               </a>

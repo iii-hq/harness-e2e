@@ -214,6 +214,100 @@ export function localScenarioDraftIssue(draft: LocalScenarioDraft) {
   return null
 }
 
+/**
+ * Audit NT-02: every problem at once, keyed by field, so the editor can mark
+ * each control and focus the first one. Keys: title, version, beforeTest,
+ * prompt, validations (count or weight total) and
+ * `validation:<id>:title|weight|instructions`.
+ */
+export type LocalScenarioFieldIssues = Record<string, string>
+
+export function localScenarioDraftFieldIssues(
+  draft: LocalScenarioDraft,
+): LocalScenarioFieldIssues {
+  const issues: LocalScenarioFieldIssues = {}
+  if (draft.title.trim() === '') issues.title = 'Add a test name.'
+  if (!/^[1-9]\d*$/.test(draft.version.trim()))
+    issues.version = 'Version must be a positive integer.'
+  else if (Number(draft.version) > 4_294_967_295)
+    issues.version = 'Version must fit within an unsigned 32-bit integer.'
+  if (draft.beforeTest.trim() === '')
+    issues.beforeTest = 'Describe the state that must exist before the test.'
+  else {
+    const issue = markdownBodyIssue(draft.beforeTest, 'Before test', 2)
+    if (issue) issues.beforeTest = issue
+  }
+  if (draft.prompt.trim() === '')
+    issues.prompt = 'Describe the task for the Harness.'
+  else {
+    const issue = markdownBodyIssue(draft.prompt, 'Task prompt', 2)
+    if (issue) issues.prompt = issue
+  }
+  if (draft.validations.length === 0)
+    issues.validations = 'Add at least one validation criterion.'
+
+  const criterionIds = new Set<string>()
+  for (const [index, validation] of draft.validations.entries()) {
+    const position = index + 1
+    const key = `validation:${validation.id}`
+    if (validation.title.trim() === '')
+      issues[`${key}:title`] = `Add a name for validation ${position}.`
+    else {
+      const criterionId = safeSlug(validation.title)
+      if (!criterionId)
+        issues[`${key}:title`] =
+          `Validation ${position} name must use letters, numbers, spaces, hyphens or underscores.`
+      else if (criterionIds.has(criterionId))
+        issues[`${key}:title`] =
+          'Validation names must compile to unique identifiers.'
+      else criterionIds.add(criterionId)
+    }
+    if (!/^[1-9]\d*$/.test(validation.weight.trim()))
+      issues[`${key}:weight`] =
+        `Validation ${position} weight must be a positive integer.`
+    else if (Number(validation.weight) > 255)
+      issues[`${key}:weight`] =
+        `Validation ${position} weight must be 255 or less.`
+    if (validation.instructions.trim() === '')
+      issues[`${key}:instructions`] =
+        `Describe how validation ${position} will be evaluated.`
+    else {
+      const issue = markdownBodyIssue(
+        validation.instructions,
+        `Validation ${position} instructions`,
+        3,
+      )
+      if (issue) issues[`${key}:instructions`] = issue
+    }
+  }
+
+  const weight = localScenarioValidationWeight(draft)
+  if (
+    draft.validations.length > 0 &&
+    weight !== 100 &&
+    !Object.keys(issues).some((key) => key.endsWith(':weight'))
+  )
+    issues.validations = `Validation weights total ${weight}%; adjust them to exactly 100%.`
+  return issues
+}
+
+/** Spreads 100% over the criteria, the remainder going to the first ones. */
+export function distributeValidationWeights(
+  draft: LocalScenarioDraft,
+): LocalScenarioDraft {
+  const count = draft.validations.length
+  if (count === 0) return draft
+  const base = Math.floor(100 / count)
+  const remainder = 100 - base * count
+  return {
+    ...draft,
+    validations: draft.validations.map((validation, index) => ({
+      ...validation,
+      weight: String(base + (index < remainder ? 1 : 0)),
+    })),
+  }
+}
+
 export function buildLocalScenarioSource(draft: LocalScenarioDraft) {
   const validations = draft.validations.flatMap((validation) => [
     `### ${validation.title.trim()} (${validation.weight.trim()}%)`,
