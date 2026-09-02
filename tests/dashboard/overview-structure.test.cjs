@@ -197,10 +197,10 @@ test('makes local plan scope selection focused and readable', () => {
   assert.match(planPage, /requestQuickExecution/)
   assert.match(executionSetup, /Find a test/)
   assert.match(executionSetup, /Search by name or id/)
-  assert.match(executionSetup, /Select visible/)
-  assert.match(executionSetup, /Select the benchmark scope/)
+  assert.match(executionSetup, /select visible/i)
+  assert.match(executionSetup, /Pick the tests/)
   assert.match(executionSetup, /Sampling, retries and seed/)
-  assert.match(executionSetup, /Logical runs/)
+  assert.match(executionSetup, /Runs per test/)
   assert.doesNotMatch(planPage, /plan-test-option|plan-advanced-control/)
 })
 
@@ -385,10 +385,10 @@ test('groups execution and judge models under their providers', () => {
   }
   assert.match(executionSetup, /Execution model/)
   assert.match(executionSetup, /Judge model/)
-  assert.match(modelDropdown, /expandedProviders/)
+  assert.match(modelDropdown, /collapsedProviders/)
   assert.match(
     modelDropdown,
-    /const collapsed = !expandedProviders\.has\(group\.provider\)/,
+    /const collapsed = collapsedProviders\.has\(group\.provider\)/,
   )
   assert.match(modelDropdown, /aria-expanded=\{open\}/)
   assert.match(modelDropdown, /role="option"/)

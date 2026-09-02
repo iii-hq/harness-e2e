@@ -1,6 +1,7 @@
 import { RefreshCw, Search } from 'lucide-react'
 import type { ReactNode } from 'react'
 import { ProviderModelDropdown } from '@/components/ProviderModelDropdown'
+import { buttonClassName } from '@/design-system'
 import '@/design-system/styles.css'
 
 export type ExecutionSetupMode = 'quick' | 'plan'
@@ -67,15 +68,72 @@ type ExecutionSetupReviewProps = {
   runsPerScenario: number
   technicalRetries: number
   ready: boolean
+  /**
+   * Audit RS-02: inside a dialog the review column sticks to the dialog's
+   * own scroller, so the page header offset must not apply.
+   */
+  stickyOffset?: 'page' | 'dialog'
   children: ReactNode
 }
 
 const fieldLabel =
   'grid min-w-0 gap-2 text-xs font-semibold text-[var(--color-ink-faint)]'
 const fieldControl =
-  'min-h-11 w-full rounded-lg border border-[var(--color-rule)] bg-panel-raised px-3 text-sm text-ink transition-colors duration-[var(--ds-duration-fast)] placeholder:text-ink-muted hover:border-[var(--color-edge)] focus-visible:border-[var(--color-rule-focus)] focus-visible:[outline:2px_solid_var(--color-rule-focus)] focus-visible:[outline-offset:3px] disabled:cursor-not-allowed disabled:opacity-50'
-const quietButton =
-  'inline-flex min-h-10 items-center justify-center gap-2 rounded-lg border border-[var(--color-rule)] bg-panel-raised px-3 text-xs font-semibold text-[var(--color-ink-faint)] transition-colors duration-[var(--ds-duration-fast)] hover:border-[var(--color-edge)] hover:text-ink disabled:cursor-not-allowed disabled:opacity-45'
+  'min-h-11 w-full rounded-[6px] border border-[var(--color-rule)] bg-panel-raised px-3 text-sm text-ink transition-colors duration-[var(--ds-duration-fast)] placeholder:text-ink-muted hover:border-[var(--color-edge)] focus-visible:border-[var(--color-rule-focus)] focus-visible:[outline:2px_solid_var(--color-rule-focus)] focus-visible:[outline-offset:3px] disabled:cursor-not-allowed disabled:opacity-50'
+const quietButton = buttonClassName({ variant: 'secondary', size: 'compact' })
+
+function retryCount(value: string) {
+  return Math.max(0, Number(value) || 0)
+}
+
+/**
+ * Audit PN-17: an empty catalog and an empty search are different states.
+ * The catalog case names the fix (refresh) instead of asking for another
+ * search term.
+ */
+function CatalogEmptyState({
+  query,
+  catalogLoading,
+  catalogEmpty,
+  onRefreshCatalog,
+}: {
+  query: string
+  catalogLoading: boolean
+  catalogEmpty: boolean
+  onRefreshCatalog?: () => void
+}) {
+  if (catalogEmpty) {
+    return (
+      <div
+        className="col-span-full grid justify-items-center gap-3 p-6 text-center text-xs text-ink-muted"
+        data-catalog-empty
+      >
+        <p className="m-0">
+          {catalogLoading
+            ? 'Loading the test catalog…'
+            : 'No tests loaded. Check that the Harness endpoint is reachable, then refresh the catalog.'}
+        </p>
+        {onRefreshCatalog && !catalogLoading ? (
+          <button
+            className={buttonClassName({
+              variant: 'secondary',
+              size: 'compact',
+            })}
+            type="button"
+            onClick={onRefreshCatalog}
+          >
+            refresh catalog
+          </button>
+        ) : null}
+      </div>
+    )
+  }
+  return (
+    <p className="col-span-full m-0 p-6 text-center text-xs text-ink-muted">
+      No tests match “{query}”. Try another name or clear the search.
+    </p>
+  )
+}
 
 export function scenarioDisplayName(scenario: string) {
   return scenario
@@ -83,31 +141,25 @@ export function scenarioDisplayName(scenario: string) {
     .replace(/\b\w/g, (character) => character.toUpperCase())
 }
 
+// Audit RS-04: the sections are not a sequence, so they carry no numerals.
 function SetupSection({
-  number,
   title,
   description,
   children,
 }: {
-  number: string
   title: string
   description: string
   children: ReactNode
 }) {
   return (
     <section className="border-b border-[var(--color-rule)] p-5 last:border-b-0 sm:p-6">
-      <div className="grid grid-cols-[2rem_minmax(0,1fr)] items-start gap-3">
-        <span className="pt-0.5 font-mono text-[0.68rem] font-semibold text-[var(--color-accent)]">
-          {number}
-        </span>
-        <div className="min-w-0">
-          <h2 className="m-0 text-sm font-semibold tracking-[-0.015em] text-ink">
-            {title}
-          </h2>
-          <p className="mt-1 mb-0 max-w-2xl text-xs leading-5 text-ink-muted">
-            {description}
-          </p>
-        </div>
+      <div className="min-w-0">
+        <h2 className="m-0 text-sm font-semibold tracking-[-0.015em] text-ink">
+          {title}
+        </h2>
+        <p className="mt-1 mb-0 max-w-2xl text-xs leading-5 text-ink-muted">
+          {description}
+        </p>
       </div>
       <div className="mt-5">{children}</div>
     </section>
@@ -179,19 +231,23 @@ export function ExecutionSetup({
 
   return (
     <div className="min-w-0 bg-panel">
+      {/* Audit RS-03: the status bar stacks below sm instead of squeezing the
+          summary into a 60px column next to the endpoint and the button. */}
       <div
-        className="flex flex-wrap items-center gap-3 border-b border-[var(--color-rule)] bg-panel-raised px-5 py-3 sm:px-6"
+        className="grid gap-2 border-b border-[var(--color-rule)] bg-panel-raised px-5 py-3 sm:flex sm:flex-wrap sm:items-center sm:gap-3 sm:px-6"
         aria-live="polite"
       >
-        <span
-          className={`h-2 w-2 rounded-full ${availableScenarios.length > 0 ? 'bg-[var(--color-ok)]' : 'bg-[var(--color-warn)]'}`}
-          aria-hidden="true"
-        />
-        <span className="min-w-0 flex-1 text-xs text-[var(--color-ink-faint)]">
-          {catalogSummary}
+        <span className="flex min-w-0 items-center gap-2 sm:flex-1">
+          <span
+            className={`h-2 w-2 shrink-0 rounded-full ${availableScenarios.length > 0 ? 'bg-[var(--color-ok)]' : 'bg-[var(--color-warn)]'}`}
+            aria-hidden="true"
+          />
+          <span className="min-w-0 text-xs text-[var(--color-ink-faint)]">
+            {catalogSummary}
+          </span>
         </span>
-        <code className="max-w-full truncate font-mono text-[0.68rem] text-ink-muted sm:max-w-[16rem]">
-          {url || 'URL not loaded'}
+        <code className="max-w-full truncate font-mono text-[0.6875rem] text-ink-muted sm:max-w-[16rem]">
+          {url || 'Endpoint not loaded'}
         </code>
         {onRefreshCatalog && (
           <button
@@ -205,25 +261,24 @@ export function ExecutionSetup({
               size={14}
               aria-hidden="true"
             />
-            {catalogLoading ? 'Refreshing' : 'Refresh'}
+            {catalogLoading ? 'refreshing' : 'refresh'}
           </button>
         )}
       </div>
 
       <SetupSection
-        number="01"
-        title={mode === 'plan' ? 'Define the evidence intent' : 'Name this run'}
+        title={mode === 'plan' ? 'Name the plan' : 'Name this run'}
         description={
           mode === 'plan'
-            ? 'The label identifies a reusable baseline and candidate workflow.'
-            : 'An optional label makes the result easier to find after it completes.'
+            ? 'The label identifies this baseline and candidate workflow in the plans list.'
+            : 'An optional label makes the result easier to find later.'
         }
       >
         <div className="grid gap-4 sm:grid-cols-2">
           <label className={fieldLabel} htmlFor={`${idPrefix}-label`}>
             <span className="flex items-baseline justify-between gap-2">
               {mode === 'plan' ? 'Plan label' : 'Execution label'}
-              <small className="font-normal text-ink-muted">
+              <small className="text-xs font-normal text-ink-muted">
                 {labelRequired ? 'required' : 'optional'}
               </small>
             </span>
@@ -246,7 +301,9 @@ export function ExecutionSetup({
             <label className={fieldLabel} htmlFor={`${idPrefix}-purpose`}>
               <span className="flex items-baseline justify-between gap-2">
                 Purpose
-                <small className="font-normal text-ink-muted">optional</small>
+                <small className="text-xs font-normal text-ink-muted">
+                  optional
+                </small>
               </span>
               <textarea
                 id={`${idPrefix}-purpose`}
@@ -263,16 +320,15 @@ export function ExecutionSetup({
       </SetupSection>
 
       <SetupSection
-        number="02"
-        title="Configure the execution environment"
-        description="The Harness endpoint, execution model and judge are retained with the result."
+        title="Choose the model and judge"
+        description="The endpoint, execution model and judge are saved with the result."
       >
         <div className="grid gap-4 sm:grid-cols-2">
           <label
             className={`${fieldLabel} sm:col-span-2`}
             htmlFor={`${idPrefix}-url`}
           >
-            iii WebSocket URL
+            Harness endpoint
             <input
               id={`${idPrefix}-url`}
               className={`${fieldControl} font-mono text-xs`}
@@ -284,46 +340,60 @@ export function ExecutionSetup({
             />
           </label>
           <div className={fieldLabel}>
-            <span className="flex items-baseline justify-between gap-2">
+            <span
+              className="flex items-baseline justify-between gap-2"
+              id={`${idPrefix}-subject-label`}
+            >
               Execution model
-              <small className="font-normal text-ink-muted">required</small>
+              <small className="text-xs font-normal text-ink-muted">
+                required
+              </small>
             </span>
             <ProviderModelDropdown
               ariaLabel="Execution model"
+              labelledBy={`${idPrefix}-subject-label`}
               required
               value={subject}
               onChange={onSubjectChange}
               disabled={disabled || modelGroups.length === 0}
               groups={modelGroups}
-              placeholder="Choose a model"
+              placeholder={
+                modelGroups.length === 0
+                  ? 'No models in the catalog'
+                  : 'Choose a model'
+              }
             />
           </div>
           <div className={fieldLabel}>
-            <span className="flex items-baseline justify-between gap-2">
+            <span
+              className="flex items-baseline justify-between gap-2"
+              id={`${idPrefix}-judge-label`}
+            >
               Judge model
-              <small className="font-normal text-ink-muted">
-                automatic when blank
+              <small className="text-xs font-normal text-ink-muted">
+                optional
               </small>
             </span>
             <ProviderModelDropdown
               ariaLabel="Judge model"
+              labelledBy={`${idPrefix}-judge-label`}
               value={judge}
               onChange={onJudgeChange}
               disabled={disabled || modelGroups.length === 0}
               groups={modelGroups}
-              placeholder="Use the default judge"
+              clearLabel="Default judge (automatic)"
+              placeholder="Default judge (automatic)"
             />
           </div>
         </div>
       </SetupSection>
 
       <SetupSection
-        number="03"
-        title="Select the benchmark scope"
+        title="Pick the tests"
         description={
           mode === 'plan'
-            ? 'Choose the smallest useful test set. The scope freezes when the baseline starts.'
-            : 'Choose only the scenarios needed for this result.'
+            ? 'Choose the smallest useful set. The scope freezes when the baseline starts.'
+            : 'Only the tests selected here run.'
         }
       >
         <div className="grid gap-4">
@@ -357,7 +427,7 @@ export function ExecutionSetup({
                 onClick={selectVisible}
                 disabled={disabled || visibleScenarios.length === 0}
               >
-                Select visible ({visibleScenarios.length})
+                select visible ({visibleScenarios.length})
               </button>
               <button
                 className={quietButton}
@@ -365,12 +435,12 @@ export function ExecutionSetup({
                 onClick={() => onSelectedScenariosChange([])}
                 disabled={disabled || selectedScenarios.length === 0}
               >
-                Clear
+                clear
               </button>
             </div>
           </div>
 
-          <output className="flex min-h-10 flex-wrap items-center justify-between gap-2 border-y border-[var(--color-rule)] py-2 font-mono text-[0.68rem] text-ink-muted">
+          <output className="flex min-h-10 flex-wrap items-center justify-between gap-2 border-y border-[var(--color-rule)] py-2 font-mono text-[0.6875rem] text-ink-muted">
             <span>
               <strong className="text-ink">{selectedScenarios.length}</strong>{' '}
               {selectedScenarios.length === 1
@@ -378,17 +448,17 @@ export function ExecutionSetup({
                 : 'tests selected'}
             </span>
             <span>
-              {plannedRuns} logical {plannedRuns === 1 ? 'run' : 'runs'}
+              {plannedRuns} {plannedRuns === 1 ? 'run' : 'runs'} in total
             </span>
           </output>
 
-          <div className="grid max-h-[25rem] grid-cols-1 gap-2 overflow-auto rounded-lg border border-[var(--color-rule)] bg-panel-raised p-2 sm:grid-cols-2">
+          <div className="grid max-h-[25rem] grid-cols-1 gap-2 overflow-auto rounded-[6px] border border-[var(--color-rule)] bg-panel-raised p-2 sm:grid-cols-2">
             {visibleScenarios.map((scenario) => {
               const selected = selectedScenarios.includes(scenario)
               const local = localScenarioIds.includes(scenario)
               return (
                 <label
-                  className={`flex min-h-16 min-w-0 cursor-pointer items-start gap-3 rounded-lg border p-3 transition-colors duration-[var(--ds-duration-fast)] ${
+                  className={`flex min-h-16 min-w-0 cursor-pointer items-start gap-3 rounded-[6px] border p-3 transition-colors duration-[var(--ds-duration-fast)] ${
                     selected
                       ? 'border-[color-mix(in_srgb,var(--color-accent)_60%,var(--color-rule))] bg-[color-mix(in_srgb,var(--color-accent)_7%,var(--surface))]'
                       : 'border-[var(--color-rule)] bg-panel hover:border-[var(--color-edge)]'
@@ -411,12 +481,12 @@ export function ExecutionSetup({
                           scenarioDisplayName(scenario)}
                       </strong>
                       {local && (
-                        <span className="rounded-full border border-[color-mix(in_srgb,var(--color-accent)_35%,var(--color-rule))] px-2 py-0.5 font-mono text-[0.58rem] font-semibold uppercase tracking-[0.05em] text-[var(--color-accent)]">
+                        <span className="rounded-full border border-[color-mix(in_srgb,var(--color-accent)_35%,var(--color-rule))] px-2 py-0.5 font-mono text-[0.6875rem] font-semibold uppercase tracking-[0.05em] text-[var(--color-accent)]">
                           Local
                         </span>
                       )}
                     </span>
-                    <code className="break-all font-mono text-[0.62rem] leading-4 text-ink-muted">
+                    <code className="break-all font-mono text-[0.6875rem] leading-4 text-ink-muted">
                       {scenario}
                     </code>
                   </span>
@@ -424,9 +494,12 @@ export function ExecutionSetup({
               )
             })}
             {visibleScenarios.length === 0 && (
-              <p className="col-span-full m-0 p-6 text-center text-xs text-ink-muted">
-                No tests match “{query}”. Try another name or clear the search.
-              </p>
+              <CatalogEmptyState
+                query={query}
+                catalogLoading={catalogLoading}
+                catalogEmpty={availableScenarios.length === 0}
+                onRefreshCatalog={onRefreshCatalog}
+              />
             )}
           </div>
         </div>
@@ -435,26 +508,27 @@ export function ExecutionSetup({
       <details className="group bg-[color-mix(in_srgb,var(--color-panel-raised)_60%,transparent)]">
         <summary className="flex min-h-20 cursor-pointer list-none items-center justify-between gap-4 px-5 py-4 marker:content-none sm:px-6 [&::-webkit-details-marker]:hidden">
           <span className="grid min-w-0 gap-1">
-            <span className="font-mono text-[0.65rem] font-semibold uppercase tracking-[0.06em] text-[var(--color-accent)]">
+            <span className="font-mono text-[0.6875rem] font-semibold uppercase tracking-[0.06em] text-[var(--color-accent)]">
               Optional controls
             </span>
             <strong className="text-sm font-semibold text-ink">
               Sampling, retries and seed
             </strong>
             <small className="text-xs leading-4 text-ink-muted">
-              Retries recover technical failures and never add evidence samples.
+              Retries only recover crashes. They never add samples.
             </small>
           </span>
           <span className="shrink-0 font-mono text-xs text-[var(--color-ink-faint)]">
-            {runsPerScenario} / test ·{' '}
-            {Math.max(0, Number(technicalRetries) || 0)} retries
+            {runsPerScenario} per test · {retryCount(technicalRetries)}{' '}
+            {retryCount(technicalRetries) === 1 ? 'retry' : 'retries'}
           </span>
         </summary>
         <div className="grid gap-px border-t border-[var(--color-rule)] bg-[var(--color-rule)] sm:grid-cols-3">
           <label className={`${fieldLabel} bg-panel p-5`}>
             Runs per test
-            <span className="text-[0.68rem] font-normal leading-4 text-ink-muted">
-              Logical evidence samples.
+            <span className="text-xs font-normal leading-4 text-ink-muted">
+              Each test runs this many times. More runs make comparisons more
+              reliable.
             </span>
             <input
               className={`${fieldControl} font-mono`}
@@ -468,8 +542,8 @@ export function ExecutionSetup({
           </label>
           <label className={`${fieldLabel} bg-panel p-5`}>
             Technical retries
-            <span className="text-[0.68rem] font-normal leading-4 text-ink-muted">
-              Recovery attempts only.
+            <span className="text-xs font-normal leading-4 text-ink-muted">
+              Reruns a test after a crash. Does not add a sample.
             </span>
             <input
               className={`${fieldControl} font-mono`}
@@ -482,9 +556,9 @@ export function ExecutionSetup({
             />
           </label>
           <label className={`${fieldLabel} bg-panel p-5`}>
-            Case seed
-            <span className="text-[0.68rem] font-normal leading-4 text-ink-muted">
-              Canonical when blank.
+            Seed
+            <span className="text-xs font-normal leading-4 text-ink-muted">
+              Leave blank for the canonical case set.
             </span>
             <input
               className={`${fieldControl} font-mono`}
@@ -514,19 +588,26 @@ export function ExecutionSetupReview({
   runsPerScenario,
   technicalRetries,
   ready,
+  stickyOffset = 'page',
   children,
 }: ExecutionSetupReviewProps) {
   const facts = [
     { label: 'Tests', value: String(selectedScenarios) },
-    { label: 'Logical runs', value: String(plannedRuns) },
-    { label: 'Runs / test', value: String(runsPerScenario) },
+    { label: 'Runs', value: String(plannedRuns) },
+    { label: 'Runs per test', value: String(runsPerScenario) },
     { label: 'Retries', value: String(technicalRetries) },
   ]
 
   return (
-    <aside className="grid content-start bg-panel-raised lg:sticky lg:top-20 lg:max-h-[calc(100dvh-6rem)] lg:overflow-auto">
+    <aside
+      className={`grid content-start bg-panel-raised lg:sticky ${
+        stickyOffset === 'dialog'
+          ? 'lg:top-0'
+          : 'lg:top-20 lg:max-h-[calc(100dvh-6rem)] lg:overflow-auto'
+      }`}
+    >
       <div className="border-b border-[var(--color-rule)] p-5 sm:p-6">
-        <p className="m-0 font-mono text-[0.65rem] font-semibold uppercase tracking-[0.07em] text-[var(--color-accent)]">
+        <p className="m-0 font-mono text-[0.6875rem] font-semibold uppercase tracking-[0.07em] text-[var(--color-accent)]">
           {mode === 'plan' ? 'Reusable workflow' : 'One-off result'}
         </p>
         <div className="mt-3 flex items-start justify-between gap-3">
@@ -541,7 +622,7 @@ export function ExecutionSetupReview({
             </p>
           </div>
           <span
-            className={`inline-flex min-h-7 shrink-0 items-center rounded-full border px-2.5 font-mono text-[0.62rem] font-semibold ${
+            className={`inline-flex min-h-7 shrink-0 items-center rounded-full border px-2.5 font-mono text-[0.6875rem] font-semibold ${
               ready
                 ? 'border-[color-mix(in_srgb,var(--color-ok)_35%,transparent)] text-[var(--color-ok)]'
                 : 'border-[var(--color-edge)] text-ink-muted'
@@ -558,7 +639,7 @@ export function ExecutionSetupReview({
             className="grid min-h-24 content-between gap-3 bg-panel p-4"
             key={fact.label}
           >
-            <dt className="font-mono text-[0.62rem] uppercase tracking-[0.05em] text-ink-muted">
+            <dt className="font-mono text-[0.6875rem] uppercase tracking-[0.05em] text-ink-muted">
               {fact.label}
             </dt>
             <dd className="m-0 font-mono text-xl font-semibold tracking-[-0.04em] text-ink">
@@ -570,7 +651,7 @@ export function ExecutionSetupReview({
 
       <dl className="grid gap-4 border-t border-[var(--color-rule)] p-5 text-xs sm:p-6">
         <div className="grid gap-1">
-          <dt className="font-mono text-[0.62rem] uppercase tracking-[0.05em] text-ink-muted">
+          <dt className="font-mono text-[0.6875rem] uppercase tracking-[0.05em] text-ink-muted">
             Execution model
           </dt>
           <dd className="m-0 break-all text-ink">
@@ -578,18 +659,18 @@ export function ExecutionSetupReview({
           </dd>
         </div>
         <div className="grid gap-1">
-          <dt className="font-mono text-[0.62rem] uppercase tracking-[0.05em] text-ink-muted">
+          <dt className="font-mono text-[0.6875rem] uppercase tracking-[0.05em] text-ink-muted">
             Judge
           </dt>
           <dd className="m-0 break-all text-[var(--color-ink-faint)]">
-            {judge || 'Automatic'}
+            {judge || 'Default judge'}
           </dd>
         </div>
         <div className="grid gap-1">
-          <dt className="font-mono text-[0.62rem] uppercase tracking-[0.05em] text-ink-muted">
+          <dt className="font-mono text-[0.6875rem] uppercase tracking-[0.05em] text-ink-muted">
             Harness endpoint
           </dt>
-          <dd className="m-0 break-all font-mono text-[0.68rem] text-[var(--color-ink-faint)]">
+          <dd className="m-0 break-all font-mono text-[0.6875rem] text-[var(--color-ink-faint)]">
             {url || 'Not loaded'}
           </dd>
         </div>

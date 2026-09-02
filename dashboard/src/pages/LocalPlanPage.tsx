@@ -15,6 +15,7 @@ import {
   requestQuickExecution,
 } from '@/components/ExecutionSetup'
 import { ScenarioChatAction } from '@/components/ScenarioChatAction'
+import { buttonClassName } from '@/design-system'
 import { useDirtyNavigation } from '@/hooks/use-dirty-navigation'
 import {
   hashForExecution,
@@ -128,6 +129,45 @@ function stateLabel(plan: LocalPlan) {
   return plan.state.replaceAll('_', ' ')
 }
 
+/** New-plan form defaults. One object feeds both the state and the dirty
+ * baseline, so an untouched form can never start out dirty (audit PN-01). */
+export const PLAN_FORM_DEFAULTS = {
+  label: '',
+  purpose: '',
+  url: '',
+  subject: '',
+  judge: '',
+  // Composite workflows contain non-repeatable steps; zero is the safe,
+  // valid default for every new local plan.
+  technicalRetries: '0',
+  scenarios: [] as string[],
+  testQuery: '',
+  runs: '1',
+  seed: '',
+}
+
+export type PlanFormValues = typeof PLAN_FORM_DEFAULTS
+
+export function planFormDirty(
+  current: PlanFormValues,
+  initial: PlanFormValues,
+) {
+  return (
+    current.label !== initial.label ||
+    current.purpose !== initial.purpose ||
+    current.url !== initial.url ||
+    current.subject !== initial.subject ||
+    current.judge !== initial.judge ||
+    current.testQuery !== initial.testQuery ||
+    current.runs !== initial.runs ||
+    current.technicalRetries !== initial.technicalRetries ||
+    current.seed !== initial.seed ||
+    current.scenarios.join('\u0000') !== initial.scenarios.join('\u0000')
+  )
+}
+
+// Audit PN-03: a real modal (showModal) with backdrop, focus trap, Escape
+// and backdrop click both meaning "keep editing".
 function DiscardDraftDialog({
   open,
   warning,
@@ -139,18 +179,32 @@ function DiscardDraftDialog({
   onDiscard: () => void
   onContinue: () => void
 }) {
+  const dialogRef = useRef<HTMLDialogElement>(null)
   const keepEditingRef = useRef<HTMLButtonElement>(null)
   useEffect(() => {
-    if (open) keepEditingRef.current?.focus()
+    const dialog = dialogRef.current
+    if (!dialog) return
+    if (open && !dialog.open) {
+      dialog.showModal()
+      keepEditingRef.current?.focus()
+    }
+    if (!open && dialog.open) dialog.close()
   }, [open])
   if (!open) return null
   return (
+    // biome-ignore lint/a11y/useKeyWithClickEvents: backdrop click only; Escape is handled by onCancel
     <dialog
-      className="harness-e2e-discard-dialog m-auto w-[min(28rem,calc(100vw-2rem))] rounded-[6px] border border-line bg-panel p-5 text-ink"
-      open
-      aria-modal="true"
+      ref={dialogRef}
+      className="harness-e2e-discard-dialog m-auto w-[min(28rem,calc(100vw-2rem))] rounded-[6px] border border-line bg-panel p-5 text-ink backdrop:bg-app-backdrop backdrop:backdrop-blur-[5px]"
       aria-labelledby="discard-draft-title"
       aria-describedby="discard-draft-description"
+      onCancel={(event) => {
+        event.preventDefault()
+        onDiscard()
+      }}
+      onClick={(event) => {
+        if (event.target === event.currentTarget) onDiscard()
+      }}
     >
       <h2 id="discard-draft-title" className="m-0 text-base font-semibold">
         Discard draft changes?
@@ -1484,33 +1538,37 @@ export function PlanComparisonPanel({
 export function LocalPlanCreatePage() {
   const [bridge, setBridge] = useState<DashboardDataBridge | null>(null)
   const [catalog, setCatalog] = useState<Catalog | null>(null)
-  const [label, setLabel] = useState('')
-  const [purpose, setPurpose] = useState('')
-  const [url, setUrl] = useState('')
-  const [subject, setSubject] = useState('')
-  const [judge, setJudge] = useState('')
-  const [scenarios, setScenarios] = useState<string[]>([])
-  const [testQuery, setTestQuery] = useState('')
-  const [runs, setRuns] = useState('1')
-  // Composite workflows contain non-repeatable steps; zero is the safe,
-  // valid default for every new local plan.
-  const [technicalRetries, setTechnicalRetries] = useState('0')
-  const [seed, setSeed] = useState('')
+  const [label, setLabel] = useState(PLAN_FORM_DEFAULTS.label)
+  const [purpose, setPurpose] = useState(PLAN_FORM_DEFAULTS.purpose)
+  const [url, setUrl] = useState(PLAN_FORM_DEFAULTS.url)
+  const [subject, setSubject] = useState(PLAN_FORM_DEFAULTS.subject)
+  const [judge, setJudge] = useState(PLAN_FORM_DEFAULTS.judge)
+  const [scenarios, setScenarios] = useState<string[]>(
+    PLAN_FORM_DEFAULTS.scenarios,
+  )
+  const [testQuery, setTestQuery] = useState(PLAN_FORM_DEFAULTS.testQuery)
+  const [runs, setRuns] = useState(PLAN_FORM_DEFAULTS.runs)
+  const [technicalRetries, setTechnicalRetries] = useState(
+    PLAN_FORM_DEFAULTS.technicalRetries,
+  )
+  const [seed, setSeed] = useState(PLAN_FORM_DEFAULTS.seed)
   const [loading, setLoading] = useState(true)
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  const initialValues = useRef({
-    label: '',
-    purpose: '',
-    url: '',
-    subject: '',
-    judge: '',
-    scenarios: [] as string[],
-    testQuery: '',
-    runs: '1',
-    technicalRetries: '1',
-    seed: '',
-  })
+  const initialValues = useRef<PlanFormValues>({ ...PLAN_FORM_DEFAULTS })
+
+  const loadCatalog = useCallback(async (source: DashboardDataBridge) => {
+    const loaded = catalogValue(await source.getCatalog())
+    const firstModel = loaded.models[0] ? modelKey(loaded.models[0]) : ''
+    setCatalog(loaded)
+    setUrl((current) => current || loaded.url)
+    setSubject((current) => current || firstModel)
+    initialValues.current = {
+      ...initialValues.current,
+      url: initialValues.current.url || loaded.url,
+      subject: initialValues.current.subject || firstModel,
+    }
+  }, [])
 
   useEffect(() => {
     let cancelled = false
@@ -1522,16 +1580,7 @@ export function LocalPlanCreatePage() {
           throw new Error(
             'Local plans are available only in the local dashboard',
           )
-        const loaded = catalogValue(await next.getCatalog())
-        if (cancelled) return
-        setCatalog(loaded)
-        setUrl(loaded.url)
-        setSubject(loaded.models[0] ? modelKey(loaded.models[0]) : '')
-        initialValues.current = {
-          ...initialValues.current,
-          url: loaded.url,
-          subject: loaded.models[0] ? modelKey(loaded.models[0]) : '',
-        }
+        await loadCatalog(next)
       })
       .catch((cause) => {
         if (!cancelled) setError(errorText(cause))
@@ -1542,7 +1591,21 @@ export function LocalPlanCreatePage() {
     return () => {
       cancelled = true
     }
-  }, [])
+  }, [loadCatalog])
+
+  // Audit PN-17: the plan page can retry a catalog load without a reload.
+  const refreshCatalog = async () => {
+    if (bridge?.mode !== 'local') return
+    setLoading(true)
+    setError(null)
+    try {
+      await loadCatalog(bridge)
+    } catch (cause) {
+      setError(errorText(cause))
+    } finally {
+      setLoading(false)
+    }
+  }
 
   const selectedSubject = catalog?.models.find(
     (item) => modelKey(item) === subject,
@@ -1570,17 +1633,21 @@ export function LocalPlanCreatePage() {
     scenarios.length > 0 &&
     hasPlanLabel
 
-  const dirty =
-    label !== initialValues.current.label ||
-    purpose !== initialValues.current.purpose ||
-    url !== initialValues.current.url ||
-    subject !== initialValues.current.subject ||
-    judge !== initialValues.current.judge ||
-    testQuery !== initialValues.current.testQuery ||
-    runs !== initialValues.current.runs ||
-    technicalRetries !== initialValues.current.technicalRetries ||
-    seed !== initialValues.current.seed ||
-    scenarios.join('\u0000') !== initialValues.current.scenarios.join('\u0000')
+  const dirty = planFormDirty(
+    {
+      label,
+      purpose,
+      url,
+      subject,
+      judge,
+      scenarios,
+      testQuery,
+      runs,
+      technicalRetries,
+      seed,
+    },
+    initialValues.current,
+  )
 
   const dirtyNavigation = useDirtyNavigation(dirty && !submitting)
 
@@ -1709,7 +1776,7 @@ export function LocalPlanCreatePage() {
         )}
 
         <form
-          className="mt-6 grid min-w-0 gap-px overflow-hidden rounded-xl border border-[var(--color-edge)] bg-[var(--color-rule)] lg:grid-cols-12"
+          className="mt-6 grid min-w-0 gap-px overflow-hidden rounded-[6px] border border-[var(--color-edge)] bg-[var(--color-rule)] lg:grid-cols-12"
           onSubmit={create}
         >
           <div className="min-w-0 bg-panel lg:col-span-8">
@@ -1734,9 +1801,10 @@ export function LocalPlanCreatePage() {
                 loading
                   ? 'Loading local catalog'
                   : catalog
-                    ? `${catalog.models.length} registered model${catalog.models.length === 1 ? '' : 's'} · ${catalog.scenarios.length} scenarios`
+                    ? `${catalog.models.length} registered model${catalog.models.length === 1 ? '' : 's'} · ${catalog.scenarios.length} tests`
                     : 'Catalog unavailable'
               }
+              onRefreshCatalog={() => void refreshCatalog()}
               onLabelChange={setLabel}
               onPurposeChange={setPurpose}
               onUrlChange={setUrl}
@@ -1780,18 +1848,26 @@ export function LocalPlanCreatePage() {
                   : `Before creating: ${hasPlanLabel ? 'select at least one test' : 'add a plan label'}${hasPlanLabel || scenarios.length === 0 ? '' : ' and select at least one test'}.`}
               </p>
               <button
-                className="inline-flex min-h-11 w-full items-center justify-center rounded-lg border border-[var(--color-accent)] bg-[var(--color-accent)] px-4 text-sm font-semibold text-[var(--color-accent-fg)] transition-colors hover:bg-[color-mix(in_srgb,var(--color-accent)_88%,white)] disabled:cursor-not-allowed disabled:opacity-45"
+                className={buttonClassName({
+                  variant: 'primary',
+                  size: 'large',
+                  className: 'w-full',
+                })}
                 type="submit"
                 disabled={!canCreate}
                 aria-describedby="plan-create-requirements"
               >
-                {submitting ? 'Creating…' : 'Create draft plan'}
+                {submitting ? 'creating…' : 'create draft plan'}
               </button>
               <a
-                className="inline-flex min-h-10 w-full items-center justify-center rounded-lg border border-[var(--color-edge)] px-3 text-xs font-semibold text-[var(--color-ink-faint)] no-underline hover:text-ink"
+                className={buttonClassName({
+                  variant: 'secondary',
+                  size: 'large',
+                  className: 'w-full no-underline',
+                })}
                 href={hashForPlans()}
               >
-                Cancel
+                cancel
               </a>
             </ExecutionSetupReview>
           </div>
