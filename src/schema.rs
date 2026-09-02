@@ -8,7 +8,9 @@ use crate::control::ScenariosListResponse;
 use crate::durable::{DurableArchiveManifest, HistoryRecord};
 use crate::fault::{FaultEvaluation, FaultJournal, FaultPlan, FaultProfile};
 use crate::report::{E2eManifest, E2eObservationEnvelope, E2eReport};
-use crate::repository_task::RepositoryTaskV1;
+use crate::task::{
+    TaskComparison, TaskDefinition, TaskRunResult, TaskSuiteDefinition, TaskSuiteResult,
+};
 use crate::workflow::WorkflowCheckpointV1;
 
 pub fn results() -> RootSchema {
@@ -62,8 +64,24 @@ pub fn scenario_catalog() -> RootSchema {
     root_schema_for::<ScenariosListResponse>()
 }
 
-pub fn repository_task() -> RootSchema {
-    root_schema_for::<RepositoryTaskV1>()
+pub fn task() -> RootSchema {
+    root_schema_for::<TaskDefinition>()
+}
+
+pub fn task_result() -> RootSchema {
+    root_schema_for::<TaskRunResult>()
+}
+
+pub fn task_comparison() -> RootSchema {
+    root_schema_for::<TaskComparison>()
+}
+
+pub fn task_suite() -> RootSchema {
+    root_schema_for::<TaskSuiteDefinition>()
+}
+
+pub fn task_suite_result() -> RootSchema {
+    root_schema_for::<TaskSuiteResult>()
 }
 
 pub fn workflow_checkpoint() -> RootSchema {
@@ -137,8 +155,12 @@ mod tests {
     }
 
     #[test]
-    fn repository_task_schema_matches_snapshot() {
-        assert_snapshot("repository-task-v1.json", &repository_task());
+    fn task_schemas_match_snapshots() {
+        assert_snapshot("task-v1.json", &task());
+        assert_snapshot("task-result-v1.json", &task_result());
+        assert_snapshot("task-comparison-v1.json", &task_comparison());
+        assert_snapshot("task-suite-v1.json", &task_suite());
+        assert_snapshot("task-suite-result-v1.json", &task_suite_result());
     }
 
     #[test]

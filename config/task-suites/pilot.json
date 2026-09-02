@@ -1,0 +1,14 @@
+{
+  "schema": "harness-e2e-task-suite/v1",
+  "id": "pilot",
+  "version": 1,
+  "repetitions": 1,
+  "tasks": [
+    "bugfix_config_precedence",
+    "bugfix_cache_invalidation",
+    "feature_batch_replay",
+    "security_code_review",
+    "contract_migration_plan",
+    "release_train_recovery"
+  ]
+}

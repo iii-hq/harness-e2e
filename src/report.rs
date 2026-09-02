@@ -3281,18 +3281,18 @@ mod tests {
     }
 
     #[test]
-    fn write_preserves_verified_additional_evidence_for_rust_scenarios() {
+    fn write_preserves_verified_additional_evidence_for_native_tasks() {
         let output = tempfile::tempdir().unwrap();
         let mut run = run(75, false);
-        let shadow = artifact::write_json(
+        let task_result = artifact::write_json(
             output.path(),
             Path::new("evidence/run/attempt/advisory-0.json"),
-            "repository_task_shadow",
-            "repository_task_shadow",
+            "native_task_result",
+            "native_task_result",
             &serde_json::json!({"equivalent": true}),
         )
         .unwrap();
-        run.evidence.push(shadow.clone());
+        run.evidence.push(task_result.clone());
         let mut report = report(vec![aggregate(vec![run])]);
 
         report.write_to(output.path(), &manifest()).unwrap();
@@ -3302,7 +3302,7 @@ mod tests {
         assert_eq!(
             evidence
                 .iter()
-                .filter(|reference| *reference == &shadow)
+                .filter(|reference| *reference == &task_result)
                 .count(),
             1
         );
@@ -3310,7 +3310,7 @@ mod tests {
         assert!(decoded.scenarios[0].runs[0]
             .evidence
             .iter()
-            .any(|reference| reference == &shadow));
+            .any(|reference| reference == &task_result));
     }
 
     #[test]

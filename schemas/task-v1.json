@@ -1,50 +1,43 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
-  "title": "RepositoryTaskV1",
+  "title": "TaskDefinition",
   "type": "object",
   "required": [
-    "assessments",
     "execution",
     "id",
-    "legacy_scenario",
-    "mode",
+    "kind",
     "schema",
     "source",
     "verifier",
-    "version"
+    "version",
+    "workspace"
   ],
   "properties": {
-    "assessments": {
-      "type": "array",
-      "items": {
-        "$ref": "#/definitions/RepositoryTaskAssessment"
-      }
-    },
     "execution": {
       "$ref": "#/definitions/ExecutionPolicy"
     },
     "id": {
       "type": "string"
     },
-    "legacy_scenario": {
-      "type": "string"
-    },
-    "mode": {
-      "$ref": "#/definitions/RepositoryTaskMode"
+    "kind": {
+      "$ref": "#/definitions/TaskKind"
     },
     "schema": {
       "type": "string"
     },
     "source": {
-      "$ref": "#/definitions/RepositoryTaskSource"
+      "$ref": "#/definitions/TaskSource"
     },
     "verifier": {
-      "$ref": "#/definitions/RepositoryTaskVerifier"
+      "$ref": "#/definitions/VerifierReference"
     },
     "version": {
       "type": "integer",
       "format": "uint32",
       "minimum": 0.0
+    },
+    "workspace": {
+      "$ref": "#/definitions/WorkspacePolicy"
     }
   },
   "additionalProperties": false,
@@ -95,42 +88,24 @@
         }
       }
     },
-    "RepositoryTaskAssessment": {
-      "type": "object",
-      "required": [
-        "id",
-        "policy",
-        "weight"
-      ],
-      "properties": {
-        "id": {
-          "type": "string"
-        },
-        "policy": {
-          "$ref": "#/definitions/RepositoryTaskAssessmentPolicy"
-        },
-        "weight": {
-          "type": "integer",
-          "format": "uint8",
-          "minimum": 0.0
-        }
-      },
-      "additionalProperties": false
-    },
-    "RepositoryTaskAssessmentPolicy": {
+    "MutationPolicy": {
       "type": "string",
       "enum": [
-        "hard_gate",
-        "advisory"
+        "allowlisted",
+        "artifact_only"
       ]
     },
-    "RepositoryTaskMode": {
+    "TaskKind": {
       "type": "string",
       "enum": [
-        "shadow"
+        "code_patch",
+        "feature",
+        "code_review",
+        "planning",
+        "operational_recovery"
       ]
     },
-    "RepositoryTaskSource": {
+    "TaskSource": {
       "oneOf": [
         {
           "type": "object",
@@ -206,27 +181,80 @@
         }
       ]
     },
-    "RepositoryTaskVerifier": {
+    "VerifierProfile": {
+      "type": "string",
+      "enum": [
+        "code_patch",
+        "structured_artifact",
+        "state_recovery"
+      ]
+    },
+    "VerifierReference": {
       "type": "object",
       "required": [
-        "kind",
-        "protocol"
+        "profile",
+        "spec"
       ],
       "properties": {
-        "kind": {
-          "$ref": "#/definitions/RepositoryTaskVerifierKind"
+        "profile": {
+          "$ref": "#/definitions/VerifierProfile"
         },
-        "protocol": {
+        "spec": {
           "type": "string"
         }
       },
       "additionalProperties": false
     },
-    "RepositoryTaskVerifierKind": {
-      "type": "string",
-      "enum": [
-        "observation_projection"
-      ]
+    "WorkspacePolicy": {
+      "type": "object",
+      "required": [
+        "allowed_paths",
+        "ignored_paths",
+        "maximum_changed_files",
+        "maximum_patch_lines",
+        "minimum_changed_files",
+        "mutation",
+        "protected_paths"
+      ],
+      "properties": {
+        "allowed_paths": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "ignored_paths": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "maximum_changed_files": {
+          "type": "integer",
+          "format": "uint16",
+          "minimum": 0.0
+        },
+        "maximum_patch_lines": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0.0
+        },
+        "minimum_changed_files": {
+          "type": "integer",
+          "format": "uint16",
+          "minimum": 0.0
+        },
+        "mutation": {
+          "$ref": "#/definitions/MutationPolicy"
+        },
+        "protected_paths": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "additionalProperties": false
     }
   }
 }

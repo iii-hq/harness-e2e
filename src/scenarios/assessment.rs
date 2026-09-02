@@ -252,11 +252,7 @@ pub(super) fn build_evaluation(
         });
     }
 
-    ObjectiveEvaluation {
-        hard_gates,
-        awards,
-        advisory_evidence: Vec::new(),
-    }
+    ObjectiveEvaluation { hard_gates, awards }
 }
 
 pub(super) fn prerequisite_failure(
