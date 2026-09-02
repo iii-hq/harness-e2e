@@ -38,7 +38,12 @@ describe('section navigation', () => {
     expect(sectionForRoute({ page: 'plans' })).toBe('plans')
     expect(sectionForRoute({ page: 'plan-create' })).toBe('plans')
     expect(
-      sectionForRoute({ page: 'execution', executionId: 'x', anchor: null }),
+      sectionForRoute({
+        page: 'execution',
+        executionId: 'x',
+        anchor: null,
+        runId: null,
+      }),
     ).toBe('executions')
     expect(sectionForRoute({ page: 'test-history', testId: 't' })).toBe('tests')
   })

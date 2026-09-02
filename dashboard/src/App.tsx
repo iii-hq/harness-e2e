@@ -15,7 +15,11 @@ function RoutedPage({ route }: { route: DashboardRoute }) {
   switch (route.page) {
     case 'execution':
       return (
-        <ExecutionPage executionId={route.executionId} anchor={route.anchor} />
+        <ExecutionPage
+          executionId={route.executionId}
+          anchor={route.anchor}
+          runId={route.runId}
+        />
       )
     case 'compare':
       return <TestsPage initialFrom={route.left} initialTo={route.right} />

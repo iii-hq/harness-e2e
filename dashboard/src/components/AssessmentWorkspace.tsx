@@ -1048,7 +1048,7 @@ export function AssessmentDetailDialog({
         </span>
       }
       closeLabel="Close assessment detail"
-      className="assessment-detail-dialog"
+      className="ds-root"
       bodyPadding
       actions={
         <>

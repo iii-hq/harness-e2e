@@ -345,9 +345,13 @@ test('migrates runner and transcript behavior to React components', () => {
   assert.match(primitives, /getClientRects\(\)\.length > 0/)
   assert.match(runner, /<Dialog/)
   assert.match(transcript, /normalizeTranscript/)
-  assert.match(transcript, /session-transcript-dialog/)
-  assert.match(transcript, /conversation-shell/)
-  assert.match(transcript, /conversation-tool/)
+  // Audit TR-02/TR-03/TR-05: the transcript is design-system markup with a
+  // role rail, search and copy; no legacy conversation CSS is left.
+  assert.match(transcript, /data-transcript/)
+  assert.match(transcript, /Search the transcript/)
+  assert.match(transcript, /Copy this message/)
+  assert.match(transcript, /relativeTime/)
+  assert.doesNotMatch(transcript, /conversation-|session-transcript/)
   assert.match(transcript, /formatTranscriptPayload/)
 })
 

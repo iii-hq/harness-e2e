@@ -38,6 +38,19 @@ describe('dashboard hash routes', () => {
       page: 'execution',
       executionId: 'run/id with spaces',
       anchor: 'scenario-direct_answer',
+      runId: null,
+    })
+  })
+
+  // Audit AW-09: the evidence record has its own route under the execution.
+  it('routes an evidence record under its execution', () => {
+    const hash = hashForExecution('exec-1', null, 'run/1')
+    expect(hash).toBe('#/execution/exec-1/run/run%2F1')
+    expect(routeFromHash(hash)).toEqual({
+      page: 'execution',
+      executionId: 'exec-1',
+      anchor: null,
+      runId: 'run/1',
     })
   })
 
@@ -79,6 +92,7 @@ describe('dashboard hash routes', () => {
         page: 'execution',
         executionId: 'run/one',
         anchor: null,
+        runId: null,
       })
       expect(routeFromHash('#/workers')).toBeNull()
     } finally {

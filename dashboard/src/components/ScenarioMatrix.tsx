@@ -3,7 +3,12 @@ import { type ReactNode, useEffect, useMemo, useState } from 'react'
 import { AssessmentWorkspace } from '@/components/AssessmentWorkspace'
 import { ScenarioChatAction } from '@/components/ScenarioChatAction'
 import { SemanticTestFlow } from '@/components/SemanticTestFlow'
-import { type OperationalStatus, StatusBadge } from '@/design-system'
+import {
+  buttonClassName,
+  type OperationalStatus,
+  StatusBadge,
+} from '@/design-system'
+import { hashForExecution } from '@/hooks/use-hash-route'
 import type { AssessmentRunView } from '@/lib/assessment-view'
 import type {
   DashboardExecutionDetail,
@@ -75,6 +80,7 @@ export function ScenarioMatrix({
                 key={item.key}
                 item={item}
                 detail={detail}
+                executionId={detail.id}
                 expanded={expanded}
                 showStructure={showStructure}
                 onToggle={() => setExpandedKey(expanded ? null : item.key)}
@@ -152,12 +158,14 @@ function ScenarioSummary({
 function ScenarioRow({
   item,
   detail,
+  executionId,
   expanded,
   showStructure,
   onToggle,
   onTranscript,
 }: {
   item: ScenarioMatrixItem
+  executionId: string
   detail: DashboardExecutionDetail
   expanded: boolean
   showStructure: boolean
@@ -192,18 +200,18 @@ function ScenarioRow({
             aria-hidden="true"
           />
           <span className="min-w-0">
-            <strong
-              className="block truncate text-sm font-semibold text-ink"
+            <h3
+              className="m-0 block truncate text-sm font-semibold text-ink"
               title={scenarioTitle}
             >
               {scenarioTitle}
-            </strong>
+            </h3>
             <span
               className="mt-1 block truncate font-mono text-label text-ink-muted"
-              title={item.subjectId}
+              title={item.reason ?? item.subjectId}
             >
-              {item.subjectId} · {item.runCount}{' '}
-              {item.runCount === 1 ? 'run' : 'runs'}
+              {item.reason ??
+                `${item.subjectId} · ${item.runCount} ${item.runCount === 1 ? 'run' : 'runs'}`}
             </span>
           </span>
         </span>
@@ -242,6 +250,7 @@ function ScenarioRow({
           id={panelId}
           detail={detailForScenario(detail, item)}
           item={item}
+          executionId={executionId}
           onTranscript={onTranscript}
         />
       ) : null}
@@ -270,13 +279,18 @@ function ScenarioExpansion({
   id,
   detail,
   item,
+  executionId,
   onTranscript,
 }: {
   id: string
   detail: DashboardExecutionDetail
   item: ScenarioMatrixItem
+  executionId: string
   onTranscript: (run: AssessmentRunView, title: string) => void
 }) {
+  const runId =
+    (item.primaryRun as unknown as { run_id?: string } | null)?.run_id ?? null
+  const evidenceHref = runId ? hashForExecution(executionId, null, runId) : null
   return (
     <section
       id={id}
@@ -290,15 +304,36 @@ function ScenarioExpansion({
               {titleCase(item.scenarioId)} run evidence
             </strong>
             <span className="mt-1 block font-mono text-label text-ink-muted">
-              {item.runCount} {item.runCount === 1 ? 'run' : 'runs'} retained
+              {item.runCount} {item.runCount === 1 ? 'run' : 'runs'} retained ·{' '}
+              {item.subjectId}
             </span>
           </div>
-          <ScenarioChatAction
-            detail={detail}
-            scenarioId={item.scenarioId}
-            subjectId={item.subjectId}
-          />
+          <div className="flex flex-wrap items-center gap-2 max-[560px]:*:w-full">
+            {evidenceHref ? (
+              <a
+                className={buttonClassName({
+                  variant: 'secondary',
+                  size: 'compact',
+                  className: 'no-underline',
+                })}
+                href={evidenceHref}
+              >
+                evidence record
+              </a>
+            ) : null}
+            <ScenarioChatAction
+              detail={detail}
+              scenarioId={item.scenarioId}
+              subjectId={item.subjectId}
+            />
+          </div>
         </div>
+        {item.reason ? (
+          <p className="m-0 bg-[var(--surface-fill)] px-4 py-3 text-sm leading-6 text-ink md:px-5">
+            <span className="ds-label mr-2">why it failed</span>
+            {item.reason}
+          </p>
+        ) : null}
         <ScenarioResultBand item={item} />
         {!item.available ? (
           <div className="border-t border-[var(--color-rule)] px-4 py-6 text-sm leading-6 text-ink-muted md:px-5">

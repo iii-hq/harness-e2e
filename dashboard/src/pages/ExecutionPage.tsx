@@ -6,6 +6,7 @@ import {
   useMemo,
   useState,
 } from 'react'
+import { AssessmentDetailDialog } from '@/components/AssessmentWorkspace'
 import { DashboardPageActions } from '@/components/DashboardPageActions'
 import { requestQuickExecution } from '@/components/ExecutionSetup'
 import { ScenarioMatrix } from '@/components/ScenarioMatrix'
@@ -636,9 +637,12 @@ function LiveState({
 export function ExecutionPage({
   executionId,
   anchor,
+  runId,
 }: {
   executionId: string
   anchor?: string | null
+  /** Evidence record open on top of the execution (audit AW-09). */
+  runId?: string | null
 }) {
   const [summary, setSummary] = useState<DashboardExecutionSummary | null>(null)
   const [detail, setDetail] = useState<DashboardExecutionDetail | null>(null)
@@ -813,6 +817,9 @@ export function ExecutionPage({
     )
 
   const primaryRun = assessmentModel.runs[0] ?? null
+  const evidenceRun = runId
+    ? (assessmentModel.runs.find((run) => run.runId === runId) ?? null)
+    : null
   const status = executionStatus(presentation)
   const scenarioSummary = scenarioMatrix?.summary ?? null
   const verdict = executionVerdict(
@@ -969,6 +976,16 @@ export function ExecutionPage({
           </>
         )}
       </div>
+      {/* Audit AW-09: the evidence record is a route, so back returns here. */}
+      {evidenceRun ? (
+        <AssessmentDetailDialog
+          run={evidenceRun}
+          detail={detail}
+          onClose={() => {
+            window.location.hash = hashForExecution(detail.id, 'results')
+          }}
+        />
+      ) : null}
       {transcript && (
         <TranscriptDialog
           title={transcript.title}

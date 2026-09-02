@@ -9,7 +9,13 @@ export type WorkspaceView = 'overview' | 'tests' | 'executions'
 
 export type DashboardRoute =
   | { page: 'overview'; view: WorkspaceView }
-  | { page: 'execution'; executionId: string; anchor: string | null }
+  | {
+      page: 'execution'
+      executionId: string
+      anchor: string | null
+      /** Evidence record open on top of the execution (audit AW-09). */
+      runId: string | null
+    }
   | { page: 'compare'; left: string | null; right: string | null }
   | { page: 'test-history'; testId: string }
   | { page: 'plans' }
@@ -19,7 +25,11 @@ export type DashboardRoute =
 export type DashboardRoutes = {
   current: () => DashboardRoute
   workspace: (view?: WorkspaceView) => string
-  execution: (executionId: string, anchor?: string | null) => string
+  execution: (
+    executionId: string,
+    anchor?: string | null,
+    runId?: string | null,
+  ) => string
   compare: (left?: string | null, right?: string | null) => string
   testHistory: (testId: string) => string
   plans: () => string
@@ -106,10 +116,21 @@ export function routeFromHash(rawHash: string): DashboardRoute | null {
     return { page: 'overview', view: head as WorkspaceView }
   }
   if (head === 'execution') {
+    // #/execution/<id>/run/<runId> opens the evidence record as a route, so
+    // the browser's back button returns to the execution (audit AW-09).
+    if (rest[1] === 'run') {
+      return {
+        page: 'execution',
+        executionId: rest[0] ?? '',
+        anchor: null,
+        runId: rest[2] ?? null,
+      }
+    }
     return {
       page: 'execution',
       executionId: rest[0] ?? '',
       anchor: rest[1] ?? null,
+      runId: null,
     }
   }
   if (head === 'compare') {
@@ -144,10 +165,12 @@ export function hashForWorkspace(view: WorkspaceView = 'overview'): string {
 export function hashForExecution(
   executionId: string,
   anchor: string | null = null,
+  runId: string | null = null,
 ): string {
   const route = dashboardHash(
     `execution${executionId ? `/${encodeSegment(executionId)}` : ''}`,
   )
+  if (runId) return `${route}/run/${encodeSegment(runId)}`
   return anchor ? `${route}/${encodeSegment(anchor)}` : route
 }
 
@@ -228,16 +251,9 @@ export function useHashRoute(): [DashboardRoute, (targetHash: string) => void] {
       const next = routeFromHash(window.location.hash)
       if (!next) return
 
-      // Each coarse page still has an isolated legacy renderer. A document
-      // reload keeps those renderers single-instanced while the hash router
-      // owns the public URL and overview/anchor navigation stays client-side.
-      if (
-        !isEmbeddedDashboard() &&
-        routeRenderIdentity(next) !== routeRenderIdentity(routeRef.current)
-      ) {
-        window.location.reload()
-        return
-      }
+      // Audit S-07: every page is a React component now, so navigation
+      // stays client-side in the standalone build too. The reload used to
+      // flash the html background and drop filters, scroll and dialogs.
       setRoute(next)
     }
     window.addEventListener('hashchange', handle)
