@@ -474,6 +474,14 @@ where
     serde_json::from_str(line).context("python probe returned invalid JSON")
 }
 
+/// `__pycache__/` directories and compiled `.pyc`/`.pyo` files are produced by
+/// the interpreter whenever the subject runs the suite; they carry no source.
+fn is_python_bytecode_cache(path: &str) -> bool {
+    path.split('/').any(|segment| segment == "__pycache__")
+        || path.ends_with(".pyc")
+        || path.ends_with(".pyo")
+}
+
 fn collect_files(root: &Path) -> Result<Vec<String>> {
     fn visit(root: &Path, directory: &Path, paths: &mut Vec<String>) -> Result<()> {
         for entry in fs::read_dir(directory)
@@ -504,9 +512,13 @@ async fn audit_fixture(run_id: &str) -> Result<PerformanceAudit> {
     ensure_safe_fixture_root(&root)?;
     let observed_paths = collect_files(&root)?;
     let expected_paths = expected_files().keys().copied().collect::<BTreeSet<_>>();
+    // Running the public tests leaves CPython bytecode caches behind. They are
+    // not part of the patch and never reach a commit, so they must not count
+    // as a scope violation.
     let unexpected_paths = observed_paths
         .iter()
         .filter(|path| !expected_paths.contains(path.as_str()))
+        .filter(|path| !is_python_bytecode_cache(path))
         .cloned()
         .collect::<Vec<_>>();
     let protected_files_exact = [TEST_PATH, TASK_PATH].into_iter().all(|relative| {
@@ -775,6 +787,28 @@ fn cleanup<'a>(_context: &'a E2eContext, run_id: &'a str) -> CleanupFuture<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn bytecode_caches_are_not_patch_scope_violations() {
+        for path in [
+            "src/__pycache__/deduplicate.cpython-312.pyc",
+            "tests/__pycache__/test_deduplicate.cpython-312.pyc",
+            "src/deduplicate.pyc",
+            "src/deduplicate.pyo",
+        ] {
+            assert!(is_python_bytecode_cache(path), "{path}");
+        }
+        for path in [
+            PRODUCTION_PATH,
+            TEST_PATH,
+            TASK_PATH,
+            "src/helpers.py",
+            "notes/pycache.md",
+            "src/__pycache__#symlink",
+        ] {
+            assert!(!is_python_bytecode_cache(path), "{path}");
+        }
+    }
 
     #[test]
     fn fixture_paths_are_narrow_and_canonical() {
