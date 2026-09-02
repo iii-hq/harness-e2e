@@ -10,6 +10,8 @@ export type {
   DeltaDirection,
   DeltaTone,
   DeltaValueProps,
+  DialogProps,
+  DialogSize,
   EmptyStateProps,
   FieldProps,
   FilterChipProps,
@@ -29,6 +31,7 @@ export {
   DataTable,
   DataTableRow,
   DeltaValue,
+  Dialog,
   deltaDirection,
   deltaTone,
   EmptyState,
@@ -46,4 +49,5 @@ export {
   Select,
   StatusBadge,
   Textarea,
+  trapDialogFocus,
 } from './primitives'

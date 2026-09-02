@@ -7,6 +7,7 @@ import {
   DataTable,
   DataTableRow,
   DeltaValue,
+  Dialog,
   deltaTone,
   EmptyState,
   Field,
@@ -308,5 +309,59 @@ describe('design system foundation primitives', () => {
     expect(
       renderToStaticMarkup(<PageHeader title="t" summary="s" />),
     ).not.toContain('ds-breadcrumb')
+  })
+})
+
+describe('design system dialog', () => {
+  it('renders header, scrolling body and footer with the title as the label', () => {
+    const html = renderToStaticMarkup(
+      <Dialog
+        open
+        onClose={() => undefined}
+        size="lg"
+        tall
+        kicker="Evidence record"
+        title="local calc smoke"
+        description="run f27f…1840"
+        closeLabel="Close assessment detail"
+        actions={<span>badge</span>}
+        footer={<button type="button">done</button>}
+        bodyPadding
+      >
+        body
+      </Dialog>,
+    )
+    expect(
+      html.startsWith('<dialog class="ds-dialog ds-dialog-lg ds-dialog-tall"'),
+    ).toBe(true)
+    const labelledBy = html.match(/aria-labelledby="([^"]+)"/)?.[1]
+    const describedBy = html.match(/aria-describedby="([^"]+)"/)?.[1]
+    expect(labelledBy).toBeTruthy()
+    expect(html).toContain(
+      `<h2 id="${labelledBy}" tabindex="-1" class="ds-dialog-title">local calc smoke</h2>`,
+    )
+    expect(html).toContain(
+      `<p id="${describedBy}" class="ds-dialog-description">run f27f…1840</p>`,
+    )
+    expect(html).toContain('<span class="ds-label">Evidence record</span>')
+    expect(html).toContain(
+      '<div class="ds-dialog-actions"><span>badge</span><button class="ds-dialog-close" type="button" aria-label="Close assessment detail">',
+    )
+    expect(html).toContain(
+      '<div class="ds-dialog-body ds-dialog-body-padded">body</div>',
+    )
+    expect(html).toContain(
+      '<footer class="ds-dialog-footer"><button type="button">done</button></footer>',
+    )
+  })
+
+  it('omits the body and description when there is nothing to show', () => {
+    const html = renderToStaticMarkup(
+      <Dialog open onClose={() => undefined} size="sm" title="Discard?" />,
+    )
+    expect(html).toContain('ds-dialog-sm')
+    expect(html).not.toContain('ds-dialog-body')
+    expect(html).not.toContain('aria-describedby')
+    expect(html).not.toContain('<footer')
   })
 })

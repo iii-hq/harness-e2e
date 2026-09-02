@@ -1,11 +1,11 @@
 {
-  "cssBorder1px": 200,
-  "cssRadiiOffToken": 78,
+  "cssBorder1px": 195,
+  "cssRadiiOffToken": 77,
   "cssFontSizesBelow11": 161,
-  "cssBoxShadow": 19,
+  "cssBoxShadow": 18,
   "cssImportant": 20,
-  "cssLinesIndex": 9539,
+  "cssLinesIndex": 9323,
   "tsxArbitraryTextBelow11": 15,
   "tsxRoundedOffToken": 67,
-  "tsxBorderUtility": 137
+  "tsxBorderUtility": 127
 }

@@ -177,14 +177,14 @@ describe('assessment workspace component', () => {
     expect(html).toContain('Open details for Direct Answer')
     expect(html).toContain('<details')
     expect(detailHtml).toContain('assessment-detail-dialog')
-    expect(detailHtml).toContain('m-auto')
+    expect(detailHtml).toContain('ds-dialog-lg')
     expect(detailHtml).not.toContain('data-transcript-action=')
     expect(detailHtml).not.toContain(
       'flex justify-end border-t border-line pt-3',
     )
     expect(detailHtml).toContain('Evidence record')
-    expect(detailHtml).toContain('assessment-detail-header')
-    expect(detailHtml).toContain('assessment-detail-actions')
+    expect(detailHtml).toContain('ds-dialog-header')
+    expect(detailHtml).toContain('ds-dialog-actions')
   })
 
   it('surfaces security review capability metrics before evidence', () => {

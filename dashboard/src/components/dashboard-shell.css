@@ -182,10 +182,6 @@
   background: color-mix(in srgb, var(--text) 90%, var(--surface));
 }
 
-.harness-e2e-discard-dialog::backdrop {
-  background: var(--color-backdrop, var(--backdrop));
-}
-
 /* Section navigation: tabs by default, a select below 720px of container
    width. Both states live here so no utility class can override them. */
 .harness-e2e-navigation-narrow {

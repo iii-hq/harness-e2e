@@ -46,7 +46,7 @@ describe('local Markdown scenario editor', () => {
     // Audit NT-01: state and actions live in a footer, not after the aside.
     expect(html).toContain('<footer')
     expect(html.indexOf('<footer')).toBeGreaterThan(html.indexOf('<aside'))
-    expect(html).toContain('open:grid-rows-[auto_minmax(0,1fr)_auto]')
+    expect(html).toContain('ds-dialog-footer')
     expect(html).toContain('>0%<')
     for (const section of [
       '## Plans',

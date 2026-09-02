@@ -48,7 +48,7 @@ describe('transcript dialog', () => {
     )
 
     expect(html).toContain('conversation-shell')
-    expect(html).toContain('session-transcript-header-content')
+    expect(html).toContain('ds-dialog-heading')
     expect(html).toContain('You')
     expect(html).toContain('tool')
     expect(html).toContain('Arguments')

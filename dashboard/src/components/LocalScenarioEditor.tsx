@@ -1,7 +1,7 @@
-import { FileText, FileUp, Plus, Trash2, X } from 'lucide-react'
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { FileText, FileUp, Plus, Trash2 } from 'lucide-react'
+import { useMemo, useRef, useState } from 'react'
 import { DiscardDraftDialog } from '@/components/DiscardDraftDialog'
-import { buttonClassName } from '@/design-system'
+import { buttonClassName, Dialog } from '@/design-system'
 import type { DashboardDataBridge } from '@/lib/dashboard-data-source'
 import {
   buildLocalScenarioSource,
@@ -113,7 +113,6 @@ export function LocalScenarioEditor({
   onClose: () => void
   onCreated: (scenarioId: string) => void
 }) {
-  const dialogRef = useRef<HTMLDialogElement>(null)
   const fileRef = useRef<HTMLInputElement>(null)
   const nextValidationId = useRef(2)
   // null means "derived from the test name"; a string is a manual edit.
@@ -123,11 +122,6 @@ export function LocalScenarioEditor({
   const [error, setError] = useState<string | null>(null)
   const [notice, setNotice] = useState<string | null>(null)
   const [confirmingClose, setConfirmingClose] = useState(false)
-
-  useEffect(() => {
-    const dialog = dialogRef.current
-    if (dialog && !dialog.open) dialog.showModal()
-  }, [])
 
   const fileName =
     fileNameInput ?? (fileNameForTitle(draft.title) || initialFileName)
@@ -253,317 +247,278 @@ export function LocalScenarioEditor({
     </span>
   )
 
-  return (
-    <dialog
-      ref={dialogRef}
-      className="ds-root m-auto hidden max-h-[94dvh] w-[min(1120px,calc(100%_-_1rem))] max-w-none overflow-hidden rounded-[6px] border border-[var(--color-edge)] bg-panel p-0 text-ink shadow-[var(--shadow-panel)] open:grid open:grid-rows-[auto_minmax(0,1fr)_auto] backdrop:bg-[var(--color-backdrop)] backdrop:backdrop-blur-sm sm:w-[min(1120px,calc(100%_-_2rem))] max-[560px]:m-0 max-[560px]:h-dvh max-[560px]:max-h-dvh max-[560px]:w-screen max-[560px]:rounded-none max-[560px]:border-0"
-      onCancel={(event) => {
-        event.preventDefault()
-        requestClose()
-      }}
-      aria-labelledby="local-scenario-editor-title"
-      aria-describedby="local-scenario-editor-description"
-    >
-      <header className="flex items-start justify-between gap-5 border-b border-[var(--color-rule)] bg-panel px-5 py-4 sm:px-6">
-        <div className="min-w-0 max-w-3xl">
-          <h2
-            className="m-0 text-base font-semibold tracking-[-0.02em] text-ink"
-            id="local-scenario-editor-title"
-          >
-            Create a local test
-          </h2>
-          <p
-            className="mt-1 mb-0 text-xs leading-5 text-ink-muted"
-            id="local-scenario-editor-description"
-          >
-            Fill in the test definition or import an existing Markdown file. The
-            Markdown is saved outside this repository without starting an
-            execution.
-          </p>
-        </div>
-        <div className="flex shrink-0 items-center gap-2">
-          <button
-            className={buttonClassName({
-              variant: 'secondary',
-              size: 'compact',
-            })}
-            type="button"
-            onClick={() => fileRef.current?.click()}
-            disabled={busy}
-          >
-            <FileUp size={15} aria-hidden="true" />
-            <span className="max-[460px]:sr-only">import .md</span>
-          </button>
-          <button
-            className="inline-grid size-11 shrink-0 place-items-center rounded-[6px] border-0 bg-transparent text-ink-soft hover:bg-panel-raised hover:text-ink disabled:opacity-50"
-            type="button"
-            onClick={requestClose}
-            disabled={saving}
-            aria-label="Close local test creation"
-          >
-            <X size={18} aria-hidden="true" />
-          </button>
-        </div>
-      </header>
-
-      <div className="min-h-0 overflow-auto">
-        <form
-          id="local-scenario-form"
-          className="grid min-w-0 gap-px bg-[var(--color-rule)] lg:grid-cols-12"
-          onSubmit={(event) => {
-            event.preventDefault()
-            void save()
-          }}
+  // Audit NT-01: the state line and the actions stay visible at every width
+  // instead of sitting after the last criterion.
+  const footer = (
+    <>
+      <p
+        className="m-0 min-w-0 flex-1 text-xs leading-5"
+        role="status"
+        aria-live="polite"
+      >
+        {statusMessage}
+      </p>
+      <div className="flex flex-wrap items-center gap-3">
+        <output
+          className={`font-mono text-xs tabular-nums ${weight === 100 ? 'text-success' : 'text-warning'}`}
+          aria-label="Validation weight total"
         >
-          <input
-            ref={fileRef}
-            className="hidden"
-            type="file"
-            accept=".md,text/markdown,text/plain"
-            onChange={(event) => void importFile(event.target.files?.[0])}
-            disabled={busy}
-          />
+          {weightBreakdown(draft)}
+        </output>
+        <button
+          className={buttonClassName({ variant: 'secondary' })}
+          type="button"
+          onClick={requestClose}
+          disabled={saving}
+        >
+          cancel
+        </button>
+        <button
+          className={buttonClassName({ variant: 'primary' })}
+          type="submit"
+          form="local-scenario-form"
+          disabled={!canCreate}
+          aria-busy={saving}
+        >
+          <Plus size={15} aria-hidden="true" />
+          {saving ? 'creating test…' : 'create test'}
+        </button>
+      </div>
+    </>
+  )
 
-          <div className="grid min-w-0 content-start gap-6 bg-panel p-5 sm:p-6 lg:col-span-8">
-            {notice ? (
-              <p
-                className="m-0 flex items-center gap-2 rounded-[6px] bg-[var(--surface-soft)] px-3 py-2 text-xs text-ink-soft"
-                role="status"
+  return (
+    <Dialog
+      open
+      onClose={requestClose}
+      size="lg"
+      title="Create a local test"
+      description="Fill in the test definition or import an existing Markdown file. The Markdown is saved outside this repository without starting an execution."
+      closeLabel="Close local test creation"
+      className="ds-root"
+      actions={
+        <button
+          className={buttonClassName({ variant: 'secondary', size: 'compact' })}
+          type="button"
+          onClick={() => fileRef.current?.click()}
+          disabled={busy}
+        >
+          <FileUp size={15} aria-hidden="true" />
+          <span className="max-[460px]:sr-only">import .md</span>
+        </button>
+      }
+      footer={footer}
+    >
+      <form
+        id="local-scenario-form"
+        className="grid min-w-0 gap-px bg-[var(--color-rule)] lg:grid-cols-12"
+        onSubmit={(event) => {
+          event.preventDefault()
+          void save()
+        }}
+      >
+        <input
+          ref={fileRef}
+          className="hidden"
+          type="file"
+          accept=".md,text/markdown,text/plain"
+          onChange={(event) => void importFile(event.target.files?.[0])}
+          disabled={busy}
+        />
+
+        <div className="grid min-w-0 content-start gap-6 bg-panel p-5 sm:p-6 lg:col-span-8">
+          {notice ? (
+            <p
+              className="m-0 flex items-center gap-2 rounded-[6px] bg-[var(--surface-soft)] px-3 py-2 text-xs text-ink-soft"
+              role="status"
+            >
+              <FileText size={14} aria-hidden="true" />
+              {notice}
+            </p>
+          ) : null}
+
+          <section className="grid gap-4" aria-labelledby="test-details-title">
+            <div>
+              <h3
+                className="m-0 text-sm font-semibold text-ink"
+                id="test-details-title"
               >
-                <FileText size={14} aria-hidden="true" />
-                {notice}
+                Test details
+              </h3>
+              <p className="mt-1 mb-0 text-xs leading-5 text-ink-muted">
+                The name becomes the title and, unless you edit it, the Markdown
+                file name.
               </p>
-            ) : null}
-
-            <section
-              className="grid gap-4"
-              aria-labelledby="test-details-title"
-            >
-              <div>
-                <h3
-                  className="m-0 text-sm font-semibold text-ink"
-                  id="test-details-title"
-                >
-                  Test details
-                </h3>
-                <p className="mt-1 mb-0 text-xs leading-5 text-ink-muted">
-                  The name becomes the title and, unless you edit it, the
-                  Markdown file name.
-                </p>
-              </div>
+            </div>
+            <label className={fieldLabelClassName}>
+              Test name
+              <input
+                className={fieldClassName}
+                value={draft.title}
+                placeholder="Database recovery"
+                onChange={(event) => updateDraft('title', event.target.value)}
+                disabled={busy}
+                autoFocus
+                required
+              />
+            </label>
+            <div className="grid gap-4 sm:grid-cols-[minmax(0,1fr)_8rem]">
               <label className={fieldLabelClassName}>
-                Test name
+                Markdown file name
                 <input
-                  className={fieldClassName}
-                  value={draft.title}
-                  placeholder="Database recovery"
-                  onChange={(event) => updateDraft('title', event.target.value)}
+                  className={`${fieldClassName} font-mono text-xs`}
+                  value={fileName}
+                  onChange={(event) => {
+                    setFileNameInput(event.target.value)
+                    setError(null)
+                  }}
                   disabled={busy}
-                  autoFocus
+                  spellCheck={false}
+                  aria-invalid={!safeFileName}
+                  aria-describedby="local-file-name-help"
+                  required
+                />
+                <small
+                  className={`text-xs font-normal leading-4 ${safeFileName ? 'text-ink-muted' : 'text-danger'}`}
+                  id="local-file-name-help"
+                >
+                  {safeFileName
+                    ? `Compiles to ${compiledLocalScenarioId(fileName.trim())}`
+                    : 'Use letters, numbers, spaces, hyphens or underscores and end with .md.'}
+                </small>
+              </label>
+              <label className={`${fieldLabelClassName} content-start`}>
+                Version
+                <input
+                  className={`${fieldClassName} font-mono text-xs`}
+                  type="number"
+                  min="1"
+                  step="1"
+                  inputMode="numeric"
+                  value={draft.version}
+                  onChange={(event) =>
+                    updateDraft('version', event.target.value)
+                  }
+                  disabled={busy}
                   required
                 />
               </label>
-              <div className="grid gap-4 sm:grid-cols-[minmax(0,1fr)_8rem]">
-                <label className={fieldLabelClassName}>
-                  Markdown file name
-                  <input
-                    className={`${fieldClassName} font-mono text-xs`}
-                    value={fileName}
-                    onChange={(event) => {
-                      setFileNameInput(event.target.value)
-                      setError(null)
-                    }}
-                    disabled={busy}
-                    spellCheck={false}
-                    aria-invalid={!safeFileName}
-                    aria-describedby="local-file-name-help"
-                    required
-                  />
-                  <small
-                    className={`text-xs font-normal leading-4 ${safeFileName ? 'text-ink-muted' : 'text-danger'}`}
-                    id="local-file-name-help"
-                  >
-                    {safeFileName
-                      ? `Compiles to ${compiledLocalScenarioId(fileName.trim())}`
-                      : 'Use letters, numbers, spaces, hyphens or underscores and end with .md.'}
-                  </small>
-                </label>
-                <label className={`${fieldLabelClassName} content-start`}>
-                  Version
-                  <input
-                    className={`${fieldClassName} font-mono text-xs`}
-                    type="number"
-                    min="1"
-                    step="1"
-                    inputMode="numeric"
-                    value={draft.version}
-                    onChange={(event) =>
-                      updateDraft('version', event.target.value)
-                    }
-                    disabled={busy}
-                    required
-                  />
-                </label>
-              </div>
-            </section>
+            </div>
+          </section>
 
-            <section
-              className="grid gap-4 border-t border-[var(--color-rule)] pt-6"
-              aria-labelledby="test-instructions-title"
-            >
+          <section
+            className="grid gap-4 border-t border-[var(--color-rule)] pt-6"
+            aria-labelledby="test-instructions-title"
+          >
+            <div>
+              <h3
+                className="m-0 text-sm font-semibold text-ink"
+                id="test-instructions-title"
+              >
+                Instructions
+              </h3>
+              <p className="mt-1 mb-0 text-xs leading-5 text-ink-muted">
+                Describe the isolated setup first, then the task the Harness
+                must complete.
+              </p>
+            </div>
+            <label className={fieldLabelClassName}>
+              Before test
+              <textarea
+                className={textareaClassName}
+                value={draft.beforeTest}
+                placeholder={PLACEHOLDER.beforeTest}
+                onChange={(event) =>
+                  updateDraft('beforeTest', event.target.value)
+                }
+                disabled={busy}
+                required
+              />
+            </label>
+            <label className={fieldLabelClassName}>
+              Task prompt
+              <textarea
+                className={textareaClassName}
+                value={draft.prompt}
+                placeholder={PLACEHOLDER.prompt}
+                onChange={(event) => updateDraft('prompt', event.target.value)}
+                disabled={busy}
+                required
+              />
+            </label>
+          </section>
+
+          <section
+            className="grid gap-4 border-t border-[var(--color-rule)] pt-6"
+            aria-labelledby="validation-criteria-title"
+          >
+            <div className="flex flex-wrap items-start justify-between gap-3">
               <div>
                 <h3
                   className="m-0 text-sm font-semibold text-ink"
-                  id="test-instructions-title"
+                  id="validation-criteria-title"
                 >
-                  Instructions
+                  Validation criteria
                 </h3>
                 <p className="mt-1 mb-0 text-xs leading-5 text-ink-muted">
-                  Describe the isolated setup first, then the task the Harness
-                  must complete.
+                  Describe the evidence for each criterion. Weights must add up
+                  to exactly 100%.
                 </p>
               </div>
-              <label className={fieldLabelClassName}>
-                Before test
-                <textarea
-                  className={textareaClassName}
-                  value={draft.beforeTest}
-                  placeholder={PLACEHOLDER.beforeTest}
-                  onChange={(event) =>
-                    updateDraft('beforeTest', event.target.value)
-                  }
-                  disabled={busy}
-                  required
-                />
-              </label>
-              <label className={fieldLabelClassName}>
-                Task prompt
-                <textarea
-                  className={textareaClassName}
-                  value={draft.prompt}
-                  placeholder={PLACEHOLDER.prompt}
-                  onChange={(event) =>
-                    updateDraft('prompt', event.target.value)
-                  }
-                  disabled={busy}
-                  required
-                />
-              </label>
-            </section>
+              <button
+                className={buttonClassName({
+                  variant: 'secondary',
+                  size: 'compact',
+                })}
+                type="button"
+                onClick={addValidation}
+                disabled={busy}
+              >
+                <Plus size={14} aria-hidden="true" />
+                add criterion
+              </button>
+            </div>
 
-            <section
-              className="grid gap-4 border-t border-[var(--color-rule)] pt-6"
-              aria-labelledby="validation-criteria-title"
-            >
-              <div className="flex flex-wrap items-start justify-between gap-3">
-                <div>
-                  <h3
-                    className="m-0 text-sm font-semibold text-ink"
-                    id="validation-criteria-title"
+            <div className="grid gap-3">
+              {draft.validations.map((validation, index) => {
+                const placeholder =
+                  PLACEHOLDER.validations[index] ??
+                  PLACEHOLDER.validations[PLACEHOLDER.validations.length - 1]
+                return (
+                  <fieldset
+                    className="m-0 grid gap-3 rounded-[6px] border border-[var(--color-rule)] bg-panel-raised p-4"
+                    key={validation.id}
                   >
-                    Validation criteria
-                  </h3>
-                  <p className="mt-1 mb-0 text-xs leading-5 text-ink-muted">
-                    Describe the evidence for each criterion. Weights must add
-                    up to exactly 100%.
-                  </p>
-                </div>
-                <button
-                  className={buttonClassName({
-                    variant: 'secondary',
-                    size: 'compact',
-                  })}
-                  type="button"
-                  onClick={addValidation}
-                  disabled={busy}
-                >
-                  <Plus size={14} aria-hidden="true" />
-                  add criterion
-                </button>
-              </div>
-
-              <div className="grid gap-3">
-                {draft.validations.map((validation, index) => {
-                  const placeholder =
-                    PLACEHOLDER.validations[index] ??
-                    PLACEHOLDER.validations[PLACEHOLDER.validations.length - 1]
-                  return (
-                    <fieldset
-                      className="m-0 grid gap-3 rounded-[6px] border border-[var(--color-rule)] bg-panel-raised p-4"
-                      key={validation.id}
-                    >
-                      <legend className="sr-only">
-                        Validation {index + 1}
-                      </legend>
-                      <div className="flex items-center justify-between gap-3">
-                        <strong className="font-mono text-xs font-semibold text-ink-soft">
-                          Criterion {index + 1}
-                        </strong>
-                        <button
-                          className={buttonClassName({
-                            variant: 'quiet',
-                            size: 'compact',
-                          })}
-                          type="button"
-                          onClick={() => removeValidation(validation.id)}
-                          disabled={busy || draft.validations.length === 1}
-                          aria-label={`Remove validation ${index + 1}`}
-                        >
-                          <Trash2 size={13} aria-hidden="true" />
-                          remove
-                        </button>
-                      </div>
-                      <div className="grid gap-3 sm:grid-cols-[minmax(0,1fr)_7rem]">
-                        <label className={fieldLabelClassName}>
-                          Name
-                          <input
-                            className={fieldClassName}
-                            value={validation.title}
-                            placeholder={placeholder.title}
-                            onChange={(event) =>
-                              updateValidation(
-                                validation.id,
-                                'title',
-                                event.target.value,
-                              )
-                            }
-                            disabled={busy}
-                            required
-                          />
-                        </label>
-                        <label className={fieldLabelClassName}>
-                          Weight %
-                          <input
-                            className={`${fieldClassName} font-mono text-xs`}
-                            type="number"
-                            min="1"
-                            max="100"
-                            step="1"
-                            inputMode="numeric"
-                            value={validation.weight}
-                            placeholder={placeholder.weight}
-                            onChange={(event) =>
-                              updateValidation(
-                                validation.id,
-                                'weight',
-                                event.target.value,
-                              )
-                            }
-                            disabled={busy}
-                            required
-                          />
-                        </label>
-                      </div>
+                    <legend className="sr-only">Validation {index + 1}</legend>
+                    <div className="flex items-center justify-between gap-3">
+                      <strong className="font-mono text-xs font-semibold text-ink-soft">
+                        Criterion {index + 1}
+                      </strong>
+                      <button
+                        className={buttonClassName({
+                          variant: 'quiet',
+                          size: 'compact',
+                        })}
+                        type="button"
+                        onClick={() => removeValidation(validation.id)}
+                        disabled={busy || draft.validations.length === 1}
+                        aria-label={`Remove validation ${index + 1}`}
+                      >
+                        <Trash2 size={13} aria-hidden="true" />
+                        remove
+                      </button>
+                    </div>
+                    <div className="grid gap-3 sm:grid-cols-[minmax(0,1fr)_7rem]">
                       <label className={fieldLabelClassName}>
-                        Evaluation instructions
-                        <textarea
-                          className={`${textareaClassName} min-h-24`}
-                          value={validation.instructions}
-                          placeholder={placeholder.instructions}
+                        Name
+                        <input
+                          className={fieldClassName}
+                          value={validation.title}
+                          placeholder={placeholder.title}
                           onChange={(event) =>
                             updateValidation(
                               validation.id,
-                              'instructions',
+                              'title',
                               event.target.value,
                             )
                           }
@@ -571,76 +526,77 @@ export function LocalScenarioEditor({
                           required
                         />
                       </label>
-                    </fieldset>
-                  )
-                })}
-              </div>
-            </section>
+                      <label className={fieldLabelClassName}>
+                        Weight %
+                        <input
+                          className={`${fieldClassName} font-mono text-xs`}
+                          type="number"
+                          min="1"
+                          max="100"
+                          step="1"
+                          inputMode="numeric"
+                          value={validation.weight}
+                          placeholder={placeholder.weight}
+                          onChange={(event) =>
+                            updateValidation(
+                              validation.id,
+                              'weight',
+                              event.target.value,
+                            )
+                          }
+                          disabled={busy}
+                          required
+                        />
+                      </label>
+                    </div>
+                    <label className={fieldLabelClassName}>
+                      Evaluation instructions
+                      <textarea
+                        className={`${textareaClassName} min-h-24`}
+                        value={validation.instructions}
+                        placeholder={placeholder.instructions}
+                        onChange={(event) =>
+                          updateValidation(
+                            validation.id,
+                            'instructions',
+                            event.target.value,
+                          )
+                        }
+                        disabled={busy}
+                        required
+                      />
+                    </label>
+                  </fieldset>
+                )
+              })}
+            </div>
+          </section>
+        </div>
+
+        <aside className="grid min-w-0 content-start gap-5 bg-panel-raised p-5 sm:p-6 lg:sticky lg:top-0 lg:col-span-4">
+          <div className="grid gap-2">
+            <span className="text-xs font-semibold text-ink-soft">
+              Generated Markdown
+            </span>
+            <code className="break-all rounded-[6px] bg-panel px-3 py-2 font-mono text-xs text-ink">
+              {fileName.trim() || initialFileName}
+            </code>
+            <p className="m-0 text-xs leading-5 text-ink-muted">
+              Plan <code>local</code> · {draft.validations.length} validation
+              {draft.validations.length === 1 ? '' : 's'} · no execution
+            </p>
           </div>
 
-          <aside className="grid min-w-0 content-start gap-5 bg-panel-raised p-5 sm:p-6 lg:sticky lg:top-0 lg:col-span-4">
-            <div className="grid gap-2">
-              <span className="text-xs font-semibold text-ink-soft">
-                Generated Markdown
-              </span>
-              <code className="break-all rounded-[6px] bg-panel px-3 py-2 font-mono text-xs text-ink">
-                {fileName.trim() || initialFileName}
-              </code>
-              <p className="m-0 text-xs leading-5 text-ink-muted">
-                Plan <code>local</code> · {draft.validations.length} validation
-                {draft.validations.length === 1 ? '' : 's'} · no execution
-              </p>
-            </div>
-
-            <details className="group rounded-[6px] bg-panel p-3">
-              <summary className="cursor-pointer text-xs font-semibold text-ink-soft">
-                Preview Markdown
-              </summary>
-              <pre className="mt-3 mb-0 max-h-72 overflow-auto whitespace-pre-wrap break-words border-t border-[var(--color-rule)] pt-3 font-mono text-xs leading-5 text-ink-soft">
-                {source}
-              </pre>
-            </details>
-          </aside>
-        </form>
-      </div>
-
-      {/* Audit NT-01: the state line and the actions stay visible at every
-          width instead of sitting after the last criterion. */}
-      <footer className="flex flex-wrap items-center justify-between gap-3 border-t border-[var(--color-rule)] bg-panel px-5 py-3 sm:px-6">
-        <p
-          className="m-0 min-w-0 flex-1 text-xs leading-5"
-          role="status"
-          aria-live="polite"
-        >
-          {statusMessage}
-        </p>
-        <div className="flex flex-wrap items-center gap-3">
-          <output
-            className={`font-mono text-xs tabular-nums ${weight === 100 ? 'text-success' : 'text-warning'}`}
-            aria-label="Validation weight total"
-          >
-            {weightBreakdown(draft)}
-          </output>
-          <button
-            className={buttonClassName({ variant: 'secondary' })}
-            type="button"
-            onClick={requestClose}
-            disabled={saving}
-          >
-            cancel
-          </button>
-          <button
-            className={buttonClassName({ variant: 'primary' })}
-            type="submit"
-            form="local-scenario-form"
-            disabled={!canCreate}
-            aria-busy={saving}
-          >
-            <Plus size={15} aria-hidden="true" />
-            {saving ? 'creating test…' : 'create test'}
-          </button>
-        </div>
-      </footer>
+          <details className="group rounded-[6px] bg-panel p-3">
+            <summary className="cursor-pointer text-xs font-semibold text-ink-soft">
+              Preview Markdown
+            </summary>
+            <pre className="mt-3 mb-0 max-h-72 overflow-auto whitespace-pre-wrap break-words border-t border-[var(--color-rule)] pt-3 font-mono text-xs leading-5 text-ink-soft">
+              {source}
+            </pre>
+          </details>
+        </aside>
+      </form>
 
       <DiscardDraftDialog
         open={confirmingClose}
@@ -653,6 +609,6 @@ export function LocalScenarioEditor({
           onClose()
         }}
       />
-    </dialog>
+    </Dialog>
   )
 }

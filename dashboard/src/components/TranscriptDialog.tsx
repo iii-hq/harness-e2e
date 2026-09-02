@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
+import { Dialog } from '@/design-system'
 import {
   formatTranscriptPayload,
   normalizeTranscript,
@@ -37,8 +38,6 @@ export function TranscriptDialog({
   open: boolean
   onClose: () => void
 }) {
-  const ref = useRef<HTMLDialogElement>(null)
-  const titleRef = useRef<HTMLHeadingElement>(null)
   const eventRefs = useRef(new Map<string, HTMLElement>())
   const heading = splitTranscriptTitle(title)
   const events = useMemo(() => normalizeTranscript(messages), [messages])
@@ -65,16 +64,6 @@ export function TranscriptDialog({
     eventRefs.current.clear()
   }, [messages])
 
-  useEffect(() => {
-    const dialog = ref.current
-    if (!dialog) return
-    if (open && !dialog.open) {
-      dialog.showModal()
-      titleRef.current?.focus()
-    }
-    if (!open && dialog.open) dialog.close()
-  }, [open])
-
   const registerEvent = (id: string, node: HTMLElement | null) => {
     if (node) eventRefs.current.set(id, node)
     else eventRefs.current.delete(id)
@@ -96,124 +85,102 @@ export function TranscriptDialog({
   }
 
   return (
-    <dialog
-      ref={ref}
-      className="session-transcript-dialog h-[min(760px,calc(100dvh-48px))] w-[min(1120px,calc(100%-32px))] rounded-[6px] border border-line-strong bg-panel shadow-panel backdrop:bg-app-backdrop backdrop:backdrop-blur-[5px] max-[560px]:m-0 max-[560px]:h-dvh max-[560px]:w-screen max-[560px]:max-w-none max-[560px]:rounded-none max-[560px]:border-0"
+    <Dialog
+      open={open}
       onClose={onClose}
-      aria-labelledby="transcript-title"
+      size="lg"
+      tall
+      kicker="Run evidence · Transcript"
+      title={heading.name}
+      description={
+        heading.runId ? (
+          <span className="font-mono text-label" title={heading.runId}>
+            run {shortRunId(heading.runId)}
+          </span>
+        ) : undefined
+      }
+      closeLabel="Close session transcript"
+      className="session-transcript-dialog"
     >
-      <div className="session-transcript-shell flex h-full min-h-0 flex-col">
-        <header className="session-transcript-header border-b border-line bg-panel">
-          <div className="session-transcript-header-content">
-            <div className="section-kicker mb-[7px]">
-              Run evidence · Transcript
+      <div className="session-transcript-body">
+        <div
+          className={`conversation-shell ${visibleEvents.length === 0 ? 'conversation-filter-empty' : ''}`}
+          data-filter={filter}
+        >
+          <div className="conversation-toolbar">
+            <div className="conversation-stats">
+              <span>
+                <strong>{summary.messages}</strong> message
+                {summary.messages === 1 ? '' : 's'}
+              </span>
+              <span>
+                <strong>{summary.calls}</strong> tool
+                {summary.calls === 1 ? '' : 's'}
+              </span>
+              <span className={summary.errors ? 'has-errors' : undefined}>
+                <strong>{summary.errors}</strong> error
+                {summary.errors === 1 ? '' : 's'}
+              </span>
             </div>
-            <h2
-              id="transcript-title"
-              ref={titleRef}
-              tabIndex={-1}
-              className="m-0 break-words text-[1.35rem] font-[570] tracking-[-0.025em] outline-none"
-            >
-              {heading.name}
-            </h2>
-            {heading.runId ? (
-              <p
-                className="m-0 mt-1 font-mono text-label text-ink-muted"
-                title={heading.runId}
-              >
-                run {shortRunId(heading.runId)}
-              </p>
-            ) : null}
-          </div>
-          <button
-            className="session-transcript-close"
-            type="button"
-            onClick={onClose}
-            aria-label="Close session transcript"
-          >
-            ×
-          </button>
-        </header>
-        <div className="session-transcript-body min-h-0 flex-1">
-          <div
-            className={`conversation-shell ${visibleEvents.length === 0 ? 'conversation-filter-empty' : ''}`}
-            data-filter={filter}
-          >
-            <div className="conversation-toolbar">
-              <div className="conversation-stats">
-                <span>
-                  <strong>{summary.messages}</strong> message
-                  {summary.messages === 1 ? '' : 's'}
-                </span>
-                <span>
-                  <strong>{summary.calls}</strong> tool
-                  {summary.calls === 1 ? '' : 's'}
-                </span>
-                <span className={summary.errors ? 'has-errors' : undefined}>
-                  <strong>{summary.errors}</strong> error
-                  {summary.errors === 1 ? '' : 's'}
-                </span>
-              </div>
-              <div className="conversation-actions">
-                <div className="conversation-filters">
-                  {(['all', 'messages', 'errors'] as const).map((candidate) => (
-                    <button
-                      key={candidate}
-                      className={`conversation-filter ${filter === candidate ? 'is-active' : ''}`}
-                      type="button"
-                      aria-pressed={filter === candidate}
-                      onClick={() => setFilter(candidate)}
-                    >
-                      {candidate === 'all'
-                        ? 'All'
-                        : candidate === 'messages'
-                          ? 'Chat'
-                          : 'Errors'}
-                    </button>
-                  ))}
-                </div>
-                {errorEvents.length > 0 ? (
+            <div className="conversation-actions">
+              <div className="conversation-filters">
+                {(['all', 'messages', 'errors'] as const).map((candidate) => (
                   <button
-                    className="conversation-next-error"
+                    key={candidate}
+                    className={`conversation-filter ${filter === candidate ? 'is-active' : ''}`}
                     type="button"
-                    onClick={focusNextError}
+                    aria-pressed={filter === candidate}
+                    onClick={() => setFilter(candidate)}
                   >
-                    Next error
+                    {candidate === 'all'
+                      ? 'All'
+                      : candidate === 'messages'
+                        ? 'Chat'
+                        : 'Errors'}
                   </button>
-                ) : null}
-              </div>
-            </div>
-            <div className="conversation-error-position" aria-live="polite">
-              {filter === 'errors' && errorEvents.length > 0
-                ? `${errorEvents.length} error${errorEvents.length === 1 ? '' : 's'} shown`
-                : ''}
-            </div>
-            {events.length === 0 ? (
-              <p className="conversation-empty-filter">
-                No transcript messages were retained for this run.
-              </p>
-            ) : (
-              <div className="conversation-list" role="log">
-                {visibleEvents.map((event) => (
-                  <TranscriptEventCard
-                    key={event.id}
-                    event={event}
-                    onRef={registerEvent}
-                    openToolId={openToolId}
-                    onToolToggle={(id, nextOpen) =>
-                      setOpenToolId(nextOpen ? id : null)
-                    }
-                  />
                 ))}
-                <p className="conversation-empty-filter">
-                  No events match this filter.
-                </p>
               </div>
-            )}
+              {errorEvents.length > 0 ? (
+                <button
+                  className="conversation-next-error"
+                  type="button"
+                  onClick={focusNextError}
+                >
+                  Next error
+                </button>
+              ) : null}
+            </div>
           </div>
+          <div className="conversation-error-position" aria-live="polite">
+            {filter === 'errors' && errorEvents.length > 0
+              ? `${errorEvents.length} error${errorEvents.length === 1 ? '' : 's'} shown`
+              : ''}
+          </div>
+          {events.length === 0 ? (
+            <p className="conversation-empty-filter">
+              No transcript messages were retained for this run.
+            </p>
+          ) : (
+            <div className="conversation-list" role="log">
+              {visibleEvents.map((event) => (
+                <TranscriptEventCard
+                  key={event.id}
+                  event={event}
+                  onRef={registerEvent}
+                  openToolId={openToolId}
+                  onToolToggle={(id, nextOpen) =>
+                    setOpenToolId(nextOpen ? id : null)
+                  }
+                />
+              ))}
+              <p className="conversation-empty-filter">
+                No events match this filter.
+              </p>
+            </div>
+          )}
         </div>
       </div>
-    </dialog>
+    </Dialog>
   )
 }
 

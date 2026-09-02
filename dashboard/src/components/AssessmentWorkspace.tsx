@@ -7,7 +7,7 @@ import {
 } from 'lucide-react'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { ScenarioChatAction } from '@/components/ScenarioChatAction'
-import { buttonClassName } from '@/design-system'
+import { buttonClassName, Dialog } from '@/design-system'
 import type {
   AnalyzerIdentity,
   AnalyzerUsage,
@@ -95,9 +95,6 @@ const PRIMARY_METRIC_TONES: Record<PrimaryMetricTone, string> = {
   neutral: '[&_[data-metric-value]]:text-ink',
   unavailable: '[&_[data-metric-value]]:text-ink-muted',
 }
-
-const DIALOG_CLOSE_CLASS =
-  'inline-grid size-11 shrink-0 place-items-center rounded-[6px] border-0 bg-transparent text-xl leading-none text-ink-soft hover:bg-panel-subtle hover:text-ink'
 
 /**
  * Audit AW-01: evidence chips used to be `#technical` anchors. In the console
@@ -1032,67 +1029,42 @@ export function AssessmentDetailDialog({
   onClose: () => void
   onTranscript?: (run: AssessmentRunView, title: string) => void
 }) {
-  const ref = useRef<HTMLDialogElement>(null)
-  const titleRef = useRef<HTMLHeadingElement>(null)
   const aiLabel =
     run.finalAssessment.result?.verdict ?? run.finalAssessment.availability
 
-  // Audit AW-06: open as a modal and move focus to the title, so keyboard and
-  // screen-reader users land on the record instead of the close button.
-  useEffect(() => {
-    const dialog = ref.current
-    if (!dialog) return
-    if (!dialog.open) dialog.showModal()
-    titleRef.current?.focus()
-  }, [])
-
+  // Audit AW-06: the design-system Dialog opens as a modal and moves focus
+  // to the title, so keyboard and screen-reader users land on the record.
   return (
-    <dialog
-      ref={ref}
-      className="assessment-detail-dialog m-auto h-[min(860px,calc(100dvh-48px))] w-[min(1120px,calc(100%-32px))] max-w-none overflow-hidden rounded-[6px] border border-line-strong bg-panel shadow-panel backdrop:bg-app-backdrop backdrop:backdrop-blur-[5px] max-[560px]:m-0 max-[560px]:h-dvh max-[560px]:w-screen max-[560px]:rounded-none max-[560px]:border-0"
+    <Dialog
+      open
       onClose={onClose}
-      aria-labelledby={`${safeId(run.key)}-dialog-title`}
+      size="lg"
+      tall
+      kicker="Evidence record"
+      title={`${titleCase(run.scenarioId)} · scenario v${run.scenarioVersion}`}
+      description={
+        <span className="break-all font-mono text-label">
+          {run.subjectId} · run {run.runId}
+        </span>
+      }
+      closeLabel="Close assessment detail"
+      className="assessment-detail-dialog"
+      bodyPadding
+      actions={
+        <>
+          <RunStatusBadges run={run} aiLabel={aiLabel} />
+          <ScenarioChatAction
+            compact
+            detail={detail}
+            scenarioId={run.scenarioId}
+            subjectId={run.subjectId}
+            runId={run.runId}
+          />
+        </>
+      }
     >
-      <div className="flex h-full min-h-0 flex-col">
-        <header className="assessment-detail-header border-b border-line bg-panel">
-          <div className="assessment-detail-heading">
-            <div className="section-kicker mb-1.5">Evidence record</div>
-            <h2
-              id={`${safeId(run.key)}-dialog-title`}
-              ref={titleRef}
-              tabIndex={-1}
-              className="m-0 break-words text-[1.25rem] font-[570] tracking-[-0.025em] text-ink outline-none"
-            >
-              {titleCase(run.scenarioId)} · scenario v{run.scenarioVersion}
-            </h2>
-            <p className="m-0 mt-1 break-all font-mono text-label text-ink-muted">
-              {run.subjectId} · run {run.runId}
-            </p>
-          </div>
-          <div className="assessment-detail-actions">
-            <RunStatusBadges run={run} aiLabel={aiLabel} />
-            <ScenarioChatAction
-              compact
-              detail={detail}
-              scenarioId={run.scenarioId}
-              subjectId={run.subjectId}
-              runId={run.runId}
-            />
-            <button
-              className={DIALOG_CLOSE_CLASS}
-              type="button"
-              onClick={onClose}
-              aria-label="Close assessment detail"
-            >
-              ×
-            </button>
-          </div>
-        </header>
-        <div className="min-h-0 flex-1 overflow-y-auto p-4 sm:p-6">
-          <AssessmentDetailContent run={run} entries={run.assessments} />
-        </div>
-      </div>
-    </dialog>
+      <AssessmentDetailContent run={run} entries={run.assessments} />
+    </Dialog>
   )
 }
 

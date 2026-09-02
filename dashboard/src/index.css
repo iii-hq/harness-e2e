@@ -3051,108 +3051,9 @@ footer {
   background: var(--accent-soft);
 }
 
-.assessment-detail-header {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 20px;
-  padding: 16px 20px;
-}
-
-.assessment-detail-heading {
-  min-width: 0;
-  flex: 1 1 auto;
-}
-
-.assessment-detail-actions {
-  display: flex;
-  flex: 0 0 auto;
-  align-items: flex-start;
-  gap: 12px;
-}
-
-.session-transcript-dialog {
-  width: min(1040px, calc(100% - 32px));
-  height: min(900px, 92dvh);
-  max-width: none;
-  max-height: none;
-  margin: auto;
-  padding: 0;
-  overflow: hidden;
-  border: 1px solid var(--line-strong);
-  border-radius: var(--radius-lg);
-  background: var(--bg);
-  color: var(--text);
-}
-
-.session-transcript-dialog::backdrop {
-  background: var(--backdrop);
-  backdrop-filter: blur(5px);
-}
-
-.session-transcript-shell {
-  display: flex;
+.session-transcript-body {
   height: 100%;
   min-height: 0;
-  width: 100%;
-  flex-direction: column;
-}
-
-.session-transcript-header {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 24px;
-  padding: 22px 24px 18px;
-  border-bottom: 1px solid var(--line);
-  background: var(--surface);
-}
-
-.session-transcript-header-content {
-  min-width: 0;
-  flex: 1 1 auto;
-}
-
-.session-transcript-header h2 {
-  margin: 0;
-  overflow-wrap: anywhere;
-  font-size: 1.08rem;
-  font-weight: 610;
-  letter-spacing: -0.025em;
-}
-
-.session-transcript-header p {
-  max-width: 760px;
-  margin: 6px 0 0;
-  overflow: hidden;
-  color: var(--text-muted);
-  font-family:
-    "Chivo Mono", ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas,
-    monospace;
-  font-size: 0.6875rem;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.session-transcript-close {
-  display: grid;
-  width: 44px;
-  height: 44px;
-  flex: 0 0 auto;
-  place-items: center;
-  padding: 0;
-  border: 0;
-  border-radius: 6px;
-  background: var(--surface-raised);
-  color: var(--text-soft);
-  cursor: pointer;
-  font-size: 1.2rem;
-  line-height: 1;
-}
-
-.session-transcript-body {
-  min-height: 0;
-  flex: 1;
   overflow: hidden;
 }
 
@@ -3816,51 +3717,6 @@ footer {
   .scenario-history-chart {
     min-height: 260px;
     padding-inline: 0;
-  }
-
-  .assessment-detail-header {
-    display: grid;
-    grid-template-columns: minmax(0, 1fr);
-    gap: 12px;
-    padding: 16px;
-  }
-
-  .assessment-detail-heading {
-    width: 100%;
-  }
-
-  .assessment-detail-actions {
-    width: 100%;
-    align-items: center;
-    justify-content: space-between;
-  }
-
-  .session-transcript-dialog {
-    width: 100vw;
-    height: 100dvh;
-    margin: 0;
-    border: 0;
-    border-radius: 0;
-  }
-
-  .session-transcript-header {
-    display: grid;
-    grid-template-columns: minmax(0, 1fr) auto;
-    gap: 12px;
-    padding: 18px 16px 15px;
-  }
-
-  .session-transcript-header-content {
-    min-width: 0;
-  }
-
-  .session-transcript-close {
-    align-self: start;
-    justify-self: end;
-  }
-
-  .session-transcript-header p {
-    white-space: normal;
   }
 
   .conversation-launch {
@@ -5340,37 +5196,9 @@ footer {
 }
 
 #test-metrics-history-proposal .tmh-detail-button:focus-visible,
-#test-metrics-history-proposal .tmh-detail-link:focus-visible,
-#test-metrics-history-proposal .tmh-dialog-close:focus-visible {
+#test-metrics-history-proposal .tmh-detail-link:focus-visible {
   outline: 2px solid var(--tmh-accent);
   outline-offset: 2px;
-}
-
-#test-metrics-history-proposal .tmh-execution-dialog {
-  width: min(1020px, calc(100% - 32px));
-  max-width: none;
-  max-height: min(860px, calc(100dvh - 48px));
-  margin: auto;
-  padding: 0;
-  overflow: hidden;
-  border: 1px solid var(--tmh-line-strong);
-  border-top: 3px solid var(--tmh-accent);
-  border-radius: 11px;
-  background: var(--tmh-surface);
-  color: var(--tmh-ink);
-  box-shadow: 0 24px 72px rgb(0 0 0 / 0.4);
-}
-
-#test-metrics-history-proposal .tmh-execution-dialog::backdrop {
-  background: rgb(0 0 0 / 0.56);
-  backdrop-filter: blur(5px);
-}
-
-#test-metrics-history-proposal .tmh-execution-dialog-shell {
-  display: flex;
-  max-height: min(860px, calc(100dvh - 48px));
-  min-height: 0;
-  flex-direction: column;
 }
 
 #test-metrics-history-proposal .tmh-execution-dialog-header,
@@ -5380,41 +5208,6 @@ footer {
   align-items: center;
   justify-content: space-between;
   gap: 16px;
-}
-
-#test-metrics-history-proposal .tmh-execution-dialog-header {
-  padding: 20px 22px;
-  border-bottom: 1px solid var(--tmh-line);
-}
-
-#test-metrics-history-proposal .tmh-execution-dialog-header h2 {
-  margin-top: 7px;
-  font-size: 22px;
-}
-
-#test-metrics-history-proposal .tmh-execution-dialog-header p {
-  margin-top: 6px;
-  color: var(--tmh-muted);
-  font-size: 11px;
-}
-
-#test-metrics-history-proposal .tmh-dialog-close {
-  display: grid;
-  width: 30px;
-  height: 30px;
-  flex: none;
-  place-items: center;
-  border: 1px solid var(--tmh-line-strong);
-  border-radius: 6px;
-  background: transparent;
-  color: var(--tmh-muted);
-  font-size: 21px;
-  line-height: 1;
-}
-
-#test-metrics-history-proposal .tmh-dialog-close:hover {
-  border-color: var(--tmh-danger);
-  color: var(--tmh-danger);
 }
 
 #test-metrics-history-proposal .tmh-execution-dialog-body {
@@ -5646,15 +5439,6 @@ footer {
     font-size: 8px;
     letter-spacing: 0.06em;
     text-transform: uppercase;
-  }
-
-  #test-metrics-history-proposal .tmh-execution-dialog {
-    width: min(680px, calc(100% - 24px));
-    max-height: calc(100dvh - 24px);
-  }
-
-  #test-metrics-history-proposal .tmh-execution-dialog-shell {
-    max-height: calc(100dvh - 24px);
   }
 
   #test-metrics-history-proposal .tmh-execution-dialog-header,

@@ -1,13 +1,19 @@
-import { ChevronDown } from 'lucide-react'
-import type {
-  ButtonHTMLAttributes,
-  HTMLAttributes,
-  InputHTMLAttributes,
-  MouseEvent,
-  ReactNode,
-  SelectHTMLAttributes,
-  TableHTMLAttributes,
-  TextareaHTMLAttributes,
+import { ChevronDown, X } from 'lucide-react'
+import {
+  type ButtonHTMLAttributes,
+  type DialogHTMLAttributes,
+  type HTMLAttributes,
+  type InputHTMLAttributes,
+  type KeyboardEvent,
+  type MouseEvent,
+  type ReactNode,
+  type RefObject,
+  type SelectHTMLAttributes,
+  type TableHTMLAttributes,
+  type TextareaHTMLAttributes,
+  useEffect,
+  useId,
+  useRef,
 } from 'react'
 
 function classes(...values: Array<string | false | null | undefined>) {
@@ -635,5 +641,178 @@ export function Select({
         <ChevronDown size={14} />
       </span>
     </span>
+  )
+}
+
+/* ----------------------------------------------------------------- dialog */
+
+export type DialogSize = 'sm' | 'md' | 'lg' | 'xl'
+
+export type DialogProps = Omit<
+  DialogHTMLAttributes<HTMLDialogElement>,
+  'title' | 'onClose'
+> & {
+  open: boolean
+  /**
+   * Called whenever closing is requested: Escape, a backdrop click, the close
+   * control or a native close. The caller decides what happens (it may ask
+   * for confirmation first) and drops `open` when it agrees.
+   */
+  onClose: () => void
+  size?: DialogSize
+  /** Fixed height (content scrolls inside); default height follows content. */
+  tall?: boolean
+  kicker?: ReactNode
+  title: ReactNode
+  description?: ReactNode
+  /** Header content before the close control: badges, secondary actions. */
+  actions?: ReactNode
+  footer?: ReactNode
+  closeLabel?: string
+  bodyPadding?: boolean
+  bodyClassName?: string
+  /** Element to focus on open instead of the title (e.g. the safe action of a confirm). */
+  initialFocus?: RefObject<HTMLElement | null>
+  children?: ReactNode
+}
+
+const FOCUSABLE =
+  'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), summary, [tabindex]:not([tabindex="-1"])'
+
+/** Keeps Tab inside the dialog even where the browser would let it out. */
+export function trapDialogFocus(event: KeyboardEvent<HTMLDialogElement>) {
+  if (event.key !== 'Tab') return
+  const focusable = [
+    ...event.currentTarget.querySelectorAll<HTMLElement>(FOCUSABLE),
+  ].filter((element) => !element.hidden && element.getClientRects().length > 0)
+  if (focusable.length === 0) return
+  const index = focusable.indexOf(document.activeElement as HTMLElement)
+  const next = event.shiftKey
+    ? index <= 0
+      ? focusable.at(-1)
+      : undefined
+    : index === -1 || index === focusable.length - 1
+      ? focusable[0]
+      : undefined
+  if (!next) return
+  event.preventDefault()
+  next.focus()
+}
+
+/**
+ * The one modal: showModal(), focus on the title (or `initialFocus`), Escape
+ * handled on the element (Chromium groups a modal opened from an Escape press
+ * with its parent, so `cancel` may land elsewhere), backdrop click, header ·
+ * scrolling body · footer, and a full-screen sheet on narrow viewports. No
+ * shadow: the console strips them, so the backdrop carries the elevation.
+ */
+export function Dialog({
+  open,
+  onClose,
+  size = 'md',
+  tall = false,
+  kicker,
+  title,
+  description,
+  actions,
+  footer,
+  closeLabel = 'Close',
+  bodyPadding = false,
+  bodyClassName,
+  initialFocus,
+  className,
+  children,
+  ...props
+}: DialogProps) {
+  const ref = useRef<HTMLDialogElement>(null)
+  const titleRef = useRef<HTMLHeadingElement>(null)
+  const id = useId()
+  const titleId = `${id}-title`
+  const descriptionId = `${id}-description`
+
+  useEffect(() => {
+    const dialog = ref.current
+    if (!dialog) return
+    if (open && !dialog.open) {
+      dialog.showModal()
+      ;(initialFocus?.current ?? titleRef.current)?.focus()
+    }
+    if (!open && dialog.open) dialog.close()
+  }, [open, initialFocus])
+
+  return (
+    <dialog
+      ref={ref}
+      className={classes(
+        'ds-dialog',
+        `ds-dialog-${size}`,
+        tall && 'ds-dialog-tall',
+        className,
+      )}
+      aria-labelledby={titleId}
+      aria-describedby={description ? descriptionId : undefined}
+      onCancel={(event) => {
+        event.preventDefault()
+        onClose()
+      }}
+      onClose={() => {
+        if (open) onClose()
+      }}
+      onKeyDown={(event) => {
+        if (event.key === 'Escape') {
+          event.preventDefault()
+          event.stopPropagation()
+          onClose()
+          return
+        }
+        trapDialogFocus(event)
+      }}
+      onClick={(event) => {
+        if (event.target === event.currentTarget) onClose()
+      }}
+      {...props}
+    >
+      <header className="ds-dialog-header">
+        <div className="ds-dialog-heading">
+          {kicker ? <span className="ds-label">{kicker}</span> : null}
+          <h2
+            id={titleId}
+            ref={titleRef}
+            tabIndex={-1}
+            className="ds-dialog-title"
+          >
+            {title}
+          </h2>
+          {description ? (
+            <p id={descriptionId} className="ds-dialog-description">
+              {description}
+            </p>
+          ) : null}
+        </div>
+        <div className="ds-dialog-actions">
+          {actions}
+          <button
+            className="ds-dialog-close"
+            type="button"
+            onClick={onClose}
+            aria-label={closeLabel}
+          >
+            <X size={18} aria-hidden="true" />
+          </button>
+        </div>
+      </header>
+      {children ? (
+        <div
+          className={classes(
+            'ds-dialog-body',
+            bodyPadding && 'ds-dialog-body-padded',
+            bodyClassName,
+          )}
+        >
+          {children}
+        </div>
+      ) : null}
+      {footer ? <footer className="ds-dialog-footer">{footer}</footer> : null}
+    </dialog>
   )
 }
