@@ -244,6 +244,10 @@ export function LocalRunnerDialog({
   }))
   const runsPerScenario = Math.max(1, Number(form.runs) || 1)
   const technicalRetries = Math.max(0, Number(form.technicalRetries) || 0)
+  // The worker refuses a local Markdown scenario without a judge.
+  const needsJudge = form.scenarios.some((id) =>
+    (catalog?.localScenarios ?? []).some((scenario) => scenario.id === id),
+  )
   const showJobStatus = Boolean(job?.status) && (ownJob || active)
   const testCount = form.scenarios.length
   const runLabel = submitting
@@ -270,16 +274,12 @@ export function LocalRunnerDialog({
     setForm((current) => ({ ...current, [key]: value }))
   }
 
+  // The worker refuses a local Markdown scenario without an explicit judge,
+  // so selecting one fills the judge with the execution model. The rule used
+  // to key on a "markdown_" prefix that the compiler no longer emits; the
+  // catalog's own local list is the source of truth.
   const updateScenarios = (scenarios: string[]) => {
-    setForm((current) => ({
-      ...current,
-      scenarios,
-      judge:
-        current.judge ||
-        (scenarios.some((id) => id.startsWith('markdown_'))
-          ? current.subject
-          : ''),
-    }))
+    setForm((current) => ({ ...current, scenarios }))
   }
 
   const submit = async (event: React.FormEvent<HTMLFormElement>) => {
@@ -300,6 +300,10 @@ export function LocalRunnerDialog({
     setSubmitting(true)
     setError(null)
     try {
+      // A local scenario always travels with a judge; without an explicit
+      // one it follows the execution model, resolved here so it can never
+      // lag behind a model chosen after the scenario was ticked.
+      const judge = selectedJudge ?? (needsJudge ? selectedSubject : null)
       const response = await bridge.startRun({
         // RunRequest.label is intentionally a string: empty labels remain
         // compatible with persisted execution metadata.
@@ -307,8 +311,8 @@ export function LocalRunnerDialog({
         url: form.url,
         model: selectedSubject.model,
         provider: selectedSubject.provider,
-        judge_model: selectedJudge?.model || '',
-        judge_provider: selectedJudge?.provider || '',
+        judge_model: judge?.model || '',
+        judge_provider: judge?.provider || '',
         scenarios: form.scenarios,
         runs: Number(form.runs),
         technical_retries: Number(form.technicalRetries),
@@ -345,12 +349,17 @@ export function LocalRunnerDialog({
       : '',
     judge: selectedJudge
       ? `${selectedJudge.provider} / ${selectedJudge.model}`
-      : '',
+      : needsJudge && selectedSubject
+        ? `${selectedSubject.provider} / ${selectedSubject.model} · same as model`
+        : '',
     url: form.url,
   }
+  // statusLabel already ends its running states with an ellipsis.
+  const sentence = (label: string) =>
+    /[.…]$/.test(label) ? label : `${label}.`
   const footerStatus =
     showJobStatus && job
-      ? `Runner ${statusLabel(job.status).toLowerCase()}.`
+      ? sentence(statusLabel(job.status))
       : job?.status
         ? `Previous runner job: ${statusLabel(job.status).toLowerCase()}.`
         : null
