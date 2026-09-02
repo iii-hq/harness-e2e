@@ -733,8 +733,13 @@ export function OverviewPage({ activeView }: { activeView: WorkspaceView }) {
     }
   }, [bridge])
 
+  const [runnerScope, setRunnerScope] = useState<string[]>([])
   useEffect(() => {
-    if (consumeQuickExecutionRequest()) setRunnerOpen(true)
+    const requested = consumeQuickExecutionRequest()
+    if (requested) {
+      setRunnerScope(requested)
+      setRunnerOpen(true)
+    }
   }, [])
 
   const latest = executions[0]
@@ -888,6 +893,7 @@ export function OverviewPage({ activeView }: { activeView: WorkspaceView }) {
       <LocalRunnerDialog
         bridge={bridge}
         open={runnerOpen}
+        initialScenarios={runnerScope}
         onClose={() => setRunnerOpen(false)}
         onCompleted={() => void load()}
       />

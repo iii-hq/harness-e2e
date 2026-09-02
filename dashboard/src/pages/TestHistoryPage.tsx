@@ -1,30 +1,58 @@
 import {
   ArrowLeftRight,
   ArrowRight,
-  Braces,
-  ChevronDown,
-  CircleAlert,
-  CircleCheck,
-  CircleDollarSign,
-  Clock3,
-  Layers3,
-  MessagesSquare,
-  Target,
-  TriangleAlert,
+  ChevronLeft,
+  ChevronRight,
+  Copy,
 } from 'lucide-react'
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { AssessmentWorkspace } from '@/components/AssessmentWorkspace'
-import { DashboardPageActions } from '@/components/DashboardPageActions'
+import {
+  DashboardPageActions,
+  dashboardHeaderActionClassName,
+} from '@/components/DashboardPageActions'
+import {
+  requestPlanFromSelection,
+  requestQuickExecution,
+} from '@/components/ExecutionSetup'
 import { ProviderModelDropdown } from '@/components/ProviderModelDropdown'
 import { ScenarioChatAction } from '@/components/ScenarioChatAction'
-import { Dialog } from '@/design-system'
-import { hashForExecution, hashForWorkspace } from '@/hooks/use-hash-route'
+import {
+  buttonClassName,
+  Callout,
+  DataTable,
+  DataTableRow,
+  DeltaValue,
+  Dialog,
+  EmptyState,
+  FilterChip,
+  FilterChipGroup,
+  isInteractiveTarget,
+  MetricCard,
+  numericCellClassName,
+  type OperationalStatus,
+  PageHeader,
+  Panel,
+  Select,
+  StatusBadge,
+} from '@/design-system'
+import {
+  hashForComparison,
+  hashForExecution,
+  hashForNewPlan,
+  hashForTestHistory,
+  hashForTests,
+  hashForWorkspace,
+  replaceRouteParams,
+  routeParams,
+} from '@/hooks/use-hash-route'
 import {
   type DashboardExecutionDetail,
   getDashboardDataBridge,
 } from '@/lib/dashboard-data-source'
 import type {
   HistoryModelGroup,
+  TestCatalogRow,
   TestHistoryResponse,
   TestObservation,
 } from '@/lib/test-catalog'
@@ -33,6 +61,12 @@ import {
   compareTestObservations,
   testObservationKey,
 } from '@/lib/test-history-comparison'
+import {
+  catalogComplexityPresentation,
+  catalogRealismPresentation,
+} from '@/pages/TestsCatalogPage'
+
+/* ---------------------------------------------------------------- helpers */
 
 function modelSelection(provider: string, model: string) {
   return JSON.stringify([provider, model])
@@ -78,19 +112,6 @@ function modelGroups(
     models.add(model)
     groups.set(provider, models)
   }
-
-  if (role === 'subject' && groups.size === 0) {
-    for (const subject of history.subjects ?? []) {
-      const separator = subject.indexOf('/')
-      if (separator < 1) continue
-      const provider = subject.slice(0, separator)
-      const model = subject.slice(separator + 1)
-      const models = groups.get(provider) ?? new Set<string>()
-      models.add(model)
-      groups.set(provider, models)
-    }
-  }
-
   return [...groups.entries()]
     .sort(([left], [right]) => left.localeCompare(right))
     .map(([provider, models]) => ({
@@ -112,186 +133,54 @@ function median(values: Array<number | null | undefined>) {
     : (known[middle - 1] + known[middle]) / 2
 }
 
-function formatCost(value: number | null | undefined) {
-  if (value === null || value === undefined || !Number.isFinite(value))
-    return 'Unknown'
-  return `$${value.toFixed(2)}`
+function finiteMetric(value: number | null | undefined): number | null {
+  return value !== null && value !== undefined && Number.isFinite(value)
+    ? value
+    : null
 }
 
-function formatDuration(value: number | null | undefined) {
-  if (value === null || value === undefined || !Number.isFinite(value))
-    return 'Unknown'
-  if (value < 60) return `${value.toFixed(1).replace(/\.0$/, '')}s`
-  const rounded = Math.max(0, Math.round(value))
-  return (
-    String(Math.floor(rounded / 60)) +
-    'm ' +
-    String(rounded % 60).padStart(2, '0') +
-    's'
-  )
+export function formatCost(value: number | null | undefined) {
+  const known = finiteMetric(value)
+  return known === null ? '—' : `$${known.toFixed(2)}`
 }
 
-function formatTokens(value: number | null | undefined) {
-  if (value === null || value === undefined || !Number.isFinite(value))
-    return 'Unknown'
-  if (Math.abs(value) >= 1000) {
-    return `${(value / 1000).toFixed(1).replace(/\.0$/, '')}k`
+export function formatDuration(value: number | null | undefined) {
+  const known = finiteMetric(value)
+  if (known === null) return '—'
+  if (known < 60) return `${known.toFixed(1).replace(/\.0$/, '')}s`
+  const rounded = Math.max(0, Math.round(known))
+  return `${Math.floor(rounded / 60)}m ${String(rounded % 60).padStart(2, '0')}s`
+}
+
+export function formatTokens(value: number | null | undefined) {
+  const known = finiteMetric(value)
+  if (known === null) return '—'
+  if (Math.abs(known) >= 1000) {
+    return `${(known / 1000).toFixed(1).replace(/\.0$/, '')}k`
   }
-  return Math.round(value).toLocaleString()
+  return Math.round(known).toLocaleString()
+}
+
+function formatCount(value: number | null | undefined) {
+  const known = finiteMetric(value)
+  return known === null ? '—' : Math.round(known).toLocaleString()
+}
+
+function formatScore(value: number | null | undefined) {
+  const known = finiteMetric(value)
+  return known === null ? '—' : known.toFixed(0)
 }
 
 function formatDate(value: string) {
-  if (!value) return 'Not completed'
+  if (!value) return 'not completed'
   const date = new Date(value)
-  if (Number.isNaN(date.getTime())) return 'Unknown date'
+  if (Number.isNaN(date.getTime())) return 'unknown date'
   return new Intl.DateTimeFormat(undefined, {
     month: 'short',
     day: 'numeric',
     hour: '2-digit',
     minute: '2-digit',
   }).format(date)
-}
-
-function formatStatus(status: string) {
-  const labels: Record<string, string> = {
-    passed: 'Passed',
-    hard_gate_failed: 'Hard gate failed',
-    technical_failed: 'Technical failure',
-    infra_failed: 'Infrastructure failure',
-  }
-  return (
-    labels[status] ??
-    status
-      .replace(/[_-]+/g, ' ')
-      .replace(/\b\w/g, (letter) => letter.toUpperCase())
-  )
-}
-
-function statusClass(status: string) {
-  if (status === 'passed') return 'tmh-status-pass'
-  if (status === 'hard_gate_failed' || status === 'infra_failed')
-    return 'tmh-status-fail'
-  return 'tmh-status-tech'
-}
-
-function shortHash(value: string | null | undefined) {
-  if (!value) return 'Unknown'
-  const hash = value.replace(/^sha256:/, '')
-  if (hash.length <= 16) return `sha256:${hash}`
-  return `sha256:${hash.slice(0, 8)}…${hash.slice(-6)}`
-}
-
-function contractSummary(observations: TestObservation[]) {
-  const contracts = [
-    ...new Set(
-      observations
-        .map((observation) => observation.contract_sha256)
-        .filter(Boolean),
-    ),
-  ]
-  if (contracts.length === 0) return 'Unknown'
-  if (contracts.length > 1) return 'Multiple contracts'
-  return shortHash(contracts[0])
-}
-
-function modelLabel(provider?: string | null, model?: string | null) {
-  if (!provider && !model) return 'Unknown model'
-  return [provider, model].filter(Boolean).join('/') || 'Unknown model'
-}
-
-function systemSummary(observation: TestObservation) {
-  if (observation.stack_mode === 'source') return 'Local source'
-  if (observation.stack_mode === 'registry') return 'Registry stack'
-  return 'Local environment'
-}
-
-function visibleLabel(count: number) {
-  return `${String(count)} visible ${count === 1 ? 'execution' : 'executions'}`
-}
-
-function knownMetricCount(values: Array<number | null | undefined>) {
-  return values.filter(
-    (value) => value !== null && value !== undefined && Number.isFinite(value),
-  ).length
-}
-
-function metricCaption(known: number, total: number, metric: string) {
-  if (known === 0) return `no ${metric} records`
-  if (known === total)
-    return `median across ${total} visible ${total === 1 ? 'execution' : 'executions'}`
-  return `median across ${known} of ${total} executions`
-}
-
-function logicalRunLabel(count: number) {
-  return `${String(count)} logical ${count === 1 ? 'run' : 'runs'}`
-}
-
-type ComparisonMetricKey =
-  | 'score'
-  | 'duration'
-  | 'tokens'
-  | 'cost'
-  | 'functionCalls'
-  | 'functionErrors'
-  | 'turns'
-
-function formatMetricValue(metric: ComparisonMetricKey, value: number | null) {
-  if (value === null) return 'Not reported'
-  switch (metric) {
-    case 'score':
-      return value.toFixed(2)
-    case 'cost':
-      return formatCost(value)
-    case 'duration':
-      return formatDuration(value)
-    case 'tokens':
-      return formatTokens(value)
-    case 'functionCalls':
-    case 'functionErrors':
-    case 'turns':
-      return Math.round(value).toLocaleString()
-  }
-}
-
-function metricDeltaText(metric: ComparisonMetricKey, value: ComparedMetric) {
-  if (value.delta === null) return 'Delta unavailable'
-  if (value.delta === 0) return 'No change'
-  const sign = value.delta > 0 ? '+' : '−'
-  const absolute = Math.abs(value.delta)
-  if (metric === 'score') return `${sign}${absolute.toFixed(1)} points`
-  if (metric === 'functionCalls') {
-    return `${sign}${Math.round(absolute).toLocaleString()} ${absolute === 1 ? 'call' : 'calls'}`
-  }
-  if (metric === 'functionErrors') {
-    return `${sign}${Math.round(absolute).toLocaleString()} ${absolute === 1 ? 'error' : 'errors'}`
-  }
-  if (metric === 'turns') {
-    return `${sign}${Math.round(absolute).toLocaleString()} ${absolute === 1 ? 'turn' : 'turns'}`
-  }
-  if (value.relativeDelta === null) {
-    if (metric === 'cost') return `${sign}${formatCost(absolute)}`
-    if (metric === 'duration') return `${sign}${formatDuration(absolute)}`
-    return `${sign}${formatTokens(absolute)}`
-  }
-  const magnitude = Math.abs(value.relativeDelta * 100)
-  const percent = magnitude.toFixed(magnitude >= 10 ? 0 : 1)
-  if (metric === 'duration') {
-    return `${percent}% ${value.delta < 0 ? 'faster' : 'slower'}`
-  }
-  return `${percent}% ${value.delta < 0 ? 'lower' : 'higher'}`
-}
-
-function deltaTone(metric: ComparisonMetricKey, value: ComparedMetric) {
-  if (value.delta === null || value.delta === 0) return 'tmh-delta-neutral'
-  if (metric === 'functionCalls') return 'tmh-delta-caution'
-  const improved = metric === 'score' ? value.delta > 0 : value.delta < 0
-  return improved ? 'tmh-delta-improved' : 'tmh-delta-regressed'
-}
-
-function finiteMetric(value: number | null | undefined): number | null {
-  return value !== null && value !== undefined && Number.isFinite(value)
-    ? value
-    : null
 }
 
 function formatDay(value: string) {
@@ -303,7 +192,159 @@ function formatDay(value: string) {
   }).format(date)
 }
 
-function ScoreTrendChart({
+/** Audit TH-05: the DS status vocabulary; "passed" is green, never accent. */
+export function statusPresentation(status: string): {
+  status: OperationalStatus
+  label: string
+} {
+  if (status === 'passed') return { status: 'passed', label: 'passed' }
+  if (status === 'hard_gate_failed')
+    return { status: 'hard_gate', label: 'hard gate failed' }
+  if (status === 'technical_failed')
+    return { status: 'failed', label: 'technical failure' }
+  if (status === 'infra_failed')
+    return { status: 'failed', label: 'infrastructure failure' }
+  return {
+    status: 'failed',
+    label: status.replace(/[_-]+/g, ' ').toLowerCase(),
+  }
+}
+
+function shortHash(value: string | null | undefined) {
+  if (!value) return null
+  return value.replace(/^sha256:/, '').slice(0, 8)
+}
+
+function contractSummary(observations: TestObservation[]) {
+  const contracts = [
+    ...new Set(
+      observations
+        .map((observation) => observation.contract_sha256)
+        .filter(Boolean),
+    ),
+  ]
+  if (contracts.length === 0) return null
+  if (contracts.length > 1) return { short: 'multiple contracts', full: null }
+  return { short: `sha ${shortHash(contracts[0])}`, full: contracts[0] }
+}
+
+function modelLabel(provider?: string | null, model?: string | null) {
+  if (!provider && !model) return 'unknown model'
+  return [provider, model].filter(Boolean).join('/') || 'unknown model'
+}
+
+function systemSummary(observation: TestObservation) {
+  const revision = shortHash(observation.system_revision)
+  const stack =
+    observation.stack_mode === 'source'
+      ? 'source'
+      : observation.stack_mode === 'registry'
+        ? 'registry'
+        : 'local'
+  return revision ? `${stack} ${revision}` : observation.system_label || stack
+}
+
+function knownMetricCount(values: Array<number | null | undefined>) {
+  return values.filter((value) => finiteMetric(value) !== null).length
+}
+
+export function metricCaption(known: number, total: number) {
+  if (known === total)
+    return `across ${total} ${total === 1 ? 'execution' : 'executions'}`
+  return `across ${known} of ${total} executions`
+}
+
+function runLabel(count: number) {
+  return `${count} ${count === 1 ? 'run' : 'runs'}`
+}
+
+type ComparisonMetricKey =
+  | 'score'
+  | 'duration'
+  | 'tokens'
+  | 'cost'
+  | 'functionCalls'
+  | 'functionErrors'
+  | 'turns'
+
+const COMPARISON_METRICS: Array<{
+  key: ComparisonMetricKey
+  label: string
+  betterWhen: 'higher' | 'lower' | 'neither'
+  format: (value: number | null) => string
+}> = [
+  { key: 'score', label: 'score', betterWhen: 'higher', format: formatScore },
+  {
+    key: 'duration',
+    label: 'duration',
+    betterWhen: 'lower',
+    format: formatDuration,
+  },
+  { key: 'tokens', label: 'tokens', betterWhen: 'lower', format: formatTokens },
+  { key: 'cost', label: 'cost', betterWhen: 'lower', format: formatCost },
+  {
+    key: 'functionCalls',
+    label: 'functions',
+    betterWhen: 'neither',
+    format: formatCount,
+  },
+  {
+    key: 'functionErrors',
+    label: 'errors',
+    betterWhen: 'lower',
+    format: formatCount,
+  },
+  { key: 'turns', label: 'turns', betterWhen: 'lower', format: formatCount },
+]
+
+function deltaMagnitude(
+  metric: ComparisonMetricKey,
+  value: ComparedMetric,
+): { value: number | null; format: (magnitude: number) => string } {
+  if (value.delta === null) return { value: null, format: String }
+  if (metric === 'score')
+    return { value: value.delta, format: (m) => `${m.toFixed(0)} pts` }
+  if (
+    metric === 'functionCalls' ||
+    metric === 'functionErrors' ||
+    metric === 'turns'
+  )
+    return { value: value.delta, format: (m) => Math.round(m).toLocaleString() }
+  if (value.relativeDelta === null) {
+    const format =
+      metric === 'cost'
+        ? formatCost
+        : metric === 'duration'
+          ? formatDuration
+          : formatTokens
+    return { value: value.delta, format: (m) => format(m) }
+  }
+  return {
+    value: value.relativeDelta * 100,
+    format: (m) => `${m.toFixed(m >= 10 ? 0 : 1)}%`,
+  }
+}
+
+/* --------------------------------------------------------------- trend */
+
+/** The rendered width of an element, so an SVG viewBox can match its pixels. */
+function useMeasuredWidth<T extends HTMLElement>(fallback: number) {
+  const ref = useRef<T>(null)
+  const [width, setWidth] = useState(fallback)
+  useEffect(() => {
+    const element = ref.current
+    if (!element || typeof ResizeObserver === 'undefined') return
+    const observer = new ResizeObserver((entries) => {
+      const next = entries[0]?.contentRect.width
+      if (next) setWidth(Math.round(next))
+    })
+    observer.observe(element)
+    return () => observer.disconnect()
+  }, [])
+  return { ref, width }
+}
+
+export function ScoreTrendChart({
   observations,
   selectedKeys,
   onSelect,
@@ -312,17 +353,22 @@ function ScoreTrendChart({
   selectedKeys: string[]
   onSelect: (observation: TestObservation) => void
 }) {
+  const { ref, width } = useMeasuredWidth<HTMLDivElement>(560)
   // Observations arrive newest-first; the chart reads left → right in time.
   const plotted = [...observations]
     .reverse()
     .filter((item) => finiteMetric(item.median_score) !== null)
   if (plotted.length === 0) {
-    return <p className="tmh-chart-empty">No scored executions to plot yet.</p>
+    return (
+      <p className="m-0 text-xs text-ink-soft">
+        No scored executions to plot yet.
+      </p>
+    )
   }
-  const left = 60
-  const right = 515
-  const top = 22
-  const bottom = 178
+  const left = 44
+  const right = Math.max(left + 80, width - 20)
+  const top = 16
+  const bottom = 132
   const xs = plotted.map((_, index) =>
     plotted.length === 1
       ? (left + right) / 2
@@ -336,306 +382,260 @@ function ScoreTrendChart({
         `${x.toFixed(1)},${yFor(plotted[index].median_score as number).toFixed(1)}`,
     )
     .join(' ')
+  const gate = yFor(50)
+  const anchorFor = (index: number) =>
+    plotted.length === 1
+      ? 'middle'
+      : index === 0
+        ? 'start'
+        : index === plotted.length - 1
+          ? 'end'
+          : 'middle'
   return (
-    <svg
-      className="tmh-chart"
-      viewBox="0 0 560 216"
-      role="img"
-      aria-label="Median score per retained execution"
-    >
-      <line className="tmh-chart-grid" x1="36" y1={top} x2="548" y2={top} />
-      <line className="tmh-chart-grid" x1="36" y1="100" x2="548" y2="100" />
-      <line
-        className="tmh-chart-grid"
-        x1="36"
-        y1={bottom}
-        x2="548"
-        y2={bottom}
-      />
-      <text className="tmh-chart-tick" x="28" y={top + 4} textAnchor="end">
-        100
-      </text>
-      <text className="tmh-chart-tick" x="28" y="104" textAnchor="end">
-        50
-      </text>
-      <text className="tmh-chart-tick" x="28" y={bottom + 4} textAnchor="end">
-        0
-      </text>
-      <text className="tmh-chart-tick" x="548" y="96" textAnchor="end">
-        gate 50
-      </text>
-      {plotted.length > 1 && (
-        <polyline className="tmh-chart-line" points={line} />
-      )}
-      {plotted.map((item, index) => {
-        const key = testObservationKey(item)
-        const selectedIndex = selectedKeys.indexOf(key)
-        const failed = item.status !== 'passed'
-        const score = item.median_score as number
-        const x = xs[index]
-        const y = yFor(score)
-        const dotClass =
-          selectedIndex >= 0
-            ? 'tmh-chart-dot-selected'
-            : failed
-              ? 'tmh-chart-dot-failed'
-              : 'tmh-chart-dot-context'
-        const slot =
-          selectedIndex === 0 ? 'A' : selectedIndex === 1 ? 'B' : null
-        const labelBelow = y <= 168
-        return (
-          // biome-ignore lint/a11y/useSemanticElements: an SVG hit target cannot be a native <button>; the group carries the full button contract (role, tabIndex, keyboard activation).
-          <g
-            className="tmh-chart-hit"
-            key={key}
-            role="button"
-            tabIndex={0}
-            aria-pressed={selectedIndex >= 0}
-            aria-label={`${formatDate(item.completed_at)} · score ${score.toFixed(0)} · ${formatStatus(item.status)}${slot ? ` · selected as ${slot}` : ''}`}
-            onClick={() => onSelect(item)}
-            onKeyDown={(event) => {
-              if (event.key === 'Enter' || event.key === ' ') {
-                event.preventDefault()
-                onSelect(item)
-              }
-            }}
-          >
-            <title>
-              {`${formatDate(item.completed_at)} · score ${score.toFixed(0)} · ${formatStatus(item.status)} · ${formatDuration(item.median_duration_seconds)} · ${formatTokens(item.median_tokens)} tokens`}
-            </title>
-            <circle className="tmh-chart-target" cx={x} cy={y} r="12" />
-            <circle
-              className={`tmh-chart-dot ${dotClass}`}
-              cx={x}
-              cy={y}
-              r={selectedIndex >= 0 ? 4.5 : 4}
-            />
-            {slot ? (
-              <g
-                className={
-                  slot === 'A' ? 'tmh-chart-chip-a' : 'tmh-chart-chip-b'
-                }
-              >
-                <rect
-                  x={x - 9}
-                  y={labelBelow ? y + 10 : y - 27}
-                  width="18"
-                  height="15"
-                  rx="4"
-                />
-                <text
-                  x={x}
-                  y={labelBelow ? y + 21.5 : y - 15.5}
-                  textAnchor="middle"
-                >
-                  {slot}
-                </text>
-              </g>
-            ) : failed ? (
-              <text
-                className="tmh-chart-value"
-                x={x}
-                y={labelBelow ? y + 18 : y - 10}
-                textAnchor="middle"
-              >
-                {score.toFixed(0)}
-              </text>
-            ) : null}
-          </g>
-        )
-      })}
-      <text className="tmh-chart-tick" x={xs[0]} y="206" textAnchor="middle">
-        {formatDay(plotted[0].completed_at)}
-      </text>
-      {plotted.length > 1 && (
+    <div ref={ref} className="w-full">
+      <svg
+        className="block h-40 w-full font-mono text-label"
+        viewBox={`0 0 ${width} 160`}
+        role="img"
+        aria-label="Median score per retained execution, oldest on the left"
+        data-score-trend
+      >
+        {[top, gate, bottom].map((y) => (
+          <line
+            key={y}
+            className="stroke-line"
+            x1={left - 8}
+            y1={y}
+            x2={right + 8}
+            y2={y}
+            strokeDasharray={y === gate ? '3 3' : undefined}
+          />
+        ))}
         <text
-          className="tmh-chart-tick"
-          x={xs[xs.length - 1]}
-          y="206"
-          textAnchor="middle"
+          className="fill-ink-soft"
+          x={left - 12}
+          y={top + 4}
+          textAnchor="end"
         >
-          {formatDay(plotted[plotted.length - 1].completed_at)}
+          100
         </text>
-      )}
-    </svg>
+        <text
+          className="fill-ink-soft"
+          x={left - 12}
+          y={gate + 4}
+          textAnchor="end"
+        >
+          50
+        </text>
+        <text
+          className="fill-ink-soft"
+          x={left - 12}
+          y={bottom + 4}
+          textAnchor="end"
+        >
+          0
+        </text>
+        <text
+          className="fill-ink-muted"
+          x={left - 12}
+          y={gate + 14}
+          textAnchor="end"
+        >
+          gate
+        </text>
+        {plotted.length > 1 ? (
+          <polyline
+            className="fill-none stroke-ink-muted"
+            strokeWidth="1.5"
+            points={line}
+            vectorEffect="non-scaling-stroke"
+          />
+        ) : null}
+        {plotted.map((item, index) => {
+          const key = testObservationKey(item)
+          const selectedIndex = selectedKeys.indexOf(key)
+          const failed = item.status !== 'passed'
+          const score = item.median_score as number
+          const x = xs[index]
+          const y = yFor(score)
+          const slot =
+            selectedIndex === 0 ? 'A' : selectedIndex === 1 ? 'B' : null
+          const labelBelow = y <= bottom - 24
+          return (
+            // biome-ignore lint/a11y/useSemanticElements: an SVG hit target cannot be a native <button>; the group carries the full button contract (role, tabIndex, keyboard activation).
+            <g
+              className="cursor-pointer outline-none focus-visible:[outline:2px_solid_var(--accent)]"
+              key={key}
+              role="button"
+              tabIndex={0}
+              aria-pressed={selectedIndex >= 0}
+              aria-label={`${formatDate(item.completed_at)} · score ${score.toFixed(0)} · ${statusPresentation(item.status).label}${slot ? ` · selected as ${slot}` : ''}`}
+              onClick={() => onSelect(item)}
+              onKeyDown={(event) => {
+                if (event.key === 'Enter' || event.key === ' ') {
+                  event.preventDefault()
+                  onSelect(item)
+                }
+              }}
+            >
+              <title>
+                {`${formatDate(item.completed_at)} · score ${score.toFixed(0)} · ${statusPresentation(item.status).label} · ${formatDuration(item.median_duration_seconds)} · ${formatTokens(item.median_tokens)} tokens`}
+              </title>
+              <circle className="fill-transparent" cx={x} cy={y} r="12" />
+              <circle
+                className={
+                  selectedIndex >= 0
+                    ? 'fill-ink'
+                    : failed
+                      ? 'fill-danger'
+                      : 'fill-success'
+                }
+                cx={x}
+                cy={y}
+                r={selectedIndex >= 0 ? 5 : 4}
+              />
+              {slot ? (
+                <g>
+                  <rect
+                    className="fill-ink"
+                    x={x - 8}
+                    y={labelBelow ? y + 9 : y - 24}
+                    width="16"
+                    height="14"
+                    rx="3"
+                  />
+                  <text
+                    className="fill-canvas font-semibold"
+                    x={x}
+                    y={labelBelow ? y + 19.5 : y - 13.5}
+                    textAnchor="middle"
+                  >
+                    {slot}
+                  </text>
+                </g>
+              ) : (
+                <text
+                  className="fill-ink-soft"
+                  x={x}
+                  y={labelBelow ? y + 18 : y - 9}
+                  textAnchor={anchorFor(index)}
+                >
+                  {score.toFixed(0)}
+                </text>
+              )}
+            </g>
+          )
+        })}
+        <text className="fill-ink-muted" x={xs[0]} y="154" textAnchor="middle">
+          {formatDay(plotted[0].completed_at)}
+        </text>
+        {plotted.length > 1 ? (
+          <text
+            className="fill-ink-muted"
+            x={xs[xs.length - 1]}
+            y="154"
+            textAnchor="middle"
+          >
+            {formatDay(plotted[plotted.length - 1].completed_at)}
+          </text>
+        ) : null}
+      </svg>
+    </div>
   )
 }
 
-const comparisonMetrics = [
-  { key: 'score', label: 'Score', icon: Target },
-  { key: 'duration', label: 'Duration', icon: Clock3 },
-  { key: 'tokens', label: 'Tokens', icon: Layers3 },
-  { key: 'cost', label: 'Cost', icon: CircleDollarSign },
-  { key: 'functionCalls', label: 'Functions', icon: Braces },
-  { key: 'functionErrors', label: 'Errors', icon: CircleAlert },
-  { key: 'turns', label: 'Turns', icon: MessagesSquare },
-] satisfies Array<{
-  key: ComparisonMetricKey
-  label: string
-  icon: typeof Target
-}>
+/** A panel with the DS heading pair (title, one-line summary) and actions. */
+function SectionPanel({
+  title,
+  summary,
+  headingId,
+  actions,
+  children,
+  ...props
+}: {
+  title: string
+  summary: string
+  headingId: string
+  actions?: React.ReactNode
+  children: React.ReactNode
+} & Omit<React.HTMLAttributes<HTMLElement>, 'title'>) {
+  return (
+    <Panel aria-labelledby={headingId} {...props}>
+      <div className="mb-4 flex flex-wrap items-start justify-between gap-3">
+        <div className="min-w-0">
+          <h2 className="m-0 text-sm font-semibold text-ink" id={headingId}>
+            {title}
+          </h2>
+          <p className="mt-1 mb-0 font-mono text-label text-ink-muted">
+            {summary}
+          </p>
+        </div>
+        {actions ? (
+          <div className="flex flex-wrap items-center gap-2">{actions}</div>
+        ) : null}
+      </div>
+      {children}
+    </Panel>
+  )
+}
+
+/* ---------------------------------------------------------- comparison */
 
 type Verdict = {
-  tone: 'improved' | 'regressed' | 'mixed' | 'neutral'
+  status: OperationalStatus
   title: string
   detail: string
 }
 
-function comparisonVerdict(
+export function comparisonVerdict(
   comparison: ReturnType<typeof compareTestObservations>,
 ): Verdict {
-  if (!comparison.compatible) {
-    return {
-      tone: 'neutral',
-      title: 'Not comparable',
-      detail: 'the values are shown, but deltas are not interpreted',
-    }
-  }
-
   const objectiveRegressed =
     comparison.baseline.status === 'passed' &&
     comparison.candidate.status !== 'passed'
   const objectiveImproved =
     comparison.baseline.status !== 'passed' &&
     comparison.candidate.status === 'passed'
-  const interpreted = [
-    ['score', comparison.metrics.score],
-    ['duration', comparison.metrics.duration],
-    ['tokens', comparison.metrics.tokens],
-    ['cost', comparison.metrics.cost],
-    ['functionErrors', comparison.metrics.functionErrors],
-    ['turns', comparison.metrics.turns],
-  ] as const
-  const tones = interpreted.map(([metric, value]) => deltaTone(metric, value))
-  const improved = objectiveImproved || tones.includes('tmh-delta-improved')
-  const regressed = objectiveRegressed || tones.includes('tmh-delta-regressed')
-  const tone =
-    improved && regressed
-      ? 'mixed'
-      : regressed
-        ? 'regressed'
-        : improved
-          ? 'improved'
-          : 'neutral'
-  const title =
-    tone === 'mixed'
-      ? 'Mixed result'
-      : tone === 'regressed'
-        ? 'Candidate regressed'
-        : tone === 'improved'
-          ? 'Candidate improved'
-          : 'No material change'
-
+  let improved = objectiveImproved
+  let regressed = objectiveRegressed
   const details: string[] = []
-  const score = comparison.metrics.score
-  if (score.delta === 0) details.push('score unchanged')
-  else if (score.delta !== null)
-    details.push(score.delta > 0 ? 'score improved' : 'score declined')
-  for (const [key, label] of [
-    ['duration', 'duration'],
-    ['tokens', 'tokens'],
-    ['cost', 'cost'],
-  ] as const) {
-    const metric = comparison.metrics[key]
-    if (metric.delta === null || metric.delta === 0) continue
-    details.push(`${label} ${metric.delta < 0 ? 'improved' : 'increased'}`)
+  if (objectiveImproved) details.push('now passes')
+  if (objectiveRegressed) details.push('no longer passes')
+  for (const metric of COMPARISON_METRICS) {
+    if (metric.betterWhen === 'neither') continue
+    const value = comparison.metrics[metric.key]
+    if (value.delta === null || value.delta === 0) continue
+    const better =
+      metric.betterWhen === 'higher' ? value.delta > 0 : value.delta < 0
+    if (better) improved = true
+    else regressed = true
+    details.push(
+      `${metric.label} ${better ? (metric.key === 'score' ? 'up' : 'down') : metric.key === 'score' ? 'down' : 'up'}`,
+    )
   }
-  if (comparison.metrics.functionErrors.delta !== null) {
-    if (comparison.metrics.functionErrors.delta > 0)
-      details.push('more function errors')
-    if (comparison.metrics.functionErrors.delta < 0)
-      details.push('fewer function errors')
-  }
+  const status: OperationalStatus =
+    improved && regressed
+      ? 'inconclusive'
+      : regressed
+        ? 'failed'
+        : improved
+          ? 'passed'
+          : 'inconclusive'
+  const title =
+    improved && regressed
+      ? 'mixed result'
+      : regressed
+        ? 'b regressed'
+        : improved
+          ? 'b improved'
+          : 'no material change'
   return {
-    tone,
+    status,
     title,
     detail: details.length
-      ? details.join(', ')
-      : 'all comparable metrics are unchanged',
+      ? details.join(' · ')
+      : 'all comparable metrics unchanged',
   }
-}
-
-function MetricComparisonCard({
-  metric,
-  label,
-  value,
-  compatible,
-  Icon,
-}: {
-  metric: ComparisonMetricKey
-  label: string
-  value: ComparedMetric
-  compatible: boolean
-  Icon: typeof Target
-}) {
-  return (
-    <article className="tmh-comparison-card">
-      <div className="tmh-comparison-card-head">
-        <Icon size={16} strokeWidth={1.75} aria-hidden="true" />
-        <span>{label}</span>
-      </div>
-      <div className="tmh-comparison-values">
-        <span className="tmh-comparison-side-label tmh-comparison-side-a">
-          A
-        </span>
-        <strong>{formatMetricValue(metric, value.baseline)}</strong>
-        <ArrowRight aria-hidden="true" size={17} strokeWidth={1.5} />
-        <strong>{formatMetricValue(metric, value.candidate)}</strong>
-        <span className="tmh-comparison-side-label tmh-comparison-side-b">
-          B
-        </span>
-      </div>
-      <p
-        className={compatible ? deltaTone(metric, value) : 'tmh-delta-neutral'}
-      >
-        {compatible ? metricDeltaText(metric, value) : 'Delta not interpreted'}
-      </p>
-    </article>
-  )
-}
-
-function MetricPair({
-  metric,
-  value,
-  compatible,
-}: {
-  metric: ComparisonMetricKey
-  value: ComparedMetric
-  compatible: boolean
-}) {
-  const changed = value.baseline !== value.candidate
-  const tone =
-    changed && compatible && value.delta !== null
-      ? deltaTone(metric, value).replace('tmh-delta-', '')
-      : changed
-        ? 'neutral'
-        : null
-
-  return (
-    <span className="tmh-impact-pair">
-      <span className="tmh-impact-value">
-        {formatMetricValue(metric, value.baseline)}
-      </span>
-      <ArrowRight aria-hidden="true" size={13} />
-      <span
-        className={`tmh-impact-value${tone ? ` tmh-impact-change tmh-impact-change-${tone}` : ''}`}
-      >
-        {formatMetricValue(metric, value.candidate)}
-      </span>
-    </span>
-  )
-}
-
-function resultChangeTone(
-  baseline: TestObservation['status'],
-  candidate: TestObservation['status'],
-  compatible: boolean,
-) {
-  if (baseline === candidate) return null
-  if (!compatible) return 'neutral'
-  if (candidate === 'passed') return 'improved'
-  if (baseline === 'passed') return 'regressed'
-  return 'caution'
 }
 
 export function ObservationComparisonPanel({
@@ -653,202 +653,151 @@ export function ObservationComparisonPanel({
 }) {
   const comparison =
     baseline && candidate ? compareTestObservations(baseline, candidate) : null
-  const verdict = comparison ? comparisonVerdict(comparison) : null
-  const resultTone = comparison
-    ? resultChangeTone(
-        comparison.baseline.status,
-        comparison.candidate.status,
-        comparison.compatible,
-      )
-    : null
+  const verdict = comparison?.compatible ? comparisonVerdict(comparison) : null
+  // Audit CP-19 / TH-08: a metric nobody reports is not a card.
+  const metrics = comparison
+    ? COMPARISON_METRICS.filter(({ key }) => {
+        const value = comparison.metrics[key]
+        return value.baseline !== null || value.candidate !== null
+      })
+    : []
 
   return (
-    <section
-      className="tmh-comparison-workspace"
-      aria-labelledby="tmh-comparison-title"
+    <SectionPanel
+      title="a → b"
+      summary={
+        baseline && candidate
+          ? `a = ${formatDate(baseline.completed_at)} · b = ${formatDate(candidate.completed_at)}`
+          : 'choose two executions in the table'
+      }
+      headingId="test-comparison-title"
+      actions={
+        <>
+          <button
+            className={buttonClassName({
+              variant: 'secondary',
+              size: 'compact',
+            })}
+            type="button"
+            onClick={onSwap}
+            disabled={!candidate}
+          >
+            <ArrowLeftRight aria-hidden="true" size={13} />
+            swap
+          </button>
+          <button
+            className={buttonClassName({ variant: 'quiet', size: 'compact' })}
+            type="button"
+            onClick={onClear}
+            disabled={!baseline}
+          >
+            clear
+          </button>
+        </>
+      }
+      data-test-comparison
       aria-live="polite"
     >
-      <div className="tmh-comparison-picker">
-        <div className="tmh-comparison-pick">
-          <span className="tmh-ab-chip tmh-ab-chip-a" aria-hidden="true">
-            A
-          </span>
-          <span>
-            <strong id="tmh-comparison-title">A · Baseline</strong>
-            <small>
-              {baseline
-                ? `${formatDate(baseline.completed_at)} · ${logicalRunLabel(baseline.run_count)}`
-                : 'Choose an execution'}
-            </small>
-          </span>
-          {baseline ? (
-            <ScenarioChatAction
-              compact
-              executionId={baseline.execution_id}
-              scenarioId={testId}
-            />
-          ) : null}
-        </div>
-        <button
-          className="tmh-swap-comparison"
-          type="button"
-          onClick={onSwap}
-          disabled={!candidate}
-        >
-          <ArrowLeftRight aria-hidden="true" size={15} />
-          Swap sides
-        </button>
-        <div className="tmh-comparison-pick tmh-comparison-pick-b">
-          <span className="tmh-ab-chip tmh-ab-chip-b" aria-hidden="true">
-            B
-          </span>
-          <span>
-            <strong>B · Candidate</strong>
-            <small>
-              {candidate
-                ? `${formatDate(candidate.completed_at)} · ${logicalRunLabel(candidate.run_count)}`
-                : 'Choose an execution'}
-            </small>
-          </span>
-          {candidate ? (
+      {!baseline ? (
+        <p className="m-0 text-xs text-ink-soft">
+          Tick an execution in the table to choose a. Separate cases and cohorts
+          are never pooled.
+        </p>
+      ) : !candidate ? (
+        <p className="m-0 text-xs text-ink-soft">
+          a = {formatDate(baseline.completed_at)}. Tick another execution to
+          choose b.
+        </p>
+      ) : comparison ? (
+        <div className="grid gap-4">
+          {/* Audit TH-11: one banner says whether deltas can be read. */}
+          {comparison.compatible ? (
+            <Callout tone="success">
+              <span className="flex flex-wrap items-center gap-2">
+                {verdict ? (
+                  <StatusBadge status={verdict.status} label={verdict.title} />
+                ) : null}
+                <span className="text-ink-soft">
+                  {verdict?.detail} · same contract, seed, cohort, model and
+                  judge
+                </span>
+              </span>
+            </Callout>
+          ) : (
+            <Callout
+              tone="warning"
+              title="not comparable · values shown, deltas not interpreted"
+            >
+              {comparison.reasons.join(' · ')}. Choose two executions of the
+              same model, judge and cohort to read deltas.
+            </Callout>
+          )}
+          <div className="grid gap-2 @[560px]:grid-cols-2 @[840px]:grid-cols-4">
+            {metrics.map(({ key, label, betterWhen, format }) => {
+              const value = comparison.metrics[key]
+              const delta = deltaMagnitude(key, value)
+              return (
+                <article
+                  className="grid gap-1 rounded-[6px] bg-[var(--surface-fill)] p-3"
+                  key={key}
+                  data-comparison-metric={key}
+                >
+                  <span className="ds-label">{label}</span>
+                  <span className="flex items-center gap-2 font-mono text-sm text-ink">
+                    <span>{format(value.baseline)}</span>
+                    <ArrowRight
+                      className="text-ink-muted"
+                      aria-hidden="true"
+                      size={13}
+                    />
+                    <span>{format(value.candidate)}</span>
+                  </span>
+                  {comparison.compatible ? (
+                    <DeltaValue
+                      className="text-label"
+                      value={delta.value}
+                      format={delta.format}
+                      betterWhen={betterWhen}
+                      unavailableLabel="—"
+                      title="b − a"
+                    />
+                  ) : (
+                    <span className="font-mono text-label text-ink-muted">
+                      a → b
+                    </span>
+                  )}
+                </article>
+              )
+            })}
+          </div>
+          <div className="flex flex-wrap gap-2">
+            {[baseline, candidate].map((observation, index) => (
+              <a
+                key={observation.execution_id}
+                className={buttonClassName({
+                  variant: 'quiet',
+                  size: 'compact',
+                  className: 'no-underline',
+                })}
+                href={hashForExecution(observation.execution_id)}
+              >
+                open {index === 0 ? 'a' : 'b'}
+                <ArrowRight aria-hidden="true" size={13} />
+              </a>
+            ))}
             <ScenarioChatAction
               compact
               executionId={candidate.execution_id}
               scenarioId={testId}
             />
-          ) : null}
+          </div>
         </div>
-        {baseline && (
-          <button
-            className="tmh-clear-comparison"
-            type="button"
-            onClick={onClear}
-          >
-            Clear
-          </button>
-        )}
-      </div>
-
-      {!baseline ? (
-        <p className="tmh-comparison-message">
-          Select <strong>Set A</strong> on an execution below to choose the
-          baseline. Separate cases and cohorts are never pooled.
-        </p>
-      ) : !candidate ? (
-        <p className="tmh-comparison-message">
-          Now select <strong>Set B</strong> on another execution to choose the
-          candidate.
-        </p>
-      ) : comparison ? (
-        <>
-          <div
-            className={`tmh-compatibility${comparison?.compatible ? ' is-compatible' : ' is-incompatible'}`}
-            role="status"
-          >
-            {comparison?.compatible ? (
-              <CircleCheck aria-hidden="true" size={17} />
-            ) : (
-              <TriangleAlert aria-hidden="true" size={17} />
-            )}
-            <strong>
-              {comparison?.compatible
-                ? 'Comparable executions'
-                : 'Not comparable'}
-            </strong>
-            <span>
-              {comparison?.compatible
-                ? 'Same scenario contract, seed, cohort, model, and assessment profile.'
-                : comparison?.reasons.join(', ')}
-            </span>
-          </div>
-          {verdict && (
-            <div className={`tmh-verdict tmh-verdict-${verdict.tone}`}>
-              {verdict.tone === 'regressed' ? (
-                <TriangleAlert aria-hidden="true" size={19} />
-              ) : verdict.tone === 'improved' ? (
-                <CircleCheck aria-hidden="true" size={19} />
-              ) : (
-                <span className="tmh-verdict-mark" aria-hidden="true" />
-              )}
-              <strong>{verdict.title}</strong>
-              <span>· {verdict.detail}</span>
-            </div>
-          )}
-          <div className="tmh-comparison-card-grid">
-            {comparisonMetrics.map(({ key, label, icon }) => (
-              <MetricComparisonCard
-                key={key}
-                Icon={icon}
-                label={label}
-                metric={key}
-                value={comparison.metrics[key]}
-                compatible={comparison.compatible}
-              />
-            ))}
-          </div>
-          <div className="tmh-impact-table-wrap">
-            <table
-              className="tmh-impact-table"
-              aria-label={`Comparison impact for ${testId}`}
-            >
-              <caption>Impact by scenario</caption>
-              <thead>
-                <tr>
-                  <th scope="col">Scenario</th>
-                  <th scope="col">Result</th>
-                  <th scope="col">Score</th>
-                  <th scope="col">Duration</th>
-                  <th scope="col">Tokens</th>
-                  <th scope="col">Cost</th>
-                  <th scope="col">Functions</th>
-                  <th scope="col">Errors</th>
-                  <th scope="col">Turns</th>
-                  <th scope="col">Reading</th>
-                </tr>
-              </thead>
-              <tbody>
-                <tr className="tmh-impact-row">
-                  <td data-label="Scenario">
-                    <code>{testId}</code>
-                  </td>
-                  <td data-label="Result">
-                    <span className="tmh-impact-pair">
-                      <span className="tmh-impact-value">
-                        {formatStatus(comparison.baseline.status)}
-                      </span>
-                      <ArrowRight aria-hidden="true" size={13} />
-                      <span
-                        className={`tmh-impact-value${resultTone ? ` tmh-impact-change tmh-impact-change-${resultTone}` : ''}`}
-                      >
-                        {formatStatus(comparison.candidate.status)}
-                      </span>
-                    </span>
-                  </td>
-                  {comparisonMetrics.map(({ key, label }) => (
-                    <td key={key} data-label={label}>
-                      <MetricPair
-                        metric={key}
-                        value={comparison.metrics[key]}
-                        compatible={comparison.compatible}
-                      />
-                    </td>
-                  ))}
-                  <td data-label="Reading">
-                    <span
-                      className={`tmh-reading tmh-reading-${verdict?.tone ?? 'neutral'}`}
-                    >
-                      {verdict?.title ?? 'Unknown'}
-                    </span>
-                  </td>
-                </tr>
-              </tbody>
-            </table>
-          </div>
-        </>
       ) : null}
-    </section>
+    </SectionPanel>
   )
 }
+
+/* ------------------------------------------------------------- details */
 
 function ExecutionDetailsDialog({
   observation,
@@ -903,123 +852,125 @@ function ExecutionDetailsDialog({
   const availableReports = scopedDetail?.reports.filter(
     (report) => report.available,
   ).length
+  const result = statusPresentation(observation.status)
+  const metrics = [
+    ['score', formatScore(observation.median_score)],
+    ['duration', formatDuration(observation.median_duration_seconds)],
+    ['tokens', formatTokens(observation.median_tokens)],
+    ['cost', formatCost(observation.median_cost_usd)],
+    ['turns', formatCount(observation.median_turns)],
+  ].filter(([, value]) => value !== '—')
 
+  // Audit TH-03: an opaque panel from the design system, no accent bar.
   return (
     <Dialog
       open
       onClose={onClose}
       size="lg"
       tall
-      kicker="Test execution details"
+      kicker="execution"
       title={testId}
-      description={`${formatDate(observation.completed_at)} · ${version ? `Test v${String(version)}` : 'Test version unknown'} · ${logicalRunLabel(observation.run_count)}`}
+      description={`${formatDate(observation.completed_at)} · ${version ? `test v${version}` : 'test version unknown'} · ${runLabel(observation.run_count)}`}
       closeLabel="Close execution details"
-      className="tmh-execution-dialog"
+      className="ds-root"
       footer={
         <>
           <a
-            className="tmh-detail-link"
+            className={buttonClassName({
+              variant: 'secondary',
+              className: 'no-underline',
+            })}
             href={hashForExecution(observation.execution_id)}
           >
-            Open full execution report
+            open full execution report
           </a>
           <ScenarioChatAction
             detail={scopedDetail}
             executionId={observation.execution_id}
             scenarioId={testId}
           />
-          <button className="tmh-detail-button" type="button" onClick={onClose}>
-            Close
+          <button
+            className={buttonClassName({ variant: 'primary' })}
+            type="button"
+            onClick={onClose}
+          >
+            close
           </button>
         </>
       }
     >
-      <div className="tmh-execution-dialog-body">
-        <section className="tmh-execution-dialog-overview">
-          <div>
-            <span className="tmh-label">Result</span>
-            <strong className={`tmh-status ${statusClass(observation.status)}`}>
-              {formatStatus(observation.status)}
-            </strong>
-            <small>
-              {observation.median_score === null ||
-              observation.median_score === undefined
-                ? 'Score unknown'
-                : `Score ${observation.median_score.toFixed(2)}`}
-            </small>
+      <div className="grid gap-6">
+        <dl className="m-0 grid gap-3 text-xs @[560px]:grid-cols-2 @[840px]:grid-cols-4">
+          <div className="grid gap-1">
+            <dt className="ds-label">result</dt>
+            <dd className="m-0">
+              <StatusBadge status={result.status} label={result.label} />
+            </dd>
           </div>
-          <div>
-            <span className="tmh-label">Execution model</span>
-            <strong>
+          <div className="grid gap-1">
+            <dt className="ds-label">execution model</dt>
+            <dd className="m-0 font-mono text-ink">
               {modelLabel(
                 observation.subject_provider,
                 observation.subject_model,
               )}
-            </strong>
+            </dd>
           </div>
-          <div>
-            <span className="tmh-label">Judge</span>
-            <strong>
+          <div className="grid gap-1">
+            <dt className="ds-label">judge</dt>
+            <dd className="m-0 font-mono text-ink">
               {modelLabel(observation.judge_provider, observation.judge_model)}
-            </strong>
-            <small>{observation.judge_protocol ?? 'Protocol unknown'}</small>
+              {observation.judge_protocol ? (
+                <span className="block text-label text-ink-muted">
+                  judge protocol: {observation.judge_protocol}
+                </span>
+              ) : null}
+            </dd>
           </div>
-          <div>
-            <span className="tmh-label">Environment</span>
-            <strong>{systemSummary(observation)}</strong>
+          <div className="grid gap-1">
+            <dt className="ds-label">system</dt>
+            <dd className="m-0 font-mono text-ink">
+              {systemSummary(observation)}
+            </dd>
           </div>
-        </section>
-
+        </dl>
+        {metrics.length > 0 ? (
+          <dl
+            className="m-0 flex flex-wrap gap-x-6 gap-y-2 font-mono text-xs"
+            aria-label="Execution metrics"
+          >
+            {metrics.map(([label, value]) => (
+              <div className="flex items-baseline gap-2" key={label}>
+                <dt className="ds-label">{label}</dt>
+                <dd className="m-0 text-ink">{value}</dd>
+              </div>
+            ))}
+          </dl>
+        ) : null}
         <section
-          className="tmh-execution-dialog-metrics"
-          aria-label="Execution metrics"
+          className="grid gap-3"
+          aria-labelledby="execution-report-title"
         >
-          <div>
-            <span>Cost</span>
-            <strong>{formatCost(observation.median_cost_usd)}</strong>
-          </div>
-          <div>
-            <span>Duration</span>
-            <strong>
-              {formatDuration(observation.median_duration_seconds)}
-            </strong>
-          </div>
-          <div>
-            <span>Tokens</span>
-            <strong>{formatTokens(observation.median_tokens)}</strong>
-          </div>
-          <div>
-            <span>Turns</span>
-            <strong>
-              {observation.median_turns === null ||
-              observation.median_turns === undefined
-                ? 'Unknown'
-                : Math.round(observation.median_turns).toLocaleString()}
-            </strong>
-          </div>
-        </section>
-
-        <section className="tmh-execution-dialog-report">
-          <div className="tmh-execution-dialog-report-heading">
-            <div>
-              <span className="tmh-label">Test report</span>
-              <h3>Assessment details for this test</h3>
-            </div>
-            {detail && (
-              <span className="tmh-visible-count">
-                {String(availableReports ?? 0)} available{' '}
+          <div className="flex flex-wrap items-baseline justify-between gap-2">
+            <h3
+              className="m-0 text-sm font-semibold text-ink"
+              id="execution-report-title"
+            >
+              Assessment details for this test
+            </h3>
+            {detail ? (
+              <span className="font-mono text-label text-ink-muted">
+                {availableReports ?? 0} available{' '}
                 {(availableReports ?? 0) === 1 ? 'report' : 'reports'}
               </span>
-            )}
+            ) : null}
           </div>
           {loading ? (
-            <p className="tmh-dialog-message" role="status">
+            <p className="m-0 text-xs text-ink-soft" role="status">
               Loading execution report…
             </p>
           ) : error ? (
-            <p className="tmh-dialog-message tmh-dialog-error" role="alert">
-              {error}
-            </p>
+            <Callout tone="danger">{error}</Callout>
           ) : (
             <AssessmentWorkspace detail={scopedDetail} />
           )}
@@ -1029,18 +980,105 @@ function ExecutionDetailsDialog({
   )
 }
 
+/* ----------------------------------------------------------------- page */
+
+type HistoryFilters = {
+  version: number | undefined
+  model: string
+  judge: string
+  system: string
+  result: string
+}
+
+const EMPTY_FILTERS: HistoryFilters = {
+  version: undefined,
+  model: '',
+  judge: '',
+  system: '',
+  result: '',
+}
+
+/** Audit TH-19: filters, the a/b selection and the open dialog live in the hash. */
+export function historyStateFromParams(params: URLSearchParams) {
+  const version = params.get('version')
+  return {
+    filters: {
+      version: version && /^\d+$/.test(version) ? Number(version) : undefined,
+      model: params.get('model') ?? '',
+      judge: params.get('judge') ?? '',
+      system: params.get('system') ?? '',
+      result: params.get('result') ?? '',
+    } satisfies HistoryFilters,
+    comparisonKeys: ['a', 'b']
+      .map((slot) => params.get(slot))
+      .filter((value): value is string => Boolean(value)),
+    open: params.get('open'),
+  }
+}
+
+export function historyStateToParams(
+  filters: HistoryFilters,
+  comparisonKeys: string[],
+  open: string | null,
+) {
+  const params = new URLSearchParams()
+  if (filters.version !== undefined)
+    params.set('version', String(filters.version))
+  if (filters.model) params.set('model', filters.model)
+  if (filters.judge) params.set('judge', filters.judge)
+  if (filters.system) params.set('system', filters.system)
+  if (filters.result) params.set('result', filters.result)
+  if (comparisonKeys[0]) params.set('a', comparisonKeys[0])
+  if (comparisonKeys[1]) params.set('b', comparisonKeys[1])
+  if (open) params.set('open', open)
+  return params
+}
+
+function filtersActive(filters: HistoryFilters) {
+  return (
+    filters.version !== undefined ||
+    Boolean(filters.model || filters.judge || filters.system || filters.result)
+  )
+}
+
+/** Audit TH-07: says which version is shown and whether the contract moved on. */
+export function versionStatement(history: TestHistoryResponse) {
+  const current = history.current_version ?? null
+  if (current === null || current === history.test_version)
+    return `contract v${history.test_version}${current === null ? '' : ' · current'}`
+  const currentVersion = history.available_versions.find(
+    (item) => item.version === current,
+  )
+  const currentRuns = currentVersion?.execution_count ?? 0
+  return `showing v${history.test_version} (latest with executions) · current contract v${current} has ${currentRuns === 0 ? 'no executions yet' : `${currentRuns} ${currentRuns === 1 ? 'execution' : 'executions'}`}`
+}
+
 export function TestHistoryPage({ testId }: { testId: string }) {
+  const initial = useMemo(
+    () =>
+      historyStateFromParams(
+        typeof window === 'undefined'
+          ? new URLSearchParams()
+          : routeParams(window.location.hash),
+      ),
+    [],
+  )
   const [history, setHistory] = useState<TestHistoryResponse | null>(null)
-  const [version, setVersion] = useState<number | undefined>()
-  const [executionModel, setExecutionModel] = useState('')
-  const [judgeModel, setJudgeModel] = useState('')
-  const [system, setSystem] = useState('')
-  const [result, setResult] = useState('')
+  const [catalogRow, setCatalogRow] = useState<TestCatalogRow | null>(null)
+  const [neighbours, setNeighbours] = useState<{
+    previous: string | null
+    next: string | null
+  }>({ previous: null, next: null })
+  const [filters, setFilters] = useState<HistoryFilters>(initial.filters)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
-  const [selectedObservation, setSelectedObservation] =
-    useState<TestObservation | null>(null)
-  const [comparisonKeys, setComparisonKeys] = useState<string[]>([])
+  const [local, setLocal] = useState(false)
+  const [openKey, setOpenKey] = useState<string | null>(initial.open)
+  const [comparisonKeys, setComparisonKeys] = useState<string[]>(
+    initial.comparisonKeys,
+  )
+  const [selectionNotice, setSelectionNotice] = useState<string | null>(null)
+  const [copied, setCopied] = useState(false)
 
   useEffect(() => {
     let cancelled = false
@@ -1049,22 +1087,17 @@ export function TestHistoryPage({ testId }: { testId: string }) {
     void getDashboardDataBridge()
       .then((next) => {
         if (cancelled) return
-        if (next.mode !== 'local') {
-          throw new Error(
-            'Test metric history is available only in the local dashboard',
-          )
-        }
-        const execution = parseModelSelection(executionModel)
-        const judge = parseModelSelection(judgeModel)
+        setLocal(next.mode === 'local')
+        const execution = parseModelSelection(filters.model)
+        const judge = parseModelSelection(filters.judge)
         return next.getTestHistory({
           test_id: testId,
-          test_version: version,
+          test_version: filters.version,
           subject_provider: execution?.provider,
           subject_model: execution?.model,
           judge_provider: judge?.provider,
           judge_model: judge?.model,
-          system_version_id: system || undefined,
-          result: result || undefined,
+          system_version_id: filters.system || undefined,
           limit: 100,
         })
       })
@@ -1081,7 +1114,33 @@ export function TestHistoryPage({ testId }: { testId: string }) {
     return () => {
       cancelled = true
     }
-  }, [executionModel, judgeModel, result, system, testId, version])
+  }, [filters.model, filters.judge, filters.system, filters.version, testId])
+
+  // Identity (complexity, realism, lifecycle) and the previous/next test come
+  // from the catalog (audit T-14 / TH-06).
+  useEffect(() => {
+    let cancelled = false
+    void getDashboardDataBridge()
+      .then((bridge) => bridge.listTests({ limit: 100 }))
+      .then((list) => {
+        if (cancelled) return
+        const ids = list.rows.map((row) => row.test_id)
+        const index = ids.indexOf(testId)
+        setCatalogRow(list.rows[index] ?? null)
+        setNeighbours({
+          previous: index > 0 ? ids[index - 1] : null,
+          next: index >= 0 && index < ids.length - 1 ? ids[index + 1] : null,
+        })
+      })
+      .catch(() => undefined)
+    return () => {
+      cancelled = true
+    }
+  }, [testId])
+
+  useEffect(() => {
+    replaceRouteParams(historyStateToParams(filters, comparisonKeys, openKey))
+  }, [filters, comparisonKeys, openKey])
 
   const executionModelGroups = useMemo(
     () => modelGroups(history, 'subject'),
@@ -1092,39 +1151,71 @@ export function TestHistoryPage({ testId }: { testId: string }) {
     [history],
   )
 
-  const observations = history?.observations ?? []
-  const costs = observations.map((item) => item.median_cost_usd)
-  const durations = observations.map((item) => item.median_duration_seconds)
-  const tokens = observations.map((item) => item.median_tokens)
-  const turns = observations.map((item) => item.median_turns)
-  const summaryCost = median(costs)
-  const summaryDuration = median(durations)
-  const summaryTokens = median(tokens)
-  const summaryTurns = median(turns)
-  const latestVersion = history?.available_versions.find(
-    (item) => item.version === history.test_version,
-  )
-  const knownPassed = observations.filter(
+  const allObservations = history?.observations ?? []
+  // Audit TH-21: the result filter is applied here so the chips keep their
+  // counts and a selection survives when both sides stay visible.
+  const observations = filters.result
+    ? allObservations.filter((item) =>
+        filters.result === 'passed'
+          ? item.status === 'passed'
+          : item.status !== 'passed',
+      )
+    : allObservations
+  const passedCount = allObservations.filter(
     (item) => item.status === 'passed',
   ).length
+  const failedCount = allObservations.length - passedCount
+
+  useEffect(() => {
+    if (loading || comparisonKeys.length === 0) return
+    const visible = new Set(observations.map(testObservationKey))
+    const kept = comparisonKeys.filter((key) => visible.has(key))
+    if (kept.length !== comparisonKeys.length) {
+      setComparisonKeys(kept)
+      setSelectionNotice(
+        kept.length === 0
+          ? 'Selection cleared: the chosen executions left the filter.'
+          : 'b was cleared because it left the filter.',
+      )
+    }
+  }, [loading, observations, comparisonKeys])
+
+  const scores = allObservations.map((item) => item.median_score)
+  const costs = allObservations.map((item) => item.median_cost_usd)
+  const durations = allObservations.map((item) => item.median_duration_seconds)
+  const tokens = allObservations.map((item) => item.median_tokens)
+  const knownCosts = knownMetricCount(costs)
   const comparisonSelections = comparisonKeys
     .map((key) => observations.find((item) => testObservationKey(item) === key))
     .filter((item): item is TestObservation => Boolean(item))
   const baseline = comparisonSelections[0] ?? null
   const candidate = comparisonSelections[1] ?? null
+  const openObservation =
+    openKey === null
+      ? null
+      : (allObservations.find((item) => testObservationKey(item) === openKey) ??
+        null)
+  const contract = contractSummary(allObservations)
+  const lastRun = allObservations[0] ?? null
+  const complexity = catalogRow
+    ? catalogComplexityPresentation(catalogRow)
+    : null
+  const realism = catalogRow ? catalogRealismPresentation(catalogRow) : null
+  const hasEvidence = allObservations.length > 0
+  const filtered = filtersActive(filters)
+  const isLocalTest = testId.startsWith('local_')
 
-  function clearComparison() {
-    setComparisonKeys([])
-  }
-
-  function swapComparison() {
-    setComparisonKeys((current) =>
-      current.length === 2 ? [current[1], current[0]] : current,
-    )
+  const setFilter = <K extends keyof HistoryFilters>(
+    key: K,
+    value: HistoryFilters[K],
+  ) => {
+    setSelectionNotice(null)
+    setFilters((current) => ({ ...current, [key]: value }))
   }
 
   function selectForComparison(observation: TestObservation) {
     const key = testObservationKey(observation)
+    setSelectionNotice(null)
     setComparisonKeys((current) => {
       const selectedIndex = current.indexOf(key)
       if (selectedIndex === 0) return current.slice(1)
@@ -1135,401 +1226,652 @@ export function TestHistoryPage({ testId }: { testId: string }) {
     })
   }
 
-  function comparisonActionLabel(observation: TestObservation) {
-    const selectedIndex = comparisonKeys.indexOf(
-      testObservationKey(observation),
-    )
-    if (selectedIndex === 0) return 'A · baseline'
-    if (selectedIndex === 1) return 'B · candidate'
-    if (comparisonKeys.length === 0) return 'Set A'
-    if (comparisonKeys.length === 1) return 'Set B'
-    return 'Replace B'
-  }
+  const identity = [
+    history ? versionStatement(history) : null,
+    contract?.short ?? null,
+    complexity?.value ? `complexity ${complexity.value}` : null,
+    realism?.value ? `realism ${realism.value}` : null,
+    history
+      ? `${history.total} ${history.total === 1 ? 'execution' : 'executions'} retained`
+      : null,
+    lastRun
+      ? `last run ${formatDate(lastRun.completed_at)} · ${statusPresentation(lastRun.status).label}`
+      : null,
+  ]
+    .filter(Boolean)
+    .join(' · ')
+
+  const runThisTest = local ? (
+    <a
+      className={dashboardHeaderActionClassName({ primary: true })}
+      href={hashForWorkspace()}
+      onClick={() => requestQuickExecution([testId])}
+    >
+      run this test
+    </a>
+  ) : null
 
   return (
-    <div id="test-metrics-history-proposal" className="tmh-page">
-      <DashboardPageActions active="tests" context={testId} />
-
-      <div className="tmh-main">
-        <p className="tmh-breadcrumb">
-          <a href={hashForWorkspace('tests')}>Tests</a> / <span>{testId}</span>
-        </p>
-        <h1>{testId}</h1>
-        <p className="tmh-subtitle">
-          Inspect how this test&apos;s result, score, duration, tokens, cost,
-          function activity, errors, and turns changed across retained local
-          executions.
-        </p>
-
-        <div className="tmh-identity">
-          <div className="tmh-identity-item">
-            <span className="tmh-label">Current version</span>
-            <strong>
-              {history?.test_version ? `v${history.test_version}` : 'Unknown'}
-            </strong>
-          </div>
-          <div className="tmh-identity-item">
-            <span className="tmh-label">Complexity</span>
-            <strong>Not recorded</strong>
-          </div>
-          <div className="tmh-identity-item">
-            <span className="tmh-label">Contract</span>
-            <code>{contractSummary(observations)}</code>
-          </div>
-          <div className="tmh-identity-item">
-            <span className="tmh-label">Retained</span>
-            <strong>
-              {latestVersion?.execution_count ?? history?.total ?? 0} executions
-            </strong>
-          </div>
-        </div>
-
-        <section className="tmh-panel" aria-labelledby="tmh-history-title">
-          <header className="tmh-panel-head">
-            <div>
-              <h2 id="tmh-history-title">Metric history</h2>
-              <p>Filters change only the evidence series shown below.</p>
-            </div>
-            <span className="tmh-visible-count">
-              {loading
-                ? 'Loading executions…'
-                : visibleLabel(observations.length)}
-            </span>
-          </header>
-
-          <div className="tmh-filters">
-            <label className="tmh-field">
-              Test version
-              <select
-                value={version ?? ''}
-                onChange={(event) => {
-                  setVersion(
-                    event.target.value ? Number(event.target.value) : undefined,
-                  )
-                  clearComparison()
-                }}
-              >
-                <option value="">Current / latest</option>
-                {(history?.available_versions ?? []).map((item) => (
-                  <option key={item.version} value={item.version}>
-                    v{item.version}
-                    {item.version === history?.test_version ? ' · current' : ''}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <div className="tmh-field">
-              Execution model
-              <ProviderModelDropdown
-                groups={executionModelGroups}
-                value={executionModel}
-                onChange={(next) => {
-                  setExecutionModel(next)
-                  clearComparison()
-                }}
-                optionValue={modelSelection}
-                placeholder="All execution models"
-                ariaLabel="Execution model"
-              />
-            </div>
-            <div className="tmh-field">
-              Judge model
-              <ProviderModelDropdown
-                groups={judgeModelGroups}
-                value={judgeModel}
-                onChange={(next) => {
-                  setJudgeModel(next)
-                  clearComparison()
-                }}
-                optionValue={modelSelection}
-                placeholder="All judge models"
-                ariaLabel="Judge model"
-              />
-            </div>
-            <label className="tmh-field">
-              System revision
-              <select
-                value={system}
-                onChange={(event) => {
-                  setSystem(event.target.value)
-                  clearComparison()
-                }}
-              >
-                <option value="">All revisions</option>
-                {(history?.systems ?? []).map((item) => (
-                  <option key={item.id} value={item.id}>
-                    {item.label}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <label className="tmh-field">
-              Result
-              <select
-                value={result}
-                onChange={(event) => {
-                  setResult(event.target.value)
-                  clearComparison()
-                }}
-              >
-                <option value="">All results</option>
-                <option value="passed">Passed</option>
-                <option value="hard_gate_failed">Hard gate failed</option>
-                <option value="technical_failed">Technical failure</option>
-                <option value="infra_failed">Infrastructure failure</option>
-              </select>
-            </label>
-          </div>
-
-          {error ? (
-            <div className="tmh-empty tmh-error" role="alert">
-              <strong>History unavailable</strong>
-              <span>{error}</span>
-            </div>
-          ) : loading ? (
-            <div className="tmh-empty" role="status">
-              Loading metric history…
-            </div>
-          ) : (
+    <>
+      <DashboardPageActions
+        active="tests"
+        context={testId}
+        actionsLabel="Test actions"
+        actions={
+          <>
+            <a
+              className={dashboardHeaderActionClassName()}
+              href={hashForComparison()}
+            >
+              compare systems
+            </a>
+            {runThisTest}
+          </>
+        }
+      />
+      <div className="ds-root page-shell w-[calc(100%_-_1.5rem)] max-w-[1420px] pt-5 pb-24 md:w-[calc(100%_-_3rem)]">
+        <PageHeader
+          title={testId}
+          summary={
+            loading && !history
+              ? 'loading the history…'
+              : identity || 'no identity recorded'
+          }
+          headingId="test-history-title"
+          breadcrumb={[
+            {
+              label: 'tests',
+              href: hashForTests(new URLSearchParams({ highlight: testId })),
+            },
+            { label: testId },
+          ]}
+          actions={
             <>
-              <div className="tmh-metric-summary">
-                <div className="tmh-metric">
-                  <span>Successful runs</span>
-                  <strong>
-                    {observations.length
-                      ? `${String(knownPassed)} / ${observations.length}`
-                      : '—'}
-                  </strong>
-                  <small>objective result</small>
-                </div>
-                <div className="tmh-metric">
-                  <span>Median cost</span>
-                  <strong>{formatCost(summaryCost)}</strong>
-                  <small>
-                    {metricCaption(
-                      knownMetricCount(costs),
-                      observations.length,
-                      'cost',
-                    )}
-                  </small>
-                </div>
-                <div className="tmh-metric">
-                  <span>Median duration</span>
-                  <strong>{formatDuration(summaryDuration)}</strong>
-                  <small>
-                    {metricCaption(
-                      knownMetricCount(durations),
-                      observations.length,
-                      'duration',
-                    )}
-                  </small>
-                </div>
-                <div className="tmh-metric">
-                  <span>Median tokens</span>
-                  <strong>{formatTokens(summaryTokens)}</strong>
-                  <small>
-                    {metricCaption(
-                      knownMetricCount(tokens),
-                      observations.length,
-                      'token',
-                    )}
-                  </small>
-                </div>
-                <div className="tmh-metric">
-                  <span>Median turns</span>
-                  <strong>
-                    {summaryTurns === null
-                      ? 'Unknown'
-                      : Math.round(summaryTurns).toLocaleString()}
-                  </strong>
-                  <small>
-                    {metricCaption(
-                      knownMetricCount(turns),
-                      observations.length,
-                      'turn',
-                    )}
-                  </small>
-                </div>
-              </div>
+              {catalogRow ? (
+                <StatusBadge
+                  status={
+                    catalogRow.lifecycle === 'active' ? 'passed' : 'unavailable'
+                  }
+                  label={
+                    catalogRow.lifecycle === 'never_run'
+                      ? 'never run'
+                      : catalogRow.lifecycle
+                  }
+                />
+              ) : null}
+              {isLocalTest ? (
+                <span className="inline-flex items-center rounded-[6px] bg-[var(--surface-fill)] px-1.5 py-0.5 font-mono text-label text-ink-soft">
+                  local
+                </span>
+              ) : null}
+              {contract?.full ? (
+                <button
+                  className={buttonClassName({
+                    variant: 'quiet',
+                    size: 'compact',
+                  })}
+                  type="button"
+                  title={contract.full}
+                  aria-label="Copy the full contract hash"
+                  onClick={() => {
+                    void navigator.clipboard
+                      ?.writeText(contract.full ?? '')
+                      .then(() => {
+                        setCopied(true)
+                        window.setTimeout(() => setCopied(false), 1500)
+                      })
+                  }}
+                >
+                  <Copy size={13} aria-hidden="true" />
+                  {copied ? 'copied' : 'copy sha'}
+                </button>
+              ) : null}
+              <span className="inline-flex gap-1">
+                <a
+                  className={buttonClassName({
+                    variant: 'quiet',
+                    size: 'compact',
+                    className: `no-underline ${neighbours.previous ? '' : 'pointer-events-none opacity-50'}`,
+                  })}
+                  href={
+                    neighbours.previous
+                      ? hashForTestHistory(neighbours.previous)
+                      : undefined
+                  }
+                  aria-disabled={!neighbours.previous}
+                  title={neighbours.previous ?? 'first test'}
+                >
+                  <ChevronLeft size={13} aria-hidden="true" />
+                  prev
+                </a>
+                <a
+                  className={buttonClassName({
+                    variant: 'quiet',
+                    size: 'compact',
+                    className: `no-underline ${neighbours.next ? '' : 'pointer-events-none opacity-50'}`,
+                  })}
+                  href={
+                    neighbours.next
+                      ? hashForTestHistory(neighbours.next)
+                      : undefined
+                  }
+                  aria-disabled={!neighbours.next}
+                  title={neighbours.next ?? 'last test'}
+                >
+                  next
+                  <ChevronRight size={13} aria-hidden="true" />
+                </a>
+              </span>
+            </>
+          }
+        />
 
-              {comparisonKeys.length > 0 ? (
-                <div className="tmh-comparison-stack">
-                  <ObservationComparisonPanel
-                    baseline={baseline}
-                    candidate={candidate}
-                    testId={testId}
-                    onClear={clearComparison}
-                    onSwap={swapComparison}
-                  />
-                  <details className="tmh-history-disclosure">
-                    <summary>
-                      <ChevronDown aria-hidden="true" size={16} />
-                      <span>
-                        View score history across {observations.length}{' '}
-                        {observations.length === 1 ? 'execution' : 'executions'}
-                      </span>
-                      <small>Points can replace A or B</small>
-                    </summary>
-                    <section
-                      className="tmh-history-chart"
-                      aria-label="Score per execution"
-                    >
-                      <ScoreTrendChart
-                        observations={observations}
-                        selectedKeys={comparisonKeys}
-                        onSelect={selectForComparison}
-                      />
-                    </section>
-                  </details>
-                </div>
+        {error ? (
+          <EmptyState
+            className="mt-6"
+            tone="error"
+            title="History unavailable"
+            description={error}
+          />
+        ) : null}
+
+        {!error && !loading && !hasEvidence && !filtered ? (
+          // Audit TH-01: an empty history is one message and the next action.
+          <EmptyState
+            className="mt-6"
+            title="no retained executions yet"
+            description="This test has never run on this dashboard. Run it once to start the metric history, or add it to a plan to capture a baseline you can compare against later."
+            actions={
+              local ? (
+                <>
+                  <a
+                    className={buttonClassName({
+                      variant: 'primary',
+                      className: 'no-underline',
+                    })}
+                    href={hashForWorkspace()}
+                    onClick={() => requestQuickExecution([testId])}
+                  >
+                    run this test
+                  </a>
+                  <a
+                    className={buttonClassName({
+                      variant: 'secondary',
+                      className: 'no-underline',
+                    })}
+                    href={hashForNewPlan()}
+                    onClick={() => requestPlanFromSelection([testId])}
+                  >
+                    add to a new plan
+                  </a>
+                </>
               ) : (
-                <p className="tmh-compare-cta">
-                  Select <strong>Set A</strong> on an execution below to open
-                  the graphical baseline/candidate comparison.
-                </p>
-              )}
+                <a
+                  className={buttonClassName({
+                    variant: 'secondary',
+                    className: 'no-underline',
+                  })}
+                  href={hashForTests()}
+                >
+                  back to the catalog
+                </a>
+              )
+            }
+          />
+        ) : null}
 
-              <table aria-label={`Metric history for ${testId}`}>
+        {!error && (loading || hasEvidence || filtered) ? (
+          <div className="mt-6 grid gap-6">
+            {hasEvidence ? (
+              // Audit TH-08: tiles only for metrics with data.
+              <div
+                className="grid gap-3 @[560px]:grid-cols-2 @[960px]:grid-cols-4"
+                data-history-tiles
+              >
+                <MetricCard
+                  label="successful runs"
+                  value={`${passedCount} / ${allObservations.length}`}
+                  detail="objective result"
+                  tone={
+                    passedCount === allObservations.length
+                      ? 'positive'
+                      : passedCount === 0
+                        ? 'negative'
+                        : 'warning'
+                  }
+                />
+                {knownMetricCount(scores) > 0 ? (
+                  <MetricCard
+                    label="median score"
+                    value={formatScore(median(scores))}
+                    detail={`judge quality · /100 · ${metricCaption(knownMetricCount(scores), allObservations.length)}`}
+                  />
+                ) : null}
+                {knownMetricCount(durations) > 0 ? (
+                  <MetricCard
+                    label="median duration"
+                    value={formatDuration(median(durations))}
+                    detail={metricCaption(
+                      knownMetricCount(durations),
+                      allObservations.length,
+                    )}
+                  />
+                ) : null}
+                {knownMetricCount(tokens) > 0 ? (
+                  <MetricCard
+                    label="median tokens"
+                    value={formatTokens(median(tokens))}
+                    detail={`subject + judge · ${metricCaption(knownMetricCount(tokens), allObservations.length)}`}
+                  />
+                ) : null}
+                {knownCosts > 0 ? (
+                  <MetricCard
+                    label="median cost"
+                    value={formatCost(median(costs))}
+                    detail={metricCaption(knownCosts, allObservations.length)}
+                  />
+                ) : null}
+              </div>
+            ) : null}
+
+            {allObservations.filter(
+              (item) => finiteMetric(item.median_score) !== null,
+            ).length >= 2 ? (
+              // Audit TH-10: the trend is always visible with two scored runs.
+              <SectionPanel
+                title="score trend"
+                summary={`newest right · ${allObservations.length} executions${knownCosts === 0 ? ' · cost not recorded in local runs' : ''}`}
+                headingId="score-trend-title"
+              >
+                <ScoreTrendChart
+                  observations={allObservations}
+                  selectedKeys={comparisonKeys}
+                  onSelect={selectForComparison}
+                />
+              </SectionPanel>
+            ) : null}
+
+            <section className="grid gap-3" aria-label="History filters">
+              <div className="flex flex-wrap items-center gap-2">
+                <label className="ds-visually-hidden" htmlFor="history-version">
+                  Test version
+                </label>
+                <Select
+                  id="history-version"
+                  className="max-w-[16rem]"
+                  value={filters.version ?? ''}
+                  onChange={(event) =>
+                    setFilter(
+                      'version',
+                      event.target.value
+                        ? Number(event.target.value)
+                        : undefined,
+                    )
+                  }
+                >
+                  <option value="">version: latest with executions</option>
+                  {(history?.available_versions ?? []).map((item) => (
+                    <option key={item.version} value={item.version}>
+                      v{item.version}
+                      {item.version === history?.current_version
+                        ? ' · current'
+                        : ''}
+                      {` · ${item.execution_count} ${item.execution_count === 1 ? 'execution' : 'executions'}`}
+                    </option>
+                  ))}
+                </Select>
+                <div className="w-full max-w-[16rem]">
+                  <ProviderModelDropdown
+                    groups={executionModelGroups}
+                    value={filters.model}
+                    onChange={(next) => setFilter('model', next)}
+                    optionValue={modelSelection}
+                    placeholder="all execution models"
+                    ariaLabel="Execution model"
+                    clearLabel="all execution models"
+                  />
+                </div>
+                <div className="w-full max-w-[16rem]">
+                  <ProviderModelDropdown
+                    groups={judgeModelGroups}
+                    value={filters.judge}
+                    onChange={(next) => setFilter('judge', next)}
+                    optionValue={modelSelection}
+                    placeholder="all judges"
+                    ariaLabel="Judge model"
+                    clearLabel="all judges"
+                  />
+                </div>
+                {(history?.systems.length ?? 0) > 0 ? (
+                  <Select
+                    aria-label="System revision"
+                    className="max-w-[16rem]"
+                    value={filters.system}
+                    onChange={(event) =>
+                      setFilter('system', event.target.value)
+                    }
+                  >
+                    <option value="">all system revisions</option>
+                    {(history?.systems ?? []).map((item) => (
+                      <option key={item.id} value={item.id}>
+                        {item.label}
+                      </option>
+                    ))}
+                  </Select>
+                ) : null}
+              </div>
+              <div className="flex flex-wrap items-center gap-2">
+                <FilterChipGroup label="Result">
+                  <FilterChip
+                    active={filters.result === ''}
+                    count={allObservations.length}
+                    onClick={() => setFilter('result', '')}
+                  >
+                    all
+                  </FilterChip>
+                  <FilterChip
+                    active={filters.result === 'failed'}
+                    count={failedCount}
+                    onClick={() => setFilter('result', 'failed')}
+                  >
+                    failed
+                  </FilterChip>
+                  <FilterChip
+                    active={filters.result === 'passed'}
+                    count={passedCount}
+                    onClick={() => setFilter('result', 'passed')}
+                  >
+                    passed
+                  </FilterChip>
+                </FilterChipGroup>
+                <output
+                  className="ms-auto font-mono text-label text-ink-muted"
+                  aria-live="polite"
+                >
+                  {loading
+                    ? 'loading executions…'
+                    : `${observations.length} of ${allObservations.length} executions`}
+                </output>
+              </div>
+            </section>
+
+            {selectionNotice ? (
+              <Callout tone="info">{selectionNotice}</Callout>
+            ) : null}
+
+            {loading ? (
+              <div className="grid gap-px" aria-busy="true" role="status">
+                <span className="ds-visually-hidden">
+                  Loading metric history
+                </span>
+                {Array.from({ length: 4 }, (_, index) => (
+                  <div
+                    // biome-ignore lint/suspicious/noArrayIndexKey: static placeholders
+                    key={index}
+                    className="h-12 animate-pulse rounded-[6px] bg-[var(--surface-fill)] motion-reduce:animate-none"
+                  />
+                ))}
+              </div>
+            ) : observations.length === 0 ? (
+              <EmptyState
+                title="No executions match these filters"
+                description="Widen the version, model, judge or result filter."
+                actions={
+                  <button
+                    className={buttonClassName({ variant: 'secondary' })}
+                    type="button"
+                    onClick={() => {
+                      setSelectionNotice(null)
+                      setFilters(EMPTY_FILTERS)
+                    }}
+                  >
+                    clear filters
+                  </button>
+                }
+              />
+            ) : (
+              <DataTable
+                caption={`Metric history for ${testId}, ${observations.length} executions`}
+                collapse
+                minWidth="56rem"
+                sticky
+                data-history-table
+              >
                 <thead>
                   <tr>
-                    <th scope="col" style={{ width: '16%' }}>
-                      Execution
+                    <th scope="col">
+                      <span className="ds-visually-hidden">Compare</span>
+                      a/b
                     </th>
-                    <th scope="col" style={{ width: '22%' }}>
-                      Model and system
+                    <th scope="col">execution</th>
+                    <th scope="col">model · system</th>
+                    <th scope="col">result</th>
+                    <th scope="col" className={numericCellClassName}>
+                      score
                     </th>
-                    <th scope="col" style={{ width: '13%' }}>
-                      Result
+                    <th scope="col" className={numericCellClassName}>
+                      duration
                     </th>
-                    <th scope="col" style={{ width: '9%' }}>
-                      Cost
+                    <th scope="col" className={numericCellClassName}>
+                      tokens
                     </th>
-                    <th scope="col" style={{ width: '10%' }}>
-                      Duration
-                    </th>
-                    <th scope="col" style={{ width: '10%' }}>
-                      Tokens
-                    </th>
-                    <th scope="col" style={{ width: '7%' }}>
-                      Turns
-                    </th>
-                    <th scope="col" style={{ width: '13%' }}>
-                      Actions
+                    {knownCosts > 0 ? (
+                      <th scope="col" className={numericCellClassName}>
+                        cost
+                      </th>
+                    ) : null}
+                    <th scope="col">
+                      <span className="ds-visually-hidden">Actions</span>
                     </th>
                   </tr>
                 </thead>
                 <tbody>
-                  {observations.map((item) => (
-                    <tr
-                      className="tmh-metric-row"
-                      key={
-                        item.execution_id +
-                        ':' +
-                        item.case_id +
-                        ':' +
-                        item.contract_sha256
-                      }
-                    >
-                      <td data-label="Execution">
-                        <strong>{formatDate(item.completed_at)}</strong>
-                        <small>
-                          Test v
-                          {item.scenario_version ??
-                            history?.test_version ??
-                            '—'}{' '}
-                          · {logicalRunLabel(item.run_count)}
-                        </small>
-                      </td>
-                      <td data-label="Model and system">
-                        <strong>
-                          {modelLabel(
-                            item.subject_provider,
-                            item.subject_model,
-                          )}
-                        </strong>
-                        <small>
-                          {systemSummary(item)} · judge{' '}
-                          {modelLabel(item.judge_provider, item.judge_model)}
-                          {' · '}
-                          {item.judge_protocol ?? 'protocol unknown'}
-                        </small>
-                      </td>
-                      <td data-label="Result">
-                        <span
-                          className={`tmh-status ${statusClass(item.status)}`}
-                        >
-                          {formatStatus(item.status)}
-                        </span>
-                        <small>
-                          {item.median_score === null ||
-                          item.median_score === undefined
-                            ? 'Score unknown'
-                            : `Score ${item.median_score.toFixed(2)}`}
-                        </small>
-                      </td>
-                      <td data-label="Cost">
-                        {formatCost(item.median_cost_usd)}
-                      </td>
-                      <td data-label="Duration">
-                        {formatDuration(item.median_duration_seconds)}
-                      </td>
-                      <td data-label="Tokens">
-                        {formatTokens(item.median_tokens)}
-                      </td>
-                      <td data-label="Turns">
-                        {item.median_turns === null ||
-                        item.median_turns === undefined
-                          ? 'Unknown'
-                          : Math.round(item.median_turns).toLocaleString()}
-                      </td>
-                      <td data-label="Actions">
-                        <div className="tmh-row-actions">
-                          <button
-                            className="tmh-detail-button"
-                            type="button"
-                            onClick={() => setSelectedObservation(item)}
-                            aria-label={`Open details for ${testId} from ${formatDate(item.completed_at)}`}
-                          >
-                            View details
-                          </button>
-                          <button
-                            className={`tmh-compare-button${comparisonKeys.includes(testObservationKey(item)) ? ' is-selected' : ''}`}
-                            type="button"
-                            onClick={() => selectForComparison(item)}
-                            aria-pressed={comparisonKeys.includes(
-                              testObservationKey(item),
+                  {observations.map((item) => {
+                    const key = testObservationKey(item)
+                    const selectedIndex = comparisonKeys.indexOf(key)
+                    const result = statusPresentation(item.status)
+                    return (
+                      // Audit TH-09: one row of compact controls; the row
+                      // itself opens the details.
+                      <DataTableRow
+                        key={key}
+                        className={`cursor-pointer ${selectedIndex >= 0 ? 'is-selected' : ''}`}
+                        data-execution-id={item.execution_id}
+                        onClick={(event) => {
+                          if (isInteractiveTarget(event.target)) return
+                          setOpenKey(key)
+                        }}
+                      >
+                        <td data-label="a/b">
+                          <label className="inline-flex min-h-7 cursor-pointer items-center gap-2 font-mono text-label text-ink-soft">
+                            <input
+                              className="size-4 accent-[var(--accent)]"
+                              type="checkbox"
+                              checked={selectedIndex >= 0}
+                              onChange={() => selectForComparison(item)}
+                              aria-label={`Select ${formatDate(item.completed_at)} for comparison`}
+                            />
+                            {selectedIndex === 0
+                              ? 'a'
+                              : selectedIndex === 1
+                                ? 'b'
+                                : ''}
+                          </label>
+                        </td>
+                        <td data-label="Execution">
+                          <span className="block font-mono text-xs text-ink">
+                            {formatDate(item.completed_at)}
+                          </span>
+                          <span className="block font-mono text-label text-ink-muted">
+                            {runLabel(item.run_count)} ·{' '}
+                            {item.execution_id.slice(0, 8)}…
+                            {item.scenario_version
+                              ? ` · v${item.scenario_version}`
+                              : ''}
+                          </span>
+                        </td>
+                        <td data-label="Model · system">
+                          <span className="block font-mono text-xs text-ink">
+                            {modelLabel(
+                              item.subject_provider,
+                              item.subject_model,
                             )}
-                          >
-                            {comparisonActionLabel(item)}
-                          </button>
-                          <ScenarioChatAction
-                            compact
-                            executionId={item.execution_id}
-                            scenarioId={testId}
+                          </span>
+                          <span className="block font-mono text-label text-ink-muted">
+                            judge{' '}
+                            {modelLabel(item.judge_provider, item.judge_model)}{' '}
+                            · {systemSummary(item)}
+                          </span>
+                        </td>
+                        <td data-label="Result">
+                          <StatusBadge
+                            status={result.status}
+                            label={result.label}
                           />
-                        </div>
-                      </td>
-                    </tr>
-                  ))}
+                        </td>
+                        <td data-label="Score" className={numericCellClassName}>
+                          {formatScore(item.median_score)}
+                        </td>
+                        <td
+                          data-label="Duration"
+                          className={numericCellClassName}
+                        >
+                          {formatDuration(item.median_duration_seconds)}
+                        </td>
+                        <td
+                          data-label="Tokens"
+                          className={numericCellClassName}
+                        >
+                          {formatTokens(item.median_tokens)}
+                        </td>
+                        {knownCosts > 0 ? (
+                          <td
+                            data-label="Cost"
+                            className={numericCellClassName}
+                          >
+                            {formatCost(item.median_cost_usd)}
+                          </td>
+                        ) : null}
+                        <td data-label="Actions" className="text-right">
+                          <span className="inline-flex items-center gap-1">
+                            <a
+                              className={buttonClassName({
+                                variant: 'quiet',
+                                size: 'compact',
+                                className: 'no-underline',
+                              })}
+                              href={hashForExecution(item.execution_id)}
+                            >
+                              open
+                              <ArrowRight size={13} aria-hidden="true" />
+                            </a>
+                            <ScenarioChatAction
+                              compact
+                              executionId={item.execution_id}
+                              scenarioId={testId}
+                            />
+                          </span>
+                        </td>
+                      </DataTableRow>
+                    )
+                  })}
                 </tbody>
-              </table>
-              {!observations.length && (
-                <div className="tmh-empty" style={{ display: 'block' }}>
-                  No executions match these filters.
-                </div>
-              )}
-            </>
-          )}
-        </section>
+              </DataTable>
+            )}
+
+            {baseline && candidate ? (
+              <ObservationComparisonPanel
+                baseline={baseline}
+                candidate={candidate}
+                testId={testId}
+                onClear={() => setComparisonKeys([])}
+                onSwap={() =>
+                  setComparisonKeys((current) =>
+                    current.length === 2 ? [current[1], current[0]] : current,
+                  )
+                }
+              />
+            ) : null}
+          </div>
+        ) : null}
       </div>
-      {selectedObservation && (
+
+      {comparisonKeys.length > 0 && !loading ? (
+        // Audit TH-09: the selection bar stays in view while rows are ticked.
+        <div
+          className="sticky bottom-0 z-10 bg-panel px-3 py-3 shadow-[0_-1px_0_0_var(--line)] md:px-6"
+          data-selection-bar
+        >
+          <div className="mx-auto flex max-w-[1420px] flex-wrap items-center gap-3 font-mono text-xs">
+            <span className="text-ink">
+              {comparisonKeys.length} selected
+              {baseline ? ` · a = ${formatDate(baseline.completed_at)}` : ''}
+              {candidate ? ` · b = ${formatDate(candidate.completed_at)}` : ''}
+            </span>
+            <span className="text-ink-muted">
+              {!candidate
+                ? 'tick another execution as b'
+                : compareTestObservations(
+                      baseline as TestObservation,
+                      candidate,
+                    ).compatible
+                  ? 'same model, judge and cohort · deltas interpreted'
+                  : 'different model, judge or cohort · deltas shown, not interpreted'}
+            </span>
+            <span className="ms-auto flex gap-2">
+              <button
+                className={buttonClassName({
+                  variant: 'secondary',
+                  size: 'compact',
+                })}
+                type="button"
+                onClick={() =>
+                  setComparisonKeys((current) =>
+                    current.length === 2 ? [current[1], current[0]] : current,
+                  )
+                }
+                disabled={!candidate}
+              >
+                swap
+              </button>
+              <button
+                className={buttonClassName({
+                  variant: 'quiet',
+                  size: 'compact',
+                })}
+                type="button"
+                onClick={() => setComparisonKeys([])}
+              >
+                clear
+              </button>
+              <button
+                className={buttonClassName({
+                  variant: 'primary',
+                  size: 'compact',
+                })}
+                type="button"
+                disabled={!candidate}
+                onClick={() =>
+                  document
+                    .getElementById('test-comparison-title')
+                    ?.scrollIntoView({ block: 'start' })
+                }
+              >
+                compare a → b
+              </button>
+            </span>
+          </div>
+        </div>
+      ) : null}
+
+      {openObservation ? (
         <ExecutionDetailsDialog
-          observation={selectedObservation}
+          observation={openObservation}
           testVersion={history?.test_version}
           testId={testId}
-          onClose={() => setSelectedObservation(null)}
+          onClose={() => setOpenKey(null)}
         />
-      )}
-    </div>
+      ) : null}
+    </>
   )
 }

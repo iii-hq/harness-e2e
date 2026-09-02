@@ -169,33 +169,32 @@ test('distinguishes active tests from tests with no execution history', () => {
 
 test('keeps metric history rows readable and opens details on demand', () => {
   const styles = read('src', 'legacy.css')
-  assert.match(historyPage, /Median tokens/)
-  assert.match(historyPage, /Impact by scenario/)
-  assert.match(historyPage, /metricCaption/)
+  // Audit TH-01/03/05/08/09/10/12/19: DS page, tiles only with data, trend
+  // always visible, checkbox a/b with a selection bar, opaque DS dialog, no
+  // impact table, state in the hash, no legacy .tmh-* CSS.
+  assert.match(historyPage, /median tokens/)
+  assert.match(historyPage, /data-history-tiles/)
+  assert.match(historyPage, /knownCosts > 0 \?/)
+  assert.match(historyPage, /data-score-trend/)
   assert.match(historyPage, /ExecutionDetailsDialog/)
   assert.match(
     historyPage,
     /reports: detail\.reports\.filter\([\s\S]*scenario_id === testId/,
   )
   assert.match(historyPage, /Assessment details for this test/)
-  assert.match(historyPage, /A · Baseline/)
-  assert.match(historyPage, /B · Candidate/)
-  assert.match(historyPage, /Functions/)
-  assert.match(historyPage, /Errors/)
-  assert.match(historyPage, /View score history across/)
+  assert.match(historyPage, /data-selection-bar/)
+  assert.match(historyPage, /type="checkbox"/)
   assert.match(historyPage, /compareTestObservations/)
   assert.match(historyPage, /getExecution\(observation\.execution_id\)/)
-  assert.match(historyPage, /View details/)
-  assert.match(historyPage, /Open full execution report/)
+  assert.match(historyPage, /open full execution report/)
   assert.match(historyPage, /systemSummary/)
-  assert.doesNotMatch(historyPage, /item\.execution_id\.slice/)
-  assert.doesNotMatch(historyPage, /systemLabel/)
-  assert.doesNotMatch(historyPage, /See series/)
-  assert.doesNotMatch(historyPage, /Metrics by compatible series/)
-  assert.match(
-    styles,
-    /#test-metrics-history-proposal th,[\s\S]*white-space: normal/,
-  )
+  assert.match(historyPage, /versionStatement/)
+  assert.match(historyPage, /historyStateToParams\(filters, comparisonKeys, openKey\)/)
+  assert.match(historyPage, /no retained executions yet/)
+  assert.match(historyPage, /requestQuickExecution\(\[testId\]\)/)
+  assert.doesNotMatch(historyPage, /Impact by scenario|View score history across|tmh-|Set A|View details/)
+  assert.doesNotMatch(historyPage, /systemLabel|See series|Metrics by compatible series/)
+  assert.doesNotMatch(styles, /tmh-|test-metrics-history-proposal/)
   assert.match(styles, /overflow-wrap: anywhere/)
   assert.match(
     styles,

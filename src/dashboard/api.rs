@@ -244,11 +244,8 @@ async fn test_history(
     AxumPath(test_id): AxumPath<String>,
     Query(mut request): Query<TestHistoryRequest>,
 ) -> Result<Json<TestHistoryResponse>, ApiError> {
-    if state.view_only {
-        return Err(ApiError::not_found(
-            "test metric history is available only in the local dashboard",
-        ));
-    }
+    // Audit T-13: retained evidence is readable in view-only mode too; only
+    // the execution endpoints stay local.
     request.test_id = test_id;
     bus::test_history(&state.controller, request)
         .await

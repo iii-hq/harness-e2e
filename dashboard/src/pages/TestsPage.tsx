@@ -798,7 +798,7 @@ export function TestsPage({
           <a
             className={dashboardHeaderActionClassName({ primary: true })}
             href={hashForWorkspace()}
-            onClick={requestQuickExecution}
+            onClick={() => requestQuickExecution()}
             aria-label="New execution"
           >
             New run
