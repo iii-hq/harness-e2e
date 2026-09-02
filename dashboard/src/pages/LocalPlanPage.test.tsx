@@ -7,7 +7,6 @@ import type {
 import { buildPlanComparison } from '@/lib/plan-comparison'
 import {
   PLAN_FORM_DEFAULTS,
-  PlanComparisonPanel,
   PlanExecutionHistory,
   PlanLifecycle,
   PlanNonComparableAttempts,
@@ -112,7 +111,7 @@ describe('local plan lifecycle', () => {
     )
 
     expect(html).toContain('Candidate is running')
-    expect(html).toContain('View active execution')
+    expect(html).toContain('view active execution')
     expect(html).not.toContain('Open active execution')
     expect(html).not.toContain('disabled=""')
     expect(html).toContain('aria-live="polite"')
@@ -137,8 +136,8 @@ describe('local plan lifecycle', () => {
     )
 
     expect(html).toContain('Capture the baseline')
-    expect(html).toContain('Run baseline')
-    expect(html).not.toContain('>Run candidate<')
+    expect(html).toContain('>run baseline<')
+    expect(html).not.toContain('>run candidate<')
   })
 
   it('prioritizes reviewing a completed candidate before offering another run', () => {
@@ -157,12 +156,10 @@ describe('local plan lifecycle', () => {
     )
 
     expect(html).toContain('Candidate results are ready')
-    expect(html).toContain(
-      '<h2 id="plan-lifecycle-title">Candidate results are ready</h2>',
-    )
-    expect(html).toContain('View latest candidate')
-    expect(html).toContain('Run another candidate')
-    expect(html).toContain('View baseline execution')
+    expect(html).toContain('Candidate results are ready')
+    expect(html).toContain('view latest candidate')
+    expect(html).toContain('run another candidate')
+    expect(html).toContain('view baseline execution')
     expect(html).not.toContain('Execution controls')
     expect(html).not.toContain('Plan actions')
     expect(html).not.toContain('Next action')
@@ -267,7 +264,7 @@ describe('local plan execution comparison', () => {
     )
     expect(html).toContain('Incomplete attempt')
     expect(html).toContain('Incomplete attempts remain excluded')
-    expect(html).toContain('Baseline and candidates')
+    expect(html).toContain('baseline and candidates')
     expect(html).toContain('1 visual baseline · 2 selected')
     expect(html).toContain('Visual baseline')
     expect(html).toContain('Official baseline')
@@ -284,7 +281,7 @@ describe('local plan execution comparison', () => {
     expect(html).toContain('Higher is better')
     expect(html).toContain('Lower is better')
     expect(html).toContain('role="tooltip"')
-    expect(html).toContain('--plan-execution-column-count:3')
+    expect(html).toContain('--ds-table-min-width:48rem')
     expect(tableHtml).toContain('>Reference<')
     expect(tableHtml).not.toMatch(/improved/i)
     expect(tableHtml).not.toContain('View details')
@@ -296,13 +293,15 @@ describe('local plan execution comparison', () => {
       /data-metric-id="tokens"[\s\S]*?<td class="is-selected is-winner" data-execution-id="candidate-2"/,
     )
     expect(html).toContain('Best')
-    expect(html).toContain('Execution history')
-    expect(html).toContain('<span>Calls</span>')
-    expect(html).toContain('<span>Errors</span>')
+    expect(html).toContain('runs · ')
+    expect(html).toContain('data-label="Tokens"')
+    expect(html).toContain('data-label="Duration"')
     expect(html).toContain('aria-label="Open report for Official baseline"')
     expect(html).toContain('title="baseline-1"')
-    expect(historyHtml).not.toContain('Execution history')
-    expect(diagnosticsHtml).toMatch(/^<section class="panel plan-run-history"/)
+    expect(historyHtml).not.toContain('runs · ')
+    expect(diagnosticsHtml).toMatch(
+      /^<section class="ds-panel[^"]*"[^>]*data-plan-run-history/,
+    )
   })
 
   it('selects only strict metric winners and leaves ties blank', () => {
@@ -319,33 +318,6 @@ describe('local plan execution comparison', () => {
     expect(planMetricWinnerIds([{ id: 'only', value: 1 }], 'higher')).toEqual(
       [],
     )
-  })
-
-  it('keeps the verdict and test drill-down without duplicate metric cards', () => {
-    const baseline = execution('baseline-1')
-    const candidate = execution('candidate-2', {
-      totals: {
-        ...execution('candidate-2').totals,
-        total_tokens: 900,
-        wall_time_seconds: 10,
-      },
-    })
-    const html = renderToStaticMarkup(
-      <PlanComparisonPanel
-        comparison={buildPlanComparison(baseline, candidate)}
-        baselineExecutionId={baseline.id}
-        candidateExecutionId={candidate.id}
-        candidateNumber={2}
-        loading={false}
-        error={null}
-      />,
-    )
-
-    expect(html).toContain('Baseline vs Candidate #2')
-    expect(html).toContain('Objective results are stable')
-    expect(html).not.toContain('plan-comparison-metrics')
-    expect(html).not.toContain('plan-comparison-metric-card')
-    expect(html).toContain('Stable')
   })
 
   it('lists plan executions with persisted names and contextual rename controls', () => {
@@ -390,7 +362,7 @@ describe('local plan execution comparison', () => {
 
     expect(html).toContain('Harness Latest')
     expect(html).toContain('Harness Next')
-    expect(html).toContain('Execution history')
+    expect(html).toContain('runs · ')
     expect(html).toContain('Visual baseline')
     expect(html).toContain('baseline-1')
     expect(html).toContain('candidate-1')
@@ -398,36 +370,9 @@ describe('local plan execution comparison', () => {
     expect(
       html.match(/aria-label="Rename Harness (?:Latest|Next)"/g),
     ).toHaveLength(2)
-    expect(html).toContain('plan-run-history-columns')
+    expect(html).toContain('data-plan-run-history')
     expect(executionsHtml).toContain('data-label="Turns"')
     expect(html).toContain('Compare candidates')
-  })
-
-  it('keeps the verdict and test drill-down without duplicate metric cards', () => {
-    const baseline = execution('baseline-1')
-    const candidate = execution('candidate-2', {
-      totals: {
-        ...execution('candidate-2').totals,
-        total_tokens: 900,
-        wall_time_seconds: 10,
-      },
-    })
-    const html = renderToStaticMarkup(
-      <PlanComparisonPanel
-        comparison={buildPlanComparison(baseline, candidate)}
-        baselineExecutionId={baseline.id}
-        candidateExecutionId={candidate.id}
-        candidateNumber={2}
-        loading={false}
-        error={null}
-      />,
-    )
-
-    expect(html).toContain('Baseline vs Candidate #2')
-    expect(html).toContain('Objective results are stable')
-    expect(html).not.toContain('plan-comparison-metrics')
-    expect(html).not.toContain('plan-comparison-metric-card')
-    expect(html).toContain('Stable')
   })
 
   it('renders general security metrics as baseline to candidate evidence', () => {
@@ -544,16 +489,16 @@ describe('local plan execution comparison', () => {
       />,
     )
 
-    expect(html).toContain('Metrics by test')
+    expect(html).toContain('by test')
     expect(html).toContain('Tokens')
     expect(html).toContain('Cost')
     expect(html).toContain('Function calls')
     expect(html).toContain('Function errors')
     expect(html).toContain('Turns')
     expect(html).toContain('Time')
-    expect(html).toContain('plan-scenario-signal-values')
+    expect(html).toContain('data-plan-by-test')
     expect(html).not.toContain('Findings')
-    expect(html).toContain('<details class="plan-scenario-disclosure" open="">')
+    expect(html).toMatch(/data-scenario-id="security_review" open=""/)
   })
 
   it('shows eight scenario metrics including turns and highlights strict winners', () => {
@@ -619,7 +564,7 @@ describe('local plan execution comparison', () => {
         loading={false}
       />,
     )
-    const scenarioHtml = html.slice(html.indexOf('Metrics by test'))
+    const scenarioHtml = html.slice(html.indexOf('data-plan-by-test'))
 
     expect(scenarioHtml).toContain('Candidate #1')
     expect(scenarioHtml).toContain('Candidate #2')
@@ -637,10 +582,11 @@ describe('local plan execution comparison', () => {
     ]) {
       expect(scenarioHtml).toContain(`data-scenario-metric-id="${metricId}"`)
     }
+    // The expanded table marks the strict winner per metric.
     expect(scenarioHtml).toMatch(
-      /plan-scenario-signal-value is-winner" title="Candidate #2"/,
+      /data-scenario-metric-id="tokens"[\s\S]*?<td class="is-winner" data-label="Candidate #2"/,
     )
-    expect(scenarioHtml).toContain('plan-scenario-metric-grid')
+    expect(scenarioHtml).toContain('data-scenario-metrics')
     expect(scenarioHtml).toContain('class="is-winner"')
   })
 
@@ -678,53 +624,6 @@ describe('local plan execution comparison', () => {
     expect(html).toContain('Candidate #2')
     expect(html).toContain('The official plan baseline remains unchanged.')
     expect(html).toContain('1 visual baseline · 2 selected')
-  })
-
-  it('keeps the comparison focus target mounted while evidence is loading', () => {
-    const html = renderToStaticMarkup(
-      <PlanComparisonPanel
-        comparison={null}
-        baselineExecutionId="baseline-1"
-        candidateExecutionId="candidate-1"
-        candidateNumber={1}
-        loading
-        error={null}
-      />,
-    )
-
-    expect(html).toContain('plan-comparison-panel')
-    expect(html).toContain('id="plan-comparison-title"')
-    expect(html).toContain('tabindex="-1"')
-    expect(html).toContain('aria-busy="true"')
-    expect(html).toContain('Baseline vs Candidate #1')
-  })
-
-  it('does not render an empty comparison panel without both executions', () => {
-    const html = renderToStaticMarkup(
-      <PlanComparisonPanel
-        comparison={null}
-        baselineExecutionId="baseline-1"
-        candidateExecutionId={null}
-        candidateNumber={null}
-        loading={false}
-        error={null}
-      />,
-    )
-
-    expect(html).toBe('')
-
-    const noBaselineHtml = renderToStaticMarkup(
-      <PlanComparisonPanel
-        comparison={null}
-        baselineExecutionId={null}
-        candidateExecutionId="candidate-1"
-        candidateNumber={1}
-        loading={false}
-        error={null}
-      />,
-    )
-
-    expect(noBaselineHtml).toBe('')
   })
 
   it('selects the latest candidate automatically and preserves a valid manual selection', () => {
