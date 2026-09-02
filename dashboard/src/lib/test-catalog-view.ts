@@ -108,6 +108,30 @@ export function comparisonWarnings(
   )
 }
 
+/**
+ * Audit T-02: executions across every contract version, not only the
+ * current one, plus the most recent evidence date. An active test with
+ * evidence on v1 no longer reads "0" because its contract moved to v3.
+ */
+export function catalogExecutionSummary(row: TestCatalogRow) {
+  const versions = row.available_versions
+  const total = versions.reduce(
+    (sum, version) => sum + version.execution_count,
+    0,
+  )
+  const lastSeen =
+    versions
+      .map((version) => version.last_seen)
+      .filter((value): value is string => Boolean(value))
+      .sort()
+      .at(-1) ?? null
+  const breakdown = versions
+    .filter((version) => version.execution_count > 0)
+    .map((version) => `${version.execution_count} on v${version.version}`)
+    .join(' · ')
+  return { total, lastSeen, breakdown }
+}
+
 function hasIssuesInB(row: TestCatalogRow) {
   const to = row.result?.to
   if (!to) return false

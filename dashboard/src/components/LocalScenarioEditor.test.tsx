@@ -1,8 +1,12 @@
 import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
 import {
+  EMPTY_LOCAL_SCENARIO_DRAFT,
+  fileNameForTitle,
+  isLocalScenarioDraftDirty,
   LOCAL_SCENARIO_TEMPLATE,
   LocalScenarioEditor,
+  weightBreakdown,
 } from '@/components/LocalScenarioEditor'
 import type { DashboardDataBridge } from '@/lib/dashboard-data-source'
 import {
@@ -28,11 +32,22 @@ describe('local Markdown scenario editor', () => {
     expect(html).toContain('Before test')
     expect(html).toContain('Task prompt')
     expect(html).toContain('Validation criteria')
-    expect(html).toContain('Import .md')
+    expect(html).toContain('import .md')
     expect(html).toContain('Preview Markdown')
-    expect(html).toContain('Create test')
-    expect(html).toContain('local_local_scenario')
-    expect(html).toContain('100%')
+    expect(html).toContain('create test')
+    // Audit NT-03: the form starts empty; the template is only a placeholder
+    // and the fallback file name does not repeat the compiler prefix.
+    expect(html).toContain('local_new_test')
+    expect(html).not.toContain('local_local_scenario')
+    expect(html).toContain('placeholder="Database recovery"')
+    expect(html).toContain('placeholder="Expected outcome"')
+    expect(html).toContain('Add a test name.')
+    expect(html).not.toContain('Ready to save locally')
+    // Audit NT-01: state and actions live in a footer, not after the aside.
+    expect(html).toContain('<footer')
+    expect(html.indexOf('<footer')).toBeGreaterThan(html.indexOf('<aside'))
+    expect(html).toContain('open:grid-rows-[auto_minmax(0,1fr)_auto]')
+    expect(html).toContain('>0%<')
     for (const section of [
       '## Plans',
       '## Version',
@@ -43,6 +58,32 @@ describe('local Markdown scenario editor', () => {
       expect(LOCAL_SCENARIO_TEMPLATE).toContain(section)
     }
     expect(LOCAL_SCENARIO_TEMPLATE).toContain('- local')
+  })
+
+  it('derives the file name from the test name and tracks dirtiness', () => {
+    expect(fileNameForTitle('Database recovery')).toBe('database-recovery.md')
+    expect(fileNameForTitle('  ')).toBe('')
+    expect(isLocalScenarioDraftDirty(EMPTY_LOCAL_SCENARIO_DRAFT, false)).toBe(
+      false,
+    )
+    expect(isLocalScenarioDraftDirty(EMPTY_LOCAL_SCENARIO_DRAFT, true)).toBe(
+      true,
+    )
+    expect(
+      isLocalScenarioDraftDirty(
+        { ...EMPTY_LOCAL_SCENARIO_DRAFT, title: 'x' },
+        false,
+      ),
+    ).toBe(true)
+    expect(
+      weightBreakdown({
+        ...EMPTY_LOCAL_SCENARIO_DRAFT,
+        validations: [
+          { id: 'a', title: 'a', weight: '70', instructions: 'x' },
+          { id: 'b', title: 'b', weight: '30', instructions: 'y' },
+        ],
+      }),
+    ).toBe('70 + 30 = 100%')
   })
 
   it('builds the compiler Markdown contract from the form values', () => {

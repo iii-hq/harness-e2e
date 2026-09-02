@@ -1,6 +1,7 @@
 import {
   AlertTriangle,
   CheckCircle2,
+  ChevronRight,
   Plus,
   RefreshCw,
   Search,
@@ -11,6 +12,7 @@ import {
   dashboardHeaderActionClassName,
 } from '@/components/DashboardPageActions'
 import { LocalScenarioEditor } from '@/components/LocalScenarioEditor'
+import { buttonClassName } from '@/design-system'
 import {
   hashForComparison,
   hashForNewPlan,
@@ -20,17 +22,21 @@ import {
   type DashboardDataBridge,
   getDashboardDataBridge,
 } from '@/lib/dashboard-data-source'
+import { formatDate } from '@/lib/execution-view'
 import {
   type LocalScenarioSummary,
   localScenariosFromCatalog,
 } from '@/lib/local-scenario-catalog'
 import type { TestCatalogRow, TestsListResponse } from '@/lib/test-catalog'
+import { catalogExecutionSummary } from '@/lib/test-catalog-view'
 
 type LifecycleFilter = 'all' | TestCatalogRow['lifecycle']
+type SourceFilter = 'all' | 'local' | 'registry'
 
-function currentVersion(row: TestCatalogRow) {
-  return row.available_versions.find(
-    (item) => item.version === row.current_version,
+function isInteractiveTarget(target: EventTarget | null) {
+  return (
+    target instanceof Element &&
+    target.closest('a, button, input, select, textarea, summary') !== null
   )
 }
 
@@ -43,15 +49,16 @@ const lifecyclePresentation: Record<
     dotClassName: 'bg-[var(--success)]',
     textClassName: 'text-ink',
   },
+  // Audit T-10: the dot carries the colour; the text stays readable.
   never_run: {
     label: 'never run',
     dotClassName: 'bg-[var(--color-ink-ghost)]',
-    textClassName: 'text-ink-muted',
+    textClassName: 'text-ink-soft',
   },
   retired: {
     label: 'retired',
     dotClassName: 'bg-[var(--warning)]',
-    textClassName: 'text-[var(--warning)]',
+    textClassName: 'text-ink-soft',
   },
 }
 
@@ -143,11 +150,11 @@ function DimensionCell({
 }) {
   return (
     <>
-      <span className="block text-xs text-[var(--color-ink-faint)]">
-        {value}
-      </span>
+      <span className="block text-xs text-ink-soft">{value}</span>
       {detail ? (
-        <small className="block text-[11px] text-ink-muted">{detail}</small>
+        <small className="block text-[0.6875rem] text-ink-muted">
+          {detail}
+        </small>
       ) : null}
     </>
   )
@@ -159,10 +166,12 @@ export function nextLocalScenarioFileName(
   const existing = new Set(
     scenarios.map((scenario) => scenario.source_path.split('/').at(-1)),
   )
-  if (!existing.has('local-scenario.md')) return 'local-scenario.md'
+  // Audit NT-03: the fallback name no longer repeats the "local_" prefix
+  // that the compiler adds ("local_local_scenario").
+  if (!existing.has('new-test.md')) return 'new-test.md'
   let suffix = 2
-  while (existing.has(`local-scenario-${suffix}.md`)) suffix += 1
-  return `local-scenario-${suffix}.md`
+  while (existing.has(`new-test-${suffix}.md`)) suffix += 1
+  return `new-test-${suffix}.md`
 }
 
 export type CatalogDisplayRow = {
@@ -278,10 +287,12 @@ export function TestsCatalogActions({
   )
 }
 
+// Audit T-09 / DS-07: same vocabulary as the version pill — mono, lowercase,
+// 6px radius, fill, no border.
 export function LocalTestBadge() {
   return (
-    <span className="inline-flex shrink-0 items-center rounded-full border border-brand/25 bg-brand-soft px-1.5 py-0.5 font-sans text-[9px] leading-none font-semibold tracking-[0.05em] text-brand uppercase">
-      Local
+    <span className="inline-flex shrink-0 items-center rounded-[6px] bg-[var(--surface-fill)] px-1.5 py-0.5 font-mono text-[0.6875rem] leading-4 text-ink-soft">
+      local
     </span>
   )
 }
@@ -291,6 +302,7 @@ export function TestsCatalogPage() {
   const [data, setData] = useState<TestsListResponse | null>(null)
   const [query, setQuery] = useState('')
   const [lifecycle, setLifecycle] = useState<LifecycleFilter>('all')
+  const [source, setSource] = useState<SourceFilter>('all')
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [localScenarios, setLocalScenarios] = useState<LocalScenarioSummary[]>(
@@ -356,13 +368,23 @@ export function TestsCatalogPage() {
   )
   const rows = allRows.filter(({ row, localScenario }) => {
     if (lifecycle !== 'all' && row.lifecycle !== lifecycle) return false
+    if (source === 'local' && !localScenario) return false
+    if (source === 'registry' && localScenario) return false
     return `${row.test_id} ${localScenario?.title ?? ''}`
       .toLowerCase()
       .includes(query.trim().toLowerCase())
   })
+  const filtered =
+    query.trim() !== '' || lifecycle !== 'all' || source !== 'all'
+  const clearFilters = () => {
+    setQuery('')
+    setLifecycle('all')
+    setSource('all')
+  }
   const localBridge = bridge?.mode === 'local' ? bridge : null
   const local = Boolean(localBridge)
   const suggestedLocalFileName = nextLocalScenarioFileName(localScenarios)
+  const localCount = allRows.filter((entry) => entry.localScenario).length
 
   return (
     <>
@@ -387,6 +409,9 @@ export function TestsCatalogPage() {
         id="tests-catalog-main"
         className="page-shell w-[calc(100%_-_1.5rem)] max-w-[1420px] pt-5 pb-16 md:w-[calc(100%_-_3rem)]"
       >
+        {/* Audit T-11: the page has a heading even though the console owns
+            the visible title. */}
+        <h1 className="visually-hidden">Test catalog</h1>
         {localBridge && authoringScenario ? (
           <LocalScenarioEditor
             bridge={localBridge}
@@ -477,24 +502,46 @@ export function TestsCatalogPage() {
               <option value="retired">Retired</option>
             </select>
           </label>
+          {localCount > 0 ? (
+            <label>
+              <span className="visually-hidden">Filter by source</span>
+              <select
+                className="min-h-9 rounded-[6px] border-0 bg-[var(--surface-fill)] px-3 text-[13px] text-[var(--color-ink-faint)] outline-none"
+                value={source}
+                onChange={(event) =>
+                  setSource(event.target.value as SourceFilter)
+                }
+              >
+                <option value="all">All sources</option>
+                <option value="local">Local</option>
+                <option value="registry">Registry</option>
+              </select>
+            </label>
+          ) : null}
           {localBridge ? (
+            // Audit T-04: a refresh, not a filter — icon only, named by its
+            // tooltip.
             <button
-              className="inline-flex min-h-9 items-center gap-2 rounded-[6px] bg-[var(--surface-fill)] px-3 text-xs font-medium text-[var(--color-ink-faint)] transition-colors hover:bg-[var(--surface-soft)] hover:text-ink disabled:cursor-wait disabled:opacity-50"
+              className="inline-grid size-9 place-items-center rounded-[6px] bg-[var(--surface-fill)] text-ink-soft transition-colors hover:bg-[var(--surface-soft)] hover:text-ink disabled:cursor-wait disabled:opacity-50"
               type="button"
               onClick={() => void loadLocalScenarios(localBridge)}
               disabled={localCatalogLoading}
+              title="Refresh local tests"
               aria-label="Refresh local tests"
             >
               <RefreshCw
                 className={localCatalogLoading ? 'animate-spin' : ''}
-                size={13}
+                size={14}
                 aria-hidden="true"
               />
-              Local tests
             </button>
           ) : null}
-          <span className="ms-auto font-mono text-xs text-ink-muted">
-            {allRows.length} tests
+          <span
+            className="ms-auto font-mono text-xs text-ink-muted"
+            aria-live="polite"
+          >
+            {filtered ? `${rows.length} of ${allRows.length}` : allRows.length}{' '}
+            tests
             {data?.revision ? (
               <>
                 {' · catalog '}
@@ -525,14 +572,37 @@ export function TestsCatalogPage() {
               )}
             </div>
           ) : rows.length === 0 ? (
-            <p className="m-0 mt-8 text-center text-[13px] text-[var(--color-ink-faint)]">
-              {allRows.length === 0
-                ? 'No tests are registered yet.'
-                : 'No tests match this filter.'}
-            </p>
+            <div className="mt-8 grid justify-items-center gap-3 text-center text-[13px] text-ink-soft">
+              <p className="m-0">
+                {allRows.length === 0
+                  ? 'No tests are registered yet.'
+                  : 'No tests match these filters.'}
+              </p>
+              {allRows.length > 0 ? (
+                <button
+                  className={buttonClassName({
+                    variant: 'secondary',
+                    size: 'compact',
+                  })}
+                  type="button"
+                  onClick={clearFilters}
+                >
+                  clear filters
+                </button>
+              ) : null}
+            </div>
           ) : (
             <div className="mt-3 overflow-x-auto">
-              <table className="w-full min-w-[82rem] border-collapse text-left [&_td]:border-0 [&_td]:px-3 [&_td]:py-2.5 [&_th]:border-0 [&_th]:px-3 [&_th]:py-2 [&_th]:font-mono [&_th]:text-[11px] [&_th]:font-medium [&_th]:uppercase [&_th]:tracking-[0.06em] [&_th]:text-ink-muted [&_tbody_tr]:transition-colors [&_tbody_tr:hover]:bg-[var(--surface-soft)]">
+              <table
+                className={`w-full min-w-[82rem] border-collapse text-left [&_td]:border-0 [&_td]:px-3 [&_td]:py-2.5 [&_th]:border-0 [&_th]:px-3 [&_th]:py-2 [&_th]:font-mono [&_th]:text-[0.6875rem] [&_th]:font-medium [&_th]:uppercase [&_th]:tracking-[0.06em] [&_th]:text-ink-muted [&_tbody_tr]:transition-colors ${
+                  local
+                    ? '[&_tbody_tr]:cursor-pointer [&_tbody_tr:hover]:bg-[var(--surface-soft)]'
+                    : ''
+                }`}
+              >
+                <caption className="visually-hidden">
+                  Test catalog, {rows.length} of {allRows.length} tests
+                </caption>
                 <thead>
                   <tr>
                     <th scope="col">Test</th>
@@ -542,7 +612,9 @@ export function TestsCatalogPage() {
                     <th scope="col">Human horizon</th>
                     <th scope="col">Realism</th>
                     <th scope="col">Calibration</th>
-                    <th scope="col">Executions</th>
+                    <th scope="col" className="text-right">
+                      Executions
+                    </th>
                     <th scope="col">
                       <span className="visually-hidden">History</span>
                     </th>
@@ -550,17 +622,39 @@ export function TestsCatalogPage() {
                 </thead>
                 <tbody>
                   {rows.map(({ row, localScenario }) => {
-                    const version = currentVersion(row)
                     const tone = lifecyclePresentation[row.lifecycle]
                     const complexity = catalogComplexityPresentation(row)
                     const horizon = catalogHorizonPresentation(row)
                     const realism = catalogRealismPresentation(row)
                     const calibration = catalogCalibrationPresentation(row)
+                    const executions = catalogExecutionSummary(row)
+                    const historyHref = hashForTestHistory(row.test_id)
                     return (
-                      <tr key={row.test_id}>
+                      // Audit T-01: the whole row opens the history; the id
+                      // link keeps the keyboard and screen-reader path.
+                      <tr
+                        key={row.test_id}
+                        onClick={
+                          local
+                            ? (click) => {
+                                if (isInteractiveTarget(click.target)) return
+                                window.location.hash = historyHref
+                              }
+                            : undefined
+                        }
+                      >
                         <td data-label="Test">
                           <span className="flex items-center gap-2 font-mono text-[13px] leading-5 font-medium text-ink">
-                            <span>{row.test_id}</span>
+                            {local ? (
+                              <a
+                                className="text-ink no-underline hover:underline"
+                                href={historyHref}
+                              >
+                                {row.test_id}
+                              </a>
+                            ) : (
+                              <span>{row.test_id}</span>
+                            )}
                             {localScenario ? <LocalTestBadge /> : null}
                           </span>
                           <small className="block text-xs text-ink-muted">
@@ -575,7 +669,7 @@ export function TestsCatalogPage() {
                           </small>
                         </td>
                         <td data-label="Version">
-                          <span className="inline-flex items-center rounded-full bg-[var(--surface-fill)] px-2 py-0.5 font-mono text-[11px] font-medium text-[var(--color-ink-faint)]">
+                          <span className="inline-flex items-center rounded-[6px] bg-[var(--surface-fill)] px-1.5 py-0.5 font-mono text-[0.6875rem] leading-4 text-ink-soft">
                             {row.current_version
                               ? `v${row.current_version}`
                               : '—'}
@@ -604,18 +698,31 @@ export function TestsCatalogPage() {
                         <td data-label="Calibration">
                           <DimensionCell {...calibration} />
                         </td>
-                        <td data-label="Executions">
-                          <span className="font-mono text-xs text-[var(--color-ink-faint)]">
-                            {version?.execution_count ?? 0}
+                        <td
+                          data-label="Executions"
+                          className="text-right tabular-nums"
+                        >
+                          <span
+                            className="block font-mono text-xs text-ink-soft"
+                            title={executions.breakdown || undefined}
+                          >
+                            {executions.total}
                           </span>
+                          <small className="block text-[0.6875rem] text-ink-muted">
+                            {executions.lastSeen
+                              ? `last seen ${formatDate(executions.lastSeen)}`
+                              : 'never run'}
+                          </small>
                         </td>
                         <td data-label="History" className="text-right">
                           {local ? (
                             <a
-                              className="inline-flex min-h-7 items-center rounded-[6px] bg-[var(--surface-fill)] px-2.5 text-xs font-medium text-[var(--color-ink-faint)] no-underline transition-colors hover:bg-[var(--surface-soft)] hover:text-ink"
-                              href={hashForTestHistory(row.test_id)}
+                              className="inline-grid size-7 place-items-center rounded-[6px] text-ink-soft no-underline transition-colors hover:bg-[var(--surface-soft)] hover:text-ink"
+                              href={historyHref}
+                              aria-label={`History for ${row.test_id}`}
+                              title="History"
                             >
-                              View metrics
+                              <ChevronRight size={16} aria-hidden="true" />
                             </a>
                           ) : (
                             <span className="text-xs text-ink-muted">

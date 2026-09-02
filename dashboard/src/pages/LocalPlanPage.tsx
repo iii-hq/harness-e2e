@@ -9,6 +9,7 @@ import {
   useState,
 } from 'react'
 import { DashboardPageActions } from '@/components/DashboardPageActions'
+import { DiscardDraftDialog } from '@/components/DiscardDraftDialog'
 import {
   ExecutionSetup,
   ExecutionSetupReview,
@@ -163,76 +164,6 @@ export function planFormDirty(
     current.technicalRetries !== initial.technicalRetries ||
     current.seed !== initial.seed ||
     current.scenarios.join('\u0000') !== initial.scenarios.join('\u0000')
-  )
-}
-
-// Audit PN-03: a real modal (showModal) with backdrop, focus trap, Escape
-// and backdrop click both meaning "keep editing".
-function DiscardDraftDialog({
-  open,
-  warning,
-  onDiscard,
-  onContinue,
-}: {
-  open: boolean
-  warning: string
-  onDiscard: () => void
-  onContinue: () => void
-}) {
-  const dialogRef = useRef<HTMLDialogElement>(null)
-  const keepEditingRef = useRef<HTMLButtonElement>(null)
-  useEffect(() => {
-    const dialog = dialogRef.current
-    if (!dialog) return
-    if (open && !dialog.open) {
-      dialog.showModal()
-      keepEditingRef.current?.focus()
-    }
-    if (!open && dialog.open) dialog.close()
-  }, [open])
-  if (!open) return null
-  return (
-    // biome-ignore lint/a11y/useKeyWithClickEvents: backdrop click only; Escape is handled by onCancel
-    <dialog
-      ref={dialogRef}
-      className="harness-e2e-discard-dialog m-auto w-[min(28rem,calc(100vw-2rem))] rounded-[6px] border border-line bg-panel p-5 text-ink backdrop:bg-app-backdrop backdrop:backdrop-blur-[5px]"
-      aria-labelledby="discard-draft-title"
-      aria-describedby="discard-draft-description"
-      onCancel={(event) => {
-        event.preventDefault()
-        onDiscard()
-      }}
-      onClick={(event) => {
-        if (event.target === event.currentTarget) onDiscard()
-      }}
-    >
-      <h2 id="discard-draft-title" className="m-0 text-base font-semibold">
-        Discard draft changes?
-      </h2>
-      <p
-        id="discard-draft-description"
-        className="m-0 mt-2 text-[13px] leading-[1.5] text-ink-soft"
-      >
-        {warning}
-      </p>
-      <div className="harness-e2e-discard-dialog-actions mt-4 flex flex-wrap justify-end gap-2">
-        <button
-          ref={keepEditingRef}
-          className="min-h-11 cursor-pointer rounded-[6px] border border-line bg-panel-raised px-3 text-ink"
-          type="button"
-          onClick={onDiscard}
-        >
-          Keep editing
-        </button>
-        <button
-          className="min-h-11 cursor-pointer rounded-[6px] border border-brand bg-brand px-3 text-panel"
-          type="button"
-          onClick={onContinue}
-        >
-          Discard and continue
-        </button>
-      </div>
-    </dialog>
   )
 }
 
@@ -1705,8 +1636,8 @@ export function LocalPlanCreatePage() {
       <DiscardDraftDialog
         open={dirtyNavigation.pendingHash !== null}
         warning={dirtyNavigation.warning}
-        onDiscard={dirtyNavigation.cancelNavigation}
-        onContinue={dirtyNavigation.confirmNavigation}
+        onKeep={dirtyNavigation.cancelNavigation}
+        onDiscard={dirtyNavigation.confirmNavigation}
       />
       <a
         className="fixed top-3 left-3 z-[100] -translate-y-24 rounded-lg bg-[var(--color-accent)] px-4 py-3 text-sm font-semibold text-[var(--color-accent-fg)] transition-transform focus:translate-y-0"
