@@ -1,9 +1,18 @@
-import { useEffect, useMemo, useState } from 'react'
+import { ArrowRight, ChevronDown, Link2 } from 'lucide-react'
+import {
+  type ReactNode,
+  useCallback,
+  useEffect,
+  useMemo,
+  useState,
+} from 'react'
 import { DashboardPageActions } from '@/components/DashboardPageActions'
+import { requestQuickExecution } from '@/components/ExecutionSetup'
 import { ScenarioMatrix } from '@/components/ScenarioMatrix'
 import { TranscriptDialog } from '@/components/TranscriptDialog'
 import {
   buttonClassName,
+  EmptyState,
   MetricCard,
   type OperationalStatus,
   PageHeader,
@@ -16,24 +25,31 @@ import {
   type AssessmentRunView,
   aggregateAssessmentMetrics,
   buildAssessmentWorkspace,
-  buildHarnessRecommendation,
 } from '@/lib/assessment-view'
 import {
+  type DashboardDataBridge,
   type DashboardExecutionDetail,
   type DashboardExecutionSummary,
   type ExecutionTotals,
   getDashboardDataBridge,
 } from '@/lib/dashboard-data-source'
 import {
+  type ExecutionVerdict,
+  executionVerdict,
+} from '@/lib/execution-verdict'
+import {
   buildExecutionPresentation,
-  categoryMessage,
   type ExecutionPresentation,
   formatDate,
   formatDuration,
   formatPercent,
   titleCase,
 } from '@/lib/execution-view'
-import { buildScenarioMatrix } from '@/lib/scenario-matrix'
+import { executionTitle } from '@/lib/overview-signal'
+import {
+  buildScenarioMatrix,
+  type ScenarioMatrixSummary,
+} from '@/lib/scenario-matrix'
 import {
   type GeneralRunMetrics,
   summedGeneralRunMetricsFromDetail,
@@ -43,9 +59,6 @@ import {
 import '@/design-system/styles.css'
 
 type DetailSection = 'summary' | 'results' | 'technical'
-
-const detailPanel =
-  'detail-section scroll-mt-28 overflow-hidden rounded-[var(--ds-radius-md)] bg-[var(--surface-fill)] p-5'
 
 function sectionFromAnchor(anchor: string | null | undefined): DetailSection {
   if (
@@ -107,76 +120,6 @@ function executionStatus(presentation: ExecutionPresentation): {
   )
     return { status: 'inconclusive', label: 'Inconclusive' }
   return { status: 'failed', label: 'Failed' }
-}
-
-function statusFromContract(
-  value: string | null | undefined,
-): OperationalStatus {
-  if (value === 'passed' || value === 'pass') return 'passed'
-  if (value === 'hard_gate_failed') return 'hard_gate'
-  if (value === 'unavailable' || value === 'not_evaluated') return 'unavailable'
-  if (value === 'inconclusive') return 'inconclusive'
-  if (
-    value === 'pass_with_concerns' ||
-    value === 'passed_with_concerns' ||
-    value === 'partial'
-  )
-    return 'recommendation'
-  if (value === 'running') return 'running'
-  if (value === 'cancelled') return 'cancelled'
-  if (value === 'incomplete') return 'incomplete'
-  return 'failed'
-}
-
-function friendlyModelName(model: string) {
-  const compact = model.slice(model.lastIndexOf('/') + 1)
-  const readable = compact
-    .replace(/^gpt-/i, 'GPT-')
-    .replace(
-      /[-_]+([a-z])/gi,
-      (_, letter: string) => ` ${letter.toUpperCase()}`,
-    )
-  return readable.charAt(0).toUpperCase() + readable.slice(1)
-}
-
-function ModelIdentityCard({
-  label,
-  models,
-}: {
-  label: string
-  models: ExecutionPresentation['subjects']
-}) {
-  return (
-    <div className="min-w-0 bg-panel-raised p-3">
-      <div className="font-mono text-label font-semibold uppercase tracking-[0.06em] text-ink-muted">
-        {label}
-      </div>
-      {models.length ? (
-        models.map((model) => (
-          <div
-            key={`${model.provider}/${model.model}`}
-            className="mt-1 min-w-0"
-          >
-            <strong
-              className="block break-words text-sm text-ink"
-              title={`${model.provider}/${model.model}`}
-            >
-              {friendlyModelName(model.model)}
-            </strong>
-            {model.provider && (
-              <code className="mt-0.5 block break-all font-mono text-label text-ink-muted">
-                {model.provider}
-              </code>
-            )}
-          </div>
-        ))
-      ) : (
-        <strong className="mt-1 block text-sm text-ink-muted">
-          Not reported
-        </strong>
-      )}
-    </div>
-  )
 }
 
 type SummaryExecutionMetrics = {
@@ -251,181 +194,191 @@ function formatReportedCost(value: number | null) {
   return `$${value.toFixed(4)}`
 }
 
-function DecisionBoundary({ label, value }: { label: string; value: string }) {
-  return (
-    <div className="grid content-start gap-2 bg-panel-raised p-4">
-      <dt className="font-mono text-label font-semibold uppercase tracking-[0.06em] text-ink-muted">
-        {label}
-      </dt>
-      <dd className="m-0">
-        <StatusBadge
-          status={statusFromContract(value)}
-          label={titleCase(value)}
-        />
-      </dd>
-    </div>
-  )
-}
+/* ---------------------------------------------------------------- verdict */
 
-const NO_RUN_STATES = new Set([
-  'cancelled',
-  'cancelling',
-  'running',
-  'incomplete',
-  'unavailable',
-])
-
-// The decision headline names the two layers of the assessment contract as
-// two labelled fields instead of the earlier "<status> objectively; AI
-// <verdict>" concatenation (audit ED-04).
-export function decisionTitle(
-  systemStatus: string,
-  advisoryStatus: string,
-  hasRun: boolean,
-): string {
-  if (!hasRun && NO_RUN_STATES.has(systemStatus)) {
-    return `${titleCase(systemStatus)} · no assessment retained`
-  }
-  if (systemStatus === 'passed' && advisoryStatus === 'pass_with_concerns') {
-    return 'Passed objectively; advisory review found gaps'
-  }
-  return `Objective result: ${titleCase(systemStatus)} · advisory: ${titleCase(advisoryStatus)}`
-}
-
-export function DecisionSection({
-  presentation,
-  detail,
-  primaryRun,
+function SectionPanel({
+  id,
+  title,
+  summary,
+  actions,
+  children,
 }: {
-  presentation: ExecutionPresentation
-  detail: DashboardExecutionDetail
-  primaryRun: AssessmentRunView | null
+  id: string
+  title: string
+  summary?: string
+  actions?: ReactNode
+  children: ReactNode
 }) {
-  const aiResult = primaryRun?.finalAssessment.result
-  const systemStatus = primaryRun?.systemStatus ?? presentation.attention
-  const advisoryStatus =
-    aiResult?.verdict ??
-    primaryRun?.finalAssessment.availability ??
-    'unavailable'
-  const effectiveStatus = primaryRun?.effectiveStatus ?? systemStatus
-  const title = decisionTitle(systemStatus, advisoryStatus, Boolean(primaryRun))
-  const recommendation = primaryRun
-    ? aiResult?.recommendation || buildHarnessRecommendation(primaryRun)
-    : NO_RUN_STATES.has(systemStatus)
-      ? 'No scenario report was retained. Rerun the execution to obtain one.'
-      : 'Inspect the retained execution evidence before deciding whether to rerun.'
-  const effectiveDiffers = effectiveStatus !== systemStatus
-  const summary = detail.assessment_summary
-  const issue = presentation.primaryIssue
-
   return (
     <Panel
       as="section"
-      id="summary"
-      padding="generous"
-      className="scroll-mt-28 rounded-[var(--ds-radius-md)] border-[var(--color-edge)] p-5 md:p-6"
-      aria-labelledby="summary-heading"
+      id={id}
+      className="scroll-mt-24"
+      aria-labelledby={`${id}-heading`}
     >
-      <PageHeader
-        headingLevel={2}
-        headingId="summary-heading"
-        context="Decision"
-        title={title}
-        summary={
-          aiResult?.summary ??
-          (issue
-            ? categoryMessage(issue.category, issue.count)
-            : 'The retained objective result is ready for evidence review.')
-        }
-        className=""
-        actions={
-          <div className="flex flex-wrap justify-end gap-2">
-            <StatusBadge
-              status={statusFromContract(systemStatus)}
-              label={`System: ${titleCase(systemStatus)}`}
-            />
-            <StatusBadge
-              status={statusFromContract(advisoryStatus)}
-              label={`AI: ${titleCase(advisoryStatus)}`}
-            />
-          </div>
-        }
-      />
-
-      <div className="mt-6 grid overflow-hidden rounded-lg border border-[var(--color-rule)] lg:grid-cols-[minmax(0,1.35fr)_minmax(24rem,0.65fr)]">
-        <section className="grid content-start gap-3 p-4 md:p-5">
-          {aiResult?.diagnosis ? (
-            <>
-              <p className="m-0 font-mono text-label font-semibold uppercase tracking-[0.06em] text-[var(--color-accent)]">
-                What happened
-              </p>
-              <p className="m-0 max-w-4xl text-sm leading-6 text-ink">
-                {aiResult.diagnosis}
-              </p>
-            </>
-          ) : null}
-          <p className="m-0 font-mono text-label font-semibold uppercase tracking-[0.06em] text-[var(--color-accent)]">
-            Recommended next step
-          </p>
-          <p className="m-0 max-w-4xl text-sm leading-6 text-ink">
-            {recommendation}
-          </p>
-          {aiResult?.concerns?.[0] ? (
-            <p className="m-0 border-l-2 border-[var(--color-warn)] pl-3 text-xs leading-5 text-[var(--color-ink-faint)]">
-              <strong className="text-warning">Primary concern:</strong>{' '}
-              {aiResult.concerns[0]}
+      <div className="mb-4 flex flex-wrap items-start justify-between gap-3">
+        <div className="min-w-0">
+          <h2
+            className="m-0 text-sm font-semibold text-ink"
+            id={`${id}-heading`}
+          >
+            {title}
+          </h2>
+          {summary ? (
+            <p className="mt-1 mb-0 max-w-[70ch] text-xs leading-5 text-ink-soft">
+              {summary}
             </p>
           ) : null}
-          <a
-            className={buttonClassName({
-              variant: 'quiet',
-              size: 'compact',
-              className: 'mt-1 w-fit',
-            })}
-            href={hashForExecution(detail.id, 'results')}
-          >
-            Inspect retained evidence
-          </a>
-        </section>
-        <div className="grid content-start border-t border-[var(--color-rule)] lg:border-t-0 lg:border-l">
-          <dl className="m-0 grid gap-px bg-[var(--color-rule)] sm:grid-cols-3 lg:grid-cols-1">
-            <DecisionBoundary label="Objective system" value={systemStatus} />
-            <DecisionBoundary label="Advisory AI" value={advisoryStatus} />
-            {effectiveDiffers ? (
-              <DecisionBoundary
-                label="Effective harness"
-                value={effectiveStatus}
-              />
-            ) : null}
-          </dl>
-          <p className="m-0 bg-panel-raised px-4 pb-4 text-xs leading-5 text-[var(--color-ink-faint)]">
-            The objective result is authoritative; the advisory AI never
-            overrides it
-            {effectiveDiffers
-              ? ', and the effective status is the one retained in the report.'
-              : '.'}
-          </p>
         </div>
+        {actions ? (
+          <div className="flex flex-wrap items-center gap-2">{actions}</div>
+        ) : null}
       </div>
+      {children}
+    </Panel>
+  )
+}
 
-      <dl className="mt-4 grid grid-cols-2 gap-px overflow-hidden rounded-lg border border-[var(--color-rule)] bg-[var(--color-rule)] lg:grid-cols-4">
-        {[
-          ['Assessments', summary?.assessment_count],
-          ['Passed', summary?.assessment_outcomes?.passed],
-          ['Partial', summary?.assessment_outcomes?.partial],
-          ['Evidence references', summary?.evidence_reference_count],
-        ].map(([label, value]) => (
-          <div key={String(label)} className="bg-panel-raised p-3">
-            <dt className="font-mono text-label uppercase tracking-[0.06em] text-ink-muted">
-              {label}
-            </dt>
-            <dd className="mt-1 mb-0 text-xl font-semibold text-ink">
-              {typeof value === 'number' ? value.toLocaleString('en-US') : '—'}
-            </dd>
+/** Audit ED-03 / ED-05: one verdict for the execution, stated once. */
+export function DecisionSection({
+  presentation,
+  detail,
+  verdict,
+  primaryRun,
+  metrics,
+  scenarioSummary,
+}: {
+  presentation: ExecutionPresentation
+  detail: DashboardExecutionDetail
+  verdict: ExecutionVerdict
+  primaryRun: AssessmentRunView | null
+  metrics: SummaryExecutionMetrics | null
+  scenarioSummary: ScenarioMatrixSummary | null
+}) {
+  const systemStatus = primaryRun?.systemStatus ?? presentation.attention
+  const advisoryStatus =
+    primaryRun?.finalAssessment.result?.verdict ??
+    primaryRun?.finalAssessment.availability ??
+    'unavailable'
+  const effectiveStatus = primaryRun?.effectiveStatus ?? systemStatus
+  const boundaries: Array<[string, string]> = [
+    ['objective system', titleCase(systemStatus).toLowerCase()],
+    ['advisory ai', titleCase(advisoryStatus).toLowerCase()],
+  ]
+  // Audit ED-05: the effective status only appears when it differs.
+  if (effectiveStatus !== systemStatus)
+    boundaries.push(['effective', titleCase(effectiveStatus).toLowerCase()])
+  const summary = detail.assessment_summary
+  const coverageComplete =
+    presentation.coverage != null &&
+    (presentation.coverage === 1 || presentation.coverage >= 100)
+  const scenarioCount = scenarioSummary?.total ?? 0
+  return (
+    <SectionPanel
+      id="summary"
+      title="decision"
+      summary={verdict.headline}
+      actions={
+        <a
+          className={buttonClassName({
+            variant: 'secondary',
+            size: 'compact',
+            className: 'no-underline',
+          })}
+          href={hashForExecution(detail.id, 'results')}
+        >
+          inspect retained evidence
+          <ArrowRight size={13} aria-hidden="true" />
+        </a>
+      }
+    >
+      <dl className="m-0 flex flex-wrap gap-x-6 gap-y-2 font-mono text-xs">
+        {boundaries.map(([label, value]) => (
+          <div className="flex items-baseline gap-2" key={label}>
+            <dt className="ds-label">{label}</dt>
+            <dd className="m-0 text-ink">{value}</dd>
           </div>
         ))}
       </dl>
-    </Panel>
+      {verdict.diagnosis ? (
+        <div className="mt-4 grid gap-1">
+          <span className="ds-label">what happened</span>
+          <p className="m-0 max-w-[80ch] text-sm leading-6 text-ink">
+            {verdict.diagnosis}
+          </p>
+        </div>
+      ) : null}
+      <div className="mt-4 grid gap-1">
+        <span className="ds-label">next step</span>
+        <p className="m-0 max-w-[80ch] text-sm leading-6 text-ink">
+          {verdict.nextStep}
+        </p>
+      </div>
+      {/* Audit ED-18: one column below 640px, no delta wrapping into a
+          second line beside the label. */}
+      <div className="mt-5 grid gap-3 @[560px]:grid-cols-2 @[960px]:grid-cols-4">
+        <MetricCard
+          label="scenarios"
+          value={
+            scenarioCount
+              ? `${scenarioSummary?.passed ?? 0}/${scenarioCount}`
+              : '—'
+          }
+          detail={
+            scenarioCount
+              ? `${scenarioSummary?.hardGate ?? 0} hard gate · ${scenarioSummary?.failed ?? 0} failed`
+              : 'no scenario report retained'
+          }
+          tone={
+            scenarioCount === 0
+              ? 'unavailable'
+              : (scenarioSummary?.passed ?? 0) === scenarioCount
+                ? 'positive'
+                : 'negative'
+          }
+        />
+        <MetricCard
+          label="coverage"
+          value={formatPercent(presentation.coverage)}
+          detail={`${presentation.receivedReports ?? 0} of ${presentation.expectedReports ?? 0} reports`}
+          tone={
+            presentation.coverage == null
+              ? 'unavailable'
+              : coverageComplete
+                ? 'positive'
+                : 'warning'
+          }
+        />
+        <MetricCard
+          label="assessments"
+          value={
+            typeof summary?.assessment_count === 'number'
+              ? summary.assessment_count.toLocaleString('en-US')
+              : '—'
+          }
+          detail={
+            typeof summary?.evidence_reference_count === 'number'
+              ? `${summary.evidence_reference_count} evidence references`
+              : 'no evidence references retained'
+          }
+          tone={summary?.assessment_count ? 'neutral' : 'unavailable'}
+        />
+        <MetricCard
+          label="reported cost"
+          value={
+            metrics?.totalCostUsd == null
+              ? '—'
+              : formatReportedCost(metrics.totalCostUsd)
+          }
+          detail={
+            metrics?.totalCostUsd == null
+              ? 'not captured for this run'
+              : 'consolidated execution cost'
+          }
+          tone={metrics?.totalCostUsd == null ? 'unavailable' : 'neutral'}
+        />
+      </div>
+    </SectionPanel>
   )
 }
 
@@ -448,31 +401,18 @@ function ResultsSection({
   )
   const scenarioCount = buildScenarioMatrix(detail).summary.total
   return (
-    <Panel
-      as="section"
+    <SectionPanel
       id="results"
-      padding="generous"
-      className={`${detailPanel} p-5 md:p-6`}
-      aria-labelledby="results-heading"
+      title="scenario results"
+      actions={
+        <span className="font-mono text-label text-ink-muted">
+          {scenarioCount} {scenarioCount === 1 ? 'scenario' : 'scenarios'} ·{' '}
+          {runCount} {runCount === 1 ? 'run' : 'runs'}
+        </span>
+      }
     >
-      <PageHeader
-        headingLevel={2}
-        headingId="results-heading"
-        context="Benchmark results"
-        title="Scenario results"
-        summary="Compare objective outcomes, advisory conclusions, runtime, and scenario structure. Expand one row to inspect its benchmark metrics and workflow."
-        className=""
-        actions={
-          <span className="font-mono text-xs text-ink-muted">
-            {scenarioCount} {scenarioCount === 1 ? 'scenario' : 'scenarios'} ·{' '}
-            {runCount} {runCount === 1 ? 'run' : 'runs'}
-          </span>
-        }
-      />
-      <div className="mt-6">
-        <ScenarioMatrix detail={detail} onTranscript={onTranscript} />
-      </div>
-    </Panel>
+      <ScenarioMatrix detail={detail} onTranscript={onTranscript} />
+    </SectionPanel>
   )
 }
 
@@ -539,49 +479,156 @@ function TechnicalSection({
 }) {
   const entries = provenanceEntries(detail, presentation)
   const raw = JSON.stringify(detail, null, 2)
+  const [copied, setCopied] = useState(false)
+  const line = entries.map(([key, value]) => `${key} ${value}`).join(' · ')
+  // Audit ED-10 / ED-05: provenance is one collapsed line until asked for.
   return (
-    <Panel
-      as="section"
-      id="technical"
-      padding="generous"
-      className={`${detailPanel} bg-panel-raised p-5 md:p-6`}
-      aria-labelledby="technical-heading"
-    >
-      <PageHeader
-        headingLevel={2}
-        headingId="technical-heading"
-        context="Provenance"
-        title="Raw fields and immutable identity"
-        summary="Identifiers retained for reproducibility."
-        className=""
-        actions={
+    <Panel as="section" id="technical" className="scroll-mt-24">
+      <details data-provenance>
+        <summary className="flex min-h-9 cursor-pointer list-none items-center gap-3 text-xs marker:hidden">
+          <ChevronDown
+            className="size-4 shrink-0 -rotate-90 text-ink-muted transition-transform duration-[var(--ds-duration-fast)] group-open:rotate-0 motion-reduce:transition-none"
+            aria-hidden="true"
+          />
+          <span className="font-semibold text-ink">
+            raw fields and immutable identity
+          </span>
+          <span className="ms-auto hidden truncate font-mono text-label text-ink-muted @[720px]:block">
+            {line.slice(0, 120)}
+          </span>
+        </summary>
+        <dl className="m-0 mt-4 grid grid-cols-[max-content_minmax(0,1fr)] gap-x-6 gap-y-2 font-mono text-xs">
+          {entries.map(([key, value]) => (
+            <div key={key} className="contents">
+              <dt className="ds-label">{key}</dt>
+              <dd className="m-0 break-all text-ink">{value}</dd>
+            </div>
+          ))}
+        </dl>
+        <div className="mt-4 flex flex-wrap gap-2">
           <button
             type="button"
-            className={buttonClassName({ variant: 'quiet', size: 'compact' })}
-            onClick={() => void navigator.clipboard?.writeText(raw)}
+            className={buttonClassName({
+              variant: 'secondary',
+              size: 'compact',
+            })}
+            onClick={() => {
+              void navigator.clipboard?.writeText(raw).then(() => {
+                setCopied(true)
+                window.setTimeout(() => setCopied(false), 1500)
+              })
+            }}
           >
-            Copy JSON
+            {copied ? 'copied' : 'copy json'}
           </button>
-        }
-      />
-      <dl className="m-0 mt-5 grid grid-cols-[max-content_minmax(0,1fr)] gap-x-6 gap-y-2 font-mono text-xs">
-        {entries.map(([key, value]) => (
-          <div key={key} className="contents">
-            <dt className="text-label font-medium uppercase tracking-[0.06em] text-ink-muted">
-              {key}
-            </dt>
-            <dd className="m-0 break-all text-ink">{value}</dd>
-          </div>
-        ))}
-      </dl>
-      <details className="mt-5 rounded-[6px] bg-panel">
-        <summary className="min-h-11 cursor-pointer px-4 py-3 text-sm font-semibold text-ink">
-          Preview raw JSON
-        </summary>
-        <pre className="max-h-[560px] overflow-auto p-4 font-mono text-xs text-[var(--color-ink-faint)]">
+        </div>
+        <pre className="mt-3 mb-0 max-h-[480px] overflow-auto rounded-[6px] bg-canvas p-4 font-mono text-xs leading-5 text-ink-soft">
           {raw}
         </pre>
       </details>
+    </Panel>
+  )
+}
+
+/** Audit ED-07: the anchors the router already accepts get a visible bar. */
+const SECTIONS: Array<{ id: DetailSection; label: string }> = [
+  { id: 'summary', label: 'decision' },
+  { id: 'results', label: 'results' },
+  { id: 'technical', label: 'provenance' },
+]
+
+function SectionBar({
+  active,
+  executionId,
+}: {
+  active: DetailSection
+  executionId: string
+}) {
+  return (
+    <nav
+      className="sticky top-12 z-10 -mx-1 flex flex-wrap gap-1 bg-canvas px-1 py-2"
+      aria-label="Execution sections"
+      data-section-bar
+    >
+      {SECTIONS.map((section) => (
+        <a
+          key={section.id}
+          className={buttonClassName({
+            variant: active === section.id ? 'secondary' : 'quiet',
+            size: 'compact',
+            className: 'no-underline',
+          })}
+          href={hashForExecution(executionId, section.id)}
+          aria-current={active === section.id ? 'true' : undefined}
+        >
+          {section.label}
+        </a>
+      ))}
+    </nav>
+  )
+}
+
+/** Audit ED-11 / ED-12: running and cancelled are their own screen. */
+function LiveState({
+  presentation,
+  status,
+  onCancel,
+  cancelling,
+}: {
+  presentation: ExecutionPresentation
+  status: { status: OperationalStatus; label: string }
+  onCancel?: () => void
+  cancelling: boolean
+}) {
+  const running =
+    presentation.attention === 'running' ||
+    presentation.attention === 'cancelling'
+  const scope =
+    presentation.expectedReports !== null &&
+    presentation.receivedReports !== null
+      ? `${presentation.receivedReports} of ${presentation.expectedReports} scenarios`
+      : null
+  const started = presentation.startedAt
+    ? Date.parse(presentation.startedAt)
+    : Number.NaN
+  // Elapsed only means something while the run is live; a finished one
+  // reports the time it took, not the time since it started.
+  const elapsed =
+    running && Number.isFinite(started)
+      ? formatDuration((Date.now() - started) / 1000)
+      : null
+  return (
+    <Panel className="mt-5" data-live-state={presentation.attention}>
+      <div className="flex flex-wrap items-center gap-3">
+        <StatusBadge
+          status={status.status}
+          label={status.label.toLowerCase()}
+        />
+        <span className="font-mono text-xs text-ink-soft">
+          {[scope, elapsed ? `${elapsed} elapsed` : null]
+            .filter(Boolean)
+            .join(' · ') || 'no progress reported yet'}
+        </span>
+        {running && onCancel ? (
+          <button
+            className={buttonClassName({
+              variant: 'secondary',
+              size: 'compact',
+              className: 'ms-auto',
+            })}
+            type="button"
+            onClick={onCancel}
+            disabled={cancelling}
+          >
+            {cancelling ? 'cancelling…' : 'cancel execution'}
+          </button>
+        ) : null}
+      </div>
+      <p className="mt-3 mb-0 max-w-[70ch] text-xs leading-5 text-ink-soft">
+        {running
+          ? 'The report, the decision and the scenario results appear here as soon as the run finishes. This page follows the run; no reload is needed.'
+          : 'No report was retained, so there is nothing to decide. Re-run the same scope to obtain one.'}
+      </p>
     </Panel>
   )
 }
@@ -595,11 +642,16 @@ export function ExecutionPage({
 }) {
   const [summary, setSummary] = useState<DashboardExecutionSummary | null>(null)
   const [detail, setDetail] = useState<DashboardExecutionDetail | null>(null)
+  const [bridge, setBridge] = useState<DashboardDataBridge | null>(null)
   const [error, setError] = useState<string | null>(null)
+  const [copied, setCopied] = useState(false)
+  const [cancelling, setCancelling] = useState(false)
   const [transcript, setTranscript] = useState<{
     run: AssessmentRunView
     title: string
   } | null>(null)
+  const section = sectionFromAnchor(anchor)
+
   useEffect(() => {
     if (!anchor || !detail) return
     window.requestAnimationFrame(() =>
@@ -609,36 +661,69 @@ export function ExecutionPage({
     )
   }, [anchor, detail])
 
+  const load = useCallback(async () => {
+    try {
+      const nextBridge = await getDashboardDataBridge()
+      setBridge(nextBridge)
+      const manifest = await nextBridge.listExecutions({
+        ids: [executionId],
+        limit: 1,
+      })
+      const nextSummary = manifest.executions[0] ?? null
+      const nextDetail = await nextBridge.getExecution(executionId)
+      setSummary(nextSummary ?? summaryFromDetail(nextDetail))
+      setDetail(nextDetail)
+      return nextBridge
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : String(cause))
+      return null
+    }
+  }, [executionId])
+
   useEffect(() => {
     let active = true
     setError(null)
     setDetail(null)
     void (async () => {
-      try {
-        const nextBridge = await getDashboardDataBridge()
-        const manifest = await nextBridge.listExecutions({
-          ids: [executionId],
-          limit: 1,
-        })
-        const nextSummary = manifest.executions[0] ?? null
-        const nextDetail = await nextBridge.getExecution(executionId)
-        if (!active) return
-        setSummary(nextSummary ?? summaryFromDetail(nextDetail))
-        setDetail(nextDetail)
-      } catch (cause) {
-        if (active)
-          setError(cause instanceof Error ? cause.message : String(cause))
-      }
+      const nextBridge = await load()
+      if (!active || !nextBridge) return
     })()
     return () => {
       active = false
     }
-  }, [executionId])
+  }, [load])
 
   const presentation = useMemo(
     () => (summary ? buildExecutionPresentation(summary) : null),
     [summary],
   )
+  const live =
+    presentation?.attention === 'running' ||
+    presentation?.attention === 'cancelling'
+
+  // Audit ED-12: a live execution follows the run instead of waiting for F5.
+  useEffect(() => {
+    if (!bridge || !live) return
+    let cancelled = false
+    let dispose: (() => void) | undefined
+    let timer: number | undefined
+    bridge
+      .subscribeRunChanges(() => {
+        if (timer) window.clearTimeout(timer)
+        timer = window.setTimeout(() => void load(), 400)
+      })
+      .then((off) => {
+        if (cancelled) off()
+        else dispose = off
+      })
+      .catch(() => undefined)
+    return () => {
+      cancelled = true
+      if (timer) window.clearTimeout(timer)
+      dispose?.()
+    }
+  }, [bridge, live, load])
+
   const assessmentModel = useMemo(
     () => buildAssessmentWorkspace(detail),
     [detail],
@@ -664,277 +749,225 @@ export function ExecutionPage({
 
   if (error)
     return (
-      <div className="ds-root min-h-dvh bg-[var(--color-bg)] text-ink">
-        <div className="mx-auto grid min-h-dvh w-[min(52rem,calc(100%_-_1.5rem))] place-items-center py-8">
-          <Panel
-            role="alert"
-            padding="generous"
-            className="w-full rounded-[var(--ds-radius-md)] border-[var(--color-alert)]"
-          >
-            <PageHeader
-              context="Execution unavailable"
-              title="Execution not found"
-              summary={error}
-              actions={
-                <a
+      <div className="ds-root min-h-dvh bg-canvas text-ink">
+        <DashboardPageActions active="executions" />
+        <div className="page-shell w-[calc(100%_-_1.5rem)] max-w-[1420px] pt-5 pb-16 md:w-[calc(100%_-_3rem)]">
+          <EmptyState
+            tone="error"
+            title={
+              /not found|unknown|no such|invalid execution|404/i.test(error)
+                ? 'Execution not found'
+                : 'Execution could not be loaded'
+            }
+            description={error}
+            actions={
+              <>
+                <button
                   className={buttonClassName({ variant: 'secondary' })}
+                  type="button"
+                  onClick={() => {
+                    setError(null)
+                    void load()
+                  }}
+                >
+                  retry
+                </button>
+                <a
+                  className={buttonClassName({
+                    variant: 'quiet',
+                    className: 'no-underline',
+                  })}
                   href={hashForWorkspace('executions')}
                 >
-                  Back to executions
+                  back to executions
                 </a>
-              }
-            />
-          </Panel>
+              </>
+            }
+          />
         </div>
       </div>
     )
+
+  // Audit ED-22: the skeleton keeps the chrome, so nothing jumps on arrival.
   if (!detail || !presentation)
     return (
-      <div className="ds-root min-h-dvh bg-[var(--color-bg)] text-ink">
-        <div className="mx-auto grid min-h-dvh w-[min(52rem,calc(100%_-_1.5rem))] place-items-center py-8">
-          <Panel
-            className="w-full rounded-[var(--ds-radius-md)]"
-            aria-busy="true"
-          >
-            <p className="m-0 font-mono text-xs uppercase tracking-[0.06em] text-ink-muted">
-              Loading execution report…
-            </p>
-          </Panel>
+      <div className="ds-root min-h-dvh bg-canvas text-ink">
+        <DashboardPageActions active="executions" />
+        <div
+          className="page-shell w-[calc(100%_-_1.5rem)] max-w-[1420px] pt-5 pb-16 md:w-[calc(100%_-_3rem)]"
+          aria-busy="true"
+          role="status"
+        >
+          <span className="ds-visually-hidden">Loading execution report</span>
+          <div className="grid gap-4">
+            <div className="h-12 w-72 animate-pulse rounded-[6px] bg-[var(--surface-fill)] motion-reduce:animate-none" />
+            {['decision', 'results', 'provenance'].map((placeholder) => (
+              <div
+                key={placeholder}
+                className="h-40 animate-pulse rounded-[6px] bg-[var(--surface-fill)] motion-reduce:animate-none"
+              />
+            ))}
+          </div>
         </div>
       </div>
     )
 
   const primaryRun = assessmentModel.runs[0] ?? null
-  const aiResult = primaryRun?.finalAssessment.result
   const status = executionStatus(presentation)
-  const workflow = summaryMetrics?.workflow ?? null
-  const hasRustWorkflow = Boolean(workflow && workflow.stepCount > 0)
-  const scenarioSummary = scenarioMatrix?.summary
-  const scenarioCount = scenarioSummary?.total ?? 0
-  const workflowScenarioCount =
-    scenarioMatrix?.items.filter((item) => item.workflowSteps.length > 0)
-      .length ?? 0
-  const scenarioAttention =
-    (scenarioSummary?.failed ?? 0) +
-    (scenarioSummary?.hardGate ?? 0) +
-    (scenarioSummary?.inconclusive ?? 0) +
-    (scenarioSummary?.unavailable ?? 0) +
-    (scenarioSummary?.running ?? 0) +
-    (scenarioSummary?.incomplete ?? 0)
+  const scenarioSummary = scenarioMatrix?.summary ?? null
+  const verdict = executionVerdict(
+    presentation,
+    scenarioSummary,
+    scenarioMatrix?.items ?? [],
+    primaryRun,
+  )
   const runtimeSeconds =
     presentation.modelRuntimeSeconds ?? summaryMetrics?.durationSeconds ?? null
-  const coverageComplete =
-    presentation.coverage != null &&
-    (presentation.coverage === 1 || presentation.coverage >= 100)
-  const noRun = !presentation.available || scenarioCount === 0
-  const subjectNames = presentation.subjects
-    .map((model) => friendlyModelName(model.model))
-    .join(', ')
-  const judgeNames = presentation.judges
-    .map((model) => friendlyModelName(model.model))
-    .join(', ')
-  const headerSummary = [
-    scenarioCount
-      ? `${scenarioCount} ${scenarioCount === 1 ? 'scenario' : 'scenarios'}`
-      : 'no scenario report retained',
-    status.label.toLowerCase(),
-    runtimeSeconds !== null ? formatDuration(runtimeSeconds) : null,
-    subjectNames
-      ? judgeNames
-        ? `${subjectNames} judged by ${judgeNames}`
-        : subjectNames
-      : null,
+  const noRun = !presentation.available || (scenarioSummary?.total ?? 0) === 0
+  const { title } = executionTitle(presentation)
+  const identity: Array<[string, string]> = [
+    [
+      'subject',
+      presentation.subjects
+        .map((model) => `${model.provider}/${model.model}`)
+        .join(', ') || 'not reported',
+    ],
+    [
+      'judge',
+      presentation.judges.map((model) => model.model).join(', ') || 'automatic',
+    ],
+    [
+      'started',
+      presentation.startedAt ? formatDate(presentation.startedAt) : '—',
+    ],
+    ['runtime', runtimeSeconds === null ? '—' : formatDuration(runtimeSeconds)],
+    [
+      'tokens',
+      summaryMetrics?.totalTokens == null
+        ? '—'
+        : formatMetricCount(summaryMetrics.totalTokens),
+    ],
+    [
+      'trigger',
+      [detail.event, detail.actor].filter(Boolean).join(' · ') ||
+        'not reported',
+    ],
+    ['id', `${detail.id.slice(0, 8)}…${detail.id.slice(-6)}`],
   ]
-    .filter(Boolean)
-    .join(' · ')
+  const local = bridge?.mode === 'local'
+  const cancelRun = async () => {
+    if (bridge?.mode !== 'local') return
+    setCancelling(true)
+    try {
+      await bridge.cancelRun()
+      await load()
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : String(cause))
+    } finally {
+      setCancelling(false)
+    }
+  }
+
   return (
-    <div className="ds-root min-h-dvh bg-[var(--color-bg)] text-ink">
-      <DashboardPageActions active="executions" context={presentation.label} />
-      <div className="page-shell detail-shell w-[min(1380px,calc(100%_-_3rem))] pt-6 outline-none max-[640px]:w-[calc(100%_-_1.5rem)]">
-        <nav
-          className="breadcrumbs mb-5 flex min-w-0 items-center gap-2 overflow-hidden font-mono text-xs text-ink-muted"
-          aria-label="Breadcrumb"
-        >
-          <a href={hashForWorkspace('executions')}>Executions</a>
-          <span aria-hidden="true">/</span>
-          <span className="truncate text-ink" aria-current="page">
-            {presentation.label}
-          </span>
-        </nav>
+    <div className="ds-root min-h-dvh bg-canvas text-ink">
+      <DashboardPageActions active="executions" context={title} />
+      <div className="page-shell w-[calc(100%_-_1.5rem)] max-w-[1420px] pt-5 pb-16 md:w-[calc(100%_-_3rem)]">
+        {/* Audit ED-13 / ED-23: the title is the execution, the trail is flat. */}
         <PageHeader
-          id="detail-summary"
-          headingId="detail-heading"
-          context="Execution detail"
-          title={presentation.label}
-          summary={headerSummary}
-          className="border-b border-[var(--color-rule)] pb-5 [&_.ds-page-header-copy]:gap-2 [&_h1]:max-w-full [&_h1]:break-words [&_h1]:text-xl"
+          title={title}
+          summary={verdict.headline}
+          headingId="execution-title"
+          breadcrumb={[
+            { label: 'executions', href: hashForWorkspace('executions') },
+            { label: title },
+          ]}
           actions={
-            <div className="flex flex-wrap justify-end gap-2">
-              <StatusBadge status={status.status} label={status.label} />
-              {scenarioCount === 1 && aiResult ? (
-                <StatusBadge
-                  status={statusFromContract(aiResult.verdict)}
-                  label={`AI: ${titleCase(aiResult.verdict)}`}
-                />
+            <>
+              <StatusBadge
+                status={status.status}
+                label={status.label.toLowerCase()}
+              />
+              {/* Audit ED-14: the detail keeps its own actions. */}
+              <button
+                className={buttonClassName({
+                  variant: 'quiet',
+                  size: 'compact',
+                })}
+                type="button"
+                onClick={() => {
+                  void navigator.clipboard
+                    ?.writeText(window.location.href)
+                    .then(() => {
+                      setCopied(true)
+                      window.setTimeout(() => setCopied(false), 1500)
+                    })
+                }}
+              >
+                <Link2 size={13} aria-hidden="true" />
+                {copied ? 'link copied' : 'copy link'}
+              </button>
+              {local ? (
+                <a
+                  className={buttonClassName({
+                    variant: 'secondary',
+                    size: 'compact',
+                    className: 'no-underline',
+                  })}
+                  href={hashForWorkspace()}
+                  onClick={() =>
+                    requestQuickExecution(
+                      scenarioMatrix?.items.map((item) => item.scenarioId) ??
+                        [],
+                    )
+                  }
+                >
+                  re-run same scope
+                </a>
               ) : null}
-              <span className="inline-flex items-center rounded-[6px] bg-[var(--surface-fill)] px-2 py-1 font-mono text-[11px] lowercase text-[var(--color-ink-faint)]">
-                {detail.availability === 'full'
-                  ? 'Full evidence'
-                  : detail.availability === 'aggregate'
-                    ? 'Aggregate'
-                    : 'No report'}
-              </span>
-            </div>
+            </>
           }
         />
 
-        <Panel
-          padding="none"
-          className="mt-5 overflow-hidden rounded-[var(--ds-radius-md)] border-[var(--color-edge)]"
+        {/* Audit ED-05: identity is one band of facts, not four cards. */}
+        <dl
+          className="mt-4 flex flex-wrap gap-x-6 gap-y-2 font-mono text-xs"
+          data-identity-band
         >
-          <section
-            className="grid grid-cols-2 gap-px bg-[var(--color-rule)] lg:grid-cols-4"
-            aria-label="Execution identity"
-          >
-            <div className="bg-panel-raised p-3">
-              <div className="font-mono text-label font-semibold uppercase tracking-[0.06em] text-ink-muted">
-                Scenarios
-              </div>
-              <strong className="mt-1 block truncate text-sm text-ink">
-                {scenarioCount
-                  ? `${scenarioCount} ${scenarioCount === 1 ? 'result' : 'results'}`
-                  : 'Not reported'}
-              </strong>
+          {identity.map(([label, value]) => (
+            <div className="flex min-w-0 items-baseline gap-2" key={label}>
+              <dt className="ds-label">{label}</dt>
+              <dd className="m-0 min-w-0 break-words text-ink">{value}</dd>
             </div>
-            <ModelIdentityCard label="Subject" models={presentation.subjects} />
-            <ModelIdentityCard label="Judge" models={presentation.judges} />
-            <div className="bg-panel-raised p-3">
-              <div className="font-mono text-label font-semibold uppercase tracking-[0.06em] text-ink-muted">
-                Completed
-              </div>
-              <strong className="mt-1 block text-sm text-ink">
-                {formatDate(presentation.completedAt)}
-              </strong>
-            </div>
-          </section>
-          {noRun ? (
-            <p className="m-0 border-t border-[var(--color-edge)] p-4 font-mono text-xs text-[var(--color-ink-faint)]">
-              No scenario report was retained for this execution
-              {presentation.attention === 'cancelled'
-                ? ' because it was cancelled'
-                : presentation.attention === 'running' ||
-                    presentation.attention === 'cancelling'
-                  ? ' yet; it is still running'
-                  : ''}
-              . Metrics appear once a report exists.
-            </p>
-          ) : (
-            <section
-              className="grid grid-cols-2 gap-3 border-t border-[var(--color-edge)] p-4 lg:grid-cols-[repeat(auto-fit,minmax(12rem,1fr))]"
-              aria-label="Execution metrics"
-            >
-              <MetricCard
-                className="bg-panel"
-                label="Objective scenarios"
-                value={`${scenarioSummary?.passed ?? 0}/${scenarioCount}`}
-                detail={`${scenarioSummary?.hardGate ?? 0} hard gate · ${scenarioSummary?.failed ?? 0} failed`}
-                delta={scenarioAttention > 0 ? 'Needs attention' : undefined}
-                tone={scenarioAttention > 0 ? 'negative' : 'positive'}
-              />
-              <MetricCard
-                className="bg-panel"
-                label="Report coverage"
-                value={formatPercent(presentation.coverage)}
-                detail={`${presentation.receivedReports ?? 0} of ${presentation.expectedReports ?? 0} reports received`}
-                delta={
-                  presentation.coverage != null && !coverageComplete
-                    ? 'Missing reports'
-                    : undefined
-                }
-                tone={
-                  presentation.coverage == null
-                    ? 'unavailable'
-                    : coverageComplete
-                      ? 'positive'
-                      : 'warning'
-                }
-              />
-              <MetricCard
-                className="bg-panel"
-                label="Execution runtime"
-                value={formatDuration(runtimeSeconds)}
-                detail={
-                  presentation.modelRuntimeSeconds != null
-                    ? 'Reported wall-clock time'
-                    : `Observed across ${summaryMetrics?.runCount ?? 0} runs`
-                }
-                tone={runtimeSeconds === null ? 'unavailable' : 'neutral'}
-              />
-              <MetricCard
-                className="bg-panel"
-                label="Total tokens"
-                value={formatMetricCount(summaryMetrics?.totalTokens ?? null)}
-                detail={
-                  summaryMetrics?.turns != null
-                    ? `${formatMetricCount(summaryMetrics.turns)} turns · subject execution usage`
-                    : 'Subject execution usage'
-                }
-                tone={
-                  summaryMetrics?.totalTokens == null
-                    ? 'unavailable'
-                    : 'neutral'
-                }
-              />
-              {summaryMetrics?.functionCalls != null ? (
-                <MetricCard
-                  className="bg-panel"
-                  label="Function calls"
-                  value={formatMetricCount(summaryMetrics.functionCalls)}
-                  detail={
-                    summaryMetrics.functionCallErrors == null
-                      ? 'Error count not captured'
-                      : `${formatMetricCount(summaryMetrics.functionCallErrors)} errors`
-                  }
-                  tone={
-                    (summaryMetrics.functionCallErrors ?? 0) > 0
-                      ? 'warning'
-                      : 'neutral'
-                  }
-                />
-              ) : null}
-              {summaryMetrics?.totalCostUsd != null ? (
-                <MetricCard
-                  className="bg-panel"
-                  label="Reported cost"
-                  value={formatReportedCost(summaryMetrics.totalCostUsd)}
-                  detail="Consolidated execution cost"
-                />
-              ) : null}
-              {hasRustWorkflow ? (
-                <MetricCard
-                  className="bg-panel"
-                  label="Workflow scenarios"
-                  value={`${workflowScenarioCount}/${scenarioCount}`}
-                  detail={`${workflow?.stepCount ?? 0} persisted steps`}
-                />
-              ) : null}
-            </section>
-          )}
-        </Panel>
-        <div className="detail-main grid min-w-0 gap-5">
-          {noRun && !primaryRun ? null : (
-            <DecisionSection
-              presentation={presentation}
-              detail={detail}
-              primaryRun={primaryRun}
-            />
-          )}
-          <ResultsSection
-            detail={detail}
-            onTranscript={(run, title) => setTranscript({ run, title })}
+          ))}
+        </dl>
+
+        {noRun ? (
+          <LiveState
+            presentation={presentation}
+            status={status}
+            cancelling={cancelling}
+            onCancel={local ? () => void cancelRun() : undefined}
           />
-          <TechnicalSection detail={detail} presentation={presentation} />
-        </div>
+        ) : (
+          <>
+            <SectionBar active={section} executionId={detail.id} />
+            <div className="grid min-w-0 gap-5">
+              <DecisionSection
+                presentation={presentation}
+                detail={detail}
+                verdict={verdict}
+                primaryRun={primaryRun}
+                metrics={summaryMetrics}
+                scenarioSummary={scenarioSummary}
+              />
+              <ResultsSection
+                detail={detail}
+                onTranscript={(run, title) => setTranscript({ run, title })}
+              />
+              <TechnicalSection detail={detail} presentation={presentation} />
+            </div>
+          </>
+        )}
       </div>
       {transcript && (
         <TranscriptDialog

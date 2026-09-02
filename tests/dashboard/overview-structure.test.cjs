@@ -302,12 +302,25 @@ test('organizes detail into progressive disclosure sections', () => {
   assert.match(executionPage, /onTranscript/)
   assert.doesNotMatch(executionPage, /Open transcript/)
   assert.match(executionPage, /aggregateAssessmentMetrics/)
-  assert.match(executionPage, /buildHarnessRecommendation/)
-  assert.match(executionPage, /Passed objectively; advisory review found gaps/)
-  assert.match(executionPage, /Recommended next step/)
-  assert.match(executionPage, /Primary concern/)
-  assert.match(executionPage, /Benchmark results/)
-  assert.match(executionPage, /Scenario results/)
+  // Audit ED-03/05/07/11/12/13/14/22/23: one aggregated verdict, an identity
+  // band, a section bar bound to the anchors, page actions, live and
+  // no-report states, and a skeleton that keeps the chrome.
+  assert.match(executionPage, /executionVerdict\(/)
+  assert.match(executionPage, /data-identity-band/)
+  assert.match(executionPage, /data-section-bar/)
+  assert.match(executionPage, /data-live-state/)
+  assert.match(executionPage, /next step/)
+  assert.match(executionPage, /what happened/)
+  assert.match(executionPage, /copy link/)
+  assert.match(executionPage, /re-run same scope/)
+  assert.match(executionPage, /subscribeRunChanges/)
+  assert.match(executionPage, /breadcrumb=\{\[/)
+  assert.match(executionPage, /aria-busy="true"/)
+  assert.doesNotMatch(
+    executionPage,
+    /Passed objectively; advisory review found gaps|System: |AI: |Recommended next step|Benchmark results|Effective harness/,
+  )
+  assert.match(executionPage, /scenario results/)
   assert.match(scenarioMatrix, /Objective result/)
   assert.match(scenarioMatrix, /Advisory/)
   assert.match(scenarioMatrix, /Runtime/)
@@ -315,7 +328,7 @@ test('organizes detail into progressive disclosure sections', () => {
   assert.match(executionPage, /buildScenarioMatrix\(detail\)/)
   assert.match(executionPage, /@\/design-system\/styles\.css/)
   assert.doesNotMatch(executionPage, /StatusPill|01 · Summary|02 · Results/)
-  assert.match(executionPage, /Preview raw JSON/)
+  assert.match(executionPage, /data-provenance/)
   // The sheet behaviour below 560px lives in the design-system Dialog.
   assert.match(transcript, /<Dialog/)
   assert.match(read('src', 'design-system', 'primitives.css'), /@container harness \(max-width: 560px\) \{\s*\.ds-dialog,/)
