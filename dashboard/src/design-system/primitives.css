@@ -310,6 +310,389 @@
   --ds-metric-color: var(--text-muted, #a3a09c);
 }
 
+/* Breadcrumb: the trail above a page title; the last item is the page. */
+.ds-breadcrumb ol {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--ds-space-2);
+  margin: 0;
+  padding: 0;
+  color: var(--text-muted, #6b6865);
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  list-style: none;
+  text-transform: lowercase;
+}
+
+.ds-breadcrumb li + li::before {
+  margin-right: var(--ds-space-2);
+  color: var(--ink-decor, #a3a09c);
+  content: "/";
+}
+
+.ds-breadcrumb a {
+  color: var(--text-soft, #6b6865);
+  text-decoration: none;
+}
+
+.ds-breadcrumb a:hover {
+  color: var(--text, #0a0a0a);
+  text-decoration: underline;
+}
+
+.ds-breadcrumb [aria-current="page"] {
+  color: var(--text, #0a0a0a);
+}
+
+/* Filter chips: pressed state is the ink fill; the count is part of the label. */
+.ds-chip-group {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--ds-space-2);
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.ds-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--ds-space-2);
+  min-height: 2rem;
+  padding: 0 var(--ds-space-3);
+  border: 0;
+  border-radius: var(--ds-radius-sm);
+  background: var(--surface-fill, rgba(20, 16, 8, 0.055));
+  color: var(--text-soft, #6b6865);
+  font-family: var(--font-mono);
+  font-size: 0.8125rem;
+  font-weight: 500;
+  line-height: 1;
+  text-transform: lowercase;
+  white-space: nowrap;
+  cursor: pointer;
+  transition:
+    color var(--ds-duration-fast) var(--ds-ease-standard),
+    background var(--ds-duration-fast) var(--ds-ease-standard);
+}
+
+.ds-chip:hover:not(:disabled) {
+  background: var(--surface-soft, rgba(20, 16, 8, 0.085));
+  color: var(--text, #0a0a0a);
+}
+
+.ds-chip:disabled {
+  cursor: not-allowed;
+  opacity: 0.4;
+}
+
+.ds-chip-active,
+.ds-chip-active:hover:not(:disabled) {
+  background: var(--text, #0a0a0a);
+  color: var(--surface, #fafafa);
+}
+
+.ds-chip-count {
+  font-size: var(--ds-text-label);
+  font-variant-numeric: tabular-nums;
+  opacity: 0.8;
+}
+
+/* Data table: hairline row dividers are the one sanctioned 1px line; header
+   labels are the label style; numeric cells align right in tabular figures. */
+.ds-table-wrap {
+  min-width: 0;
+  overflow-x: auto;
+}
+
+.ds-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.8125rem;
+  text-align: left;
+}
+
+.ds-table-caption {
+  padding: 0 0 var(--ds-space-3);
+  color: var(--text-soft, #6b6865);
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  text-align: left;
+  caption-side: top;
+}
+
+.ds-table th {
+  padding: var(--ds-space-2) var(--ds-space-3);
+  color: var(--text-muted, #6b6865);
+  font-family: var(--font-mono);
+  font-size: var(--ds-text-label);
+  font-weight: 500;
+  letter-spacing: var(--ds-tracking-label);
+  text-transform: uppercase;
+  vertical-align: bottom;
+  white-space: nowrap;
+}
+
+.ds-table td {
+  padding: var(--ds-space-3);
+  border-top: 1px solid var(--line, rgba(20, 16, 8, 0.16));
+  vertical-align: top;
+}
+
+.ds-table-sticky thead th {
+  position: sticky;
+  z-index: 1;
+  top: 0;
+  background: var(--surface, #fafafa);
+}
+
+.ds-table-numeric {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+
+.ds-table-row-link {
+  cursor: pointer;
+  transition: background var(--ds-duration-fast) var(--ds-ease-standard);
+}
+
+.ds-table-row-link:hover {
+  background: var(--surface-fill, rgba(20, 16, 8, 0.055));
+}
+
+.ds-table-row-link a {
+  color: inherit;
+  text-decoration: none;
+}
+
+.ds-table-row-link a:hover {
+  text-decoration: underline;
+}
+
+/* Empty state: a fill, a lowercase mono title, and the action that fixes it. */
+.ds-empty {
+  display: grid;
+  justify-items: center;
+  gap: var(--ds-space-3);
+  padding: var(--ds-space-10) var(--ds-space-5);
+  border-radius: var(--ds-radius-md);
+  background: var(--surface-fill, rgba(20, 16, 8, 0.055));
+  color: var(--text, #0a0a0a);
+  text-align: center;
+}
+
+.ds-empty-icon {
+  color: var(--text-muted, #6b6865);
+}
+
+.ds-empty-title {
+  margin: 0;
+  font-family: var(--font-mono);
+  font-size: 1rem;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  text-transform: lowercase;
+  text-wrap: balance;
+}
+
+.ds-empty-description {
+  max-width: 40rem;
+  margin: 0;
+  color: var(--text-soft, #6b6865);
+  font-size: 0.8125rem;
+  line-height: 1.5;
+}
+
+.ds-empty-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: var(--ds-space-2);
+  margin-top: var(--ds-space-1);
+}
+
+.ds-empty-error {
+  background: color-mix(in srgb, var(--danger, #d81b3c) 8%, transparent);
+}
+
+.ds-empty-error .ds-empty-title {
+  color: var(--danger, #d81b3c);
+}
+
+/* Delta: sign, magnitude and direction glyph in the tone of the outcome. */
+.ds-delta {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 0.25em;
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.ds-delta-positive {
+  color: var(--success, #356f3d);
+}
+
+.ds-delta-negative {
+  color: var(--danger, #d81b3c);
+}
+
+.ds-delta-neutral {
+  color: var(--text-soft, #6b6865);
+}
+
+.ds-delta-unavailable {
+  color: var(--text-muted, #6b6865);
+}
+
+/* Callout: one tinted fill per tone, icon and title in the tone colour. */
+.ds-callout {
+  --ds-callout-color: var(--info, #006699);
+  display: flex;
+  gap: var(--ds-space-3);
+  padding: var(--ds-space-3) var(--ds-space-4);
+  border-radius: var(--ds-radius-md);
+  background: color-mix(in srgb, var(--ds-callout-color) 8%, transparent);
+  color: var(--text, #0a0a0a);
+  font-size: 0.8125rem;
+  line-height: 1.5;
+}
+
+.ds-callout-icon {
+  flex: 0 0 auto;
+  margin-top: 0.1em;
+  color: var(--ds-callout-color);
+}
+
+.ds-callout-body {
+  display: grid;
+  min-width: 0;
+  gap: var(--ds-space-1);
+}
+
+.ds-callout-title {
+  color: var(--ds-callout-color);
+  font-family: var(--font-mono);
+  font-size: 0.8125rem;
+  font-weight: 600;
+  text-transform: lowercase;
+}
+
+.ds-callout-success {
+  --ds-callout-color: var(--success, #356f3d);
+}
+
+.ds-callout-warning {
+  --ds-callout-color: var(--warning, #a87a00);
+}
+
+.ds-callout-danger {
+  --ds-callout-color: var(--danger, #d81b3c);
+}
+
+/* Field: label row, control, hint and error wired by id. Controls are fills
+   with a 3:1 inset edge; the focus ring comes from the shell. */
+.ds-field {
+  display: grid;
+  min-width: 0;
+  gap: var(--ds-space-2);
+}
+
+.ds-field-label {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--ds-space-2);
+  color: var(--text-soft, #6b6865);
+  font-size: 0.75rem;
+  font-weight: 600;
+}
+
+.ds-field-meta {
+  color: var(--text-muted, #6b6865);
+  font-family: var(--font-mono);
+  font-size: var(--ds-text-label);
+  font-weight: 400;
+  text-transform: lowercase;
+}
+
+.ds-field-hint {
+  margin: 0;
+  color: var(--text-muted, #6b6865);
+  font-size: 0.75rem;
+  line-height: 1.4;
+}
+
+.ds-field-error {
+  margin: 0;
+  color: var(--danger, #d81b3c);
+  font-size: 0.75rem;
+  line-height: 1.4;
+}
+
+.ds-input {
+  width: 100%;
+  min-height: 2.25rem;
+  padding: 0 var(--ds-space-3);
+  border: 0;
+  border-radius: var(--ds-radius-sm);
+  background: var(--surface-fill, rgba(20, 16, 8, 0.055));
+  color: var(--text, #0a0a0a);
+  font: inherit;
+  font-size: 0.8125rem;
+  outline: 1px solid var(--control-edge, currentColor);
+  outline-offset: -1px;
+  transition: background var(--ds-duration-fast) var(--ds-ease-standard);
+}
+
+.ds-input::placeholder {
+  color: var(--text-muted, #6b6865);
+}
+
+.ds-input:hover:not(:disabled) {
+  background: var(--surface-soft, rgba(20, 16, 8, 0.085));
+}
+
+.ds-input:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+.ds-field-invalid .ds-input {
+  outline-color: var(--danger, #d81b3c);
+}
+
+.ds-textarea {
+  min-height: 6rem;
+  padding: var(--ds-space-2) var(--ds-space-3);
+  line-height: 1.5;
+  resize: vertical;
+}
+
+.ds-select {
+  position: relative;
+  display: block;
+  min-width: 0;
+}
+
+.ds-select-control {
+  padding-right: 2rem;
+  appearance: none;
+}
+
+.ds-select-chevron {
+  position: absolute;
+  top: 50%;
+  right: var(--ds-space-3);
+  display: inline-flex;
+  color: var(--text-muted, #6b6865);
+  pointer-events: none;
+  transform: translateY(-50%);
+}
+
 @media (max-width: 720px) {
   .ds-page-header {
     grid-template-columns: minmax(0, 1fr);
