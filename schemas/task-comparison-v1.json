@@ -1,0 +1,80 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "TaskComparison",
+  "type": "object",
+  "required": [
+    "baseline_passed",
+    "baseline_system_identity_sha256",
+    "candidate_passed",
+    "candidate_system_identity_sha256",
+    "case_fingerprint",
+    "comparable",
+    "reason",
+    "schema",
+    "task_id"
+  ],
+  "properties": {
+    "baseline_passed": {
+      "type": "boolean"
+    },
+    "baseline_system_identity_sha256": {
+      "type": "string"
+    },
+    "candidate_passed": {
+      "type": "boolean"
+    },
+    "candidate_system_identity_sha256": {
+      "type": "string"
+    },
+    "capability_delta": {
+      "type": [
+        "integer",
+        "null"
+      ],
+      "format": "int8"
+    },
+    "case_fingerprint": {
+      "type": "string"
+    },
+    "comparable": {
+      "type": "boolean"
+    },
+    "function_error_delta": {
+      "type": [
+        "integer",
+        "null"
+      ],
+      "format": "int64"
+    },
+    "reason": {
+      "type": "string"
+    },
+    "schema": {
+      "type": "string"
+    },
+    "task_id": {
+      "type": "string"
+    },
+    "token_delta": {
+      "type": [
+        "integer",
+        "null"
+      ],
+      "format": "int64"
+    },
+    "turn_delta": {
+      "type": [
+        "integer",
+        "null"
+      ],
+      "format": "int64"
+    },
+    "wall_time_delta_ms": {
+      "type": [
+        "integer",
+        "null"
+      ],
+      "format": "int64"
+    }
+  }
+}

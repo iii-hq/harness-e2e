@@ -1,0 +1,29 @@
+schema = "harness-e2e-task/v1"
+id = "release_train_recovery"
+version = 1
+kind = "operational_recovery"
+
+[source]
+kind = "embedded_directory"
+path = "fixtures/release_train_recovery"
+manifest_sha256 = "sha256:af990daf6145e31f3a9235d74a2ce783cf6a3bef0e73663f2bcf6c6b9ac42ab2"
+required_paths = ["initial_state.json", "shadow_example.json"]
+
+[execution]
+max_turns = 40
+max_output_tokens = 16384
+max_total_tokens = 500000
+stuck_timeout_seconds = 900
+
+[workspace]
+mutation = "artifact_only"
+allowed_paths = ["recovered-state.json", "recovery-report.json"]
+protected_paths = ["initial_state.json", "shadow_example.json"]
+ignored_paths = []
+minimum_changed_files = 2
+maximum_changed_files = 2
+maximum_patch_lines = 240
+
+[verifier]
+profile = "state_recovery"
+spec = "verifier.json"

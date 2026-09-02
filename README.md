@@ -36,8 +36,13 @@ List the materialized scenarios and their scenario versions:
 cargo run --locked --bin harness-e2e -- list
 cargo run --locked --bin harness-e2e -- catalog
 cargo run --locked --bin harness-e2e -- validate-scenarios
-cargo run --locked --bin harness-e2e -- validate-repository-tasks
+cargo run --locked --bin harness-e2e -- tasks list
+cargo run --locked --bin harness-e2e -- tasks validate
 ```
+
+The native six-task pilot corpus, deterministic verifier profiles and
+longitudinal task comparison are documented in
+[docs/native-benchmark-tasks.md](docs/native-benchmark-tasks.md).
 
 New declarative scenarios are authored only as `scenarios/*.md`. The compiler
 embeds the exact source, validates the canonical English section structure,

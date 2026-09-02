@@ -303,7 +303,6 @@ pub fn evaluate_text_response<'a>(
                 ),
             ],
             awards: Vec::new(),
-            advisory_evidence: Vec::new(),
         })
     })
 }

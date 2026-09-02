@@ -1,0 +1,29 @@
+schema = "harness-e2e-task/v1"
+id = "feature_batch_replay"
+version = 1
+kind = "feature"
+
+[source]
+kind = "embedded_directory"
+path = "tests/fixtures/repository-tasks/feature-batch-replay"
+manifest_sha256 = "sha256:0f2b552526ca92a202c722fa4afa6c49fe16de295e6c4f2a4643d5d3012bb830"
+required_paths = ["src/__init__.py", "src/event_store.py", "src/replay.py", "tests/test_replay.py"]
+
+[execution]
+max_turns = 40
+max_output_tokens = 16384
+max_total_tokens = 400000
+stuck_timeout_seconds = 600
+
+[workspace]
+mutation = "allowlisted"
+allowed_paths = ["src/replay.py"]
+protected_paths = ["tests", "src/__init__.py", "src/event_store.py"]
+ignored_paths = ["__pycache__/", "*.py[cod]", ".pytest_cache/"]
+minimum_changed_files = 1
+maximum_changed_files = 1
+maximum_patch_lines = 80
+
+[verifier]
+profile = "code_patch"
+spec = "verifier.json"

@@ -1,0 +1,29 @@
+schema = "harness-e2e-task/v1"
+id = "security_code_review"
+version = 1
+kind = "code_review"
+
+[source]
+kind = "embedded_directory"
+path = "tests/fixtures/security-scan-repository"
+manifest_sha256 = "sha256:153a193ece61785f41591889f0693e474b15c679d352192759206e637c356f64"
+required_paths = [".env.example", ".github/workflows/insecure.yml", "README.md", "package-lock.json", "package.json", "src/vulnerable.rs"]
+
+[execution]
+max_turns = 32
+max_output_tokens = 16384
+max_total_tokens = 300000
+stuck_timeout_seconds = 600
+
+[workspace]
+mutation = "artifact_only"
+allowed_paths = ["review.json"]
+protected_paths = [".env.example", ".github", "README.md", "package-lock.json", "package.json", "src"]
+ignored_paths = ["node_modules/", ".npm/"]
+minimum_changed_files = 1
+maximum_changed_files = 1
+maximum_patch_lines = 120
+
+[verifier]
+profile = "structured_artifact"
+spec = "verifier.json"

@@ -1,0 +1,78 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "TaskSuiteResult",
+  "type": "object",
+  "required": [
+    "completed_runs",
+    "coverage_incomplete_runs",
+    "infrastructure_invalid_runs",
+    "model",
+    "product_passed_runs",
+    "provider",
+    "requested_runs",
+    "resource_limited_runs",
+    "schema",
+    "suite_behavior_sha256",
+    "suite_id",
+    "suite_version",
+    "task_results"
+  ],
+  "properties": {
+    "completed_runs": {
+      "type": "integer",
+      "format": "uint32",
+      "minimum": 0.0
+    },
+    "coverage_incomplete_runs": {
+      "type": "integer",
+      "format": "uint32",
+      "minimum": 0.0
+    },
+    "infrastructure_invalid_runs": {
+      "type": "integer",
+      "format": "uint32",
+      "minimum": 0.0
+    },
+    "model": {
+      "type": "string"
+    },
+    "product_passed_runs": {
+      "type": "integer",
+      "format": "uint32",
+      "minimum": 0.0
+    },
+    "provider": {
+      "type": "string"
+    },
+    "requested_runs": {
+      "type": "integer",
+      "format": "uint32",
+      "minimum": 0.0
+    },
+    "resource_limited_runs": {
+      "type": "integer",
+      "format": "uint32",
+      "minimum": 0.0
+    },
+    "schema": {
+      "type": "string"
+    },
+    "suite_behavior_sha256": {
+      "type": "string"
+    },
+    "suite_id": {
+      "type": "string"
+    },
+    "suite_version": {
+      "type": "integer",
+      "format": "uint32",
+      "minimum": 0.0
+    },
+    "task_results": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    }
+  }
+}

@@ -40,8 +40,11 @@ enum Command {
     },
     /// Validate every scenarios/*.md file without running a model.
     ValidateScenarios(ValidateScenariosArgs),
-    /// Validate every embedded repository-task contract without running a model.
-    ValidateRepositoryTasks,
+    /// List, validate, execute and compare native benchmark tasks.
+    Tasks {
+        #[command(subcommand)]
+        command: TaskCommand,
+    },
     /// List models registered in the running stack.
     Models(ModelsArgs),
     /// Execute one or more quality scenarios against a running stack.
@@ -58,6 +61,76 @@ enum Command {
     FaultPlan(FaultPlanArgs),
     /// Classify observed recovery from a protected supervisor's fault journal.
     FaultEvaluate(FaultEvaluateArgs),
+}
+
+#[derive(Debug, Subcommand)]
+enum TaskCommand {
+    /// Print the immutable native task catalog.
+    List,
+    /// Validate task contracts, fixtures, instructions and verifier specs.
+    Validate,
+    /// Execute one task against a running Harness stack.
+    Run(TaskRunArgs),
+    /// Execute a versioned task suite and persist an aggregate result.
+    RunSuite(TaskRunSuiteArgs),
+    /// Compare two task-result.json files from compatible executions.
+    Compare(TaskCompareArgs),
+}
+
+#[derive(Debug, Args)]
+struct TaskRunArgs {
+    /// Native task id from `tasks list`.
+    task: String,
+
+    #[arg(long, env = "III_URL", default_value = "ws://127.0.0.1:49134")]
+    url: String,
+
+    #[arg(long, env = "HARNESS_E2E_MODEL")]
+    model: String,
+
+    #[arg(long, env = "HARNESS_E2E_PROVIDER")]
+    provider: String,
+
+    #[arg(
+        long,
+        env = "HARNESS_E2E_TASK_OUTPUT",
+        default_value = "target/task-runs"
+    )]
+    output: PathBuf,
+}
+
+#[derive(Debug, Args)]
+struct TaskCompareArgs {
+    /// Baseline task-result.json.
+    #[arg(long)]
+    baseline: PathBuf,
+
+    /// Candidate task-result.json.
+    #[arg(long)]
+    candidate: PathBuf,
+}
+
+#[derive(Debug, Args)]
+struct TaskRunSuiteArgs {
+    /// Versioned task suite JSON.
+    #[arg(long, default_value = "config/task-suites/pilot.json")]
+    suite: PathBuf,
+
+    #[arg(long, env = "III_URL", default_value = "ws://127.0.0.1:49134")]
+    url: String,
+
+    #[arg(long, env = "HARNESS_E2E_MODEL")]
+    model: String,
+
+    #[arg(long, env = "HARNESS_E2E_PROVIDER")]
+    provider: String,
+
+    #[arg(
+        long,
+        env = "HARNESS_E2E_TASK_OUTPUT",
+        default_value = "target/task-runs"
+    )]
+    output: PathBuf,
 }
 
 #[derive(Debug, Args)]
@@ -261,7 +334,7 @@ async fn main() -> Result<()> {
             Ok(())
         }
         Some(Command::ValidateScenarios(args)) => validate_scenarios(args),
-        Some(Command::ValidateRepositoryTasks) => validate_repository_tasks(),
+        Some(Command::Tasks { command }) => tasks(command).await,
         Some(Command::Models(args)) => models(args).await,
         Some(Command::Run(args)) => run(args).await,
         Some(Command::ReplayMaterialized(args)) => replay_materialized(args).await,
@@ -288,17 +361,80 @@ fn validate_scenarios(args: ValidateScenariosArgs) -> Result<()> {
     Ok(())
 }
 
-fn validate_repository_tasks() -> Result<()> {
-    let tasks = harness_e2e::repository_task::embedded_catalog()?;
-    println!(
-        "{}",
-        serde_json::to_string_pretty(&serde_json::json!({
-            "valid": true,
-            "task_count": tasks.len(),
-            "tasks": tasks,
-        }))?
-    );
-    Ok(())
+async fn tasks(command: TaskCommand) -> Result<()> {
+    match command {
+        TaskCommand::List => {
+            let tasks = harness_e2e::task::embedded_catalog()?;
+            let items = tasks
+                .into_iter()
+                .map(|task| {
+                    serde_json::json!({
+                        "id": task.definition.id,
+                        "version": task.definition.version,
+                        "kind": task.definition.kind,
+                        "behavior_sha256": task.behavior_sha256,
+                    })
+                })
+                .collect::<Vec<_>>();
+            println!("{}", serde_json::to_string_pretty(&items)?);
+            Ok(())
+        }
+        TaskCommand::Validate => {
+            let tasks = harness_e2e::task::embedded_catalog()?;
+            let mut sources = Vec::new();
+            for task in &tasks {
+                sources.push(harness_e2e::task::observe_source(&task.definition.source)?);
+            }
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&serde_json::json!({
+                    "valid": true,
+                    "task_count": tasks.len(),
+                    "tasks": tasks,
+                    "sources": sources,
+                }))?
+            );
+            Ok(())
+        }
+        TaskCommand::Run(args) => {
+            let (result, path) = harness_e2e::task::run_task(harness_e2e::task::TaskRunConfig {
+                url: args.url,
+                task_id: args.task,
+                model: args.model,
+                provider: args.provider,
+                output: args.output,
+            })
+            .await?;
+            println!("{}", path.display());
+            if result.status != harness_e2e::task::TaskRunStatus::Passed {
+                bail!("task ended with status {:?}", result.status);
+            }
+            Ok(())
+        }
+        TaskCommand::RunSuite(args) => {
+            let suite = harness_e2e::task::TaskSuiteDefinition::read(&args.suite)?;
+            let (result, path) = harness_e2e::task::run_task_suite(
+                &suite,
+                &args.url,
+                &args.model,
+                &args.provider,
+                &args.output,
+            )
+            .await?;
+            println!("{}", path.display());
+            if result.completed_runs != result.requested_runs {
+                bail!("task suite did not complete every requested run");
+            }
+            Ok(())
+        }
+        TaskCommand::Compare(args) => {
+            let baseline = harness_e2e::task::read_task_result(&args.baseline)?;
+            let candidate = harness_e2e::task::read_task_result(&args.candidate)?;
+            let comparison = harness_e2e::task::TaskComparison::compare(&baseline, &candidate);
+            println!("{}", serde_json::to_string_pretty(&comparison)?);
+            Ok(())
+        }
+    }
 }
 
 fn fault_plan(args: FaultPlanArgs) -> Result<()> {
@@ -516,12 +652,14 @@ mod tests {
     }
 
     #[test]
-    fn repository_task_validation_needs_no_model_configuration() {
+    fn native_task_validation_needs_no_model_configuration() {
         assert!(matches!(
-            Cli::try_parse_from(["harness-e2e", "validate-repository-tasks"])
+            Cli::try_parse_from(["harness-e2e", "tasks", "validate"])
                 .unwrap()
                 .command,
-            Some(Command::ValidateRepositoryTasks)
+            Some(Command::Tasks {
+                command: TaskCommand::Validate
+            })
         ));
     }
 

@@ -1,0 +1,35 @@
+{
+  "profile": "state_recovery",
+  "state_path": "recovered-state.json",
+  "report_path": "recovery-report.json",
+  "state_schema": {
+    "type": "object", "additionalProperties": false,
+    "required": ["version", "tag", "run_id", "run_attempt", "latest_before", "latest_after", "operation", "published", "promoted", "locks_released"],
+    "properties": {
+      "version": {"type": "string"}, "tag": {"type": "string"}, "run_id": {"type": "integer"},
+      "run_attempt": {"type": "integer", "minimum": 2}, "latest_before": {"type": "string"},
+      "latest_after": {"type": "string"}, "operation": {"type": "string"},
+      "published": {"const": true}, "promoted": {"const": true}, "locks_released": {"const": true}
+    }
+  },
+  "report_schema": {
+    "type": "object", "additionalProperties": false,
+    "required": ["reused_immutable_identity", "fresh_gated_operation", "cas_expected_latest", "direct_channel_mutation", "retagged", "version_bumped", "stale_operation_retried"],
+    "properties": {
+      "reused_immutable_identity": {"const": true}, "fresh_gated_operation": {"const": true},
+      "cas_expected_latest": {"type": "string"}, "direct_channel_mutation": {"const": false},
+      "retagged": {"const": false}, "version_bumped": {"const": false},
+      "stale_operation_retried": {"const": false}
+    }
+  },
+  "state_assertions": [
+    {"pointer": "/version", "equals_from": {"file": "initial_state.json", "pointer": "/tag/version"}},
+    {"pointer": "/tag", "equals_from": {"file": "initial_state.json", "pointer": "/tag/name"}},
+    {"pointer": "/run_id", "equals_from": {"file": "initial_state.json", "pointer": "/run/run_id"}},
+    {"pointer": "/latest_before", "equals_from": {"file": "initial_state.json", "pointer": "/latest_version"}},
+    {"pointer": "/latest_after", "equals_from": {"file": "initial_state.json", "pointer": "/tag/version"}}
+  ],
+  "report_assertions": [
+    {"pointer": "/cas_expected_latest", "equals_from": {"file": "initial_state.json", "pointer": "/latest_version"}}
+  ]
+}

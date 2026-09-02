@@ -1,0 +1,10 @@
+{
+  "profile": "code_patch",
+  "baseline_must_fail": true,
+  "public_commands": [
+    {"program": "python3", "args": ["-m", "unittest", "discover", "-s", "tests", "-p", "test_*.py"], "timeout_seconds": 30}
+  ],
+  "hidden_commands": [
+    {"program": "python3", "args": ["-c", "from src.event_store import EventStore; from src.replay import replay_all; seen=[]; assert replay_all(EventStore([]),seen.append,batch_size=2)==0 and seen==[]; seen=[]; assert replay_all(EventStore([1,2,3,4]),seen.append,batch_size=2)==4 and seen==[1,2,3,4]"], "timeout_seconds": 30}
+  ]
+}
