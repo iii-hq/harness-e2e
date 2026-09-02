@@ -164,12 +164,66 @@
   background: var(--color-backdrop, var(--backdrop));
 }
 
+/* Section navigation: tabs by default, a select below 720px of container
+   width. Both states live here so no utility class can override them. */
+.harness-e2e-navigation-narrow {
+  display: none;
+}
+
 .harness-e2e-shell[data-narrow="true"] .harness-e2e-navigation-wide {
   display: none;
 }
 
 .harness-e2e-shell[data-narrow="true"] .harness-e2e-navigation-narrow {
   display: block;
+}
+
+/* Page actions collapse into one disclosure in narrow containers. */
+.harness-e2e-header-overflow {
+  position: relative;
+}
+
+.harness-e2e-header-overflow > summary {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 2.25rem;
+  min-height: 2.25rem;
+  border-radius: 6px;
+  color: var(--text-soft);
+  list-style: none;
+  cursor: pointer;
+}
+
+.harness-e2e-header-overflow > summary::-webkit-details-marker {
+  display: none;
+}
+
+.harness-e2e-header-overflow > summary:hover,
+.harness-e2e-header-overflow[open] > summary {
+  background: var(--surface-soft);
+  color: var(--text);
+}
+
+.harness-e2e-header-overflow-menu {
+  position: absolute;
+  top: calc(100% + 4px);
+  right: 0;
+  z-index: 30;
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 2px;
+  min-width: 11rem;
+  padding: 6px;
+  border-radius: 6px;
+  background: var(--surface-raised);
+  outline: 1px solid var(--line);
+}
+
+.harness-e2e-header-overflow-menu .harness-e2e-header-action {
+  justify-content: flex-start;
+  min-height: 2.25rem;
 }
 
 .harness-e2e-shell [data-route-chrome] {
