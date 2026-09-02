@@ -336,7 +336,7 @@ export function LocalRunnerDialog({
           >
             Create a quick benchmark result
           </strong>
-          <p className="mt-1 mb-0 max-w-2xl text-xs leading-5 text-[var(--color-ink-ghost)]">
+          <p className="mt-1 mb-0 max-w-2xl text-xs leading-5 text-ink-muted">
             Run selected scenarios once. Use a reusable plan when you need a
             fixed baseline and candidate comparison.
           </p>
@@ -404,7 +404,7 @@ export function LocalRunnerDialog({
 
             {error && (
               <p
-                className="m-0 border-t border-[var(--color-rule)] bg-[color-mix(in_srgb,var(--color-alert)_8%,var(--surface))] p-5 text-xs leading-5 text-[var(--color-alert)] sm:px-6"
+                className="m-0 border-t border-[var(--color-rule)] bg-[color-mix(in_srgb,var(--color-alert)_8%,var(--surface))] p-5 text-xs leading-5 text-danger sm:px-6"
                 role="alert"
               >
                 {error}

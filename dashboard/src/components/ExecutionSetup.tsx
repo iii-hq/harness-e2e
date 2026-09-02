@@ -73,7 +73,7 @@ type ExecutionSetupReviewProps = {
 const fieldLabel =
   'grid min-w-0 gap-2 text-xs font-semibold text-[var(--color-ink-faint)]'
 const fieldControl =
-  'min-h-11 w-full rounded-lg border border-[var(--color-rule)] bg-panel-raised px-3 text-sm text-ink transition-colors duration-[var(--ds-duration-fast)] placeholder:text-[var(--color-ink-ghost)] hover:border-[var(--color-edge)] focus-visible:border-[var(--color-rule-focus)] focus-visible:[outline:2px_solid_var(--color-rule-focus)] focus-visible:[outline-offset:3px] disabled:cursor-not-allowed disabled:opacity-50'
+  'min-h-11 w-full rounded-lg border border-[var(--color-rule)] bg-panel-raised px-3 text-sm text-ink transition-colors duration-[var(--ds-duration-fast)] placeholder:text-ink-muted hover:border-[var(--color-edge)] focus-visible:border-[var(--color-rule-focus)] focus-visible:[outline:2px_solid_var(--color-rule-focus)] focus-visible:[outline-offset:3px] disabled:cursor-not-allowed disabled:opacity-50'
 const quietButton =
   'inline-flex min-h-10 items-center justify-center gap-2 rounded-lg border border-[var(--color-rule)] bg-panel-raised px-3 text-xs font-semibold text-[var(--color-ink-faint)] transition-colors duration-[var(--ds-duration-fast)] hover:border-[var(--color-edge)] hover:text-ink disabled:cursor-not-allowed disabled:opacity-45'
 
@@ -104,7 +104,7 @@ function SetupSection({
           <h2 className="m-0 text-sm font-semibold tracking-[-0.015em] text-ink">
             {title}
           </h2>
-          <p className="mt-1 mb-0 max-w-2xl text-xs leading-5 text-[var(--color-ink-ghost)]">
+          <p className="mt-1 mb-0 max-w-2xl text-xs leading-5 text-ink-muted">
             {description}
           </p>
         </div>
@@ -190,7 +190,7 @@ export function ExecutionSetup({
         <span className="min-w-0 flex-1 text-xs text-[var(--color-ink-faint)]">
           {catalogSummary}
         </span>
-        <code className="max-w-full truncate font-mono text-[0.68rem] text-[var(--color-ink-ghost)] sm:max-w-[16rem]">
+        <code className="max-w-full truncate font-mono text-[0.68rem] text-ink-muted sm:max-w-[16rem]">
           {url || 'URL not loaded'}
         </code>
         {onRefreshCatalog && (
@@ -223,7 +223,7 @@ export function ExecutionSetup({
           <label className={fieldLabel} htmlFor={`${idPrefix}-label`}>
             <span className="flex items-baseline justify-between gap-2">
               {mode === 'plan' ? 'Plan label' : 'Execution label'}
-              <small className="font-normal text-[var(--color-ink-ghost)]">
+              <small className="font-normal text-ink-muted">
                 {labelRequired ? 'required' : 'optional'}
               </small>
             </span>
@@ -246,9 +246,7 @@ export function ExecutionSetup({
             <label className={fieldLabel} htmlFor={`${idPrefix}-purpose`}>
               <span className="flex items-baseline justify-between gap-2">
                 Purpose
-                <small className="font-normal text-[var(--color-ink-ghost)]">
-                  optional
-                </small>
+                <small className="font-normal text-ink-muted">optional</small>
               </span>
               <textarea
                 id={`${idPrefix}-purpose`}
@@ -288,9 +286,7 @@ export function ExecutionSetup({
           <div className={fieldLabel}>
             <span className="flex items-baseline justify-between gap-2">
               Execution model
-              <small className="font-normal text-[var(--color-ink-ghost)]">
-                required
-              </small>
+              <small className="font-normal text-ink-muted">required</small>
             </span>
             <ProviderModelDropdown
               ariaLabel="Execution model"
@@ -305,7 +301,7 @@ export function ExecutionSetup({
           <div className={fieldLabel}>
             <span className="flex items-baseline justify-between gap-2">
               Judge model
-              <small className="font-normal text-[var(--color-ink-ghost)]">
+              <small className="font-normal text-ink-muted">
                 automatic when blank
               </small>
             </span>
@@ -339,7 +335,7 @@ export function ExecutionSetup({
               Find a test
               <span className="relative">
                 <Search
-                  className="pointer-events-none absolute top-1/2 left-3 -translate-y-1/2 text-[var(--color-ink-ghost)]"
+                  className="pointer-events-none absolute top-1/2 left-3 -translate-y-1/2 text-ink-muted"
                   size={15}
                   aria-hidden="true"
                 />
@@ -374,7 +370,7 @@ export function ExecutionSetup({
             </div>
           </div>
 
-          <output className="flex min-h-10 flex-wrap items-center justify-between gap-2 border-y border-[var(--color-rule)] py-2 font-mono text-[0.68rem] text-[var(--color-ink-ghost)]">
+          <output className="flex min-h-10 flex-wrap items-center justify-between gap-2 border-y border-[var(--color-rule)] py-2 font-mono text-[0.68rem] text-ink-muted">
             <span>
               <strong className="text-ink">{selectedScenarios.length}</strong>{' '}
               {selectedScenarios.length === 1
@@ -420,7 +416,7 @@ export function ExecutionSetup({
                         </span>
                       )}
                     </span>
-                    <code className="break-all font-mono text-[0.62rem] leading-4 text-[var(--color-ink-ghost)]">
+                    <code className="break-all font-mono text-[0.62rem] leading-4 text-ink-muted">
                       {scenario}
                     </code>
                   </span>
@@ -428,7 +424,7 @@ export function ExecutionSetup({
               )
             })}
             {visibleScenarios.length === 0 && (
-              <p className="col-span-full m-0 p-6 text-center text-xs text-[var(--color-ink-ghost)]">
+              <p className="col-span-full m-0 p-6 text-center text-xs text-ink-muted">
                 No tests match “{query}”. Try another name or clear the search.
               </p>
             )}
@@ -445,7 +441,7 @@ export function ExecutionSetup({
             <strong className="text-sm font-semibold text-ink">
               Sampling, retries and seed
             </strong>
-            <small className="text-xs leading-4 text-[var(--color-ink-ghost)]">
+            <small className="text-xs leading-4 text-ink-muted">
               Retries recover technical failures and never add evidence samples.
             </small>
           </span>
@@ -457,7 +453,7 @@ export function ExecutionSetup({
         <div className="grid gap-px border-t border-[var(--color-rule)] bg-[var(--color-rule)] sm:grid-cols-3">
           <label className={`${fieldLabel} bg-panel p-5`}>
             Runs per test
-            <span className="text-[0.68rem] font-normal leading-4 text-[var(--color-ink-ghost)]">
+            <span className="text-[0.68rem] font-normal leading-4 text-ink-muted">
               Logical evidence samples.
             </span>
             <input
@@ -472,7 +468,7 @@ export function ExecutionSetup({
           </label>
           <label className={`${fieldLabel} bg-panel p-5`}>
             Technical retries
-            <span className="text-[0.68rem] font-normal leading-4 text-[var(--color-ink-ghost)]">
+            <span className="text-[0.68rem] font-normal leading-4 text-ink-muted">
               Recovery attempts only.
             </span>
             <input
@@ -487,7 +483,7 @@ export function ExecutionSetup({
           </label>
           <label className={`${fieldLabel} bg-panel p-5`}>
             Case seed
-            <span className="text-[0.68rem] font-normal leading-4 text-[var(--color-ink-ghost)]">
+            <span className="text-[0.68rem] font-normal leading-4 text-ink-muted">
               Canonical when blank.
             </span>
             <input
@@ -538,7 +534,7 @@ export function ExecutionSetupReview({
             <h2 className="m-0 text-base font-semibold text-ink">
               Review setup
             </h2>
-            <p className="mt-1 mb-0 text-xs leading-5 text-[var(--color-ink-ghost)]">
+            <p className="mt-1 mb-0 text-xs leading-5 text-ink-muted">
               {mode === 'plan'
                 ? 'Creates a draft. The scope remains editable until the baseline starts.'
                 : 'Starts immediately and saves an independent execution result.'}
@@ -548,7 +544,7 @@ export function ExecutionSetupReview({
             className={`inline-flex min-h-7 shrink-0 items-center rounded-full border px-2.5 font-mono text-[0.62rem] font-semibold ${
               ready
                 ? 'border-[color-mix(in_srgb,var(--color-ok)_35%,transparent)] text-[var(--color-ok)]'
-                : 'border-[var(--color-edge)] text-[var(--color-ink-ghost)]'
+                : 'border-[var(--color-edge)] text-ink-muted'
             }`}
           >
             {status}
@@ -562,7 +558,7 @@ export function ExecutionSetupReview({
             className="grid min-h-24 content-between gap-3 bg-panel p-4"
             key={fact.label}
           >
-            <dt className="font-mono text-[0.62rem] uppercase tracking-[0.05em] text-[var(--color-ink-ghost)]">
+            <dt className="font-mono text-[0.62rem] uppercase tracking-[0.05em] text-ink-muted">
               {fact.label}
             </dt>
             <dd className="m-0 font-mono text-xl font-semibold tracking-[-0.04em] text-ink">
@@ -574,7 +570,7 @@ export function ExecutionSetupReview({
 
       <dl className="grid gap-4 border-t border-[var(--color-rule)] p-5 text-xs sm:p-6">
         <div className="grid gap-1">
-          <dt className="font-mono text-[0.62rem] uppercase tracking-[0.05em] text-[var(--color-ink-ghost)]">
+          <dt className="font-mono text-[0.62rem] uppercase tracking-[0.05em] text-ink-muted">
             Execution model
           </dt>
           <dd className="m-0 break-all text-ink">
@@ -582,7 +578,7 @@ export function ExecutionSetupReview({
           </dd>
         </div>
         <div className="grid gap-1">
-          <dt className="font-mono text-[0.62rem] uppercase tracking-[0.05em] text-[var(--color-ink-ghost)]">
+          <dt className="font-mono text-[0.62rem] uppercase tracking-[0.05em] text-ink-muted">
             Judge
           </dt>
           <dd className="m-0 break-all text-[var(--color-ink-faint)]">
@@ -590,7 +586,7 @@ export function ExecutionSetupReview({
           </dd>
         </div>
         <div className="grid gap-1">
-          <dt className="font-mono text-[0.62rem] uppercase tracking-[0.05em] text-[var(--color-ink-ghost)]">
+          <dt className="font-mono text-[0.62rem] uppercase tracking-[0.05em] text-ink-muted">
             Harness endpoint
           </dt>
           <dd className="m-0 break-all font-mono text-[0.68rem] text-[var(--color-ink-faint)]">

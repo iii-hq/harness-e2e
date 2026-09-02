@@ -46,7 +46,7 @@ const lifecyclePresentation: Record<
   never_run: {
     label: 'never run',
     dotClassName: 'bg-[var(--color-ink-ghost)]',
-    textClassName: 'text-[var(--color-ink-ghost)]',
+    textClassName: 'text-ink-muted',
   },
   retired: {
     label: 'retired',
@@ -147,9 +147,7 @@ function DimensionCell({
         {value}
       </span>
       {detail ? (
-        <small className="block text-[11px] text-[var(--color-ink-ghost)]">
-          {detail}
-        </small>
+        <small className="block text-[11px] text-ink-muted">{detail}</small>
       ) : null}
     </>
   )
@@ -452,12 +450,12 @@ export function TestsCatalogPage() {
           <label className="relative block w-full max-w-xs">
             <span className="visually-hidden">Search tests</span>
             <Search
-              className="absolute top-1/2 left-3 -translate-y-1/2 text-[var(--color-ink-ghost)]"
+              className="absolute top-1/2 left-3 -translate-y-1/2 text-ink-muted"
               size={14}
               aria-hidden="true"
             />
             <input
-              className="min-h-9 w-full rounded-[6px] border-0 bg-[var(--surface-fill)] pl-9 pr-3 text-[13px] text-ink outline-none placeholder:text-[var(--color-ink-ghost)]"
+              className="min-h-9 w-full rounded-[6px] border-0 bg-[var(--surface-fill)] pl-9 pr-3 text-[13px] text-ink outline-none placeholder:text-ink-muted"
               type="search"
               placeholder="Filter tests…"
               value={query}
@@ -495,7 +493,7 @@ export function TestsCatalogPage() {
               Local tests
             </button>
           ) : null}
-          <span className="ms-auto font-mono text-xs text-[var(--color-ink-ghost)]">
+          <span className="ms-auto font-mono text-xs text-ink-muted">
             {allRows.length} tests
             {data?.revision ? (
               <>
@@ -534,7 +532,7 @@ export function TestsCatalogPage() {
             </p>
           ) : (
             <div className="mt-3 overflow-x-auto">
-              <table className="w-full min-w-[82rem] border-collapse text-left [&_td]:border-0 [&_td]:px-3 [&_td]:py-2.5 [&_th]:border-0 [&_th]:px-3 [&_th]:py-2 [&_th]:font-mono [&_th]:text-[11px] [&_th]:font-medium [&_th]:uppercase [&_th]:tracking-[0.06em] [&_th]:text-[var(--color-ink-ghost)] [&_tbody_tr]:transition-colors [&_tbody_tr:hover]:bg-[var(--surface-soft)]">
+              <table className="w-full min-w-[82rem] border-collapse text-left [&_td]:border-0 [&_td]:px-3 [&_td]:py-2.5 [&_th]:border-0 [&_th]:px-3 [&_th]:py-2 [&_th]:font-mono [&_th]:text-[11px] [&_th]:font-medium [&_th]:uppercase [&_th]:tracking-[0.06em] [&_th]:text-ink-muted [&_tbody_tr]:transition-colors [&_tbody_tr:hover]:bg-[var(--surface-soft)]">
                 <thead>
                   <tr>
                     <th scope="col">Test</th>
@@ -565,7 +563,7 @@ export function TestsCatalogPage() {
                             <span>{row.test_id}</span>
                             {localScenario ? <LocalTestBadge /> : null}
                           </span>
-                          <small className="block text-xs text-[var(--color-ink-ghost)]">
+                          <small className="block text-xs text-ink-muted">
                             {localScenario ? (
                               localScenario.title
                             ) : (
@@ -620,7 +618,7 @@ export function TestsCatalogPage() {
                               View metrics
                             </a>
                           ) : (
-                            <span className="text-xs text-[var(--color-ink-ghost)]">
+                            <span className="text-xs text-ink-muted">
                               Local dashboard only
                             </span>
                           )}

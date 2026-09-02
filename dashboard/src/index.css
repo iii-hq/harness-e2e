@@ -142,50 +142,6 @@ body {
   font-weight: 700;
 }
 
-.section-nav {
-  position: sticky;
-  z-index: 20;
-  top: 14px;
-  display: flex;
-  width: fit-content;
-  max-width: 100%;
-  margin: -10px 0 24px;
-  gap: 4px;
-  overflow-x: auto;
-  padding: 5px;
-  border: 0;
-  border-radius: 6px;
-  background: var(--surface-raised);
-  scrollbar-width: none;
-}
-
-.section-nav::-webkit-scrollbar {
-  display: none;
-}
-
-.section-nav a {
-  display: inline-flex;
-  align-items: center;
-  flex: 0 0 auto;
-  gap: 7px;
-  padding: 8px 11px;
-  border-radius: 8px;
-  color: var(--text-soft);
-  font-size: 0.74rem;
-  font-weight: 700;
-  text-decoration: none;
-  transition:
-    background 140ms ease,
-    color 140ms ease;
-}
-
-.section-nav a:hover,
-.section-nav a:focus-visible {
-  background: var(--surface-soft);
-  color: var(--text);
-  outline: none;
-}
-
 #latest-evidence,
 #comparison,
 #efficiency,
@@ -297,6 +253,7 @@ footer a:hover {
   min-height: 36px;
   padding: 0 14px;
   border: 0;
+  white-space: nowrap;
   border-radius: 6px;
   background: var(--surface-fill, var(--surface-raised));
   font-family: var(--font-mono, "Chivo Mono", ui-monospace, monospace);
@@ -6321,74 +6278,6 @@ footer {
   min-width: 0;
 }
 
-.section-nav {
-  position: sticky;
-  z-index: 20;
-  top: 12px;
-  display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-  width: 100%;
-  max-width: none;
-  margin: 0 0 18px;
-  gap: 0;
-  overflow: hidden;
-  padding: 0;
-  border: 1px solid var(--line-strong);
-  border-radius: 9px;
-  background: var(--glass);
-  box-shadow: 0 12px 30px rgba(0, 0, 0, 0.12);
-}
-
-.section-nav button {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  min-width: 0;
-  min-height: 52px;
-  padding: 0 16px;
-  border: 0;
-  border-right: 1px solid var(--line);
-  background: transparent;
-  color: var(--text-muted);
-  cursor: pointer;
-  text-align: left;
-}
-
-.section-nav button:last-child {
-  border-right: 0;
-}
-
-.section-nav button > span {
-  color: var(--text-muted);
-  font-family:
-    "Chivo Mono", ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas,
-    monospace;
-  font-size: 0.6rem;
-}
-
-.section-nav button > strong {
-  overflow: hidden;
-  font-size: 0.74rem;
-  font-weight: 620;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.section-nav button:hover,
-.section-nav button:focus-visible {
-  background: var(--surface-soft);
-  color: var(--text);
-}
-
-.section-nav button.active {
-  background: var(--text);
-  color: var(--bg);
-}
-
-.section-nav button.active > span {
-  color: var(--accent);
-}
-
 #overview-content {
   display: grid;
   gap: 16px;
@@ -6699,20 +6588,6 @@ footer {
     padding: 20px 18px;
   }
 
-  .section-nav {
-    position: static;
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-    margin-bottom: 14px;
-  }
-
-  .section-nav button:nth-child(2) {
-    border-right: 0;
-  }
-
-  .section-nav button:nth-child(-n + 2) {
-    border-bottom: 1px solid var(--line);
-  }
-
   .overview-comparison,
   .efficiency-overview,
   .health-panel,
@@ -6932,11 +6807,6 @@ footer {
 @media (max-width: 430px) {
   .overview-shell .sync-block {
     display: none;
-  }
-
-  .section-nav button {
-    min-height: 48px;
-    padding: 0 12px;
   }
 
   .latest-health-meta {

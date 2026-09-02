@@ -24,7 +24,15 @@ test(
   "the narrow select is hidden by CSS, not by a Tailwind utility",
   { todo: "S-01: DashboardShell.tsx still uses the `hidden` utility until PR2" },
   () => {
-    assert.doesNotMatch(shellTsx, /harness-e2e-navigation-narrow[^"]*\bhidden\b/);
-    assert.match(shellCss, /\.harness-e2e-navigation-narrow\s*\{[^}]*display:\s*none/);
+    assert.equal(
+      /harness-e2e-navigation-narrow[^"]*\bhidden\b/.test(shellTsx),
+      false,
+      "DashboardShell.tsx hides the narrow select with the Tailwind `hidden` utility",
+    );
+    assert.equal(
+      /\.harness-e2e-navigation-narrow\s*\{[^}]*display:\s*none/.test(shellCss),
+      true,
+      "dashboard-shell.css does not hide the narrow select by default",
+    );
   },
 );

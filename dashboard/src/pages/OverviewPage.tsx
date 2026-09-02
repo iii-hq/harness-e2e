@@ -119,7 +119,7 @@ function metricTone(presentation: ExecutionPresentation): MetricTone {
 }
 
 const sectionLabelClassName =
-  'font-mono text-[0.6875rem] font-medium uppercase tracking-[0.06em] text-[var(--color-ink-ghost)]'
+  'font-mono text-[0.6875rem] font-medium uppercase tracking-[0.06em] text-ink-muted'
 
 function SummaryKpi({
   label,
@@ -210,7 +210,7 @@ export function LatestExecution({
           </div>
         </div>
         <div className="ms-auto flex flex-wrap items-center gap-3">
-          <span className="font-mono text-xs text-[var(--color-ink-ghost)]">
+          <span className="font-mono text-xs text-ink-muted">
             {formatDate(presentation.completedAt)} · judge{' '}
             {modelNames(presentation.judges)}
           </span>
@@ -405,12 +405,12 @@ function ExecutionHistory({
         >
           Recent executions
         </h2>
-        <span className="ms-auto font-mono text-xs text-[var(--color-ink-ghost)]">
+        <span className="ms-auto font-mono text-xs text-ink-muted">
           {filtered.length} of {executions.length} executions
         </span>
       </div>
       <section
-        className="mt-3 grid gap-2 sm:grid-cols-2 md:grid-cols-[minmax(14rem,1fr)_auto_auto] [&_input]:min-h-9 [&_input]:w-full [&_input]:rounded-[6px] [&_input]:border-0 [&_input]:bg-[var(--surface-fill)] [&_input]:px-3 [&_input]:text-[13px] [&_input]:text-ink [&_input]:placeholder:text-[var(--color-ink-ghost)] [&_select]:min-h-9 [&_select]:w-full [&_select]:rounded-[6px] [&_select]:border-0 [&_select]:bg-[var(--surface-fill)] [&_select]:px-3 [&_select]:text-[13px] [&_select]:text-[var(--color-ink-faint)]"
+        className="mt-3 grid gap-2 sm:grid-cols-2 md:grid-cols-[minmax(14rem,1fr)_auto_auto] [&_input]:min-h-9 [&_input]:w-full [&_input]:rounded-[6px] [&_input]:border-0 [&_input]:bg-[var(--surface-fill)] [&_input]:px-3 [&_input]:text-[13px] [&_input]:text-ink [&_input]:placeholder:text-ink-muted [&_select]:min-h-9 [&_select]:w-full [&_select]:rounded-[6px] [&_select]:border-0 [&_select]:bg-[var(--surface-fill)] [&_select]:px-3 [&_select]:text-[13px] [&_select]:text-[var(--color-ink-faint)]"
         aria-label="Execution filters"
       >
         <label className="sm:col-span-2 md:col-span-1">
@@ -452,7 +452,7 @@ function ExecutionHistory({
         </label>
       </section>
       <div className="mt-2 overflow-x-auto">
-        <table className="w-full min-w-[56rem] border-collapse text-left font-mono text-xs md:text-[13px] [&_a]:font-medium [&_a]:text-ink [&_a]:underline-offset-4 [&_a:hover]:underline [&_td]:border-0 [&_td]:px-3 [&_td]:py-2.5 [&_th]:border-0 [&_th]:px-3 [&_th]:py-2 [&_th]:font-mono [&_th]:text-[11px] [&_th]:font-medium [&_th]:uppercase [&_th]:tracking-[0.06em] [&_th]:text-[var(--color-ink-ghost)] [&_tbody_tr]:transition-colors [&_tbody_tr:hover]:bg-[var(--surface-soft)]">
+        <table className="w-full min-w-[56rem] border-collapse text-left font-mono text-xs md:text-[13px] [&_a]:font-medium [&_a]:text-ink [&_a]:underline-offset-4 [&_a:hover]:underline [&_td]:border-0 [&_td]:px-3 [&_td]:py-2.5 [&_th]:border-0 [&_th]:px-3 [&_th]:py-2 [&_th]:font-mono [&_th]:text-[11px] [&_th]:font-medium [&_th]:uppercase [&_th]:tracking-[0.06em] [&_th]:text-ink-muted [&_tbody_tr]:transition-colors [&_tbody_tr:hover]:bg-[var(--surface-soft)]">
           <thead>
             <tr>
               <th scope="col">Execution</th>
@@ -757,7 +757,7 @@ export function OverviewPage({ activeView }: { activeView: WorkspaceView }) {
                     </a>
                   </div>
                 </div>
-                <p className="m-0 font-mono text-xs text-[var(--color-ink-ghost)]">
+                <p className="m-0 font-mono text-xs text-ink-muted">
                   {catalog
                     ? `${catalog.count} tests in catalog`
                     : 'Catalog loading'}

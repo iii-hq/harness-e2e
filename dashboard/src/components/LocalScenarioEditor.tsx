@@ -201,7 +201,7 @@ export function LocalScenarioEditor({
             Create a local test
           </h2>
           <p
-            className="mt-1 mb-0 text-xs leading-5 text-[var(--color-ink-ghost)]"
+            className="mt-1 mb-0 text-xs leading-5 text-ink-muted"
             id="local-scenario-editor-description"
           >
             Fill in the test definition or import an existing Markdown file. We
@@ -271,7 +271,7 @@ export function LocalScenarioEditor({
                 >
                   Test details
                 </h3>
-                <p className="mt-1 mb-0 text-xs leading-5 text-[var(--color-ink-ghost)]">
+                <p className="mt-1 mb-0 text-xs leading-5 text-ink-muted">
                   These fields become the title, version and local file
                   identity.
                 </p>
@@ -304,7 +304,7 @@ export function LocalScenarioEditor({
                     required
                   />
                   <small
-                    className={`font-normal leading-4 ${safeFileName ? 'text-[var(--color-ink-ghost)]' : 'text-[var(--color-alert)]'}`}
+                    className={`font-normal leading-4 ${safeFileName ? 'text-ink-muted' : 'text-danger'}`}
                     id="local-file-name-help"
                   >
                     {safeFileName
@@ -341,7 +341,7 @@ export function LocalScenarioEditor({
                 >
                   Instructions
                 </h3>
-                <p className="mt-1 mb-0 text-xs leading-5 text-[var(--color-ink-ghost)]">
+                <p className="mt-1 mb-0 text-xs leading-5 text-ink-muted">
                   Describe the isolated setup first, then the task the Harness
                   must complete.
                 </p>
@@ -384,7 +384,7 @@ export function LocalScenarioEditor({
                   >
                     Validation criteria
                   </h3>
-                  <p className="mt-1 mb-0 text-xs leading-5 text-[var(--color-ink-ghost)]">
+                  <p className="mt-1 mb-0 text-xs leading-5 text-ink-muted">
                     Define the evidence and distribute exactly 100% across the
                     criteria.
                   </p>
@@ -412,7 +412,7 @@ export function LocalScenarioEditor({
                         Criterion {index + 1}
                       </strong>
                       <button
-                        className="inline-flex min-h-8 items-center gap-1.5 rounded-lg px-2 text-xs font-semibold text-[var(--color-ink-ghost)] hover:bg-[var(--surface-soft)] hover:text-[var(--color-alert)] disabled:opacity-40"
+                        className="inline-flex min-h-8 items-center gap-1.5 rounded-lg px-2 text-xs font-semibold text-ink-muted hover:bg-[var(--surface-soft)] hover:text-danger disabled:opacity-40"
                         type="button"
                         onClick={() => removeValidation(validation.id)}
                         disabled={busy || draft.validations.length === 1}
@@ -490,7 +490,7 @@ export function LocalScenarioEditor({
               <code className="break-all rounded-lg border border-[var(--color-rule)] bg-panel px-3 py-2 font-mono text-xs text-[var(--color-accent)]">
                 {fileName.trim() || 'local-scenario.md'}
               </code>
-              <p className="m-0 text-xs leading-5 text-[var(--color-ink-ghost)]">
+              <p className="m-0 text-xs leading-5 text-ink-muted">
                 Plan <code>local</code> · {draft.validations.length} validation
                 {draft.validations.length === 1 ? '' : 's'} · no execution
               </p>
@@ -501,12 +501,12 @@ export function LocalScenarioEditor({
                 Validation weight
               </span>
               <output
-                className={`font-mono text-2xl font-semibold tracking-[-0.04em] ${weight === 100 ? 'text-[var(--color-ok)]' : 'text-[var(--color-warn)]'}`}
+                className={`font-mono text-2xl font-semibold tracking-[-0.04em] ${weight === 100 ? 'text-[var(--color-ok)]' : 'text-warning'}`}
                 aria-live="polite"
               >
                 {weight}%
               </output>
-              <small className="text-xs leading-4 text-[var(--color-ink-ghost)]">
+              <small className="text-xs leading-4 text-ink-muted">
                 The generated criteria must total exactly 100%.
               </small>
             </div>
@@ -515,20 +515,20 @@ export function LocalScenarioEditor({
               <summary className="cursor-pointer text-xs font-semibold text-[var(--color-ink-faint)]">
                 Preview Markdown
               </summary>
-              <pre className="mt-3 mb-0 max-h-72 overflow-auto whitespace-pre-wrap break-words border-t border-[var(--color-rule)] pt-3 font-mono text-[0.68rem] leading-5 text-[var(--color-ink-ghost)]">
+              <pre className="mt-3 mb-0 max-h-72 overflow-auto whitespace-pre-wrap break-words border-t border-[var(--color-rule)] pt-3 font-mono text-[0.68rem] leading-5 text-ink-muted">
                 {source}
               </pre>
             </details>
 
             {error ? (
               <p
-                className="m-0 rounded-lg border border-[color-mix(in_srgb,var(--color-alert)_30%,transparent)] bg-[color-mix(in_srgb,var(--color-alert)_8%,var(--surface))] p-3 text-xs leading-5 text-[var(--color-alert)]"
+                className="m-0 rounded-lg border border-[color-mix(in_srgb,var(--color-alert)_30%,transparent)] bg-[color-mix(in_srgb,var(--color-alert)_8%,var(--surface))] p-3 text-xs leading-5 text-danger"
                 role="alert"
               >
                 {error}
               </p>
             ) : draftIssue || !safeFileName ? (
-              <p className="m-0 text-xs leading-5 text-[var(--color-ink-ghost)]">
+              <p className="m-0 text-xs leading-5 text-ink-muted">
                 {!safeFileName
                   ? 'Enter a safe Markdown file name to continue.'
                   : draftIssue}

@@ -168,9 +168,13 @@ design-system migration runs; all of them are part of `pnpm test` and
   sizes. The counts in `css-debt.baseline.json` can only go down. After a
   migration removes debt, lock the lower numbers in with
   `CSS_DEBT_UPDATE=1 node --test tests/dashboard/css-debt.test.cjs`.
-- `tests/dashboard/theme-contrast.test.cjs` computes WCAG ratios for the shell
-  text tokens in both themes; tokens still below 4.5:1 carry an explicit floor
-  that must be raised when the token is fixed.
+- `tests/dashboard/theme-contrast.test.cjs` resolves the shell's text tokens
+  (`--text`, `--text-soft`, `--text-muted`, `--accent`, `--success`,
+  `--warning`, `--danger`) through their `var()` chains and requires 4.5:1 on
+  the panel, the raised panel and the fill in both themes, plus 3:1 for
+  `--control-edge`. New colours must be channel lists (`--he-*-rgb`) or
+  `color-mix()` of host tokens: the console build rewrites unknown hex
+  literals to `var(--color-ink)`.
 - `tests/dashboard/shell-narrow-nav.test.cjs` and
   `src/components/DashboardShell.test.tsx` describe the CSS-only toggle for the
   narrow section select (`todo` / `it.fails` until it lands).

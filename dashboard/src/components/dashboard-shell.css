@@ -35,14 +35,29 @@
   --line-strong: var(--color-edge, rgba(20, 16, 8, 0.28));
   --text: var(--he-ink);
   --text-soft: var(--color-ink-faint, #6b6865);
-  --text-muted: var(--color-ink-ghost, #a3a09c);
+  /* Text below 18px has to reach 4.5:1 on the panel, the raised panel and
+     the .055 fill (audit A11Y-01, A11Y-02, DK-01). The host's ghost, alert
+     and warn tokens do not, so the dashboard carries its own channel lists
+     for text and keeps the host ghost only for decoration (--ink-decor).
+     tests/dashboard/theme-contrast.test.cjs measures these. */
+  --he-ink-muted-rgb: 110, 107, 103;
+  --he-alert-rgb: 196, 0, 29;
+  --he-warn-rgb: 133, 98, 0;
+  --text-muted: rgb(var(--he-ink-muted-rgb));
+  --ink-decor: var(--color-ink-ghost, #a3a09c);
   --accent: var(--color-accent, #b8420f);
   --accent-soft: var(--color-accent-muted, rgba(184, 66, 15, 0.1));
   --accent-blue: var(--color-accent, #b8420f);
-  --warning: var(--color-warn, #a87a00);
-  --danger: var(--color-alert, #ff0026);
+  --warning: rgb(var(--he-warn-rgb));
+  --danger: rgb(var(--he-alert-rgb));
   --success: var(--color-ok, #356f3d);
   --contrast-rgb: 20, 16, 8;
+  --contrast: rgb(var(--contrast-rgb));
+  /* Control boundaries need 3:1 against the panel (WCAG 1.4.11). */
+  --control-edge: color-mix(in srgb, var(--text) 50%, transparent);
+  --font-body: var(--font-sans, Inter, ui-sans-serif, system-ui, sans-serif);
+  --code-bg: var(--surface-raised);
+  --code-text: var(--text-soft);
   --color-rule: var(--color-edge, rgba(20, 16, 8, 0.16));
   --color-accent-fg: var(--he-panel);
   --color-accent-hover: var(--color-accent-hover, var(--accent));
@@ -67,7 +82,14 @@
   --he-ink-rgb: 237, 237, 237;
   --he-panel-rgb: 17, 17, 17;
   --he-panel-raised-rgb: 23, 23, 23;
+  --he-ink-muted-rgb: 143, 143, 143;
+  --he-alert-rgb: 240, 93, 104;
+  --he-warn-rgb: 245, 165, 36;
+  /* The host's dark alert and warn tokens already pass AA; keep them. */
+  --warning: var(--color-warn, rgb(var(--he-warn-rgb)));
+  --danger: var(--color-alert, rgb(var(--he-alert-rgb)));
   --contrast-rgb: 255, 255, 255;
+  --control-edge: color-mix(in srgb, var(--text) 40%, transparent);
 }
 
 .harness-e2e-shell[data-mode="standalone"] {
@@ -158,6 +180,18 @@
   :where(button, a, input, select, textarea, summary):focus-visible {
   outline: 2px solid var(--color-rule-focus, var(--accent));
   outline-offset: 3px;
+}
+
+/* Fields are fill-only, so their edge is an inset outline at 3:1 against the
+   panel; the focus ring above replaces it while the field is focused. */
+.harness-e2e-shell
+:where(
+  input:not([type="checkbox"], [type="radio"], [type="range"], [type="file"]),
+  select,
+  textarea
+) {
+  outline: 1px solid var(--control-edge);
+  outline-offset: -1px;
 }
 
 @media (prefers-reduced-motion: reduce) {

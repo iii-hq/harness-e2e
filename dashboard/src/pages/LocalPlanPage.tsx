@@ -1678,7 +1678,7 @@ export function LocalPlanCreatePage() {
               onClick={requestQuickExecution}
             >
               <strong className="font-semibold">Quick execution</strong>
-              <span className="text-[0.65rem] text-[var(--color-ink-ghost)]">
+              <span className="text-[0.65rem] text-ink-muted">
                 One result now
               </span>
             </a>
@@ -1687,7 +1687,7 @@ export function LocalPlanCreatePage() {
               aria-current="page"
             >
               <strong className="font-semibold">Reusable plan</strong>
-              <span className="text-[0.65rem] text-[var(--color-ink-ghost)]">
+              <span className="text-[0.65rem] text-ink-muted">
                 Baseline + candidates
               </span>
             </span>
@@ -1699,7 +1699,7 @@ export function LocalPlanCreatePage() {
             className="mt-6 rounded-lg border border-[color-mix(in_srgb,var(--color-alert)_35%,transparent)] bg-[color-mix(in_srgb,var(--color-alert)_8%,var(--surface))] p-5"
             role="alert"
           >
-            <h2 className="m-0 text-sm font-semibold text-[var(--color-alert)]">
+            <h2 className="m-0 text-sm font-semibold text-danger">
               Plan cannot be created
             </h2>
             <p className="mt-2 mb-0 text-xs leading-5 text-[var(--color-ink-faint)]">
@@ -1772,7 +1772,7 @@ export function LocalPlanCreatePage() {
               ready={canCreate}
             >
               <p
-                className="m-0 text-xs leading-5 text-[var(--color-ink-ghost)]"
+                className="m-0 text-xs leading-5 text-ink-muted"
                 id="plan-create-requirements"
               >
                 {hasPlanLabel && scenarios.length > 0
@@ -1797,7 +1797,7 @@ export function LocalPlanCreatePage() {
           </div>
         </form>
       </main>
-      <footer className="ds-root mx-auto flex w-[calc(100%_-_1.5rem)] max-w-[1420px] flex-wrap items-center justify-between gap-4 border-t border-[var(--color-rule)] py-8 font-mono text-xs text-[var(--color-ink-ghost)] sm:w-[calc(100%_-_3rem)]">
+      <footer className="ds-root mx-auto flex w-[calc(100%_-_1.5rem)] max-w-[1420px] flex-wrap items-center justify-between gap-4 border-t border-[var(--color-rule)] py-8 font-mono text-xs text-ink-muted sm:w-[calc(100%_-_3rem)]">
         <span>Harness E2E · local plans</span>
         <a
           className="text-inherit underline-offset-4 hover:underline"

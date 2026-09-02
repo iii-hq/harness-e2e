@@ -125,12 +125,12 @@ export function ProviderModelDropdown({
               <strong className="overflow-hidden text-ellipsis whitespace-nowrap text-xs font-semibold">
                 {selected.label}
               </strong>
-              <small className="overflow-hidden text-ellipsis whitespace-nowrap text-[0.64rem] font-medium text-[var(--color-ink-ghost)]">
+              <small className="overflow-hidden text-ellipsis whitespace-nowrap text-[0.64rem] font-medium text-ink-muted">
                 {selected.provider}
               </small>
             </>
           ) : (
-            <span className="overflow-hidden text-ellipsis whitespace-nowrap text-xs text-[var(--color-ink-ghost)]">
+            <span className="overflow-hidden text-ellipsis whitespace-nowrap text-xs text-ink-muted">
               {placeholder}
             </span>
           )}
@@ -150,7 +150,7 @@ export function ProviderModelDropdown({
           aria-label={ariaLabel}
         >
           {normalizedGroups.length === 0 ? (
-            <div className="p-5 text-center text-xs text-[var(--color-ink-ghost)]">
+            <div className="p-5 text-center text-xs text-ink-muted">
               No models available
             </div>
           ) : (
@@ -180,7 +180,7 @@ export function ProviderModelDropdown({
                     <span className="min-w-0 flex-1 overflow-hidden text-ellipsis whitespace-nowrap">
                       {group.provider}
                     </span>
-                    <small className="font-mono text-[0.62rem] font-normal text-[var(--color-ink-ghost)]">
+                    <small className="font-mono text-[0.62rem] font-normal text-ink-muted">
                       {group.models.length}
                     </small>
                   </button>

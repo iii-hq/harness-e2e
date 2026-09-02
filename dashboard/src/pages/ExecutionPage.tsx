@@ -148,7 +148,7 @@ function ModelIdentityCard({
 }) {
   return (
     <div className="min-w-0 bg-panel-raised p-3">
-      <div className="font-mono text-[0.6rem] font-semibold uppercase tracking-[0.06em] text-[var(--color-ink-ghost)]">
+      <div className="font-mono text-[0.6rem] font-semibold uppercase tracking-[0.06em] text-ink-muted">
         {label}
       </div>
       {models.length ? (
@@ -164,14 +164,14 @@ function ModelIdentityCard({
               {friendlyModelName(model.model)}
             </strong>
             {model.provider && (
-              <code className="mt-0.5 block break-all font-mono text-[0.59rem] text-[var(--color-ink-ghost)]">
+              <code className="mt-0.5 block break-all font-mono text-[0.59rem] text-ink-muted">
                 {model.provider}
               </code>
             )}
           </div>
         ))
       ) : (
-        <strong className="mt-1 block text-sm text-[var(--color-ink-ghost)]">
+        <strong className="mt-1 block text-sm text-ink-muted">
           Not reported
         </strong>
       )}
@@ -262,7 +262,7 @@ function DecisionBoundary({
 }) {
   return (
     <div className="grid content-start gap-2 bg-panel-raised p-4">
-      <dt className="font-mono text-[0.62rem] font-semibold uppercase tracking-[0.06em] text-[var(--color-ink-ghost)]">
+      <dt className="font-mono text-[0.62rem] font-semibold uppercase tracking-[0.06em] text-ink-muted">
         {label}
       </dt>
       <dd className="m-0">
@@ -358,9 +358,7 @@ export function DecisionSection({
           </p>
           {aiResult?.concerns?.[0] ? (
             <p className="m-0 border-l-2 border-[var(--color-warn)] pl-3 text-xs leading-5 text-[var(--color-ink-faint)]">
-              <strong className="text-[var(--color-warn)]">
-                Primary concern:
-              </strong>{' '}
+              <strong className="text-warning">Primary concern:</strong>{' '}
               {aiResult.concerns[0]}
             </p>
           ) : null}
@@ -402,7 +400,7 @@ export function DecisionSection({
           ['Evidence references', summary?.evidence_reference_count],
         ].map(([label, value]) => (
           <div key={String(label)} className="bg-panel-raised p-3">
-            <dt className="font-mono text-[0.6rem] uppercase tracking-[0.06em] text-[var(--color-ink-ghost)]">
+            <dt className="font-mono text-[0.6rem] uppercase tracking-[0.06em] text-ink-muted">
               {label}
             </dt>
             <dd className="mt-1 mb-0 text-xl font-semibold text-ink">
@@ -448,7 +446,7 @@ function ResultsSection({
         summary="Compare objective outcomes, advisory conclusions, runtime, and scenario structure. Expand one row to inspect its benchmark metrics and workflow."
         className=""
         actions={
-          <span className="font-mono text-xs text-[var(--color-ink-ghost)]">
+          <span className="font-mono text-xs text-ink-muted">
             {scenarioCount} {scenarioCount === 1 ? 'scenario' : 'scenarios'} ·{' '}
             {runCount} {runCount === 1 ? 'run' : 'runs'}
           </span>
@@ -502,7 +500,7 @@ function TechnicalSection({
             key={key}
             className="rounded-lg border border-[var(--color-rule)] bg-panel p-3"
           >
-            <small className="font-mono text-[0.6rem] font-semibold uppercase tracking-[0.06em] text-[var(--color-ink-ghost)]">
+            <small className="font-mono text-[0.6rem] font-semibold uppercase tracking-[0.06em] text-ink-muted">
               {key.replaceAll('_', ' ')}
             </small>
             <code className="mt-2 block break-all font-mono text-xs text-[var(--color-ink-faint)]">
@@ -517,7 +515,7 @@ function TechnicalSection({
         <summary className="min-h-11 cursor-pointer px-4 py-3 text-sm font-semibold text-ink">
           Preview raw JSON
         </summary>
-        <pre className="max-h-[560px] overflow-auto border-t border-[var(--color-rule)] p-4 font-mono text-xs text-[var(--color-ink-ghost)]">
+        <pre className="max-h-[560px] overflow-auto border-t border-[var(--color-rule)] p-4 font-mono text-xs text-ink-muted">
           {JSON.stringify(detail, null, 2)}
         </pre>
       </details>
@@ -665,7 +663,7 @@ export function ExecutionPage({
             className="w-full rounded-[var(--ds-radius-md)]"
             aria-busy="true"
           >
-            <p className="m-0 font-mono text-xs uppercase tracking-[0.06em] text-[var(--color-ink-ghost)]">
+            <p className="m-0 font-mono text-xs uppercase tracking-[0.06em] text-ink-muted">
               Loading execution report…
             </p>
           </Panel>
@@ -706,7 +704,7 @@ export function ExecutionPage({
         className="page-shell detail-shell w-[min(1380px,calc(100%_-_3rem))] pt-6 max-[640px]:w-[calc(100%_-_1.5rem)]"
       >
         <nav
-          className="breadcrumbs mb-5 flex min-w-0 items-center gap-2 overflow-hidden font-mono text-[0.64rem] text-[var(--color-ink-ghost)]"
+          className="breadcrumbs mb-5 flex min-w-0 items-center gap-2 overflow-hidden font-mono text-[0.64rem] text-ink-muted"
           aria-label="Breadcrumb"
         >
           <a href={hashForWorkspace()}>Overview</a>
@@ -750,7 +748,7 @@ export function ExecutionPage({
             aria-label="Execution identity"
           >
             <div className="bg-panel-raised p-3">
-              <div className="font-mono text-[0.6rem] font-semibold uppercase tracking-[0.06em] text-[var(--color-ink-ghost)]">
+              <div className="font-mono text-[0.6rem] font-semibold uppercase tracking-[0.06em] text-ink-muted">
                 Scenarios
               </div>
               <strong className="mt-1 block truncate text-sm text-ink">
@@ -762,7 +760,7 @@ export function ExecutionPage({
             <ModelIdentityCard label="Subject" models={presentation.subjects} />
             <ModelIdentityCard label="Judge" models={presentation.judges} />
             <div className="bg-panel-raised p-3">
-              <div className="font-mono text-[0.6rem] font-semibold uppercase tracking-[0.06em] text-[var(--color-ink-ghost)]">
+              <div className="font-mono text-[0.6rem] font-semibold uppercase tracking-[0.06em] text-ink-muted">
                 Completed
               </div>
               <strong className="mt-1 block text-sm text-ink">
@@ -905,7 +903,7 @@ export function ExecutionPage({
           onClose={() => setTranscript(null)}
         />
       )}
-      <footer className="mx-auto mt-8 flex w-[min(1380px,calc(100%_-_3rem))] flex-wrap items-center justify-between gap-3 border-t border-[var(--color-rule)] py-6 text-xs text-[var(--color-ink-ghost)] max-[640px]:w-[calc(100%_-_1.5rem)]">
+      <footer className="mx-auto mt-8 flex w-[min(1380px,calc(100%_-_3rem))] flex-wrap items-center justify-between gap-3 border-t border-[var(--color-rule)] py-6 text-xs text-ink-muted max-[640px]:w-[calc(100%_-_1.5rem)]">
         <span>Harness E2E · public execution report</span>
         <a
           className="text-[var(--color-ink-faint)] underline-offset-4 hover:underline"

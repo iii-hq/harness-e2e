@@ -1,8 +1,9 @@
-// Guard-rail for the shell's colour tokens. Every token that carries text must
-// reach WCAG AA (4.5:1) on the panel, the raised panel and the fill it sits on,
-// in both themes. Tokens that fail today (audit A11Y-01, A11Y-02, DK-01) carry
-// a lower floor equal to their current ratio, so they cannot get worse; PR1 of
-// the UI roadmap raises the tokens and must raise these floors to 4.5.
+// Guard-rail for the shell's text tokens. Every token the dashboard uses for
+// text below 18px must reach WCAG AA (4.5:1) on the panel, the raised panel
+// and the .055 fill, in both themes; the control edge must reach 3:1 on the
+// panel (WCAG 1.4.11). Tokens are read from dashboard-shell.css in standalone
+// mode and resolved through their var() chains, so a change anywhere in the
+// chain is measured. Audit ids: A11Y-01, A11Y-02, A11Y-09, DK-01, DK-03.
 const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const path = require("node:path");
@@ -19,29 +20,58 @@ function tokenBlock(selector) {
   const open = css.indexOf("{", start);
   const close = css.indexOf("}", open);
   const tokens = {};
-  for (const match of css.slice(open + 1, close).matchAll(/(--[\w-]+)\s*:\s*([^;]+);/g)) {
-    tokens[match[1]] = match[2].trim();
+  const body = css.slice(open + 1, close).replace(/\/\*[\s\S]*?\*\//g, "");
+  for (const match of body.matchAll(/(--[\w-]+)\s*:\s*([^;]+);/g)) {
+    tokens[match[1]] = match[2].replace(/\s+/g, " ").trim();
   }
   return tokens;
 }
 
-function parseColor(value) {
-  const hex = value.match(/^#([0-9a-f]{6})$/i);
-  if (hex) {
-    const n = Number.parseInt(hex[1], 16);
-    return { rgb: [(n >> 16) & 255, (n >> 8) & 255, n & 255], alpha: 1 };
+// Cascade order for a token: shell block, then (dark) shell dark block, then
+// the standalone block(s), which come later in the file at equal specificity.
+const blocks = {
+  shell: tokenBlock(/\.harness-e2e-shell\.harness-e2e-shell,/),
+  shellDark: tokenBlock(/\.harness-e2e-shell\.harness-e2e-shell\[data-theme="dark"\],/),
+  standalone: tokenBlock(/\.harness-e2e-shell\[data-mode="standalone"\]\s*\{/),
+  standaloneDark: tokenBlock(/\.harness-e2e-shell\[data-mode="standalone"\]\[data-theme="dark"\]\s*\{/),
+};
+const scopes = {
+  light: { ...blocks.shell, ...blocks.standalone },
+  dark: { ...blocks.shell, ...blocks.shellDark, ...blocks.standalone, ...blocks.standaloneDark },
+};
+
+// Resolves var() chains, rgb(<channel list>) and colour literals to [r,g,b,a].
+function resolve(value, scope, depth = 0) {
+  assert.ok(depth < 12, `token chain too deep: ${value}`);
+  let text = value;
+  for (let guard = 0; guard < 12 && /var\(/.test(text); guard += 1) {
+    text = text.replace(/var\((--[\w-]+)\s*(?:,\s*((?:[^()]|\([^()]*\))*))?\)/g, (_all, name, fallback) => {
+      if (scope[name] !== undefined) return scope[name];
+      assert.ok(fallback !== undefined, `${name} is undefined in this scope and has no fallback`);
+      return fallback;
+    });
   }
-  const rgba = value.match(/^rgba?\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)\s*(?:,\s*([\d.]+))?\s*\)$/);
-  assert.ok(rgba, `unsupported colour: ${value}`);
-  return {
-    rgb: [Number(rgba[1]), Number(rgba[2]), Number(rgba[3])],
-    alpha: rgba[4] === undefined ? 1 : Number(rgba[4]),
-  };
+  return parseColor(text.trim(), scope, depth);
 }
 
-function composite(foreground, background) {
-  const { rgb, alpha } = parseColor(foreground);
-  return rgb.map((channel, index) => Math.round(channel * alpha + background[index] * (1 - alpha)));
+function parseColor(text, scope, depth) {
+  const hex = text.match(/^#([0-9a-f]{6})$/i);
+  if (hex) {
+    const n = Number.parseInt(hex[1], 16);
+    return [(n >> 16) & 255, (n >> 8) & 255, n & 255, 1];
+  }
+  const rgb = text.match(/^rgba?\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)\s*(?:,\s*([\d.]+))?\s*\)$/);
+  if (rgb) return [Number(rgb[1]), Number(rgb[2]), Number(rgb[3]), rgb[4] === undefined ? 1 : Number(rgb[4])];
+  const mix = text.match(/^color-mix\(in srgb,\s*(.+?)\s+(\d+)%,\s*transparent\)$/);
+  if (mix) {
+    const inner = resolve(mix[1], scope, depth + 1);
+    return [inner[0], inner[1], inner[2], (inner[3] * Number(mix[2])) / 100];
+  }
+  assert.fail(`unsupported colour: ${text}`);
+}
+
+function over([r, g, b, a], [br, bg, bb]) {
+  return [Math.round(r * a + br * (1 - a)), Math.round(g * a + bg * (1 - a)), Math.round(b * a + bb * (1 - a))];
 }
 
 function luminance([r, g, b]) {
@@ -52,89 +82,66 @@ function luminance([r, g, b]) {
   return 0.2126 * channel(r) + 0.7152 * channel(g) + 0.0722 * channel(b);
 }
 
-function contrastRatio(text, surface) {
-  const fg = luminance(composite(text, surface));
-  const bg = luminance(surface);
+function contrast(foreground, background) {
+  const fg = luminance(over(foreground, background));
+  const bg = luminance(background);
   const [hi, lo] = fg > bg ? [fg, bg] : [bg, fg];
   return Math.round(((hi + 0.05) / (lo + 0.05)) * 100) / 100;
 }
 
-const themes = {
-  light: tokenBlock(/\.harness-e2e-shell\[data-mode="standalone"\]\s*\{/),
-  dark: tokenBlock(/\.harness-e2e-shell\[data-mode="standalone"\]\[data-theme="dark"\]\s*\{/),
-};
-
-function surfaces(theme) {
-  const tokens = themes[theme];
-  const panel = parseColor(tokens["--color-panel"]).rgb;
+function grounds(scope) {
+  const panel = over(resolve("var(--surface)", scope), [0, 0, 0]);
   return {
     panel,
-    raised: parseColor(tokens["--color-panel-raised"]).rgb,
-    fill: composite(tokens["--color-surface"], panel),
+    raised: over(resolve("var(--surface-raised)", scope), [0, 0, 0]),
+    fill: over(resolve("var(--surface-fill)", scope), panel),
   };
 }
 
+// Every token the dashboard paints small text with.
+const textTokens = ["--text", "--text-soft", "--text-muted", "--accent", "--success", "--warning", "--danger"];
 const AA = 4.5;
-// Floors below AA are the ratios measured in the audit; they only go up.
-const floors = {
-  light: {
-    "--color-ink": AA,
-    "--color-ink-faint": AA,
-    "--color-ink-ghost": 2.2, // A11Y-01: 2.49 on panel, 2.22 on fill
-    "--color-accent": AA,
-    "--color-ok": AA,
-    "--color-warn": 3.2, // A11Y-02: 3.69 on panel, 3.29 on fill
-    "--color-alert": 3.4, // A11Y-02: 3.81 on panel, 3.40 on fill
-  },
-  dark: {
-    "--color-ink": AA,
-    "--color-ink-faint": AA,
-    "--color-ink-ghost": 3.3, // DK-01: 3.76 on panel, 3.32 on fill
-    "--color-accent": AA,
-    "--color-ok": AA,
-    "--color-warn": AA,
-    "--color-alert": AA,
-  },
-};
 
-for (const theme of Object.keys(floors)) {
-  test(`${theme} text tokens keep their contrast floor (target ${AA}:1)`, () => {
-    const tokens = themes[theme];
-    const grounds = surfaces(theme);
+for (const theme of ["light", "dark"]) {
+  test(`${theme}: text tokens reach ${AA}:1 on panel, raised panel and fill`, () => {
+    const scope = scopes[theme];
+    const surfaces = grounds(scope);
     const rows = [];
     const failures = [];
-    for (const [token, floor] of Object.entries(floors[theme])) {
-      assert.ok(tokens[token], `${token} is declared for ${theme}`);
-      for (const [ground, rgb] of Object.entries(grounds)) {
-        const ratio = contrastRatio(tokens[token], rgb);
-        rows.push({ theme, token, ground, ratio, floor, aa: ratio >= AA ? "yes" : "no" });
-        if (ratio < floor) failures.push(`${theme} ${token} on ${ground}: ${ratio}:1 < floor ${floor}:1`);
+    for (const token of textTokens) {
+      const colour = resolve(`var(${token})`, scope);
+      for (const [ground, rgb] of Object.entries(surfaces)) {
+        const ratio = contrast(colour, rgb);
+        rows.push({ theme, token, ground, ratio });
+        if (ratio < AA) failures.push(`${theme} ${token} on ${ground}: ${ratio}:1`);
       }
     }
     console.table(rows);
-    assert.deepEqual(failures, [], "a text token lost contrast");
+    assert.deepEqual(failures, [], `text tokens below ${AA}:1`);
+  });
+
+  test(`${theme}: the control edge reaches 3:1 on the panel`, () => {
+    const scope = scopes[theme];
+    const { panel } = grounds(scope);
+    const ratio = contrast(resolve("var(--control-edge)", scope), panel);
+    assert.ok(ratio >= 3, `${theme} --control-edge on panel is ${ratio}:1`);
   });
 }
 
-test("tokens that already reach AA are pinned at 4.5 (raise the floor when fixing the rest)", () => {
-  for (const theme of Object.keys(floors)) {
-    const tokens = themes[theme];
-    const grounds = surfaces(theme);
-    for (const [token, floor] of Object.entries(floors[theme])) {
-      if (floor >= AA) continue;
-      const reachesEverywhere = Object.values(grounds).every((rgb) => contrastRatio(tokens[token], rgb) >= AA);
-      assert.equal(
-        reachesEverywhere,
-        false,
-        `${theme} ${token} now reaches ${AA}:1 everywhere; raise its floor to ${AA} in this test`,
-      );
-    }
+test("decorative ink stays separate from text ink", () => {
+  for (const theme of ["light", "dark"]) {
+    const scope = scopes[theme];
+    assert.ok(scope["--ink-decor"], `${theme} declares --ink-decor`);
+    assert.notEqual(
+      resolve("var(--ink-decor)", scope).join(","),
+      resolve("var(--text-muted)", scope).join(","),
+      `${theme}: --ink-decor and --text-muted must differ; decoration is not text`,
+    );
   }
 });
 
-test("control edges: the edge token against the panel (WCAG 1.4.11 wants 3:1)", { todo: "DK-03 / A11Y-09: fill-only fields until PR1 adds a 3:1 edge" }, () => {
-  for (const theme of Object.keys(floors)) {
-    const ratio = contrastRatio(themes[theme]["--color-edge"], surfaces(theme).panel);
-    assert.ok(ratio >= 3, `${theme} --color-edge on panel is ${ratio}:1`);
+test("legacy tokens the old stylesheet still reads are defined", () => {
+  for (const token of ["--font-body", "--contrast", "--code-bg", "--code-text"]) {
+    assert.ok(blocks.shell[token], `${token} is defined in the shell block (audit PD-02 / DS-03)`);
   }
 });
