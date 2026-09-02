@@ -241,11 +241,16 @@ the engine is implemented."#,
             public_legalmoves = public_legalmoves.display(),
         ),
         filesystem_root: Some(root),
+        // Reasoning subjects spend their whole output budget thinking about
+        // move generation before the first edit: five daily runs ended at
+        // exactly 16 384 reasoning tokens with `stop_reason: end`, no text and
+        // no call, leaving the stubs untouched. The budget has to hold a full
+        // planning turn; the total-token and stuck bounds still cap the run.
         execution: ExecutionPolicy {
             max_turns: 48,
-            max_output_tokens: Some(16_384),
+            max_output_tokens: Some(65_536),
             max_total_tokens: Some(1_000_000),
-            stuck_timeout_seconds: 600,
+            stuck_timeout_seconds: 900,
             max_validation_retries: None,
         },
         denied_functions: &["http::*", "browser::*", "github::*"],
