@@ -1,6 +1,7 @@
 import { ChevronDown, X } from 'lucide-react'
 import {
   type ButtonHTMLAttributes,
+  type CSSProperties,
   type DialogHTMLAttributes,
   type HTMLAttributes,
   type InputHTMLAttributes,
@@ -300,6 +301,8 @@ export type DataTableProps = TableHTMLAttributes<HTMLTableElement> & {
   sticky?: boolean
   /** Below this width the wrapper scrolls horizontally instead of squeezing. */
   minWidth?: string
+  /** In narrow containers rows become stacked cards labelled by data-label. */
+  collapse?: boolean
   wrapClassName?: string
 }
 
@@ -308,6 +311,7 @@ export function DataTable({
   captionVisible = false,
   sticky = false,
   minWidth,
+  collapse = false,
   wrapClassName,
   className,
   children,
@@ -316,8 +320,17 @@ export function DataTable({
   return (
     <div className={classes('ds-table-wrap', wrapClassName)}>
       <table
-        className={classes('ds-table', sticky && 'ds-table-sticky', className)}
-        style={minWidth ? { minWidth } : undefined}
+        className={classes(
+          'ds-table',
+          sticky && 'ds-table-sticky',
+          collapse && 'ds-table-collapse',
+          className,
+        )}
+        style={
+          minWidth
+            ? ({ '--ds-table-min-width': minWidth } as CSSProperties)
+            : undefined
+        }
         {...props}
       >
         <caption

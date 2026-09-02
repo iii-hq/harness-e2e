@@ -403,12 +403,14 @@
 /* Data table: hairline row dividers are the one sanctioned 1px line; header
    labels are the label style; numeric cells align right in tabular figures. */
 .ds-table-wrap {
+  position: relative;
   min-width: 0;
   overflow-x: auto;
 }
 
 .ds-table {
   width: 100%;
+  min-width: var(--ds-table-min-width, 0);
   border-collapse: collapse;
   font-size: 0.8125rem;
   text-align: left;
@@ -439,6 +441,7 @@
   padding: var(--ds-space-3);
   border-top: 1px solid var(--line, rgba(20, 16, 8, 0.16));
   vertical-align: top;
+  white-space: normal;
 }
 
 .ds-table-sticky thead th {
@@ -825,6 +828,53 @@
   justify-content: flex-end;
   gap: var(--ds-space-2);
   margin-left: auto;
+}
+
+/* Narrow containers: a collapsing table becomes one card per row, each cell
+   labelled by its data-label (audit RD-03 / PD-16 / P-17). */
+@container harness (max-width: 720px) {
+  .ds-table-collapse {
+    min-width: 0;
+  }
+
+  .ds-table-collapse thead {
+    display: none;
+  }
+
+  .ds-table-collapse tbody,
+  .ds-table-collapse tr,
+  .ds-table-collapse td {
+    display: block;
+  }
+
+  .ds-table-collapse tr {
+    display: grid;
+    gap: var(--ds-space-3);
+    padding: var(--ds-space-4) 0;
+    border-top: 1px solid var(--line, rgba(20, 16, 8, 0.16));
+  }
+
+  .ds-table-collapse td {
+    padding: 0;
+    border-top: 0;
+  }
+
+  .ds-table-collapse td[data-label]::before {
+    display: block;
+    margin-bottom: var(--ds-space-1);
+    color: var(--text-muted, #6b6865);
+    font-family: var(--font-mono);
+    font-size: var(--ds-text-label);
+    font-weight: 500;
+    letter-spacing: var(--ds-tracking-label);
+    text-transform: uppercase;
+    content: attr(data-label);
+  }
+
+  .ds-table-collapse .ds-table-numeric,
+  .ds-table-collapse .text-right {
+    text-align: left;
+  }
 }
 
 @container harness (max-width: 560px) {

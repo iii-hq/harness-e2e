@@ -144,9 +144,9 @@ test('keeps the workspace navigation and versioned test flow', () => {
   assert.match(appHeader, /return null/)
   assert.doesNotMatch(read('src', 'legacy.css'), /\.topbar(?:\s|,|\{)/)
   assert.doesNotMatch(historyPage, /tmh-topbar|tmh-brand|tmh-context/)
-  assert.match(plansPage, /All local plans/)
+  assert.match(plansPage, /title="plans"/)
   assert.match(plansPage, /hashForNewPlan\(\)/)
-  assert.match(plansPage, /Comparison available/)
+  assert.match(plansPage, /comparison available/)
 })
 
 test('distinguishes active tests from tests with no execution history', () => {
@@ -221,31 +221,17 @@ test('keeps plan panels explicitly padded and comparison content full bleed', ()
   )
   assert.match(
     styles,
-    /\.plans-list-heading[\s\S]*padding: var\(--plan-panel-space-y\) var\(--plan-panel-space-x\)/,
-  )
-  assert.match(
-    styles,
     /@container harness \(max-width: 560px\)[\s\S]*--plan-panel-space-y: 18px[\s\S]*--plan-panel-space-x: 18px/,
   )
   assert.match(planPage, /panel-heading plan-panel-heading/g)
   assert.doesNotMatch(planPage, /className="panel-heading"/)
-  assert.match(plansPage, /panel-heading plans-list-heading/)
+  // The plans list renders on the design system (PR B); no legacy panel classes.
+  assert.doesNotMatch(plansPage, /plans-list-|plan-list-|plans-how-it-works|plans-summary/)
   assert.match(planPage, /plan-execution-table-wrap/)
   assert.match(planPage, /plan-scenario-disclosures/)
   assert.match(planPage, /page-heading plan-detail-heading/)
   assert.match(planPage, /plan-detail-state/)
-  assert.match(
-    styles,
-    /\.plans-how-it-works \{[\s\S]*?background: transparent;[\s\S]*?\.plans-how-it-works > div \{[\s\S]*?background: transparent;/,
-  )
-  assert.match(
-    styles,
-    /\.plans-summary-grid \{[\s\S]*?background: transparent;[\s\S]*?\.plans-summary-card \{[\s\S]*?background: transparent;[\s\S]*?box-shadow: none;/,
-  )
-  assert.match(
-    styles,
-    /\.plans-list-panel \{[\s\S]*?border: 1px solid var\(--line\);[\s\S]*?background: transparent;[\s\S]*?box-shadow: none;/,
-  )
+  assert.doesNotMatch(styles, /\.plans-how-it-works|\.plans-summary-grid|\.plans-list-panel|\.plan-list-card/)
   assert.match(
     styles,
     /\.plan-run-history \{[\s\S]*?margin-top: 1\.25rem;[\s\S]*?background: var\(--surface\);/,
@@ -261,8 +247,8 @@ test('keeps plan panels explicitly padded and comparison content full bleed', ()
 test('exposes baseline and arbitrary candidate comparison controls', () => {
   const styles = read('src', 'legacy.css')
   assert.match(plansPage, /Latest candidate vs baseline/)
-  assert.match(plansPage, /Objective regressions/)
-  assert.match(plansPage, /Not reported/)
+  assert.match(plansPage, /regressed/)
+  assert.match(plansPage, /DeltaValue/)
   assert.match(planPage, /Baseline and candidates/)
   assert.match(
     planPage,

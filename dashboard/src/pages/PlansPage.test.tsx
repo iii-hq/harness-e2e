@@ -4,7 +4,11 @@ import type {
   DashboardExecutionSummary,
   LocalPlan,
 } from '@/lib/dashboard-data-source'
-import { PlanComparisonSummary } from '@/pages/PlansPage'
+import {
+  PlanBaselineCell,
+  PlanComparisonSummary,
+  planStatePresentation,
+} from '@/pages/PlansPage'
 
 const plan: LocalPlan = {
   schema_version: 1,
@@ -60,7 +64,9 @@ function execution(id: string, passRate: number): DashboardExecutionSummary {
 }
 
 describe('plan list comparison summary', () => {
-  it('shows the latest candidate verdict and core baseline deltas', () => {
+  // Audit P-02 / P-10: one verdict, signed core deltas coloured by outcome,
+  // unreported figures hidden.
+  it('shows the latest candidate verdict and the signed core deltas', () => {
     const html = renderToStaticMarkup(
       <PlanComparisonSummary
         plan={plan}
@@ -68,30 +74,75 @@ describe('plan list comparison summary', () => {
         candidate={execution('candidate-2', 50)}
       />,
     )
-
-    expect(html).toContain('Latest candidate vs baseline')
-    expect(html).toContain('Candidate #2')
-    expect(html).toContain('Regressed')
-    expect(html).toContain('Pass rate')
-    expect(html).toContain('100%')
-    expect(html).toContain('50%')
-    expect(html).toContain('Hard gates')
-    expect(html).toContain('Technical failures')
-    expect(html).toContain('Cost')
-    expect(html).toContain('Turns')
+    expect(html).toContain('>regressed<')
+    expect(html).toContain('candidate #2')
+    expect(html).toContain('>pass<')
+    expect(html).toContain('−50pp')
+    expect(html).toContain('ds-delta-negative')
+    expect(html).toContain('>tokens<')
+    expect(html).toContain('−10%')
+    expect(html).toContain('ds-delta-positive')
+    expect(html).not.toContain('Not reported')
+    expect(html).not.toContain('Not comparable')
   })
 
-  it('keeps the no-candidate state explicit while exposing the baseline snapshot', () => {
+  it('keeps the no-candidate state explicit and shows the baseline figures in their own cell', () => {
+    const ready = {
+      ...plan,
+      state: 'baseline_ready' as const,
+      candidate_execution_ids: [],
+    }
     const html = renderToStaticMarkup(
       <PlanComparisonSummary
-        plan={{ ...plan, candidate_execution_ids: [] }}
+        plan={ready}
         baseline={execution('baseline-1', 100)}
         candidate={null}
       />,
     )
+    expect(html).toContain('No candidate yet')
+    expect(html).not.toContain('regressed')
+    const cell = renderToStaticMarkup(
+      <PlanBaselineCell plan={ready} baseline={execution('baseline-1', 100)} />,
+    )
+    expect(cell).toContain('100%')
+    expect(cell).toContain('1K tokens')
+    expect(cell).toContain('4 turns')
+    expect(
+      renderToStaticMarkup(
+        <PlanBaselineCell
+          plan={{ ...ready, state: 'draft' }}
+          baseline={null}
+        />,
+      ),
+    ).toContain('not captured')
+  })
 
-    expect(html).toContain('Baseline snapshot')
-    expect(html).toContain('Run a candidate to measure evolution')
-    expect(html).not.toContain('Regressed')
+  it('gives every state one status line and one action', () => {
+    expect(
+      planStatePresentation({ ...plan, state: 'draft', locked: false }),
+    ).toMatchObject({
+      label: 'draft',
+      action: 'run baseline',
+    })
+    expect(
+      planStatePresentation({
+        ...plan,
+        state: 'draft',
+        locked: true,
+        incomplete_execution_ids: ['x'],
+      }),
+    ).toMatchObject({ label: 'retry available', action: 'retry baseline' })
+    expect(
+      planStatePresentation({ ...plan, state: 'candidate_running' }),
+    ).toMatchObject({
+      status: 'running',
+      label: 'candidate running',
+    })
+    expect(
+      planStatePresentation({ ...plan, state: 'baseline_ready' }),
+    ).toMatchObject({
+      action: 'run candidate',
+    })
+    expect(planStatePresentation(plan)).toMatchObject({ action: 'compare' })
   })
 })

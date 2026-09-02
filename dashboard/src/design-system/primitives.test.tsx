@@ -150,7 +150,7 @@ describe('design system foundation primitives', () => {
       '<caption class="ds-visually-hidden">Executions, 3 of 20</caption>',
     )
     expect(html).toContain('class="ds-table ds-table-sticky"')
-    expect(html).toContain('min-width:48rem')
+    expect(html).toContain('--ds-table-min-width:48rem')
     expect(html).toContain(
       '<tr class="ds-table-row-link" data-href="#/execution/abc">',
     )
