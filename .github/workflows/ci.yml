@@ -11,6 +11,7 @@ permissions:
 jobs:
   validate:
     runs-on: ubuntu-latest
+    environment: harness-e2e-trusted
     env:
       HARNESS_E2E_TASK_FIXTURE_PATH: ${{ github.workspace }}/target/fixtures/native-task-fixtures
     steps:
