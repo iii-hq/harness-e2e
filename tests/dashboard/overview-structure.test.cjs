@@ -132,9 +132,10 @@ test('keeps the workspace navigation and versioned test flow', () => {
   ]) {
     assert.match(page, /<DashboardPageActions/)
   }
-  assert.match(dashboardShell, /<Tabs/)
-  assert.match(dashboardShell, /<TabsTrigger\b[^>]*key=\{item\.value\}/s)
-  assert.match(dashboardShell, /<Select/)
+  assert.match(dashboardShell, /<nav[\s\S]*aria-label="Harness E2E sections"/)
+  assert.match(dashboardShell, /aria-current=\{\s*item\.value === section \? 'page' : undefined\s*\}/)
+  assert.match(dashboardShell, /<select/)
+  assert.match(dashboardShell, /<PageActionsBar/)
   assert.match(appHeader, /return null/)
   assert.doesNotMatch(read('src', 'index.css'), /\.topbar(?:\s|,|\{)/)
   assert.doesNotMatch(historyPage, /tmh-topbar|tmh-brand|tmh-context/)
@@ -316,7 +317,10 @@ test('organizes detail into progressive disclosure sections', () => {
     assert.match(executionPage, new RegExp(`id=\\"${section}\\"`))
   }
   assert.match(executionPage, /hashForExecution\(detail\.id, 'results'\)/)
-  assert.match(executionPage, /className="skip-link"/)
+  // One skip-link and one main landmark, both owned by the shell (A11Y-06).
+  assert.match(dashboardShell, /className="skip-link"/)
+  assert.doesNotMatch(executionPage, /className="skip-link"/)
+  assert.doesNotMatch(executionPage, /<main\b/)
   assert.doesNotMatch(executionPage, /detail-index/)
   assert.match(
     executionPage,

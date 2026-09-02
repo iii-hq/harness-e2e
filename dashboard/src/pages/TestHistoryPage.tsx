@@ -1148,9 +1148,9 @@ export function TestHistoryPage({ testId }: { testId: string }) {
 
   return (
     <div id="test-metrics-history-proposal" className="tmh-page">
-      <DashboardPageActions active="tests" />
+      <DashboardPageActions active="tests" context={testId} />
 
-      <main className="tmh-main" id="test-history-main">
+      <div className="tmh-main">
         <p className="tmh-breadcrumb">
           <a href={hashForWorkspace('tests')}>Tests</a> / <span>{testId}</span>
         </p>
@@ -1521,7 +1521,7 @@ export function TestHistoryPage({ testId }: { testId: string }) {
             </>
           )}
         </section>
-      </main>
+      </div>
       {selectedObservation && (
         <ExecutionDetailsDialog
           observation={selectedObservation}

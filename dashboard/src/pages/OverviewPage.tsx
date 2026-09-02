@@ -781,17 +781,6 @@ export function OverviewPage({ activeView }: { activeView: WorkspaceView }) {
 
   return (
     <div className="ds-root min-h-dvh bg-[var(--color-bg)] text-ink">
-      {/* biome-ignore lint/a11y/useValidAnchor: a skip link must stay a link; the console owns the hash router, so the handler moves focus instead of changing the route (audit E-15). */}
-      <a
-        className="skip-link"
-        href="#main"
-        onClick={(click) => {
-          click.preventDefault()
-          document.getElementById('main')?.focus()
-        }}
-      >
-        Skip to execution dashboard
-      </a>
       <DashboardPageActions
         active={activeView}
         actionsLabel="Overview actions"
@@ -815,11 +804,7 @@ export function OverviewPage({ activeView }: { activeView: WorkspaceView }) {
           ) : null
         }
       />
-      <main
-        id="main"
-        tabIndex={-1}
-        className="page-shell w-[calc(100%_-_1.5rem)] max-w-[1420px] pt-5 pb-16 outline-none md:w-[calc(100%_-_3rem)]"
-      >
+      <div className="page-shell w-[calc(100%_-_1.5rem)] max-w-[1420px] pt-5 pb-16 md:w-[calc(100%_-_3rem)]">
         {error && (
           <Panel
             className="empty-state grid justify-items-start gap-4 p-8"
@@ -899,7 +884,7 @@ export function OverviewPage({ activeView }: { activeView: WorkspaceView }) {
             )}
           </div>
         )}
-      </main>
+      </div>
       <LocalRunnerDialog
         bridge={bridge}
         open={runnerOpen}

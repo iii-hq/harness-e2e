@@ -386,9 +386,6 @@ export function TestsCatalogPage() {
 
   return (
     <>
-      <a className="skip-link" href="#tests-catalog-main">
-        Skip to test catalog
-      </a>
       <DashboardPageActions
         active="tests"
         actionsLabel="Test catalog actions"
@@ -403,10 +400,7 @@ export function TestsCatalogPage() {
           />
         }
       />
-      <main
-        id="tests-catalog-main"
-        className="page-shell w-[calc(100%_-_1.5rem)] max-w-[1420px] pt-5 pb-16 md:w-[calc(100%_-_3rem)]"
-      >
+      <div className="page-shell w-[calc(100%_-_1.5rem)] max-w-[1420px] pt-5 pb-16 md:w-[calc(100%_-_3rem)]">
         {/* Audit T-11: the page has a heading even though the console owns
             the visible title. */}
         <h1 className="visually-hidden">Test catalog</h1>
@@ -735,7 +729,7 @@ export function TestsCatalogPage() {
               </table>
             </div>
           ))}
-      </main>
+      </div>
     </>
   )
 }

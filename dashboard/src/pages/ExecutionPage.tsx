@@ -665,10 +665,7 @@ export function ExecutionPage({
   if (error)
     return (
       <div className="ds-root min-h-dvh bg-[var(--color-bg)] text-ink">
-        <main
-          id="main"
-          className="mx-auto grid min-h-dvh w-[min(52rem,calc(100%_-_1.5rem))] place-items-center py-8"
-        >
+        <div className="mx-auto grid min-h-dvh w-[min(52rem,calc(100%_-_1.5rem))] place-items-center py-8">
           <Panel
             role="alert"
             padding="generous"
@@ -688,16 +685,13 @@ export function ExecutionPage({
               }
             />
           </Panel>
-        </main>
+        </div>
       </div>
     )
   if (!detail || !presentation)
     return (
       <div className="ds-root min-h-dvh bg-[var(--color-bg)] text-ink">
-        <main
-          id="main"
-          className="mx-auto grid min-h-dvh w-[min(52rem,calc(100%_-_1.5rem))] place-items-center py-8"
-        >
+        <div className="mx-auto grid min-h-dvh w-[min(52rem,calc(100%_-_1.5rem))] place-items-center py-8">
           <Panel
             className="w-full rounded-[var(--ds-radius-md)]"
             aria-busy="true"
@@ -706,7 +700,7 @@ export function ExecutionPage({
               Loading execution report…
             </p>
           </Panel>
-        </main>
+        </div>
       </div>
     )
 
@@ -755,23 +749,8 @@ export function ExecutionPage({
     .join(' · ')
   return (
     <div className="ds-root min-h-dvh bg-[var(--color-bg)] text-ink">
-      {/* biome-ignore lint/a11y/useValidAnchor: a skip link must stay a link; the console owns the hash router, so the handler moves focus instead of changing the route (audit ED-16). */}
-      <a
-        className="skip-link"
-        href="#main"
-        onClick={(click) => {
-          click.preventDefault()
-          document.getElementById('main')?.focus()
-        }}
-      >
-        Skip to execution details
-      </a>
-      <DashboardPageActions active="executions" />
-      <main
-        id="main"
-        tabIndex={-1}
-        className="page-shell detail-shell w-[min(1380px,calc(100%_-_3rem))] pt-6 outline-none max-[640px]:w-[calc(100%_-_1.5rem)]"
-      >
+      <DashboardPageActions active="executions" context={presentation.label} />
+      <div className="page-shell detail-shell w-[min(1380px,calc(100%_-_3rem))] pt-6 outline-none max-[640px]:w-[calc(100%_-_1.5rem)]">
         <nav
           className="breadcrumbs mb-5 flex min-w-0 items-center gap-2 overflow-hidden font-mono text-xs text-ink-muted"
           aria-label="Breadcrumb"
@@ -956,7 +935,7 @@ export function ExecutionPage({
           />
           <TechnicalSection detail={detail} presentation={presentation} />
         </div>
-      </main>
+      </div>
       {transcript && (
         <TranscriptDialog
           title={transcript.title}
@@ -965,17 +944,6 @@ export function ExecutionPage({
           onClose={() => setTranscript(null)}
         />
       )}
-      <footer className="mx-auto mt-8 flex w-[min(1380px,calc(100%_-_3rem))] flex-wrap items-center justify-between gap-3 border-t border-[var(--color-rule)] py-6 text-xs text-ink-muted max-[640px]:w-[calc(100%_-_1.5rem)]">
-        <span>
-          Execution report · <code className="font-mono">{detail.id}</code>
-        </span>
-        <a
-          className="text-[var(--color-ink-faint)] underline-offset-4 hover:underline"
-          href={hashForWorkspace('executions')}
-        >
-          Back to all executions
-        </a>
-      </footer>
     </div>
   )
 }

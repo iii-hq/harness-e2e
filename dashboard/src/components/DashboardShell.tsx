@@ -1,18 +1,17 @@
+import { PageBody, PageHeader, PageMain, PageShell } from '@iii-dev/console-ui'
 import {
-  PageBody,
-  PageHeader,
-  PageMain,
-  PageShell,
-  Select,
-  Tabs,
-  TabsList,
-  TabsTrigger,
-} from '@iii-dev/console-ui'
+  FlaskConical,
+  LayoutGrid,
+  ListChecks,
+  PieChart,
+  Route,
+} from 'lucide-react'
 import {
   createContext,
   type ReactNode,
   useCallback,
   useContext,
+  useEffect,
   useState,
 } from 'react'
 import { ThemeToggle } from '@/components/ThemeToggle'
@@ -22,6 +21,7 @@ import {
   hashForCoverage,
   hashForPlans,
   hashForWorkspace,
+  routeRenderIdentity,
   type WorkspaceView,
 } from '@/hooks/use-hash-route'
 import { useTheme } from '@/hooks/useTheme'
@@ -38,7 +38,11 @@ export type DashboardHeaderState = {
   key: string
   actions?: ReactNode
   actionsLabel?: string
+  /** The open entity (execution label, test id, plan label) for the console title. */
+  context?: string
 }
+
+export const MAIN_ID = 'harness-e2e-main'
 
 export type DashboardChromeContextValue = {
   embedded: boolean
@@ -88,59 +92,12 @@ function hashForSection(section: DashboardSection): string {
   return hashForWorkspace(section as WorkspaceView)
 }
 
-function TabGlyph({ children }: { children: ReactNode }) {
-  return (
-    <svg
-      viewBox="0 0 16 16"
-      width="16"
-      height="16"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="1.35"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      aria-hidden="true"
-    >
-      {children}
-    </svg>
-  )
-}
-
 const sectionIcons: Record<DashboardSection, ReactNode> = {
-  overview: (
-    <TabGlyph>
-      <rect x="2.5" y="2.5" width="4.8" height="7" rx="1" />
-      <rect x="2.5" y="11.5" width="4.8" height="2" rx="1" />
-      <rect x="8.7" y="2.5" width="4.8" height="2" rx="1" />
-      <rect x="8.7" y="6.5" width="4.8" height="7" rx="1" />
-    </TabGlyph>
-  ),
-  tests: (
-    <TabGlyph>
-      <path d="M6.4 2.2h3.2M8 2.2v3.4l3.9 6.3a1.4 1.4 0 0 1-1.19 2.1H5.29a1.4 1.4 0 0 1-1.19-2.1L8 5.6" />
-      <path d="M5.7 10.2h4.6" />
-    </TabGlyph>
-  ),
-  executions: (
-    <TabGlyph>
-      <circle cx="8" cy="8.2" r="5.3" />
-      <path d="M8 5.4v2.8l1.9 1.4" />
-    </TabGlyph>
-  ),
-  plans: (
-    <TabGlyph>
-      <circle cx="4.6" cy="4.6" r="1.9" />
-      <circle cx="11.4" cy="11.4" r="1.9" />
-      <path d="M4.6 6.5v2.4a2.3 2.3 0 0 0 2.3 2.3h1.8" />
-      <path d="M11.4 9.5V7.1a2.3 2.3 0 0 0-2.3-2.3H7.3" />
-    </TabGlyph>
-  ),
-  coverage: (
-    <TabGlyph>
-      <circle cx="8" cy="8" r="5.3" />
-      <path d="M8 2.7v5.3l3.7 3.7" />
-    </TabGlyph>
-  ),
+  overview: <LayoutGrid size={15} aria-hidden="true" />,
+  tests: <FlaskConical size={15} aria-hidden="true" />,
+  executions: <ListChecks size={15} aria-hidden="true" />,
+  plans: <Route size={15} aria-hidden="true" />,
+  coverage: <PieChart size={15} aria-hidden="true" />,
 }
 
 // Coverage stays reachable by URL but is deliberately absent from the menu.
@@ -173,46 +130,23 @@ function HarnessE2eIcon() {
   )
 }
 
-export type HeaderActionsProps = {
-  narrow: boolean
+export type PageActionsBarProps = {
   actions?: ReactNode
-  actionsLabel?: string
-  children?: ReactNode
+  label?: string
 }
 
-// Page actions sit in the console header next to its close control. Below
-// 720px of container width they collapse into one disclosure so that control
-// never leaves the viewport (audit S-02 / RD-02).
-export function HeaderActions({
-  narrow,
-  actions,
-  actionsLabel,
-  children,
-}: HeaderActionsProps) {
+// Audit S-04 / S-05 / S-07: a section's actions live in the page, in the
+// same bar as the section links, so the console header keeps only context,
+// theme and close. The bar wraps in narrow containers instead of hiding.
+export function PageActionsBar({ actions, label }: PageActionsBarProps) {
+  if (!actions) return null
   return (
-    <div className="harness-e2e-header-actions flex min-w-0 items-center justify-end gap-2">
-      {children}
-      {actions && narrow ? (
-        <details className="harness-e2e-header-overflow">
-          <summary aria-label={actionsLabel ?? 'Page actions'}>
-            <svg
-              viewBox="0 0 16 16"
-              width="16"
-              height="16"
-              fill="currentColor"
-              aria-hidden="true"
-            >
-              <circle cx="3" cy="8" r="1.5" />
-              <circle cx="8" cy="8" r="1.5" />
-              <circle cx="13" cy="8" r="1.5" />
-            </svg>
-          </summary>
-          <div className="harness-e2e-header-overflow-menu">{actions}</div>
-        </details>
-      ) : (
-        actions
-      )}
-    </div>
+    <section
+      className="harness-e2e-page-actions flex min-w-0 flex-wrap items-center justify-end gap-2"
+      aria-label={label ?? 'Page actions'}
+    >
+      {actions}
+    </section>
   )
 }
 
@@ -260,6 +194,18 @@ export function DashboardShell({
     window.location.hash = hashForSection(next)
   }
 
+  // Audit S-07: a route change starts at the top, unless the route names an
+  // anchor the page scrolls to itself. Both scrollers are reset because the
+  // console scrolls its main pane and the standalone app scrolls the window.
+  const routeIdentity = routeRenderIdentity(route)
+  const routeAnchor = route.page === 'execution' ? route.anchor : null
+  // biome-ignore lint/correctness/useExhaustiveDependencies: the route identity is the trigger, not a value the effect reads
+  useEffect(() => {
+    if (routeAnchor) return
+    window.scrollTo(0, 0)
+    document.getElementById(MAIN_ID)?.scrollTo(0, 0)
+  }, [routeIdentity, routeAnchor])
+
   return (
     <DashboardChromeContext.Provider value={contextValue}>
       <PageShell
@@ -271,78 +217,93 @@ export function DashboardShell({
         <PageHeader
           icon={<HarnessE2eIcon />}
           title="harness e2e"
-          description={sectionLabel ?? 'Overview'}
+          description={header.context ?? sectionLabel ?? 'Overview'}
           actions={
-            <HeaderActions
-              narrow={narrow}
-              actions={header.actions}
-              actionsLabel={header.actionsLabel}
-            >
-              {!embedded ? (
-                <ThemeToggle
-                  theme={standaloneTheme}
-                  onChange={setStandaloneTheme}
-                />
-              ) : null}
-            </HeaderActions>
+            !embedded ? (
+              <ThemeToggle
+                theme={standaloneTheme}
+                onChange={setStandaloneTheme}
+              />
+            ) : undefined
           }
           onClose={embedded ? onRequestClose : undefined}
         />
         <PageBody side={panelSide}>
-          <PageMain className="harness-e2e-console-main min-h-0 min-w-0 overflow-auto p-0">
+          {/* The console owns the hash router, so the skip link moves focus
+              instead of changing the route (audit A11Y-06). */}
+          <a
+            className="skip-link"
+            href={`#${MAIN_ID}`}
+            onClick={(click) => {
+              click.preventDefault()
+              document.getElementById(MAIN_ID)?.focus()
+            }}
+          >
+            Skip to content
+          </a>
+          <PageMain
+            id={MAIN_ID}
+            tabIndex={-1}
+            className="harness-e2e-console-main min-h-0 min-w-0 overflow-auto p-0 outline-none"
+          >
             <div
               ref={mainRef}
               className="harness-e2e-dashboard min-h-full min-w-0 overflow-x-hidden bg-panel text-ink"
               data-harness-e2e-dashboard
               data-theme={theme}
             >
-              <div
-                className="harness-e2e-navigation sticky top-0 z-10 min-w-0 bg-panel"
+              {/* Audit S-04 / A11Y-05: sections are links with aria-current,
+                  so the browser, assistive technology and the hash router all
+                  agree on what navigation is. Page actions share the bar. */}
+              <nav
+                className="harness-e2e-navigation sticky top-0 z-10 flex min-w-0 flex-wrap items-center justify-between gap-2 bg-panel px-4 py-1.5"
                 data-section={section}
+                aria-label="Harness E2E sections"
               >
-                <div className="harness-e2e-navigation-wide min-w-0 px-4">
-                  <Tabs
-                    value={section}
-                    onValueChange={(next) => navigate(next as DashboardSection)}
-                    aria-label="Harness E2E sections"
-                  >
-                    <TabsList className="flex items-center gap-1 overflow-x-auto py-1.5 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
-                      {navigation.map((item) => (
-                        // Embedded: no className override, so the Console
-                        // host's canonical content-navigation tab (line
-                        // variant + semantic icon) fully governs the look.
-                        // Standalone: the local stub is unstyled, so it gets
-                        // the pill vocabulary explicitly.
-                        <TabsTrigger
-                          key={item.value}
-                          value={item.value}
-                          icon={sectionIcons[item.value]}
-                          className={
-                            embedded
-                              ? undefined
-                              : 'whitespace-nowrap rounded-[6px] px-2.5 py-1.5 text-[13px] font-medium leading-none text-ink-soft transition-colors hover:bg-panel-soft hover:text-ink aria-[selected=true]:bg-[var(--surface-selected)] aria-[selected=true]:font-semibold aria-[selected=true]:text-ink'
-                          }
-                        >
-                          {item.label}
-                        </TabsTrigger>
-                      ))}
-                    </TabsList>
-                  </Tabs>
-                </div>
-                {/* Visibility of the wide tabs and the narrow select lives in
+                <ul className="harness-e2e-navigation-wide m-0 min-w-0 list-none items-center gap-1 overflow-x-auto p-0 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+                  {navigation.map((item) => (
+                    <li key={item.value}>
+                      <a
+                        className="harness-e2e-nav-link"
+                        href={hashForSection(item.value)}
+                        aria-current={
+                          item.value === section ? 'page' : undefined
+                        }
+                      >
+                        {sectionIcons[item.value]}
+                        <span>{item.label}</span>
+                      </a>
+                    </li>
+                  ))}
+                </ul>
+                {/* Visibility of the wide links and the narrow select lives in
                     dashboard-shell.css, keyed on data-narrow: a Tailwind
                     `hidden` here would win over that CSS (Tailwind is
                     imported with `important`; audit S-01). */}
-                <div className="harness-e2e-navigation-narrow min-w-0 px-4 py-2">
-                  <Select
+                <div className="harness-e2e-navigation-narrow min-w-0 flex-1">
+                  <select
+                    className="harness-e2e-nav-select min-h-9 w-full rounded-[6px] border-0 bg-panel-soft px-2.5 font-mono text-[12px] font-medium lowercase leading-none text-ink"
                     value={section}
-                    options={navigation}
-                    onChange={(next) => navigate(next as DashboardSection)}
-                    className="min-h-9 w-full rounded-[6px] border-0 bg-panel-soft px-2.5 font-mono text-[12px] font-medium lowercase leading-none text-ink"
+                    onChange={(event) =>
+                      navigate(event.target.value as DashboardSection)
+                    }
                     aria-label="Harness E2E section"
-                  />
+                  >
+                    {navigation.map((item) => (
+                      <option key={item.value} value={item.value}>
+                        {item.label}
+                      </option>
+                    ))}
+                    {section === 'coverage' ? (
+                      <option value="coverage">Coverage</option>
+                    ) : null}
+                  </select>
                 </div>
-              </div>
+                <PageActionsBar
+                  actions={header.actions}
+                  label={header.actionsLabel}
+                />
+              </nav>
               <div className="harness-e2e-content min-w-0">{children}</div>
             </div>
           </PageMain>
