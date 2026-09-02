@@ -1,7 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import {
   hashForComparison,
-  hashForCoverage,
   hashForExecution,
   hashForNewPlan,
   hashForPlan,
@@ -42,14 +41,13 @@ describe('dashboard hash routes', () => {
     })
   })
 
-  it('routes comparisons and coverage from the single entry point', () => {
+  it('routes comparisons from the single entry point', () => {
     const comparison = hashForComparison('version/a', 'version b')
     expect(routeFromHash(comparison)).toEqual({
       page: 'compare',
       left: 'version/a',
       right: 'version b',
     })
-    expect(hashForCoverage()).toBe('#/coverage')
     expect(routeFromHash('#main')).toBeNull()
   })
 

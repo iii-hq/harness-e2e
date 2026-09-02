@@ -8,8 +8,8 @@ const dashboardRoot = path.join(repositoryRoot, 'dashboard')
 const read = (...segments) =>
   fs.readFileSync(path.join(dashboardRoot, ...segments), 'utf8')
 const overviewPage = read('src', 'pages', 'OverviewPage.tsx')
+const executionsPage = read('src', 'pages', 'ExecutionsPage.tsx')
 const executionPage = read('src', 'pages', 'ExecutionPage.tsx')
-const coveragePage = read('src', 'pages', 'CoveragePage.tsx')
 const appHeader = read('src', 'components', 'AppHeader.tsx')
 const dashboardShell = read('src', 'components', 'DashboardShell.tsx')
 const runner = read('src', 'components', 'LocalRunnerDialog.tsx')
@@ -31,17 +31,23 @@ const publisher = fs.readFileSync(
 )
 
 test('prioritizes the first-read execution signal', () => {
-  assert.match(overviewPage, /Latest execution/)
-  assert.match(overviewPage, /Scenario pass rate/)
-  assert.match(overviewPage, /Recent executions/)
-  assert.match(overviewPage, /Investigate execution/)
-  assert.match(overviewPage, /Subject/)
+  // Audit O-01/O-06/O-08/O-17: a signal panel, not the ledger — latest band,
+  // trend deltas, attention queue, running strip, five recent rows.
+  assert.match(overviewPage, /latest execution/)
+  assert.match(overviewPage, /scenario pass rate/)
+  assert.match(overviewPage, /data-recent-executions/)
+  assert.match(overviewPage, /data-attention-queue/)
+  assert.match(overviewPage, /data-running-strip/)
+  assert.match(overviewPage, /investigate/)
+  assert.match(overviewPage, /view all executions/)
+  assert.match(overviewPage, /trendDelta/)
+  assert.match(overviewPage, /subscribeRunChanges/)
   assert.match(overviewPage, /modelNames\(presentation\.judges\)/)
   assert.match(dashboardShell, /value: 'tests'/)
   assert.match(overviewPage, /hashForNewPlan\(\)/)
-  assert.match(overviewPage, /New plan/)
-  assert.match(overviewPage, /lg:grid-cols-\[minmax\(0,1fr\)_300px\]/)
-  assert.match(overviewPage, /buttonClassName\(\{ variant: 'secondary' \}\)/)
+  assert.match(overviewPage, /new plan/)
+  assert.doesNotMatch(overviewPage, /lg:grid-cols-\[minmax\(0,1fr\)_300px\]/)
+  assert.doesNotMatch(overviewPage, /Quick run|Run the full suite or a subset/)
   assert.doesNotMatch(overviewPage, /hashForPlans/)
   assert.doesNotMatch(overviewPage, /View Actions/)
   assert.doesNotMatch(
@@ -63,9 +69,9 @@ test('keeps the overview operational, dense, and Tailwind-based', () => {
   const styles = read('src', 'legacy.css')
 
   for (const primitive of [
-    'Button',
     'MetricCard',
     'Panel',
+    'PageHeader',
     'StatusBadge',
   ]) {
     assert.match(overviewPage, new RegExp(`\\b${primitive}\\b`))
@@ -77,11 +83,9 @@ test('keeps the overview operational, dense, and Tailwind-based', () => {
   assert.doesNotMatch(entry, /@import "tailwindcss" important/)
   assert.match(entry, /@layer theme, base, legacy, ds, components, utilities;/)
   assert.match(entry, /@import "\.\/legacy\.css" layer\(legacy\);/)
-  assert.match(overviewPage, /lg:grid-cols-\[minmax\(0,1fr\)_300px\]/)
-  assert.match(overviewPage, /xl:grid-cols-4/)
-  assert.match(overviewPage, /Recent executions/)
-  assert.match(overviewPage, /Total tokens/)
-  assert.match(overviewPage, /Run the full suite or a subset/)
+  assert.match(overviewPage, /@\[960px\]:grid-cols-4/)
+  assert.match(overviewPage, /recent executions/)
+  assert.match(overviewPage, /'tokens'/)
   assert.match(overviewPage, /@\/design-system\/styles\.css/)
   assert.doesNotMatch(overviewPage, /\.\/overview\.css/)
   assert.doesNotMatch(overviewPage, /Evidence that|earns trust/)
@@ -95,21 +99,16 @@ test('keeps the overview operational, dense, and Tailwind-based', () => {
 
 test('adapts overview metrics when persisted workflow evidence is available', () => {
   assert.match(overviewPage, /execution\.workflow_metrics/)
-  assert.match(overviewPage, /Semantic steps/)
-  assert.match(overviewPage, /Workflow runtime/)
+  assert.match(overviewPage, /semantic steps/)
+  assert.match(overviewPage, /workflow runtime/)
   assert.match(overviewPage, /hard gates passed/)
-  assert.match(overviewPage, /attentionWorkflowSteps/)
-  assert.match(overviewPage, /activeWorkflowSteps/)
+  assert.match(overviewPage, /workflowProgress/)
 })
 
-test('uses one low-emphasis action treatment in overview card footers', () => {
-  const styles = read('src', 'legacy.css')
-  assert.match(styles, /\.overview-card-action\s*\{[\s\S]*display: inline-flex/)
-  assert.match(styles, /\.overview-card-action:hover[\s\S]*border-bottom-color/)
-  assert.match(
-    styles,
-    /\.overview-card-action:focus-visible[\s\S]*outline-offset/,
-  )
+test('keeps the ledger out of the overview', () => {
+  // Audit O-01 / E-06: one table, in the executions ledger only.
+  assert.match(executionsPage, /ExecutionHistory/)
+  assert.doesNotMatch(overviewPage, /<table/)
 })
 
 test('keeps the workspace navigation and versioned test flow', () => {
@@ -143,7 +142,6 @@ test('keeps the workspace navigation and versioned test flow', () => {
   for (const page of [
     overviewPage,
     executionPage,
-    coveragePage,
     catalogPage,
     historyPage,
     testsPage,
@@ -370,11 +368,11 @@ test('publisher writes only the JSON manifest', () => {
 })
 
 test('does not load removed DOM renderers', () => {
-  const legacyLoader = read('src', 'hooks', 'useLegacyPage.ts')
-  assert.doesNotMatch(
-    legacyLoader,
-    /overview\.js|execution\.js|local-runner\.js|execution-transcript\.js/,
-  )
+  // Audit CV-01/CV-03: the coverage route, its page and the legacy DOM
+  // loader are gone; nothing injects scripts into the dashboard any more.
+  assert.equal(fs.existsSync(path.join(dashboardRoot, 'src', 'hooks', 'useLegacyPage.ts')), false)
+  assert.equal(fs.existsSync(path.join(dashboardRoot, 'src', 'pages', 'CoveragePage.tsx')), false)
+  assert.equal(fs.existsSync(path.join(dashboardRoot, 'public', 'coverage')), false)
   for (const filename of [
     'overview.js',
     'execution.js',

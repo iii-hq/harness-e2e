@@ -41,7 +41,6 @@ describe('section navigation', () => {
       sectionForRoute({ page: 'execution', executionId: 'x', anchor: null }),
     ).toBe('executions')
     expect(sectionForRoute({ page: 'test-history', testId: 't' })).toBe('tests')
-    expect(sectionForRoute({ page: 'coverage' })).toBe('coverage')
   })
 
   it('renders both the wide links and the narrow select', () => {

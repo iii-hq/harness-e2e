@@ -15,7 +15,6 @@ export type DashboardRoute =
   | { page: 'plans' }
   | { page: 'plan-create' }
   | { page: 'plan-detail'; planId: string }
-  | { page: 'coverage' }
 
 export type DashboardRoutes = {
   current: () => DashboardRoute
@@ -26,7 +25,6 @@ export type DashboardRoutes = {
   plans: () => string
   newPlan: () => string
   plan: (planId: string) => string
-  coverage: () => string
 }
 
 const workspaceViews = new Set<WorkspaceView>([
@@ -126,7 +124,6 @@ export function routeFromHash(rawHash: string): DashboardRoute | null {
     if (rest[0] === 'new') return { page: 'plan-create' }
     return { page: 'plan-detail', planId: rest[0] }
   }
-  if (head === 'coverage') return { page: 'coverage' }
   return null
 }
 
@@ -163,10 +160,6 @@ export function hashForComparison(
   return right ? `${route}/${encodeSegment(right)}` : route
 }
 
-export function hashForCoverage(): string {
-  return dashboardHash('coverage')
-}
-
 export function hashForTestHistory(testId: string): string {
   return dashboardHash(`tests/${encodeSegment(testId)}`)
 }
@@ -192,7 +185,6 @@ export const dashboardRoutes: DashboardRoutes = {
   plans: hashForPlans,
   newPlan: hashForNewPlan,
   plan: hashForPlan,
-  coverage: hashForCoverage,
 }
 
 export function routeRenderIdentity(route: DashboardRoute): string {
