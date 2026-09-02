@@ -120,12 +120,19 @@ test('keeps the workspace navigation and versioned test flow', () => {
   assert.match(testsPage, /loadVersionResult\(row\.test_id/)
   assert.match(testsPage, /prefetchedCatalog/)
   assert.match(catalogPage, /<DashboardPageActions[\s\S]*active="tests"/)
-  assert.match(catalogPage, /visually-hidden">Search tests/)
-  assert.match(catalogPage, /placeholder="Filter tests…"/)
-  assert.match(
-    catalogPage,
-    /type="search"[\s\S]*border-0[\s\S]*bg-\[var\(--surface-fill\)\]/,
-  )
+  // Audit T-03 / T-07 / T-08 / T-12: DS table with a sticky first column,
+  // lifecycle groups with retired collapsed, cursor pagination, filters in
+  // the hash, and a text search with its own clear control.
+  assert.match(catalogPage, /aria-label="Search tests"/)
+  assert.match(catalogPage, /placeholder="Filter by name, id or title…"/)
+  assert.doesNotMatch(catalogPage, /type="search"|min-w-\[82rem\]|Local dashboard only/)
+  assert.match(catalogPage, /<DataTable\s+caption=\{caption\}\s+collapse\s+collapseInline\s+minWidth="64rem"\s+sticky\s*>/)
+  assert.match(catalogPage, /ds-table-sticky-col/)
+  assert.match(catalogPage, /data-catalog-group=\{group\.lifecycle\}/)
+  assert.match(catalogPage, /retired test/)
+  assert.match(catalogPage, /cursor: data\.next_cursor/)
+  assert.match(catalogPage, /replaceRouteParams\(params\)/)
+  assert.match(catalogPage, /catalogFiltersFromParams\(routeParams\(window\.location\.hash\)\)/)
   for (const page of [
     overviewPage,
     executionPage,

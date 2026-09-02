@@ -3,13 +3,20 @@ import { describe, expect, it } from 'vitest'
 import type { LocalScenarioSummary } from '@/lib/local-scenario-catalog'
 import type { TestCatalogRow } from '@/lib/test-catalog'
 import {
+  CATALOG_DEFAULT_FILTERS,
   catalogCalibrationPresentation,
   catalogComplexityPresentation,
+  catalogFiltersActive,
+  catalogFiltersFromParams,
+  catalogFiltersToParams,
   catalogHorizonPresentation,
   catalogRealismPresentation,
+  filterCatalogRows,
+  groupCatalogRows,
   LocalTestBadge,
   mergeLocalScenariosIntoCatalog,
   nextLocalScenarioFileName,
+  sortCatalogDisplayRows,
   TestsCatalogActions,
 } from '@/pages/TestsCatalogPage'
 
@@ -63,10 +70,10 @@ describe('test catalog L5 dimensions', () => {
       <TestsCatalogActions local localReady onNewTest={() => undefined} />,
     )
 
-    expect(html).toContain('New test')
+    expect(html).toContain('new test')
     expect(html).toContain('Create a new local test')
-    expect(html).toContain('New plan')
-    expect(html).toContain('Compare')
+    expect(html).toContain('new plan')
+    expect(html).toContain('compare versions')
     expect(html).not.toContain('disabled=""')
   })
 
@@ -144,7 +151,7 @@ describe('test catalog L5 dimensions', () => {
       detail: 'author estimate',
     })
     expect(catalogRealismPresentation(row())).toEqual({
-      value: 'Realistic simulator',
+      value: 'realistic simulator',
       detail: 'read-only shadow',
     })
   })
@@ -159,24 +166,105 @@ describe('test catalog L5 dimensions', () => {
           },
         }),
       )
-      expect(presentation.value).toBe('Observed')
+      expect(presentation.value).toBe('observed')
       expect(JSON.stringify(presentation).toLowerCase()).not.toContain('robust')
     }
   })
 
+  // Audit T-12 / T-14: one marker for anything not declared.
   it('keeps absent dimensions compatible with older responses', () => {
     const legacy = row({
       complexity: undefined,
       characterization: undefined,
       calibration: undefined,
     })
-    expect(catalogComplexityPresentation(legacy).value).toBe('Not declared')
-    expect(catalogHorizonPresentation(legacy).value).toBe('Unknown')
-    expect(catalogRealismPresentation(legacy).value).toBe('Not declared')
+    expect(catalogComplexityPresentation(legacy).value).toBeNull()
+    expect(catalogHorizonPresentation(legacy).value).toBeNull()
+    expect(catalogRealismPresentation(legacy).value).toBeNull()
     expect(catalogCalibrationPresentation(legacy)).toEqual({
-      value: 'Candidate',
+      value: 'no samples',
       detail: null,
     })
+  })
+
+  it('reads filters from the hash and writes only the non-default ones back', () => {
+    const filters = catalogFiltersFromParams(
+      new URLSearchParams(
+        'q=chess&lifecycle=active&evidence=1&sort=runs&source=nope',
+      ),
+    )
+    expect(filters).toMatchObject({
+      query: 'chess',
+      lifecycle: 'active',
+      withExecutions: true,
+      sort: 'runs',
+      source: 'all',
+    })
+    expect(catalogFiltersToParams(filters).toString()).toBe(
+      'q=chess&lifecycle=active&evidence=1&sort=runs',
+    )
+    expect(catalogFiltersActive(CATALOG_DEFAULT_FILTERS)).toBe(false)
+  })
+
+  it('groups by lifecycle and sorts by runs, last seen or complexity', () => {
+    const rows = [
+      {
+        row: row({
+          test_id: 'b',
+          lifecycle: 'never_run',
+          complexity: { tier: 'l2_stateful' },
+        }),
+        localScenario: null,
+      },
+      {
+        row: row({
+          test_id: 'a',
+          available_versions: [
+            {
+              version: 3,
+              execution_count: 2,
+              run_count: 2,
+              last_seen: '2026-08-23T00:00:00Z',
+            },
+          ],
+        }),
+        localScenario: null,
+      },
+      {
+        row: row({ test_id: 'c', lifecycle: 'retired', complexity: null }),
+        localScenario: null,
+      },
+    ]
+    expect(
+      groupCatalogRows(rows).map((group) => [
+        group.lifecycle,
+        group.rows.length,
+      ]),
+    ).toEqual([
+      ['active', 1],
+      ['never_run', 1],
+      ['retired', 1],
+    ])
+    expect(
+      sortCatalogDisplayRows(rows, 'runs').map((entry) => entry.row.test_id),
+    ).toEqual(['a', 'b', 'c'])
+    expect(
+      sortCatalogDisplayRows(rows, 'complexity').map(
+        (entry) => entry.row.test_id,
+      ),
+    ).toEqual(['a', 'b', 'c'])
+    expect(
+      filterCatalogRows(rows, {
+        ...CATALOG_DEFAULT_FILTERS,
+        withExecutions: true,
+      }).map((entry) => entry.row.test_id),
+    ).toEqual(['a'])
+    expect(
+      filterCatalogRows(rows, {
+        ...CATALOG_DEFAULT_FILTERS,
+        complexity: 'none',
+      }).map((entry) => entry.row.test_id),
+    ).toEqual(['c'])
   })
 
   it('distinguishes repeatability from tail calibration', () => {
@@ -189,7 +277,7 @@ describe('test catalog L5 dimensions', () => {
           },
         }),
       ).value,
-    ).toBe('Repeatable')
+    ).toBe('repeatable')
     expect(
       catalogCalibrationPresentation(
         row({
@@ -199,7 +287,7 @@ describe('test catalog L5 dimensions', () => {
           },
         }),
       ).value,
-    ).toBe('Tail calibrated')
+    ).toBe('tail calibrated')
   })
 
   it('shows a verified reference before live calibration samples exist', () => {
@@ -213,7 +301,7 @@ describe('test catalog L5 dimensions', () => {
         }),
       ),
     ).toEqual({
-      value: 'Reference verified',
+      value: 'reference verified',
       detail: '0 compatible samples',
     })
   })
