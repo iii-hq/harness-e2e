@@ -14,6 +14,7 @@ admission_timeout_seconds=${HARNESS_E2E_ADMISSION_TIMEOUT_SECONDS:-180}
 run_timeout_seconds=${HARNESS_E2E_RUN_TIMEOUT_SECONDS:-10800}
 fixture_launcher=${HARNESS_E2E_FIXTURE_LAUNCHER:-"$repo_root/scripts/engineering_ticket_fixture.py"}
 fixture_source_root=${HARNESS_E2E_FIXTURE_SOURCE_ROOT:-"$repo_root/tests/fixtures/campaign"}
+shared_fixture_repository=${HARNESS_E2E_SHARED_FIXTURE_REPOSITORY:-"$repo_root/target/fixtures/e2e-fixture"}
 engineering_fixture_revision=7a6b25b3cd12d66af74a358ae86e0d2b846bd384
 shared_fixture_revision=16f6b9e05e34e09c824191eed0631d77f85be6a9
 
@@ -193,7 +194,12 @@ prepare_code_fixtures() {
     export HARNESS_E2E_ENGINEERING_TICKET_FIXTURE_PATH
   fi
   if [[ "$requires_shared" == true ]]; then
-    export HARNESS_E2E_ENGINEERING_FIXTURE_REPOSITORY="$fixture_source_root/shared-fixture.bundle"
+    [[ -d "$shared_fixture_repository/.git" ]] || fail \
+      "shared fixture checkout is unavailable: $shared_fixture_repository"
+    observed_shared_revision=$(git -C "$shared_fixture_repository" rev-parse HEAD)
+    [[ "$observed_shared_revision" == "$shared_fixture_revision" ]] || fail \
+      "shared fixture checkout mismatch: expected $shared_fixture_revision, observed $observed_shared_revision"
+    export HARNESS_E2E_ENGINEERING_FIXTURE_REPOSITORY="$shared_fixture_repository"
     fixture_json="$run_root/shared-fixture.json"
     "$fixture_launcher" prepare --execution-id "${execution_prefix}-shared" \
       --revision "$shared_fixture_revision" >"$fixture_json"

@@ -8,6 +8,7 @@ use crate::control::ScenariosListResponse;
 use crate::durable::{DurableArchiveManifest, HistoryRecord};
 use crate::fault::{FaultEvaluation, FaultJournal, FaultPlan, FaultProfile};
 use crate::report::{E2eManifest, E2eObservationEnvelope, E2eReport};
+use crate::repository_task::RepositoryTaskV1;
 use crate::workflow::WorkflowCheckpointV1;
 
 pub fn results() -> RootSchema {
@@ -59,6 +60,10 @@ pub fn observation() -> RootSchema {
 
 pub fn scenario_catalog() -> RootSchema {
     root_schema_for::<ScenariosListResponse>()
+}
+
+pub fn repository_task() -> RootSchema {
+    root_schema_for::<RepositoryTaskV1>()
 }
 
 pub fn workflow_checkpoint() -> RootSchema {
@@ -129,6 +134,11 @@ mod tests {
     fn observation_contract_schemas_match_snapshots() {
         assert_snapshot("e2e-observation-v1.json", &observation());
         assert_snapshot("e2e-scenario-catalog-v4.json", &scenario_catalog());
+    }
+
+    #[test]
+    fn repository_task_schema_matches_snapshot() {
+        assert_snapshot("repository-task-v1.json", &repository_task());
     }
 
     #[test]

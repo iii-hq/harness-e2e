@@ -2030,12 +2030,7 @@ impl E2eReport {
                 for attempt in &run.retry_attempts {
                     validate_retry_identity(run, attempt)?;
                 }
-                let markdown_evidence = if run.markdown_execution.is_some() {
-                    std::mem::take(&mut run.evidence)
-                } else {
-                    Vec::new()
-                };
-                run.evidence.clear();
+                let additional_evidence = std::mem::take(&mut run.evidence);
                 materialize_attempt_evidence(
                     output,
                     &run.run_id,
@@ -2054,15 +2049,10 @@ impl E2eReport {
                     run.scenario_flow.as_ref(),
                     &run.semantic_tests,
                 );
-                append_verified_references(output, &mut run.evidence, markdown_evidence)?;
+                append_verified_references(output, &mut run.evidence, additional_evidence)?;
                 bind_assessment_evidence(&mut run.assessment_results, &run.evidence);
                 for attempt in &mut run.retry_attempts {
-                    let markdown_evidence = if attempt.markdown_execution.is_some() {
-                        std::mem::take(&mut attempt.evidence)
-                    } else {
-                        Vec::new()
-                    };
-                    attempt.evidence.clear();
+                    let additional_evidence = std::mem::take(&mut attempt.evidence);
                     materialize_attempt_evidence(
                         output,
                         &attempt.run_id,
@@ -2081,7 +2071,7 @@ impl E2eReport {
                         attempt.scenario_flow.as_ref(),
                         &attempt.semantic_tests,
                     );
-                    append_verified_references(output, &mut attempt.evidence, markdown_evidence)?;
+                    append_verified_references(output, &mut attempt.evidence, additional_evidence)?;
                     bind_assessment_evidence(&mut attempt.assessment_results, &attempt.evidence);
                 }
             }
@@ -2126,7 +2116,7 @@ fn append_verified_references(
             .any(|existing| existing.id == reference.id || existing.path == reference.path)
         {
             bail!(
-                "Markdown evidence conflicts with an existing artifact reference: {}",
+                "additional evidence conflicts with an existing artifact reference: {}",
                 reference.path
             );
         }
@@ -3288,6 +3278,39 @@ mod tests {
             .evidence
             .iter()
             .any(|reference| reference == &phase));
+    }
+
+    #[test]
+    fn write_preserves_verified_additional_evidence_for_rust_scenarios() {
+        let output = tempfile::tempdir().unwrap();
+        let mut run = run(75, false);
+        let shadow = artifact::write_json(
+            output.path(),
+            Path::new("evidence/run/attempt/advisory-0.json"),
+            "repository_task_shadow",
+            "repository_task_shadow",
+            &serde_json::json!({"equivalent": true}),
+        )
+        .unwrap();
+        run.evidence.push(shadow.clone());
+        let mut report = report(vec![aggregate(vec![run])]);
+
+        report.write_to(output.path(), &manifest()).unwrap();
+        report.write_to(output.path(), &manifest()).unwrap();
+
+        let evidence = &report.scenarios[0].runs[0].evidence;
+        assert_eq!(
+            evidence
+                .iter()
+                .filter(|reference| *reference == &shadow)
+                .count(),
+            1
+        );
+        let (decoded, _) = E2eReport::read_from(output.path()).unwrap();
+        assert!(decoded.scenarios[0].runs[0]
+            .evidence
+            .iter()
+            .any(|reference| reference == &shadow));
     }
 
     #[test]

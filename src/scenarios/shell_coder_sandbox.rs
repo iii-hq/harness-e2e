@@ -22,10 +22,10 @@ use crate::context::E2eContext;
 use super::assessment::{self, AssessmentSpec};
 use super::validation_loop::suffix;
 use super::{
-    common, ArtifactExpectation, CapturedDeliverable, CapturedInvariant, CleanupFuture,
-    ComplexityProfile, DeliverableCaptureFuture, DeliverableContract, EvaluationFuture,
-    ExecutionPolicy, InvariantSpec, MaterializedScenario, ProvenanceEvidence, ScenarioCase,
-    ScenarioObservation, ScenarioSpec,
+    common, AdvisoryEvidence, ArtifactExpectation, CapturedDeliverable, CapturedInvariant,
+    CleanupFuture, ComplexityProfile, DeliverableCaptureFuture, DeliverableContract,
+    EvaluationFuture, ExecutionPolicy, InvariantSpec, MaterializedScenario, ProvenanceEvidence,
+    ScenarioCase, ScenarioObservation, ScenarioSpec,
 };
 
 pub const ID: &str = "shell_coder_sandbox";
@@ -678,75 +678,141 @@ fn evaluate<'a>(
             && fixture.demo.stdout.trim() == HOST_DEMO_STDOUT
             && fixture.demo.stderr.trim().is_empty();
         let scope = fixture.scope_valid() && workflow.evidence_ordered;
-        Ok(assessment::build_evaluation([
-            WORKER_SETUP.full_or_zero(
+        let worker_reason = format!("shell={shell_ready}, coder={coder_ready}");
+        let investigation_passed = workflow.investigation_complete();
+        let investigation_points = workflow.investigation_points();
+        let investigation_reason = format!(
+            "info={:?}, source={:?}, tests={:?}, task={:?}, red={:?}, edit={:?}",
+            workflow.coder_info,
+            workflow.source_read,
+            workflow.tests_read,
+            workflow.task_read,
+            workflow.red_baseline,
+            workflow.first_source_edit
+        );
+        let diagnosis_points = if workflow.diagnosis_complete() && fixture.diagnosis_present {
+            DIAGNOSIS.weight()
+        } else {
+            0
+        };
+        let diagnosis_reason = format!(
+            "create={:?}, move={:?}, retained={}",
+            workflow.diagnosis_create, workflow.diagnosis_move, fixture.diagnosis_present
+        );
+        let public_reason = format!(
+            "subject red={:?}, green={:?}, runner green={}, stdout={:?}, stderr={:?}",
+            workflow.red_baseline,
+            workflow.green_public,
+            fixture.public.success,
+            fixture.public.stdout,
+            fixture.public.stderr
+        );
+        let hidden_reason = format!(
+            "checks={:?}; output={:?}",
+            fixture.hidden.checks, fixture.hidden_output
+        );
+        let host_reason = format!(
+            "subject demo={:?}, runner success={}, stdout={:?}, stderr={:?}",
+            workflow.host_demo, fixture.demo.success, fixture.demo.stdout, fixture.demo.stderr
+        );
+        let scope_reason = format!(
+            "protected={}, patch={}, diagnosis={}, unexpected={:?}, ordered={}",
+            fixture.protected_files_exact,
+            fixture.production_patch_present,
+            fixture.diagnosis_present,
+            fixture.unexpected_paths,
+            workflow.evidence_ordered,
+        );
+        let observations = vec![
+            crate::repository_task::RepositoryTaskAssessmentObservation::hard_gate(
+                WORKER_SETUP.id(),
                 worker_setup,
-                format!("shell={shell_ready}, coder={coder_ready}"),
-            ),
-            INVESTIGATION.gate_and_points(
-                workflow.investigation_complete(),
-                workflow.investigation_points(),
-                format!(
-                    "info={:?}, source={:?}, tests={:?}, task={:?}, red={:?}, edit={:?}",
-                    workflow.coder_info,
-                    workflow.source_read,
-                    workflow.tests_read,
-                    workflow.task_read,
-                    workflow.red_baseline,
-                    workflow.first_source_edit
-                ),
-            )?,
-            DIAGNOSIS.award(
-                if workflow.diagnosis_complete() && fixture.diagnosis_present {
-                    DIAGNOSIS.weight()
+                if worker_setup {
+                    WORKER_SETUP.weight()
                 } else {
                     0
                 },
-                format!(
-                    "create={:?}, move={:?}, retained={}",
-                    workflow.diagnosis_create, workflow.diagnosis_move, fixture.diagnosis_present
-                ),
-            )?,
-            PUBLIC_CORRECTNESS.full_or_zero(
+                worker_reason.clone(),
+            ),
+            crate::repository_task::RepositoryTaskAssessmentObservation::hard_gate(
+                INVESTIGATION.id(),
+                investigation_passed,
+                investigation_points,
+                investigation_reason.clone(),
+            ),
+            crate::repository_task::RepositoryTaskAssessmentObservation::advisory(
+                DIAGNOSIS.id(),
+                diagnosis_points,
+                diagnosis_reason.clone(),
+            ),
+            crate::repository_task::RepositoryTaskAssessmentObservation::hard_gate(
+                PUBLIC_CORRECTNESS.id(),
                 public_correctness,
-                format!(
-                    "subject red={:?}, green={:?}, runner green={}, stdout={:?}, stderr={:?}",
-                    workflow.red_baseline,
-                    workflow.green_public,
-                    fixture.public.success,
-                    fixture.public.stdout,
-                    fixture.public.stderr
-                ),
+                if public_correctness {
+                    PUBLIC_CORRECTNESS.weight()
+                } else {
+                    0
+                },
+                public_reason.clone(),
             ),
-            HIDDEN_CORRECTNESS.full_or_zero(
+            crate::repository_task::RepositoryTaskAssessmentObservation::hard_gate(
+                HIDDEN_CORRECTNESS.id(),
                 fixture.hidden.passed,
-                format!(
-                    "checks={:?}; output={:?}",
-                    fixture.hidden.checks, fixture.hidden_output
-                ),
+                if fixture.hidden.passed {
+                    HIDDEN_CORRECTNESS.weight()
+                } else {
+                    0
+                },
+                hidden_reason.clone(),
             ),
-            HOST_EXECUTION.full_or_zero(
+            crate::repository_task::RepositoryTaskAssessmentObservation::hard_gate(
+                HOST_EXECUTION.id(),
                 host_execution,
-                format!(
-                    "subject demo={:?}, runner success={}, stdout={:?}, stderr={:?}",
-                    workflow.host_demo,
-                    fixture.demo.success,
-                    fixture.demo.stdout,
-                    fixture.demo.stderr
-                ),
+                if host_execution {
+                    HOST_EXECUTION.weight()
+                } else {
+                    0
+                },
+                host_reason.clone(),
             ),
-            SCOPE_AND_LIFECYCLE.full_or_zero(
+            crate::repository_task::RepositoryTaskAssessmentObservation::hard_gate(
+                SCOPE_AND_LIFECYCLE.id(),
                 scope,
-                format!(
-                    "protected={}, patch={}, diagnosis={}, unexpected={:?}, ordered={}",
-                    fixture.protected_files_exact,
-                    fixture.production_patch_present,
-                    fixture.diagnosis_present,
-                    fixture.unexpected_paths,
-                    workflow.evidence_ordered
-                ),
+                if scope {
+                    SCOPE_AND_LIFECYCLE.weight()
+                } else {
+                    0
+                },
+                scope_reason.clone(),
             ),
-        ]))
+        ];
+        let mut evaluation = assessment::build_evaluation([
+            WORKER_SETUP.full_or_zero(worker_setup, worker_reason),
+            INVESTIGATION.gate_and_points(
+                investigation_passed,
+                investigation_points,
+                investigation_reason,
+            )?,
+            DIAGNOSIS.award(diagnosis_points, diagnosis_reason)?,
+            PUBLIC_CORRECTNESS.full_or_zero(public_correctness, public_reason),
+            HIDDEN_CORRECTNESS.full_or_zero(fixture.hidden.passed, hidden_reason),
+            HOST_EXECUTION.full_or_zero(host_execution, host_reason),
+            SCOPE_AND_LIFECYCLE.full_or_zero(scope, scope_reason),
+        ]);
+        let shadow = crate::repository_task::evaluate_shadow(
+            ID,
+            scenario_for_case(run_id).execution,
+            &observation.case,
+            &observations,
+            &evaluation,
+        );
+        evaluation.advisory_evidence.push(AdvisoryEvidence {
+            id: "repository_task_shadow".to_string(),
+            kind: "repository_task_shadow".to_string(),
+            value: serde_json::to_value(shadow)
+                .unwrap_or_else(|error| json!({"serialization_error": error.to_string()})),
+        });
+        Ok(evaluation)
     })
 }
 

@@ -348,6 +348,16 @@ pub struct ScenarioObservation {
 pub struct ObjectiveEvaluation {
     pub hard_gates: Vec<HardGateReport>,
     pub awards: Vec<CriterionAward>,
+    /// Non-authoritative, immutable evidence produced alongside the objective
+    /// evaluator. Persistence failures are logged and never change the verdict.
+    pub advisory_evidence: Vec<AdvisoryEvidence>,
+}
+
+#[derive(Debug)]
+pub struct AdvisoryEvidence {
+    pub id: String,
+    pub kind: String,
+    pub value: Value,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
