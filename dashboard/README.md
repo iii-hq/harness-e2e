@@ -190,3 +190,11 @@ pnpm screenshots -- --base standalone --out .screenshots/after
 
 Captures and a typography census (`census.json`) land in
 `dashboard/.screenshots/`, which is ignored by git.
+
+The remaining design-audit work is split into four briefs under
+[`docs/ui-migration/`](docs/ui-migration/README.md). That README also holds the
+rules every UI pull request follows (copy-pinned tests change with the copy,
+no unexplained `biome-ignore`, design-system vocabulary only, token colours,
+static Tailwind classes) and the live-evidence recipe: the Rust dashboard in
+local mode (`III_NAMESPACE=my-project harness-e2e dashboard --runs-dir
+~/.iii/data/harness-e2e --listen 127.0.0.1:4173`) behind `vite preview`.
