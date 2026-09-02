@@ -1,0 +1,279 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "TaskDefinition",
+  "type": "object",
+  "required": [
+    "execution",
+    "id",
+    "kind",
+    "schema",
+    "source",
+    "verifier",
+    "version",
+    "workspace"
+  ],
+  "properties": {
+    "execution": {
+      "$ref": "#/definitions/ExecutionPolicy"
+    },
+    "execution_mode": {
+      "default": "single_turn",
+      "allOf": [
+        {
+          "$ref": "#/definitions/TaskExecutionMode"
+        }
+      ]
+    },
+    "id": {
+      "type": "string"
+    },
+    "kind": {
+      "$ref": "#/definitions/TaskKind"
+    },
+    "schema": {
+      "type": "string"
+    },
+    "source": {
+      "$ref": "#/definitions/TaskSource"
+    },
+    "verifier": {
+      "$ref": "#/definitions/VerifierReference"
+    },
+    "version": {
+      "type": "integer",
+      "format": "uint32",
+      "minimum": 0.0
+    },
+    "workspace": {
+      "$ref": "#/definitions/WorkspacePolicy"
+    }
+  },
+  "additionalProperties": false,
+  "definitions": {
+    "ExecutionPolicy": {
+      "type": "object",
+      "required": [
+        "max_turns",
+        "stuck_timeout_seconds"
+      ],
+      "properties": {
+        "max_output_tokens": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "max_total_tokens": {
+          "description": "Shared Harness token budget. `None` leaves the Harness budget unbounded for this scenario.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "max_turns": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0.0
+        },
+        "max_validation_retries": {
+          "description": "Optional per-session cap for post-turn validation denials. `None` preserves the Harness-configured default.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0.0
+        },
+        "stuck_timeout_seconds": {
+          "description": "Stop only after this many seconds without observable useful progress. Large scenarios have no fixed wall-clock deadline.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        }
+      }
+    },
+    "MutationPolicy": {
+      "type": "string",
+      "enum": [
+        "allowlisted",
+        "artifact_only"
+      ]
+    },
+    "TaskExecutionMode": {
+      "type": "string",
+      "enum": [
+        "single_turn",
+        "stateful_simulation",
+        "checkpoint_ladder"
+      ]
+    },
+    "TaskKind": {
+      "type": "string",
+      "enum": [
+        "code_patch",
+        "feature",
+        "code_review",
+        "planning",
+        "operational_recovery",
+        "endurance"
+      ]
+    },
+    "TaskSource": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": [
+            "kind",
+            "manifest_sha256",
+            "path_env",
+            "repository",
+            "required_paths",
+            "revision",
+            "subtree"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "git_checkout"
+              ]
+            },
+            "manifest_sha256": {
+              "type": "string"
+            },
+            "path_env": {
+              "type": "string"
+            },
+            "repository": {
+              "type": "string"
+            },
+            "required_paths": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "revision": {
+              "type": "string"
+            },
+            "subtree": {
+              "type": "string"
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": [
+            "kind",
+            "manifest_sha256",
+            "path",
+            "required_paths"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "embedded_directory"
+              ]
+            },
+            "manifest_sha256": {
+              "type": "string"
+            },
+            "path": {
+              "type": "string"
+            },
+            "required_paths": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          },
+          "additionalProperties": false
+        }
+      ]
+    },
+    "VerifierProfile": {
+      "type": "string",
+      "enum": [
+        "code_patch",
+        "structured_artifact",
+        "state_recovery",
+        "state_simulation",
+        "checkpoint_ladder"
+      ]
+    },
+    "VerifierReference": {
+      "type": "object",
+      "required": [
+        "profile",
+        "spec"
+      ],
+      "properties": {
+        "profile": {
+          "$ref": "#/definitions/VerifierProfile"
+        },
+        "spec": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "WorkspacePolicy": {
+      "type": "object",
+      "required": [
+        "allowed_paths",
+        "ignored_paths",
+        "maximum_changed_files",
+        "maximum_patch_lines",
+        "minimum_changed_files",
+        "mutation",
+        "protected_paths"
+      ],
+      "properties": {
+        "allowed_paths": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "ignored_paths": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "maximum_changed_files": {
+          "type": "integer",
+          "format": "uint16",
+          "minimum": 0.0
+        },
+        "maximum_patch_lines": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0.0
+        },
+        "minimum_changed_files": {
+          "type": "integer",
+          "format": "uint16",
+          "minimum": 0.0
+        },
+        "mutation": {
+          "$ref": "#/definitions/MutationPolicy"
+        },
+        "protected_paths": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "additionalProperties": false
+    }
+  }
+}

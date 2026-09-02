@@ -1,8 +1,8 @@
 schema = "harness-e2e-task/v2"
-id = "release_train_recovery"
-version = 2
+id = "release_train_recovery_simulated"
+version = 1
 kind = "operational_recovery"
-execution_mode = "single_turn"
+execution_mode = "stateful_simulation"
 
 [source]
 kind = "git_checkout"
@@ -21,13 +21,13 @@ stuck_timeout_seconds = 900
 
 [workspace]
 mutation = "artifact_only"
-allowed_paths = ["recovered-state.json", "recovery-report.json"]
+allowed_paths = ["recovery-actions.json"]
 protected_paths = ["initial_state.json", "shadow_example.json"]
 ignored_paths = []
-minimum_changed_files = 2
-maximum_changed_files = 2
-maximum_patch_lines = 240
+minimum_changed_files = 1
+maximum_changed_files = 1
+maximum_patch_lines = 120
 
 [verifier]
-profile = "state_recovery"
+profile = "state_simulation"
 spec = "verifier.json"

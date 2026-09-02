@@ -11,10 +11,24 @@ permissions:
 jobs:
   validate:
     runs-on: ubuntu-latest
+    env:
+      HARNESS_E2E_TASK_FIXTURE_PATH: ${{ github.workspace }}/target/fixtures/native-task-fixtures
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           fetch-depth: 0
+      - name: Require native task fixture access
+        env:
+          E2E_FIXTURE_GITHUB_TOKEN: ${{ secrets.E2E_FIXTURE_GITHUB_TOKEN }}
+        run: test -n "$E2E_FIXTURE_GITHUB_TOKEN"
+      - name: Checkout pinned native task fixtures
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          repository: iii-hq/e2e-fixture
+          ref: 5e9bf8fd77bafc42ad7d62b99b3b84f1b1d35029
+          token: ${{ secrets.E2E_FIXTURE_GITHUB_TOKEN }}
+          persist-credentials: false
+          path: target/fixtures/native-task-fixtures
       - uses: pnpm/action-setup@fc06bc1257f339d1d5d8b3a19a8cae5388b55320 # v5
         with:
           version: 11.13.1

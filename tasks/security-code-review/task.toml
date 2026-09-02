@@ -1,12 +1,16 @@
-schema = "harness-e2e-task/v1"
+schema = "harness-e2e-task/v2"
 id = "security_code_review"
-version = 1
+version = 2
 kind = "code_review"
+execution_mode = "single_turn"
 
 [source]
-kind = "embedded_directory"
-path = "tests/fixtures/security-scan-repository"
-manifest_sha256 = "sha256:153a193ece61785f41591889f0693e474b15c679d352192759206e637c356f64"
+kind = "git_checkout"
+repository = "iii-hq/e2e-fixture"
+revision = "5e9bf8fd77bafc42ad7d62b99b3b84f1b1d35029"
+subtree = "native-tasks/security-code-review"
+path_env = "HARNESS_E2E_TASK_FIXTURE_PATH"
+manifest_sha256 = "sha256:c82d10a8961e1bcaeef5e4574f80d6c73e933e81a7722c10ce8b66bef14eef3b"
 required_paths = [".env.example", ".github/workflows/insecure.yml", "README.md", "package-lock.json", "package.json", "src/vulnerable.rs"]
 
 [execution]

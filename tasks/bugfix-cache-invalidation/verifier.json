@@ -2,9 +2,10 @@
   "profile": "code_patch",
   "baseline_must_fail": true,
   "public_commands": [
-    {"program": "python3", "args": ["-m", "unittest", "discover", "-s", "tests", "-p", "test_*.py"], "timeout_seconds": 30}
+    {"id": "public_cache_suite", "dimension": "functional", "program": "python3", "args": ["-m", "unittest", "discover", "-s", "tests", "-p", "test_*.py"], "timeout_seconds": 30}
   ],
   "hidden_commands": [
-    {"program": "python3", "args": ["-c", "from src.cache_store import CacheStore; from src.profile_service import ProfileService; s=CacheStore(); s.put('u',{'v':10},10); service=ProfileService(s,lambda _u,v:{'v':v}); assert service.on_profile_changed('u',9) is False; assert s.get('u')=={'v':10}; assert service.on_profile_changed('u',11) is True; assert service.profile('u',12)=={'v':12}"], "timeout_seconds": 30}
+    {"id": "private_stale_event_ignored", "dimension": "functional", "program": "python3", "args": ["-c", "from src.cache_store import CacheStore; from src.profile_service import ProfileService; s=CacheStore(); s.put('u',{'v':10},10); service=ProfileService(s,lambda _u,v:{'v':v}); assert service.on_profile_changed('u',9) is False; assert s.get('u')=={'v':10}"], "timeout_seconds": 30},
+    {"id": "private_newer_event_invalidates", "dimension": "functional", "program": "python3", "args": ["-c", "from src.cache_store import CacheStore; from src.profile_service import ProfileService; s=CacheStore(); s.put('u',{'v':10},10); service=ProfileService(s,lambda _u,v:{'v':v}); assert service.on_profile_changed('u',11) is True; assert service.profile('u',12)=={'v':12}"], "timeout_seconds": 30}
   ]
 }

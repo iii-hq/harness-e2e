@@ -44,6 +44,18 @@ lines, every public/hidden decision, terminal status, and the accepted patch.
 A capability failure is a valid measured outcome. Missing terminal evidence or
 an invalid accepted Git/test boundary is a hard-gate failure.
 
+Checkpoint evidence also classifies grounding failures separately from an
+ordinary implementation rejection. A claimed HEAD that differs from Git,
+rewritten ancestry, protected repository state or work outside the revealed
+ticket is a grounding failure. A public or hidden test failure by itself remains
+a capability failure, not an hallucination.
+
+The report carries a non-authoritative `harness-e2e-endurance-shadow/v1`
+projection with `max_grounded_rung`, first grounding failure, accepted depth and
+terminal boundary. It reuses the same subject session and evidence as the
+legacy report, avoiding stochastic double execution. Five complete parity runs
+are required before a separate reviewed change may make it authoritative.
+
 ## GitHub handoff
 
 The evaluated session has no network or GitHub capability. The trusted

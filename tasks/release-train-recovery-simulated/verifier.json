@@ -1,0 +1,5 @@
+{
+  "profile": "state_simulation",
+  "initial_state_path": "initial_state.json",
+  "actions_path": "recovery-actions.json"
+}

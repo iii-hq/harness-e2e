@@ -1,0 +1,49 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "TaskSystemManifest",
+  "type": "object",
+  "required": [
+    "comparison_series",
+    "lane",
+    "platform",
+    "runner_revision",
+    "stack_mode"
+  ],
+  "properties": {
+    "comparison_series": {
+      "type": "string"
+    },
+    "components": {
+      "default": {},
+      "type": "object",
+      "additionalProperties": {
+        "type": "string"
+      }
+    },
+    "lane": {
+      "type": "string"
+    },
+    "platform": {
+      "type": "string"
+    },
+    "release_channel": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "release_tag": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "runner_revision": {
+      "type": "string"
+    },
+    "stack_mode": {
+      "type": "string"
+    }
+  },
+  "additionalProperties": false
+}

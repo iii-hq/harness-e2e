@@ -1,11 +1,15 @@
-schema = "harness-e2e-task/v1"
+schema = "harness-e2e-task/v2"
 id = "contract_migration_plan"
-version = 1
+version = 2
 kind = "planning"
+execution_mode = "single_turn"
 
 [source]
-kind = "embedded_directory"
-path = "tests/fixtures/repository-tasks/contract-migration-plan"
+kind = "git_checkout"
+repository = "iii-hq/e2e-fixture"
+revision = "5e9bf8fd77bafc42ad7d62b99b3b84f1b1d35029"
+subtree = "native-tasks/contract-migration-plan"
+path_env = "HARNESS_E2E_TASK_FIXTURE_PATH"
 manifest_sha256 = "sha256:fd6f61eac84b405a8c117357679c4f594723dea047ad9e1bca818766ba7c4fe3"
 required_paths = ["consumer/client.py", "consumer/contract.json", "producer/contract.json", "producer/profile_api.py"]
 

@@ -1,11 +1,15 @@
-schema = "harness-e2e-task/v1"
+schema = "harness-e2e-task/v2"
 id = "feature_batch_replay"
-version = 1
+version = 2
 kind = "feature"
+execution_mode = "single_turn"
 
 [source]
-kind = "embedded_directory"
-path = "tests/fixtures/repository-tasks/feature-batch-replay"
+kind = "git_checkout"
+repository = "iii-hq/e2e-fixture"
+revision = "5e9bf8fd77bafc42ad7d62b99b3b84f1b1d35029"
+subtree = "native-tasks/feature-batch-replay"
+path_env = "HARNESS_E2E_TASK_FIXTURE_PATH"
 manifest_sha256 = "sha256:0f2b552526ca92a202c722fa4afa6c49fe16de295e6c4f2a4643d5d3012bb830"
 required_paths = ["src/__init__.py", "src/event_store.py", "src/replay.py", "tests/test_replay.py"]
 

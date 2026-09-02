@@ -9,7 +9,8 @@ use crate::durable::{DurableArchiveManifest, HistoryRecord};
 use crate::fault::{FaultEvaluation, FaultJournal, FaultPlan, FaultProfile};
 use crate::report::{E2eManifest, E2eObservationEnvelope, E2eReport};
 use crate::task::{
-    TaskComparison, TaskDefinition, TaskRunResult, TaskSuiteDefinition, TaskSuiteResult,
+    OfficialVerifierBundle, TaskComparison, TaskDefinition, TaskRunResult, TaskSuiteComparison,
+    TaskSuiteDefinition, TaskSuiteResult, TaskSystemManifest,
 };
 use crate::workflow::WorkflowCheckpointV1;
 
@@ -84,6 +85,18 @@ pub fn task_suite_result() -> RootSchema {
     root_schema_for::<TaskSuiteResult>()
 }
 
+pub fn task_suite_comparison() -> RootSchema {
+    root_schema_for::<TaskSuiteComparison>()
+}
+
+pub fn official_verifier_bundle() -> RootSchema {
+    root_schema_for::<OfficialVerifierBundle>()
+}
+
+pub fn task_system_manifest() -> RootSchema {
+    root_schema_for::<TaskSystemManifest>()
+}
+
 pub fn workflow_checkpoint() -> RootSchema {
     root_schema_for::<WorkflowCheckpointV1>()
 }
@@ -156,11 +169,17 @@ mod tests {
 
     #[test]
     fn task_schemas_match_snapshots() {
-        assert_snapshot("task-v1.json", &task());
-        assert_snapshot("task-result-v1.json", &task_result());
-        assert_snapshot("task-comparison-v1.json", &task_comparison());
-        assert_snapshot("task-suite-v1.json", &task_suite());
-        assert_snapshot("task-suite-result-v1.json", &task_suite_result());
+        assert_snapshot("task-v2.json", &task());
+        assert_snapshot("task-result-v2.json", &task_result());
+        assert_snapshot("task-comparison-v2.json", &task_comparison());
+        assert_snapshot("task-suite-v2.json", &task_suite());
+        assert_snapshot("task-suite-result-v2.json", &task_suite_result());
+        assert_snapshot("task-suite-comparison-v1.json", &task_suite_comparison());
+        assert_snapshot(
+            "official-verifier-bundle-v1.json",
+            &official_verifier_bundle(),
+        );
+        assert_snapshot("task-system-manifest-v1.json", &task_system_manifest());
     }
 
     #[test]

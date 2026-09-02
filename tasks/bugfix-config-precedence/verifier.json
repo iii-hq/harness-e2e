@@ -2,9 +2,11 @@
   "profile": "code_patch",
   "baseline_must_fail": true,
   "public_commands": [
-    {"program": "python3", "args": ["-m", "unittest", "discover", "-s", "tests", "-p", "test_*.py"], "timeout_seconds": 30}
+    {"id": "public_config_suite", "dimension": "functional", "program": "python3", "args": ["-m", "unittest", "discover", "-s", "tests", "-p", "test_*.py"], "timeout_seconds": 30}
   ],
   "hidden_commands": [
-    {"program": "python3", "args": ["-c", "from src.config_cache import ConfigCache; f={'region':'file'}; e={'region':'env'}; c=ConfigCache(); assert c.resolve('api',f,e,{'region':'cli-a'})['region']=='cli-a'; assert c.resolve('api',f,e,{'region':'cli-b'})['region']=='cli-b'; assert f=={'region':'file'} and e=={'region':'env'}"], "timeout_seconds": 30}
+    {"id": "private_cli_precedence", "dimension": "functional", "program": "python3", "args": ["-c", "from src.config_loader import merge_config; assert merge_config({'region':'file'},{'region':'env'},{'region':'cli'})['region']=='cli'"], "timeout_seconds": 30},
+    {"id": "private_cache_isolation", "dimension": "functional", "program": "python3", "args": ["-c", "from src.config_cache import ConfigCache; c=ConfigCache(); assert c.resolve('api',{}, {}, {'region':'cli-a'})['region']=='cli-a'; assert c.resolve('api',{}, {}, {'region':'cli-b'})['region']=='cli-b'"], "timeout_seconds": 30},
+    {"id": "private_inputs_immutable", "dimension": "grounding", "program": "python3", "args": ["-c", "from src.config_loader import merge_config; f={'region':'file'}; e={'region':'env'}; c={'region':'cli'}; merge_config(f,e,c); assert f=={'region':'file'} and e=={'region':'env'} and c=={'region':'cli'}"], "timeout_seconds": 30}
   ]
 }
