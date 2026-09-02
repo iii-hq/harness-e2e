@@ -60,6 +60,16 @@ export function hashWithParams(hash: string, params: URLSearchParams): string {
   return query ? `${base}?${query}` : base
 }
 
+/** Rewrites the whole hash without a navigation (no hashchange, no reload). */
+export function replaceDashboardHash(targetHash: string) {
+  if (targetHash === window.location.hash) return
+  window.history.replaceState(
+    window.history.state,
+    '',
+    `${window.location.pathname}${window.location.search}${targetHash}`,
+  )
+}
+
 /** Rewrites the current hash's params without a navigation or a scroll reset. */
 export function replaceRouteParams(params: URLSearchParams) {
   const target = hashWithParams(window.location.hash, params)

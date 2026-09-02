@@ -116,9 +116,16 @@ test('keeps the workspace navigation and versioned test flow', () => {
   for (const view of ['overview', 'tests', 'executions', 'plans']) {
     assert.match(dashboardShell, new RegExp(`value: '${view}'`))
   }
-  assert.match(testsPage, /Tests across system versions/)
+  // Audit CP-01/02/05/10/11: DS page, explicit builder, state chips bound to
+  // the table, signed deltas, the pair kept in the hash.
+  assert.match(testsPage, /title="compare"/)
   assert.match(testsPage, /loadVersionResult\(row\.test_id/)
   assert.match(testsPage, /prefetchedCatalog/)
+  assert.match(testsPage, /replaceDashboardHash\(hashForComparison\(fromVersionId, toVersionId\)\)/)
+  assert.match(testsPage, /data-compare-group=\{group\.key\[0\]\}/)
+  assert.match(testsPage, /<DeltaValue/)
+  assert.match(testsPage, /aria-controls=\{detailsId\}/)
+  assert.doesNotMatch(testsPage, /overview-shell|ambient|live-dot|section-kicker|panel-heading|sync-block|Impact by scenario|No evidence</)
   assert.match(catalogPage, /<DashboardPageActions[\s\S]*active="tests"/)
   // Audit T-03 / T-07 / T-08 / T-12: DS table with a sticky first column,
   // lifecycle groups with retired collapsed, cursor pagination, filters in
