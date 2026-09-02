@@ -232,12 +232,23 @@ class ReleaseControlCampaignTest(unittest.TestCase):
         ]
         common = MODULE.campaign_matrix(value)["include"][0]
         self.assertEqual(common["runs_on"], ["ubuntu-latest"])
-        self.assertEqual(set(common), {"group_id", "execution_kind", "runs_on"})
+        self.assertTrue(common["requires_shared_fixture"])
+        self.assertEqual(
+            set(common),
+            {
+                "group_id",
+                "execution_kind",
+                "requires_shared_fixture",
+                "runs_on",
+            },
+        )
 
     def test_campaign_matrix_keeps_browser_groups_ephemeral(self):
         value = campaign_contract()
         value["suite"]["groups"][0]["scenarios"] = ["browser_cross_site"]
-        self.assertEqual(MODULE.campaign_matrix(value)["include"][0]["runs_on"], ["ubuntu-latest"])
+        common = MODULE.campaign_matrix(value)["include"][0]
+        self.assertEqual(common["runs_on"], ["ubuntu-latest"])
+        self.assertFalse(common["requires_shared_fixture"])
 
     def test_requires_exactly_one_runner_and_the_application_under_test(self):
         missing_runner = campaign_contract()

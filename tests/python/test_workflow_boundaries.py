@@ -50,12 +50,13 @@ class WorkflowBoundaryTests(unittest.TestCase):
         self.assertIn("runs-on: ${{ matrix.runs_on }}", workflow)
         self.assertIn("environment: harness-e2e-trusted", workflow)
         self.assertIn("ref: ${{ inputs.runner_sha }}", workflow)
-        self.assertNotIn("matrix.requires_", workflow)
+        self.assertIn("matrix.requires_shared_fixture", workflow)
         launcher = (ROOT / "scripts/run_exact_stack_group.sh").read_text(
             encoding="utf-8"
         )
         self.assertIn("engineering-ticket.bundle", launcher)
-        self.assertIn("shared-fixture.bundle", launcher)
+        self.assertIn("HARNESS_E2E_SHARED_FIXTURE_REPOSITORY", launcher)
+        self.assertNotIn("shared-fixture.bundle", launcher)
         self.assertIn("HARNESS_E2E_ENGINEERING_TICKET_FIXTURE_PATH", launcher)
         self.assertIn("HARNESS_E2E_FIXTURE_PATH", launcher)
         self.assertIn("cleanup --lease-id", launcher)
@@ -138,8 +139,16 @@ class WorkflowBoundaryTests(unittest.TestCase):
 
     def test_compose_campaigns_use_disposable_code_fixtures(self):
         launcher = (ROOT / "scripts/run_exact_stack_group.sh").read_text()
+        workflow = (
+            ROOT / ".github/workflows/exact-stack-e2e.yml"
+        ).read_text(encoding="utf-8")
         self.assertIn("HARNESS_E2E_ENGINEERING_TICKET_FIXTURE_PATH", launcher)
         self.assertIn("HARNESS_E2E_FIXTURE_PATH", launcher)
+        self.assertIn("repository: iii-hq/e2e-fixture", workflow)
+        self.assertIn(
+            "ref: 16f6b9e05e34e09c824191eed0631d77f85be6a9", workflow
+        )
+        self.assertIn("persist-credentials: false", workflow)
         self.assertIn("engineering_fixture_revision=", launcher)
         self.assertIn("shared_fixture_revision=", launcher)
         self.assertIn("prepare --execution-id", launcher)

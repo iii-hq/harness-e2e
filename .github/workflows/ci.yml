@@ -45,6 +45,7 @@ jobs:
           else
             cargo run --locked -- validate-scenarios
           fi
+          cargo run --locked -- validate-repository-tasks
       - name: Verify repository independence
         run: |
           cargo metadata --locked --format-version 1 --no-deps > metadata.json
