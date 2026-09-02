@@ -1,0 +1,292 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "TaskSuiteResult",
+  "type": "object",
+  "required": [
+    "cohort_identity_sha256",
+    "comparison_series",
+    "completed_runs",
+    "coverage_incomplete_runs",
+    "execution_id",
+    "infrastructure_invalid_runs",
+    "lane",
+    "model",
+    "product_passed_runs",
+    "provider",
+    "requested_runs",
+    "resource_limited_runs",
+    "schema",
+    "suite_behavior_sha256",
+    "suite_id",
+    "suite_version",
+    "task_aggregates",
+    "task_results",
+    "verifier_mode",
+    "verifier_sha256"
+  ],
+  "properties": {
+    "cohort_identity_sha256": {
+      "type": "string"
+    },
+    "comparison_series": {
+      "type": "string"
+    },
+    "completed_runs": {
+      "type": "integer",
+      "format": "uint32",
+      "minimum": 0.0
+    },
+    "coverage_incomplete_runs": {
+      "type": "integer",
+      "format": "uint32",
+      "minimum": 0.0
+    },
+    "execution_id": {
+      "type": "string"
+    },
+    "infrastructure_invalid_runs": {
+      "type": "integer",
+      "format": "uint32",
+      "minimum": 0.0
+    },
+    "lane": {
+      "type": "string"
+    },
+    "model": {
+      "type": "string"
+    },
+    "product_passed_runs": {
+      "type": "integer",
+      "format": "uint32",
+      "minimum": 0.0
+    },
+    "provider": {
+      "type": "string"
+    },
+    "release_channel": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "release_tag": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "requested_runs": {
+      "type": "integer",
+      "format": "uint32",
+      "minimum": 0.0
+    },
+    "resource_limited_runs": {
+      "type": "integer",
+      "format": "uint32",
+      "minimum": 0.0
+    },
+    "schema": {
+      "type": "string"
+    },
+    "suite_behavior_sha256": {
+      "type": "string"
+    },
+    "suite_id": {
+      "type": "string"
+    },
+    "suite_version": {
+      "type": "integer",
+      "format": "uint32",
+      "minimum": 0.0
+    },
+    "task_aggregates": {
+      "type": "array",
+      "items": {
+        "$ref": "#/definitions/TaskAggregate"
+      }
+    },
+    "task_results": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "verifier_mode": {
+      "$ref": "#/definitions/TaskVerifierMode"
+    },
+    "verifier_sha256": {
+      "type": "string"
+    }
+  },
+  "definitions": {
+    "RateEstimate": {
+      "type": "object",
+      "required": [
+        "ci95_lower",
+        "ci95_upper",
+        "rate",
+        "sample_size",
+        "successes"
+      ],
+      "properties": {
+        "ci95_lower": {
+          "type": "number",
+          "format": "double"
+        },
+        "ci95_upper": {
+          "type": "number",
+          "format": "double"
+        },
+        "rate": {
+          "type": "number",
+          "format": "double"
+        },
+        "sample_size": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0.0
+        },
+        "successes": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0.0
+        }
+      }
+    },
+    "TaskAggregate": {
+      "type": "object",
+      "required": [
+        "excluded_infrastructure_runs",
+        "included_runs",
+        "maturity",
+        "requested_runs",
+        "task_id"
+      ],
+      "properties": {
+        "excluded_infrastructure_runs": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0.0
+        },
+        "flaky_rate": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double"
+        },
+        "grounding_integrity": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/RateEstimate"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "included_runs": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0.0
+        },
+        "maturity": {
+          "type": "string"
+        },
+        "p50_total_tokens": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double"
+        },
+        "p50_turns": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double"
+        },
+        "p50_wall_time_ms": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double"
+        },
+        "p95_total_tokens": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double"
+        },
+        "p95_turns": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double"
+        },
+        "p95_wall_time_ms": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double"
+        },
+        "product_success": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/RateEstimate"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "requested_runs": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0.0
+        },
+        "structural_integrity": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/RateEstimate"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "task_id": {
+          "type": "string"
+        },
+        "technical_failure": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/RateEstimate"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "unavailable": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "TaskVerifierMode": {
+      "type": "string",
+      "enum": [
+        "development",
+        "official"
+      ]
+    }
+  }
+}

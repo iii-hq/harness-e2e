@@ -1,11 +1,15 @@
-schema = "harness-e2e-task/v1"
+schema = "harness-e2e-task/v2"
 id = "bugfix_cache_invalidation"
-version = 1
+version = 2
 kind = "code_patch"
+execution_mode = "single_turn"
 
 [source]
-kind = "embedded_directory"
-path = "tests/fixtures/repository-tasks/bugfix-cache-invalidation"
+kind = "git_checkout"
+repository = "iii-hq/e2e-fixture"
+revision = "5e9bf8fd77bafc42ad7d62b99b3b84f1b1d35029"
+subtree = "native-tasks/bugfix-cache-invalidation"
+path_env = "HARNESS_E2E_TASK_FIXTURE_PATH"
 manifest_sha256 = "sha256:7f81f6a69e4bdb5a193e886d13a24287294ea03c58fdac6cac81bf2d24f92ef1"
 required_paths = ["src/__init__.py", "src/cache_store.py", "src/profile_service.py", "tests/test_cache.py"]
 

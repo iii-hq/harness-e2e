@@ -94,6 +94,9 @@ The code-focused campaigns use protected disposable checkouts of
 `iii-hq/e2e-fixture`. The engineering handoff uses its dedicated pinned
 revision, while `shell_coder_sandbox`, `chess_engine_build`, and `trend_blog`
 share a second pinned revision through `HARNESS_E2E_FIXTURE_PATH`. The protected
+native benchmark task corpus uses its own pinned revision through
+`HARNESS_E2E_TASK_FIXTURE_PATH`, keeping task evolution independent from the
+legacy scenario fixture family. The protected
 launcher and cleanup boundary are described in
 [docs/engineering-ticket-git-handoff.md](docs/engineering-ticket-git-handoff.md).
 The team-facing composition and didactic description of every daily, weekly,

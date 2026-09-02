@@ -3,9 +3,20 @@
   "artifact_path": "migration-plan.json",
   "schema": {
     "type": "object", "additionalProperties": false,
-    "required": ["objective", "steps", "validation", "rollback"],
+    "required": ["objective", "evidence", "steps", "validation", "rollback"],
     "properties": {
       "objective": {"type": "string", "minLength": 20},
+      "evidence": {
+        "type": "array", "minItems": 2, "maxItems": 4,
+        "items": {
+          "type": "object", "additionalProperties": false,
+          "required": ["path", "reason"],
+          "properties": {
+            "path": {"type": "string"},
+            "reason": {"type": "string", "minLength": 15}
+          }
+        }
+      },
       "steps": {
         "type": "array", "minItems": 4, "maxItems": 8,
         "items": {
@@ -22,9 +33,11 @@
     }
   },
   "assertions": [
-    {"pointer": "/steps/0/id", "equals": "add-v1-v2-compatibility"},
-    {"pointer": "/steps/1/id", "equals": "validate-dual-contract"},
-    {"pointer": "/steps/2/id", "equals": "migrate-consumer"},
-    {"pointer": "/steps/3/id", "equals": "retire-v1-compatibility"}
+    {"id": "consumer_evidence", "dimension": "grounding", "pointer": "/evidence/0/path", "equals": "consumer/contract.json"},
+    {"id": "producer_evidence", "dimension": "grounding", "pointer": "/evidence/1/path", "equals": "producer/contract.json"},
+    {"id": "compatibility_first", "dimension": "grounding", "pointer": "/steps/0/id", "equals": "add-v1-v2-compatibility"},
+    {"id": "dual_validation_before_cutover", "dimension": "grounding", "pointer": "/steps/1/id", "equals": "validate-dual-contract"},
+    {"id": "consumer_migration_after_compatibility", "dimension": "grounding", "pointer": "/steps/2/id", "equals": "migrate-consumer"},
+    {"id": "compatibility_retired_last", "dimension": "grounding", "pointer": "/steps/3/id", "equals": "retire-v1-compatibility"}
   ]
 }

@@ -1,11 +1,15 @@
-schema = "harness-e2e-task/v1"
+schema = "harness-e2e-task/v2"
 id = "bugfix_config_precedence"
-version = 1
+version = 2
 kind = "code_patch"
+execution_mode = "single_turn"
 
 [source]
-kind = "embedded_directory"
-path = "tests/fixtures/repository-tasks/bugfix-config-precedence"
+kind = "git_checkout"
+repository = "iii-hq/e2e-fixture"
+revision = "5e9bf8fd77bafc42ad7d62b99b3b84f1b1d35029"
+subtree = "native-tasks/bugfix-config-precedence"
+path_env = "HARNESS_E2E_TASK_FIXTURE_PATH"
 manifest_sha256 = "sha256:a430448e07f105c6cbe7e1ce11b8508ea026f6ecc6cb39dfb142da442f8a5d5f"
 required_paths = ["src/__init__.py", "src/config_cache.py", "src/config_loader.py", "tests/test_config.py"]
 
