@@ -1,3 +1,4 @@
+@layer theme, base, legacy, ds, components, utilities;
 .harness-e2e-console-shell {
   min-width: 0;
   /* Keep extension z-indexes (for example the sticky dashboard header) below
@@ -5,7 +6,7 @@
   isolation: isolate;
 }
 
-.harness-e2e-console-main {
+.harness-e2e-console-shell .harness-e2e-console-main {
   min-width: 0;
   overflow: auto;
   padding: 0;

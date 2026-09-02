@@ -77,7 +77,7 @@ const metrics = {
   cssFontSizesBelow11,
   cssBoxShadow: () => countIn(cssFiles, /box-shadow\s*:\s*(?!none\b)[^;}]+/g),
   cssImportant: () => countIn(cssFiles, /!important/g),
-  cssLinesIndex: () => read(path.join(dashboardSrc, "index.css")).split("\n").length,
+  cssLinesLegacy: () => read(path.join(dashboardSrc, "legacy.css")).split("\n").length,
   tsxArbitraryTextBelow11,
   tsxRoundedOffToken: () => countIn(tsxFiles, /\brounded-(?:full|sm|md|lg|xl|2xl|3xl|\[(?!6px\])[^\]]+\])/g),
   tsxBorderUtility: () => countIn(tsxFiles, /(?<=["'\s])border(?:-[trblxyse])?(?=["'\s])/g),

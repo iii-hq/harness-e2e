@@ -43,14 +43,14 @@ test("uses the shared React theme control on every dashboard page", () => {
 
 test("defines complete light and dark token sets", () => {
   // Audit DS-03: the palette lives in dashboard-shell.css and reaches the
-  // standalone document root through data-harness-e2e, so index.css paints
+  // standalone document root through data-harness-e2e, so legacy.css paints
   // nothing private. Both themes set their own color-scheme there.
   const shell = fs.readFileSync(
     path.join(dashboardRoot, "src", "components", "dashboard-shell.css"),
     "utf8",
   );
   const styles = fs.readFileSync(
-    path.join(dashboardRoot, "src", "index.css"),
+    path.join(dashboardRoot, "src", "legacy.css"),
     "utf8",
   );
 
