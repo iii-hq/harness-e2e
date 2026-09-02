@@ -2340,7 +2340,6 @@ fn git_handoff_scenario_for_case(run_id: &str, task: &'static TaskCase) -> Scena
     let scope = handoff_state_scope(run_id);
     let plan_auditor = plan_auditor_function_id(run_id);
     let implementation_auditor = implementation_auditor_function_id(run_id);
-    let expires_at = unix_now_ms().saturating_add(GIT_HANDOFF_WAKE_TIMEOUT_MS);
     let planner_task = format!(
         "Read `.harness-e2e/task-case.json`, the relevant source, and the public tests in the current repository. Engineering ticket ET-{}: {} Reproduce the focused failure before editing. Create a free-form Markdown implementation plan at `{IMPLEMENTATION_PLAN_PATH}`; do not edit production code, tests, fixtures, task metadata, Git configuration, or refs other than the current branch. Create one or more non-merge Git commits containing only the plan, leave the worktree clean, and reply with a concise status. Validator feedback is trusted Harness machinery; if rejected, repair in this same session and commit the corrected plan. Never use a remote Git operation or network access.",
         task.canonical_seed, task.ticket
@@ -2352,12 +2351,12 @@ fn git_handoff_scenario_for_case(run_id: &str, task: &'static TaskCase) -> Scena
             "You are the root Harness orchestrator for a two-phase engineering workflow. You coordinate only: never call shell or coder, never inspect or edit the workspace yourself, never poll, and never forward a child's prose. Wakes carry checkpoint metadata; Git is the only work handoff. Follow these steps exactly.\n\n\
              PLAN PHASE\n\
              1. Register a validator with engine::register_trigger: trigger_type `{HOOK_TYPE}`, function_id `{plan_auditor}`, config {{\"sessions\":[\"{planner}\"],\"timeout_ms\":120000}}. Save its subscription_id.\n\
-             2. Before spawning, register a one-shot wake with engine::register_trigger: trigger_type `state`, no function_id, label `engineering-plan-accepted`, once true, config {{\"scope\":\"{scope}\",\"key\":\"plan\"}}, lifecycle {{\"expires_at\":{expires_at}}}.\n\
+             2. Before spawning, register a one-shot wake with engine::register_trigger: trigger_type `state`, no function_id, label `engineering-plan-accepted`, once true, config {{\"scope\":\"{scope}\",\"key\":\"plan\"}}, lifecycle {{\"expires_in_ms\":{GIT_HANDOFF_WAKE_TIMEOUT_MS}}}.\n\
              3. Spawn exactly one leaf with harness::spawn: session_id `{planner}`, task exactly {planner_task:?}, options {{\"functions\":{{\"allow\":[\"engine::functions::list\",\"engine::functions::info\",\"coder::*\",\"shell::exec\"]}},\"max_turns\":24,\"max_validation_retries\":2}}. Omit filesystem_root, model, and provider. End your turn.\n\n\
              IMPLEMENTATION PHASE\n\
              4. When the plan wake arrives with phase `plan` and a head_sha, unregister the plan validator. If it is an expiry/error notice, report `GIT HANDOFF FAILED: plan checkpoint unavailable. PARENT DONE.` and do not spawn an implementer.\n\
              5. Register the implementation validator: trigger_type `{HOOK_TYPE}`, function_id `{implementation_auditor}`, config {{\"sessions\":[\"{implementer}\"],\"timeout_ms\":120000}}. Save its subscription_id.\n\
-             6. Before spawning, register a one-shot wake: trigger_type `state`, no function_id, label `engineering-implementation-accepted`, once true, config {{\"scope\":\"{scope}\",\"key\":\"implementation\"}}, lifecycle {{\"expires_at\":{expires_at}}}.\n\
+             6. Before spawning, register a one-shot wake: trigger_type `state`, no function_id, label `engineering-implementation-accepted`, once true, config {{\"scope\":\"{scope}\",\"key\":\"implementation\"}}, lifecycle {{\"expires_in_ms\":{GIT_HANDOFF_WAKE_TIMEOUT_MS}}}.\n\
              7. Spawn exactly one leaf with harness::spawn: session_id `{implementer}`, task exactly {IMPLEMENTER_TASK:?}, options {{\"functions\":{{\"allow\":[\"engine::functions::list\",\"engine::functions::info\",\"coder::*\",\"shell::exec\"]}},\"max_turns\":40,\"max_validation_retries\":2}}. Omit filesystem_root, model, and provider. End your turn.\n\n\
              FINALIZATION\n\
              8. When the implementation wake arrives with phase `implementation` and a head_sha, unregister the implementation validator and reply `GIT HANDOFF COMPLETE at <head_sha>. PARENT DONE.` If it is an expiry/error notice, unregister the implementation validator and reply `GIT HANDOFF FAILED: implementation checkpoint unavailable. PARENT DONE.`",
@@ -2400,14 +2399,6 @@ fn implementation_auditor_function_id(run_id: &str) -> String {
         "e2etest::engineering_implementation_audit_{}",
         suffix(run_id)
     )
-}
-
-fn unix_now_ms() -> u64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_millis()
-        .min(u64::MAX as u128) as u64
 }
 
 fn git_handoff_setup<'a>(context: &'a E2eContext, run_id: &'a str) -> CleanupFuture<'a> {
@@ -3495,9 +3486,11 @@ fn state_wake_registration(call: &common::ObservedFunctionCall, scope: &str, key
             .pointer("/config/key")
             .and_then(Value::as_str)
             == Some(key)
+        // The engine's LifecycleRequest only knows the relative deadline; the
+        // absolute `expires_at` was retired and is rejected as an unknown field.
         && call
             .arguments
-            .pointer("/lifecycle/expires_at")
+            .pointer("/lifecycle/expires_in_ms")
             .and_then(Value::as_u64)
             .is_some()
 }
@@ -4597,7 +4590,7 @@ mod tests {
                     "trigger_type": "state",
                     "once": true,
                     "config": { "scope": scope, "key": "plan" },
-                    "lifecycle": { "expires_at": 1 },
+                    "lifecycle": { "expires_in_ms": 1 },
                 }),
             ),
             call("harness::spawn", json!({ "session_id": planner })),
@@ -4619,7 +4612,7 @@ mod tests {
                     "trigger_type": "state",
                     "once": true,
                     "config": { "scope": scope, "key": "implementation" },
-                    "lifecycle": { "expires_at": 2 },
+                    "lifecycle": { "expires_in_ms": 2 },
                 }),
             ),
             call(

@@ -2,7 +2,7 @@
 //! impossible (threshold far above what its bounded budget can reach), so
 //! the validator denies every attempt, the child's turn FAILS on budget
 //! exhaustion, the verdict key is never written, and the parent — whose
-//! wake carries an `expires_at` deadline — is woken by the expiry notice
+//! wake carries an `expires_in_ms` deadline — is woken by the expiry notice
 //! instead and reports the give-up.
 //!
 //! Exercises what no success scenario can: `max_validation_retries` as a
@@ -10,8 +10,6 @@
 //! infinite loop), the guarantee that a failed turn writes NO verdict (the
 //! `state::set` tail never ran), and the wake-expiry fallback that keeps a
 //! parent from parking forever on evidence that will never arrive.
-
-use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde_json::{json, Value};
 
@@ -114,7 +112,6 @@ fn scenario_for_case(run_id: &str) -> ScenarioSpec {
     let table = table(run_id);
     let scope = scope(run_id);
     let child = child_session(run_id);
-    let expires_at = now_ms() + EXPIRY_DELAY_MS;
     ScenarioSpec {
         id: ID,
         version: VERSION,
@@ -140,8 +137,8 @@ fn scenario_for_case(run_id: &str) -> ScenarioSpec {
              Remember the subscription_id.\n\n\
              Step 3 — arm your wake BEFORE spawning, WITH a deadline: engine::register_trigger \
              with trigger_type \"state\", config {{\"scope\": \"{scope}\", \"key\": \
-             \"verdict\"}}, label \"child-validated\", lifecycle: {{\"expires_at\": \
-             {expires_at}}}, and NO function_id. If the verdict is never written you will be \
+             \"verdict\"}}, label \"child-validated\", lifecycle: {{\"expires_in_ms\": \
+             {EXPIRY_DELAY_MS}}}, and NO function_id. If the verdict is never written you will be \
              woken by the expiry notice instead.\n\n\
              Step 4 — spawn the worker: harness::spawn with session_id \"{child}\", task: \"You \
              are a worker in a validated loop: the harness checks every reply of yours and \
@@ -217,7 +214,7 @@ fn evaluate<'a>(
                 && call.arguments.get("trigger_type").and_then(Value::as_str) == Some("state")
                 && call
                     .arguments
-                    .pointer("/lifecycle/expires_at")
+                    .pointer("/lifecycle/expires_in_ms")
                     .and_then(Value::as_u64)
                     .is_some()
         });
@@ -300,7 +297,7 @@ fn capture<'a>(
                 && call.arguments.get("trigger_type").and_then(Value::as_str) == Some("state")
                 && call
                     .arguments
-                    .pointer("/lifecycle/expires_at")
+                    .pointer("/lifecycle/expires_in_ms")
                     .and_then(Value::as_u64)
                     .is_some()
         });
@@ -423,13 +420,6 @@ fn cleanup<'a>(context: &'a E2eContext, run_id: &'a str) -> CleanupFuture<'a> {
             .await?;
         Ok(())
     })
-}
-
-fn now_ms() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|duration| duration.as_millis() as u64)
-        .unwrap_or(0)
 }
 
 fn table(run_id: &str) -> String {
