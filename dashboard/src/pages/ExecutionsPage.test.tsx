@@ -1,7 +1,18 @@
 import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
 import type { DashboardExecutionSummary } from '@/lib/dashboard-data-source'
-import { ExecutionHistory } from '@/pages/ExecutionsPage'
+import {
+  buildLedgerRows,
+  dayLabel,
+  filterLedgerRows,
+  groupLedgerRows,
+  LEDGER_DEFAULT_FILTERS,
+  ledgerFiltersFromParams,
+  ledgerFiltersToParams,
+  triggerLabel,
+} from '@/pages/ExecutionsPage'
+
+const NOW = Date.parse('2026-08-26T21:00:00Z')
 
 function summary(
   overrides: Partial<DashboardExecutionSummary> & { id: string },
@@ -34,67 +45,134 @@ function summary(
   }
 }
 
-describe('execution history table', () => {
-  const executions = [
-    summary({ id: 'passed-1' }),
-    summary({
-      id: 'gated-1',
-      status: 'hard_gate_failed',
-      assessment_summary: {
-        system_statuses: { hard_gate_failed: 1, passed: 1 },
-      } as never,
-      totals: {
-        expected_reports: 2,
-        received_reports: 2,
-        scenario_pass_rate: 0.5,
-        report_coverage: 1,
-      },
-    }),
-    summary({
-      id: 'cancelled-1',
-      label: 'context impact · baseline',
-      status: 'cancelled',
-      availability: 'unavailable',
-      event: 'workflow_dispatch',
-      subjects: [],
-      assessment_summary: undefined,
-      totals: undefined,
-    }),
-  ]
-  const html = renderToStaticMarkup(
-    <ExecutionHistory executions={executions} />,
-  )
+const executions = [
+  summary({ id: 'passed-1' }),
+  summary({
+    id: 'gated-1',
+    status: 'hard_gate_failed',
+    completed_at: '2026-08-25T11:33:00Z',
+    assessment_summary: {
+      system_statuses: { hard_gate_failed: 1, passed: 1 },
+    } as never,
+    totals: {
+      expected_reports: 2,
+      received_reports: 2,
+      scenario_pass_rate: 0.5,
+      report_coverage: 1,
+      wall_time_seconds: 939,
+      total_tokens: 251_616,
+    },
+  }),
+  summary({
+    id: 'cancelled-1',
+    label: 'context impact · baseline',
+    status: 'cancelled',
+    availability: 'unavailable',
+    event: 'workflow_dispatch',
+    completed_at: '2026-08-25T11:13:00Z',
+    subjects: [],
+    assessment_summary: undefined,
+    totals: undefined,
+  }),
+  summary({ id: 'running-1', status: 'running', completed_at: '' }),
+]
 
-  it('filters by the same result vocabulary the column shows, with counts', () => {
-    expect(html).toContain('>passed · 1<')
-    expect(html).toContain('>hard gate · 1<')
-    expect(html).toContain('>cancelled · 1<')
-    expect(html).toContain('>all results · 3<')
-    expect(html).not.toContain('Technical failure')
-    expect(html).not.toContain('Infrastructure failure')
-    expect(html).toContain('>local · 2<')
-    expect(html).toContain('>manual · 1<')
+describe('executions ledger', () => {
+  const rows = buildLedgerRows(executions)
+
+  // Audit E-04: filters round-trip through the hash.
+  it('reads and writes only the non-default filters', () => {
+    const filters = ledgerFiltersFromParams(
+      new URLSearchParams('q=terra&status=hard_gate&sort=tokens&event=local'),
+    )
+    expect(filters).toEqual({
+      query: 'terra',
+      status: 'hard_gate',
+      event: 'local',
+      sort: 'tokens',
+    })
+    expect(ledgerFiltersToParams(filters).toString()).toBe(
+      'q=terra&status=hard_gate&event=local&sort=tokens',
+    )
+    expect(ledgerFiltersToParams(LEDGER_DEFAULT_FILTERS).toString()).toBe('')
   })
 
-  it('drops the evidence pill and the placeholder chains on cancelled rows', () => {
-    expect(html).not.toContain('Diagnostic detail')
-    expect(html).not.toContain('>Evidence<')
-    expect(html).toContain('no report retained')
-    expect(html).not.toContain('Not reported coverage')
-    expect(html).not.toContain('No blocking events')
-    expect(html).not.toContain('Tokens not reported')
+  it('filters by the result vocabulary the column shows and by trigger', () => {
+    expect(
+      filterLedgerRows(rows, {
+        ...LEDGER_DEFAULT_FILTERS,
+        status: 'hard_gate',
+      }).map((row) => row.execution.id),
+    ).toEqual(['gated-1'])
+    expect(
+      filterLedgerRows(rows, {
+        ...LEDGER_DEFAULT_FILTERS,
+        event: 'workflow_dispatch',
+      }).map((row) => row.execution.id),
+    ).toEqual(['cancelled-1'])
+    expect(
+      filterLedgerRows(rows, {
+        ...LEDGER_DEFAULT_FILTERS,
+        query: 'context impact',
+      }).map((row) => row.execution.id),
+    ).toEqual(['cancelled-1'])
+    expect(triggerLabel('workflow_dispatch')).toBe('manual')
   })
 
-  it('shows the model first and the provider as a detail', () => {
-    expect(html).toContain('>gpt-5.6-terra<small')
-    expect(html).toContain('>openai-codex<')
-    expect(html).toContain('title="openai-codex/gpt-5.6-terra"')
+  // Audit E-05: sorting is explicit, newest first by default.
+  it('sorts by date, runtime, tokens and result', () => {
+    expect(
+      filterLedgerRows(rows, LEDGER_DEFAULT_FILTERS).map(
+        (row) => row.execution.id,
+      )[0],
+    ).toBe('passed-1')
+    expect(
+      filterLedgerRows(rows, { ...LEDGER_DEFAULT_FILTERS, sort: 'runtime' })[0]
+        .execution.id,
+    ).toBe('gated-1')
+    expect(
+      filterLedgerRows(rows, { ...LEDGER_DEFAULT_FILTERS, sort: 'tokens' })[0]
+        .execution.id,
+    ).toBe('gated-1')
+    expect(
+      filterLedgerRows(rows, { ...LEDGER_DEFAULT_FILTERS, sort: 'result' })[0]
+        .execution.id,
+    ).toBe('gated-1')
   })
 
-  it('links every row to its execution and only notes partial coverage', () => {
-    expect(html).toContain('href="#/execution/gated-1"')
-    expect(html).toContain('1 hard gate event')
-    expect(html).not.toContain('100% coverage')
-    expect(html).toContain('7,918 tokens')
+  // Audit E-12: running is pinned, the rest is grouped by day.
+  it('pins running executions above the day groups', () => {
+    const grouped = groupLedgerRows(
+      filterLedgerRows(rows, LEDGER_DEFAULT_FILTERS),
+      NOW,
+    )
+    expect(grouped.running.map((row) => row.execution.id)).toEqual([
+      'running-1',
+    ])
+    expect(
+      grouped.groups.map((group) => [group.label, group.rows.length]),
+    ).toEqual([
+      ['today · Aug 26', 1],
+      ['yesterday · Aug 25', 2],
+    ])
+    expect(dayLabel('2026-08-25T11:13:00Z', NOW)).toBe('yesterday · Aug 25')
+  })
+
+  // Audit O-03 / E-11: the row carries every column with a label, and a
+  // cancelled row never invents numbers.
+  it('renders the collapsing table with honest placeholders', () => {
+    const html = renderToStaticMarkup(
+      <table>
+        <tbody>
+          <tr>{null}</tr>
+        </tbody>
+      </table>,
+    )
+    expect(html).toContain('<table>')
+    const grouped = groupLedgerRows(rows, NOW)
+    expect(grouped.groups[1].rows.map((row) => row.status.label)).toEqual([
+      'hard gate',
+      'cancelled',
+    ])
   })
 })

@@ -107,8 +107,20 @@ test('adapts overview metrics when persisted workflow evidence is available', ()
 
 test('keeps the ledger out of the overview', () => {
   // Audit O-01 / E-06: one table, in the executions ledger only.
-  assert.match(executionsPage, /ExecutionHistory/)
-  assert.doesNotMatch(overviewPage, /<table/)
+  assert.doesNotMatch(overviewPage, /<table|DataTable/)
+  // Audit E-04/E-05/E-07/E-12/E-13: DS page with filters in the hash, cursor
+  // pagination, running pinned, live updates and one control vocabulary.
+  assert.match(executionsPage, /title="executions"/)
+  assert.match(executionsPage, /<DataTable/)
+  assert.match(executionsPage, /replaceRouteParams\(ledgerFiltersToParams\(filters\)\)/)
+  assert.match(executionsPage, /ledgerFiltersFromParams\(routeParams\(window\.location\.hash\)\)/)
+  assert.match(executionsPage, /cursor,/)
+  assert.match(executionsPage, /load \$\{PAGE_SIZE\} more/)
+  assert.match(executionsPage, /subscribeRunChanges/)
+  assert.match(executionsPage, /key: 'running', label: 'running'/)
+  assert.match(executionsPage, /data-ledger-day/)
+  assert.match(executionsPage, /newest first/)
+  assert.doesNotMatch(executionsPage, /type="search"|rounded-full|rounded-lg/)
 })
 
 test('keeps the workspace navigation and versioned test flow', () => {
