@@ -1,0 +1,29 @@
+schema = "harness-e2e-task/v1"
+id = "bugfix_cache_invalidation"
+version = 1
+kind = "code_patch"
+
+[source]
+kind = "embedded_directory"
+path = "tests/fixtures/repository-tasks/bugfix-cache-invalidation"
+manifest_sha256 = "sha256:7f81f6a69e4bdb5a193e886d13a24287294ea03c58fdac6cac81bf2d24f92ef1"
+required_paths = ["src/__init__.py", "src/cache_store.py", "src/profile_service.py", "tests/test_cache.py"]
+
+[execution]
+max_turns = 40
+max_output_tokens = 16384
+max_total_tokens = 400000
+stuck_timeout_seconds = 600
+
+[workspace]
+mutation = "allowlisted"
+allowed_paths = ["src/cache_store.py", "src/profile_service.py"]
+protected_paths = ["tests", "src/__init__.py"]
+ignored_paths = ["__pycache__/", "*.py[cod]", ".pytest_cache/"]
+minimum_changed_files = 2
+maximum_changed_files = 2
+maximum_patch_lines = 80
+
+[verifier]
+profile = "code_patch"
+spec = "verifier.json"

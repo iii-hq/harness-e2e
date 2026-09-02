@@ -1,0 +1,31 @@
+{
+  "profile": "structured_artifact",
+  "artifact_path": "review.json",
+  "schema": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": ["summary", "findings"],
+    "properties": {
+      "summary": {"type": "string", "minLength": 20, "maxLength": 2000},
+      "findings": {
+        "type": "array", "minItems": 2, "maxItems": 2,
+        "items": {
+          "type": "object", "additionalProperties": false,
+          "required": ["id", "severity", "path", "line", "explanation", "remediation"],
+          "properties": {
+            "id": {"type": "string"}, "severity": {"enum": ["high", "medium", "low"]},
+            "path": {"type": "string"}, "line": {"type": "integer", "minimum": 1},
+            "explanation": {"type": "string", "minLength": 20},
+            "remediation": {"type": "string", "minLength": 20}
+          }
+        }
+      }
+    }
+  },
+  "assertions": [
+    {"pointer": "/findings/0/id", "equals": "shell-command-injection"},
+    {"pointer": "/findings/0/path", "equals": "src/vulnerable.rs"},
+    {"pointer": "/findings/1/id", "equals": "unpinned-workflow-action"},
+    {"pointer": "/findings/1/path", "equals": ".github/workflows/insecure.yml"}
+  ]
+}

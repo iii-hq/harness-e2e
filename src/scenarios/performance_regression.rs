@@ -23,10 +23,10 @@ use crate::report::EvaluationDimension;
 use super::assessment::{self, AssessmentSpec};
 use super::validation_loop::suffix;
 use super::{
-    AdvisoryEvidence, ArtifactExpectation, CapturedDeliverable, CapturedInvariant, CleanupFuture,
-    ComplexityProfile, DeliverableCaptureFuture, DeliverableContract, EvaluationFuture,
-    ExecutionPolicy, InvariantSpec, MaterializedScenario, ProvenanceEvidence, ScenarioCase,
-    ScenarioObservation, ScenarioSpec,
+    ArtifactExpectation, CapturedDeliverable, CapturedInvariant, CleanupFuture, ComplexityProfile,
+    DeliverableCaptureFuture, DeliverableContract, EvaluationFuture, ExecutionPolicy,
+    InvariantSpec, MaterializedScenario, ProvenanceEvidence, ScenarioCase, ScenarioObservation,
+    ScenarioSpec,
 };
 
 pub const ID: &str = "performance_regression";
@@ -575,89 +575,48 @@ async fn audit_fixture(run_id: &str) -> Result<PerformanceAudit> {
 
 fn evaluate<'a>(
     _context: &'a E2eContext,
-    observation: &'a ScenarioObservation,
+    _observation: &'a ScenarioObservation,
     run_id: &'a str,
 ) -> EvaluationFuture<'a> {
     Box::pin(async move {
         let audit = audit_fixture(run_id).await?;
         let baseline_work = audit.baseline.as_ref().map(|baseline| baseline.work_256);
         let baseline_median = audit.baseline.as_ref().map(|baseline| baseline.median_ns);
-        let functional = audit.functional_correctness();
-        let deterministic = audit.deterministic_improvement();
-        let scope = audit.scope_valid();
-        let wall = audit.wall_clock_improved();
-        let functional_reason = format!(
-            "public_tests_passed={}, hidden_correctness={}; public_output={:?}; hidden_output={:?}",
-            audit.public_tests_passed,
-            audit.hidden.correctness,
-            audit.public_output,
-            audit.hidden_output
-        );
-        let deterministic_reason = format!(
-            "baseline_work_256={baseline_work:?}, candidate_work_128={}, candidate_work_256={}, limit_256={WORK_LIMIT_LARGE}, minimum_reduction={MINIMUM_REDUCTION_FACTOR}x",
-            audit.hidden.work_128, audit.hidden.work_256
-        );
-        let scope_reason = format!(
-            "protected_files_exact={}, production_patch_present={}, unexpected_paths={:?}",
-            audit.protected_files_exact, audit.production_patch_present, audit.unexpected_paths
-        );
-        let wall_reason = format!(
-            "run-local baseline_median_ns={baseline_median:?}, candidate_median_ns={:?}; advisory only",
-            audit.candidate_median_ns
-        );
-        let observations = vec![
-            crate::repository_task::RepositoryTaskAssessmentObservation::hard_gate(
-                FUNCTIONAL_CORRECTNESS.id(),
-                functional,
-                if functional {
-                    FUNCTIONAL_CORRECTNESS.weight()
-                } else {
-                    0
-                },
-                functional_reason.clone(),
+        Ok(assessment::build_evaluation([
+            FUNCTIONAL_CORRECTNESS.full_or_zero(
+                audit.functional_correctness(),
+                format!(
+                    "public_tests_passed={}, hidden_correctness={}; public_output={:?}; hidden_output={:?}",
+                    audit.public_tests_passed,
+                    audit.hidden.correctness,
+                    audit.public_output,
+                    audit.hidden_output
+                ),
             ),
-            crate::repository_task::RepositoryTaskAssessmentObservation::hard_gate(
-                DETERMINISTIC_IMPROVEMENT.id(),
-                deterministic,
-                if deterministic {
-                    DETERMINISTIC_IMPROVEMENT.weight()
-                } else {
-                    0
-                },
-                deterministic_reason.clone(),
+            DETERMINISTIC_IMPROVEMENT.full_or_zero(
+                audit.deterministic_improvement(),
+                format!(
+                    "baseline_work_256={baseline_work:?}, candidate_work_128={}, candidate_work_256={}, limit_256={WORK_LIMIT_LARGE}, minimum_reduction={MINIMUM_REDUCTION_FACTOR}x",
+                    audit.hidden.work_128, audit.hidden.work_256
+                ),
             ),
-            crate::repository_task::RepositoryTaskAssessmentObservation::hard_gate(
-                PATCH_SCOPE.id(),
-                scope,
-                if scope { PATCH_SCOPE.weight() } else { 0 },
-                scope_reason.clone(),
+            PATCH_SCOPE.full_or_zero(
+                audit.scope_valid(),
+                format!(
+                    "protected_files_exact={}, production_patch_present={}, unexpected_paths={:?}",
+                    audit.protected_files_exact,
+                    audit.production_patch_present,
+                    audit.unexpected_paths
+                ),
             ),
-            crate::repository_task::RepositoryTaskAssessmentObservation::advisory(
-                WALL_CLOCK_SIGNAL.id(),
-                if wall { WALL_CLOCK_SIGNAL.weight() } else { 0 },
-                wall_reason.clone(),
+            WALL_CLOCK_SIGNAL.full_or_zero(
+                audit.wall_clock_improved(),
+                format!(
+                    "run-local baseline_median_ns={baseline_median:?}, candidate_median_ns={:?}; advisory only",
+                    audit.candidate_median_ns
+                ),
             ),
-        ];
-        let mut evaluation = assessment::build_evaluation([
-            FUNCTIONAL_CORRECTNESS.full_or_zero(functional, functional_reason),
-            DETERMINISTIC_IMPROVEMENT.full_or_zero(deterministic, deterministic_reason),
-            PATCH_SCOPE.full_or_zero(scope, scope_reason),
-            WALL_CLOCK_SIGNAL.full_or_zero(wall, wall_reason),
-        ]);
-        let shadow = crate::repository_task::evaluate_shadow(
-            ID,
-            scenario_for_case(run_id).execution,
-            &observation.case,
-            &observations,
-            &evaluation,
-        );
-        evaluation.advisory_evidence.push(AdvisoryEvidence {
-            id: "repository_task_shadow".to_string(),
-            kind: "repository_task_shadow".to_string(),
-            value: serde_json::to_value(shadow)
-                .unwrap_or_else(|error| json!({"serialization_error": error.to_string()})),
-        });
-        Ok(evaluation)
+        ]))
     })
 }
 

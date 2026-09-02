@@ -1,0 +1,30 @@
+{
+  "profile": "structured_artifact",
+  "artifact_path": "migration-plan.json",
+  "schema": {
+    "type": "object", "additionalProperties": false,
+    "required": ["objective", "steps", "validation", "rollback"],
+    "properties": {
+      "objective": {"type": "string", "minLength": 20},
+      "steps": {
+        "type": "array", "minItems": 4, "maxItems": 8,
+        "items": {
+          "type": "object", "additionalProperties": false,
+          "required": ["id", "action", "completion_signal"],
+          "properties": {
+            "id": {"type": "string"}, "action": {"type": "string", "minLength": 15},
+            "completion_signal": {"type": "string", "minLength": 10}
+          }
+        }
+      },
+      "validation": {"type": "array", "minItems": 2, "items": {"type": "string", "minLength": 10}},
+      "rollback": {"type": "string", "minLength": 20}
+    }
+  },
+  "assertions": [
+    {"pointer": "/steps/0/id", "equals": "add-v1-v2-compatibility"},
+    {"pointer": "/steps/1/id", "equals": "validate-dual-contract"},
+    {"pointer": "/steps/2/id", "equals": "migrate-consumer"},
+    {"pointer": "/steps/3/id", "equals": "retire-v1-compatibility"}
+  ]
+}

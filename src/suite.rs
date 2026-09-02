@@ -4514,31 +4514,6 @@ async fn execute(
                 format!("scenario '{}' evaluator failed: {error:#}", spec.id),
             )
         })?;
-    for (index, evidence) in std::mem::take(&mut objective.advisory_evidence)
-        .into_iter()
-        .enumerate()
-    {
-        let relative = PathBuf::from("evidence")
-            .join(&report.run_id)
-            .join(&report.attempt_id)
-            .join(format!("advisory-{index}.json"));
-        match artifact::write_json(
-            output,
-            &relative,
-            evidence.id,
-            evidence.kind,
-            &evidence.value,
-        ) {
-            Ok(reference) => report.evidence.push(reference),
-            Err(error) => tracing::warn!(
-                scenario = spec.id,
-                run_id,
-                attempt_id = report.attempt_id,
-                %error,
-                "failed to persist non-authoritative evaluator evidence"
-            ),
-        }
-    }
     if !case.deliverable_contract.artifacts.is_empty() {
         let passed = !report.asset_assessments.is_empty()
             && report.asset_assessments.iter().all(|asset| {
@@ -5552,7 +5527,6 @@ mod tests {
                     awarded: 100,
                     reason: "ok".into(),
                 }],
-                advisory_evidence: Vec::new(),
             }
         )
         .is_ok());
@@ -5561,7 +5535,6 @@ mod tests {
             &ObjectiveEvaluation {
                 hard_gates: Vec::new(),
                 awards: Vec::new(),
-                advisory_evidence: Vec::new(),
             }
         )
         .is_err());
@@ -5574,7 +5547,6 @@ mod tests {
                     awarded: 101,
                     reason: "too high".into(),
                 }],
-                advisory_evidence: Vec::new(),
             },
         )
         .unwrap_err();
@@ -5596,7 +5568,6 @@ mod tests {
                     awarded: 1,
                     reason: "observed".into(),
                 }],
-                advisory_evidence: Vec::new(),
             },
         )
         .unwrap_err();
@@ -5621,7 +5592,6 @@ mod tests {
                         reason: "second".into(),
                     },
                 ],
-                advisory_evidence: Vec::new(),
             },
         )
         .unwrap_err();
@@ -5644,7 +5614,6 @@ mod tests {
                     awarded: 1,
                     reason: "observed".into(),
                 }],
-                advisory_evidence: Vec::new(),
             },
         )
         .unwrap_err();
