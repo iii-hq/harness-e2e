@@ -162,8 +162,31 @@ describe('ScenarioMatrix', () => {
     expect(html).not.toContain('data-step-metric="Polls"')
     expect(html).toContain('Not captured')
     expect(html).toContain('Inspect scenario evidence')
+    expect(html).toContain('>Structure<')
+    expect(html).not.toContain('logical run')
+    expect(html).not.toContain('>avg<')
     expect(html).not.toContain('Recorded runs')
     expect(html).not.toContain('This scenario has no persisted workflow')
     expect(html).toContain('aria-expanded="true"')
+  })
+
+  // Audit SM-07 / SM-12: without any persisted workflow the Structure column
+  // only repeats "Standard", and a failed scenario opens its evidence at once.
+  it('hides the structure column and opens evidence for a failed standard scenario', () => {
+    const failedOnly = {
+      ...detail,
+      reports: detail.reports.filter(
+        (report) => report.scenario_id === 'persistent_state',
+      ),
+    } as DashboardExecutionDetail
+    const html = renderToStaticMarkup(
+      <ScenarioMatrix detail={failedOnly} onTranscript={() => {}} />,
+    )
+
+    expect(html).not.toContain('>Structure<')
+    expect(html).not.toContain('>Standard<')
+    expect(html).toContain('Inspect scenario evidence')
+    expect(html).toMatch(/<details[^>]*open/)
+    expect(html).toContain('title="Persistent State v1"')
   })
 })

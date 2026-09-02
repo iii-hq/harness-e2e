@@ -26,6 +26,11 @@ export function ScenarioMatrix({
   onTranscript: (run: AssessmentRunView, title: string) => void
 }) {
   const model = useMemo(() => buildScenarioMatrix(detail), [detail])
+  // Audit SM-07: the Structure column only carries information when at
+  // least one scenario persisted a workflow; otherwise it repeats "Standard".
+  const showStructure = model.items.some(
+    (item) => item.workflowSteps.length > 0,
+  )
   const preferredItem =
     model.items.find((item) => item.workflowSteps.length > 0) ??
     model.items.find((item) => item.objective.status !== 'passed') ??
@@ -53,14 +58,14 @@ export function ScenarioMatrix({
       <ScenarioSummary summary={model.summary} />
       <div className="overflow-hidden rounded-[var(--ds-radius-md)] border border-[var(--color-edge)] bg-panel">
         <div
-          className="hidden grid-cols-[minmax(13rem,1.2fr)_minmax(9rem,0.75fr)_minmax(10rem,1fr)_minmax(7rem,0.55fr)_minmax(8rem,0.7fr)] gap-4 border-b border-[var(--color-rule)] bg-panel-raised px-5 py-3 font-mono text-[0.61rem] font-semibold uppercase tracking-[0.06em] text-ink-muted lg:grid"
+          className={`hidden gap-4 border-b border-[var(--color-rule)] bg-panel-raised px-5 py-3 font-mono text-[0.6875rem] font-semibold uppercase tracking-[0.06em] text-ink-muted lg:grid ${matrixColumns(showStructure)}`}
           aria-hidden="true"
         >
           <span>Scenario</span>
           <span>Objective result</span>
           <span>Advisory</span>
           <span>Runtime</span>
-          <span>Structure</span>
+          {showStructure ? <span>Structure</span> : null}
         </div>
         <ol className="m-0 grid list-none p-0">
           {model.items.map((item) => {
@@ -71,6 +76,7 @@ export function ScenarioMatrix({
                 item={item}
                 detail={detail}
                 expanded={expanded}
+                showStructure={showStructure}
                 onToggle={() => setExpandedKey(expanded ? null : item.key)}
                 onTranscript={onTranscript}
               />
@@ -80,6 +86,15 @@ export function ScenarioMatrix({
       </div>
     </div>
   )
+}
+
+const MATRIX_COLUMNS =
+  'lg:grid-cols-[minmax(13rem,1.2fr)_minmax(9rem,0.75fr)_minmax(10rem,1fr)_minmax(7rem,0.55fr)]'
+const MATRIX_COLUMNS_WITH_STRUCTURE =
+  'lg:grid-cols-[minmax(13rem,1.2fr)_minmax(9rem,0.75fr)_minmax(10rem,1fr)_minmax(7rem,0.55fr)_minmax(8rem,0.7fr)]'
+
+function matrixColumns(showStructure: boolean) {
+  return showStructure ? MATRIX_COLUMNS_WITH_STRUCTURE : MATRIX_COLUMNS
 }
 
 function ScenarioSummary({
@@ -138,16 +153,21 @@ function ScenarioRow({
   item,
   detail,
   expanded,
+  showStructure,
   onToggle,
   onTranscript,
 }: {
   item: ScenarioMatrixItem
   detail: DashboardExecutionDetail
   expanded: boolean
+  showStructure: boolean
   onToggle: () => void
   onTranscript: (run: AssessmentRunView, title: string) => void
 }) {
   const panelId = `${safeId(item.key)}-scenario-panel`
+  const scenarioTitle = `${titleCase(item.scenarioId)}${
+    item.scenarioVersion != null ? ` v${item.scenarioVersion}` : ''
+  }`
   const structure = item.workflowSteps.length
     ? `Workflow · ${item.workflowSteps.length} ${item.workflowSteps.length === 1 ? 'step' : 'steps'}`
     : item.available
@@ -158,7 +178,7 @@ function ScenarioRow({
     <li className="border-t border-[var(--color-rule)] first:border-t-0">
       <button
         data-scenario-row={item.key}
-        className={`group grid min-h-16 w-full min-w-0 gap-x-4 gap-y-3 border-0 px-4 py-4 text-left transition-colors motion-reduce:transition-none lg:grid-cols-[minmax(13rem,1.2fr)_minmax(9rem,0.75fr)_minmax(10rem,1fr)_minmax(7rem,0.55fr)_minmax(8rem,0.7fr)] lg:items-center lg:px-5 ${
+        className={`group grid min-h-16 w-full min-w-0 gap-x-4 gap-y-3 border-0 px-4 py-4 text-left transition-colors motion-reduce:transition-none lg:items-center lg:px-5 ${matrixColumns(showStructure)} ${
           expanded ? 'bg-panel-raised' : 'bg-panel hover:bg-panel-raised'
         }`}
         type="button"
@@ -172,11 +192,16 @@ function ScenarioRow({
             aria-hidden="true"
           />
           <span className="min-w-0">
-            <strong className="block truncate text-sm font-semibold text-ink">
-              {titleCase(item.scenarioId)}
-              {item.scenarioVersion != null ? ` v${item.scenarioVersion}` : ''}
+            <strong
+              className="block truncate text-sm font-semibold text-ink"
+              title={scenarioTitle}
+            >
+              {scenarioTitle}
             </strong>
-            <span className="mt-1 block truncate font-mono text-[0.61rem] text-ink-muted">
+            <span
+              className="mt-1 block truncate font-mono text-[0.6875rem] text-ink-muted"
+              title={item.subjectId}
+            >
               {item.subjectId} · {item.runCount}{' '}
               {item.runCount === 1 ? 'run' : 'runs'}
             </span>
@@ -198,17 +223,19 @@ function ScenarioRow({
           <strong className="font-mono text-xs font-semibold tabular-nums text-ink">
             {formatScenarioDuration(item.durationMs)}
           </strong>
-          {item.durationKind === 'average' ? (
-            <span className="ml-1 font-mono text-[0.58rem] text-ink-muted">
+          {item.durationKind === 'average' && item.runCount > 1 ? (
+            <span className="ml-1 font-mono text-[0.6875rem] text-ink-muted">
               avg
             </span>
           ) : null}
         </MatrixCell>
-        <MatrixCell label="Structure">
-          <span className="text-xs font-medium text-[var(--color-ink-faint)]">
-            {structure}
-          </span>
-        </MatrixCell>
+        {showStructure ? (
+          <MatrixCell label="Structure">
+            <span className="text-xs font-medium text-[var(--color-ink-faint)]">
+              {structure}
+            </span>
+          </MatrixCell>
+        ) : null}
       </button>
       {expanded ? (
         <ScenarioExpansion
@@ -231,7 +258,7 @@ function MatrixCell({
 }) {
   return (
     <span className="grid min-w-0 grid-cols-[7rem_minmax(0,1fr)] items-center gap-3 lg:block">
-      <span className="font-mono text-[0.58rem] font-semibold uppercase tracking-[0.06em] text-ink-muted lg:hidden">
+      <span className="font-mono text-[0.6875rem] font-semibold uppercase tracking-[0.06em] text-ink-muted lg:hidden">
         {label}
       </span>
       <span className="min-w-0">{children}</span>
@@ -262,9 +289,8 @@ function ScenarioExpansion({
             <strong className="block truncate text-sm text-ink">
               {titleCase(item.scenarioId)} run evidence
             </strong>
-            <span className="mt-1 block font-mono text-[0.61rem] text-ink-muted">
-              {item.runCount}{' '}
-              {item.runCount === 1 ? 'logical run' : 'logical runs'}
+            <span className="mt-1 block font-mono text-[0.6875rem] text-ink-muted">
+              {item.runCount} {item.runCount === 1 ? 'run' : 'runs'} retained
             </span>
           </div>
           <ScenarioChatAction
@@ -283,10 +309,17 @@ function ScenarioExpansion({
           <WorkflowDurationProfile tests={item.workflowSteps} />
         ) : null}
         {item.available ? (
-          <details className="group border-t border-[var(--color-rule)]">
-            <summary className="flex min-h-12 cursor-pointer list-none items-center justify-between gap-4 px-4 py-3 text-sm font-semibold text-ink marker:hidden md:px-5">
+          <details
+            className="group border-t border-[var(--color-rule)]"
+            open={item.objective.status !== 'passed'}
+          >
+            <summary className="flex min-h-12 cursor-pointer list-none items-center gap-3 px-4 py-3 text-sm font-semibold text-ink marker:hidden md:px-5">
+              <ChevronDown
+                className="size-4 shrink-0 -rotate-90 text-ink-muted transition-transform duration-[var(--ds-motion-duration-fast)] group-open:rotate-0 motion-reduce:transition-none"
+                aria-hidden="true"
+              />
               <span>Inspect scenario evidence</span>
-              <span className="font-mono text-[0.61rem] font-normal text-ink-muted">
+              <span className="ml-auto font-mono text-[0.6875rem] font-normal text-ink-muted">
                 assessments, gates, artifacts, and provenance
               </span>
             </summary>
@@ -309,7 +342,7 @@ function ScenarioExpansion({
 function ScenarioResultBand({ item }: { item: ScenarioMatrixItem }) {
   return (
     <dl
-      className="m-0 grid grid-cols-2 gap-px bg-[var(--color-rule)] lg:grid-cols-4 xl:grid-cols-7"
+      className="m-0 grid grid-cols-2 overflow-hidden lg:grid-cols-4 xl:grid-cols-7"
       data-scenario-primary-metrics
     >
       <ResultFact
@@ -348,8 +381,11 @@ function ResultFact({
   status?: OperationalStatus
 }) {
   return (
-    <div className="min-w-0 bg-panel p-3 md:p-4" data-primary-metric={label}>
-      <dt className="font-mono text-[0.58rem] font-semibold uppercase tracking-[0.06em] text-ink-muted">
+    <div
+      className="-mr-px -mb-px min-w-0 border-r border-b border-[var(--color-rule)] bg-panel p-3 md:p-4"
+      data-primary-metric={label}
+    >
+      <dt className="font-mono text-[0.6875rem] font-semibold uppercase tracking-[0.06em] text-ink-muted">
         {label}
       </dt>
       <dd className="m-0 mt-2 min-w-0">
@@ -360,7 +396,7 @@ function ResultFact({
             {value}
           </strong>
         )}
-        <span className="mt-1 block text-[0.66rem] leading-4 text-ink-muted">
+        <span className="mt-1 block text-[0.6875rem] leading-4 text-ink-muted">
           {detail}
         </span>
       </dd>
@@ -393,11 +429,11 @@ function WorkflowDurationProfile({ tests }: { tests: SemanticTestReport[] }) {
             timing that is absent from the report.
           </p>
         </div>
-        <span className="font-mono text-[0.64rem] text-ink-muted">
+        <span className="font-mono text-[0.6875rem] text-ink-muted">
           {formatScenarioDuration(totalDuration)} recorded step time
         </span>
       </header>
-      <div className="hidden grid-cols-[minmax(12rem,0.9fr)_7rem_minmax(14rem,1.4fr)_minmax(12rem,1fr)] gap-4 border-b border-[var(--color-rule)] bg-panel-raised px-5 py-2.5 font-mono text-[0.58rem] font-semibold uppercase tracking-[0.06em] text-ink-muted lg:grid">
+      <div className="hidden grid-cols-[minmax(12rem,0.9fr)_7rem_minmax(14rem,1.4fr)_minmax(12rem,1fr)] gap-4 border-b border-[var(--color-rule)] bg-panel-raised px-5 py-2.5 font-mono text-[0.6875rem] font-semibold uppercase tracking-[0.06em] text-ink-muted lg:grid">
         <span>Step</span>
         <span>Duration</span>
         <span>Duration profile</span>
@@ -444,10 +480,10 @@ function WorkflowStepRow({
     : 'Starts workflow'
   const barTone =
     status.status === 'passed'
-      ? 'bg-[var(--color-accent)]'
+      ? 'bg-success'
       : status.status === 'hard_gate' || status.status === 'failed'
-        ? 'bg-[var(--color-alert)]'
-        : 'bg-[var(--color-warn)]'
+        ? 'bg-danger'
+        : 'bg-warning'
 
   return (
     <li
@@ -455,7 +491,7 @@ function WorkflowStepRow({
       data-workflow-step={test.node_id}
     >
       <div className="flex min-w-0 items-start gap-3">
-        <span className="grid size-7 shrink-0 place-items-center rounded-md border border-[var(--color-rule)] bg-panel-raised font-mono text-[0.61rem] font-semibold text-ink-muted">
+        <span className="grid size-7 shrink-0 place-items-center rounded-[6px] bg-panel-raised font-mono text-[0.6875rem] font-semibold text-ink-muted">
           {String(index + 1).padStart(2, '0')}
         </span>
         <div className="min-w-0">
@@ -469,13 +505,13 @@ function WorkflowStepRow({
               label={status.label}
             />
           </div>
-          <span className="mt-1 block truncate text-[0.65rem] text-ink-muted">
+          <span className="mt-1 block truncate text-[0.6875rem] text-ink-muted">
             {dependencies}
           </span>
         </div>
       </div>
       <div className="grid grid-cols-[7rem_minmax(0,1fr)] items-center gap-3 lg:block">
-        <span className="font-mono text-[0.58rem] font-semibold uppercase tracking-[0.06em] text-ink-muted lg:hidden">
+        <span className="font-mono text-[0.6875rem] font-semibold uppercase tracking-[0.06em] text-ink-muted lg:hidden">
           Duration
         </span>
         <strong className="font-mono text-xs font-semibold tabular-nums text-ink">
@@ -483,7 +519,7 @@ function WorkflowStepRow({
         </strong>
       </div>
       <div className="grid grid-cols-[7rem_minmax(0,1fr)] items-center gap-3 lg:block">
-        <span className="font-mono text-[0.58rem] font-semibold uppercase tracking-[0.06em] text-ink-muted lg:hidden">
+        <span className="font-mono text-[0.6875rem] font-semibold uppercase tracking-[0.06em] text-ink-muted lg:hidden">
           Profile
         </span>
         <div>
@@ -493,13 +529,13 @@ function WorkflowStepRow({
               style={{ width: `${width}%` }}
             />
           </div>
-          <span className="mt-1 block font-mono text-[0.59rem] tabular-nums text-ink-muted">
+          <span className="mt-1 block font-mono text-[0.6875rem] tabular-nums text-ink-muted">
             {share.toFixed(share >= 10 ? 0 : 1)}% of recorded step time
           </span>
         </div>
       </div>
       <div className="grid grid-cols-[7rem_minmax(0,1fr)] items-start gap-3 lg:block">
-        <span className="font-mono text-[0.58rem] font-semibold uppercase tracking-[0.06em] text-ink-muted lg:hidden">
+        <span className="font-mono text-[0.6875rem] font-semibold uppercase tracking-[0.06em] text-ink-muted lg:hidden">
           Metrics
         </span>
         <div
@@ -509,7 +545,7 @@ function WorkflowStepRow({
           {metrics.map((metric) => (
             <span
               key={metric.label}
-              className="inline-flex min-w-0 items-baseline gap-1 rounded-md border border-[var(--color-rule)] bg-panel-raised px-2 py-1 font-mono text-[0.6rem] text-ink-muted"
+              className="inline-flex min-w-0 items-baseline gap-1 rounded-[6px] bg-panel-raised px-2 py-1 font-mono text-[0.6875rem] text-ink-muted"
               data-step-metric={metric.label}
             >
               <span className="truncate">{metric.label}</span>

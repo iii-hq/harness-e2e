@@ -68,7 +68,7 @@ export function SemanticTestFlow({
                 label={cleanupStatus(flow.flow?.cleanup.status).label}
               />
               <code
-                className="break-all text-[0.65rem] text-ink-muted"
+                className="break-all text-[0.6875rem] text-ink-muted"
                 title={flow.runId}
               >
                 run {shortHash(flow.runId)}
@@ -204,7 +204,7 @@ function WorkflowMetricsOverview({
         <details className="group mt-3 rounded-md border border-line bg-panel/40">
           <summary className="flex min-h-11 cursor-pointer list-none items-center justify-between gap-3 px-3 py-2 text-xs font-semibold text-ink marker:hidden">
             <span>Additional runtime counters</span>
-            <span className="font-mono text-[0.65rem] font-normal text-ink-muted">
+            <span className="font-mono text-[0.6875rem] font-normal text-ink-muted">
               {numericMetrics.length} metrics
             </span>
           </summary>
@@ -248,7 +248,7 @@ function WorkflowMetric({
         : 'text-ink'
   return (
     <div className="min-w-0 bg-panel px-3 py-3">
-      <div className="text-[0.62rem] font-semibold uppercase tracking-[0.08em] text-ink-muted">
+      <div className="text-[0.6875rem] font-semibold uppercase tracking-[0.08em] text-ink-muted">
         {label}
       </div>
       <strong
@@ -256,7 +256,7 @@ function WorkflowMetric({
       >
         {value}
       </strong>
-      <span className="mt-1 block text-[0.68rem] leading-4 text-ink-muted">
+      <span className="mt-1 block text-[0.6875rem] leading-4 text-ink-muted">
         {caption}
       </span>
     </div>
@@ -286,7 +286,7 @@ function SemanticTestCard({
       <header className="grid gap-4 px-4 py-4 sm:px-5 lg:grid-cols-[minmax(0,1fr)_auto] lg:items-center">
         <div className="flex min-w-0 items-start gap-3">
           <span
-            className="grid size-8 shrink-0 place-items-center rounded-md border border-line bg-panel-subtle font-mono text-[0.65rem] font-semibold text-ink-muted"
+            className="grid size-8 shrink-0 place-items-center rounded-md border border-line bg-panel-subtle font-mono text-[0.6875rem] font-semibold text-ink-muted"
             title={`Step ${number}`}
           >
             {String(number).padStart(2, '0')}
@@ -312,7 +312,7 @@ function SemanticTestCard({
           className="min-w-0 px-4 py-4 sm:px-5"
           aria-label="Step outcome"
         >
-          <div className="text-[0.62rem] font-semibold uppercase tracking-[0.08em] text-ink-muted">
+          <div className="text-[0.6875rem] font-semibold uppercase tracking-[0.08em] text-ink-muted">
             Outcome
           </div>
           <strong className={`mt-2 block text-base ${outcome.tone}`}>
@@ -344,7 +344,7 @@ function SemanticTestCard({
           <span className="text-xs font-semibold text-ink">
             Decision evidence
           </span>
-          <span className="font-mono text-[0.65rem] text-ink-muted">
+          <span className="font-mono text-[0.6875rem] text-ink-muted">
             {gates.length} gates · {evaluations.length} evaluations ·{' '}
             {failures.length} failures
           </span>
@@ -415,7 +415,7 @@ function SemanticTestCard({
           <span className="text-xs font-semibold text-ink">
             Technical evidence
           </span>
-          <span className="font-mono text-[0.65rem] text-ink-muted">
+          <span className="font-mono text-[0.6875rem] text-ink-muted">
             {assets.length} assets · raw counters and identity
           </span>
         </summary>
@@ -433,7 +433,7 @@ function SemanticTestCard({
                   {asset.media_type ?? asset.kind ?? 'asset'} ·{' '}
                   {formatBytes(asset.size_bytes ?? 0)}
                 </span>
-                <code className="break-all text-[0.62rem] leading-5 text-ink-muted">
+                <code className="break-all text-[0.6875rem] leading-5 text-ink-muted">
                   {asset.artifact.path}
                 </code>
               </li>
@@ -446,14 +446,14 @@ function SemanticTestCard({
             <dl className="mt-2 grid gap-2 text-xs">
               <div>
                 <dt className="text-ink-muted">Step type</dt>
-                <dd className="m-0 mt-0.5 break-all font-mono text-[0.65rem] text-ink-soft">
+                <dd className="m-0 mt-0.5 break-all font-mono text-[0.6875rem] text-ink-soft">
                   {test.step_type}@{test.step_version}
                 </dd>
               </div>
               {test.cost_usd != null && (
                 <div>
                   <dt className="text-ink-muted">Reported cost</dt>
-                  <dd className="m-0 mt-0.5 font-mono text-[0.65rem] text-ink-soft">
+                  <dd className="m-0 mt-0.5 font-mono text-[0.6875rem] text-ink-soft">
                     ${test.cost_usd.toFixed(4)}
                   </dd>
                 </div>
@@ -462,7 +462,7 @@ function SemanticTestCard({
             <h6 className="m-0 mt-4 text-xs font-semibold text-ink">
               Raw counters
             </h6>
-            <pre className="mt-2 max-h-52 overflow-auto rounded-md border border-line bg-panel p-3 font-mono text-[0.65rem] leading-5 text-ink-muted whitespace-pre-wrap">
+            <pre className="mt-2 max-h-52 overflow-auto rounded-md border border-line bg-panel p-3 font-mono text-[0.6875rem] leading-5 text-ink-muted whitespace-pre-wrap">
               {formatJson(test.metrics)}
             </pre>
           </div>

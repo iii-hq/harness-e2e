@@ -8,7 +8,9 @@ import {
   useState,
 } from 'react'
 import { createPortal } from 'react-dom'
+import { buttonClassName } from '@/design-system'
 import type { DashboardExecutionDetail } from '@/lib/dashboard-data-source'
+import { titleCase } from '@/lib/execution-view'
 import {
   loadScenarioChatTargets,
   type ScenarioChatTarget,
@@ -168,10 +170,13 @@ export function ScenarioChatAction({
     <span className={`relative inline-flex ${className}`}>
       <button
         ref={triggerRef}
-        className={`inline-flex min-h-11 items-center justify-center gap-2 rounded-[var(--ds-radius-sm)] border border-[var(--color-edge)] bg-panel px-3 text-xs font-semibold text-ink transition-colors hover:border-[var(--color-ink-ghost)] hover:bg-panel-raised focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--color-accent)] disabled:cursor-not-allowed disabled:opacity-55 ${compact ? 'min-w-11 px-2.5' : ''}`}
+        className={buttonClassName({
+          variant: 'secondary',
+          size: compact ? 'compact' : 'default',
+        })}
         type="button"
         title={compact ? buttonLabel : undefined}
-        aria-label={`${buttonLabel} for ${scenarioId}`}
+        aria-label={`${buttonLabel} for ${titleCase(scenarioId)}`}
         aria-haspopup={multiple ? 'menu' : undefined}
         aria-expanded={multiple ? menuOpen : undefined}
         aria-controls={multiple && menuOpen ? menuId : undefined}
@@ -196,7 +201,7 @@ export function ScenarioChatAction({
               className="z-[120] max-h-[min(360px,calc(100dvh-32px))] overflow-y-auto rounded-[var(--ds-radius-md)] border border-[var(--color-edge)] bg-panel p-1.5 shadow-panel"
               style={menuPosition}
               role="menu"
-              aria-label={`Chat sessions for ${scenarioId}`}
+              aria-label={`Chat sessions for ${titleCase(scenarioId)}`}
             >
               {targets.map((target) => (
                 <button
@@ -213,12 +218,12 @@ export function ScenarioChatAction({
                     <strong className="block truncate text-xs text-ink">
                       {targetLabel(target)}
                     </strong>
-                    <span className="mt-1 block truncate font-mono text-[0.61rem] text-ink-muted">
+                    <span className="mt-1 block truncate font-mono text-[0.6875rem] text-ink-muted">
                       {target.current ? 'Current attempt' : 'Retry history'} ·{' '}
                       {shortId(target.sessionId)}
                     </span>
                   </span>
-                  <span className="shrink-0 font-mono text-[0.58rem] uppercase text-ink-muted">
+                  <span className="shrink-0 font-mono text-[0.6875rem] uppercase text-ink-muted">
                     {target.status ?? 'retained'}
                   </span>
                 </button>
