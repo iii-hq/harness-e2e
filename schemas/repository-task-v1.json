@@ -1,0 +1,232 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "RepositoryTaskV1",
+  "type": "object",
+  "required": [
+    "assessments",
+    "execution",
+    "id",
+    "legacy_scenario",
+    "mode",
+    "schema",
+    "source",
+    "verifier",
+    "version"
+  ],
+  "properties": {
+    "assessments": {
+      "type": "array",
+      "items": {
+        "$ref": "#/definitions/RepositoryTaskAssessment"
+      }
+    },
+    "execution": {
+      "$ref": "#/definitions/ExecutionPolicy"
+    },
+    "id": {
+      "type": "string"
+    },
+    "legacy_scenario": {
+      "type": "string"
+    },
+    "mode": {
+      "$ref": "#/definitions/RepositoryTaskMode"
+    },
+    "schema": {
+      "type": "string"
+    },
+    "source": {
+      "$ref": "#/definitions/RepositoryTaskSource"
+    },
+    "verifier": {
+      "$ref": "#/definitions/RepositoryTaskVerifier"
+    },
+    "version": {
+      "type": "integer",
+      "format": "uint32",
+      "minimum": 0.0
+    }
+  },
+  "additionalProperties": false,
+  "definitions": {
+    "ExecutionPolicy": {
+      "type": "object",
+      "required": [
+        "max_turns",
+        "stuck_timeout_seconds"
+      ],
+      "properties": {
+        "max_output_tokens": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "max_total_tokens": {
+          "description": "Shared Harness token budget. `None` leaves the Harness budget unbounded for this scenario.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "max_turns": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0.0
+        },
+        "max_validation_retries": {
+          "description": "Optional per-session cap for post-turn validation denials. `None` preserves the Harness-configured default.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0.0
+        },
+        "stuck_timeout_seconds": {
+          "description": "Stop only after this many seconds without observable useful progress. Large scenarios have no fixed wall-clock deadline.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        }
+      }
+    },
+    "RepositoryTaskAssessment": {
+      "type": "object",
+      "required": [
+        "id",
+        "policy",
+        "weight"
+      ],
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "policy": {
+          "$ref": "#/definitions/RepositoryTaskAssessmentPolicy"
+        },
+        "weight": {
+          "type": "integer",
+          "format": "uint8",
+          "minimum": 0.0
+        }
+      },
+      "additionalProperties": false
+    },
+    "RepositoryTaskAssessmentPolicy": {
+      "type": "string",
+      "enum": [
+        "hard_gate",
+        "advisory"
+      ]
+    },
+    "RepositoryTaskMode": {
+      "type": "string",
+      "enum": [
+        "shadow"
+      ]
+    },
+    "RepositoryTaskSource": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": [
+            "kind",
+            "manifest_sha256",
+            "path_env",
+            "repository",
+            "required_paths",
+            "revision",
+            "subtree"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "git_checkout"
+              ]
+            },
+            "manifest_sha256": {
+              "type": "string"
+            },
+            "path_env": {
+              "type": "string"
+            },
+            "repository": {
+              "type": "string"
+            },
+            "required_paths": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "revision": {
+              "type": "string"
+            },
+            "subtree": {
+              "type": "string"
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": [
+            "kind",
+            "manifest_sha256",
+            "path",
+            "required_paths"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "embedded_directory"
+              ]
+            },
+            "manifest_sha256": {
+              "type": "string"
+            },
+            "path": {
+              "type": "string"
+            },
+            "required_paths": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          },
+          "additionalProperties": false
+        }
+      ]
+    },
+    "RepositoryTaskVerifier": {
+      "type": "object",
+      "required": [
+        "kind",
+        "protocol"
+      ],
+      "properties": {
+        "kind": {
+          "$ref": "#/definitions/RepositoryTaskVerifierKind"
+        },
+        "protocol": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "RepositoryTaskVerifierKind": {
+      "type": "string",
+      "enum": [
+        "observation_projection"
+      ]
+    }
+  }
+}

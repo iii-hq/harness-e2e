@@ -17,6 +17,7 @@ pub mod markdown;
 mod observe;
 pub mod redaction;
 pub mod report;
+pub mod repository_task;
 pub mod scenarios;
 pub mod schema;
 pub mod suite;

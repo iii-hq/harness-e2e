@@ -36,6 +36,7 @@ List the materialized scenarios and their scenario versions:
 cargo run --locked --bin harness-e2e -- list
 cargo run --locked --bin harness-e2e -- catalog
 cargo run --locked --bin harness-e2e -- validate-scenarios
+cargo run --locked --bin harness-e2e -- validate-repository-tasks
 ```
 
 New declarative scenarios are authored only as `scenarios/*.md`. The compiler

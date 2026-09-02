@@ -38,6 +38,11 @@ EXECUTION_KINDS = {
 ORCHESTRATION_ROLES = {"target", "runtime", "runner"}
 ORCHESTRATION_KINDS = {"binary", "engine"}
 APPLICATION = "harness"
+SHARED_FIXTURE_SCENARIOS = {
+    "shell_coder_sandbox",
+    "chess_engine_build",
+    "trend_blog",
+}
 
 
 def load_object(path: Path, label: str) -> dict[str, Any]:
@@ -323,6 +328,9 @@ def campaign_matrix(contract: dict[str, Any]) -> dict[str, Any]:
             {
                 "group_id": group["id"],
                 "execution_kind": group["execution_kind"],
+                "requires_shared_fixture": bool(
+                    set(group.get("scenarios", [])) & SHARED_FIXTURE_SCENARIOS
+                ),
                 "runs_on": (
                     ["self-hosted", "harness-e2e"]
                     if group["execution_kind"] == "fault_injection"

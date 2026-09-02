@@ -40,6 +40,8 @@ enum Command {
     },
     /// Validate every scenarios/*.md file without running a model.
     ValidateScenarios(ValidateScenariosArgs),
+    /// Validate every embedded repository-task contract without running a model.
+    ValidateRepositoryTasks,
     /// List models registered in the running stack.
     Models(ModelsArgs),
     /// Execute one or more quality scenarios against a running stack.
@@ -259,6 +261,7 @@ async fn main() -> Result<()> {
             Ok(())
         }
         Some(Command::ValidateScenarios(args)) => validate_scenarios(args),
+        Some(Command::ValidateRepositoryTasks) => validate_repository_tasks(),
         Some(Command::Models(args)) => models(args).await,
         Some(Command::Run(args)) => run(args).await,
         Some(Command::ReplayMaterialized(args)) => replay_materialized(args).await,
@@ -280,6 +283,19 @@ fn validate_scenarios(args: ValidateScenariosArgs) -> Result<()> {
             "valid": true,
             "scenario_count": scenarios.len(),
             "scenarios": scenarios,
+        }))?
+    );
+    Ok(())
+}
+
+fn validate_repository_tasks() -> Result<()> {
+    let tasks = harness_e2e::repository_task::embedded_catalog()?;
+    println!(
+        "{}",
+        serde_json::to_string_pretty(&serde_json::json!({
+            "valid": true,
+            "task_count": tasks.len(),
+            "tasks": tasks,
         }))?
     );
     Ok(())
@@ -496,6 +512,16 @@ mod tests {
                 .unwrap()
                 .command,
             Some(Command::List)
+        ));
+    }
+
+    #[test]
+    fn repository_task_validation_needs_no_model_configuration() {
+        assert!(matches!(
+            Cli::try_parse_from(["harness-e2e", "validate-repository-tasks"])
+                .unwrap()
+                .command,
+            Some(Command::ValidateRepositoryTasks)
         ));
     }
 

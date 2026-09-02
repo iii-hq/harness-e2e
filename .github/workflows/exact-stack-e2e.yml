@@ -54,6 +54,22 @@ jobs:
         with:
           ref: ${{ inputs.runner_sha }}
 
+      - name: Require private fixture repository access
+        if: ${{ matrix.requires_shared_fixture }}
+        env:
+          E2E_FIXTURE_GITHUB_TOKEN: ${{ secrets.E2E_FIXTURE_GITHUB_TOKEN }}
+        run: test -n "$E2E_FIXTURE_GITHUB_TOKEN"
+
+      - name: Checkout pinned shared code fixture
+        if: ${{ matrix.requires_shared_fixture }}
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          repository: iii-hq/e2e-fixture
+          ref: 16f6b9e05e34e09c824191eed0631d77f85be6a9
+          token: ${{ secrets.E2E_FIXTURE_GITHUB_TOKEN }}
+          persist-credentials: false
+          path: target/fixtures/e2e-fixture
+
       - name: Validate Release Control dispatch
         env:
           RELEASE_CONTROL_BOT_LOGIN: ${{ vars.RELEASE_CONTROL_BOT_LOGIN }}
@@ -169,6 +185,7 @@ jobs:
           ZAI_API_KEY: ${{ secrets.ZAI_API_KEY }}
           DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
           HARNESS_E2E_STACK_LOCK: ${{ inputs.stack_lock }}
+          HARNESS_E2E_SHARED_FIXTURE_REPOSITORY: ${{ github.workspace }}/target/fixtures/e2e-fixture
         run: scripts/run_exact_stack_group.sh
 
       - name: Execute protected fault campaign group
