@@ -43,9 +43,9 @@ falha técnica de infraestrutura.
   deve ler os três assets, reproduzir a suíte vermelha, registrar um diagnóstico,
   alterar somente o arquivo de produção, deixar os testes públicos verdes e
   passar probes ocultos de revisões fora de ordem, conflito, validação,
-  imutabilidade da entrada e contas com saldo zero. Depois, deve provar o mesmo
-  comportamento no host e em um sandbox Python sem rede, copiar exatamente
-  código e testes e encerrar o sandbox.
+  imutabilidade da entrada e contas com saldo zero. Por fim, deve executar a CLI
+  reparada no próprio workspace e produzir exatamente o JSON esperado; o runner
+  repete a suíte, os probes ocultos e a CLI antes do cleanup.
 
 - `performance_regression` — Testa otimização sem regressão funcional. O agente
   recebe uma função Python correta, porém quadrática, e deve reduzir o trabalho
@@ -85,8 +85,9 @@ semanais especializadas do mesmo plano.
   que um timer relativo é armado antes da escrita, acorda a sessão no momento
   correto e não deixa recursos ativos.
 
-- `shell_coder_sandbox` — Três execuções. Mede se investigação, patch e paridade
-  do sandbox convergem de forma repetível, não apenas se um caso isolado passou.
+- `shell_coder_sandbox` — Três execuções. Mede se investigação, patch, testes
+  públicos e ocultos e a CLI no host convergem de forma repetível, não apenas se
+  um caso isolado passou.
 
 - `performance_regression` — Cinco execuções. É o principal sinal estatístico de
   regressão de código e compara taxa de aprovação, mediana da nota e dispersão
@@ -164,7 +165,7 @@ para não mascarar uma regressão da release.
 
 ## Leitura especial da nota de `shell_coder_sandbox`
 
-O cenário mantém `scenario_version = 5`, mas usa o cohort
+O cenário usa `scenario_version = 6` e mantém o cohort
 `code-hard-2026-08`. Os assets visíveis não vivem no binário do harness: são
 carregados do subtree `shell-coder-sandbox` do repositório
 `iii-hq/e2e-fixture`, fixado por commit e por digest de conteúdo. Os probes
@@ -173,14 +174,13 @@ integralmente a avaliação.
 
 Os 100 pontos agora são distribuídos assim:
 
-- 5: workers necessários disponíveis e instalados;
-- 15: leitura dos três artefatos e reprodução vermelha antes do primeiro edit;
+- 5: superfícies de shell e coder disponíveis;
+- 20: leitura dos três artefatos e reprodução vermelha antes do primeiro edit;
 - 5: diagnóstico escrito e movido para o local final;
-- 20: suíte pública aceita pelo runner;
-- 25: probes ocultos aceitos pelo runner;
+- 25: suíte pública aceita pelo runner;
+- 30: probes ocultos aceitos pelo runner;
 - 10: demo correta no host;
-- 15: mesma fonte, mesmos testes e mesmos resultados no sandbox sem rede;
-- 5: escopo exato, ordem das evidências e sandbox encerrado.
+- 5: escopo exato e ordem das evidências.
 
 Assim, uma execução que apenas chama ferramentas corretamente não obtém uma boa
 nota. A maior parte dos pontos depende de produzir código correto e evidência

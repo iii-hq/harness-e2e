@@ -23,9 +23,9 @@ technical retry is allowed only for infrastructure failures.
 
 3. **`shell_coder_sandbox`** — Validates a complete, reproducible code-fix
    workflow: reproduce the failure, diagnose it, modify only production code,
-   pass public and hidden tests, and reproduce the result in an offline Python
-   sandbox. Its purpose is to measure real coding correctness, evidence quality,
-   scope discipline, and host-to-sandbox parity.
+   pass public and hidden tests, and execute the repaired CLI in the host
+   workspace with exact output. Its purpose is to measure real coding
+   correctness, evidence quality, scope discipline, and host execution.
 
 4. **`performance_regression`** — Validates that an algorithm can be optimized
    without changing its output or ordering, using deterministic hash and
@@ -65,9 +65,9 @@ recovery and endurance are specialized weekly tracks.
    weekly canary for basic execution and scheduled wake behavior.
 
 2. **`shell_coder_sandbox`** — Validates that investigation, patching, public
-   and hidden tests, and offline sandbox parity converge across three runs. Its
-   purpose is to measure repeatable coding performance rather than a one-off
-   success.
+   and hidden tests, and exact host CLI execution converge across three runs.
+   Its purpose is to measure repeatable coding performance rather than a
+   one-off success.
 
 3. **`performance_regression`** — Validates optimization correctness across
    five runs using deterministic work measurements. Its purpose is to provide
@@ -131,9 +131,9 @@ release regressions are not masked.
    purpose is to act as release canaries.
 
 2. **`shell_coder_sandbox`** — Validates that the published version can execute
-   a complete code-fix workflow and reproduce the result in an offline sandbox.
-   Its purpose is to verify release-level coding correctness and evidence
-   parity.
+   a complete code-fix workflow and reproduce the exact CLI result in the host
+   workspace. Its purpose is to verify release-level coding correctness and
+   execution evidence.
 
 3. **`performance_regression`** — Validates optimization without functional
    regression in the published version. Its purpose is to detect release-level

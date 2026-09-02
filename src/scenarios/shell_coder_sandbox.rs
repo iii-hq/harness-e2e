@@ -1,10 +1,9 @@
-//! `shell_coder_sandbox` — repair a multi-case Python reconciliation module,
-//! prove the repair with public and runner-owned hidden probes, and then run
-//! the exact repaired source in both the host workspace and a networkless VM.
+//! `shell_coder_sandbox` — repair a multi-case Python reconciliation module and
+//! prove the repair with public tests, runner-owned hidden probes, and an exact
+//! host-side CLI result. The historical scenario id is retained for continuity.
 //!
-//! The public scenario version intentionally remains stable. The harder cohort
-//! is identified by its canonical seed, materialized inputs, contract hash,
-//! and assessment profile.
+//! Version 6 removes the engine-managed sandbox dependency while retaining the
+//! pinned fixture and deterministic code-repair contract.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::OsStr;
@@ -30,7 +29,7 @@ use super::{
 };
 
 pub const ID: &str = "shell_coder_sandbox";
-const VERSION: u32 = 5;
+const VERSION: u32 = 6;
 pub const CANONICAL_SEED: u64 = 2_051;
 const DIFFICULTY_PROFILE: &str = "code-hard-2026-08";
 
@@ -41,9 +40,6 @@ const PUBLIC_TEST_PATH: &str = "tests/test_reconcile.py";
 const TASK_PATH: &str = "TASK.md";
 const DIAGNOSIS_DRAFT_PATH: &str = "diagnosis.tmp.md";
 const DIAGNOSIS_PATH: &str = "evidence/diagnosis.md";
-const SANDBOX_SOURCE_PATH: &str = "/workspace/src/reconcile.py";
-const SANDBOX_TEST_PATH: &str = "/workspace/tests/test_reconcile.py";
-const SANDBOX_WORKDIR: &str = "/workspace";
 const HOST_DEMO_STDOUT: &str = r#"{"accounts":[{"account":"alpha","balance_cents":825},{"account":"beta","balance_cents":0}]}"#;
 const MAX_SOURCE_BYTES: u64 = 64 * 1024;
 const COMMAND_TIMEOUT: Duration = Duration::from_secs(90);
@@ -187,11 +183,11 @@ if __name__ == "__main__":
 const WORKER_SETUP: AssessmentSpec = AssessmentSpec::hard_gated(
     "worker_setup",
     5,
-    "The assembled project exposes every required code-execution surface.",
+    "The assembled project exposes the required shell and coder surfaces.",
 );
 const INVESTIGATION: AssessmentSpec = AssessmentSpec::hard_gated(
     "investigation_and_red_baseline",
-    15,
+    20,
     "Source and tests are inspected and the public failure is reproduced before the first production edit.",
 );
 const DIAGNOSIS: AssessmentSpec = AssessmentSpec::score_only(
@@ -201,12 +197,12 @@ const DIAGNOSIS: AssessmentSpec = AssessmentSpec::score_only(
 );
 const PUBLIC_CORRECTNESS: AssessmentSpec = AssessmentSpec::hard_gated(
     "public_correctness",
-    20,
+    25,
     "The subject reruns the public suite after editing and the runner independently observes it green.",
 );
 const HIDDEN_CORRECTNESS: AssessmentSpec = AssessmentSpec::hard_gated(
     "hidden_correctness",
-    25,
+    30,
     "Runner-owned probes accept generators, out-of-order revisions, account migration, conflicts, validation, idempotency, and input immutability.",
 );
 const HOST_EXECUTION: AssessmentSpec = AssessmentSpec::hard_gated(
@@ -214,15 +210,10 @@ const HOST_EXECUTION: AssessmentSpec = AssessmentSpec::hard_gated(
     10,
     "The repaired CLI runs in the host workspace and emits the exact compact JSON contract.",
 );
-const SANDBOX_PARITY: AssessmentSpec = AssessmentSpec::hard_gated(
-    "sandbox_parity",
-    15,
-    "The exact repaired source and protected public tests pass inside a networkless sandbox, whose demo matches the host output.",
-);
 const SCOPE_AND_LIFECYCLE: AssessmentSpec = AssessmentSpec::hard_gated(
     "scope_and_lifecycle",
     5,
-    "Protected files remain exact, only the source and diagnosis differ, and the sandbox lifecycle terminates cleanly.",
+    "Protected files remain exact and only the source and retained diagnosis differ.",
 );
 const ASSESSMENTS: &[AssessmentSpec] = &[
     WORKER_SETUP,
@@ -231,7 +222,6 @@ const ASSESSMENTS: &[AssessmentSpec] = &[
     PUBLIC_CORRECTNESS,
     HIDDEN_CORRECTNESS,
     HOST_EXECUTION,
-    SANDBOX_PARITY,
     SCOPE_AND_LIFECYCLE,
 ];
 
@@ -255,17 +245,16 @@ pub fn materialize(namespace: &str, _seed: u64) -> Result<MaterializedScenario> 
             "task_path": TASK_PATH,
             "diagnosis_path": DIAGNOSIS_PATH,
             "host_demo_stdout": HOST_DEMO_STDOUT,
-            "sandbox_resources": {"cpus": 1, "memory_mb": 256, "network": false},
             "hidden_probe_families": 7,
         }),
         ComplexityProfile {
             planning_depth: 5,
             dependency_depth: 4,
-            external_systems: 3,
-            state_transitions: 12,
+            external_systems: 2,
+            state_transitions: 8,
             validation_loops: 2,
             artifact_count: 2,
-            coordination_edges: 3,
+            coordination_edges: 2,
             ambiguity_level: 5,
             ..ComplexityProfile::default()
         },
@@ -275,7 +264,6 @@ pub fn materialize(namespace: &str, _seed: u64) -> Result<MaterializedScenario> 
             "iii::registry".to_string(),
             "iii::coder".to_string(),
             "iii::shell".to_string(),
-            "iii::sandbox".to_string(),
         ],
         deliverable_contract(),
     )?;
@@ -288,7 +276,6 @@ pub fn materialize(namespace: &str, _seed: u64) -> Result<MaterializedScenario> 
 
 fn scenario_for_case(run_id: &str) -> ScenarioSpec {
     let root = workspace_root(run_id);
-    let sandbox_name = sandbox_name(run_id);
     ScenarioSpec {
         id: ID,
         version: VERSION,
@@ -306,17 +293,10 @@ Follow this evidence order:
 5. Rerun the complete public suite until green, read the final source, and run
    `python3 {source} --demo`. Its stdout must be exactly `{host_stdout}`.
 6. Move `{diagnosis_draft}` to `{diagnosis}` using `coder::move`. Add no other files.
-7. Create one sandbox named `{sandbox_name}` with image `python`, exactly 1 CPU, 256 MB,
-   and networking disabled. With `sandbox::fs::write` and `parents: true`, copy the exact
-   final source to `{sandbox_source}` and unchanged public tests to `{sandbox_test}`.
-8. In sandbox workdir `{sandbox_workdir}`, run the same unittest discovery command with
-   `sandbox::exec`, then run `python3 {sandbox_source} --demo`. Require green tests and the
-   same compact JSON. List the active sandbox, then stop it with `wait: true`.
 
-Do not modify `{tests}` or `{task}`, use the network, write outside the workspace, or leave
-the sandbox running. Hidden runner-side probes cover additional cases. Finish with a short
-report containing the red baseline, green public suite, host demo, sandbox suite, and sandbox
-demo results."#,
+Do not modify `{tests}` or `{task}`, use the network, or write outside the workspace. Hidden
+runner-side probes cover additional cases. Finish with a short report containing the red
+baseline, green public suite, and host demo results."#,
             root = root.display(),
             source = SOURCE_PATH,
             tests = PUBLIC_TEST_PATH,
@@ -324,9 +304,6 @@ demo results."#,
             diagnosis_draft = DIAGNOSIS_DRAFT_PATH,
             diagnosis = DIAGNOSIS_PATH,
             host_stdout = HOST_DEMO_STDOUT,
-            sandbox_source = SANDBOX_SOURCE_PATH,
-            sandbox_test = SANDBOX_TEST_PATH,
-            sandbox_workdir = SANDBOX_WORKDIR,
         ),
         filesystem_root: Some(root),
         execution: ExecutionPolicy {
@@ -589,13 +566,13 @@ impl WorkflowAudit {
     fn investigation_points(&self) -> u8 {
         let mut points = 0;
         if self.coder_info.is_some() {
-            points += 3;
+            points += 4;
         }
         if self.source_read.is_some() && self.tests_read.is_some() && self.task_read.is_some() {
-            points += 6;
+            points += 8;
         }
         if self.red_before_edit {
-            points += 6;
+            points += 8;
         }
         points
     }
@@ -693,23 +670,7 @@ fn evaluate<'a>(
         let workflow = workflow_audit(observation, &root);
         let shell_ready = context.function_exists("shell::exec").await?;
         let coder_ready = context.function_exists("coder::update-file").await?;
-        let mut sandbox_ready = true;
-        for function in [
-            "sandbox::create",
-            "sandbox::fs::write",
-            "sandbox::exec",
-            "sandbox::list",
-            "sandbox::stop",
-        ] {
-            sandbox_ready &= context.function_exists(function).await?;
-        }
-        let worker_setup = shell_ready && coder_ready && sandbox_ready;
-        let sandbox = sandbox_evidence(
-            &observation.transcript,
-            &sandbox_name(run_id),
-            fixture.source.as_deref(),
-            &assets.public_tests,
-        );
+        let worker_setup = shell_ready && coder_ready;
         let public_correctness =
             workflow.red_before_edit && workflow.green_public.is_some() && fixture.public.success;
         let host_execution = workflow.host_demo.is_some()
@@ -720,7 +681,7 @@ fn evaluate<'a>(
         Ok(assessment::build_evaluation([
             WORKER_SETUP.full_or_zero(
                 worker_setup,
-                format!("shell={shell_ready}, coder={coder_ready}, sandbox={sandbox_ready}"),
+                format!("shell={shell_ready}, coder={coder_ready}"),
             ),
             INVESTIGATION.gate_and_points(
                 workflow.investigation_complete(),
@@ -774,17 +735,15 @@ fn evaluate<'a>(
                     fixture.demo.stderr
                 ),
             ),
-            SANDBOX_PARITY.full_or_zero(sandbox.complete(), sandbox.summary()),
             SCOPE_AND_LIFECYCLE.full_or_zero(
-                scope && sandbox.stopped,
+                scope,
                 format!(
-                    "protected={}, patch={}, diagnosis={}, unexpected={:?}, ordered={}, stopped={}",
+                    "protected={}, patch={}, diagnosis={}, unexpected={:?}, ordered={}",
                     fixture.protected_files_exact,
                     fixture.production_patch_present,
                     fixture.diagnosis_present,
                     fixture.unexpected_paths,
-                    workflow.evidence_ordered,
-                    sandbox.stopped
+                    workflow.evidence_ordered
                 ),
             ),
         ]))
@@ -801,12 +760,6 @@ fn capture<'a>(
         let assets = load_fixture_assets()?;
         let fixture = audit_fixture(run_id, &assets).await?;
         let workflow = workflow_audit(observation, &root);
-        let sandbox = sandbox_evidence(
-            &observation.transcript,
-            &sandbox_name(run_id),
-            fixture.source.as_deref(),
-            &assets.public_tests,
-        );
         let scope = fixture.scope_valid() && workflow.evidence_ordered;
         Ok(vec![
             CapturedDeliverable {
@@ -864,7 +817,6 @@ fn capture<'a>(
                         "stdout": fixture.demo.stdout.trim(),
                         "stderr": fixture.demo.stderr.trim(),
                     },
-                    "sandbox": sandbox.as_json(),
                     "workflow": {
                         "red_baseline": workflow.red_baseline,
                         "green_public": workflow.green_public,
@@ -873,23 +825,15 @@ fn capture<'a>(
                     },
                 })
                 .into(),
-                invariants: vec![
-                    CapturedInvariant {
-                        id: "host_demo_exact".to_string(),
-                        passed: fixture.demo.success
-                            && fixture.demo.stdout.trim() == HOST_DEMO_STDOUT,
-                        reason: format!("expected exact host stdout `{HOST_DEMO_STDOUT}`"),
-                    },
-                    CapturedInvariant {
-                        id: "sandbox_parity_complete".to_string(),
-                        passed: sandbox.complete(),
-                        reason: sandbox.summary(),
-                    },
-                ],
+                invariants: vec![CapturedInvariant {
+                    id: "host_demo_exact".to_string(),
+                    passed: fixture.demo.success && fixture.demo.stdout.trim() == HOST_DEMO_STDOUT,
+                    reason: format!("expected exact host stdout `{HOST_DEMO_STDOUT}`"),
+                }],
                 provenance: vec![ProvenanceEvidence {
-                    kind: "sandbox".to_string(),
-                    source_id: sandbox_name(run_id),
-                    relation: "exact_source_reexecuted_and_stopped".to_string(),
+                    kind: "filesystem_path".to_string(),
+                    source_id: root.join(SOURCE_PATH).display().to_string(),
+                    relation: "exact_source_executed_by_runner".to_string(),
                 }],
             },
         ])
@@ -923,10 +867,9 @@ fn deliverable_contract() -> DeliverableContract {
                 media_type: "application/json".to_string(),
                 schema: json!({
                     "type": "object",
-                    "required": ["host", "sandbox", "workflow"],
+                    "required": ["host", "workflow"],
                     "properties": {
                         "host": {"type": "object"},
-                        "sandbox": {"type": "object"},
                         "workflow": {"type": "object"}
                     },
                     "additionalProperties": false
@@ -950,10 +893,6 @@ fn deliverable_contract() -> DeliverableContract {
             InvariantSpec {
                 id: "host_demo_exact".to_string(),
                 description: "The host CLI preserves the compact JSON contract.".to_string(),
-            },
-            InvariantSpec {
-                id: "sandbox_parity_complete".to_string(),
-                description: "The exact repair passes inside a stopped sandbox.".to_string(),
             },
         ],
         provenance_required: true,
@@ -1200,21 +1139,6 @@ fn normalize_workspace_path(path: &Path) -> Option<PathBuf> {
     Some(normalized)
 }
 
-fn function_results<'a>(transcript: &'a Value, function_id: &'a str) -> Vec<&'a Value> {
-    transcript
-        .get("messages")
-        .and_then(Value::as_array)
-        .into_iter()
-        .flatten()
-        .filter_map(|entry| entry.get("message"))
-        .filter(|message| {
-            message.get("role").and_then(Value::as_str) == Some("function_result")
-                && message.get("function_id").and_then(Value::as_str) == Some(function_id)
-                && message.get("is_error").and_then(Value::as_bool) == Some(false)
-        })
-        .collect()
-}
-
 fn successful_output_result(message: &Value, expected: &str) -> bool {
     result_exit_code(message) == Some(0)
         && message
@@ -1229,283 +1153,6 @@ fn successful_output_result(message: &Value, expected: &str) -> bool {
             .pointer("/details/timed_out")
             .and_then(Value::as_bool)
             != Some(true)
-}
-
-#[derive(Debug, Default)]
-struct SandboxEvidence {
-    sandbox_id: Option<String>,
-    exact_create: bool,
-    source_written: bool,
-    tests_written: bool,
-    public_tests_passed: bool,
-    demo_passed: bool,
-    listed_active: bool,
-    stopped: bool,
-    ordered: bool,
-}
-
-impl SandboxEvidence {
-    fn complete(&self) -> bool {
-        self.sandbox_id.is_some()
-            && self.exact_create
-            && self.source_written
-            && self.tests_written
-            && self.public_tests_passed
-            && self.demo_passed
-            && self.listed_active
-            && self.stopped
-            && self.ordered
-    }
-
-    fn summary(&self) -> String {
-        format!(
-            "sandbox id={}, create={}, source={}, tests={}, public={}, demo={}, listed={}, stopped={}, ordered={}",
-            self.sandbox_id.as_deref().unwrap_or("missing"),
-            self.exact_create,
-            self.source_written,
-            self.tests_written,
-            self.public_tests_passed,
-            self.demo_passed,
-            self.listed_active,
-            self.stopped,
-            self.ordered
-        )
-    }
-
-    fn as_json(&self) -> Value {
-        json!({
-            "sandbox_id": self.sandbox_id,
-            "exact_create": self.exact_create,
-            "source_written": self.source_written,
-            "tests_written": self.tests_written,
-            "public_tests_passed": self.public_tests_passed,
-            "demo_passed": self.demo_passed,
-            "listed_active": self.listed_active,
-            "stopped": self.stopped,
-            "ordered": self.ordered,
-        })
-    }
-}
-
-fn sandbox_evidence(
-    transcript: &Value,
-    expected_name: &str,
-    final_source: Option<&str>,
-    public_tests: &str,
-) -> SandboxEvidence {
-    let invocations = common::function_invocations(transcript);
-    let sandbox_id = invocations.iter().find_map(|invocation| {
-        (invocation.call.function_id == "sandbox::create"
-            && exact_sandbox_create(&invocation.call, expected_name))
-        .then(|| common::function_result(transcript, invocation))
-        .flatten()
-        .and_then(|result| {
-            result
-                .pointer("/details/sandbox_id")
-                .and_then(Value::as_str)
-                .map(str::to_owned)
-        })
-    });
-    let Some(id) = sandbox_id.as_deref() else {
-        return SandboxEvidence {
-            sandbox_id,
-            ..SandboxEvidence::default()
-        };
-    };
-    let exact_create = invocations
-        .iter()
-        .any(|invocation| exact_sandbox_create(&invocation.call, expected_name));
-    let source_written = final_source.is_some_and(|source| {
-        correlated_call_succeeded(transcript, &invocations, |call| {
-            is_sandbox_write(call, id, SANDBOX_SOURCE_PATH, source)
-        })
-    });
-    let tests_written = correlated_call_succeeded(transcript, &invocations, |call| {
-        is_sandbox_write(call, id, SANDBOX_TEST_PATH, public_tests)
-    });
-    let public_tests_passed = correlated_result_matches(
-        transcript,
-        &invocations,
-        |call| is_sandbox_public_test(call, id),
-        |result| result_exit_code(result) == Some(0),
-    );
-    let demo_passed = correlated_result_matches(
-        transcript,
-        &invocations,
-        |call| is_sandbox_demo(call, id),
-        |result| successful_output_result(result, HOST_DEMO_STDOUT),
-    );
-    let listed_active = function_results(transcript, "sandbox::list")
-        .into_iter()
-        .any(|message| {
-            message
-                .pointer("/details/sandboxes")
-                .and_then(Value::as_array)
-                .into_iter()
-                .flatten()
-                .any(|sandbox| {
-                    sandbox.get("sandbox_id").and_then(Value::as_str) == Some(id)
-                        && sandbox.get("name").and_then(Value::as_str) == Some(expected_name)
-                        && sandbox.get("stopped").and_then(Value::as_bool) == Some(false)
-                })
-        });
-    let stopped = correlated_result_matches(
-        transcript,
-        &invocations,
-        |call| {
-            call.function_id == "sandbox::stop"
-                && call.arguments.get("sandbox_id").and_then(Value::as_str) == Some(id)
-                && call.arguments.get("wait").and_then(Value::as_bool) == Some(true)
-        },
-        |result| {
-            result.pointer("/details/stopped").and_then(Value::as_bool) == Some(true)
-                && result
-                    .pointer("/details/sandbox_id")
-                    .and_then(Value::as_str)
-                    == Some(id)
-        },
-    );
-    let ordered =
-        sandbox_calls_are_ordered(&invocations, expected_name, id, final_source, public_tests);
-    SandboxEvidence {
-        sandbox_id,
-        exact_create,
-        source_written,
-        tests_written,
-        public_tests_passed,
-        demo_passed,
-        listed_active,
-        stopped,
-        ordered,
-    }
-}
-
-fn exact_sandbox_create(call: &common::ObservedFunctionCall, expected_name: &str) -> bool {
-    call.function_id == "sandbox::create"
-        && call.arguments.get("image").and_then(Value::as_str) == Some("python")
-        && call.arguments.get("name").and_then(Value::as_str) == Some(expected_name)
-        && call.arguments.get("cpus").and_then(Value::as_u64) == Some(1)
-        && call.arguments.get("memory_mb").and_then(Value::as_u64) == Some(256)
-        && call.arguments.get("network").and_then(Value::as_bool) == Some(false)
-}
-
-fn is_sandbox_write(
-    call: &common::ObservedFunctionCall,
-    sandbox_id: &str,
-    path: &str,
-    content: &str,
-) -> bool {
-    call.function_id == "sandbox::fs::write"
-        && call.arguments.get("sandbox_id").and_then(Value::as_str) == Some(sandbox_id)
-        && call.arguments.get("path").and_then(Value::as_str) == Some(path)
-        && call.arguments.get("content").and_then(Value::as_str) == Some(content)
-        && call.arguments.get("parents").and_then(Value::as_bool) == Some(true)
-}
-
-fn is_sandbox_public_test(call: &common::ObservedFunctionCall, sandbox_id: &str) -> bool {
-    is_sandbox_python_call(
-        call,
-        sandbox_id,
-        &[
-            "-m",
-            "unittest",
-            "discover",
-            "-s",
-            "tests",
-            "-p",
-            "test_*.py",
-        ],
-    )
-}
-
-fn is_sandbox_demo(call: &common::ObservedFunctionCall, sandbox_id: &str) -> bool {
-    is_sandbox_python_call(call, sandbox_id, &[SANDBOX_SOURCE_PATH, "--demo"])
-}
-
-fn is_sandbox_python_call(
-    call: &common::ObservedFunctionCall,
-    sandbox_id: &str,
-    expected_args: &[&str],
-) -> bool {
-    call.function_id == "sandbox::exec"
-        && call.arguments.get("sandbox_id").and_then(Value::as_str) == Some(sandbox_id)
-        && call.arguments.get("cmd").and_then(Value::as_str) == Some("python3")
-        && call.arguments.get("workdir").and_then(Value::as_str) == Some(SANDBOX_WORKDIR)
-        && call
-            .arguments
-            .get("args")
-            .and_then(Value::as_array)
-            .is_some_and(|args| {
-                args.len() == expected_args.len()
-                    && args
-                        .iter()
-                        .filter_map(Value::as_str)
-                        .eq(expected_args.iter().copied())
-            })
-}
-
-fn sandbox_calls_are_ordered(
-    invocations: &[common::ObservedFunctionInvocation],
-    expected_name: &str,
-    sandbox_id: &str,
-    final_source: Option<&str>,
-    public_tests: &str,
-) -> bool {
-    let create = invocation_index(invocations, |call| {
-        exact_sandbox_create(call, expected_name)
-    });
-    let source = final_source.and_then(|source| {
-        invocation_index(invocations, |call| {
-            is_sandbox_write(call, sandbox_id, SANDBOX_SOURCE_PATH, source)
-        })
-    });
-    let tests = invocation_index(invocations, |call| {
-        is_sandbox_write(call, sandbox_id, SANDBOX_TEST_PATH, public_tests)
-    });
-    let public = invocation_index(invocations, |call| is_sandbox_public_test(call, sandbox_id));
-    let demo = invocation_index(invocations, |call| is_sandbox_demo(call, sandbox_id));
-    let list = demo.and_then(|demo| {
-        invocation_indexes(invocations, |call| call.function_id == "sandbox::list")
-            .into_iter()
-            .find(|list| *list > demo)
-    });
-    let stop = list.and_then(|list| {
-        invocation_indexes(invocations, |call| {
-            call.function_id == "sandbox::stop"
-                && call.arguments.get("sandbox_id").and_then(Value::as_str) == Some(sandbox_id)
-                && call.arguments.get("wait").and_then(Value::as_bool) == Some(true)
-        })
-        .into_iter()
-        .find(|stop| *stop > list)
-    });
-    matches!(
-        (create, source, tests, public, demo, list, stop),
-        (Some(create), Some(source), Some(tests), Some(public), Some(demo), Some(list), Some(stop))
-            if create < source && create < tests && source < public && tests < public
-                && public < demo && demo < list && list < stop
-    )
-}
-
-fn correlated_call_succeeded(
-    transcript: &Value,
-    invocations: &[common::ObservedFunctionInvocation],
-    call_matches: impl Fn(&common::ObservedFunctionCall) -> bool,
-) -> bool {
-    correlated_result_matches(transcript, invocations, call_matches, |_| true)
-}
-
-fn correlated_result_matches(
-    transcript: &Value,
-    invocations: &[common::ObservedFunctionInvocation],
-    call_matches: impl Fn(&common::ObservedFunctionCall) -> bool,
-    result_matches: impl Fn(&Value) -> bool,
-) -> bool {
-    invocations
-        .iter()
-        .filter(|invocation| call_matches(&invocation.call))
-        .any(|invocation| {
-            common::function_result(transcript, invocation).is_some_and(&result_matches)
-        })
 }
 
 fn collect_files(root: &Path) -> Result<Vec<String>> {
@@ -1537,50 +1184,8 @@ fn is_ignored_python_artifact(path: &str) -> bool {
     path.split('/').any(|part| part == "__pycache__") || path.ends_with(".pyc")
 }
 
-fn cleanup<'a>(context: &'a E2eContext, run_id: &'a str) -> CleanupFuture<'a> {
-    Box::pin(async move {
-        let mut failures = Vec::new();
-        if let Err(error) = cleanup_owned_sandbox(context, &sandbox_name(run_id)).await {
-            failures.push(format!("sandbox cleanup: {error:#}"));
-        }
-        if let Err(error) = remove_workspace(&workspace_root(run_id)) {
-            failures.push(format!("workspace cleanup: {error:#}"));
-        }
-        if failures.is_empty() {
-            Ok(())
-        } else {
-            bail!(failures.join("; "))
-        }
-    })
-}
-
-async fn cleanup_owned_sandbox(context: &E2eContext, expected_name: &str) -> Result<()> {
-    if !context.function_exists("sandbox::list").await? {
-        return Ok(());
-    }
-    let listed = context.trigger_value("sandbox::list", json!({})).await?;
-    for sandbox_id in owned_running_sandbox_ids(&listed, expected_name) {
-        let _: Value = context
-            .trigger(
-                "sandbox::stop",
-                json!({"sandbox_id": sandbox_id, "wait": true}),
-            )
-            .await?;
-    }
-    Ok(())
-}
-
-fn owned_running_sandbox_ids(listed: &Value, expected_name: &str) -> Vec<String> {
-    listed
-        .get("sandboxes")
-        .and_then(Value::as_array)
-        .into_iter()
-        .flatten()
-        .filter(|sandbox| sandbox.get("name").and_then(Value::as_str) == Some(expected_name))
-        .filter(|sandbox| sandbox.get("stopped").and_then(Value::as_bool) != Some(true))
-        .filter_map(|sandbox| sandbox.get("sandbox_id").and_then(Value::as_str))
-        .map(str::to_owned)
-        .collect()
+fn cleanup<'a>(_context: &'a E2eContext, run_id: &'a str) -> CleanupFuture<'a> {
+    Box::pin(async move { remove_workspace(&workspace_root(run_id)) })
 }
 
 fn remove_workspace(root: &Path) -> Result<()> {
@@ -1630,19 +1235,15 @@ fn workspace_root(run_id: &str) -> PathBuf {
     workspace_parent().join(format!("shell-coder-{}", suffix(run_id)))
 }
 
-fn sandbox_name(run_id: &str) -> String {
-    format!("e2e-shell-coder-{}", suffix(run_id))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
-    fn harder_case_keeps_version_and_has_a_distinct_cohort() {
+    fn host_only_case_has_a_distinct_version_and_cohort() {
         let materialized = materialize("catalog", CANONICAL_SEED).unwrap();
         let rotated = materialize("catalog", 7).unwrap();
-        assert_eq!(materialized.case.scenario_version, 5);
+        assert_eq!(materialized.case.scenario_version, 6);
         assert_eq!(materialized.case.seed, CANONICAL_SEED);
         assert_eq!(rotated.case.case_id, materialized.case.case_id);
         assert_eq!(
@@ -1670,6 +1271,18 @@ mod tests {
             materialized.case.complexity.tier,
             super::super::ComplexityTier::L4Coordinated
         );
+        assert!(!materialized
+            .case
+            .inputs
+            .as_object()
+            .unwrap()
+            .contains_key("sandbox_resources"));
+        assert!(!materialized
+            .case
+            .required_capabilities
+            .iter()
+            .any(|capability| capability == "iii::sandbox"));
+        assert!(!materialized.spec.prompt.contains("sandbox"));
         assert_eq!(
             ASSESSMENTS
                 .iter()

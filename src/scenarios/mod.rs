@@ -860,7 +860,7 @@ mod tests {
         // start independently at v1 and bring the built-in catalog to 40 entries.
         let expected = [
             (ScenarioId::ContextPressure, 4),
-            (ScenarioId::ShellCoderSandbox, 5),
+            (ScenarioId::ShellCoderSandbox, 6),
             (ScenarioId::ResearchPipeline, 6),
             (ScenarioId::FanoutLadder, 3),
             (ScenarioId::SecurityReview, 4),
