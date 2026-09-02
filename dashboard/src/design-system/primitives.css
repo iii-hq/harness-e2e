@@ -827,7 +827,7 @@
   margin-left: auto;
 }
 
-@media (max-width: 560px) {
+@container harness (max-width: 560px) {
   .ds-dialog,
   .ds-dialog-tall {
     width: 100vw;
@@ -838,7 +838,7 @@
   }
 }
 
-@media (max-width: 720px) {
+@container harness (max-width: 720px) {
   .ds-page-header {
     grid-template-columns: minmax(0, 1fr);
     align-items: start;

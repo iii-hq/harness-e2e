@@ -15,7 +15,6 @@
   position: relative;
   min-width: 320px;
   min-height: 100%;
-  overflow-x: hidden;
   background:
     linear-gradient(var(--grid-line) 1px, transparent 1px),
     linear-gradient(90deg, var(--grid-line) 1px, transparent 1px), var(--bg);

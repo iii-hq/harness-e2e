@@ -220,7 +220,7 @@ test('keeps plan panels explicitly padded and comparison content full bleed', ()
   )
   assert.match(
     styles,
-    /@media \(max-width: 560px\)[\s\S]*--plan-panel-space-y: 18px[\s\S]*--plan-panel-space-x: 18px/,
+    /@container harness \(max-width: 560px\)[\s\S]*--plan-panel-space-y: 18px[\s\S]*--plan-panel-space-x: 18px/,
   )
   assert.match(planPage, /panel-heading plan-panel-heading/g)
   assert.doesNotMatch(planPage, /className="panel-heading"/)
@@ -353,7 +353,7 @@ test('organizes detail into progressive disclosure sections', () => {
   assert.match(executionPage, /Preview raw JSON/)
   // The sheet behaviour below 560px lives in the design-system Dialog.
   assert.match(transcript, /<Dialog/)
-  assert.match(read('src', 'design-system', 'primitives.css'), /@media \(max-width: 560px\) \{\s*\.ds-dialog,/)
+  assert.match(read('src', 'design-system', 'primitives.css'), /@container harness \(max-width: 560px\) \{\s*\.ds-dialog,/)
 })
 
 test('migrates runner and transcript behavior to React components', () => {

@@ -158,6 +158,11 @@
   --radius-lg: 6px;
   --shadow: none;
   min-width: 0;
+  /* Audit DS-14 / RD-11: the dashboard is a query container. Injected pages
+     live in tabs and split panes, so layout reacts to THIS width, not the
+     viewport. Two points matter: narrow (≤ 720px) and compact (≤ 480px). */
+  container-type: inline-size;
+  container-name: harness;
 }
 
 /* Console vocabulary: headings render in the mono face, lowercase, with tight

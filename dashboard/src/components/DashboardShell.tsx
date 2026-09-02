@@ -248,7 +248,7 @@ export function DashboardShell({
           >
             <div
               ref={mainRef}
-              className="harness-e2e-dashboard min-h-full min-w-0 overflow-x-hidden bg-panel text-ink"
+              className="harness-e2e-dashboard min-h-full min-w-0 bg-panel text-ink"
               data-harness-e2e-dashboard
               data-theme={theme}
             >
