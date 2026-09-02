@@ -1,0 +1,110 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "TaskSuiteComparison",
+  "type": "object",
+  "required": [
+    "advisory",
+    "baseline_execution_id",
+    "candidate_execution_id",
+    "comparable",
+    "deltas",
+    "reason",
+    "schema"
+  ],
+  "properties": {
+    "advisory": {
+      "type": "boolean"
+    },
+    "baseline_execution_id": {
+      "type": "string"
+    },
+    "candidate_execution_id": {
+      "type": "string"
+    },
+    "comparable": {
+      "type": "boolean"
+    },
+    "deltas": {
+      "type": "array",
+      "items": {
+        "$ref": "#/definitions/TaskAggregateDelta"
+      }
+    },
+    "reason": {
+      "type": "string"
+    },
+    "schema": {
+      "type": "string"
+    }
+  },
+  "definitions": {
+    "TaskAggregateDelta": {
+      "type": "object",
+      "required": [
+        "baseline_maturity",
+        "candidate_maturity",
+        "task_id"
+      ],
+      "properties": {
+        "baseline_maturity": {
+          "type": "string"
+        },
+        "candidate_maturity": {
+          "type": "string"
+        },
+        "grounding_integrity_rate": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double"
+        },
+        "p50_total_tokens_ratio": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double"
+        },
+        "p50_turns_ratio": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double"
+        },
+        "p50_wall_time_ratio": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double"
+        },
+        "product_success_rate": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double"
+        },
+        "structural_integrity_rate": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double"
+        },
+        "task_id": {
+          "type": "string"
+        },
+        "technical_failure_rate": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double"
+        }
+      }
+    }
+  }
+}

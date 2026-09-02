@@ -23,13 +23,13 @@
     }
   },
   "state_assertions": [
-    {"pointer": "/version", "equals_from": {"file": "initial_state.json", "pointer": "/tag/version"}},
-    {"pointer": "/tag", "equals_from": {"file": "initial_state.json", "pointer": "/tag/name"}},
-    {"pointer": "/run_id", "equals_from": {"file": "initial_state.json", "pointer": "/run/run_id"}},
-    {"pointer": "/latest_before", "equals_from": {"file": "initial_state.json", "pointer": "/latest_version"}},
-    {"pointer": "/latest_after", "equals_from": {"file": "initial_state.json", "pointer": "/tag/version"}}
+    {"id": "reuse_version", "dimension": "grounding", "pointer": "/version", "equals_from": {"file": "initial_state.json", "pointer": "/tag/version"}},
+    {"id": "reuse_tag", "dimension": "grounding", "pointer": "/tag", "equals_from": {"file": "initial_state.json", "pointer": "/tag/name"}},
+    {"id": "reuse_run", "dimension": "grounding", "pointer": "/run_id", "equals_from": {"file": "initial_state.json", "pointer": "/run/run_id"}},
+    {"id": "preserve_latest_before", "dimension": "grounding", "pointer": "/latest_before", "equals_from": {"file": "initial_state.json", "pointer": "/latest_version"}},
+    {"id": "promote_immutable_version", "dimension": "functional", "pointer": "/latest_after", "equals_from": {"file": "initial_state.json", "pointer": "/tag/version"}}
   ],
   "report_assertions": [
-    {"pointer": "/cas_expected_latest", "equals_from": {"file": "initial_state.json", "pointer": "/latest_version"}}
+    {"id": "cas_observed_latest", "dimension": "grounding", "pointer": "/cas_expected_latest", "equals_from": {"file": "initial_state.json", "pointer": "/latest_version"}}
   ]
 }

@@ -1,4 +1,5 @@
-use std::path::PathBuf;
+use std::collections::BTreeMap;
+use std::path::{Path, PathBuf};
 
 use anyhow::{bail, Context, Result};
 use clap::{Args, Parser, Subcommand};
@@ -75,6 +76,8 @@ enum TaskCommand {
     RunSuite(TaskRunSuiteArgs),
     /// Compare two task-result.json files from compatible executions.
     Compare(TaskCompareArgs),
+    /// Compare two aggregate suite-result.json cohorts.
+    CompareSuite(TaskCompareSuiteArgs),
 }
 
 #[derive(Debug, Args)]
@@ -97,6 +100,21 @@ struct TaskRunArgs {
         default_value = "target/task-runs"
     )]
     output: PathBuf,
+
+    #[arg(long, default_value = "local_development")]
+    lane: String,
+
+    #[arg(long)]
+    release_channel: Option<String>,
+
+    #[arg(long)]
+    release_tag: Option<String>,
+
+    #[arg(long)]
+    system_manifest: Option<PathBuf>,
+
+    #[arg(long)]
+    official_verifier_bundle: Option<PathBuf>,
 }
 
 #[derive(Debug, Args)]
@@ -106,6 +124,17 @@ struct TaskCompareArgs {
     baseline: PathBuf,
 
     /// Candidate task-result.json.
+    #[arg(long)]
+    candidate: PathBuf,
+}
+
+#[derive(Debug, Args)]
+struct TaskCompareSuiteArgs {
+    /// Baseline suite-result.json.
+    #[arg(long)]
+    baseline: PathBuf,
+
+    /// Candidate suite-result.json.
     #[arg(long)]
     candidate: PathBuf,
 }
@@ -131,6 +160,18 @@ struct TaskRunSuiteArgs {
         default_value = "target/task-runs"
     )]
     output: PathBuf,
+
+    /// Immutable stack identity. Required for meaningful remote comparisons.
+    #[arg(long)]
+    system_manifest: Option<PathBuf>,
+
+    /// Runner-private official verifier overlay.
+    #[arg(long)]
+    official_verifier_bundle: Option<PathBuf>,
+
+    /// Immutable published release tag when no system manifest is supplied.
+    #[arg(long)]
+    release_tag: Option<String>,
 }
 
 #[derive(Debug, Args)]
@@ -381,6 +422,7 @@ async fn tasks(command: TaskCommand) -> Result<()> {
         }
         TaskCommand::Validate => {
             let tasks = harness_e2e::task::embedded_catalog()?;
+            let suites = harness_e2e::task::checked_in_task_suites()?;
             let mut sources = Vec::new();
             for task in &tasks {
                 sources.push(harness_e2e::task::observe_source(&task.definition.source)?);
@@ -390,19 +432,29 @@ async fn tasks(command: TaskCommand) -> Result<()> {
                 serde_json::to_string_pretty(&serde_json::json!({
                     "valid": true,
                     "task_count": tasks.len(),
+                    "suite_count": suites.len(),
                     "tasks": tasks,
+                    "suites": suites,
                     "sources": sources,
                 }))?
             );
             Ok(())
         }
         TaskCommand::Run(args) => {
+            let system = task_system_manifest(
+                args.system_manifest.as_deref(),
+                &args.lane,
+                args.release_channel.clone(),
+                args.release_tag.clone(),
+            )?;
             let (result, path) = harness_e2e::task::run_task(harness_e2e::task::TaskRunConfig {
                 url: args.url,
                 task_id: args.task,
                 model: args.model,
                 provider: args.provider,
                 output: args.output,
+                system,
+                official_verifier_bundle: args.official_verifier_bundle,
             })
             .await?;
             println!("{}", path.display());
@@ -413,12 +465,20 @@ async fn tasks(command: TaskCommand) -> Result<()> {
         }
         TaskCommand::RunSuite(args) => {
             let suite = harness_e2e::task::TaskSuiteDefinition::read(&args.suite)?;
+            let system = task_system_manifest(
+                args.system_manifest.as_deref(),
+                &suite.lane,
+                suite.release_channel.clone(),
+                args.release_tag.clone(),
+            )?;
             let (result, path) = harness_e2e::task::run_task_suite(
                 &suite,
                 &args.url,
                 &args.model,
                 &args.provider,
                 &args.output,
+                &system,
+                args.official_verifier_bundle.as_deref(),
             )
             .await?;
             println!("{}", path.display());
@@ -434,7 +494,47 @@ async fn tasks(command: TaskCommand) -> Result<()> {
             println!("{}", serde_json::to_string_pretty(&comparison)?);
             Ok(())
         }
+        TaskCommand::CompareSuite(args) => {
+            let baseline = harness_e2e::task::read_task_suite_result(&args.baseline)?;
+            let candidate = harness_e2e::task::read_task_suite_result(&args.candidate)?;
+            let comparison = harness_e2e::task::TaskSuiteComparison::compare(&baseline, &candidate);
+            println!("{}", serde_json::to_string_pretty(&comparison)?);
+            Ok(())
+        }
     }
+}
+
+fn task_system_manifest(
+    path: Option<&Path>,
+    lane: &str,
+    release_channel: Option<String>,
+    release_tag: Option<String>,
+) -> Result<harness_e2e::task::TaskSystemManifest> {
+    if let Some(path) = path {
+        return harness_e2e::task::TaskSystemManifest::read(path);
+    }
+    let manifest = harness_e2e::task::TaskSystemManifest {
+        lane: lane.into(),
+        comparison_series: match (lane, release_channel.as_deref(), release_tag.as_deref()) {
+            ("remote_release", Some("rc"), Some(tag)) => {
+                format!("rc:{}", tag.split("-rc.").next().unwrap_or(tag))
+            }
+            ("remote_release", Some("stable"), _) => "stable".into(),
+            _ => "local".into(),
+        },
+        stack_mode: if lane == "remote_release" {
+            "registry".into()
+        } else {
+            "source".into()
+        },
+        release_channel,
+        release_tag,
+        runner_revision: std::env::var("GITHUB_SHA").unwrap_or_else(|_| "working-tree".into()),
+        platform: format!("{}-{}", std::env::consts::OS, std::env::consts::ARCH),
+        components: BTreeMap::new(),
+    };
+    manifest.validate()?;
+    Ok(manifest)
 }
 
 fn fault_plan(args: FaultPlanArgs) -> Result<()> {

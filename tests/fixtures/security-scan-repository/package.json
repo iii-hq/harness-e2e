@@ -1,9 +1,0 @@
-{
-  "name": "security-scan-e2e-fixture",
-  "private": true,
-  "version": "0.0.0",
-  "dependencies": {
-    "lodash": "4.17.15",
-    "left-pad": "*"
-  }
-}

@@ -1,0 +1,274 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "OfficialVerifierBundle",
+  "type": "object",
+  "required": [
+    "id",
+    "schema",
+    "tasks"
+  ],
+  "properties": {
+    "id": {
+      "type": "string"
+    },
+    "schema": {
+      "type": "string"
+    },
+    "tasks": {
+      "type": "object",
+      "additionalProperties": {
+        "$ref": "#/definitions/VerifierSpec"
+      }
+    }
+  },
+  "additionalProperties": false,
+  "definitions": {
+    "JsonAssertion": {
+      "type": "object",
+      "required": [
+        "id",
+        "pointer"
+      ],
+      "properties": {
+        "dimension": {
+          "default": "functional",
+          "allOf": [
+            {
+              "$ref": "#/definitions/VerificationDimension"
+            }
+          ]
+        },
+        "equals": true,
+        "equals_from": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/SourcePointer"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "id": {
+          "type": "string"
+        },
+        "pointer": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "SourcePointer": {
+      "type": "object",
+      "required": [
+        "file",
+        "pointer"
+      ],
+      "properties": {
+        "file": {
+          "type": "string"
+        },
+        "pointer": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "TaskCommand": {
+      "type": "object",
+      "required": [
+        "args",
+        "id",
+        "program",
+        "timeout_seconds"
+      ],
+      "properties": {
+        "args": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "dimension": {
+          "default": "functional",
+          "allOf": [
+            {
+              "$ref": "#/definitions/VerificationDimension"
+            }
+          ]
+        },
+        "id": {
+          "type": "string"
+        },
+        "program": {
+          "type": "string"
+        },
+        "timeout_seconds": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        }
+      },
+      "additionalProperties": false
+    },
+    "VerificationDimension": {
+      "type": "string",
+      "enum": [
+        "functional",
+        "structural_integrity",
+        "grounding",
+        "technical_reliability"
+      ]
+    },
+    "VerifierSpec": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": [
+            "baseline_must_fail",
+            "hidden_commands",
+            "profile",
+            "public_commands"
+          ],
+          "properties": {
+            "baseline_must_fail": {
+              "type": "boolean"
+            },
+            "hidden_commands": {
+              "type": "array",
+              "items": {
+                "$ref": "#/definitions/TaskCommand"
+              }
+            },
+            "profile": {
+              "type": "string",
+              "enum": [
+                "code_patch"
+              ]
+            },
+            "public_commands": {
+              "type": "array",
+              "items": {
+                "$ref": "#/definitions/TaskCommand"
+              }
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": [
+            "artifact_path",
+            "assertions",
+            "profile",
+            "schema"
+          ],
+          "properties": {
+            "artifact_path": {
+              "type": "string"
+            },
+            "assertions": {
+              "type": "array",
+              "items": {
+                "$ref": "#/definitions/JsonAssertion"
+              }
+            },
+            "profile": {
+              "type": "string",
+              "enum": [
+                "structured_artifact"
+              ]
+            },
+            "schema": true
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": [
+            "profile",
+            "report_assertions",
+            "report_path",
+            "report_schema",
+            "state_assertions",
+            "state_path",
+            "state_schema"
+          ],
+          "properties": {
+            "profile": {
+              "type": "string",
+              "enum": [
+                "state_recovery"
+              ]
+            },
+            "report_assertions": {
+              "type": "array",
+              "items": {
+                "$ref": "#/definitions/JsonAssertion"
+              }
+            },
+            "report_path": {
+              "type": "string"
+            },
+            "report_schema": true,
+            "state_assertions": {
+              "type": "array",
+              "items": {
+                "$ref": "#/definitions/JsonAssertion"
+              }
+            },
+            "state_path": {
+              "type": "string"
+            },
+            "state_schema": true
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": [
+            "actions_path",
+            "initial_state_path",
+            "profile"
+          ],
+          "properties": {
+            "actions_path": {
+              "type": "string"
+            },
+            "initial_state_path": {
+              "type": "string"
+            },
+            "profile": {
+              "type": "string",
+              "enum": [
+                "state_simulation"
+              ]
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": [
+            "profile",
+            "projection_schema",
+            "scenario_id"
+          ],
+          "properties": {
+            "profile": {
+              "type": "string",
+              "enum": [
+                "checkpoint_ladder"
+              ]
+            },
+            "projection_schema": true,
+            "scenario_id": {
+              "type": "string"
+            }
+          },
+          "additionalProperties": false
+        }
+      ]
+    }
+  }
+}

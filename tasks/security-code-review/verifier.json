@@ -8,7 +8,7 @@
     "properties": {
       "summary": {"type": "string", "minLength": 20, "maxLength": 2000},
       "findings": {
-        "type": "array", "minItems": 2, "maxItems": 2,
+        "type": "array", "minItems": 3, "maxItems": 3,
         "items": {
           "type": "object", "additionalProperties": false,
           "required": ["id", "severity", "path", "line", "explanation", "remediation"],
@@ -23,9 +23,17 @@
     }
   },
   "assertions": [
-    {"pointer": "/findings/0/id", "equals": "shell-command-injection"},
-    {"pointer": "/findings/0/path", "equals": "src/vulnerable.rs"},
-    {"pointer": "/findings/1/id", "equals": "unpinned-workflow-action"},
-    {"pointer": "/findings/1/path", "equals": ".github/workflows/insecure.yml"}
+    {"id": "shell_finding", "dimension": "grounding", "pointer": "/findings/0/id", "equals": "shell-command-injection"},
+    {"id": "shell_evidence_path", "dimension": "grounding", "pointer": "/findings/0/path", "equals": "src/vulnerable.rs"},
+    {"id": "shell_evidence_line", "dimension": "grounding", "pointer": "/findings/0/line", "equals": 8},
+    {"id": "shell_severity", "dimension": "functional", "pointer": "/findings/0/severity", "equals": "high"},
+    {"id": "workflow_finding", "dimension": "grounding", "pointer": "/findings/1/id", "equals": "unpinned-workflow-action"},
+    {"id": "workflow_evidence_path", "dimension": "grounding", "pointer": "/findings/1/path", "equals": ".github/workflows/insecure.yml"},
+    {"id": "workflow_evidence_line", "dimension": "grounding", "pointer": "/findings/1/line", "equals": 14},
+    {"id": "workflow_severity", "dimension": "functional", "pointer": "/findings/1/severity", "equals": "medium"},
+    {"id": "remote_script_finding", "dimension": "grounding", "pointer": "/findings/2/id", "equals": "unverified-remote-script"},
+    {"id": "remote_script_evidence_path", "dimension": "grounding", "pointer": "/findings/2/path", "equals": ".github/workflows/insecure.yml"},
+    {"id": "remote_script_evidence_line", "dimension": "grounding", "pointer": "/findings/2/line", "equals": 16},
+    {"id": "remote_script_severity", "dimension": "functional", "pointer": "/findings/2/severity", "equals": "high"}
   ]
 }

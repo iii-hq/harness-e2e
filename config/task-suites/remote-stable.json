@@ -1,10 +1,11 @@
 {
   "schema": "harness-e2e-task-suite/v2",
-  "id": "pilot",
-  "version": 2,
-  "lane": "local_development",
-  "official_verifier_required": false,
-  "repetitions": 1,
+  "id": "remote_stable",
+  "version": 1,
+  "lane": "remote_release",
+  "release_channel": "stable",
+  "official_verifier_required": true,
+  "repetitions": 5,
   "tasks": [
     "bugfix_config_precedence",
     "bugfix_cache_invalidation",

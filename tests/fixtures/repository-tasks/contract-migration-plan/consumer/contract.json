@@ -1,5 +1,0 @@
-{
-  "accepted_versions": ["v1"],
-  "endpoint": "/profiles/{id}",
-  "required_fields": ["id", "display_name"]
-}
