@@ -118,7 +118,7 @@ export function TranscriptDialog({
             </h2>
             {heading.runId ? (
               <p
-                className="m-0 mt-1 font-mono text-[0.6875rem] text-ink-muted"
+                className="m-0 mt-1 font-mono text-label text-ink-muted"
                 title={heading.runId}
               >
                 run {shortRunId(heading.runId)}

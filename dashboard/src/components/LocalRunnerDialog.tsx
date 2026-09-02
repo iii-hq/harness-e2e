@@ -352,7 +352,7 @@ export function LocalRunnerDialog({
     >
       <header className="flex items-start justify-between gap-5 border-b border-[var(--color-rule)] bg-panel px-5 py-4 sm:px-6">
         <div className="min-w-0">
-          <p className="m-0 font-mono text-[0.6875rem] font-semibold uppercase tracking-[0.07em] text-[var(--color-accent)]">
+          <p className="m-0 font-mono text-label font-semibold uppercase tracking-[0.07em] text-[var(--color-accent)]">
             Execution setup
           </p>
           <h2
@@ -444,7 +444,7 @@ export function LocalRunnerDialog({
                   Live runner output
                 </summary>
                 <pre
-                  className="mt-3 mb-0 max-h-80 w-full overflow-auto rounded-[6px] border border-[var(--color-rule)] bg-[var(--color-bg)] p-4 font-mono text-[0.6875rem] leading-5 text-[var(--color-ink-faint)]"
+                  className="mt-3 mb-0 max-h-80 w-full overflow-auto rounded-[6px] border border-[var(--color-rule)] bg-[var(--color-bg)] p-4 font-mono text-label leading-5 text-[var(--color-ink-faint)]"
                   aria-live="polite"
                 >
                   {log}

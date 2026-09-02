@@ -99,7 +99,7 @@ function grounds(scope) {
 }
 
 // Every token the dashboard paints small text with.
-const textTokens = ["--text", "--text-soft", "--text-muted", "--accent", "--success", "--warning", "--danger"];
+const textTokens = ["--text", "--text-soft", "--text-muted", "--accent", "--info", "--success", "--warning", "--danger"];
 const AA = 4.5;
 
 for (const theme of ["light", "dark"]) {

@@ -119,7 +119,7 @@ function metricTone(presentation: ExecutionPresentation): MetricTone {
 }
 
 const sectionLabelClassName =
-  'font-mono text-[0.6875rem] font-medium uppercase tracking-[0.06em] text-ink-muted'
+  'font-mono text-label font-medium uppercase tracking-[0.06em] text-ink-muted'
 
 function SummaryKpi({
   label,

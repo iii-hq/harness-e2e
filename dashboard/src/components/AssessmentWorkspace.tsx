@@ -61,7 +61,7 @@ function formatRunDuration(durationMs: number | null) {
 function RunMetricCard({ label, value }: { label: string; value: string }) {
   return (
     <div className="rounded-lg border border-line bg-panel-subtle p-3">
-      <small className="block text-[0.6875rem] font-semibold uppercase tracking-[0.06em] text-ink-muted">
+      <small className="block text-label font-semibold uppercase tracking-[0.06em] text-ink-muted">
         {label}
       </small>
       <strong className="mt-1 block text-sm font-semibold text-ink">
@@ -274,10 +274,10 @@ function PrimaryMetricBoard({
           className={`grid min-h-36 content-between gap-5 bg-panel p-4 ${PRIMARY_METRIC_TONES[metric.tone]}`}
         >
           <div className="flex items-start justify-between gap-3">
-            <h5 className="m-0 text-[0.6875rem] font-semibold uppercase tracking-[0.06em] text-ink-muted">
+            <h5 className="m-0 text-label font-semibold uppercase tracking-[0.06em] text-ink-muted">
               {metric.label}
             </h5>
-            <span className="shrink-0 font-mono text-[0.6875rem] uppercase tracking-[0.05em] text-ink-muted">
+            <span className="shrink-0 font-mono text-label uppercase tracking-[0.05em] text-ink-muted">
               {metric.context}
             </span>
           </div>
@@ -341,7 +341,7 @@ function StatusCard({
 }) {
   return (
     <div className={`rounded-lg border p-3 ${toneForOutcome(value)}`}>
-      <span className="block text-[0.6875rem] font-semibold uppercase tracking-[0.065em] opacity-80">
+      <span className="block text-label font-semibold uppercase tracking-[0.065em] opacity-80">
         {label}
       </span>
       <strong className="mt-1 block text-sm text-current">
@@ -382,10 +382,7 @@ function AnalyzerProvenance({
           ? ` · ${[analyzer.provider, analyzer.model].filter(Boolean).join('/')}`
           : ''}
       </span>
-      <code
-        className="break-all text-[0.6875rem]"
-        title={analyzer.input_sha256}
-      >
+      <code className="break-all text-label" title={analyzer.input_sha256}>
         input {shortHash(analyzer.input_sha256)}
       </code>
       {usageParts.length > 0 && <span>{usageParts.join(' · ')}</span>}
@@ -408,7 +405,7 @@ function EvidenceLinks({
       {references.map((reference, index) => (
         <button
           key={`${reference.artifact_id}:${reference.artifact_sha256}:${reference.locator ?? ''}`}
-          className="rounded-full border border-line bg-panel px-2 py-1 font-mono text-[0.6875rem] text-ink-soft hover:border-brand hover:text-ink"
+          className="rounded-full border border-line bg-panel px-2 py-1 font-mono text-label text-ink-soft hover:border-brand hover:text-ink"
           type="button"
           data-evidence-target="technical"
           title={`${reference.artifact_id} · ${shortHash(reference.artifact_sha256)}`}
@@ -434,7 +431,7 @@ function AssessmentMatrix({ entries }: { entries: AssessmentEntry[] }) {
     <div className="overflow-hidden rounded-lg border border-line">
       <div className="hidden overflow-x-auto md:block">
         <table className="w-full border-collapse text-left text-sm">
-          <thead className="bg-panel-subtle text-[0.6875rem] uppercase tracking-[0.06em] text-ink-muted">
+          <thead className="bg-panel-subtle text-label uppercase tracking-[0.06em] text-ink-muted">
             <tr>
               <th className="px-3 py-2.5 font-semibold">Assessment</th>
               <th className="px-3 py-2.5 font-semibold">Policy / source</th>
@@ -469,7 +466,7 @@ function AssessmentIdentity({ entry }: { entry: AssessmentEntry }) {
         {titleCase(entry.kind)} · {titleCase(entry.dimension)}
       </span>
       {entry.targetId !== entry.criterionId && (
-        <span className="font-mono text-[0.6875rem] text-ink-muted">
+        <span className="font-mono text-label text-ink-muted">
           target {entry.targetId}
         </span>
       )}
@@ -538,7 +535,7 @@ function AssessmentRow({ entry }: { entry: AssessmentEntry }) {
       </td>
       <td className="px-3 py-3">
         <span
-          className={`inline-flex rounded-full border px-2 py-1 text-[0.6875rem] font-semibold ${toneForOutcome(entry.outcome)}`}
+          className={`inline-flex rounded-full border px-2 py-1 text-label font-semibold ${toneForOutcome(entry.outcome)}`}
         >
           {titleCase(entry.validationOutcome ?? entry.outcome)}
         </span>
@@ -562,7 +559,7 @@ function AssessmentCard({ entry }: { entry: AssessmentEntry }) {
       <div className="flex items-start justify-between gap-3">
         <AssessmentIdentity entry={entry} />
         <span
-          className={`shrink-0 rounded-full border px-2 py-1 text-[0.6875rem] font-semibold ${toneForOutcome(entry.outcome)}`}
+          className={`shrink-0 rounded-full border px-2 py-1 text-label font-semibold ${toneForOutcome(entry.outcome)}`}
         >
           {titleCase(entry.validationOutcome ?? entry.outcome)}
         </span>
@@ -652,7 +649,7 @@ function AiNarrativeTabs({
                 else tabRefs.current.delete(section.id)
               }}
               id={`${narrativeId}-tab-${section.id}`}
-              className={`flex min-h-11 min-w-max flex-1 items-center justify-between gap-2 rounded-md px-3 py-2 text-left text-[0.6875rem] font-semibold uppercase tracking-[0.05em] transition sm:min-w-0 ${
+              className={`flex min-h-11 min-w-max flex-1 items-center justify-between gap-2 rounded-md px-3 py-2 text-left text-label font-semibold uppercase tracking-[0.05em] transition sm:min-w-0 ${
                 selected
                   ? 'bg-brand-soft text-ink'
                   : 'text-ink-muted hover:bg-panel/60 hover:text-ink'
@@ -671,7 +668,7 @@ function AiNarrativeTabs({
                 className={
                   selected
                     ? 'inline-flex h-7 min-w-7 shrink-0 items-center justify-center rounded-full border-2 border-brand bg-panel px-1.5 text-[0.7rem] font-bold leading-none tabular-nums text-ink'
-                    : 'inline-flex h-6 min-w-6 shrink-0 items-center justify-center rounded-full border border-line-strong bg-panel px-1.5 text-[0.6875rem] font-bold leading-none tabular-nums text-ink-soft'
+                    : 'inline-flex h-6 min-w-6 shrink-0 items-center justify-center rounded-full border border-line-strong bg-panel px-1.5 text-label font-bold leading-none tabular-nums text-ink-soft'
                 }
                 title={`${count} reported`}
               >
@@ -781,7 +778,7 @@ function FinalAiCard({ run }: { run: AssessmentRunView }) {
       )}
       <div className="grid w-full gap-5 p-4">
         <section className="grid gap-2 lg:col-span-2">
-          <h5 className="m-0 text-[0.6875rem] font-semibold uppercase tracking-[0.06em] text-ink-muted">
+          <h5 className="m-0 text-label font-semibold uppercase tracking-[0.06em] text-ink-muted">
             AI advisory
           </h5>
           <p className="m-0 text-xs text-ink-muted">
@@ -790,7 +787,7 @@ function FinalAiCard({ run }: { run: AssessmentRunView }) {
           </p>
           {result.diagnosis ? (
             <div className="grid gap-1">
-              <p className="m-0 text-[0.6875rem] font-semibold uppercase tracking-[0.06em] text-ink-muted">
+              <p className="m-0 text-label font-semibold uppercase tracking-[0.06em] text-ink-muted">
                 What happened
               </p>
               <p className="m-0 border-l-2 border-[var(--color-rule)] pl-3 text-sm leading-5 text-ink-soft">
@@ -799,7 +796,7 @@ function FinalAiCard({ run }: { run: AssessmentRunView }) {
             </div>
           ) : null}
           <div className="grid gap-1">
-            <p className="m-0 text-[0.6875rem] font-semibold uppercase tracking-[0.06em] text-ink-muted">
+            <p className="m-0 text-label font-semibold uppercase tracking-[0.06em] text-ink-muted">
               Suggested correction or improvement
             </p>
             <p className="m-0 border-l-2 border-brand pl-3 text-sm leading-5 text-ink-soft">
@@ -814,7 +811,7 @@ function FinalAiCard({ run }: { run: AssessmentRunView }) {
           <div>
             <h5
               id={narrativeId}
-              className="m-0 text-[0.6875rem] font-semibold uppercase tracking-[0.06em] text-ink-muted"
+              className="m-0 text-label font-semibold uppercase tracking-[0.06em] text-ink-muted"
             >
               Diagnostic narrative
             </h5>
@@ -825,13 +822,13 @@ function FinalAiCard({ run }: { run: AssessmentRunView }) {
           <AiNarrativeTabs narrativeId={narrativeId} result={result} />
         </section>
         <section className="grid gap-2 lg:col-span-2">
-          <h5 className="m-0 text-[0.6875rem] font-semibold uppercase tracking-[0.06em] text-ink-muted">
+          <h5 className="m-0 text-label font-semibold uppercase tracking-[0.06em] text-ink-muted">
             Evidence supporting this AI conclusion
           </h5>
           <EvidenceLinks references={result.evidence ?? []} label="Reference" />
         </section>
         <section className="grid gap-2 border-t border-line pt-3 lg:col-span-2">
-          <h5 className="m-0 text-[0.6875rem] font-semibold uppercase tracking-[0.06em] text-ink-muted">
+          <h5 className="m-0 text-label font-semibold uppercase tracking-[0.06em] text-ink-muted">
             Analyzer provenance
           </h5>
           <AnalyzerProvenance
@@ -987,12 +984,12 @@ function RunStatusBadges({
   return (
     <span className="flex flex-wrap items-start justify-end gap-1.5">
       <span
-        className={`rounded-full border px-2 py-1 text-[0.6875rem] font-semibold ${toneForOutcome(run.systemStatus)}`}
+        className={`rounded-full border px-2 py-1 text-label font-semibold ${toneForOutcome(run.systemStatus)}`}
       >
         System: {titleCase(run.systemStatus)}
       </span>
       <span
-        className={`rounded-full border px-2 py-1 text-[0.6875rem] font-semibold ${toneForOutcome(aiLabel)}`}
+        className={`rounded-full border px-2 py-1 text-label font-semibold ${toneForOutcome(aiLabel)}`}
       >
         AI: {titleCase(aiLabel)}
       </span>
@@ -1068,7 +1065,7 @@ export function AssessmentDetailDialog({
             >
               {titleCase(run.scenarioId)} · scenario v{run.scenarioVersion}
             </h2>
-            <p className="m-0 mt-1 break-all font-mono text-[0.6875rem] text-ink-muted">
+            <p className="m-0 mt-1 break-all font-mono text-label text-ink-muted">
               {run.subjectId} · run {run.runId}
             </p>
           </div>
@@ -1118,13 +1115,13 @@ function RunAssessment({
     >
       <header className="flex flex-col gap-4 p-4 sm:flex-row sm:items-start sm:justify-between">
         <div className="min-w-0">
-          <span className="font-mono text-[0.6875rem] font-semibold uppercase tracking-[0.06em] text-ink-muted">
+          <span className="font-mono text-label font-semibold uppercase tracking-[0.06em] text-ink-muted">
             Scenario performance
           </span>
           <h3 className="mt-1 mb-0 text-lg font-semibold tracking-[-0.025em] text-ink">
             {titleCase(run.scenarioId)}
           </h3>
-          <p className="mt-1 mb-0 break-all font-mono text-[0.6875rem] text-ink-muted">
+          <p className="mt-1 mb-0 break-all font-mono text-label text-ink-muted">
             v{run.scenarioVersion} · {run.subjectId} · run {run.runId}
           </p>
         </div>
@@ -1134,7 +1131,7 @@ function RunAssessment({
       <PrimaryMetricBoard run={run} />
 
       <footer className="flex flex-col gap-3 p-3 sm:flex-row sm:items-center sm:justify-between">
-        <p className="m-0 font-mono text-[0.6875rem] text-ink-muted">
+        <p className="m-0 font-mono text-label text-ink-muted">
           Runtime {formatRunDuration(run.metrics.durationMs)} · Tokens{' '}
           {formatMetricCount(run.metrics.totalTokens)} · Function errors{' '}
           {formatMetricCount(run.metrics.functionCallErrors)}
@@ -1217,7 +1214,7 @@ export function AssessmentPanel({
         <details className="rounded-[6px] border border-line bg-panel-subtle">
           <summary className="flex min-h-11 cursor-pointer items-center justify-between gap-3 px-4 py-3 text-xs font-semibold text-ink-soft">
             <span>Filter scenario runs by assessment signal</span>
-            <span className="font-mono text-[0.6875rem] font-normal text-ink-muted">
+            <span className="font-mono text-label font-normal text-ink-muted">
               {counts.all} assessments
             </span>
           </summary>

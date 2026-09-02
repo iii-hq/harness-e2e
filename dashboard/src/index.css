@@ -21,7 +21,7 @@
   --color-ink-muted: var(--text-muted);
   --color-brand: var(--accent);
   --color-brand-soft: var(--accent-soft);
-  --color-info: var(--accent-blue);
+  --color-info: var(--info);
   --color-warning: var(--warning);
   --color-danger: var(--danger);
   --color-success: var(--success);
@@ -31,41 +31,21 @@
     "Chivo Mono", ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas,
     monospace;
   --shadow-panel: var(--shadow);
+  /* Closed type scale (audit DS-04): label is the smallest size the
+     dashboard renders; utilities below it are debt the ratchet counts. */
+  --text-label: 0.6875rem;
+  --text-label--line-height: 1rem;
 }
 
+/* Colour, type and elevation tokens live in components/dashboard-shell.css;
+   the standalone document root carries them through data-harness-e2e (see
+   index.html), so nothing here paints a private palette (audit DS-03). Only
+   layout spacing and the document defaults remain. */
 :root {
-  color-scheme: dark;
-  --bg: #0a0c0b;
-  --surface: #111412;
-  --surface-raised: #171a18;
-  --surface-soft: #1d211e;
-  --line: rgba(255, 255, 255, 0.09);
-  --line-strong: rgba(255, 255, 255, 0.16);
-  --text: #f5f7f4;
-  --text-soft: #a8b0a9;
-  --text-muted: #707971;
-  --accent: #c7ff4a;
-  --accent-soft: rgba(199, 255, 74, 0.12);
-  --accent-blue: #7bc7ff;
-  --warning: #ffd166;
-  --danger: #ff786f;
-  --success: #9ee66c;
-  --contrast-rgb: 255, 255, 255;
-  --grid-line: rgba(255, 255, 255, 0.018);
-  --glass: rgba(13, 16, 14, 0.86);
-  --code-bg: #080a09;
-  --code-text: #cbd3cc;
-  --backdrop: rgba(2, 4, 3, 0.76);
-  --radius-sm: 6px;
-  --radius-md: 6px;
-  --radius-lg: 6px;
-  --shadow: none;
   --plan-panel-space-y: 24px;
   --plan-panel-space-x: 28px;
   --plan-card-space: 16px;
-  font-family:
-    Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont,
-    "Segoe UI", sans-serif;
+  font-family: var(--font-body, Inter, ui-sans-serif, system-ui, sans-serif);
   color: var(--text);
   background: var(--bg);
   font-synthesis: none;
@@ -281,8 +261,8 @@ footer a:hover {
 }
 
 .badge-preview {
-  border: 1px solid rgba(255, 209, 102, 0.35);
-  background: rgba(255, 209, 102, 0.08);
+  border: 1px solid color-mix(in srgb, var(--warning) 35%, transparent);
+  background: color-mix(in srgb, var(--warning) 8%, transparent);
   color: var(--warning);
 }
 
@@ -559,7 +539,7 @@ a:focus-visible {
   padding: 0 10px;
   border: 1px solid var(--line);
   border-radius: 8px;
-  background: rgba(255, 255, 255, 0.025);
+  background: rgba(var(--contrast-rgb), 0.025);
   color: var(--text-soft);
   font-family:
     "Chivo Mono", ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas,
@@ -751,7 +731,7 @@ a:focus-visible {
 }
 
 .chart-grid-line {
-  stroke: rgba(255, 255, 255, 0.07);
+  stroke: rgba(var(--contrast-rgb), 0.07);
   stroke-width: 1;
 }
 
@@ -809,7 +789,7 @@ a:focus-visible {
 }
 
 .chart-tooltip-guide {
-  stroke: rgba(255, 255, 255, 0.13);
+  stroke: rgba(var(--contrast-rgb), 0.13);
   stroke-width: 1;
   stroke-dasharray: 3 5;
 }
@@ -821,9 +801,8 @@ a:focus-visible {
 
 .chart-tooltip-box {
   fill: var(--surface-raised, #1a1e1b);
-  stroke: var(--line-strong, rgba(255, 255, 255, 0.16));
+  stroke: var(--line-strong);
   stroke-width: 1;
-  filter: drop-shadow(0 10px 24px rgba(0, 0, 0, 0.2));
 }
 
 .chart-tooltip-heading {
@@ -867,7 +846,7 @@ a:focus-visible {
 }
 
 .chart-contract-boundary {
-  stroke: rgba(255, 209, 102, 0.55);
+  stroke: color-mix(in srgb, var(--warning) 55%, transparent);
   stroke-width: 1;
   stroke-dasharray: 3 5;
 }
@@ -1333,16 +1312,16 @@ footer {
   gap: 8px 14px;
   margin-top: 14px;
   padding: 12px 14px;
-  border: 1px solid rgba(158, 230, 108, 0.2);
+  border: 1px solid color-mix(in srgb, var(--success) 20%, transparent);
   border-radius: 10px;
-  background: rgba(158, 230, 108, 0.045);
+  background: color-mix(in srgb, var(--success) 4%, transparent);
   color: var(--text-soft);
   font-size: 0.68rem;
 }
 
 .efficiency-guardrail-alert {
-  border-color: rgba(255, 209, 102, 0.22);
-  background: rgba(255, 209, 102, 0.045);
+  border-color: color-mix(in srgb, var(--warning) 22%, transparent);
+  background: color-mix(in srgb, var(--warning) 4%, transparent);
 }
 
 .guardrail-status {
@@ -1452,7 +1431,6 @@ footer {
   border: 1px solid var(--line-strong);
   border-radius: var(--radius-lg);
   background: var(--surface);
-  box-shadow: 0 32px 100px rgba(0, 0, 0, 0.65);
   color: var(--text);
 }
 
@@ -1518,7 +1496,7 @@ footer {
   padding: 0 11px;
   border: 1px solid var(--line);
   border-radius: 8px;
-  background: rgba(255, 255, 255, 0.02);
+  background: rgba(var(--contrast-rgb), 0.02);
   color: var(--text-muted);
   cursor: pointer;
   font-size: 0.67rem;
@@ -1892,7 +1870,6 @@ footer {
   border: 1px solid var(--line-strong);
   border-radius: 6px;
   background: var(--surface-raised, #1a1e1b);
-  box-shadow: 0 12px 30px rgba(0, 0, 0, 0.2);
   color: var(--text-soft);
   content: attr(data-tooltip);
   font-size: 0.65rem;
@@ -1915,8 +1892,8 @@ footer {
 }
 
 .matrix-passed {
-  border-color: rgba(158, 230, 108, 0.26);
-  background: rgba(158, 230, 108, 0.11);
+  border-color: color-mix(in srgb, var(--success) 26%, transparent);
+  background: color-mix(in srgb, var(--success) 11%, transparent);
   color: var(--success);
 }
 
@@ -1924,26 +1901,26 @@ footer {
 .matrix-hard_gate_failed,
 .matrix-technical_failed,
 .matrix-infra_failed {
-  border-color: rgba(255, 120, 111, 0.3);
-  background: rgba(255, 120, 111, 0.13);
+  border-color: color-mix(in srgb, var(--danger) 30%, transparent);
+  background: color-mix(in srgb, var(--danger) 13%, transparent);
   color: var(--danger);
 }
 
 .matrix-running {
-  border-color: rgba(123, 199, 255, 0.3);
-  background: rgba(123, 199, 255, 0.1);
+  border-color: color-mix(in srgb, var(--info) 30%, transparent);
+  background: color-mix(in srgb, var(--info) 10%, transparent);
   color: var(--accent-blue);
 }
 
 .matrix-incomplete {
-  border-color: rgba(255, 209, 102, 0.3);
-  background: rgba(255, 209, 102, 0.1);
+  border-color: color-mix(in srgb, var(--warning) 30%, transparent);
+  background: color-mix(in srgb, var(--warning) 10%, transparent);
   color: var(--warning);
 }
 
 .matrix-cancelled {
-  border-color: rgba(168, 176, 169, 0.22);
-  background: rgba(168, 176, 169, 0.07);
+  border-color: color-mix(in srgb, var(--text-muted) 22%, transparent);
+  background: color-mix(in srgb, var(--text-muted) 7%, transparent);
   color: var(--text-soft);
 }
 
@@ -1994,9 +1971,9 @@ footer {
   gap: 18px;
   margin-top: 14px;
   padding: 12px 14px;
-  border: 1px solid rgba(123, 199, 255, 0.2);
+  border: 1px solid color-mix(in srgb, var(--info) 20%, transparent);
   border-radius: 10px;
-  background: rgba(123, 199, 255, 0.045);
+  background: color-mix(in srgb, var(--info) 4%, transparent);
 }
 
 .comparison-bar div {
@@ -2113,7 +2090,7 @@ footer {
 .compare-warning-list li {
   padding: 9px 11px;
   border-left: 2px solid var(--warning);
-  background: rgba(255, 209, 102, 0.055);
+  background: color-mix(in srgb, var(--warning) 6%, transparent);
   color: var(--text-soft);
   font-size: 0.76rem;
   overflow-wrap: anywhere;
@@ -2307,9 +2284,9 @@ footer {
   gap: 26px;
   margin-bottom: 20px;
   padding: 22px;
-  border: 1px solid rgba(255, 120, 111, 0.26);
+  border: 1px solid color-mix(in srgb, var(--danger) 26%, transparent);
   border-radius: var(--radius-md);
-  background: rgba(255, 120, 111, 0.055);
+  background: color-mix(in srgb, var(--danger) 6%, transparent);
 }
 
 .detail-alert h2 {
@@ -2361,16 +2338,16 @@ footer {
   align-items: center;
   gap: 12px;
   padding: 9px 12px;
-  border: 1px solid rgba(255, 120, 111, 0.2);
+  border: 1px solid color-mix(in srgb, var(--danger) 20%, transparent);
   border-radius: 9px;
-  background: rgba(255, 120, 111, 0.04);
+  background: color-mix(in srgb, var(--danger) 4%, transparent);
   color: var(--text);
   font-size: 0.7rem;
   text-decoration: none;
 }
 
 .failure-chip:hover {
-  border-color: rgba(255, 120, 111, 0.45);
+  border-color: color-mix(in srgb, var(--danger) 45%, transparent);
 }
 
 .failure-chip strong {
@@ -2710,7 +2687,7 @@ footer {
   padding: 12px;
   border: 1px solid var(--line);
   border-radius: 9px;
-  background: rgba(255, 255, 255, 0.018);
+  background: rgba(var(--contrast-rgb), 0.018);
 }
 
 .detail-metric > span {
@@ -2886,7 +2863,7 @@ footer {
 .diagnostic-list li {
   padding: 10px;
   border-left: 2px solid var(--danger);
-  background: rgba(255, 120, 111, 0.04);
+  background: color-mix(in srgb, var(--danger) 4%, transparent);
 }
 
 .diagnostic-list span {
@@ -2997,7 +2974,7 @@ footer {
   padding: 0 12px;
   border: 1px solid var(--line);
   border-radius: 8px;
-  background: rgba(255, 255, 255, 0.02);
+  background: rgba(var(--contrast-rgb), 0.02);
   color: var(--text-soft);
   cursor: pointer;
   font-size: 0.67rem;
@@ -3016,9 +2993,9 @@ footer {
   gap: 20px;
   margin-top: 14px;
   padding: 15px 16px;
-  border: 1px solid rgba(123, 199, 255, 0.2);
+  border: 1px solid color-mix(in srgb, var(--info) 20%, transparent);
   border-radius: 10px;
-  background: rgba(123, 199, 255, 0.035);
+  background: color-mix(in srgb, var(--info) 4%, transparent);
 }
 
 .conversation-launch > div {
@@ -3105,7 +3082,6 @@ footer {
   border: 1px solid var(--line-strong);
   border-radius: var(--radius-lg);
   background: var(--bg);
-  box-shadow: 0 32px 100px rgba(0, 0, 0, 0.68);
   color: var(--text);
 }
 
@@ -4034,12 +4010,12 @@ footer {
      a page-local light-dark()/color-scheme pair (which rendered the page dark
      inside a light Console). */
   --tmh-bg: var(--surface, #fafafa);
-  --tmh-surface: var(--surface-fill, rgba(20, 16, 8, 0.055));
-  --tmh-raised: var(--surface-soft, rgba(20, 16, 8, 0.085));
+  --tmh-surface: var(--surface-fill);
+  --tmh-raised: var(--surface-soft);
   --tmh-ink: var(--text, #0a0a0a);
   --tmh-muted: var(--text-soft, #6b6865);
-  --tmh-line: var(--line, rgba(20, 16, 8, 0.16));
-  --tmh-line-strong: var(--line-strong, rgba(20, 16, 8, 0.28));
+  --tmh-line: var(--line);
+  --tmh-line-strong: var(--line-strong);
   --tmh-accent: var(--accent, #b8420f);
   --tmh-danger: var(--danger, #ff0026);
   --tmh-warning: var(--warning, #a87a00);
@@ -5905,14 +5881,14 @@ footer {
   gap: 11px;
   margin-top: 16px;
   padding: 13px 14px;
-  border: 1px solid rgba(123, 199, 255, 0.2);
+  border: 1px solid color-mix(in srgb, var(--info) 20%, transparent);
   border-radius: 10px;
-  background: rgba(123, 199, 255, 0.045);
+  background: color-mix(in srgb, var(--info) 4%, transparent);
 }
 
 .latest-first-failure.has-failure {
-  border-color: rgba(255, 120, 111, 0.25);
-  background: rgba(255, 120, 111, 0.055);
+  border-color: color-mix(in srgb, var(--danger) 25%, transparent);
+  background: color-mix(in srgb, var(--danger) 6%, transparent);
 }
 
 .latest-signal-icon {
@@ -5969,11 +5945,11 @@ footer {
   margin-top: 24px;
   padding: 28px 30px;
   overflow: hidden;
-  border-color: rgba(123, 199, 255, 0.22);
+  border-color: color-mix(in srgb, var(--info) 22%, transparent);
   background:
     radial-gradient(
       circle at 100% 0,
-      rgba(123, 199, 255, 0.075),
+      color-mix(in srgb, var(--info) 8%, transparent),
       transparent 30%
     ),
     var(--surface);
@@ -5999,14 +5975,14 @@ footer {
 }
 
 .comparison-verdict-eligible {
-  border-color: rgba(158, 230, 108, 0.28);
-  background: rgba(158, 230, 108, 0.08);
+  border-color: color-mix(in srgb, var(--success) 28%, transparent);
+  background: color-mix(in srgb, var(--success) 8%, transparent);
   color: var(--success);
 }
 
 .comparison-verdict-exploratory {
-  border-color: rgba(255, 209, 102, 0.28);
-  background: rgba(255, 209, 102, 0.07);
+  border-color: color-mix(in srgb, var(--warning) 28%, transparent);
+  background: color-mix(in srgb, var(--warning) 7%, transparent);
   color: var(--warning);
 }
 
@@ -6159,10 +6135,6 @@ footer {
   font-size: 0.68rem;
   text-overflow: ellipsis;
   white-space: nowrap;
-}
-
-:root[data-theme="light"] {
-  color-scheme: light;
 }
 
 :root[data-theme="light"] .ambient {

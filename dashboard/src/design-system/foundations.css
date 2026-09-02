@@ -2,6 +2,7 @@
    same semantic names from dashboard-shell.css, so injected styles never
    repaint the host with a private palette. */
 .harness-e2e-shell {
+  --ds-text-label: 0.6875rem;
   --ds-text-xs: 0.75rem;
   --ds-text-sm: 0.8125rem;
   --ds-text-md: 0.875rem;
@@ -78,6 +79,18 @@
 .ds-mono {
   font-family: var(--font-mono);
   font-variant-numeric: tabular-nums;
+}
+
+/* The one uppercase style in the dashboard: 11px mono labels over data
+   (audit DS-04). Everything else stays in sentence or lower case. */
+.ds-label {
+  font-family: var(--font-mono);
+  font-size: var(--ds-text-label);
+  font-weight: 500;
+  letter-spacing: var(--ds-tracking-label);
+  line-height: 1rem;
+  text-transform: uppercase;
+  color: var(--text-muted);
 }
 
 .ds-visually-hidden {
