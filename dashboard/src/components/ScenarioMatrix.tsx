@@ -58,7 +58,7 @@ export function ScenarioMatrix({
       <ScenarioSummary summary={model.summary} />
       <div className="overflow-hidden rounded-[var(--ds-radius-md)] border border-[var(--color-edge)] bg-panel">
         <div
-          className={`hidden gap-4 border-b border-[var(--color-rule)] bg-panel-raised px-5 py-3 font-mono text-[0.6875rem] font-semibold uppercase tracking-[0.06em] text-ink-muted lg:grid ${matrixColumns(showStructure)}`}
+          className={`hidden gap-4 border-b border-[var(--color-rule)] bg-panel-raised px-5 py-3 font-mono text-label font-semibold uppercase tracking-[0.06em] text-ink-muted lg:grid ${matrixColumns(showStructure)}`}
           aria-hidden="true"
         >
           <span>Scenario</span>
@@ -199,7 +199,7 @@ function ScenarioRow({
               {scenarioTitle}
             </strong>
             <span
-              className="mt-1 block truncate font-mono text-[0.6875rem] text-ink-muted"
+              className="mt-1 block truncate font-mono text-label text-ink-muted"
               title={item.subjectId}
             >
               {item.subjectId} · {item.runCount}{' '}
@@ -224,7 +224,7 @@ function ScenarioRow({
             {formatScenarioDuration(item.durationMs)}
           </strong>
           {item.durationKind === 'average' && item.runCount > 1 ? (
-            <span className="ml-1 font-mono text-[0.6875rem] text-ink-muted">
+            <span className="ml-1 font-mono text-label text-ink-muted">
               avg
             </span>
           ) : null}
@@ -258,7 +258,7 @@ function MatrixCell({
 }) {
   return (
     <span className="grid min-w-0 grid-cols-[7rem_minmax(0,1fr)] items-center gap-3 lg:block">
-      <span className="font-mono text-[0.6875rem] font-semibold uppercase tracking-[0.06em] text-ink-muted lg:hidden">
+      <span className="font-mono text-label font-semibold uppercase tracking-[0.06em] text-ink-muted lg:hidden">
         {label}
       </span>
       <span className="min-w-0">{children}</span>
@@ -289,7 +289,7 @@ function ScenarioExpansion({
             <strong className="block truncate text-sm text-ink">
               {titleCase(item.scenarioId)} run evidence
             </strong>
-            <span className="mt-1 block font-mono text-[0.6875rem] text-ink-muted">
+            <span className="mt-1 block font-mono text-label text-ink-muted">
               {item.runCount} {item.runCount === 1 ? 'run' : 'runs'} retained
             </span>
           </div>
@@ -319,7 +319,7 @@ function ScenarioExpansion({
                 aria-hidden="true"
               />
               <span>Inspect scenario evidence</span>
-              <span className="ml-auto font-mono text-[0.6875rem] font-normal text-ink-muted">
+              <span className="ml-auto font-mono text-label font-normal text-ink-muted">
                 assessments, gates, artifacts, and provenance
               </span>
             </summary>
@@ -385,7 +385,7 @@ function ResultFact({
       className="-mr-px -mb-px min-w-0 border-r border-b border-[var(--color-rule)] bg-panel p-3 md:p-4"
       data-primary-metric={label}
     >
-      <dt className="font-mono text-[0.6875rem] font-semibold uppercase tracking-[0.06em] text-ink-muted">
+      <dt className="font-mono text-label font-semibold uppercase tracking-[0.06em] text-ink-muted">
         {label}
       </dt>
       <dd className="m-0 mt-2 min-w-0">
@@ -396,7 +396,7 @@ function ResultFact({
             {value}
           </strong>
         )}
-        <span className="mt-1 block text-[0.6875rem] leading-4 text-ink-muted">
+        <span className="mt-1 block text-label leading-4 text-ink-muted">
           {detail}
         </span>
       </dd>
@@ -429,11 +429,11 @@ function WorkflowDurationProfile({ tests }: { tests: SemanticTestReport[] }) {
             timing that is absent from the report.
           </p>
         </div>
-        <span className="font-mono text-[0.6875rem] text-ink-muted">
+        <span className="font-mono text-label text-ink-muted">
           {formatScenarioDuration(totalDuration)} recorded step time
         </span>
       </header>
-      <div className="hidden grid-cols-[minmax(12rem,0.9fr)_7rem_minmax(14rem,1.4fr)_minmax(12rem,1fr)] gap-4 border-b border-[var(--color-rule)] bg-panel-raised px-5 py-2.5 font-mono text-[0.6875rem] font-semibold uppercase tracking-[0.06em] text-ink-muted lg:grid">
+      <div className="hidden grid-cols-[minmax(12rem,0.9fr)_7rem_minmax(14rem,1.4fr)_minmax(12rem,1fr)] gap-4 border-b border-[var(--color-rule)] bg-panel-raised px-5 py-2.5 font-mono text-label font-semibold uppercase tracking-[0.06em] text-ink-muted lg:grid">
         <span>Step</span>
         <span>Duration</span>
         <span>Duration profile</span>
@@ -491,7 +491,7 @@ function WorkflowStepRow({
       data-workflow-step={test.node_id}
     >
       <div className="flex min-w-0 items-start gap-3">
-        <span className="grid size-7 shrink-0 place-items-center rounded-[6px] bg-panel-raised font-mono text-[0.6875rem] font-semibold text-ink-muted">
+        <span className="grid size-7 shrink-0 place-items-center rounded-[6px] bg-panel-raised font-mono text-label font-semibold text-ink-muted">
           {String(index + 1).padStart(2, '0')}
         </span>
         <div className="min-w-0">
@@ -505,13 +505,13 @@ function WorkflowStepRow({
               label={status.label}
             />
           </div>
-          <span className="mt-1 block truncate text-[0.6875rem] text-ink-muted">
+          <span className="mt-1 block truncate text-label text-ink-muted">
             {dependencies}
           </span>
         </div>
       </div>
       <div className="grid grid-cols-[7rem_minmax(0,1fr)] items-center gap-3 lg:block">
-        <span className="font-mono text-[0.6875rem] font-semibold uppercase tracking-[0.06em] text-ink-muted lg:hidden">
+        <span className="font-mono text-label font-semibold uppercase tracking-[0.06em] text-ink-muted lg:hidden">
           Duration
         </span>
         <strong className="font-mono text-xs font-semibold tabular-nums text-ink">
@@ -519,7 +519,7 @@ function WorkflowStepRow({
         </strong>
       </div>
       <div className="grid grid-cols-[7rem_minmax(0,1fr)] items-center gap-3 lg:block">
-        <span className="font-mono text-[0.6875rem] font-semibold uppercase tracking-[0.06em] text-ink-muted lg:hidden">
+        <span className="font-mono text-label font-semibold uppercase tracking-[0.06em] text-ink-muted lg:hidden">
           Profile
         </span>
         <div>
@@ -529,13 +529,13 @@ function WorkflowStepRow({
               style={{ width: `${width}%` }}
             />
           </div>
-          <span className="mt-1 block font-mono text-[0.6875rem] tabular-nums text-ink-muted">
+          <span className="mt-1 block font-mono text-label tabular-nums text-ink-muted">
             {share.toFixed(share >= 10 ? 0 : 1)}% of recorded step time
           </span>
         </div>
       </div>
       <div className="grid grid-cols-[7rem_minmax(0,1fr)] items-start gap-3 lg:block">
-        <span className="font-mono text-[0.6875rem] font-semibold uppercase tracking-[0.06em] text-ink-muted lg:hidden">
+        <span className="font-mono text-label font-semibold uppercase tracking-[0.06em] text-ink-muted lg:hidden">
           Metrics
         </span>
         <div
@@ -545,7 +545,7 @@ function WorkflowStepRow({
           {metrics.map((metric) => (
             <span
               key={metric.label}
-              className="inline-flex min-w-0 items-baseline gap-1 rounded-[6px] bg-panel-raised px-2 py-1 font-mono text-[0.6875rem] text-ink-muted"
+              className="inline-flex min-w-0 items-baseline gap-1 rounded-[6px] bg-panel-raised px-2 py-1 font-mono text-label text-ink-muted"
               data-step-metric={metric.label}
             >
               <span className="truncate">{metric.label}</span>

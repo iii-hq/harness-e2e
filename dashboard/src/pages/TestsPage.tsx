@@ -806,7 +806,7 @@ export function TestsPage({
         }
       />
 
-      <main id="tests-main" className="page-shell overview-shell">
+      <div className="page-shell overview-shell">
         <section className="page-heading" aria-labelledby="tests-title">
           <div>
             <div className="eyebrow">
@@ -1112,14 +1112,7 @@ export function TestsPage({
             </>
           )}
         </section>
-      </main>
-      <footer>
-        <span>Harness E2E · versioned evidence</span>
-        <span>
-          {versionLabel(fromVersionId) || 'A unavailable'} →{' '}
-          {versionLabel(toVersionId) || 'B unavailable'}
-        </span>
-      </footer>
+      </div>
     </>
   )
 }

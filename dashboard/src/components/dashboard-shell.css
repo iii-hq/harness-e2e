@@ -1,257 +1,275 @@
-.harness-e2e-shell,
-.harness-e2e-shell * {
-  box-sizing: border-box;
-}
+@layer theme, base, legacy, ds, components, utilities;
+@layer legacy {
+  .harness-e2e-shell,
+  .harness-e2e-shell * {
+    box-sizing: border-box;
+  }
 
-/* The bundle's own Tailwind theme re-declares --color-ink/--color-panel/
+  /* The bundle's own Tailwind theme re-declares --color-ink/--color-panel/
    --color-panel-raised in terms of these semantic tokens, so chaining through
    those three console names would cycle inside the injected scope. They get
    concrete per-theme console values (--he-*) instead; every other token chains
    through a console variable that stays resolvable. The doubled class beats
    the legacy `:root` palette that the console scoper rewrites onto the same
    element. */
-.harness-e2e-shell.harness-e2e-shell,
-.harness-e2e-dashboard.harness-e2e-dashboard {
-  /* Channel lists + rgb(var()) on purpose: the console bundle pipeline
+  .harness-e2e-shell.harness-e2e-shell,
+  .harness-e2e-dashboard.harness-e2e-dashboard,
+  :root[data-harness-e2e="standalone"] {
+    /* Channel lists + rgb(var()) on purpose: the console bundle pipeline
      normalizes literal colors to hex and then rewrites hex to semantic
      tokens, which would reintroduce the cycle. Raw channel custom
      properties survive both passes. */
-  --he-ink-rgb: 10, 10, 10;
-  --he-panel-rgb: 250, 250, 250;
-  --he-panel-raised-rgb: 247, 245, 242;
-  --he-ink: rgb(var(--he-ink-rgb));
-  --he-panel: rgb(var(--he-panel-rgb));
-  --he-panel-raised: rgb(var(--he-panel-raised-rgb));
-  --color-ink: var(--he-ink);
-  --color-panel: var(--he-panel);
-  --color-panel-raised: var(--he-panel-raised);
-  --bg: var(--color-bg, #f2f0ed);
-  --surface: var(--he-panel);
-  --surface-raised: var(--he-panel-raised);
-  --surface-fill: var(--color-surface, rgba(20, 16, 8, 0.055));
-  --surface-soft: var(--color-surface-hover, rgba(20, 16, 8, 0.085));
-  --surface-selected: var(--color-surface-selected, rgba(20, 16, 8, 0.12));
-  --line: var(--color-edge, rgba(20, 16, 8, 0.16));
-  --line-strong: var(--color-edge, rgba(20, 16, 8, 0.28));
-  --text: var(--he-ink);
-  --text-soft: var(--color-ink-faint, #6b6865);
-  /* Text below 18px has to reach 4.5:1 on the panel, the raised panel and
+    --he-ink-rgb: 10, 10, 10;
+    --he-panel-rgb: 250, 250, 250;
+    --he-panel-raised-rgb: 247, 245, 242;
+    --he-ink: rgb(var(--he-ink-rgb));
+    --he-panel: rgb(var(--he-panel-rgb));
+    --he-panel-raised: rgb(var(--he-panel-raised-rgb));
+    --color-ink: var(--he-ink);
+    --color-panel: var(--he-panel);
+    --color-panel-raised: var(--he-panel-raised);
+    --bg: var(--color-bg, #f2f0ed);
+    --surface: var(--he-panel);
+    --surface-raised: var(--he-panel-raised);
+    --surface-fill: var(--color-surface, rgba(var(--contrast-rgb), 0.055));
+    --surface-soft: var(
+      --color-surface-hover,
+      rgba(var(--contrast-rgb), 0.085)
+    );
+    --surface-selected: var(
+      --color-surface-selected,
+      rgba(var(--contrast-rgb), 0.12)
+    );
+    --line: var(--color-edge, rgba(var(--contrast-rgb), 0.16));
+    --line-strong: var(--color-edge, rgba(var(--contrast-rgb), 0.28));
+    --text: var(--he-ink);
+    --text-soft: var(--color-ink-faint, #6b6865);
+    /* Text below 18px has to reach 4.5:1 on the panel, the raised panel and
      the .055 fill (audit A11Y-01, A11Y-02, DK-01). The host's ghost, alert
      and warn tokens do not, so the dashboard carries its own channel lists
      for text and keeps the host ghost only for decoration (--ink-decor).
      tests/dashboard/theme-contrast.test.cjs measures these. */
-  --he-ink-muted-rgb: 110, 107, 103;
-  --he-alert-rgb: 196, 0, 29;
-  --he-warn-rgb: 133, 98, 0;
-  --text-muted: rgb(var(--he-ink-muted-rgb));
-  --ink-decor: var(--color-ink-ghost, #a3a09c);
-  --accent: var(--color-accent, #b8420f);
-  --accent-soft: var(--color-accent-muted, rgba(184, 66, 15, 0.1));
-  --accent-blue: var(--color-accent, #b8420f);
-  --warning: rgb(var(--he-warn-rgb));
-  --danger: rgb(var(--he-alert-rgb));
-  --success: var(--color-ok, #356f3d);
-  --contrast-rgb: 20, 16, 8;
-  --contrast: rgb(var(--contrast-rgb));
-  /* Control boundaries need 3:1 against the panel (WCAG 1.4.11). */
-  --control-edge: color-mix(in srgb, var(--text) 50%, transparent);
-  --font-body: var(--font-sans, Inter, ui-sans-serif, system-ui, sans-serif);
-  --code-bg: var(--surface-raised);
-  --code-text: var(--text-soft);
-  --color-rule: var(--color-edge, rgba(20, 16, 8, 0.16));
-  --color-accent-fg: var(--he-panel);
-  --color-accent-hover: var(--color-accent-hover, var(--accent));
-  --grid-line: transparent;
-  --glass: var(--he-panel-raised);
-  --backdrop: color-mix(in srgb, var(--color-bg, #f2f0ed) 86%, transparent);
-  --radius-sm: 6px;
-  --radius-md: 6px;
-  --radius-lg: 6px;
-  --shadow: none;
-  --shadow-panel: none;
-  --shadow-focus: 0 0 0 3px color-mix(in srgb, var(--accent) 22%, transparent);
-  min-width: 0;
-  min-height: 100%;
-  color: var(--text);
-  background: var(--surface);
-  font-family: var(--font-sans, Inter, ui-sans-serif, system-ui, sans-serif);
-}
+    --he-ink-muted-rgb: 110, 107, 103;
+    --he-alert-rgb: 196, 0, 29;
+    --he-warn-rgb: 133, 98, 0;
+    /* Informational accent (running, comparisons) separate from the brand
+     accent (audit DS-06); 5.6:1 on the panel in light, 8.9:1 in dark. */
+    --he-info-rgb: 0, 102, 153;
+    --text-muted: rgb(var(--he-ink-muted-rgb));
+    --ink-decor: var(--color-ink-ghost, #a3a09c);
+    --accent: var(--color-accent, #b8420f);
+    --accent-soft: var(
+      --color-accent-muted,
+      color-mix(in srgb, var(--accent) 10%, transparent)
+    );
+    --info: rgb(var(--he-info-rgb));
+    --accent-blue: var(--info);
+    --warning: rgb(var(--he-warn-rgb));
+    --danger: rgb(var(--he-alert-rgb));
+    --success: var(--color-ok, #356f3d);
+    --contrast-rgb: 20, 16, 8;
+    --contrast: rgb(var(--contrast-rgb));
+    /* Control boundaries need 3:1 against the panel (WCAG 1.4.11). */
+    --control-edge: color-mix(in srgb, var(--text) 50%, transparent);
+    --font-body: var(--font-sans, Inter, ui-sans-serif, system-ui, sans-serif);
+    --code-bg: var(--surface-raised);
+    --code-text: var(--text-soft);
+    --color-rule: var(--color-edge, rgba(var(--contrast-rgb), 0.16));
+    --color-accent-fg: var(--he-panel);
+    --color-accent-hover: var(--color-accent-hover, var(--accent));
+    --grid-line: transparent;
+    --glass: var(--he-panel-raised);
+    --backdrop: color-mix(in srgb, var(--color-bg, #f2f0ed) 86%, transparent);
+    --radius-sm: 6px;
+    --radius-md: 6px;
+    --radius-lg: 6px;
+    --shadow: none;
+    --shadow-panel: none;
+    --shadow-focus: 0 0 0 3px color-mix(in srgb, var(--accent) 22%, transparent);
+    color-scheme: light;
+    min-width: 0;
+    min-height: 100%;
+    color: var(--text);
+    background: var(--surface);
+    font-family: var(--font-sans, Inter, ui-sans-serif, system-ui, sans-serif);
+  }
 
-.harness-e2e-shell.harness-e2e-shell[data-theme="dark"],
-.harness-e2e-dashboard.harness-e2e-dashboard[data-theme="dark"] {
-  --he-ink-rgb: 237, 237, 237;
-  --he-panel-rgb: 17, 17, 17;
-  --he-panel-raised-rgb: 23, 23, 23;
-  --he-ink-muted-rgb: 143, 143, 143;
-  --he-alert-rgb: 240, 93, 104;
-  --he-warn-rgb: 245, 165, 36;
-  /* The host's dark alert and warn tokens already pass AA; keep them. */
-  --warning: var(--color-warn, rgb(var(--he-warn-rgb)));
-  --danger: var(--color-alert, rgb(var(--he-alert-rgb)));
-  --contrast-rgb: 255, 255, 255;
-  --control-edge: color-mix(in srgb, var(--text) 40%, transparent);
-}
+  .harness-e2e-shell.harness-e2e-shell[data-theme="dark"],
+  .harness-e2e-dashboard.harness-e2e-dashboard[data-theme="dark"],
+  :root[data-harness-e2e="standalone"][data-theme="dark"] {
+    --he-ink-rgb: 237, 237, 237;
+    --he-panel-rgb: 17, 17, 17;
+    --he-panel-raised-rgb: 23, 23, 23;
+    --he-ink-muted-rgb: 143, 143, 143;
+    --he-alert-rgb: 240, 93, 104;
+    --he-warn-rgb: 245, 165, 36;
+    --he-info-rgb: 123, 199, 255;
+    color-scheme: dark;
+    /* The host's dark alert and warn tokens already pass AA; keep them. */
+    --warning: var(--color-warn, rgb(var(--he-warn-rgb)));
+    --danger: var(--color-alert, rgb(var(--he-alert-rgb)));
+    --contrast-rgb: 255, 255, 255;
+    --control-edge: color-mix(in srgb, var(--text) 40%, transparent);
+  }
 
-.harness-e2e-shell[data-mode="standalone"] {
-  --font-sans: Inter, ui-sans-serif, system-ui, sans-serif;
-  --font-mono: "Chivo Mono", ui-monospace, monospace;
-  --color-bg: #f2f0ed;
-  --color-panel: #fafafa;
-  --color-panel-raised: #f7f5f2;
-  --color-surface: rgba(20, 16, 8, 0.055);
-  --color-surface-hover: rgba(20, 16, 8, 0.085);
-  --color-surface-selected: rgba(20, 16, 8, 0.12);
-  --color-edge: rgba(20, 16, 8, 0.16);
-  --color-ink: #0a0a0a;
-  --color-ink-faint: #6b6865;
-  --color-ink-ghost: #a3a09c;
-  --color-accent: #b8420f;
-  --color-accent-muted: rgba(184, 66, 15, 0.1);
-  --color-warn: #a87a00;
-  --color-alert: #ff0026;
-  --color-ok: #356f3d;
-}
+  /* Standalone plays the host: these are the console token names the shell
+   chains through. The standalone root carries them too (index.html sets
+   data-harness-e2e), so portals rendered under <body> keep their colours. */
+  :root[data-harness-e2e="standalone"],
+  .harness-e2e-shell[data-mode="standalone"] {
+    --font-sans: Inter, ui-sans-serif, system-ui, sans-serif;
+    --font-mono: "Chivo Mono", ui-monospace, monospace;
+    --color-bg: #f2f0ed;
+    --color-surface: rgba(var(--contrast-rgb), 0.055);
+    --color-surface-hover: rgba(var(--contrast-rgb), 0.085);
+    --color-surface-selected: rgba(var(--contrast-rgb), 0.12);
+    --color-edge: rgba(var(--contrast-rgb), 0.16);
+    --color-ink-faint: #6b6865;
+    --color-ink-ghost: #a3a09c;
+    --color-accent: #b8420f;
+    --color-accent-muted: color-mix(
+      in srgb,
+      var(--color-accent) 10%,
+      transparent
+    );
+    --color-warn: #a87a00;
+    --color-alert: #ff0026;
+    --color-ok: #356f3d;
+  }
 
-.harness-e2e-shell[data-mode="standalone"][data-theme="dark"] {
-  --color-bg: #0a0a0a;
-  --color-panel: #111111;
-  --color-panel-raised: #171717;
-  --color-surface: rgba(255, 255, 255, 0.055);
-  --color-surface-hover: rgba(255, 255, 255, 0.085);
-  --color-surface-selected: rgba(255, 255, 255, 0.12);
-  --color-edge: rgba(255, 255, 255, 0.12);
-  --color-ink: #ededed;
-  --color-ink-faint: #a6a6a6;
-  --color-ink-ghost: #6f6f6f;
-  --color-accent: #28a8f7;
-  --color-accent-muted: rgba(40, 168, 247, 0.12);
-  --color-warn: #f5a524;
-  --color-alert: #f05d68;
-  --color-ok: #36c98f;
-}
+  :root[data-harness-e2e="standalone"][data-theme="dark"],
+  .harness-e2e-shell[data-mode="standalone"][data-theme="dark"] {
+    --color-bg: #0a0a0a;
+    --color-surface: rgba(var(--contrast-rgb), 0.055);
+    --color-surface-hover: rgba(var(--contrast-rgb), 0.085);
+    --color-surface-selected: rgba(var(--contrast-rgb), 0.12);
+    --color-edge: rgba(var(--contrast-rgb), 0.12);
+    --color-ink-faint: #a6a6a6;
+    --color-ink-ghost: #6f6f6f;
+    --color-accent: #28a8f7;
+    --color-accent-muted: color-mix(
+      in srgb,
+      var(--color-accent) 12%,
+      transparent
+    );
+    --color-warn: #f5a524;
+    --color-alert: #f05d68;
+    --color-ok: #36c98f;
+  }
 
-.harness-e2e-dashboard.harness-e2e-dashboard {
-  --radius-sm: 6px;
-  --radius-md: 6px;
-  --radius-lg: 6px;
-  --shadow: none;
-  min-width: 0;
-}
+  .harness-e2e-dashboard.harness-e2e-dashboard {
+    --radius-sm: 6px;
+    --radius-md: 6px;
+    --radius-lg: 6px;
+    --shadow: none;
+    min-width: 0;
+    /* Audit DS-14 / RD-11: the dashboard is a query container. Injected pages
+     live in tabs and split panes, so layout reacts to THIS width, not the
+     viewport. Two points matter: narrow (≤ 720px) and compact (≤ 480px). */
+    container-type: inline-size;
+    container-name: harness;
+  }
 
-/* Console vocabulary: headings render in the mono face, lowercase, with tight
+  /* Console vocabulary: headings render in the mono face, lowercase, with tight
    tracking. :where() keeps specificity at zero so page-level size rules win. */
-.harness-e2e-dashboard :where(h1, h2, h3, h4) {
-  font-family: var(--font-mono, "Chivo Mono", ui-monospace, monospace);
-  font-weight: 600;
-  letter-spacing: -0.01em;
-  text-transform: lowercase;
-}
+  .harness-e2e-dashboard :where(h1, h2, h3, h4) {
+    font-family: var(--font-mono, "Chivo Mono", ui-monospace, monospace);
+    font-weight: 600;
+    letter-spacing: -0.01em;
+    text-transform: lowercase;
+  }
 
-.harness-e2e-header-action:hover {
-  background: var(--surface-soft);
-}
+  .harness-e2e-header-action:hover {
+    background: var(--surface-soft);
+  }
 
-.harness-e2e-header-action-primary {
-  background: var(--text);
-  color: var(--surface);
-}
+  .harness-e2e-header-action-primary {
+    background: var(--text);
+    color: var(--surface);
+  }
 
-.harness-e2e-header-action-primary:hover {
-  background: color-mix(in srgb, var(--text) 90%, var(--surface));
-}
+  .harness-e2e-header-action-primary:hover {
+    background: color-mix(in srgb, var(--text) 90%, var(--surface));
+  }
 
-.harness-e2e-discard-dialog::backdrop {
-  background: var(--color-backdrop, var(--backdrop));
-}
-
-/* Section navigation: tabs by default, a select below 720px of container
+  /* Section navigation: tabs by default, a select below 720px of container
    width. Both states live here so no utility class can override them. */
-.harness-e2e-navigation-narrow {
-  display: none;
-}
+  .harness-e2e-navigation-wide {
+    display: flex;
+  }
 
-.harness-e2e-shell[data-narrow="true"] .harness-e2e-navigation-wide {
-  display: none;
-}
+  .harness-e2e-navigation-narrow {
+    display: none;
+  }
 
-.harness-e2e-shell[data-narrow="true"] .harness-e2e-navigation-narrow {
-  display: block;
-}
+  .harness-e2e-shell[data-narrow="true"] .harness-e2e-navigation-wide {
+    display: none;
+  }
 
-/* Page actions collapse into one disclosure in narrow containers. */
-.harness-e2e-header-overflow {
-  position: relative;
-}
+  .harness-e2e-shell[data-narrow="true"] .harness-e2e-navigation-narrow {
+    display: block;
+  }
 
-.harness-e2e-header-overflow > summary {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  min-width: 2.25rem;
-  min-height: 2.25rem;
-  border-radius: 6px;
-  color: var(--text-soft);
-  list-style: none;
-  cursor: pointer;
-}
+  /* Section links: the pill vocabulary in both hosts; aria-current is the
+   selected state (audit S-04 / A11Y-05). */
+  .harness-e2e-nav-link {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.4rem;
+    min-height: 2rem;
+    padding: 0 0.625rem;
+    border-radius: 6px;
+    color: var(--text-soft);
+    font-family: var(--font-mono, "Chivo Mono", ui-monospace, monospace);
+    font-size: 0.8125rem;
+    font-weight: 500;
+    line-height: 1;
+    text-decoration: none;
+    text-transform: lowercase;
+    white-space: nowrap;
+    transition:
+      color 160ms ease,
+      background 160ms ease;
+  }
 
-.harness-e2e-header-overflow > summary::-webkit-details-marker {
-  display: none;
-}
+  .harness-e2e-nav-link:hover {
+    background: var(--surface-soft);
+    color: var(--text);
+  }
 
-.harness-e2e-header-overflow > summary:hover,
-.harness-e2e-header-overflow[open] > summary {
-  background: var(--surface-soft);
-  color: var(--text);
-}
+  .harness-e2e-nav-link[aria-current="page"] {
+    background: var(--surface-selected);
+    color: var(--text);
+    font-weight: 600;
+  }
 
-.harness-e2e-header-overflow-menu {
-  position: absolute;
-  top: calc(100% + 4px);
-  right: 0;
-  z-index: 30;
-  display: flex;
-  flex-direction: column;
-  align-items: stretch;
-  gap: 2px;
-  min-width: 11rem;
-  padding: 6px;
-  border-radius: 6px;
-  background: var(--surface-raised);
-  outline: 1px solid var(--line);
-}
+  .harness-e2e-shell [data-route-chrome] {
+    display: none;
+  }
 
-.harness-e2e-header-overflow-menu .harness-e2e-header-action {
-  justify-content: flex-start;
-  min-height: 2.25rem;
-}
+  .harness-e2e-shell
+    :where(button, a, input, select, textarea, summary):focus-visible {
+    outline: 2px solid var(--color-rule-focus, var(--accent));
+    outline-offset: 3px;
+  }
 
-.harness-e2e-shell [data-route-chrome] {
-  display: none;
-}
-
-.harness-e2e-shell
-  :where(button, a, input, select, textarea, summary):focus-visible {
-  outline: 2px solid var(--color-rule-focus, var(--accent));
-  outline-offset: 3px;
-}
-
-/* Fields are fill-only, so their edge is an inset outline at 3:1 against the
+  /* Fields are fill-only, so their edge is an inset outline at 3:1 against the
    panel; the focus ring above replaces it while the field is focused. */
-.harness-e2e-shell
-:where(
-  input:not([type="checkbox"], [type="radio"], [type="range"], [type="file"]),
-  select,
-  textarea
-) {
-  outline: 1px solid var(--control-edge);
-  outline-offset: -1px;
-}
+  .harness-e2e-shell
+  :where(
+    input:not([type="checkbox"], [type="radio"], [type="range"], [type="file"]),
+    select,
+    textarea
+  ) {
+    outline: 1px solid var(--control-edge);
+    outline-offset: -1px;
+  }
 
-@media (prefers-reduced-motion: reduce) {
-  .harness-e2e-shell * {
-    scroll-behavior: auto !important;
-    animation-duration: 1ms !important;
-    transition-duration: 1ms !important;
+  @media (prefers-reduced-motion: reduce) {
+    .harness-e2e-shell * {
+      scroll-behavior: auto !important;
+      animation-duration: 1ms !important;
+      transition-duration: 1ms !important;
+    }
   }
 }

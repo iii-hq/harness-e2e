@@ -18,7 +18,7 @@ Three surfaces, in this order:
 
 ## Legacy to delete
 
-`.plans-*`, `.plan-list-*`, `.plan-detail-*`, `.plan-execution-*`, `.plan-run-*` (~1,300 lines), the dialog CSS in `index.css`, `.setup-*`.
+`.plans-*`, `.plan-list-*`, `.plan-detail-*`, `.plan-execution-*`, `.plan-run-*` (~1,300 lines), the dialog CSS in `legacy.css`, `.setup-*`.
 
 ## Findings to close
 
@@ -73,7 +73,7 @@ Three surfaces, in this order:
 - **P-19** (P2 · A11Y semântica) — 7 links com o mesmo nome acessível "Open plan →" (`285-287`); → `aria-label={\`Open plan ${plan.label}\`}`; `aria-labelledby` no article; igualar label ao texto; apagar CSS morto.
 - **PD-18** (P2 · DK) — plan-testplan-dark-1440.png: tokens funcionam, mas painéis border-only com `--surface` = fundo (#111) sobram só com linha `--color-edge` .12 ≈ 1.4:1; → Resolve-se com PD-10 (fills).
 - **PD-19** (P2 · Copy) — Fallback "Explicit local baseline and candidate scope." (`2158-2159`) aparece como se fosse propósito ("test plan"); → Sem fallback (omitir o `<p>`); glossário único: baseline / candidate, "reference" só no seletor; tooltip curto para judge.
-- **PD-20** (P2 · Código morto) — `PlanComparisonPanel` (`1380-1482`) não é renderizado por nenhuma página (só por `LocalPlanPage.test.tsx`); → Remover; reduz `index.css` e o risco de reintroduzir o vocabulário legado.
+- **PD-20** (P2 · Código morto) — `PlanComparisonPanel` (`1380-1482`) não é renderizado por nenhuma página (só por `LocalPlanPage.test.tsx`); → Remover; reduz `legacy.css` e o risco de reintroduzir o vocabulário legado.
 
 ### Plan creation
 
@@ -99,7 +99,7 @@ Three surfaces, in this order:
 
 ## Acceptance
 
-- CSS-debt ratchet drops by at least 40 `border: 1px` and the deleted legacy blocks are gone from `index.css`.
+- CSS-debt ratchet drops by at least 40 `border: 1px` and the deleted legacy blocks are gone from `legacy.css`.
 - Plans list, plan detail and the setup sheet render only design-system primitives (grep the pages for legacy class prefixes returns nothing).
 - The setup footer with the primary action is visible without scrolling at 1440, 720 and 390.
 - Live capture: run suite from the Overview, `plans/new` and a plan detail at 1100 and 390 px, both themes.

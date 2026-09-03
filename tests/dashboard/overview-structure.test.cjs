@@ -59,7 +59,7 @@ test('prioritizes the first-read execution signal', () => {
 })
 
 test('keeps the overview operational, dense, and Tailwind-based', () => {
-  const styles = read('src', 'index.css')
+  const styles = read('src', 'legacy.css')
 
   for (const primitive of [
     'Button',
@@ -70,7 +70,12 @@ test('keeps the overview operational, dense, and Tailwind-based', () => {
     assert.match(overviewPage, new RegExp(`\\b${primitive}\\b`))
   }
   assert.match(overviewPage, /DashboardPageActions/)
-  assert.match(styles, /@import "tailwindcss" important/)
+  // Audit DS-12: utilities win by cascade layer, not by `important`.
+  const entry = read('src', 'index.css')
+  assert.match(entry, /@import "tailwindcss";/)
+  assert.doesNotMatch(entry, /@import "tailwindcss" important/)
+  assert.match(entry, /@layer theme, base, legacy, ds, components, utilities;/)
+  assert.match(entry, /@import "\.\/legacy\.css" layer\(legacy\);/)
   assert.match(overviewPage, /lg:grid-cols-\[minmax\(0,1fr\)_300px\]/)
   assert.match(overviewPage, /xl:grid-cols-4/)
   assert.match(overviewPage, /Recent executions/)
@@ -97,7 +102,7 @@ test('adapts overview metrics when persisted workflow evidence is available', ()
 })
 
 test('uses one low-emphasis action treatment in overview card footers', () => {
-  const styles = read('src', 'index.css')
+  const styles = read('src', 'legacy.css')
   assert.match(styles, /\.overview-card-action\s*\{[\s\S]*display: inline-flex/)
   assert.match(styles, /\.overview-card-action:hover[\s\S]*border-bottom-color/)
   assert.match(
@@ -132,11 +137,12 @@ test('keeps the workspace navigation and versioned test flow', () => {
   ]) {
     assert.match(page, /<DashboardPageActions/)
   }
-  assert.match(dashboardShell, /<Tabs/)
-  assert.match(dashboardShell, /<TabsTrigger\b[^>]*key=\{item\.value\}/s)
-  assert.match(dashboardShell, /<Select/)
+  assert.match(dashboardShell, /<nav[\s\S]*aria-label="Harness E2E sections"/)
+  assert.match(dashboardShell, /aria-current=\{\s*item\.value === section \? 'page' : undefined\s*\}/)
+  assert.match(dashboardShell, /<select/)
+  assert.match(dashboardShell, /<PageActionsBar/)
   assert.match(appHeader, /return null/)
-  assert.doesNotMatch(read('src', 'index.css'), /\.topbar(?:\s|,|\{)/)
+  assert.doesNotMatch(read('src', 'legacy.css'), /\.topbar(?:\s|,|\{)/)
   assert.doesNotMatch(historyPage, /tmh-topbar|tmh-brand|tmh-context/)
   assert.match(plansPage, /All local plans/)
   assert.match(plansPage, /hashForNewPlan\(\)/)
@@ -154,7 +160,7 @@ test('distinguishes active tests from tests with no execution history', () => {
 })
 
 test('keeps metric history rows readable and opens details on demand', () => {
-  const styles = read('src', 'index.css')
+  const styles = read('src', 'legacy.css')
   assert.match(historyPage, /Median tokens/)
   assert.match(historyPage, /Impact by scenario/)
   assert.match(historyPage, /metricCaption/)
@@ -205,7 +211,7 @@ test('makes local plan scope selection focused and readable', () => {
 })
 
 test('keeps plan panels explicitly padded and comparison content full bleed', () => {
-  const styles = read('src', 'index.css')
+  const styles = read('src', 'legacy.css')
   assert.match(styles, /--plan-panel-space-y: 24px/)
   assert.match(styles, /--plan-panel-space-x: 28px/)
   assert.match(styles, /--plan-card-space: 16px/)
@@ -219,7 +225,7 @@ test('keeps plan panels explicitly padded and comparison content full bleed', ()
   )
   assert.match(
     styles,
-    /@media \(max-width: 560px\)[\s\S]*--plan-panel-space-y: 18px[\s\S]*--plan-panel-space-x: 18px/,
+    /@container harness \(max-width: 560px\)[\s\S]*--plan-panel-space-y: 18px[\s\S]*--plan-panel-space-x: 18px/,
   )
   assert.match(planPage, /panel-heading plan-panel-heading/g)
   assert.doesNotMatch(planPage, /className="panel-heading"/)
@@ -253,7 +259,7 @@ test('keeps plan panels explicitly padded and comparison content full bleed', ()
 })
 
 test('exposes baseline and arbitrary candidate comparison controls', () => {
-  const styles = read('src', 'index.css')
+  const styles = read('src', 'legacy.css')
   assert.match(plansPage, /Latest candidate vs baseline/)
   assert.match(plansPage, /Objective regressions/)
   assert.match(plansPage, /Not reported/)
@@ -316,7 +322,10 @@ test('organizes detail into progressive disclosure sections', () => {
     assert.match(executionPage, new RegExp(`id=\\"${section}\\"`))
   }
   assert.match(executionPage, /hashForExecution\(detail\.id, 'results'\)/)
-  assert.match(executionPage, /className="skip-link"/)
+  // One skip-link and one main landmark, both owned by the shell (A11Y-06).
+  assert.match(dashboardShell, /className="skip-link"/)
+  assert.doesNotMatch(executionPage, /className="skip-link"/)
+  assert.doesNotMatch(executionPage, /<main\b/)
   assert.doesNotMatch(executionPage, /detail-index/)
   assert.match(
     executionPage,
@@ -347,8 +356,9 @@ test('organizes detail into progressive disclosure sections', () => {
   assert.match(executionPage, /@\/design-system\/styles\.css/)
   assert.doesNotMatch(executionPage, /StatusPill|01 · Summary|02 · Results/)
   assert.match(executionPage, /Preview raw JSON/)
-  assert.match(transcript, /max-\[560px\]:w-screen/)
-  assert.match(transcript, /max-\[560px\]:h-dvh/)
+  // The sheet behaviour below 560px lives in the design-system Dialog.
+  assert.match(transcript, /<Dialog/)
+  assert.match(read('src', 'design-system', 'primitives.css'), /@container harness \(max-width: 560px\) \{\s*\.ds-dialog,/)
 })
 
 test('migrates runner and transcript behavior to React components', () => {
@@ -357,9 +367,10 @@ test('migrates runner and transcript behavior to React components', () => {
   assert.match(runner, /cancelRun/)
   assert.match(runner, /subscribeRunChanges/)
   assert.match(runner, /aria-live/)
-  assert.match(runner, /function trapDialogFocus/)
-  assert.match(runner, /getClientRects\(\)\.length > 0/)
-  assert.match(runner, /onKeyDownCapture=\{trapDialogFocus\}/)
+  const primitives = read('src', 'design-system', 'primitives.tsx')
+  assert.match(primitives, /export function trapDialogFocus/)
+  assert.match(primitives, /getClientRects\(\)\.length > 0/)
+  assert.match(runner, /<Dialog/)
   assert.match(transcript, /normalizeTranscript/)
   assert.match(transcript, /session-transcript-dialog/)
   assert.match(transcript, /conversation-shell/)
@@ -371,8 +382,7 @@ test('keeps an empty local execution label serializable and its action visible',
   assert.match(runner, /label: form\.label\.trim\(\),/)
   assert.doesNotMatch(runner, /label: form\.label \|\| null/)
   assert.match(runner, /form="local-runner-form"/)
-  assert.match(runner, /hidden max-h-\[94dvh\]/)
-  assert.match(runner, /open:grid open:grid-rows/)
+  assert.match(read('src', 'design-system', 'primitives.css'), /\.ds-dialog\[open\] \{\s*display: grid;/)
   assert.match(runner, /lg:grid-cols-12/)
   assert.match(runner, /Create a reusable plan instead/)
   assert.match(executionSetup, /mode === 'plan'/)

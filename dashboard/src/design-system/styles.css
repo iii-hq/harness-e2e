@@ -1,7 +1,8 @@
+@layer theme, base, legacy, ds, components, utilities;
 @import "@fontsource/geist/400.css";
 @import "@fontsource/geist/500.css";
 @import "@fontsource/geist/600.css";
 @import "@fontsource/chivo-mono/400.css";
 @import "@fontsource/chivo-mono/600.css";
-@import "./foundations.css";
-@import "./primitives.css";
+@import "./foundations.css" layer(ds);
+@import "./primitives.css" layer(ds);

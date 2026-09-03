@@ -416,11 +416,8 @@ export function PlansPage() {
 
   return (
     <>
-      <a className="skip-link" href="#plans-main">
-        Skip to local plans
-      </a>
       <PlanListHeader />
-      <main id="plans-main" className="page-shell overview-shell plans-shell">
+      <div className="page-shell overview-shell plans-shell">
         <section className="page-heading" aria-labelledby="plans-title">
           <div>
             <div className="eyebrow">
@@ -607,11 +604,7 @@ export function PlansPage() {
             </section>
           </>
         )}
-      </main>
-      <footer>
-        <span>Harness E2E · local plan workspace</span>
-        <a href={hashForWorkspace()}>Back to overview</a>
-      </footer>
+      </div>
     </>
   )
 }

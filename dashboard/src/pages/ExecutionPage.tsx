@@ -148,7 +148,7 @@ function ModelIdentityCard({
 }) {
   return (
     <div className="min-w-0 bg-panel-raised p-3">
-      <div className="font-mono text-[0.6875rem] font-semibold uppercase tracking-[0.06em] text-ink-muted">
+      <div className="font-mono text-label font-semibold uppercase tracking-[0.06em] text-ink-muted">
         {label}
       </div>
       {models.length ? (
@@ -164,7 +164,7 @@ function ModelIdentityCard({
               {friendlyModelName(model.model)}
             </strong>
             {model.provider && (
-              <code className="mt-0.5 block break-all font-mono text-[0.6875rem] text-ink-muted">
+              <code className="mt-0.5 block break-all font-mono text-label text-ink-muted">
                 {model.provider}
               </code>
             )}
@@ -254,7 +254,7 @@ function formatReportedCost(value: number | null) {
 function DecisionBoundary({ label, value }: { label: string; value: string }) {
   return (
     <div className="grid content-start gap-2 bg-panel-raised p-4">
-      <dt className="font-mono text-[0.6875rem] font-semibold uppercase tracking-[0.06em] text-ink-muted">
+      <dt className="font-mono text-label font-semibold uppercase tracking-[0.06em] text-ink-muted">
         {label}
       </dt>
       <dd className="m-0">
@@ -356,7 +356,7 @@ export function DecisionSection({
         <section className="grid content-start gap-3 p-4 md:p-5">
           {aiResult?.diagnosis ? (
             <>
-              <p className="m-0 font-mono text-[0.6875rem] font-semibold uppercase tracking-[0.06em] text-[var(--color-accent)]">
+              <p className="m-0 font-mono text-label font-semibold uppercase tracking-[0.06em] text-[var(--color-accent)]">
                 What happened
               </p>
               <p className="m-0 max-w-4xl text-sm leading-6 text-ink">
@@ -364,7 +364,7 @@ export function DecisionSection({
               </p>
             </>
           ) : null}
-          <p className="m-0 font-mono text-[0.6875rem] font-semibold uppercase tracking-[0.06em] text-[var(--color-accent)]">
+          <p className="m-0 font-mono text-label font-semibold uppercase tracking-[0.06em] text-[var(--color-accent)]">
             Recommended next step
           </p>
           <p className="m-0 max-w-4xl text-sm leading-6 text-ink">
@@ -416,7 +416,7 @@ export function DecisionSection({
           ['Evidence references', summary?.evidence_reference_count],
         ].map(([label, value]) => (
           <div key={String(label)} className="bg-panel-raised p-3">
-            <dt className="font-mono text-[0.6875rem] uppercase tracking-[0.06em] text-ink-muted">
+            <dt className="font-mono text-label uppercase tracking-[0.06em] text-ink-muted">
               {label}
             </dt>
             <dd className="mt-1 mb-0 text-xl font-semibold text-ink">
@@ -567,7 +567,7 @@ function TechnicalSection({
       <dl className="m-0 mt-5 grid grid-cols-[max-content_minmax(0,1fr)] gap-x-6 gap-y-2 font-mono text-xs">
         {entries.map(([key, value]) => (
           <div key={key} className="contents">
-            <dt className="text-[0.6875rem] font-medium uppercase tracking-[0.06em] text-ink-muted">
+            <dt className="text-label font-medium uppercase tracking-[0.06em] text-ink-muted">
               {key}
             </dt>
             <dd className="m-0 break-all text-ink">{value}</dd>
@@ -665,10 +665,7 @@ export function ExecutionPage({
   if (error)
     return (
       <div className="ds-root min-h-dvh bg-[var(--color-bg)] text-ink">
-        <main
-          id="main"
-          className="mx-auto grid min-h-dvh w-[min(52rem,calc(100%_-_1.5rem))] place-items-center py-8"
-        >
+        <div className="mx-auto grid min-h-dvh w-[min(52rem,calc(100%_-_1.5rem))] place-items-center py-8">
           <Panel
             role="alert"
             padding="generous"
@@ -688,16 +685,13 @@ export function ExecutionPage({
               }
             />
           </Panel>
-        </main>
+        </div>
       </div>
     )
   if (!detail || !presentation)
     return (
       <div className="ds-root min-h-dvh bg-[var(--color-bg)] text-ink">
-        <main
-          id="main"
-          className="mx-auto grid min-h-dvh w-[min(52rem,calc(100%_-_1.5rem))] place-items-center py-8"
-        >
+        <div className="mx-auto grid min-h-dvh w-[min(52rem,calc(100%_-_1.5rem))] place-items-center py-8">
           <Panel
             className="w-full rounded-[var(--ds-radius-md)]"
             aria-busy="true"
@@ -706,7 +700,7 @@ export function ExecutionPage({
               Loading execution report…
             </p>
           </Panel>
-        </main>
+        </div>
       </div>
     )
 
@@ -755,23 +749,8 @@ export function ExecutionPage({
     .join(' · ')
   return (
     <div className="ds-root min-h-dvh bg-[var(--color-bg)] text-ink">
-      {/* biome-ignore lint/a11y/useValidAnchor: a skip link must stay a link; the console owns the hash router, so the handler moves focus instead of changing the route (audit ED-16). */}
-      <a
-        className="skip-link"
-        href="#main"
-        onClick={(click) => {
-          click.preventDefault()
-          document.getElementById('main')?.focus()
-        }}
-      >
-        Skip to execution details
-      </a>
-      <DashboardPageActions active="executions" />
-      <main
-        id="main"
-        tabIndex={-1}
-        className="page-shell detail-shell w-[min(1380px,calc(100%_-_3rem))] pt-6 outline-none max-[640px]:w-[calc(100%_-_1.5rem)]"
-      >
+      <DashboardPageActions active="executions" context={presentation.label} />
+      <div className="page-shell detail-shell w-[min(1380px,calc(100%_-_3rem))] pt-6 outline-none max-[640px]:w-[calc(100%_-_1.5rem)]">
         <nav
           className="breadcrumbs mb-5 flex min-w-0 items-center gap-2 overflow-hidden font-mono text-xs text-ink-muted"
           aria-label="Breadcrumb"
@@ -818,7 +797,7 @@ export function ExecutionPage({
             aria-label="Execution identity"
           >
             <div className="bg-panel-raised p-3">
-              <div className="font-mono text-[0.6875rem] font-semibold uppercase tracking-[0.06em] text-ink-muted">
+              <div className="font-mono text-label font-semibold uppercase tracking-[0.06em] text-ink-muted">
                 Scenarios
               </div>
               <strong className="mt-1 block truncate text-sm text-ink">
@@ -830,7 +809,7 @@ export function ExecutionPage({
             <ModelIdentityCard label="Subject" models={presentation.subjects} />
             <ModelIdentityCard label="Judge" models={presentation.judges} />
             <div className="bg-panel-raised p-3">
-              <div className="font-mono text-[0.6875rem] font-semibold uppercase tracking-[0.06em] text-ink-muted">
+              <div className="font-mono text-label font-semibold uppercase tracking-[0.06em] text-ink-muted">
                 Completed
               </div>
               <strong className="mt-1 block text-sm text-ink">
@@ -956,7 +935,7 @@ export function ExecutionPage({
           />
           <TechnicalSection detail={detail} presentation={presentation} />
         </div>
-      </main>
+      </div>
       {transcript && (
         <TranscriptDialog
           title={transcript.title}
@@ -965,17 +944,6 @@ export function ExecutionPage({
           onClose={() => setTranscript(null)}
         />
       )}
-      <footer className="mx-auto mt-8 flex w-[min(1380px,calc(100%_-_3rem))] flex-wrap items-center justify-between gap-3 border-t border-[var(--color-rule)] py-6 text-xs text-ink-muted max-[640px]:w-[calc(100%_-_1.5rem)]">
-        <span>
-          Execution report · <code className="font-mono">{detail.id}</code>
-        </span>
-        <a
-          className="text-[var(--color-ink-faint)] underline-offset-4 hover:underline"
-          href={hashForWorkspace('executions')}
-        >
-          Back to all executions
-        </a>
-      </footer>
     </div>
   )
 }

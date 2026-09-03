@@ -85,14 +85,14 @@ Four surfaces, in this order:
 - **TH-17** (P2 · a11y/tabela) — A ≤720 a tabela perde semântica: `thead { display:none }` (`index.css:5663-5665`) e `table/tbody/tr/td { display:block }` (:5655-5661) fazem a maioria dos leitores de tela deixar de anunciá-la como tabela; → Manter `role="table/row/cell"` no layout em bloco, ou renderizar uma lista de cards em mobile (como `TestCard` na Compare); adicionar `<caption>` visualmente oculta.
 - **TH-18** (P2 · copy) — Jargão sem explicação e plural quebrado: "Retained 1 executions" (`:1209`), "1 logical run" (`:224`), "objective result", "contract sha256:9e29b35f…c20deb" sem copiar/abrir (`:1203-1205`), "Local source · judge openai-codex/… · assessment-json"… → Pluralização; tooltip/glossário para "retained", "logical run", "contract", "system revision"; botão copiar no hash; "assessment-json" → "judge protocol: assessment-json".
 - **TH-19** (P2 · estado/URL) — Filtros, seleção A/B e dialog não vão para a URL (`useState` apenas, `:1116-1126`): refresh/voltar perde tudo; → Sincronizar `?version=&model=&judge=&system=&result=&a=&b=` no hash; dialog → rota `tests/<id>/<executionId>` ou usar a rota de execução existente.
-- **TH-20** (P2 · dívida CSS) — 36 classes `.tmh-*` definidas em `index.css` sem nenhum consumidor JSX (`tmh-viz*`, `tmh-dumbbells`, `tmh-dumbrow`, `tmh-ddot*`, `tmh-track*`, `tmh-comparison-selection/-metrics/-metric/-head/-warning/-arrow`, `tmh-delta-pill`, `tmh-series-note`,… → Purgar as classes mortas; renomear o id para `test-history`; mover o CSS restante para um arquivo próprio ou para primitivas do DS.
+- **TH-20** (P2 · dívida CSS) — 36 classes `.tmh-*` definidas em `legacy.css` sem nenhum consumidor JSX (`tmh-viz*`, `tmh-dumbbells`, `tmh-dumbrow`, `tmh-ddot*`, `tmh-track*`, `tmh-comparison-selection/-metrics/-metric/-head/-warning/-arrow`, `tmh-delta-pill`, `tmh-series-note`,… → Purgar as classes mortas; renomear o id para `test-history`; mover o CSS restante para um arquivo próprio ou para primitivas do DS.
 
 ## Acceptance
 
 - The history dialog/drawer is readable in light and dark (contrast test green; live capture in both themes).
 - The test page shows "showing vN · contract vM" from the backend field, never inferred on the front end.
 - Compare deltas carry a sign and a direction glyph; the default view lists only rows with evidence.
-- Ratchet: `.tmh-*` and `.comparison-*` removed from `index.css`; no new `border: 1px` outside `.ds-*`.
+- Ratchet: `.tmh-*` and `.comparison-*` removed from `legacy.css`; no new `border: 1px` outside `.ds-*`.
 - Live capture: catalog, editor, test page (with and without evidence) and compare at 1100 and 390 px, both themes.
 
 ## PR body

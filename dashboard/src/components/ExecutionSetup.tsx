@@ -246,7 +246,7 @@ export function ExecutionSetup({
             {catalogSummary}
           </span>
         </span>
-        <code className="max-w-full truncate font-mono text-[0.6875rem] text-ink-muted sm:max-w-[16rem]">
+        <code className="max-w-full truncate font-mono text-label text-ink-muted sm:max-w-[16rem]">
           {url || 'Endpoint not loaded'}
         </code>
         {onRefreshCatalog && (
@@ -440,7 +440,7 @@ export function ExecutionSetup({
             </div>
           </div>
 
-          <output className="flex min-h-10 flex-wrap items-center justify-between gap-2 border-y border-[var(--color-rule)] py-2 font-mono text-[0.6875rem] text-ink-muted">
+          <output className="flex min-h-10 flex-wrap items-center justify-between gap-2 border-y border-[var(--color-rule)] py-2 font-mono text-label text-ink-muted">
             <span>
               <strong className="text-ink">{selectedScenarios.length}</strong>{' '}
               {selectedScenarios.length === 1
@@ -481,12 +481,12 @@ export function ExecutionSetup({
                           scenarioDisplayName(scenario)}
                       </strong>
                       {local && (
-                        <span className="rounded-full border border-[color-mix(in_srgb,var(--color-accent)_35%,var(--color-rule))] px-2 py-0.5 font-mono text-[0.6875rem] font-semibold uppercase tracking-[0.05em] text-[var(--color-accent)]">
+                        <span className="rounded-full border border-[color-mix(in_srgb,var(--color-accent)_35%,var(--color-rule))] px-2 py-0.5 font-mono text-label font-semibold uppercase tracking-[0.05em] text-[var(--color-accent)]">
                           Local
                         </span>
                       )}
                     </span>
-                    <code className="break-all font-mono text-[0.6875rem] leading-4 text-ink-muted">
+                    <code className="break-all font-mono text-label leading-4 text-ink-muted">
                       {scenario}
                     </code>
                   </span>
@@ -508,7 +508,7 @@ export function ExecutionSetup({
       <details className="group bg-[color-mix(in_srgb,var(--color-panel-raised)_60%,transparent)]">
         <summary className="flex min-h-20 cursor-pointer list-none items-center justify-between gap-4 px-5 py-4 marker:content-none sm:px-6 [&::-webkit-details-marker]:hidden">
           <span className="grid min-w-0 gap-1">
-            <span className="font-mono text-[0.6875rem] font-semibold uppercase tracking-[0.06em] text-[var(--color-accent)]">
+            <span className="font-mono text-label font-semibold uppercase tracking-[0.06em] text-[var(--color-accent)]">
               Optional controls
             </span>
             <strong className="text-sm font-semibold text-ink">
@@ -607,7 +607,7 @@ export function ExecutionSetupReview({
       }`}
     >
       <div className="border-b border-[var(--color-rule)] p-5 sm:p-6">
-        <p className="m-0 font-mono text-[0.6875rem] font-semibold uppercase tracking-[0.07em] text-[var(--color-accent)]">
+        <p className="m-0 font-mono text-label font-semibold uppercase tracking-[0.07em] text-[var(--color-accent)]">
           {mode === 'plan' ? 'Reusable workflow' : 'One-off result'}
         </p>
         <div className="mt-3 flex items-start justify-between gap-3">
@@ -622,7 +622,7 @@ export function ExecutionSetupReview({
             </p>
           </div>
           <span
-            className={`inline-flex min-h-7 shrink-0 items-center rounded-full border px-2.5 font-mono text-[0.6875rem] font-semibold ${
+            className={`inline-flex min-h-7 shrink-0 items-center rounded-full border px-2.5 font-mono text-label font-semibold ${
               ready
                 ? 'border-[color-mix(in_srgb,var(--color-ok)_35%,transparent)] text-[var(--color-ok)]'
                 : 'border-[var(--color-edge)] text-ink-muted'
@@ -639,7 +639,7 @@ export function ExecutionSetupReview({
             className="grid min-h-24 content-between gap-3 bg-panel p-4"
             key={fact.label}
           >
-            <dt className="font-mono text-[0.6875rem] uppercase tracking-[0.05em] text-ink-muted">
+            <dt className="font-mono text-label uppercase tracking-[0.05em] text-ink-muted">
               {fact.label}
             </dt>
             <dd className="m-0 font-mono text-xl font-semibold tracking-[-0.04em] text-ink">
@@ -651,7 +651,7 @@ export function ExecutionSetupReview({
 
       <dl className="grid gap-4 border-t border-[var(--color-rule)] p-5 text-xs sm:p-6">
         <div className="grid gap-1">
-          <dt className="font-mono text-[0.6875rem] uppercase tracking-[0.05em] text-ink-muted">
+          <dt className="font-mono text-label uppercase tracking-[0.05em] text-ink-muted">
             Execution model
           </dt>
           <dd className="m-0 break-all text-ink">
@@ -659,7 +659,7 @@ export function ExecutionSetupReview({
           </dd>
         </div>
         <div className="grid gap-1">
-          <dt className="font-mono text-[0.6875rem] uppercase tracking-[0.05em] text-ink-muted">
+          <dt className="font-mono text-label uppercase tracking-[0.05em] text-ink-muted">
             Judge
           </dt>
           <dd className="m-0 break-all text-[var(--color-ink-faint)]">
@@ -667,10 +667,10 @@ export function ExecutionSetupReview({
           </dd>
         </div>
         <div className="grid gap-1">
-          <dt className="font-mono text-[0.6875rem] uppercase tracking-[0.05em] text-ink-muted">
+          <dt className="font-mono text-label uppercase tracking-[0.05em] text-ink-muted">
             Harness endpoint
           </dt>
-          <dd className="m-0 break-all font-mono text-[0.6875rem] text-[var(--color-ink-faint)]">
+          <dd className="m-0 break-all font-mono text-label text-[var(--color-ink-faint)]">
             {url || 'Not loaded'}
           </dd>
         </div>

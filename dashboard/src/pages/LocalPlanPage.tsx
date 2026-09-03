@@ -1639,17 +1639,8 @@ export function LocalPlanCreatePage() {
         onKeep={dirtyNavigation.cancelNavigation}
         onDiscard={dirtyNavigation.confirmNavigation}
       />
-      <a
-        className="fixed top-3 left-3 z-[100] -translate-y-24 rounded-lg bg-[var(--color-accent)] px-4 py-3 text-sm font-semibold text-[var(--color-accent-fg)] transition-transform focus:translate-y-0"
-        href="#plan-create-main"
-      >
-        Skip to plan creation
-      </a>
       <DashboardPageActions active="plans" />
-      <main
-        id="plan-create-main"
-        className="ds-root mx-auto w-[calc(100%_-_1.5rem)] max-w-[1420px] py-8 sm:w-[calc(100%_-_3rem)] sm:py-10"
-      >
+      <div className="ds-root mx-auto w-[calc(100%_-_1.5rem)] max-w-[1420px] py-8 sm:w-[calc(100%_-_3rem)] sm:py-10">
         <header className="grid items-end gap-6 border-b border-[var(--color-rule)] pb-6 lg:grid-cols-[minmax(0,1fr)_auto]">
           <div className="min-w-0">
             <p className="m-0 font-mono text-[0.68rem] font-semibold uppercase tracking-[0.08em] text-[var(--color-accent)]">
@@ -1803,16 +1794,7 @@ export function LocalPlanCreatePage() {
             </ExecutionSetupReview>
           </div>
         </form>
-      </main>
-      <footer className="ds-root mx-auto flex w-[calc(100%_-_1.5rem)] max-w-[1420px] flex-wrap items-center justify-between gap-4 border-t border-[var(--color-rule)] py-8 font-mono text-xs text-ink-muted sm:w-[calc(100%_-_3rem)]">
-        <span>Harness E2E · local plans</span>
-        <a
-          className="text-inherit underline-offset-4 hover:underline"
-          href={hashForWorkspace()}
-        >
-          Back to home
-        </a>
-      </footer>
+      </div>
     </>
   )
 }
@@ -2127,14 +2109,11 @@ export function LocalPlanDetailPage({ planId }: { planId: string }) {
 
   return (
     <>
-      <a className="skip-link" href="#plan-detail-main">
-        Skip to plan detail
-      </a>
-      <DashboardPageActions active="plans" />
-      <main
-        id="plan-detail-main"
-        className="page-shell overview-shell plan-detail-shell"
-      >
+      <DashboardPageActions
+        active="plans"
+        context={plan ? plan.label || plan.id : undefined}
+      />
+      <div className="page-shell overview-shell plan-detail-shell">
         {loading && (
           <section className="panel plan-panel-padded">
             <p className="table-empty">Loading plan…</p>
@@ -2234,11 +2213,7 @@ export function LocalPlanDetailPage({ planId }: { planId: string }) {
             />
           </>
         )}
-      </main>
-      <footer>
-        <span>Harness E2E · local plan detail</span>
-        <a href={hashForPlans()}>Back to plans</a>
-      </footer>
+      </div>
     </>
   )
 }

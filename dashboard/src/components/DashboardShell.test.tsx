@@ -2,7 +2,7 @@ import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it, vi } from 'vitest'
 import {
   DashboardShell,
-  HeaderActions,
+  PageActionsBar,
   sectionForRoute,
 } from '@/components/DashboardShell'
 
@@ -44,12 +44,25 @@ describe('section navigation', () => {
     expect(sectionForRoute({ page: 'coverage' })).toBe('coverage')
   })
 
-  it('renders both the wide tabs and the narrow select', () => {
+  it('renders both the wide links and the narrow select', () => {
     const html = renderShell()
     expect(html).toContain('harness-e2e-navigation-wide')
     expect(html).toContain('harness-e2e-navigation-narrow')
     expect(html).toContain('aria-label="Harness E2E section"')
     expect(html).toContain('data-narrow="false"')
+  })
+
+  // Audit S-04 / A11Y-05 / A11Y-06: sections are links with aria-current,
+  // the shell owns the one skip-link and the main landmark.
+  it('navigates with links that mark the current section', () => {
+    const html = renderShell()
+    expect(html).toContain('<nav class="harness-e2e-navigation')
+    expect(html).toContain('aria-label="Harness E2E sections"')
+    expect(html).toContain('href="#/overview" aria-current="page"')
+    expect(html).toContain('href="#/tests"')
+    expect(html).not.toContain('role="tab"')
+    expect(html).toContain('class="skip-link" href="#harness-e2e-main"')
+    expect(html).toContain('id="harness-e2e-main" tabindex="-1"')
   })
 
   // Audit S-01 / RD-01: visibility of the narrow select is decided by
@@ -79,36 +92,22 @@ describe('section navigation', () => {
   })
 })
 
-describe('page actions in the console header', () => {
+describe('page actions in the section bar', () => {
   const actions = <button type="button">new plan</button>
 
-  // Audit S-02 / RD-02: three inline actions pushed the console close
-  // control out of a 390px viewport. In narrow containers the actions
-  // collapse into one disclosure.
-  it('collapses into one disclosure when the container is narrow', () => {
+  // Audit S-05 / S-07: a section's primary action lives in the page, next to
+  // the section links, not in the console header.
+  it('renders the actions as a labelled group', () => {
     const html = renderToStaticMarkup(
-      <HeaderActions
-        narrow={true}
-        actions={actions}
-        actionsLabel="Overview actions"
-      />,
+      <PageActionsBar actions={actions} label="Overview actions" />,
     )
-    expect(html).toContain('<details class="harness-e2e-header-overflow">')
+    expect(html).toContain('harness-e2e-page-actions')
+    expect(html).toContain('<section class="harness-e2e-page-actions')
     expect(html).toContain('aria-label="Overview actions"')
-    expect(html).toContain('harness-e2e-header-overflow-menu')
     expect(html).toContain('>new plan<')
   })
 
-  it('stays inline when the container is wide', () => {
-    const html = renderToStaticMarkup(
-      <HeaderActions narrow={false} actions={actions} />,
-    )
-    expect(html).not.toContain('harness-e2e-header-overflow')
-    expect(html).toContain('>new plan<')
-  })
-
-  it('renders nothing collapsible when a page has no actions', () => {
-    const html = renderToStaticMarkup(<HeaderActions narrow={true} />)
-    expect(html).not.toContain('<details')
+  it('renders nothing when a page has no actions', () => {
+    expect(renderToStaticMarkup(<PageActionsBar />)).toBe('')
   })
 })
