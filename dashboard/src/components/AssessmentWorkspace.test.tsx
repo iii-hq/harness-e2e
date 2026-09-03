@@ -131,7 +131,9 @@ describe('assessment workspace component', () => {
     expect(rendered).toContain('durable_result')
     expect(rendered).toContain('objective system outcome disagree')
     expect(rendered).not.toContain('Evidence register')
-    expect(rendered).toContain('href="#technical"')
+    expect(rendered).toContain('data-evidence-target="technical"')
+    expect(rendered).not.toContain('href="#technical"')
+    expect(rendered).toContain('90/100')
     expect(rendered).toContain('Diagnostic narrative')
     expect(rendered).toContain('Facts shown first')
     expect(rendered).toContain('role="tablist"')
@@ -180,7 +182,7 @@ describe('assessment workspace component', () => {
     expect(detailHtml).not.toContain(
       'flex justify-end border-t border-line pt-3',
     )
-    expect(detailHtml).toContain('Scenario detail')
+    expect(detailHtml).toContain('Evidence record')
     expect(detailHtml).toContain('assessment-detail-header')
     expect(detailHtml).toContain('assessment-detail-actions')
   })
@@ -271,6 +273,39 @@ describe('assessment workspace component', () => {
     )
     expect(effectiveBoundary).toContain('border-warning/30')
     expect(effectiveBoundary).not.toContain('border-danger/30')
+  })
+
+  // Audit AW-03 / AW-04: a run that retained no assessments gets neither a
+  // filter bar over zero rows nor a "0/0 passed" outcome tile.
+  it('drops the filter bar and reports unavailable outcomes for a run without assessments', () => {
+    const emptyRun = {
+      ...model.runs[0],
+      key: 'judge-error',
+      systemStatus: 'judge_error' as const,
+      effectiveStatus: 'judge_error' as const,
+      hasAiDisagreement: false,
+      assessments: [],
+      finalAssessment: { availability: 'unavailable' as const },
+    }
+    const html = renderToStaticMarkup(
+      <AssessmentPanel
+        model={{ availability: 'available', runs: [emptyRun] }}
+        filter="all"
+      />,
+    )
+    expect(html).not.toContain('Filter scenario runs by assessment signal')
+    expect(html).toContain('Objective result')
+    expect(html).toContain('Judge Error')
+    expect(html).toContain('Assessment outcomes')
+    expect(html).toContain('No assessments retained')
+    expect(html).not.toContain('0/0')
+    expect(html).not.toContain('bg-success/5')
+    const detailHtml = renderToStaticMarkup(
+      <AssessmentDetailDialog run={emptyRun} onClose={() => undefined} />,
+    )
+    expect(detailHtml).toContain('No assessments were retained for this run.')
+    expect(detailHtml).not.toContain('border-t-[3px]')
+    expect(detailHtml).toContain('tabindex="-1"')
   })
 
   it('renders explicit legacy and unavailable states without a default verdict', () => {

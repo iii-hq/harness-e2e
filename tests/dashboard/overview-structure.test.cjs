@@ -23,7 +23,6 @@ const historyPage = read('src', 'pages', 'TestHistoryPage.tsx')
 const transcript = read('src', 'components', 'TranscriptDialog.tsx')
 const dataSource = read('src', 'lib', 'dashboard-data-source.ts')
 const viewModel = read('src', 'lib', 'execution-view.ts')
-const sectionNav = read('src', 'components', 'SectionNav.tsx')
 const testsPage = read('src', 'pages', 'TestsPage.tsx')
 const publisher = fs.readFileSync(
   path.join(repositoryRoot, 'scripts', 'publish_harness_e2e_dashboard.py'),
@@ -57,7 +56,6 @@ test('prioritizes the first-read execution signal', () => {
   )
   assert.doesNotMatch(overviewPage, /Confidence grows in the background/)
   assert.doesNotMatch(overviewPage, /01 \/ Current signal/)
-  assert.doesNotMatch(sectionNav, /capability/i)
 })
 
 test('keeps the overview operational, dense, and Tailwind-based', () => {
@@ -109,8 +107,8 @@ test('uses one low-emphasis action treatment in overview card footers', () => {
 })
 
 test('keeps the workspace navigation and versioned test flow', () => {
-  for (const view of ['overview', 'tests', 'executions']) {
-    assert.match(sectionNav, new RegExp(`id: '${view}'`))
+  for (const view of ['overview', 'tests', 'executions', 'plans']) {
+    assert.match(dashboardShell, new RegExp(`value: '${view}'`))
   }
   assert.match(testsPage, /Tests across system versions/)
   assert.match(testsPage, /loadVersionResult\(row\.test_id/)
@@ -199,10 +197,10 @@ test('makes local plan scope selection focused and readable', () => {
   assert.match(planPage, /requestQuickExecution/)
   assert.match(executionSetup, /Find a test/)
   assert.match(executionSetup, /Search by name or id/)
-  assert.match(executionSetup, /Select visible/)
-  assert.match(executionSetup, /Select the benchmark scope/)
+  assert.match(executionSetup, /select visible/i)
+  assert.match(executionSetup, /Pick the tests/)
   assert.match(executionSetup, /Sampling, retries and seed/)
-  assert.match(executionSetup, /Logical runs/)
+  assert.match(executionSetup, /Runs per test/)
   assert.doesNotMatch(planPage, /plan-test-option|plan-advanced-control/)
 })
 
@@ -387,10 +385,10 @@ test('groups execution and judge models under their providers', () => {
   }
   assert.match(executionSetup, /Execution model/)
   assert.match(executionSetup, /Judge model/)
-  assert.match(modelDropdown, /expandedProviders/)
+  assert.match(modelDropdown, /collapsedProviders/)
   assert.match(
     modelDropdown,
-    /const collapsed = !expandedProviders\.has\(group\.provider\)/,
+    /const collapsed = collapsedProviders\.has\(group\.provider\)/,
   )
   assert.match(modelDropdown, /aria-expanded=\{open\}/)
   assert.match(modelDropdown, /role="option"/)

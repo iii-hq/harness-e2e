@@ -50,14 +50,19 @@ describe('execution setup workspace', () => {
     )
 
     for (const html of [plan, quick]) {
-      expect(html).toContain('Configure the execution environment')
-      expect(html).toContain('Select the benchmark scope')
+      expect(html).toContain('Choose the model and judge')
+      expect(html).toContain('Pick the tests')
       expect(html).toContain('Sampling, retries and seed')
       expect(html).toContain('Search by name or id')
-      expect(html).toContain('2 logical runs')
+      expect(html).toContain('2 runs in total')
+      expect(html).not.toContain('logical')
+      // Audit RS-04: no 01/02/03 numerals.
+      expect(html).not.toContain('>01<')
+      expect(html).toContain('Harness endpoint')
+      expect(html).toContain('aria-labelledby="test-setup-subject-label"')
     }
     expect(plan).toContain('Plan label')
-    expect(plan).toContain('Define the evidence intent')
+    expect(plan).toContain('Name the plan')
     expect(plan).toContain('Purpose')
     expect(quick).toContain('Execution label')
     expect(quick).toContain('Name this run')
@@ -83,10 +88,56 @@ describe('execution setup workspace', () => {
     )
 
     expect(html).toContain('Reusable workflow')
-    expect(html).toContain('Logical runs')
-    expect(html).toContain('Runs / test')
+    expect(html).toContain('>Runs<')
+    expect(html).toContain('Runs per test')
     expect(html).toContain('Execution model')
+    expect(html).toContain('Default judge')
     expect(html).toContain('Create draft plan')
+    expect(html).toContain('lg:top-20')
+  })
+
+  // Audit RS-02: inside a dialog the review column sticks to the top of the
+  // dialog scroller, not 5rem below it.
+  it('drops the page header offset when the review sits in a dialog', () => {
+    const html = renderToStaticMarkup(
+      <ExecutionSetupReview
+        mode="quick"
+        status="Ready"
+        subject="openai / gpt-5"
+        judge=""
+        url="ws://127.0.0.1:49134"
+        selectedScenarios={1}
+        plannedRuns={1}
+        runsPerScenario={1}
+        technicalRetries={0}
+        ready
+        stickyOffset="dialog"
+      >
+        <button type="button">run 1 test</button>
+      </ExecutionSetupReview>,
+    )
+    expect(html).toContain('lg:top-0')
+    expect(html).not.toContain('lg:top-20')
+  })
+
+  // Audit PN-17: an empty catalog is not an empty search.
+  it('explains an empty catalog and offers a refresh instead of a search hint', () => {
+    const html = renderToStaticMarkup(
+      <ExecutionSetup
+        {...sharedProps}
+        mode="quick"
+        modelGroups={[]}
+        availableScenarios={[]}
+        selectedScenarios={[]}
+        catalogSummary="Catalog unavailable"
+        onRefreshCatalog={() => undefined}
+      />,
+    )
+    expect(html).toContain('data-catalog-empty')
+    expect(html).toContain('No tests loaded')
+    expect(html).toContain('refresh catalog')
+    expect(html).not.toContain('No tests match')
+    expect(html).toContain('No models in the catalog')
   })
 
   it('marks local scenarios without mixing authoring into execution setup', () => {

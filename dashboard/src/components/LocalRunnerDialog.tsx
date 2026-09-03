@@ -3,6 +3,7 @@ import {
   ExecutionSetup,
   ExecutionSetupReview,
 } from '@/components/ExecutionSetup'
+import { buttonClassName } from '@/design-system'
 import { hashForNewPlan } from '@/hooks/use-hash-route'
 import type {
   DashboardDataBridge,
@@ -161,6 +162,9 @@ export function LocalRunnerDialog({
   const [form, setForm] = useState<RunnerForm>(initialForm)
   const [scenarioQuery, setScenarioQuery] = useState('')
   const [job, setJob] = useState<RunnerJob | null>(null)
+  // Audit RS-01: the snapshot also returns the previous job. Only a job
+  // started from this dialog session may drive the status pill.
+  const [ownJob, setOwnJob] = useState(false)
   const [log, setLog] = useState('')
   const [logOffset, setLogOffset] = useState(0)
   const [loadingCatalog, setLoadingCatalog] = useState(false)
@@ -216,6 +220,7 @@ export function LocalRunnerDialog({
   useEffect(() => {
     if (!open || !bridge || bridge.mode !== 'local') return
     setError(null)
+    setOwnJob(false)
     void refreshCatalog()
     void refreshJob()
     let unsubscribe: (() => void) | undefined
@@ -258,6 +263,25 @@ export function LocalRunnerDialog({
   const canRun = Boolean(
     catalog && selectedSubject && form.scenarios.length > 0,
   )
+  const showJobStatus = Boolean(job?.status) && (ownJob || active)
+  const testCount = form.scenarios.length
+  const runLabel = submitting
+    ? 'starting…'
+    : active
+      ? 'running…'
+      : testCount > 0
+        ? `run ${testCount} ${testCount === 1 ? 'test' : 'tests'}`
+        : 'run tests'
+  // Audit RS-10: a disabled primary says why.
+  const runHint = active
+    ? null
+    : !catalog
+      ? 'Waiting for the catalog.'
+      : !selectedSubject
+        ? 'Choose an execution model.'
+        : testCount === 0
+          ? 'Select at least one test.'
+          : null
 
   const update = <K extends keyof RunnerForm>(key: K, value: RunnerForm[K]) => {
     setForm((current) => ({ ...current, [key]: value }))
@@ -299,6 +323,7 @@ export function LocalRunnerDialog({
         seed: form.seed ? Number(form.seed) : null,
       })
       setJob(asJob(response))
+      setOwnJob(true)
       setLog('')
       setLogOffset(0)
     } catch (cause) {
@@ -320,29 +345,29 @@ export function LocalRunnerDialog({
   return (
     <dialog
       ref={dialogRef}
-      className="ds-root m-auto hidden max-h-[94dvh] w-[min(1180px,calc(100%_-_1rem))] max-w-none overflow-hidden rounded-xl border border-[var(--color-edge)] bg-panel p-0 text-ink shadow-[var(--shadow-panel)] open:grid open:grid-rows-[auto_minmax(0,1fr)] backdrop:bg-[var(--color-backdrop)] backdrop:backdrop-blur-sm sm:w-[min(1180px,calc(100%_-_2rem))]"
+      className="ds-root m-auto hidden max-h-[94dvh] w-[min(1180px,calc(100%_-_1rem))] max-w-none overflow-hidden rounded-[6px] border border-[var(--color-edge)] bg-panel p-0 text-ink shadow-[var(--shadow-panel)] open:grid open:grid-rows-[auto_minmax(0,1fr)] backdrop:bg-[var(--color-backdrop)] backdrop:backdrop-blur-sm sm:w-[min(1180px,calc(100%_-_2rem))]"
       onClose={onClose}
       onKeyDownCapture={trapDialogFocus}
       aria-labelledby="local-runner-title"
     >
       <header className="flex items-start justify-between gap-5 border-b border-[var(--color-rule)] bg-panel px-5 py-4 sm:px-6">
         <div className="min-w-0">
-          <p className="m-0 font-mono text-[0.65rem] font-semibold uppercase tracking-[0.07em] text-[var(--color-accent)]">
+          <p className="m-0 font-mono text-[0.6875rem] font-semibold uppercase tracking-[0.07em] text-[var(--color-accent)]">
             Execution setup
           </p>
-          <strong
-            className="mt-1 block text-base font-semibold"
+          <h2
+            className="mt-1 mb-0 text-base font-semibold"
             id="local-runner-title"
           >
-            Create a quick benchmark result
-          </strong>
-          <p className="mt-1 mb-0 max-w-2xl text-xs leading-5 text-[var(--color-ink-ghost)]">
-            Run selected scenarios once. Use a reusable plan when you need a
-            fixed baseline and candidate comparison.
+            Run suite
+          </h2>
+          <p className="mt-1 mb-0 max-w-2xl text-xs leading-5 text-ink-muted">
+            Runs the selected tests once and saves an independent result. Use a
+            plan when you need a fixed baseline and candidate comparison.
           </p>
         </div>
         <button
-          className="grid h-11 w-11 shrink-0 place-items-center rounded-lg border border-[var(--color-rule)] bg-transparent text-lg text-[var(--color-ink-faint)] transition-colors hover:border-[var(--color-edge)] hover:text-ink"
+          className="inline-grid size-11 shrink-0 place-items-center rounded-[6px] border-0 bg-transparent text-xl leading-none text-ink-soft hover:bg-panel-raised hover:text-ink"
           type="button"
           onClick={onClose}
           aria-label="Close execution form"
@@ -385,7 +410,7 @@ export function LocalRunnerDialog({
               catalogLoading={loadingCatalog}
               catalogSummary={
                 catalog
-                  ? `${catalog.models.length} registered model${catalog.models.length === 1 ? '' : 's'} · ${catalog.scenarios.length} scenarios${catalog.localScenarios.length > 0 ? ` · ${catalog.localScenarios.length} local` : ''}`
+                  ? `${catalog.models.length} registered model${catalog.models.length === 1 ? '' : 's'} · ${catalog.scenarios.length} tests${catalog.localScenarios.length > 0 ? ` · ${catalog.localScenarios.length} local` : ''}`
                   : 'Catalog loads when this dialog opens'
               }
               onRefreshCatalog={() => void refreshCatalog()}
@@ -404,7 +429,7 @@ export function LocalRunnerDialog({
 
             {error && (
               <p
-                className="m-0 border-t border-[var(--color-rule)] bg-[color-mix(in_srgb,var(--color-alert)_8%,var(--surface))] p-5 text-xs leading-5 text-[var(--color-alert)] sm:px-6"
+                className="m-0 border-t border-[var(--color-rule)] bg-[color-mix(in_srgb,var(--color-alert)_8%,var(--surface))] p-5 text-xs leading-5 text-danger sm:px-6"
                 role="alert"
               >
                 {error}
@@ -419,7 +444,7 @@ export function LocalRunnerDialog({
                   Live runner output
                 </summary>
                 <pre
-                  className="mt-3 mb-0 max-h-80 w-full overflow-auto rounded-lg border border-[var(--color-rule)] bg-[var(--color-bg)] p-4 font-mono text-[0.68rem] leading-5 text-[var(--color-ink-faint)]"
+                  className="mt-3 mb-0 max-h-80 w-full overflow-auto rounded-[6px] border border-[var(--color-rule)] bg-[var(--color-bg)] p-4 font-mono text-[0.6875rem] leading-5 text-[var(--color-ink-faint)]"
                   aria-live="polite"
                 >
                   {log}
@@ -431,8 +456,9 @@ export function LocalRunnerDialog({
           <div className="min-w-0 bg-panel-raised lg:col-span-4">
             <ExecutionSetupReview
               mode="quick"
+              stickyOffset="dialog"
               status={
-                job?.status
+                showJobStatus && job
                   ? statusLabel(job.status)
                   : canRun
                     ? 'Ready'
@@ -456,29 +482,48 @@ export function LocalRunnerDialog({
               ready={canRun && !active}
             >
               <button
-                className="inline-flex min-h-11 w-full items-center justify-center rounded-lg border border-[var(--color-accent)] bg-[var(--color-accent)] px-4 text-sm font-semibold text-[var(--color-accent-fg)] transition-colors hover:bg-[color-mix(in_srgb,var(--color-accent)_88%,white)] disabled:cursor-not-allowed disabled:opacity-45"
+                className={buttonClassName({
+                  variant: 'primary',
+                  size: 'large',
+                  className: 'w-full',
+                })}
                 type="submit"
                 form="local-runner-form"
                 disabled={active || !canRun}
                 aria-busy={active}
+                aria-describedby={runHint ? 'local-runner-hint' : undefined}
               >
-                {submitting
-                  ? 'Starting E2E…'
-                  : active
-                    ? 'E2E running…'
-                    : 'Run selected E2E'}
+                {runLabel}
               </button>
+              {runHint ? (
+                <p
+                  className="m-0 text-xs leading-5 text-ink-muted"
+                  id="local-runner-hint"
+                  role="status"
+                >
+                  {runHint}
+                </p>
+              ) : null}
+              {job?.status && !showJobStatus ? (
+                <p className="m-0 text-xs leading-5 text-ink-muted">
+                  Previous runner job: {statusLabel(job.status).toLowerCase()}.
+                </p>
+              ) : null}
               {active && (
                 <button
-                  className="inline-flex min-h-11 w-full items-center justify-center rounded-lg border border-[var(--color-edge)] bg-transparent px-4 text-sm font-semibold text-[var(--color-ink-faint)] hover:text-ink"
+                  className={buttonClassName({
+                    variant: 'secondary',
+                    size: 'large',
+                    className: 'w-full',
+                  })}
                   type="button"
                   onClick={() => void cancel()}
                 >
-                  Cancel execution
+                  cancel execution
                 </button>
               )}
               <a
-                className="inline-flex min-h-10 w-full items-center justify-center rounded-lg px-3 text-xs font-semibold text-[var(--color-ink-faint)] underline-offset-4 hover:text-ink hover:underline"
+                className="inline-flex min-h-10 w-full items-center justify-center rounded-[6px] px-3 text-xs font-semibold text-[var(--color-ink-faint)] underline-offset-4 hover:text-ink hover:underline"
                 href={hashForNewPlan()}
               >
                 Create a reusable plan instead

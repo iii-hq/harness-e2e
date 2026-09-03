@@ -8,6 +8,24 @@ import {
 
 type TranscriptFilter = 'all' | 'messages' | 'errors'
 
+/**
+ * Audit TR-07: callers pass "Scenario · <run id>". The run id is kept in a
+ * secondary line, shortened when it is a long hash, with the full value in a
+ * tooltip.
+ */
+export function splitTranscriptTitle(title: string) {
+  const separator = title.lastIndexOf(' · ')
+  if (separator === -1) return { name: title, runId: null }
+  return {
+    name: title.slice(0, separator),
+    runId: title.slice(separator + 3),
+  }
+}
+
+function shortRunId(value: string) {
+  return value.length > 20 ? `${value.slice(0, 12)}…${value.slice(-4)}` : value
+}
+
 export function TranscriptDialog({
   title,
   messages,
@@ -20,7 +38,9 @@ export function TranscriptDialog({
   onClose: () => void
 }) {
   const ref = useRef<HTMLDialogElement>(null)
+  const titleRef = useRef<HTMLHeadingElement>(null)
   const eventRefs = useRef(new Map<string, HTMLElement>())
+  const heading = splitTranscriptTitle(title)
   const events = useMemo(() => normalizeTranscript(messages), [messages])
   const summary = transcriptSummary(events)
   const [filter, setFilter] = useState<TranscriptFilter>('all')
@@ -48,7 +68,10 @@ export function TranscriptDialog({
   useEffect(() => {
     const dialog = ref.current
     if (!dialog) return
-    if (open && !dialog.open) dialog.showModal()
+    if (open && !dialog.open) {
+      dialog.showModal()
+      titleRef.current?.focus()
+    }
     if (!open && dialog.open) dialog.close()
   }, [open])
 
@@ -75,7 +98,7 @@ export function TranscriptDialog({
   return (
     <dialog
       ref={ref}
-      className="session-transcript-dialog h-[min(760px,calc(100dvh-48px))] w-[min(1120px,calc(100%-32px))] rounded-[10px] border border-line-strong border-t-[3px] border-t-info bg-panel shadow-panel backdrop:bg-app-backdrop backdrop:backdrop-blur-[5px] max-[560px]:m-0 max-[560px]:h-dvh max-[560px]:w-screen max-[560px]:max-w-none max-[560px]:rounded-none max-[560px]:border-0"
+      className="session-transcript-dialog h-[min(760px,calc(100dvh-48px))] w-[min(1120px,calc(100%-32px))] rounded-[6px] border border-line-strong bg-panel shadow-panel backdrop:bg-app-backdrop backdrop:backdrop-blur-[5px] max-[560px]:m-0 max-[560px]:h-dvh max-[560px]:w-screen max-[560px]:max-w-none max-[560px]:rounded-none max-[560px]:border-0"
       onClose={onClose}
       aria-labelledby="transcript-title"
     >
@@ -87,18 +110,23 @@ export function TranscriptDialog({
             </div>
             <h2
               id="transcript-title"
-              className="m-0 text-[1.35rem] font-[570] tracking-[-0.025em]"
+              ref={titleRef}
+              tabIndex={-1}
+              className="m-0 break-words text-[1.35rem] font-[570] tracking-[-0.025em] outline-none"
             >
-              {title}
+              {heading.name}
             </h2>
-            <p className="m-0 mt-2 text-sm text-ink-muted">
-              {summary.messages} message{summary.messages === 1 ? '' : 's'} ·{' '}
-              {summary.calls} tool call{summary.calls === 1 ? '' : 's'} ·{' '}
-              {summary.errors} error{summary.errors === 1 ? '' : 's'}
-            </p>
+            {heading.runId ? (
+              <p
+                className="m-0 mt-1 font-mono text-[0.6875rem] text-ink-muted"
+                title={heading.runId}
+              >
+                run {shortRunId(heading.runId)}
+              </p>
+            ) : null}
           </div>
           <button
-            className="dialog-close session-transcript-close bg-transparent"
+            className="session-transcript-close"
             type="button"
             onClick={onClose}
             aria-label="Close session transcript"
@@ -144,14 +172,15 @@ export function TranscriptDialog({
                     </button>
                   ))}
                 </div>
-                <button
-                  className="conversation-next-error"
-                  type="button"
-                  disabled={errorEvents.length === 0}
-                  onClick={focusNextError}
-                >
-                  Next error
-                </button>
+                {errorEvents.length > 0 ? (
+                  <button
+                    className="conversation-next-error"
+                    type="button"
+                    onClick={focusNextError}
+                  >
+                    Next error
+                  </button>
+                ) : null}
               </div>
             </div>
             <div className="conversation-error-position" aria-live="polite">
@@ -164,7 +193,7 @@ export function TranscriptDialog({
                 No transcript messages were retained for this run.
               </p>
             ) : (
-              <div className="conversation-list" role="log" aria-live="polite">
+              <div className="conversation-list" role="log">
                 {visibleEvents.map((event) => (
                   <TranscriptEventCard
                     key={event.id}
@@ -249,7 +278,7 @@ function TranscriptEventCard({
           {event.callId && <em>{event.callId}</em>}
         </span>
         <span className="conversation-tool-status">
-          {event.isError ? 'error' : (event.status ?? 'pending')}
+          {event.isError ? 'error' : (event.status ?? 'no result recorded')}
         </span>
         <span className="conversation-chevron" aria-hidden="true">
           ⌄

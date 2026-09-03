@@ -173,6 +173,49 @@ function HarnessE2eIcon() {
   )
 }
 
+export type HeaderActionsProps = {
+  narrow: boolean
+  actions?: ReactNode
+  actionsLabel?: string
+  children?: ReactNode
+}
+
+// Page actions sit in the console header next to its close control. Below
+// 720px of container width they collapse into one disclosure so that control
+// never leaves the viewport (audit S-02 / RD-02).
+export function HeaderActions({
+  narrow,
+  actions,
+  actionsLabel,
+  children,
+}: HeaderActionsProps) {
+  return (
+    <div className="harness-e2e-header-actions flex min-w-0 items-center justify-end gap-2">
+      {children}
+      {actions && narrow ? (
+        <details className="harness-e2e-header-overflow">
+          <summary aria-label={actionsLabel ?? 'Page actions'}>
+            <svg
+              viewBox="0 0 16 16"
+              width="16"
+              height="16"
+              fill="currentColor"
+              aria-hidden="true"
+            >
+              <circle cx="3" cy="8" r="1.5" />
+              <circle cx="8" cy="8" r="1.5" />
+              <circle cx="13" cy="8" r="1.5" />
+            </svg>
+          </summary>
+          <div className="harness-e2e-header-overflow-menu">{actions}</div>
+        </details>
+      ) : (
+        actions
+      )}
+    </div>
+  )
+}
+
 export type DashboardShellProps = {
   children: ReactNode
   route: DashboardRoute
@@ -228,17 +271,20 @@ export function DashboardShell({
         <PageHeader
           icon={<HarnessE2eIcon />}
           title="harness e2e"
-          description={`${sectionLabel ?? 'Overview'} · evidence, plans and live evaluation control`}
+          description={sectionLabel ?? 'Overview'}
           actions={
-            <div className="harness-e2e-header-actions flex min-w-0 items-center justify-end gap-2">
+            <HeaderActions
+              narrow={narrow}
+              actions={header.actions}
+              actionsLabel={header.actionsLabel}
+            >
               {!embedded ? (
                 <ThemeToggle
                   theme={standaloneTheme}
                   onChange={setStandaloneTheme}
                 />
               ) : null}
-              {header.actions}
-            </div>
+            </HeaderActions>
           }
           onClose={embedded ? onRequestClose : undefined}
         />
@@ -251,7 +297,7 @@ export function DashboardShell({
               data-theme={theme}
             >
               <div
-                className="harness-e2e-navigation sticky top-0 z-10 min-w-0 border-b border-line bg-panel"
+                className="harness-e2e-navigation sticky top-0 z-10 min-w-0 bg-panel"
                 data-section={section}
               >
                 <div className="harness-e2e-navigation-wide min-w-0 px-4">
@@ -283,7 +329,11 @@ export function DashboardShell({
                     </TabsList>
                   </Tabs>
                 </div>
-                <div className="harness-e2e-navigation-narrow hidden min-w-0 px-4 py-2">
+                {/* Visibility of the wide tabs and the narrow select lives in
+                    dashboard-shell.css, keyed on data-narrow: a Tailwind
+                    `hidden` here would win over that CSS (Tailwind is
+                    imported with `important`; audit S-01). */}
+                <div className="harness-e2e-navigation-narrow min-w-0 px-4 py-2">
                   <Select
                     value={section}
                     options={navigation}
