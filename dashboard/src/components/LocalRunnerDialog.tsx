@@ -1,9 +1,9 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import {
   ExecutionSetup,
   ExecutionSetupReview,
 } from '@/components/ExecutionSetup'
-import { buttonClassName } from '@/design-system'
+import { buttonClassName, Dialog } from '@/design-system'
 import { hashForNewPlan } from '@/hooks/use-hash-route'
 import type {
   DashboardDataBridge,
@@ -112,28 +112,6 @@ function errorMessage(cause: unknown) {
   return cause instanceof Error ? cause.message : String(cause)
 }
 
-function trapDialogFocus(event: React.KeyboardEvent<HTMLDialogElement>) {
-  if (event.key !== 'Tab') return
-  const focusable = [
-    ...event.currentTarget.querySelectorAll<HTMLElement>(
-      'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), summary, [tabindex]:not([tabindex="-1"])',
-    ),
-  ].filter((element) => !element.hidden && element.getClientRects().length > 0)
-  if (focusable.length === 0) return
-
-  const activeIndex = focusable.indexOf(document.activeElement as HTMLElement)
-  const next = event.shiftKey
-    ? activeIndex <= 0
-      ? focusable.at(-1)
-      : undefined
-    : activeIndex === -1 || activeIndex === focusable.length - 1
-      ? focusable[0]
-      : undefined
-  if (!next) return
-  event.preventDefault()
-  next.focus()
-}
-
 function statusLabel(status: string | undefined) {
   return (
     {
@@ -157,7 +135,6 @@ export function LocalRunnerDialog({
   onClose: () => void
   onCompleted?: () => void
 }) {
-  const dialogRef = useRef<HTMLDialogElement>(null)
   const [catalog, setCatalog] = useState<RunnerCatalog | null>(null)
   const [form, setForm] = useState<RunnerForm>(initialForm)
   const [scenarioQuery, setScenarioQuery] = useState('')
@@ -209,13 +186,6 @@ export function LocalRunnerDialog({
       setLoadingCatalog(false)
     }
   }, [bridge, form.url])
-
-  useEffect(() => {
-    const dialog = dialogRef.current
-    if (!dialog) return
-    if (open && !dialog.open) dialog.showModal()
-    if (!open && dialog.open) dialog.close()
-  }, [open])
 
   useEffect(() => {
     if (!open || !bridge || bridge.mode !== 'local') return
@@ -343,195 +313,170 @@ export function LocalRunnerDialog({
   }
 
   return (
-    <dialog
-      ref={dialogRef}
-      className="ds-root m-auto hidden max-h-[94dvh] w-[min(1180px,calc(100%_-_1rem))] max-w-none overflow-hidden rounded-[6px] border border-[var(--color-edge)] bg-panel p-0 text-ink shadow-[var(--shadow-panel)] open:grid open:grid-rows-[auto_minmax(0,1fr)] backdrop:bg-[var(--color-backdrop)] backdrop:backdrop-blur-sm sm:w-[min(1180px,calc(100%_-_2rem))]"
+    <Dialog
+      open={open}
       onClose={onClose}
-      onKeyDownCapture={trapDialogFocus}
-      aria-labelledby="local-runner-title"
+      size="xl"
+      kicker="Execution setup"
+      title="Run suite"
+      description="Runs the selected tests once and saves an independent result. Use a plan when you need a fixed baseline and candidate comparison."
+      closeLabel="Close execution form"
+      className="ds-root"
     >
-      <header className="flex items-start justify-between gap-5 border-b border-[var(--color-rule)] bg-panel px-5 py-4 sm:px-6">
-        <div className="min-w-0">
-          <p className="m-0 font-mono text-[0.6875rem] font-semibold uppercase tracking-[0.07em] text-[var(--color-accent)]">
-            Execution setup
-          </p>
-          <h2
-            className="mt-1 mb-0 text-base font-semibold"
-            id="local-runner-title"
-          >
-            Run suite
-          </h2>
-          <p className="mt-1 mb-0 max-w-2xl text-xs leading-5 text-ink-muted">
-            Runs the selected tests once and saves an independent result. Use a
-            plan when you need a fixed baseline and candidate comparison.
-          </p>
-        </div>
-        <button
-          className="inline-grid size-11 shrink-0 place-items-center rounded-[6px] border-0 bg-transparent text-xl leading-none text-ink-soft hover:bg-panel-raised hover:text-ink"
-          type="button"
-          onClick={onClose}
-          aria-label="Close execution form"
-        >
-          ×
-        </button>
-      </header>
-
-      <div className="min-h-0 overflow-auto">
-        <form
-          id="local-runner-form"
-          className="grid min-w-0 gap-px bg-[var(--color-rule)] lg:grid-cols-12"
-          onSubmit={submit}
-        >
-          <div className="min-w-0 bg-panel lg:col-span-8">
-            <ExecutionSetup
-              idPrefix="quick-execution"
-              mode="quick"
-              label={form.label}
-              url={form.url}
-              subject={form.subject}
-              judge={form.judge}
-              modelGroups={modelOptions}
-              availableScenarios={catalog?.scenarios ?? []}
-              localScenarioIds={
-                catalog?.localScenarios.map((scenario) => scenario.id) ?? []
-              }
-              scenarioTitles={Object.fromEntries(
-                catalog?.localScenarios.map((scenario) => [
-                  scenario.id,
-                  scenario.title,
-                ]) ?? [],
-              )}
-              selectedScenarios={form.scenarios}
-              query={scenarioQuery}
-              runs={form.runs}
-              technicalRetries={form.technicalRetries}
-              seed={form.seed}
-              disabled={active}
-              catalogLoading={loadingCatalog}
-              catalogSummary={
-                catalog
-                  ? `${catalog.models.length} registered model${catalog.models.length === 1 ? '' : 's'} · ${catalog.scenarios.length} tests${catalog.localScenarios.length > 0 ? ` · ${catalog.localScenarios.length} local` : ''}`
-                  : 'Catalog loads when this dialog opens'
-              }
-              onRefreshCatalog={() => void refreshCatalog()}
-              onLabelChange={(value) => update('label', value)}
-              onUrlChange={(value) => update('url', value)}
-              onSubjectChange={(value) => update('subject', value)}
-              onJudgeChange={(value) => update('judge', value)}
-              onSelectedScenariosChange={updateScenarios}
-              onQueryChange={setScenarioQuery}
-              onRunsChange={(value) => update('runs', value)}
-              onTechnicalRetriesChange={(value) =>
-                update('technicalRetries', value)
-              }
-              onSeedChange={(value) => update('seed', value)}
-            />
-
-            {error && (
-              <p
-                className="m-0 border-t border-[var(--color-rule)] bg-[color-mix(in_srgb,var(--color-alert)_8%,var(--surface))] p-5 text-xs leading-5 text-danger sm:px-6"
-                role="alert"
-              >
-                {error}
-              </p>
+      <form
+        id="local-runner-form"
+        className="grid min-w-0 gap-px bg-[var(--color-rule)] lg:grid-cols-12"
+        onSubmit={submit}
+      >
+        <div className="min-w-0 bg-panel lg:col-span-8">
+          <ExecutionSetup
+            idPrefix="quick-execution"
+            mode="quick"
+            label={form.label}
+            url={form.url}
+            subject={form.subject}
+            judge={form.judge}
+            modelGroups={modelOptions}
+            availableScenarios={catalog?.scenarios ?? []}
+            localScenarioIds={
+              catalog?.localScenarios.map((scenario) => scenario.id) ?? []
+            }
+            scenarioTitles={Object.fromEntries(
+              catalog?.localScenarios.map((scenario) => [
+                scenario.id,
+                scenario.title,
+              ]) ?? [],
             )}
-            {log && (
-              <details
-                className="border-t border-[var(--color-rule)] p-5 sm:p-6"
-                open={active}
-              >
-                <summary className="cursor-pointer text-xs font-semibold text-[var(--color-ink-faint)]">
-                  Live runner output
-                </summary>
-                <pre
-                  className="mt-3 mb-0 max-h-80 w-full overflow-auto rounded-[6px] border border-[var(--color-rule)] bg-[var(--color-bg)] p-4 font-mono text-[0.6875rem] leading-5 text-[var(--color-ink-faint)]"
-                  aria-live="polite"
-                >
-                  {log}
-                </pre>
-              </details>
-            )}
-          </div>
+            selectedScenarios={form.scenarios}
+            query={scenarioQuery}
+            runs={form.runs}
+            technicalRetries={form.technicalRetries}
+            seed={form.seed}
+            disabled={active}
+            catalogLoading={loadingCatalog}
+            catalogSummary={
+              catalog
+                ? `${catalog.models.length} registered model${catalog.models.length === 1 ? '' : 's'} · ${catalog.scenarios.length} tests${catalog.localScenarios.length > 0 ? ` · ${catalog.localScenarios.length} local` : ''}`
+                : 'Catalog loads when this dialog opens'
+            }
+            onRefreshCatalog={() => void refreshCatalog()}
+            onLabelChange={(value) => update('label', value)}
+            onUrlChange={(value) => update('url', value)}
+            onSubjectChange={(value) => update('subject', value)}
+            onJudgeChange={(value) => update('judge', value)}
+            onSelectedScenariosChange={updateScenarios}
+            onQueryChange={setScenarioQuery}
+            onRunsChange={(value) => update('runs', value)}
+            onTechnicalRetriesChange={(value) =>
+              update('technicalRetries', value)
+            }
+            onSeedChange={(value) => update('seed', value)}
+          />
 
-          <div className="min-w-0 bg-panel-raised lg:col-span-4">
-            <ExecutionSetupReview
-              mode="quick"
-              stickyOffset="dialog"
-              status={
-                showJobStatus && job
-                  ? statusLabel(job.status)
-                  : canRun
-                    ? 'Ready'
-                    : 'Incomplete'
-              }
-              subject={
-                selectedSubject
-                  ? `${selectedSubject.provider} / ${selectedSubject.model}`
-                  : ''
-              }
-              judge={
-                selectedJudge
-                  ? `${selectedJudge.provider} / ${selectedJudge.model}`
-                  : ''
-              }
-              url={form.url}
-              selectedScenarios={form.scenarios.length}
-              plannedRuns={plannedRuns}
-              runsPerScenario={runsPerScenario}
-              technicalRetries={technicalRetries}
-              ready={canRun && !active}
+          {error && (
+            <p
+              className="m-0 border-t border-[var(--color-rule)] bg-[color-mix(in_srgb,var(--color-alert)_8%,var(--surface))] p-5 text-xs leading-5 text-danger sm:px-6"
+              role="alert"
             >
+              {error}
+            </p>
+          )}
+          {log && (
+            <details
+              className="border-t border-[var(--color-rule)] p-5 sm:p-6"
+              open={active}
+            >
+              <summary className="cursor-pointer text-xs font-semibold text-[var(--color-ink-faint)]">
+                Live runner output
+              </summary>
+              <pre
+                className="mt-3 mb-0 max-h-80 w-full overflow-auto rounded-[6px] border border-[var(--color-rule)] bg-[var(--color-bg)] p-4 font-mono text-label leading-5 text-[var(--color-ink-faint)]"
+                aria-live="polite"
+              >
+                {log}
+              </pre>
+            </details>
+          )}
+        </div>
+
+        <div className="min-w-0 bg-panel-raised lg:col-span-4">
+          <ExecutionSetupReview
+            mode="quick"
+            stickyOffset="dialog"
+            status={
+              showJobStatus && job
+                ? statusLabel(job.status)
+                : canRun
+                  ? 'Ready'
+                  : 'Incomplete'
+            }
+            subject={
+              selectedSubject
+                ? `${selectedSubject.provider} / ${selectedSubject.model}`
+                : ''
+            }
+            judge={
+              selectedJudge
+                ? `${selectedJudge.provider} / ${selectedJudge.model}`
+                : ''
+            }
+            url={form.url}
+            selectedScenarios={form.scenarios.length}
+            plannedRuns={plannedRuns}
+            runsPerScenario={runsPerScenario}
+            technicalRetries={technicalRetries}
+            ready={canRun && !active}
+          >
+            <button
+              className={buttonClassName({
+                variant: 'primary',
+                size: 'large',
+                className: 'w-full',
+              })}
+              type="submit"
+              form="local-runner-form"
+              disabled={active || !canRun}
+              aria-busy={active}
+              aria-describedby={runHint ? 'local-runner-hint' : undefined}
+            >
+              {runLabel}
+            </button>
+            {runHint ? (
+              <p
+                className="m-0 text-xs leading-5 text-ink-muted"
+                id="local-runner-hint"
+                role="status"
+              >
+                {runHint}
+              </p>
+            ) : null}
+            {job?.status && !showJobStatus ? (
+              <p className="m-0 text-xs leading-5 text-ink-muted">
+                Previous runner job: {statusLabel(job.status).toLowerCase()}.
+              </p>
+            ) : null}
+            {active && (
               <button
                 className={buttonClassName({
-                  variant: 'primary',
+                  variant: 'secondary',
                   size: 'large',
                   className: 'w-full',
                 })}
-                type="submit"
-                form="local-runner-form"
-                disabled={active || !canRun}
-                aria-busy={active}
-                aria-describedby={runHint ? 'local-runner-hint' : undefined}
+                type="button"
+                onClick={() => void cancel()}
               >
-                {runLabel}
+                cancel execution
               </button>
-              {runHint ? (
-                <p
-                  className="m-0 text-xs leading-5 text-ink-muted"
-                  id="local-runner-hint"
-                  role="status"
-                >
-                  {runHint}
-                </p>
-              ) : null}
-              {job?.status && !showJobStatus ? (
-                <p className="m-0 text-xs leading-5 text-ink-muted">
-                  Previous runner job: {statusLabel(job.status).toLowerCase()}.
-                </p>
-              ) : null}
-              {active && (
-                <button
-                  className={buttonClassName({
-                    variant: 'secondary',
-                    size: 'large',
-                    className: 'w-full',
-                  })}
-                  type="button"
-                  onClick={() => void cancel()}
-                >
-                  cancel execution
-                </button>
-              )}
-              <a
-                className="inline-flex min-h-10 w-full items-center justify-center rounded-[6px] px-3 text-xs font-semibold text-[var(--color-ink-faint)] underline-offset-4 hover:text-ink hover:underline"
-                href={hashForNewPlan()}
-              >
-                Create a reusable plan instead
-              </a>
-            </ExecutionSetupReview>
-          </div>
-        </form>
-      </div>
-    </dialog>
+            )}
+            <a
+              className="inline-flex min-h-10 w-full items-center justify-center rounded-[6px] px-3 text-xs font-semibold text-[var(--color-ink-faint)] underline-offset-4 hover:text-ink hover:underline"
+              href={hashForNewPlan()}
+            >
+              Create a reusable plan instead
+            </a>
+          </ExecutionSetupReview>
+        </div>
+      </form>
+    </Dialog>
   )
 }

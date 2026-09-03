@@ -39,9 +39,12 @@ roadmap at https://claude.ai/code/artifact/43057679-eab9-456b-aa6f-8393c64a92ab.
 5. **Tailwind classes are static strings.** Do not build class names by
    concatenating fragments (`text-[${size}]`); the compiler cannot see them.
    Put every variant as a literal in the file, even inside a helper.
-6. **Tailwind is imported with `important`** until PR A removes it: an inline
-   utility such as `hidden` beats every rule in `dashboard-shell.css`. Toggle
-   visibility from CSS keyed on `data-*` attributes, not from utilities.
+6. **Cascade layers decide, not `important`.** Utilities sit above the
+   `legacy` (legacy.css, dashboard-shell.css) and `ds` (design system) layers,
+   so a utility on an element wins; unlayered host CSS in the console beats
+   all of them. Never re-add `important` to the Tailwind import or to a rule.
+   Toggle visibility from CSS keyed on `data-*` attributes, not from
+   utilities, so the shell's rules stay the single source of truth.
 7. **Dialogs use `showModal()`**, focus the title on open, have a 44×44 close
    control, and handle Escape on the element (Chromium groups a modal opened
    from an Escape press with the one below it, so `cancel` may fire on the
@@ -49,7 +52,7 @@ roadmap at https://claude.ai/code/artifact/43057679-eab9-456b-aa6f-8393c64a92ab.
 8. **Honest empty states.** "Not reported", "never run", "no assessments
    retained" are distinct; never show `0/0`, `undefined` or a placeholder that
    looks like data.
-9. **Delete the legacy block you replace.** Each brief lists the `index.css`
+9. **Delete the legacy block you replace.** Each brief lists the `legacy.css`
    selectors that go with the page; the CSS-debt ratchet must go down, and
    `CSS_DEBT_UPDATE=1 node --test tests/dashboard/css-debt.test.cjs` locks the
    new floor in the same commit.

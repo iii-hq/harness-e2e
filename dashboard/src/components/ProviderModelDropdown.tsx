@@ -214,7 +214,7 @@ export function ProviderModelDropdown({
               <strong className="overflow-hidden text-ellipsis whitespace-nowrap text-xs font-semibold">
                 {selected.label}
               </strong>
-              <small className="overflow-hidden text-ellipsis whitespace-nowrap text-[0.6875rem] font-medium text-ink-muted">
+              <small className="overflow-hidden text-ellipsis whitespace-nowrap text-label font-medium text-ink-muted">
                 {selected.provider}
               </small>
             </>
@@ -322,7 +322,7 @@ export function ProviderModelMenu({
                 type="button"
                 id={groupLabelId}
                 tabIndex={-1}
-                className="flex min-h-9 w-full items-center gap-2 rounded-[6px] border-0 bg-transparent px-2 text-left font-mono text-[0.6875rem] font-semibold text-[var(--color-ink-faint)] transition-colors duration-[var(--ds-duration-fast)] hover:bg-panel-raised hover:text-ink"
+                className="flex min-h-9 w-full items-center gap-2 rounded-[6px] border-0 bg-transparent px-2 text-left font-mono text-label font-semibold text-[var(--color-ink-faint)] transition-colors duration-[var(--ds-duration-fast)] hover:bg-panel-raised hover:text-ink"
                 aria-expanded={!collapsed}
                 aria-controls={groupId}
                 onClick={() => onToggleProvider(group.provider)}
@@ -335,7 +335,7 @@ export function ProviderModelMenu({
                 <span className="min-w-0 flex-1 overflow-hidden text-ellipsis whitespace-nowrap">
                   {group.provider}
                 </span>
-                <small className="font-mono text-[0.6875rem] font-normal text-ink-muted">
+                <small className="font-mono text-label font-normal text-ink-muted">
                   {group.models.length}
                 </small>
               </button>

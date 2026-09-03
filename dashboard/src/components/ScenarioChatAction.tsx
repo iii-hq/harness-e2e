@@ -218,12 +218,12 @@ export function ScenarioChatAction({
                     <strong className="block truncate text-xs text-ink">
                       {targetLabel(target)}
                     </strong>
-                    <span className="mt-1 block truncate font-mono text-[0.6875rem] text-ink-muted">
+                    <span className="mt-1 block truncate font-mono text-label text-ink-muted">
                       {target.current ? 'Current attempt' : 'Retry history'} ·{' '}
                       {shortId(target.sessionId)}
                     </span>
                   </span>
-                  <span className="shrink-0 font-mono text-[0.6875rem] uppercase text-ink-muted">
+                  <span className="shrink-0 font-mono text-label uppercase text-ink-muted">
                     {target.status ?? 'retained'}
                   </span>
                 </button>

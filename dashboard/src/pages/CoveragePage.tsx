@@ -8,15 +8,12 @@ export function CoveragePage() {
   return (
     <>
       <LegacyLoadError error={error} />
-      <a className="skip-link" href="#main">
-        Skip to coverage reports
-      </a>
       <div className="ambient ambient-one" aria-hidden="true"></div>
       <div className="ambient ambient-two" aria-hidden="true"></div>
 
       <DashboardPageActions active="coverage" />
 
-      <main id="main" className="page-shell overview-shell">
+      <div className="page-shell overview-shell">
         <section className="page-heading" aria-labelledby="page-title">
           <div>
             <div className="eyebrow">
@@ -88,7 +85,7 @@ export function CoveragePage() {
             </div>
           </article>
         </section>
-      </main>
+      </div>
     </>
   )
 }

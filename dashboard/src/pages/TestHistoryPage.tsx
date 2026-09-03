@@ -12,11 +12,12 @@ import {
   Target,
   TriangleAlert,
 } from 'lucide-react'
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { AssessmentWorkspace } from '@/components/AssessmentWorkspace'
 import { DashboardPageActions } from '@/components/DashboardPageActions'
 import { ProviderModelDropdown } from '@/components/ProviderModelDropdown'
 import { ScenarioChatAction } from '@/components/ScenarioChatAction'
+import { Dialog } from '@/design-system'
 import { hashForExecution, hashForWorkspace } from '@/hooks/use-hash-route'
 import {
   type DashboardExecutionDetail,
@@ -860,15 +861,9 @@ function ExecutionDetailsDialog({
   testId: string
   onClose: () => void
 }) {
-  const dialogRef = useRef<HTMLDialogElement>(null)
   const [detail, setDetail] = useState<DashboardExecutionDetail | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
-
-  useEffect(() => {
-    const dialog = dialogRef.current
-    if (dialog && !dialog.open) dialog.showModal()
-  }, [])
 
   useEffect(() => {
     let cancelled = false
@@ -910,132 +905,18 @@ function ExecutionDetailsDialog({
   ).length
 
   return (
-    <dialog
-      ref={dialogRef}
-      className="tmh-execution-dialog"
+    <Dialog
+      open
       onClose={onClose}
-      aria-labelledby="tmh-execution-dialog-title"
-    >
-      <div className="tmh-execution-dialog-shell">
-        <header className="tmh-execution-dialog-header">
-          <div>
-            <span className="tmh-label">Test execution details</span>
-            <h2 id="tmh-execution-dialog-title">{testId}</h2>
-            <p>
-              {formatDate(observation.completed_at)} ·{' '}
-              {version ? `Test v${String(version)}` : 'Test version unknown'}
-              {' · '}
-              {logicalRunLabel(observation.run_count)}
-            </p>
-          </div>
-          <button
-            className="tmh-dialog-close"
-            type="button"
-            onClick={onClose}
-            aria-label="Close execution details"
-          >
-            ×
-          </button>
-        </header>
-
-        <div className="tmh-execution-dialog-body">
-          <section className="tmh-execution-dialog-overview">
-            <div>
-              <span className="tmh-label">Result</span>
-              <strong
-                className={`tmh-status ${statusClass(observation.status)}`}
-              >
-                {formatStatus(observation.status)}
-              </strong>
-              <small>
-                {observation.median_score === null ||
-                observation.median_score === undefined
-                  ? 'Score unknown'
-                  : `Score ${observation.median_score.toFixed(2)}`}
-              </small>
-            </div>
-            <div>
-              <span className="tmh-label">Execution model</span>
-              <strong>
-                {modelLabel(
-                  observation.subject_provider,
-                  observation.subject_model,
-                )}
-              </strong>
-            </div>
-            <div>
-              <span className="tmh-label">Judge</span>
-              <strong>
-                {modelLabel(
-                  observation.judge_provider,
-                  observation.judge_model,
-                )}
-              </strong>
-              <small>{observation.judge_protocol ?? 'Protocol unknown'}</small>
-            </div>
-            <div>
-              <span className="tmh-label">Environment</span>
-              <strong>{systemSummary(observation)}</strong>
-            </div>
-          </section>
-
-          <section
-            className="tmh-execution-dialog-metrics"
-            aria-label="Execution metrics"
-          >
-            <div>
-              <span>Cost</span>
-              <strong>{formatCost(observation.median_cost_usd)}</strong>
-            </div>
-            <div>
-              <span>Duration</span>
-              <strong>
-                {formatDuration(observation.median_duration_seconds)}
-              </strong>
-            </div>
-            <div>
-              <span>Tokens</span>
-              <strong>{formatTokens(observation.median_tokens)}</strong>
-            </div>
-            <div>
-              <span>Turns</span>
-              <strong>
-                {observation.median_turns === null ||
-                observation.median_turns === undefined
-                  ? 'Unknown'
-                  : Math.round(observation.median_turns).toLocaleString()}
-              </strong>
-            </div>
-          </section>
-
-          <section className="tmh-execution-dialog-report">
-            <div className="tmh-execution-dialog-report-heading">
-              <div>
-                <span className="tmh-label">Test report</span>
-                <h3>Assessment details for this test</h3>
-              </div>
-              {detail && (
-                <span className="tmh-visible-count">
-                  {String(availableReports ?? 0)} available{' '}
-                  {(availableReports ?? 0) === 1 ? 'report' : 'reports'}
-                </span>
-              )}
-            </div>
-            {loading ? (
-              <p className="tmh-dialog-message" role="status">
-                Loading execution report…
-              </p>
-            ) : error ? (
-              <p className="tmh-dialog-message tmh-dialog-error" role="alert">
-                {error}
-              </p>
-            ) : (
-              <AssessmentWorkspace detail={scopedDetail} />
-            )}
-          </section>
-        </div>
-
-        <footer className="tmh-execution-dialog-footer">
+      size="lg"
+      tall
+      kicker="Test execution details"
+      title={testId}
+      description={`${formatDate(observation.completed_at)} · ${version ? `Test v${String(version)}` : 'Test version unknown'} · ${logicalRunLabel(observation.run_count)}`}
+      closeLabel="Close execution details"
+      className="tmh-execution-dialog"
+      footer={
+        <>
           <a
             className="tmh-detail-link"
             href={hashForExecution(observation.execution_id)}
@@ -1050,9 +931,101 @@ function ExecutionDetailsDialog({
           <button className="tmh-detail-button" type="button" onClick={onClose}>
             Close
           </button>
-        </footer>
+        </>
+      }
+    >
+      <div className="tmh-execution-dialog-body">
+        <section className="tmh-execution-dialog-overview">
+          <div>
+            <span className="tmh-label">Result</span>
+            <strong className={`tmh-status ${statusClass(observation.status)}`}>
+              {formatStatus(observation.status)}
+            </strong>
+            <small>
+              {observation.median_score === null ||
+              observation.median_score === undefined
+                ? 'Score unknown'
+                : `Score ${observation.median_score.toFixed(2)}`}
+            </small>
+          </div>
+          <div>
+            <span className="tmh-label">Execution model</span>
+            <strong>
+              {modelLabel(
+                observation.subject_provider,
+                observation.subject_model,
+              )}
+            </strong>
+          </div>
+          <div>
+            <span className="tmh-label">Judge</span>
+            <strong>
+              {modelLabel(observation.judge_provider, observation.judge_model)}
+            </strong>
+            <small>{observation.judge_protocol ?? 'Protocol unknown'}</small>
+          </div>
+          <div>
+            <span className="tmh-label">Environment</span>
+            <strong>{systemSummary(observation)}</strong>
+          </div>
+        </section>
+
+        <section
+          className="tmh-execution-dialog-metrics"
+          aria-label="Execution metrics"
+        >
+          <div>
+            <span>Cost</span>
+            <strong>{formatCost(observation.median_cost_usd)}</strong>
+          </div>
+          <div>
+            <span>Duration</span>
+            <strong>
+              {formatDuration(observation.median_duration_seconds)}
+            </strong>
+          </div>
+          <div>
+            <span>Tokens</span>
+            <strong>{formatTokens(observation.median_tokens)}</strong>
+          </div>
+          <div>
+            <span>Turns</span>
+            <strong>
+              {observation.median_turns === null ||
+              observation.median_turns === undefined
+                ? 'Unknown'
+                : Math.round(observation.median_turns).toLocaleString()}
+            </strong>
+          </div>
+        </section>
+
+        <section className="tmh-execution-dialog-report">
+          <div className="tmh-execution-dialog-report-heading">
+            <div>
+              <span className="tmh-label">Test report</span>
+              <h3>Assessment details for this test</h3>
+            </div>
+            {detail && (
+              <span className="tmh-visible-count">
+                {String(availableReports ?? 0)} available{' '}
+                {(availableReports ?? 0) === 1 ? 'report' : 'reports'}
+              </span>
+            )}
+          </div>
+          {loading ? (
+            <p className="tmh-dialog-message" role="status">
+              Loading execution report…
+            </p>
+          ) : error ? (
+            <p className="tmh-dialog-message tmh-dialog-error" role="alert">
+              {error}
+            </p>
+          ) : (
+            <AssessmentWorkspace detail={scopedDetail} />
+          )}
+        </section>
       </div>
-    </dialog>
+    </Dialog>
   )
 }
 
@@ -1175,9 +1148,9 @@ export function TestHistoryPage({ testId }: { testId: string }) {
 
   return (
     <div id="test-metrics-history-proposal" className="tmh-page">
-      <DashboardPageActions active="tests" />
+      <DashboardPageActions active="tests" context={testId} />
 
-      <main className="tmh-main" id="test-history-main">
+      <div className="tmh-main">
         <p className="tmh-breadcrumb">
           <a href={hashForWorkspace('tests')}>Tests</a> / <span>{testId}</span>
         </p>
@@ -1548,7 +1521,7 @@ export function TestHistoryPage({ testId }: { testId: string }) {
             </>
           )}
         </section>
-      </main>
+      </div>
       {selectedObservation && (
         <ExecutionDetailsDialog
           observation={selectedObservation}

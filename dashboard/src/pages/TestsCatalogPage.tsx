@@ -152,9 +152,7 @@ function DimensionCell({
     <>
       <span className="block text-xs text-ink-soft">{value}</span>
       {detail ? (
-        <small className="block text-[0.6875rem] text-ink-muted">
-          {detail}
-        </small>
+        <small className="block text-label text-ink-muted">{detail}</small>
       ) : null}
     </>
   )
@@ -291,7 +289,7 @@ export function TestsCatalogActions({
 // 6px radius, fill, no border.
 export function LocalTestBadge() {
   return (
-    <span className="inline-flex shrink-0 items-center rounded-[6px] bg-[var(--surface-fill)] px-1.5 py-0.5 font-mono text-[0.6875rem] leading-4 text-ink-soft">
+    <span className="inline-flex shrink-0 items-center rounded-[6px] bg-[var(--surface-fill)] px-1.5 py-0.5 font-mono text-label leading-4 text-ink-soft">
       local
     </span>
   )
@@ -388,9 +386,6 @@ export function TestsCatalogPage() {
 
   return (
     <>
-      <a className="skip-link" href="#tests-catalog-main">
-        Skip to test catalog
-      </a>
       <DashboardPageActions
         active="tests"
         actionsLabel="Test catalog actions"
@@ -405,10 +400,7 @@ export function TestsCatalogPage() {
           />
         }
       />
-      <main
-        id="tests-catalog-main"
-        className="page-shell w-[calc(100%_-_1.5rem)] max-w-[1420px] pt-5 pb-16 md:w-[calc(100%_-_3rem)]"
-      >
+      <div className="page-shell w-[calc(100%_-_1.5rem)] max-w-[1420px] pt-5 pb-16 md:w-[calc(100%_-_3rem)]">
         {/* Audit T-11: the page has a heading even though the console owns
             the visible title. */}
         <h1 className="visually-hidden">Test catalog</h1>
@@ -594,7 +586,7 @@ export function TestsCatalogPage() {
           ) : (
             <div className="mt-3 overflow-x-auto">
               <table
-                className={`w-full min-w-[82rem] border-collapse text-left [&_td]:border-0 [&_td]:px-3 [&_td]:py-2.5 [&_th]:border-0 [&_th]:px-3 [&_th]:py-2 [&_th]:font-mono [&_th]:text-[0.6875rem] [&_th]:font-medium [&_th]:uppercase [&_th]:tracking-[0.06em] [&_th]:text-ink-muted [&_tbody_tr]:transition-colors ${
+                className={`w-full min-w-[82rem] border-collapse text-left [&_td]:border-0 [&_td]:px-3 [&_td]:py-2.5 [&_th]:border-0 [&_th]:px-3 [&_th]:py-2 [&_th]:font-mono [&_th]:text-label [&_th]:font-medium [&_th]:uppercase [&_th]:tracking-[0.06em] [&_th]:text-ink-muted [&_tbody_tr]:transition-colors ${
                   local
                     ? '[&_tbody_tr]:cursor-pointer [&_tbody_tr:hover]:bg-[var(--surface-soft)]'
                     : ''
@@ -669,7 +661,7 @@ export function TestsCatalogPage() {
                           </small>
                         </td>
                         <td data-label="Version">
-                          <span className="inline-flex items-center rounded-[6px] bg-[var(--surface-fill)] px-1.5 py-0.5 font-mono text-[0.6875rem] leading-4 text-ink-soft">
+                          <span className="inline-flex items-center rounded-[6px] bg-[var(--surface-fill)] px-1.5 py-0.5 font-mono text-label leading-4 text-ink-soft">
                             {row.current_version
                               ? `v${row.current_version}`
                               : '—'}
@@ -708,7 +700,7 @@ export function TestsCatalogPage() {
                           >
                             {executions.total}
                           </span>
-                          <small className="block text-[0.6875rem] text-ink-muted">
+                          <small className="block text-label text-ink-muted">
                             {executions.lastSeen
                               ? `last seen ${formatDate(executions.lastSeen)}`
                               : 'never run'}
@@ -737,7 +729,7 @@ export function TestsCatalogPage() {
               </table>
             </div>
           ))}
-      </main>
+      </div>
     </>
   )
 }

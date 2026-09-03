@@ -31,7 +31,12 @@ test("the narrow select is hidden by CSS, not by a Tailwind utility", () => {
   );
 });
 
-test("page actions have a narrow-container disclosure (S-02)", () => {
-  assert.match(shellTsx, /harness-e2e-header-overflow/);
-  assert.match(shellCss, /\.harness-e2e-header-overflow-menu\s*\{[^}]*position:\s*absolute/);
+// Audit S-02 / S-05: page actions no longer sit in the console header where
+// they pushed the close control out of view; they share the section bar
+// inside the page and wrap in narrow containers.
+test("page actions live in the wrapping section bar, not the console header (S-02)", () => {
+  assert.match(shellTsx, /<PageActionsBar/);
+  assert.match(shellTsx, /harness-e2e-page-actions flex min-w-0 flex-wrap/);
+  assert.doesNotMatch(shellTsx, /harness-e2e-header-overflow/);
+  assert.doesNotMatch(shellCss, /harness-e2e-header-overflow/);
 });

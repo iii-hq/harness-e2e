@@ -32,6 +32,8 @@ export type AppHeaderProps = {
   active: AppHeaderSection
   actions?: ReactNode
   actionsLabel?: string
+  /** The open entity, shown as the console title's second line. */
+  context?: string
   showThemeToggle?: boolean
 }
 
@@ -39,6 +41,7 @@ export function AppHeader({
   active,
   actions,
   actionsLabel = 'Page actions',
+  context,
 }: AppHeaderProps) {
   const chrome = useDashboardChrome()
   const hasActions = Boolean(actions)
@@ -48,14 +51,23 @@ export function AppHeader({
   useEffect(() => {
     if (!setHeader || !clearHeader) return
     setHeader({
-      key: `${active}:${actionsLabel}:${hasActions}`,
+      key: `${active}:${actionsLabel}:${hasActions}:${context ?? ''}`,
       actions,
       actionsLabel,
+      context,
     })
     return clearHeader
-  }, [actions, active, actionsLabel, clearHeader, hasActions, setHeader])
+  }, [
+    actions,
+    active,
+    actionsLabel,
+    clearHeader,
+    context,
+    hasActions,
+    setHeader,
+  ])
 
-  // The Console owns the page chrome. This bridge keeps route-level actions
-  // available to the single PageHeader without rendering a second header.
+  // The shell owns the chrome: the actions render in the section bar inside
+  // the page and the context goes to the console title. Nothing renders here.
   return null
 }

@@ -42,17 +42,33 @@ test("uses the shared React theme control on every dashboard page", () => {
 });
 
 test("defines complete light and dark token sets", () => {
+  // Audit DS-03: the palette lives in dashboard-shell.css and reaches the
+  // standalone document root through data-harness-e2e, so legacy.css paints
+  // nothing private. Both themes set their own color-scheme there.
+  const shell = fs.readFileSync(
+    path.join(dashboardRoot, "src", "components", "dashboard-shell.css"),
+    "utf8",
+  );
   const styles = fs.readFileSync(
-    path.join(dashboardRoot, "src", "index.css"),
+    path.join(dashboardRoot, "src", "legacy.css"),
     "utf8",
   );
 
-  assert.match(styles, /:root\s*\{[^}]*color-scheme:\s*dark;/s);
   assert.match(
-    styles,
-    /:root\[data-theme="light"\]\s*\{[^}]*color-scheme:\s*light;/s,
+    shell,
+    /:root\[data-harness-e2e="standalone"\]\s*\{[^}]*color-scheme:\s*light;/s,
   );
-  for (const token of ["--bg", "--surface", "--text", "--accent", "--danger"]) {
-    assert.match(styles, new RegExp(`${token}:`));
+  assert.match(
+    shell,
+    /:root\[data-harness-e2e="standalone"\]\[data-theme="dark"\]\s*\{[^}]*color-scheme:\s*dark;/s,
+  );
+  for (const token of ["--bg", "--surface", "--text", "--accent", "--info", "--danger"]) {
+    assert.match(shell, new RegExp(`${token}:`));
   }
+  assert.doesNotMatch(styles, /:root\s*\{[^}]*--(?:bg|surface|text|accent|danger):/s);
+  assert.doesNotMatch(styles, /rgba\(\d/);
+  assert.match(
+    fs.readFileSync(path.join(dashboardRoot, "index.html"), "utf8"),
+    /<html lang="en" data-harness-e2e="standalone">/,
+  );
 });

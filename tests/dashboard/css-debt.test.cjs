@@ -24,6 +24,9 @@ function walk(dir, out = []) {
 
 const files = walk(dashboardSrc).filter((file) => !/\.test\.[cm]?[jt]sx?$/.test(file));
 const cssFiles = files.filter((file) => file.endsWith(".css"));
+// The design system is the one place a 1px line is sanctioned (table row
+// dividers, see primitives.css); every other stylesheet must keep shedding them.
+const legacyCssFiles = cssFiles.filter((file) => !file.includes(`${path.sep}design-system${path.sep}`));
 const tsxFiles = files.filter((file) => /\.(tsx|ts)$/.test(file));
 const read = (file) => fs.readFileSync(file, "utf8");
 const countIn = (list, regex) =>
@@ -69,12 +72,12 @@ function cssRadiiOffToken() {
 const metrics = {
   // rgba/hex borders drawn as 1px lines: the DS uses fills for hierarchy
   cssBorder1px: () =>
-    countIn(cssFiles, /border(?:-(?:top|right|bottom|left|inline|block)(?:-start|-end)?)?\s*:\s*1px/g),
+    countIn(legacyCssFiles, /border(?:-(?:top|right|bottom|left|inline|block)(?:-start|-end)?)?\s*:\s*1px/g),
   cssRadiiOffToken,
   cssFontSizesBelow11,
   cssBoxShadow: () => countIn(cssFiles, /box-shadow\s*:\s*(?!none\b)[^;}]+/g),
   cssImportant: () => countIn(cssFiles, /!important/g),
-  cssLinesIndex: () => read(path.join(dashboardSrc, "index.css")).split("\n").length,
+  cssLinesLegacy: () => read(path.join(dashboardSrc, "legacy.css")).split("\n").length,
   tsxArbitraryTextBelow11,
   tsxRoundedOffToken: () => countIn(tsxFiles, /\brounded-(?:full|sm|md|lg|xl|2xl|3xl|\[(?!6px\])[^\]]+\])/g),
   tsxBorderUtility: () => countIn(tsxFiles, /(?<=["'\s])border(?:-[trblxyse])?(?=["'\s])/g),
