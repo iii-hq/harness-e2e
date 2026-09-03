@@ -1,7 +1,10 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import {
   ExecutionSetup,
-  ExecutionSetupReview,
+  ExecutionSetupFooter,
+  focusFirstInvalid,
+  requestPlanFromSelection,
+  validateExecutionSetup,
 } from '@/components/ExecutionSetup'
 import { buttonClassName, Dialog } from '@/design-system'
 import { hashForNewPlan } from '@/hooks/use-hash-route'
@@ -146,6 +149,7 @@ export function LocalRunnerDialog({
   const [logOffset, setLogOffset] = useState(0)
   const [loadingCatalog, setLoadingCatalog] = useState(false)
   const [submitting, setSubmitting] = useState(false)
+  const [attempted, setAttempted] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
   const refreshJob = useCallback(async () => {
@@ -229,10 +233,6 @@ export function LocalRunnerDialog({
   }))
   const runsPerScenario = Math.max(1, Number(form.runs) || 1)
   const technicalRetries = Math.max(0, Number(form.technicalRetries) || 0)
-  const plannedRuns = form.scenarios.length * runsPerScenario
-  const canRun = Boolean(
-    catalog && selectedSubject && form.scenarios.length > 0,
-  )
   const showJobStatus = Boolean(job?.status) && (ownJob || active)
   const testCount = form.scenarios.length
   const runLabel = submitting
@@ -242,16 +242,18 @@ export function LocalRunnerDialog({
       : testCount > 0
         ? `run ${testCount} ${testCount === 1 ? 'test' : 'tests'}`
         : 'run tests'
-  // Audit RS-10: a disabled primary says why.
-  const runHint = active
-    ? null
-    : !catalog
-      ? 'Waiting for the catalog.'
-      : !selectedSubject
-        ? 'Choose an execution model.'
-        : testCount === 0
-          ? 'Select at least one test.'
-          : null
+  // Audit RS-10 / PN-05: the primary stays enabled; after a submit attempt
+  // the footer lists what is still pending and the fields show it inline.
+  const errors = attempted
+    ? validateExecutionSetup({
+        mode: 'quick',
+        label: form.label,
+        subject: form.subject,
+        selectedScenarios: form.scenarios,
+        url: form.url,
+      })
+    : {}
+  const pending = Object.values(errors)
 
   const update = <K extends keyof RunnerForm>(key: K, value: RunnerForm[K]) => {
     setForm((current) => ({ ...current, [key]: value }))
@@ -271,8 +273,17 @@ export function LocalRunnerDialog({
 
   const submit = async (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault()
-    if (!bridge || !selectedSubject || form.scenarios.length === 0) {
-      setError('Choose an execution model and at least one scenario.')
+    const nextErrors = validateExecutionSetup({
+      mode: 'quick',
+      label: form.label,
+      subject: form.subject,
+      selectedScenarios: form.scenarios,
+      url: form.url,
+    })
+    if (Object.keys(nextErrors).length > 0 || !bridge || !selectedSubject) {
+      setAttempted(true)
+      focusFirstInvalid('quick-execution', nextErrors)
+      if (!bridge) setError('The local runner is not connected.')
       return
     }
     setSubmitting(true)
@@ -312,170 +323,157 @@ export function LocalRunnerDialog({
     }
   }
 
+  const summary = {
+    mode: 'quick' as const,
+    selectedScenarios: form.scenarios.length,
+    runsPerScenario,
+    technicalRetries,
+    seed: form.seed,
+    subject: selectedSubject
+      ? `${selectedSubject.provider} / ${selectedSubject.model}`
+      : '',
+    judge: selectedJudge
+      ? `${selectedJudge.provider} / ${selectedJudge.model}`
+      : '',
+    url: form.url,
+  }
+  const footerStatus =
+    showJobStatus && job
+      ? `Runner ${statusLabel(job.status).toLowerCase()}.`
+      : job?.status
+        ? `Previous runner job: ${statusLabel(job.status).toLowerCase()}.`
+        : null
+  const localCount = catalog?.localScenarios.length ?? 0
+
   return (
     <Dialog
       open={open}
       onClose={onClose}
-      size="xl"
+      size="lg"
+      tall
       kicker="Execution setup"
       title="Run suite"
       description="Runs the selected tests once and saves an independent result. Use a plan when you need a fixed baseline and candidate comparison."
       closeLabel="Close execution form"
       className="ds-root"
+      footer={
+        <ExecutionSetupFooter
+          summary={summary}
+          pending={pending}
+          error={error}
+          status={footerStatus}
+        >
+          <a
+            className={buttonClassName({
+              variant: 'quiet',
+              className: 'no-underline',
+            })}
+            href={hashForNewPlan()}
+            onClick={() => requestPlanFromSelection(form.scenarios)}
+          >
+            create a reusable plan instead
+          </a>
+          {active ? (
+            <button
+              className={buttonClassName({ variant: 'secondary' })}
+              type="button"
+              onClick={() => void cancel()}
+            >
+              cancel execution
+            </button>
+          ) : (
+            <button
+              className={buttonClassName({ variant: 'secondary' })}
+              type="button"
+              onClick={onClose}
+            >
+              cancel
+            </button>
+          )}
+          <button
+            className={buttonClassName({ variant: 'primary' })}
+            type="submit"
+            form="local-runner-form"
+            disabled={active}
+            aria-busy={active}
+          >
+            {runLabel}
+          </button>
+        </ExecutionSetupFooter>
+      }
     >
       <form
         id="local-runner-form"
-        className="grid min-w-0 gap-px bg-[var(--color-rule)] lg:grid-cols-12"
+        className="grid min-w-0 gap-6"
         onSubmit={submit}
+        noValidate
       >
-        <div className="min-w-0 bg-panel lg:col-span-8">
-          <ExecutionSetup
-            idPrefix="quick-execution"
-            mode="quick"
-            label={form.label}
-            url={form.url}
-            subject={form.subject}
-            judge={form.judge}
-            modelGroups={modelOptions}
-            availableScenarios={catalog?.scenarios ?? []}
-            localScenarioIds={
-              catalog?.localScenarios.map((scenario) => scenario.id) ?? []
-            }
-            scenarioTitles={Object.fromEntries(
-              catalog?.localScenarios.map((scenario) => [
-                scenario.id,
-                scenario.title,
-              ]) ?? [],
-            )}
-            selectedScenarios={form.scenarios}
-            query={scenarioQuery}
-            runs={form.runs}
-            technicalRetries={form.technicalRetries}
-            seed={form.seed}
-            disabled={active}
-            catalogLoading={loadingCatalog}
-            catalogSummary={
-              catalog
-                ? `${catalog.models.length} registered model${catalog.models.length === 1 ? '' : 's'} · ${catalog.scenarios.length} tests${catalog.localScenarios.length > 0 ? ` · ${catalog.localScenarios.length} local` : ''}`
-                : 'Catalog loads when this dialog opens'
-            }
-            onRefreshCatalog={() => void refreshCatalog()}
-            onLabelChange={(value) => update('label', value)}
-            onUrlChange={(value) => update('url', value)}
-            onSubjectChange={(value) => update('subject', value)}
-            onJudgeChange={(value) => update('judge', value)}
-            onSelectedScenariosChange={updateScenarios}
-            onQueryChange={setScenarioQuery}
-            onRunsChange={(value) => update('runs', value)}
-            onTechnicalRetriesChange={(value) =>
-              update('technicalRetries', value)
-            }
-            onSeedChange={(value) => update('seed', value)}
-          />
-
-          {error && (
-            <p
-              className="m-0 border-t border-[var(--color-rule)] bg-[color-mix(in_srgb,var(--color-alert)_8%,var(--surface))] p-5 text-xs leading-5 text-danger sm:px-6"
-              role="alert"
-            >
-              {error}
-            </p>
+        <ExecutionSetup
+          idPrefix="quick-execution"
+          mode="quick"
+          stickyOffset="dialog"
+          label={form.label}
+          url={form.url}
+          subject={form.subject}
+          judge={form.judge}
+          modelGroups={modelOptions}
+          availableScenarios={catalog?.scenarios ?? []}
+          localScenarioIds={
+            catalog?.localScenarios.map((scenario) => scenario.id) ?? []
+          }
+          scenarioTitles={Object.fromEntries(
+            catalog?.localScenarios.map((scenario) => [
+              scenario.id,
+              scenario.title,
+            ]) ?? [],
           )}
-          {log && (
-            <details
-              className="border-t border-[var(--color-rule)] p-5 sm:p-6"
-              open={active}
-            >
-              <summary className="cursor-pointer text-xs font-semibold text-[var(--color-ink-faint)]">
-                Live runner output
-              </summary>
-              <pre
-                className="mt-3 mb-0 max-h-80 w-full overflow-auto rounded-[6px] border border-[var(--color-rule)] bg-[var(--color-bg)] p-4 font-mono text-label leading-5 text-[var(--color-ink-faint)]"
-                aria-live="polite"
-              >
-                {log}
-              </pre>
-            </details>
-          )}
-        </div>
-
-        <div className="min-w-0 bg-panel-raised lg:col-span-4">
-          <ExecutionSetupReview
-            mode="quick"
-            stickyOffset="dialog"
-            status={
-              showJobStatus && job
-                ? statusLabel(job.status)
-                : canRun
-                  ? 'Ready'
-                  : 'Incomplete'
-            }
-            subject={
-              selectedSubject
-                ? `${selectedSubject.provider} / ${selectedSubject.model}`
-                : ''
-            }
-            judge={
-              selectedJudge
-                ? `${selectedJudge.provider} / ${selectedJudge.model}`
-                : ''
-            }
-            url={form.url}
-            selectedScenarios={form.scenarios.length}
-            plannedRuns={plannedRuns}
-            runsPerScenario={runsPerScenario}
-            technicalRetries={technicalRetries}
-            ready={canRun && !active}
+          selectedScenarios={form.scenarios}
+          query={scenarioQuery}
+          runs={form.runs}
+          technicalRetries={form.technicalRetries}
+          seed={form.seed}
+          disabled={active}
+          catalogLoading={loadingCatalog}
+          catalogStatus={
+            loadingCatalog
+              ? { tone: 'loading', text: 'loading catalog…' }
+              : catalog
+                ? {
+                    tone: 'ready',
+                    text: `catalog ready · ${catalog.models.length} model${catalog.models.length === 1 ? '' : 's'} · ${catalog.scenarios.length} test${catalog.scenarios.length === 1 ? '' : 's'}${localCount > 0 ? ` · ${localCount} local` : ''}`,
+                  }
+                : { tone: 'unavailable', text: 'catalog unavailable' }
+          }
+          errors={errors}
+          onRefreshCatalog={() => void refreshCatalog()}
+          onLabelChange={(value) => update('label', value)}
+          onUrlChange={(value) => update('url', value)}
+          onSubjectChange={(value) => update('subject', value)}
+          onJudgeChange={(value) => update('judge', value)}
+          onSelectedScenariosChange={updateScenarios}
+          onQueryChange={setScenarioQuery}
+          onRunsChange={(value) => update('runs', value)}
+          onTechnicalRetriesChange={(value) =>
+            update('technicalRetries', value)
+          }
+          onSeedChange={(value) => update('seed', value)}
+        />
+        {log ? (
+          <details
+            className="rounded-[6px] bg-[var(--surface-fill)] p-4"
+            open={active}
           >
-            <button
-              className={buttonClassName({
-                variant: 'primary',
-                size: 'large',
-                className: 'w-full',
-              })}
-              type="submit"
-              form="local-runner-form"
-              disabled={active || !canRun}
-              aria-busy={active}
-              aria-describedby={runHint ? 'local-runner-hint' : undefined}
+            <summary className="cursor-pointer font-mono text-xs text-ink-soft">
+              live runner output
+            </summary>
+            <pre
+              className="mt-3 mb-0 max-h-80 w-full overflow-auto rounded-[6px] bg-canvas p-4 font-mono text-label leading-5 text-ink-soft"
+              aria-live="polite"
             >
-              {runLabel}
-            </button>
-            {runHint ? (
-              <p
-                className="m-0 text-xs leading-5 text-ink-muted"
-                id="local-runner-hint"
-                role="status"
-              >
-                {runHint}
-              </p>
-            ) : null}
-            {job?.status && !showJobStatus ? (
-              <p className="m-0 text-xs leading-5 text-ink-muted">
-                Previous runner job: {statusLabel(job.status).toLowerCase()}.
-              </p>
-            ) : null}
-            {active && (
-              <button
-                className={buttonClassName({
-                  variant: 'secondary',
-                  size: 'large',
-                  className: 'w-full',
-                })}
-                type="button"
-                onClick={() => void cancel()}
-              >
-                cancel execution
-              </button>
-            )}
-            <a
-              className="inline-flex min-h-10 w-full items-center justify-center rounded-[6px] px-3 text-xs font-semibold text-[var(--color-ink-faint)] underline-offset-4 hover:text-ink hover:underline"
-              href={hashForNewPlan()}
-            >
-              Create a reusable plan instead
-            </a>
-          </ExecutionSetupReview>
-        </div>
+              {log}
+            </pre>
+          </details>
+        ) : null}
       </form>
     </Dialog>
   )

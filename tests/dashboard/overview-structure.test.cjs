@@ -17,6 +17,7 @@ const executionSetup = read('src', 'components', 'ExecutionSetup.tsx')
 const scenarioMatrix = read('src', 'components', 'ScenarioMatrix.tsx')
 const modelDropdown = read('src', 'components', 'ProviderModelDropdown.tsx')
 const planPage = read('src', 'pages', 'LocalPlanPage.tsx')
+const planDetailPage = read('src', 'pages', 'PlanDetailPage.tsx')
 const plansPage = read('src', 'pages', 'PlansPage.tsx')
 const catalogPage = read('src', 'pages', 'TestsCatalogPage.tsx')
 const historyPage = read('src', 'pages', 'TestHistoryPage.tsx')
@@ -144,9 +145,9 @@ test('keeps the workspace navigation and versioned test flow', () => {
   assert.match(appHeader, /return null/)
   assert.doesNotMatch(read('src', 'legacy.css'), /\.topbar(?:\s|,|\{)/)
   assert.doesNotMatch(historyPage, /tmh-topbar|tmh-brand|tmh-context/)
-  assert.match(plansPage, /All local plans/)
+  assert.match(plansPage, /title="plans"/)
   assert.match(plansPage, /hashForNewPlan\(\)/)
-  assert.match(plansPage, /Comparison available/)
+  assert.match(plansPage, /comparison available/)
 })
 
 test('distinguishes active tests from tests with no execution history', () => {
@@ -196,116 +197,52 @@ test('keeps metric history rows readable and opens details on demand', () => {
 })
 
 test('makes local plan scope selection focused and readable', () => {
-  assert.match(planPage, /Create a benchmark plan/)
+  // Audit PN-18 / PN-25 / PN-02: DS header with a breadcrumb, one column,
+  // and the sticky footer instead of the review aside.
+  assert.match(planPage, /title="new plan"/)
+  assert.match(planPage, /breadcrumb=\{\[/)
   assert.match(planPage, /ExecutionSetup/)
-  assert.match(planPage, /ExecutionSetupReview/)
-  assert.match(planPage, /Quick execution/)
+  assert.match(planPage, /ExecutionSetupFooter/)
+  assert.doesNotMatch(planPage, /ExecutionSetupReview|lg:grid-cols-12/)
+  assert.match(planPage, /sticky bottom-0/)
+  assert.match(planPage, /quick execution instead/)
   assert.match(planPage, /requestQuickExecution/)
+  assert.match(planPage, /validateExecutionSetup/)
+  assert.match(planPage, /unavailableScenarios/)
   assert.match(executionSetup, /Find a test/)
   assert.match(executionSetup, /Search by name or id/)
   assert.match(executionSetup, /select visible/i)
+  assert.match(executionSetup, /select group/)
   assert.match(executionSetup, /Pick the tests/)
-  assert.match(executionSetup, /Sampling, retries and seed/)
+  assert.match(executionSetup, /Advanced · sampling, retries and seed/)
   assert.match(executionSetup, /Runs per test/)
+  assert.doesNotMatch(executionSetup, /max-h-\[25rem\]|type="search"/)
   assert.doesNotMatch(planPage, /plan-test-option|plan-advanced-control/)
 })
 
-test('keeps plan panels explicitly padded and comparison content full bleed', () => {
+test('renders plan pages on the design system with no legacy plan CSS', () => {
   const styles = read('src', 'legacy.css')
-  assert.match(styles, /--plan-panel-space-y: 24px/)
-  assert.match(styles, /--plan-panel-space-x: 28px/)
-  assert.match(styles, /--plan-card-space: 16px/)
-  assert.match(
-    styles,
-    /\.plan-panel-heading,[\s\S]*\.plan-panel-section[\s\S]*padding: var\(--plan-panel-space-y\) var\(--plan-panel-space-x\)/,
-  )
-  assert.match(
-    styles,
-    /\.plans-list-heading[\s\S]*padding: var\(--plan-panel-space-y\) var\(--plan-panel-space-x\)/,
-  )
-  assert.match(
-    styles,
-    /@container harness \(max-width: 560px\)[\s\S]*--plan-panel-space-y: 18px[\s\S]*--plan-panel-space-x: 18px/,
-  )
-  assert.match(planPage, /panel-heading plan-panel-heading/g)
-  assert.doesNotMatch(planPage, /className="panel-heading"/)
-  assert.match(plansPage, /panel-heading plans-list-heading/)
-  assert.match(planPage, /plan-execution-table-wrap/)
-  assert.match(planPage, /plan-scenario-disclosures/)
-  assert.match(planPage, /page-heading plan-detail-heading/)
-  assert.match(planPage, /plan-detail-state/)
-  assert.match(
-    styles,
-    /\.plans-how-it-works \{[\s\S]*?background: transparent;[\s\S]*?\.plans-how-it-works > div \{[\s\S]*?background: transparent;/,
-  )
-  assert.match(
-    styles,
-    /\.plans-summary-grid \{[\s\S]*?background: transparent;[\s\S]*?\.plans-summary-card \{[\s\S]*?background: transparent;[\s\S]*?box-shadow: none;/,
-  )
-  assert.match(
-    styles,
-    /\.plans-list-panel \{[\s\S]*?border: 1px solid var\(--line\);[\s\S]*?background: transparent;[\s\S]*?box-shadow: none;/,
-  )
-  assert.match(
-    styles,
-    /\.plan-run-history \{[\s\S]*?margin-top: 1\.25rem;[\s\S]*?background: var\(--surface\);/,
-  )
-  assert.match(
-    styles,
-    /\.plan-status-grid \{[\s\S]*?gap: 0;[\s\S]*?border: 1px solid var\(--line\);[\s\S]*?background: var\(--surface\);/,
-  )
-  assert.match(styles, /\.plan-status-card \+ \.plan-status-card/)
-  assert.doesNotMatch(planPage, /Execution controls|Plan actions|Next action/)
+  // PR B: every .plan-* block left legacy.css with the pages that used it.
+  assert.doesNotMatch(styles, /^ *\.plan-/m)
+  assert.doesNotMatch(styles, /--plan-panel-space/)
+  assert.doesNotMatch(planPage, /className="(?:panel|page-heading|plan-)/)
+  assert.doesNotMatch(planDetailPage, /className="(?:panel|page-heading|plan-)/)
+  assert.match(planDetailPage, /<PageHeader[\s\S]*breadcrumb=/)
+  assert.match(planDetailPage, /<PlanLifecycle[\s\S]*<PlanScope[\s\S]*<PlanRunHistory[\s\S]*<PlanExecutionHistory/)
 })
 
 test('exposes baseline and arbitrary candidate comparison controls', () => {
-  const styles = read('src', 'legacy.css')
   assert.match(plansPage, /Latest candidate vs baseline/)
-  assert.match(plansPage, /Objective regressions/)
-  assert.match(plansPage, /Not reported/)
-  assert.match(planPage, /Baseline and candidates/)
-  assert.match(
-    planPage,
-    /Choose a visual baseline and any number of candidates/,
-  )
-  assert.match(planPage, /PLAN_COMPARISON_TABLE_METRICS/)
-  assert.match(planPage, /plan-execution-metric/)
-  assert.match(planPage, /planMetricWinnerIds/)
-  assert.match(planPage, /plan-winner-badge/)
-  assert.match(planPage, /--plan-execution-column-count/)
-  assert.match(styles, /table-layout: fixed/)
-  assert.match(
-    styles,
-    /\.plan-comparison-selection \{[\s\S]*?grid-template-columns: minmax\(280px, 0\.9fr\) minmax\(0, 1\.1fr\)/,
-  )
-  assert.match(
-    styles,
-    /\.plan-candidate-options \{[\s\S]*?display: flex;[\s\S]*?flex-wrap: wrap;/,
-  )
-  assert.match(
-    styles,
-    /\.plan-execution-table tbody td\.is-winner \{[\s\S]*?background: transparent;/,
-  )
-  assert.match(planPage, /Best values are highlighted/)
-  assert.match(planPage, /Visual baseline/)
-  assert.match(planPage, /Execution history/)
-  assert.match(planPage, /plan-run-history-list/)
-  assert.match(planPage, /ExecutionNameControl/)
-  assert.match(planPage, /official plan baseline remains unchanged/)
-  assert.match(
-    planPage,
-    /!plan\.baseline_execution_id[\s\S]*plan\.candidate_execution_ids\.length === 0/,
-  )
-  assert.doesNotMatch(planPage, /onSelectCandidate/)
-  assert.doesNotMatch(planPage, /plan-execution-report-link/)
-  assert.doesNotMatch(planPage, /scrollIntoView\(\{ behavior: 'smooth'/)
-  assert.match(planPage, /aria-live="polite"/)
-  assert.match(planPage, /baselineLabel.*resolvedCandidateLabel/s)
-  assert.doesNotMatch(planPage, /plan-comparison-metrics/)
-  assert.doesNotMatch(planPage, /ComparisonMetricCard/)
-  assert.match(planPage, /Metrics by test/)
-  assert.match(planPage, /'turns'/)
-  assert.match(planPage, /Run another candidate/)
+  assert.match(plansPage, /regressed/)
+  assert.match(plansPage, /DeltaValue/)
+  assert.match(planDetailPage, /baseline and candidates/)
+  assert.match(planDetailPage, /Choose a visual baseline and any number of candidates/)
+  assert.match(planDetailPage, /PLAN_COMPARISON_TABLE_METRICS/)
+  assert.match(planDetailPage, /planMetricWinnerIds/)
+  assert.match(planDetailPage, /Best values are highlighted/)
+  assert.match(planDetailPage, /Visual baseline/)
+  // Audit PD-12: a metric that no column reports is not a row.
+  assert.match(planDetailPage, /entries\.some\(\(\{ value \}\) => value !== null\)/)
 })
 
 test('uses a typed bridge for local, observed and static execution sources', () => {
@@ -383,8 +320,14 @@ test('keeps an empty local execution label serializable and its action visible',
   assert.doesNotMatch(runner, /label: form\.label \|\| null/)
   assert.match(runner, /form="local-runner-form"/)
   assert.match(read('src', 'design-system', 'primitives.css'), /\.ds-dialog\[open\] \{\s*display: grid;/)
-  assert.match(runner, /lg:grid-cols-12/)
-  assert.match(runner, /Create a reusable plan instead/)
+  // Audit RS-03 / RS-07 / RS-13: one column, the summary and actions in the
+  // dialog footer, the selection handed over to plans/new.
+  assert.doesNotMatch(runner, /lg:grid-cols-12|ExecutionSetupReview/)
+  assert.match(runner, /footer=\{/)
+  assert.match(runner, /ExecutionSetupFooter/)
+  assert.match(runner, /requestPlanFromSelection\(form\.scenarios\)/)
+  assert.match(runner, /create a reusable plan instead/)
+  assert.match(runner, /validateExecutionSetup/)
   assert.match(executionSetup, /mode === 'plan'/)
 })
 
