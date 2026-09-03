@@ -14,6 +14,8 @@ import {
 type ScenarioProjection = DashboardReportProjection['scenarios'][number]
 
 export type ScenarioMatrixItem = {
+  /** Why the scenario did not pass, when the report says (audit SM-01). */
+  reason: string | null
   key: string
   reportIndex: number
   scenarioIndex: number | null
@@ -154,6 +156,7 @@ function scenarioItem(
 
   return {
     key: `${subjectId}:${scenario.scenario_id}:v${scenario.scenario_version}:${reportIndex}:${scenarioIndex}`,
+    reason: objective.status === 'passed' ? null : failureReason(primaryRun),
     reportIndex,
     scenarioIndex,
     subjectId,
@@ -173,6 +176,25 @@ function scenarioItem(
   }
 }
 
+/**
+ * Audit SM-01: a scenario that did not pass says why, from the retained
+ * evidence — the judge's diagnosis first, then the first technical failure.
+ */
+export function failureReason(run: DashboardRunProjection | null) {
+  if (!run) return null
+  const record = run as unknown as {
+    ai_final_assessment?: { result?: { diagnosis?: string } }
+    failures?: Array<{ message?: string; reason?: string }>
+  }
+  const diagnosis = record.ai_final_assessment?.result?.diagnosis
+  if (typeof diagnosis === 'string' && diagnosis.trim()) return diagnosis.trim()
+  const failure = record.failures?.find(
+    (entry) => entry && (entry.message || entry.reason),
+  )
+  const message = failure?.message ?? failure?.reason
+  return typeof message === 'string' && message.trim() ? message.trim() : null
+}
+
 function unavailableScenario(
   detail: DashboardExecutionDetail,
   reportIndex: number,
@@ -185,6 +207,7 @@ function unavailableScenario(
 
   return {
     key: `${record?.subject_id ?? 'unknown'}:${scenarioId}:unavailable:${reportIndex}`,
+    reason: 'The expected report for this scenario was not retained.',
     reportIndex,
     scenarioIndex: null,
     subjectId: record?.subject_id ?? 'Unknown subject',

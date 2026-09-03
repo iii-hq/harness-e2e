@@ -830,6 +830,18 @@
   margin-left: auto;
 }
 
+/* Day separators inside a ledger table: a label row, not a data row. */
+.ds-table tr[data-ledger-day] th {
+  padding-top: var(--ds-space-4);
+  border-top: 0;
+  background: var(--surface);
+  text-align: start;
+}
+
+.ds-table tbody + tbody tr[data-ledger-day] th {
+  border-top: 1px solid var(--line, rgba(20, 16, 8, 0.16));
+}
+
 /* A first column that stays put while the wrapper scrolls sideways
    (audit T-03), and the two-second highlight of a row just created or
    returned to (audit NT-08 / TH-06). */
@@ -923,6 +935,14 @@
 
   .ds-table-collapse-inline td:last-child::before {
     content: none;
+  }
+
+  /* A day separator keeps its own line above the cards it introduces. */
+  .ds-table-collapse tr[data-ledger-day] th {
+    display: block;
+    width: 100%;
+    padding: var(--ds-space-4) 0 var(--ds-space-1);
+    background: transparent;
   }
 }
 

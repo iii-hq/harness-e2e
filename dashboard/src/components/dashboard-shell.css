@@ -265,6 +265,31 @@
     outline-offset: -1px;
   }
 
+  /* The skip link belongs to the shell, not to the deleted legacy pages:
+     off-screen until focused, then a real 44px target (audit A11Y-06). */
+  .harness-e2e-shell .skip-link {
+    position: fixed;
+    z-index: 100;
+    top: -72px;
+    left: 12px;
+    display: inline-flex;
+    align-items: center;
+    min-height: 44px;
+    padding: 10px 14px;
+    border-radius: 6px;
+    background: var(--text);
+    color: var(--surface);
+    font-family: var(--font-mono, "Chivo Mono", ui-monospace, monospace);
+    font-weight: 500;
+    text-decoration: none;
+    text-transform: lowercase;
+    transition: top 160ms ease;
+  }
+
+  .harness-e2e-shell .skip-link:focus-visible {
+    top: 12px;
+  }
+
   @media (prefers-reduced-motion: reduce) {
     .harness-e2e-shell * {
       scroll-behavior: auto !important;

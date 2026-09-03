@@ -1,3 +1,4 @@
+import { ArrowRight } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import {
   DashboardPageActions,
@@ -6,10 +7,12 @@ import {
 import { consumeQuickExecutionRequest } from '@/components/ExecutionSetup'
 import { LocalRunnerDialog } from '@/components/LocalRunnerDialog'
 import {
-  Button,
   buttonClassName,
+  Callout,
+  EmptyState,
   MetricCard,
   type MetricTone,
+  PageHeader,
   Panel,
   StatusBadge,
 } from '@/design-system'
@@ -17,7 +20,6 @@ import {
   hashForExecution,
   hashForNewPlan,
   hashForWorkspace,
-  type WorkspaceView,
 } from '@/hooks/use-hash-route'
 import { useLatestRequest } from '@/hooks/use-latest-request'
 import {
@@ -26,7 +28,6 @@ import {
   getDashboardDataBridge,
 } from '@/lib/dashboard-data-source'
 import {
-  buildExecutionPresentation,
   categoryLabel,
   categoryMessage,
   type ExecutionPresentation,
@@ -34,656 +35,500 @@ import {
   formatDuration,
   formatPercent,
 } from '@/lib/execution-view'
+import {
+  buildOverviewSignal,
+  executionTitle,
+  type SignalMetric,
+} from '@/lib/overview-signal'
 import '@/design-system/styles.css'
 
-function statusCopy(presentation: ExecutionPresentation) {
+/** Executions the Overview asks for; the ledger pages beyond this. */
+const OVERVIEW_LIMIT = 20
+
+export function statusCopy(presentation: ExecutionPresentation) {
   if (presentation.attention === 'passed')
-    return {
-      label: 'Passed',
-      title: 'Latest execution passed',
-      status: 'passed' as const,
-    }
+    return { label: 'passed', status: 'passed' as const }
   if (presentation.attention === 'running')
-    return {
-      label: 'Running',
-      title: 'Execution is still running',
-      status: 'running' as const,
-    }
+    return { label: 'running', status: 'running' as const }
   if (presentation.attention === 'cancelling')
-    return {
-      label: 'Cancelling',
-      title: 'Cancellation is in progress',
-      status: 'cancelling' as const,
-    }
+    return { label: 'cancelling', status: 'cancelling' as const }
   if (presentation.attention === 'cancelled')
-    return {
-      label: 'Cancelled',
-      title: 'Execution was cancelled',
-      status: 'cancelled' as const,
-    }
+    return { label: 'cancelled', status: 'cancelled' as const }
   if (presentation.attention === 'incomplete')
-    return {
-      label: 'Incomplete',
-      title: 'Evidence is incomplete',
-      status: 'incomplete' as const,
-    }
+    return { label: 'incomplete', status: 'incomplete' as const }
   if (presentation.attention === 'unavailable')
-    return {
-      label: 'Unavailable',
-      title: 'No report evidence is available',
-      status: 'unavailable' as const,
-    }
+    return { label: 'no report', status: 'unavailable' as const }
   if (presentation.breakdown.hard_gate > 0)
-    return {
-      label: 'Hard gate failed',
-      title: 'A hard gate blocks this execution',
-      status: 'hard_gate' as const,
-    }
+    return { label: 'hard gate', status: 'hard_gate' as const }
   if (
     presentation.breakdown.inconclusive > 0 &&
     presentation.breakdown.issues === presentation.breakdown.inconclusive
   )
-    return {
-      label: 'Inconclusive',
-      title: 'The latest execution is inconclusive',
-      status: 'inconclusive' as const,
-    }
-  return {
-    label: 'Failed',
-    title: 'Latest execution needs attention',
-    status: 'failed' as const,
-  }
+    return { label: 'inconclusive', status: 'inconclusive' as const }
+  return { label: 'failed', status: 'failed' as const }
 }
 
-function modelNames(models: ExecutionPresentation['subjects']) {
-  if (models.length === 0) return 'Not reported'
+export function modelNames(models: ExecutionPresentation['subjects']) {
+  if (models.length === 0) return 'not reported'
   return models.map((model) => `${model.provider}/${model.model}`).join(', ')
 }
 
-function finiteNumber(value: unknown): number | null {
-  return typeof value === 'number' && Number.isFinite(value) ? value : null
-}
-
-function formatTurns(value: unknown) {
-  const turns = finiteNumber(value)
-  if (turns === null) return 'Turns not captured'
-  const rounded = Math.round(turns)
-  return `${rounded.toLocaleString()} ${rounded === 1 ? 'turn' : 'turns'}`
-}
-
-function metricTone(presentation: ExecutionPresentation): MetricTone {
+function metricTone(presentation: ExecutionPresentation | null): MetricTone {
+  if (!presentation) return 'unavailable'
   if (presentation.attention === 'passed') return 'positive'
   if (presentation.attention === 'needs_attention') return 'negative'
   if (presentation.attention === 'unavailable') return 'unavailable'
   return 'warning'
 }
 
-const sectionLabelClassName =
-  'font-mono text-label font-medium uppercase tracking-[0.06em] text-ink-muted'
-
-function SummaryKpi({
-  label,
-  value,
-  caption,
-  tone = 'neutral',
-  delta,
-}: {
-  label: string
-  value: string
-  caption: string
-  tone?: MetricTone
-  delta?: string
-}) {
-  return (
-    <MetricCard
-      className="min-h-0 rounded-[6px] border-0 bg-[var(--surface-fill)] p-4"
-      label={label}
-      value={value}
-      detail={caption}
-      tone={tone}
-      delta={delta}
-    />
-  )
+/** Audit O-16: the delta reads as a signed change, the caption as the median. */
+export function trendDelta(
+  metric: SignalMetric,
+  format: (value: number) => string,
+): string | undefined {
+  if (metric.delta === null || metric.delta === 0) return undefined
+  const sign = metric.delta > 0 ? '+' : '−'
+  return `${sign}${format(Math.abs(metric.delta))} vs prev`
 }
 
-export function LatestExecution({
+export function trendCaption(
+  metric: SignalMetric,
+  format: (value: number) => string,
+  fallback: string,
+) {
+  if (metric.median === null || metric.sampleSize === 0) return fallback
+  return `median of last ${metric.sampleSize}: ${format(metric.median)}`
+}
+
+function tokensLabel(value: number | null | undefined) {
+  return typeof value === 'number' && Number.isFinite(value)
+    ? Math.round(value).toLocaleString()
+    : '—'
+}
+
+function finiteNumber(value: unknown): number | null {
+  return typeof value === 'number' && Number.isFinite(value) ? value : null
+}
+
+/**
+ * Workflow executions report step progress; the plain ones report how many
+ * scenario reports arrived. The second tile shows whichever exists so the
+ * headline never repeats a number the first tile already gave.
+ */
+export function workflowProgress(presentation: ExecutionPresentation) {
+  const workflow = presentation.execution.workflow_metrics
+  const steps = finiteNumber(workflow?.step_count) ?? 0
+  if (steps === 0) return null
+  const succeeded = finiteNumber(workflow?.succeeded_steps) ?? 0
+  const skipped = finiteNumber(workflow?.skipped_steps) ?? 0
+  const active =
+    (finiteNumber(workflow?.running_steps) ?? 0) +
+    (finiteNumber(workflow?.pending_steps) ?? 0)
+  const attention =
+    (finiteNumber(workflow?.failed_steps) ?? 0) +
+    (finiteNumber(workflow?.hard_gate_failed_steps) ?? 0) +
+    (finiteNumber(workflow?.cancelled_steps) ?? 0)
+  const gates = finiteNumber(workflow?.hard_gate_count) ?? 0
+  const passedGates = finiteNumber(workflow?.passed_hard_gate_count) ?? 0
+  const assets = finiteNumber(workflow?.asset_count) ?? 0
+  const evaluations = finiteNumber(workflow?.evaluation_count) ?? 0
+  const durationMs = finiteNumber(workflow?.duration_ms)
+  const complete = succeeded + skipped === steps
+  return {
+    steps,
+    succeeded,
+    value: `${succeeded}/${steps}`,
+    detail:
+      gates > 0
+        ? `${passedGates}/${gates} hard gates passed`
+        : `${assets} assets · ${evaluations} evaluations`,
+    delta:
+      attention > 0
+        ? 'needs review'
+        : active > 0
+          ? 'in progress'
+          : complete
+            ? 'complete'
+            : 'incomplete',
+    tone: (attention > 0
+      ? 'negative'
+      : active > 0
+        ? 'warning'
+        : complete
+          ? 'positive'
+          : 'unavailable') as MetricTone,
+    runtimeSeconds:
+      durationMs === null
+        ? presentation.workflowRuntimeSeconds
+        : durationMs / 1000,
+    tokens: finiteNumber(workflow?.total_tokens),
+  }
+}
+
+/* ------------------------------------------------------------------ bands */
+
+function LatestExecutionBand({
   presentation,
 }: {
   presentation: ExecutionPresentation
 }) {
   const status = statusCopy(presentation)
-  const issue = presentation.primaryIssue
+  const { title, detail } = executionTitle(presentation)
   const execution = presentation.execution
-  const totalTokens = execution.totals?.total_tokens
-  const turnsLabel = formatTurns(execution.totals?.turns)
-  const workflow = execution.workflow_metrics
-  const workflowStepCount = finiteNumber(workflow?.step_count) ?? 0
-  const hasWorkflowMetrics = workflowStepCount > 0
-  const workflowTokens = finiteNumber(workflow?.total_tokens)
-  const workflowFunctionCalls = finiteNumber(workflow?.function_calls)
-  const workflowTokenMetricSteps =
-    finiteNumber(workflow?.token_metric_steps) ??
-    (workflowTokens !== null ? workflowStepCount : 0)
-  const succeededWorkflowSteps = finiteNumber(workflow?.succeeded_steps) ?? 0
-  const skippedWorkflowSteps = finiteNumber(workflow?.skipped_steps) ?? 0
-  const activeWorkflowSteps =
-    (finiteNumber(workflow?.running_steps) ?? 0) +
-    (finiteNumber(workflow?.pending_steps) ?? 0)
-  const attentionWorkflowSteps =
-    (finiteNumber(workflow?.failed_steps) ?? 0) +
-    (finiteNumber(workflow?.hard_gate_failed_steps) ?? 0) +
-    (finiteNumber(workflow?.cancelled_steps) ?? 0)
-  const workflowDurationMs = finiteNumber(workflow?.duration_ms)
-  const runtimeSeconds = hasWorkflowMetrics
-    ? workflowDurationMs === null
-      ? presentation.workflowRuntimeSeconds
-      : workflowDurationMs / 1000
-    : presentation.modelRuntimeSeconds
-  const hardGateCount = finiteNumber(workflow?.hard_gate_count) ?? 0
-  const passedHardGateCount =
-    finiteNumber(workflow?.passed_hard_gate_count) ?? 0
-  const workflowAssetCount = finiteNumber(workflow?.asset_count) ?? 0
-  const workflowEvaluationCount = finiteNumber(workflow?.evaluation_count) ?? 0
-  const scopeSummary =
+  const scope =
     presentation.expectedReports !== null &&
     presentation.receivedReports !== null
       ? `${presentation.receivedReports}/${presentation.expectedReports} reports`
       : null
   return (
-    <section aria-labelledby="latest-health-heading">
-      <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
-        <div className="grid min-w-0 gap-1">
-          <p className={`m-0 ${sectionLabelClassName}`}>Latest execution</p>
-          <div className="flex min-w-0 flex-wrap items-center gap-2.5">
+    <Panel aria-labelledby="latest-execution-title" data-latest-execution>
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div className="min-w-0">
+          <p className="ds-label m-0">
+            latest execution · {formatDate(presentation.completedAt)}
+          </p>
+          <div className="mt-1 flex min-w-0 flex-wrap items-center gap-2.5">
             <h2
-              className="m-0 font-mono text-sm leading-5 font-semibold tracking-[-0.01em]"
-              id="latest-health-heading"
-              title={status.title}
+              className="m-0 font-mono text-sm leading-5 font-semibold tracking-[-0.01em] text-ink"
+              id="latest-execution-title"
             >
-              {presentation.label}
+              {title}
             </h2>
-            <span className="text-[13px] leading-5 text-[var(--color-ink-faint)]">
-              {modelNames(presentation.subjects)}
-              {scopeSummary ? ` · ${scopeSummary}` : ''}
-            </span>
             <StatusBadge status={status.status} label={status.label} />
           </div>
+          <p className="mt-1 mb-0 font-mono text-label text-ink-soft">
+            {[
+              detail,
+              modelNames(presentation.subjects),
+              presentation.judges.length > 0
+                ? `judge ${modelNames(presentation.judges)}`
+                : null,
+              scope,
+            ]
+              .filter(Boolean)
+              .join(' · ')}
+          </p>
         </div>
-        <div className="ms-auto flex flex-wrap items-center gap-3">
-          <span className="font-mono text-xs text-ink-muted">
-            {formatDate(presentation.completedAt)} · judge{' '}
-            {modelNames(presentation.judges)}
-          </span>
-          <a
-            className={buttonClassName({ variant: 'secondary' })}
-            href={hashForExecution(execution.id)}
-          >
-            {issue ? 'Investigate execution' : 'Open execution'}
-          </a>
-        </div>
-      </div>
-      <section
-        className="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-4"
-        aria-label="Latest execution summary"
-      >
-        <SummaryKpi
-          label="Scenario pass rate"
-          value={formatPercent(presentation.passRate)}
-          caption={
-            presentation.breakdown.total > 0
-              ? `${presentation.breakdown.passed + presentation.breakdown.passed_with_concerns} of ${presentation.breakdown.total} scenarios passed`
-              : 'Objective scenario outcomes'
-          }
-          tone={metricTone(presentation)}
-        />
-        {hasWorkflowMetrics ? (
-          <SummaryKpi
-            label="Semantic steps"
-            value={`${succeededWorkflowSteps}/${workflowStepCount}`}
-            caption={
-              hardGateCount > 0
-                ? `${passedHardGateCount}/${hardGateCount} hard gates passed`
-                : `${workflowAssetCount} assets · ${workflowEvaluationCount} evaluations`
-            }
-            delta={
-              attentionWorkflowSteps > 0
-                ? 'Needs review'
-                : activeWorkflowSteps > 0
-                  ? 'In progress'
-                  : succeededWorkflowSteps + skippedWorkflowSteps ===
-                      workflowStepCount
-                    ? 'Complete'
-                    : 'Incomplete'
-            }
-            tone={
-              attentionWorkflowSteps > 0
-                ? 'negative'
-                : activeWorkflowSteps > 0
-                  ? 'warning'
-                  : succeededWorkflowSteps + skippedWorkflowSteps ===
-                      workflowStepCount
-                    ? 'positive'
-                    : 'unavailable'
-            }
-          />
-        ) : (
-          <SummaryKpi
-            label="Report coverage"
-            value={formatPercent(presentation.coverage)}
-            caption={
-              presentation.expectedReports !== null &&
-              presentation.receivedReports !== null
-                ? `${presentation.receivedReports} of ${presentation.expectedReports} reports received`
-                : 'Completeness was not published'
-            }
-            tone={
-              presentation.coverage === null
-                ? 'unavailable'
-                : presentation.coverage >= 1
-                  ? 'positive'
-                  : 'warning'
-            }
-          />
-        )}
-        <SummaryKpi
-          label={hasWorkflowMetrics ? 'Workflow runtime' : 'Model runtime'}
-          value={formatDuration(runtimeSeconds)}
-          caption={
-            hasWorkflowMetrics
-              ? `${workflowAssetCount} assets · ${workflowEvaluationCount} evaluations`
-              : presentation.workflowRuntimeSeconds !== null &&
-                  presentation.workflowRuntimeSeconds !==
-                    presentation.modelRuntimeSeconds
-                ? `${formatDuration(presentation.workflowRuntimeSeconds)} total workflow`
-                : 'Wall-clock time of the subject models'
-          }
-          tone={runtimeSeconds === null ? 'unavailable' : 'neutral'}
-        />
-        <SummaryKpi
-          label={hasWorkflowMetrics ? 'Workflow tokens' : 'Total tokens'}
-          value={
-            hasWorkflowMetrics
-              ? (workflowTokens?.toLocaleString() ?? 'Not captured')
-              : typeof totalTokens === 'number'
-                ? totalTokens.toLocaleString()
-                : '—'
-          }
-          caption={
-            hasWorkflowMetrics
-              ? `${turnsLabel} · ${workflowFunctionCalls?.toLocaleString() ?? 'No'} function calls · ${workflowTokenMetricSteps}/${workflowStepCount} steps reported tokens`
-              : finiteNumber(execution.totals?.turns) !== null
-                ? `${turnsLabel} · subject and judge usage`
-                : 'Subject and judge usage'
-          }
-          delta={
-            hasWorkflowMetrics
-              ? workflowTokenMetricSteps === 0
-                ? 'No data'
-                : workflowTokenMetricSteps === workflowStepCount
-                  ? 'Complete'
-                  : 'Partial'
-              : undefined
-          }
-          tone={
-            hasWorkflowMetrics
-              ? workflowTokenMetricSteps === 0
-                ? 'unavailable'
-                : workflowTokenMetricSteps === workflowStepCount
-                  ? 'neutral'
-                  : 'warning'
-              : typeof totalTokens === 'number'
-                ? 'neutral'
-                : 'unavailable'
-          }
-        />
-      </section>
-      {issue && (
-        <div
-          className="mt-3 grid grid-cols-[auto_minmax(0,1fr)] gap-3 rounded-[6px] bg-[color-mix(in_srgb,var(--danger)_7%,transparent)] p-3"
-          aria-live="polite"
+        <a
+          className={buttonClassName({
+            variant: presentation.primaryIssue ? 'primary' : 'secondary',
+            className: 'no-underline',
+          })}
+          href={hashForExecution(execution.id)}
         >
-          <span
-            className="mt-1.5 h-1.5 w-1.5 rounded-full bg-[var(--danger)]"
-            aria-hidden="true"
-          />
-          <div>
-            <strong className="text-sm font-semibold text-ink">
-              {categoryLabel(issue.category)} needs investigation
-            </strong>
-            <p className="mt-1 mb-0 text-xs leading-5 text-[var(--color-ink-faint)]">
-              {categoryMessage(issue.category, issue.count)}
-            </p>
-          </div>
-        </div>
-      )}
-    </section>
+          {presentation.primaryIssue ? 'investigate' : 'open execution'}
+          <ArrowRight size={14} aria-hidden="true" />
+        </a>
+      </div>
+    </Panel>
   )
 }
 
-const triggerLabels: Record<string, string> = {
-  schedule: 'Scheduled',
-  workflow_dispatch: 'Manual',
-  local: 'Local',
-}
-
-function triggerLabel(event: string) {
-  return triggerLabels[event] ?? event
-}
-
-function countBy<T>(items: T[], key: (item: T) => string | null) {
-  const counts = new Map<string, number>()
-  for (const item of items) {
-    const value = key(item)
-    if (!value) continue
-    counts.set(value, (counts.get(value) ?? 0) + 1)
-  }
-  return counts
-}
-
-function ModelList({ models }: { models: ExecutionPresentation['subjects'] }) {
-  if (models.length === 0) return <span className="text-ink-muted">—</span>
+function SignalMetrics({
+  presentation,
+  signal,
+}: {
+  presentation: ExecutionPresentation
+  signal: ReturnType<typeof buildOverviewSignal>
+}) {
+  const workflow = workflowProgress(presentation)
+  const totalTokens = workflow
+    ? workflow.tokens
+    : (presentation.execution.totals?.total_tokens as number | undefined)
+  const runtimeSeconds = workflow
+    ? workflow.runtimeSeconds
+    : presentation.modelRuntimeSeconds
   return (
-    <div className="grid gap-0.5">
-      {models.map((model) => (
-        <span key={`${model.provider}/${model.model}`} className="text-ink">
-          {model.model}
-          {model.provider ? (
-            <small className="block text-ink-muted">{model.provider}</small>
-          ) : null}
-        </span>
-      ))}
+    <div
+      className="grid gap-3 @[560px]:grid-cols-2 @[960px]:grid-cols-4"
+      data-signal-metrics
+    >
+      <MetricCard
+        label="scenario pass rate"
+        value={formatPercent(presentation.passRate)}
+        detail={
+          presentation.breakdown.total > 0
+            ? `${presentation.breakdown.passed + presentation.breakdown.passed_with_concerns} of ${presentation.breakdown.total} scenarios passed`
+            : trendCaption(
+                signal.passRate,
+                (value) => `${Math.round(value)}%`,
+                'objective scenario outcomes',
+              )
+        }
+        tone={metricTone(presentation)}
+        delta={trendDelta(
+          signal.passRate,
+          (value) => `${Math.round(value)} pts`,
+        )}
+      />
+      {workflow ? (
+        <MetricCard
+          label="semantic steps"
+          value={workflow.value}
+          detail={workflow.detail}
+          tone={workflow.tone}
+          delta={workflow.delta}
+        />
+      ) : (
+        <MetricCard
+          label="report coverage"
+          value={formatPercent(presentation.coverage)}
+          detail={
+            presentation.expectedReports !== null &&
+            presentation.receivedReports !== null
+              ? `${presentation.receivedReports} of ${presentation.expectedReports} reports received`
+              : 'completeness was not published'
+          }
+          tone={
+            presentation.coverage === null
+              ? 'unavailable'
+              : presentation.coverage >= 1
+                ? 'positive'
+                : 'warning'
+          }
+          delta={
+            presentation.coverage !== null && presentation.coverage >= 1
+              ? 'complete'
+              : undefined
+          }
+        />
+      )}
+      <MetricCard
+        label={workflow ? 'workflow runtime' : 'runtime'}
+        value={formatDuration(runtimeSeconds)}
+        detail={trendCaption(
+          signal.runtime,
+          (value) => formatDuration(value),
+          'wall-clock time of the subject models',
+        )}
+        tone={runtimeSeconds === null ? 'unavailable' : 'neutral'}
+      />
+      <MetricCard
+        label={workflow ? 'workflow tokens' : 'tokens'}
+        value={tokensLabel(totalTokens)}
+        detail={trendCaption(
+          signal.tokens,
+          (value) => tokensLabel(value),
+          'subject + judge usage',
+        )}
+        tone={typeof totalTokens === 'number' ? 'neutral' : 'unavailable'}
+      />
     </div>
   )
 }
 
-function isInteractiveTarget(target: EventTarget | null) {
-  return (
-    target instanceof Element &&
-    target.closest('a, button, input, select, textarea, summary') !== null
-  )
-}
-
-export function ExecutionHistory({
-  executions,
+/** Audit O-06: every attention row carries the reason and its own action. */
+function AttentionQueue({
+  entries,
+  total,
 }: {
-  executions: DashboardExecutionSummary[]
+  entries: ReturnType<typeof buildOverviewSignal>['attention']
+  total: number
 }) {
-  const [query, setQuery] = useState('')
-  const [status, setStatus] = useState('all')
-  const [event, setEvent] = useState('all')
-  // The table shows a status derived from the assessment summary, so the
-  // filter offers exactly those labels, with counts, instead of the raw
-  // backend status that never matched the column (audit E-02 / O-11).
-  const rows = useMemo(
-    () =>
-      executions.map((execution) => {
-        const presentation = buildExecutionPresentation(execution)
-        return {
-          execution,
-          presentation,
-          status: statusCopy(presentation),
-          searchText: [
-            presentation.label,
-            execution.workflow_name,
-            execution.id,
-            execution.run_id,
-            execution.completed_at,
-            formatDate(presentation.completedAt),
-            execution.source?.sha,
-            ...presentation.subjects.flatMap((model) => [
-              model.model,
-              `${model.provider}/${model.model}`,
-            ]),
-          ]
-            .filter(Boolean)
-            .join(' ')
-            .toLowerCase(),
-        }
-      }),
-    [executions],
-  )
-  const statusCounts = useMemo(
-    () => countBy(rows, (row) => row.status.status),
-    [rows],
-  )
-  const statusOptions = useMemo(
-    () =>
-      [...statusCounts.entries()].map(([value, count]) => ({
-        value,
-        count,
-        label:
-          rows.find((row) => row.status.status === value)?.status.label ??
-          value,
-      })),
-    [rows, statusCounts],
-  )
-  const eventCounts = useMemo(
-    () => countBy(rows, (row) => row.execution.event ?? null),
-    [rows],
-  )
-  const filtered = useMemo(() => {
-    const normalized = query.trim().toLowerCase()
-    return rows.filter((row) => {
-      if (status !== 'all' && row.status.status !== status) return false
-      if (event !== 'all' && row.execution.event !== event) return false
-      return !normalized || row.searchText.includes(normalized)
-    })
-  }, [event, rows, query, status])
   return (
-    <section className="mt-6 min-w-0" aria-labelledby="executions-heading">
-      <div className="flex items-baseline gap-3">
-        <h2
-          className={`m-0 uppercase ${sectionLabelClassName}`}
-          id="executions-heading"
-        >
-          Recent executions
-        </h2>
-        <span
-          className="ms-auto font-mono text-xs text-ink-muted"
-          aria-live="polite"
-        >
-          {filtered.length} of {executions.length} executions
-        </span>
-      </div>
-      <section
-        className="mt-3 grid gap-2 sm:grid-cols-2 md:grid-cols-[minmax(14rem,1fr)_auto_auto] [&_input]:min-h-9 [&_input]:w-full [&_input]:rounded-[6px] [&_input]:border-0 [&_input]:bg-[var(--surface-fill)] [&_input]:px-3 [&_input]:text-[13px] [&_input]:text-ink [&_input]:placeholder:text-ink-muted [&_select]:min-h-9 [&_select]:w-full [&_select]:rounded-[6px] [&_select]:border-0 [&_select]:bg-[var(--surface-fill)] [&_select]:px-3 [&_select]:font-mono [&_select]:text-[13px] [&_select]:lowercase [&_select]:text-ink"
-        aria-label="Execution filters"
-      >
-        <label className="sm:col-span-2 md:col-span-1">
-          <span className="visually-hidden">Search executions</span>
-          <input
-            type="search"
-            placeholder="Search label, model, id or date"
-            value={query}
-            onChange={(event) => setQuery(event.target.value)}
-          />
-        </label>
-        <label>
-          <span className="visually-hidden">Filter by result</span>
-          <select
-            value={status}
-            onChange={(event) => setStatus(event.target.value)}
+    <Panel aria-labelledby="attention-title" data-attention-queue>
+      <div className="mb-3 flex flex-wrap items-baseline justify-between gap-2">
+        <div>
+          <h2
+            className="m-0 text-sm font-semibold text-ink"
+            id="attention-title"
           >
-            <option value="all">all results · {executions.length}</option>
-            {statusOptions.map((option) => (
-              <option key={option.value} value={option.value}>
-                {option.label.toLowerCase()} · {option.count}
-              </option>
-            ))}
-          </select>
-        </label>
-        <label>
-          <span className="visually-hidden">Filter by trigger</span>
-          <select
-            value={event}
-            onChange={(event) => setEvent(event.target.value)}
-          >
-            <option value="all">all triggers · {executions.length}</option>
-            {[...eventCounts.entries()].map(([value, count]) => (
-              <option key={value} value={value}>
-                {triggerLabel(value).toLowerCase()} · {count}
-              </option>
-            ))}
-          </select>
-        </label>
-      </section>
-      <div className="mt-2 min-w-0 overflow-x-auto">
-        <table className="w-full min-w-[52rem] border-collapse text-left font-mono text-xs md:text-[13px] [&_a]:font-medium [&_a]:text-ink [&_a]:underline-offset-4 [&_a:hover]:underline [&_td]:border-0 [&_td]:px-3 [&_td]:py-2.5 [&_th]:border-0 [&_th]:px-3 [&_th]:py-2 [&_th]:font-mono [&_th]:text-[11px] [&_th]:font-medium [&_th]:uppercase [&_th]:tracking-[0.06em] [&_th]:text-ink-muted [&_tbody_tr]:cursor-pointer [&_tbody_tr]:transition-colors [&_tbody_tr:hover]:bg-[var(--surface-soft)]">
-          <thead>
-            <tr>
-              <th scope="col">Execution</th>
-              <th scope="col">Result</th>
-              <th scope="col">Subject</th>
-              <th scope="col">Scope</th>
-              <th scope="col">Outcome</th>
-              <th scope="col">Efficiency</th>
-            </tr>
-          </thead>
-          <tbody>
-            {filtered.map(({ execution, presentation, status }) => {
-              const href = hashForExecution(execution.id)
-              const evidenceNote =
-                execution.availability === 'aggregate'
-                  ? 'aggregate report'
-                  : execution.availability === 'unavailable'
-                    ? 'no report retained'
-                    : null
-              const partialCoverage =
-                presentation.coverage !== null && presentation.coverage < 1
-              return (
-                // The whole row navigates; the label link keeps the keyboard
-                // and screen-reader path (audit E-08 / O-15).
-                <tr
-                  key={execution.id}
-                  onClick={(click) => {
-                    if (isInteractiveTarget(click.target)) return
-                    window.location.hash = href
-                  }}
-                >
-                  <td data-label="Execution">
-                    <a href={href}>{presentation.label}</a>
-                    <small className="block text-ink-muted">
-                      {formatDate(presentation.completedAt)}
-                      {execution.event
-                        ? ` · ${triggerLabel(execution.event).toLowerCase()}`
-                        : ''}
-                    </small>
-                  </td>
-                  <td data-label="Result">
-                    <StatusBadge status={status.status} label={status.label} />
-                    {evidenceNote ? (
-                      <small className="block text-ink-muted">
-                        {evidenceNote}
-                      </small>
-                    ) : null}
-                  </td>
-                  <td
-                    data-label="Subject"
-                    title={modelNames(presentation.subjects)}
-                  >
-                    <ModelList models={presentation.subjects} />
-                  </td>
-                  {presentation.available ? (
-                    <>
-                      <td data-label="Scope">
-                        <div className="grid gap-0.5">
-                          <strong>
-                            {presentation.receivedReports ?? '—'}/
-                            {presentation.expectedReports ?? '—'}
-                          </strong>
-                          {partialCoverage ? (
-                            <small>
-                              {formatPercent(presentation.coverage)} coverage
-                            </small>
-                          ) : null}
-                        </div>
-                      </td>
-                      <td data-label="Outcome">
-                        <div className="grid gap-0.5">
-                          <strong>
-                            {formatPercent(presentation.passRate)}
-                          </strong>
-                          {presentation.primaryIssue ? (
-                            <small>
-                              {categoryMessage(
-                                presentation.primaryIssue.category,
-                                presentation.primaryIssue.count,
-                              )}
-                            </small>
-                          ) : null}
-                        </div>
-                      </td>
-                      <td data-label="Efficiency">
-                        <div className="grid gap-0.5">
-                          <strong>
-                            {formatDuration(presentation.modelRuntimeSeconds)}
-                          </strong>
-                          {presentation.execution.totals?.total_tokens ? (
-                            <small>
-                              {presentation.execution.totals.total_tokens.toLocaleString()}{' '}
-                              tokens
-                            </small>
-                          ) : null}
-                        </div>
-                      </td>
-                    </>
-                  ) : (
-                    <td
-                      data-label="Report"
-                      colSpan={3}
-                      className="text-ink-muted"
-                    >
-                      —
-                    </td>
-                  )}
-                </tr>
-              )
-            })}
-          </tbody>
-        </table>
-        {filtered.length === 0 && (
-          <p className="m-0 py-6 text-center text-[13px] text-[var(--color-ink-faint)]">
-            No executions match these filters.{' '}
-            <button
-              type="button"
-              className="font-mono text-[var(--accent)] underline-offset-4 hover:underline"
-              onClick={() => {
-                setQuery('')
-                setStatus('all')
-                setEvent('all')
-              }}
-            >
-              clear filters
-            </button>
+            needs attention
+          </h2>
+          <p className="mt-1 mb-0 font-mono text-label text-ink-muted">
+            {total} of the loaded executions {total === 1 ? 'is' : 'are'}{' '}
+            blocked by gates or errors
+            {total > entries.length ? ` · showing ${entries.length}` : ''}
           </p>
-        )}
+        </div>
       </div>
-    </section>
+      <ul className="m-0 grid list-none gap-px overflow-hidden rounded-[6px] bg-line p-0">
+        {entries.map(({ presentation, category, count }) => {
+          const { title, detail } = executionTitle(presentation)
+          const status = statusCopy(presentation)
+          return (
+            <li
+              className="grid gap-1 bg-panel p-3 @[720px]:grid-cols-[10rem_minmax(0,1fr)_auto] @[720px]:items-center @[720px]:gap-3"
+              key={presentation.execution.id}
+              data-attention-row={category}
+            >
+              <StatusBadge
+                status={status.status}
+                label={categoryLabel(category as never).toLowerCase()}
+              />
+              <span className="min-w-0">
+                <span
+                  className="block truncate font-mono text-xs text-ink"
+                  title={title}
+                >
+                  {title}
+                </span>
+                <span className="block truncate font-mono text-label text-ink-soft">
+                  {categoryMessage(category as never, count)}
+                  {detail ? ` · ${detail}` : ''}
+                </span>
+              </span>
+              <span className="flex items-center gap-2 justify-self-start @[720px]:justify-self-end">
+                <span className="font-mono text-label text-ink-muted">
+                  {formatDate(presentation.completedAt)}
+                </span>
+                <a
+                  className={buttonClassName({
+                    variant: 'quiet',
+                    size: 'compact',
+                    className: 'no-underline',
+                  })}
+                  href={hashForExecution(presentation.execution.id)}
+                >
+                  open
+                  <ArrowRight size={13} aria-hidden="true" />
+                </a>
+              </span>
+            </li>
+          )
+        })}
+      </ul>
+    </Panel>
   )
 }
 
-function FlaskIcon() {
+/** Audit O-17: running executions get their own live strip. */
+function RunningStrip({
+  running,
+  onCancel,
+  cancelling,
+}: {
+  running: ExecutionPresentation[]
+  onCancel?: () => void
+  cancelling: boolean
+}) {
   return (
-    <svg
-      width="18"
-      height="18"
-      viewBox="0 0 18 18"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="1.5"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      aria-hidden="true"
-    >
-      <path d="M7 2h4M9 2v4.2l4.6 7.4a1.6 1.6 0 0 1-1.36 2.4H5.76a1.6 1.6 0 0 1-1.36-2.4L9 6.2" />
-      <path d="M6.2 11.5h5.6" />
-    </svg>
+    <Panel aria-labelledby="running-title" data-running-strip>
+      <h2 className="ds-label m-0" id="running-title">
+        running now
+      </h2>
+      {running.length === 0 ? (
+        <p className="mt-2 mb-0 text-xs text-ink-soft">
+          Nothing is running. The binary executes one experiment at a time.
+        </p>
+      ) : (
+        <ul className="m-0 mt-2 grid list-none gap-2 p-0">
+          {running.map((presentation) => {
+            const { title } = executionTitle(presentation)
+            const status = statusCopy(presentation)
+            const scope =
+              presentation.expectedReports !== null &&
+              presentation.receivedReports !== null
+                ? `${presentation.receivedReports} of ${presentation.expectedReports} scenarios`
+                : null
+            return (
+              <li
+                className="flex flex-wrap items-center gap-2"
+                key={presentation.execution.id}
+              >
+                <StatusBadge status={status.status} label={status.label} />
+                <a
+                  className="min-w-0 truncate font-mono text-xs text-ink no-underline hover:underline"
+                  href={hashForExecution(presentation.execution.id)}
+                >
+                  {title}
+                </a>
+                {scope ? (
+                  <span className="font-mono text-label text-ink-muted">
+                    {scope}
+                  </span>
+                ) : null}
+                {onCancel && presentation.attention === 'running' ? (
+                  <button
+                    className={buttonClassName({
+                      variant: 'quiet',
+                      size: 'compact',
+                      className: 'ms-auto',
+                    })}
+                    type="button"
+                    onClick={onCancel}
+                    disabled={cancelling}
+                  >
+                    {cancelling ? 'cancelling…' : 'cancel'}
+                  </button>
+                ) : null}
+              </li>
+            )
+          })}
+        </ul>
+      )}
+    </Panel>
   )
 }
 
-export function OverviewPage({ activeView }: { activeView: WorkspaceView }) {
+/** Audit O-01 / O-03: five compact rows, never the ledger's table. */
+function RecentExecutions({
+  presentations,
+  total,
+}: {
+  presentations: ExecutionPresentation[]
+  total: number
+}) {
+  return (
+    <Panel aria-labelledby="recent-title" data-recent-executions>
+      <div className="mb-3 flex flex-wrap items-baseline justify-between gap-2">
+        <h2 className="m-0 text-sm font-semibold text-ink" id="recent-title">
+          recent executions
+        </h2>
+        <a
+          className="font-mono text-label text-ink-soft no-underline hover:text-ink hover:underline"
+          href={hashForWorkspace('executions')}
+        >
+          view all executions →
+        </a>
+      </div>
+      <ul className="m-0 grid list-none gap-px overflow-hidden rounded-[6px] bg-line p-0">
+        {presentations.map((presentation) => {
+          const { title, detail } = executionTitle(presentation)
+          const status = statusCopy(presentation)
+          return (
+            <li className="bg-panel" key={presentation.execution.id}>
+              <a
+                className="grid gap-1 p-3 no-underline transition-colors hover:bg-[var(--surface-fill)] @[720px]:grid-cols-[minmax(0,1fr)_9rem_7rem_5rem] @[720px]:items-center @[720px]:gap-3"
+                href={hashForExecution(presentation.execution.id)}
+              >
+                <span className="min-w-0">
+                  <span
+                    className="block truncate font-mono text-xs text-ink"
+                    title={title}
+                  >
+                    {title}
+                  </span>
+                  <span className="block truncate font-mono text-label text-ink-muted">
+                    {formatDate(presentation.completedAt)}
+                    {detail ? ` · ${detail}` : ''}
+                  </span>
+                </span>
+                <StatusBadge status={status.status} label={status.label} />
+                <span className="truncate font-mono text-label text-ink-soft">
+                  {presentation.subjects[0]?.model ?? '—'}
+                </span>
+                <span className="font-mono text-xs text-ink-soft @[720px]:text-right">
+                  {formatPercent(presentation.passRate)}
+                </span>
+              </a>
+            </li>
+          )
+        })}
+      </ul>
+      <p className="mt-2 mb-0 font-mono text-label text-ink-muted">
+        last {presentations.length} of {total}
+      </p>
+    </Panel>
+  )
+}
+
+/* ------------------------------------------------------------------- page */
+
+export function OverviewPage() {
   const [bridge, setBridge] = useState<DashboardDataBridge | null>(null)
   const [executions, setExecutions] = useState<DashboardExecutionSummary[]>([])
+  const [total, setTotal] = useState(0)
   const [catalog, setCatalog] = useState<{
     count: number
     revision: string
@@ -691,19 +536,23 @@ export function OverviewPage({ activeView }: { activeView: WorkspaceView }) {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [runnerOpen, setRunnerOpen] = useState(false)
+  const [runnerScope, setRunnerScope] = useState<string[]>([])
+  const [cancelling, setCancelling] = useState(false)
   const beginRequest = useLatestRequest()
 
   const load = useCallback(async () => {
     const request = beginRequest()
-    setLoading(true)
     setError(null)
     try {
       const nextBridge = bridge ?? (await getDashboardDataBridge())
       if (!request.isCurrent()) return
       setBridge(nextBridge)
-      const manifest = await nextBridge.listExecutions({ limit: 100 })
+      const manifest = await nextBridge.listExecutions({
+        limit: OVERVIEW_LIMIT,
+      })
       if (!request.isCurrent()) return
       setExecutions(manifest.executions ?? [])
+      setTotal(manifest.total ?? manifest.executions?.length ?? 0)
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : String(cause))
     } finally {
@@ -715,6 +564,29 @@ export function OverviewPage({ activeView }: { activeView: WorkspaceView }) {
     void load()
   }, [load])
 
+  // Audit O-17 / E-12: a running execution updates without a reload.
+  useEffect(() => {
+    if (!bridge) return
+    let cancelled = false
+    let dispose: (() => void) | undefined
+    let timer: number | undefined
+    bridge
+      .subscribeRunChanges(() => {
+        if (timer) window.clearTimeout(timer)
+        timer = window.setTimeout(() => void load(), 400)
+      })
+      .then((off) => {
+        if (cancelled) off()
+        else dispose = off
+      })
+      .catch(() => undefined)
+    return () => {
+      cancelled = true
+      if (timer) window.clearTimeout(timer)
+      dispose?.()
+    }
+  }, [bridge, load])
+
   useEffect(() => {
     if (!bridge) return
     let cancelled = false
@@ -723,7 +595,7 @@ export function OverviewPage({ activeView }: { activeView: WorkspaceView }) {
       .then((response) => {
         if (cancelled) return
         setCatalog({
-          count: response.rows?.length ?? 0,
+          count: response.total ?? response.rows?.length ?? 0,
           revision: response.revision ?? '',
         })
       })
@@ -733,7 +605,6 @@ export function OverviewPage({ activeView }: { activeView: WorkspaceView }) {
     }
   }, [bridge])
 
-  const [runnerScope, setRunnerScope] = useState<string[]>([])
   useEffect(() => {
     const requested = consumeQuickExecutionRequest()
     if (requested) {
@@ -742,52 +613,32 @@ export function OverviewPage({ activeView }: { activeView: WorkspaceView }) {
     }
   }, [])
 
-  const latest = executions[0]
-    ? buildExecutionPresentation(executions[0])
-    : null
+  const signal = useMemo(() => buildOverviewSignal(executions), [executions])
   const local = bridge?.mode === 'local'
+  const cancelRun = async () => {
+    if (bridge?.mode !== 'local') return
+    setCancelling(true)
+    try {
+      await bridge.cancelRun()
+      await load()
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : String(cause))
+    } finally {
+      setCancelling(false)
+    }
+  }
 
-  const aside = (
-    <aside className="grid content-start gap-3" aria-label="Suite controls">
-      {local && (
-        <div className="grid gap-2.5 rounded-[6px] bg-[var(--surface-fill)] p-4">
-          <span className={sectionLabelClassName}>Quick run</span>
-          <p className="m-0 text-[13px] leading-5 text-[var(--color-ink-faint)]">
-            Run the full suite or a subset against the local stack. Results
-            publish here as each scenario finishes.
-          </p>
-          <Button variant="primary" onClick={() => setRunnerOpen(true)}>
-            Run suite
-          </Button>
-        </div>
-      )}
-      <div className="grid gap-1.5 rounded-[6px] bg-[var(--surface-fill)] p-4">
-        <span className={sectionLabelClassName}>Catalog</span>
-        <p className="m-0 text-[13px] leading-5 text-[var(--color-ink-faint)]">
-          {catalog ? `${catalog.count} tests` : 'Tests'}
-          {catalog?.revision ? (
-            <>
-              {' · revision '}
-              <span className="font-mono text-xs">
-                {catalog.revision.slice(-12)}
-              </span>
-            </>
-          ) : null}
-        </p>
-        <a
-          className="font-mono text-xs font-medium text-[var(--accent)] no-underline hover:underline"
-          href={hashForWorkspace('tests')}
-        >
-          Browse tests →
-        </a>
-      </div>
-    </aside>
-  )
+  const summary =
+    executions.length === 0
+      ? 'no executions retained yet'
+      : `signal from the last ${executions.length} execution${executions.length === 1 ? '' : 's'}${
+          total > executions.length ? ` of ${total}` : ''
+        }`
 
   return (
-    <div className="ds-root min-h-dvh bg-[var(--color-bg)] text-ink">
+    <div className="ds-root min-h-dvh bg-canvas text-ink">
       <DashboardPageActions
-        active={activeView}
+        active="overview"
         actionsLabel="Overview actions"
         actions={
           local ? (
@@ -796,99 +647,133 @@ export function OverviewPage({ activeView }: { activeView: WorkspaceView }) {
                 className={dashboardHeaderActionClassName()}
                 href={hashForNewPlan()}
               >
-                New plan
+                new plan
               </a>
               <button
                 className={dashboardHeaderActionClassName({ primary: true })}
                 type="button"
                 onClick={() => setRunnerOpen(true)}
               >
-                Run suite
+                run suite
               </button>
             </>
           ) : null
         }
       />
       <div className="page-shell w-[calc(100%_-_1.5rem)] max-w-[1420px] pt-5 pb-16 md:w-[calc(100%_-_3rem)]">
-        {error && (
-          <Panel
-            className="empty-state grid justify-items-start gap-4 p-8"
-            role="alert"
-            tone="raised"
+        <PageHeader
+          title="overview"
+          summary={
+            loading && executions.length === 0 ? 'loading the ledger…' : summary
+          }
+          headingId="overview-title"
+          actions={
+            catalog ? (
+              <a
+                className="font-mono text-label text-ink-soft no-underline hover:text-ink hover:underline"
+                href={hashForWorkspace('tests')}
+                title={catalog.revision || undefined}
+              >
+                {catalog.count} tests · browse →
+              </a>
+            ) : null
+          }
+        />
+
+        {error ? (
+          <Callout
+            tone="danger"
+            title="Dashboard data unavailable"
+            className="mt-6"
           >
-            <StatusBadge status="unavailable" label="Data unavailable" />
-            <h2>Dashboard data unavailable</h2>
-            <p>{error}</p>
-            <Button onClick={() => void load()}>Retry</Button>
-          </Panel>
-        )}
-        {!error && loading && (
-          <Panel
-            className="grid min-h-56 content-center gap-6 p-8"
-            aria-busy="true"
-            aria-label="Loading execution evidence"
-          >
-            <div className="h-4 w-40 animate-pulse rounded-full bg-[var(--surface-soft)] motion-reduce:animate-none" />
-            <div className="h-16 w-full max-w-3xl animate-pulse rounded-[6px] bg-[var(--surface-soft)] motion-reduce:animate-none" />
-          </Panel>
-        )}
-        {!error && !loading && (
-          <div id="overview-content" className="grid gap-0">
-            {executions.length === 0 ? (
-              <div className="mt-14 grid justify-items-center gap-4">
-                <div className="grid w-full max-w-md gap-3 rounded-[6px] bg-[var(--surface-fill)] p-6">
-                  <div className="grid grid-cols-[auto_minmax(0,1fr)] items-start gap-3">
-                    <span className="mt-0.5 text-[var(--color-ink-faint)]">
-                      <FlaskIcon />
-                    </span>
-                    <div className="grid gap-1.5">
-                      <h2 className="m-0 text-base leading-6 font-semibold tracking-[-0.01em]">
-                        No executions yet
-                      </h2>
-                      <p className="m-0 max-w-[44ch] text-[13px] leading-[1.7] text-[var(--color-ink-faint)]">
-                        Run the suite once to publish outcomes, retained
-                        evidence and efficiency for this stack. Results land
-                        here as soon as the first scenario finishes.
-                      </p>
-                    </div>
-                  </div>
-                  <div className="flex flex-wrap items-center gap-2 pl-[30px]">
-                    {local && (
-                      <Button
-                        variant="primary"
-                        onClick={() => setRunnerOpen(true)}
-                      >
-                        Run suite
-                      </Button>
-                    )}
-                    <a
-                      className={buttonClassName({ variant: 'quiet' })}
-                      href={hashForWorkspace('tests')}
-                    >
-                      Browse tests
-                    </a>
-                  </div>
-                </div>
-                <p className="m-0 font-mono text-xs text-ink-muted">
-                  {catalog
-                    ? `${catalog.count} tests in catalog`
-                    : 'Catalog loading'}
-                  {local ? ' · local runner ready' : ''}
-                </p>
-              </div>
-            ) : activeView === 'overview' ? (
-              <div className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_300px]">
-                <div className="min-w-0">
-                  {latest && <LatestExecution presentation={latest} />}
-                  <ExecutionHistory executions={executions} />
-                </div>
-                {aside}
-              </div>
-            ) : (
-              <ExecutionHistory executions={executions} />
-            )}
+            <span className="flex flex-wrap items-center justify-between gap-3">
+              {error}
+              <button
+                className={buttonClassName({
+                  variant: 'secondary',
+                  size: 'compact',
+                })}
+                type="button"
+                onClick={() => void load()}
+              >
+                retry
+              </button>
+            </span>
+          </Callout>
+        ) : null}
+
+        {!error && loading && executions.length === 0 ? (
+          <div className="mt-6 grid gap-3" aria-busy="true" role="status">
+            <span className="ds-visually-hidden">
+              Loading execution evidence
+            </span>
+            {Array.from({ length: 3 }, (_, index) => (
+              <div
+                // biome-ignore lint/suspicious/noArrayIndexKey: static placeholders
+                key={index}
+                className="h-24 animate-pulse rounded-[6px] bg-[var(--surface-fill)] motion-reduce:animate-none"
+              />
+            ))}
           </div>
-        )}
+        ) : null}
+
+        {!error && !loading && executions.length === 0 ? (
+          <EmptyState
+            className="mt-6"
+            title="No executions yet"
+            description="Run the suite once to publish outcomes, retained evidence and efficiency for this stack. Results land here as soon as the first scenario finishes."
+            actions={
+              <>
+                {local ? (
+                  <button
+                    className={buttonClassName({ variant: 'primary' })}
+                    type="button"
+                    onClick={() => setRunnerOpen(true)}
+                  >
+                    run suite
+                  </button>
+                ) : null}
+                <a
+                  className={buttonClassName({
+                    variant: 'secondary',
+                    className: 'no-underline',
+                  })}
+                  href={hashForWorkspace('tests')}
+                >
+                  browse tests
+                </a>
+              </>
+            }
+          />
+        ) : null}
+
+        {!error && executions.length > 0 ? (
+          <div className="mt-6 grid gap-6" data-overview-signal>
+            {signal.latest ? (
+              <>
+                <LatestExecutionBand presentation={signal.latest} />
+                <SignalMetrics presentation={signal.latest} signal={signal} />
+              </>
+            ) : null}
+            {signal.running.length > 0 || local ? (
+              <RunningStrip
+                running={signal.running}
+                cancelling={cancelling}
+                onCancel={local ? () => void cancelRun() : undefined}
+              />
+            ) : null}
+            {signal.attention.length > 0 ? (
+              <AttentionQueue
+                entries={signal.attention}
+                total={signal.attentionTotal}
+              />
+            ) : null}
+            <RecentExecutions
+              presentations={signal.recent}
+              total={total || executions.length}
+            />
+          </div>
+        ) : null}
       </div>
       <LocalRunnerDialog
         bridge={bridge}
