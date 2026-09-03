@@ -32,6 +32,8 @@ type ProviderModelDropdownProps = {
   ariaLabel: string
   /** Id of a visible label. When given it labels the control instead of ariaLabel. */
   labelledBy?: string
+  /** Id for the trigger so a <label htmlFor> can name it. */
+  id?: string
   /** Renders a first option that clears the value, e.g. "Default judge". */
   clearLabel?: string
   disabled?: boolean
@@ -68,6 +70,7 @@ export function ProviderModelDropdown({
   placeholder,
   ariaLabel,
   labelledBy,
+  id,
   clearLabel,
   disabled = false,
   required = false,
@@ -181,8 +184,9 @@ export function ProviderModelDropdown({
     <div className="relative min-w-0 w-full" ref={rootRef}>
       <button
         ref={triggerRef}
+        id={id}
         type="button"
-        className="flex min-h-11 w-full items-center justify-between gap-2.5 rounded-[6px] border border-[var(--color-rule)] bg-panel-raised px-3 py-2 text-left text-sm text-ink transition-colors duration-[var(--ds-duration-fast)] hover:border-[var(--color-edge)] focus-visible:border-[var(--color-rule-focus)] focus-visible:[outline:2px_solid_var(--color-rule-focus)] focus-visible:[outline-offset:3px] disabled:cursor-not-allowed disabled:opacity-50 aria-expanded:border-[var(--color-edge)]"
+        className="ds-input flex items-center justify-between gap-2.5 text-left"
         aria-label={labelledBy ? undefined : ariaLabel}
         aria-labelledby={labelledBy}
         aria-haspopup="listbox"

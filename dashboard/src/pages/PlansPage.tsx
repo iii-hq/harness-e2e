@@ -4,6 +4,21 @@ import {
   dashboardHeaderActionClassName,
 } from '@/components/DashboardPageActions'
 import {
+  buttonClassName,
+  Callout,
+  DataTable,
+  DataTableRow,
+  DeltaValue,
+  EmptyState,
+  FilterChip,
+  FilterChipGroup,
+  Input,
+  numericCellClassName,
+  type OperationalStatus,
+  PageHeader,
+  StatusBadge,
+} from '@/design-system'
+import {
   hashForNewPlan,
   hashForPlan,
   hashForWorkspace,
@@ -14,13 +29,12 @@ import {
   getDashboardDataBridge,
   type LocalPlan,
 } from '@/lib/dashboard-data-source'
+import { formatDate } from '@/lib/execution-view'
 import {
   buildPlanComparison,
-  formatPlanMetricDelta,
   formatPlanMetricValue,
   loadExecutionSummaries,
   metricById,
-  PLAN_CORE_METRICS,
   type PlanComparison,
   type PlanMetricComparison,
   type PlanMetricId,
@@ -29,50 +43,73 @@ import {
 
 type PlanFilter = 'all' | 'needs_action' | 'running' | 'compared' | 'regressed'
 
-function statePresentation(plan: LocalPlan) {
+export type PlanStatePresentation = {
+  status: OperationalStatus
+  label: string
+  detail: string
+  /** The one action this state offers; it opens the plan at that action. */
+  action: string
+}
+
+/** Audit P-10 / P-14: one status line per plan, "running" everywhere. */
+export function planStatePresentation(plan: LocalPlan): PlanStatePresentation {
   if (
     plan.locked &&
     plan.state === 'draft' &&
     plan.incomplete_execution_ids.length
   ) {
     return {
-      label: 'Retry available',
-      tone: 'status-incomplete',
+      status: 'incomplete',
+      label: 'retry available',
       detail: 'The last baseline attempt was incomplete.',
+      action: 'retry baseline',
     }
   }
   switch (plan.state) {
     case 'baseline_running':
       return {
-        label: 'Baseline running',
-        tone: 'status-incomplete',
+        status: 'running',
+        label: 'baseline running',
         detail: 'Capturing the official baseline.',
+        action: 'open',
       }
     case 'baseline_ready':
       return {
-        label: 'Ready for candidate',
-        tone: 'status-neutral',
-        detail: 'Baseline captured; run the same scope after your change.',
+        status: 'unavailable',
+        label: 'ready for candidate',
+        detail:
+          'No candidate yet. Make the Harness change, then rerun this exact scope.',
+        action: 'run candidate',
       }
     case 'candidate_running':
       return {
-        label: 'Candidate running',
-        tone: 'status-incomplete',
+        status: 'running',
+        label: 'candidate running',
         detail: 'Comparing the locked scope against the baseline.',
+        action: 'open',
       }
     case 'comparison_ready':
       return {
-        label: 'Comparison available',
-        tone: 'status-neutral',
+        status: 'unavailable',
+        label: 'comparison available',
         detail: 'Candidate results are available for review.',
+        action: 'compare',
       }
     default:
       return {
-        label: 'Draft',
-        tone: 'status-incomplete',
-        detail: 'Select the scope, then capture a baseline.',
+        status: 'incomplete',
+        label: 'draft',
+        detail: 'Baseline not captured yet.',
+        action: 'run baseline',
       }
   }
+}
+
+const verdictStatus: Record<PlanVerdict, OperationalStatus> = {
+  improved: 'passed',
+  stable: 'unavailable',
+  regressed: 'failed',
+  inconclusive: 'inconclusive',
 }
 
 function matchesFilter(
@@ -91,232 +128,298 @@ function matchesFilter(
   return plan.candidate_execution_ids.length > 0
 }
 
-function formatDate(value: string) {
-  const date = new Date(value)
-  if (Number.isNaN(date.getTime())) return 'Unknown date'
-  return new Intl.DateTimeFormat(undefined, {
-    dateStyle: 'medium',
-    timeStyle: 'short',
-  }).format(date)
-}
-
 function modelLabel(plan: LocalPlan) {
-  return (
-    [plan.provider, plan.model].filter(Boolean).join(' / ') || 'Model not set'
+  return plan.model || 'model not set'
+}
+
+function shortDate(value: string) {
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return 'unknown'
+  return new Intl.DateTimeFormat(undefined, { dateStyle: 'medium' }).format(
+    date,
   )
 }
 
-const verdictPresentation: Record<
-  PlanVerdict,
-  { label: string; tone: string }
-> = {
-  improved: { label: 'Improved', tone: 'status-pass' },
-  stable: { label: 'Stable', tone: 'status-neutral' },
-  regressed: { label: 'Regressed', tone: 'status-fail' },
-  inconclusive: { label: 'Inconclusive', tone: 'status-incomplete' },
+function compact(value: number) {
+  return new Intl.NumberFormat('en-US', {
+    notation: Math.abs(value) >= 1000 ? 'compact' : 'standard',
+    maximumFractionDigits: Math.abs(value) >= 100 ? 0 : 1,
+  }).format(value)
 }
 
-function ComparisonMetric({ metric }: { metric: PlanMetricComparison }) {
+const CORE_DELTAS: Array<{ id: PlanMetricId; label: string }> = [
+  { id: 'pass_rate', label: 'pass' },
+  { id: 'quality', label: 'score' },
+  { id: 'tokens', label: 'tokens' },
+  { id: 'duration', label: 'time' },
+]
+
+/**
+ * Audit P-02: one rule for colour. The number keeps the ink; the delta is
+ * signed and carries the direction; red means an objective regression,
+ * amber a worse efficiency figure, no colour no change.
+ */
+function MetricDelta({
+  label,
+  metric,
+}: {
+  label: string
+  metric: PlanMetricComparison
+}) {
+  if (metric.delta === null) return null
+  const absolute =
+    metric.format === 'percent_points' || metric.format === 'score'
+  const value = absolute ? metric.delta : (metric.delta_percent ?? metric.delta)
+  const unit =
+    metric.format === 'percent_points'
+      ? 'pp'
+      : metric.format === 'score'
+        ? 'pts'
+        : metric.delta_percent !== null
+          ? '%'
+          : ''
   return (
-    <div className="plan-list-comparison-metric">
-      <span>{metric.label}</span>
-      <div>
-        <strong>{formatPlanMetricValue(metric, 'baseline')}</strong>
-        <i aria-hidden="true">→</i>
-        <strong>{formatPlanMetricValue(metric, 'candidate')}</strong>
-      </div>
-      <small className={`metric-tone-${metric.tone}`}>
-        {formatPlanMetricDelta(metric)}
-      </small>
-    </div>
+    <span className="inline-flex items-baseline gap-1 whitespace-nowrap">
+      <span className="text-ink-muted">{label}</span>
+      <DeltaValue
+        value={value}
+        format={(magnitude) => `${compact(magnitude)}${unit}`}
+        betterWhen={
+          metric.direction === 'higher'
+            ? 'higher'
+            : metric.direction === 'lower'
+              ? 'lower'
+              : 'neither'
+        }
+      />
+    </span>
   )
 }
 
-function comparisonRange(comparison: PlanComparison, id: PlanMetricId) {
-  const metric = metricById(comparison, id)
-  return metric
-    ? `${formatPlanMetricValue(metric, 'baseline')} → ${formatPlanMetricValue(metric, 'candidate')}`
-    : 'Not reported'
+/** The baseline column: the four core figures, only when captured. */
+export function PlanBaselineCell({
+  plan,
+  baseline,
+}: {
+  plan: LocalPlan
+  baseline: DashboardExecutionSummary | null
+}) {
+  if (!baseline) {
+    const presentation = planStatePresentation(plan)
+    return (
+      <span className="text-ink-muted">
+        {presentation.label === 'retry available'
+          ? 'incomplete'
+          : 'not captured'}
+      </span>
+    )
+  }
+  const snapshot = buildPlanComparison(baseline, baseline)
+  const value = (id: PlanMetricId) => {
+    const metric = metricById(snapshot, id)
+    return metric && metric.baseline !== null
+      ? formatPlanMetricValue(metric, 'baseline')
+      : null
+  }
+  const pass = value('pass_rate')
+  const tokens = value('tokens')
+  const duration = value('duration')
+  const turns = value('turns')
+  return (
+    <span className="grid gap-0.5 font-mono text-xs tabular-nums">
+      <span className="text-ink">
+        {[pass, tokens ? `${tokens} tokens` : null]
+          .filter(Boolean)
+          .join(' · ') || 'no figures reported'}
+      </span>
+      {duration || turns ? (
+        <span className="text-ink-muted">
+          {[duration, turns ? `${turns} turns` : null]
+            .filter(Boolean)
+            .join(' · ')}
+        </span>
+      ) : null}
+    </span>
+  )
 }
 
+/**
+ * The "latest candidate vs baseline" column: the verdict and the signed
+ * core deltas, or the sentence that says why there is nothing to compare.
+ */
 export function PlanComparisonSummary({
   plan,
   baseline,
   candidate,
+  running,
 }: {
   plan: LocalPlan
   baseline: DashboardExecutionSummary | null
   candidate: DashboardExecutionSummary | null
+  running?: DashboardExecutionSummary | null
 }) {
+  const presentation = planStatePresentation(plan)
   const candidateCount = plan.candidate_execution_ids.length
-  if (candidateCount === 0) {
-    const snapshot = baseline ? buildPlanComparison(baseline, baseline) : null
+  if (presentation.status === 'running') {
+    const expected = running?.totals?.expected_reports ?? null
+    const received = running?.totals?.received_reports ?? null
     return (
-      <section className="plan-list-comparison plan-list-comparison-empty">
-        <div>
-          <span className="section-kicker">
-            {baseline ? 'Baseline snapshot' : 'Comparison not started'}
-          </span>
-          <strong>
-            {baseline
-              ? 'Run a candidate to measure evolution'
-              : 'Capture a baseline before comparing results'}
-          </strong>
-        </div>
-        {snapshot && (
-          <div className="plan-list-baseline-metrics">
-            {PLAN_CORE_METRICS.map((id) => {
-              const metric = metricById(snapshot, id)
-              return metric ? (
-                <span key={id}>
-                  <small>{metric.label}</small>
-                  <b>{formatPlanMetricValue(metric, 'baseline')}</b>
-                </span>
-              ) : null
-            })}
-          </div>
-        )}
-      </section>
+      <span className="grid gap-0.5 text-xs">
+        <StatusBadge status="running" label={presentation.label} />
+        <span className="text-ink-muted">
+          {running?.started_at
+            ? `started ${formatDate(running.started_at)}`
+            : 'in progress'}
+          {expected !== null && received !== null
+            ? ` · ${received}/${expected} tests`
+            : ''}
+        </span>
+      </span>
     )
   }
-
+  if (candidateCount === 0) {
+    return (
+      <span className="block max-w-[26rem] text-xs leading-5 text-ink-muted">
+        {baseline ? presentation.detail : '—'}
+      </span>
+    )
+  }
   const comparison = buildPlanComparison(baseline, candidate)
-  const verdict = verdictPresentation[comparison.verdict]
+  const deltas = CORE_DELTAS.map(({ id, label }) => {
+    const metric = metricById(comparison, id)
+    return metric && metric.delta !== null ? (
+      <MetricDelta key={id} label={label} metric={metric} />
+    ) : null
+  }).filter(Boolean)
   return (
-    <section
-      className={`plan-list-comparison plan-list-comparison-${comparison.verdict}`}
-      aria-label="Latest candidate compared with baseline"
-    >
-      <header>
-        <div>
-          <span className="section-kicker">Latest candidate vs baseline</span>
-          <strong>
-            Candidate #{candidateCount}
-            {candidate?.completed_at
-              ? ` · ${formatDate(candidate.completed_at)}`
-              : ''}
-          </strong>
-        </div>
-        <span className={`status-pill ${verdict.tone}`}>{verdict.label}</span>
-      </header>
-      {comparison.metrics.length > 0 ? (
-        <div className="plan-list-comparison-grid">
-          {PLAN_CORE_METRICS.map((id) => {
-            const metric = metricById(comparison, id)
-            return metric ? <ComparisonMetric key={id} metric={metric} /> : null
-          })}
-        </div>
+    <span className="grid gap-1 text-xs">
+      <span className="flex flex-wrap items-center gap-2">
+        <StatusBadge
+          status={verdictStatus[comparison.verdict]}
+          label={comparison.verdict}
+        />
+        <span className="text-ink-muted">
+          candidate #{candidateCount}
+          {candidate?.completed_at
+            ? ` · ${formatDate(candidate.completed_at)}`
+            : ''}
+        </span>
+      </span>
+      {deltas.length > 0 ? (
+        <span className="flex flex-wrap gap-x-3 gap-y-1 font-mono tabular-nums">
+          {deltas}
+        </span>
       ) : (
-        <p>{comparison.detail}</p>
+        <span className="max-w-[26rem] leading-5 text-ink-muted">
+          {comparison.detail}
+        </span>
       )}
-      <footer>
-        <span>
-          Hard gates{' '}
-          <strong>{comparisonRange(comparison, 'hard_gates')}</strong>
-        </span>
-        <span>
-          Technical failures{' '}
-          <strong>{comparisonRange(comparison, 'technical_failures')}</strong>
-        </span>
-        <span>
-          Cost <strong>{comparisonRange(comparison, 'cost')}</strong>
-        </span>
-      </footer>
-    </section>
+    </span>
   )
 }
 
-function PlanListHeader() {
+function HowPlansWork() {
   return (
-    <DashboardPageActions
-      active="plans"
-      actionsLabel="Local plan actions"
-      actions={
-        <a
-          className={dashboardHeaderActionClassName({ primary: true })}
-          href={hashForNewPlan()}
-          aria-label="New local plan"
-        >
-          New plan
-        </a>
-      }
-    />
+    <ol className="m-0 grid list-none gap-2 p-0 text-xs leading-5 text-ink-soft sm:grid-cols-3">
+      <li>
+        <strong className="block text-ink">Pick the change scope</strong>
+        Only the tests that matter for this edit.
+      </li>
+      <li>
+        <strong className="block text-ink">Capture the baseline</strong>
+        The plan freezes cases, seeds and policy.
+      </li>
+      <li>
+        <strong className="block text-ink">Run candidates</strong>
+        Review objective gates and directional efficiency.
+      </li>
+    </ol>
   )
 }
 
-function PlanCard({
+function PlanRow({
   plan,
   executionSummaries,
 }: {
   plan: LocalPlan
   executionSummaries: Record<string, DashboardExecutionSummary>
 }) {
-  const presentation = statePresentation(plan)
-  const candidateCount = plan.candidate_execution_ids.length
-  const scopeLabel = `${plan.scenarios.length} test${plan.scenarios.length === 1 ? '' : 's'} · ${plan.runs} run${plan.runs === 1 ? '' : 's'} each`
-  const latestCandidateId = plan.candidate_execution_ids.at(-1) ?? ''
+  const presentation = planStatePresentation(plan)
+  const href = hashForPlan(plan.id)
   const baseline = plan.baseline_execution_id
     ? (executionSummaries[plan.baseline_execution_id] ?? null)
     : null
+  const latestCandidateId = plan.candidate_execution_ids.at(-1) ?? ''
   const candidate = latestCandidateId
     ? (executionSummaries[latestCandidateId] ?? null)
     : null
-  const comparison = candidateCount
-    ? buildPlanComparison(baseline, candidate)
-    : null
-
+  const running =
+    presentation.status === 'running' && plan.last_attempt_id
+      ? (executionSummaries[plan.last_attempt_id] ?? null)
+      : null
+  const title = plan.label || 'Untitled local plan'
   return (
-    <article
-      className={`plan-list-card${comparison ? ` plan-list-card-${comparison.verdict}` : ''}`}
-    >
-      <header className="plan-list-card-header">
-        <div className="plan-list-card-title">
-          <div className="plan-list-card-state">
-            <span className={`status-pill ${presentation.tone}`}>
-              {presentation.label}
+    <DataTableRow href={href} data-plan-state={plan.state}>
+      <td data-label="Plan">
+        <span className="grid gap-1">
+          <StatusBadge
+            status={presentation.status}
+            label={presentation.label}
+          />
+          <a
+            className="font-mono text-[0.8125rem] font-semibold text-ink no-underline hover:underline"
+            href={href}
+            aria-label={`Open plan ${title}`}
+          >
+            {title}
+          </a>
+          {plan.purpose ? (
+            <span
+              className="line-clamp-2 max-w-[28rem] text-xs leading-5 text-ink-soft"
+              title={plan.purpose}
+            >
+              {plan.purpose}
             </span>
-            {plan.locked && (
-              <span className="plan-list-lock">Scope locked</span>
-            )}
-          </div>
-          <h3>{plan.label || 'Untitled local plan'}</h3>
-          <p>{plan.purpose || presentation.detail}</p>
-        </div>
-        <a className="button button-secondary" href={hashForPlan(plan.id)}>
-          Open plan <span aria-hidden="true">→</span>
+          ) : null}
+        </span>
+      </td>
+      <td data-label="Scope · model">
+        <span className="grid gap-0.5 text-xs">
+          <span className="text-ink">
+            {plan.scenarios.length} test{plan.scenarios.length === 1 ? '' : 's'}{' '}
+            · {plan.runs} run{plan.runs === 1 ? '' : 's'} each
+          </span>
+          <span className="font-mono text-ink-muted">{modelLabel(plan)}</span>
+        </span>
+      </td>
+      <td data-label="Baseline">
+        <PlanBaselineCell plan={plan} baseline={baseline} />
+      </td>
+      <td data-label="Latest candidate vs baseline">
+        <PlanComparisonSummary
+          plan={plan}
+          baseline={baseline}
+          candidate={candidate}
+          running={running}
+        />
+      </td>
+      <td data-label="Updated" className={numericCellClassName}>
+        <span className="whitespace-nowrap text-xs text-ink-muted">
+          {shortDate(plan.updated_at)}
+        </span>
+      </td>
+      <td className="text-right">
+        <a
+          className={buttonClassName({
+            variant: presentation.action === 'open' ? 'quiet' : 'secondary',
+            size: 'compact',
+          })}
+          href={href}
+        >
+          {presentation.action}
         </a>
-      </header>
-      <div className="plan-list-card-meta">
-        <div>
-          <span>Scope</span>
-          <strong>{scopeLabel}</strong>
-        </div>
-        <div>
-          <span>Model</span>
-          <strong>{modelLabel(plan)}</strong>
-        </div>
-        <div>
-          <span>Lifecycle</span>
-          <strong>
-            {plan.baseline_execution_id
-              ? 'Baseline captured'
-              : 'Baseline pending'}
-            {candidateCount > 0
-              ? ` · ${candidateCount} candidate${candidateCount === 1 ? '' : 's'}`
-              : ''}
-          </strong>
-        </div>
-      </div>
-      <PlanComparisonSummary
-        plan={plan}
-        baseline={baseline}
-        candidate={candidate}
-      />
-      <footer className="plan-list-card-footer">
-        <span>Updated {formatDate(plan.updated_at)}</span>
-        <code>{plan.id}</code>
-      </footer>
-    </article>
+      </td>
+    </DataTableRow>
   )
 }
 
@@ -332,8 +435,8 @@ export function PlansPage() {
   const [error, setError] = useState<string | null>(null)
   const [comparisonError, setComparisonError] = useState<string | null>(null)
 
-  const load = useCallback(async () => {
-    setLoading(true)
+  const load = useCallback(async ({ silent = false } = {}) => {
+    if (!silent) setLoading(true)
     setError(null)
     setComparisonError(null)
     try {
@@ -351,6 +454,7 @@ export function PlansPage() {
       const executionIds = orderedPlans.flatMap((plan) => [
         plan.baseline_execution_id ?? '',
         plan.candidate_execution_ids.at(-1) ?? '',
+        plan.last_attempt_id ?? '',
       ])
       try {
         setExecutionSummaries(
@@ -365,7 +469,7 @@ export function PlansPage() {
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : String(cause))
     } finally {
-      setLoading(false)
+      if (!silent) setLoading(false)
     }
   }, [])
 
@@ -373,235 +477,269 @@ export function PlansPage() {
     void load()
   }, [load])
 
+  const comparisonFor = useCallback(
+    (plan: LocalPlan) => {
+      const candidateId = plan.candidate_execution_ids.at(-1) ?? ''
+      if (!candidateId) return null
+      return buildPlanComparison(
+        plan.baseline_execution_id
+          ? executionSummaries[plan.baseline_execution_id]
+          : null,
+        executionSummaries[candidateId],
+      )
+    },
+    [executionSummaries],
+  )
+
+  const counts = useMemo(() => {
+    const count = (candidate: PlanFilter) =>
+      plans.filter((plan) =>
+        matchesFilter(plan, candidate, comparisonFor(plan)),
+      ).length
+    return {
+      all: plans.length,
+      needs_action: count('needs_action'),
+      running: count('running'),
+      compared: count('compared'),
+      regressed: count('regressed'),
+    }
+  }, [comparisonFor, plans])
+
+  // Audit P-13: a list with a running plan refreshes itself.
+  useEffect(() => {
+    if (counts.running === 0) return
+    const timer = window.setInterval(() => void load({ silent: true }), 5_000)
+    return () => window.clearInterval(timer)
+  }, [counts.running, load])
+
   const filteredPlans = useMemo(() => {
     const normalized = query.trim().toLowerCase()
     return plans.filter((plan) => {
-      const candidateId = plan.candidate_execution_ids.at(-1) ?? ''
-      const comparison = candidateId
-        ? buildPlanComparison(
-            plan.baseline_execution_id
-              ? executionSummaries[plan.baseline_execution_id]
-              : null,
-            executionSummaries[candidateId],
-          )
-        : null
-      if (!matchesFilter(plan, filter, comparison)) return false
+      if (!matchesFilter(plan, filter, comparisonFor(plan))) return false
       if (!normalized) return true
       return [plan.label, plan.purpose, plan.id, ...plan.scenario_ids]
         .join(' ')
         .toLowerCase()
         .includes(normalized)
     })
-  }, [executionSummaries, filter, plans, query])
+  }, [comparisonFor, filter, plans, query])
 
-  const activeCount = plans.filter((plan) =>
-    ['baseline_running', 'candidate_running'].includes(plan.state),
-  ).length
-  const comparedCount = plans.filter(
-    (plan) => plan.candidate_execution_ids.length > 0,
-  ).length
-  const needsActionCount = plans.filter(
-    (plan) => plan.state === 'draft' || plan.state === 'baseline_ready',
-  ).length
-  const regressionCount = plans.filter((plan) => {
-    const candidateId = plan.candidate_execution_ids.at(-1) ?? ''
-    if (!candidateId || !plan.baseline_execution_id) return false
-    return (
-      buildPlanComparison(
-        executionSummaries[plan.baseline_execution_id],
-        executionSummaries[candidateId],
-      ).verdict === 'regressed'
-    )
-  }).length
+  const local = bridge?.mode === 'local'
+  const filtered = query.trim() !== '' || filter !== 'all'
+  const filters: Array<{ id: PlanFilter; label: string }> = [
+    { id: 'all', label: 'all' },
+    { id: 'needs_action', label: 'needs action' },
+    { id: 'running', label: 'running' },
+    { id: 'compared', label: 'compared' },
+    { id: 'regressed', label: 'regressed' },
+  ]
 
   return (
     <>
-      <PlanListHeader />
-      <div className="page-shell overview-shell plans-shell">
-        <section className="page-heading" aria-labelledby="plans-title">
-          <div>
-            <div className="eyebrow">
-              <span className="live-dot" aria-hidden="true" />
-              Local comparison workspace
-            </div>
-            <h1 id="plans-title">Choose a plan to continue</h1>
-            <p>
-              Every plan is a small, explicit contract: capture one baseline,
-              then rerun the same frozen scope after your Harness change.
-            </p>
-          </div>
-          <div className="sync-block">
-            <span>Plans in this dashboard</span>
-            <strong>
-              {bridge?.mode === 'local' ? plans.length : 'Local only'}
-            </strong>
-          </div>
-        </section>
-
-        {bridge?.mode !== 'local' && !loading ? (
-          <section className="panel plans-view-only" role="status">
-            <div>
-              <div className="section-kicker">Local plans</div>
-              <h2>Available only in the local dashboard</h2>
-              <p>
-                Published and view-only reports keep historical evidence, but do
-                not expose local plan state or controls.
-              </p>
-            </div>
-            <a className="button button-secondary" href={hashForWorkspace()}>
-              Back to overview
+      <DashboardPageActions
+        active="plans"
+        actionsLabel="Local plan actions"
+        actions={
+          local ? (
+            <a
+              className={dashboardHeaderActionClassName({ primary: true })}
+              href={hashForNewPlan()}
+            >
+              new plan
             </a>
-          </section>
+          ) : null
+        }
+      />
+      <div className="ds-root page-shell w-[calc(100%_-_1.5rem)] max-w-[1420px] pt-5 pb-16 md:w-[calc(100%_-_3rem)]">
+        <PageHeader
+          title="plans"
+          summary="Capture one baseline, then rerun the same frozen scope after your Harness change."
+          actions={
+            local && plans.length > 0 ? (
+              <details className="group text-xs text-ink-soft">
+                <summary className="cursor-pointer list-none font-mono text-ink-muted marker:hidden hover:text-ink">
+                  how plans work
+                </summary>
+                <div className="mt-3 max-w-[48rem]">
+                  <HowPlansWork />
+                </div>
+              </details>
+            ) : undefined
+          }
+        />
+
+        {!local && !loading ? (
+          <div className="mt-6">
+            <EmptyState
+              title="Available only in the local dashboard"
+              description="Published and view-only reports keep historical evidence, but do not expose local plan state or controls."
+              actions={
+                <a
+                  className={buttonClassName({ variant: 'secondary' })}
+                  href={hashForWorkspace()}
+                >
+                  back to overview
+                </a>
+              }
+            />
+          </div>
         ) : (
           <>
-            <section className="plans-how-it-works" aria-label="Plan workflow">
-              <div>
-                <span>01</span>
-                <strong>Pick the change scope</strong>
-                <small>Only the tests that matter for this edit.</small>
-              </div>
-              <div>
-                <span>02</span>
-                <strong>Capture baseline</strong>
-                <small>The plan freezes cases, seeds and policy.</small>
-              </div>
-              <div>
-                <span>03</span>
-                <strong>Run candidates</strong>
-                <small>
-                  Review objective gates and directional efficiency.
-                </small>
-              </div>
-              <a className="button button-primary" href={hashForNewPlan()}>
-                ＋ New local plan
-              </a>
-            </section>
-
-            <section className="plans-summary-grid" aria-label="Plan summary">
-              <article className="panel plans-summary-card">
-                <span>Needs action</span>
-                <strong>{needsActionCount}</strong>
-                <small>Drafts or plans ready for a candidate</small>
-              </article>
-              <article className="panel plans-summary-card">
-                <span>Running</span>
-                <strong>{activeCount}</strong>
-                <small>Baseline or candidate runs active now</small>
-              </article>
-              <article className="panel plans-summary-card">
-                <span>Compared</span>
-                <strong>{comparedCount}</strong>
-                <small>Plans with completed candidate evidence</small>
-              </article>
-              <article className="panel plans-summary-card plans-summary-regressions">
-                <span>Objective regressions</span>
-                <strong>{regressionCount}</strong>
-                <small>Latest candidates worse than their baselines</small>
-              </article>
-            </section>
-
             <section
-              className="panel plans-list-panel"
-              aria-labelledby="plans-list-title"
+              className="mt-5 flex flex-wrap items-center gap-3"
+              aria-label="Plan filters"
             >
-              <div className="panel-heading plans-list-heading">
-                <div>
-                  <div className="section-kicker">Plan history</div>
-                  <h2 id="plans-list-title">All local plans</h2>
-                </div>
-                <span className="coverage-note">
-                  {loading ? 'Loading…' : `${filteredPlans.length} shown`}
-                </span>
+              <div className="w-full max-w-xs">
+                <Input
+                  type="search"
+                  value={query}
+                  placeholder="Search label, purpose or test…"
+                  aria-label="Search plans"
+                  onChange={(event) => setQuery(event.target.value)}
+                />
               </div>
-              <div className="plans-list-toolbar">
-                <label className="search-field">
-                  <span className="visually-hidden">Search plans</span>
-                  <input
-                    type="search"
-                    value={query}
-                    placeholder="Search label, purpose or test"
-                    onChange={(event) => setQuery(event.target.value)}
-                  />
-                </label>
-                <label className="plans-filter-field">
-                  <span className="visually-hidden">Filter plans</span>
-                  <select
-                    value={filter}
-                    onChange={(event) =>
-                      setFilter(event.target.value as PlanFilter)
+              <FilterChipGroup label="Plan state">
+                {filters.map((candidate) => (
+                  <FilterChip
+                    key={candidate.id}
+                    active={filter === candidate.id}
+                    count={counts[candidate.id]}
+                    className={
+                      candidate.id === 'regressed' &&
+                      counts.regressed > 0 &&
+                      filter !== 'regressed'
+                        ? 'text-danger'
+                        : undefined
                     }
+                    onClick={() => setFilter(candidate.id)}
                   >
-                    <option value="all">All plans</option>
-                    <option value="needs_action">Needs action</option>
-                    <option value="running">In progress</option>
-                    <option value="compared">Compared</option>
-                    <option value="regressed">Objective regressions</option>
-                  </select>
-                </label>
-                <button
-                  className="button button-secondary"
-                  type="button"
-                  onClick={() => void load()}
-                >
-                  Refresh
-                </button>
-              </div>
-              {comparisonError && !error && (
-                <div className="plans-comparison-notice" role="status">
+                    {candidate.label}
+                  </FilterChip>
+                ))}
+              </FilterChipGroup>
+              <span
+                className="ms-auto font-mono text-xs text-ink-muted"
+                aria-live="polite"
+              >
+                {loading
+                  ? 'loading…'
+                  : filtered
+                    ? `${filteredPlans.length} of ${plans.length} plans`
+                    : `${plans.length} plan${plans.length === 1 ? '' : 's'}`}
+              </span>
+            </section>
+
+            {comparisonError && !error ? (
+              <div className="mt-4">
+                <Callout tone="warning" title="Comparison metrics unavailable">
                   Execution summaries could not be loaded. Plans remain
-                  available, but comparison metrics are marked unavailable.{' '}
-                  <span>{comparisonError}</span>
-                </div>
-              )}
+                  available, but comparisons are marked unavailable.{' '}
+                  <span className="font-mono">{comparisonError}</span>
+                </Callout>
+              </div>
+            ) : null}
+
+            <div className="mt-4">
               {error ? (
-                <div className="plans-empty" role="alert">
-                  <strong>Plans could not be loaded</strong>
-                  <p>{error}</p>
-                  <button
-                    className="button button-secondary"
-                    type="button"
-                    onClick={() => void load()}
-                  >
-                    Try again
-                  </button>
-                </div>
+                <EmptyState
+                  tone="error"
+                  title="Plans could not be loaded"
+                  description={error}
+                  actions={
+                    <button
+                      className={buttonClassName({ variant: 'secondary' })}
+                      type="button"
+                      onClick={() => void load()}
+                    >
+                      try again
+                    </button>
+                  }
+                />
               ) : loading ? (
-                <p className="table-empty plans-loading">
-                  Loading local plans…
-                </p>
-              ) : filteredPlans.length > 0 ? (
-                <div className="plans-list">
-                  {filteredPlans.map((plan) => (
-                    <PlanCard
-                      key={plan.id}
-                      plan={plan}
-                      executionSummaries={executionSummaries}
+                <div className="grid gap-2" aria-busy="true" role="status">
+                  <span className="ds-visually-hidden">
+                    Loading local plans
+                  </span>
+                  {['first', 'second', 'third'].map((placeholder) => (
+                    <div
+                      key={placeholder}
+                      className="h-16 animate-pulse rounded-[6px] bg-[var(--surface-fill)] motion-reduce:animate-none"
                     />
                   ))}
                 </div>
-              ) : (
-                <div className="plans-empty">
-                  <strong>
-                    {plans.length === 0
-                      ? 'No local plans yet'
-                      : 'No plans match this filter'}
-                  </strong>
-                  <p>
-                    {plans.length === 0
-                      ? 'Start with only the tests relevant to the Harness change in front of you.'
-                      : 'Try another status or search term.'}
-                  </p>
-                  {plans.length === 0 && (
+              ) : plans.length === 0 ? (
+                <EmptyState
+                  title="No local plans yet"
+                  description={
+                    <span className="grid gap-4">
+                      <span>
+                        Start with only the tests relevant to the Harness change
+                        in front of you.
+                      </span>
+                      <HowPlansWork />
+                    </span>
+                  }
+                  actions={
                     <a
-                      className="button button-primary"
+                      className={buttonClassName({ variant: 'primary' })}
                       href={hashForNewPlan()}
                     >
-                      Create the first plan
+                      new plan
                     </a>
-                  )}
-                </div>
+                  }
+                />
+              ) : filteredPlans.length === 0 ? (
+                <EmptyState
+                  title="No plans match these filters"
+                  description="Try another state or search term."
+                  actions={
+                    <button
+                      className={buttonClassName({
+                        variant: 'secondary',
+                        size: 'compact',
+                      })}
+                      type="button"
+                      onClick={() => {
+                        setQuery('')
+                        setFilter('all')
+                      }}
+                    >
+                      clear filters
+                    </button>
+                  }
+                />
+              ) : (
+                <DataTable
+                  caption={`Local plans, ${filteredPlans.length} of ${plans.length}`}
+                  collapse
+                  minWidth="64rem"
+                >
+                  <thead>
+                    <tr>
+                      <th scope="col">Plan</th>
+                      <th scope="col">Scope · model</th>
+                      <th scope="col">Baseline</th>
+                      <th scope="col">Latest candidate vs baseline</th>
+                      <th scope="col" className={numericCellClassName}>
+                        Updated
+                      </th>
+                      <th scope="col">
+                        <span className="ds-visually-hidden">Action</span>
+                      </th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {filteredPlans.map((plan) => (
+                      <PlanRow
+                        key={plan.id}
+                        plan={plan}
+                        executionSummaries={executionSummaries}
+                      />
+                    ))}
+                  </tbody>
+                </DataTable>
               )}
-            </section>
+            </div>
           </>
         )}
       </div>
