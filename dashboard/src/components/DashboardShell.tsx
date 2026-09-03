@@ -1,11 +1,5 @@
 import { PageBody, PageHeader, PageMain, PageShell } from '@iii-dev/console-ui'
-import {
-  FlaskConical,
-  LayoutGrid,
-  ListChecks,
-  PieChart,
-  Route,
-} from 'lucide-react'
+import { FlaskConical, LayoutGrid, ListChecks, Route } from 'lucide-react'
 import {
   createContext,
   type ReactNode,
@@ -18,7 +12,6 @@ import { ThemeToggle } from '@/components/ThemeToggle'
 import { useContainerNarrow } from '@/hooks/use-container-narrow'
 import {
   type DashboardRoute,
-  hashForCoverage,
   hashForPlans,
   hashForWorkspace,
   routeRenderIdentity,
@@ -27,12 +20,7 @@ import {
 import { useTheme } from '@/hooks/useTheme'
 import './dashboard-shell.css'
 
-export type DashboardSection =
-  | 'overview'
-  | 'tests'
-  | 'executions'
-  | 'plans'
-  | 'coverage'
+export type DashboardSection = 'overview' | 'tests' | 'executions' | 'plans'
 
 export type DashboardHeaderState = {
   key: string
@@ -62,7 +50,6 @@ export function useDashboardChrome() {
 }
 
 export function sectionForRoute(route: DashboardRoute): DashboardSection {
-  if (route.page === 'coverage') return 'coverage'
   if (
     route.page === 'plans' ||
     route.page === 'plan-create' ||
@@ -88,7 +75,6 @@ export function sectionForRoute(route: DashboardRoute): DashboardSection {
 
 function hashForSection(section: DashboardSection): string {
   if (section === 'plans') return hashForPlans()
-  if (section === 'coverage') return hashForCoverage()
   return hashForWorkspace(section as WorkspaceView)
 }
 
@@ -97,10 +83,8 @@ const sectionIcons: Record<DashboardSection, ReactNode> = {
   tests: <FlaskConical size={15} aria-hidden="true" />,
   executions: <ListChecks size={15} aria-hidden="true" />,
   plans: <Route size={15} aria-hidden="true" />,
-  coverage: <PieChart size={15} aria-hidden="true" />,
 }
 
-// Coverage stays reachable by URL but is deliberately absent from the menu.
 const navigation: Array<{ value: DashboardSection; label: string }> = [
   { value: 'overview', label: 'Overview' },
   { value: 'tests', label: 'Tests' },
@@ -113,7 +97,6 @@ const sectionLabels: Record<DashboardSection, string> = {
   tests: 'Tests',
   executions: 'Executions',
   plans: 'Plans',
-  coverage: 'Coverage',
 }
 
 function HarnessE2eIcon() {
@@ -297,9 +280,6 @@ export function DashboardShell({
                         {item.label}
                       </option>
                     ))}
-                    {section === 'coverage' ? (
-                      <option value="coverage">Coverage</option>
-                    ) : null}
                   </select>
                 </div>
                 <PageActionsBar

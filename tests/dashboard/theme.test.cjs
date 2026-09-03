@@ -26,7 +26,6 @@ test("uses the shared React theme control on every dashboard page", () => {
     "OverviewPage.tsx",
     "TestsPage.tsx",
     "ExecutionPage.tsx",
-    "CoveragePage.tsx",
     "TestsCatalogPage.tsx",
     "TestHistoryPage.tsx",
     "PlansPage.tsx",

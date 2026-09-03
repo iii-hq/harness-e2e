@@ -1,6 +1,8 @@
 import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
 import {
+  matchesQuery,
+  relativeTime,
   splitTranscriptTitle,
   TranscriptDialog,
 } from '@/components/TranscriptDialog'
@@ -47,22 +49,46 @@ describe('transcript dialog', () => {
       />,
     )
 
-    expect(html).toContain('conversation-shell')
-    expect(html).toContain('ds-dialog-heading')
-    expect(html).toContain('You')
-    expect(html).toContain('tool')
-    expect(html).toContain('Arguments')
-    expect(html).toContain('Result')
-    expect(html).toContain('conversation-filter')
+    // Audit TR-02: a role rail on a left-aligned column, no legacy classes.
+    expect(html).toContain('data-transcript')
+    expect(html).toContain('data-role="user"')
+    expect(html).toContain('data-kind="tool"')
+    expect(html).toContain('>user<')
+    expect(html).toContain('>tool<')
+    expect(html).not.toContain('conversation-shell')
+    expect(html).not.toContain('conversation-filter')
+    // Audit TR-03: search, copy on every payload, no zero-error control.
+    expect(html).toContain('Search the transcript')
+    expect(html).toContain('Copy this message')
+    expect(html).toContain('Copy the arguments')
+    expect(html).toContain('Copy the result')
+    expect(html).toContain('2 of 2 events shown')
+    expect(html).not.toContain('next error')
     expect(html).not.toMatch(/<details[^>]*open/)
-    // Audit TR-03 / TR-06 / TR-04: one stats row, a log that does not
-    // announce itself, no "Next error" for zero errors, honest tool status.
-    expect(html.match(/message<\/span>|messages<\/span>/g)).toHaveLength(1)
-    expect(html).not.toContain('role="log" aria-live')
-    expect(html).not.toContain('Next error')
+    expect(html).toContain('>arguments<')
+    expect(html).toContain('>result<')
     expect(html).not.toContain('>pending<')
     expect(html).toContain('run run-1')
     expect(html).toContain('>Reactive Automation<')
+  })
+
+  it('times events against the first one and filters by text', () => {
+    const origin = Date.parse('2026-08-26T20:07:31Z')
+    expect(relativeTime('2026-08-26T20:07:36Z', origin)).toBe('+5s')
+    expect(relativeTime('2026-08-26T20:09:03Z', origin)).toBe('+1m 32s')
+    expect(relativeTime(null, origin)).toBeNull()
+    expect(
+      matchesQuery({ id: 'a', kind: 'message', text: 'Run it' }, 'run'),
+    ).toBe(true)
+    expect(
+      matchesQuery({ id: 'a', kind: 'message', text: 'Run it' }, 'missing'),
+    ).toBe(false)
+    expect(
+      matchesQuery(
+        { id: 'b', kind: 'tool', functionId: 'state::get' },
+        'state',
+      ),
+    ).toBe(true)
   })
 
   it('splits the run id out of the caller-provided title', () => {

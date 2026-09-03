@@ -2,11 +2,12 @@ import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
 import type { AssessmentRunView } from '@/lib/assessment-view'
 import type { DashboardExecutionDetail } from '@/lib/dashboard-data-source'
+import { executionVerdict } from '@/lib/execution-verdict'
 import { buildExecutionPresentation } from '@/lib/execution-view'
+import type { ScenarioMatrixSummary } from '@/lib/scenario-matrix'
 import {
   buildSummaryExecutionMetrics,
   DecisionSection,
-  decisionTitle,
   provenanceEntries,
 } from '@/pages/ExecutionPage'
 
@@ -70,63 +71,117 @@ const run: AssessmentRunView = {
   },
 }
 
-describe('execution decision hierarchy', () => {
-  it('keeps the objective outcome authoritative while surfacing AI guidance', () => {
+function scenarioSummary(overrides: Partial<ScenarioMatrixSummary> = {}) {
+  return {
+    total: 2,
+    passed: 1,
+    failed: 1,
+    hardGate: 0,
+    inconclusive: 0,
+    unavailable: 0,
+    running: 0,
+    incomplete: 0,
+    ...overrides,
+  }
+}
+
+describe('execution verdict', () => {
+  // Audit ED-03: one aggregated verdict, never a per-scenario headline
+  // contradicting the objective one.
+  it('aggregates the scenario outcomes into one sentence', () => {
+    const verdict = executionVerdict(
+      buildExecutionPresentation(detail),
+      scenarioSummary({ hardGate: 1, failed: 1, passed: 3, total: 5 }),
+      [],
+      run,
+    )
+    expect(verdict.headline).toBe('1 failure · 1 hard gate failed · 3 passed')
+    expect(verdict.nextStep).toBe(
+      'Emit a complete per-path detection manifest and rerun.',
+    )
+  })
+
+  it('says plainly when no report was retained', () => {
+    const cancelled = buildExecutionPresentation({
+      ...detail,
+      status: 'cancelled',
+      availability: 'unavailable',
+      assessment_summary: undefined,
+      totals: undefined,
+    } as unknown as DashboardExecutionDetail)
+    const verdict = executionVerdict(cancelled, null, [], null)
+    expect(verdict.headline).toBe('cancelled · no scenario report retained')
+    expect(verdict.nextStep).toBe('Re-run the same scope to obtain a report.')
+    expect(verdict.diagnosis).toBeNull()
+  })
+
+  it('has nothing to act on when every scenario passed', () => {
+    const verdict = executionVerdict(
+      buildExecutionPresentation(detail),
+      scenarioSummary({ total: 2, passed: 2, failed: 0 }),
+      [],
+      null,
+    )
+    expect(verdict.headline).toBe('2 passed')
+    expect(verdict.nextStep).toBe('Nothing to act on: every scenario passed.')
+  })
+})
+
+describe('execution decision section', () => {
+  // Audit ED-05: the status is stated once; "effective" only when it differs.
+  it('states the verdict once and keeps the boundaries as fields', () => {
     const html = renderToStaticMarkup(
       <DecisionSection
         detail={detail}
         presentation={buildExecutionPresentation(detail)}
+        verdict={executionVerdict(
+          buildExecutionPresentation(detail),
+          scenarioSummary(),
+          [],
+          run,
+        )}
         primaryRun={run}
+        metrics={null}
+        scenarioSummary={scenarioSummary()}
       />,
     )
-
-    expect(html).toContain('Passed objectively; advisory review found gaps')
-    expect(html).toContain('System: Passed')
-    expect(html).toContain('AI: Pass With Concerns')
-    const effectiveBoundary = html.slice(
-      html.indexOf('Effective harness'),
-      html.indexOf('Effective harness') + 600,
-    )
-    expect(effectiveBoundary).toContain('ds-status-recommendation')
-    expect(effectiveBoundary).not.toContain('ds-status-failed')
+    expect(html).toContain('>decision<')
+    expect(html).toContain('1 failure · 1 passed')
+    expect(html).toContain('objective system')
+    expect(html).toContain('advisory ai')
+    expect(html).toContain('>effective<')
     expect(html).toContain(
       'Emit a complete per-path detection manifest and rerun.',
     )
-    expect(html).toContain('Only three of four seeded paths were detected.')
+    expect(html).not.toContain('System: Passed')
+    expect(html).not.toContain('AI: Pass With Concerns')
     expect(html).toContain('46')
-    expect(html).toContain('39')
-    expect(html).toContain('7')
-    expect(html).toContain('17')
-  })
-
-  it('names the two contract layers instead of concatenating them', () => {
-    expect(decisionTitle('judge_error', 'inconclusive', true)).toBe(
-      'Objective result: Judge Error · advisory: Inconclusive',
-    )
-    expect(decisionTitle('cancelled', 'unavailable', false)).toBe(
-      'Cancelled · no assessment retained',
-    )
-    expect(decisionTitle('passed', 'pass_with_concerns', true)).toBe(
-      'Passed objectively; advisory review found gaps',
-    )
+    expect(html).toContain('17 evidence references')
+    expect(html).toContain('not captured for this run')
   })
 
   it('hides the effective boundary when it repeats the objective one', () => {
+    const presentation = buildExecutionPresentation(detail)
     const html = renderToStaticMarkup(
       <DecisionSection
         detail={detail}
-        presentation={buildExecutionPresentation(detail)}
+        presentation={presentation}
+        verdict={executionVerdict(presentation, scenarioSummary(), [], run)}
         primaryRun={{
           ...run,
           effectiveStatus: 'passed',
           systemStatus: 'passed',
         }}
+        metrics={null}
+        scenarioSummary={scenarioSummary()}
       />,
     )
-    expect(html).toContain('Objective system')
-    expect(html).not.toContain('Effective harness')
+    expect(html).toContain('objective system')
+    expect(html).not.toContain('>effective<')
   })
+})
 
+describe('execution provenance', () => {
   it('lists provenance without null fields and with local timestamps', () => {
     const entries = provenanceEntries(
       {

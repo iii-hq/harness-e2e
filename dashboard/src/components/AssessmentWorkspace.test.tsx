@@ -176,7 +176,7 @@ describe('assessment workspace component', () => {
     expect(rendered).toContain('Filter assessment matrix')
     expect(html).toContain('Open details for Direct Answer')
     expect(html).toContain('<details')
-    expect(detailHtml).toContain('assessment-detail-dialog')
+    expect(detailHtml).toContain('ds-dialog')
     expect(detailHtml).toContain('ds-dialog-lg')
     expect(detailHtml).not.toContain('data-transcript-action=')
     expect(detailHtml).not.toContain(
