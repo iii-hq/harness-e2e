@@ -48,8 +48,41 @@ function encodeSegment(segment: string): string {
   return encodeURIComponent(segment)
 }
 
+/** The `?key=value` part of a dashboard hash, if any (audit T-08 / TH-19). */
+export function routeParams(rawHash: string): URLSearchParams {
+  const index = rawHash.indexOf('?')
+  return new URLSearchParams(index === -1 ? '' : rawHash.slice(index + 1))
+}
+
+export function hashWithParams(hash: string, params: URLSearchParams): string {
+  const base = hash.split('?')[0]
+  const query = params.toString()
+  return query ? `${base}?${query}` : base
+}
+
+/** Rewrites the whole hash without a navigation (no hashchange, no reload). */
+export function replaceDashboardHash(targetHash: string) {
+  if (targetHash === window.location.hash) return
+  window.history.replaceState(
+    window.history.state,
+    '',
+    `${window.location.pathname}${window.location.search}${targetHash}`,
+  )
+}
+
+/** Rewrites the current hash's params without a navigation or a scroll reset. */
+export function replaceRouteParams(params: URLSearchParams) {
+  const target = hashWithParams(window.location.hash, params)
+  if (target === window.location.hash) return
+  window.history.replaceState(
+    window.history.state,
+    '',
+    `${window.location.pathname}${window.location.search}${target}`,
+  )
+}
+
 export function routeFromHash(rawHash: string): DashboardRoute | null {
-  const routedHash = dashboardRouteHash(rawHash)
+  const routedHash = dashboardRouteHash(rawHash.split('?')[0])
   if (routedHash === null) return null
   rawHash = routedHash
   if (rawHash === '' || rawHash === '#' || rawHash === '#/') {
@@ -100,6 +133,11 @@ export function routeFromHash(rawHash: string): DashboardRoute | null {
 export function currentDashboardRoute(): DashboardRoute {
   if (typeof window === 'undefined') return defaultRoute
   return routeFromHash(window.location.hash) ?? defaultRoute
+}
+
+export function hashForTests(params?: URLSearchParams): string {
+  const hash = hashForWorkspace('tests')
+  return params ? hashWithParams(hash, params) : hash
 }
 
 export function hashForWorkspace(view: WorkspaceView = 'overview'): string {

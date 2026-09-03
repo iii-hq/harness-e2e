@@ -109,7 +109,10 @@ export type HistoryModelGroup = {
 
 export type TestHistoryResponse = {
   test_id: string
+  /** The version whose executions are shown. */
   test_version: number
+  /** The contract's current version; absent on older responses (audit TH-07). */
+  current_version?: number | null
   available_versions: TestCatalogRow['available_versions']
   cases: string[]
   subjects: string[]

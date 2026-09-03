@@ -130,11 +130,14 @@ function statusLabel(status: string | undefined) {
 export function LocalRunnerDialog({
   bridge,
   open,
+  initialScenarios = [],
   onClose,
   onCompleted,
 }: {
   bridge: DashboardDataBridge | null
   open: boolean
+  /** Tests preselected by the page that opened the dialog (audit TH-06). */
+  initialScenarios?: string[]
   onClose: () => void
   onCompleted?: () => void
 }) {
@@ -195,6 +198,14 @@ export function LocalRunnerDialog({
     if (!open || !bridge || bridge.mode !== 'local') return
     setError(null)
     setOwnJob(false)
+    if (initialScenarios.length > 0)
+      setForm((current) => ({
+        ...current,
+        scenarios: [
+          ...current.scenarios,
+          ...initialScenarios.filter((id) => !current.scenarios.includes(id)),
+        ],
+      }))
     void refreshCatalog()
     void refreshJob()
     let unsubscribe: (() => void) | undefined
@@ -210,7 +221,7 @@ export function LocalRunnerDialog({
       unsubscribe?.()
       if (interval) window.clearInterval(interval)
     }
-  }, [bridge, open, refreshCatalog, refreshJob])
+  }, [bridge, open, initialScenarios, refreshCatalog, refreshJob])
 
   const active =
     job?.status === 'running' || job?.status === 'cancelling' || submitting
