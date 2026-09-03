@@ -156,3 +156,33 @@ into a suite-wide score. The Tests view is the comparison surface: it shows
 pooled raw-run score, sample size, pass rate, outcome classes, cost, tokens, and
 runtime for each test/version/system-version tuple. Technical and infrastructure
 failures remain explicit outcomes and are never converted into zero scores.
+
+## UI guard-rails
+
+Three checks keep the dashboard from accumulating new visual debt while the
+design-system migration runs; all of them are part of `pnpm test` and
+`node --test tests/dashboard/*.test.cjs`:
+
+- `tests/dashboard/css-debt.test.cjs` counts 1px borders, radii other than the
+  6px token, text below 11px, shadows, `!important` and arbitrary Tailwind
+  sizes. The counts in `css-debt.baseline.json` can only go down. After a
+  migration removes debt, lock the lower numbers in with
+  `CSS_DEBT_UPDATE=1 node --test tests/dashboard/css-debt.test.cjs`.
+- `tests/dashboard/theme-contrast.test.cjs` computes WCAG ratios for the shell
+  text tokens in both themes; tokens still below 4.5:1 carry an explicit floor
+  that must be raised when the token is fixed.
+- `tests/dashboard/shell-narrow-nav.test.cjs` and
+  `src/components/DashboardShell.test.tsx` describe the CSS-only toggle for the
+  narrow section select (`todo` / `it.fails` until it lands).
+
+Pull requests that touch the UI attach before/after captures. With the console
+(or the standalone server) running:
+
+```bash
+pnpm screenshots                              # every route × 1440/720/390 × light/dark
+pnpm screenshots -- --only overview,tests --widths 1440 --themes light
+pnpm screenshots -- --base standalone --out .screenshots/after
+```
+
+Captures and a typography census (`census.json`) land in
+`dashboard/.screenshots/`, which is ignored by git.
