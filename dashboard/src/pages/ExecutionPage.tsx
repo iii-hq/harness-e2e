@@ -148,7 +148,7 @@ function ModelIdentityCard({
 }) {
   return (
     <div className="min-w-0 bg-panel-raised p-3">
-      <div className="font-mono text-[0.6rem] font-semibold uppercase tracking-[0.06em] text-[var(--color-ink-ghost)]">
+      <div className="font-mono text-[0.6875rem] font-semibold uppercase tracking-[0.06em] text-ink-muted">
         {label}
       </div>
       {models.length ? (
@@ -164,14 +164,14 @@ function ModelIdentityCard({
               {friendlyModelName(model.model)}
             </strong>
             {model.provider && (
-              <code className="mt-0.5 block break-all font-mono text-[0.59rem] text-[var(--color-ink-ghost)]">
+              <code className="mt-0.5 block break-all font-mono text-[0.6875rem] text-ink-muted">
                 {model.provider}
               </code>
             )}
           </div>
         ))
       ) : (
-        <strong className="mt-1 block text-sm text-[var(--color-ink-ghost)]">
+        <strong className="mt-1 block text-sm text-ink-muted">
           Not reported
         </strong>
       )}
@@ -251,18 +251,10 @@ function formatReportedCost(value: number | null) {
   return `$${value.toFixed(4)}`
 }
 
-function DecisionBoundary({
-  label,
-  value,
-  caption,
-}: {
-  label: string
-  value: string
-  caption: string
-}) {
+function DecisionBoundary({ label, value }: { label: string; value: string }) {
   return (
     <div className="grid content-start gap-2 bg-panel-raised p-4">
-      <dt className="font-mono text-[0.62rem] font-semibold uppercase tracking-[0.06em] text-[var(--color-ink-ghost)]">
+      <dt className="font-mono text-[0.6875rem] font-semibold uppercase tracking-[0.06em] text-ink-muted">
         {label}
       </dt>
       <dd className="m-0">
@@ -271,11 +263,33 @@ function DecisionBoundary({
           label={titleCase(value)}
         />
       </dd>
-      <p className="m-0 text-xs leading-5 text-[var(--color-ink-faint)]">
-        {caption}
-      </p>
     </div>
   )
+}
+
+const NO_RUN_STATES = new Set([
+  'cancelled',
+  'cancelling',
+  'running',
+  'incomplete',
+  'unavailable',
+])
+
+// The decision headline names the two layers of the assessment contract as
+// two labelled fields instead of the earlier "<status> objectively; AI
+// <verdict>" concatenation (audit ED-04).
+export function decisionTitle(
+  systemStatus: string,
+  advisoryStatus: string,
+  hasRun: boolean,
+): string {
+  if (!hasRun && NO_RUN_STATES.has(systemStatus)) {
+    return `${titleCase(systemStatus)} · no assessment retained`
+  }
+  if (systemStatus === 'passed' && advisoryStatus === 'pass_with_concerns') {
+    return 'Passed objectively; advisory review found gaps'
+  }
+  return `Objective result: ${titleCase(systemStatus)} · advisory: ${titleCase(advisoryStatus)}`
 }
 
 export function DecisionSection({
@@ -294,14 +308,13 @@ export function DecisionSection({
     primaryRun?.finalAssessment.availability ??
     'unavailable'
   const effectiveStatus = primaryRun?.effectiveStatus ?? systemStatus
-  const objectivePassed = systemStatus === 'passed'
-  const title =
-    objectivePassed && advisoryStatus === 'pass_with_concerns'
-      ? 'Passed objectively; advisory review found gaps'
-      : `${titleCase(systemStatus)} objectively; AI ${titleCase(advisoryStatus)}`
+  const title = decisionTitle(systemStatus, advisoryStatus, Boolean(primaryRun))
   const recommendation = primaryRun
     ? aiResult?.recommendation || buildHarnessRecommendation(primaryRun)
-    : 'Inspect the retained execution evidence before deciding whether to rerun.'
+    : NO_RUN_STATES.has(systemStatus)
+      ? 'No scenario report was retained. Rerun the execution to obtain one.'
+      : 'Inspect the retained execution evidence before deciding whether to rerun.'
+  const effectiveDiffers = effectiveStatus !== systemStatus
   const summary = detail.assessment_summary
   const issue = presentation.primaryIssue
 
@@ -315,6 +328,7 @@ export function DecisionSection({
     >
       <PageHeader
         headingLevel={2}
+        headingId="summary-heading"
         context="Decision"
         title={title}
         summary={
@@ -342,7 +356,7 @@ export function DecisionSection({
         <section className="grid content-start gap-3 p-4 md:p-5">
           {aiResult?.diagnosis ? (
             <>
-              <p className="m-0 font-mono text-[0.65rem] font-semibold uppercase tracking-[0.06em] text-[var(--color-accent)]">
+              <p className="m-0 font-mono text-[0.6875rem] font-semibold uppercase tracking-[0.06em] text-[var(--color-accent)]">
                 What happened
               </p>
               <p className="m-0 max-w-4xl text-sm leading-6 text-ink">
@@ -350,7 +364,7 @@ export function DecisionSection({
               </p>
             </>
           ) : null}
-          <p className="m-0 font-mono text-[0.65rem] font-semibold uppercase tracking-[0.06em] text-[var(--color-accent)]">
+          <p className="m-0 font-mono text-[0.6875rem] font-semibold uppercase tracking-[0.06em] text-[var(--color-accent)]">
             Recommended next step
           </p>
           <p className="m-0 max-w-4xl text-sm leading-6 text-ink">
@@ -358,9 +372,7 @@ export function DecisionSection({
           </p>
           {aiResult?.concerns?.[0] ? (
             <p className="m-0 border-l-2 border-[var(--color-warn)] pl-3 text-xs leading-5 text-[var(--color-ink-faint)]">
-              <strong className="text-[var(--color-warn)]">
-                Primary concern:
-              </strong>{' '}
+              <strong className="text-warning">Primary concern:</strong>{' '}
               {aiResult.concerns[0]}
             </p>
           ) : null}
@@ -375,23 +387,25 @@ export function DecisionSection({
             Inspect retained evidence
           </a>
         </section>
-        <dl className="m-0 grid gap-px border-t border-[var(--color-rule)] bg-[var(--color-rule)] sm:grid-cols-3 lg:grid-cols-1 lg:border-t-0 lg:border-l">
-          <DecisionBoundary
-            label="Objective system"
-            value={systemStatus}
-            caption="Deterministic gates and execution outcome."
-          />
-          <DecisionBoundary
-            label="Advisory AI"
-            value={advisoryStatus}
-            caption="Qualitative guidance; never overrides the system."
-          />
-          <DecisionBoundary
-            label="Effective harness"
-            value={effectiveStatus}
-            caption="Canonical final status retained in the report."
-          />
-        </dl>
+        <div className="grid content-start border-t border-[var(--color-rule)] lg:border-t-0 lg:border-l">
+          <dl className="m-0 grid gap-px bg-[var(--color-rule)] sm:grid-cols-3 lg:grid-cols-1">
+            <DecisionBoundary label="Objective system" value={systemStatus} />
+            <DecisionBoundary label="Advisory AI" value={advisoryStatus} />
+            {effectiveDiffers ? (
+              <DecisionBoundary
+                label="Effective harness"
+                value={effectiveStatus}
+              />
+            ) : null}
+          </dl>
+          <p className="m-0 bg-panel-raised px-4 pb-4 text-xs leading-5 text-[var(--color-ink-faint)]">
+            The objective result is authoritative; the advisory AI never
+            overrides it
+            {effectiveDiffers
+              ? ', and the effective status is the one retained in the report.'
+              : '.'}
+          </p>
+        </div>
       </div>
 
       <dl className="mt-4 grid grid-cols-2 gap-px overflow-hidden rounded-lg border border-[var(--color-rule)] bg-[var(--color-rule)] lg:grid-cols-4">
@@ -402,7 +416,7 @@ export function DecisionSection({
           ['Evidence references', summary?.evidence_reference_count],
         ].map(([label, value]) => (
           <div key={String(label)} className="bg-panel-raised p-3">
-            <dt className="font-mono text-[0.6rem] uppercase tracking-[0.06em] text-[var(--color-ink-ghost)]">
+            <dt className="font-mono text-[0.6875rem] uppercase tracking-[0.06em] text-ink-muted">
               {label}
             </dt>
             <dd className="mt-1 mb-0 text-xl font-semibold text-ink">
@@ -443,12 +457,13 @@ function ResultsSection({
     >
       <PageHeader
         headingLevel={2}
+        headingId="results-heading"
         context="Benchmark results"
         title="Scenario results"
         summary="Compare objective outcomes, advisory conclusions, runtime, and scenario structure. Expand one row to inspect its benchmark metrics and workflow."
         className=""
         actions={
-          <span className="font-mono text-xs text-[var(--color-ink-ghost)]">
+          <span className="font-mono text-xs text-ink-muted">
             {scenarioCount} {scenarioCount === 1 ? 'scenario' : 'scenarios'} ·{' '}
             {runCount} {runCount === 1 ? 'run' : 'runs'}
           </span>
@@ -461,6 +476,60 @@ function ResultsSection({
   )
 }
 
+function compactObject(value: unknown): string | null {
+  if (!value || typeof value !== 'object') return null
+  const entries = Object.entries(value as Record<string, unknown>).filter(
+    ([, entry]) => entry !== null && entry !== undefined && entry !== '',
+  )
+  if (entries.length === 0) return null
+  return entries
+    .map(([key, entry]) =>
+      typeof entry === 'string' && /^[0-9a-f]{40}$/i.test(entry)
+        ? `${key} ${entry.slice(0, 12)}`
+        : `${key} ${typeof entry === 'object' ? JSON.stringify(entry) : String(entry)}`,
+    )
+    .join(' · ')
+}
+
+// Provenance rows: only fields with a value, timestamps in the reader's
+// locale next to the duration, nested records flattened without null keys
+// (audit ED-15).
+export function provenanceEntries(
+  detail: DashboardExecutionDetail,
+  presentation: ExecutionPresentation,
+): Array<[string, string]> {
+  const started = Date.parse(presentation.startedAt)
+  const completed = Date.parse(presentation.completedAt)
+  const duration =
+    Number.isFinite(started) &&
+    Number.isFinite(completed) &&
+    completed >= started
+      ? formatDuration((completed - started) / 1000)
+      : null
+  const rows: Array<[string, string | null | undefined]> = [
+    ['execution id', detail.id],
+    ['run id', detail.run_id],
+    ['attempt', detail.attempt == null ? null : String(detail.attempt)],
+    ['status', detail.status],
+    ['availability', detail.availability],
+    ['event', detail.event],
+    ['actor', detail.actor],
+    [
+      'started',
+      presentation.startedAt ? formatDate(presentation.startedAt) : null,
+    ],
+    [
+      'completed',
+      presentation.completedAt
+        ? `${formatDate(presentation.completedAt)}${duration ? ` · ${duration}` : ''}`
+        : null,
+    ],
+    ['source', compactObject(detail.source)],
+    ['release', compactObject(detail.release)],
+  ]
+  return rows.filter((row): row is [string, string] => Boolean(row[1]))
+}
+
 function TechnicalSection({
   detail,
   presentation,
@@ -468,19 +537,8 @@ function TechnicalSection({
   detail: DashboardExecutionDetail
   presentation: ExecutionPresentation
 }) {
-  const technical = {
-    id: detail.id,
-    run_id: detail.run_id,
-    attempt: detail.attempt,
-    status: detail.status,
-    source: detail.source,
-    release: detail.release,
-    event: detail.event,
-    actor: detail.actor,
-    started_at: presentation.startedAt,
-    completed_at: presentation.completedAt,
-    availability: detail.availability,
-  }
+  const entries = provenanceEntries(detail, presentation)
+  const raw = JSON.stringify(detail, null, 2)
   return (
     <Panel
       as="section"
@@ -491,34 +549,37 @@ function TechnicalSection({
     >
       <PageHeader
         headingLevel={2}
+        headingId="technical-heading"
         context="Provenance"
         title="Raw fields and immutable identity"
-        summary="Internal identifiers remain available for reproducibility without carrying the first-read experience."
+        summary="Identifiers retained for reproducibility."
         className=""
-      />
-      <div className="mt-5 grid gap-2 sm:grid-cols-2">
-        {Object.entries(technical).map(([key, value]) => (
-          <div
-            key={key}
-            className="rounded-lg border border-[var(--color-rule)] bg-panel p-3"
+        actions={
+          <button
+            type="button"
+            className={buttonClassName({ variant: 'quiet', size: 'compact' })}
+            onClick={() => void navigator.clipboard?.writeText(raw)}
           >
-            <small className="font-mono text-[0.6rem] font-semibold uppercase tracking-[0.06em] text-[var(--color-ink-ghost)]">
-              {key.replaceAll('_', ' ')}
-            </small>
-            <code className="mt-2 block break-all font-mono text-xs text-[var(--color-ink-faint)]">
-              {typeof value === 'object'
-                ? JSON.stringify(value)
-                : String(value ?? 'Not reported')}
-            </code>
+            Copy JSON
+          </button>
+        }
+      />
+      <dl className="m-0 mt-5 grid grid-cols-[max-content_minmax(0,1fr)] gap-x-6 gap-y-2 font-mono text-xs">
+        {entries.map(([key, value]) => (
+          <div key={key} className="contents">
+            <dt className="text-[0.6875rem] font-medium uppercase tracking-[0.06em] text-ink-muted">
+              {key}
+            </dt>
+            <dd className="m-0 break-all text-ink">{value}</dd>
           </div>
         ))}
-      </div>
-      <details className="mt-5 rounded-lg border border-[var(--color-rule)] bg-panel">
+      </dl>
+      <details className="mt-5 rounded-[6px] bg-panel">
         <summary className="min-h-11 cursor-pointer px-4 py-3 text-sm font-semibold text-ink">
           Preview raw JSON
         </summary>
-        <pre className="max-h-[560px] overflow-auto border-t border-[var(--color-rule)] p-4 font-mono text-xs text-[var(--color-ink-ghost)]">
-          {JSON.stringify(detail, null, 2)}
+        <pre className="max-h-[560px] overflow-auto p-4 font-mono text-xs text-[var(--color-ink-faint)]">
+          {raw}
         </pre>
       </details>
     </Panel>
@@ -539,14 +600,6 @@ export function ExecutionPage({
     run: AssessmentRunView
     title: string
   } | null>(null)
-  const [section, setSection] = useState<DetailSection>(
-    sectionFromAnchor(anchor),
-  )
-
-  useEffect(() => {
-    setSection(sectionFromAnchor(anchor))
-  }, [anchor])
-
   useEffect(() => {
     if (!anchor || !detail) return
     window.requestAnimationFrame(() =>
@@ -609,25 +662,9 @@ export function ExecutionPage({
     [detail],
   )
 
-  useEffect(() => {
-    if (anchor || !presentation) return
-    const initialSection: DetailSection =
-      presentation.attention === 'needs_attention' ? 'results' : 'summary'
-    setSection(initialSection)
-    if (initialSection === 'results')
-      window.requestAnimationFrame(() =>
-        document
-          .getElementById(initialSection)
-          ?.scrollIntoView({ block: 'start' }),
-      )
-  }, [anchor, presentation])
-
   if (error)
     return (
       <div className="ds-root min-h-dvh bg-[var(--color-bg)] text-ink">
-        <a className="skip-link" href={hashForWorkspace()}>
-          Back to executions
-        </a>
         <main
           id="main"
           className="mx-auto grid min-h-dvh w-[min(52rem,calc(100%_-_1.5rem))] place-items-center py-8"
@@ -665,7 +702,7 @@ export function ExecutionPage({
             className="w-full rounded-[var(--ds-radius-md)]"
             aria-busy="true"
           >
-            <p className="m-0 font-mono text-xs uppercase tracking-[0.06em] text-[var(--color-ink-ghost)]">
+            <p className="m-0 font-mono text-xs uppercase tracking-[0.06em] text-ink-muted">
               Loading execution report…
             </p>
           </Panel>
@@ -695,31 +732,62 @@ export function ExecutionPage({
   const coverageComplete =
     presentation.coverage != null &&
     (presentation.coverage === 1 || presentation.coverage >= 100)
+  const noRun = !presentation.available || scenarioCount === 0
+  const subjectNames = presentation.subjects
+    .map((model) => friendlyModelName(model.model))
+    .join(', ')
+  const judgeNames = presentation.judges
+    .map((model) => friendlyModelName(model.model))
+    .join(', ')
+  const headerSummary = [
+    scenarioCount
+      ? `${scenarioCount} ${scenarioCount === 1 ? 'scenario' : 'scenarios'}`
+      : 'no scenario report retained',
+    status.label.toLowerCase(),
+    runtimeSeconds !== null ? formatDuration(runtimeSeconds) : null,
+    subjectNames
+      ? judgeNames
+        ? `${subjectNames} judged by ${judgeNames}`
+        : subjectNames
+      : null,
+  ]
+    .filter(Boolean)
+    .join(' · ')
   return (
     <div className="ds-root min-h-dvh bg-[var(--color-bg)] text-ink">
-      <a className="skip-link" href={hashForExecution(executionId, section)}>
+      {/* biome-ignore lint/a11y/useValidAnchor: a skip link must stay a link; the console owns the hash router, so the handler moves focus instead of changing the route (audit ED-16). */}
+      <a
+        className="skip-link"
+        href="#main"
+        onClick={(click) => {
+          click.preventDefault()
+          document.getElementById('main')?.focus()
+        }}
+      >
         Skip to execution details
       </a>
       <DashboardPageActions active="executions" />
       <main
         id="main"
-        className="page-shell detail-shell w-[min(1380px,calc(100%_-_3rem))] pt-6 max-[640px]:w-[calc(100%_-_1.5rem)]"
+        tabIndex={-1}
+        className="page-shell detail-shell w-[min(1380px,calc(100%_-_3rem))] pt-6 outline-none max-[640px]:w-[calc(100%_-_1.5rem)]"
       >
         <nav
-          className="breadcrumbs mb-5 flex min-w-0 items-center gap-2 overflow-hidden font-mono text-[0.64rem] text-[var(--color-ink-ghost)]"
+          className="breadcrumbs mb-5 flex min-w-0 items-center gap-2 overflow-hidden font-mono text-xs text-ink-muted"
           aria-label="Breadcrumb"
         >
-          <a href={hashForWorkspace()}>Overview</a>
-          <span aria-hidden="true">/</span>
           <a href={hashForWorkspace('executions')}>Executions</a>
           <span aria-hidden="true">/</span>
-          <span className="truncate">{presentation.label}</span>
+          <span className="truncate text-ink" aria-current="page">
+            {presentation.label}
+          </span>
         </nav>
         <PageHeader
           id="detail-summary"
+          headingId="detail-heading"
           context="Execution detail"
           title={presentation.label}
-          summary={`${presentation.receivedReports ?? '—'} of ${presentation.expectedReports ?? '—'} expected reports received. Objective outcomes remain authoritative; advisory AI is shown separately.`}
+          summary={headerSummary}
           className="border-b border-[var(--color-rule)] pb-5 [&_.ds-page-header-copy]:gap-2 [&_h1]:max-w-full [&_h1]:break-words [&_h1]:text-xl"
           actions={
             <div className="flex flex-wrap justify-end gap-2">
@@ -750,7 +818,7 @@ export function ExecutionPage({
             aria-label="Execution identity"
           >
             <div className="bg-panel-raised p-3">
-              <div className="font-mono text-[0.6rem] font-semibold uppercase tracking-[0.06em] text-[var(--color-ink-ghost)]">
+              <div className="font-mono text-[0.6875rem] font-semibold uppercase tracking-[0.06em] text-ink-muted">
                 Scenarios
               </div>
               <strong className="mt-1 block truncate text-sm text-ink">
@@ -762,7 +830,7 @@ export function ExecutionPage({
             <ModelIdentityCard label="Subject" models={presentation.subjects} />
             <ModelIdentityCard label="Judge" models={presentation.judges} />
             <div className="bg-panel-raised p-3">
-              <div className="font-mono text-[0.6rem] font-semibold uppercase tracking-[0.06em] text-[var(--color-ink-ghost)]">
+              <div className="font-mono text-[0.6875rem] font-semibold uppercase tracking-[0.06em] text-ink-muted">
                 Completed
               </div>
               <strong className="mt-1 block text-sm text-ink">
@@ -770,126 +838,118 @@ export function ExecutionPage({
               </strong>
             </div>
           </section>
-          <section
-            className="grid grid-cols-2 gap-3 border-t border-[var(--color-edge)] p-4 lg:grid-cols-4"
-            aria-label="Execution metrics"
-          >
-            <MetricCard
-              className="bg-panel"
-              label="Objective scenarios"
-              value={
-                scenarioCount
-                  ? `${scenarioSummary?.passed ?? 0}/${scenarioCount}`
-                  : '—'
-              }
-              detail={`${scenarioSummary?.hardGate ?? 0} hard gate · ${scenarioSummary?.failed ?? 0} failed`}
-              delta={scenarioAttention > 0 ? 'Needs attention' : 'Passed'}
-              tone={scenarioAttention > 0 ? 'negative' : 'positive'}
-            />
-            <MetricCard
-              className="bg-panel"
-              label="Report coverage"
-              value={formatPercent(presentation.coverage)}
-              detail={`${presentation.receivedReports ?? 0} of ${presentation.expectedReports ?? 0} reports received`}
-              delta={
-                presentation.coverage == null
-                  ? 'Not reported'
-                  : coverageComplete
-                    ? 'Complete'
-                    : 'Missing reports'
-              }
-              tone={
-                presentation.coverage == null
-                  ? 'unavailable'
-                  : coverageComplete
-                    ? 'positive'
-                    : 'warning'
-              }
-            />
-            <MetricCard
-              className="bg-panel"
-              label="Execution runtime"
-              value={formatDuration(runtimeSeconds)}
-              detail={
-                presentation.modelRuntimeSeconds != null
-                  ? 'Reported wall-clock time'
-                  : `${summaryMetrics?.runCount ?? 0} observed runs`
-              }
-              delta={
-                presentation.modelRuntimeSeconds != null
-                  ? 'Wall clock'
-                  : 'Observed'
-              }
-              tone={runtimeSeconds === null ? 'unavailable' : 'neutral'}
-            />
-            <MetricCard
-              className="bg-panel"
-              label="Workflow scenarios"
-              value={
-                scenarioCount
-                  ? `${workflowScenarioCount}/${scenarioCount}`
-                  : '—'
-              }
-              detail={
-                hasRustWorkflow
-                  ? `${workflow?.stepCount ?? 0} persisted steps`
-                  : 'No workflow steps retained'
-              }
-              delta={hasRustWorkflow ? 'Composite' : 'Standard'}
-              tone={hasRustWorkflow ? 'neutral' : 'unavailable'}
-            />
-            <MetricCard
-              className="bg-panel"
-              label="Total tokens"
-              value={formatMetricCount(summaryMetrics?.totalTokens ?? null)}
-              detail="Consolidated subject execution usage"
-              delta="Usage"
-              tone={
-                summaryMetrics?.totalTokens == null ? 'unavailable' : 'neutral'
-              }
-            />
-            <MetricCard
-              className="bg-panel"
-              label="Turns"
-              value={formatMetricCount(summaryMetrics?.turns ?? null)}
-              detail="Root and delegated agent turns"
-              delta="Efficiency"
-              tone={summaryMetrics?.turns == null ? 'unavailable' : 'neutral'}
-            />
-            <MetricCard
-              className="bg-panel"
-              label="Function calls"
-              value={formatMetricCount(summaryMetrics?.functionCalls ?? null)}
-              detail={
-                summaryMetrics?.functionCallErrors == null
-                  ? 'Error count not captured'
-                  : `${formatMetricCount(summaryMetrics.functionCallErrors)} errors`
-              }
-              delta="Tools"
-              tone={
-                summaryMetrics?.functionCalls == null
-                  ? 'unavailable'
-                  : 'neutral'
-              }
-            />
-            <MetricCard
-              className="bg-panel"
-              label="Reported cost"
-              value={formatReportedCost(summaryMetrics?.totalCostUsd ?? null)}
-              detail="Consolidated execution cost"
-              delta="USD"
-              tone={
-                summaryMetrics?.totalCostUsd == null ? 'unavailable' : 'neutral'
-              }
-            />
-          </section>
+          {noRun ? (
+            <p className="m-0 border-t border-[var(--color-edge)] p-4 font-mono text-xs text-[var(--color-ink-faint)]">
+              No scenario report was retained for this execution
+              {presentation.attention === 'cancelled'
+                ? ' because it was cancelled'
+                : presentation.attention === 'running' ||
+                    presentation.attention === 'cancelling'
+                  ? ' yet; it is still running'
+                  : ''}
+              . Metrics appear once a report exists.
+            </p>
+          ) : (
+            <section
+              className="grid grid-cols-2 gap-3 border-t border-[var(--color-edge)] p-4 lg:grid-cols-[repeat(auto-fit,minmax(12rem,1fr))]"
+              aria-label="Execution metrics"
+            >
+              <MetricCard
+                className="bg-panel"
+                label="Objective scenarios"
+                value={`${scenarioSummary?.passed ?? 0}/${scenarioCount}`}
+                detail={`${scenarioSummary?.hardGate ?? 0} hard gate · ${scenarioSummary?.failed ?? 0} failed`}
+                delta={scenarioAttention > 0 ? 'Needs attention' : undefined}
+                tone={scenarioAttention > 0 ? 'negative' : 'positive'}
+              />
+              <MetricCard
+                className="bg-panel"
+                label="Report coverage"
+                value={formatPercent(presentation.coverage)}
+                detail={`${presentation.receivedReports ?? 0} of ${presentation.expectedReports ?? 0} reports received`}
+                delta={
+                  presentation.coverage != null && !coverageComplete
+                    ? 'Missing reports'
+                    : undefined
+                }
+                tone={
+                  presentation.coverage == null
+                    ? 'unavailable'
+                    : coverageComplete
+                      ? 'positive'
+                      : 'warning'
+                }
+              />
+              <MetricCard
+                className="bg-panel"
+                label="Execution runtime"
+                value={formatDuration(runtimeSeconds)}
+                detail={
+                  presentation.modelRuntimeSeconds != null
+                    ? 'Reported wall-clock time'
+                    : `Observed across ${summaryMetrics?.runCount ?? 0} runs`
+                }
+                tone={runtimeSeconds === null ? 'unavailable' : 'neutral'}
+              />
+              <MetricCard
+                className="bg-panel"
+                label="Total tokens"
+                value={formatMetricCount(summaryMetrics?.totalTokens ?? null)}
+                detail={
+                  summaryMetrics?.turns != null
+                    ? `${formatMetricCount(summaryMetrics.turns)} turns · subject execution usage`
+                    : 'Subject execution usage'
+                }
+                tone={
+                  summaryMetrics?.totalTokens == null
+                    ? 'unavailable'
+                    : 'neutral'
+                }
+              />
+              {summaryMetrics?.functionCalls != null ? (
+                <MetricCard
+                  className="bg-panel"
+                  label="Function calls"
+                  value={formatMetricCount(summaryMetrics.functionCalls)}
+                  detail={
+                    summaryMetrics.functionCallErrors == null
+                      ? 'Error count not captured'
+                      : `${formatMetricCount(summaryMetrics.functionCallErrors)} errors`
+                  }
+                  tone={
+                    (summaryMetrics.functionCallErrors ?? 0) > 0
+                      ? 'warning'
+                      : 'neutral'
+                  }
+                />
+              ) : null}
+              {summaryMetrics?.totalCostUsd != null ? (
+                <MetricCard
+                  className="bg-panel"
+                  label="Reported cost"
+                  value={formatReportedCost(summaryMetrics.totalCostUsd)}
+                  detail="Consolidated execution cost"
+                />
+              ) : null}
+              {hasRustWorkflow ? (
+                <MetricCard
+                  className="bg-panel"
+                  label="Workflow scenarios"
+                  value={`${workflowScenarioCount}/${scenarioCount}`}
+                  detail={`${workflow?.stepCount ?? 0} persisted steps`}
+                />
+              ) : null}
+            </section>
+          )}
         </Panel>
         <div className="detail-main grid min-w-0 gap-5">
-          <DecisionSection
-            presentation={presentation}
-            detail={detail}
-            primaryRun={primaryRun}
-          />
+          {noRun && !primaryRun ? null : (
+            <DecisionSection
+              presentation={presentation}
+              detail={detail}
+              primaryRun={primaryRun}
+            />
+          )}
           <ResultsSection
             detail={detail}
             onTranscript={(run, title) => setTranscript({ run, title })}
@@ -905,8 +965,10 @@ export function ExecutionPage({
           onClose={() => setTranscript(null)}
         />
       )}
-      <footer className="mx-auto mt-8 flex w-[min(1380px,calc(100%_-_3rem))] flex-wrap items-center justify-between gap-3 border-t border-[var(--color-rule)] py-6 text-xs text-[var(--color-ink-ghost)] max-[640px]:w-[calc(100%_-_1.5rem)]">
-        <span>Harness E2E · public execution report</span>
+      <footer className="mx-auto mt-8 flex w-[min(1380px,calc(100%_-_3rem))] flex-wrap items-center justify-between gap-3 border-t border-[var(--color-rule)] py-6 text-xs text-ink-muted max-[640px]:w-[calc(100%_-_1.5rem)]">
+        <span>
+          Execution report · <code className="font-mono">{detail.id}</code>
+        </span>
         <a
           className="text-[var(--color-ink-faint)] underline-offset-4 hover:underline"
           href={hashForWorkspace('executions')}

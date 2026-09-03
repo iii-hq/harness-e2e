@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import type { TestCatalogRow, TestSideSummary } from '@/lib/test-catalog'
 import {
+  catalogExecutionSummary,
   comparisonUtility,
   comparisonWarnings,
   hasRetainedEvidence,
@@ -187,5 +188,48 @@ describe('versioned test catalog view', () => {
         detail: expect.stringContaining('provider, or model'),
       }),
     ])
+  })
+})
+
+describe('catalog execution summary', () => {
+  // Audit T-02: an active test whose contract moved to v3 still shows the
+  // evidence it gathered on v1.
+  it('sums executions across contract versions and keeps the latest date', () => {
+    const summary = catalogExecutionSummary({
+      test_id: 'chess_play_ladder',
+      lifecycle: 'active',
+      current_version: 3,
+      selected_version: 3,
+      result: null,
+      available_versions: [
+        { version: 3, execution_count: 0, run_count: 0, last_seen: null },
+        {
+          version: 1,
+          execution_count: 1,
+          run_count: 2,
+          last_seen: '2026-08-26T19:53:13.315Z',
+        },
+      ],
+    } as never)
+    expect(summary).toEqual({
+      total: 1,
+      lastSeen: '2026-08-26T19:53:13.315Z',
+      breakdown: '1 on v1',
+    })
+  })
+
+  it('reports never-run tests without a date', () => {
+    expect(
+      catalogExecutionSummary({
+        test_id: 'fresh',
+        lifecycle: 'never_run',
+        current_version: 1,
+        selected_version: 1,
+        result: null,
+        available_versions: [
+          { version: 1, execution_count: 0, run_count: 0, last_seen: null },
+        ],
+      } as never),
+    ).toEqual({ total: 0, lastSeen: null, breakdown: '' })
   })
 })

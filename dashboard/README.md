@@ -168,9 +168,13 @@ design-system migration runs; all of them are part of `pnpm test` and
   sizes. The counts in `css-debt.baseline.json` can only go down. After a
   migration removes debt, lock the lower numbers in with
   `CSS_DEBT_UPDATE=1 node --test tests/dashboard/css-debt.test.cjs`.
-- `tests/dashboard/theme-contrast.test.cjs` computes WCAG ratios for the shell
-  text tokens in both themes; tokens still below 4.5:1 carry an explicit floor
-  that must be raised when the token is fixed.
+- `tests/dashboard/theme-contrast.test.cjs` resolves the shell's text tokens
+  (`--text`, `--text-soft`, `--text-muted`, `--accent`, `--success`,
+  `--warning`, `--danger`) through their `var()` chains and requires 4.5:1 on
+  the panel, the raised panel and the fill in both themes, plus 3:1 for
+  `--control-edge`. New colours must be channel lists (`--he-*-rgb`) or
+  `color-mix()` of host tokens: the console build rewrites unknown hex
+  literals to `var(--color-ink)`.
 - `tests/dashboard/shell-narrow-nav.test.cjs` and
   `src/components/DashboardShell.test.tsx` describe the CSS-only toggle for the
   narrow section select (`todo` / `it.fails` until it lands).
@@ -186,3 +190,11 @@ pnpm screenshots -- --base standalone --out .screenshots/after
 
 Captures and a typography census (`census.json`) land in
 `dashboard/.screenshots/`, which is ignored by git.
+
+The remaining design-audit work is split into four briefs under
+[`docs/ui-migration/`](docs/ui-migration/README.md). That README also holds the
+rules every UI pull request follows (copy-pinned tests change with the copy,
+no unexplained `biome-ignore`, design-system vocabulary only, token colours,
+static Tailwind classes) and the live-evidence recipe: the Rust dashboard in
+local mode (`III_NAMESPACE=my-project harness-e2e dashboard --runs-dir
+~/.iii/data/harness-e2e --listen 127.0.0.1:4173`) behind `vite preview`.

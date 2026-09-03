@@ -71,17 +71,17 @@ describe('test catalog L5 dimensions', () => {
   })
 
   it('suggests a new file name instead of colliding with a saved test', () => {
-    expect(nextLocalScenarioFileName([])).toBe('local-scenario.md')
+    expect(nextLocalScenarioFileName([])).toBe('new-test.md')
     expect(
       nextLocalScenarioFileName([
         localScenario({
-          source_path: 'local-scenarios/local-scenario.md',
+          source_path: 'local-scenarios/new-test.md',
         }),
         localScenario({
-          source_path: 'local-scenarios/local-scenario-2.md',
+          source_path: 'local-scenarios/new-test-2.md',
         }),
       ]),
-    ).toBe('local-scenario-3.md')
+    ).toBe('new-test-3.md')
   })
 
   it('lists local definitions as normal catalog rows without duplicates', () => {
@@ -122,10 +122,16 @@ describe('test catalog L5 dimensions', () => {
     })
   })
 
-  it('renders a compact local-origin badge', () => {
+  // Audit T-09 / DS-07: the badge speaks the same vocabulary as the
+  // version pill — mono, lowercase, 6px, fill, no border, 11px.
+  it('renders the local-origin badge in the mono vocabulary', () => {
     const html = renderToStaticMarkup(<LocalTestBadge />)
-    expect(html).toContain('Local')
-    expect(html).toContain('bg-brand-soft')
+    expect(html).toContain('>local<')
+    expect(html).toContain('bg-[var(--surface-fill)]')
+    expect(html).toContain('rounded-[6px]')
+    expect(html).not.toContain('rounded-full')
+    expect(html).not.toContain('border-brand')
+    expect(html).not.toContain('uppercase')
   })
 
   it('presents classification, horizon, and realism independently', () => {

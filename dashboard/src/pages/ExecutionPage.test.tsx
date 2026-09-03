@@ -6,6 +6,8 @@ import { buildExecutionPresentation } from '@/lib/execution-view'
 import {
   buildSummaryExecutionMetrics,
   DecisionSection,
+  decisionTitle,
+  provenanceEntries,
 } from '@/pages/ExecutionPage'
 
 const detail = {
@@ -95,6 +97,67 @@ describe('execution decision hierarchy', () => {
     expect(html).toContain('39')
     expect(html).toContain('7')
     expect(html).toContain('17')
+  })
+
+  it('names the two contract layers instead of concatenating them', () => {
+    expect(decisionTitle('judge_error', 'inconclusive', true)).toBe(
+      'Objective result: Judge Error · advisory: Inconclusive',
+    )
+    expect(decisionTitle('cancelled', 'unavailable', false)).toBe(
+      'Cancelled · no assessment retained',
+    )
+    expect(decisionTitle('passed', 'pass_with_concerns', true)).toBe(
+      'Passed objectively; advisory review found gaps',
+    )
+  })
+
+  it('hides the effective boundary when it repeats the objective one', () => {
+    const html = renderToStaticMarkup(
+      <DecisionSection
+        detail={detail}
+        presentation={buildExecutionPresentation(detail)}
+        primaryRun={{
+          ...run,
+          effectiveStatus: 'passed',
+          systemStatus: 'passed',
+        }}
+      />,
+    )
+    expect(html).toContain('Objective system')
+    expect(html).not.toContain('Effective harness')
+  })
+
+  it('lists provenance without null fields and with local timestamps', () => {
+    const entries = provenanceEntries(
+      {
+        ...detail,
+        run_id: 'run-1',
+        attempt: 1,
+        event: 'local',
+        actor: 'layon',
+        started_at: '2026-08-26T20:07:31Z',
+        completed_at: '2026-08-26T20:11:31Z',
+        source: {
+          ref: null,
+          repository: 'iii-hq/harness-e2e',
+          sha: 'e34550995cE33809d0b9458f3689111faa8d3f0e'.toLowerCase(),
+        },
+        release: { registry_tag: null, stack_lock_digest: null },
+      } as unknown as DashboardExecutionDetail,
+      buildExecutionPresentation({
+        ...detail,
+        started_at: '2026-08-26T20:07:31Z',
+        completed_at: '2026-08-26T20:11:31Z',
+      } as unknown as DashboardExecutionDetail),
+    )
+    const byKey = Object.fromEntries(entries)
+    expect(Object.keys(byKey)).not.toContain('release')
+    expect(byKey.source).toBe(
+      'repository iii-hq/harness-e2e · sha e34550995ce3',
+    )
+    expect(byKey.completed).toMatch(/· 4m 00s$/)
+    expect(byKey.completed).not.toContain('2026-08-26T20:11:31Z')
+    expect(byKey.actor).toBe('layon')
   })
 
   it('prefers consolidated execution totals for primary usage metrics', () => {

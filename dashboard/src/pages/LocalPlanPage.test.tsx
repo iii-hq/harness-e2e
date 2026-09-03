@@ -6,13 +6,36 @@ import type {
 } from '@/lib/dashboard-data-source'
 import { buildPlanComparison } from '@/lib/plan-comparison'
 import {
+  PLAN_FORM_DEFAULTS,
   PlanComparisonPanel,
   PlanExecutionHistory,
   PlanLifecycle,
   PlanNonComparableAttempts,
+  planFormDirty,
   planMetricWinnerIds,
   selectedPlanCandidate,
 } from '@/pages/LocalPlanPage'
+
+describe('new plan form dirtiness', () => {
+  // Audit PN-01: the form used to be born dirty because the dirty baseline
+  // carried a different retry default than the state.
+  it('treats an untouched form as clean', () => {
+    expect(planFormDirty(PLAN_FORM_DEFAULTS, PLAN_FORM_DEFAULTS)).toBe(false)
+    expect(PLAN_FORM_DEFAULTS.technicalRetries).toBe('0')
+  })
+
+  it('flags any edited field', () => {
+    expect(
+      planFormDirty({ ...PLAN_FORM_DEFAULTS, label: 'x' }, PLAN_FORM_DEFAULTS),
+    ).toBe(true)
+    expect(
+      planFormDirty(
+        { ...PLAN_FORM_DEFAULTS, scenarios: ['a'] },
+        PLAN_FORM_DEFAULTS,
+      ),
+    ).toBe(true)
+  })
+})
 
 const candidateRunningPlan: LocalPlan = {
   schema_version: 1,

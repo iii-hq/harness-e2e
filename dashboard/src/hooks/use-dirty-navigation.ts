@@ -2,6 +2,23 @@ import { useEffect, useRef, useState } from 'react'
 
 const warning = 'You have unsaved changes. Leave this page and discard them?'
 
+/**
+ * Audit PN-03: intercepting a hash change can scroll the page (or the
+ * console pane) back to the top. Capture every scrolled container before
+ * the intercept and restore it once the guard has rendered.
+ */
+function captureScroll() {
+  const positions: Array<[Element, number]> = []
+  for (const element of document.querySelectorAll('*')) {
+    if (element.scrollTop > 0) positions.push([element, element.scrollTop])
+  }
+  const windowY = window.scrollY
+  return () => {
+    for (const [element, top] of positions) element.scrollTop = top
+    if (windowY > 0) window.scrollTo(0, windowY)
+  }
+}
+
 /** Protect a dirty editor from hash navigation, pane close and tab refresh. */
 export function useDirtyNavigation(dirty: boolean) {
   const acceptedHash = useRef(
@@ -17,6 +34,7 @@ export function useDirtyNavigation(dirty: boolean) {
         acceptedHash.current = nextHash
         return
       }
+      const restoreScroll = captureScroll()
       pendingHash.current = nextHash
       window.history.replaceState(
         window.history.state,
@@ -24,6 +42,8 @@ export function useDirtyNavigation(dirty: boolean) {
         `${window.location.pathname}${window.location.search}${acceptedHash.current}`,
       )
       rerender((value) => value + 1)
+      window.requestAnimationFrame(restoreScroll)
+      window.setTimeout(restoreScroll, 0)
     }
     const handleBeforeUnload = (event: BeforeUnloadEvent) => {
       if (!dirty) return

@@ -134,6 +134,8 @@ export type PageHeaderProps = HTMLAttributes<HTMLElement> & {
   title: string
   summary: string
   headingLevel?: 1 | 2
+  /** Id for the heading element, so a section can point aria-labelledby at it. */
+  headingId?: string
   context?: string
   actions?: ReactNode
 }
@@ -142,6 +144,7 @@ export function PageHeader({
   title,
   summary,
   headingLevel = 1,
+  headingId,
   context,
   actions,
   className,
@@ -152,7 +155,7 @@ export function PageHeader({
     <header className={classes('ds-page-header', className)} {...props}>
       <div className="ds-page-header-copy">
         {context ? <p className="ds-page-context">{context}</p> : null}
-        <Heading>{title}</Heading>
+        <Heading id={headingId}>{title}</Heading>
         <p className="ds-page-summary">{summary}</p>
       </div>
       {actions ? <div className="ds-page-actions">{actions}</div> : null}
