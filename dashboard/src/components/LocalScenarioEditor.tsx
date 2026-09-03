@@ -1,14 +1,23 @@
-import { FileText, FileUp, Plus, Trash2 } from 'lucide-react'
+import { Copy, Download, FileUp, Plus, X } from 'lucide-react'
 import { useMemo, useRef, useState } from 'react'
 import { DiscardDraftDialog } from '@/components/DiscardDraftDialog'
-import { buttonClassName, Dialog } from '@/design-system'
+import {
+  buttonClassName,
+  Dialog,
+  Field,
+  fieldDescribedBy,
+  Input,
+  Textarea,
+} from '@/design-system'
 import type { DashboardDataBridge } from '@/lib/dashboard-data-source'
 import {
   buildLocalScenarioSource,
+  distributeValidationWeights,
   INITIAL_LOCAL_SCENARIO_DRAFT,
   LOCAL_SCENARIO_TEMPLATE,
   type LocalScenarioDraft,
-  localScenarioDraftIssue,
+  type LocalScenarioFieldIssues,
+  localScenarioDraftFieldIssues,
   localScenarioValidationWeight,
   parseLocalScenarioSource,
 } from '@/lib/local-scenario-authoring'
@@ -16,6 +25,8 @@ import {
 export { LOCAL_SCENARIO_TEMPLATE }
 
 const MAX_LOCAL_SCENARIO_BYTES = 256 * 1024
+
+export type LocalScenarioCreatedIntent = 'catalog' | 'plan'
 
 /**
  * Audit NT-03: the editor starts empty. The template text is shown as
@@ -87,6 +98,35 @@ export function weightBreakdown(draft: LocalScenarioDraft) {
   return parts.length > 1 ? `${parts.join(' + ')} = ${total}%` : `${total}%`
 }
 
+/** Human label for an issue key, used in the footer's pending list. */
+export function issueFieldLabel(key: string, draft: LocalScenarioDraft) {
+  const names: Record<string, string> = {
+    title: 'test name',
+    file: 'file name',
+    version: 'version',
+    beforeTest: 'before test',
+    prompt: 'task prompt',
+    validations: 'criteria weights',
+  }
+  if (names[key]) return names[key]
+  const match = key.match(/^validation:(.+):(title|weight|instructions)$/)
+  if (!match) return key
+  const index = draft.validations.findIndex(
+    (validation) => validation.id === match[1],
+  )
+  const part =
+    match[2] === 'title'
+      ? 'name'
+      : match[2] === 'weight'
+        ? 'weight'
+        : 'instructions'
+  return `criterion ${index + 1} ${part}`
+}
+
+function fieldId(key: string) {
+  return `local-test-${key.replace(/[^a-z0-9]+/gi, '-')}`
+}
+
 function responseScenarioId(value: Record<string, unknown>) {
   const scenario = value.scenario
   if (!scenario || typeof scenario !== 'object') return null
@@ -94,11 +134,7 @@ function responseScenarioId(value: Record<string, unknown>) {
   return typeof id === 'string' ? id : null
 }
 
-const fieldClassName =
-  'min-h-11 w-full rounded-[6px] border border-[var(--color-rule)] bg-panel-raised px-3 text-sm text-ink placeholder:text-ink-muted focus-visible:border-[var(--color-rule-focus)] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--color-rule-focus)] disabled:opacity-50'
-const textareaClassName =
-  'min-h-28 w-full resize-y rounded-[6px] border border-[var(--color-rule)] bg-panel-raised px-3 py-2.5 text-sm leading-6 text-ink placeholder:text-ink-muted focus-visible:border-[var(--color-rule-focus)] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--color-rule-focus)] disabled:opacity-50'
-const fieldLabelClassName = 'grid gap-2 text-xs font-semibold text-ink-soft'
+const TEMPLATE_HREF = `data:text/markdown;charset=utf-8,${encodeURIComponent(LOCAL_SCENARIO_TEMPLATE)}`
 
 export function LocalScenarioEditor({
   bridge,
@@ -111,7 +147,7 @@ export function LocalScenarioEditor({
   disabled?: boolean
   initialFileName?: string
   onClose: () => void
-  onCreated: (scenarioId: string) => void
+  onCreated: (scenarioId: string, intent: LocalScenarioCreatedIntent) => void
 }) {
   const fileRef = useRef<HTMLInputElement>(null)
   const nextValidationId = useRef(2)
@@ -119,19 +155,31 @@ export function LocalScenarioEditor({
   const [fileNameInput, setFileNameInput] = useState<string | null>(null)
   const [draft, setDraft] = useState<LocalScenarioDraft>(cloneEmptyDraft)
   const [saving, setSaving] = useState(false)
+  const [attempted, setAttempted] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [notice, setNotice] = useState<string | null>(null)
+  const [copied, setCopied] = useState(false)
   const [confirmingClose, setConfirmingClose] = useState(false)
 
   const fileName =
     fileNameInput ?? (fileNameForTitle(draft.title) || initialFileName)
   const source = useMemo(() => buildLocalScenarioSource(draft), [draft])
-  const weight = useMemo(() => localScenarioValidationWeight(draft), [draft])
-  const draftIssue = useMemo(() => localScenarioDraftIssue(draft), [draft])
+  const weight = localScenarioValidationWeight(draft)
   const safeFileName = safeLocalFileName(fileName.trim())
+  const allIssues = useMemo<LocalScenarioFieldIssues>(() => {
+    const issues = localScenarioDraftFieldIssues(draft)
+    if (!safeFileName)
+      issues.file =
+        'Use letters, numbers, spaces, hyphens or underscores and end with .md.'
+    return issues
+  }, [draft, safeFileName])
+  // Audit NT-02 / NT-05: the errors appear after the first attempt, on the
+  // field itself, and the primary stays enabled.
+  const issues = attempted ? allIssues : {}
+  const issueKeys = Object.keys(issues)
   const busy = disabled || saving
-  const canCreate = safeFileName && draftIssue === null && !busy
   const dirty = isLocalScenarioDraftDirty(draft, fileNameInput !== null)
+  const compiledId = compiledLocalScenarioId(fileName.trim())
 
   const updateDraft = <Key extends keyof LocalScenarioDraft>(
     key: Key,
@@ -185,13 +233,16 @@ export function LocalScenarioEditor({
     else onClose()
   }
 
-  const save = async () => {
-    if (!safeFileName || draftIssue) {
-      setError(
-        !safeFileName
-          ? 'Use a safe Markdown file name before creating the test.'
-          : draftIssue,
-      )
+  const focusIssue = (key: string) => {
+    const element = document.getElementById(fieldId(key))
+    if (element instanceof HTMLElement) element.focus()
+  }
+
+  const save = async (intent: LocalScenarioCreatedIntent) => {
+    const keys = Object.keys(allIssues)
+    if (keys.length > 0) {
+      setAttempted(true)
+      focusIssue(keys[0])
       return
     }
     setSaving(true)
@@ -204,7 +255,7 @@ export function LocalScenarioEditor({
       const scenarioId = responseScenarioId(response)
       if (!scenarioId)
         throw new Error('The worker did not return a scenario id.')
-      onCreated(scenarioId)
+      onCreated(scenarioId, intent)
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : String(cause))
     } finally {
@@ -225,6 +276,7 @@ export function LocalScenarioEditor({
       setDraft(imported)
       setNotice(`Imported ${file.name}. Review the fields before creating.`)
     } catch (cause) {
+      // Audit NT-10: the parse error names the problem, in the one feedback area.
       setError(
         `Could not import ${file.name}: ${cause instanceof Error ? cause.message : String(cause)}`,
       )
@@ -233,38 +285,82 @@ export function LocalScenarioEditor({
     }
   }
 
-  const statusMessage = error ? (
-    <span className="text-danger">{error}</span>
-  ) : !safeFileName ? (
-    <span className="text-ink-muted">
-      Enter a safe Markdown file name to continue.
-    </span>
-  ) : draftIssue ? (
-    <span className="text-ink-muted">{draftIssue}</span>
-  ) : (
-    <span className="text-success">
-      Ready to save locally. No execution starts.
-    </span>
+  const copySource = () => {
+    void navigator.clipboard?.writeText(source).then(() => {
+      setCopied(true)
+      window.setTimeout(() => setCopied(false), 1500)
+    })
+  }
+
+  const describedBy = (key: string, hint = false) =>
+    fieldDescribedBy(fieldId(key), { hint, error: Boolean(issues[key]) })
+
+  const preview = (
+    <>
+      <div className="flex items-center justify-between gap-2">
+        <span className="ds-label">generated markdown · live</span>
+        <button
+          className={buttonClassName({ variant: 'quiet', size: 'compact' })}
+          type="button"
+          onClick={copySource}
+          aria-label="Copy the generated Markdown"
+        >
+          <Copy size={13} aria-hidden="true" />
+          {copied ? 'copied' : 'copy'}
+        </button>
+      </div>
+      <pre
+        className="m-0 max-h-[60vh] overflow-auto whitespace-pre-wrap break-words rounded-[6px] bg-canvas p-3 font-mono text-xs leading-5 text-ink-soft"
+        data-markdown-preview
+      >
+        {source}
+      </pre>
+      <p className="m-0 font-mono text-label text-ink-muted">
+        compiles to test id{' '}
+        <span className="text-ink-soft" data-compiled-id>
+          {compiledId}
+        </span>{' '}
+        · saved outside this repository · no execution
+      </p>
+    </>
   )
 
-  // Audit NT-01: the state line and the actions stay visible at every width
-  // instead of sitting after the last criterion.
+  // Audit NT-01 / NT-12: the state line and the actions stay visible at
+  // every width; the pending list links to each field.
   const footer = (
     <>
-      <p
-        className="m-0 min-w-0 flex-1 text-xs leading-5"
-        role="status"
+      <div
+        className="min-w-0 flex-1 text-xs leading-5"
+        role={error ? 'alert' : 'status'}
         aria-live="polite"
       >
-        {statusMessage}
-      </p>
-      <div className="flex flex-wrap items-center gap-3">
-        <output
-          className={`font-mono text-xs tabular-nums ${weight === 100 ? 'text-success' : 'text-warning'}`}
-          aria-label="Validation weight total"
-        >
-          {weightBreakdown(draft)}
-        </output>
+        {error ? (
+          <span className="text-danger">{error}</span>
+        ) : issueKeys.length > 0 ? (
+          <span className="flex flex-wrap items-center gap-x-1 text-ink-soft">
+            {issueKeys.length} field{issueKeys.length === 1 ? '' : 's'} need
+            {issueKeys.length === 1 ? 's' : ''} attention ·{' '}
+            {issueKeys.map((key, index) => (
+              <button
+                key={key}
+                className="rounded-[6px] border-0 bg-transparent p-0 font-mono text-label text-danger underline-offset-2 hover:underline"
+                type="button"
+                onClick={() => focusIssue(key)}
+              >
+                {issueFieldLabel(key, draft)}
+                {index < issueKeys.length - 1 ? ',' : ''}
+              </button>
+            ))}
+          </span>
+        ) : notice ? (
+          <span className="text-ink-soft">{notice}</span>
+        ) : (
+          <span className="text-ink-soft">
+            Saved locally as Markdown. No execution starts.
+          </span>
+        )}
+      </div>
+      <div className="flex flex-wrap items-center gap-2">
         <button
           className={buttonClassName({ variant: 'secondary' })}
           type="button"
@@ -274,10 +370,18 @@ export function LocalScenarioEditor({
           cancel
         </button>
         <button
+          className={buttonClassName({ variant: 'secondary' })}
+          type="button"
+          onClick={() => void save('plan')}
+          disabled={busy}
+        >
+          create and open plan
+        </button>
+        <button
           className={buttonClassName({ variant: 'primary' })}
           type="submit"
           form="local-scenario-form"
-          disabled={!canCreate}
+          disabled={busy}
           aria-busy={saving}
         >
           <Plus size={15} aria-hidden="true" />
@@ -291,31 +395,55 @@ export function LocalScenarioEditor({
     <Dialog
       open
       onClose={requestClose}
-      size="lg"
-      title="Create a local test"
-      description="Fill in the test definition or import an existing Markdown file. The Markdown is saved outside this repository without starting an execution."
+      size="xl"
+      tall
+      kicker="markdown"
+      title="new local test"
+      description="Describe the task, then how to judge it. The file is saved outside this repository; nothing runs."
       closeLabel="Close local test creation"
       className="ds-root"
       actions={
-        <button
-          className={buttonClassName({ variant: 'secondary', size: 'compact' })}
-          type="button"
-          onClick={() => fileRef.current?.click()}
-          disabled={busy}
-        >
-          <FileUp size={15} aria-hidden="true" />
-          <span className="max-[460px]:sr-only">import .md</span>
-        </button>
+        <>
+          <a
+            className={buttonClassName({
+              variant: 'quiet',
+              size: 'compact',
+              className: 'no-underline',
+            })}
+            href={TEMPLATE_HREF}
+            download="new-test.md"
+            title="Download the template .md"
+            aria-label="Download the template .md"
+          >
+            <Download size={14} aria-hidden="true" />
+            <span className="max-[560px]:sr-only">template .md</span>
+          </a>
+          <button
+            className={buttonClassName({
+              variant: 'secondary',
+              size: 'compact',
+            })}
+            type="button"
+            onClick={() => fileRef.current?.click()}
+            disabled={busy}
+            title="Import a Markdown test definition"
+            aria-label="Import a Markdown test definition"
+          >
+            <FileUp size={14} aria-hidden="true" />
+            <span className="max-[560px]:sr-only">import .md</span>
+          </button>
+        </>
       }
       footer={footer}
     >
       <form
         id="local-scenario-form"
-        className="grid min-w-0 gap-px bg-[var(--color-rule)] lg:grid-cols-12"
+        className="grid min-w-0 gap-6 @[1024px]:grid-cols-[minmax(0,1fr)_22rem] @[1024px]:items-start"
         onSubmit={(event) => {
           event.preventDefault()
-          void save()
+          void save('catalog')
         }}
+        noValidate
       >
         <input
           ref={fileRef}
@@ -326,47 +454,42 @@ export function LocalScenarioEditor({
           disabled={busy}
         />
 
-        <div className="grid min-w-0 content-start gap-6 bg-panel p-5 sm:p-6 lg:col-span-8">
-          {notice ? (
-            <p
-              className="m-0 flex items-center gap-2 rounded-[6px] bg-[var(--surface-soft)] px-3 py-2 text-xs text-ink-soft"
-              role="status"
-            >
-              <FileText size={14} aria-hidden="true" />
-              {notice}
-            </p>
-          ) : null}
-
+        <div className="grid min-w-0 content-start gap-7">
           <section className="grid gap-4" aria-labelledby="test-details-title">
-            <div>
-              <h3
-                className="m-0 text-sm font-semibold text-ink"
-                id="test-details-title"
-              >
-                Test details
-              </h3>
-              <p className="mt-1 mb-0 text-xs leading-5 text-ink-muted">
-                The name becomes the title and, unless you edit it, the Markdown
-                file name.
-              </p>
-            </div>
-            <label className={fieldLabelClassName}>
-              Test name
-              <input
-                className={fieldClassName}
+            <h3
+              className="m-0 text-sm font-semibold text-ink"
+              id="test-details-title"
+            >
+              Test details
+            </h3>
+            <Field
+              label="Test name"
+              htmlFor={fieldId('title')}
+              meta="required"
+              error={issues.title}
+            >
+              <Input
+                id={fieldId('title')}
                 value={draft.title}
                 placeholder="Database recovery"
                 onChange={(event) => updateDraft('title', event.target.value)}
                 disabled={busy}
                 autoFocus
-                required
+                aria-invalid={issues.title ? true : undefined}
+                aria-describedby={describedBy('title')}
               />
-            </label>
-            <div className="grid gap-4 sm:grid-cols-[minmax(0,1fr)_8rem]">
-              <label className={fieldLabelClassName}>
-                Markdown file name
-                <input
-                  className={`${fieldClassName} font-mono text-xs`}
+            </Field>
+            <div className="grid items-start gap-4 sm:grid-cols-[minmax(0,1fr)_7rem]">
+              <Field
+                label="File"
+                htmlFor={fieldId('file')}
+                meta={fileNameInput === null ? 'from name' : 'custom'}
+                hint={`compiles to ${compiledId}`}
+                error={issues.file}
+              >
+                <Input
+                  id={fieldId('file')}
+                  className="font-mono text-xs"
                   value={fileName}
                   onChange={(event) => {
                     setFileNameInput(event.target.value)
@@ -374,23 +497,18 @@ export function LocalScenarioEditor({
                   }}
                   disabled={busy}
                   spellCheck={false}
-                  aria-invalid={!safeFileName}
-                  aria-describedby="local-file-name-help"
-                  required
+                  aria-invalid={issues.file ? true : undefined}
+                  aria-describedby={describedBy('file', true)}
                 />
-                <small
-                  className={`text-xs font-normal leading-4 ${safeFileName ? 'text-ink-muted' : 'text-danger'}`}
-                  id="local-file-name-help"
-                >
-                  {safeFileName
-                    ? `Compiles to ${compiledLocalScenarioId(fileName.trim())}`
-                    : 'Use letters, numbers, spaces, hyphens or underscores and end with .md.'}
-                </small>
-              </label>
-              <label className={`${fieldLabelClassName} content-start`}>
-                Version
-                <input
-                  className={`${fieldClassName} font-mono text-xs`}
+              </Field>
+              <Field
+                label="Version"
+                htmlFor={fieldId('version')}
+                error={issues.version}
+              >
+                <Input
+                  id={fieldId('version')}
+                  className="font-mono text-xs"
                   type="number"
                   min="1"
                   step="1"
@@ -400,59 +518,67 @@ export function LocalScenarioEditor({
                     updateDraft('version', event.target.value)
                   }
                   disabled={busy}
-                  required
+                  aria-invalid={issues.version ? true : undefined}
+                  aria-describedby={describedBy('version')}
                 />
-              </label>
+              </Field>
             </div>
           </section>
 
           <section
-            className="grid gap-4 border-t border-[var(--color-rule)] pt-6"
+            className="grid gap-4"
             aria-labelledby="test-instructions-title"
           >
-            <div>
-              <h3
-                className="m-0 text-sm font-semibold text-ink"
-                id="test-instructions-title"
-              >
-                Instructions
-              </h3>
-              <p className="mt-1 mb-0 text-xs leading-5 text-ink-muted">
-                Describe the isolated setup first, then the task the Harness
-                must complete.
-              </p>
-            </div>
-            <label className={fieldLabelClassName}>
-              Before test
-              <textarea
-                className={textareaClassName}
+            <h3
+              className="m-0 text-sm font-semibold text-ink"
+              id="test-instructions-title"
+            >
+              Instructions
+            </h3>
+            <Field
+              label="Before test"
+              htmlFor={fieldId('beforeTest')}
+              meta="setup the harness runs first"
+              error={issues.beforeTest}
+            >
+              <Textarea
+                id={fieldId('beforeTest')}
+                className="min-h-24"
                 value={draft.beforeTest}
                 placeholder={PLACEHOLDER.beforeTest}
                 onChange={(event) =>
                   updateDraft('beforeTest', event.target.value)
                 }
                 disabled={busy}
-                required
+                aria-invalid={issues.beforeTest ? true : undefined}
+                aria-describedby={describedBy('beforeTest')}
               />
-            </label>
-            <label className={fieldLabelClassName}>
-              Task prompt
-              <textarea
-                className={textareaClassName}
+            </Field>
+            <Field
+              label="Task prompt"
+              htmlFor={fieldId('prompt')}
+              meta="required"
+              hint="Say what “done” looks like — the judge reads this prompt too."
+              error={issues.prompt}
+            >
+              <Textarea
+                id={fieldId('prompt')}
+                className="min-h-28"
                 value={draft.prompt}
                 placeholder={PLACEHOLDER.prompt}
                 onChange={(event) => updateDraft('prompt', event.target.value)}
                 disabled={busy}
-                required
+                aria-invalid={issues.prompt ? true : undefined}
+                aria-describedby={describedBy('prompt', true)}
               />
-            </label>
+            </Field>
           </section>
 
           <section
-            className="grid gap-4 border-t border-[var(--color-rule)] pt-6"
+            className="grid gap-3"
             aria-labelledby="validation-criteria-title"
           >
-            <div className="flex flex-wrap items-start justify-between gap-3">
+            <div className="flex flex-wrap items-center justify-between gap-3">
               <div>
                 <h3
                   className="m-0 text-sm font-semibold text-ink"
@@ -460,59 +586,61 @@ export function LocalScenarioEditor({
                 >
                   Validation criteria
                 </h3>
-                <p className="mt-1 mb-0 text-xs leading-5 text-ink-muted">
-                  Describe the evidence for each criterion. Weights must add up
-                  to exactly 100%.
+                <p className="mt-1 mb-0 text-xs leading-5 text-ink-soft">
+                  Weights must total 100.
                 </p>
               </div>
-              <button
-                className={buttonClassName({
-                  variant: 'secondary',
-                  size: 'compact',
-                })}
-                type="button"
-                onClick={addValidation}
-                disabled={busy}
-              >
-                <Plus size={14} aria-hidden="true" />
-                add criterion
-              </button>
+              <div className="flex flex-wrap gap-2">
+                <button
+                  className={buttonClassName({
+                    variant: 'quiet',
+                    size: 'compact',
+                  })}
+                  type="button"
+                  onClick={() =>
+                    setDraft((current) => distributeValidationWeights(current))
+                  }
+                  disabled={busy || draft.validations.length === 0}
+                >
+                  distribute evenly
+                </button>
+                <button
+                  className={buttonClassName({
+                    variant: 'secondary',
+                    size: 'compact',
+                  })}
+                  type="button"
+                  onClick={addValidation}
+                  disabled={busy}
+                >
+                  <Plus size={13} aria-hidden="true" />
+                  add criterion
+                </button>
+              </div>
             </div>
 
-            <div className="grid gap-3">
+            <div className="grid gap-3" data-criteria>
               {draft.validations.map((validation, index) => {
                 const placeholder =
                   PLACEHOLDER.validations[index] ??
                   PLACEHOLDER.validations[PLACEHOLDER.validations.length - 1]
+                const key = `validation:${validation.id}`
+                const onlyOne = draft.validations.length === 1
                 return (
+                  // Audit NT-04 / NT-11: a compact fill block, no border.
                   <fieldset
-                    className="m-0 grid gap-3 rounded-[6px] border border-[var(--color-rule)] bg-panel-raised p-4"
+                    className="m-0 grid gap-3 rounded-[6px] border-0 bg-[var(--surface-fill)] p-3"
                     key={validation.id}
                   >
                     <legend className="sr-only">Validation {index + 1}</legend>
-                    <div className="flex items-center justify-between gap-3">
-                      <strong className="font-mono text-xs font-semibold text-ink-soft">
-                        Criterion {index + 1}
-                      </strong>
-                      <button
-                        className={buttonClassName({
-                          variant: 'quiet',
-                          size: 'compact',
-                        })}
-                        type="button"
-                        onClick={() => removeValidation(validation.id)}
-                        disabled={busy || draft.validations.length === 1}
-                        aria-label={`Remove validation ${index + 1}`}
+                    <div className="grid items-start gap-3 sm:grid-cols-[minmax(0,1fr)_5.5rem_auto]">
+                      <Field
+                        label={`Criterion ${index + 1}`}
+                        htmlFor={fieldId(`${key}:title`)}
+                        error={issues[`${key}:title`]}
                       >
-                        <Trash2 size={13} aria-hidden="true" />
-                        remove
-                      </button>
-                    </div>
-                    <div className="grid gap-3 sm:grid-cols-[minmax(0,1fr)_7rem]">
-                      <label className={fieldLabelClassName}>
-                        Name
-                        <input
-                          className={fieldClassName}
+                        <Input
+                          id={fieldId(`${key}:title`)}
                           value={validation.title}
                           placeholder={placeholder.title}
                           onChange={(event) =>
@@ -523,13 +651,21 @@ export function LocalScenarioEditor({
                             )
                           }
                           disabled={busy}
-                          required
+                          aria-invalid={
+                            issues[`${key}:title`] ? true : undefined
+                          }
+                          aria-describedby={describedBy(`${key}:title`)}
                         />
-                      </label>
-                      <label className={fieldLabelClassName}>
-                        Weight %
-                        <input
-                          className={`${fieldClassName} font-mono text-xs`}
+                      </Field>
+                      <Field
+                        label="Weight"
+                        htmlFor={fieldId(`${key}:weight`)}
+                        meta="%"
+                        error={issues[`${key}:weight`]}
+                      >
+                        <Input
+                          id={fieldId(`${key}:weight`)}
+                          className="font-mono text-xs"
                           type="number"
                           min="1"
                           max="100"
@@ -545,14 +681,39 @@ export function LocalScenarioEditor({
                             )
                           }
                           disabled={busy}
-                          required
+                          aria-invalid={
+                            issues[`${key}:weight`] ? true : undefined
+                          }
+                          aria-describedby={describedBy(`${key}:weight`)}
                         />
-                      </label>
+                      </Field>
+                      <button
+                        className={buttonClassName({
+                          variant: 'quiet',
+                          size: 'compact',
+                          className: 'sm:mt-6',
+                        })}
+                        type="button"
+                        onClick={() => removeValidation(validation.id)}
+                        disabled={busy || onlyOne}
+                        title={
+                          onlyOne
+                            ? 'At least one criterion is required'
+                            : `Remove criterion ${index + 1}`
+                        }
+                        aria-label={`Remove criterion ${index + 1}`}
+                      >
+                        <X size={13} aria-hidden="true" />
+                      </button>
                     </div>
-                    <label className={fieldLabelClassName}>
-                      Evaluation instructions
-                      <textarea
-                        className={`${textareaClassName} min-h-24`}
+                    <Field
+                      label="Evaluation instructions"
+                      htmlFor={fieldId(`${key}:instructions`)}
+                      error={issues[`${key}:instructions`]}
+                    >
+                      <Textarea
+                        id={fieldId(`${key}:instructions`)}
+                        className="min-h-20"
                         value={validation.instructions}
                         placeholder={placeholder.instructions}
                         onChange={(event) =>
@@ -563,39 +724,48 @@ export function LocalScenarioEditor({
                           )
                         }
                         disabled={busy}
-                        required
+                        aria-invalid={
+                          issues[`${key}:instructions`] ? true : undefined
+                        }
+                        aria-describedby={describedBy(`${key}:instructions`)}
                       />
-                    </label>
+                    </Field>
                   </fieldset>
                 )
               })}
             </div>
+            <output
+              className={`font-mono text-xs tabular-nums ${weight === 100 ? 'text-success' : 'text-warning'}`}
+              aria-label="Validation weight total"
+              id={fieldId('validations')}
+              tabIndex={-1}
+            >
+              {weightBreakdown(draft)}
+              {weight === 100
+                ? ' ✓'
+                : weight < 100
+                  ? ` · ${100 - weight} missing`
+                  : ` · ${weight - 100} over`}
+            </output>
+            {issues.validations ? (
+              <p className="m-0 text-xs text-danger" role="alert">
+                {issues.validations}
+              </p>
+            ) : null}
           </section>
         </div>
 
-        <aside className="grid min-w-0 content-start gap-5 bg-panel-raised p-5 sm:p-6 lg:sticky lg:top-0 lg:col-span-4">
-          <div className="grid gap-2">
-            <span className="text-xs font-semibold text-ink-soft">
-              Generated Markdown
-            </span>
-            <code className="break-all rounded-[6px] bg-panel px-3 py-2 font-mono text-xs text-ink">
-              {fileName.trim() || initialFileName}
-            </code>
-            <p className="m-0 text-xs leading-5 text-ink-muted">
-              Plan <code>local</code> · {draft.validations.length} validation
-              {draft.validations.length === 1 ? '' : 's'} · no execution
-            </p>
-          </div>
-
-          <details className="group rounded-[6px] bg-panel p-3">
-            <summary className="cursor-pointer text-xs font-semibold text-ink-soft">
-              Preview Markdown
-            </summary>
-            <pre className="mt-3 mb-0 max-h-72 overflow-auto whitespace-pre-wrap break-words border-t border-[var(--color-rule)] pt-3 font-mono text-xs leading-5 text-ink-soft">
-              {source}
-            </pre>
-          </details>
+        {/* Audit NT-07: the live Markdown is a side panel when there is room
+            and a collapsed disclosure otherwise. */}
+        <aside className="hidden min-w-0 content-start gap-3 @[1024px]:sticky @[1024px]:top-0 @[1024px]:grid">
+          {preview}
         </aside>
+        <details className="group min-w-0 rounded-[6px] bg-[var(--surface-fill)] p-3 @[1024px]:hidden">
+          <summary className="cursor-pointer font-mono text-xs text-ink-soft">
+            generated markdown
+          </summary>
+          <div className="mt-3 grid gap-3">{preview}</div>
+        </details>
       </form>
 
       <DiscardDraftDialog

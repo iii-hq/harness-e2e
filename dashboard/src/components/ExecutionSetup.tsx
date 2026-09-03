@@ -17,15 +17,27 @@ export type ExecutionSetupMode = 'quick' | 'plan'
 export const QUICK_EXECUTION_INTENT_KEY = 'harness-e2e:quick-execution'
 export const PLAN_SCOPE_INTENT_KEY = 'harness-e2e:plan-scope'
 
-export function requestQuickExecution() {
-  window.sessionStorage.setItem(QUICK_EXECUTION_INTENT_KEY, 'open')
+export function requestQuickExecution(scenarioIds: string[] = []) {
+  window.sessionStorage.setItem(
+    QUICK_EXECUTION_INTENT_KEY,
+    JSON.stringify(scenarioIds),
+  )
 }
 
-export function consumeQuickExecutionRequest() {
-  const requested =
-    window.sessionStorage.getItem(QUICK_EXECUTION_INTENT_KEY) === 'open'
-  if (requested) window.sessionStorage.removeItem(QUICK_EXECUTION_INTENT_KEY)
-  return requested
+/** Returns the requested scope (possibly empty) or null when nothing asked. */
+export function consumeQuickExecutionRequest(): string[] | null {
+  const raw = window.sessionStorage.getItem(QUICK_EXECUTION_INTENT_KEY)
+  if (raw === null) return null
+  window.sessionStorage.removeItem(QUICK_EXECUTION_INTENT_KEY)
+  if (raw === 'open') return []
+  try {
+    const parsed = JSON.parse(raw)
+    return Array.isArray(parsed)
+      ? parsed.filter((item): item is string => typeof item === 'string')
+      : []
+  } catch {
+    return []
+  }
 }
 
 /** Audit RS-13: a selection made in the run-suite dialog travels to plans/new. */

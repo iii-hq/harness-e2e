@@ -1,33 +1,147 @@
 import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
-import type { TestSideSummary } from '@/lib/test-catalog'
-import { SideResult } from '@/pages/TestsPage'
+import type { TestCatalogRow, TestSideSummary } from '@/lib/test-catalog'
+import {
+  matchesCompareFilter,
+  RowDetails,
+  rowState,
+  SideResult,
+  sortCompareRows,
+} from '@/pages/TestsPage'
+
+function side(overrides: Partial<TestSideSummary> = {}): TestSideSummary {
+  return {
+    evaluated_version_id: 'legacy-version',
+    execution_count: 1,
+    total_runs: 1,
+    scored_runs: 1,
+    case_count: 1,
+    median_score: 100,
+    pass_rate: 1,
+    median_cost_usd: null,
+    median_tokens: null,
+    median_duration_seconds: null,
+    outcomes: {
+      passed: 1,
+      hard_gate_failed: 0,
+      technical_failed: 0,
+      infra_failed: 0,
+    },
+    samples: { score: 1, cost_usd: 0, tokens: 0, duration_seconds: 0 },
+    ...overrides,
+  }
+}
+
+function row(
+  from: TestSideSummary | null,
+  to: TestSideSummary | null,
+  overrides: Partial<TestCatalogRow> = {},
+  compatibility: TestCatalogRow['result'] extends infer R
+    ? R extends { compatibility: infer C }
+      ? C
+      : never
+    : never = 'compatible',
+): TestCatalogRow {
+  return {
+    test_id: 'direct_answer',
+    lifecycle: 'active',
+    current_version: 2,
+    available_versions: [],
+    selected_version: 2,
+    result:
+      from || to
+        ? {
+            test_id: 'direct_answer',
+            test_version: 2,
+            compatibility,
+            compatibility_reasons: [],
+            from,
+            to,
+            delta: {
+              score:
+                from &&
+                to &&
+                from.median_score !== null &&
+                to.median_score !== null
+                  ? to.median_score - from.median_score
+                  : null,
+              cost_usd: null,
+              tokens: null,
+              duration_seconds: null,
+            },
+            from_observations: [],
+            to_observations: [],
+          }
+        : null,
+    ...overrides,
+  }
+}
 
 describe('versioned test side presentation', () => {
-  it('renders retained legacy summaries without inventing assessment results', () => {
-    const legacy: TestSideSummary = {
-      evaluated_version_id: 'legacy-version',
-      execution_count: 1,
-      total_runs: 1,
-      scored_runs: 1,
-      case_count: 1,
-      median_score: 100,
-      pass_rate: 1,
-      median_cost_usd: null,
-      median_tokens: null,
-      median_duration_seconds: null,
-      outcomes: {
-        passed: 1,
-        hard_gate_failed: 0,
-        technical_failed: 0,
-        infra_failed: 0,
-      },
-      samples: { score: 1, cost_usd: 0, tokens: 0, duration_seconds: 0 },
-    }
-    const html = renderToStaticMarkup(<SideResult summary={legacy} />)
-    expect(html).toContain('System: Passed')
-    expect(html).toContain('AI: Unavailable')
-    expect(html).toContain('Effective: Unavailable')
-    expect(html).toContain('0 evidence references')
+  // Audit CP-04 / CP-16: one line per side; nothing is invented for legacy
+  // summaries without assessments.
+  it('renders retained legacy summaries as one status line', () => {
+    const html = renderToStaticMarkup(<SideResult summary={side()} />)
+    expect(html).toContain('ds-status-passed')
+    expect(html).toContain('>passed<')
+    expect(html).toContain('100')
+    expect(html).toContain('n=1')
+    expect(html).not.toContain('ai:')
+    expect(html).not.toContain('Effective')
+    expect(html).not.toContain('evidence references')
+  })
+
+  it('names a missing side plainly', () => {
+    expect(renderToStaticMarkup(<SideResult summary={null} />)).toContain(
+      'no evidence',
+    )
+  })
+})
+
+describe('comparison row states', () => {
+  // Audit CP-01: one state per row decides the group and the default filter.
+  it('classifies rows and sorts comparable first', () => {
+    const regressed = row(side(), side({ median_score: 60 }))
+    const improved = row(side({ median_score: 60 }), side())
+    const oneSide = row(null, side(), { test_id: 'b_only' })
+    const none = row(null, null, { test_id: 'nothing' })
+    const changed = row(
+      side(),
+      side(),
+      { test_id: 'changed' },
+      'contract_changed',
+    )
+    expect(rowState(regressed)).toBe('regressed')
+    expect(rowState(improved)).toBe('improved')
+    expect(rowState(row(side(), side()))).toBe('unchanged')
+    expect(rowState(oneSide)).toBe('one_side')
+    expect(rowState(none)).toBe('none')
+    expect(rowState(changed)).toBe('changed')
+    expect(
+      sortCompareRows([none, oneSide, changed, improved, regressed]).map(
+        rowState,
+      ),
+    ).toEqual(['regressed', 'improved', 'changed', 'one_side', 'none'])
+    expect(matchesCompareFilter('none', 'evidence')).toBe(false)
+    expect(matchesCompareFilter('one_side', 'evidence')).toBe(true)
+    expect(matchesCompareFilter('unchanged', 'comparable')).toBe(true)
+    expect(matchesCompareFilter('changed', 'comparable')).toBe(false)
+  })
+
+  // Audit CP-19: tiles only with data; the evidence list names the side.
+  it('hides tiles that are dashes on both sides', () => {
+    const html = renderToStaticMarkup(
+      <RowDetails
+        result={row(side({ median_cost_usd: 0.02 }), side()).result}
+        aLabel="source a37f82be"
+        bLabel="source bc26991d"
+      />,
+    )
+    expect(html).toContain('pass rate')
+    expect(html).toContain('median cost')
+    expect(html).not.toContain('median runtime')
+    expect(html).not.toContain('median tokens')
+    expect(html).toContain('No retained observations.')
+    expect(html).toContain('open history')
   })
 })

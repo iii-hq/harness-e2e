@@ -303,6 +303,8 @@ export type DataTableProps = TableHTMLAttributes<HTMLTableElement> & {
   minWidth?: string
   /** In narrow containers rows become stacked cards labelled by data-label. */
   collapse?: boolean
+  /** With collapse: the first cell is the card title, the rest wrap inline (audit T-03). */
+  collapseInline?: boolean
   wrapClassName?: string
 }
 
@@ -312,6 +314,7 @@ export function DataTable({
   sticky = false,
   minWidth,
   collapse = false,
+  collapseInline = false,
   wrapClassName,
   className,
   children,
@@ -324,6 +327,7 @@ export function DataTable({
           'ds-table',
           sticky && 'ds-table-sticky',
           collapse && 'ds-table-collapse',
+          collapse && collapseInline && 'ds-table-collapse-inline',
           className,
         )}
         style={

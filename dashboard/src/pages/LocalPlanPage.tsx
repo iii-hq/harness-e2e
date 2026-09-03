@@ -355,7 +355,7 @@ export function LocalPlanCreatePage() {
                 className: 'no-underline',
               })}
               href={hashForWorkspace()}
-              onClick={requestQuickExecution}
+              onClick={() => requestQuickExecution()}
             >
               quick execution instead
             </a>

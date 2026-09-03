@@ -242,7 +242,10 @@ pub(super) struct HistoryModelGroup {
 #[derive(Debug, Clone, Serialize, JsonSchema)]
 pub(super) struct TestHistoryResponse {
     pub test_id: String,
+    /// The version whose executions are shown (the latest with evidence by default).
     pub test_version: u32,
+    /// The contract's current version, which may have no executions yet.
+    pub current_version: Option<u32>,
     pub available_versions: Vec<VersionDescriptor>,
     pub cases: Vec<String>,
     pub subjects: Vec<String>,
@@ -802,6 +805,7 @@ impl DashboardReadModel {
         Ok(TestHistoryResponse {
             test_id: request.test_id,
             test_version,
+            current_version: entry.current_version,
             available_versions: entry
                 .versions
                 .iter()

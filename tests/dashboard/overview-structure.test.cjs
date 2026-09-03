@@ -116,16 +116,30 @@ test('keeps the workspace navigation and versioned test flow', () => {
   for (const view of ['overview', 'tests', 'executions', 'plans']) {
     assert.match(dashboardShell, new RegExp(`value: '${view}'`))
   }
-  assert.match(testsPage, /Tests across system versions/)
+  // Audit CP-01/02/05/10/11: DS page, explicit builder, state chips bound to
+  // the table, signed deltas, the pair kept in the hash.
+  assert.match(testsPage, /title="compare"/)
   assert.match(testsPage, /loadVersionResult\(row\.test_id/)
   assert.match(testsPage, /prefetchedCatalog/)
+  assert.match(testsPage, /replaceDashboardHash\(hashForComparison\(fromVersionId, toVersionId\)\)/)
+  assert.match(testsPage, /data-compare-group=\{group\.key\[0\]\}/)
+  assert.match(testsPage, /<DeltaValue/)
+  assert.match(testsPage, /aria-controls=\{detailsId\}/)
+  assert.doesNotMatch(testsPage, /overview-shell|ambient|live-dot|section-kicker|panel-heading|sync-block|Impact by scenario|No evidence</)
   assert.match(catalogPage, /<DashboardPageActions[\s\S]*active="tests"/)
-  assert.match(catalogPage, /visually-hidden">Search tests/)
-  assert.match(catalogPage, /placeholder="Filter tests…"/)
-  assert.match(
-    catalogPage,
-    /type="search"[\s\S]*border-0[\s\S]*bg-\[var\(--surface-fill\)\]/,
-  )
+  // Audit T-03 / T-07 / T-08 / T-12: DS table with a sticky first column,
+  // lifecycle groups with retired collapsed, cursor pagination, filters in
+  // the hash, and a text search with its own clear control.
+  assert.match(catalogPage, /aria-label="Search tests"/)
+  assert.match(catalogPage, /placeholder="Filter by name, id or title…"/)
+  assert.doesNotMatch(catalogPage, /type="search"|min-w-\[82rem\]|Local dashboard only/)
+  assert.match(catalogPage, /<DataTable\s+caption=\{caption\}\s+collapse\s+collapseInline\s+minWidth="64rem"\s+sticky\s*>/)
+  assert.match(catalogPage, /ds-table-sticky-col/)
+  assert.match(catalogPage, /data-catalog-group=\{group\.lifecycle\}/)
+  assert.match(catalogPage, /retired test/)
+  assert.match(catalogPage, /cursor: data\.next_cursor/)
+  assert.match(catalogPage, /replaceRouteParams\(params\)/)
+  assert.match(catalogPage, /catalogFiltersFromParams\(routeParams\(window\.location\.hash\)\)/)
   for (const page of [
     overviewPage,
     executionPage,
@@ -162,33 +176,32 @@ test('distinguishes active tests from tests with no execution history', () => {
 
 test('keeps metric history rows readable and opens details on demand', () => {
   const styles = read('src', 'legacy.css')
-  assert.match(historyPage, /Median tokens/)
-  assert.match(historyPage, /Impact by scenario/)
-  assert.match(historyPage, /metricCaption/)
+  // Audit TH-01/03/05/08/09/10/12/19: DS page, tiles only with data, trend
+  // always visible, checkbox a/b with a selection bar, opaque DS dialog, no
+  // impact table, state in the hash, no legacy .tmh-* CSS.
+  assert.match(historyPage, /median tokens/)
+  assert.match(historyPage, /data-history-tiles/)
+  assert.match(historyPage, /knownCosts > 0 \?/)
+  assert.match(historyPage, /data-score-trend/)
   assert.match(historyPage, /ExecutionDetailsDialog/)
   assert.match(
     historyPage,
     /reports: detail\.reports\.filter\([\s\S]*scenario_id === testId/,
   )
   assert.match(historyPage, /Assessment details for this test/)
-  assert.match(historyPage, /A · Baseline/)
-  assert.match(historyPage, /B · Candidate/)
-  assert.match(historyPage, /Functions/)
-  assert.match(historyPage, /Errors/)
-  assert.match(historyPage, /View score history across/)
+  assert.match(historyPage, /data-selection-bar/)
+  assert.match(historyPage, /type="checkbox"/)
   assert.match(historyPage, /compareTestObservations/)
   assert.match(historyPage, /getExecution\(observation\.execution_id\)/)
-  assert.match(historyPage, /View details/)
-  assert.match(historyPage, /Open full execution report/)
+  assert.match(historyPage, /open full execution report/)
   assert.match(historyPage, /systemSummary/)
-  assert.doesNotMatch(historyPage, /item\.execution_id\.slice/)
-  assert.doesNotMatch(historyPage, /systemLabel/)
-  assert.doesNotMatch(historyPage, /See series/)
-  assert.doesNotMatch(historyPage, /Metrics by compatible series/)
-  assert.match(
-    styles,
-    /#test-metrics-history-proposal th,[\s\S]*white-space: normal/,
-  )
+  assert.match(historyPage, /versionStatement/)
+  assert.match(historyPage, /historyStateToParams\(filters, comparisonKeys, openKey\)/)
+  assert.match(historyPage, /no retained executions yet/)
+  assert.match(historyPage, /requestQuickExecution\(\[testId\]\)/)
+  assert.doesNotMatch(historyPage, /Impact by scenario|View score history across|tmh-|Set A|View details/)
+  assert.doesNotMatch(historyPage, /systemLabel|See series|Metrics by compatible series/)
+  assert.doesNotMatch(styles, /tmh-|test-metrics-history-proposal/)
   assert.match(styles, /overflow-wrap: anywhere/)
   assert.match(
     styles,
