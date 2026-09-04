@@ -6,6 +6,7 @@ import {
   Copy,
 } from 'lucide-react'
 import { useEffect, useMemo, useRef, useState } from 'react'
+import { AboutTestPanel } from '@/components/AboutTestPanel'
 import { AssessmentWorkspace } from '@/components/AssessmentWorkspace'
 import {
   DashboardPageActions,
@@ -55,6 +56,7 @@ import type {
   TestCatalogRow,
   TestHistoryResponse,
   TestObservation,
+  TestSpec,
 } from '@/lib/test-catalog'
 import {
   type ComparedMetric,
@@ -803,11 +805,13 @@ function ExecutionDetailsDialog({
   observation,
   testVersion,
   testId,
+  spec,
   onClose,
 }: {
   observation: TestObservation
   testVersion: number | undefined
   testId: string
+  spec: TestSpec | null
   onClose: () => void
 }) {
   const [detail, setDetail] = useState<DashboardExecutionDetail | null>(null)
@@ -947,6 +951,11 @@ function ExecutionDetailsDialog({
             ))}
           </dl>
         ) : null}
+        {/* Audit TH-20: a result is unreadable without the contract it was
+            measured against, so the spec travels with it into the dialog. */}
+        {spec ? (
+          <AboutTestPanel layout="stacked" spec={spec} testId={testId} />
+        ) : null}
         <section
           className="grid gap-3"
           aria-labelledby="execution-report-title"
@@ -972,7 +981,7 @@ function ExecutionDetailsDialog({
           ) : error ? (
             <Callout tone="danger">{error}</Callout>
           ) : (
-            <AssessmentWorkspace detail={scopedDetail} />
+            <AssessmentWorkspace detail={scopedDetail} spec={spec} />
           )}
         </section>
       </div>
@@ -1365,6 +1374,16 @@ export function TestHistoryPage({ testId }: { testId: string }) {
             </>
           }
         />
+
+        {/* Audit TH-20: the identity line names the contract but never says
+            what the test asks for. This does, before any metric. */}
+        {catalogRow?.spec ? (
+          <AboutTestPanel
+            className="mt-6"
+            spec={catalogRow.spec}
+            testId={testId}
+          />
+        ) : null}
 
         {error ? (
           <EmptyState
@@ -1869,6 +1888,7 @@ export function TestHistoryPage({ testId }: { testId: string }) {
           observation={openObservation}
           testVersion={history?.test_version}
           testId={testId}
+          spec={catalogRow?.spec ?? null}
           onClose={() => setOpenKey(null)}
         />
       ) : null}
