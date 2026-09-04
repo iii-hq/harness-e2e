@@ -48,6 +48,16 @@ use super::{
 pub const ID: &str = "chess_engine_build";
 const VERSION: u32 = 2;
 
+/// One-paragraph editorial description of what this test asks for, shown above
+/// the prompt on the dashboard's test page. Written by hand: the prompt states
+/// the task operationally, this states it the way a reader needs it first.
+pub const SUMMARY: &str = "Implement fully correct standard chess rules over a frozen fixture \
+repository. The subject is handed `engine/engine.py` with `legal_moves(fen)` and \
+`perft(fen, depth)` raising `NotImplementedError`, and must cover castling, en passant, all four \
+promotions, absolute pins and check evasion \u{2014} standard library only, CLI contract unchanged. \
+Verification is entirely runner-side: the engine is replayed over a fixed battery of positions and \
+compared against the shakmaty kernel oracle.";
+
 // --- Pinned, frozen fixture identity (do not edit) --------------------------
 //
 // The fixture is consumed via a local checkout of the repository root exported

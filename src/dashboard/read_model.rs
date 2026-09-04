@@ -13,11 +13,14 @@ use super::assessment_projection::{
 use super::presenter::{execution_summary, MAX_EXECUTIONS};
 use super::store::{load_runs, StoredRun};
 use crate::artifact;
-use crate::assessment::RunAssessmentContract;
+use crate::assessment::{
+    AssessmentKind, AssessmentPolicy, AssessmentSource, RunAssessmentContract,
+};
 use crate::identity::StackIdentity;
-use crate::report::{E2eRunReport, E2eScenarioReport, RunStatus};
+use crate::report::{E2eRunReport, E2eScenarioReport, EvaluationDimension, RunStatus};
 use crate::scenarios::{
-    stable_seed, ComplexityClassification, ScenarioCharacterization, ScenarioId,
+    stable_seed, ComplexityClassification, ExecutionPolicy, ScenarioCharacterization, ScenarioId,
+    ScenarioSpec,
 };
 
 const DEFAULT_PAGE_SIZE: u16 = 25;
@@ -282,9 +285,39 @@ pub(super) struct TestCatalogRow {
     pub characterization: Option<ScenarioCharacterization>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub calibration: Option<CalibrationProjection>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub spec: Option<TestSpecProjection>,
     pub available_versions: Vec<VersionDescriptor>,
     pub selected_version: Option<u32>,
     pub result: Option<TestVersionResult>,
+}
+
+/// The scenario definition as a reader needs it: what the subject is asked to
+/// do, how the result is scored, and the limits it runs under. Projected from
+/// the materialized `ScenarioSpec` of the test's current version, so it always
+/// describes the contract the dashboard is showing.
+#[derive(Debug, Clone, Serialize, JsonSchema)]
+pub(super) struct TestSpecProjection {
+    /// Editorial description; absent until the scenario defines a `SUMMARY`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub summary: Option<String>,
+    /// The prompt as materialized for a representative run: run-scoped paths
+    /// resolve against a catalog namespace, never a real execution.
+    pub prompt: String,
+    pub criteria: Vec<TestCriterionProjection>,
+    pub execution: ExecutionPolicy,
+    pub denied_functions: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, JsonSchema)]
+pub(super) struct TestCriterionProjection {
+    pub id: String,
+    pub weight: u8,
+    pub description: String,
+    pub kind: AssessmentKind,
+    pub policy: AssessmentPolicy,
+    pub dimension: EvaluationDimension,
+    pub source: AssessmentSource,
 }
 
 #[derive(Debug, Clone, Serialize, JsonSchema)]
@@ -350,6 +383,7 @@ struct TestEntry {
     current_version: Option<u32>,
     current_classification: Option<ComplexityClassification>,
     current_characterization: Option<ScenarioCharacterization>,
+    current_spec: Option<TestSpecProjection>,
     current_reference_verified: bool,
     versions: BTreeMap<u32, TestVersionEntry>,
 }
@@ -669,6 +703,7 @@ impl DashboardReadModel {
                     calibration_projection(version, entry.current_reference_verified)
                 })
             }),
+            spec: entry.current_spec.clone(),
             available_versions,
             selected_version,
             result,
@@ -916,6 +951,7 @@ fn current_tests() -> Result<BTreeMap<String, TestEntry>> {
                     current_version: Some(materialized.spec.version),
                     current_classification: Some(materialized.case.complexity),
                     current_characterization: Some(materialized.case.characterization),
+                    current_spec: Some(spec_projection(*id, &materialized.spec)),
                     current_reference_verified: matches!(
                         id,
                         ScenarioId::IncidentResponse
@@ -930,6 +966,34 @@ fn current_tests() -> Result<BTreeMap<String, TestEntry>> {
             ))
         })
         .collect()
+}
+
+/// Projects the parts of a `ScenarioSpec` a reader needs. The evaluator, setup
+/// and cleanup hooks stay behind: they are runner wiring, not contract.
+fn spec_projection(id: ScenarioId, spec: &ScenarioSpec) -> TestSpecProjection {
+    TestSpecProjection {
+        summary: id.summary().map(str::to_string),
+        prompt: spec.prompt.clone(),
+        criteria: spec
+            .criteria
+            .iter()
+            .map(|criterion| TestCriterionProjection {
+                id: criterion.id.to_string(),
+                weight: criterion.weight,
+                description: criterion.description.to_string(),
+                kind: criterion.kind,
+                policy: criterion.policy,
+                dimension: criterion.dimension,
+                source: criterion.source,
+            })
+            .collect(),
+        execution: spec.execution,
+        denied_functions: spec
+            .denied_functions
+            .iter()
+            .map(|function| (*function).to_string())
+            .collect(),
+    }
 }
 
 type CalibrationGroupKey = (String, String, String, String, String);
@@ -1665,6 +1729,86 @@ mod tests {
                 .execution,
             ExecutionRealism::FrozenRealArtifact
         );
+    }
+
+    #[test]
+    fn current_catalog_projects_the_prompt_and_the_scoring_contract() {
+        let root = tempfile::tempdir().expect("temporary dashboard store should exist");
+        let model = DashboardReadModel::load(root.path())
+            .expect("current scenarios should materialize into the read model");
+        let chess = model
+            .tests_list(TestsListRequest {
+                query: Some(ScenarioId::ChessEngineBuild.as_str().into()),
+                ..TestsListRequest::default()
+            })
+            .expect("chess engine build should be readable")
+            .rows
+            .into_iter()
+            .next()
+            .expect("chess engine build should be registered");
+        let spec = chess
+            .spec
+            .expect("the scoring contract should be projected");
+
+        // The prompt reaches the reader as the subject receives it.
+        assert!(spec.prompt.contains("perft(fen, depth)"));
+        assert!(spec.prompt.contains("legalmoves"));
+        assert!(spec
+            .summary
+            .as_deref()
+            .is_some_and(|summary| summary.contains("frozen fixture repository")));
+
+        // Weights, policy and the description of every criterion travel with it.
+        let weights: Vec<_> = spec
+            .criteria
+            .iter()
+            .map(|criterion| (criterion.id.as_str(), criterion.weight, criterion.policy))
+            .collect();
+        assert_eq!(
+            weights,
+            vec![
+                ("perft_exact", 40, AssessmentPolicy::HardGate),
+                ("legal_moves_correct", 30, AssessmentPolicy::HardGate),
+                ("interface_contract", 20, AssessmentPolicy::HardGate),
+                ("build_discipline", 10, AssessmentPolicy::Advisory),
+            ]
+        );
+        assert_eq!(
+            spec.criteria
+                .iter()
+                .map(|entry| u32::from(entry.weight))
+                .sum::<u32>(),
+            100
+        );
+        assert!(spec.criteria[0].description.contains("kernel oracle"));
+
+        // The limits the run answers to are part of the contract, not trivia.
+        assert_eq!(spec.execution.max_turns, 48);
+        assert_eq!(
+            spec.denied_functions,
+            ["http::*", "browser::*", "github::*"]
+        );
+    }
+
+    #[test]
+    fn a_scenario_without_an_editorial_summary_still_projects_its_contract() {
+        let root = tempfile::tempdir().expect("temporary dashboard store should exist");
+        let model = DashboardReadModel::load(root.path())
+            .expect("current scenarios should materialize into the read model");
+        let row = model
+            .tests_list(TestsListRequest {
+                query: Some(ScenarioId::ContextPressure.as_str().into()),
+                ..TestsListRequest::default()
+            })
+            .expect("context pressure should be readable")
+            .rows
+            .into_iter()
+            .next()
+            .expect("context pressure should be registered");
+        let spec = row.spec.expect("the scoring contract should be projected");
+        assert!(spec.summary.is_none());
+        assert!(!spec.prompt.is_empty());
+        assert!(!spec.criteria.is_empty());
     }
 
     #[test]

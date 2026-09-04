@@ -6,11 +6,18 @@ import {
   ShieldCheck,
 } from 'lucide-react'
 import { useEffect, useMemo, useRef, useState } from 'react'
+import { TestCriteriaList } from '@/components/AboutTestPanel'
 import { ScenarioChatAction } from '@/components/ScenarioChatAction'
-import { buttonClassName, Dialog } from '@/design-system'
+import {
+  buttonClassName,
+  Callout,
+  Dialog,
+  type OperationalStatus,
+} from '@/design-system'
 import type {
   AnalyzerIdentity,
   AnalyzerUsage,
+  AssessmentOutcome,
   EvidenceReference,
 } from '@/lib/assessment-contract'
 import {
@@ -26,6 +33,7 @@ import {
 } from '@/lib/assessment-view'
 import type { DashboardExecutionDetail } from '@/lib/dashboard-data-source'
 import { formatDuration } from '@/lib/execution-view'
+import type { TestCriterion, TestSpec } from '@/lib/test-catalog'
 
 const FILTERS: Array<{ id: AssessmentFilter; label: string }> = [
   { id: 'all', label: 'All' },
@@ -134,12 +142,24 @@ function metricToneForEntry(
   return 'neutral'
 }
 
+/** An outcome nobody reached is not a verdict. A run that died before
+ *  evaluation has to read that way, not as a subject that failed its gates. */
+export function isEvaluated(outcome: AssessmentOutcome): boolean {
+  return outcome !== 'not_evaluated' && outcome !== 'unavailable'
+}
+
 function primaryRunMetrics(run: AssessmentRunView): PrimaryMetric[] {
   const hardGates = run.assessments.filter(
     (entry) => entry.policy === 'hard_gate',
   )
   const passedHardGates = hardGates.filter(
     (entry) => entry.outcome === 'passed',
+  ).length
+  const evaluatedHardGates = hardGates.filter((entry) =>
+    isEvaluated(entry.outcome),
+  ).length
+  const evaluatedAssessments = run.assessments.filter((entry) =>
+    isEvaluated(entry.outcome),
   ).length
   const detection = run.assessments.find((entry) =>
     entry.criterionId.includes('seeded_vulnerability_detection'),
@@ -152,7 +172,7 @@ function primaryRunMetrics(run: AssessmentRunView): PrimaryMetric[] {
   ).length
   const aiResult = run.finalAssessment.result
   const hardGateTone: PrimaryMetricTone =
-    hardGates.length === 0
+    hardGates.length === 0 || evaluatedHardGates === 0
       ? 'unavailable'
       : passedHardGates === hardGates.length
         ? 'positive'
@@ -160,7 +180,7 @@ function primaryRunMetrics(run: AssessmentRunView): PrimaryMetric[] {
   // Audit AW-04: a run with no retained assessments is unavailable, not
   // "0/0 passed".
   const assessmentTone: PrimaryMetricTone =
-    run.assessments.length === 0
+    run.assessments.length === 0 || evaluatedAssessments === 0
       ? 'unavailable'
       : passedAssessments === run.assessments.length
         ? 'positive'
@@ -186,13 +206,20 @@ function primaryRunMetrics(run: AssessmentRunView): PrimaryMetric[] {
       : {
           label: 'Objective hard gates',
           value:
-            hardGates.length > 0
-              ? `${passedHardGates}/${hardGates.length}`
-              : 'Not reported',
+            hardGates.length === 0
+              ? 'Not reported'
+              : evaluatedHardGates === 0
+                ? 'Not evaluated'
+                : `${passedHardGates}/${hardGates.length}`,
+          // Audit AW-11: a gate that was never reached did not fail. Counting
+          // not_evaluated as "failed" blamed the subject for an infrastructure
+          // error that stopped the run before any gate ran.
           detail:
-            hardGates.length > 0
-              ? `${hardGates.length - passedHardGates} failed`
-              : 'No deterministic gates retained',
+            hardGates.length === 0
+              ? 'No deterministic gates retained'
+              : evaluatedHardGates === 0
+                ? `${hardGates.length} ${hardGates.length === 1 ? 'gate' : 'gates'}, none reached`
+                : `${evaluatedHardGates - passedHardGates} failed`,
           context: 'Objective',
           tone: hardGateTone,
         }
@@ -213,10 +240,14 @@ function primaryRunMetrics(run: AssessmentRunView): PrimaryMetric[] {
             run.assessments.length > 0
               ? `${passedAssessments}/${run.assessments.length}`
               : 'Not reported',
+          // Audit AW-11: same distinction as the gates — "needs review" is a
+          // verdict on work that exists, "not evaluated" is the absence of one.
           detail:
-            run.assessments.length > 0
-              ? `${run.assessments.length - passedAssessments} need review`
-              : 'No assessments retained',
+            run.assessments.length === 0
+              ? 'No assessments retained'
+              : evaluatedAssessments === 0
+                ? `${run.assessments.length} not evaluated`
+                : `${evaluatedAssessments - passedAssessments} need review`,
           context: 'Observed',
           tone: assessmentTone,
         },
@@ -1068,17 +1099,54 @@ export function AssessmentDetailDialog({
   )
 }
 
+const OUTCOME_STATUSES: Record<AssessmentOutcome, OperationalStatus> = {
+  passed: 'passed',
+  failed: 'failed',
+  error: 'failed',
+  partial: 'inconclusive',
+  not_evaluated: 'unavailable',
+  unavailable: 'unavailable',
+}
+
+/** Pairs each criterion of the contract with what happened to it. The spec
+ *  supplies the requirement, the run supplies the outcome; a criterion the run
+ *  never reported still shows what it would have demanded (audit TH-21). */
+function criteriaOutcomes(run: AssessmentRunView, criteria: TestCriterion[]) {
+  const byId = new Map(
+    run.assessments.map((entry) => [entry.criterionId, entry]),
+  )
+  return new Map(
+    criteria.map((criterion) => {
+      const entry = byId.get(criterion.id)
+      const outcome = entry?.outcome ?? 'not_evaluated'
+      return [
+        criterion.id,
+        {
+          label: outcome.replace(/_/g, ' '),
+          status: OUTCOME_STATUSES[outcome],
+        },
+      ]
+    }),
+  )
+}
+
 function RunAssessment({
   run,
+  spec,
   onOpen,
   onTranscript,
 }: {
   run: AssessmentRunView
+  spec?: TestSpec | null
   onOpen: () => void
   onTranscript?: (run: AssessmentRunView, title: string) => void
 }) {
   const aiLabel =
     run.finalAssessment.result?.verdict ?? run.finalAssessment.availability
+  const criteria = spec?.criteria ?? []
+  const nothingEvaluated =
+    run.assessments.length > 0 &&
+    run.assessments.every((entry) => !isEvaluated(entry.outcome))
 
   return (
     <article
@@ -1101,6 +1169,33 @@ function RunAssessment({
       </header>
 
       <PrimaryMetricBoard run={run} />
+
+      {criteria.length > 0 ? (
+        // A fill, not a rule: the metric board above already ends on a line,
+        // and the design system separates bands by surface (audit DS-11).
+        <section
+          aria-labelledby={`${safeId(run.key)}-required`}
+          className="bg-panel-subtle p-4"
+        >
+          {nothingEvaluated ? (
+            <Callout
+              className="mb-3.5"
+              tone="warning"
+              title="nothing was scored on merit"
+            >
+              This run ended in {titleCase(run.systemStatus).toLowerCase()}{' '}
+              after {formatRunDuration(run.metrics.durationMs)}, before any
+              deliverable was captured. Every criterion below is unevaluated —
+              none of them failed on the subject's work.
+            </Callout>
+          ) : null}
+          <TestCriteriaList
+            criteria={criteria}
+            headingId={`${safeId(run.key)}-required`}
+            outcomes={criteriaOutcomes(run, criteria)}
+          />
+        </section>
+      ) : null}
 
       <footer className="flex flex-col gap-3 p-3 sm:flex-row sm:items-center sm:justify-between">
         <p className="m-0 font-mono text-label text-ink-muted">
@@ -1130,12 +1225,15 @@ export function AssessmentPanel({
   model,
   detail,
   filter,
+  spec,
   onFilter,
   onTranscript,
 }: {
   model: AssessmentWorkspaceModel
   detail?: DashboardExecutionDetail | null
   filter: AssessmentFilter
+  /** The scored contract, so each run reads against what it had to meet. */
+  spec?: TestSpec | null
   onFilter?: (filter: AssessmentFilter) => void
   onTranscript?: (run: AssessmentRunView, title: string) => void
 }) {
@@ -1222,6 +1320,7 @@ export function AssessmentPanel({
           <RunAssessment
             key={run.key}
             run={run}
+            spec={spec}
             onOpen={() => setSelectedRunKey(run.key)}
             onTranscript={onTranscript}
           />
@@ -1246,9 +1345,11 @@ export function AssessmentPanel({
 
 export function AssessmentWorkspace({
   detail,
+  spec,
   onTranscript,
 }: {
   detail: DashboardExecutionDetail | null
+  spec?: TestSpec | null
   onTranscript?: (run: AssessmentRunView, title: string) => void
 }) {
   const [filter, setFilter] = useState<AssessmentFilter>('all')
@@ -1258,6 +1359,7 @@ export function AssessmentWorkspace({
       model={model}
       detail={detail}
       filter={filter}
+      spec={spec}
       onFilter={setFilter}
       onTranscript={onTranscript}
     />
