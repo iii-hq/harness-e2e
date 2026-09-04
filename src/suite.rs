@@ -5,9 +5,9 @@ use std::time::{Duration, Instant};
 
 use anyhow::{bail, Context, Result};
 use chrono::{SecondsFormat, Utc};
+use futures_util::stream::StreamExt;
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use serde_json::json;
-use futures_util::stream::StreamExt;
 use tokio::sync::{mpsc, oneshot, watch};
 use uuid::Uuid;
 
@@ -710,33 +710,33 @@ async fn evaluate_final_assessments(
     // shared and still advisory: a run that outlives it is reported as timed out
     // and the objective status is untouched.
     let outcomes: Vec<Result<FinalAssessmentOutcome>> = match judge_config {
-            Some(config) => {
-                let mut round_trips = Vec::with_capacity(pending.len());
-                for item in &pending {
-                    round_trips.push(evaluate_one_final_assessment(
-                        context,
-                        config,
-                        &item.input,
-                        batch_started,
-                    ));
-                }
-                futures_util::stream::iter(round_trips)
-                    .buffered(FINAL_ASSESSMENT_CONCURRENCY)
-                    .collect()
-                    .await
+        Some(config) => {
+            let mut round_trips = Vec::with_capacity(pending.len());
+            for item in &pending {
+                round_trips.push(evaluate_one_final_assessment(
+                    context,
+                    config,
+                    &item.input,
+                    batch_started,
+                ));
             }
-            None => pending
-                .iter()
-                .map(|item| {
-                    Ok((
-                        unavailable_final_assessment(&item.input)?,
-                        0,
-                        None,
-                        Duration::ZERO,
-                    ))
-                })
-                .collect(),
-        };
+            futures_util::stream::iter(round_trips)
+                .buffered(FINAL_ASSESSMENT_CONCURRENCY)
+                .collect()
+                .await
+        }
+        None => pending
+            .iter()
+            .map(|item| {
+                Ok((
+                    unavailable_final_assessment(&item.input)?,
+                    0,
+                    None,
+                    Duration::ZERO,
+                ))
+            })
+            .collect(),
+    };
 
     // Attachment mutates the report, so it happens in the original run order.
     for (item, outcome) in pending.iter().zip(outcomes) {
