@@ -6,6 +6,7 @@ import { SemanticTestFlow } from '@/components/SemanticTestFlow'
 import {
   buttonClassName,
   type OperationalStatus,
+  Panel,
   StatusBadge,
 } from '@/design-system'
 import { hashForExecution } from '@/hooks/use-hash-route'
@@ -107,18 +108,23 @@ function ResultContractStrip({
 }) {
   if (contracts.length === 0) {
     return (
-      <div
-        className="rounded-[var(--ds-radius-sm)] border border-dashed border-[var(--color-edge)] bg-panel-raised p-4 text-sm text-ink-muted"
+      <Panel
+        tone="raised"
+        padding="compact"
+        className="text-sm text-ink-muted"
         data-results-contract="unavailable"
       >
         Results v3 contract unavailable. Objective outcome and report
         completeness are not inferred from execution status.
-      </div>
+      </Panel>
     )
   }
   return (
-    <section
-      className="grid gap-3 rounded-[var(--ds-radius-sm)] border border-[var(--color-edge)] bg-panel-raised p-4"
+    <Panel
+      as="section"
+      tone="raised"
+      padding="compact"
+      className="grid gap-3"
       aria-label="Results contract"
     >
       {contracts.map((contract) => (
@@ -153,7 +159,7 @@ function ResultContractStrip({
           />
         </div>
       ))}
-    </section>
+    </Panel>
   )
 }
 
@@ -463,7 +469,7 @@ function ScenarioReliabilityBand({
   if (!aggregate) {
     return (
       <p
-        className="m-0 border-t border-[var(--color-rule)] px-4 py-3 text-xs text-ink-muted md:px-5"
+        className="m-0 bg-panel-raised px-4 py-3 text-xs text-ink-muted md:px-5"
         data-scenario-aggregate="unavailable"
       >
         Required Results v3 aggregate is unavailable; no completion or
@@ -497,7 +503,7 @@ function ScenarioReliabilityBand({
   ] as const
   return (
     <section
-      className="border-t border-[var(--color-rule)] px-4 py-4 md:px-5"
+      className="bg-panel-raised px-4 py-4 md:px-5"
       aria-label="Scenario reliability and completion"
       data-scenario-aggregate="available"
     >
@@ -602,7 +608,7 @@ function RunOutcomeLedger({ runs }: { runs: DashboardRunProjection[] }) {
   const attempts = physicalAttempts(runs)
   if (attempts.length === 0) return null
   return (
-    <details className="group border-t border-[var(--color-rule)]">
+    <details className="group bg-panel-raised">
       <summary className="flex min-h-11 cursor-pointer list-none items-center gap-3 px-4 py-3 text-xs font-semibold text-ink marker:hidden md:px-5">
         <ChevronDown
           className="size-4 shrink-0 -rotate-90 text-ink-muted transition-transform group-open:rotate-0"
@@ -613,7 +619,7 @@ function RunOutcomeLedger({ runs }: { runs: DashboardRunProjection[] }) {
           {attempts.length} {attempts.length === 1 ? 'attempt' : 'attempts'}
         </span>
       </summary>
-      <div className="overflow-x-auto border-t border-[var(--color-rule)]">
+      <div className="overflow-x-auto bg-panel">
         <table className="w-full min-w-[860px] border-collapse text-left text-xs">
           <thead className="bg-panel-raised font-mono text-label uppercase tracking-[0.06em] text-ink-muted">
             <tr>
@@ -629,10 +635,7 @@ function RunOutcomeLedger({ runs }: { runs: DashboardRunProjection[] }) {
           </thead>
           <tbody>
             {attempts.map((attempt) => (
-              <tr
-                key={attempt.key}
-                className="border-t border-[var(--color-rule)]"
-              >
+              <tr key={attempt.key} className="even:bg-panel-raised">
                 <td className="px-4 py-3 font-mono text-ink">
                   {attempt.runId}
                   <span className="ml-2 text-ink-muted">
@@ -924,9 +927,9 @@ function WorkflowStepRow({
           Profile
         </span>
         <div>
-          <div className="h-2 overflow-hidden rounded-full bg-[var(--color-surface-hover)]">
+          <div className="h-2 overflow-hidden rounded-[6px] bg-[var(--color-surface-hover)]">
             <div
-              className={`h-full rounded-full ${barTone}`}
+              className={`h-full rounded-[6px] ${barTone}`}
               style={{ width: `${width}%` }}
             />
           </div>

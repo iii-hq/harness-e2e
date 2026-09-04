@@ -44,31 +44,21 @@ pub enum FailureDomain {
     E2eInfrastructure,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum RetryScope {
+    #[default]
     None,
     SameSlot,
 }
 
-impl Default for RetryScope {
-    fn default() -> Self {
-        Self::None
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum ContaminationScope {
+    #[default]
     None,
     Case,
     Execution,
-}
-
-impl Default for ContaminationScope {
-    fn default() -> Self {
-        Self::None
-    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -315,46 +305,31 @@ pub enum RunStatus {
     InfrastructureError,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum CompletionState {
     Completed,
     TaskIncomplete,
+    #[default]
     Undetermined,
 }
 
-impl Default for CompletionState {
-    fn default() -> Self {
-        Self::Undetermined
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum TechnicalState {
     Valid,
+    #[default]
     TechnicalInvalid,
 }
 
-impl Default for TechnicalState {
-    fn default() -> Self {
-        Self::TechnicalInvalid
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum EvaluatorAvailability {
     NotRequired,
+    #[default]
     Pending,
     Available,
     Unavailable,
-}
-
-impl Default for EvaluatorAvailability {
-    fn default() -> Self {
-        Self::Pending
-    }
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]

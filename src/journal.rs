@@ -282,14 +282,13 @@ impl ExecutionJournal {
                     }
                 }
                 ExecutionJournalEventKind::RunCommitted { slot_id, .. }
-                | ExecutionJournalEventKind::SlotDeferred { slot_id, .. } => {
+                | ExecutionJournalEventKind::SlotDeferred { slot_id, .. }
                     if inventory
                         .as_ref()
                         .is_none_or(|slots| !slots.contains(slot_id))
-                        || !disposed_slots.insert(slot_id.clone())
-                    {
-                        bail!("execution journal commits unknown or duplicate slot '{slot_id}'");
-                    }
+                        || !disposed_slots.insert(slot_id.clone()) =>
+                {
+                    bail!("execution journal commits unknown or duplicate slot '{slot_id}'");
                 }
                 _ => {}
             }
