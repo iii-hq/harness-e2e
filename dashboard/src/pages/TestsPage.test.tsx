@@ -5,6 +5,7 @@ import {
   comparisonHasNoOverlap,
   comparisonVerdict,
   matchesCompareFilter,
+  oneSidedTests,
   RowDetails,
   rowState,
   SideResult,
@@ -185,5 +186,20 @@ describe('comparison row states', () => {
     expect(
       comparisonVerdict({ regressed: 0, improved: 0, unchanged: 0 }),
     ).toBeNull()
+  })
+
+  // Audit CP-24: naming which side holds what is what decides which side is
+  // worth running, and it is the input to the two recovery actions.
+  it('names which side ran what, and counts a shared test as neither', () => {
+    const rows = [
+      { ...row(side(), null), test_id: 'only_a' },
+      { ...row(null, side()), test_id: 'only_b' },
+      { ...row(side(), side()), test_id: 'both' },
+      { ...row(null, null), test_id: 'neither' },
+    ]
+    expect(oneSidedTests(rows)).toEqual({
+      onlyOnA: ['only_a'],
+      onlyOnB: ['only_b'],
+    })
   })
 })

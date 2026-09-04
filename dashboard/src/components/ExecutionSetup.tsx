@@ -336,7 +336,14 @@ export function ExecutionSetup({
   ).length
 
   return (
-    <div className="grid min-w-0 gap-8" data-execution-setup={mode}>
+    // Audit RS-15: when something else holds the form, park it rather than
+    // leaving 68 dead controls at full strength. The reader can still read
+    // what they would be configuring, and the callout above says why.
+    <div
+      className={`grid min-w-0 gap-8 ${disabled ? 'opacity-55' : ''}`}
+      data-execution-setup={mode}
+      data-parked={disabled || undefined}
+    >
       {/* Audit PN-26 / RS-06: catalog status in the status vocabulary. */}
       <div
         className="flex min-w-0 flex-wrap items-center gap-3 font-mono text-xs"

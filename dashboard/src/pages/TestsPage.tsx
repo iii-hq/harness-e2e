@@ -285,6 +285,20 @@ export function comparisonVerdict(counts: {
   }
 }
 
+/** Which tests only one side ran. Naming the sides is what tells a reader
+ *  which side is worth running, and it is the input to the two actions that
+ *  make the comparison possible at all (audit CP-24). */
+export function oneSidedTests(rows: TestCatalogRow[]) {
+  return {
+    onlyOnA: rows
+      .filter((row) => row.result?.from && !row.result?.to)
+      .map((row) => row.test_id),
+    onlyOnB: rows
+      .filter((row) => row.result?.to && !row.result?.from)
+      .map((row) => row.test_id),
+  }
+}
+
 export function sortCompareRows(rows: TestCatalogRow[]) {
   return [...rows].sort(
     (left, right) =>
@@ -1189,6 +1203,9 @@ export function TestsPage({
   // columns rather than ruling off two columns of nothing.
   const showDeltas = !comparisonHasNoOverlap(evidenceCount, comparableCount)
   const verdict = comparisonVerdict(counts)
+  // Audit CP-24: "8 tests ran on one side" does not say which side holds what,
+  // which is the thing that decides which side is worth running.
+  const { onlyOnA, onlyOnB } = oneSidedTests(rows)
   const normalizedQuery = query.trim().toLowerCase()
   const visibleRows = useMemo(
     () =>
@@ -1539,15 +1556,45 @@ export function TestsPage({
           >
             <span className="grid gap-2">
               <span>
-                {counts.one_side} test{counts.one_side === 1 ? '' : 's'} ran on
-                one side only and none ran on both, so there is no delta to
-                compute anywhere on this page. Run the missing side, or choose a
-                pair that shares evidence.
+                a ran {onlyOnA.length} test{onlyOnA.length === 1 ? '' : 's'} b
+                did not, and b ran {onlyOnB.length} test
+                {onlyOnB.length === 1 ? '' : 's'} a did not. Nothing ran on both
+                sides, so there is no delta to compute anywhere on this page.
               </span>
               <span className="flex flex-wrap gap-2">
+                {/* Running the missing side is what makes this page work, so
+                    it is the action, not an instruction to go and do it. */}
+                {local && onlyOnA.length > 0 ? (
+                  <a
+                    className={buttonClassName({
+                      variant: 'secondary',
+                      size: 'compact',
+                      className: 'no-underline',
+                    })}
+                    href={hashForWorkspace()}
+                    onClick={() => requestQuickExecution(onlyOnA)}
+                  >
+                    run a&rsquo;s {onlyOnA.length} test
+                    {onlyOnA.length === 1 ? '' : 's'} on b
+                  </a>
+                ) : null}
+                {local && onlyOnB.length > 0 ? (
+                  <a
+                    className={buttonClassName({
+                      variant: 'secondary',
+                      size: 'compact',
+                      className: 'no-underline',
+                    })}
+                    href={hashForWorkspace()}
+                    onClick={() => requestQuickExecution(onlyOnB)}
+                  >
+                    run b&rsquo;s {onlyOnB.length} test
+                    {onlyOnB.length === 1 ? '' : 's'} on a
+                  </a>
+                ) : null}
                 <button
                   className={buttonClassName({
-                    variant: 'secondary',
+                    variant: 'quiet',
                     size: 'compact',
                   })}
                   type="button"

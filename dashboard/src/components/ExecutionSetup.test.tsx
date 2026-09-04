@@ -253,4 +253,25 @@ describe('execution setup sheet', () => {
     expect(html).toContain('disabled=""')
     expect(html).toContain('data-scenario-group="local"')
   })
+
+  // Audit RS-15: when something else holds the form it is parked, not dead —
+  // the reader can still see what they would be configuring.
+  it('parks the form visibly instead of leaving dead controls at full strength', () => {
+    const parked = renderToStaticMarkup(
+      <ExecutionSetup
+        {...sharedProps}
+        mode="quick"
+        disabled
+        selectedScenarios={[]}
+      />,
+    )
+    expect(parked).toContain('data-parked="true"')
+    expect(parked).toContain('opacity-55')
+
+    const open = renderToStaticMarkup(
+      <ExecutionSetup {...sharedProps} mode="quick" selectedScenarios={[]} />,
+    )
+    expect(open).not.toContain('data-parked')
+    expect(open).not.toContain('opacity-55')
+  })
 })
