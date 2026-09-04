@@ -23,7 +23,11 @@ case "$artifact_dir" in
   *) echo "HARNESS_E2E_ARTIFACTS_DIR must be below $repo_root/target" >&2; exit 2 ;;
 esac
 mkdir -p "$artifact_dir"
-artifact_dir=$(cd "$artifact_dir" && pwd)
+artifact_dir=$(cd "$artifact_dir" && pwd -P)
+case "$artifact_dir" in
+  "$repo_root"/target/*) ;;
+  *) echo "artifact directory escapes the canonical target directory" >&2; exit 2 ;;
+esac
 contract_path="$artifact_dir/stack-lock.json"
 printf '%s\n' "$HARNESS_E2E_STACK_LOCK" >"$contract_path"
 python3 "$contract_tool" validate --contract "$contract_path" >/dev/null
@@ -38,6 +42,13 @@ short_execution=${execution_id%%-*}
 namespace="e2e-${short_execution}-${campaign_group_id}"
 
 run_root=$(mktemp -d "${TMPDIR:-/tmp}/harness-e2e-compose.XXXXXX")
+# TMPDIR is configurable; reject an uploaded runtime/secret tree before any
+# provider credential or Compose state is written into it.
+if ! python3 "$contract_tool" validate-layout \
+  --artifact-root "$artifact_dir" --runtime-root "$run_root" --allowed-root "$repo_root/target"; then
+  rmdir -- "$run_root"
+  exit 2
+fi
 project_dir="$run_root/project"
 engine_config="$project_dir/iii.config.yaml"
 compose_file="$artifact_dir/stack/worker-compose.yaml"

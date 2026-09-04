@@ -1,6 +1,10 @@
+import hashlib
 import importlib.util
 import json
+import os
+import subprocess
 import tempfile
+import textwrap
 import unittest
 from pathlib import Path
 
@@ -129,6 +133,91 @@ class ReleaseControlCampaignTest(unittest.TestCase):
     def test_common_runner_restricts_secret_files(self):
         runner = RUNNER_SCRIPT.read_text()
         self.assertIn("chmod 600", runner)
+        self.assertLess(runner.index("validate-layout"), runner.index('secrets_dir="$run_root/secrets"'))
+
+    def test_runtime_layout_requires_canonical_disjoint_roots(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            allowed = root / "target"
+            artifacts = allowed / "evidence"
+            runtime = root / "runtime"
+            artifacts.mkdir(parents=True)
+            runtime.mkdir()
+            MODULE.validate_runtime_layout(artifacts, runtime, allowed)
+            for overlapping in [artifacts, artifacts / "runtime", allowed]:
+                overlapping.mkdir(exist_ok=True)
+                with self.assertRaisesRegex(ValueError, "must not overlap"):
+                    MODULE.validate_runtime_layout(artifacts, overlapping, allowed)
+            link = root / "runtime-link"
+            link.symlink_to(artifacts, target_is_directory=True)
+            with self.assertRaisesRegex(ValueError, "must not overlap"):
+                MODULE.validate_runtime_layout(artifacts, link, allowed)
+            outside = root / "outside"
+            outside.mkdir()
+            with self.assertRaisesRegex(ValueError, "canonical target directory"):
+                MODULE.validate_runtime_layout(allowed / ".." / "outside", runtime, allowed)
+
+    def test_common_runner_rejects_uploaded_tmpdir_before_writing_credentials(self):
+        (ROOT / "target").mkdir(exist_ok=True)
+        with tempfile.TemporaryDirectory(prefix="artifact-layout-test-", dir=ROOT / "target") as directory:
+            artifacts = Path(directory)
+            result = subprocess.run(
+                ["bash", str(RUNNER_SCRIPT)],
+                env={
+                    **os.environ,
+                    "HARNESS_E2E_ARTIFACTS_DIR": str(artifacts),
+                    "HARNESS_E2E_STACK_LOCK": json.dumps(campaign_contract()),
+                    "HARNESS_E2E_CAMPAIGN_GROUP_ID": "daily-core",
+                    "TMPDIR": str(artifacts),
+                    "DEEPSEEK_API_KEY": "fake-secret-never-upload",
+                    "ZAI_API_KEY": "fake-secret-never-upload",
+                },
+                capture_output=True,
+                text=True,
+                timeout=15,
+                check=False,
+            )
+            self.assertEqual(result.returncode, 2, result.stderr)
+            self.assertIn("must not overlap", result.stdout)
+            self.assertFalse(list(artifacts.rglob("*.env")))
+            self.assertFalse(list(artifacts.glob("harness-e2e-compose.*")))
+
+    def test_uploads_preserve_hidden_files_only_from_validated_packages_or_safe_diagnostics(self):
+        workflow = WORKFLOW.read_text()
+        for kind in ["group", "root"]:
+            step = workflow.split(f"- name: Upload {kind} observation bundle", 1)[1].split("\n      - name:", 1)[0]
+            self.assertIn("include-hidden-files: true", step)
+            self.assertIn(f"steps.{kind}_package.outcome == 'success'", step)
+            self.assertIn(f"steps.{kind}_package_failure.outcome == 'success'", step)
+            self.assertIn(f"steps.{kind}_package_failure.outputs.path", step)
+
+    def test_packaging_failure_diagnostic_never_copies_the_unvalidated_tree(self):
+        workflow = WORKFLOW.read_text()
+        for kind in ["group", "root"]:
+            with self.subTest(kind=kind), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                unvalidated = root / "unvalidated"
+                unvalidated.mkdir()
+                (unvalidated / ".env").write_text("API_KEY=fake-secret-never-upload\n")
+                step = workflow.split(f"- name: Preserve safe {kind} packaging diagnostic", 1)[1].split("\n      - name:", 1)[0]
+                self.assertIn(f"steps.{kind}_package.outcome == 'failure'", step)
+                script = textwrap.dedent(step.split("run: |\n", 1)[1])
+                github_output = root / "github-output"
+                subprocess.run(
+                    ["bash", "-c", script],
+                    cwd=unvalidated,
+                    env={**os.environ, "RUNNER_TEMP": str(root), "GITHUB_OUTPUT": str(github_output)},
+                    check=True,
+                    capture_output=True,
+                    text=True,
+                )
+                diagnostic = Path(github_output.read_text().strip().removeprefix("path="))
+                self.assertFalse(diagnostic.is_relative_to(unvalidated))
+                self.assertEqual([path.name for path in diagnostic.iterdir()], ["failure.json"])
+                failure = json.loads((diagnostic / "failure.json").read_text())
+                self.assertEqual(failure["phase"], "artifact_packaging")
+                self.assertEqual(failure["outcome"], "infra_failed")
+                self.assertNotIn("fake-secret-never-upload", json.dumps(failure))
 
     def test_common_runner_preserves_native_data_and_awaits_compose_add(self):
         runner = RUNNER_SCRIPT.read_text()
@@ -407,6 +496,45 @@ class ReleaseControlCampaignTest(unittest.TestCase):
             "native/executions/run-1/journal/events/00000001.json",
             [entry["path"] for entry in manifest["files"]],
         )
+
+    def test_group_and_root_packages_preserve_hidden_checkpoint_bytes(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            group = root / "groups" / "daily-core"
+            checkpoint = group / "native/executions/.workflow-state/workflow-resume/state-v1.json"
+            checkpoint.parent.mkdir(parents=True)
+            payload = b'{"state_sha256":"sha256:checkpoint","state":{"sequence":3}}\n'
+            checkpoint.write_bytes(payload)
+            for package_root in [group, root]:
+                manifest = MODULE.package_bundle(package_root, campaign_contract(), {})
+                reference = next(entry for entry in manifest["files"] if entry["path"].endswith("state-v1.json"))
+                self.assertEqual(reference["path"], checkpoint.relative_to(package_root).as_posix())
+                self.assertEqual(reference["sha256"], f"sha256:{hashlib.sha256(payload).hexdigest()}")
+                self.assertEqual(reference["size_bytes"], len(payload))
+                self.assertEqual(checkpoint.read_bytes(), payload)
+
+    def test_package_rejects_credential_paths_instead_of_silently_omitting_them(self):
+        for relative in [".env", ".env.local", "provider-zai.env", "secrets/key", ".aws/credentials", ".ssh/id_ed25519", ".gnupg/key"]:
+            with self.subTest(relative=relative), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                credential = root / relative
+                credential.parent.mkdir(parents=True, exist_ok=True)
+                credential.write_text("fake-secret-never-upload\n")
+                with self.assertRaisesRegex(ValueError, "reserved credential path"):
+                    MODULE.package_bundle(root, campaign_contract(), {})
+
+    def test_separate_runtime_secrets_are_not_part_of_the_artifact_manifest(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            artifacts = root / "target" / "evidence"
+            artifacts.mkdir(parents=True)
+            secrets = root / "runtime" / "secrets"
+            secrets.mkdir(parents=True)
+            (secrets / "provider-zai.env").write_text("ZAI_API_KEY=fake-secret-never-upload\n")
+            (artifacts / "failure.json").write_text('{"outcome":"infra_failed"}\n')
+            MODULE.validate_runtime_layout(artifacts, secrets.parent, root / "target")
+            manifest = MODULE.package_bundle(artifacts, campaign_contract(), {})
+            self.assertEqual([entry["path"] for entry in manifest["files"]], ["failure.json"])
 
     def test_package_rejects_symlinks(self):
         with tempfile.TemporaryDirectory() as directory:

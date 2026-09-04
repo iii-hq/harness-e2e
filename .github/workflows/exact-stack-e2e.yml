@@ -184,6 +184,7 @@ jobs:
         run: scripts/run_exact_stack_fault.sh
 
       - name: Package factual group evidence
+        id: group_package
         if: always()
         env:
           WORKFLOW_IDENTITY: >-
@@ -196,17 +197,27 @@ jobs:
             --workflow "$WORKFLOW_IDENTITY" \
             --output target/harness-e2e-exact-stack/bundle-manifest.json
 
+      - name: Preserve safe group packaging diagnostic
+        id: group_package_failure
+        if: always() && steps.group_package.outcome == 'failure'
+        run: |
+          set -euo pipefail
+          diagnostic_dir=$(mktemp -d "${RUNNER_TEMP:?}/harness-e2e-package-failure.XXXXXX")
+          printf '%s\n' '{"phase":"artifact_packaging","outcome":"infra_failed","error":"Group artifact validation failed; unsafe tree was not uploaded. See workflow logs."}' > "$diagnostic_dir/failure.json"
+          printf 'path=%s\n' "$diagnostic_dir" >> "$GITHUB_OUTPUT"
+
       - name: Upload group observation bundle
-        if: always()
+        if: always() && (steps.group_package.outcome == 'success' || steps.group_package_failure.outcome == 'success')
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
         with:
           name: e2e-observation-${{ inputs.campaign_id }}-${{ inputs.execution_id }}-${{ inputs.attempt }}-${{ matrix.group_id }}-gh-${{ github.run_attempt }}
-          path: target/harness-e2e-exact-stack/
+          path: ${{ steps.group_package.outcome == 'success' && 'target/harness-e2e-exact-stack/' || steps.group_package_failure.outputs.path }}
+          include-hidden-files: true
           retention-days: 90
           if-no-files-found: error
 
       - name: Preserve factual group conclusion
-        if: always() && (steps.common.outcome == 'failure' || steps.fault.outcome == 'failure')
+        if: always() && (steps.common.outcome == 'failure' || steps.fault.outcome == 'failure' || steps.group_package.outcome == 'failure')
         run: exit 1
 
   finalize:
@@ -281,13 +292,23 @@ jobs:
             --workflow '{"repository":"${{ github.repository }}","workflow":"exact-stack-e2e.yml","workflow_sha":"${{ github.sha }}","run_id":${{ github.run_id }},"run_attempt":${{ github.run_attempt }},"job":"finalize"}' \
             --output target/harness-e2e-campaign/bundle-manifest.json
 
+      - name: Preserve safe root packaging diagnostic
+        id: root_package_failure
+        if: always() && steps.root_package.outcome == 'failure'
+        run: |
+          set -euo pipefail
+          diagnostic_dir=$(mktemp -d "${RUNNER_TEMP:?}/harness-e2e-package-failure.XXXXXX")
+          printf '%s\n' '{"phase":"artifact_packaging","outcome":"infra_failed","error":"Root artifact validation failed; unsafe tree was not uploaded. See workflow logs."}' > "$diagnostic_dir/failure.json"
+          printf 'path=%s\n' "$diagnostic_dir" >> "$GITHUB_OUTPUT"
+
       - name: Upload root observation bundle
         id: root_upload
-        if: always()
+        if: always() && (steps.root_package.outcome == 'success' || steps.root_package_failure.outcome == 'success')
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
         with:
           name: e2e-observation-${{ inputs.campaign_id }}-${{ inputs.execution_id }}-${{ inputs.attempt }}-gh-${{ github.run_attempt }}
-          path: target/harness-e2e-campaign/
+          path: ${{ steps.root_package.outcome == 'success' && 'target/harness-e2e-campaign/' || steps.root_package_failure.outputs.path }}
+          include-hidden-files: true
           retention-days: 90
           if-no-files-found: error
 
