@@ -8,6 +8,7 @@ import {
 } from 'react'
 import { AssessmentDetailDialog } from '@/components/AssessmentWorkspace'
 import { DashboardPageActions } from '@/components/DashboardPageActions'
+import { ExecutionMetricsPanel } from '@/components/ExecutionMetricsPanel'
 import { requestQuickExecution } from '@/components/ExecutionSetup'
 import {
   OutcomeDerivation,
@@ -62,9 +63,10 @@ import {
 } from '@/lib/workflow-metrics'
 import '@/design-system/styles.css'
 
-type DetailSection = 'summary' | 'results' | 'technical'
+type DetailSection = 'summary' | 'metrics' | 'results' | 'technical'
 
 function sectionFromAnchor(anchor: string | null | undefined): DetailSection {
+  if (anchor === 'metrics') return 'metrics'
   if (
     anchor === 'results' ||
     anchor === 'assessments' ||
@@ -539,6 +541,7 @@ function TechnicalSection({
 /** Audit ED-07: the anchors the router already accepts get a visible bar. */
 const SECTIONS: Array<{ id: DetailSection; label: string }> = [
   { id: 'summary', label: 'decision' },
+  { id: 'metrics', label: 'metrics' },
   { id: 'results', label: 'results' },
   { id: 'technical', label: 'provenance' },
 ]
@@ -972,6 +975,7 @@ export function ExecutionPage({
                 metrics={summaryMetrics}
                 scenarioSummary={scenarioSummary}
               />
+              <ExecutionMetricsPanel detail={detail} />
               <ResultsSection
                 detail={detail}
                 onTranscript={(run, title) => setTranscript({ run, title })}
