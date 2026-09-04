@@ -177,13 +177,54 @@ class CanonicalManifestTests(unittest.TestCase):
         paths = sorted(CAMPAIGN_DIR.glob("*.json"))
         self.assertEqual(
             [path.name for path in paths],
-            ["daily.json", "endurance.json", "post-deploy.json", "weekly.json"],
+            [
+                "daily.json",
+                "endurance.json",
+                "post-deploy.json",
+                "swe-continuous.json",
+                "swe-isolated.json",
+                "weekly.json",
+            ],
         )
         for path in paths:
             raw = json.loads(path.read_text(encoding="utf-8"))
             self.assertFalse(contains_seed_field(raw), path)
             campaign = load_campaign(path, ROOT / "scenarios")
             self.assertTrue(campaign.groups)
+
+    def test_swe_campaigns_are_advisory_single_run_composite_groups(self):
+        isolated_ids = (
+            "swe_config_isolation",
+            "swe_cache_invalidation",
+            "swe_batch_replay",
+            "swe_replay_recovery",
+            "swe_contract_migration",
+            "swe_tenant_isolation",
+            "swe_replay_performance",
+            "swe_release_handoff",
+        )
+        isolated = load_campaign(CAMPAIGN_DIR / "swe-isolated.json", ROOT / "scenarios")
+        continuous = load_campaign(CAMPAIGN_DIR / "swe-continuous.json", ROOT / "scenarios")
+
+        self.assertEqual(isolated.failure_policy, "advisory")
+        self.assertEqual(isolated.lane, "swe-isolated")
+        self.assertEqual(len(isolated.groups), 8)
+        self.assertEqual(tuple(group.scenarios[0] for group in isolated.groups), isolated_ids)
+        self.assertEqual(continuous.failure_policy, "advisory")
+        self.assertEqual(continuous.lane, "swe-continuous")
+        self.assertEqual(len(continuous.groups), 1)
+        self.assertEqual(continuous.groups[0].scenarios, ("swe_service_journey",))
+
+        for group in (*isolated.groups, *continuous.groups):
+            self.assertEqual(group.execution_kind, "composite_flow")
+            self.assertEqual(group.runs, 1)
+            self.assertEqual(group.technical_retries, 0)
+            self.assertEqual(len(group.scenarios), 1)
+        self.assertEqual(
+            [group.difficulty_weight for group in isolated.groups],
+            [2, 2, 2, 2, 5, 2, 2, 2],
+        )
+        self.assertEqual(continuous.groups[0].difficulty_weight, 5)
 
     def test_endurance_is_single_run_advisory_and_not_technically_retried(self):
         campaign = load_campaign(CAMPAIGN_DIR / "endurance.json", ROOT / "scenarios")

@@ -33,7 +33,7 @@ pub use catalog::{
     StepEvaluation, StepExecutor, StepExecutorContext, StepExecutorOutput, StepReconcileOutcome,
     StepReconcileState, TypedPortValue, WorkflowAssetContent, WorkflowCleanupContext,
     WorkflowCleanupHook, WorkflowEvaluationOutcome, WorkflowEvaluationResult, WorkflowGateResult,
-    WorkflowProvenance,
+    WorkflowProvenance, WorkflowTermination, WorkflowTerminationReason,
 };
 pub use resume::{
     ResumeDisposition, StepResumePhase, WorkflowResumeEnvelopeV1, WorkflowResumeIdentityV1,
@@ -151,6 +151,11 @@ pub fn adaptive_runtime(
 /// sequential scenario requires registering it here and implementing its step
 /// catalog; no JSON definition is loaded or accepted by the runner.
 pub fn composite_definition(scenario: ScenarioId) -> Option<WorkflowDefinitionV1> {
+    if crate::scenarios::swe_service::is_swe(scenario) {
+        return Some(crate::scenarios::swe_service::workflow::definition(
+            scenario,
+        ));
+    }
     match scenario {
         ScenarioId::SecurityReview => Some(security_scan::definition()),
         ScenarioId::IncidentResponse => Some(incident_response::definition()),
@@ -168,6 +173,13 @@ pub fn composite_descriptor_catalog(scenarios: &[ScenarioId]) -> Result<StepCata
         let Some(definition) = composite_definition(*scenario) else {
             continue;
         };
+        if crate::scenarios::swe_service::is_swe(*scenario) {
+            for descriptor in crate::scenarios::swe_service::workflow::descriptors() {
+                if catalog.get(&descriptor.id, descriptor.version).is_none() {
+                    catalog.register_descriptor(descriptor)?;
+                }
+            }
+        }
         if definition.nodes.iter().any(|node| {
             node.step_type == builtin::HARNESS_STEP_ID
                 && node.step_version == builtin::HARNESS_STEP_VERSION
@@ -222,6 +234,21 @@ pub fn composite_runtime(
     let definition = composite_definition(scenario)
         .with_context(|| format!("scenario '{}' is not composite", scenario.as_str()))?;
     let mut catalog = StepCatalog::new();
+    if crate::scenarios::swe_service::is_swe(scenario) {
+        let cleanup_hook = crate::scenarios::swe_service::workflow::register(
+            &mut catalog,
+            scenario,
+            context,
+            model,
+            provider,
+        )?;
+        definition.validate(&catalog)?;
+        return Ok(CompositeScenarioRuntime {
+            definition,
+            catalog: Arc::new(catalog),
+            cleanup_hook,
+        });
+    }
     if definition.nodes.iter().any(|node| {
         node.step_type == builtin::HARNESS_STEP_ID
             && node.step_version == builtin::HARNESS_STEP_VERSION

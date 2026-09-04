@@ -754,6 +754,7 @@ mod tests {
                     inputs: BTreeMap::new(),
                     output_dir: tempfile::tempdir()?.path().to_path_buf(),
                     cancellation: tokio::sync::watch::channel(false).1,
+                    termination: Default::default(),
                 })
                 .await?;
         }

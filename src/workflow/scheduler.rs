@@ -818,6 +818,7 @@ async fn recover_resume_state(
                     inputs: BTreeMap::new(),
                     output_dir: request.output_dir.clone(),
                     cancellation: cancellation.clone(),
+                    termination: Default::default(),
                 };
                 let previous = StepReconcileState {
                     phase: stored.phase,
@@ -1027,6 +1028,7 @@ async fn execute_materialized_workflow(
     let started_at = timestamp();
     let checkpoint_store = CheckpointStore::new(&request.output_dir, &request.run_id, &attempt_id);
     let (abort_sender, abort_receiver) = watch::channel(false);
+    let termination = super::WorkflowTermination::default();
     let mut external_cancellation = request.cancellation.clone();
 
     preflight_all(
@@ -1089,6 +1091,7 @@ async fn execute_materialized_workflow(
                 message: "workflow execution was cancelled".into(),
                 technical: true,
             });
+            termination.set(super::WorkflowTerminationReason::Cancelled);
             let _ = abort_sender.send(true);
             cancel_active(&catalog, &active_contexts).await;
         }
@@ -1102,6 +1105,7 @@ async fn execute_materialized_workflow(
                 ),
                 technical: true,
             });
+            termination.set(super::WorkflowTerminationReason::Deadline);
             let _ = abort_sender.send(true);
             cancel_active(&catalog, &active_contexts).await;
         }
@@ -1191,6 +1195,7 @@ async fn execute_materialized_workflow(
                         inputs,
                         output_dir: request.output_dir.clone(),
                         cancellation: abort_receiver.clone(),
+                        termination: termination.clone(),
                     };
                     let report = reports.get_mut(&id).expect("known report");
                     report.status = WorkflowStepStatus::Running;
@@ -1242,6 +1247,7 @@ async fn execute_materialized_workflow(
                         message: "workflow execution was cancelled".into(),
                         technical: true,
                     });
+                    termination.set(super::WorkflowTerminationReason::Cancelled);
                     let _ = abort_sender.send(true);
                     cancel_active(&catalog, &active_contexts).await;
                 }
@@ -1257,6 +1263,7 @@ async fn execute_materialized_workflow(
                     ),
                     technical: true,
                 });
+                termination.set(super::WorkflowTerminationReason::Deadline);
                 let _ = abort_sender.send(true);
                 cancel_active(&catalog, &active_contexts).await;
                 continue;
@@ -1415,6 +1422,7 @@ async fn preflight_all(
                 inputs: BTreeMap::new(),
                 output_dir: request.output_dir.clone(),
                 cancellation: cancellation.clone(),
+                termination: Default::default(),
             })
             .await
             .with_context(|| format!("preflight workflow node '{}'", node.id))?;
@@ -2516,6 +2524,7 @@ mod tests {
             inputs: BTreeMap::new(),
             output_dir: output.path().to_path_buf(),
             cancellation,
+            termination: Default::default(),
         };
         let assets = (0..=MAX_WORKFLOW_ASSETS_PER_STEP)
             .map(|index| CapturedWorkflowAsset {

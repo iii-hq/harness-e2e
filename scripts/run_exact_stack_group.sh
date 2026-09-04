@@ -334,6 +334,10 @@ if [[ -n "${HARNESS_E2E_ENGINEERING_TICKET_FIXTURE_PATH:-}" ]]; then
   project_args+=(--environment \
     "harness-e2e.HARNESS_E2E_ENGINEERING_TICKET_FIXTURE_PATH=$HARNESS_E2E_ENGINEERING_TICKET_FIXTURE_PATH")
 fi
+if [[ -n "${HARNESS_E2E_SWE_WORKSPACE_ROOT:-}" ]]; then
+  project_args+=(--environment \
+    "harness-e2e.HARNESS_E2E_SWE_WORKSPACE_ROOT=$HARNESS_E2E_SWE_WORKSPACE_ROOT")
+fi
 python3 "$contract_tool" project "${project_args[@]}"
 
 failure_phase=engine_start
@@ -415,6 +419,9 @@ for native_name in results.json manifest.json observation.json; do
   test -f "$native_dir/$native_name"
   cp -- "$native_dir/$native_name" "$artifact_dir/$native_name"
 done
+python3 "$repo_root/scripts/extract_swe_reports.py" \
+  --native-dir "$native_dir" --output-dir "$artifact_dir/deliverables" \
+  >"$artifact_dir/swe-deliverables.json"
 expected_results_sha=$(jq -er '.observation.evidence.results_sha256' "$results_response")
 expected_manifest_sha=$(jq -er '.observation.evidence.manifest_sha256' "$results_response")
 observed_results_sha="sha256:$(sha256sum "$artifact_dir/results.json" | cut -d ' ' -f1)"
