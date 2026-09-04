@@ -2,7 +2,10 @@ import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
 import type { TestCatalogRow, TestSideSummary } from '@/lib/test-catalog'
 import {
+  comparisonHasNoOverlap,
+  comparisonVerdict,
   matchesCompareFilter,
+  oneSidedTests,
   RowDetails,
   rowState,
   SideResult,
@@ -143,5 +146,60 @@ describe('comparison row states', () => {
     expect(html).not.toContain('median tokens')
     expect(html).toContain('No retained observations.')
     expect(html).toContain('open history')
+  })
+
+  // Audit CP-20: two sides that share nothing produce a table of empty delta
+  // columns. That is a state to name, not a comparison to render.
+  it('separates a comparison with no overlap from an empty cohort', () => {
+    expect(comparisonHasNoOverlap(8, 0)).toBe(true)
+    expect(comparisonHasNoOverlap(12, 5)).toBe(false)
+    // Nothing ran at all: the empty state already covers it.
+    expect(comparisonHasNoOverlap(0, 0)).toBe(false)
+  })
+
+  // Audit CP-23: the page exists to answer one question, so it answers it
+  // rather than leaving three chip counts to be read in the right direction.
+  it('states which side is behind, and never calls a tie a regression', () => {
+    expect(
+      comparisonVerdict({ regressed: 3, improved: 2, unchanged: 7 }),
+    ).toEqual({
+      tone: 'negative',
+      headline: 'b is behind a on 3 of 12 comparable tests',
+    })
+    // A regression outranks an improvement: it is the one worth acting on.
+    expect(
+      comparisonVerdict({ regressed: 1, improved: 5, unchanged: 0 })?.tone,
+    ).toBe('negative')
+    expect(
+      comparisonVerdict({ regressed: 0, improved: 2, unchanged: 1 }),
+    ).toEqual({
+      tone: 'positive',
+      headline: 'b is ahead of a on 2 of 3 comparable tests',
+    })
+    expect(
+      comparisonVerdict({ regressed: 0, improved: 0, unchanged: 1 }),
+    ).toEqual({
+      tone: 'neutral',
+      headline: 'b matches a on all 1 comparable test',
+    })
+    // Nothing comparable is not a verdict; the no-overlap callout covers it.
+    expect(
+      comparisonVerdict({ regressed: 0, improved: 0, unchanged: 0 }),
+    ).toBeNull()
+  })
+
+  // Audit CP-24: naming which side holds what is what decides which side is
+  // worth running, and it is the input to the two recovery actions.
+  it('names which side ran what, and counts a shared test as neither', () => {
+    const rows = [
+      { ...row(side(), null), test_id: 'only_a' },
+      { ...row(null, side()), test_id: 'only_b' },
+      { ...row(side(), side()), test_id: 'both' },
+      { ...row(null, null), test_id: 'neither' },
+    ]
+    expect(oneSidedTests(rows)).toEqual({
+      onlyOnA: ['only_a'],
+      onlyOnB: ['only_b'],
+    })
   })
 })

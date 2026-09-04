@@ -374,33 +374,80 @@ function ScenarioExpansion({
   )
 }
 
+/** Audit ED-24: eleven facts in one seven-column grid wrapped into a ragged
+ *  second row with a visible empty cell. Three bands, each sized to its own
+ *  count, divide evenly and say what kind of number each one is. */
 function ScenarioResultBand({ item }: { item: ScenarioMatrixItem }) {
+  const scoring = item.primaryMetrics.filter(
+    (metric) => metric.band === 'scoring',
+  )
+  const execution = item.primaryMetrics.filter(
+    (metric) => metric.band === 'execution',
+  )
   return (
-    <dl
-      className="m-0 grid grid-cols-2 overflow-hidden lg:grid-cols-4 xl:grid-cols-7"
-      data-scenario-primary-metrics
-    >
-      <ResultFact
-        label="Objective"
-        value={item.objective.label}
-        status={item.objective.status}
-        detail="Authoritative system result"
-      />
-      <ResultFact
-        label="Advisory"
-        value={item.advisory.label}
-        status={item.advisory.status}
-        detail="Does not override objective result"
-      />
-      {item.primaryMetrics.map((metric) => (
+    <div className="grid gap-4" data-scenario-primary-metrics>
+      <MetricBandGroup label="outcome" columns="sm:grid-cols-2">
         <ResultFact
-          key={metric.label}
-          label={metric.label}
-          value={metric.value}
-          detail={metric.detail}
+          label="Objective"
+          value={item.objective.label}
+          status={item.objective.status}
+          detail="Authoritative system result"
         />
-      ))}
-    </dl>
+        <ResultFact
+          label="Advisory"
+          value={item.advisory.label}
+          status={item.advisory.status}
+          detail="Does not override objective result"
+        />
+      </MetricBandGroup>
+      {scoring.length > 0 ? (
+        <MetricBandGroup
+          label="scoring"
+          columns="sm:grid-cols-2 lg:grid-cols-4"
+        >
+          {scoring.map((metric) => (
+            <ResultFact
+              key={metric.label}
+              label={metric.label}
+              value={metric.value}
+              detail={metric.detail}
+            />
+          ))}
+        </MetricBandGroup>
+      ) : null}
+      {execution.length > 0 ? (
+        <MetricBandGroup
+          label="execution"
+          columns="sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5"
+        >
+          {execution.map((metric) => (
+            <ResultFact
+              key={metric.label}
+              label={metric.label}
+              value={metric.value}
+              detail={metric.detail}
+            />
+          ))}
+        </MetricBandGroup>
+      ) : null}
+    </div>
+  )
+}
+
+function MetricBandGroup({
+  label,
+  columns,
+  children,
+}: {
+  label: string
+  columns: string
+  children: ReactNode
+}) {
+  return (
+    <div className="grid gap-2">
+      <span className="ds-label">{label}</span>
+      <dl className={`m-0 grid gap-2 ${columns}`}>{children}</dl>
+    </div>
   )
 }
 
@@ -416,8 +463,10 @@ function ResultFact({
   status?: OperationalStatus
 }) {
   return (
+    // Bands separate by fill and gap now, so the hairline seams and the
+    // negative margins that closed them are gone (audit DS-14).
     <div
-      className="-mr-px -mb-px min-w-0 border-r border-b border-[var(--color-rule)] bg-panel p-3 md:p-4"
+      className="min-w-0 rounded-[6px] bg-panel p-3 md:p-4"
       data-primary-metric={label}
     >
       <dt className="font-mono text-label font-semibold uppercase tracking-[0.06em] text-ink-muted">

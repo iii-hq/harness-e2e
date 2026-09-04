@@ -9,6 +9,10 @@ import {
 import { AssessmentDetailDialog } from '@/components/AssessmentWorkspace'
 import { DashboardPageActions } from '@/components/DashboardPageActions'
 import { requestQuickExecution } from '@/components/ExecutionSetup'
+import {
+  OutcomeDerivation,
+  type OutcomeRow,
+} from '@/components/OutcomeDerivation'
 import { ScenarioMatrix } from '@/components/ScenarioMatrix'
 import { TranscriptDialog } from '@/components/TranscriptDialog'
 import {
@@ -44,7 +48,6 @@ import {
   formatDate,
   formatDuration,
   formatPercent,
-  titleCase,
 } from '@/lib/execution-view'
 import { executionTitle } from '@/lib/overview-signal'
 import {
@@ -262,13 +265,13 @@ export function DecisionSection({
     primaryRun?.finalAssessment.availability ??
     'unavailable'
   const effectiveStatus = primaryRun?.effectiveStatus ?? systemStatus
-  const boundaries: Array<[string, string]> = [
-    ['objective system', titleCase(systemStatus).toLowerCase()],
-    ['advisory ai', titleCase(advisoryStatus).toLowerCase()],
+  const boundaries: OutcomeRow[] = [
+    { role: 'system', value: systemStatus },
+    { role: 'advisory', value: advisoryStatus },
   ]
   // Audit ED-05: the effective status only appears when it differs.
   if (effectiveStatus !== systemStatus)
-    boundaries.push(['effective', titleCase(effectiveStatus).toLowerCase()])
+    boundaries.push({ role: 'effective', value: effectiveStatus })
   const summary = detail.assessment_summary
   const coverageComplete =
     presentation.coverage != null &&
@@ -293,27 +296,24 @@ export function DecisionSection({
         </a>
       }
     >
-      <dl className="m-0 flex flex-wrap gap-x-6 gap-y-2 font-mono text-xs">
-        {boundaries.map(([label, value]) => (
-          <div className="flex items-baseline gap-2" key={label}>
-            <dt className="ds-label">{label}</dt>
-            <dd className="m-0 text-ink">{value}</dd>
+      <OutcomeDerivation rows={boundaries} />
+      {/* Audit ED-22: the narrative used to stop at 80ch and leave the right
+          half of a 1400px panel empty. Two columns use the width instead. */}
+      <div className="mt-5 grid gap-x-8 gap-y-4 @[900px]:grid-cols-[minmax(0,1.35fr)_minmax(0,1fr)]">
+        {verdict.diagnosis ? (
+          <div className="grid content-start gap-1">
+            <span className="ds-label">what happened</span>
+            <p className="m-0 text-sm leading-6 text-pretty text-ink">
+              {verdict.diagnosis}
+            </p>
           </div>
-        ))}
-      </dl>
-      {verdict.diagnosis ? (
-        <div className="mt-4 grid gap-1">
-          <span className="ds-label">what happened</span>
-          <p className="m-0 max-w-[80ch] text-sm leading-6 text-ink">
-            {verdict.diagnosis}
+        ) : null}
+        <div className="grid content-start gap-1">
+          <span className="ds-label">next step</span>
+          <p className="m-0 text-sm leading-6 text-pretty text-ink-soft">
+            {verdict.nextStep}
           </p>
         </div>
-      ) : null}
-      <div className="mt-4 grid gap-1">
-        <span className="ds-label">next step</span>
-        <p className="m-0 max-w-[80ch] text-sm leading-6 text-ink">
-          {verdict.nextStep}
-        </p>
       </div>
       {/* Audit ED-18: one column below 640px, no delta wrapping into a
           second line beside the label. */}
@@ -357,11 +357,16 @@ export function DecisionSection({
               ? summary.assessment_count.toLocaleString('en-US')
               : '—'
           }
-          detail={
+          // Audit ED-23: "0" beside "N evidence references" read as a
+          // contradiction; say the count means nothing was retained.
+          detail={[
+            summary?.assessment_count ? null : 'none retained',
             typeof summary?.evidence_reference_count === 'number'
-              ? `${summary.evidence_reference_count} evidence references`
-              : 'no evidence references retained'
-          }
+              ? `${summary.evidence_reference_count} evidence reference${summary.evidence_reference_count === 1 ? '' : 's'}`
+              : 'no evidence references retained',
+          ]
+            .filter(Boolean)
+            .join(' · ')}
           tone={summary?.assessment_count ? 'neutral' : 'unavailable'}
         />
         <MetricCard

@@ -245,6 +245,60 @@ export function matchesCompareFilter(state: RowState, filter: CompareFilter) {
   return state === filter
 }
 
+/** Evidence on both sides but nothing shared: every delta column is empty and
+ *  the page has no comparison to render, however many rows it has (audit
+ *  CP-20). Distinct from an empty cohort, which has nothing at all. */
+export function comparisonHasNoOverlap(
+  evidenceCount: number,
+  comparableCount: number,
+) {
+  return evidenceCount > 0 && comparableCount === 0
+}
+
+/** The one sentence a comparison exists to produce. Reading it off the filter
+ *  chips meant counting three numbers and working out which direction was bad
+ *  (audit CP-23). */
+export function comparisonVerdict(counts: {
+  regressed: number
+  improved: number
+  unchanged: number
+}) {
+  const comparable = counts.regressed + counts.improved + counts.unchanged
+  if (comparable === 0) return null
+  const test = (n: number) =>
+    `${n} of ${comparable} comparable test${comparable === 1 ? '' : 's'}`
+  if (counts.regressed > 0) {
+    return {
+      tone: 'negative' as const,
+      headline: `b is behind a on ${test(counts.regressed)}`,
+    }
+  }
+  if (counts.improved > 0) {
+    return {
+      tone: 'positive' as const,
+      headline: `b is ahead of a on ${test(counts.improved)}`,
+    }
+  }
+  return {
+    tone: 'neutral' as const,
+    headline: `b matches a on all ${comparable} comparable test${comparable === 1 ? '' : 's'}`,
+  }
+}
+
+/** Which tests only one side ran. Naming the sides is what tells a reader
+ *  which side is worth running, and it is the input to the two actions that
+ *  make the comparison possible at all (audit CP-24). */
+export function oneSidedTests(rows: TestCatalogRow[]) {
+  return {
+    onlyOnA: rows
+      .filter((row) => row.result?.from && !row.result?.to)
+      .map((row) => row.test_id),
+    onlyOnB: rows
+      .filter((row) => row.result?.to && !row.result?.from)
+      .map((row) => row.test_id),
+  }
+}
+
 export function sortCompareRows(rows: TestCatalogRow[]) {
   return [...rows].sort(
     (left, right) =>
@@ -553,6 +607,7 @@ function CompareRow({
   expanded,
   loading,
   error,
+  showDeltas,
   onVersion,
   onToggle,
 }: {
@@ -563,6 +618,9 @@ function CompareRow({
   expanded: boolean
   loading: boolean
   error?: string
+  /** Audit CP-22: with nothing comparable both delta columns are dashes on
+   *  every row. Two columns of nothing are not a comparison. */
+  showDeltas: boolean
   onVersion: (row: TestCatalogRow, version: number) => void
   onToggle: (row: TestCatalogRow) => void
 }) {
@@ -606,36 +664,46 @@ function CompareRow({
         <td data-label={`b · ${bLabel}`}>
           <SideResult summary={result?.to ?? null} />
         </td>
-        <td data-label="Δ score" className={numericCellClassName}>
-          {comparable ? (
-            <DeltaValue
-              value={result?.delta.score}
-              format={(m) => m.toFixed(0)}
-              betterWhen="higher"
-              unavailableLabel="—"
-              title="b − a"
-            />
-          ) : (
-            <span className="text-ink-muted" title={compatibilityLabel(result)}>
-              —
-            </span>
-          )}
-        </td>
-        <td data-label="Δ tokens" className={numericCellClassName}>
-          {comparable ? (
-            <DeltaValue
-              value={relativeTokenDelta(result)}
-              format={(m) => `${m.toFixed(m >= 10 ? 0 : 1)}%`}
-              betterWhen="lower"
-              unavailableLabel="—"
-              title="b − a, relative to a"
-            />
-          ) : (
-            <span className="text-ink-muted" title={compatibilityLabel(result)}>
-              —
-            </span>
-          )}
-        </td>
+        {showDeltas ? (
+          <>
+            <td data-label="Δ score" className={numericCellClassName}>
+              {comparable ? (
+                <DeltaValue
+                  value={result?.delta.score}
+                  format={(m) => m.toFixed(0)}
+                  betterWhen="higher"
+                  unavailableLabel="—"
+                  title="b − a"
+                />
+              ) : (
+                <span
+                  className="text-ink-muted"
+                  title={compatibilityLabel(result)}
+                >
+                  —
+                </span>
+              )}
+            </td>
+            <td data-label="Δ tokens" className={numericCellClassName}>
+              {comparable ? (
+                <DeltaValue
+                  value={relativeTokenDelta(result)}
+                  format={(m) => `${m.toFixed(m >= 10 ? 0 : 1)}%`}
+                  betterWhen="lower"
+                  unavailableLabel="—"
+                  title="b − a, relative to a"
+                />
+              ) : (
+                <span
+                  className="text-ink-muted"
+                  title={compatibilityLabel(result)}
+                >
+                  —
+                </span>
+              )}
+            </td>
+          </>
+        ) : null}
         <td data-label="Actions" className="text-right">
           <span className="inline-flex flex-wrap items-center justify-end gap-1">
             {state === 'one_side' && local ? (
@@ -689,7 +757,7 @@ function CompareRow({
       </tr>
       {expanded || error ? (
         <tr id={detailsId} data-compare-details-row>
-          <td colSpan={6} className="bg-[var(--surface-fill)]">
+          <td colSpan={showDeltas ? 6 : 4} className="bg-[var(--surface-fill)]">
             {error ? (
               <Callout tone="danger">
                 <span className="flex flex-wrap items-center justify-between gap-3">
@@ -1131,6 +1199,13 @@ export function TestsPage({
   }, [states])
   const comparableCount = counts.regressed + counts.improved + counts.unchanged
   const evidenceCount = rows.length - counts.none
+  // Audit CP-22: no overlap means every delta cell is a dash. Drop the two
+  // columns rather than ruling off two columns of nothing.
+  const showDeltas = !comparisonHasNoOverlap(evidenceCount, comparableCount)
+  const verdict = comparisonVerdict(counts)
+  // Audit CP-24: "8 tests ran on one side" does not say which side holds what,
+  // which is the thing that decides which side is worth running.
+  const { onlyOnA, onlyOnB } = oneSidedTests(rows)
   const normalizedQuery = query.trim().toLowerCase()
   const visibleRows = useMemo(
     () =>
@@ -1470,6 +1545,107 @@ export function TestsPage({
           </Callout>
         ) : null}
 
+        {/* Audit CP-20: with nothing comparable the page rendered a comparison
+            table with two permanently empty delta columns and never said why.
+            The reason is the headline, and running the other side is the fix. */}
+        {!error && comparisonHasNoOverlap(evidenceCount, comparableCount) ? (
+          <Callout
+            className="mt-6"
+            tone="warning"
+            title="these two sides have no test in common"
+          >
+            <span className="grid gap-2">
+              <span>
+                a ran {onlyOnA.length} test{onlyOnA.length === 1 ? '' : 's'} b
+                did not, and b ran {onlyOnB.length} test
+                {onlyOnB.length === 1 ? '' : 's'} a did not. Nothing ran on both
+                sides, so there is no delta to compute anywhere on this page.
+              </span>
+              <span className="flex flex-wrap gap-2">
+                {/* Running the missing side is what makes this page work, so
+                    it is the action, not an instruction to go and do it. */}
+                {local && onlyOnA.length > 0 ? (
+                  <a
+                    className={buttonClassName({
+                      variant: 'secondary',
+                      size: 'compact',
+                      className: 'no-underline',
+                    })}
+                    href={hashForWorkspace()}
+                    onClick={() => requestQuickExecution(onlyOnA)}
+                  >
+                    run a&rsquo;s {onlyOnA.length} test
+                    {onlyOnA.length === 1 ? '' : 's'} on b
+                  </a>
+                ) : null}
+                {local && onlyOnB.length > 0 ? (
+                  <a
+                    className={buttonClassName({
+                      variant: 'secondary',
+                      size: 'compact',
+                      className: 'no-underline',
+                    })}
+                    href={hashForWorkspace()}
+                    onClick={() => requestQuickExecution(onlyOnB)}
+                  >
+                    run b&rsquo;s {onlyOnB.length} test
+                    {onlyOnB.length === 1 ? '' : 's'} on a
+                  </a>
+                ) : null}
+                <button
+                  className={buttonClassName({
+                    variant: 'quiet',
+                    size: 'compact',
+                  })}
+                  type="button"
+                  onClick={() => setFilter('one_side')}
+                >
+                  show what each side ran
+                </button>
+              </span>
+            </span>
+          </Callout>
+        ) : null}
+
+        {/* Audit CP-23: the page exists to answer one question. Answer it. */}
+        {!error && verdict ? (
+          <Panel className="mt-6" padding="compact">
+            <div className="flex flex-wrap items-baseline gap-x-5 gap-y-2">
+              <strong
+                className={`font-mono text-[0.9375rem] font-semibold ${
+                  verdict.tone === 'negative'
+                    ? 'text-danger'
+                    : verdict.tone === 'positive'
+                      ? 'text-success'
+                      : 'text-ink'
+                }`}
+              >
+                {verdict.headline}
+              </strong>
+              <span className="flex flex-wrap items-center gap-x-5 gap-y-1">
+                {counts.regressed > 0 ? (
+                  <StatusBadge
+                    status="failed"
+                    label={`${counts.regressed} regressed`}
+                  />
+                ) : null}
+                {counts.improved > 0 ? (
+                  <StatusBadge
+                    status="passed"
+                    label={`${counts.improved} improved`}
+                  />
+                ) : null}
+                {counts.unchanged > 0 ? (
+                  <StatusBadge
+                    status="unavailable"
+                    label={`${counts.unchanged} unchanged`}
+                  />
+                ) : null}
+              </span>
+            </div>
+          </Panel>
+        ) : null}
+
         {/* Audit CP-01 / CP-11: the KPIs are the filters and they count what
             the table shows. */}
         <section className="mt-6 grid gap-3" aria-label="Comparison filters">
@@ -1483,30 +1659,39 @@ export function TestsPage({
               >
                 with evidence
               </FilterChip>
-              <FilterChip
-                active={filter === 'comparable'}
-                count={comparableCount}
-                onClick={() => setFilter('comparable')}
-                title="same test version, cases and contracts on both sides"
-              >
-                comparable
-              </FilterChip>
-              <FilterChip
-                active={filter === 'regressed'}
-                count={counts.regressed}
-                onClick={() => setFilter('regressed')}
-                title="objective result or score dropped in b"
-              >
-                regressed in b
-              </FilterChip>
-              <FilterChip
-                active={filter === 'improved'}
-                count={counts.improved}
-                onClick={() => setFilter('improved')}
-                title="score up in b, no gate lost"
-              >
-                improved in b
-              </FilterChip>
+              {/* Audit CP-21: three chips that can only ever read zero sat as
+                  equal peers to the two that work. They appear once there is
+                  something to filter, or while one is the active view. */}
+              {comparableCount > 0 || filter === 'comparable' ? (
+                <FilterChip
+                  active={filter === 'comparable'}
+                  count={comparableCount}
+                  onClick={() => setFilter('comparable')}
+                  title="same test version, cases and contracts on both sides"
+                >
+                  comparable
+                </FilterChip>
+              ) : null}
+              {counts.regressed > 0 || filter === 'regressed' ? (
+                <FilterChip
+                  active={filter === 'regressed'}
+                  count={counts.regressed}
+                  onClick={() => setFilter('regressed')}
+                  title="objective result or score dropped in b"
+                >
+                  regressed in b
+                </FilterChip>
+              ) : null}
+              {counts.improved > 0 || filter === 'improved' ? (
+                <FilterChip
+                  active={filter === 'improved'}
+                  count={counts.improved}
+                  onClick={() => setFilter('improved')}
+                  title="score up in b, no gate lost"
+                >
+                  improved in b
+                </FilterChip>
+              ) : null}
               <FilterChip
                 active={filter === 'one_side'}
                 count={counts.one_side}
@@ -1655,20 +1840,24 @@ export function TestsPage({
                       >
                         b · {bLabel}
                       </th>
-                      <th
-                        scope="col"
-                        className={numericCellClassName}
-                        title="b − a, in score points"
-                      >
-                        Δ score
-                      </th>
-                      <th
-                        scope="col"
-                        className={numericCellClassName}
-                        title="b − a, relative to a"
-                      >
-                        Δ tokens
-                      </th>
+                      {showDeltas ? (
+                        <>
+                          <th
+                            scope="col"
+                            className={numericCellClassName}
+                            title="b − a, in score points"
+                          >
+                            Δ score
+                          </th>
+                          <th
+                            scope="col"
+                            className={numericCellClassName}
+                            title="b − a, relative to a"
+                          >
+                            Δ tokens
+                          </th>
+                        </>
+                      ) : null}
                       <th scope="col">
                         <span className="ds-visually-hidden">Actions</span>
                       </th>
@@ -1685,6 +1874,7 @@ export function TestsPage({
                         expanded={expanded.has(row.test_id)}
                         loading={rowLoading.has(row.test_id)}
                         error={rowErrors[row.test_id]}
+                        showDeltas={showDeltas}
                         onVersion={selectTestVersion}
                         onToggle={toggleDetails}
                       />
