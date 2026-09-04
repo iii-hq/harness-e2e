@@ -529,7 +529,14 @@ fn task_system_manifest(
         },
         release_channel,
         release_tag,
-        runner_revision: std::env::var("GITHUB_SHA").unwrap_or_else(|_| "working-tree".into()),
+        // The runner is a non-Harness component that cohort identity holds
+        // constant, so a constant placeholder would let two arms built from
+        // different runner commits compare as if nothing moved. Outside CI,
+        // fall back to the revision build.rs resolved for this binary.
+        runner_revision: std::env::var("GITHUB_SHA")
+            .ok()
+            .filter(|value| !value.trim().is_empty())
+            .unwrap_or_else(|| env!("HARNESS_E2E_BUILD_REVISION").to_string()),
         platform: format!("{}-{}", std::env::consts::OS, std::env::consts::ARCH),
         components: BTreeMap::new(),
     };
