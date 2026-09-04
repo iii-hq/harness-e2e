@@ -6,15 +6,21 @@ import { SemanticTestFlow } from '@/components/SemanticTestFlow'
 import {
   buttonClassName,
   type OperationalStatus,
+  Panel,
   StatusBadge,
 } from '@/design-system'
 import { hashForExecution } from '@/hooks/use-hash-route'
 import type { AssessmentRunView } from '@/lib/assessment-view'
 import type {
+  CompletionState,
   DashboardExecutionDetail,
+  DashboardRunProjection,
+  DashboardScenarioAggregate,
+  EvaluatorAvailability,
   SemanticTestReport,
+  TechnicalState,
 } from '@/lib/dashboard-data-source'
-import { titleCase } from '@/lib/execution-view'
+import { formatPercent, titleCase } from '@/lib/execution-view'
 import {
   buildScenarioMatrix,
   detailForScenario,
@@ -60,6 +66,7 @@ export function ScenarioMatrix({
 
   return (
     <div className="grid gap-4">
+      <ResultContractStrip contracts={model.contracts} />
       <ScenarioSummary summary={model.summary} />
       <div className="overflow-hidden rounded-[var(--ds-radius-md)] border border-[var(--color-edge)] bg-panel">
         <div
@@ -92,6 +99,84 @@ export function ScenarioMatrix({
       </div>
     </div>
   )
+}
+
+function ResultContractStrip({
+  contracts,
+}: {
+  contracts: ReturnType<typeof buildScenarioMatrix>['contracts']
+}) {
+  if (contracts.length === 0) {
+    return (
+      <Panel
+        tone="raised"
+        padding="compact"
+        className="text-sm text-ink-muted"
+        data-results-contract="unavailable"
+      >
+        Results v3 contract unavailable. Objective outcome and report
+        completeness are not inferred from execution status.
+      </Panel>
+    )
+  }
+  return (
+    <Panel
+      as="section"
+      tone="raised"
+      padding="compact"
+      className="grid gap-3"
+      aria-label="Results contract"
+    >
+      {contracts.map((contract) => (
+        <div
+          key={contract.key}
+          className="grid gap-3 sm:grid-cols-2 lg:grid-cols-5"
+          data-results-contract={contract.valid ? 'valid' : 'invalid'}
+        >
+          <ContractFact
+            label="report state"
+            value={contract.reportState ?? 'unavailable'}
+          />
+          <ContractFact
+            label="objective outcome"
+            value={contract.objectiveOutcome ?? 'unavailable'}
+          />
+          <ContractFact
+            label="schema"
+            value={
+              contract.schemaVersion === null
+                ? 'unavailable'
+                : `Results v${contract.schemaVersion}`
+            }
+          />
+          <ContractFact
+            label="result contract"
+            value={shortHash(contract.resultContractSha256)}
+          />
+          <ContractFact
+            label="scoring profile"
+            value={shortHash(contract.scoringProfileSha256)}
+          />
+        </div>
+      ))}
+    </Panel>
+  )
+}
+
+function ContractFact({ label, value }: { label: string; value: string }) {
+  return (
+    <span className="min-w-0">
+      <span className="ds-label block">{label}</span>
+      <strong className="mt-1 block truncate font-mono text-xs text-ink">
+        {titleCase(value)}
+      </strong>
+    </span>
+  )
+}
+
+function shortHash(value: string | null) {
+  if (!value) return 'unavailable'
+  return value.length > 19 ? `${value.slice(0, 19)}…` : value
 }
 
 const MATRIX_COLUMNS =
@@ -335,6 +420,8 @@ function ScenarioExpansion({
           </p>
         ) : null}
         <ScenarioResultBand item={item} />
+        <ScenarioReliabilityBand aggregate={item.aggregate} />
+        <RunOutcomeLedger runs={item.runs} />
         {!item.available ? (
           <div className="border-t border-[var(--color-rule)] px-4 py-6 text-sm leading-6 text-ink-muted md:px-5">
             The expected report for this scenario is unavailable. Runtime,
@@ -372,6 +459,239 @@ function ScenarioExpansion({
       </div>
     </section>
   )
+}
+
+function ScenarioReliabilityBand({
+  aggregate,
+}: {
+  aggregate: DashboardScenarioAggregate | null
+}) {
+  if (!aggregate) {
+    return (
+      <p
+        className="m-0 bg-panel-raised px-4 py-3 text-xs text-ink-muted md:px-5"
+        data-scenario-aggregate="unavailable"
+      >
+        Required Results v3 aggregate is unavailable; no completion or
+        reliability metric was inferred.
+      </p>
+    )
+  }
+  const counts = [
+    ['planned', aggregate.planned_runs],
+    ['observed', aggregate.observed_runs],
+    ['deferred', aggregate.deferred_runs],
+    ['completed', aggregate.completed_runs],
+    ['task incomplete', aggregate.task_incomplete_runs],
+    ['undetermined', aggregate.undetermined_runs],
+    ['technical valid', aggregate.technical_valid_runs],
+    ['technical invalid', aggregate.technical_invalid_runs],
+  ] as const
+  const rates = [
+    ['execution reliability', aggregate.execution_reliability],
+    ['completion evidence coverage', aggregate.completion_evidence_coverage],
+    ['completion rate', aggregate.completion_rate],
+    ['objective score coverage', aggregate.objective_score_coverage],
+    ['quality coverage', aggregate.quality_coverage],
+  ] as const
+  const tokenMetrics = [
+    ['subject tokens', aggregate.total_tokens_consumed],
+    ['judge tokens', aggregate.judge_tokens_consumed],
+    ['completed p50 tokens', aggregate.tokens_completed_p50],
+    ['failed attempt tokens', aggregate.failed_attempt_tokens],
+    ['tokens per completion', aggregate.tokens_per_completion],
+  ] as const
+  return (
+    <section
+      className="bg-panel-raised px-4 py-4 md:px-5"
+      aria-label="Scenario reliability and completion"
+      data-scenario-aggregate="available"
+    >
+      <h4 className="m-0 text-xs font-semibold text-ink">
+        Completion and evidence yield
+      </h4>
+      <dl className="m-0 mt-3 grid grid-cols-2 gap-x-5 gap-y-3 sm:grid-cols-4 xl:grid-cols-8">
+        {counts.map(([label, value]) => (
+          <AggregateFact key={label} label={label} value={formatCount(value)} />
+        ))}
+      </dl>
+      <dl className="m-0 mt-4 grid grid-cols-2 gap-x-5 gap-y-3 sm:grid-cols-3 xl:grid-cols-6">
+        {rates.map(([label, value]) => (
+          <AggregateFact
+            key={label}
+            label={label}
+            value={formatPercentOrDash(value)}
+          />
+        ))}
+        <AggregateFact
+          label="quality score completed"
+          value={
+            aggregate.quality_score_completed == null
+              ? '—'
+              : `${formatDecimal(aggregate.quality_score_completed)}/100`
+          }
+          detail={`${aggregate.quality_scored_completed_runs}/${aggregate.completed_runs} completed runs scored`}
+        />
+      </dl>
+      <dl className="m-0 mt-4 grid grid-cols-2 gap-x-5 gap-y-3 sm:grid-cols-3 xl:grid-cols-5">
+        {tokenMetrics.map(([label, value]) => (
+          <AggregateFact
+            key={label}
+            label={label}
+            value={value == null ? '—' : formatDecimal(value)}
+          />
+        ))}
+      </dl>
+    </section>
+  )
+}
+
+function AggregateFact({
+  label,
+  value,
+  detail,
+}: {
+  label: string
+  value: string
+  detail?: string
+}) {
+  return (
+    <div className="min-w-0">
+      <dt className="ds-label">{label}</dt>
+      <dd className="m-0 mt-1 font-mono text-xs font-semibold tabular-nums text-ink">
+        {value}
+      </dd>
+      {detail ? (
+        <dd className="m-0 mt-1 text-label text-ink-muted">{detail}</dd>
+      ) : null}
+    </div>
+  )
+}
+
+type PhysicalAttempt = {
+  key: string
+  runId: string
+  attemptNumber: number | null
+  completion?: CompletionState
+  technical?: TechnicalState
+  evaluators?: DashboardRunProjection['evaluators']
+  objectiveScore?: number | null
+  qualityScoreCompleted?: number | null
+}
+
+function physicalAttempts(runs: DashboardRunProjection[]): PhysicalAttempt[] {
+  return runs.flatMap((run) => [
+    ...(run.retry_attempts ?? []).map((attempt) => ({
+      key: `${attempt.attempt_id}:retry`,
+      runId: attempt.run_id,
+      attemptNumber: attempt.attempt_number,
+      completion: attempt.completion,
+      technical: attempt.technical,
+      evaluators: attempt.evaluators,
+      objectiveScore: attempt.objective_score,
+      qualityScoreCompleted: attempt.quality_score_completed,
+    })),
+    {
+      key: `${run.attempt_id}:terminal`,
+      runId: run.run_id,
+      attemptNumber: run.attempt_number ?? null,
+      completion: run.completion,
+      technical: run.technical,
+      evaluators: run.evaluators,
+      objectiveScore: run.objective_score,
+      qualityScoreCompleted: run.quality_score_completed,
+    },
+  ])
+}
+
+function RunOutcomeLedger({ runs }: { runs: DashboardRunProjection[] }) {
+  const attempts = physicalAttempts(runs)
+  if (attempts.length === 0) return null
+  return (
+    <details className="group bg-panel-raised">
+      <summary className="flex min-h-11 cursor-pointer list-none items-center gap-3 px-4 py-3 text-xs font-semibold text-ink marker:hidden md:px-5">
+        <ChevronDown
+          className="size-4 shrink-0 -rotate-90 text-ink-muted transition-transform group-open:rotate-0"
+          aria-hidden="true"
+        />
+        Physical attempt outcomes
+        <span className="ml-auto font-mono text-label font-normal text-ink-muted">
+          {attempts.length} {attempts.length === 1 ? 'attempt' : 'attempts'}
+        </span>
+      </summary>
+      <div className="overflow-x-auto bg-panel">
+        <table className="w-full min-w-[860px] border-collapse text-left text-xs">
+          <thead className="bg-panel-raised font-mono text-label uppercase tracking-[0.06em] text-ink-muted">
+            <tr>
+              <th className="px-4 py-2 font-semibold">run / attempt</th>
+              <th className="px-4 py-2 font-semibold">completion</th>
+              <th className="px-4 py-2 font-semibold">technical</th>
+              <th className="px-4 py-2 font-semibold">completion evaluator</th>
+              <th className="px-4 py-2 font-semibold">quality evaluator</th>
+              <th className="px-4 py-2 font-semibold">final advisory</th>
+              <th className="px-4 py-2 font-semibold">objective</th>
+              <th className="px-4 py-2 font-semibold">quality</th>
+            </tr>
+          </thead>
+          <tbody>
+            {attempts.map((attempt) => (
+              <tr key={attempt.key} className="even:bg-panel-raised">
+                <td className="px-4 py-3 font-mono text-ink">
+                  {attempt.runId}
+                  <span className="ml-2 text-ink-muted">
+                    #{attempt.attemptNumber ?? '—'}
+                  </span>
+                </td>
+                <td className="px-4 py-3">{stateLabel(attempt.completion)}</td>
+                <td className="px-4 py-3">{stateLabel(attempt.technical)}</td>
+                <td className="px-4 py-3">
+                  {evaluatorLabel(attempt.evaluators?.completion)}
+                </td>
+                <td className="px-4 py-3">
+                  {evaluatorLabel(attempt.evaluators?.quality)}
+                </td>
+                <td className="px-4 py-3">
+                  {evaluatorLabel(attempt.evaluators?.final_advisory)}
+                </td>
+                <td className="px-4 py-3 font-mono tabular-nums">
+                  {scoreLabel(attempt.objectiveScore)}
+                </td>
+                <td className="px-4 py-3 font-mono tabular-nums">
+                  {scoreLabel(attempt.qualityScoreCompleted)}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </details>
+  )
+}
+
+function stateLabel(value: CompletionState | TechnicalState | undefined) {
+  return value ? titleCase(value) : 'Contract unavailable'
+}
+
+function evaluatorLabel(value: EvaluatorAvailability | undefined) {
+  return value ? titleCase(value) : 'Contract unavailable'
+}
+
+function scoreLabel(value: number | null | undefined) {
+  return typeof value === 'number' && Number.isFinite(value)
+    ? `${formatDecimal(value)}/100`
+    : '—'
+}
+
+function formatPercentOrDash(value: number | null) {
+  return value == null || !Number.isFinite(value) ? '—' : formatPercent(value)
+}
+
+function formatDecimal(value: number) {
+  return value.toLocaleString('en-US', { maximumFractionDigits: 1 })
+}
+
+function formatCount(value: number) {
+  return value.toLocaleString('en-US', { maximumFractionDigits: 0 })
 }
 
 /** Audit ED-24: eleven facts in one seven-column grid wrapped into a ragged

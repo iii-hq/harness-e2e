@@ -300,42 +300,49 @@ async fn evaluate_rung(
     let report_aggregates = report_aggregates(&observation.response, run_id, fan_out);
     let no_errors = observation.metrics.totals.function_call_errors == 0;
 
-    Ok(assessment::build_evaluation([
-        PARALLEL_FAN_OUT.full_or_zero(
-            fanned_out,
-            format!(
-                "spawns={}, single_response_spawns={single_response_spawns}, \
+    Ok(assessment::build_evaluation(
+        if report_aggregates {
+            crate::report::CompletionState::Completed
+        } else {
+            crate::report::CompletionState::TaskIncomplete
+        },
+        [
+            PARALLEL_FAN_OUT.full_or_zero(
+                fanned_out,
+                format!(
+                    "spawns={}, single_response_spawns={single_response_spawns}, \
                  direct_sessions={}/{fan_out}, total_sessions={}",
-                spawns.len(),
-                worker_sessions.len(),
-                observation.metrics.totals.sessions
+                    spawns.len(),
+                    worker_sessions.len(),
+                    observation.metrics.totals.sessions
+                ),
             ),
-        ),
-        WORKER_DELIVERABLES.full_or_zero(
-            audit.rows_exact && audit.direct_provenance,
-            format!(
-                "exact_rows={}/{fan_out}, distinct_writers={}, leaf_discipline={}",
-                audit.exact_rows, audit.distinct_writers, audit.leaf_discipline
+            WORKER_DELIVERABLES.full_or_zero(
+                audit.rows_exact && audit.direct_provenance,
+                format!(
+                    "exact_rows={}/{fan_out}, distinct_writers={}, leaf_discipline={}",
+                    audit.exact_rows, audit.distinct_writers, audit.leaf_discipline
+                ),
             ),
-        ),
-        BARRIER_FAN_IN.full_or_zero(
-            armed_before_spawns && barrier_woke,
-            format!(
-                "registrations={}, armed_before_spawns={armed_before_spawns}, \
+            BARRIER_FAN_IN.full_or_zero(
+                armed_before_spawns && barrier_woke,
+                format!(
+                    "registrations={}, armed_before_spawns={armed_before_spawns}, \
                  completion_records={}, barrier_woke={barrier_woke}",
-                registrations.len(),
-                completion_records.len()
+                    registrations.len(),
+                    completion_records.len()
+                ),
             ),
-        ),
-        AGGREGATED_REPORT.full_or_zero(
-            report_aggregates && active_bindings == 0 && no_errors,
-            format!(
-                "report_aggregates={report_aggregates}, active_bindings={active_bindings}, \
+            AGGREGATED_REPORT.full_or_zero(
+                report_aggregates && active_bindings == 0 && no_errors,
+                format!(
+                    "report_aggregates={report_aggregates}, active_bindings={active_bindings}, \
                  function_errors={}",
-                observation.metrics.totals.function_call_errors
+                    observation.metrics.totals.function_call_errors
+                ),
             ),
-        ),
-    ]))
+        ],
+    ))
 }
 
 struct WorkerAudit {
@@ -376,7 +383,7 @@ async fn worker_audit(
             .filter(|call| call.function_id == "state::set")
             .collect();
         leaf_discipline &= session_calls.iter().all(|call| {
-            call.function_id == "state::set" || call.function_id.starts_with("engine::functions::")
+            call.function_id == "state::set" || common::is_contract_discovery(&call.function_id)
         });
         if writes.len() != 1 {
             single_writes = false;

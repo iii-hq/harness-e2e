@@ -60,6 +60,21 @@ function execution(
 }
 
 describe('execution presentation view model', () => {
+  it('preserves unsupported history as unavailable evidence, without current metrics or a verdict', () => {
+    const presentation = buildExecutionPresentation(
+      execution({ status: 'unsupported', availability: 'unsupported' }),
+    )
+    expect(presentation.attention).toBe('unsupported')
+    expect(presentation.available).toBe(false)
+    expect(presentation.subjects[0].model).toBe('gpt-5.6-terra')
+    expect(presentation.passRate).toBeNull()
+    expect(presentation.coverage).toBeNull()
+    expect(presentation.expectedReports).toBeNull()
+    expect(presentation.modelRuntimeSeconds).toBeNull()
+    expect(presentation.breakdown.total).toBe(0)
+    expect(presentation.primaryIssue).toBeNull()
+  })
+
   it('keeps mixed objective statuses visible instead of collapsing them to technical failure', () => {
     const value = failureBreakdown(execution())
     expect(value).toMatchObject({

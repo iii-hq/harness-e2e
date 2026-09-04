@@ -594,7 +594,13 @@ fn evaluate<'a>(
         let audit = audit_fixture(run_id).await?;
         let baseline_work = audit.baseline.as_ref().map(|baseline| baseline.work_256);
         let baseline_median = audit.baseline.as_ref().map(|baseline| baseline.median_ns);
-        Ok(assessment::build_evaluation([
+        Ok(assessment::build_evaluation(
+            if audit.production_patch_present {
+                crate::report::CompletionState::Completed
+            } else {
+                crate::report::CompletionState::TaskIncomplete
+            },
+            [
             FUNCTIONAL_CORRECTNESS.full_or_zero(
                 audit.functional_correctness(),
                 format!(
@@ -628,7 +634,8 @@ fn evaluate<'a>(
                     audit.candidate_median_ns
                 ),
             ),
-        ]))
+            ],
+        ))
     })
 }
 

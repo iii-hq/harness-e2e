@@ -469,6 +469,14 @@
         }
       }
     },
+    "ContaminationScope": {
+      "type": "string",
+      "enum": [
+        "none",
+        "case",
+        "execution"
+      ]
+    },
     "DimensionReport": {
       "type": "object",
       "required": [
@@ -556,9 +564,22 @@
       "required": [
         "domain",
         "message",
-        "phase"
+        "phase",
+        "status"
       ],
       "properties": {
+        "code": {
+          "default": "",
+          "type": "string"
+        },
+        "contamination": {
+          "default": "none",
+          "allOf": [
+            {
+              "$ref": "#/definitions/ContaminationScope"
+            }
+          ]
+        },
         "domain": {
           "$ref": "#/definitions/FailureDomain"
         },
@@ -567,8 +588,42 @@
         },
         "phase": {
           "$ref": "#/definitions/FailurePhase"
+        },
+        "retry_scope": {
+          "default": "none",
+          "allOf": [
+            {
+              "$ref": "#/definitions/RetryScope"
+            }
+          ]
+        },
+        "status": {
+          "description": "The failure's original classification, independent of the primary run status.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/RunStatus"
+            }
+          ]
         }
       }
+    },
+    "RetryScope": {
+      "type": "string",
+      "enum": [
+        "none",
+        "same_slot"
+      ]
+    },
+    "RunStatus": {
+      "type": "string",
+      "enum": [
+        "passed",
+        "hard_gate_failed",
+        "subject_error",
+        "judge_error",
+        "resource_limit",
+        "infrastructure_error"
+      ]
     },
     "SystemStatus": {
       "type": "string",

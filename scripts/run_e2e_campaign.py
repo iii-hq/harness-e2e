@@ -14,6 +14,7 @@ import dataclasses
 import datetime as dt
 import hashlib
 import json
+import math
 import os
 import pathlib
 import re
@@ -25,6 +26,11 @@ import uuid
 from collections.abc import Callable, Mapping, Sequence
 from typing import Any
 
+from result_contract import (
+    RESULTS_SCHEMA_VERSION,
+    RESULT_CONTRACT_SHA256,
+    SCORING_PROFILE_SHA256,
+)
 
 CAMPAIGN_KIND = "harness-e2e-campaign"
 SCORING_PROFILE = "difficulty-weighted-v1"
@@ -63,6 +69,35 @@ SAFE_ID = re.compile(r"^[a-z][a-z0-9_-]{0,63}$")
 SAFE_LANE = re.compile(r"^[a-z][a-z0-9_-]{0,31}$")
 SAFE_EXECUTION_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$")
 FORBIDDEN_SEED_FIELDS = {"seed", "seeds", "rotating_seed", "rotating_seeds"}
+SHA256_PATTERN = re.compile(r"^sha256:[0-9a-f]{64}$")
+RESULT_REPORT_STATES = {"complete", "partial"}
+OBJECTIVE_OUTCOMES = {"passed", "failed", "inconclusive"}
+RESULT_AGGREGATE_COUNT_FIELDS = (
+    "planned_runs",
+    "observed_runs",
+    "deferred_runs",
+    "completed_runs",
+    "task_incomplete_runs",
+    "undetermined_runs",
+    "technical_valid_runs",
+    "technical_invalid_runs",
+    "objective_scored_runs",
+    "quality_scored_completed_runs",
+)
+RESULT_AGGREGATE_RATE_FIELDS = (
+    "execution_reliability",
+    "completion_evidence_coverage",
+    "completion_rate",
+    "objective_score_coverage",
+    "quality_coverage",
+)
+RESULT_AGGREGATE_TOKEN_FIELDS = (
+    "total_tokens_consumed",
+    "judge_tokens_consumed",
+    "tokens_completed_p50",
+    "failed_attempt_tokens",
+    "tokens_per_completion",
+)
 
 # Canonical campaign scope. Adding a scenario to a reviewed manifest requires
 # intentionally declaring its execution kind here, preventing typos and,
@@ -546,13 +581,43 @@ def _canonical_sha256(value: Any) -> str:
     return f"sha256:{hashlib.sha256(encoded).hexdigest()}"
 
 
+def _reject_symlink_components(
+    path: pathlib.Path, root: pathlib.Path, *, label: str
+) -> pathlib.Path:
+    resolved_root = root.resolve()
+    try:
+        relative = path.relative_to(root)
+    except ValueError as error:
+        raise CampaignError(f"{label} is outside the artifact root: {path}") from error
+    cursor = root
+    for component in relative.parts:
+        cursor = cursor / component
+        if cursor.is_symlink():
+            raise CampaignError(f"{label} contains a symlink: {relative.as_posix()}")
+    resolved = path.resolve()
+    try:
+        resolved.relative_to(resolved_root)
+    except ValueError as error:
+        raise CampaignError(f"{label} escapes the artifact root: {path}") from error
+    return resolved
+
+
 def _file_reference(path: pathlib.Path, root: pathlib.Path) -> dict[str, Any]:
+    _reject_symlink_components(path, root, label="campaign artifact")
     payload = path.read_bytes()
+    media_type = {
+        ".json": "application/json",
+        ".jsonl": "application/x-ndjson",
+        ".log": "text/plain",
+        ".txt": "text/plain",
+        ".yaml": "application/yaml",
+        ".yml": "application/yaml",
+    }.get(path.suffix.lower(), "application/octet-stream")
     return {
         "path": str(path.relative_to(root)),
         "sha256": f"sha256:{hashlib.sha256(payload).hexdigest()}",
         "size_bytes": len(payload),
-        "media_type": "application/json",
+        "media_type": media_type,
     }
 
 
@@ -569,6 +634,51 @@ def _tier_weight(value: Any) -> int | None:
     }.get(value)
 
 
+def _require_result_hash(value: Any, label: str) -> str:
+    if not isinstance(value, str) or not SHA256_PATTERN.fullmatch(value):
+        raise CampaignError(f"{label} must be a sha256 fingerprint")
+    return value
+
+
+def _require_result_count(value: Any, label: str) -> int:
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        raise CampaignError(f"{label} must be a non-negative integer")
+    return value
+
+
+def _optional_result_number(value: Any, label: str) -> float | None:
+    if value is None:
+        return None
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise CampaignError(f"{label} must be a number or null")
+    number = float(value)
+    if not 0.0 <= number <= 100.0:
+        raise CampaignError(f"{label} must be in 0..=100")
+    return number
+
+
+def _optional_result_rate(value: Any, label: str) -> float | None:
+    if value is None:
+        return None
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise CampaignError(f"{label} must be a number or null")
+    number = float(value)
+    if not 0.0 <= number <= 1.0:
+        raise CampaignError(f"{label} must be in 0..=1")
+    return number
+
+
+def _optional_nonnegative_number(value: Any, label: str) -> float | None:
+    if value is None:
+        return None
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise CampaignError(f"{label} must be a number or null")
+    number = float(value)
+    if not math.isfinite(number) or number < 0.0:
+        raise CampaignError(f"{label} must be finite and non-negative")
+    return number
+
+
 def _regular_group_measurement(
     group: CampaignGroup, output: pathlib.Path
 ) -> dict[str, Any]:
@@ -577,34 +687,119 @@ def _regular_group_measurement(
         return {
             "objective_score": None,
             "score_availability": "unavailable",
-            "coverage": 0.0,
+            "execution_reliability": 0.0,
+            "completion_evidence_coverage": 0.0,
+            "completion_rate": None,
+            "objective_score_coverage": 0.0,
+            "quality_score_completed": None,
+            "quality_coverage": None,
             "product_passed": None,
             "infrastructure_valid": False,
+            "report_state": "partial",
+            "objective_outcome": "inconclusive",
+            "result_contract_sha256": None,
+            "scoring_profile_sha256": None,
         }
     report = _load_json(results_path)
+    if report.get("schema_version") != RESULTS_SCHEMA_VERSION:
+        raise CampaignError(
+            f"{results_path}: schema_version must be {RESULTS_SCHEMA_VERSION}"
+        )
+    result_contract_sha256 = _require_result_hash(
+        report.get("result_contract_sha256"),
+        f"{results_path}.result_contract_sha256",
+    )
+    if result_contract_sha256 != RESULT_CONTRACT_SHA256:
+        raise CampaignError(f"{results_path}: unsupported result contract fingerprint")
+    scoring_profile_sha256 = _require_result_hash(
+        report.get("scoring_profile_sha256"),
+        f"{results_path}.scoring_profile_sha256",
+    )
+    if scoring_profile_sha256 != SCORING_PROFILE_SHA256:
+        raise CampaignError(f"{results_path}: unsupported scoring profile fingerprint")
+    report_state = report.get("report_state")
+    if report_state not in RESULT_REPORT_STATES:
+        raise CampaignError(
+            f"{results_path}.report_state must be one of {sorted(RESULT_REPORT_STATES)}"
+        )
+    objective_outcome = report.get("objective_outcome")
+    if objective_outcome not in OBJECTIVE_OUTCOMES:
+        raise CampaignError(
+            f"{results_path}.objective_outcome must be one of {sorted(OBJECTIVE_OUTCOMES)}"
+        )
+    persistence_errors = report.get("persistence_errors", [])
+    if not isinstance(persistence_errors, list) or any(
+        not isinstance(error, str) or not error.strip() for error in persistence_errors
+    ):
+        raise CampaignError(f"{results_path}.persistence_errors must be nonempty strings")
+    if persistence_errors and (
+        report_state != "partial" or objective_outcome != "inconclusive"
+    ):
+        raise CampaignError(f"{results_path}: persistence errors require partial inconclusive results")
     scenarios = report.get("scenarios")
     if not isinstance(scenarios, list):
         raise CampaignError(f"{results_path}: scenarios must be an array")
     medians: list[float] = []
-    expected_runs = group.runs * len(group.scenarios)
-    scored_runs = 0
-    technical_failures = 0
+    totals = {field: 0 for field in RESULT_AGGREGATE_COUNT_FIELDS}
+    quality_scores: list[float] = []
     observed_weights: list[int] = []
     for scenario in scenarios:
         if not isinstance(scenario, dict):
-            continue
+            raise CampaignError(f"{results_path}: every scenario must be an object")
         aggregate = scenario.get("aggregate")
-        if isinstance(aggregate, dict):
-            median = aggregate.get("median_score")
-            if isinstance(median, (int, float)) and not isinstance(median, bool):
-                medians.append(float(median))
-            scored = aggregate.get("scored_runs")
-            if isinstance(scored, int) and not isinstance(scored, bool):
-                scored_runs += scored
-            failures = aggregate.get("technical_failures")
-            if isinstance(failures, int) and not isinstance(failures, bool):
-                technical_failures += failures
+        if not isinstance(aggregate, dict):
+            raise CampaignError(f"{results_path}.scenarios[].aggregate must be an object")
+        label = f"{results_path}.scenarios[].aggregate"
+        counts = {
+            field: _require_result_count(aggregate.get(field), f"{label}.{field}")
+            for field in RESULT_AGGREGATE_COUNT_FIELDS
+        }
+        if counts["planned_runs"] != counts["observed_runs"] + counts["deferred_runs"]:
+            raise CampaignError(f"{label}: planned_runs invariant is violated")
+        if counts["observed_runs"] != (
+            counts["completed_runs"]
+            + counts["task_incomplete_runs"]
+            + counts["undetermined_runs"]
+        ):
+            raise CampaignError(f"{label}: completion invariant is violated")
+        if counts["observed_runs"] != (
+            counts["technical_valid_runs"] + counts["technical_invalid_runs"]
+        ):
+            raise CampaignError(f"{label}: technical invariant is violated")
+        for field, count in counts.items():
+            totals[field] += count
+        for field in RESULT_AGGREGATE_RATE_FIELDS:
+            _optional_result_rate(aggregate.get(field), f"{label}.{field}")
+        for field in RESULT_AGGREGATE_TOKEN_FIELDS:
+            if field not in aggregate:
+                raise CampaignError(f"{label}.{field} is required")
+            _optional_nonnegative_number(aggregate.get(field), f"{label}.{field}")
+        median = _optional_result_number(
+            aggregate.get("objective_median_score"),
+            f"{label}.objective_median_score",
+        )
+        if median is not None:
+            medians.append(float(median))
+        quality_score = _optional_result_number(
+            aggregate.get("quality_score_completed"),
+            f"{label}.quality_score_completed",
+        )
+        if quality_score is not None:
+            quality_scores.append(quality_score)
         case = scenario.get("case")
+        if case is None:
+            reason = scenario.get("deferral_reason")
+            if (
+                not isinstance(reason, str)
+                or not reason.strip()
+                or counts["planned_runs"] == 0
+                or counts["observed_runs"] != 0
+                or counts["deferred_runs"] != counts["planned_runs"]
+                or scenario.get("runs") != []
+            ):
+                raise CampaignError(
+                    f"{results_path}: unmaterialized scenario must be wholly deferred with a reason"
+                )
         complexity = case.get("complexity") if isinstance(case, dict) else None
         tier = complexity.get("tier") if isinstance(complexity, dict) else None
         weight = _tier_weight(tier)
@@ -614,13 +809,37 @@ def _regular_group_measurement(
         raise CampaignError(
             f"{results_path}: observed difficulty weight does not match campaign"
         )
-    coverage = min(1.0, scored_runs / expected_runs) if expected_runs else 0.0
+    expected_runs = group.runs * len(group.scenarios)
+    if totals["planned_runs"] != expected_runs:
+        raise CampaignError(
+            f"{results_path}: planned runs do not match campaign ({totals['planned_runs']} != {expected_runs})"
+        )
+    planned = totals["planned_runs"]
+    completed = totals["completed_runs"]
+    objective_score_coverage = totals["objective_scored_runs"] / planned if planned else 0.0
+    quality_coverage = (
+        totals["quality_scored_completed_runs"] / completed if completed else None
+    )
+    execution_reliability = totals["technical_valid_runs"] / planned if planned else 0.0
+    completion_evidence_coverage = (
+        totals["completed_runs"] + totals["task_incomplete_runs"]
+    ) / planned if planned else 0.0
+    completion_denominator = totals["completed_runs"] + totals["task_incomplete_runs"]
+    completion_rate = (
+        totals["completed_runs"] / completion_denominator
+        if completion_denominator
+        else None
+    )
     objective_score = sum(medians) / len(medians) if medians else None
+    quality_score_completed = (
+        sum(quality_scores) / len(quality_scores) if quality_scores else None
+    )
     availability = (
         "complete"
         if objective_score is not None
-        and coverage >= 1.0
-        and technical_failures == 0
+        and objective_score_coverage >= 1.0
+        and report_state == "complete"
+        and totals["technical_invalid_runs"] == 0
         else "partial"
         if objective_score is not None
         else "unavailable"
@@ -628,11 +847,18 @@ def _regular_group_measurement(
     return {
         "objective_score": objective_score,
         "score_availability": availability,
-        "coverage": coverage,
-        "product_passed": report.get("passed")
-        if isinstance(report.get("passed"), bool)
-        else None,
-        "infrastructure_valid": technical_failures == 0,
+        "execution_reliability": execution_reliability,
+        "completion_evidence_coverage": completion_evidence_coverage,
+        "completion_rate": completion_rate,
+        "objective_score_coverage": objective_score_coverage,
+        "quality_score_completed": quality_score_completed,
+        "quality_coverage": quality_coverage,
+        "product_passed": {"passed": True, "failed": False}.get(objective_outcome),
+        "infrastructure_valid": totals["technical_invalid_runs"] == 0 and not persistence_errors,
+        "report_state": report_state,
+        "objective_outcome": objective_outcome,
+        "result_contract_sha256": result_contract_sha256,
+        "scoring_profile_sha256": scoring_profile_sha256,
     }
 
 
@@ -644,9 +870,18 @@ def _fault_group_measurement(
         return {
             "objective_score": None,
             "score_availability": "unavailable",
-            "coverage": 0.0,
+            "execution_reliability": 0.0,
+            "completion_evidence_coverage": 0.0,
+            "completion_rate": None,
+            "objective_score_coverage": 0.0,
+            "quality_score_completed": None,
+            "quality_coverage": None,
             "product_passed": None,
             "infrastructure_valid": False,
+            "report_state": "partial",
+            "objective_outcome": "inconclusive",
+            "result_contract_sha256": None,
+            "scoring_profile_sha256": None,
         }
     scores: list[float] = []
     infrastructure_valid = True
@@ -674,9 +909,28 @@ def _fault_group_measurement(
     return {
         "objective_score": objective_score,
         "score_availability": availability,
-        "coverage": coverage,
-        "product_passed": product_passed if scores else None,
+        "execution_reliability": coverage,
+        "completion_evidence_coverage": coverage,
+        "completion_rate": (
+            sum(score == 100.0 for score in scores) / len(scores) if scores else None
+        ),
+        "objective_score_coverage": coverage,
+        "quality_score_completed": None,
+        "quality_coverage": None,
+        "product_passed": (
+            product_passed if len(scores) == group.runs else False if not product_passed else None
+        ),
         "infrastructure_valid": infrastructure_valid,
+        "report_state": "complete" if len(evaluations) == group.runs else "partial",
+        "objective_outcome": (
+            "passed"
+            if len(scores) == group.runs and product_passed
+            else "failed"
+            if not product_passed
+            else "inconclusive"
+        ),
+        "result_contract_sha256": None,
+        "scoring_profile_sha256": None,
     }
 
 
@@ -687,9 +941,17 @@ def score_campaign(
     scored_weight = 0
     expected_weight = sum(group.difficulty_weight for group in campaign.groups)
     weighted_score = 0.0
-    coverage = 0.0
+    metric_fields = (
+        "execution_reliability",
+        "completion_evidence_coverage",
+        "objective_score_coverage",
+    )
+    metric_totals = {field: 0.0 for field in metric_fields}
     product_values: list[bool] = []
     infrastructure_valid = True
+    all_group_scores_complete = True
+    result_contracts: set[str] = set()
+    scoring_profiles: set[str] = set()
     for group in campaign.groups:
         result = by_id[group.id]
         output = pathlib.Path(result["output"])
@@ -708,16 +970,38 @@ def score_campaign(
         if isinstance(score, (int, float)):
             scored_weight += group.difficulty_weight
             weighted_score += float(score) * group.difficulty_weight
-        coverage += float(measurement["coverage"])
+        for field in metric_fields:
+            metric_totals[field] += float(measurement[field])
+        if measurement["result_contract_sha256"] is not None:
+            result_contracts.add(measurement["result_contract_sha256"])
+        if measurement["scoring_profile_sha256"] is not None:
+            scoring_profiles.add(measurement["scoring_profile_sha256"])
         if isinstance(measurement["product_passed"], bool):
             product_values.append(measurement["product_passed"])
         infrastructure_valid = (
             infrastructure_valid and measurement["infrastructure_valid"]
         )
+        all_group_scores_complete = (
+            all_group_scores_complete and measurement["score_availability"] == "complete"
+        )
+    if len(result_contracts) > 1:
+        raise CampaignError("campaign groups use incompatible result contracts")
+    if len(scoring_profiles) > 1:
+        raise CampaignError("campaign groups use incompatible scoring profiles")
+    local_scoring_profile = _canonical_sha256(
+        _load_json(
+            pathlib.Path(__file__).resolve().parents[1]
+            / "config"
+            / "scoring"
+            / "difficulty-weighted-v1.json"
+        )
+    )
+    if scoring_profiles and scoring_profiles != {local_scoring_profile}:
+        raise CampaignError("results scoring_profile_sha256 does not match campaign")
     harness_score = weighted_score / scored_weight if scored_weight else None
     availability = (
         "complete"
-        if scored_weight == expected_weight and infrastructure_valid
+        if scored_weight == expected_weight and infrastructure_valid and all_group_scores_complete
         else "partial"
         if harness_score is not None
         else "unavailable"
@@ -728,11 +1012,16 @@ def score_campaign(
         "score_availability": availability,
         "scored_weight": scored_weight,
         "expected_weight": expected_weight,
-        "coverage": coverage / len(campaign.groups),
+        **{
+            field: total / len(campaign.groups)
+            for field, total in metric_totals.items()
+        },
         "product_passed": all(product_values)
         if len(product_values) == len(campaign.groups)
         else None,
         "infrastructure_valid": infrastructure_valid,
+        "result_contract_sha256": next(iter(result_contracts), None),
+        "scoring_profile_sha256": next(iter(scoring_profiles), local_scoring_profile),
     }
 
 
@@ -904,12 +1193,15 @@ def execute_campaign(
         group_results.append(result)
 
     scoring = score_campaign(campaign, group_results)
-    objective_passed = (
-        scoring["product_passed"]
-        if isinstance(scoring["product_passed"], bool)
-        else all(result["status"] in {"passed", "dry_run"} for result in group_results)
+    # A successful process is not proof that the product passed. Missing or
+    # inconclusive product evidence remains None and fails closed in enforcing
+    # mode while advisory mode still preserves the complete observation.
+    objective_passed = scoring["product_passed"]
+    process_exit_code = (
+        0
+        if dry_run or advisory or objective_passed is True
+        else 1
     )
-    process_exit_code = 0 if dry_run or advisory or objective_passed else 1
     return {
         "kind": "harness-e2e-campaign-summary",
         "campaign_id": campaign.campaign_id,
@@ -987,23 +1279,25 @@ def build_campaign_bundle(
     scoring_profile_path: pathlib.Path,
 ) -> dict[str, Any]:
     root = summary_path.parent
+    if root.is_symlink():
+        raise CampaignError(f"campaign bundle root must not be a symlink: {root}")
     groups: list[dict[str, Any]] = []
     for raw_group in summary.get("groups", []):
         if not isinstance(raw_group, dict):
             continue
         output = pathlib.Path(str(raw_group["output"]))
         artifacts: list[dict[str, Any]] = []
-        candidates = [
-            output / "results.json",
-            output / "manifest.json",
-            output / "observation.json",
-            output / "failure.json",
-            output / "fault-plan.json",
-        ]
-        candidates.extend(sorted(output.glob("run-*/*.json")))
-        for path in candidates:
-            if path.is_file():
-                artifacts.append(_file_reference(path, root))
+        if output.is_symlink():
+            raise CampaignError(f"campaign group output must not be a symlink: {output}")
+        if output.exists():
+            for path in sorted(output.rglob("*")):
+                relative = path.relative_to(output).as_posix()
+                if path.is_symlink():
+                    raise CampaignError(
+                        f"campaign group artifact tree contains symlink: {relative}"
+                    )
+                if path.is_file() and path.name != "bundle-manifest.json":
+                    artifacts.append(_file_reference(path, root))
         groups.append(
             {
                 "group_id": raw_group.get("group_id"),
@@ -1039,6 +1333,8 @@ def validate_campaign_bundle(
     makes the exact Harness artifacts recoverable and prevents an ingesting
     service from silently normalizing or reconstructing them.
     """
+    if root.is_symlink():
+        raise CampaignError("campaign bundle root must not be a symlink")
     if bundle.get("schema") != "e2e-campaign-observation-bundle/v1":
         raise CampaignError("unsupported campaign bundle schema")
     references: list[Any] = [bundle.get("summary")]
@@ -1059,7 +1355,10 @@ def validate_campaign_bundle(
         expected_size = reference.get("size_bytes")
         if not isinstance(relative, str) or not relative:
             raise CampaignError("campaign bundle artifact path must be non-empty")
-        candidate = (resolved_root / relative).resolve()
+        unresolved = resolved_root / relative
+        candidate = _reject_symlink_components(
+            unresolved, resolved_root, label="campaign bundle artifact"
+        )
         try:
             candidate.relative_to(resolved_root)
         except ValueError as error:
@@ -1083,12 +1382,29 @@ def compact_aggregate_artifacts(
     bundle: Mapping[str, Any], *, root: pathlib.Path, group_root: pathlib.Path
 ) -> None:
     """Keep only group files referenced by the validated campaign bundle."""
-    keep = {
-        (root / reference["path"]).resolve()
-        for group in bundle["groups"]
-        for reference in group["artifacts"]
-    }
+    if group_root.is_symlink():
+        raise CampaignError("campaign group root must not be a symlink")
+    resolved_group_root = group_root.resolve()
+    keep = set()
+    for group in bundle["groups"]:
+        for reference in group["artifacts"]:
+            candidate = root / reference["path"]
+            resolved = _reject_symlink_components(
+                candidate, root, label="campaign bundle artifact"
+            )
+            try:
+                resolved.relative_to(resolved_group_root)
+            except ValueError as error:
+                raise CampaignError(
+                    f"campaign bundle artifact escapes group root: {reference['path']}"
+                ) from error
+            keep.add(resolved)
     for path in group_root.rglob("*"):
+        if path.is_symlink():
+            raise CampaignError(
+                f"campaign group artifact tree contains symlink: "
+                f"{path.relative_to(group_root).as_posix()}"
+            )
         if path.is_file() and path.resolve() not in keep:
             path.unlink()
 

@@ -4,6 +4,7 @@
   "type": "object",
   "required": [
     "archive",
+    "baseline_comparable",
     "case_count",
     "e2e_repository",
     "e2e_revision",
@@ -13,6 +14,8 @@
     "lane",
     "occurred_at",
     "passed",
+    "result_contract_sha256",
+    "scoring_profile_sha256",
     "stack_mode",
     "subject_model",
     "subject_provider",
@@ -21,6 +24,9 @@
   "properties": {
     "archive": {
       "$ref": "#/definitions/DurableArchiveReference"
+    },
+    "baseline_comparable": {
+      "type": "boolean"
     },
     "case_count": {
       "type": "integer",
@@ -50,6 +56,12 @@
     },
     "passed": {
       "type": "boolean"
+    },
+    "result_contract_sha256": {
+      "type": "string"
+    },
+    "scoring_profile_sha256": {
+      "type": "string"
     },
     "stack_mode": {
       "type": "string"

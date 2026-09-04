@@ -678,75 +678,84 @@ fn evaluate<'a>(
             && fixture.demo.stdout.trim() == HOST_DEMO_STDOUT
             && fixture.demo.stderr.trim().is_empty();
         let scope = fixture.scope_valid() && workflow.evidence_ordered;
-        Ok(assessment::build_evaluation([
-            WORKER_SETUP.full_or_zero(
-                worker_setup,
-                format!("shell={shell_ready}, coder={coder_ready}"),
-            ),
-            INVESTIGATION.gate_and_points(
-                workflow.investigation_complete(),
-                workflow.investigation_points(),
-                format!(
-                    "info={:?}, source={:?}, tests={:?}, task={:?}, red={:?}, edit={:?}",
-                    workflow.coder_info,
-                    workflow.source_read,
-                    workflow.tests_read,
-                    workflow.task_read,
-                    workflow.red_baseline,
-                    workflow.first_source_edit
+        Ok(assessment::build_evaluation(
+            if fixture.production_patch_present {
+                crate::report::CompletionState::Completed
+            } else {
+                crate::report::CompletionState::TaskIncomplete
+            },
+            [
+                WORKER_SETUP.full_or_zero(
+                    worker_setup,
+                    format!("shell={shell_ready}, coder={coder_ready}"),
                 ),
-            )?,
-            DIAGNOSIS.award(
-                if workflow.diagnosis_complete() && fixture.diagnosis_present {
-                    DIAGNOSIS.weight()
-                } else {
-                    0
-                },
-                format!(
-                    "create={:?}, move={:?}, retained={}",
-                    workflow.diagnosis_create, workflow.diagnosis_move, fixture.diagnosis_present
+                INVESTIGATION.gate_and_points(
+                    workflow.investigation_complete(),
+                    workflow.investigation_points(),
+                    format!(
+                        "info={:?}, source={:?}, tests={:?}, task={:?}, red={:?}, edit={:?}",
+                        workflow.coder_info,
+                        workflow.source_read,
+                        workflow.tests_read,
+                        workflow.task_read,
+                        workflow.red_baseline,
+                        workflow.first_source_edit
+                    ),
+                )?,
+                DIAGNOSIS.award(
+                    if workflow.diagnosis_complete() && fixture.diagnosis_present {
+                        DIAGNOSIS.weight()
+                    } else {
+                        0
+                    },
+                    format!(
+                        "create={:?}, move={:?}, retained={}",
+                        workflow.diagnosis_create,
+                        workflow.diagnosis_move,
+                        fixture.diagnosis_present
+                    ),
+                )?,
+                PUBLIC_CORRECTNESS.full_or_zero(
+                    public_correctness,
+                    format!(
+                        "subject red={:?}, green={:?}, runner green={}, stdout={:?}, stderr={:?}",
+                        workflow.red_baseline,
+                        workflow.green_public,
+                        fixture.public.success,
+                        fixture.public.stdout,
+                        fixture.public.stderr
+                    ),
                 ),
-            )?,
-            PUBLIC_CORRECTNESS.full_or_zero(
-                public_correctness,
-                format!(
-                    "subject red={:?}, green={:?}, runner green={}, stdout={:?}, stderr={:?}",
-                    workflow.red_baseline,
-                    workflow.green_public,
-                    fixture.public.success,
-                    fixture.public.stdout,
-                    fixture.public.stderr
+                HIDDEN_CORRECTNESS.full_or_zero(
+                    fixture.hidden.passed,
+                    format!(
+                        "checks={:?}; output={:?}",
+                        fixture.hidden.checks, fixture.hidden_output
+                    ),
                 ),
-            ),
-            HIDDEN_CORRECTNESS.full_or_zero(
-                fixture.hidden.passed,
-                format!(
-                    "checks={:?}; output={:?}",
-                    fixture.hidden.checks, fixture.hidden_output
+                HOST_EXECUTION.full_or_zero(
+                    host_execution,
+                    format!(
+                        "subject demo={:?}, runner success={}, stdout={:?}, stderr={:?}",
+                        workflow.host_demo,
+                        fixture.demo.success,
+                        fixture.demo.stdout,
+                        fixture.demo.stderr
+                    ),
                 ),
-            ),
-            HOST_EXECUTION.full_or_zero(
-                host_execution,
-                format!(
-                    "subject demo={:?}, runner success={}, stdout={:?}, stderr={:?}",
-                    workflow.host_demo,
-                    fixture.demo.success,
-                    fixture.demo.stdout,
-                    fixture.demo.stderr
+                SCOPE_AND_LIFECYCLE.full_or_zero(
+                    scope,
+                    format!(
+                        "protected={}, patch={}, diagnosis={}, unexpected={:?}, ordered={}",
+                        fixture.protected_files_exact,
+                        fixture.production_patch_present,
+                        fixture.diagnosis_present,
+                        fixture.unexpected_paths,
+                        workflow.evidence_ordered
+                    ),
                 ),
-            ),
-            SCOPE_AND_LIFECYCLE.full_or_zero(
-                scope,
-                format!(
-                    "protected={}, patch={}, diagnosis={}, unexpected={:?}, ordered={}",
-                    fixture.protected_files_exact,
-                    fixture.production_patch_present,
-                    fixture.diagnosis_present,
-                    fixture.unexpected_paths,
-                    workflow.evidence_ordered
-                ),
-            ),
-        ]))
+            ],
+        ))
     })
 }
 

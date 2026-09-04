@@ -1,6 +1,7 @@
 import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
 import type { DashboardExecutionSummary } from '@/lib/dashboard-data-source'
+import { configureDashboardRuntime } from '@/lib/dashboard-runtime'
 import { buildExecutionPresentation } from '@/lib/execution-view'
 import {
   attentionQueue,
@@ -9,6 +10,8 @@ import {
   signalMetric,
 } from '@/lib/overview-signal'
 import {
+  RecentExecutions,
+  RunningStrip,
   trendCaption,
   trendDelta,
   workflowProgress,
@@ -45,6 +48,84 @@ function summary(
     ...overrides,
   }
 }
+
+describe('running execution navigation', () => {
+  it('keeps an unsupported historical execution linked and explicitly labelled', () => {
+    const html = renderToStaticMarkup(
+      <RecentExecutions
+        total={1}
+        presentations={[
+          buildExecutionPresentation(
+            summary({
+              id: 'legacy-execution',
+              status: 'unsupported',
+              availability: 'unsupported',
+            }),
+          ),
+        ]}
+      />,
+    )
+    expect(html).toContain('unsupported')
+    expect(html).toContain('href="#/execution/legacy-execution"')
+    expect(html).toContain('gpt-5.6-terra')
+    expect(html).toContain('Not reported')
+    expect(html).not.toContain('100%')
+  })
+
+  it('adds a detail button beside cancel for the current execution', () => {
+    const html = renderToStaticMarkup(
+      <RunningStrip
+        running={[
+          buildExecutionPresentation(
+            summary({ id: 'current-run', status: 'running' }),
+          ),
+        ]}
+        onCancel={() => {}}
+        cancelling={false}
+      />,
+    )
+    expect(html).toMatch(
+      /<a[^>]+href="#\/execution\/current-run"[^>]*>open execution/,
+    )
+    expect(html).toMatch(/<button[^>]*>cancel<\/button>/)
+  })
+
+  it.each(['running', 'cancelling'])(
+    'keeps navigation available for %s executions without cancel permission',
+    (status) => {
+      const restore = configureDashboardRuntime({
+        embedded: true,
+        hashBase: '#/ext/harness-e2e',
+      })
+      try {
+        const html = renderToStaticMarkup(
+          <RunningStrip
+            running={[
+              buildExecutionPresentation(
+                summary({ id: 'current-run', status }),
+              ),
+            ]}
+            cancelling
+          />,
+        )
+        expect(html).toMatch(
+          /<a[^>]+href="#\/ext\/harness-e2e\/execution\/current-run"[^>]*>open execution/,
+        )
+        expect(html).not.toContain('<button')
+      } finally {
+        restore()
+      }
+    },
+  )
+
+  it('has no execution button when nothing is running', () => {
+    const html = renderToStaticMarkup(
+      <RunningStrip running={[]} cancelling={false} />,
+    )
+    expect(html).not.toContain('open execution')
+    expect(html).toContain('Nothing is running.')
+  })
+})
 
 function workflowExecution(): DashboardExecutionSummary {
   return summary({

@@ -490,7 +490,7 @@ async fn analyst_audit(
                 call.function_id == names.search_function
                     || call.function_id == names.fetch_function
                     || call.function_id == "state::set"
-                    || call.function_id.starts_with("engine::functions::")
+                    || common::is_contract_discovery(&call.function_id)
             })
             && calls
                 .iter()
@@ -667,7 +667,13 @@ fn evaluate<'a>(
         let active_bindings = common::active_binding_count(context, &names.root_session).await?;
         let report_grounded = response_grounded(&observation.response, &evidence, &conflicts);
 
-        Ok(assessment::build_evaluation([
+        Ok(assessment::build_evaluation(
+            if report_grounded {
+                crate::report::CompletionState::Completed
+            } else {
+                crate::report::CompletionState::TaskIncomplete
+            },
+            [
             CORPUS_DISCOVERY.full_or_zero(
                 discovery_complete,
                 format!(
@@ -700,7 +706,8 @@ fn evaluate<'a>(
                     observation.metrics.totals.function_call_errors
                 ),
             ),
-        ]))
+            ],
+        ))
     })
 }
 

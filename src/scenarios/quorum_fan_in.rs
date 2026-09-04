@@ -322,43 +322,50 @@ async fn evaluate_quorum(
     let sessions_direct = observation.metrics.totals.sessions == u64::from(MEMBER_COUNT) + 1;
     let no_errors = observation.metrics.totals.function_call_errors == 0;
 
-    Ok(assessment::build_evaluation([
-        QUORUM_REPORT.full_or_zero(
-            reports,
-            format!(
-                "report must start with `{REPORT_MARKER}`, carry both quorum tokens verbatim, \
+    Ok(assessment::build_evaluation(
+        if reports {
+            crate::report::CompletionState::Completed
+        } else {
+            crate::report::CompletionState::TaskIncomplete
+        },
+        [
+            QUORUM_REPORT.full_or_zero(
+                reports,
+                format!(
+                    "report must start with `{REPORT_MARKER}`, carry both quorum tokens verbatim, \
                  and omit the straggler token"
+                ),
             ),
-        ),
-        QUORUM_WAKE.full_or_zero(
-            armed_before_spawns && barrier_woke,
-            format!(
-                "registrations={}, armed_before_spawns={armed_before_spawns}, \
+            QUORUM_WAKE.full_or_zero(
+                armed_before_spawns && barrier_woke,
+                format!(
+                    "registrations={}, armed_before_spawns={armed_before_spawns}, \
                  quorum_records={}, barrier_woke={barrier_woke}",
-                registrations.len(),
-                quorum_records.len()
+                    registrations.len(),
+                    quorum_records.len()
+                ),
             ),
-        ),
-        STRAGGLER_STOPPED.full_or_zero(
-            stopped_after_barrier && straggler_never_wrote && three_children,
-            format!(
-                "stop_after_barrier={stopped_after_barrier}, straggler_written={}, \
+            STRAGGLER_STOPPED.full_or_zero(
+                stopped_after_barrier && straggler_never_wrote && three_children,
+                format!(
+                    "stop_after_barrier={stopped_after_barrier}, straggler_written={}, \
                  direct_children={}/{MEMBER_COUNT}, stop_calls={}",
-                !straggler_never_wrote,
-                children.len(),
-                audit.stop_calls.len()
+                    !straggler_never_wrote,
+                    children.len(),
+                    audit.stop_calls.len()
+                ),
             ),
-        ),
-        FAN_OUT_DISCIPLINE.full_or_zero(
-            single_response_spawns && sessions_direct && no_errors,
-            format!(
-                "single_response_spawns={single_response_spawns}, total_sessions={}, \
+            FAN_OUT_DISCIPLINE.full_or_zero(
+                single_response_spawns && sessions_direct && no_errors,
+                format!(
+                    "single_response_spawns={single_response_spawns}, total_sessions={}, \
                  function_errors={}",
-                observation.metrics.totals.sessions,
-                observation.metrics.totals.function_call_errors
+                    observation.metrics.totals.sessions,
+                    observation.metrics.totals.function_call_errors
+                ),
             ),
-        ),
-    ]))
+        ],
+    ))
 }
 
 fn capture<'a>(

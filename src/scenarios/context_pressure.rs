@@ -336,7 +336,7 @@ fn ingestion_audit(run_id: &str, segments: u32, calls: &[ObservedFunctionCall]) 
         .filter(|call| {
             call.function_id != charter_function
                 && call.function_id != segment_function
-                && !call.function_id.starts_with("engine::functions::")
+                && !common::is_contract_discovery(&call.function_id)
         })
         .count();
     let charter_first = charter_positions.len() == 1
@@ -432,42 +432,49 @@ fn evaluate_rung(
         && report.needles_ordered
         && response_chars <= report_budget_chars(segments);
 
-    Ok(assessment::build_evaluation([
-        CHARTER_PRESERVED.full_or_zero(
-            report.charter_preserved,
-            format!(
-                "report must start with `{}` and reproduce mission, checkpoint, quorum, \
+    Ok(assessment::build_evaluation(
+        if report.charter_preserved && report.needles_ordered {
+            crate::report::CompletionState::Completed
+        } else {
+            crate::report::CompletionState::TaskIncomplete
+        },
+        [
+            CHARTER_PRESERVED.full_or_zero(
+                report.charter_preserved,
+                format!(
+                    "report must start with `{}` and reproduce mission, checkpoint, quorum, \
                  and seal verbatim",
-                report_header(segments)
+                    report_header(segments)
+                ),
             ),
-        ),
-        NEEDLES_RECOVERED.full_or_zero(
-            report.needles_ordered,
-            format!(
-                "missing {} of {segments} needle(s); needles must appear in ascending order",
-                report.missing_needles
+            NEEDLES_RECOVERED.full_or_zero(
+                report.needles_ordered,
+                format!(
+                    "missing {} of {segments} needle(s); needles must appear in ascending order",
+                    report.missing_needles
+                ),
             ),
-        ),
-        INGESTION_DISCIPLINE.full_or_zero(
-            disciplined,
-            format!(
-                "charter_calls={} (first={}), segment_calls={}/{segments} exact={}, \
+            INGESTION_DISCIPLINE.full_or_zero(
+                disciplined,
+                format!(
+                    "charter_calls={} (first={}), segment_calls={}/{segments} exact={}, \
                  other_calls={}, function_errors={errors}",
-                ingestion.charter_calls,
-                ingestion.charter_first,
-                ingestion.segment_calls,
-                ingestion.segments_exact,
-                ingestion.other_calls
+                    ingestion.charter_calls,
+                    ingestion.charter_first,
+                    ingestion.segment_calls,
+                    ingestion.segments_exact,
+                    ingestion.other_calls
+                ),
             ),
-        ),
-        CONCISE_REPORT.full_or_zero(
-            concise,
-            format!(
-                "observed {response_chars} character(s); budget {}",
-                report_budget_chars(segments)
+            CONCISE_REPORT.full_or_zero(
+                concise,
+                format!(
+                    "observed {response_chars} character(s); budget {}",
+                    report_budget_chars(segments)
+                ),
             ),
-        ),
-    ]))
+        ],
+    ))
 }
 
 fn capture<'a>(

@@ -18,11 +18,74 @@ use crate::workflow::{WorkflowStepReport, WorkflowStepStatus};
 
 pub(super) const MAX_EXECUTIONS: usize = 100;
 
+pub(super) fn stored_execution_summary(run: &super::store::StoredRun) -> Result<Value> {
+    let mut value = execution_summary(&run.metadata, run.report.as_ref())?;
+    attach_live_progress(&mut value, run)?;
+    attach_report_compatibility(&mut value, run)?;
+    Ok(value)
+}
+
+pub(super) fn stored_execution_detail(run: &super::store::StoredRun) -> Result<Value> {
+    let mut value = execution_detail_value_optional(&run.metadata, run.report.as_ref())?;
+    attach_live_progress(&mut value, run)?;
+    attach_report_compatibility(&mut value, run)?;
+    Ok(value)
+}
+
+fn attach_live_progress(value: &mut Value, run: &super::store::StoredRun) -> Result<()> {
+    value["live_progress"] = serde_json::to_value(&run.live_progress)?;
+    value["live_progress_error"] = json!(run.live_progress_error);
+    // A report can be written while final assessments are still running.
+    // Keep lifecycle authoritative until the control plane finishes.
+    if run.metadata.status.active() {
+        value["status"] = json!(if run.metadata.status == JobStatus::Cancelling {
+            "cancelling"
+        } else {
+            "running"
+        });
+        value["conclusion"] = json!("");
+        value["completed_at"] = json!("");
+    }
+    if let Some(progress) = &run.live_progress {
+        value["generated_at"] = json!(progress.updated_at);
+    }
+    Ok(())
+}
+
+fn attach_report_compatibility(value: &mut Value, run: &super::store::StoredRun) -> Result<()> {
+    let Some(unsupported) = &run.unsupported_report else {
+        return Ok(());
+    };
+    value["status"] = json!("unsupported");
+    value["availability"] = json!("unsupported");
+    value["conclusion"] = json!("");
+    value["execution"]["conclusion"] = json!("");
+    value["baseline_comparable"] = json!(false);
+    value["requested_runs"] = Value::Null;
+    value["result_compatibility"] = serde_json::to_value(unsupported)?;
+    value["first_failure"] = json!({
+        "kind": "unsupported_results_schema",
+        "message": format!(
+            "Results schema v{} is retained as historical evidence, but is incompatible with v{}. Metrics and baseline comparisons are unavailable; no migration or re-execution was performed.",
+            unsupported.schema_version, unsupported.expected_schema_version,
+        ),
+    });
+    if !run.metadata.request.model.is_empty() || !run.metadata.request.provider.is_empty() {
+        value["subjects"] = json!([{
+            "id": slug(&format!("{}-{}", run.metadata.request.provider, run.metadata.request.model)),
+            "model": run.metadata.request.model,
+            "provider": run.metadata.request.provider,
+            "scenarios": [],
+        }]);
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 pub(super) fn load_execution_summaries(runs_dir: &Path) -> Result<Vec<Value>> {
     let mut values = Vec::new();
     for run in load_runs(runs_dir)? {
-        values.push(execution_summary(&run.metadata, run.report.as_ref())?);
+        values.push(stored_execution_summary(&run)?);
     }
     values.sort_by(|left, right| {
         right
@@ -126,7 +189,11 @@ pub(super) fn execution_summary(
         .iter()
         .filter(|scenario| scenario.passed)
         .count();
-    let status = semantic_status(report.passed, hard_gate_failures, technical_failures);
+    let status = if report.persistence_errors.is_empty() {
+        semantic_status(report.passed, hard_gate_failures, technical_failures)
+    } else {
+        "incomplete"
+    };
     let totals = efficiency_totals(report);
     let execution_identity = &report.execution;
     let system = &report.system_under_test;
@@ -154,7 +221,7 @@ pub(super) fn execution_summary(
         "assessment_summary": assessment_summary,
         "scenarios": scenarios,
     });
-    Ok(json!({
+    let mut summary = json!({
         "id": metadata.id,
         "label": metadata.label,
         "run_id": execution_identity.execution_id,
@@ -165,7 +232,7 @@ pub(super) fn execution_summary(
         "actor": actor(),
         "started_at": execution_identity.started_at,
         "completed_at": execution_identity.completed_at,
-        "conclusion": if hard_gate_failures > 0 || technical_failures > 0 { "failure" } else { "success" },
+        "conclusion": if !report.persistence_errors.is_empty() || hard_gate_failures > 0 || technical_failures > 0 { "failure" } else { "success" },
         "status": status,
         "availability": "full",
         "detail_path": format!("runs/{}.json", metadata.id),
@@ -198,7 +265,13 @@ pub(super) fn execution_summary(
         },
         "workflow_duration_seconds": wall_time_seconds,
         "first_failure": first_failure(report),
-    }))
+    });
+    summary["persistence_errors"] = json!(report.persistence_errors);
+    summary["slot_start_deadline_seconds"] = json!(report.slot_start_deadline_seconds);
+    if !report.persistence_errors.is_empty() {
+        summary["baseline_comparable"] = json!(false);
+    }
+    Ok(summary)
 }
 
 /// Build the detail payload even when the runner has not persisted a final
@@ -662,6 +735,9 @@ fn run_total_cost(scenario_id: &str, run: &E2eRunReport) -> Option<f64> {
 }
 
 fn first_failure(report: &E2eReport) -> Value {
+    if let Some(error) = report.persistence_errors.first() {
+        return json!({"kind": "persistence", "message": error});
+    }
     for scenario in &report.scenarios {
         for run in &scenario.runs {
             if let Some(failure) = run.failures.first() {
@@ -709,7 +785,7 @@ fn execution_identity(metadata: &RunMetadata, report: Option<&E2eReport>) -> Val
         "label": metadata.label,
         "started_at": report_identity.map(|value| value.started_at.as_str()).unwrap_or(metadata.started_at.as_str()),
         "completed_at": report_identity.map(|value| value.completed_at.as_str()).unwrap_or(metadata.completed_at.as_str()),
-        "conclusion": if metadata.status == JobStatus::Failed { "failure" } else { "success" },
+        "conclusion": if metadata.status == JobStatus::Failed || report.is_some_and(|value| !value.persistence_errors.is_empty()) { "failure" } else { "success" },
         "head_sha": head_sha,
         "head_branch": null,
         "repository": repository,

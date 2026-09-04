@@ -86,6 +86,27 @@ function scenarioSummary(overrides: Partial<ScenarioMatrixSummary> = {}) {
 }
 
 describe('execution verdict', () => {
+  it('explains retained but incompatible history without suggesting an automatic re-run', () => {
+    const unsupported = buildExecutionPresentation({
+      ...detail,
+      status: 'unsupported',
+      availability: 'unsupported',
+      first_failure: {
+        kind: 'unsupported_results_schema',
+        message: 'Results schema v3 cannot be compared with v4.',
+      },
+    })
+    const verdict = executionVerdict(unsupported, null)
+    expect(verdict.headline).toBe(
+      'unsupported result contract · historical evidence retained',
+    )
+    expect(verdict.diagnosis).toBe(
+      'Results schema v3 cannot be compared with v4.',
+    )
+    expect(verdict.nextStep).toContain('cannot be used as a baseline')
+    expect(verdict.nextStep).not.toContain('Re-run')
+  })
+
   // Audit ED-03: one aggregated verdict, never a per-scenario headline
   // contradicting the objective one.
   it('aggregates the scenario outcomes into one sentence', () => {

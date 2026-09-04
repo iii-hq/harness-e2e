@@ -3,8 +3,14 @@ import type {
   DashboardExecutionDetail,
   DashboardReportProjection,
   DashboardRunProjection,
+  DashboardScenarioAggregate,
   SemanticTestReport,
 } from '@/lib/dashboard-data-source'
+import {
+  RESULT_CONTRACT_SHA256,
+  RESULTS_SCHEMA_VERSION,
+  SCORING_PROFILE_SHA256,
+} from '@/lib/result-contract.generated'
 import {
   aggregateWorkflowMetrics,
   generalRunMetrics,
@@ -39,6 +45,7 @@ export type ScenarioMatrixItem = {
   primaryRun: DashboardRunProjection | null
   workflowRun: DashboardRunProjection | null
   workflowSteps: SemanticTestReport[]
+  aggregate: DashboardScenarioAggregate | null
   /** `band` groups the facts so each row of the result card divides evenly.
    *  Eleven tiles in one seven-column grid left a visible orphan cell and said
    *  nothing about what kind of number each one was (audit ED-24). */
@@ -51,6 +58,16 @@ export type ScenarioMatrixItem = {
 }
 
 export type MetricBand = 'scoring' | 'execution'
+
+export type ResultContractSummary = {
+  key: string
+  valid: boolean
+  schemaVersion: number | null
+  reportState: 'complete' | 'partial' | null
+  objectiveOutcome: 'passed' | 'failed' | 'inconclusive' | null
+  resultContractSha256: string | null
+  scoringProfileSha256: string | null
+}
 
 export type ScenarioMatrixSummary = {
   total: number
@@ -66,20 +83,24 @@ export type ScenarioMatrixSummary = {
 export type ScenarioMatrixModel = {
   items: ScenarioMatrixItem[]
   summary: ScenarioMatrixSummary
+  contracts: ResultContractSummary[]
 }
 
 export function buildScenarioMatrix(
   detail: DashboardExecutionDetail,
 ): ScenarioMatrixModel {
+  const contracts = resultContracts(detail)
   const items = (detail.reports ?? []).flatMap((record, reportIndex) => {
-    if (!record.available || !record.report) {
+    const report = record.report
+    if (!record.available || !report) {
       return [unavailableScenario(detail, reportIndex)]
     }
 
-    return (record.report.scenarios ?? []).map((scenario, scenarioIndex) =>
+    return (report.scenarios ?? []).map((scenario, scenarioIndex) =>
       scenarioItem(
         detail,
         record.subject_id,
+        report,
         scenario,
         reportIndex,
         scenarioIndex,
@@ -112,7 +133,50 @@ export function buildScenarioMatrix(
     else summary.failed += 1
   }
 
-  return { items, summary }
+  return { items, summary, contracts }
+}
+
+function resultContracts(
+  detail: DashboardExecutionDetail,
+): ResultContractSummary[] {
+  const seen = new Set<string>()
+  return (detail.reports ?? []).flatMap((record, index) => {
+    const report = record.report
+    if (!record.available || !report) return []
+    const schemaVersion = finiteNumber(report.schema_version)
+    const reportState =
+      report.report_state === 'complete' || report.report_state === 'partial'
+        ? report.report_state
+        : null
+    const objectiveOutcome =
+      report.objective_outcome === 'passed' ||
+      report.objective_outcome === 'failed' ||
+      report.objective_outcome === 'inconclusive'
+        ? report.objective_outcome
+        : null
+    const resultContractSha256 = nonEmptyString(report.result_contract_sha256)
+    const scoringProfileSha256 = nonEmptyString(report.scoring_profile_sha256)
+    const key = [
+      schemaVersion,
+      reportState,
+      objectiveOutcome,
+      resultContractSha256,
+      scoringProfileSha256,
+    ].join(':')
+    if (seen.has(key)) return []
+    seen.add(key)
+    return [
+      {
+        key: key || `invalid-${index}`,
+        valid: validResultContract(report),
+        schemaVersion,
+        reportState,
+        objectiveOutcome,
+        resultContractSha256,
+        scoringProfileSha256,
+      },
+    ]
+  })
 }
 
 export function detailForScenario(
@@ -142,6 +206,7 @@ export function detailForScenario(
 function scenarioItem(
   detail: DashboardExecutionDetail,
   subjectId: string,
+  report: DashboardReportProjection,
   scenario: ScenarioProjection,
   reportIndex: number,
   scenarioIndex: number,
@@ -152,21 +217,19 @@ function scenarioItem(
     .reverse()
     .find((run) => (run.semantic_tests?.length ?? 0) > 0)
   const workflowSteps = workflowRun?.semantic_tests ?? []
-  const objective = objectiveStatus(
-    scenario.status ||
-      primaryRun?.assessment?.system_status ||
-      primaryRun?.status ||
-      (scenario.passed === true
-        ? 'passed'
-        : scenario.passed === false
-          ? 'failed'
-          : 'unavailable'),
-  )
+  const aggregate = validResultContract(report)
+    ? validAggregate(scenario.aggregate)
+    : null
+  const objective = scenarioObjective(scenario.passed, aggregate)
   const duration = scenarioDuration(detail, subjectId, scenario, runs)
 
   return {
     key: `${subjectId}:${scenario.scenario_id}:v${scenario.scenario_version}:${reportIndex}:${scenarioIndex}`,
-    reason: objective.status === 'passed' ? null : failureReason(primaryRun),
+    reason:
+      objective.status === 'passed'
+        ? null
+        : (failureReason(primaryRun) ??
+          nonEmptyString(scenario.deferral_reason)),
     reportIndex,
     scenarioIndex,
     subjectId,
@@ -182,6 +245,7 @@ function scenarioItem(
     primaryRun,
     workflowRun: workflowRun ?? null,
     workflowSteps,
+    aggregate,
     primaryMetrics: primaryMetrics(primaryRun, workflowSteps, duration),
   }
 }
@@ -237,8 +301,93 @@ function unavailableScenario(
     primaryRun: null,
     workflowRun: null,
     workflowSteps: [],
+    aggregate: null,
     primaryMetrics: primaryMetrics(null, [], { value: null, kind: null }),
   }
+}
+
+function scenarioObjective(
+  passed: boolean | undefined,
+  aggregate: DashboardScenarioAggregate | null,
+): ScenarioMatrixItem['objective'] {
+  if (!aggregate) return objectiveStatus('unavailable')
+  if (
+    aggregate.deferred_runs > 0 ||
+    aggregate.undetermined_runs > 0 ||
+    aggregate.technical_invalid_runs > 0
+  ) {
+    return objectiveStatus('inconclusive')
+  }
+  if (passed === true) return objectiveStatus('passed')
+  if (passed === false && aggregate.hard_gate_failures > 0) {
+    return objectiveStatus('hard_gate_failed')
+  }
+  if (passed === false) return objectiveStatus('failed')
+  return objectiveStatus('unavailable')
+}
+
+function validAggregate(value: unknown): DashboardScenarioAggregate | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null
+  const aggregate = value as Record<string, unknown>
+  const requiredNumbers = [
+    'planned_runs',
+    'observed_runs',
+    'deferred_runs',
+    'completed_runs',
+    'task_incomplete_runs',
+    'undetermined_runs',
+    'technical_valid_runs',
+    'technical_invalid_runs',
+    'objective_scored_runs',
+    'quality_scored_completed_runs',
+    'hard_gate_failures',
+    'technical_failures',
+  ]
+  if (requiredNumbers.some((key) => finiteNumber(aggregate[key]) === null)) {
+    return null
+  }
+  const requiredNullableNumbers = [
+    'execution_reliability',
+    'completion_evidence_coverage',
+    'completion_rate',
+    'objective_median_score',
+    'objective_score_coverage',
+    'quality_score_completed',
+    'quality_coverage',
+    'total_tokens_consumed',
+    'judge_tokens_consumed',
+    'tokens_completed_p50',
+    'failed_attempt_tokens',
+    'tokens_per_completion',
+  ]
+  if (
+    requiredNullableNumbers.some(
+      (key) => !(key in aggregate) || !nullableFiniteNumber(aggregate[key]),
+    )
+  ) {
+    return null
+  }
+  return value as DashboardScenarioAggregate
+}
+
+function validResultContract(report: DashboardReportProjection): boolean {
+  return (
+    finiteNumber(report.schema_version) === RESULTS_SCHEMA_VERSION &&
+    (report.report_state === 'complete' || report.report_state === 'partial') &&
+    (report.objective_outcome === 'passed' ||
+      report.objective_outcome === 'failed' ||
+      report.objective_outcome === 'inconclusive') &&
+    report.result_contract_sha256 === RESULT_CONTRACT_SHA256 &&
+    report.scoring_profile_sha256 === SCORING_PROFILE_SHA256
+  )
+}
+
+function nullableFiniteNumber(value: unknown): boolean {
+  return value === null || finiteNumber(value) !== null
+}
+
+function nonEmptyString(value: unknown): string | null {
+  return typeof value === 'string' && value.trim() ? value : null
 }
 
 function objectiveStatus(rawValue: string): ScenarioMatrixItem['objective'] {

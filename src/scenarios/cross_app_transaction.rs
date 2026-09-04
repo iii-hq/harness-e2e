@@ -864,7 +864,7 @@ fn transcript_is_scoped(transcript: &Value, run_id: &str) -> bool {
     let allowed = ids.all();
     common::function_calls(transcript).iter().all(|call| {
         allowed.contains(&call.function_id.as_str())
-            || call.function_id.starts_with("engine::functions::")
+            || common::is_contract_discovery(&call.function_id)
     })
 }
 
@@ -894,7 +894,13 @@ fn evaluate<'a>(
         let scoped = transcript_is_scoped(&observation.transcript, run_id);
         let sentinels_ok = sentinels_unchanged(&audit.snapshot);
         let receipts_ok = receipts_reported(&observation.response, run_id);
-        Ok(assessment::build_evaluation([
+        Ok(assessment::build_evaluation(
+            if final_exact {
+                crate::report::CompletionState::Completed
+            } else {
+                crate::report::CompletionState::TaskIncomplete
+            },
+            [
             CONSISTENT_FINAL_STATE.full_or_zero(
                 final_exact && sequence_ok,
                 format!(
@@ -915,7 +921,8 @@ fn evaluate<'a>(
                 receipts_ok,
                 "final response must contain exactly the three run-derived service receipts",
             ),
-        ]))
+            ],
+        ))
     })
 }
 

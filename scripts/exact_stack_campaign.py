@@ -643,19 +643,54 @@ def compose_evidence(
     }
 
 
-def package_bundle(root: Path, contract: dict[str, Any], workflow: dict[str, Any]) -> dict[str, Any]:
-    files = []
+def validate_runtime_layout(artifact_root: Path, runtime_root: Path, allowed_root: Path) -> None:
+    """Runtime state and provider secrets must never enter the uploaded tree."""
+    artifact = artifact_root.resolve(strict=True)
+    runtime = runtime_root.resolve(strict=True)
+    allowed = allowed_root.resolve(strict=True)
+    if artifact == allowed or not artifact.is_relative_to(allowed):
+        raise ValueError("artifact root must remain below the canonical target directory")
+    if artifact.is_relative_to(runtime) or runtime.is_relative_to(artifact):
+        raise ValueError("runtime and artifact roots must not overlap")
+
+
+def _package_files(root: Path) -> list[dict[str, Any]]:
+    """Hash regular files without ever traversing or dereferencing symlinks."""
+    if root.is_symlink():
+        raise ValueError(f"artifact root must not be a symlink: {root}")
+    resolved_root = root.resolve(strict=True)
+    files: list[dict[str, Any]] = []
     for path in sorted(root.rglob("*")):
+        relative = path.relative_to(root).as_posix()
+        if path.is_symlink():
+            raise ValueError(f"artifact tree contains symlink: {relative}")
+        if (
+            path.name == ".env"
+            or path.name.startswith(".env.")
+            or path.name.endswith(".env")
+            or path.name in {"secrets", ".aws", ".ssh", ".gnupg"}
+        ):
+            raise ValueError(f"artifact tree contains a reserved credential path: {relative}")
         if not path.is_file() or path.name == "bundle-manifest.json":
             continue
+        resolved = path.resolve(strict=True)
+        try:
+            resolved.relative_to(resolved_root)
+        except ValueError as error:
+            raise ValueError(f"artifact escapes root: {relative}") from error
         payload = path.read_bytes()
         files.append(
             {
-                "path": path.relative_to(root).as_posix(),
+                "path": relative,
                 "sha256": f"sha256:{hashlib.sha256(payload).hexdigest()}",
                 "size_bytes": len(payload),
             }
         )
+    return files
+
+
+def package_bundle(root: Path, contract: dict[str, Any], workflow: dict[str, Any]) -> dict[str, Any]:
+    files = _package_files(root)
     return {
         "schema": "e2e-observation-bundle/v1",
         "campaign_id": contract["campaign_id"],
@@ -709,9 +744,16 @@ def main() -> int:
     package.add_argument("--contract", type=Path, required=True)
     package.add_argument("--workflow", required=True)
     package.add_argument("--output", type=Path, required=True)
+    layout = commands.add_parser("validate-layout")
+    layout.add_argument("--artifact-root", type=Path, required=True)
+    layout.add_argument("--runtime-root", type=Path, required=True)
+    layout.add_argument("--allowed-root", type=Path, required=True)
     args = parser.parse_args()
 
     try:
+        if args.command == "validate-layout":
+            validate_runtime_layout(args.artifact_root, args.runtime_root, args.allowed_root)
+            return 0
         contract = validate_contract(load_object(args.contract, "contract"))
         if args.command == "validate":
             print(canonical(contract))

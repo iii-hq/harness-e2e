@@ -1132,51 +1132,58 @@ fn evaluate<'a>(
         } else {
             1
         };
-        Ok(assessment::build_evaluation([
-            CAPABILITY_DEPTH.award(
-                depth_points,
-                format!(
-                    "accepted {}/{} cumulative rungs",
-                    snapshot.accepted_rungs,
-                    TICKETS.len()
+        Ok(assessment::build_evaluation(
+            if terminal {
+                crate::report::CompletionState::Completed
+            } else {
+                crate::report::CompletionState::TaskIncomplete
+            },
+            [
+                CAPABILITY_DEPTH.award(
+                    depth_points,
+                    format!(
+                        "accepted {}/{} cumulative rungs",
+                        snapshot.accepted_rungs,
+                        TICKETS.len()
+                    ),
+                )?,
+                TERMINAL_PROTOCOL.full_or_zero(
+                    terminal,
+                    format!(
+                        "terminal_status={:?}, terminal_rung={:?}",
+                        snapshot.terminal_status, snapshot.terminal_rung
+                    ),
                 ),
-            )?,
-            TERMINAL_PROTOCOL.full_or_zero(
-                terminal,
-                format!(
-                    "terminal_status={:?}, terminal_rung={:?}",
-                    snapshot.terminal_status, snapshot.terminal_rung
+                GIT_INTEGRITY.full_or_zero(
+                    git_integrity,
+                    format!(
+                        "{} accepted checkpoint(s) retained clean Git scope and ancestry",
+                        accepted.len()
+                    ),
                 ),
-            ),
-            GIT_INTEGRITY.full_or_zero(
-                git_integrity,
-                format!(
-                    "{} accepted checkpoint(s) retained clean Git scope and ancestry",
-                    accepted.len()
+                REGRESSION_INTEGRITY.full_or_zero(
+                    regression_integrity,
+                    format!(
+                        "{} accepted checkpoint(s) passed public and cumulative hidden probes",
+                        accepted.len()
+                    ),
                 ),
-            ),
-            REGRESSION_INTEGRITY.full_or_zero(
-                regression_integrity,
-                format!(
-                    "{} accepted checkpoint(s) passed public and cumulative hidden probes",
-                    accepted.len()
-                ),
-            ),
-            CONVERGENCE.award(
-                convergence_points,
-                format!(
-                    "{} rejected round(s) across {} accepted rung(s)",
-                    rejection_count, snapshot.accepted_rungs
-                ),
-            )?,
-            EFFICIENCY.award(
-                efficiency_points,
-                format!(
-                    "{} changed line(s) across accepted rung ranges",
-                    changed_lines
-                ),
-            )?,
-        ]))
+                CONVERGENCE.award(
+                    convergence_points,
+                    format!(
+                        "{} rejected round(s) across {} accepted rung(s)",
+                        rejection_count, snapshot.accepted_rungs
+                    ),
+                )?,
+                EFFICIENCY.award(
+                    efficiency_points,
+                    format!(
+                        "{} changed line(s) across accepted rung ranges",
+                        changed_lines
+                    ),
+                )?,
+            ],
+        ))
     })
 }
 

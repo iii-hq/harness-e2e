@@ -602,7 +602,7 @@ fn evaluate<'a>(
         let _ = observation;
         let root = workspace_root(run_id);
         if !root.join(OUTPUT_MANIFEST).exists() && !root.join(OUTPUT_INDEX).exists() {
-            return Ok(assessment::prerequisite_failure(
+            return Ok(assessment::task_incomplete(
                 ASSESSMENTS,
                 "site_present",
                 format!("no site produced under {}", root.display()),
@@ -613,13 +613,16 @@ fn evaluate<'a>(
 }
 
 fn build(audit: &SiteAudit) -> ObjectiveEvaluation {
-    assessment::build_evaluation([
-        FACTUAL_ANCHORING.full_or_zero(audit.anchoring_ok, audit.detail.clone()),
-        NO_FABRICATION.full_or_zero(audit.no_fabrication_ok, audit.detail.clone()),
-        SITE_STRUCTURE.full_or_zero(audit.structure_ok, audit.detail.clone()),
-        EDITORIAL_COVERAGE.full_or_zero(audit.coverage_ok, audit.detail.clone()),
-        PRESENTATION_QUALITY.full_or_zero(audit.presentation_ok, audit.detail.clone()),
-    ])
+    assessment::build_evaluation(
+        crate::report::CompletionState::Completed,
+        [
+            FACTUAL_ANCHORING.full_or_zero(audit.anchoring_ok, audit.detail.clone()),
+            NO_FABRICATION.full_or_zero(audit.no_fabrication_ok, audit.detail.clone()),
+            SITE_STRUCTURE.full_or_zero(audit.structure_ok, audit.detail.clone()),
+            EDITORIAL_COVERAGE.full_or_zero(audit.coverage_ok, audit.detail.clone()),
+            PRESENTATION_QUALITY.full_or_zero(audit.presentation_ok, audit.detail.clone()),
+        ],
+    )
 }
 
 fn capture<'a>(

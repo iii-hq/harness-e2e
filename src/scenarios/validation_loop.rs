@@ -151,26 +151,33 @@ fn evaluate<'a>(
         let validator_passed = single_registration && carries_retry_prompt && no_errors;
         let loop_passed = nudges >= 1 && converged_exactly;
 
-        Ok(assessment::build_evaluation([
-            GOAL_REACHED.full_or_zero(
-                goal_reached,
-                format!("observed {rows} row(s), need more than {THRESHOLD}"),
-            ),
-            VALIDATOR_DISCIPLINE.full_or_zero(
-                validator_passed,
-                format!(
-                    "observed {} post-turn registration(s), expected exactly one; \
-                     carries_retry_prompt={carries_retry_prompt}; function_call_errors={}",
-                    registrations.len(),
-                    observation.metrics.totals.function_call_errors
+        Ok(assessment::build_evaluation(
+            if goal_reached {
+                crate::report::CompletionState::Completed
+            } else {
+                crate::report::CompletionState::TaskIncomplete
+            },
+            [
+                GOAL_REACHED.full_or_zero(
+                    goal_reached,
+                    format!("observed {rows} row(s), need more than {THRESHOLD}"),
                 ),
-            ),
-            LOOP_EVIDENCE.gate_and_points(
-                loop_passed,
-                loop_points,
-                format!("nudges={nudges}, rows={rows} (full marks at exactly {EXPECTED_ROWS})"),
-            )?,
-        ]))
+                VALIDATOR_DISCIPLINE.full_or_zero(
+                    validator_passed,
+                    format!(
+                        "observed {} post-turn registration(s), expected exactly one; \
+                     carries_retry_prompt={carries_retry_prompt}; function_call_errors={}",
+                        registrations.len(),
+                        observation.metrics.totals.function_call_errors
+                    ),
+                ),
+                LOOP_EVIDENCE.gate_and_points(
+                    loop_passed,
+                    loop_points,
+                    format!("nudges={nudges}, rows={rows} (full marks at exactly {EXPECTED_ROWS})"),
+                )?,
+            ],
+        ))
     })
 }
 

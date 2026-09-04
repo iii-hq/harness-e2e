@@ -211,7 +211,13 @@ fn evaluate<'a>(
             exact_source_write && mirror_valid && call_delivered && call_payload_recorded;
         let clean_completion = active_bindings == 0 && no_errors && confirmed;
 
-        Ok(assessment::build_evaluation([
+        Ok(assessment::build_evaluation(
+            if confirmed {
+                crate::report::CompletionState::Completed
+            } else {
+                crate::report::CompletionState::TaskIncomplete
+            },
+            [
             REACTIONS_ARMED.full_or_zero(
                 reactions_armed,
                 format!(
@@ -244,7 +250,8 @@ fn evaluate<'a>(
                     observation.metrics.totals.function_call_errors
                 ),
             ),
-        ]))
+            ],
+        ))
     })
 }
 
@@ -374,11 +381,14 @@ fn is_mirror_wake(call: &common::ObservedFunctionCall, names: &Names) -> bool {
             .pointer("/config/key")
             .and_then(Value::as_str)
             == Some(MIRROR_KEY)
-        && call
-            .arguments
-            .get("label")
-            .and_then(Value::as_str)
-            .is_some_and(|label| !label.trim().is_empty())
+        && [
+            call.arguments.get("label"),
+            call.arguments.pointer("/metadata/label"),
+        ]
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_str)
+        .any(|label| !label.trim().is_empty())
         && common::is_wake_registration(&call.arguments)
 }
 
@@ -440,7 +450,7 @@ fn valid_mirror(mirror: &Value, names: &Names, source: &Value) -> bool {
 }
 
 fn source_value(seed: u64) -> Value {
-    json!({ "message": "mirror me", "case_seed": seed })
+    json!({ "message": "mirror me", "case_seed": seed.to_string() })
 }
 
 fn cleanup<'a>(context: &'a E2eContext, run_id: &'a str) -> CleanupFuture<'a> {
@@ -489,5 +499,66 @@ impl Names {
             scope: format!("e2e:mechanical:{run_id}"),
             root_session: format!("e2e_{run_id}"),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn mirror_wake(names: &Names, label_location: &str) -> common::ObservedFunctionCall {
+        let mut arguments = json!({
+            "trigger_type": "state",
+            "config": { "scope": names.scope, "key": MIRROR_KEY }
+        });
+        match label_location {
+            "top-level" => arguments["label"] = json!("mirror wake"),
+            "metadata" => arguments["metadata"] = json!({ "label": "mirror wake" }),
+            _ => {}
+        }
+        common::ObservedFunctionCall {
+            function_id: "engine::register_trigger".to_string(),
+            arguments,
+        }
+    }
+
+    #[test]
+    fn mirror_wake_accepts_top_level_and_metadata_labels() {
+        let names = Names::new("labels");
+
+        assert!(is_mirror_wake(&mirror_wake(&names, "top-level"), &names));
+        assert!(is_mirror_wake(&mirror_wake(&names, "metadata"), &names));
+        assert!(!is_mirror_wake(&mirror_wake(&names, "missing"), &names));
+
+        let mut conflicting = mirror_wake(&names, "metadata");
+        conflicting.arguments["label"] = json!("  ");
+        assert!(is_mirror_wake(&conflicting, &names));
+    }
+
+    #[test]
+    fn source_seed_is_a_lossless_string_above_javascript_safe_integer() {
+        let names = Names::new("large-seed");
+        let seed = 9_007_199_254_740_993_u64;
+        let source = source_value(seed);
+        let mirror = json!({
+            "scope": names.scope,
+            "key": SOURCE_KEY,
+            "new_value": source.clone(),
+            "event_type": "state:set"
+        });
+
+        assert_eq!(source["case_seed"], seed.to_string());
+        assert!(valid_mirror(&mirror, &names, &source));
+
+        let rounded_numeric_mirror = json!({
+            "scope": names.scope,
+            "key": SOURCE_KEY,
+            "new_value": {
+                "message": "mirror me",
+                "case_seed": 9_007_199_254_740_992_u64
+            },
+            "event_type": "state:set"
+        });
+        assert!(!valid_mirror(&rounded_numeric_mirror, &names, &source));
     }
 }

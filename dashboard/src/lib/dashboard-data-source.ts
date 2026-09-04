@@ -4,6 +4,7 @@ import type {
   RunAssessmentContract,
 } from '@/lib/assessment-contract'
 import { getDashboardIiiClient } from '@/lib/iii-client'
+import type { RESULTS_SCHEMA_VERSION } from '@/lib/result-contract.generated'
 import type {
   EvaluatedVersionsResponse,
   TestCatalogRow,
@@ -204,6 +205,55 @@ export type DashboardExecutionSummary = JsonObject & {
   workflow_metrics?: DashboardWorkflowMetricSummary | null
   totals?: ExecutionTotals
   assessment_summary?: AssessmentSummary
+  live_progress?: LiveProgress | null
+  live_progress_error?: string | null
+  persistence_errors?: string[]
+  slot_start_deadline_seconds?: number | null
+  baseline_comparable?: boolean
+}
+
+export type LiveProgress = {
+  updated_at: string
+  phase?: string | null
+  terminal: boolean
+  terminal_reason?: string | null
+  committed_events: number
+  planned_slots: number
+  runs_committed: number
+  slots_deferred: number
+  attempts_started: number
+  attempts_finished: number
+  subject_observations_committed: number
+  active_attempt: {
+    scenario_id: string
+    run_id: string
+    attempt_id: string
+    session_id: string
+    started_at: string
+  } | null
+  slots: Array<{
+    slot_id: string
+    scenario_id: string
+    repetition: number
+    state: 'pending' | 'committed' | 'deferred'
+    reason: string | null
+    run_id: string | null
+    completion: CompletionState | null
+    technical: TechnicalState | null
+    objective_score: number | null
+    quality_score_completed: number | null
+  }>
+  completed_runs: number
+  task_incomplete_runs: number
+  undetermined_runs: number
+  technical_invalid_runs: number
+  completion_rate: number | null
+  quality_score_completed: number | null
+  quality_scored_completed_runs: number
+  observed_tokens: number | null
+  token_observed_attempts: number
+  observed_cost_usd: number | null
+  cost_observed_runs: number
 }
 
 export type DashboardRunMetricTotals = JsonObject & {
@@ -224,6 +274,47 @@ export type DashboardRunMetrics = JsonObject & {
 
 export type DashboardRunCost = JsonObject & {
   total_usd?: number | null
+}
+
+export type CompletionState = 'completed' | 'task_incomplete' | 'undetermined'
+export type TechnicalState = 'valid' | 'technical_invalid'
+export type EvaluatorAvailability =
+  | 'not_required'
+  | 'pending'
+  | 'available'
+  | 'unavailable'
+
+export type DashboardEvaluatorStates = {
+  completion: EvaluatorAvailability
+  quality: EvaluatorAvailability
+  final_advisory: EvaluatorAvailability
+}
+
+export type DashboardScenarioAggregate = JsonObject & {
+  planned_runs: number
+  observed_runs: number
+  deferred_runs: number
+  completed_runs: number
+  task_incomplete_runs: number
+  undetermined_runs: number
+  technical_valid_runs: number
+  technical_invalid_runs: number
+  execution_reliability: number | null
+  completion_evidence_coverage: number | null
+  completion_rate: number | null
+  objective_scored_runs: number
+  objective_median_score: number | null
+  objective_score_coverage: number | null
+  quality_scored_completed_runs: number
+  quality_score_completed: number | null
+  quality_coverage: number | null
+  total_tokens_consumed: number | null
+  judge_tokens_consumed: number | null
+  tokens_completed_p50: number | null
+  failed_attempt_tokens: number | null
+  tokens_per_completion: number | null
+  hard_gate_failures: number
+  technical_failures: number
 }
 
 export type DashboardRunEfficiency = JsonObject & {
@@ -300,7 +391,12 @@ export type DashboardRunProjection = JsonObject & {
   session_id?: string
   assessment: RunAssessmentContract
   transcript?: JsonObject
-  status?: string
+  status: string
+  completion: CompletionState
+  technical: TechnicalState
+  evaluators: DashboardEvaluatorStates
+  objective_score: number | null
+  quality_score_completed: number | null
   score?: number | null
   validation_score?: number | null
   instruction_adherence?:
@@ -344,11 +440,21 @@ export type DashboardRetryAttemptProjection = JsonObject & {
   attempt_id: string
   attempt_number: number
   session_id: string
-  status?: string
+  status: string
+  completion: CompletionState
+  technical: TechnicalState
+  evaluators: DashboardEvaluatorStates
+  objective_score: number | null
+  quality_score_completed: number | null
   wall_time_ms?: number | null
 }
 
 export type DashboardReportProjection = JsonObject & {
+  schema_version: typeof RESULTS_SCHEMA_VERSION
+  result_contract_sha256: string
+  scoring_profile_sha256: string
+  report_state: 'complete' | 'partial'
+  objective_outcome: 'passed' | 'failed' | 'inconclusive'
   assessment_availability?: 'available' | 'unavailable'
   assessment_contract: AssessmentContract
   assessment_summary: AssessmentSummary
@@ -363,7 +469,7 @@ export type DashboardReportProjection = JsonObject & {
       median_score?: number | null
       hard_gate_failures?: number
       technical_failures?: number
-      aggregate?: JsonObject
+      aggregate: DashboardScenarioAggregate
       runs: DashboardRunProjection[]
     }
   >
@@ -515,10 +621,8 @@ function makeBridge(runtime: RuntimeConfig): DashboardDataBridge {
   }
 
   const listExecutions = (input: ExecutionListInput = {}) =>
-    cachedCall<ExecutionManifest>(
-      runtime.functions.executions_list,
-      input,
-      () => httpExecutionList(input),
+    call<ExecutionManifest>(runtime.functions.executions_list, input, () =>
+      httpExecutionList(input),
     )
 
   return {
@@ -626,7 +730,7 @@ function makeBridge(runtime: RuntimeConfig): DashboardDataBridge {
       const client = await getDashboardIiiClient()
       const handlerId = 'iii::harness-e2e-dashboard::changed'
       const offHandler = client.on<JsonObject>(handlerId, (payload) => {
-        if (payload.kind !== 'progress') readCache.clear()
+        readCache.clear()
         handler(payload)
       })
       const offTrigger = client.registerTrigger({

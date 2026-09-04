@@ -28,6 +28,15 @@ pub struct ObservedFunctionOutcome {
     pub details: Option<Value>,
 }
 
+/// Returns whether a function call is contract discovery rather than product work.
+///
+/// The directory alias is intentionally narrow: only the engine function-info
+/// endpoint is discovery. Other `directory::*` calls remain observable work.
+pub fn is_contract_discovery(function_id: &str) -> bool {
+    function_id.starts_with("engine::functions::")
+        || function_id == "directory::engine::functions::info"
+}
+
 pub fn final_response(transcript: &Value) -> String {
     transcript
         .get("messages")
@@ -278,6 +287,11 @@ pub fn evaluate_text_response<'a>(
         let calls = function_calls(&observation.transcript);
         let response = observation.response.as_str();
         Ok(ObjectiveEvaluation {
+            completion: if response.trim().is_empty() {
+                crate::report::CompletionState::TaskIncomplete
+            } else {
+                crate::report::CompletionState::Completed
+            },
             hard_gates: vec![
                 gate(
                     "response_present",
@@ -418,5 +432,16 @@ mod tests {
             ]
         });
         assert_eq!(final_response(&transcript), "yes indeed");
+    }
+
+    #[test]
+    fn recognizes_only_the_allowed_contract_discovery_functions() {
+        assert!(is_contract_discovery("engine::functions::list"));
+        assert!(is_contract_discovery("engine::functions::info"));
+        assert!(is_contract_discovery("directory::engine::functions::info"));
+
+        assert!(!is_contract_discovery("directory::engine::functions::list"));
+        assert!(!is_contract_discovery("directory::workers::info"));
+        assert!(!is_contract_discovery("engine::function::info"));
     }
 }
