@@ -2,6 +2,7 @@ import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
 import type { TestCatalogRow, TestSideSummary } from '@/lib/test-catalog'
 import {
+  comparisonHasNoOverlap,
   matchesCompareFilter,
   RowDetails,
   rowState,
@@ -143,5 +144,14 @@ describe('comparison row states', () => {
     expect(html).not.toContain('median tokens')
     expect(html).toContain('No retained observations.')
     expect(html).toContain('open history')
+  })
+
+  // Audit CP-20: two sides that share nothing produce a table of empty delta
+  // columns. That is a state to name, not a comparison to render.
+  it('separates a comparison with no overlap from an empty cohort', () => {
+    expect(comparisonHasNoOverlap(8, 0)).toBe(true)
+    expect(comparisonHasNoOverlap(12, 5)).toBe(false)
+    // Nothing ran at all: the empty state already covers it.
+    expect(comparisonHasNoOverlap(0, 0)).toBe(false)
   })
 })

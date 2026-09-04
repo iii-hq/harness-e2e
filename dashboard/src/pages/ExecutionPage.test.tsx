@@ -147,9 +147,12 @@ describe('execution decision section', () => {
     )
     expect(html).toContain('>decision<')
     expect(html).toContain('1 failure · 1 passed')
-    expect(html).toContain('objective system')
-    expect(html).toContain('advisory ai')
-    expect(html).toContain('>effective<')
+    // The three outcomes read as one derivation: two inputs and what the
+    // contract publishes, each named by its role.
+    expect(html).toContain('data-outcome-derivation')
+    expect(html).toContain('system · deterministic gates')
+    expect(html).toContain('advisory · separate qualitative conclusion')
+    expect(html).toContain('effective · the status the result contract')
     expect(html).toContain(
       'Emit a complete per-path detection manifest and rerun.',
     )
@@ -176,8 +179,8 @@ describe('execution decision section', () => {
         scenarioSummary={scenarioSummary()}
       />,
     )
-    expect(html).toContain('objective system')
-    expect(html).not.toContain('>effective<')
+    expect(html).toContain('system · deterministic gates')
+    expect(html).not.toContain('effective · the status')
   })
 })
 

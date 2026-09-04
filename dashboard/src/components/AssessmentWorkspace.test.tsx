@@ -105,9 +105,11 @@ describe('assessment workspace component', () => {
       />,
     )
     const rendered = `${html}${detailHtml}`
-    expect(rendered).toContain('Objective system')
-    expect(rendered).toContain('Advisory AI')
-    expect(rendered).toContain('Effective harness')
+    // One derivation, named by role — the same shape the execution page uses.
+    expect(rendered).toContain('data-outcome-derivation')
+    expect(rendered).toContain('system · deterministic gates')
+    expect(rendered).toContain('advisory · separate qualitative conclusion')
+    expect(rendered).toContain('effective · the status the result contract')
     expect(rendered).toContain('run run-1')
     expect(rendered).not.toContain('attempt attempt-1')
     expect(rendered).toContain('data-primary-run-metrics')
@@ -266,13 +268,14 @@ describe('assessment workspace component', () => {
     expect(html).toContain('0/4')
     expect(html).toContain('0% applied cleanly')
     expect(html).toContain('82% confidence')
-    const effectiveIndex = detailHtml.indexOf('Effective harness')
+    // A run that passed with concerns reads as a concern, never as a failure.
+    const effectiveIndex = detailHtml.indexOf('effective · the status')
     const effectiveBoundary = detailHtml.slice(
-      effectiveIndex - 200,
-      effectiveIndex + 500,
+      effectiveIndex - 400,
+      effectiveIndex + 100,
     )
-    expect(effectiveBoundary).toContain('border-warning/30')
-    expect(effectiveBoundary).not.toContain('border-danger/30')
+    expect(effectiveBoundary).toContain('ds-status-inconclusive')
+    expect(effectiveBoundary).not.toContain('ds-status-failed')
   })
 
   // Audit AW-03 / AW-04: a run that retained no assessments gets neither a

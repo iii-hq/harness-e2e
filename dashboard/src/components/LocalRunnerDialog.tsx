@@ -6,7 +6,7 @@ import {
   requestPlanFromSelection,
   validateExecutionSetup,
 } from '@/components/ExecutionSetup'
-import { buttonClassName, Dialog } from '@/design-system'
+import { buttonClassName, Callout, Dialog } from '@/design-system'
 import { hashForNewPlan } from '@/hooks/use-hash-route'
 import type {
   DashboardDataBridge,
@@ -253,7 +253,9 @@ export function LocalRunnerDialog({
   const runLabel = submitting
     ? 'starting…'
     : active
-      ? 'running…'
+      ? ownJob
+        ? 'running…'
+        : 'runner busy'
       : testCount > 0
         ? `run ${testCount} ${testCount === 1 ? 'test' : 'tests'}`
         : 'run tests'
@@ -358,11 +360,15 @@ export function LocalRunnerDialog({
   const sentence = (label: string) =>
     /[.…]$/.test(label) ? label : `${label}.`
   const footerStatus =
-    showJobStatus && job
-      ? sentence(statusLabel(job.status))
-      : job?.status
-        ? `Previous runner job: ${statusLabel(job.status).toLowerCase()}.`
-        : null
+    // Audit RS-14: "Running…" beside "0 tests · 0 runs" read as this form
+    // having started something. Say whose job is holding it instead.
+    active && !ownJob
+      ? 'A runner job started outside this form is still running.'
+      : showJobStatus && job
+        ? sentence(statusLabel(job.status))
+        : job?.status
+          ? `Previous runner job: ${statusLabel(job.status).toLowerCase()}.`
+          : null
   const localCount = catalog?.localScenarios.length ?? 0
 
   return (
@@ -428,6 +434,32 @@ export function LocalRunnerDialog({
         onSubmit={submit}
         noValidate
       >
+        {/* Audit RS-14: a runner job this dialog did not start disables all 68
+            controls with no explanation, and the footer says "0 tests · 0 runs"
+            and "Running…" in the same breath. Name what is holding the form. */}
+        {active && !ownJob ? (
+          <Callout
+            tone="warning"
+            title="the runner is busy, so this form is locked"
+          >
+            <span className="grid gap-2">
+              <span>
+                A runner job started outside this form is still marked{' '}
+                {statusLabel(job?.status).toLowerCase()}. Nothing new can start
+                until it ends. If the executions ledger shows none in flight,
+                the job outlived the run that started it.
+              </span>
+              {job?.log ? (
+                <span className="grid gap-1">
+                  <span className="ds-label">last output from the job</span>
+                  <pre className="m-0 max-h-24 overflow-auto rounded-[6px] bg-canvas p-3 font-mono text-xs leading-5 text-ink-soft">
+                    {job.log.trimEnd().split('\n').slice(-4).join('\n')}
+                  </pre>
+                </span>
+              ) : null}
+            </span>
+          </Callout>
+        ) : null}
         <ExecutionSetup
           idPrefix="quick-execution"
           mode="quick"

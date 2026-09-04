@@ -245,6 +245,16 @@ export function matchesCompareFilter(state: RowState, filter: CompareFilter) {
   return state === filter
 }
 
+/** Evidence on both sides but nothing shared: every delta column is empty and
+ *  the page has no comparison to render, however many rows it has (audit
+ *  CP-20). Distinct from an empty cohort, which has nothing at all. */
+export function comparisonHasNoOverlap(
+  evidenceCount: number,
+  comparableCount: number,
+) {
+  return evidenceCount > 0 && comparableCount === 0
+}
+
 export function sortCompareRows(rows: TestCatalogRow[]) {
   return [...rows].sort(
     (left, right) =>
@@ -1470,6 +1480,38 @@ export function TestsPage({
           </Callout>
         ) : null}
 
+        {/* Audit CP-20: with nothing comparable the page rendered a comparison
+            table with two permanently empty delta columns and never said why.
+            The reason is the headline, and running the other side is the fix. */}
+        {!error && comparisonHasNoOverlap(evidenceCount, comparableCount) ? (
+          <Callout
+            className="mt-6"
+            tone="warning"
+            title="these two sides have no test in common"
+          >
+            <span className="grid gap-2">
+              <span>
+                {counts.one_side} test{counts.one_side === 1 ? '' : 's'} ran on
+                one side only and none ran on both, so there is no delta to
+                compute anywhere on this page. Run the missing side, or choose a
+                pair that shares evidence.
+              </span>
+              <span className="flex flex-wrap gap-2">
+                <button
+                  className={buttonClassName({
+                    variant: 'secondary',
+                    size: 'compact',
+                  })}
+                  type="button"
+                  onClick={() => setFilter('one_side')}
+                >
+                  show what each side ran
+                </button>
+              </span>
+            </span>
+          </Callout>
+        ) : null}
+
         {/* Audit CP-01 / CP-11: the KPIs are the filters and they count what
             the table shows. */}
         <section className="mt-6 grid gap-3" aria-label="Comparison filters">
@@ -1483,30 +1525,39 @@ export function TestsPage({
               >
                 with evidence
               </FilterChip>
-              <FilterChip
-                active={filter === 'comparable'}
-                count={comparableCount}
-                onClick={() => setFilter('comparable')}
-                title="same test version, cases and contracts on both sides"
-              >
-                comparable
-              </FilterChip>
-              <FilterChip
-                active={filter === 'regressed'}
-                count={counts.regressed}
-                onClick={() => setFilter('regressed')}
-                title="objective result or score dropped in b"
-              >
-                regressed in b
-              </FilterChip>
-              <FilterChip
-                active={filter === 'improved'}
-                count={counts.improved}
-                onClick={() => setFilter('improved')}
-                title="score up in b, no gate lost"
-              >
-                improved in b
-              </FilterChip>
+              {/* Audit CP-21: three chips that can only ever read zero sat as
+                  equal peers to the two that work. They appear once there is
+                  something to filter, or while one is the active view. */}
+              {comparableCount > 0 || filter === 'comparable' ? (
+                <FilterChip
+                  active={filter === 'comparable'}
+                  count={comparableCount}
+                  onClick={() => setFilter('comparable')}
+                  title="same test version, cases and contracts on both sides"
+                >
+                  comparable
+                </FilterChip>
+              ) : null}
+              {counts.regressed > 0 || filter === 'regressed' ? (
+                <FilterChip
+                  active={filter === 'regressed'}
+                  count={counts.regressed}
+                  onClick={() => setFilter('regressed')}
+                  title="objective result or score dropped in b"
+                >
+                  regressed in b
+                </FilterChip>
+              ) : null}
+              {counts.improved > 0 || filter === 'improved' ? (
+                <FilterChip
+                  active={filter === 'improved'}
+                  count={counts.improved}
+                  onClick={() => setFilter('improved')}
+                  title="score up in b, no gate lost"
+                >
+                  improved in b
+                </FilterChip>
+              ) : null}
               <FilterChip
                 active={filter === 'one_side'}
                 count={counts.one_side}

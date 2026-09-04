@@ -186,21 +186,25 @@ describe('scenario matrix presentation model', () => {
         label: 'Validation score',
         value: '80/100',
         detail: 'Deterministic sum of isolated validator outcomes',
+        band: 'scoring',
       },
       {
         label: 'Instruction adherence',
         value: '92/100',
         detail: 'Advisory prompt-following assessment',
+        band: 'scoring',
       },
       {
         label: 'Pipeline integrity',
         value: 'Complete',
         detail: 'Correct revision, section routing, and phase completion',
+        band: 'scoring',
       },
       {
         label: 'Technical failures',
         value: '0',
         detail: 'Infrastructure, evaluator, resource, or cleanup failures',
+        band: 'scoring',
       },
     ])
   })
@@ -234,26 +238,31 @@ describe('scenario matrix presentation model', () => {
         label: 'Runtime',
         value: '3.0 s',
         detail: 'Average scenario duration',
+        band: 'execution',
       },
       {
         label: 'Total tokens',
         value: '1,000',
         detail: '1/2 workflow steps reported',
+        band: 'execution',
       },
       {
         label: 'Function calls',
         value: '3',
         detail: '0 errors',
+        band: 'execution',
       },
       {
         label: 'Function errors',
         value: '0',
         detail: 'Subject execution errors',
+        band: 'execution',
       },
       {
         label: 'Reported cost',
         value: '—',
         detail: 'Not captured for this run',
+        band: 'execution',
       },
     ])
 
@@ -297,26 +306,31 @@ describe('scenario matrix presentation model', () => {
         label: 'Runtime',
         value: '3.0 s',
         detail: 'Average scenario duration',
+        band: 'execution',
       },
       {
         label: 'Total tokens',
         value: '3,500',
         detail: 'Evaluator usage · backfilled',
+        band: 'execution',
       },
       {
         label: 'Function calls',
         value: '9',
         detail: 'Workflow operations · backfilled',
+        band: 'execution',
       },
       {
         label: 'Function errors',
         value: '0',
         detail: 'Workflow failures · backfilled',
+        band: 'execution',
       },
       {
         label: 'Reported cost',
         value: '$0.0000',
         detail: 'Local run · no metered charge',
+        band: 'execution',
       },
     ])
   })
