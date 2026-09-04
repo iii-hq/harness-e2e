@@ -463,6 +463,14 @@ pub struct TaskAggregate {
     pub p95_turns: Option<f64>,
     pub p50_wall_time_ms: Option<f64>,
     pub p95_wall_time_ms: Option<f64>,
+    pub p50_billable_tokens: Option<f64>,
+    pub p95_billable_tokens: Option<f64>,
+    pub p50_function_calls: Option<f64>,
+    pub p95_function_calls: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub p50_cost_usd: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub p95_cost_usd: Option<f64>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub unavailable: BTreeMap<String, String>,
 }
@@ -479,6 +487,10 @@ pub struct TaskAggregateDelta {
     pub p50_total_tokens_ratio: Option<f64>,
     pub p50_turns_ratio: Option<f64>,
     pub p50_wall_time_ratio: Option<f64>,
+    pub p50_billable_tokens_ratio: Option<f64>,
+    pub p50_function_calls_ratio: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub p50_cost_usd_ratio: Option<f64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
@@ -2554,6 +2566,40 @@ fn aggregate_task_results(
         .collect()
 }
 
+/// Recompute a stored cohort's aggregates from the per-run evidence it already
+/// references. Retained runs keep the full metric totals, so a suite persisted
+/// before a metric existed stays comparable without re-executing the model.
+pub fn reaggregate_suite_result(path: &Path) -> Result<TaskSuiteResult> {
+    let mut summary: TaskSuiteResult = serde_json::from_slice(
+        &fs::read(path).with_context(|| format!("read suite result {}", path.display()))?,
+    )
+    .with_context(|| format!("decode suite result {}", path.display()))?;
+    let root = path
+        .parent()
+        .context("suite result has no parent directory")?;
+    let mut results = Vec::with_capacity(summary.task_results.len());
+    for relative in &summary.task_results {
+        let full = root.join(relative);
+        let result: TaskRunResult = serde_json::from_slice(
+            &fs::read(&full).with_context(|| format!("read task result {}", full.display()))?,
+        )
+        .with_context(|| format!("decode task result {}", full.display()))?;
+        results.push(result);
+    }
+    summary.task_aggregates = summary
+        .task_aggregates
+        .iter()
+        .map(|aggregate| {
+            let all = results
+                .iter()
+                .filter(|result| result.task_id == aggregate.task_id)
+                .collect::<Vec<_>>();
+            aggregate_task(&aggregate.task_id, aggregate.requested_runs, &all)
+        })
+        .collect();
+    Ok(summary)
+}
+
 fn aggregate_task(task_id: &str, requested_runs: u32, all: &[&TaskRunResult]) -> TaskAggregate {
     let included = all
         .iter()
@@ -2570,8 +2616,14 @@ fn aggregate_task(task_id: &str, requested_runs: u32, all: &[&TaskRunResult]) ->
         .iter()
         .map(|result| result.wall_time_ms as f64)
         .collect::<Vec<_>>();
+    let billable = collect_task_metric(&included, billable_tokens);
+    let calls = collect_task_metric(&included, function_calls);
+    let cost = collect_task_cost(&included);
     let p95_total_tokens = tail_metric(&tokens, "p95_total_tokens", &mut unavailable);
     let p95_turns = tail_metric(&turns, "p95_turns", &mut unavailable);
+    let p95_billable_tokens = tail_metric(&billable, "p95_billable_tokens", &mut unavailable);
+    let p95_function_calls = tail_metric(&calls, "p95_function_calls", &mut unavailable);
+    let p95_cost_usd = tail_metric(&cost, "p95_cost_usd", &mut unavailable);
     let p95_wall_time_ms = tail_metric(
         &Some(wall_times.clone()),
         "p95_wall_time_ms",
@@ -2587,6 +2639,24 @@ fn aggregate_task(task_id: &str, requested_runs: u32, all: &[&TaskRunResult]) ->
         unavailable.insert(
             "turns".into(),
             "one or more included runs lacks turn metrics".into(),
+        );
+    }
+    if billable.is_none() {
+        unavailable.insert(
+            "billable_tokens".into(),
+            "one or more included runs lacks token metrics".into(),
+        );
+    }
+    if calls.is_none() {
+        unavailable.insert(
+            "function_calls".into(),
+            "one or more included runs lacks function-call metrics".into(),
+        );
+    }
+    if cost.is_none() {
+        unavailable.insert(
+            "cost_usd".into(),
+            "provider did not report monetary cost".into(),
         );
     }
     let flaky_rate = if n >= 2 {
@@ -2619,6 +2689,12 @@ fn aggregate_task(task_id: &str, requested_runs: u32, all: &[&TaskRunResult]) ->
         p95_turns,
         p50_wall_time_ms: median(&wall_times),
         p95_wall_time_ms,
+        p50_billable_tokens: billable.as_deref().and_then(median),
+        p95_billable_tokens,
+        p50_function_calls: calls.as_deref().and_then(median),
+        p95_function_calls,
+        p50_cost_usd: cost.as_deref().and_then(median),
+        p95_cost_usd,
         unavailable,
     }
 }
@@ -2826,6 +2902,15 @@ impl TaskSuiteComparison {
                             from.p50_wall_time_ms,
                             to.p50_wall_time_ms,
                         ),
+                        p50_billable_tokens_ratio: ratio_delta(
+                            from.p50_billable_tokens,
+                            to.p50_billable_tokens,
+                        ),
+                        p50_function_calls_ratio: ratio_delta(
+                            from.p50_function_calls,
+                            to.p50_function_calls,
+                        ),
+                        p50_cost_usd_ratio: ratio_delta(from.p50_cost_usd, to.p50_cost_usd),
                     }
                 })
                 .collect()
@@ -2882,6 +2967,42 @@ pub fn read_task_suite_result(path: &Path) -> Result<TaskSuiteResult> {
 fn total_tokens(result: &TaskRunResult) -> Option<u64> {
     let totals = &result.metrics.as_ref()?.totals;
     Some(totals.input_tokens?.saturating_add(totals.output_tokens?))
+}
+
+/// Every token the turn moved, including the reasoning and cache volume that
+/// `total_tokens` leaves out. Cache reads dominate real workloads, so the two
+/// series are kept side by side rather than one replacing the other.
+fn billable_tokens(result: &TaskRunResult) -> Option<u64> {
+    let totals = &result.metrics.as_ref()?.totals;
+    let mut sum = totals.input_tokens?.saturating_add(totals.output_tokens?);
+    for extra in [
+        totals.reasoning_tokens,
+        totals.cache_read_tokens,
+        totals.cache_write_tokens,
+    ] {
+        sum = sum.saturating_add(extra.unwrap_or(0));
+    }
+    Some(sum)
+}
+
+fn function_calls(result: &TaskRunResult) -> Option<u64> {
+    result
+        .metrics
+        .as_ref()
+        .map(|metrics| metrics.totals.function_calls)
+}
+
+/// Monetary cost is passthrough only: a provider that reports nothing leaves
+/// the series absent instead of being imputed from a price table.
+fn collect_task_cost(runs: &[&TaskRunResult]) -> Option<Vec<f64>> {
+    runs.iter()
+        .map(|result| {
+            result
+                .metrics
+                .as_ref()
+                .and_then(|metrics| metrics.totals.cost_usd)
+        })
+        .collect()
 }
 
 fn redact_official_verification(verification: &mut TaskVerification) {
@@ -3314,15 +3435,46 @@ class ConfigCache:
 
     #[test]
     fn comparison_requires_the_same_case_fingerprint() {
-        let result = |case: &str, system: &str, passed: bool| TaskRunResult {
+        let result = |case: &str, system: &str, passed: bool| {
+            let mut result = sample_run_result();
+            result.execution_id = system.into();
+            result.case_fingerprint = case.into();
+            result.system_identity_sha256 = system.into();
+            result.harness_version = system.into();
+            result.status = if passed {
+                TaskRunStatus::Passed
+            } else {
+                TaskRunStatus::Failed
+            };
+            result.product_passed = passed;
+            result
+        };
+        let baseline = result("case-a", "system-a", false);
+        let candidate = result("case-a", "system-b", true);
+        let comparison = TaskComparison::compare(&baseline, &candidate);
+        assert!(comparison.comparable);
+        assert_eq!(comparison.capability_delta, Some(1));
+        let changed_case = TaskComparison::compare(&baseline, &result("case-b", "system-c", true));
+        assert!(!changed_case.comparable);
+        assert_eq!(changed_case.capability_delta, None);
+        assert_eq!(changed_case.wall_time_delta_ms, None);
+        let mut invalid_evidence = result("case-a", "system-c", true);
+        invalid_evidence.infrastructure_valid = false;
+        let invalid = TaskComparison::compare(&baseline, &invalid_evidence);
+        assert!(!invalid.comparable);
+        assert_eq!(invalid.capability_delta, None);
+    }
+
+    fn sample_run_result() -> TaskRunResult {
+        TaskRunResult {
             schema: TASK_RESULT_SCHEMA.into(),
-            execution_id: system.into(),
+            execution_id: "system".into(),
             task_id: "feature_batch_replay".into(),
             task_version: 1,
             task_kind: TaskKind::Feature,
             behavior_sha256: "sha256:behavior".into(),
-            case_fingerprint: case.into(),
-            system_identity_sha256: system.into(),
+            case_fingerprint: "case".into(),
+            system_identity_sha256: "system".into(),
             cohort_identity_sha256: "cohort-a".into(),
             lane: "local_development".into(),
             comparison_series: "local".into(),
@@ -3331,15 +3483,11 @@ class ConfigCache:
             verifier_mode: TaskVerifierMode::Development,
             verifier_sha256: "sha256:verifier".into(),
             engine_version: "engine".into(),
-            harness_version: system.into(),
+            harness_version: "system".into(),
             model: "model".into(),
             provider: "provider".into(),
-            status: if passed {
-                TaskRunStatus::Passed
-            } else {
-                TaskRunStatus::Failed
-            },
-            product_passed: passed,
+            status: TaskRunStatus::Passed,
+            product_passed: true,
             structural_integrity: true,
             grounding_integrity: true,
             technical_failure: false,
@@ -3363,21 +3511,66 @@ class ConfigCache:
             cleanup_valid: true,
             subject_failure: None,
             failure: None,
+        }
+    }
+
+    fn metrics_totals(cost_usd: Option<f64>) -> SessionMetricsResponse {
+        let mut totals = serde_json::json!({
+            "sessions": 1,
+            "turns": 9,
+            "function_calls": 14,
+            "function_call_errors": 1,
+            "input_tokens": 18_595,
+            "output_tokens": 3_197,
+            "reasoning_tokens": 686,
+            "cache_read_tokens": 64_512,
+            "cache_write_tokens": 0,
+        });
+        if let Some(cost) = cost_usd {
+            totals["cost_usd"] = serde_json::json!(cost);
+        }
+        serde_json::from_value(serde_json::json!({
+            "complete": true,
+            "root_session_id": "session",
+            "totals": totals,
+            "by_session": [],
+            "traces": [],
+        }))
+        .expect("metrics fixture decodes")
+    }
+
+    #[test]
+    fn aggregates_expose_billable_tokens_calls_and_passthrough_cost() {
+        let run = |cost: Option<f64>| {
+            let mut result = sample_run_result();
+            result.metrics = Some(metrics_totals(cost));
+            result
         };
-        let baseline = result("case-a", "system-a", false);
-        let candidate = result("case-a", "system-b", true);
-        let comparison = TaskComparison::compare(&baseline, &candidate);
-        assert!(comparison.comparable);
-        assert_eq!(comparison.capability_delta, Some(1));
-        let changed_case = TaskComparison::compare(&baseline, &result("case-b", "system-c", true));
-        assert!(!changed_case.comparable);
-        assert_eq!(changed_case.capability_delta, None);
-        assert_eq!(changed_case.wall_time_delta_ms, None);
-        let mut invalid_evidence = result("case-a", "system-c", true);
-        invalid_evidence.infrastructure_valid = false;
-        let invalid = TaskComparison::compare(&baseline, &invalid_evidence);
-        assert!(!invalid.comparable);
-        assert_eq!(invalid.capability_delta, None);
+
+        let priced = [run(Some(0.25)), run(Some(0.35))];
+        let borrowed = priced.iter().collect::<Vec<_>>();
+        let aggregate = aggregate_task("feature_batch_replay", 2, &borrowed);
+
+        // input + output alone is 21_792; the cache and reasoning volume the
+        // provider also moved brings the billable series to 86_990.
+        assert_eq!(aggregate.p50_total_tokens, Some(21_792.0));
+        assert_eq!(aggregate.p50_billable_tokens, Some(86_990.0));
+        assert_eq!(aggregate.p50_function_calls, Some(14.0));
+        assert_eq!(aggregate.p50_cost_usd, Some(0.35));
+        assert!(!aggregate.unavailable.contains_key("cost_usd"));
+
+        let unpriced = [run(None), run(Some(0.25))];
+        let borrowed = unpriced.iter().collect::<Vec<_>>();
+        let aggregate = aggregate_task("feature_batch_replay", 2, &borrowed);
+
+        // One silent run voids the series rather than averaging over a hole,
+        // and no price table stands in for what the provider never reported.
+        assert_eq!(aggregate.p50_cost_usd, None);
+        assert_eq!(
+            aggregate.unavailable.get("cost_usd").map(String::as_str),
+            Some("provider did not report monetary cost")
+        );
+        assert_eq!(aggregate.p50_billable_tokens, Some(86_990.0));
     }
 
     #[test]
@@ -3504,6 +3697,12 @@ class ConfigCache:
                 p95_turns: None,
                 p50_wall_time_ms: Some(1000.0),
                 p95_wall_time_ms: None,
+                p50_billable_tokens: Some(500.0),
+                p95_billable_tokens: None,
+                p50_function_calls: Some(6.0),
+                p95_function_calls: None,
+                p50_cost_usd: None,
+                p95_cost_usd: None,
                 unavailable: BTreeMap::new(),
             }],
         };

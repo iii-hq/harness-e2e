@@ -193,6 +193,27 @@
         "maturity": {
           "type": "string"
         },
+        "p50_billable_tokens": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double"
+        },
+        "p50_cost_usd": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double"
+        },
+        "p50_function_calls": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double"
+        },
         "p50_total_tokens": {
           "type": [
             "number",
@@ -208,6 +229,27 @@
           "format": "double"
         },
         "p50_wall_time_ms": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double"
+        },
+        "p95_billable_tokens": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double"
+        },
+        "p95_cost_usd": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double"
+        },
+        "p95_function_calls": {
           "type": [
             "number",
             "null"

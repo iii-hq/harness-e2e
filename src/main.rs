@@ -78,6 +78,8 @@ enum TaskCommand {
     Compare(TaskCompareArgs),
     /// Compare two aggregate suite-result.json cohorts.
     CompareSuite(TaskCompareSuiteArgs),
+    /// Recompute a stored cohort's aggregates from its retained per-run evidence.
+    Reaggregate(TaskReaggregateArgs),
 }
 
 #[derive(Debug, Args)]
@@ -137,6 +139,17 @@ struct TaskCompareSuiteArgs {
     /// Candidate suite-result.json.
     #[arg(long)]
     candidate: PathBuf,
+}
+
+#[derive(Debug, Args)]
+struct TaskReaggregateArgs {
+    /// suite-result.json to recompute in place.
+    #[arg(long)]
+    suite_result: PathBuf,
+
+    /// Write the recomputed cohort here instead of overwriting the input.
+    #[arg(long)]
+    output: Option<PathBuf>,
 }
 
 #[derive(Debug, Args)]
@@ -499,6 +512,16 @@ async fn tasks(command: TaskCommand) -> Result<()> {
             let candidate = harness_e2e::task::read_task_suite_result(&args.candidate)?;
             let comparison = harness_e2e::task::TaskSuiteComparison::compare(&baseline, &candidate);
             println!("{}", serde_json::to_string_pretty(&comparison)?);
+            Ok(())
+        }
+        TaskCommand::Reaggregate(args) => {
+            let summary = harness_e2e::task::reaggregate_suite_result(&args.suite_result)?;
+            let destination = args.output.as_deref().unwrap_or(&args.suite_result);
+            let mut rendered = serde_json::to_string_pretty(&summary)?;
+            rendered.push('\n');
+            std::fs::write(destination, rendered)
+                .with_context(|| format!("write cohort {}", destination.display()))?;
+            eprintln!("recomputed {}", destination.display());
             Ok(())
         }
     }

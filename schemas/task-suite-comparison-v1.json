@@ -59,6 +59,27 @@
           ],
           "format": "double"
         },
+        "p50_billable_tokens_ratio": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double"
+        },
+        "p50_cost_usd_ratio": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double"
+        },
+        "p50_function_calls_ratio": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double"
+        },
         "p50_total_tokens_ratio": {
           "type": [
             "number",

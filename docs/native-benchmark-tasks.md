@@ -77,6 +77,16 @@ cargo run --locked -- tasks compare \
 ```
 
 Compare cohorts with `tasks compare-suite --baseline ... --candidate ...`.
+
+Recompute a stored cohort from the per-run evidence it already references, so a
+suite persisted before a metric existed becomes comparable without re-executing
+the model:
+
+```bash
+cargo run --locked -- tasks reaggregate \
+  --suite-result target/task-runs/<execution>/suite-result.json
+```
+
 Comparisons are advisory and emit no deltas when lane, verifier, model, fixture,
 runner or another non-Harness component differs.
 
@@ -118,7 +128,15 @@ into one score.
 
 One included sample is directional, five are repeatable, and twenty are
 validated and enable p95. Suites retain Wilson intervals for rates, flakiness,
-p50/p95 tokens, turns and wall time.
+p50/p95 tokens, turns, function calls, cost and wall time.
+
+Two token series are kept side by side. `total_tokens` counts prompt and
+completion only; `billable_tokens` adds the reasoning and cache volume the
+provider also moved, which routinely dominates. The two can move in opposite
+directions, so an efficiency claim must name which series it means. Monetary
+cost is passthrough: a provider that reports no `cost_usd` leaves the series
+absent and records the reason in `unavailable`, rather than being imputed from
+a price table.
 
 The native task sources live under `native-tasks/` in `iii-hq/e2e-fixture`.
 Every task pins the full fixture commit and its subtree manifest independently.
