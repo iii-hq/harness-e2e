@@ -2614,6 +2614,36 @@ pub fn reaggregate_suite_result(path: &Path) -> Result<TaskSuiteResult> {
     Ok(summary)
 }
 
+/// Persist a recomputed cohort atomically. Task-result references are relative
+/// to the suite directory, so an alternate output must remain beside the input
+/// rather than silently producing a summary with dangling evidence paths.
+pub fn write_reaggregated_suite_result(source: &Path, output: Option<&Path>) -> Result<PathBuf> {
+    let summary = reaggregate_suite_result(source)?;
+    let destination = output.unwrap_or(source);
+    let source_parent = canonical_parent(source, "suite result")?;
+    let destination_parent = canonical_parent(destination, "reaggregated output")?;
+    if source_parent != destination_parent {
+        bail!(
+            "reaggregated output must be beside the input suite result so relative task-result references remain valid"
+        );
+    }
+    let mut rendered = serde_json::to_vec_pretty(&summary).context("encode reaggregated cohort")?;
+    rendered.push(b'\n');
+    artifact::write_atomic(destination, &rendered)
+        .with_context(|| format!("write cohort {}", destination.display()))?;
+    Ok(destination.to_path_buf())
+}
+
+fn canonical_parent(path: &Path, label: &str) -> Result<PathBuf> {
+    let parent = path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."));
+    parent
+        .canonicalize()
+        .with_context(|| format!("resolve {label} directory {}", parent.display()))
+}
+
 fn aggregate_task(task_id: &str, requested_runs: u32, all: &[&TaskRunResult]) -> TaskAggregate {
     let included = all
         .iter()
@@ -2670,7 +2700,7 @@ fn aggregate_task(task_id: &str, requested_runs: u32, all: &[&TaskRunResult]) ->
     if cost.is_none() {
         unavailable.insert(
             "cost_usd".into(),
-            "provider did not report monetary cost".into(),
+            "runtime did not expose monetary cost".into(),
         );
     }
     let flaky_rate = if n >= 2 {
@@ -3000,17 +3030,13 @@ fn total_tokens(result: &TaskRunResult) -> Option<u64> {
     Some(totals.input_tokens?.saturating_add(totals.output_tokens?))
 }
 
-/// Every token the turn moved, including the reasoning and cache volume that
-/// `total_tokens` leaves out. Cache reads dominate real workloads, so the two
-/// series are kept side by side rather than one replacing the other.
+/// Every token the turn moved, including the cache volume that `total_tokens`
+/// leaves out. Reasoning tokens are already included in `output_tokens`, while
+/// cache reads and writes are disjoint from `input_tokens`.
 fn billable_tokens(result: &TaskRunResult) -> Option<u64> {
     let totals = &result.metrics.as_ref()?.totals;
     let mut sum = totals.input_tokens?.saturating_add(totals.output_tokens?);
-    for extra in [
-        totals.reasoning_tokens,
-        totals.cache_read_tokens,
-        totals.cache_write_tokens,
-    ] {
+    for extra in [totals.cache_read_tokens, totals.cache_write_tokens] {
         sum = sum.saturating_add(extra.unwrap_or(0));
     }
     Some(sum)
@@ -3023,8 +3049,10 @@ fn function_calls(result: &TaskRunResult) -> Option<u64> {
         .map(|metrics| metrics.totals.function_calls)
 }
 
-/// Monetary cost is passthrough only: a provider that reports nothing leaves
-/// the series absent instead of being imputed from a price table.
+/// Copy monetary cost from the runtime metrics without doing any local
+/// imputation. The runtime may expose a provider-reported value or a value
+/// derived by the Router from catalog pricing; that provenance is not retained
+/// in the task-result contract.
 fn collect_task_cost(runs: &[&TaskRunResult]) -> Option<Vec<f64>> {
     runs.iter()
         .map(|result| {
@@ -3610,7 +3638,7 @@ class ConfigCache:
     }
 
     #[test]
-    fn aggregates_expose_billable_tokens_calls_and_passthrough_cost() {
+    fn aggregates_expose_billable_tokens_calls_and_observed_cost() {
         let run = |cost: Option<f64>| {
             let mut result = sample_run_result();
             result.metrics = Some(metrics_totals(cost));
@@ -3621,10 +3649,11 @@ class ConfigCache:
         let borrowed = priced.iter().collect::<Vec<_>>();
         let aggregate = aggregate_task("feature_batch_replay", 2, &borrowed);
 
-        // input + output alone is 21_792; the cache and reasoning volume the
-        // provider also moved brings the billable series to 86_990.
+        // input + output alone is 21_792; the disjoint cache volume the
+        // provider also moved brings the billable series to 86_304. Reasoning
+        // is already part of output and must not be counted a second time.
         assert_eq!(aggregate.p50_total_tokens, Some(21_792.0));
-        assert_eq!(aggregate.p50_billable_tokens, Some(86_990.0));
+        assert_eq!(aggregate.p50_billable_tokens, Some(86_304.0));
         assert_eq!(aggregate.p50_function_calls, Some(14.0));
         assert_eq!(aggregate.p50_cost_usd, Some(0.35));
         assert!(!aggregate.unavailable.contains_key("cost_usd"));
@@ -3633,14 +3662,68 @@ class ConfigCache:
         let borrowed = unpriced.iter().collect::<Vec<_>>();
         let aggregate = aggregate_task("feature_batch_replay", 2, &borrowed);
 
-        // One silent run voids the series rather than averaging over a hole,
-        // and no price table stands in for what the provider never reported.
+        // One run without an observed runtime cost voids the series rather
+        // than averaging over a hole. This layer does not invent a value.
         assert_eq!(aggregate.p50_cost_usd, None);
         assert_eq!(
             aggregate.unavailable.get("cost_usd").map(String::as_str),
-            Some("provider did not report monetary cost")
+            Some("runtime did not expose monetary cost")
         );
-        assert_eq!(aggregate.p50_billable_tokens, Some(86_990.0));
+        assert_eq!(aggregate.p50_billable_tokens, Some(86_304.0));
+    }
+
+    #[test]
+    fn reaggregated_output_stays_beside_its_relative_evidence() {
+        let directory = tempfile::tempdir().unwrap();
+        let run_directory = directory.path().join("runs");
+        fs::create_dir_all(&run_directory).unwrap();
+        let run_path = run_directory.join("task-result.json");
+        let mut run = sample_run_result();
+        run.metrics = Some(metrics_totals(Some(0.25)));
+        fs::write(&run_path, serde_json::to_vec_pretty(&run).unwrap()).unwrap();
+
+        let suite_path = directory.path().join("suite-result.json");
+        let suite = TaskSuiteResult {
+            schema: TASK_SUITE_RESULT_SCHEMA.into(),
+            suite_id: "development".into(),
+            suite_version: 1,
+            suite_behavior_sha256: "sha256:suite".into(),
+            execution_id: "execution".into(),
+            lane: "local_development".into(),
+            comparison_series: "local".into(),
+            release_channel: None,
+            release_tag: None,
+            verifier_mode: TaskVerifierMode::Development,
+            verifier_sha256: "sha256:verifier".into(),
+            cohort_identity_sha256: "sha256:cohort".into(),
+            model: "model".into(),
+            provider: "provider".into(),
+            requested_runs: 1,
+            completed_runs: 1,
+            product_passed_runs: 1,
+            infrastructure_invalid_runs: 0,
+            resource_limited_runs: 0,
+            coverage_incomplete_runs: 0,
+            task_results: vec!["runs/task-result.json".into()],
+            task_aggregates: vec![aggregate_task("feature_batch_replay", 1, &[&run])],
+        };
+        fs::write(&suite_path, serde_json::to_vec_pretty(&suite).unwrap()).unwrap();
+
+        let sibling = directory.path().join("suite-result.reaggregated.json");
+        write_reaggregated_suite_result(&suite_path, Some(&sibling)).unwrap();
+        let reloaded = reaggregate_suite_result(&sibling).unwrap();
+        assert_eq!(
+            reloaded.task_aggregates[0].p50_billable_tokens,
+            Some(86_304.0)
+        );
+
+        let elsewhere = tempfile::tempdir().unwrap();
+        let error = write_reaggregated_suite_result(
+            &suite_path,
+            Some(&elsewhere.path().join("suite-result.json")),
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("must be beside the input"));
     }
 
     #[test]

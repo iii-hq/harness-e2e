@@ -87,6 +87,10 @@ cargo run --locked -- tasks reaggregate \
   --suite-result target/task-runs/<execution>/suite-result.json
 ```
 
+Use `--output` with a sibling file name to preserve the original summary while
+keeping its relative per-run evidence references valid. Reaggregation replaces
+the selected summary atomically.
+
 Comparisons are advisory and emit no deltas when lane, verifier, model, fixture,
 runner or another non-Harness component differs.
 
@@ -139,13 +143,16 @@ One included sample is directional, five are repeatable, and twenty are
 validated and enable p95. Suites retain Wilson intervals for rates, flakiness,
 p50/p95 tokens, turns, function calls, cost and wall time.
 
-Two token series are kept side by side. `total_tokens` counts prompt and
-completion only; `billable_tokens` adds the reasoning and cache volume the
-provider also moved, which routinely dominates. The two can move in opposite
-directions, so an efficiency claim must name which series it means. Monetary
-cost is passthrough: a provider that reports no `cost_usd` leaves the series
-absent and records the reason in `unavailable`, rather than being imputed from
-a price table.
+Two token series are kept side by side. `total_tokens` counts uncached input
+and output; `billable_tokens` adds the disjoint cache-read and cache-write
+volume the provider also moved, which routinely dominates. Reasoning tokens
+are already included in output and are not added again. The two series can move
+in opposite directions, so an efficiency claim must name which series it
+means. Monetary cost is copied from the runtime metrics without local
+imputation. It may be reported by the provider or derived by the Router from
+catalog pricing; the task-result contract does not retain that provenance. If
+the runtime exposes no `cost_usd`, the series remains absent and records the
+reason in `unavailable`.
 
 The native task sources live under `native-tasks/` in `iii-hq/e2e-fixture`.
 Every task pins the full fixture commit and its subtree manifest independently.

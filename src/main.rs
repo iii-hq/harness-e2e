@@ -147,7 +147,7 @@ struct TaskReaggregateArgs {
     #[arg(long)]
     suite_result: PathBuf,
 
-    /// Write the recomputed cohort here instead of overwriting the input.
+    /// Write the recomputed cohort beside the input instead of overwriting it.
     #[arg(long)]
     output: Option<PathBuf>,
 }
@@ -515,12 +515,10 @@ async fn tasks(command: TaskCommand) -> Result<()> {
             Ok(())
         }
         TaskCommand::Reaggregate(args) => {
-            let summary = harness_e2e::task::reaggregate_suite_result(&args.suite_result)?;
-            let destination = args.output.as_deref().unwrap_or(&args.suite_result);
-            let mut rendered = serde_json::to_string_pretty(&summary)?;
-            rendered.push('\n');
-            std::fs::write(destination, rendered)
-                .with_context(|| format!("write cohort {}", destination.display()))?;
+            let destination = harness_e2e::task::write_reaggregated_suite_result(
+                &args.suite_result,
+                args.output.as_deref(),
+            )?;
             eprintln!("recomputed {}", destination.display());
             Ok(())
         }
