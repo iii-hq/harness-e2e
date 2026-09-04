@@ -39,8 +39,18 @@ export type ScenarioMatrixItem = {
   primaryRun: DashboardRunProjection | null
   workflowRun: DashboardRunProjection | null
   workflowSteps: SemanticTestReport[]
-  primaryMetrics: Array<{ label: string; value: string; detail: string }>
+  /** `band` groups the facts so each row of the result card divides evenly.
+   *  Eleven tiles in one seven-column grid left a visible orphan cell and said
+   *  nothing about what kind of number each one was (audit ED-24). */
+  primaryMetrics: Array<{
+    label: string
+    value: string
+    detail: string
+    band: MetricBand
+  }>
 }
+
+export type MetricBand = 'scoring' | 'execution'
 
 export type ScenarioMatrixSummary = {
   total: number
@@ -378,8 +388,7 @@ function primaryMetrics(
         },
       ]
     : []
-  return [
-    ...markdownMetrics,
+  const executionMetrics = [
     runtimeMetric,
     {
       label: 'Total tokens',
@@ -427,6 +436,16 @@ function primaryMetrics(
             ? `Reported by all ${workflow.stepCount} workflow steps`
             : missingDetail,
     },
+  ]
+  return [
+    ...markdownMetrics.map((metric) => ({
+      ...metric,
+      band: 'scoring' as const,
+    })),
+    ...executionMetrics.map((metric) => ({
+      ...metric,
+      band: 'execution' as const,
+    })),
   ]
 }
 

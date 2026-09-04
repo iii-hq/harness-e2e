@@ -7,6 +7,7 @@ import {
 } from 'lucide-react'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { TestCriteriaList } from '@/components/AboutTestPanel'
+import { OutcomeDerivation } from '@/components/OutcomeDerivation'
 import { ScenarioChatAction } from '@/components/ScenarioChatAction'
 import {
   buttonClassName,
@@ -356,30 +357,6 @@ function toneForOutcome(outcome: string) {
     return 'border-warning/30 bg-warning/5 text-warning'
   }
   return 'border-line bg-panel-subtle text-ink-muted'
-}
-
-function StatusCard({
-  label,
-  value,
-  caption,
-}: {
-  label: string
-  value: string
-  caption: string
-}) {
-  return (
-    <div className={`rounded-lg border p-3 ${toneForOutcome(value)}`}>
-      <span className="block text-label font-semibold uppercase tracking-[0.065em] opacity-80">
-        {label}
-      </span>
-      <strong className="mt-1 block text-sm text-current">
-        {titleCase(value)}
-      </strong>
-      <span className="mt-1 block text-xs leading-5 text-ink-muted">
-        {caption}
-      </span>
-    </div>
-  )
 }
 
 function AnalyzerProvenance({
@@ -818,7 +795,9 @@ function FinalAiCard({ run }: { run: AssessmentRunView }) {
               <p className="m-0 text-label font-semibold uppercase tracking-[0.06em] text-ink-muted">
                 What happened
               </p>
-              <p className="m-0 border-l-2 border-[var(--color-rule)] pl-3 text-sm leading-5 text-ink-soft">
+              {/* Audit DS-13: an accent bar down the left of a paragraph is
+                  decoration this design system does not use anywhere else. */}
+              <p className="m-0 text-sm leading-5 text-pretty text-ink-soft">
                 {result.diagnosis}
               </p>
             </div>
@@ -827,7 +806,7 @@ function FinalAiCard({ run }: { run: AssessmentRunView }) {
             <p className="m-0 text-label font-semibold uppercase tracking-[0.06em] text-ink-muted">
               Suggested correction or improvement
             </p>
-            <p className="m-0 border-l-2 border-brand pl-3 text-sm leading-5 text-ink-soft">
+            <p className="m-0 text-sm leading-5 text-pretty text-ink-soft">
               {result.recommendation || buildHarnessRecommendation(run)}
             </p>
           </div>
@@ -880,8 +859,23 @@ function AssessmentDetailContent({
   const aiLabel = ai.result?.verdict ?? ai.availability
   const objectiveFailure = run.systemStatus !== 'passed'
 
+  // Audit ED-25: a run that retained no assessments passed on infrastructure
+  // alone. The tiles said "Not reported" twice and left the reader to work out
+  // that nothing about the output was ever checked.
+  const scoredNothing = run.assessments.length === 0
+
   return (
     <div className="grid gap-5">
+      {scoredNothing ? (
+        <Callout
+          tone="warning"
+          title="only execution and infrastructure were checked"
+        >
+          This run retained no assessments, so nothing about the deliverable or
+          its structure was scored. The outcome below reports that the run
+          completed, not that it produced the right thing.
+        </Callout>
+      ) : null}
       <PrimaryMetricBoard run={run} standalone />
 
       <section aria-labelledby={`${safeId(run.key)}-outcome`}>
@@ -906,23 +900,15 @@ function AssessmentDetailContent({
             Outcome boundaries
           </h4>
         </div>
-        <div className="grid gap-2 sm:grid-cols-3">
-          <StatusCard
-            label="Objective system"
-            value={run.systemStatus}
-            caption="Deterministic gates, execution, and infrastructure."
-          />
-          <StatusCard
-            label="Advisory AI"
-            value={aiLabel}
-            caption="Separate qualitative conclusion; never overrides the system."
-          />
-          <StatusCard
-            label="Effective harness"
-            value={run.effectiveStatus}
-            caption="Canonical final status exposed by the result contract."
-          />
-        </div>
+        {/* Audit ED-21: three tinted cards read as three findings. They are one
+            derivation, and the execution page states it the same way now. */}
+        <OutcomeDerivation
+          rows={[
+            { role: 'system', value: run.systemStatus },
+            { role: 'advisory', value: aiLabel },
+            { role: 'effective', value: run.effectiveStatus },
+          ]}
+        />
       </section>
 
       <FinalAiCard run={run} />
