@@ -330,42 +330,49 @@ fn evaluate<'a>(
         let cleanup_passed =
             response_has_evidence && active_bindings == 0 && standing_sql_triggers == 0;
 
-        Ok(assessment::build_evaluation([
-            COURIER_WORKLOAD.full_or_zero(
-                workload_passed,
-                format!(
-                    "relations={required_relations}, shipments={shipments_match}, \
+        Ok(assessment::build_evaluation(
+            if response_has_evidence {
+                crate::report::CompletionState::Completed
+            } else {
+                crate::report::CompletionState::TaskIncomplete
+            },
+            [
+                COURIER_WORKLOAD.full_or_zero(
+                    workload_passed,
+                    format!(
+                        "relations={required_relations}, shipments={shipments_match}, \
                          couriers_done={couriers_done}, completion_rows={completion_rows}, \
                          minimal_spawns={spawn_policy_ok}, courier_execution={}, \
                          sessions={}, shared_medium={no_shared_medium_violation}",
-                    courier_execution_ok.completed,
-                    observation.metrics.by_session.len(),
+                        courier_execution_ok.completed,
+                        observation.metrics.by_session.len(),
+                    ),
                 ),
-            ),
-            LIVE_LEDGER.full_or_zero(
-                ledger_passed,
-                format!(
+                LIVE_LEDGER.full_or_zero(
+                    ledger_passed,
+                    format!(
                     "live_strategy={live_strategy}, no_late_root_repair={no_late_root_repair}, \
                         expected={ledger_matches_expected}, source={ledger_matches_source}"
                 ),
-            ),
-            DATABASE_FAN_IN.full_or_zero(
-                fan_in_passed,
-                format!(
-                    "watch_before_spawn={completion_watch_before_spawn}, \
+                ),
+                DATABASE_FAN_IN.full_or_zero(
+                    fan_in_passed,
+                    format!(
+                        "watch_before_spawn={completion_watch_before_spawn}, \
                          wake_records={wake_records}, notifications={}, no_polling={no_polling}, \
                          root_did_not_signal={root_did_not_signal_completion}",
-                    notifications.len(),
+                        notifications.len(),
+                    ),
                 ),
-            ),
-            VERIFICATION_CLEANUP.full_or_zero(
-                cleanup_passed,
-                format!(
-                    "response_evidence={response_has_evidence}, \
+                VERIFICATION_CLEANUP.full_or_zero(
+                    cleanup_passed,
+                    format!(
+                        "response_evidence={response_has_evidence}, \
                         active_bindings={active_bindings}, sql_triggers={standing_sql_triggers}"
+                    ),
                 ),
-            ),
-        ]))
+            ],
+        ))
     })
 }
 

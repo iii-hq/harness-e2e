@@ -24,6 +24,10 @@ use crate::durable::{
 use crate::fault::{
     ExpectedTerminalOutcome, FaultEvaluation, FaultJournal, FaultPlan, FaultProfile,
 };
+use crate::journal::{
+    ExecutionJournal, ExecutionJournalEventKind, ExecutionJournalHeader, JournalProgress,
+    JournalTerminalState, EXECUTION_JOURNAL_SCHEMA,
+};
 use crate::judge::JudgeConfig;
 use crate::longitudinal::{self, ComparisonPolicy, ComparisonResponse};
 use crate::markdown::{
@@ -150,6 +154,8 @@ pub struct ExecutionRecord {
     pub run_contract_sha256: Option<String>,
     pub lane_budget: LaneBudget,
     pub transitions: Vec<PhaseTransition>,
+    #[serde(default)]
+    pub journal_progress: JournalProgress,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub active_attempt: Option<ActiveAttempt>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -254,6 +260,7 @@ pub struct StatusResponse {
     pub error: String,
     pub updated_at: String,
     pub transitions: Vec<PhaseTransition>,
+    pub journal_progress: JournalProgress,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -897,6 +904,22 @@ impl ControlPlane {
         }
 
         let now = now();
+        let journal = ExecutionJournal::initialize(
+            &self.inner.output_root.join(&execution_id),
+            &ExecutionJournalHeader {
+                schema: EXECUTION_JOURNAL_SCHEMA.into(),
+                execution_id: execution_id.clone(),
+                request_sha256: request_sha256.clone(),
+                result_contract_sha256: crate::report::RESULT_CONTRACT_SHA256.into(),
+                scoring_profile_sha256: crate::report::SCORING_PROFILE_SHA256.into(),
+                created_at: now.clone(),
+                request: serde_json::to_value(&request).context("encode journal request")?,
+                runner: serde_json::to_value(RunnerIdentity::runtime())
+                    .context("encode journal runner identity")?,
+            },
+        )?;
+        let journal_progress =
+            journal.append(now.clone(), ExecutionJournalEventKind::ExecutionAdmitted)?;
         let record = ExecutionRecord {
             execution_id: execution_id.clone(),
             idempotency_key: request.idempotency_key.clone(),
@@ -912,6 +935,7 @@ impl ControlPlane {
                 at: now,
                 reason: "request accepted for admission".into(),
             }],
+            journal_progress,
             active_attempt: None,
             resume_state_path: None,
             resume_state_sha256: None,
@@ -1090,6 +1114,18 @@ impl ControlPlane {
 
     async fn apply_event(&self, execution_id: &str, event: &SuiteEvent) -> Result<()> {
         match event {
+            SuiteEvent::SlotInventoryCommitted { slots } => {
+                let progress = self.append_journal_event(
+                    execution_id,
+                    ExecutionJournalEventKind::SlotInventoryCommitted {
+                        slots: slots.clone(),
+                    },
+                )?;
+                self.update_record(execution_id, |record| {
+                    record.journal_progress = progress;
+                })
+                .await
+            }
             SuiteEvent::Phase(phase) => {
                 self.transition(execution_id, (*phase).into(), "suite checkpoint")
                     .await
@@ -1101,6 +1137,15 @@ impl ControlPlane {
                 session_id,
                 resume_state_path,
             } => {
+                let progress = self.append_journal_event(
+                    execution_id,
+                    ExecutionJournalEventKind::AttemptStarted {
+                        scenario_id: scenario_id.as_str().to_string(),
+                        run_id: run_id.clone(),
+                        attempt_id: attempt_id.clone(),
+                        session_id: session_id.clone(),
+                    },
+                )?;
                 self.update_record(execution_id, |record| {
                     record.active_attempt = Some(ActiveAttempt {
                         scenario_id: scenario_id.clone(),
@@ -1112,6 +1157,7 @@ impl ControlPlane {
                     });
                     record.resume_state_path = resume_state_path.clone();
                     record.resume_state_sha256 = None;
+                    record.journal_progress = progress;
                 })
                 .await
             }
@@ -1119,6 +1165,13 @@ impl ControlPlane {
                 attempt_id,
                 state_sha256,
             } => {
+                let progress = self.append_journal_event(
+                    execution_id,
+                    ExecutionJournalEventKind::AttemptCheckpointed {
+                        attempt_id: attempt_id.clone(),
+                        state_sha256: state_sha256.clone(),
+                    },
+                )?;
                 self.update_record(execution_id, |record| {
                     if let Some(active) = record
                         .active_attempt
@@ -1128,10 +1181,17 @@ impl ControlPlane {
                         active.resume_state_sha256 = Some(state_sha256.clone());
                     }
                     record.resume_state_sha256 = Some(state_sha256.clone());
+                    record.journal_progress = progress;
                 })
                 .await
             }
             SuiteEvent::AttemptFinished { attempt_id } => {
+                let progress = self.append_journal_event(
+                    execution_id,
+                    ExecutionJournalEventKind::AttemptFinished {
+                        attempt_id: attempt_id.clone(),
+                    },
+                )?;
                 self.update_record(execution_id, |record| {
                     if record
                         .active_attempt
@@ -1141,6 +1201,56 @@ impl ControlPlane {
                     {
                         record.active_attempt = None;
                     }
+                    record.journal_progress = progress;
+                })
+                .await
+            }
+            SuiteEvent::SubjectObservationCommitted {
+                slot_id,
+                attempt_id,
+                artifact,
+            } => {
+                let progress = self.append_journal_event(
+                    execution_id,
+                    ExecutionJournalEventKind::SubjectObservationCommitted {
+                        slot_id: slot_id.clone(),
+                        attempt_id: attempt_id.clone(),
+                        artifact: artifact.clone(),
+                    },
+                )?;
+                self.update_record(execution_id, |record| {
+                    record.journal_progress = progress;
+                })
+                .await
+            }
+            SuiteEvent::RunCommitted {
+                slot_id,
+                run_id,
+                artifact,
+            } => {
+                let progress = self.append_journal_event(
+                    execution_id,
+                    ExecutionJournalEventKind::RunCommitted {
+                        slot_id: slot_id.clone(),
+                        run_id: run_id.clone(),
+                        artifact: artifact.clone(),
+                    },
+                )?;
+                self.update_record(execution_id, |record| {
+                    record.journal_progress = progress;
+                })
+                .await
+            }
+            SuiteEvent::SlotDeferred { slot_id, reason } => {
+                let progress = self.append_journal_event(
+                    execution_id,
+                    ExecutionJournalEventKind::SlotDeferred {
+                        slot_id: slot_id.clone(),
+                        reason: reason.clone(),
+                    },
+                )?;
+                self.update_record(execution_id, |record| {
+                    record.journal_progress = progress;
                 })
                 .await
             }
@@ -1340,42 +1450,73 @@ impl ControlPlane {
         for mut record in records {
             let execution_id = record.execution_id.clone();
             if !record.phase.terminal() {
-                let adaptive_resume = record
-                    .active_attempt
-                    .as_ref()
-                    .and_then(|active| self.adaptive_restore_attempt(&record, active));
-                if let Some(adaptive_resume) = adaptive_resume {
-                    record.error.clear();
-                    record.phase = ExecutionPhase::Admitted;
+                let journal = match self.initialize_or_open_journal(&record) {
+                    Ok(journal) => journal,
+                    Err(error) => {
+                        record.error = format!(
+                            "execution journal could not be opened; manual reconciliation required: {error:#}"
+                        );
+                        record.phase = ExecutionPhase::NeedsReconciliation;
+                        record.active_attempt = None;
+                        record.updated_at = now();
+                        self.persist_record(record).await?;
+                        continue;
+                    }
+                };
+                record.journal_progress = match journal.replay() {
+                    Ok(progress) => progress,
+                    Err(error) => {
+                        record.error = format!(
+                            "execution journal is invalid; manual reconciliation required: {error:#}"
+                        );
+                        record.phase = ExecutionPhase::NeedsReconciliation;
+                        record.active_attempt = None;
+                        record.updated_at = now();
+                        self.persist_record(record).await?;
+                        continue;
+                    }
+                };
+                if let Some(terminal_state) = record.journal_progress.terminal_state.clone() {
+                    record.phase = execution_phase_from_journal(terminal_state);
+                    record.error = record
+                        .journal_progress
+                        .terminal_reason
+                        .clone()
+                        .unwrap_or_default();
+                    record.active_attempt = None;
                     record.updated_at = now();
-                    record.transitions.push(PhaseTransition {
-                        phase: ExecutionPhase::Admitted,
-                        at: record.updated_at.clone(),
-                        reason: "restart recovery re-enqueued the trusted adaptive attempt".into(),
-                    });
-                    let request = record.request.clone();
                     self.persist_record(record).await?;
-                    self.spawn_execution(execution_id, request, Some(adaptive_resume))
-                        .await;
                     continue;
                 }
                 if let Some(active) = record.active_attempt.take() {
                     self.compensate_attempt(&active).await;
                 }
-                record.cancel_requested = true;
                 record.error =
                     "worker restarted during execution; active work was compensated".into();
-                record.phase = ExecutionPhase::Cancelled;
+                record.phase = ExecutionPhase::NeedsReconciliation;
                 record.updated_at = now();
+                record.journal_progress = journal.append(
+                    record.updated_at.clone(),
+                    ExecutionJournalEventKind::ExecutionStopped {
+                        reason: record.error.clone(),
+                    },
+                )?;
+                record.journal_progress = journal.append(
+                    record.updated_at.clone(),
+                    ExecutionJournalEventKind::ExecutionFinalized {
+                        state: JournalTerminalState::NeedsReconciliation,
+                        reason: record.error.clone(),
+                    },
+                )?;
                 record.transitions.push(PhaseTransition {
-                    phase: ExecutionPhase::Cancelled,
+                    phase: ExecutionPhase::NeedsReconciliation,
                     at: record.updated_at.clone(),
-                    reason: "restart recovery compensated the active attempt".into(),
+                    reason: "restart recovery stopped without resuming subject work".into(),
                 });
                 if record.request.run_contract.is_some() {
                     let observation = terminal_observation(
                         &record,
-                        ExecutionPhase::Cancelled,
+                        ExecutionPhase::NeedsReconciliation,
                         &record.error,
                         record.report.as_ref(),
                         record.manifest.as_ref(),
@@ -1411,56 +1552,6 @@ impl ControlPlane {
             }
         }
         Ok(())
-    }
-
-    fn adaptive_restore_attempt(
-        &self,
-        record: &ExecutionRecord,
-        active: &ActiveAttempt,
-    ) -> Option<AdaptiveResumeAttempt> {
-        let scenario_id = active.scenario_id.built_in()?;
-        if record.cancel_requested
-            || active.scenario_id.execution_kind()
-                != crate::scenarios::ScenarioExecutionKind::AdaptiveFlow
-            || active.run_id.is_empty()
-            || record.request.runs != 1
-            || record.request.technical_retries != 0
-            || !record.request.rotating_seeds.is_empty()
-            || record.request.scenarios.as_slice() != [active.scenario_id.clone()]
-        {
-            return None;
-        }
-        let expected = self
-            .inner
-            .output_root
-            .join(".workflow-state")
-            .join("workflow-resume")
-            .join(&record.execution_id)
-            .join(&active.run_id)
-            .join(&active.attempt_id)
-            .join("state-v1.json");
-        if active.resume_state_path.as_deref() != Some(expected.to_string_lossy().as_ref()) {
-            return None;
-        }
-        let planner_state = self
-            .inner
-            .output_root
-            .join(".workflow-state")
-            .join("adaptive-plans")
-            .join(&record.execution_id)
-            .join(&active.run_id)
-            .join(&active.attempt_id)
-            .join("plans-v1.json");
-        if expected.is_file() && !planner_state.is_file() {
-            return None;
-        }
-        Some(AdaptiveResumeAttempt {
-            scenario_id,
-            run_id: active.run_id.clone(),
-            attempt_id: active.attempt_id.clone(),
-            resume_existing: expected.is_file(),
-            restore_planner: planner_state.is_file(),
-        })
     }
 
     async fn cleanup_active_attempt(&self, execution_id: &str) {
@@ -1510,6 +1601,21 @@ impl ControlPlane {
         result_path: Option<String>,
     ) -> Result<()> {
         let current = self.record(execution_id).await?;
+        let journal_progress = self.append_journal_event(
+            execution_id,
+            ExecutionJournalEventKind::ExecutionFinalized {
+                state: match phase {
+                    ExecutionPhase::Completed => JournalTerminalState::Completed,
+                    ExecutionPhase::Cancelled => JournalTerminalState::Cancelled,
+                    ExecutionPhase::NeedsReconciliation => {
+                        JournalTerminalState::NeedsReconciliation
+                    }
+                    ExecutionPhase::Unsupported => JournalTerminalState::Unsupported,
+                    _ => JournalTerminalState::Failed,
+                },
+                reason: error.clone(),
+            },
+        )?;
         let (observation, observation_artifact) = if current.request.run_contract.is_some() {
             let observation = terminal_observation(
                 &current,
@@ -1535,6 +1641,7 @@ impl ControlPlane {
             record.observation = observation;
             record.observation_artifact = observation_artifact;
             record.active_attempt = None;
+            record.journal_progress = journal_progress;
             record.transitions.push(PhaseTransition {
                 phase,
                 at: now(),
@@ -1551,6 +1658,13 @@ impl ControlPlane {
         reason: &str,
     ) -> Result<()> {
         let reason = reason.to_string();
+        let progress = self.append_journal_event(
+            execution_id,
+            ExecutionJournalEventKind::PhaseChanged {
+                phase: format!("{phase:?}").to_ascii_lowercase(),
+                reason: reason.clone(),
+            },
+        )?;
         self.update_record(execution_id, move |record| {
             if !record.phase.terminal() {
                 record.phase = phase;
@@ -1559,6 +1673,7 @@ impl ControlPlane {
                     at: now(),
                     reason,
                 });
+                record.journal_progress = progress;
             }
         })
         .await
@@ -1603,6 +1718,46 @@ impl ControlPlane {
             .insert(record.execution_id.clone(), record.clone());
         let _ = self.inner.updates.send(ControlPlaneUpdate { record });
         Ok(())
+    }
+
+    fn execution_journal(&self, execution_id: &str) -> Result<ExecutionJournal> {
+        ExecutionJournal::open(&self.inner.output_root.join(execution_id))
+    }
+
+    fn initialize_or_open_journal(&self, record: &ExecutionRecord) -> Result<ExecutionJournal> {
+        let root = self.inner.output_root.join(&record.execution_id);
+        let header = root.join("journal/header.json");
+        if header.exists() {
+            ExecutionJournal::open(&root)
+        } else {
+            ExecutionJournal::initialize(
+                &root,
+                &ExecutionJournalHeader {
+                    schema: EXECUTION_JOURNAL_SCHEMA.into(),
+                    execution_id: record.execution_id.clone(),
+                    request_sha256: if record.request_sha256.is_empty() {
+                        artifact::sha256_value(&record.request)?
+                    } else {
+                        record.request_sha256.clone()
+                    },
+                    result_contract_sha256: crate::report::RESULT_CONTRACT_SHA256.into(),
+                    scoring_profile_sha256: crate::report::SCORING_PROFILE_SHA256.into(),
+                    created_at: record.requested_at.clone(),
+                    request: serde_json::to_value(&record.request)
+                        .context("encode recovered journal request")?,
+                    runner: serde_json::to_value(RunnerIdentity::runtime())
+                        .context("encode recovered journal runner identity")?,
+                },
+            )
+        }
+    }
+
+    fn append_journal_event(
+        &self,
+        execution_id: &str,
+        kind: ExecutionJournalEventKind,
+    ) -> Result<JournalProgress> {
+        self.execution_journal(execution_id)?.append(now(), kind)
     }
 
     async fn trigger(&self, function_id: &str, payload: Value) -> Result<Value> {
@@ -1734,13 +1889,6 @@ fn validate_run_request(request: &RunRequest) -> Result<LaneBudget> {
     } else {
         unique_scenarios(&request.scenarios)
     };
-    if request.technical_retries > 0
-        && scenarios
-            .iter()
-            .any(|scenario| !scenario.execution_kind().replay_safe())
-    {
-        bail!("non-replayable scenarios require technical_retries=0");
-    }
     let base_seed_count = 1_usize;
     let unique_rotating_seeds = request
         .rotating_seeds
@@ -1750,7 +1898,14 @@ fn validate_run_request(request: &RunRequest) -> Result<LaneBudget> {
         .collect::<std::collections::HashSet<_>>()
         .len();
     let seed_count = base_seed_count.saturating_add(unique_rotating_seeds);
-    let case_count = scenarios.len().saturating_mul(seed_count);
+    let case_count = scenarios.iter().fold(0_usize, |total, scenario| {
+        let scenario_seed_count = if scenario.canonical_seed_only() {
+            1
+        } else {
+            seed_count
+        };
+        total.saturating_add(scenario_seed_count)
+    });
     if case_count > usize::from(budget.max_cases) {
         bail!(
             "lane '{}' permits at most {} cases, got {}",
@@ -1787,14 +1942,27 @@ fn validate_run_request(request: &RunRequest) -> Result<LaneBudget> {
                 },
                 |built_in| Ok(u64::from(built_in.spec("budget").execution.max_turns)),
             )?;
+            let physical_attempts = if scenario.execution_kind().replay_safe() {
+                u64::from(request.technical_retries) + 1
+            } else {
+                1
+            };
+            let scenario_seed_count = if scenario.canonical_seed_only() {
+                1_u64
+            } else {
+                seed_count.try_into().unwrap_or(u64::MAX)
+            };
             total
-                .checked_add(max_turns)
+                .checked_add(
+                    max_turns
+                        .checked_mul(physical_attempts)
+                        .and_then(|turns| turns.checked_mul(scenario_seed_count))
+                        .context("declared turn budget overflow")?,
+                )
                 .context("declared turn budget overflow")
         })?;
     let declared_turns = turns_per_run
-        .checked_mul(seed_count.try_into().unwrap_or(u64::MAX))
-        .and_then(|turns| turns.checked_mul(u64::from(request.runs)))
-        .and_then(|turns| turns.checked_mul(u64::from(request.technical_retries) + 1))
+        .checked_mul(u64::from(request.runs))
         .context("declared turn budget overflow")?;
     if declared_turns > budget.max_declared_turns {
         bail!(
@@ -2584,6 +2752,17 @@ fn status_response(record: &ExecutionRecord) -> StatusResponse {
         error: record.error.clone(),
         updated_at: record.updated_at.clone(),
         transitions: record.transitions.clone(),
+        journal_progress: record.journal_progress.clone(),
+    }
+}
+
+fn execution_phase_from_journal(state: JournalTerminalState) -> ExecutionPhase {
+    match state {
+        JournalTerminalState::Completed => ExecutionPhase::Completed,
+        JournalTerminalState::Failed => ExecutionPhase::Failed,
+        JournalTerminalState::Cancelled => ExecutionPhase::Cancelled,
+        JournalTerminalState::NeedsReconciliation => ExecutionPhase::NeedsReconciliation,
+        JournalTerminalState::Unsupported => ExecutionPhase::Unsupported,
     }
 }
 
@@ -3002,6 +3181,7 @@ mod tests {
             request,
             lane_budget: lane_budget("pr-gate"),
             transitions: Vec::new(),
+            journal_progress: JournalProgress::default(),
             active_attempt: None,
             resume_state_path: None,
             resume_state_sha256: None,
@@ -3110,6 +3290,7 @@ mod tests {
     #[test]
     fn lane_budget_counts_rotating_seeds_as_distinct_cases() {
         let mut request = request();
+        request.scenarios = vec![ScenarioId::MechanicalReaction.into()];
         request.rotating_seeds = (100..108).collect();
 
         assert_eq!(
@@ -3119,7 +3300,7 @@ mod tests {
     }
 
     #[test]
-    fn security_review_is_admitted_only_without_technical_retries() {
+    fn security_review_is_admitted_and_ignores_ineligible_retries() {
         let mut request = request();
         request.lane = "local".into();
         request.scenarios = vec![ScenarioId::SecurityReview.into()];
@@ -3127,10 +3308,8 @@ mod tests {
         validate_run_request(&request).expect("security review should use the control plane");
 
         request.technical_retries = 1;
-        assert_eq!(
-            validate_run_request(&request).unwrap_err().to_string(),
-            "non-replayable scenarios require technical_retries=0"
-        );
+        validate_run_request(&request)
+            .expect("per-slot scheduler decides whether a retry is replay-safe");
     }
 
     #[test]

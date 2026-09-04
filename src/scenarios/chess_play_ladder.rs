@@ -464,30 +464,37 @@ fn evaluate_game(
         ),
     )?;
 
-    Ok(assessment::build_evaluation([
-        ZERO_ILLEGAL_MOVES.full_or_zero(
-            zero_illegal,
-            format!(
-                "illegal_attempts={}, function_call_errors={function_errors}",
-                snapshot.illegal_attempts
+    Ok(assessment::build_evaluation(
+        if completed {
+            crate::report::CompletionState::Completed
+        } else {
+            crate::report::CompletionState::TaskIncomplete
+        },
+        [
+            ZERO_ILLEGAL_MOVES.full_or_zero(
+                zero_illegal,
+                format!(
+                    "illegal_attempts={}, function_call_errors={function_errors}",
+                    snapshot.illegal_attempts
+                ),
             ),
-        ),
-        GAME_COMPLETED.full_or_zero(
-            completed,
-            format!(
-                "finished={}, result={:?}, plies={plies} (cap {MOVE_CAP})",
-                snapshot.finished, snapshot.result
+            GAME_COMPLETED.full_or_zero(
+                completed,
+                format!(
+                    "finished={}, result={:?}, plies={plies} (cap {MOVE_CAP})",
+                    snapshot.finished, snapshot.result
+                ),
             ),
-        ),
-        RESULT_REPORTED.full_or_zero(
-            reported,
-            format!(
-                "final response must contain `{RESULT_MARKER} {}`",
-                snapshot.result.as_deref().unwrap_or("<result>")
+            RESULT_REPORTED.full_or_zero(
+                reported,
+                format!(
+                    "final response must contain `{RESULT_MARKER} {}`",
+                    snapshot.result.as_deref().unwrap_or("<result>")
+                ),
             ),
-        ),
-        strength_award,
-    ]))
+            strength_award,
+        ],
+    ))
 }
 
 fn case_depth(case: &ScenarioCase) -> u32 {

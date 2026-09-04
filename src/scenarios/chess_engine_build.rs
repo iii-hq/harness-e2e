@@ -683,30 +683,33 @@ fn evaluate<'a>(
     Box::pin(async move {
         let engine = engine_path(&workspace_root(run_id));
         let battery = run_full_battery(&engine).await?;
-        Ok(assessment::build_evaluation([
-            PERFT_EXACT.full_or_zero(
-                battery.perft_exact(),
-                reason_over("perft_exact", battery.perft.iter(), |report| {
-                    report.value_ok
-                }),
-            ),
-            LEGAL_MOVES_CORRECT.full_or_zero(
-                battery.legal_moves_correct(),
-                reason_over("legal_moves_correct", battery.legal.iter(), |report| {
-                    report.value_ok
-                }),
-            ),
-            INTERFACE_CONTRACT.full_or_zero(
-                battery.interface_contract(),
-                reason_over("interface_contract", battery.all(), |report| {
-                    report.interface_ok
-                }),
-            ),
-            BUILD_DISCIPLINE.full_or_zero(
-                battery.build_discipline(),
-                reason_over("build_discipline", battery.all(), |report| report.finished),
-            ),
-        ]))
+        Ok(assessment::build_evaluation(
+            crate::report::CompletionState::Completed,
+            [
+                PERFT_EXACT.full_or_zero(
+                    battery.perft_exact(),
+                    reason_over("perft_exact", battery.perft.iter(), |report| {
+                        report.value_ok
+                    }),
+                ),
+                LEGAL_MOVES_CORRECT.full_or_zero(
+                    battery.legal_moves_correct(),
+                    reason_over("legal_moves_correct", battery.legal.iter(), |report| {
+                        report.value_ok
+                    }),
+                ),
+                INTERFACE_CONTRACT.full_or_zero(
+                    battery.interface_contract(),
+                    reason_over("interface_contract", battery.all(), |report| {
+                        report.interface_ok
+                    }),
+                ),
+                BUILD_DISCIPLINE.full_or_zero(
+                    battery.build_discipline(),
+                    reason_over("build_discipline", battery.all(), |report| report.finished),
+                ),
+            ],
+        ))
     })
 }
 

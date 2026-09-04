@@ -10,6 +10,7 @@ pub mod dashboard;
 pub mod durable;
 pub mod fault;
 pub mod identity;
+pub mod journal;
 pub mod judge;
 pub mod longitudinal;
 pub mod manifest;

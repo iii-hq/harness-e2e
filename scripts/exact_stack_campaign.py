@@ -643,19 +643,36 @@ def compose_evidence(
     }
 
 
-def package_bundle(root: Path, contract: dict[str, Any], workflow: dict[str, Any]) -> dict[str, Any]:
-    files = []
+def _package_files(root: Path) -> list[dict[str, Any]]:
+    """Hash regular files without ever traversing or dereferencing symlinks."""
+    if root.is_symlink():
+        raise ValueError(f"artifact root must not be a symlink: {root}")
+    resolved_root = root.resolve(strict=True)
+    files: list[dict[str, Any]] = []
     for path in sorted(root.rglob("*")):
+        relative = path.relative_to(root).as_posix()
+        if path.is_symlink():
+            raise ValueError(f"artifact tree contains symlink: {relative}")
         if not path.is_file() or path.name == "bundle-manifest.json":
             continue
+        resolved = path.resolve(strict=True)
+        try:
+            resolved.relative_to(resolved_root)
+        except ValueError as error:
+            raise ValueError(f"artifact escapes root: {relative}") from error
         payload = path.read_bytes()
         files.append(
             {
-                "path": path.relative_to(root).as_posix(),
+                "path": relative,
                 "sha256": f"sha256:{hashlib.sha256(payload).hexdigest()}",
                 "size_bytes": len(payload),
             }
         )
+    return files
+
+
+def package_bundle(root: Path, contract: dict[str, Any], workflow: dict[str, Any]) -> dict[str, Any]:
+    files = _package_files(root)
     return {
         "schema": "e2e-observation-bundle/v1",
         "campaign_id": contract["campaign_id"],

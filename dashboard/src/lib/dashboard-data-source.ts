@@ -226,6 +226,47 @@ export type DashboardRunCost = JsonObject & {
   total_usd?: number | null
 }
 
+export type CompletionState = 'completed' | 'task_incomplete' | 'undetermined'
+export type TechnicalState = 'valid' | 'technical_invalid'
+export type EvaluatorAvailability =
+  | 'not_required'
+  | 'pending'
+  | 'available'
+  | 'unavailable'
+
+export type DashboardEvaluatorStates = {
+  completion: EvaluatorAvailability
+  quality: EvaluatorAvailability
+  final_advisory: EvaluatorAvailability
+}
+
+export type DashboardScenarioAggregate = JsonObject & {
+  planned_runs: number
+  observed_runs: number
+  deferred_runs: number
+  completed_runs: number
+  task_incomplete_runs: number
+  undetermined_runs: number
+  technical_valid_runs: number
+  technical_invalid_runs: number
+  execution_reliability: number | null
+  completion_evidence_coverage: number | null
+  completion_rate: number | null
+  objective_scored_runs: number
+  objective_median_score: number | null
+  objective_score_coverage: number | null
+  quality_scored_completed_runs: number
+  quality_score_completed: number | null
+  quality_coverage: number | null
+  total_tokens_consumed: number | null
+  judge_tokens_consumed: number | null
+  tokens_completed_p50: number | null
+  failed_attempt_tokens: number | null
+  tokens_per_completion: number | null
+  hard_gate_failures: number
+  technical_failures: number
+}
+
 export type DashboardRunEfficiency = JsonObject & {
   wall_time_ms?: number | null
   total_tokens?: number | null
@@ -300,7 +341,12 @@ export type DashboardRunProjection = JsonObject & {
   session_id?: string
   assessment: RunAssessmentContract
   transcript?: JsonObject
-  status?: string
+  status: string
+  completion: CompletionState
+  technical: TechnicalState
+  evaluators: DashboardEvaluatorStates
+  objective_score: number | null
+  quality_score_completed: number | null
   score?: number | null
   validation_score?: number | null
   instruction_adherence?:
@@ -344,11 +390,21 @@ export type DashboardRetryAttemptProjection = JsonObject & {
   attempt_id: string
   attempt_number: number
   session_id: string
-  status?: string
+  status: string
+  completion: CompletionState
+  technical: TechnicalState
+  evaluators: DashboardEvaluatorStates
+  objective_score: number | null
+  quality_score_completed: number | null
   wall_time_ms?: number | null
 }
 
 export type DashboardReportProjection = JsonObject & {
+  schema_version: 3
+  result_contract_sha256: string
+  scoring_profile_sha256: string
+  report_state: 'complete' | 'partial'
+  objective_outcome: 'passed' | 'failed' | 'inconclusive'
   assessment_availability?: 'available' | 'unavailable'
   assessment_contract: AssessmentContract
   assessment_summary: AssessmentSummary
@@ -363,7 +419,7 @@ export type DashboardReportProjection = JsonObject & {
       median_score?: number | null
       hard_gate_failures?: number
       technical_failures?: number
-      aggregate?: JsonObject
+      aggregate: DashboardScenarioAggregate
       runs: DashboardRunProjection[]
     }
   >

@@ -8,6 +8,7 @@ from pathlib import Path
 ROOT = Path(__file__).parents[2]
 SCRIPT = ROOT / "scripts" / "exact_stack_campaign.py"
 RUNNER_SCRIPT = ROOT / "scripts" / "run_exact_stack_group.sh"
+WORKFLOW = ROOT / ".github" / "workflows" / "exact-stack-e2e.yml"
 SPEC = importlib.util.spec_from_file_location("exact_stack_campaign", SCRIPT)
 assert SPEC and SPEC.loader
 MODULE = importlib.util.module_from_spec(SPEC)
@@ -128,6 +129,19 @@ class ReleaseControlCampaignTest(unittest.TestCase):
     def test_common_runner_restricts_secret_files(self):
         runner = RUNNER_SCRIPT.read_text()
         self.assertIn("chmod 600", runner)
+
+    def test_common_runner_preserves_native_data_and_awaits_compose_add(self):
+        runner = RUNNER_SCRIPT.read_text()
+        self.assertIn('e2e_data="$artifact_dir/native"', runner)
+        self.assertIn("await_compose_add", runner)
+        self.assertIn("compose::operation", runner)
+        self.assertNotIn('e2e_data="$run_root/e2e-data"', runner)
+
+    def test_finalizer_uploads_root_evidence_even_after_aggregate_failure(self):
+        workflow = WORKFLOW.read_text()
+        root_upload = workflow.split("- name: Upload root observation bundle", 1)[1]
+        self.assertIn("if: always()", root_upload.split("- name:", 1)[0])
+        self.assertIn("group observation artifact was not available", workflow)
 
     def test_a_field_this_version_does_not_know_is_carried_not_rejected(self):
         value = campaign_contract()
@@ -378,6 +392,33 @@ class ReleaseControlCampaignTest(unittest.TestCase):
             manifest = MODULE.package_bundle(root, campaign_contract(), {"run_id": 7, "run_attempt": 1})
         self.assertEqual(manifest["terminal_payload"], "results.json")
         self.assertRegex(manifest["files"][0]["sha256"], r"^sha256:[0-9a-f]{64}$")
+
+    def test_package_preserves_native_journal_without_terminal_results(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            event = root / "native/executions/run-1/journal/events/00000001.json"
+            event.parent.mkdir(parents=True)
+            event.write_text('{"event":"RunCommitted"}\n')
+            manifest = MODULE.package_bundle(
+                root, campaign_contract(), {"run_id": 7, "run_attempt": 1}
+            )
+        self.assertIsNone(manifest["terminal_payload"])
+        self.assertIn(
+            "native/executions/run-1/journal/events/00000001.json",
+            [entry["path"] for entry in manifest["files"]],
+        )
+
+    def test_package_rejects_symlinks(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            outside = root.parent / f"{root.name}-outside.json"
+            outside.write_text("{}\n")
+            try:
+                (root / "linked.json").symlink_to(outside)
+                with self.assertRaisesRegex(ValueError, "contains symlink"):
+                    MODULE.package_bundle(root, campaign_contract(), {})
+            finally:
+                outside.unlink(missing_ok=True)
 
 
 if __name__ == "__main__":

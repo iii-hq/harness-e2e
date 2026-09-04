@@ -25,7 +25,7 @@ use crate::control::{
     ScenariosListResponse,
 };
 use crate::markdown::ScenarioKey;
-use crate::report::{E2eReport, RunStatus};
+use crate::report::E2eReport;
 
 const MAX_LOG_TAIL_BYTES: u64 = 256 * 1024;
 const MAX_LOG_CHUNK_BYTES: u64 = 64 * 1024;
@@ -504,7 +504,7 @@ impl Controller {
             .flatten();
         let complete = status == JobStatus::Completed
             && report.as_ref().is_some_and(|report| {
-                !report_has_infrastructure_failure(report) && report_matches_plan(report, &plan)
+                report_is_baseline_comparable(report) && report_matches_plan(report, &plan)
             });
         if complete {
             match context.role {
@@ -676,12 +676,19 @@ fn control_error(error: anyhow::Error) -> ApiError {
     }
 }
 
-fn report_has_infrastructure_failure(report: &E2eReport) -> bool {
-    report
+fn report_is_baseline_comparable(report: &E2eReport) -> bool {
+    let planned = report
         .scenarios
         .iter()
-        .flat_map(|scenario| scenario.runs.iter())
-        .any(|run| run.status == RunStatus::InfrastructureError)
+        .map(|scenario| u64::from(scenario.aggregate.planned_runs))
+        .sum::<u64>();
+    planned > 0
+        && report.report_state == crate::report::ReportState::Complete
+        && report.scenarios.iter().all(|scenario| {
+            scenario.aggregate.observed_runs == scenario.aggregate.planned_runs
+                && scenario.aggregate.undetermined_runs == 0
+                && scenario.aggregate.technical_invalid_runs == 0
+        })
 }
 
 fn report_matches_plan(report: &E2eReport, plan: &LocalPlan) -> bool {
@@ -704,7 +711,8 @@ fn report_matches_plan(report: &E2eReport, plan: &LocalPlan) -> bool {
                 scenario.scenario_id == item.scenario_id
                     && scenario.scenario_version == item.scenario_version
                     && scenario.case_id == item.case_id
-                    && scenario.runs.len() == plan.runs as usize
+                    && scenario.aggregate.planned_runs == plan.runs
+                    && scenario.aggregate.observed_runs == plan.runs
                     && scenario.case.as_ref().is_some_and(|case| {
                         case.seed == item.seed
                             && case.inputs_sha256 == item.inputs_sha256
@@ -778,13 +786,6 @@ pub(super) fn validate_request(request: &mut RunRequest) -> std::result::Result<
         && request.judge_model.is_empty()
     {
         return Err("Markdown scenarios require an explicit judge model and provider".into());
-    }
-    if request.technical_retries > 0
-        && selected
-            .iter()
-            .any(|scenario| !scenario.execution_kind().replay_safe())
-    {
-        return Err("non-replayable scenarios require technical_retries=0".into());
     }
     Ok(())
 }

@@ -469,6 +469,14 @@
         }
       }
     },
+    "ContaminationScope": {
+      "type": "string",
+      "enum": [
+        "none",
+        "case",
+        "execution"
+      ]
+    },
     "DimensionReport": {
       "type": "object",
       "required": [
@@ -559,6 +567,18 @@
         "phase"
       ],
       "properties": {
+        "code": {
+          "default": "",
+          "type": "string"
+        },
+        "contamination": {
+          "default": "none",
+          "allOf": [
+            {
+              "$ref": "#/definitions/ContaminationScope"
+            }
+          ]
+        },
         "domain": {
           "$ref": "#/definitions/FailureDomain"
         },
@@ -567,8 +587,23 @@
         },
         "phase": {
           "$ref": "#/definitions/FailurePhase"
+        },
+        "retry_scope": {
+          "default": "none",
+          "allOf": [
+            {
+              "$ref": "#/definitions/RetryScope"
+            }
+          ]
         }
       }
+    },
+    "RetryScope": {
+      "type": "string",
+      "enum": [
+        "none",
+        "same_slot"
+      ]
     },
     "SystemStatus": {
       "type": "string",

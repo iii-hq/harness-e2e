@@ -30,7 +30,10 @@ const STORAGE_DELETE: &str = "storage::deleteObject";
 const DATABASE_EXECUTE: &str = "database::execute";
 const DATABASE_QUERY: &str = "database::query";
 const CHUNK_BYTES: usize = 6 * 1024 * 1024;
-const HISTORY_TABLE: &str = "harness_e2e_history";
+// Stage-1 Results v3 records are intentionally isolated from legacy history.
+// The old `harness_e2e_history` table remains untouched and readable by older
+// deployments; this binary writes only the strict result cohort.
+const HISTORY_TABLE: &str = "harness_e2e_result_history";
 
 #[derive(
     Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, JsonSchema,
@@ -166,6 +169,9 @@ pub struct HistoryRecord {
     pub subject_provider: String,
     pub subject_model: String,
     pub passed: bool,
+    pub result_contract_sha256: String,
+    pub scoring_profile_sha256: String,
+    pub baseline_comparable: bool,
     pub case_count: u32,
     pub stack_mode: String,
     pub subject_revision: String,
@@ -563,14 +569,24 @@ impl DurableHistory {
             bail!("history list limit must be between 1 and 500");
         }
         self.ensure_history_table().await?;
+        let (sql, params) = match request.lane.as_ref() {
+            Some(lane) => (
+                format!("SELECT record_json, record_sha256 FROM {HISTORY_TABLE} WHERE deleted_at IS NULL AND lane = ? ORDER BY occurred_at DESC LIMIT ?"),
+                json!([lane, request.limit]),
+            ),
+            None => (
+                format!("SELECT record_json, record_sha256 FROM {HISTORY_TABLE} WHERE deleted_at IS NULL ORDER BY occurred_at DESC LIMIT ?"),
+                json!([request.limit]),
+            ),
+        };
         let value = self
             .caller
             .call(
                 DATABASE_QUERY,
                 json!({
                     "db": self.config.database,
-                    "sql": format!("SELECT record_json, record_sha256 FROM {HISTORY_TABLE} WHERE deleted_at IS NULL ORDER BY occurred_at DESC LIMIT ?"),
-                    "params": [request.limit],
+                    "sql": sql,
+                    "params": params,
                 }),
             )
             .await?;
@@ -581,28 +597,31 @@ impl DurableHistory {
             .unwrap_or_default();
         let mut records = Vec::new();
         for row in rows {
-            let encoded = row
-                .get("record_json")
-                .and_then(Value::as_str)
-                .context("history row is missing record_json")?;
-            let expected = row
-                .get("record_sha256")
-                .and_then(Value::as_str)
-                .context("history row is missing record_sha256")?;
-            let record: HistoryRecord = serde_json::from_str(encoded)?;
-            validate_history_record(&record)?;
-            if sha256_bytes(encoded.as_bytes()) != expected {
-                bail!(
-                    "history record {} failed hash verification",
-                    record.ingestion_id
-                );
-            }
-            if request
-                .lane
-                .as_ref()
-                .is_none_or(|lane| lane == &record.lane)
-            {
-                records.push(record);
+            let parsed = (|| -> Result<HistoryRecord> {
+                let encoded = row
+                    .get("record_json")
+                    .and_then(Value::as_str)
+                    .context("history row is missing record_json")?;
+                let expected = row
+                    .get("record_sha256")
+                    .and_then(Value::as_str)
+                    .context("history row is missing record_sha256")?;
+                let record: HistoryRecord = serde_json::from_str(encoded)?;
+                validate_history_record(&record)?;
+                if sha256_bytes(encoded.as_bytes()) != expected {
+                    bail!(
+                        "history record {} failed hash verification",
+                        record.ingestion_id
+                    );
+                }
+                Ok(record)
+            })();
+            match parsed {
+                Ok(record) => records.push(record),
+                Err(error) => tracing::warn!(
+                    error = %format!("{error:#}"),
+                    "skipping one corrupt E2E history row"
+                ),
             }
         }
         Ok(HistoryListResponse { records })
@@ -805,7 +824,7 @@ impl DurableHistory {
                 DATABASE_EXECUTE,
                 json!({
                     "db": self.config.database,
-                    "sql": format!("INSERT INTO {HISTORY_TABLE} (ingestion_id, identity_sha256, execution_id, lane, occurred_at, expires_at, record_json, record_sha256, deleted_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL)"),
+                    "sql": format!("INSERT INTO {HISTORY_TABLE} (ingestion_id, identity_sha256, execution_id, lane, occurred_at, expires_at, result_contract_sha256, scoring_profile_sha256, baseline_comparable, record_json, record_sha256, deleted_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)"),
                     "params": [
                         record.ingestion_id,
                         record.identity_sha256,
@@ -813,6 +832,9 @@ impl DurableHistory {
                         record.lane,
                         record.occurred_at,
                         record.archive.expires_at,
+                        record.result_contract_sha256,
+                        record.scoring_profile_sha256,
+                        record.baseline_comparable,
                         encoded,
                         digest,
                     ],
@@ -871,7 +893,7 @@ impl DurableHistory {
                 DATABASE_EXECUTE,
                 json!({
                     "db": self.config.database,
-                    "sql": format!("CREATE TABLE IF NOT EXISTS {HISTORY_TABLE} (ingestion_id TEXT PRIMARY KEY, identity_sha256 TEXT NOT NULL, execution_id TEXT NOT NULL, lane TEXT NOT NULL, occurred_at TEXT NOT NULL, expires_at TEXT NULL, record_json TEXT NOT NULL, record_sha256 TEXT NOT NULL, deleted_at TEXT NULL)"),
+                    "sql": format!("CREATE TABLE IF NOT EXISTS {HISTORY_TABLE} (ingestion_id TEXT PRIMARY KEY, identity_sha256 TEXT NOT NULL, execution_id TEXT NOT NULL, lane TEXT NOT NULL, occurred_at TEXT NOT NULL, expires_at TEXT NULL, result_contract_sha256 TEXT NOT NULL, scoring_profile_sha256 TEXT NOT NULL, baseline_comparable INTEGER NOT NULL, record_json TEXT NOT NULL, record_sha256 TEXT NOT NULL, deleted_at TEXT NULL)"),
                     "params": [],
                 }),
             )
@@ -889,6 +911,9 @@ struct ArchiveBasis {
     subject_provider: String,
     subject_model: String,
     passed: bool,
+    result_contract_sha256: String,
+    scoring_profile_sha256: String,
+    baseline_comparable: bool,
     case_count: u32,
     stack_mode: String,
     subject_revision: String,
@@ -961,6 +986,13 @@ fn archive_basis(
             subject_provider: observation.provenance.subject_provider.clone(),
             subject_model: observation.provenance.subject_model.clone(),
             passed: observation.outcome.passed.unwrap_or(false),
+            result_contract_sha256: report
+                .map(|report| report.result_contract_sha256.clone())
+                .unwrap_or_else(|| crate::report::RESULT_CONTRACT_SHA256.into()),
+            scoring_profile_sha256: report
+                .map(|report| report.scoring_profile_sha256.clone())
+                .unwrap_or_else(|| crate::report::SCORING_PROFILE_SHA256.into()),
+            baseline_comparable: report.is_some_and(baseline_comparable),
             case_count: u32::try_from(
                 observation
                     .samples
@@ -996,12 +1028,34 @@ fn archive_basis(
         subject_provider: report.subject.provider.clone(),
         subject_model: report.subject.model.clone(),
         passed: report.passed,
+        result_contract_sha256: report.result_contract_sha256.clone(),
+        scoring_profile_sha256: report.scoring_profile_sha256.clone(),
+        baseline_comparable: baseline_comparable(report),
         case_count: u32::try_from(report.scenarios.len()).unwrap_or(u32::MAX),
         stack_mode,
         subject_revision,
         e2e_repository: system.e2e_repository.clone(),
         e2e_revision: system.e2e_revision.clone(),
     })
+}
+
+fn baseline_comparable(report: &E2eReport) -> bool {
+    let planned = report
+        .scenarios
+        .iter()
+        .map(|scenario| u64::from(scenario.aggregate.planned_runs))
+        .sum::<u64>();
+    let observed = report
+        .scenarios
+        .iter()
+        .map(|scenario| u64::from(scenario.aggregate.observed_runs))
+        .sum::<u64>();
+    planned > 0
+        && observed == planned
+        && report.scenarios.iter().all(|scenario| {
+            scenario.aggregate.undetermined_runs == 0
+                && scenario.aggregate.technical_invalid_runs == 0
+        })
 }
 
 fn archive_id(
@@ -1037,6 +1091,9 @@ fn history_record(basis: &ArchiveBasis, archive: DurableArchiveReference) -> Res
         subject_provider: basis.subject_provider.clone(),
         subject_model: basis.subject_model.clone(),
         passed: basis.passed,
+        result_contract_sha256: basis.result_contract_sha256.clone(),
+        scoring_profile_sha256: basis.scoring_profile_sha256.clone(),
+        baseline_comparable: basis.baseline_comparable,
         case_count: basis.case_count,
         stack_mode: basis.stack_mode.clone(),
         subject_revision: basis.subject_revision.clone(),
@@ -1054,6 +1111,23 @@ fn validate_history_record(record: &HistoryRecord) -> Result<()> {
         || record.identity_sha256 != record.archive.identity_sha256
     {
         bail!("history identity differs from its archive reference");
+    }
+    for (name, value) in [
+        (
+            "result_contract_sha256",
+            record.result_contract_sha256.as_str(),
+        ),
+        (
+            "scoring_profile_sha256",
+            record.scoring_profile_sha256.as_str(),
+        ),
+    ] {
+        if value.len() != 71
+            || !value.starts_with("sha256:")
+            || !value[7..].bytes().all(|byte| byte.is_ascii_hexdigit())
+        {
+            bail!("history {name} is not a SHA-256 fingerprint");
+        }
     }
     DateTime::parse_from_rfc3339(&record.occurred_at)
         .context("history occurred_at must be RFC 3339")?;

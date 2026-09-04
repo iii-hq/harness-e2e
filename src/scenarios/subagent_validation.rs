@@ -220,26 +220,33 @@ fn evaluate<'a>(
             orchestration_outcome(ordered, child_nudges);
         let child_goal_passed = goal && rows == EXPECTED_ROWS;
 
-        Ok(assessment::build_evaluation([
-            CHILD_GOAL.gate_and_points(
-                child_goal_passed,
-                child_goal_points(goal, rows),
-                format!(
+        Ok(assessment::build_evaluation(
+            if reported {
+                crate::report::CompletionState::Completed
+            } else {
+                crate::report::CompletionState::TaskIncomplete
+            },
+            [
+                CHILD_GOAL.gate_and_points(
+                    child_goal_passed,
+                    child_goal_points(goal, rows),
+                    format!(
                     "rows={rows}, verdict={verdict}, need both above {THRESHOLD}; full marks at \
                      exactly {EXPECTED_ROWS} rows"
                 ),
-            )?,
-            ORCHESTRATION_DISCIPLINE.gate_and_points(
-                orchestration_passed,
-                orchestration_points,
-                format!(
+                )?,
+                ORCHESTRATION_DISCIPLINE.gate_and_points(
+                    orchestration_passed,
+                    orchestration_points,
+                    format!(
                     "validator@{validator_index:?} wake@{wake_index:?} spawn@{spawn_index:?} — \
                      validator and wake must precede the spawn; observed {child_nudges} nudge(s) \
                      in the child transcript"
                 ),
-            )?,
-            WAKE_REPORT.full_or_zero(reported, "expected the exact report line"),
-        ]))
+                )?,
+                WAKE_REPORT.full_or_zero(reported, "expected the exact report line"),
+            ],
+        ))
     })
 }
 

@@ -314,45 +314,52 @@ fn evaluate<'a>(
         let report_verified = report_is_verified(&observation.response);
         let no_errors = observation.metrics.totals.function_call_errors == 0;
 
-        Ok(assessment::build_evaluation([
-            BALANCED_LEDGER.full_or_zero(
-                balanced,
-                format!(
-                    "accumulator_rows={}, accumulator={}, audit_rows={}, \
+        Ok(assessment::build_evaluation(
+            if report_verified {
+                crate::report::CompletionState::Completed
+            } else {
+                crate::report::CompletionState::TaskIncomplete
+            },
+            [
+                BALANCED_LEDGER.full_or_zero(
+                    balanced,
+                    format!(
+                        "accumulator_rows={}, accumulator={}, audit_rows={}, \
                      sequences_exact={sequences_exact}",
-                    snapshot.accumulator_rows,
-                    snapshot.accumulator,
-                    snapshot.audit_rows(),
+                        snapshot.accumulator_rows,
+                        snapshot.accumulator,
+                        snapshot.audit_rows(),
+                    ),
                 ),
-            ),
-            CONTENDED_WRITES.full_or_zero(
-                contended,
-                format!(
-                    "children_in_tree={}/{WRITERS}, contended_children={}, \
+                CONTENDED_WRITES.full_or_zero(
+                    contended,
+                    format!(
+                        "children_in_tree={}/{WRITERS}, contended_children={}, \
                      no_extra_sessions={}, root_clean={root_clean}",
-                    audit.children_in_tree, audit.contended_children, audit.no_extra_sessions,
+                        audit.children_in_tree, audit.contended_children, audit.no_extra_sessions,
+                    ),
                 ),
-            ),
-            QUORUM_FREE_FAN_IN.full_or_zero(
-                fan_in,
-                format!(
-                    "registrations={}, armed_before_spawns={armed_before_spawns}, spawns={}, \
+                QUORUM_FREE_FAN_IN.full_or_zero(
+                    fan_in,
+                    format!(
+                        "registrations={}, armed_before_spawns={armed_before_spawns}, spawns={}, \
                      single_response_spawns={single_response_spawns}, completion_records={}, \
                      barrier_woke={barrier_woke}",
-                    registrations.len(),
-                    spawns.len(),
-                    completion_records.len(),
+                        registrations.len(),
+                        spawns.len(),
+                        completion_records.len(),
+                    ),
                 ),
-            ),
-            VERIFIED_REPORT.full_or_zero(
-                report_verified && no_errors,
-                format!(
-                    "report_verified={report_verified}, response_chars={}, function_errors={}",
-                    observation.response.chars().count(),
-                    observation.metrics.totals.function_call_errors,
+                VERIFIED_REPORT.full_or_zero(
+                    report_verified && no_errors,
+                    format!(
+                        "report_verified={report_verified}, response_chars={}, function_errors={}",
+                        observation.response.chars().count(),
+                        observation.metrics.totals.function_call_errors,
+                    ),
                 ),
-            ),
-        ]))
+            ],
+        ))
     })
 }
 

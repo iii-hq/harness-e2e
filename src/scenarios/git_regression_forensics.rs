@@ -681,22 +681,29 @@ fn evaluate<'a>(
         let culprit = snapshot.culprit_passed();
         let evidence = snapshot.evidence_passed();
         let efficiency_points = efficiency_points(&snapshot, observation);
-        Ok(assessment::build_evaluation([
-            REPOSITORY_ACQUIRED.full_or_zero(acquisition, acquisition_reason(&snapshot)),
-            ENDPOINTS_REPRODUCED.full_or_zero(endpoints, endpoint_reason(&snapshot)),
-            FIRST_BAD_IDENTIFIED.full_or_zero(culprit, culprit_reason(&snapshot)),
-            EVIDENCE_GROUNDED.full_or_zero(evidence, evidence_reason(&snapshot)),
-            SEARCH_EFFICIENCY.award(
-                efficiency_points,
-                format!(
+        Ok(assessment::build_evaluation(
+            if evidence {
+                crate::report::CompletionState::Completed
+            } else {
+                crate::report::CompletionState::TaskIncomplete
+            },
+            [
+                REPOSITORY_ACQUIRED.full_or_zero(acquisition, acquisition_reason(&snapshot)),
+                ENDPOINTS_REPRODUCED.full_or_zero(endpoints, endpoint_reason(&snapshot)),
+                FIRST_BAD_IDENTIFIED.full_or_zero(culprit, culprit_reason(&snapshot)),
+                EVIDENCE_GROUNDED.full_or_zero(evidence, evidence_reason(&snapshot)),
+                SEARCH_EFFICIENCY.award(
+                    efficiency_points,
+                    format!(
                     "unique search revisions={}, ideal={}, duplicates={}, function-call errors={}",
                     snapshot.trace_metrics.unique_search_revisions,
                     snapshot.trace_metrics.ideal_search_revisions,
                     snapshot.trace_metrics.duplicate_probe_runs,
                     observation.metrics.totals.function_call_errors,
                 ),
-            )?,
-        ]))
+                )?,
+            ],
+        ))
     })
 }
 

@@ -215,30 +215,37 @@ fn evaluate_simple<'a>(
 ) -> EvaluationFuture<'a> {
     Box::pin(async move {
         let bundle = captured_bundle(observation)?;
-        Ok(assessment::build_evaluation([
-            SIMPLE_ASSESSMENTS[0].full_or_zero(
-                bundle.probe_passed("compose_valid"),
-                probe_reason(&bundle, "compose_valid"),
-            ),
-            SIMPLE_ASSESSMENTS[1].full_or_zero(
-                bundle.probe_passed("worker_live"),
-                probe_reason(&bundle, "worker_live"),
-            ),
-            SIMPLE_ASSESSMENTS[2].full_or_zero(
-                bundle.probe_passed("function_surface"),
-                probe_reason(&bundle, "function_surface"),
-            ),
-            SIMPLE_ASSESSMENTS[3].full_or_zero(
-                bundle.probe_passed("todo_crud_isolated"),
-                probe_reason(&bundle, "todo_crud_isolated"),
-            ),
-            SIMPLE_ASSESSMENTS[4].full_or_zero(
-                bundle.probe_passed("todo_invalid_contracts"),
-                probe_reason(&bundle, "todo_invalid_contracts"),
-            ),
-            SIMPLE_ASSESSMENTS[5]
-                .full_or_zero(bundle.evidence_complete(), evidence_reason(&bundle)),
-        ]))
+        Ok(assessment::build_evaluation(
+            if bundle.subject.candidate_sha256.is_some() {
+                crate::report::CompletionState::Completed
+            } else {
+                crate::report::CompletionState::TaskIncomplete
+            },
+            [
+                SIMPLE_ASSESSMENTS[0].full_or_zero(
+                    bundle.probe_passed("compose_valid"),
+                    probe_reason(&bundle, "compose_valid"),
+                ),
+                SIMPLE_ASSESSMENTS[1].full_or_zero(
+                    bundle.probe_passed("worker_live"),
+                    probe_reason(&bundle, "worker_live"),
+                ),
+                SIMPLE_ASSESSMENTS[2].full_or_zero(
+                    bundle.probe_passed("function_surface"),
+                    probe_reason(&bundle, "function_surface"),
+                ),
+                SIMPLE_ASSESSMENTS[3].full_or_zero(
+                    bundle.probe_passed("todo_crud_isolated"),
+                    probe_reason(&bundle, "todo_crud_isolated"),
+                ),
+                SIMPLE_ASSESSMENTS[4].full_or_zero(
+                    bundle.probe_passed("todo_invalid_contracts"),
+                    probe_reason(&bundle, "todo_invalid_contracts"),
+                ),
+                SIMPLE_ASSESSMENTS[5]
+                    .full_or_zero(bundle.evidence_complete(), evidence_reason(&bundle)),
+            ],
+        ))
     })
 }
 

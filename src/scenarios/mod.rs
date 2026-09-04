@@ -11,7 +11,7 @@ use serde_json::Value;
 
 use crate::assessment::{AssessmentKind, AssessmentPolicy, AssessmentSource};
 use crate::context::E2eContext;
-use crate::report::HardGateReport;
+use crate::report::{CompletionState, HardGateReport};
 use crate::wire::SessionMetricsResponse;
 
 mod assessment;
@@ -346,6 +346,10 @@ pub struct ScenarioObservation {
 }
 
 pub struct ObjectiveEvaluation {
+    /// Whether the subject reached the task's terminal state. This is
+    /// deliberately independent from hard gates and score: a completed task
+    /// may still be objectively wrong or low quality.
+    pub completion: CompletionState,
     pub hard_gates: Vec<HardGateReport>,
     pub awards: Vec<CriterionAward>,
 }

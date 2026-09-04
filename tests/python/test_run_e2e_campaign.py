@@ -15,6 +15,7 @@ sys.path.insert(0, str(ROOT / "scripts"))
 from run_e2e_campaign import (
     CampaignError,
     FAULT_PROFILE_WEIGHT,
+    RESULT_CONTRACT_SHA256,
     SCENARIO_DIFFICULTY_WEIGHT,
     aggregate_existing_campaign,
     markdown_group,
@@ -28,6 +29,7 @@ from run_e2e_campaign import (
     parse_campaign,
     score_campaign,
     validate_campaign_bundle,
+    _canonical_sha256,
 )
 
 
@@ -461,7 +463,7 @@ class CampaignRunnerTests(unittest.TestCase):
                 run_process=fake_run,
             )
         self.assertEqual(len(calls), 2, "advisory mode must execute every group")
-        self.assertFalse(summary["objective_passed"])
+        self.assertIsNone(summary["objective_passed"])
         self.assertEqual(summary["process_exit_code"], 0)
         self.assertEqual([group["exit_code"] for group in summary["groups"]], [9, 0])
         for _, environment, check in calls:
@@ -490,7 +492,7 @@ class CampaignRunnerTests(unittest.TestCase):
                 run_process=fake_run,
             )
         self.assertEqual(len(calls), 2)
-        self.assertFalse(summary["objective_passed"])
+        self.assertIsNone(summary["objective_passed"])
         self.assertEqual(summary["process_exit_code"], 1)
 
     def test_dry_run_builds_every_command_without_starting_a_process(self):
@@ -560,7 +562,7 @@ class CampaignRunnerTests(unittest.TestCase):
                 / "campaign-summary.json"
             )
             summary = json.loads(summary_path.read_text(encoding="utf-8"))
-            self.assertFalse(summary["objective_passed"])
+            self.assertIsNone(summary["objective_passed"])
             self.assertEqual(summary["process_exit_code"], 0)
             self.assertEqual(
                 [group["exit_code"] for group in summary["groups"]], [7, 0]
@@ -604,6 +606,98 @@ class CampaignRunnerTests(unittest.TestCase):
             results.write_text('{"native":false}\n', encoding="utf-8")
             with self.assertRaisesRegex(CampaignError, "digest mismatch"):
                 validate_campaign_bundle(bundle, root=root)
+
+    def test_bundle_preserves_native_journal_without_results(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = pathlib.Path(directory)
+            group_output = root / "groups" / "core"
+            event = group_output / "native" / "executions" / "run-1" / "journal" / "events" / "00000001.json"
+            event.parent.mkdir(parents=True)
+            event.write_text('{"event":"RunCommitted"}\n', encoding="utf-8")
+            summary_path = root / "campaign-summary.json"
+            summary = {
+                "campaign_id": "test-campaign",
+                "execution_id": "execution-1",
+                "lane": "daily",
+                "groups": [
+                    {
+                        "group_id": "core",
+                        "execution_kind": "harness_turn",
+                        "status": "failed",
+                        "difficulty_weight": 4,
+                        "objective_score": None,
+                        "score_availability": "unavailable",
+                        "output": str(group_output),
+                    }
+                ],
+            }
+            summary_path.write_text(json.dumps(summary), encoding="utf-8")
+            campaign_path = root / "campaign.json"
+            campaign_path.write_text(json.dumps(manifest()), encoding="utf-8")
+            bundle = build_campaign_bundle(
+                summary,
+                summary_path=summary_path,
+                manifest_path=campaign_path,
+                scoring_profile_path=ROOT / "config/scoring/difficulty-weighted-v1.json",
+            )
+
+            paths = [artifact["path"] for artifact in bundle["groups"][0]["artifacts"]]
+            self.assertIn(
+                "groups/core/native/executions/run-1/journal/events/00000001.json",
+                paths,
+            )
+            validate_campaign_bundle(bundle, root=root)
+
+    def test_campaign_bundle_rejects_symlink_artifacts(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = pathlib.Path(directory)
+            group_output = root / "groups" / "core"
+            group_output.mkdir(parents=True)
+            outside = root / "outside.json"
+            outside.write_text("{}\n", encoding="utf-8")
+            (group_output / "linked.json").symlink_to(outside)
+            summary_path = root / "campaign-summary.json"
+            summary_path.write_text("{}\n", encoding="utf-8")
+            campaign_path = root / "campaign.json"
+            campaign_path.write_text(json.dumps(manifest()), encoding="utf-8")
+            summary = {
+                "campaign_id": "test-campaign",
+                "execution_id": "execution-1",
+                "lane": "daily",
+                "groups": [{"group_id": "core", "output": str(group_output)}],
+            }
+            with self.assertRaisesRegex(CampaignError, "contains symlink"):
+                build_campaign_bundle(
+                    summary,
+                    summary_path=summary_path,
+                    manifest_path=campaign_path,
+                    scoring_profile_path=ROOT / "config/scoring/difficulty-weighted-v1.json",
+                )
+
+    def test_legacy_results_v3_shape_is_rejected(self):
+        campaign = parse_campaign(
+            manifest(
+                [
+                    {
+                        "id": "core",
+                        "execution_kind": "harness_turn",
+                        "runs": 1,
+                        "technical_retries": 0,
+                        "difficulty_weight": 4,
+                        "scenarios": ["tool_contract_recovery"],
+                    }
+                ]
+            )
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            output = pathlib.Path(directory) / "core"
+            output.mkdir()
+            (output / "results.json").write_text(
+                json.dumps({"schema_version": 3, "passed": True, "scenarios": []}),
+                encoding="utf-8",
+            )
+            with self.assertRaisesRegex(CampaignError, "result_contract_sha256"):
+                score_campaign(campaign, [{"group_id": "core", "output": str(output)}])
 
     def test_compact_aggregate_keeps_only_bundle_references(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -658,17 +752,43 @@ class CampaignRunnerTests(unittest.TestCase):
             ]:
                 output = root / group_id
                 output.mkdir()
+                scoring_profile = json.loads(
+                    (ROOT / "config/scoring/difficulty-weighted-v1.json").read_text()
+                )
                 (output / "results.json").write_text(
                     json.dumps(
                         {
-                            "passed": True,
+                            "schema_version": 3,
+                            "result_contract_sha256": RESULT_CONTRACT_SHA256,
+                            "scoring_profile_sha256": _canonical_sha256(scoring_profile),
+                            "report_state": "complete",
+                            "objective_outcome": "passed",
                             "scenarios": [
                                 {
                                     "case": {"complexity": {"tier": tier}},
                                     "aggregate": {
-                                        "median_score": median,
-                                        "scored_runs": 1,
-                                        "technical_failures": 0,
+                                        "planned_runs": 1,
+                                        "observed_runs": 1,
+                                        "deferred_runs": 0,
+                                        "completed_runs": 1,
+                                        "task_incomplete_runs": 0,
+                                        "undetermined_runs": 0,
+                                        "technical_valid_runs": 1,
+                                        "technical_invalid_runs": 0,
+                                        "execution_reliability": 1.0,
+                                        "completion_evidence_coverage": 1.0,
+                                        "completion_rate": 1.0,
+                                        "objective_scored_runs": 1,
+                                        "objective_median_score": median,
+                                        "objective_score_coverage": 1.0,
+                                        "quality_scored_completed_runs": 1,
+                                        "quality_score_completed": median,
+                                        "quality_coverage": 1.0,
+                                        "total_tokens_consumed": 1200,
+                                        "judge_tokens_consumed": 100,
+                                        "tokens_completed_p50": 1200.0,
+                                        "failed_attempt_tokens": 0,
+                                        "tokens_per_completion": 1200.0,
                                     },
                                 }
                             ],
@@ -679,7 +799,7 @@ class CampaignRunnerTests(unittest.TestCase):
                 groups.append({"group_id": group_id, "output": str(output)})
             scoring = score_campaign(campaign, groups)
         self.assertAlmostEqual(scoring["harness_score"], (80 * 4 + 100 * 2) / 6)
-        self.assertEqual(scoring["coverage"], 1.0)
+        self.assertEqual(scoring["objective_score_coverage"], 1.0)
         self.assertEqual(scoring["score_availability"], "complete")
 
     def test_fault_infrastructure_is_null_not_zero_and_reduces_coverage(self):
@@ -713,7 +833,7 @@ class CampaignRunnerTests(unittest.TestCase):
                 campaign, [{"group_id": "fault", "output": str(output)}]
             )
         self.assertEqual(scoring["harness_score"], 100.0)
-        self.assertAlmostEqual(scoring["coverage"], 1 / 3)
+        self.assertAlmostEqual(scoring["objective_score_coverage"], 1 / 3)
         self.assertFalse(scoring["infrastructure_valid"])
         self.assertEqual(scoring["score_availability"], "partial")
 

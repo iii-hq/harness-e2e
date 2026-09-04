@@ -149,10 +149,30 @@ pub(super) fn load_runs(runs_dir: &Path) -> Result<Vec<StoredRun>> {
         if !entry.file_type()?.is_dir() {
             continue;
         }
-        let Some(run) = read_stored_run(&entry.path())? else {
-            continue;
-        };
-        runs.push(run);
+        match read_stored_run(&entry.path()) {
+            Ok(Some(run)) => runs.push(run),
+            Ok(None) => {}
+            Err(error) => tracing::warn!(
+                path = %entry.path().display(),
+                error = %format!("{error:#}"),
+                "ignoring an unsupported or corrupt E2E execution"
+            ),
+        }
     }
     Ok(runs)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn listing_isolates_a_corrupt_execution_directory() {
+        let root = tempfile::tempdir().expect("temporary directory");
+        let corrupt = root.path().join("corrupt-execution");
+        fs::create_dir_all(&corrupt).expect("execution directory");
+        fs::write(corrupt.join("results.json"), b"not-json\n").expect("corrupt result fixture");
+
+        assert!(load_runs(root.path()).unwrap().is_empty());
+    }
 }

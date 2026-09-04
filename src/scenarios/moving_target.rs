@@ -391,7 +391,7 @@ fn submission_audit(run_id: &str, transcript: &Value) -> SubmissionAudit {
             phases.push(classify(run_id, &manifest));
         } else if call.function_id == brief_function {
             brief_calls += 1;
-        } else if !call.function_id.starts_with("engine::functions::") {
+        } else if !common::is_contract_discovery(&call.function_id) {
             // Function discovery is legitimate machinery, not indiscipline —
             // the same exemption every leaf-discipline audit in this registry
             // grants.
@@ -429,37 +429,44 @@ fn evaluate<'a>(
             .map(|phase| phase.label())
             .collect::<Vec<_>>()
             .join(",");
-        Ok(assessment::build_evaluation([
-            ADAPTED_DELIVERABLE.full_or_zero(
-                receipt_reported,
-                format!("final response must contain the exact receipt `{receipt}`"),
-            ),
-            REVISION_HONORED.full_or_zero(
-                revision_honored,
-                format!(
-                    "observed submission phases [{phase_trace}]; expected exactly one \
+        Ok(assessment::build_evaluation(
+            if receipt_reported {
+                crate::report::CompletionState::Completed
+            } else {
+                crate::report::CompletionState::TaskIncomplete
+            },
+            [
+                ADAPTED_DELIVERABLE.full_or_zero(
+                    receipt_reported,
+                    format!("final response must contain the exact receipt `{receipt}`"),
+                ),
+                REVISION_HONORED.full_or_zero(
+                    revision_honored,
+                    format!(
+                        "observed submission phases [{phase_trace}]; expected exactly one \
                      brief-conforming submission followed by exactly one \
                      revision-conforming submission"
+                    ),
                 ),
-            ),
-            BOUNDED_REWORK.full_or_zero(
-                bounded,
-                format!(
-                    "observed {} submit call(s), {} brief call(s), {} other call(s), and \
+                BOUNDED_REWORK.full_or_zero(
+                    bounded,
+                    format!(
+                        "observed {} submit call(s), {} brief call(s), {} other call(s), and \
                      {errors} function-call error(s); expected 2, 1, 0, and 0",
-                    audit.phases.len(),
-                    audit.brief_calls,
-                    audit.other_calls
+                        audit.phases.len(),
+                        audit.brief_calls,
+                        audit.other_calls
+                    ),
                 ),
-            ),
-            ADAPTATION_REPORT.full_or_zero(
-                report_ok,
-                format!(
+                ADAPTATION_REPORT.full_or_zero(
+                    report_ok,
+                    format!(
                     "receipt_reported={receipt_reported}, mentions_revision={mentions_revision}, \
                      observed {response_chars} character(s); limit {REPORT_BUDGET_CHARS}"
                 ),
-            ),
-        ]))
+                ),
+            ],
+        ))
     })
 }
 

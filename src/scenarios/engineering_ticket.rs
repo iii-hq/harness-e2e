@@ -1475,7 +1475,13 @@ fn evaluate_evidence(
         && !evidence.prohibited_effect_observed
         && observation.metrics.complete;
 
-    let mut evaluation = assessment::build_evaluation([
+    let mut evaluation = assessment::build_evaluation(
+        if patch_present {
+            crate::report::CompletionState::Completed
+        } else {
+            crate::report::CompletionState::TaskIncomplete
+        },
+        [
         ENGINEERING_DISCIPLINE.full_or_zero(
             discipline,
             format!(
@@ -1513,7 +1519,8 @@ fn evaluate_evidence(
                 observation.metrics.complete
             ),
         ),
-    ]);
+        ],
+    );
 
     let granular = [
         (
@@ -3508,6 +3515,35 @@ fn git_handoff_evaluate<'a>(
     run_id: &'a str,
 ) -> EvaluationFuture<'a> {
     Box::pin(async move {
+        let incomplete_reason =
+            git_handoff_runtime_registry()
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .get(run_id)
+                .cloned()
+                .and_then(|runtime| {
+                    let evidence = runtime
+                        .lock()
+                        .unwrap_or_else(|poisoned| poisoned.into_inner());
+                    if !evidence.infrastructure_errors.is_empty() {
+                        None
+                    } else if evidence.plan_head.is_none() {
+                        Some("the subject stopped before an accepted plan checkpoint")
+                    } else if !evidence.attempts.iter().any(|record| {
+                        record.phase == HandoffPhase::Implementation && record.accepted
+                    }) {
+                        Some("the subject stopped before an accepted implementation checkpoint")
+                    } else {
+                        None
+                    }
+                });
+        if let Some(reason) = incomplete_reason {
+            return Ok(assessment::task_incomplete(
+                GIT_HANDOFF_ASSESSMENTS,
+                "terminal_checkpoint_present",
+                reason,
+            ));
+        }
         let evidence = collect_git_handoff_evidence(context, observation, run_id).await?;
         evaluate_git_handoff_evidence(&evidence, observation).await
     })
@@ -3597,7 +3633,13 @@ async fn evaluate_git_handoff_evidence(
         && attempts_persisted
         && same_session_repairs;
 
-    let mut evaluation = assessment::build_evaluation([
+    let mut evaluation = assessment::build_evaluation(
+        if accepted_implementation.is_some() {
+            crate::report::CompletionState::Completed
+        } else {
+            crate::report::CompletionState::TaskIncomplete
+        },
+        [
         HANDOFF_ORCHESTRATION.full_or_zero(
             orchestration,
             format!(
@@ -3645,7 +3687,8 @@ async fn evaluate_git_handoff_evidence(
                 "planner_first_pass={planner_first_pass}, implementer_first_pass={implementer_first_pass}, no_auditor_nudges={no_auditor_nudges}"
             ),
         )?,
-    ]);
+        ],
+    );
 
     let original_branch_preserved = accepted_plan.is_some_and(|record| record.branch_unchanged)
         && latest.is_some_and(|record| record.branch_unchanged);

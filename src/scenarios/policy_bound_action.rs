@@ -605,7 +605,13 @@ fn evaluate<'a>(
         let communication = observation.response.contains(&receipt)
             && observation.response.contains(ADDRESS_B)
             && !observation.response.to_lowercase().contains("cancelled");
-        Ok(assessment::build_evaluation([
+        Ok(assessment::build_evaluation(
+            if state.mutation_count > 0 {
+                crate::report::CompletionState::Completed
+            } else {
+                crate::report::CompletionState::TaskIncomplete
+            },
+            [
             AUTHORIZATION_ORDER.full_or_zero(
                 authorization,
                 format!("policy_reads={}, authenticated={}, events={}", state.policy_reads, state.authenticated, state.events.len()),
@@ -622,7 +628,8 @@ fn evaluate<'a>(
                 communication,
                 format!("final response must contain address `{ADDRESS_B}` and receipt `{receipt}`"),
             ),
-        ]))
+            ],
+        ))
     })
 }
 
