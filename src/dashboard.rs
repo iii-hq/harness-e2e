@@ -420,6 +420,39 @@ mod tests {
     }
 
     #[test]
+    fn persistence_errors_and_effective_deadline_survive_dashboard_projections() {
+        let mut report = report();
+        report.slot_start_deadline_seconds = Some(3600);
+        report.record_persistence_error("run checkpoint acknowledgement failed".into());
+        let metadata = metadata();
+        for projection in [
+            execution_summary(&metadata, Some(&report)).unwrap(),
+            execution_detail_value_optional(&metadata, Some(&report)).unwrap(),
+        ] {
+            assert_eq!(projection["status"], "incomplete");
+            assert_eq!(projection["conclusion"], "failure");
+            assert_eq!(projection["execution"]["conclusion"], "failure");
+            assert_eq!(projection["baseline_comparable"], false);
+            assert_eq!(projection["slot_start_deadline_seconds"], 3600);
+            assert_eq!(projection["first_failure"]["kind"], "persistence");
+            assert_eq!(
+                projection["persistence_errors"],
+                json!(["run checkpoint acknowledgement failed"]),
+            );
+        }
+        let detail = execution_detail_value_optional(&metadata, Some(&report)).unwrap();
+        assert!(!detail["reports"].as_array().unwrap().is_empty());
+        assert_eq!(
+            detail["reports"][0]["report"]["slot_start_deadline_seconds"],
+            3600
+        );
+        assert_eq!(
+            detail["reports"][0]["report"]["persistence_errors"],
+            json!(["run checkpoint acknowledgement failed"]),
+        );
+    }
+
+    #[test]
     fn active_and_cancelled_runs_have_partial_details_without_a_report() {
         for (job_status, expected_status) in [
             (JobStatus::Running, "running"),

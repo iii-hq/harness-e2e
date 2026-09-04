@@ -1281,6 +1281,7 @@ mod tests {
             asset_redaction: Default::default(),
         };
         let scenario = E2eScenarioReport {
+            deferral_reason: None,
             scenario_id: "todo_worker_simple".into(),
             case_id: "case-1".into(),
             scenario_version: 1,
@@ -1344,7 +1345,9 @@ mod tests {
             runs: vec![run],
         };
         E2eReport {
-            schema_version: 2,
+            schema_version: crate::report::RESULTS_SCHEMA_VERSION,
+            persistence_errors: Vec::new(),
+            slot_start_deadline_seconds: None,
             result_contract_sha256: crate::report::RESULT_CONTRACT_SHA256.into(),
             scoring_profile_sha256: crate::report::SCORING_PROFILE_SHA256.into(),
             report_state: crate::report::ReportState::Complete,

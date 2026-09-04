@@ -4,6 +4,7 @@ import type {
   RunAssessmentContract,
 } from '@/lib/assessment-contract'
 import { getDashboardIiiClient } from '@/lib/iii-client'
+import type { RESULTS_SCHEMA_VERSION } from '@/lib/result-contract.generated'
 import type {
   EvaluatedVersionsResponse,
   TestCatalogRow,
@@ -204,6 +205,9 @@ export type DashboardExecutionSummary = JsonObject & {
   workflow_metrics?: DashboardWorkflowMetricSummary | null
   totals?: ExecutionTotals
   assessment_summary?: AssessmentSummary
+  persistence_errors?: string[]
+  slot_start_deadline_seconds?: number | null
+  baseline_comparable?: boolean
 }
 
 export type DashboardRunMetricTotals = JsonObject & {
@@ -400,7 +404,7 @@ export type DashboardRetryAttemptProjection = JsonObject & {
 }
 
 export type DashboardReportProjection = JsonObject & {
-  schema_version: 3
+  schema_version: typeof RESULTS_SCHEMA_VERSION
   result_contract_sha256: string
   scoring_profile_sha256: string
   report_state: 'complete' | 'partial'

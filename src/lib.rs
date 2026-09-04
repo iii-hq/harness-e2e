@@ -18,6 +18,7 @@ pub mod markdown;
 mod observe;
 pub mod redaction;
 pub mod report;
+pub mod result_contract;
 pub mod scenarios;
 pub mod schema;
 pub mod suite;

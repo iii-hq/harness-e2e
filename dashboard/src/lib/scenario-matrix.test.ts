@@ -1,17 +1,20 @@
 import { describe, expect, it } from 'vitest'
 import type { DashboardExecutionDetail } from '@/lib/dashboard-data-source'
 import {
+  RESULT_CONTRACT_SHA256,
+  RESULTS_SCHEMA_VERSION,
+  SCORING_PROFILE_SHA256,
+} from '@/lib/result-contract.generated'
+import {
   buildScenarioMatrix,
   detailForScenario,
   stepSignals,
 } from '@/lib/scenario-matrix'
 
 const resultContract = {
-  schema_version: 3 as const,
-  result_contract_sha256:
-    'sha256:5a6c38bca7168d0ff06a9bad8ea42e9d7afab0f25ccb2f8316ea85c9e85a7a03',
-  scoring_profile_sha256:
-    'sha256:11d3e03f9c898b9f3c1a2f696401ccd135d50b9cbec340a480f99327923d12d1',
+  schema_version: RESULTS_SCHEMA_VERSION,
+  result_contract_sha256: RESULT_CONTRACT_SHA256,
+  scoring_profile_sha256: SCORING_PROFILE_SHA256,
   report_state: 'complete' as const,
   objective_outcome: 'passed' as const,
 }
@@ -336,7 +339,7 @@ describe('scenario matrix presentation model', () => {
       expect.arrayContaining([
         expect.objectContaining({
           valid: true,
-          schemaVersion: 3,
+          schemaVersion: RESULTS_SCHEMA_VERSION,
           reportState: 'complete',
         }),
       ]),
@@ -382,7 +385,7 @@ describe('scenario matrix presentation model', () => {
     )
   })
 
-  it('does not infer a successful objective when required v3 fields are absent', () => {
+  it('does not infer a successful objective when required result fields are absent', () => {
     const detail = executionDetail()
     const report = detail.reports[0]?.report
     const scenario = report?.scenarios[0]
@@ -398,6 +401,37 @@ describe('scenario matrix presentation model', () => {
       status: 'unavailable',
       label: 'Unavailable',
     })
+  })
+
+  it('keeps legacy schema and unknown fingerprints unavailable for comparison', () => {
+    for (const [key, value] of [
+      ['schema_version', 3],
+      ['result_contract_sha256', `sha256:${'0'.repeat(64)}`],
+      ['scoring_profile_sha256', `sha256:${'0'.repeat(64)}`],
+    ] as const) {
+      const detail = executionDetail()
+      const report = detail.reports[0].report as unknown as Record<
+        string,
+        unknown
+      >
+      report[key] = value
+      const model = buildScenarioMatrix(detail)
+      expect(model.contracts[0]).toMatchObject({ valid: false })
+      expect(model.items[0].objective.status).toBe('unavailable')
+    }
+  })
+
+  it('shows the explicit deferral reason without inventing a physical run', () => {
+    const detail = executionDetail()
+    const scenario = detail.reports[2]?.report?.scenarios[0]
+    if (!scenario) throw new Error('expected deferred scenario fixture')
+    const projection = scenario as unknown as Record<string, unknown>
+    projection.deferral_reason = 'Scenario materialization failed'
+    const item = buildScenarioMatrix(detail).items[2]
+    expect(item.reason).toBe('Scenario materialization failed')
+    expect(item.runCount).toBe(0)
+    expect(item.runs).toEqual([])
+    expect(item.objective.status).toBe('inconclusive')
   })
 
   it('prioritizes usage and domain counters for each workflow step', () => {

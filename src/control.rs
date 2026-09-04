@@ -221,6 +221,9 @@ pub struct RunRequest {
     pub technical_retries: u8,
     #[serde(default = "default_progress_interval_seconds")]
     pub progress_interval_seconds: u64,
+    /// Soft scheduling budget, resolved before request hashing/admission.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub slot_start_deadline_seconds: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub run_contract: Option<ObservationRunContract>,
 }
@@ -858,6 +861,8 @@ impl ControlPlane {
     }
 
     pub async fn run(&self, mut request: RunRequest) -> Result<RunAccepted> {
+        request.slot_start_deadline_seconds =
+            crate::suite::resolve_slot_start_deadline(request.slot_start_deadline_seconds)?;
         request.local_markdown_scenarios = self
             .resolve_local_markdown_scenarios(&request.scenarios, request.run_contract.is_some())
             .await?;
@@ -1046,6 +1051,7 @@ impl ControlPlane {
             technical_retries: request.technical_retries,
             progress_interval: (request.progress_interval_seconds > 0)
                 .then(|| Duration::from_secs(request.progress_interval_seconds)),
+            slot_start_deadline_seconds: request.slot_start_deadline_seconds,
             control: Some(SuiteControl {
                 execution_id: execution_id.clone(),
                 lane: request.lane.clone(),
@@ -1062,14 +1068,18 @@ impl ControlPlane {
         let cancelled = *cancellation.borrow();
         let result = match outcome {
             Ok(outcome) => {
-                let reconciliation_error = outcome
-                    .report
-                    .scenarios
-                    .iter()
-                    .flat_map(|scenario| &scenario.runs)
-                    .flat_map(|run| &run.failures)
-                    .find(|failure| failure.message.starts_with("needs_reconciliation:"))
-                    .map(|failure| failure.message.clone());
+                let reconciliation_error = if !outcome.report.persistence_errors.is_empty() {
+                    Some(outcome.report.persistence_errors.join("; "))
+                } else {
+                    outcome
+                        .report
+                        .scenarios
+                        .iter()
+                        .flat_map(|scenario| &scenario.runs)
+                        .flat_map(|run| &run.failures)
+                        .find(|failure| failure.message.starts_with("needs_reconciliation:"))
+                        .map(|failure| failure.message.clone())
+                };
                 self.finish(
                     &execution_id,
                     if cancelled {
@@ -1082,10 +1092,10 @@ impl ControlPlane {
                     reconciliation_error.unwrap_or_default(),
                     Some(outcome.report),
                     Some(outcome.manifest),
-                    Some(relative_result_path(
-                        &self.inner.output_root,
-                        &outcome.report_path,
-                    )),
+                    outcome
+                        .report_path
+                        .as_deref()
+                        .map(|path| relative_result_path(&self.inner.output_root, path)),
                 )
                 .await
             }
@@ -1459,7 +1469,7 @@ impl ControlPlane {
                         record.phase = ExecutionPhase::NeedsReconciliation;
                         record.active_attempt = None;
                         record.updated_at = now();
-                        self.persist_record(record).await?;
+                        let _ = self.persist_terminal_record(record).await;
                         continue;
                     }
                 };
@@ -1472,7 +1482,7 @@ impl ControlPlane {
                         record.phase = ExecutionPhase::NeedsReconciliation;
                         record.active_attempt = None;
                         record.updated_at = now();
-                        self.persist_record(record).await?;
+                        let _ = self.persist_terminal_record(record).await;
                         continue;
                     }
                 };
@@ -1485,7 +1495,8 @@ impl ControlPlane {
                         .unwrap_or_default();
                     record.active_attempt = None;
                     record.updated_at = now();
-                    self.persist_record(record).await?;
+                    prepare_terminal_observation(&mut record, &self.inner.output_root);
+                    let _ = self.persist_terminal_record(record).await;
                     continue;
                 }
                 if let Some(active) = record.active_attempt.take() {
@@ -1495,54 +1506,22 @@ impl ControlPlane {
                     "worker restarted during execution; active work was compensated".into();
                 record.phase = ExecutionPhase::NeedsReconciliation;
                 record.updated_at = now();
-                record.journal_progress = journal.append(
-                    record.updated_at.clone(),
-                    ExecutionJournalEventKind::ExecutionStopped {
-                        reason: record.error.clone(),
-                    },
-                )?;
-                record.journal_progress = journal.append(
-                    record.updated_at.clone(),
-                    ExecutionJournalEventKind::ExecutionFinalized {
-                        state: JournalTerminalState::NeedsReconciliation,
-                        reason: record.error.clone(),
-                    },
-                )?;
+                match finalize_restarted_journal(&journal, &record.updated_at, &record.error) {
+                    Ok(progress) => record.journal_progress = progress,
+                    Err(error) => record
+                        .error
+                        .push_str(&format!("; persist restart recovery: {error:#}")),
+                }
                 record.transitions.push(PhaseTransition {
                     phase: ExecutionPhase::NeedsReconciliation,
                     at: record.updated_at.clone(),
                     reason: "restart recovery stopped without resuming subject work".into(),
                 });
-                if record.request.run_contract.is_some() {
-                    let observation = terminal_observation(
-                        &record,
-                        ExecutionPhase::NeedsReconciliation,
-                        &record.error,
-                        record.report.as_ref(),
-                        record.manifest.as_ref(),
-                        record.result_path.as_deref(),
-                        &self.inner.output_root,
-                    )?;
-                    let artifact =
-                        observation.write_to(&self.inner.output_root.join(&execution_id))?;
-                    record.observation = Some(observation);
-                    record.observation_artifact = Some(artifact);
-                }
-                self.persist_record(record).await?;
+                prepare_terminal_observation(&mut record, &self.inner.output_root);
+                let _ = self.persist_terminal_record(record).await;
             } else if record.request.run_contract.is_some() && record.observation.is_none() {
-                let observation = terminal_observation(
-                    &record,
-                    record.phase,
-                    &record.error,
-                    record.report.as_ref(),
-                    record.manifest.as_ref(),
-                    record.result_path.as_deref(),
-                    &self.inner.output_root,
-                )?;
-                let artifact = observation.write_to(&self.inner.output_root.join(&execution_id))?;
-                record.observation = Some(observation);
-                record.observation_artifact = Some(artifact);
-                self.persist_record(record).await?;
+                prepare_terminal_observation(&mut record, &self.inner.output_root);
+                let _ = self.persist_terminal_record(record).await;
             } else {
                 self.inner
                     .records
@@ -1600,11 +1579,25 @@ impl ControlPlane {
         manifest: Option<E2eManifest>,
         result_path: Option<String>,
     ) -> Result<()> {
-        let current = self.record(execution_id).await?;
-        let journal_progress = self.append_journal_event(
+        let mut record = self.record(execution_id).await?;
+        record.phase = phase;
+        record.error = error;
+        record.report = report;
+        record.manifest = manifest;
+        record.result_path = result_path;
+        record.active_attempt = None;
+        record.updated_at = now();
+        // Auxiliary envelope failures must be reflected before the immutable
+        // terminal event, without throwing away the report we already obtained.
+        let previous_error = record.error.clone();
+        prepare_terminal_observation(&mut record, &self.inner.output_root);
+        if record.error != previous_error {
+            rewrite_degraded_final_report(&mut record, &self.inner.output_root);
+        }
+        let journal_progress = match self.append_journal_event(
             execution_id,
             ExecutionJournalEventKind::ExecutionFinalized {
-                state: match phase {
+                state: match record.phase {
                     ExecutionPhase::Completed => JournalTerminalState::Completed,
                     ExecutionPhase::Cancelled => JournalTerminalState::Cancelled,
                     ExecutionPhase::NeedsReconciliation => {
@@ -1613,42 +1606,35 @@ impl ControlPlane {
                     ExecutionPhase::Unsupported => JournalTerminalState::Unsupported,
                     _ => JournalTerminalState::Failed,
                 },
-                reason: error.clone(),
+                reason: record.error.clone(),
             },
-        )?;
-        let (observation, observation_artifact) = if current.request.run_contract.is_some() {
-            let observation = terminal_observation(
-                &current,
-                phase,
-                &error,
-                report.as_ref(),
-                manifest.as_ref(),
-                result_path.as_deref(),
-                &self.inner.output_root,
-            )?;
-            let output = self.inner.output_root.join(execution_id);
-            let artifact = observation.write_to(&output)?;
-            (Some(observation), Some(artifact))
-        } else {
-            (None, None)
+        ) {
+            Ok(progress) => progress,
+            Err(failure) => {
+                // An atomic installation can succeed before a later sync error.
+                // Never contradict an already committed terminal state.
+                if let Ok(progress) = self
+                    .execution_journal(execution_id)
+                    .and_then(|journal| journal.replay())
+                {
+                    record.journal_progress = progress;
+                }
+                let message = format!("finalize execution journal: {failure:#}");
+                mark_terminal_persistence_error(&mut record, message);
+                rewrite_degraded_final_report(&mut record, &self.inner.output_root);
+                // The earlier envelope no longer describes this degraded result.
+                // Rebuild only auxiliary evidence; never rematerialize subject work.
+                prepare_terminal_observation(&mut record, &self.inner.output_root);
+                record.journal_progress.clone()
+            }
         };
-        self.update_record(execution_id, move |record| {
-            record.phase = phase;
-            record.error = error;
-            record.report = report;
-            record.manifest = manifest;
-            record.result_path = result_path;
-            record.observation = observation;
-            record.observation_artifact = observation_artifact;
-            record.active_attempt = None;
-            record.journal_progress = journal_progress;
-            record.transitions.push(PhaseTransition {
-                phase,
-                at: now(),
-                reason: "execution finalized".into(),
-            });
-        })
-        .await
+        record.journal_progress = journal_progress;
+        record.transitions.push(PhaseTransition {
+            phase: record.phase,
+            at: now(),
+            reason: "execution finalized".into(),
+        });
+        self.persist_terminal_record(record).await
     }
 
     async fn transition(
@@ -1717,6 +1703,24 @@ impl ControlPlane {
             .await
             .insert(record.execution_id.clone(), record.clone());
         let _ = self.inner.updates.send(ControlPlaneUpdate { record });
+        Ok(())
+    }
+
+    async fn persist_terminal_record(&self, mut record: ExecutionRecord) -> Result<()> {
+        if let Err(error) = self.persist_record(record.clone()).await {
+            mark_terminal_persistence_error(
+                &mut record,
+                format!("persist terminal execution record: {error:#}"),
+            );
+            tracing::error!(execution_id = %record.execution_id, %error, "terminal evidence retained in memory; durable reconciliation required");
+            self.inner
+                .records
+                .write()
+                .await
+                .insert(record.execution_id.clone(), record.clone());
+            let _ = self.inner.updates.send(ControlPlaneUpdate { record });
+            return Err(error);
+        }
         Ok(())
     }
 
@@ -1868,7 +1872,136 @@ fn execution_id_for_key(idempotency_key: &str) -> String {
     format!("{:x}", digest)[..32].to_string()
 }
 
+fn mark_terminal_persistence_error(record: &mut ExecutionRecord, message: String) {
+    let (message, _) = crate::redaction::RedactionPolicy::from_environment().redact_text(&message);
+    if !record.error.is_empty() {
+        record.error.push_str("; ");
+    }
+    record.error.push_str(&message);
+    // Committed terminal events are immutable. A later persistence failure is
+    // additional reconciliation evidence, not a contradictory terminal event.
+    record.phase = record
+        .journal_progress
+        .terminal_state
+        .clone()
+        .map(execution_phase_from_journal)
+        .unwrap_or(ExecutionPhase::NeedsReconciliation);
+    record.active_attempt = None;
+    record.updated_at = now();
+    if let Some(report) = record.report.as_mut() {
+        report.record_persistence_error(message);
+    }
+    record.observation_artifact = None;
+    if let Some(observation) = record.observation.as_mut() {
+        observation.outcome.control_phase = match record.phase {
+            ExecutionPhase::Completed => "completed",
+            ExecutionPhase::Cancelled => "cancelled",
+            ExecutionPhase::Failed => "failed",
+            ExecutionPhase::Unsupported => "unsupported",
+            _ => "needs_reconciliation",
+        }
+        .into();
+        observation.outcome.objective = ObservationObjective::InfrastructureFailed;
+        observation.outcome.passed = None;
+        observation.outcome.error = record.error.clone();
+        // The in-memory report now differs from the previous artifact bytes.
+        observation.evidence.results_sha256 = None;
+    }
+}
+
+fn rewrite_degraded_final_report(record: &mut ExecutionRecord, output_root: &Path) {
+    let (Some(report), Some(manifest), Some(_)) = (
+        record.report.as_mut(),
+        record.manifest.as_ref(),
+        record.result_path.as_ref(),
+    ) else {
+        return;
+    };
+    if let Err(error) = report.write_to(&output_root.join(&record.execution_id), manifest) {
+        record.result_path = None;
+        mark_terminal_persistence_error(
+            record,
+            format!("persist degraded final report: {error:#}"),
+        );
+    }
+}
+
+fn prepare_terminal_observation(record: &mut ExecutionRecord, output_root: &Path) {
+    if record.request.run_contract.is_none() {
+        return;
+    }
+    record.observation_artifact = None;
+    // A report returned only in memory is still valuable, but cannot authorize
+    // an observation claiming that its result artifact was durably produced.
+    if record.report.is_some()
+        && !record
+            .result_path
+            .as_ref()
+            .is_some_and(|path| output_root.join(path).is_file())
+    {
+        mark_terminal_persistence_error(
+            record,
+            "terminal observation unavailable: result artifact was not persisted".into(),
+        );
+        return;
+    }
+    let observation = match terminal_observation(
+        record,
+        record.phase,
+        &record.error,
+        record.report.as_ref(),
+        record.manifest.as_ref(),
+        record.result_path.as_deref(),
+        output_root,
+    ) {
+        Ok(observation) => observation,
+        Err(error) => {
+            mark_terminal_persistence_error(
+                record,
+                format!("construct terminal observation: {error:#}"),
+            );
+            return;
+        }
+    };
+    let artifact = observation.write_to(&output_root.join(&record.execution_id));
+    record.observation = Some(observation);
+    match artifact {
+        Ok(artifact) => record.observation_artifact = Some(artifact),
+        Err(error) => mark_terminal_persistence_error(
+            record,
+            format!("persist terminal observation: {error:#}"),
+        ),
+    }
+}
+
+fn finalize_restarted_journal(
+    journal: &ExecutionJournal,
+    at: &str,
+    reason: &str,
+) -> Result<JournalProgress> {
+    let progress = journal.replay()?;
+    if progress.terminal {
+        return Ok(progress);
+    }
+    journal.append(
+        at.into(),
+        ExecutionJournalEventKind::ExecutionStopped {
+            reason: reason.into(),
+        },
+    )?;
+    journal.append(
+        at.into(),
+        ExecutionJournalEventKind::ExecutionFinalized {
+            state: JournalTerminalState::NeedsReconciliation,
+            reason: reason.into(),
+        },
+    )
+}
+
 fn validate_run_request(request: &RunRequest) -> Result<LaneBudget> {
+    if request.slot_start_deadline_seconds == Some(0) {
+        bail!("slot_start_deadline_seconds must be greater than zero");
+    }
     if request.idempotency_key.trim().is_empty()
         || request.idempotency_key.len() > MAX_IDEMPOTENCY_KEY_BYTES
     {
@@ -2805,6 +2938,69 @@ fn now() -> String {
 mod tests {
     use super::*;
 
+    #[test]
+    fn effective_slot_start_budget_is_in_request_identity_and_zero_is_rejected() {
+        let mut first = request();
+        first.slot_start_deadline_seconds = Some(60);
+        let mut second = first.clone();
+        second.slot_start_deadline_seconds = Some(120);
+        assert_ne!(
+            artifact::sha256_value(&first).unwrap(),
+            artifact::sha256_value(&second).unwrap()
+        );
+        validate_run_request(&first).unwrap();
+        second.slot_start_deadline_seconds = Some(0);
+        assert!(validate_run_request(&second).is_err());
+    }
+
+    #[test]
+    fn recovery_finalizes_admitted_and_active_journals_without_reexecuting_attempts() {
+        for active in [false, true] {
+            let output = tempfile::tempdir().unwrap();
+            let journal = ExecutionJournal::initialize(
+                output.path(),
+                &ExecutionJournalHeader {
+                    schema: EXECUTION_JOURNAL_SCHEMA.into(),
+                    execution_id: "recovery".into(),
+                    request_sha256: "request".into(),
+                    result_contract_sha256: crate::report::RESULT_CONTRACT_SHA256.into(),
+                    scoring_profile_sha256: crate::report::SCORING_PROFILE_SHA256.into(),
+                    created_at: now(),
+                    request: serde_json::to_value(request()).unwrap(),
+                    runner: json!({}),
+                },
+            )
+            .unwrap();
+            journal
+                .append(now(), ExecutionJournalEventKind::ExecutionAdmitted)
+                .unwrap();
+            if active {
+                journal
+                    .append(
+                        now(),
+                        ExecutionJournalEventKind::AttemptStarted {
+                            scenario_id: "case".into(),
+                            run_id: "run".into(),
+                            attempt_id: "attempt".into(),
+                            session_id: "session".into(),
+                        },
+                    )
+                    .unwrap();
+            }
+            let progress = finalize_restarted_journal(&journal, &now(), "restart").unwrap();
+            assert_eq!(
+                progress.terminal_state,
+                Some(JournalTerminalState::NeedsReconciliation)
+            );
+            assert_eq!(progress.attempts_started, u64::from(active));
+            assert_eq!(progress.attempts_finished, 0);
+            assert_eq!(
+                finalize_restarted_journal(&journal, &now(), "restart again").unwrap(),
+                progress
+            );
+        }
+    }
+
     fn request() -> RunRequest {
         RunRequest {
             _caller_worker_id: None,
@@ -2824,6 +3020,7 @@ mod tests {
             rotating_seeds: Vec::new(),
             technical_retries: 1,
             progress_interval_seconds: 15,
+            slot_start_deadline_seconds: None,
             run_contract: None,
         }
     }
@@ -3165,10 +3362,9 @@ mod tests {
         );
     }
 
-    #[test]
-    fn unsupported_d0_execution_still_produces_a_terminal_observation() {
+    fn observation_record() -> ExecutionRecord {
         let request = d0_request();
-        let record = ExecutionRecord {
+        ExecutionRecord {
             execution_id: "execution-1".into(),
             idempotency_key: request.idempotency_key.clone(),
             phase: ExecutionPhase::Admitted,
@@ -3193,7 +3389,143 @@ mod tests {
             observation: None,
             observation_artifact: None,
             archive: None,
-        };
+        }
+    }
+
+    fn retained_report(record: &ExecutionRecord) -> E2eReport {
+        let mut run = crate::report::E2eRunReport::new(
+            "retained-run".into(),
+            "attempt".into(),
+            1,
+            "session".into(),
+            "retained prompt".into(),
+        );
+        run.status = crate::report::RunStatus::Passed;
+        run.score = Some(100);
+        E2eReport::new(
+            crate::identity::ExecutionIdentity {
+                execution_id: record.execution_id.clone(),
+                lane: record.request.lane.clone(),
+                started_at: record.requested_at.clone(),
+                completed_at: record.updated_at.clone(),
+            },
+            crate::identity::SystemUnderTestIdentity {
+                stack: record
+                    .request
+                    .run_contract
+                    .as_ref()
+                    .unwrap()
+                    .target
+                    .stack
+                    .clone(),
+                engine_version: "test".into(),
+                engine_revision: None,
+                harness_version: "test".into(),
+                e2e_repository: "iii-hq/harness-e2e".into(),
+                e2e_revision: "a".repeat(40),
+                contract_hashes: BTreeMap::from([(
+                    "harness::status".into(),
+                    format!("sha256:{}", "a".repeat(64)),
+                )]),
+            },
+            crate::report::ModelArtifact {
+                model: record.request.model.clone(),
+                provider: record.request.provider.clone(),
+                context_window: 100,
+                max_output_tokens: 10,
+                supports_tools: Some(true),
+                supports_vision: None,
+            },
+            None,
+            None,
+            None,
+            vec![crate::report::E2eScenarioReport::aggregate(
+                "direct_answer",
+                1,
+                ExecutionPolicy {
+                    max_turns: 1,
+                    max_output_tokens: Some(10),
+                    max_total_tokens: Some(100),
+                    stuck_timeout_seconds: 10,
+                    max_validation_retries: None,
+                },
+                vec![run],
+            )],
+        )
+    }
+
+    #[test]
+    fn terminal_observation_write_failure_retains_evidence_and_does_not_block_the_next_record() {
+        let output = tempfile::tempdir().unwrap();
+        let mut failed = observation_record();
+        failed.phase = ExecutionPhase::Failed;
+        std::fs::create_dir_all(
+            output
+                .path()
+                .join(&failed.execution_id)
+                .join("observation.json"),
+        )
+        .unwrap();
+        prepare_terminal_observation(&mut failed, output.path());
+        assert_eq!(failed.phase, ExecutionPhase::NeedsReconciliation);
+        assert!(failed.observation.is_some());
+        assert!(failed.observation_artifact.is_none());
+        assert!(failed.error.contains("persist terminal observation"));
+        assert_eq!(failed.observation.as_ref().unwrap().outcome.passed, None);
+        let mut next = observation_record();
+        next.execution_id = "next-execution".into();
+        next.phase = ExecutionPhase::Failed;
+        prepare_terminal_observation(&mut next, output.path());
+        assert!(next.error.is_empty());
+        assert!(next.observation_artifact.is_some());
+    }
+
+    #[test]
+    fn missing_final_artifact_keeps_the_obtained_report_without_fabricating_an_observation() {
+        let output = tempfile::tempdir().unwrap();
+        let mut record = observation_record();
+        record.phase = ExecutionPhase::Completed;
+        record.report = Some(retained_report(&record));
+        prepare_terminal_observation(&mut record, output.path());
+        assert_eq!(record.phase, ExecutionPhase::NeedsReconciliation);
+        assert!(record.result_path.is_none());
+        assert!(record.observation.is_none());
+        assert!(record.observation_artifact.is_none());
+        let report = record.report.unwrap();
+        assert_eq!(report.scenarios[0].runs[0].run_id, "retained-run");
+        assert_eq!(report.scenarios[0].runs[0].score, Some(100));
+        assert_eq!(report.report_state, crate::report::ReportState::Partial);
+        assert!(report.persistence_errors[0].contains("result artifact was not persisted"));
+        assert!(!output.path().join(record.execution_id).exists());
+    }
+
+    #[test]
+    fn invalid_observation_preserves_an_already_finalized_journal_phase() {
+        let output = tempfile::tempdir().unwrap();
+        let mut record = observation_record();
+        record.phase = ExecutionPhase::Completed;
+        record.journal_progress.terminal = true;
+        record.journal_progress.terminal_state = Some(JournalTerminalState::Completed);
+        record
+            .request
+            .run_contract
+            .as_mut()
+            .unwrap()
+            .target
+            .application = "invalid".into();
+        prepare_terminal_observation(&mut record, output.path());
+        assert_eq!(record.phase, ExecutionPhase::Completed);
+        assert_eq!(
+            record.journal_progress.terminal_state,
+            Some(JournalTerminalState::Completed)
+        );
+        assert!(record.error.contains("construct terminal observation"));
+        assert!(record.observation_artifact.is_none());
+    }
+
+    #[test]
+    fn unsupported_d0_execution_still_produces_a_terminal_observation() {
+        let record = observation_record();
         let output = tempfile::tempdir().unwrap();
         let observation = terminal_observation(
             &record,

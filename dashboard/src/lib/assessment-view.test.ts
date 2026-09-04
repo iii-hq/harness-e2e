@@ -12,6 +12,11 @@ import {
   matchesAssessmentFilter,
 } from '@/lib/assessment-view'
 import type { DashboardExecutionDetail } from '@/lib/dashboard-data-source'
+import {
+  RESULT_CONTRACT_SHA256,
+  RESULTS_SCHEMA_VERSION,
+  SCORING_PROFILE_SHA256,
+} from '@/lib/result-contract.generated'
 
 const finalPass: AiFinalAssessment = {
   availability: 'available',
@@ -105,11 +110,9 @@ function detail(run: RunAssessmentContract): DashboardExecutionDetail {
         scenario_id: 'direct_answer',
         available: true,
         report: {
-          schema_version: 3,
-          result_contract_sha256:
-            'sha256:5a6c38bca7168d0ff06a9bad8ea42e9d7afab0f25ccb2f8316ea85c9e85a7a03',
-          scoring_profile_sha256:
-            'sha256:11d3e03f9c898b9f3c1a2f696401ccd135d50b9cbec340a480f99327923d12d1',
+          schema_version: RESULTS_SCHEMA_VERSION,
+          result_contract_sha256: RESULT_CONTRACT_SHA256,
+          scoring_profile_sha256: SCORING_PROFILE_SHA256,
           report_state: 'complete',
           objective_outcome: 'passed',
           assessment_availability: 'available',

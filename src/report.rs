@@ -63,6 +63,8 @@ pub enum ContaminationScope {
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct FailureRecord {
+    /// The failure's original classification, independent of the primary run status.
+    pub status: RunStatus,
     pub domain: FailureDomain,
     pub phase: FailurePhase,
     #[serde(default)]
@@ -641,6 +643,7 @@ impl E2eRunReport {
         let message = message.into();
         let is_primary = self.failures.is_empty();
         self.failures.push(FailureRecord {
+            status,
             domain: status.failure_domain(),
             phase,
             code: code.into(),
@@ -652,9 +655,6 @@ impl E2eRunReport {
             self.status = status;
         }
         self.seal_outcome_from_status();
-        if phase == FailurePhase::Cleanup {
-            self.technical = TechnicalState::TechnicalInvalid;
-        }
     }
 
     pub fn finish(&mut self, status: RunStatus) {
@@ -735,6 +735,20 @@ impl E2eRunReport {
                     self.quality_score_completed = None;
                 }
             }
+        }
+        // The compatibility status retains the first failure, but subsequent
+        // infrastructure/cleanup failures still invalidate the technical axis.
+        // Derive this from durable evidence rather than the previous axis value:
+        // newly created reports start invalid and must become valid on success.
+        if self.failures.iter().any(|failure| {
+            failure.phase == FailurePhase::Cleanup
+                || matches!(
+                    failure.status,
+                    RunStatus::SubjectError | RunStatus::InfrastructureError
+                )
+        }) {
+            self.technical = TechnicalState::TechnicalInvalid;
+            self.objective_score = None;
         }
     }
 
@@ -1469,6 +1483,8 @@ pub struct E2eScenarioReport {
     pub scenario_version: u32,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub case: Option<ScenarioCase>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub deferral_reason: Option<String>,
     pub execution_policy: ExecutionPolicy,
     pub aggregate: ScenarioAggregate,
     pub passed: bool,
@@ -1509,13 +1525,54 @@ impl E2eScenarioReport {
         case: ScenarioCase,
         execution_policy: ExecutionPolicy,
         planned_runs: u32,
+        runs: Vec<E2eRunReport>,
+    ) -> Self {
+        Self::aggregate_with_planned(
+            case.scenario_id.clone(),
+            case.case_id.clone(),
+            case.scenario_version,
+            Some(case),
+            execution_policy,
+            planned_runs,
+            runs,
+        )
+    }
+
+    /// Preserve requested slots even when no executable case could be materialized.
+    /// Version zero denotes an unknown version, not a fabricated case identity.
+    pub fn deferred(
+        scenario_id: String,
+        case_id: String,
+        scenario_version: u32,
+        execution_policy: ExecutionPolicy,
+        planned_runs: u32,
+        reason: String,
+    ) -> Self {
+        let mut report = Self::aggregate_with_planned(
+            scenario_id,
+            case_id,
+            scenario_version,
+            None,
+            execution_policy,
+            planned_runs,
+            Vec::new(),
+        );
+        report.deferral_reason = Some(reason);
+        report
+    }
+
+    fn aggregate_with_planned(
+        scenario_id: String,
+        case_id: String,
+        scenario_version: u32,
+        case: Option<ScenarioCase>,
+        execution_policy: ExecutionPolicy,
+        planned_runs: u32,
         mut runs: Vec<E2eRunReport>,
     ) -> Self {
         for run in &mut runs {
             run.seal_outcome_from_status();
         }
-        let scenario_id = case.scenario_id.clone();
-        let scenario_version = case.scenario_version;
         let run_count = runs.len() as u32;
         let completed_runs = count_runs(&runs, |run| run.completion == CompletionState::Completed);
         let task_incomplete_runs = count_runs(&runs, |run| {
@@ -1576,10 +1633,11 @@ impl E2eScenarioReport {
             && undetermined_runs == 0
             && passed_runs >= required_passes;
         Self {
-            case_id: case.case_id.clone(),
+            case_id,
             scenario_id,
             scenario_version,
-            case: Some(case),
+            case,
+            deferral_reason: None,
             execution_policy,
             aggregate: ScenarioAggregate {
                 planned_runs,
@@ -1626,12 +1684,39 @@ impl E2eScenarioReport {
 
     pub fn refresh_aggregate(&mut self) -> Result<()> {
         let planned_runs = self.aggregate.planned_runs;
-        let case = self
-            .case
-            .take()
-            .context("cannot refresh scenario aggregate without a materialized case")?;
+        self.validate_deferral()?;
+        let case = self.case.take();
         let runs = std::mem::take(&mut self.runs);
-        *self = Self::aggregate_case_with_planned(case, self.execution_policy, planned_runs, runs);
+        let deferral_reason = self.deferral_reason.take();
+        *self = Self::aggregate_with_planned(
+            self.scenario_id.clone(),
+            self.case_id.clone(),
+            self.scenario_version,
+            case,
+            self.execution_policy,
+            planned_runs,
+            runs,
+        );
+        self.deferral_reason = deferral_reason;
+        Ok(())
+    }
+
+    fn validate_deferral(&self) -> Result<()> {
+        if let Some(reason) = &self.deferral_reason {
+            if reason.trim().is_empty() || self.aggregate.deferred_runs == 0 {
+                bail!("scenario deferral reason requires a nonempty reason and deferred slots");
+            }
+        }
+        if self.case.is_none()
+            && (self.deferral_reason.is_none()
+                || self.aggregate.planned_runs == 0
+                || self.aggregate.deferred_runs != self.aggregate.planned_runs
+                || self.aggregate.observed_runs != 0
+                || !self.runs.is_empty()
+                || self.passed)
+        {
+            bail!("scenario without a materialized case must be wholly deferred with a reason");
+        }
         Ok(())
     }
 }
@@ -1648,7 +1733,9 @@ pub struct ModelArtifact {
 
 pub const OBSERVATION_SCHEMA: &str = "e2e-observation/v1";
 pub const CATALOG_SCHEMA: &str = "e2e-scenario-catalog/v4";
-pub const RESULTS_SCHEMA_VERSION: u32 = 3;
+pub use crate::result_contract::{
+    RESULTS_SCHEMA_VERSION, RESULT_CONTRACT_SHA256, SCORING_PROFILE_SHA256,
+};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
@@ -2093,11 +2180,6 @@ pub struct ObservedWorkerContract {
     pub response_schema_sha256: String,
 }
 
-pub const RESULT_CONTRACT_SHA256: &str =
-    "sha256:5a6c38bca7168d0ff06a9bad8ea42e9d7afab0f25ccb2f8316ea85c9e85a7a03";
-pub const SCORING_PROFILE_SHA256: &str =
-    "sha256:11d3e03f9c898b9f3c1a2f696401ccd135d50b9cbec340a480f99327923d12d1";
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum ReportState {
@@ -2121,6 +2203,11 @@ pub struct E2eReport {
     pub scoring_profile_sha256: String,
     pub report_state: ReportState,
     pub objective_outcome: ObjectiveOutcome,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub persistence_errors: Vec<String>,
+    /// Soft scheduling deadline: prevents starting slots after this interval.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub slot_start_deadline_seconds: Option<u64>,
     pub execution: ExecutionIdentity,
     pub system_under_test: SystemUnderTestIdentity,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -2175,6 +2262,8 @@ impl E2eReport {
             } else {
                 ObjectiveOutcome::Failed
             },
+            persistence_errors: Vec::new(),
+            slot_start_deadline_seconds: None,
             execution,
             system_under_test,
             manifest: None,
@@ -2190,6 +2279,13 @@ impl E2eReport {
         };
         report.assessment_contract = AssessmentContract::from_assessment_evidence(&report);
         report
+    }
+
+    pub fn record_persistence_error(&mut self, error: String) {
+        self.persistence_errors.push(error);
+        self.report_state = ReportState::Partial;
+        self.objective_outcome = ObjectiveOutcome::Inconclusive;
+        self.passed = false;
     }
 
     pub fn write_to(&mut self, output: &Path, manifest: &E2eManifest) -> Result<PathBuf> {
@@ -2290,27 +2386,29 @@ impl E2eReport {
         reference.verify(output)?;
         for scenario in &self.scenarios {
             scenario.aggregate.validate()?;
+            scenario.validate_deferral()?;
+            if scenario.scenario_id.trim().is_empty() {
+                bail!("scenario has an empty scenario_id");
+            }
             if scenario.case_id.trim().is_empty() {
                 bail!("scenario {} has an empty case_id", scenario.scenario_id);
             }
-            let case = scenario
-                .case
-                .as_ref()
-                .context("scenario is missing its materialized case")?;
-            case.validate()?;
-            let expected_method = crate::scenarios::ComplexityMethod::CapabilityV2;
-            if case.complexity.method != expected_method {
-                bail!(
-                    "results schema_version {} requires {:?} complexity classification",
-                    self.schema_version,
-                    expected_method
-                );
-            }
-            if scenario.case_id != case.case_id
-                || scenario.scenario_id != case.scenario_id
-                || scenario.scenario_version != case.scenario_version
-            {
-                bail!("scenario identity differs from its materialized case");
+            if let Some(case) = &scenario.case {
+                case.validate()?;
+                let expected_method = crate::scenarios::ComplexityMethod::CapabilityV2;
+                if case.complexity.method != expected_method {
+                    bail!(
+                        "results schema_version {} requires {:?} complexity classification",
+                        self.schema_version,
+                        expected_method
+                    );
+                }
+                if scenario.case_id != case.case_id
+                    || scenario.scenario_id != case.scenario_id
+                    || scenario.scenario_version != case.scenario_version
+                {
+                    bail!("scenario identity differs from its materialized case");
+                }
             }
             for run in &scenario.runs {
                 validate_attempt_identity(run)?;
@@ -2395,8 +2493,11 @@ impl E2eReport {
                     )?;
                 }
             }
-            let expected = E2eScenarioReport::aggregate_case_with_planned(
-                case.clone(),
+            let expected = E2eScenarioReport::aggregate_with_planned(
+                scenario.scenario_id.clone(),
+                scenario.case_id.clone(),
+                scenario.scenario_version,
+                scenario.case.clone(),
                 scenario.execution_policy,
                 scenario.aggregate.planned_runs,
                 scenario.runs.clone(),
@@ -2415,10 +2516,17 @@ impl E2eReport {
             .scenarios
             .iter()
             .any(|scenario| scenario.aggregate.deferred_runs > 0);
-        if scenario_partial && self.report_state != ReportState::Partial {
-            bail!("results with deferred scenario slots must be partial");
+        if self
+            .persistence_errors
+            .iter()
+            .any(|error| error.trim().is_empty())
+        {
+            bail!("results persistence errors must be nonempty");
         }
-        let expected_partial = self.report_state == ReportState::Partial;
+        let expected_partial = scenario_partial || !self.persistence_errors.is_empty();
+        if (self.report_state == ReportState::Partial) != expected_partial {
+            bail!("results partial state must match deferred slots or persistence errors");
+        }
         let expected_passed = !expected_partial
             && !self.scenarios.is_empty()
             && self.scenarios.iter().all(|scenario| scenario.passed);
@@ -2443,7 +2551,13 @@ impl E2eReport {
     fn redact_sensitive_evidence(&mut self) -> Result<()> {
         let policy = crate::redaction::RedactionPolicy::from_environment();
         let mut redaction = self.redaction.clone();
+        for error in &mut self.persistence_errors {
+            redact_string(&policy, &mut redaction, error);
+        }
         for scenario in &mut self.scenarios {
+            if let Some(reason) = &mut scenario.deferral_reason {
+                redact_string(&policy, &mut redaction, reason);
+            }
             for run in &mut scenario.runs {
                 redaction.merge(run.asset_redaction.clone());
                 redact_string(&policy, &mut redaction, &mut run.prompt);
@@ -3498,6 +3612,206 @@ mod tests {
     }
 
     #[test]
+    fn secondary_infrastructure_failure_survives_sealing_and_aggregation() {
+        for primary in [
+            RunStatus::HardGateFailed,
+            RunStatus::ResourceLimit,
+            RunStatus::JudgeError,
+        ] {
+            for phase in [FailurePhase::Cleanup, FailurePhase::Collect] {
+                let mut failed = run(80, true);
+                failed.push_failure(primary, FailurePhase::Evaluate, "primary failure");
+                failed.push_failure(
+                    RunStatus::InfrastructureError,
+                    phase,
+                    "secondary infrastructure failure",
+                );
+                assert_eq!(failed.status, primary);
+                assert_eq!(failed.technical, TechnicalState::TechnicalInvalid);
+                assert_eq!(failed.objective_score, None);
+
+                let bytes = serde_json::to_vec(&failed).unwrap();
+                let decoded: E2eRunReport = serde_json::from_slice(&bytes).unwrap();
+                let mut aggregated = aggregate(vec![decoded]);
+                aggregated.refresh_aggregate().unwrap();
+
+                assert_eq!(aggregated.runs[0].status, primary);
+                assert_eq!(
+                    aggregated.runs[0].technical,
+                    TechnicalState::TechnicalInvalid
+                );
+                assert_eq!(aggregated.runs[0].completion, CompletionState::Completed);
+                assert_eq!(aggregated.runs[0].objective_score, None);
+                assert_eq!(aggregated.aggregate.technical_invalid_runs, 1);
+                assert_eq!(aggregated.aggregate.objective_scored_runs, 0);
+                assert!(!aggregated.passed);
+            }
+        }
+    }
+
+    #[test]
+    fn hard_gate_failure_is_not_infrastructure_failure_despite_shared_domain() {
+        let mut failed = run(0, false);
+        failed.push_typed_failure(
+            RunStatus::HardGateFailed,
+            FailurePhase::Evaluate,
+            "custom_objective_gate",
+            RetryScope::None,
+            ContaminationScope::None,
+            "objective gate failed",
+        );
+        assert_eq!(failed.failures[0].domain, FailureDomain::E2eInfrastructure);
+        let aggregated = aggregate(vec![failed]);
+        assert_eq!(aggregated.runs[0].technical, TechnicalState::Valid);
+        assert_eq!(aggregated.runs[0].objective_score, Some(0));
+        assert_eq!(aggregated.aggregate.technical_invalid_runs, 0);
+    }
+
+    #[test]
+    fn initially_invalid_run_becomes_valid_when_execution_succeeds() {
+        let mut completed = E2eRunReport::new(
+            "run".into(),
+            "attempt".into(),
+            1,
+            "session".into(),
+            "prompt".into(),
+        );
+        assert_eq!(completed.technical, TechnicalState::TechnicalInvalid);
+        completed.score = Some(90);
+        completed.finish(RunStatus::Passed);
+        assert_eq!(completed.technical, TechnicalState::Valid);
+        assert_eq!(completed.objective_score, Some(90));
+    }
+
+    #[test]
+    fn wholly_deferred_scenario_has_no_fabricated_case_or_run() {
+        let mut deferred = E2eScenarioReport::deferred(
+            "unmaterialized".into(),
+            "requested-case".into(),
+            0,
+            aggregate(Vec::new()).execution_policy,
+            3,
+            "scenario materialization failed".into(),
+        );
+        deferred.refresh_aggregate().unwrap();
+        assert!(deferred.case.is_none());
+        assert!(deferred.runs.is_empty());
+        assert_eq!(deferred.scenario_version, 0);
+        assert_eq!(deferred.case_id, "requested-case");
+        assert_eq!(deferred.aggregate.planned_runs, 3);
+        assert_eq!(deferred.aggregate.observed_runs, 0);
+        assert_eq!(deferred.aggregate.deferred_runs, 3);
+        assert_eq!(deferred.aggregate.total_tokens_consumed, Some(0));
+        assert_eq!(deferred.aggregate.completion_rate, None);
+        assert_eq!(deferred.aggregate.tokens_per_completion, None);
+        assert_eq!(deferred.aggregate.quality_score_completed, None);
+        assert!(!deferred.passed);
+        assert_eq!(
+            deferred.deferral_reason.as_deref(),
+            Some("scenario materialization failed")
+        );
+
+        let output = tempfile::tempdir().unwrap();
+        let mut report = report(vec![deferred]);
+        report.write_to(output.path(), &manifest()).unwrap();
+        let (decoded, _) = E2eReport::read_from(output.path()).unwrap();
+        assert_eq!(decoded.report_state, ReportState::Partial);
+        assert_eq!(decoded.objective_outcome, ObjectiveOutcome::Inconclusive);
+        assert!(decoded.scenarios[0].case.is_none());
+    }
+
+    #[test]
+    fn missing_case_requires_wholly_deferred_slots_and_reason() {
+        let policy = aggregate(Vec::new()).execution_policy;
+        for (planned, reason) in [(0, "failure"), (2, ""), (2, "   ")] {
+            let mut deferred = E2eScenarioReport::deferred(
+                "unmaterialized".into(),
+                "requested-case".into(),
+                0,
+                policy,
+                planned,
+                reason.into(),
+            );
+            assert!(deferred.refresh_aggregate().is_err());
+        }
+        let mut deferred = E2eScenarioReport::deferred(
+            "unmaterialized".into(),
+            "requested-case".into(),
+            0,
+            policy,
+            2,
+            "materialization failed".into(),
+        );
+        deferred.runs.push(run(90, true));
+        assert!(deferred.refresh_aggregate().is_err());
+        deferred.runs.clear();
+        deferred.deferral_reason = None;
+        assert!(deferred.refresh_aggregate().is_err());
+    }
+
+    #[test]
+    fn deferred_aggregate_rejects_invented_measurements() {
+        let deferred = E2eScenarioReport::deferred(
+            "unmaterialized".into(),
+            "requested-case".into(),
+            0,
+            aggregate(Vec::new()).execution_policy,
+            2,
+            "materialization failed".into(),
+        );
+        let output = tempfile::tempdir().unwrap();
+        let mut report = report(vec![deferred]);
+        report.scenarios[0].aggregate.total_tokens_consumed = Some(100);
+        let error = report.write_to(output.path(), &manifest()).unwrap_err();
+        assert!(format!("{error:#}").contains("aggregate differs from its run evidence"));
+    }
+
+    #[test]
+    fn persistence_error_preserves_completed_runs_but_prevents_complete_pass() {
+        let output = tempfile::tempdir().unwrap();
+        let mut report = report(vec![aggregate(vec![run(90, true)])]);
+        report.slot_start_deadline_seconds = Some(3600);
+        report.record_persistence_error("journal append failed".into());
+        assert_eq!(report.report_state, ReportState::Partial);
+        assert_eq!(report.objective_outcome, ObjectiveOutcome::Inconclusive);
+        assert!(!report.passed);
+        assert_eq!(report.scenarios[0].aggregate.completed_runs, 1);
+        assert_eq!(report.scenarios[0].aggregate.deferred_runs, 0);
+        assert_eq!(
+            report.scenarios[0].aggregate.objective_median_score,
+            Some(90.0)
+        );
+        report.write_to(output.path(), &manifest()).unwrap();
+        let (decoded, _) = E2eReport::read_from(output.path()).unwrap();
+        assert_eq!(decoded.persistence_errors, vec!["journal append failed"]);
+        assert_eq!(decoded.slot_start_deadline_seconds, Some(3600));
+        assert_eq!(
+            decoded.scenarios[0].runs[0].technical,
+            TechnicalState::Valid
+        );
+    }
+
+    #[test]
+    fn persistence_and_deferral_errors_are_redacted_before_persistence() {
+        let secret = "Bearer test-secret-material-for-redaction";
+        let deferred = E2eScenarioReport::deferred(
+            "unmaterialized".into(),
+            "requested-case".into(),
+            0,
+            aggregate(Vec::new()).execution_policy,
+            2,
+            format!("materialization failed: {secret}"),
+        );
+        let output = tempfile::tempdir().unwrap();
+        let mut report = report(vec![deferred]);
+        report.record_persistence_error(format!("journal append failed: {secret}"));
+        report.write_to(output.path(), &manifest()).unwrap();
+        let bytes = std::fs::read_to_string(output.path().join("results.json")).unwrap();
+        assert!(!bytes.contains("test-secret-material-for-redaction"));
+        assert!(report.redaction.redacted_values >= 2);
+    }
+
+    #[test]
     fn hard_gate_failures_count_as_scored_failed_runs() {
         let mut outvoted = run(45, false);
         outvoted.status = RunStatus::HardGateFailed;
@@ -3853,11 +4167,14 @@ mod tests {
         let error = E2eReport::read_from(&path).unwrap_err();
         assert!(format!("{error:#}").contains("unsupported results schema_version 2"));
 
-        value["schema_version"] = serde_json::json!(4);
+        value["schema_version"] = serde_json::json!(RESULTS_SCHEMA_VERSION + 1);
         std::fs::write(&path, serde_json::to_vec_pretty(&value).unwrap()).unwrap();
 
         let error = E2eReport::read_from(&path).unwrap_err();
-        assert!(format!("{error:#}").contains("unsupported results schema_version 4"));
+        assert!(format!("{error:#}").contains(&format!(
+            "unsupported results schema_version {}",
+            RESULTS_SCHEMA_VERSION + 1
+        )));
     }
 
     #[test]

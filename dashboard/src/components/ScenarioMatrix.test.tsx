@@ -2,13 +2,16 @@ import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
 import { ScenarioMatrix } from '@/components/ScenarioMatrix'
 import type { DashboardExecutionDetail } from '@/lib/dashboard-data-source'
+import {
+  RESULT_CONTRACT_SHA256,
+  RESULTS_SCHEMA_VERSION,
+  SCORING_PROFILE_SHA256,
+} from '@/lib/result-contract.generated'
 
 const resultContract = {
-  schema_version: 3 as const,
-  result_contract_sha256:
-    'sha256:5a6c38bca7168d0ff06a9bad8ea42e9d7afab0f25ccb2f8316ea85c9e85a7a03',
-  scoring_profile_sha256:
-    'sha256:11d3e03f9c898b9f3c1a2f696401ccd135d50b9cbec340a480f99327923d12d1',
+  schema_version: RESULTS_SCHEMA_VERSION,
+  result_contract_sha256: RESULT_CONTRACT_SHA256,
+  scoring_profile_sha256: SCORING_PROFILE_SHA256,
   report_state: 'complete' as const,
   objective_outcome: 'passed' as const,
 }
@@ -238,7 +241,7 @@ describe('ScenarioMatrix', () => {
     expect(html).toContain('4 scenarios')
     expect(html).toContain('report state')
     expect(html).toContain('objective outcome')
-    expect(html).toContain('Results V3')
+    expect(html).toContain(`Results V${RESULTS_SCHEMA_VERSION}`)
     expect(html).toContain('Completion and evidence yield')
     expect(html).toContain('execution reliability')
     expect(html).toContain('quality score completed')

@@ -30,7 +30,7 @@ const STORAGE_DELETE: &str = "storage::deleteObject";
 const DATABASE_EXECUTE: &str = "database::execute";
 const DATABASE_QUERY: &str = "database::query";
 const CHUNK_BYTES: usize = 6 * 1024 * 1024;
-// Stage-1 Results v3 records are intentionally isolated from legacy history.
+// Results v4 records are intentionally isolated from legacy history.
 // The old `harness_e2e_history` table remains untouched and readable by older
 // deployments; this binary writes only the strict result cohort.
 const HISTORY_TABLE: &str = "harness_e2e_result_history";

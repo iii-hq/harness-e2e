@@ -2,11 +2,11 @@ import type {
   DashboardExecutionDetail,
   DashboardRunProjection,
 } from '@/lib/dashboard-data-source'
-const RESULTS_SCHEMA_VERSION = 3
-const RESULT_CONTRACT_SHA256 =
-  'sha256:5a6c38bca7168d0ff06a9bad8ea42e9d7afab0f25ccb2f8316ea85c9e85a7a03'
-const SCORING_PROFILE_SHA256 =
-  'sha256:11d3e03f9c898b9f3c1a2f696401ccd135d50b9cbec340a480f99327923d12d1'
+import {
+  RESULT_CONTRACT_SHA256,
+  RESULTS_SCHEMA_VERSION,
+  SCORING_PROFILE_SHA256,
+} from '@/lib/result-contract.generated'
 
 export function metricRun(
   id: string,

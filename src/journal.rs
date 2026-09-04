@@ -195,25 +195,33 @@ impl ExecutionJournal {
             .get_or_init(|| Mutex::new(()))
             .lock()
             .map_err(|_| anyhow::anyhow!("execution journal append lock is poisoned"))?;
-        let progress = self.replay()?;
-        if progress.terminal {
+        let mut state = self.replay_state()?;
+        if state.progress.terminal {
             bail!("cannot append to a finalized execution journal");
         }
-        let sequence = progress.committed_events + 1;
+        let sequence = state.progress.committed_events + 1;
         let event = ExecutionJournalEvent {
             sequence,
             at,
-            previous_sha256: progress.last_event_sha256,
+            previous_sha256: state.progress.last_event_sha256.clone(),
             kind,
         };
         let path = self
             .events_dir()
             .join(format!("{sequence:08}-{}.json", event.kind.file_label()));
-        write_immutable_json(&path, &event)?;
-        self.replay()
+        let bytes = immutable_json_bytes(&path, &event)?;
+        // Use the same transition and artifact checks as recovery before installing
+        // the event. A rejected candidate must never become part of the chain.
+        state.apply(&event, &bytes, self.execution_root()?)?;
+        artifact::write_immutable_atomic(&path, &bytes)?;
+        Ok(state.progress)
     }
 
     pub fn replay(&self) -> Result<JournalProgress> {
+        Ok(self.replay_state()?.progress)
+    }
+
+    fn replay_state(&self) -> Result<ReplayState> {
         self.read_header()?;
         let mut paths = fs::read_dir(self.events_dir())
             .with_context(|| format!("read {}", self.events_dir().display()))?
@@ -221,12 +229,7 @@ impl ExecutionJournal {
             .collect::<std::io::Result<Vec<_>>>()?;
         paths.sort();
 
-        let mut progress = JournalProgress::default();
-        let mut inventory: Option<HashSet<String>> = None;
-        let mut started_attempts = HashSet::new();
-        let mut finished_attempts = HashSet::new();
-        let mut observed_attempts = HashSet::new();
-        let mut disposed_slots = HashSet::new();
+        let mut state = ReplayState::default();
         for path in paths {
             if path.extension().and_then(|value| value.to_str()) != Some("json") {
                 continue;
@@ -234,82 +237,109 @@ impl ExecutionJournal {
             let bytes = fs::read(&path).with_context(|| format!("read {}", path.display()))?;
             let event: ExecutionJournalEvent = serde_json::from_slice(&bytes)
                 .with_context(|| format!("decode {}", path.display()))?;
-            let expected = progress.committed_events + 1;
-            if event.sequence != expected {
-                bail!(
-                    "execution journal sequence gap: expected {expected}, observed {}",
-                    event.sequence
-                );
-            }
-            if event.previous_sha256 != progress.last_event_sha256 {
-                bail!("execution journal hash chain mismatch at sequence {expected}");
-            }
-            match &event.kind {
-                ExecutionJournalEventKind::SlotInventoryCommitted { slots } => {
-                    let ids = slots
-                        .iter()
-                        .map(|slot| slot.slot_id.clone())
-                        .collect::<HashSet<_>>();
-                    let ordinals = slots
-                        .iter()
-                        .map(|slot| slot.ordinal)
-                        .collect::<HashSet<_>>();
-                    if inventory.is_some()
-                        || ids.len() != slots.len()
-                        || ordinals.len() != slots.len()
-                    {
-                        bail!("execution journal slot inventory is duplicate or ambiguous");
-                    }
-                    inventory = Some(ids);
-                }
-                ExecutionJournalEventKind::AttemptStarted { attempt_id, .. } => {
-                    if !started_attempts.insert(attempt_id.clone()) {
-                        bail!("execution journal repeats attempt '{attempt_id}'");
-                    }
-                }
-                ExecutionJournalEventKind::AttemptFinished { attempt_id } => {
-                    if !started_attempts.contains(attempt_id)
-                        || !finished_attempts.insert(attempt_id.clone())
-                    {
-                        bail!("execution journal finishes unknown or duplicate attempt '{attempt_id}'");
-                    }
-                }
-                ExecutionJournalEventKind::SubjectObservationCommitted { attempt_id, .. } => {
-                    if !finished_attempts.contains(attempt_id)
-                        || !observed_attempts.insert(attempt_id.clone())
-                    {
-                        bail!("execution journal observes unknown or duplicate attempt '{attempt_id}'");
-                    }
-                }
-                ExecutionJournalEventKind::RunCommitted { slot_id, .. }
-                | ExecutionJournalEventKind::SlotDeferred { slot_id, .. }
-                    if inventory
-                        .as_ref()
-                        .is_none_or(|slots| !slots.contains(slot_id))
-                        || !disposed_slots.insert(slot_id.clone()) =>
-                {
-                    bail!("execution journal commits unknown or duplicate slot '{slot_id}'");
-                }
-                _ => {}
-            }
-            match &event.kind {
-                ExecutionJournalEventKind::SubjectObservationCommitted { artifact, .. }
-                | ExecutionJournalEventKind::RunCommitted { artifact, .. } => artifact.verify(
-                    self.root
-                        .parent()
-                        .context("execution journal root has no execution parent")?,
-                )?,
-                _ => {}
-            }
-            apply_event(&mut progress, &event.kind)?;
-            progress.committed_events = event.sequence;
-            progress.last_event_sha256 = Some(artifact::sha256_bytes(&bytes));
+            state.apply(&event, &bytes, self.execution_root()?)?;
         }
-        Ok(progress)
+        Ok(state)
+    }
+
+    fn execution_root(&self) -> Result<&Path> {
+        self.root
+            .parent()
+            .context("execution journal root has no execution parent")
     }
 
     fn events_dir(&self) -> PathBuf {
         self.root.join("events")
+    }
+}
+
+#[derive(Default)]
+struct ReplayState {
+    progress: JournalProgress,
+    inventory: Option<HashSet<String>>,
+    started_attempts: HashSet<String>,
+    finished_attempts: HashSet<String>,
+    observed_attempts: HashSet<String>,
+    disposed_slots: HashSet<String>,
+}
+
+impl ReplayState {
+    fn apply(
+        &mut self,
+        event: &ExecutionJournalEvent,
+        bytes: &[u8],
+        execution_root: &Path,
+    ) -> Result<()> {
+        let expected = self.progress.committed_events + 1;
+        if event.sequence != expected {
+            bail!(
+                "execution journal sequence gap: expected {expected}, observed {}",
+                event.sequence
+            );
+        }
+        if event.previous_sha256 != self.progress.last_event_sha256 {
+            bail!("execution journal hash chain mismatch at sequence {expected}");
+        }
+        match &event.kind {
+            ExecutionJournalEventKind::SlotInventoryCommitted { slots } => {
+                let ids = slots
+                    .iter()
+                    .map(|slot| slot.slot_id.clone())
+                    .collect::<HashSet<_>>();
+                let ordinals = slots
+                    .iter()
+                    .map(|slot| slot.ordinal)
+                    .collect::<HashSet<_>>();
+                if self.inventory.is_some()
+                    || ids.len() != slots.len()
+                    || ordinals.len() != slots.len()
+                {
+                    bail!("execution journal slot inventory is duplicate or ambiguous");
+                }
+                self.inventory = Some(ids);
+            }
+            ExecutionJournalEventKind::AttemptStarted { attempt_id, .. } => {
+                if !self.started_attempts.insert(attempt_id.clone()) {
+                    bail!("execution journal repeats attempt '{attempt_id}'");
+                }
+            }
+            ExecutionJournalEventKind::AttemptFinished { attempt_id } => {
+                if !self.started_attempts.contains(attempt_id)
+                    || !self.finished_attempts.insert(attempt_id.clone())
+                {
+                    bail!("execution journal finishes unknown or duplicate attempt '{attempt_id}'");
+                }
+            }
+            ExecutionJournalEventKind::SubjectObservationCommitted { attempt_id, .. } => {
+                if !self.finished_attempts.contains(attempt_id)
+                    || !self.observed_attempts.insert(attempt_id.clone())
+                {
+                    bail!("execution journal observes unknown or duplicate attempt '{attempt_id}'");
+                }
+            }
+            ExecutionJournalEventKind::RunCommitted { slot_id, .. }
+            | ExecutionJournalEventKind::SlotDeferred { slot_id, .. }
+                if self
+                    .inventory
+                    .as_ref()
+                    .is_none_or(|slots| !slots.contains(slot_id))
+                    || !self.disposed_slots.insert(slot_id.clone()) =>
+            {
+                bail!("execution journal commits unknown or duplicate slot '{slot_id}'");
+            }
+            _ => {}
+        }
+        match &event.kind {
+            ExecutionJournalEventKind::SubjectObservationCommitted { artifact, .. }
+            | ExecutionJournalEventKind::RunCommitted { artifact, .. } => {
+                artifact.verify(execution_root)?;
+            }
+            _ => {}
+        }
+        apply_event(&mut self.progress, &event.kind)?;
+        self.progress.committed_events = event.sequence;
+        self.progress.last_event_sha256 = Some(artifact::sha256_bytes(bytes));
+        Ok(())
     }
 }
 
@@ -385,10 +415,14 @@ fn apply_event(progress: &mut JournalProgress, event: &ExecutionJournalEventKind
 }
 
 fn write_immutable_json(path: &Path, value: &impl Serialize) -> Result<()> {
+    artifact::write_immutable_atomic(path, &immutable_json_bytes(path, value)?)
+}
+
+fn immutable_json_bytes(path: &Path, value: &impl Serialize) -> Result<Vec<u8>> {
     let mut bytes = serde_json::to_vec_pretty(value)
         .with_context(|| format!("serialize {}", path.display()))?;
     bytes.push(b'\n');
-    artifact::write_immutable_atomic(path, &bytes)
+    Ok(bytes)
 }
 
 #[cfg(test)]
@@ -406,6 +440,324 @@ mod tests {
             request: serde_json::json!({"runs": 1}),
             runner: serde_json::json!({"version": "test"}),
         }
+    }
+
+    fn slot() -> JournalSlot {
+        JournalSlot {
+            slot_id: "slot".into(),
+            ordinal: 0,
+            scenario_id: "scenario".into(),
+            case_id: "case".into(),
+            seed: "7".into(),
+            repetition: 0,
+        }
+    }
+
+    fn append(journal: &ExecutionJournal, kind: ExecutionJournalEventKind) -> JournalProgress {
+        journal.append("2026-09-04T12:00:01Z".into(), kind).unwrap()
+    }
+
+    fn admit_slot(journal: &ExecutionJournal) {
+        append(journal, ExecutionJournalEventKind::ExecutionAdmitted);
+        append(
+            journal,
+            ExecutionJournalEventKind::SlotInventoryCommitted {
+                slots: vec![slot()],
+            },
+        );
+    }
+
+    fn start_attempt(attempt_id: &str) -> ExecutionJournalEventKind {
+        ExecutionJournalEventKind::AttemptStarted {
+            scenario_id: "scenario".into(),
+            run_id: "run".into(),
+            attempt_id: attempt_id.into(),
+            session_id: "session".into(),
+        }
+    }
+
+    fn journal_bytes(journal: &ExecutionJournal) -> Vec<(PathBuf, Vec<u8>)> {
+        let mut files = vec![(
+            PathBuf::from("header.json"),
+            fs::read(journal.root.join("header.json")).unwrap(),
+        )];
+        for entry in fs::read_dir(journal.events_dir()).unwrap() {
+            let path = entry.unwrap().path();
+            files.push((
+                path.strip_prefix(&journal.root).unwrap().to_path_buf(),
+                fs::read(path).unwrap(),
+            ));
+        }
+        files.sort();
+        files
+    }
+
+    fn assert_rejected_without_mutation(
+        journal: &ExecutionJournal,
+        event: ExecutionJournalEventKind,
+        expected_error: &str,
+    ) {
+        let before_progress = journal.replay().unwrap();
+        let before_bytes = journal_bytes(journal);
+        let error = journal
+            .append("2026-09-04T12:00:02Z".into(), event)
+            .unwrap_err();
+        assert!(
+            error.to_string().contains(expected_error),
+            "unexpected append error: {error:#}"
+        );
+        assert_eq!(journal_bytes(journal), before_bytes);
+        assert_eq!(journal.replay().unwrap(), before_progress);
+    }
+
+    fn evidence(output: &Path, name: &str) -> artifact::ArtifactReference {
+        artifact::write_json(
+            output,
+            Path::new(name),
+            name,
+            "test-evidence",
+            &serde_json::json!({"completed": true}),
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn rejected_inventory_and_slot_events_leave_the_chain_unchanged() {
+        let output = tempfile::tempdir().unwrap();
+        let journal = ExecutionJournal::initialize(output.path(), &header()).unwrap();
+        append(&journal, ExecutionJournalEventKind::ExecutionAdmitted);
+        assert_rejected_without_mutation(
+            &journal,
+            ExecutionJournalEventKind::SlotInventoryCommitted {
+                slots: vec![slot(), slot()],
+            },
+            "inventory is duplicate or ambiguous",
+        );
+        let mut same_ordinal = slot();
+        same_ordinal.slot_id = "another-slot".into();
+        assert_rejected_without_mutation(
+            &journal,
+            ExecutionJournalEventKind::SlotInventoryCommitted {
+                slots: vec![slot(), same_ordinal],
+            },
+            "inventory is duplicate or ambiguous",
+        );
+        assert_rejected_without_mutation(
+            &journal,
+            ExecutionJournalEventKind::SlotDeferred {
+                slot_id: "slot".into(),
+                reason: "no inventory".into(),
+            },
+            "unknown or duplicate slot",
+        );
+        append(
+            &journal,
+            ExecutionJournalEventKind::SlotInventoryCommitted {
+                slots: vec![slot()],
+            },
+        );
+        assert_rejected_without_mutation(
+            &journal,
+            ExecutionJournalEventKind::SlotInventoryCommitted { slots: vec![] },
+            "inventory is duplicate or ambiguous",
+        );
+        assert_rejected_without_mutation(
+            &journal,
+            ExecutionJournalEventKind::SlotDeferred {
+                slot_id: "unknown-slot".into(),
+                reason: "invalid slot".into(),
+            },
+            "unknown or duplicate slot",
+        );
+        let deferred = ExecutionJournalEventKind::SlotDeferred {
+            slot_id: "slot".into(),
+            reason: "deadline".into(),
+        };
+        append(&journal, deferred.clone());
+        assert_rejected_without_mutation(&journal, deferred, "unknown or duplicate slot");
+        let progress = append(
+            &journal,
+            ExecutionJournalEventKind::ExecutionFinalized {
+                state: JournalTerminalState::Completed,
+                reason: "partial execution".into(),
+            },
+        );
+        assert_eq!(progress.committed_events, 4);
+        assert_eq!(progress.slots_deferred, 1);
+    }
+
+    #[test]
+    fn rejected_attempt_events_allow_a_valid_checkpoint_and_finish() {
+        let output = tempfile::tempdir().unwrap();
+        let journal = ExecutionJournal::initialize(output.path(), &header()).unwrap();
+        admit_slot(&journal);
+        assert_rejected_without_mutation(
+            &journal,
+            ExecutionJournalEventKind::AttemptFinished {
+                attempt_id: "unknown".into(),
+            },
+            "unknown or duplicate attempt",
+        );
+        append(&journal, start_attempt("attempt"));
+        assert_rejected_without_mutation(
+            &journal,
+            start_attempt("overlapping-attempt"),
+            "while another is active",
+        );
+        assert_rejected_without_mutation(
+            &journal,
+            ExecutionJournalEventKind::AttemptCheckpointed {
+                attempt_id: "unknown".into(),
+                state_sha256: "sha256:state".into(),
+            },
+            "does not match the active attempt",
+        );
+        assert_rejected_without_mutation(
+            &journal,
+            ExecutionJournalEventKind::SubjectObservationCommitted {
+                slot_id: "slot".into(),
+                attempt_id: "attempt".into(),
+                artifact: evidence(output.path(), "observation.json"),
+            },
+            "unknown or duplicate attempt",
+        );
+        let checkpoint = append(
+            &journal,
+            ExecutionJournalEventKind::AttemptCheckpointed {
+                attempt_id: "attempt".into(),
+                state_sha256: "sha256:state".into(),
+            },
+        );
+        assert_eq!(checkpoint.active_attempt_id.as_deref(), Some("attempt"));
+        assert_eq!(checkpoint.attempts_finished, 0);
+        let finished = ExecutionJournalEventKind::AttemptFinished {
+            attempt_id: "attempt".into(),
+        };
+        append(&journal, finished.clone());
+        assert_rejected_without_mutation(&journal, finished, "unknown or duplicate attempt");
+        assert_rejected_without_mutation(&journal, start_attempt("attempt"), "repeats attempt");
+        let observation = ExecutionJournalEventKind::SubjectObservationCommitted {
+            slot_id: "slot".into(),
+            attempt_id: "attempt".into(),
+            artifact: evidence(output.path(), "observation.json"),
+        };
+        append(&journal, observation.clone());
+        assert_rejected_without_mutation(&journal, observation, "unknown or duplicate attempt");
+        let committed = ExecutionJournalEventKind::RunCommitted {
+            slot_id: "slot".into(),
+            run_id: "run".into(),
+            artifact: evidence(output.path(), "run.json"),
+        };
+        append(&journal, committed.clone());
+        assert_rejected_without_mutation(&journal, committed, "unknown or duplicate slot");
+        let progress = append(
+            &journal,
+            ExecutionJournalEventKind::ExecutionFinalized {
+                state: JournalTerminalState::Completed,
+                reason: "completed".into(),
+            },
+        );
+        assert_eq!(progress.committed_events, 8);
+        assert_eq!(progress.attempts_started, 1);
+        assert_eq!(progress.attempts_finished, 1);
+        assert_eq!(progress.subject_observations_committed, 1);
+        assert_eq!(progress.runs_committed, 1);
+        assert_eq!(journal.replay().unwrap(), progress);
+    }
+
+    #[test]
+    fn missing_and_invalid_artifacts_are_rejected_before_event_installation() {
+        let output = tempfile::tempdir().unwrap();
+        let journal = ExecutionJournal::initialize(output.path(), &header()).unwrap();
+        admit_slot(&journal);
+        append(&journal, start_attempt("attempt"));
+        append(
+            &journal,
+            ExecutionJournalEventKind::AttemptFinished {
+                attempt_id: "attempt".into(),
+            },
+        );
+        for is_observation in [true, false] {
+            let valid = evidence(
+                output.path(),
+                if is_observation {
+                    "observation.json"
+                } else {
+                    "run.json"
+                },
+            );
+            let mut missing = valid.clone();
+            missing.path = "missing.json".into();
+            let mut wrong_hash = valid.clone();
+            wrong_hash.sha256 = "sha256:incorrect".into();
+            let mut wrong_size = valid.clone();
+            wrong_size.size_bytes += 1;
+            let mut escaping = valid.clone();
+            escaping.path = "../outside.json".into();
+            let mut invalid_metadata = valid.clone();
+            invalid_metadata.id.clear();
+            let event = |artifact| {
+                if is_observation {
+                    ExecutionJournalEventKind::SubjectObservationCommitted {
+                        slot_id: "slot".into(),
+                        attempt_id: "attempt".into(),
+                        artifact,
+                    }
+                } else {
+                    ExecutionJournalEventKind::RunCommitted {
+                        slot_id: "slot".into(),
+                        run_id: "run".into(),
+                        artifact,
+                    }
+                }
+            };
+            for (invalid, expected_error) in [
+                (missing, "read artifact"),
+                (wrong_hash, "hash does not match"),
+                (wrong_size, "size does not match"),
+                (escaping, "cannot contain parent"),
+                (invalid_metadata, "metadata must be non-empty"),
+            ] {
+                assert_rejected_without_mutation(&journal, event(invalid), expected_error);
+            }
+            append(&journal, event(valid));
+        }
+        let progress = journal.replay().unwrap();
+        assert_eq!(progress.committed_events, 6);
+        assert_eq!(progress.subject_observations_committed, 1);
+        assert_eq!(progress.runs_committed, 1);
+    }
+
+    #[test]
+    fn append_revalidates_previously_committed_artifacts() {
+        let output = tempfile::tempdir().unwrap();
+        let journal = ExecutionJournal::initialize(output.path(), &header()).unwrap();
+        admit_slot(&journal);
+        let reference = evidence(output.path(), "run.json");
+        append(
+            &journal,
+            ExecutionJournalEventKind::RunCommitted {
+                slot_id: "slot".into(),
+                run_id: "run".into(),
+                artifact: reference.clone(),
+            },
+        );
+        let before_bytes = journal_bytes(&journal);
+        let artifact_path = output.path().join(&reference.path);
+        let original = fs::read(&artifact_path).unwrap();
+        fs::write(&artifact_path, vec![b'x'; original.len()]).unwrap();
+        let event = ExecutionJournalEventKind::ExecutionFinalized {
+            state: JournalTerminalState::Completed,
+            reason: "completed".into(),
+        };
+        assert!(journal
+            .append("2026-09-04T12:00:02Z".into(), event.clone())
+            .unwrap_err()
+            .to_string()
+            .contains("hash does not match"));
+        assert_eq!(journal_bytes(&journal), before_bytes);
+        fs::write(&artifact_path, original).unwrap();
+        assert!(append(&journal, event).terminal);
     }
 
     #[test]
@@ -496,13 +848,10 @@ mod tests {
                 },
             )
             .unwrap();
-        assert!(journal
-            .append(
-                "2026-09-04T12:00:02Z".into(),
-                ExecutionJournalEventKind::ExecutionAdmitted,
-            )
-            .unwrap_err()
-            .to_string()
-            .contains("finalized"));
+        assert_rejected_without_mutation(
+            &journal,
+            ExecutionJournalEventKind::ExecutionAdmitted,
+            "finalized",
+        );
     }
 }

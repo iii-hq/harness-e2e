@@ -1,0 +1,5 @@
+{
+  "schema_version": 4,
+  "results_schema": "schemas/results.json",
+  "scoring_profile": "config/scoring/difficulty-weighted-v1.json"
+}

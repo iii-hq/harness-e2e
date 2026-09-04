@@ -582,6 +582,7 @@ pub(super) fn control_request(
         rotating_seeds: Vec::new(),
         technical_retries: request.technical_retries,
         progress_interval_seconds: 15,
+        slot_start_deadline_seconds: None,
         run_contract: None,
     })
 }

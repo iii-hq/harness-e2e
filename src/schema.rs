@@ -18,6 +18,11 @@ pub fn results() -> RootSchema {
         .as_mut()
         .expect("results schema has an object root");
     object.required.insert("manifest".to_string());
+    if let Some(Schema::Object(version)) = object.properties.get_mut("schema_version") {
+        version.enum_values = Some(vec![serde_json::json!(
+            crate::report::RESULTS_SCHEMA_VERSION
+        )]);
+    }
     let scenario = root
         .definitions
         .get_mut("E2eScenarioReport")
@@ -29,7 +34,9 @@ pub fn results() -> RootSchema {
         .object
         .as_mut()
         .expect("E2eScenarioReport has object validation");
-    scenario.required.insert("case".to_string());
+    // An unmaterialized, wholly deferred case has an inventory identity and a
+    // reason, but no fabricated ScenarioCase. Report validation enforces this.
+    scenario.required.remove("case");
     root.schema
         .metadata()
         .title

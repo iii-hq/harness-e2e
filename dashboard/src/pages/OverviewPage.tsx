@@ -58,6 +58,8 @@ export function statusCopy(presentation: ExecutionPresentation) {
     return { label: 'incomplete', status: 'incomplete' as const }
   if (presentation.attention === 'unavailable')
     return { label: 'no report', status: 'unavailable' as const }
+  if (presentation.attention === 'unsupported')
+    return { label: 'unsupported', status: 'unavailable' as const }
   if (presentation.breakdown.hard_gate > 0)
     return { label: 'hard gate', status: 'hard_gate' as const }
   if (
@@ -393,7 +395,7 @@ function AttentionQueue({
 }
 
 /** Audit O-17: running executions get their own live strip. */
-function RunningStrip({
+export function RunningStrip({
   running,
   onCancel,
   cancelling,
@@ -438,20 +440,32 @@ function RunningStrip({
                     {scope}
                   </span>
                 ) : null}
-                {onCancel && presentation.attention === 'running' ? (
-                  <button
+                <div className="ms-auto flex shrink-0 items-center gap-2">
+                  <a
                     className={buttonClassName({
-                      variant: 'quiet',
+                      variant: 'secondary',
                       size: 'compact',
-                      className: 'ms-auto',
+                      className: 'no-underline',
                     })}
-                    type="button"
-                    onClick={onCancel}
-                    disabled={cancelling}
+                    href={hashForExecution(presentation.execution.id)}
                   >
-                    {cancelling ? 'cancelling…' : 'cancel'}
-                  </button>
-                ) : null}
+                    open execution
+                    <ArrowRight size={13} aria-hidden="true" />
+                  </a>
+                  {onCancel && presentation.attention === 'running' ? (
+                    <button
+                      className={buttonClassName({
+                        variant: 'quiet',
+                        size: 'compact',
+                      })}
+                      type="button"
+                      onClick={onCancel}
+                      disabled={cancelling}
+                    >
+                      {cancelling ? 'cancelling…' : 'cancel'}
+                    </button>
+                  ) : null}
+                </div>
               </li>
             )
           })}
@@ -462,7 +476,7 @@ function RunningStrip({
 }
 
 /** Audit O-01 / O-03: five compact rows, never the ledger's table. */
-function RecentExecutions({
+export function RecentExecutions({
   presentations,
   total,
 }: {

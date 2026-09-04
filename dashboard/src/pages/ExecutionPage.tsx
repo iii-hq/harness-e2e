@@ -49,6 +49,7 @@ import {
   formatDate,
   formatDuration,
   formatPercent,
+  unsupportedExecutionReason,
 } from '@/lib/execution-view'
 import { executionTitle } from '@/lib/overview-signal'
 import {
@@ -118,6 +119,8 @@ function executionStatus(presentation: ExecutionPresentation): {
     return { status: 'incomplete', label: 'Incomplete' }
   if (presentation.attention === 'unavailable')
     return { status: 'unavailable', label: 'Unavailable' }
+  if (presentation.attention === 'unsupported')
+    return { status: 'unavailable', label: 'Unsupported' }
   if (presentation.breakdown.hard_gate > 0)
     return { status: 'hard_gate', label: 'Hard gate failed' }
   if (
@@ -460,6 +463,12 @@ export function provenanceEntries(
     ['attempt', detail.attempt == null ? null : String(detail.attempt)],
     ['status', detail.status],
     ['availability', detail.availability],
+    [
+      'slot start deadline',
+      detail.slot_start_deadline_seconds == null
+        ? null
+        : `${detail.slot_start_deadline_seconds}s (soft limit for starting new slots)`,
+    ],
     ['event', detail.event],
     ['actor', detail.actor],
     [
@@ -616,7 +625,10 @@ function LiveState({
         <span className="font-mono text-xs text-ink-soft">
           {[scope, elapsed ? `${elapsed} elapsed` : null]
             .filter(Boolean)
-            .join(' · ') || 'no progress reported yet'}
+            .join(' · ') ||
+            (presentation.attention === 'unsupported'
+              ? 'historical result retained'
+              : 'no progress reported yet')}
         </span>
         {running && onCancel ? (
           <button
@@ -634,9 +646,11 @@ function LiveState({
         ) : null}
       </div>
       <p className="mt-3 mb-0 max-w-[70ch] text-xs leading-5 text-ink-soft">
-        {running
-          ? 'The report, the decision and the scenario results appear here as soon as the run finishes. This page follows the run; no reload is needed.'
-          : 'No report was retained, so there is nothing to decide. Re-run the same scope to obtain one.'}
+        {presentation.attention === 'unsupported'
+          ? unsupportedExecutionReason(presentation.execution)
+          : running
+            ? 'The report, the decision and the scenario results appear here as soon as the run finishes. This page follows the run; no reload is needed.'
+            : 'No report was retained, so there is nothing to decide. Re-run the same scope to obtain one.'}
       </p>
     </Panel>
   )
@@ -921,7 +935,7 @@ export function ExecutionPage({
                 <Link2 size={13} aria-hidden="true" />
                 {copied ? 'link copied' : 'copy link'}
               </button>
-              {local ? (
+              {local && presentation.attention !== 'unsupported' ? (
                 <a
                   className={buttonClassName({
                     variant: 'secondary',
@@ -956,6 +970,12 @@ export function ExecutionPage({
           ))}
         </dl>
 
+        {detail.persistence_errors?.length ? (
+          <p className="mt-4 text-sm text-warning" role="status">
+            Partial result: completed runs were preserved, but persistence
+            failed. {detail.persistence_errors.join(' · ')}
+          </p>
+        ) : null}
         {noRun ? (
           <LiveState
             presentation={presentation}

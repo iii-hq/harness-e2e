@@ -564,7 +564,8 @@
       "required": [
         "domain",
         "message",
-        "phase"
+        "phase",
+        "status"
       ],
       "properties": {
         "code": {
@@ -595,6 +596,14 @@
               "$ref": "#/definitions/RetryScope"
             }
           ]
+        },
+        "status": {
+          "description": "The failure's original classification, independent of the primary run status.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/RunStatus"
+            }
+          ]
         }
       }
     },
@@ -603,6 +612,17 @@
       "enum": [
         "none",
         "same_slot"
+      ]
+    },
+    "RunStatus": {
+      "type": "string",
+      "enum": [
+        "passed",
+        "hard_gate_failed",
+        "subject_error",
+        "judge_error",
+        "resource_limit",
+        "infrastructure_error"
       ]
     },
     "SystemStatus": {

@@ -15,7 +15,12 @@ sys.path.insert(0, str(ROOT / "scripts"))
 from run_e2e_campaign import (
     CampaignError,
     FAULT_PROFILE_WEIGHT,
+    RESULTS_SCHEMA_VERSION,
     RESULT_CONTRACT_SHA256,
+    SCORING_PROFILE_SHA256,
+    RESULT_AGGREGATE_COUNT_FIELDS,
+    RESULT_AGGREGATE_RATE_FIELDS,
+    RESULT_AGGREGATE_TOKEN_FIELDS,
     SCENARIO_DIFFICULTY_WEIGHT,
     aggregate_existing_campaign,
     markdown_group,
@@ -34,6 +39,40 @@ from run_e2e_campaign import (
 
 
 CAMPAIGN_DIR = ROOT / "config" / "campaigns"
+
+
+def native_scenario(scenario_id, *, deferred=False):
+    aggregate = {field: 0 for field in RESULT_AGGREGATE_COUNT_FIELDS}
+    aggregate.update({field: None for field in RESULT_AGGREGATE_RATE_FIELDS})
+    aggregate.update({field: None for field in RESULT_AGGREGATE_TOKEN_FIELDS})
+    aggregate.update({
+        "planned_runs": 1,
+        "observed_runs": 0 if deferred else 1,
+        "deferred_runs": 1 if deferred else 0,
+        "completed_runs": 0 if deferred else 1,
+        "technical_valid_runs": 0 if deferred else 1,
+        "objective_scored_runs": 0 if deferred else 1,
+        "objective_median_score": None if deferred else 90,
+        "quality_scored_completed_runs": 0 if deferred else 1,
+        "quality_score_completed": None if deferred else 90,
+    })
+    scenario = {"scenario_id": scenario_id, "aggregate": aggregate}
+    if deferred:
+        scenario.update({"deferral_reason": "materialization failed", "runs": []})
+    else:
+        scenario["case"] = {"complexity": {"tier": "l4_coordinated"}}
+    return scenario
+
+
+def native_report(scenarios, *, partial=False):
+    return {
+        "schema_version": RESULTS_SCHEMA_VERSION,
+        "result_contract_sha256": RESULT_CONTRACT_SHA256,
+        "scoring_profile_sha256": SCORING_PROFILE_SHA256,
+        "report_state": "partial" if partial else "complete",
+        "objective_outcome": "inconclusive" if partial else "passed",
+        "scenarios": scenarios,
+    }
 
 
 def manifest(groups=None):
@@ -696,7 +735,7 @@ class CampaignRunnerTests(unittest.TestCase):
                 json.dumps({"schema_version": 3, "passed": True, "scenarios": []}),
                 encoding="utf-8",
             )
-            with self.assertRaisesRegex(CampaignError, "result_contract_sha256"):
+            with self.assertRaisesRegex(CampaignError, "schema_version must be 4"):
                 score_campaign(campaign, [{"group_id": "core", "output": str(output)}])
 
     def test_compact_aggregate_keeps_only_bundle_references(self):
@@ -719,6 +758,50 @@ class CampaignRunnerTests(unittest.TestCase):
             self.assertTrue(results.is_file())
             self.assertTrue(contract.is_file())
             self.assertFalse(runtime.exists())
+
+    def test_partial_report_requires_every_planned_slot_explicitly(self):
+        campaign = parse_campaign(manifest([{
+            "id": "core", "execution_kind": "harness_turn", "runs": 1,
+            "technical_retries": 0, "difficulty_weight": 4,
+            "scenarios": ["tool_contract_recovery", "engineering_ticket"],
+        }]))
+        with tempfile.TemporaryDirectory() as directory:
+            output = pathlib.Path(directory)
+            document = native_report([native_scenario("tool_contract_recovery")], partial=True)
+            results = output / "results.json"
+            results.write_text(json.dumps(document), encoding="utf-8")
+            with self.assertRaisesRegex(CampaignError, "planned runs do not match campaign"):
+                score_campaign(campaign, [{"group_id": "core", "output": str(output)}])
+
+            document["scenarios"].append(native_scenario("engineering_ticket", deferred=True))
+            results.write_text(json.dumps(document), encoding="utf-8")
+            scoring = score_campaign(campaign, [{"group_id": "core", "output": str(output)}])
+            self.assertEqual(scoring["harness_score"], 90)
+            self.assertEqual(scoring["objective_score_coverage"], 0.5)
+            self.assertEqual(scoring["score_availability"], "partial")
+
+    def test_unmaterialized_scenario_requires_deferral_reason_without_observations(self):
+        campaign = parse_campaign(manifest())
+        with tempfile.TemporaryDirectory() as directory:
+            output = pathlib.Path(directory)
+            deferred = native_scenario("tool_contract_recovery", deferred=True)
+            deferred.pop("deferral_reason")
+            (output / "results.json").write_text(
+                json.dumps(native_report([deferred], partial=True)), encoding="utf-8"
+            )
+            with self.assertRaisesRegex(CampaignError, "wholly deferred with a reason"):
+                score_campaign(campaign, [{"group_id": "core", "output": str(output)}])
+
+    def test_persistence_error_preserves_score_but_invalidates_infrastructure(self):
+        campaign = parse_campaign(manifest())
+        with tempfile.TemporaryDirectory() as directory:
+            output = pathlib.Path(directory)
+            document = native_report([native_scenario("tool_contract_recovery")], partial=True)
+            document["persistence_errors"] = ["journal append failed"]
+            (output / "results.json").write_text(json.dumps(document), encoding="utf-8")
+            scoring = score_campaign(campaign, [{"group_id": "core", "output": str(output)}])
+            self.assertEqual(scoring["harness_score"], 90)
+            self.assertFalse(scoring["infrastructure_valid"])
 
     def test_difficulty_weighted_score_uses_native_scenario_medians(self):
         campaign = parse_campaign(
@@ -758,7 +841,7 @@ class CampaignRunnerTests(unittest.TestCase):
                 (output / "results.json").write_text(
                     json.dumps(
                         {
-                            "schema_version": 3,
+                            "schema_version": RESULTS_SCHEMA_VERSION,
                             "result_contract_sha256": RESULT_CONTRACT_SHA256,
                             "scoring_profile_sha256": _canonical_sha256(scoring_profile),
                             "report_state": "complete",

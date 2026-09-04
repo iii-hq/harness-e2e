@@ -398,6 +398,7 @@ async fn run(args: RunArgs) -> Result<()> {
         seed: args.seed,
         rotating_seeds: args.rotating_seeds,
         technical_retries,
+        slot_start_deadline_seconds: harness_e2e::suite::resolve_slot_start_deadline(None)?,
         progress_interval: (args.progress_interval_seconds > 0)
             .then(|| std::time::Duration::from_secs(args.progress_interval_seconds)),
         control: None,
@@ -408,11 +409,18 @@ async fn run(args: RunArgs) -> Result<()> {
     .context("run E2E quality suite")?;
 
     print!("{}", outcome.report.summary(false));
-    println!("report: {}", outcome.report_path.display());
+    if let Some(path) = &outcome.report_path {
+        println!("report: {}", path.display());
+    } else {
+        eprintln!(
+            "report persistence failed: {}",
+            outcome.report.persistence_errors.join("; ")
+        );
+    }
     if !outcome.report.passed {
         bail!("E2E suite failed");
     }
-    tracing::info!(path = %outcome.report_path.display(), "E2E quality suite passed");
+    tracing::info!(path = ?outcome.report_path, "E2E quality suite passed");
     Ok(())
 }
 
@@ -458,6 +466,7 @@ async fn replay_materialized(args: ReplayMaterializedArgs) -> Result<()> {
         seed: Some(frozen.seed),
         rotating_seeds: Vec::new(),
         technical_retries: frozen.campaign.technical_retries,
+        slot_start_deadline_seconds: harness_e2e::suite::resolve_slot_start_deadline(None)?,
         progress_interval: (args.progress_interval_seconds > 0)
             .then(|| std::time::Duration::from_secs(args.progress_interval_seconds)),
         control: None,
@@ -467,7 +476,14 @@ async fn replay_materialized(args: ReplayMaterializedArgs) -> Result<()> {
     .await
     .context("replay immutable Markdown plan")?;
     print!("{}", outcome.report.summary(false));
-    println!("report: {}", outcome.report_path.display());
+    if let Some(path) = &outcome.report_path {
+        println!("report: {}", path.display());
+    } else {
+        eprintln!(
+            "report persistence failed: {}",
+            outcome.report.persistence_errors.join("; ")
+        );
+    }
     if !outcome.report.passed {
         bail!("materialized Markdown replay failed");
     }

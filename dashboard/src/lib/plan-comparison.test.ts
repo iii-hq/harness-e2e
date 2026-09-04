@@ -68,6 +68,20 @@ function execution(
 }
 
 describe('local plan comparison view model', () => {
+  it('does not calculate deltas from unsupported historical contracts', () => {
+    const comparison = buildPlanComparison(
+      execution('legacy', {
+        status: 'unsupported',
+        availability: 'unsupported',
+      }),
+      execution('current'),
+    )
+    expect(comparison.verdict).toBe('inconclusive')
+    expect(comparison.headline).toBe('Result contracts are incompatible')
+    expect(comparison.metrics).toEqual([])
+    expect(comparison.scenarios).toEqual([])
+  })
+
   it('keeps objective stability separate from directional efficiency', () => {
     const comparison = buildPlanComparison(
       execution('baseline'),

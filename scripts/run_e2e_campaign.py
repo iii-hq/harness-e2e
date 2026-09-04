@@ -26,6 +26,11 @@ import uuid
 from collections.abc import Callable, Mapping, Sequence
 from typing import Any
 
+from result_contract import (
+    RESULTS_SCHEMA_VERSION,
+    RESULT_CONTRACT_SHA256,
+    SCORING_PROFILE_SHA256,
+)
 
 CAMPAIGN_KIND = "harness-e2e-campaign"
 SCORING_PROFILE = "difficulty-weighted-v1"
@@ -65,9 +70,6 @@ SAFE_LANE = re.compile(r"^[a-z][a-z0-9_-]{0,31}$")
 SAFE_EXECUTION_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$")
 FORBIDDEN_SEED_FIELDS = {"seed", "seeds", "rotating_seed", "rotating_seeds"}
 SHA256_PATTERN = re.compile(r"^sha256:[0-9a-f]{64}$")
-RESULTS_SCHEMA_VERSION = 3
-RESULT_CONTRACT_SHA256 = "sha256:5a6c38bca7168d0ff06a9bad8ea42e9d7afab0f25ccb2f8316ea85c9e85a7a03"
-SCORING_PROFILE_SHA256 = "sha256:11d3e03f9c898b9f3c1a2f696401ccd135d50b9cbec340a480f99327923d12d1"
 RESULT_REPORT_STATES = {"complete", "partial"}
 OBJECTIVE_OUTCOMES = {"passed", "failed", "inconclusive"}
 RESULT_AGGREGATE_COUNT_FIELDS = (
@@ -725,6 +727,15 @@ def _regular_group_measurement(
         raise CampaignError(
             f"{results_path}.objective_outcome must be one of {sorted(OBJECTIVE_OUTCOMES)}"
         )
+    persistence_errors = report.get("persistence_errors", [])
+    if not isinstance(persistence_errors, list) or any(
+        not isinstance(error, str) or not error.strip() for error in persistence_errors
+    ):
+        raise CampaignError(f"{results_path}.persistence_errors must be nonempty strings")
+    if persistence_errors and (
+        report_state != "partial" or objective_outcome != "inconclusive"
+    ):
+        raise CampaignError(f"{results_path}: persistence errors require partial inconclusive results")
     scenarios = report.get("scenarios")
     if not isinstance(scenarios, list):
         raise CampaignError(f"{results_path}: scenarios must be an array")
@@ -738,45 +749,57 @@ def _regular_group_measurement(
         aggregate = scenario.get("aggregate")
         if not isinstance(aggregate, dict):
             raise CampaignError(f"{results_path}.scenarios[].aggregate must be an object")
-        if isinstance(aggregate, dict):
-            label = f"{results_path}.scenarios[].aggregate"
-            counts = {
-                field: _require_result_count(aggregate.get(field), f"{label}.{field}")
-                for field in RESULT_AGGREGATE_COUNT_FIELDS
-            }
-            if counts["planned_runs"] != counts["observed_runs"] + counts["deferred_runs"]:
-                raise CampaignError(f"{label}: planned_runs invariant is violated")
-            if counts["observed_runs"] != (
-                counts["completed_runs"]
-                + counts["task_incomplete_runs"]
-                + counts["undetermined_runs"]
-            ):
-                raise CampaignError(f"{label}: completion invariant is violated")
-            if counts["observed_runs"] != (
-                counts["technical_valid_runs"] + counts["technical_invalid_runs"]
-            ):
-                raise CampaignError(f"{label}: technical invariant is violated")
-            for field, count in counts.items():
-                totals[field] += count
-            for field in RESULT_AGGREGATE_RATE_FIELDS:
-                _optional_result_rate(aggregate.get(field), f"{label}.{field}")
-            for field in RESULT_AGGREGATE_TOKEN_FIELDS:
-                if field not in aggregate:
-                    raise CampaignError(f"{label}.{field} is required")
-                _optional_nonnegative_number(aggregate.get(field), f"{label}.{field}")
-            median = _optional_result_number(
-                aggregate.get("objective_median_score"),
-                f"{label}.objective_median_score",
-            )
-            if median is not None:
-                medians.append(float(median))
-            quality_score = _optional_result_number(
-                aggregate.get("quality_score_completed"),
-                f"{label}.quality_score_completed",
-            )
-            if quality_score is not None:
-                quality_scores.append(quality_score)
+        label = f"{results_path}.scenarios[].aggregate"
+        counts = {
+            field: _require_result_count(aggregate.get(field), f"{label}.{field}")
+            for field in RESULT_AGGREGATE_COUNT_FIELDS
+        }
+        if counts["planned_runs"] != counts["observed_runs"] + counts["deferred_runs"]:
+            raise CampaignError(f"{label}: planned_runs invariant is violated")
+        if counts["observed_runs"] != (
+            counts["completed_runs"]
+            + counts["task_incomplete_runs"]
+            + counts["undetermined_runs"]
+        ):
+            raise CampaignError(f"{label}: completion invariant is violated")
+        if counts["observed_runs"] != (
+            counts["technical_valid_runs"] + counts["technical_invalid_runs"]
+        ):
+            raise CampaignError(f"{label}: technical invariant is violated")
+        for field, count in counts.items():
+            totals[field] += count
+        for field in RESULT_AGGREGATE_RATE_FIELDS:
+            _optional_result_rate(aggregate.get(field), f"{label}.{field}")
+        for field in RESULT_AGGREGATE_TOKEN_FIELDS:
+            if field not in aggregate:
+                raise CampaignError(f"{label}.{field} is required")
+            _optional_nonnegative_number(aggregate.get(field), f"{label}.{field}")
+        median = _optional_result_number(
+            aggregate.get("objective_median_score"),
+            f"{label}.objective_median_score",
+        )
+        if median is not None:
+            medians.append(float(median))
+        quality_score = _optional_result_number(
+            aggregate.get("quality_score_completed"),
+            f"{label}.quality_score_completed",
+        )
+        if quality_score is not None:
+            quality_scores.append(quality_score)
         case = scenario.get("case")
+        if case is None:
+            reason = scenario.get("deferral_reason")
+            if (
+                not isinstance(reason, str)
+                or not reason.strip()
+                or counts["planned_runs"] == 0
+                or counts["observed_runs"] != 0
+                or counts["deferred_runs"] != counts["planned_runs"]
+                or scenario.get("runs") != []
+            ):
+                raise CampaignError(
+                    f"{results_path}: unmaterialized scenario must be wholly deferred with a reason"
+                )
         complexity = case.get("complexity") if isinstance(case, dict) else None
         tier = complexity.get("tier") if isinstance(complexity, dict) else None
         weight = _tier_weight(tier)
@@ -787,19 +810,10 @@ def _regular_group_measurement(
             f"{results_path}: observed difficulty weight does not match campaign"
         )
     expected_runs = group.runs * len(group.scenarios)
-    if totals["planned_runs"] > expected_runs or (
-        report_state == "complete" and totals["planned_runs"] != expected_runs
-    ):
+    if totals["planned_runs"] != expected_runs:
         raise CampaignError(
             f"{results_path}: planned runs do not match campaign ({totals['planned_runs']} != {expected_runs})"
         )
-    # A materialization failure may prevent a case projection from being built,
-    # but the immutable slot inventory still proves that the run was planned.
-    # Preserve the usable observations and account for absent projections as
-    # deferred instead of rejecting the entire partial report.
-    implicit_deferred = expected_runs - totals["planned_runs"]
-    totals["planned_runs"] += implicit_deferred
-    totals["deferred_runs"] += implicit_deferred
     planned = totals["planned_runs"]
     completed = totals["completed_runs"]
     objective_score_coverage = totals["objective_scored_runs"] / planned if planned else 0.0
@@ -840,7 +854,7 @@ def _regular_group_measurement(
         "quality_score_completed": quality_score_completed,
         "quality_coverage": quality_coverage,
         "product_passed": {"passed": True, "failed": False}.get(objective_outcome),
-        "infrastructure_valid": totals["technical_invalid_runs"] == 0,
+        "infrastructure_valid": totals["technical_invalid_runs"] == 0 and not persistence_errors,
         "report_state": report_state,
         "objective_outcome": objective_outcome,
         "result_contract_sha256": result_contract_sha256,
@@ -935,6 +949,7 @@ def score_campaign(
     metric_totals = {field: 0.0 for field in metric_fields}
     product_values: list[bool] = []
     infrastructure_valid = True
+    all_group_scores_complete = True
     result_contracts: set[str] = set()
     scoring_profiles: set[str] = set()
     for group in campaign.groups:
@@ -966,6 +981,9 @@ def score_campaign(
         infrastructure_valid = (
             infrastructure_valid and measurement["infrastructure_valid"]
         )
+        all_group_scores_complete = (
+            all_group_scores_complete and measurement["score_availability"] == "complete"
+        )
     if len(result_contracts) > 1:
         raise CampaignError("campaign groups use incompatible result contracts")
     if len(scoring_profiles) > 1:
@@ -983,7 +1001,7 @@ def score_campaign(
     harness_score = weighted_score / scored_weight if scored_weight else None
     availability = (
         "complete"
-        if scored_weight == expected_weight and infrastructure_valid
+        if scored_weight == expected_weight and infrastructure_valid and all_group_scores_complete
         else "partial"
         if harness_score is not None
         else "unavailable"

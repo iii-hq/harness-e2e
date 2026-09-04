@@ -71,6 +71,12 @@
     "passed": {
       "type": "boolean"
     },
+    "persistence_errors": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
     "redaction": {
       "default": {
         "redacted_fields": 0,
@@ -98,10 +104,22 @@
     "schema_version": {
       "type": "integer",
       "format": "uint32",
+      "enum": [
+        4
+      ],
       "minimum": 0.0
     },
     "scoring_profile_sha256": {
       "type": "string"
+    },
+    "slot_start_deadline_seconds": {
+      "description": "Soft scheduling deadline: prevents starting slots after this interval.",
+      "type": [
+        "integer",
+        "null"
+      ],
+      "format": "uint64",
+      "minimum": 0.0
     },
     "subject": {
       "$ref": "#/definitions/ModelArtifact"
@@ -1436,7 +1454,6 @@
       "type": "object",
       "required": [
         "aggregate",
-        "case",
         "execution_policy",
         "passed",
         "runs",
@@ -1459,6 +1476,12 @@
         "case_id": {
           "default": "",
           "type": "string"
+        },
+        "deferral_reason": {
+          "type": [
+            "string",
+            "null"
+          ]
         },
         "execution_policy": {
           "$ref": "#/definitions/ExecutionPolicy"
@@ -1817,7 +1840,8 @@
       "required": [
         "domain",
         "message",
-        "phase"
+        "phase",
+        "status"
       ],
       "properties": {
         "code": {
@@ -1846,6 +1870,14 @@
           "allOf": [
             {
               "$ref": "#/definitions/RetryScope"
+            }
+          ]
+        },
+        "status": {
+          "description": "The failure's original classification, independent of the primary run status.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/RunStatus"
             }
           ]
         }
