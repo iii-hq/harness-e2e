@@ -859,8 +859,23 @@ function AssessmentDetailContent({
   const aiLabel = ai.result?.verdict ?? ai.availability
   const objectiveFailure = run.systemStatus !== 'passed'
 
+  // Audit ED-25: a run that retained no assessments passed on infrastructure
+  // alone. The tiles said "Not reported" twice and left the reader to work out
+  // that nothing about the output was ever checked.
+  const scoredNothing = run.assessments.length === 0
+
   return (
     <div className="grid gap-5">
+      {scoredNothing ? (
+        <Callout
+          tone="warning"
+          title="only execution and infrastructure were checked"
+        >
+          This run retained no assessments, so nothing about the deliverable or
+          its structure was scored. The outcome below reports that the run
+          completed, not that it produced the right thing.
+        </Callout>
+      ) : null}
       <PrimaryMetricBoard run={run} standalone />
 
       <section aria-labelledby={`${safeId(run.key)}-outcome`}>
