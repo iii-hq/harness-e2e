@@ -5,6 +5,7 @@ use std::time::{Duration, Instant};
 
 use anyhow::{bail, Context, Result};
 use chrono::{SecondsFormat, Utc};
+use futures_util::stream::StreamExt;
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use serde_json::json;
 use tokio::sync::{mpsc, oneshot, watch};
@@ -59,6 +60,10 @@ const MAX_TECHNICAL_RETRIES: u8 = 3;
 // analyzer/provider stalls from holding the CLI child (and its plan lifecycle)
 // indefinitely; timing out the advisory assessment never changes run status.
 const FINAL_ASSESSMENT_BATCH_TIMEOUT: Duration = Duration::from_secs(120);
+// The advisory analyzer is one provider round trip per run, so a sequential batch
+// fits only `budget / latency` runs and coverage collapses as a block grows.
+// Evaluations are independent, so they run concurrently under the same budget.
+const FINAL_ASSESSMENT_CONCURRENCY: usize = 4;
 
 pub(crate) fn e2e_function_policy(spec: &ScenarioSpec, run_id: &str) -> FunctionPolicy {
     let mut deny = vec!["e2e::*".to_string()];
@@ -505,12 +510,76 @@ const MAX_FINAL_ASSESSMENT_VALUE_ITEMS: usize = 16;
 const MAX_FINAL_ASSESSMENT_VALUE_DEPTH: usize = 4;
 const MAX_FINAL_ASSESSMENT_VALUE_BYTES: usize = 4 * 1024;
 
+/// One advisory analyzer outcome: the assessment, the attempts it took, the
+/// analyzer usage when the provider reported it, and how long it ran.
+type FinalAssessmentOutcome = (
+    AiFinalAssessment,
+    u8,
+    Option<crate::report::ModelUsageReport>,
+    Duration,
+);
+
+/// One advisory analyzer round trip under the shared batch budget. Extracted so
+/// the concurrent stream holds a concrete future type instead of an inferred
+/// closure future.
+async fn evaluate_one_final_assessment(
+    context: &E2eContext,
+    config: &JudgeConfig,
+    input: &FinalAssessmentInput,
+    batch_started: Instant,
+) -> Result<FinalAssessmentOutcome> {
+    let assessment_started = Instant::now();
+    let remaining = FINAL_ASSESSMENT_BATCH_TIMEOUT.saturating_sub(batch_started.elapsed());
+    if remaining.is_zero() {
+        return Ok((
+            timed_out_final_assessment(input, config, Duration::ZERO)?,
+            0,
+            None,
+            assessment_started.elapsed(),
+        ));
+    }
+    match tokio::time::timeout(
+        remaining,
+        judge::evaluate_final_assessment(context, config, input),
+    )
+    .await
+    {
+        Ok(outcome) => {
+            let outcome = outcome?;
+            Ok((
+                outcome.assessment,
+                outcome.attempts,
+                outcome.usage,
+                assessment_started.elapsed(),
+            ))
+        }
+        Err(_) => Ok((
+            timed_out_final_assessment(input, config, assessment_started.elapsed())?,
+            1,
+            None,
+            assessment_started.elapsed(),
+        )),
+    }
+}
+
 async fn evaluate_final_assessments(
     context: &E2eContext,
     judge_config: Option<&JudgeConfig>,
     output: &std::path::Path,
     report: &mut E2eReport,
 ) -> Result<()> {
+    struct PendingAssessment {
+        scenario_index: usize,
+        run_index: usize,
+        scenario_id: String,
+        run_id: String,
+        attempt_id: String,
+        run_status: RunStatus,
+        ordinal: usize,
+        input: FinalAssessmentInput,
+        input_reference: crate::artifact::ArtifactReference,
+    }
+
     let total = report
         .scenarios
         .iter()
@@ -518,6 +587,11 @@ async fn evaluate_final_assessments(
         .sum::<usize>();
     let batch_started = Instant::now();
     let mut ordinal = 0usize;
+    let mut pending: Vec<PendingAssessment> = Vec::new();
+
+    // Preparation touches the report, so it stays sequential and cheap: it only
+    // builds and persists each input, and records the runs that never reach the
+    // analyzer.
     for scenario_index in 0..report.scenarios.len() {
         for run_index in 0..report.scenarios[scenario_index].runs.len() {
             ordinal += 1;
@@ -554,7 +628,6 @@ async fn evaluate_final_assessments(
                 total,
                 "starting advisory final assessment"
             );
-            let assessment_started = Instant::now();
             if let Err(error) = input.validate() {
                 attach_final_assessment(
                     report,
@@ -619,72 +692,83 @@ async fn evaluate_final_assessments(
                     continue;
                 }
             };
-
-            let (assessment, attempts, usage) = match judge_config {
-                Some(config) => {
-                    let remaining =
-                        FINAL_ASSESSMENT_BATCH_TIMEOUT.saturating_sub(batch_started.elapsed());
-                    if remaining.is_zero() {
-                        (
-                            timed_out_final_assessment(&input, config, Duration::ZERO)?,
-                            0,
-                            None,
-                        )
-                    } else {
-                        match tokio::time::timeout(
-                            remaining,
-                            judge::evaluate_final_assessment(context, config, &input),
-                        )
-                        .await
-                        {
-                            Ok(outcome) => {
-                                let outcome = outcome?;
-                                (outcome.assessment, outcome.attempts, outcome.usage)
-                            }
-                            Err(_) => (
-                                timed_out_final_assessment(
-                                    &input,
-                                    config,
-                                    assessment_started.elapsed(),
-                                )?,
-                                1,
-                                None,
-                            ),
-                        }
-                    }
-                }
-                None => (unavailable_final_assessment(&input)?, 0, None),
-            };
-            let availability = assessment.availability;
-
-            attach_final_assessment(
-                report,
+            pending.push(PendingAssessment {
                 scenario_index,
                 run_index,
-                &run_id,
-                &attempt_id,
-                Some(input_reference),
-                attempts,
-                usage.as_ref(),
-                judge_config.is_some(),
-                assessment,
-            )?;
-            tracing::info!(
-                scenario = scenario_id,
+                scenario_id,
                 run_id,
                 attempt_id,
-                status = ?run_status,
-                availability = ?availability,
-                attempts,
+                run_status,
                 ordinal,
-                total,
-                duration_ms = assessment_started
-                    .elapsed()
-                    .as_millis()
-                    .min(u64::MAX as u128) as u64,
-                "advisory final assessment finished"
-            );
+                input,
+                input_reference,
+            });
         }
+    }
+
+    // Only the analyzer round trips run concurrently. The batch budget is still
+    // shared and still advisory: a run that outlives it is reported as timed out
+    // and the objective status is untouched.
+    let outcomes: Vec<Result<FinalAssessmentOutcome>> = match judge_config {
+        Some(config) => {
+            let mut round_trips = Vec::with_capacity(pending.len());
+            for item in &pending {
+                round_trips.push(evaluate_one_final_assessment(
+                    context,
+                    config,
+                    &item.input,
+                    batch_started,
+                ));
+            }
+            futures_util::stream::iter(round_trips)
+                .buffered(FINAL_ASSESSMENT_CONCURRENCY)
+                .collect()
+                .await
+        }
+        None => pending
+            .iter()
+            .map(|item| {
+                Ok((
+                    unavailable_final_assessment(&item.input)?,
+                    0,
+                    None,
+                    Duration::ZERO,
+                ))
+            })
+            .collect(),
+    };
+
+    // Attachment mutates the report, so it happens in the original run order.
+    for (item, outcome) in pending.iter().zip(outcomes) {
+        let (assessment, attempts, usage, elapsed) = outcome?;
+        let availability = assessment.availability;
+        attach_final_assessment(
+            report,
+            item.scenario_index,
+            item.run_index,
+            &item.run_id,
+            &item.attempt_id,
+            Some(item.input_reference.clone()),
+            attempts,
+            usage.as_ref(),
+            judge_config.is_some(),
+            assessment,
+        )?;
+        tracing::info!(
+            scenario = item.scenario_id,
+            run_id = item.run_id,
+            attempt_id = item.attempt_id,
+            status = ?item.run_status,
+            availability = ?availability,
+            attempts,
+            ordinal = item.ordinal,
+            total,
+            duration_ms = elapsed.as_millis().min(u64::MAX as u128) as u64,
+            "advisory final assessment finished"
+        );
+    }
+
+    for scenario_index in 0..report.scenarios.len() {
         report.scenarios[scenario_index].refresh_aggregate()?;
     }
     report.passed =
