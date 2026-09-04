@@ -174,7 +174,7 @@ mod tests {
         assert_snapshot("task-comparison-v2.json", &task_comparison());
         assert_snapshot("task-suite-v2.json", &task_suite());
         assert_snapshot("task-suite-result-v2.json", &task_suite_result());
-        assert_snapshot("task-suite-comparison-v1.json", &task_suite_comparison());
+        assert_snapshot("task-suite-comparison-v2.json", &task_suite_comparison());
         assert_snapshot(
             "official-verifier-bundle-v1.json",
             &official_verifier_bundle(),

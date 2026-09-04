@@ -32,7 +32,7 @@ pub const TASK_RESULT_SCHEMA: &str = "harness-e2e-task-result/v2";
 pub const TASK_COMPARISON_SCHEMA: &str = "harness-e2e-task-comparison/v2";
 pub const TASK_SUITE_SCHEMA: &str = "harness-e2e-task-suite/v2";
 pub const TASK_SUITE_RESULT_SCHEMA: &str = "harness-e2e-task-suite-result/v2";
-pub const TASK_SUITE_COMPARISON_SCHEMA: &str = "harness-e2e-task-suite-comparison/v1";
+pub const TASK_SUITE_COMPARISON_SCHEMA: &str = "harness-e2e-task-suite-comparison/v2";
 pub const OFFICIAL_VERIFIER_BUNDLE_SCHEMA: &str = "harness-e2e-official-verifier-bundle/v1";
 const LEGACY_TASK_RESULT_SCHEMA: &str = "harness-e2e-task-result/v1";
 
@@ -445,6 +445,20 @@ pub struct RateEstimate {
     pub ci95_upper: f64,
 }
 
+/// Difference between two rates, carrying the uncertainty both sides already
+/// measured. A cohort reports a Wilson interval per arm; collapsing the
+/// comparison to a bare point discards exactly the information that decides
+/// whether the change is real, so the interval travels with the difference.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct RateDelta {
+    pub difference: f64,
+    pub ci95_lower: f64,
+    pub ci95_upper: f64,
+    /// The interval excludes zero, so the two arms are distinguishable at 95%.
+    /// False means "not separable at this sample size", never "equivalent".
+    pub separated: bool,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct TaskAggregate {
     pub task_id: String,
@@ -480,10 +494,10 @@ pub struct TaskAggregateDelta {
     pub task_id: String,
     pub baseline_maturity: String,
     pub candidate_maturity: String,
-    pub product_success_rate: Option<f64>,
-    pub structural_integrity_rate: Option<f64>,
-    pub grounding_integrity_rate: Option<f64>,
-    pub technical_failure_rate: Option<f64>,
+    pub product_success_rate: Option<RateDelta>,
+    pub structural_integrity_rate: Option<RateDelta>,
+    pub grounding_integrity_rate: Option<RateDelta>,
+    pub technical_failure_rate: Option<RateDelta>,
     pub p50_total_tokens_ratio: Option<f64>,
     pub p50_turns_ratio: Option<f64>,
     pub p50_wall_time_ratio: Option<f64>,
@@ -2933,8 +2947,25 @@ impl TaskSuiteComparison {
     }
 }
 
-fn rate_delta(from: &Option<RateEstimate>, to: &Option<RateEstimate>) -> Option<f64> {
-    Some(to.as_ref()?.rate - from.as_ref()?.rate)
+/// Newcombe's hybrid score interval for the difference of two proportions,
+/// assembled from the Wilson bounds each arm already carries. It is built for
+/// the small, lopsided samples a five-repetition cohort produces, where a
+/// normal approximation would quietly overstate precision.
+fn rate_delta(from: &Option<RateEstimate>, to: &Option<RateEstimate>) -> Option<RateDelta> {
+    let from = from.as_ref()?;
+    let to = to.as_ref()?;
+    let difference = to.rate - from.rate;
+    let lower = difference
+        - ((to.rate - to.ci95_lower).powi(2) + (from.ci95_upper - from.rate).powi(2)).sqrt();
+    let upper = difference
+        + ((to.ci95_upper - to.rate).powi(2) + (from.rate - from.ci95_lower).powi(2)).sqrt();
+    let (ci95_lower, ci95_upper) = (lower.max(-1.0), upper.min(1.0));
+    Some(RateDelta {
+        difference,
+        ci95_lower,
+        ci95_upper,
+        separated: ci95_lower > 0.0 || ci95_upper < 0.0,
+    })
 }
 
 fn ratio_delta(from: Option<f64>, to: Option<f64>) -> Option<f64> {
@@ -3540,6 +3571,45 @@ class ConfigCache:
     }
 
     #[test]
+    fn rate_deltas_carry_the_interval_that_decides_whether_a_change_is_real() {
+        let delta = |from: (usize, usize), to: (usize, usize)| {
+            rate_delta(
+                &Some(rate_estimate(from.0, from.1)),
+                &Some(rate_estimate(to.0, to.1)),
+            )
+            .expect("both arms have rates")
+        };
+
+        // The drop this corpus actually produced: 4/5 to 2/5 on five
+        // repetitions. The point estimate looks decisive and the interval says
+        // it is not — the arms are simply not separable at this sample size.
+        let observed = delta((4, 5), (2, 5));
+        assert!((observed.difference - -0.4).abs() < 1e-9);
+        assert!(observed.ci95_lower < 0.0 && observed.ci95_upper > 0.0);
+        assert!(!observed.separated);
+
+        // The same 40-point drop over twenty repetitions clears zero, which is
+        // the whole reason the maturity ladder asks for twenty.
+        let powered = delta((16, 20), (8, 20));
+        assert!((powered.difference - -0.4).abs() < 1e-9);
+        assert!(powered.ci95_upper < 0.0);
+        assert!(powered.separated);
+
+        // A total collapse is separable even on five, and the interval stays
+        // inside the [-1, 1] the difference of two proportions can occupy.
+        let collapse = delta((5, 5), (0, 5));
+        assert!(collapse.separated);
+        assert!(collapse.ci95_lower >= -1.0 && collapse.ci95_upper <= 1.0);
+
+        // No movement is never reported as separated.
+        let flat = delta((5, 5), (5, 5));
+        assert_eq!(flat.difference, 0.0);
+        assert!(!flat.separated);
+
+        assert!(rate_delta(&None, &Some(rate_estimate(1, 5))).is_none());
+    }
+
+    #[test]
     fn aggregates_expose_billable_tokens_calls_and_passthrough_cost() {
         let run = |cost: Option<f64>| {
             let mut result = sample_run_result();
@@ -3710,9 +3780,15 @@ class ConfigCache:
         let candidate = suite_result("2", "rc:harness/v1.2.3", 4);
         let comparison = TaskSuiteComparison::compare(&baseline, &candidate);
         assert!(comparison.comparable);
-        assert!(comparison.deltas[0]
+        let delta = comparison.deltas[0]
             .product_success_rate
-            .is_some_and(|delta| (delta - 0.2).abs() < 1e-12));
+            .as_ref()
+            .expect("both cohorts report a product success rate");
+        assert!((delta.difference - 0.2).abs() < 1e-12);
+        // Five repetitions cannot separate a twenty-point move, and the
+        // comparison now says so instead of leaving the point estimate alone.
+        assert!(delta.ci95_lower < 0.0 && delta.ci95_upper > 0.0);
+        assert!(!delta.separated);
 
         let other_line = suite_result("3", "rc:harness/v1.2.4", 5);
         let incompatible = TaskSuiteComparison::compare(&baseline, &other_line);

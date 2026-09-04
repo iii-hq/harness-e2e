@@ -90,6 +90,15 @@ cargo run --locked -- tasks reaggregate \
 Comparisons are advisory and emit no deltas when lane, verifier, model, fixture,
 runner or another non-Harness component differs.
 
+Every rate delta carries a 95% interval for the difference, built with
+Newcombe's hybrid score method from the Wilson bounds each arm already holds,
+plus a `separated` flag that is true only when that interval excludes zero. A
+delta that is not separated means the two arms cannot be told apart at this
+sample size — never that they are equivalent. The interval also states the
+comparison's own resolution: five repetitions per arm cannot separate anything
+smaller than roughly forty points, which is why twenty repetitions are what the
+`validated` rung asks for.
+
 Local development compares paired executions of the candidate and the last
 stable Harness on the same source stack. A published RC compares primarily to
 the preceding RC in the same release line and secondarily to the current
