@@ -588,7 +588,7 @@ fn browser_audit(run_id: &str, transcript: &Value) -> BrowserAudit {
             "browser::navigate" => audit.navigations += 1,
             "browser::snapshot" => audit.snapshots += 1,
             "browser::act" => audit.acts += 1,
-            id if id.starts_with("engine::functions::") => {}
+            id if common::is_contract_discovery(id) => {}
             _ => audit.other_calls += 1,
         }
         if let Some(session_id) = outcome
@@ -675,7 +675,13 @@ fn evaluate<'a>(
             && audit.acts >= 3
             && audit.other_calls == 0
             && observation.metrics.totals.function_call_errors == 0;
-        Ok(assessment::build_evaluation([
+        Ok(assessment::build_evaluation(
+            if oracle.current_policy_opened {
+                crate::report::CompletionState::Completed
+            } else {
+                crate::report::CompletionState::TaskIncomplete
+            },
+            [
             CROSS_SITE_NAVIGATION.full_or_zero(
                 oracle.visited_origins,
                 format!(
@@ -710,7 +716,8 @@ fn evaluate<'a>(
                     audit.other_calls,
                 ),
             ),
-        ]))
+            ],
+        ))
     })
 }
 
@@ -977,7 +984,7 @@ mod tests {
         assert!(required_functions("run-1").contains(&"browser::sessions::list".to_string()));
         assert!(allowed.iter().all(|id| {
             id.starts_with("browser::")
-                || id.starts_with("engine::functions::")
+                || common::is_contract_discovery(id)
                 || id.starts_with("e2e_browser_fixture_")
         }));
     }

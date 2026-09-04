@@ -14,6 +14,7 @@ export type ExecutionAttentionState =
   | 'cancelling'
   | 'cancelled'
   | 'unavailable'
+  | 'unsupported'
 
 export type FailureCategory =
   | 'infrastructure'
@@ -93,7 +94,26 @@ function countStatus(source: JsonObject, key: string): number {
 }
 
 function totalsFor(execution: DashboardExecutionSummary): ExecutionTotals {
+  if (isUnsupportedExecution(execution)) return {}
   return objectValue(execution.totals) as ExecutionTotals
+}
+
+export function isUnsupportedExecution(
+  execution: DashboardExecutionSummary,
+): boolean {
+  return (
+    execution.status === 'unsupported' ||
+    execution.availability === 'unsupported'
+  )
+}
+
+export function unsupportedExecutionReason(
+  execution: DashboardExecutionSummary,
+): string {
+  return (
+    stringValue(objectValue(execution.first_failure).message) ||
+    'Historical evidence is retained, but its result contract is unsupported. Metrics and baseline comparisons are unavailable; no migration or re-execution was performed.'
+  )
 }
 
 function subjectsFor(
@@ -103,6 +123,7 @@ function subjectsFor(
 }
 
 function assessmentStatuses(execution: DashboardExecutionSummary): JsonObject {
+  if (isUnsupportedExecution(execution)) return {}
   const summary = objectValue(execution.assessment_summary)
   const statuses = objectValue(summary.system_statuses)
   return Object.keys(statuses).length > 0 ? statuses : {}
@@ -179,6 +200,7 @@ export function attentionState(
   breakdown = failureBreakdown(execution),
 ): ExecutionAttentionState {
   const status = stringValue(execution.status)
+  if (isUnsupportedExecution(execution)) return 'unsupported'
   if (status === 'running') return 'running'
   if (status === 'cancelling') return 'cancelling'
   if (status === 'cancelled') return 'cancelled'
@@ -266,7 +288,9 @@ export function buildExecutionPresentation(
       numberValue(totals.workflow_duration_seconds),
     completedAt: stringValue(execution.completed_at || execution.generated_at),
     startedAt: stringValue(execution.started_at),
-    available: execution.availability !== 'unavailable',
+    available:
+      execution.availability !== 'unavailable' &&
+      !isUnsupportedExecution(execution),
   }
 }
 
@@ -328,7 +352,8 @@ export function isExecutionAttention(
   return (
     presentation.attention === 'needs_attention' ||
     presentation.attention === 'incomplete' ||
-    presentation.attention === 'unavailable'
+    presentation.attention === 'unavailable' ||
+    presentation.attention === 'unsupported'
   )
 }
 

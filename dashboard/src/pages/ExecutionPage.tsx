@@ -8,7 +8,9 @@ import {
 } from 'react'
 import { AssessmentDetailDialog } from '@/components/AssessmentWorkspace'
 import { DashboardPageActions } from '@/components/DashboardPageActions'
+import { ExecutionMetricsPanel } from '@/components/ExecutionMetricsPanel'
 import { requestQuickExecution } from '@/components/ExecutionSetup'
+import { LiveProgressPanel } from '@/components/LiveProgressPanel'
 import {
   OutcomeDerivation,
   type OutcomeRow,
@@ -25,6 +27,7 @@ import {
   StatusBadge,
 } from '@/design-system'
 import { hashForExecution, hashForWorkspace } from '@/hooks/use-hash-route'
+import { useLatestRequest } from '@/hooks/use-latest-request'
 import {
   type AssessmentRunMetrics,
   type AssessmentRunView,
@@ -48,12 +51,14 @@ import {
   formatDate,
   formatDuration,
   formatPercent,
+  unsupportedExecutionReason,
 } from '@/lib/execution-view'
 import { executionTitle } from '@/lib/overview-signal'
 import {
   buildScenarioMatrix,
   type ScenarioMatrixSummary,
 } from '@/lib/scenario-matrix'
+import { watchExecution } from '@/lib/watch-execution'
 import {
   type GeneralRunMetrics,
   summedGeneralRunMetricsFromDetail,
@@ -62,9 +67,10 @@ import {
 } from '@/lib/workflow-metrics'
 import '@/design-system/styles.css'
 
-type DetailSection = 'summary' | 'results' | 'technical'
+type DetailSection = 'summary' | 'metrics' | 'results' | 'technical'
 
 function sectionFromAnchor(anchor: string | null | undefined): DetailSection {
+  if (anchor === 'metrics') return 'metrics'
   if (
     anchor === 'results' ||
     anchor === 'assessments' ||
@@ -116,6 +122,8 @@ function executionStatus(presentation: ExecutionPresentation): {
     return { status: 'incomplete', label: 'Incomplete' }
   if (presentation.attention === 'unavailable')
     return { status: 'unavailable', label: 'Unavailable' }
+  if (presentation.attention === 'unsupported')
+    return { status: 'unavailable', label: 'Unsupported' }
   if (presentation.breakdown.hard_gate > 0)
     return { status: 'hard_gate', label: 'Hard gate failed' }
   if (
@@ -458,6 +466,12 @@ export function provenanceEntries(
     ['attempt', detail.attempt == null ? null : String(detail.attempt)],
     ['status', detail.status],
     ['availability', detail.availability],
+    [
+      'slot start deadline',
+      detail.slot_start_deadline_seconds == null
+        ? null
+        : `${detail.slot_start_deadline_seconds}s (soft limit for starting new slots)`,
+    ],
     ['event', detail.event],
     ['actor', detail.actor],
     [
@@ -539,6 +553,7 @@ function TechnicalSection({
 /** Audit ED-07: the anchors the router already accepts get a visible bar. */
 const SECTIONS: Array<{ id: DetailSection; label: string }> = [
   { id: 'summary', label: 'decision' },
+  { id: 'metrics', label: 'metrics' },
   { id: 'results', label: 'results' },
   { id: 'technical', label: 'provenance' },
 ]
@@ -580,11 +595,13 @@ function LiveState({
   status,
   onCancel,
   cancelling,
+  hasProgress,
 }: {
   presentation: ExecutionPresentation
   status: { status: OperationalStatus; label: string }
   onCancel?: () => void
   cancelling: boolean
+  hasProgress: boolean
 }) {
   const running =
     presentation.attention === 'running' ||
@@ -613,7 +630,10 @@ function LiveState({
         <span className="font-mono text-xs text-ink-soft">
           {[scope, elapsed ? `${elapsed} elapsed` : null]
             .filter(Boolean)
-            .join(' · ') || 'no progress reported yet'}
+            .join(' · ') ||
+            (presentation.attention === 'unsupported'
+              ? 'historical result retained'
+              : 'no progress reported yet')}
         </span>
         {running && onCancel ? (
           <button
@@ -631,9 +651,13 @@ function LiveState({
         ) : null}
       </div>
       <p className="mt-3 mb-0 max-w-[70ch] text-xs leading-5 text-ink-soft">
-        {running
-          ? 'The report, the decision and the scenario results appear here as soon as the run finishes. This page follows the run; no reload is needed.'
-          : 'No report was retained, so there is nothing to decide. Re-run the same scope to obtain one.'}
+        {presentation.attention === 'unsupported'
+          ? unsupportedExecutionReason(presentation.execution)
+          : running
+            ? 'This page follows recorded progress automatically. The final report and decision appear when the execution finishes.'
+            : hasProgress
+              ? 'The final report is unavailable. Recorded checkpoints remain visible below as partial evidence, not a final verdict.'
+              : 'No report or verified progress is available for this execution.'}
       </p>
     </Panel>
   )
@@ -660,19 +684,23 @@ export function ExecutionPage({
     title: string
   } | null>(null)
   const section = sectionFromAnchor(anchor)
+  const beginRequest = useLatestRequest()
+  const loadedExecutionId = detail?.id
 
   useEffect(() => {
-    if (!anchor || !detail) return
+    if (!anchor || !loadedExecutionId) return
     window.requestAnimationFrame(() =>
       document
         .getElementById(sectionFromAnchor(anchor))
         ?.scrollIntoView({ block: 'start' }),
     )
-  }, [anchor, detail])
+  }, [anchor, loadedExecutionId])
 
   const load = useCallback(async () => {
+    const request = beginRequest()
     try {
       const nextBridge = await getDashboardDataBridge()
+      if (!request.isCurrent()) return null
       setBridge(nextBridge)
       const manifest = await nextBridge.listExecutions({
         ids: [executionId],
@@ -680,26 +708,24 @@ export function ExecutionPage({
       })
       const nextSummary = manifest.executions[0] ?? null
       const nextDetail = await nextBridge.getExecution(executionId)
-      setSummary(nextSummary ?? summaryFromDetail(nextDetail))
+      if (!request.isCurrent()) return null
+      setSummary(summaryFromDetail(nextDetail, nextSummary ?? undefined))
       setDetail(nextDetail)
+      setError(null)
       return nextBridge
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : String(cause))
+      if (request.isCurrent()) {
+        setError(cause instanceof Error ? cause.message : String(cause))
+      }
       return null
     }
-  }, [executionId])
+  }, [beginRequest, executionId])
 
   useEffect(() => {
-    let active = true
     setError(null)
     setDetail(null)
-    void (async () => {
-      const nextBridge = await load()
-      if (!active || !nextBridge) return
-    })()
-    return () => {
-      active = false
-    }
+    setSummary(null)
+    void load()
   }, [load])
 
   const presentation = useMemo(
@@ -713,25 +739,8 @@ export function ExecutionPage({
   // Audit ED-12: a live execution follows the run instead of waiting for F5.
   useEffect(() => {
     if (!bridge || !live) return
-    let cancelled = false
-    let dispose: (() => void) | undefined
-    let timer: number | undefined
-    bridge
-      .subscribeRunChanges(() => {
-        if (timer) window.clearTimeout(timer)
-        timer = window.setTimeout(() => void load(), 400)
-      })
-      .then((off) => {
-        if (cancelled) off()
-        else dispose = off
-      })
-      .catch(() => undefined)
-    return () => {
-      cancelled = true
-      if (timer) window.clearTimeout(timer)
-      dispose?.()
-    }
-  }, [bridge, live, load])
+    return watchExecution(bridge, executionId, load)
+  }, [bridge, executionId, live, load])
 
   const assessmentModel = useMemo(
     () => buildAssessmentWorkspace(detail),
@@ -756,7 +765,7 @@ export function ExecutionPage({
     [detail],
   )
 
-  if (error)
+  if (error && !detail)
     return (
       <div className="ds-root min-h-dvh bg-canvas text-ink">
         <DashboardPageActions active="executions" />
@@ -887,7 +896,11 @@ export function ExecutionPage({
         {/* Audit ED-13 / ED-23: the title is the execution, the trail is flat. */}
         <PageHeader
           title={title}
-          summary={verdict.headline}
+          summary={
+            detail.live_progress
+              ? `${detail.live_progress.runs_committed} of ${detail.live_progress.planned_slots} runs recorded · ${live ? 'results are provisional' : 'partial evidence preserved'}`
+              : verdict.headline
+          }
           headingId="execution-title"
           breadcrumb={[
             { label: 'executions', href: hashForWorkspace('executions') },
@@ -918,7 +931,7 @@ export function ExecutionPage({
                 <Link2 size={13} aria-hidden="true" />
                 {copied ? 'link copied' : 'copy link'}
               </button>
-              {local ? (
+              {local && presentation.attention !== 'unsupported' ? (
                 <a
                   className={buttonClassName({
                     variant: 'secondary',
@@ -953,14 +966,36 @@ export function ExecutionPage({
           ))}
         </dl>
 
-        {noRun ? (
+        {error ? (
+          <p className="mt-4 text-sm text-warning" role="status">
+            Refresh failed. Showing the last received snapshot; automatic
+            updates will retry. {error}
+          </p>
+        ) : null}
+        {detail.live_progress_error ? (
+          <p className="mt-4 text-sm text-warning" role="status">
+            {detail.live_progress_error}
+          </p>
+        ) : null}
+        {detail.persistence_errors?.length ? (
+          <p className="mt-4 text-sm text-warning" role="status">
+            Partial result: completed runs were preserved, but persistence
+            failed. {detail.persistence_errors.join(' · ')}
+          </p>
+        ) : null}
+        {noRun || live ? (
           <LiveState
             presentation={presentation}
             status={status}
             cancelling={cancelling}
+            hasProgress={Boolean(detail.live_progress)}
             onCancel={local ? () => void cancelRun() : undefined}
           />
-        ) : (
+        ) : null}
+        {detail.live_progress ? (
+          <LiveProgressPanel progress={detail.live_progress} running={live} />
+        ) : null}
+        {!noRun && !live ? (
           <>
             <SectionBar active={section} executionId={detail.id} />
             <div className="grid min-w-0 gap-5">
@@ -972,6 +1007,7 @@ export function ExecutionPage({
                 metrics={summaryMetrics}
                 scenarioSummary={scenarioSummary}
               />
+              <ExecutionMetricsPanel detail={detail} />
               <ResultsSection
                 detail={detail}
                 onTranscript={(run, title) => setTranscript({ run, title })}
@@ -979,7 +1015,7 @@ export function ExecutionPage({
               <TechnicalSection detail={detail} presentation={presentation} />
             </div>
           </>
-        )}
+        ) : null}
       </div>
       {/* Audit AW-09: the evidence record is a route, so back returns here. */}
       {evidenceRun ? (

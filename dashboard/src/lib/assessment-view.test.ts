@@ -12,6 +12,11 @@ import {
   matchesAssessmentFilter,
 } from '@/lib/assessment-view'
 import type { DashboardExecutionDetail } from '@/lib/dashboard-data-source'
+import {
+  RESULT_CONTRACT_SHA256,
+  RESULTS_SCHEMA_VERSION,
+  SCORING_PROFILE_SHA256,
+} from '@/lib/result-contract.generated'
 
 const finalPass: AiFinalAssessment = {
   availability: 'available',
@@ -105,6 +110,11 @@ function detail(run: RunAssessmentContract): DashboardExecutionDetail {
         scenario_id: 'direct_answer',
         available: true,
         report: {
+          schema_version: RESULTS_SCHEMA_VERSION,
+          result_contract_sha256: RESULT_CONTRACT_SHA256,
+          scoring_profile_sha256: SCORING_PROFILE_SHA256,
+          report_state: 'complete',
+          objective_outcome: 'passed',
           assessment_availability: 'available',
           assessment_contract: { runs: [run] },
           assessment_summary: {} as never,
@@ -113,10 +123,46 @@ function detail(run: RunAssessmentContract): DashboardExecutionDetail {
               scenario_id: 'direct_answer',
               scenario_version: 4,
               assessment_summary: {} as never,
+              aggregate: {
+                planned_runs: 1,
+                observed_runs: 1,
+                deferred_runs: 0,
+                completed_runs: 1,
+                task_incomplete_runs: 0,
+                undetermined_runs: 0,
+                technical_valid_runs: 1,
+                technical_invalid_runs: 0,
+                execution_reliability: 1,
+                completion_evidence_coverage: 1,
+                completion_rate: 1,
+                objective_scored_runs: 1,
+                objective_median_score: 100,
+                objective_score_coverage: 1,
+                quality_scored_completed_runs: 1,
+                quality_score_completed: 100,
+                quality_coverage: 1,
+                total_tokens_consumed: 1200,
+                judge_tokens_consumed: 100,
+                tokens_completed_p50: 1200,
+                failed_attempt_tokens: 0,
+                tokens_per_completion: 1200,
+                hard_gate_failures: 0,
+                technical_failures: 0,
+              },
               runs: [
                 {
                   run_id: run.run_id,
                   attempt_id: run.attempt_id,
+                  status: 'passed',
+                  completion: 'completed',
+                  technical: 'valid',
+                  evaluators: {
+                    completion: 'available',
+                    quality: 'available',
+                    final_advisory: 'available',
+                  },
+                  objective_score: 100,
+                  quality_score_completed: 100,
                   assessment: run,
                 },
               ],

@@ -6,9 +6,13 @@
     "assessment_contract",
     "execution",
     "manifest",
+    "objective_outcome",
     "passed",
+    "report_state",
+    "result_contract_sha256",
     "scenarios",
     "schema_version",
+    "scoring_profile_sha256",
     "subject",
     "system_under_test"
   ],
@@ -51,6 +55,9 @@
         }
       ]
     },
+    "objective_outcome": {
+      "$ref": "#/definitions/ObjectiveOutcome"
+    },
     "observation_contract": {
       "anyOf": [
         {
@@ -64,6 +71,12 @@
     "passed": {
       "type": "boolean"
     },
+    "persistence_errors": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
     "redaction": {
       "default": {
         "redacted_fields": 0,
@@ -76,6 +89,12 @@
         }
       ]
     },
+    "report_state": {
+      "$ref": "#/definitions/ReportState"
+    },
+    "result_contract_sha256": {
+      "type": "string"
+    },
     "scenarios": {
       "type": "array",
       "items": {
@@ -85,6 +104,21 @@
     "schema_version": {
       "type": "integer",
       "format": "uint32",
+      "enum": [
+        4
+      ],
+      "minimum": 0.0
+    },
+    "scoring_profile_sha256": {
+      "type": "string"
+    },
+    "slot_start_deadline_seconds": {
+      "description": "Soft scheduling deadline: prevents starting slots after this interval.",
+      "type": [
+        "integer",
+        "null"
+      ],
+      "format": "uint64",
       "minimum": 0.0
     },
     "subject": {
@@ -843,6 +877,14 @@
         }
       }
     },
+    "CompletionState": {
+      "type": "string",
+      "enum": [
+        "completed",
+        "task_incomplete",
+        "undetermined"
+      ]
+    },
     "ComplexityClassification": {
       "type": "object",
       "required": [
@@ -981,6 +1023,14 @@
         "l3_concurrent",
         "l4_coordinated",
         "l5_adaptive"
+      ]
+    },
+    "ContaminationScope": {
+      "type": "string",
+      "enum": [
+        "none",
+        "case",
+        "execution"
       ]
     },
     "CostReport": {
@@ -1172,13 +1222,16 @@
       "required": [
         "attempt_id",
         "attempt_number",
+        "completion",
         "cost",
         "criteria",
+        "evaluators",
         "hard_gates",
         "prompt",
         "run_id",
         "session_id",
         "status",
+        "technical",
         "wall_time_ms"
       ],
       "properties": {
@@ -1200,6 +1253,9 @@
               "type": "null"
             }
           ]
+        },
+        "completion": {
+          "$ref": "#/definitions/CompletionState"
         },
         "cost": {
           "$ref": "#/definitions/CostReport"
@@ -1231,6 +1287,9 @@
               "type": "null"
             }
           ]
+        },
+        "evaluators": {
+          "$ref": "#/definitions/EvaluatorStates"
         },
         "evidence": {
           "type": "array",
@@ -1298,8 +1357,24 @@
             }
           ]
         },
+        "objective_score": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint8",
+          "minimum": 0.0
+        },
         "prompt": {
           "type": "string"
+        },
+        "quality_score_completed": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint8",
+          "minimum": 0.0
         },
         "retry_attempts": {
           "type": "array",
@@ -1348,6 +1423,9 @@
         "status": {
           "$ref": "#/definitions/RunStatus"
         },
+        "technical": {
+          "$ref": "#/definitions/TechnicalState"
+        },
         "transcript": true,
         "validation_score": {
           "description": "Explicit Markdown validation score. Mirrors `score` for Markdown-authored scenarios while keeping the legacy aggregate field compatible.",
@@ -1376,7 +1454,6 @@
       "type": "object",
       "required": [
         "aggregate",
-        "case",
         "execution_policy",
         "passed",
         "runs",
@@ -1399,6 +1476,12 @@
         "case_id": {
           "default": "",
           "type": "string"
+        },
+        "deferral_reason": {
+          "type": [
+            "string",
+            "null"
+          ]
         },
         "execution_policy": {
           "$ref": "#/definitions/ExecutionPolicy"
@@ -1607,6 +1690,34 @@
         "e2e_infrastructure"
       ]
     },
+    "EvaluatorAvailability": {
+      "type": "string",
+      "enum": [
+        "not_required",
+        "pending",
+        "available",
+        "unavailable"
+      ]
+    },
+    "EvaluatorStates": {
+      "type": "object",
+      "required": [
+        "completion",
+        "final_advisory",
+        "quality"
+      ],
+      "properties": {
+        "completion": {
+          "$ref": "#/definitions/EvaluatorAvailability"
+        },
+        "final_advisory": {
+          "$ref": "#/definitions/EvaluatorAvailability"
+        },
+        "quality": {
+          "$ref": "#/definitions/EvaluatorAvailability"
+        }
+      }
+    },
     "EvidenceReference": {
       "type": "object",
       "required": [
@@ -1729,9 +1840,22 @@
       "required": [
         "domain",
         "message",
-        "phase"
+        "phase",
+        "status"
       ],
       "properties": {
+        "code": {
+          "default": "",
+          "type": "string"
+        },
+        "contamination": {
+          "default": "none",
+          "allOf": [
+            {
+              "$ref": "#/definitions/ContaminationScope"
+            }
+          ]
+        },
         "domain": {
           "$ref": "#/definitions/FailureDomain"
         },
@@ -1740,6 +1864,22 @@
         },
         "phase": {
           "$ref": "#/definitions/FailurePhase"
+        },
+        "retry_scope": {
+          "default": "none",
+          "allOf": [
+            {
+              "$ref": "#/definitions/RetryScope"
+            }
+          ]
+        },
+        "status": {
+          "description": "The failure's original classification, independent of the primary run status.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/RunStatus"
+            }
+          ]
         }
       }
     },
@@ -2115,6 +2255,14 @@
         }
       }
     },
+    "ObjectiveOutcome": {
+      "type": "string",
+      "enum": [
+        "passed",
+        "failed",
+        "inconclusive"
+      ]
+    },
     "ObservationCorrelation": {
       "type": "object",
       "required": [
@@ -2457,16 +2605,26 @@
         }
       }
     },
+    "ReportState": {
+      "type": "string",
+      "enum": [
+        "complete",
+        "partial"
+      ]
+    },
     "RetryAttemptReport": {
       "type": "object",
       "required": [
         "attempt_id",
         "attempt_number",
+        "completion",
         "cost",
+        "evaluators",
         "failures",
         "run_id",
         "session_id",
         "status",
+        "technical",
         "wall_time_ms"
       ],
       "properties": {
@@ -2477,6 +2635,9 @@
           "type": "integer",
           "format": "uint32",
           "minimum": 0.0
+        },
+        "completion": {
+          "$ref": "#/definitions/CompletionState"
         },
         "cost": {
           "$ref": "#/definitions/CostReport"
@@ -2503,6 +2664,9 @@
             }
           ]
         },
+        "evaluators": {
+          "$ref": "#/definitions/EvaluatorStates"
+        },
         "evidence": {
           "type": "array",
           "items": {
@@ -2519,6 +2683,16 @@
           "anyOf": [
             {
               "$ref": "#/definitions/InstructionAdherenceReport"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "judge_usage": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ModelUsageReport"
             },
             {
               "type": "null"
@@ -2545,6 +2719,22 @@
             }
           ]
         },
+        "objective_score": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint8",
+          "minimum": 0.0
+        },
+        "quality_score_completed": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint8",
+          "minimum": 0.0
+        },
         "run_id": {
           "type": "string"
         },
@@ -2570,6 +2760,9 @@
         "status": {
           "$ref": "#/definitions/RunStatus"
         },
+        "technical": {
+          "$ref": "#/definitions/TechnicalState"
+        },
         "transcript": true,
         "validation_score": {
           "type": [
@@ -2585,6 +2778,13 @@
           "minimum": 0.0
         }
       }
+    },
+    "RetryScope": {
+      "type": "string",
+      "enum": [
+        "none",
+        "same_slot"
+      ]
     },
     "RobustnessReport": {
       "type": "object",
@@ -2751,37 +2951,143 @@
     "ScenarioAggregate": {
       "type": "object",
       "required": [
+        "completed_runs",
         "cost",
+        "deferred_runs",
         "hard_gate_failures",
+        "objective_scored_runs",
+        "observed_runs",
         "pass_rate",
         "passed_runs",
+        "planned_runs",
+        "quality_scored_completed_runs",
         "required_passes",
         "robustness",
         "runs",
         "scored_runs",
-        "technical_failures"
+        "task_incomplete_runs",
+        "technical_failures",
+        "technical_invalid_runs",
+        "technical_valid_runs",
+        "undetermined_runs"
       ],
       "properties": {
-        "cost": {
-          "$ref": "#/definitions/CostReport"
-        },
-        "hard_gate_failures": {
+        "completed_runs": {
           "type": "integer",
           "format": "uint32",
           "minimum": 0.0
         },
-        "median_score": {
+        "completion_evidence_coverage": {
           "type": [
             "number",
             "null"
           ],
           "format": "double"
         },
+        "completion_rate": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double"
+        },
+        "cost": {
+          "$ref": "#/definitions/CostReport"
+        },
+        "deferred_runs": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0.0
+        },
+        "execution_reliability": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double"
+        },
+        "failed_attempt_tokens": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "hard_gate_failures": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0.0
+        },
+        "judge_tokens_consumed": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "median_score": {
+          "description": "Compatibility alias for `objective_median_score`.",
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double"
+        },
+        "objective_median_score": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double"
+        },
+        "objective_score_coverage": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double"
+        },
+        "objective_scored_runs": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0.0
+        },
+        "observed_runs": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0.0
+        },
         "pass_rate": {
           "type": "number",
           "format": "double"
         },
         "passed_runs": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0.0
+        },
+        "planned_runs": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0.0
+        },
+        "quality_coverage": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double"
+        },
+        "quality_score_completed": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double"
+        },
+        "quality_scored_completed_runs": {
           "type": "integer",
           "format": "uint32",
           "minimum": 0.0
@@ -2795,16 +3101,60 @@
           "$ref": "#/definitions/RobustnessReport"
         },
         "runs": {
+          "description": "Compatibility alias for `observed_runs`.",
           "type": "integer",
           "format": "uint32",
           "minimum": 0.0
         },
         "scored_runs": {
+          "description": "Compatibility alias for `objective_scored_runs`.",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0.0
+        },
+        "task_incomplete_runs": {
           "type": "integer",
           "format": "uint32",
           "minimum": 0.0
         },
         "technical_failures": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0.0
+        },
+        "technical_invalid_runs": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0.0
+        },
+        "technical_valid_runs": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0.0
+        },
+        "tokens_completed_p50": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double"
+        },
+        "tokens_per_completion": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double"
+        },
+        "total_tokens_consumed": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "undetermined_runs": {
           "type": "integer",
           "format": "uint32",
           "minimum": 0.0
@@ -3350,6 +3700,13 @@
           "$ref": "#/definitions/StackIdentity"
         }
       }
+    },
+    "TechnicalState": {
+      "type": "string",
+      "enum": [
+        "valid",
+        "technical_invalid"
+      ]
     },
     "TypedPortValue": {
       "type": "object",

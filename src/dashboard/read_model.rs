@@ -10,7 +10,7 @@ use super::assessment_projection::{
     analyzer_profile_sha256, assessment_profile_sha256, contracts_for_scenario, summarize,
     AssessmentSummary,
 };
-use super::presenter::{execution_summary, MAX_EXECUTIONS};
+use super::presenter::{stored_execution_summary, MAX_EXECUTIONS};
 use super::store::{load_runs, StoredRun};
 use crate::artifact;
 use crate::assessment::{
@@ -417,13 +417,14 @@ impl DashboardReadModel {
                         "id": run.metadata.id,
                         "completed_at": run.metadata.completed_at,
                         "status": run.metadata.status,
+                        "unsupported_report": run.unsupported_report,
                     })
                 })
                 .collect::<Vec<_>>(),
         )?;
         let summaries = stored
             .iter()
-            .map(|run| execution_summary(&run.metadata, run.report.as_ref()))
+            .map(stored_execution_summary)
             .collect::<Result<Vec<_>>>()?;
         let mut model = Self {
             revision,

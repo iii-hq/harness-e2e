@@ -1,5 +1,7 @@
-use std::fs;
+use std::fs::{self, File, OpenOptions};
+use std::io::Write;
 use std::path::{Component, Path};
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use anyhow::{bail, Context, Result};
 use schemars::JsonSchema;
@@ -106,10 +108,85 @@ pub fn write_atomic(path: &Path, bytes: &[u8]) -> Result<()> {
         .file_name()
         .and_then(|name| name.to_str())
         .context("artifact path must have a UTF-8 file name")?;
-    let temporary = path.with_file_name(format!(".{file_name}.tmp"));
-    fs::write(&temporary, bytes).with_context(|| format!("write {}", temporary.display()))?;
-    fs::rename(&temporary, path).with_context(|| format!("replace {}", path.display()))?;
+    let parent = path.parent().context("artifact path must have a parent")?;
+    let temporary = write_synced_temporary(path, file_name, bytes)?;
+    if let Err(error) = fs::rename(&temporary, path) {
+        let _ = fs::remove_file(&temporary);
+        return Err(error).with_context(|| format!("replace {}", path.display()));
+    }
+    sync_directory(parent)
+}
+
+pub fn write_immutable_atomic(path: &Path, bytes: &[u8]) -> Result<()> {
+    if let Ok(existing) = fs::read(path) {
+        if existing == bytes {
+            return Ok(());
+        }
+        bail!(
+            "immutable artifact {} already exists with different content",
+            path.display()
+        );
+    }
+    let file_name = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .context("artifact path must have a UTF-8 file name")?;
+    let parent = path.parent().context("artifact path must have a parent")?;
+    let temporary = write_synced_temporary(path, file_name, bytes)?;
+
+    let installed = fs::hard_link(&temporary, path);
+    let _ = fs::remove_file(&temporary);
+    match installed {
+        Ok(()) => sync_directory(parent)?,
+        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+            let existing = fs::read(path).with_context(|| format!("read {}", path.display()))?;
+            if existing != bytes {
+                bail!(
+                    "immutable artifact {} already exists with different content",
+                    path.display()
+                );
+            }
+        }
+        Err(error) => return Err(error).with_context(|| format!("install {}", path.display())),
+    }
     Ok(())
+}
+
+fn write_synced_temporary(
+    path: &Path,
+    file_name: &str,
+    bytes: &[u8],
+) -> Result<std::path::PathBuf> {
+    loop {
+        static NEXT_TEMPORARY: AtomicU64 = AtomicU64::new(0);
+        let nonce = NEXT_TEMPORARY.fetch_add(1, Ordering::Relaxed);
+        let candidate =
+            path.with_file_name(format!(".{file_name}.tmp-{}-{nonce}", std::process::id()));
+        match OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&candidate)
+        {
+            Ok(mut file) => {
+                file.write_all(bytes)
+                    .with_context(|| format!("write {}", candidate.display()))?;
+                file.sync_all()
+                    .with_context(|| format!("sync {}", candidate.display()))?;
+                return Ok(candidate);
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(error) => {
+                return Err(error).with_context(|| format!("create {}", candidate.display()))
+            }
+        }
+    }
+}
+
+fn sync_directory(path: &Path) -> Result<()> {
+    File::open(path)
+        .with_context(|| format!("open directory {}", path.display()))?
+        .sync_all()
+        .with_context(|| format!("sync directory {}", path.display()))
 }
 
 pub fn sha256_value<T>(value: &T) -> Result<String>
@@ -235,5 +312,28 @@ mod tests {
         )
         .unwrap_err();
         assert!(error.to_string().contains("immutable artifact"));
+    }
+
+    #[test]
+    fn immutable_atomic_writes_are_idempotent_but_never_replace_content() {
+        let output = tempfile::tempdir().unwrap();
+        let path = output.path().join("immutable.json");
+        write_immutable_atomic(&path, b"one\n").unwrap();
+        write_immutable_atomic(&path, b"one\n").unwrap();
+
+        let error = write_immutable_atomic(&path, b"two\n").unwrap_err();
+        assert!(error
+            .to_string()
+            .contains("already exists with different content"));
+        assert_eq!(fs::read(path).unwrap(), b"one\n");
+    }
+
+    #[test]
+    fn atomic_writes_can_replace_mutable_projections() {
+        let output = tempfile::tempdir().unwrap();
+        let path = output.path().join("projection.json");
+        write_atomic(&path, b"one\n").unwrap();
+        write_atomic(&path, b"two\n").unwrap();
+        assert_eq!(fs::read(path).unwrap(), b"two\n");
     }
 }

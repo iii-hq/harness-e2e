@@ -278,25 +278,32 @@ fn evaluate<'a>(
             0
         };
 
-        Ok(assessment::build_evaluation([
-            CHAIN_ORDER.full_or_zero(
-                ordered,
-                format!("nudges in order: {nudges:?} — expected CHAIN-A then CHAIN-B"),
-            ),
-            ALL_GATES_SATISFIED.full_or_zero(
-                satisfied,
-                format!("rows={rows} (need 3), marker={marker} (need 1)"),
-            ),
-            BROKEN_VALIDATOR_SKIPPED.gate_and_points(
-                three_registrations,
-                broken_validator_points,
-                format!(
+        Ok(assessment::build_evaluation(
+            if satisfied {
+                crate::report::CompletionState::Completed
+            } else {
+                crate::report::CompletionState::TaskIncomplete
+            },
+            [
+                CHAIN_ORDER.full_or_zero(
+                    ordered,
+                    format!("nudges in order: {nudges:?} — expected CHAIN-A then CHAIN-B"),
+                ),
+                ALL_GATES_SATISFIED.full_or_zero(
+                    satisfied,
+                    format!("rows={rows} (need 3), marker={marker} (need 1)"),
+                ),
+                BROKEN_VALIDATOR_SKIPPED.gate_and_points(
+                    three_registrations,
+                    broken_validator_points,
+                    format!(
                     "observed {} post-turn registration(s); broken_registered={broken_registered}; \
                      ordered={ordered}; need three incl. the fail_open broken one",
                     hook_registrations.len()
                 ),
-            )?,
-        ]))
+                )?,
+            ],
+        ))
     })
 }
 

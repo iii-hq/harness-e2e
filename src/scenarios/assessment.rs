@@ -1,7 +1,7 @@
 use anyhow::{bail, Result};
 
 use crate::assessment::{AssessmentKind, AssessmentPolicy, AssessmentSource, DeclaredAssessment};
-use crate::report::{EvaluationDimension, HardGateReport};
+use crate::report::{CompletionState, EvaluationDimension, HardGateReport};
 
 use super::{CriterionAward, CriterionSpec, ObjectiveEvaluation, ScenarioSpec};
 
@@ -231,6 +231,7 @@ pub(super) fn criteria(specs: &[AssessmentSpec]) -> Vec<CriterionSpec> {
 }
 
 pub(super) fn build_evaluation(
+    completion: CompletionState,
     results: impl IntoIterator<Item = AssessmentOutcome>,
 ) -> ObjectiveEvaluation {
     let mut hard_gates = Vec::new();
@@ -252,7 +253,11 @@ pub(super) fn build_evaluation(
         });
     }
 
-    ObjectiveEvaluation { hard_gates, awards }
+    ObjectiveEvaluation {
+        completion,
+        hard_gates,
+        awards,
+    }
 }
 
 pub(super) fn prerequisite_failure(
@@ -260,9 +265,43 @@ pub(super) fn prerequisite_failure(
     gate_id: impl Into<String>,
     details: impl Into<String>,
 ) -> ObjectiveEvaluation {
+    failed_evaluation(
+        CompletionState::Undetermined,
+        "prerequisite",
+        specs,
+        gate_id,
+        details,
+    )
+}
+
+/// Records valid evidence that the subject stopped without producing the
+/// requested terminal output. Unlike a missing harness prerequisite, this is
+/// a measured incomplete task rather than an undetermined observation.
+pub(super) fn task_incomplete(
+    specs: &[AssessmentSpec],
+    gate_id: impl Into<String>,
+    details: impl Into<String>,
+) -> ObjectiveEvaluation {
+    failed_evaluation(
+        CompletionState::TaskIncomplete,
+        "completion",
+        specs,
+        gate_id,
+        details,
+    )
+}
+
+fn failed_evaluation(
+    completion: CompletionState,
+    gate_kind: &str,
+    specs: &[AssessmentSpec],
+    gate_id: impl Into<String>,
+    details: impl Into<String>,
+) -> ObjectiveEvaluation {
     let gate_id = gate_id.into();
-    let reason = format!("prerequisite gate '{gate_id}' failed: {}", details.into());
+    let reason = format!("{gate_kind} gate '{gate_id}' failed: {}", details.into());
     let mut evaluation = build_evaluation(
+        completion,
         specs
             .iter()
             .copied()
@@ -313,7 +352,10 @@ mod tests {
 
     #[test]
     fn hard_gated_pass_produces_a_passing_gate_and_full_award() {
-        let evaluation = build_evaluation([HARD_GATED.full_or_zero(true, "satisfied")]);
+        let evaluation = build_evaluation(
+            CompletionState::Completed,
+            [HARD_GATED.full_or_zero(true, "satisfied")],
+        );
 
         assert_eq!(evaluation.hard_gates.len(), 1);
         assert_eq!(evaluation.hard_gates[0].id, "required");
@@ -327,16 +369,26 @@ mod tests {
 
     #[test]
     fn hard_gated_failure_produces_a_failed_gate_and_zero_award() {
-        let evaluation = build_evaluation([HARD_GATED.full_or_zero(false, "missing")]);
+        let evaluation = build_evaluation(
+            CompletionState::TaskIncomplete,
+            [HARD_GATED.full_or_zero(false, "missing")],
+        );
 
+        assert_eq!(evaluation.completion, CompletionState::TaskIncomplete);
         assert!(!evaluation.hard_gates[0].passed);
         assert_eq!(evaluation.awards[0].awarded, 0);
     }
 
     #[test]
     fn score_only_produces_an_award_without_a_gate() {
-        let passed = build_evaluation([SCORE_ONLY.full_or_zero(true, "observed")]);
-        let failed = build_evaluation([SCORE_ONLY.full_or_zero(false, "missing")]);
+        let passed = build_evaluation(
+            CompletionState::Completed,
+            [SCORE_ONLY.full_or_zero(true, "observed")],
+        );
+        let failed = build_evaluation(
+            CompletionState::Completed,
+            [SCORE_ONLY.full_or_zero(false, "missing")],
+        );
 
         assert!(passed.hard_gates.is_empty());
         assert_eq!(passed.awards[0].id, "signal");
@@ -347,7 +399,10 @@ mod tests {
 
     #[test]
     fn score_only_accepts_partial_awards_within_its_weight() {
-        let evaluation = build_evaluation([SCORE_ONLY.award(12, "partial").unwrap()]);
+        let evaluation = build_evaluation(
+            CompletionState::Completed,
+            [SCORE_ONLY.award(12, "partial").unwrap()],
+        );
 
         assert!(evaluation.hard_gates.is_empty());
         assert_eq!(evaluation.awards[0].awarded, 12);
@@ -371,9 +426,12 @@ mod tests {
 
     #[test]
     fn hard_gated_assessment_can_award_partial_points_after_passing() {
-        let evaluation = build_evaluation([HARD_GATED
-            .gate_and_points(true, 35, "passed with partial quality")
-            .unwrap()]);
+        let evaluation = build_evaluation(
+            CompletionState::Completed,
+            [HARD_GATED
+                .gate_and_points(true, 35, "passed with partial quality")
+                .unwrap()],
+        );
 
         assert!(evaluation.hard_gates[0].passed);
         assert_eq!(evaluation.awards[0].awarded, 35);
@@ -381,10 +439,14 @@ mod tests {
 
     #[test]
     fn failed_hard_gate_can_retain_independent_quality_points() {
-        let evaluation = build_evaluation([HARD_GATED
-            .gate_and_points(false, 35, "failed with partial quality")
-            .unwrap()]);
+        let evaluation = build_evaluation(
+            CompletionState::Completed,
+            [HARD_GATED
+                .gate_and_points(false, 35, "failed with partial quality")
+                .unwrap()],
+        );
 
+        assert_eq!(evaluation.completion, CompletionState::Completed);
         assert!(!evaluation.hard_gates[0].passed);
         assert_eq!(evaluation.awards[0].awarded, 35);
     }
@@ -419,6 +481,7 @@ mod tests {
             "database capability is unavailable",
         );
 
+        assert_eq!(evaluation.completion, CompletionState::Undetermined);
         assert_eq!(evaluation.hard_gates.len(), 1);
         assert!(!evaluation.hard_gates[0].passed);
         assert_eq!(evaluation.hard_gates[0].id, "database_available");
@@ -435,5 +498,18 @@ mod tests {
             evaluation.awards[1].reason,
             "prerequisite gate 'database_available' failed: database capability is unavailable"
         );
+    }
+
+    #[test]
+    fn missing_subject_output_is_task_incomplete_not_undetermined() {
+        let evaluation = task_incomplete(
+            &[HARD_GATED, SCORE_ONLY],
+            "output_present",
+            "the subject produced no output",
+        );
+
+        assert_eq!(evaluation.completion, CompletionState::TaskIncomplete);
+        assert_eq!(evaluation.hard_gates.len(), 1);
+        assert!(!evaluation.hard_gates[0].passed);
     }
 }

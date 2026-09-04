@@ -1,10 +1,53 @@
 import { describe, expect, it } from 'vitest'
 import type { DashboardExecutionDetail } from '@/lib/dashboard-data-source'
 import {
+  RESULT_CONTRACT_SHA256,
+  RESULTS_SCHEMA_VERSION,
+  SCORING_PROFILE_SHA256,
+} from '@/lib/result-contract.generated'
+import {
   buildScenarioMatrix,
   detailForScenario,
   stepSignals,
 } from '@/lib/scenario-matrix'
+
+const resultContract = {
+  schema_version: RESULTS_SCHEMA_VERSION,
+  result_contract_sha256: RESULT_CONTRACT_SHA256,
+  scoring_profile_sha256: SCORING_PROFILE_SHA256,
+  report_state: 'complete' as const,
+  objective_outcome: 'passed' as const,
+}
+
+function aggregate(overrides: Record<string, unknown> = {}) {
+  return {
+    planned_runs: 1,
+    observed_runs: 1,
+    deferred_runs: 0,
+    completed_runs: 1,
+    task_incomplete_runs: 0,
+    undetermined_runs: 0,
+    technical_valid_runs: 1,
+    technical_invalid_runs: 0,
+    execution_reliability: 1,
+    completion_evidence_coverage: 1,
+    completion_rate: 1,
+    objective_scored_runs: 1,
+    objective_median_score: 100,
+    objective_score_coverage: 1,
+    quality_scored_completed_runs: 1,
+    quality_score_completed: 88,
+    quality_coverage: 1,
+    total_tokens_consumed: 1200,
+    judge_tokens_consumed: 100,
+    tokens_completed_p50: 1200,
+    failed_attempt_tokens: 0,
+    tokens_per_completion: 1200,
+    hard_gate_failures: 0,
+    technical_failures: 0,
+    ...overrides,
+  }
+}
 
 function executionDetail() {
   return {
@@ -32,6 +75,7 @@ function executionDetail() {
         scenario_id: 'security_review',
         available: true,
         report: {
+          ...resultContract,
           assessment_contract: { runs: [] },
           assessment_summary: {},
           scenarios: [
@@ -39,11 +83,21 @@ function executionDetail() {
               scenario_id: 'security_review',
               scenario_version: 2,
               passed: true,
+              aggregate: aggregate(),
               runs: [
                 {
                   run_id: 'run-security',
                   attempt_id: 'attempt-security',
                   status: 'passed',
+                  completion: 'completed',
+                  technical: 'valid',
+                  evaluators: {
+                    completion: 'available',
+                    quality: 'available',
+                    final_advisory: 'available',
+                  },
+                  objective_score: 100,
+                  quality_score_completed: 88,
                   wall_time_ms: 3_200,
                   assessment: {
                     run_id: 'run-security',
@@ -111,6 +165,8 @@ function executionDetail() {
         scenario_id: 'persistent_state',
         available: true,
         report: {
+          ...resultContract,
+          objective_outcome: 'failed',
           assessment_contract: { runs: [] },
           assessment_summary: {},
           scenarios: [
@@ -118,11 +174,35 @@ function executionDetail() {
               scenario_id: 'persistent_state',
               scenario_version: 1,
               passed: false,
+              aggregate: aggregate({
+                completed_runs: 0,
+                task_incomplete_runs: 1,
+                completion_rate: 0,
+                objective_median_score: 0,
+                quality_scored_completed_runs: 0,
+                quality_score_completed: null,
+                quality_coverage: null,
+                total_tokens_consumed: null,
+                judge_tokens_consumed: null,
+                tokens_completed_p50: null,
+                failed_attempt_tokens: null,
+                tokens_per_completion: null,
+                hard_gate_failures: 1,
+              }),
               runs: [
                 {
                   run_id: 'run-state',
                   attempt_id: 'attempt-state',
                   status: 'hard_gate_failed',
+                  completion: 'task_incomplete',
+                  technical: 'valid',
+                  evaluators: {
+                    completion: 'available',
+                    quality: 'not_required',
+                    final_advisory: 'not_required',
+                  },
+                  objective_score: 0,
+                  quality_score_completed: null,
                   wall_time_ms: 1_500,
                   assessment: {
                     system_status: 'hard_gate_failed',
@@ -141,13 +221,35 @@ function executionDetail() {
         scenario_id: 'research_pipeline',
         available: true,
         report: {
+          ...resultContract,
+          objective_outcome: 'inconclusive',
           assessment_contract: { runs: [] },
           assessment_summary: {},
           scenarios: [
             {
               scenario_id: 'research_pipeline',
               scenario_version: 1,
-              status: 'inconclusive',
+              passed: false,
+              aggregate: aggregate({
+                observed_runs: 0,
+                deferred_runs: 1,
+                completed_runs: 0,
+                technical_valid_runs: 0,
+                execution_reliability: 0,
+                completion_evidence_coverage: 0,
+                completion_rate: null,
+                objective_scored_runs: 0,
+                objective_median_score: null,
+                objective_score_coverage: 0,
+                quality_scored_completed_runs: 0,
+                quality_score_completed: null,
+                quality_coverage: null,
+                total_tokens_consumed: null,
+                judge_tokens_consumed: null,
+                tokens_completed_p50: null,
+                failed_attempt_tokens: null,
+                tokens_per_completion: null,
+              }),
               runs: [],
             },
           ],
@@ -233,6 +335,15 @@ describe('scenario matrix presentation model', () => {
     expect(security.durationMs).toBe(3_000)
     expect(security.durationKind).toBe('average')
     expect(security.workflowSteps).toHaveLength(2)
+    expect(model.contracts).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          valid: true,
+          schemaVersion: RESULTS_SCHEMA_VERSION,
+          reportState: 'complete',
+        }),
+      ]),
+    )
     expect(security.primaryMetrics).toEqual([
       {
         label: 'Runtime',
@@ -272,6 +383,55 @@ describe('scenario matrix presentation model', () => {
     expect(scoped.reports[0]?.report?.scenarios[0]?.scenario_id).toBe(
       'security_review',
     )
+  })
+
+  it('does not infer a successful objective when required result fields are absent', () => {
+    const detail = executionDetail()
+    const report = detail.reports[0]?.report
+    const scenario = report?.scenarios[0]
+    if (!report || !scenario) throw new Error('expected report fixture')
+    delete (report as unknown as Record<string, unknown>).report_state
+    delete (scenario as unknown as Record<string, unknown>).aggregate
+    scenario.passed = true
+    scenario.status = 'passed'
+
+    const model = buildScenarioMatrix(detail)
+    expect(model.contracts[0]).toMatchObject({ valid: false })
+    expect(model.items[0]?.objective).toMatchObject({
+      status: 'unavailable',
+      label: 'Unavailable',
+    })
+  })
+
+  it('keeps legacy schema and unknown fingerprints unavailable for comparison', () => {
+    for (const [key, value] of [
+      ['schema_version', 3],
+      ['result_contract_sha256', `sha256:${'0'.repeat(64)}`],
+      ['scoring_profile_sha256', `sha256:${'0'.repeat(64)}`],
+    ] as const) {
+      const detail = executionDetail()
+      const report = detail.reports[0].report as unknown as Record<
+        string,
+        unknown
+      >
+      report[key] = value
+      const model = buildScenarioMatrix(detail)
+      expect(model.contracts[0]).toMatchObject({ valid: false })
+      expect(model.items[0].objective.status).toBe('unavailable')
+    }
+  })
+
+  it('shows the explicit deferral reason without inventing a physical run', () => {
+    const detail = executionDetail()
+    const scenario = detail.reports[2]?.report?.scenarios[0]
+    if (!scenario) throw new Error('expected deferred scenario fixture')
+    const projection = scenario as unknown as Record<string, unknown>
+    projection.deferral_reason = 'Scenario materialization failed'
+    const item = buildScenarioMatrix(detail).items[2]
+    expect(item.reason).toBe('Scenario materialization failed')
+    expect(item.runCount).toBe(0)
+    expect(item.runs).toEqual([])
+    expect(item.objective.status).toBe('inconclusive')
   })
 
   it('prioritizes usage and domain counters for each workflow step', () => {

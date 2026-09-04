@@ -11,6 +11,7 @@ artifact_dir=${HARNESS_E2E_ARTIFACTS_DIR:-"$repo_root/target/harness-e2e-shadow"
 engine_port=${HARNESS_E2E_ENGINE_PORT:-49134}
 wait_seconds=${HARNESS_E2E_WAIT_SECONDS:-300}
 admission_timeout_seconds=${HARNESS_E2E_ADMISSION_TIMEOUT_SECONDS:-180}
+compose_add_timeout_seconds=${HARNESS_E2E_COMPOSE_ADD_TIMEOUT_SECONDS:-600}
 run_timeout_seconds=${HARNESS_E2E_RUN_TIMEOUT_SECONDS:-10800}
 fixture_launcher=${HARNESS_E2E_FIXTURE_LAUNCHER:-"$repo_root/scripts/engineering_ticket_fixture.py"}
 fixture_source_root=${HARNESS_E2E_FIXTURE_SOURCE_ROOT:-"$repo_root/tests/fixtures/campaign"}
@@ -22,7 +23,11 @@ case "$artifact_dir" in
   *) echo "HARNESS_E2E_ARTIFACTS_DIR must be below $repo_root/target" >&2; exit 2 ;;
 esac
 mkdir -p "$artifact_dir"
-artifact_dir=$(cd "$artifact_dir" && pwd)
+artifact_dir=$(cd "$artifact_dir" && pwd -P)
+case "$artifact_dir" in
+  "$repo_root"/target/*) ;;
+  *) echo "artifact directory escapes the canonical target directory" >&2; exit 2 ;;
+esac
 contract_path="$artifact_dir/stack-lock.json"
 printf '%s\n' "$HARNESS_E2E_STACK_LOCK" >"$contract_path"
 python3 "$contract_tool" validate --contract "$contract_path" >/dev/null
@@ -37,13 +42,23 @@ short_execution=${execution_id%%-*}
 namespace="e2e-${short_execution}-${campaign_group_id}"
 
 run_root=$(mktemp -d "${TMPDIR:-/tmp}/harness-e2e-compose.XXXXXX")
+# TMPDIR is configurable; reject an uploaded runtime/secret tree before any
+# provider credential or Compose state is written into it.
+if ! python3 "$contract_tool" validate-layout \
+  --artifact-root "$artifact_dir" --runtime-root "$run_root" --allowed-root "$repo_root/target"; then
+  rmdir -- "$run_root"
+  exit 2
+fi
 project_dir="$run_root/project"
 engine_config="$project_dir/iii.config.yaml"
 compose_file="$artifact_dir/stack/worker-compose.yaml"
 compose_state="$run_root/compose-state"
 tools_dir="$run_root/bin"
 secrets_dir="$run_root/secrets"
-e2e_data="$run_root/e2e-data"
+# The worker's native execution tree is evidence, not disposable runtime state.
+# Keep it below the uploaded artifact root so a failed results-get or process
+# cleanup cannot erase already committed runs and journal events.
+e2e_data="$artifact_dir/native"
 engine_url="ws://127.0.0.1:${engine_port}"
 mkdir -p "$project_dir" "$compose_state" "$tools_dir" "$secrets_dir" "$e2e_data" \
   "$artifact_dir/logs" "$artifact_dir/stack"
@@ -97,6 +112,44 @@ project_trigger() {
     --namespace "$namespace" \
     --timeout-ms "$timeout_ms" \
     --json "$payload"
+}
+
+# `compose::add` may either finish synchronously or return an asynchronous
+# admission receipt. A receipt is not proof that project assembly succeeded,
+# so follow the typed operation until it reaches a terminal state.
+await_compose_add() {
+  local receipt=$1
+  local snapshot=$2
+  local status
+  status=$(jq -r '.status // empty' "$receipt")
+
+  case "$status" in
+    ok) return 0 ;;
+    accepted) ;;
+    *) fail "compose::add answered '${status:-no status}'" ;;
+  esac
+
+  local operation_id deadline detail
+  operation_id=$(jq -er '.operation_id | select(type == "string" and length > 0)' "$receipt")
+  deadline=$((SECONDS + compose_add_timeout_seconds))
+  log "compose::add admitted operation $operation_id; waiting for it to settle"
+
+  while ((SECONDS < deadline)); do
+    compose_trigger compose::operation "operation_id=$operation_id" >"$snapshot"
+    status=$(jq -r '.status // empty' "$snapshot")
+    case "$status" in
+      succeeded) return 0 ;;
+      failed | cancelled)
+        detail=$(jq -r '.last_event.detail // .phase // "no detail"' "$snapshot")
+        fail "compose::add $status: $detail"
+        ;;
+      accepted | pending | running) ;;
+      *) fail "compose::operation answered '${status:-no status}'" ;;
+    esac
+    sleep 5
+  done
+
+  fail "compose::add did not settle within ${compose_add_timeout_seconds}s"
 }
 
 cleanup() {
@@ -306,7 +359,7 @@ while IFS= read -r root; do
   add_args+=("worker=$root")
 done < <(python3 "$contract_tool" roots --contract "$contract_path")
 compose_trigger compose::add "${add_args[@]}" >"$artifact_dir/stack/add.json"
-jq -e '.status == "ok"' "$artifact_dir/stack/add.json" >/dev/null
+await_compose_add "$artifact_dir/stack/add.json" "$artifact_dir/stack/add-operation.json"
 
 failure_phase=project_start
 compose_trigger compose::up "file=$compose_file" >"$artifact_dir/stack/up.json"

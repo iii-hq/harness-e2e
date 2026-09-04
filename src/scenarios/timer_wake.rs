@@ -379,7 +379,13 @@ fn evaluate<'a>(
         let no_polling = audit.disciplined();
         let clean_completion = active_bindings == 0 && no_errors && confirmed;
 
-        Ok(assessment::build_evaluation([
+        Ok(assessment::build_evaluation(
+            if confirmed {
+                crate::report::CompletionState::Completed
+            } else {
+                crate::report::CompletionState::TaskIncomplete
+            },
+            [
             TIMER_ARMED.full_or_zero(
                 timer_armed,
                 format!(
@@ -415,7 +421,8 @@ fn evaluate<'a>(
                     observation.metrics.totals.function_call_errors
                 ),
             ),
-        ]))
+            ],
+        ))
     })
 }
 

@@ -10,6 +10,7 @@ import type {
 import {
   buildExecutionPresentation,
   failureBreakdown,
+  isUnsupportedExecution,
 } from '@/lib/execution-view'
 import {
   generalRunMetrics,
@@ -215,7 +216,7 @@ export function executionMetricValue(
   execution: DashboardExecutionSummary | null | undefined,
   id: PlanMetricId,
 ): number | null {
-  if (!execution) return null
+  if (!execution || isUnsupportedExecution(execution)) return null
   const executionTotals = totals(execution)
   const assessment = objectValue(execution.assessment_summary)
   switch (id) {
@@ -731,6 +732,18 @@ export function buildPlanComparison(
         'Both a retained baseline and a completed candidate are required before deltas can be calculated.',
       baseline: baseline ?? null,
       candidate: candidate ?? null,
+      metrics: [],
+      scenarios: [],
+    }
+  }
+  if (isUnsupportedExecution(baseline) || isUnsupportedExecution(candidate)) {
+    return {
+      verdict: 'inconclusive',
+      headline: 'Result contracts are incompatible',
+      detail:
+        'Historical evidence remains available, but unsupported result contracts cannot be compared or selected as baselines.',
+      baseline,
+      candidate,
       metrics: [],
       scenarios: [],
     }

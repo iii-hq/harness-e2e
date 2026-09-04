@@ -271,7 +271,7 @@ fn tick_write(function_id: &str, arguments: &Value, names: &Names) -> Option<Val
 fn is_allowed_call(function_id: &str, arguments: &Value, names: &Names) -> bool {
     // Function discovery is legitimate machinery, not chain noise — the same
     // exemption every discipline audit in this registry grants.
-    if function_id.starts_with("engine::functions::") {
+    if common::is_contract_discovery(function_id) {
         return true;
     }
     // Registration shape and count are wake_integrity's business.
@@ -516,44 +516,53 @@ async fn evaluate_chain(
     let response_chars = observation.response.chars().count();
     let quiet = errors == 0 && disciplined && response_chars <= MAX_REPORT_CHARS;
 
-    Ok(assessment::build_evaluation([
-        CHAIN_COMPLETED.full_or_zero(
-            counter_final && reported,
-            format!("final_counter={observed}, expected_count={ticks}, marker_present={reported}"),
-        ),
-        WAKE_INTEGRITY.full_or_zero(
-            wake.registrations_exact && wake.fired_exact && active_bindings == 0,
-            format!(
-                "registrations={}/{ticks} (tick-labeled={}), fired={}/{ticks} (retired={}), \
+    Ok(assessment::build_evaluation(
+        if counter_final {
+            crate::report::CompletionState::Completed
+        } else {
+            crate::report::CompletionState::TaskIncomplete
+        },
+        [
+            CHAIN_COMPLETED.full_or_zero(
+                counter_final && reported,
+                format!(
+                    "final_counter={observed}, expected_count={ticks}, marker_present={reported}"
+                ),
+            ),
+            WAKE_INTEGRITY.full_or_zero(
+                wake.registrations_exact && wake.fired_exact && active_bindings == 0,
+                format!(
+                    "registrations={}/{ticks} (tick-labeled={}), fired={}/{ticks} (retired={}), \
                  active_bindings={active_bindings}",
-                wake.registration_calls,
-                wake.tick_registrations,
-                wake.tick_fired,
-                wake.retired_fired
+                    wake.registration_calls,
+                    wake.tick_registrations,
+                    wake.tick_fired,
+                    wake.retired_fired
+                ),
             ),
-        ),
-        MONOTONIC_PROGRESS.full_or_zero(
-            chain.passed,
-            format!(
-                "writes={}, arms={}, fired_events={}, ordered_calls={}, causal_arms={}, \
+            MONOTONIC_PROGRESS.full_or_zero(
+                chain.passed,
+                format!(
+                    "writes={}, arms={}, fired_events={}, ordered_calls={}, causal_arms={}, \
                  strict_interleave={}, anchor={}",
-                chain.write_count,
-                chain.arm_count,
-                chain.fired_count,
-                chain.ordered_calls,
-                chain.causal_arms,
-                chain.strict_interleave,
-                chain.anchor
+                    chain.write_count,
+                    chain.arm_count,
+                    chain.fired_count,
+                    chain.ordered_calls,
+                    chain.causal_arms,
+                    chain.strict_interleave,
+                    chain.anchor
+                ),
             ),
-        ),
-        QUIET_CHAIN.full_or_zero(
-            quiet,
-            format!(
-                "function_errors={errors}, disciplined={disciplined}, \
+            QUIET_CHAIN.full_or_zero(
+                quiet,
+                format!(
+                    "function_errors={errors}, disciplined={disciplined}, \
                  response_chars={response_chars}/{MAX_REPORT_CHARS}"
+                ),
             ),
-        ),
-    ]))
+        ],
+    ))
 }
 
 fn capture<'a>(

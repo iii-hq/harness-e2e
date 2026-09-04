@@ -1,5 +1,5 @@
 use std::collections::{BTreeSet, HashMap, HashSet};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -106,6 +106,9 @@ pub struct SuiteRunConfig {
     pub rotating_seeds: Vec<u64>,
     pub technical_retries: u8,
     pub progress_interval: Option<Duration>,
+    /// Soft admission budget: stop starting slots after this elapsed duration.
+    /// The current slot still finishes capture and cleanup.
+    pub slot_start_deadline_seconds: Option<u64>,
     pub control: Option<SuiteControl>,
     pub observation_contract: Option<ObservationRunContract>,
     /// Exact immutable Markdown plan used by materialized replay. The runner
@@ -125,7 +128,25 @@ pub struct AdaptiveResumeAttempt {
 pub struct SuiteRunOutcome {
     pub report: E2eReport,
     pub manifest: E2eManifest,
-    pub report_path: PathBuf,
+    /// Absent when persistence failed; the redacted report is still returned.
+    pub report_path: Option<PathBuf>,
+}
+
+enum PreparedSuiteCase {
+    BuiltIn {
+        key: ScenarioKey,
+        seed: u64,
+        definition: MaterializedScenario,
+        preflight_error: Option<String>,
+        runs: Vec<E2eRunReport>,
+    },
+    Markdown {
+        key: ScenarioKey,
+        seed: u64,
+        definition: MarkdownScenarioSource,
+        case: ScenarioCase,
+        runs: Vec<E2eRunReport>,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -143,6 +164,9 @@ pub enum SuitePhase {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SuiteEvent {
+    SlotInventoryCommitted {
+        slots: Vec<crate::journal::JournalSlot>,
+    },
     Phase(SuitePhase),
     AttemptStarted {
         scenario_id: ScenarioKey,
@@ -157,6 +181,20 @@ pub enum SuiteEvent {
     },
     AttemptFinished {
         attempt_id: String,
+    },
+    SubjectObservationCommitted {
+        slot_id: String,
+        attempt_id: String,
+        artifact: crate::artifact::ArtifactReference,
+    },
+    RunCommitted {
+        slot_id: String,
+        run_id: String,
+        artifact: crate::artifact::ArtifactReference,
+    },
+    SlotDeferred {
+        slot_id: String,
+        reason: String,
     },
 }
 
@@ -183,6 +221,8 @@ pub struct SuiteControl {
 }
 
 pub async fn run_suite(config: SuiteRunConfig) -> Result<SuiteRunOutcome> {
+    let suite_started = Instant::now();
+    let suite_deadline = config.slot_start_deadline_seconds.map(Duration::from_secs);
     validate_config(&config)?;
     emit_phase(config.control.as_ref(), SuitePhase::Preflighting).await?;
     ensure_not_cancelled(config.control.as_ref())?;
@@ -293,34 +333,169 @@ pub async fn run_suite(config: SuiteRunConfig) -> Result<SuiteRunOutcome> {
     }
     worker_contracts.sort_by(|left, right| left.function_id.cmp(&right.function_id));
     emit_phase(config.control.as_ref(), SuitePhase::Materializing).await?;
-    let mut scenario_reports = Vec::new();
+    let slots = planned_slots(&config);
+    let mut persistence_errors = Vec::new();
+    preserve_event(
+        config.control.as_ref(),
+        SuiteEvent::SlotInventoryCommitted {
+            slots: slots.clone(),
+        },
+        &mut persistence_errors,
+    )
+    .await;
+    let mut prepared_cases = Vec::new();
+    let mut deferred_cases = Vec::new();
 
     for scenario_key in &config.scenarios {
-        ensure_not_cancelled(config.control.as_ref())?;
         for seed in case_seeds_for_key(scenario_key, config.seed, &config.rotating_seeds) {
             if let Some(scenario_id) = scenario_key.built_in() {
-                let definition = scenario_id
-                    .materialize("validation", seed)
-                    .with_context(|| format!("materialize scenario {}", scenario_id.as_str()))?;
-                preflight_case(&context, &control_plane, &definition.case).await?;
-                let mut runs = Vec::with_capacity(config.runs as usize);
-                for repetition in 0..config.runs {
-                    tracing::info!(
-                        scenario = scenario_id.as_str(),
-                        case_id = definition.case.case_id,
-                        seed,
-                        run = repetition + 1,
-                        total_runs = config.runs,
-                        "running E2E quality scenario case"
-                    );
-                    let run = run_with_technical_retries(
+                let definition = match scenario_id.materialize("validation", seed) {
+                    Ok(definition) => definition,
+                    Err(error) => {
+                        let reason =
+                            format!("materialize scenario {}: {error:#}", scenario_id.as_str());
+                        deferred_cases.push(
+                            defer_planned_case(
+                                config.control.as_ref(),
+                                &slots,
+                                scenario_key,
+                                seed,
+                                None,
+                                config.runs,
+                                reason,
+                                &mut persistence_errors,
+                            )
+                            .await,
+                        );
+                        continue;
+                    }
+                };
+                let preflight_error = preflight_case(&context, &control_plane, &definition.case)
+                    .await
+                    .err()
+                    .map(|error| format!("preflight case {}: {error:#}", definition.case.case_id));
+                prepared_cases.push(PreparedSuiteCase::BuiltIn {
+                    key: scenario_key.clone(),
+                    seed,
+                    definition,
+                    preflight_error,
+                    runs: Vec::with_capacity(config.runs as usize),
+                });
+            } else {
+                let definition = match markdown_definition(&config, scenario_key.as_str()) {
+                    Ok(definition) => definition,
+                    Err(error) => {
+                        let reason = format!(
+                            "load Markdown scenario {}: {error:#}",
+                            scenario_key.as_str()
+                        );
+                        deferred_cases.push(
+                            defer_planned_case(
+                                config.control.as_ref(),
+                                &slots,
+                                scenario_key,
+                                seed,
+                                None,
+                                config.runs,
+                                reason,
+                                &mut persistence_errors,
+                            )
+                            .await,
+                        );
+                        continue;
+                    }
+                };
+                let scenario = &definition.scenario;
+                let case = match markdown_case(scenario, seed) {
+                    Ok(case) => case,
+                    Err(error) => {
+                        let reason =
+                            format!("materialize Markdown case {}: {error:#}", scenario.id);
+                        deferred_cases.push(
+                            defer_planned_case(
+                                config.control.as_ref(),
+                                &slots,
+                                scenario_key,
+                                seed,
+                                Some(scenario.version),
+                                config.runs,
+                                reason,
+                                &mut persistence_errors,
+                            )
+                            .await,
+                        );
+                        continue;
+                    }
+                };
+                prepared_cases.push(PreparedSuiteCase::Markdown {
+                    key: scenario_key.clone(),
+                    seed,
+                    definition,
+                    case,
+                    runs: Vec::with_capacity(config.runs as usize),
+                });
+            }
+        }
+    }
+
+    // Execute one slot per prepared case before starting the next repetition.
+    // A late failure therefore cannot consume the whole suite budget while
+    // leaving every later scenario without a single observation.
+    for (repetition, index) in round_robin_slots(config.runs, prepared_cases.len()) {
+        let prepared = &mut prepared_cases[index];
+        if let Some(reason) = slot_deferral_reason(
+            !persistence_errors.is_empty(),
+            config
+                .control
+                .as_ref()
+                .is_some_and(|control| *control.cancellation.borrow()),
+            suite_started.elapsed(),
+            suite_deadline,
+        ) {
+            let (key, seed) = match prepared {
+                PreparedSuiteCase::BuiltIn { key, seed, .. }
+                | PreparedSuiteCase::Markdown { key, seed, .. } => (key, *seed),
+            };
+            preserve_event(
+                config.control.as_ref(),
+                SuiteEvent::SlotDeferred {
+                    slot_id: slot_id(key, seed, repetition),
+                    reason: reason.into(),
+                },
+                &mut persistence_errors,
+            )
+            .await;
+            continue;
+        }
+        let (slot_key, seed, mut run, subject_observed) = match prepared {
+            PreparedSuiteCase::BuiltIn {
+                key,
+                seed,
+                definition,
+                preflight_error,
+                ..
+            } => {
+                let scenario_id = key.built_in().expect("prepared built-in scenario");
+                tracing::info!(
+                    scenario = scenario_id.as_str(),
+                    case_id = definition.case.case_id,
+                    seed = *seed,
+                    run = repetition + 1,
+                    total_runs = config.runs,
+                    "running E2E quality scenario case"
+                );
+                let subject_observed = preflight_error.is_none();
+                let run = if let Some(error) = preflight_error.as_ref() {
+                    preflight_failure_run(&definition.spec, error.clone())
+                } else {
+                    run_with_technical_retries(
                         &context,
                         RetryRequest {
                             scenario_id,
                             subject: &config.subject,
                             judge_config: config.judge.as_ref(),
                             audit_analyzer: config.audit_analyzer.as_ref(),
-                            seed,
+                            seed: *seed,
                             technical_retries: config.technical_retries,
                             progress_interval: config.progress_interval,
                             control: config.control.as_ref(),
@@ -333,101 +508,108 @@ pub async fn run_suite(config: SuiteRunConfig) -> Result<SuiteRunOutcome> {
                                 .filter(|resume| resume.scenario_id == scenario_id),
                         },
                     )
-                    .await;
-                    let stop = run.status.is_technical_failure();
-                    runs.push(run);
-                    if stop {
-                        tracing::warn!(
-                            scenario = scenario_id.as_str(),
-                            seed,
-                            "stopping case after a technical failure"
-                        );
-                        break;
-                    }
-                }
-                scenario_reports.push(E2eScenarioReport::aggregate_case(
-                    definition.case,
-                    definition.spec.execution,
-                    runs,
-                ));
-            } else {
-                let definition = markdown_definition(&config, scenario_key.as_str())?;
-                let scenario = &definition.scenario;
-                let case = markdown_case(scenario, seed)?;
-                preflight_case(&context, &control_plane, &case).await?;
-                let mut runs = Vec::with_capacity(config.runs as usize);
-                for repetition in 0..config.runs {
-                    tracing::info!(
-                        scenario = scenario.id,
-                        case_id = case.case_id,
-                        seed,
-                        run = repetition + 1,
-                        total_runs = config.runs,
-                        "running Markdown-authored E2E scenario"
-                    );
-                    let run = run_markdown_with_technical_retries(
-                        &context,
-                        MarkdownRetryRequest {
-                            scenario,
-                            source: &definition.source,
-                            subject: &config.subject,
-                            auxiliary: config
-                                .judge
-                                .as_ref()
-                                .expect("validated Markdown auxiliary model"),
-                            audit_analyzer: config.audit_analyzer.as_ref(),
-                            seed,
-                            technical_retries: config.technical_retries,
-                            progress_interval: config.progress_interval,
-                            control: config.control.as_ref(),
-                            output: &config.output,
-                            system_identity_sha256: &system_identity_sha256,
-                            runs: config.runs,
-                            materialized_plan: config.materialized_markdown_plan.as_ref(),
-                        },
-                    )
-                    .await;
-                    let stop = run.status.is_technical_failure();
-                    runs.push(run);
-                    if stop {
-                        tracing::warn!(
-                            scenario = scenario.id,
-                            seed,
-                            "stopping Markdown case after a technical failure"
-                        );
-                        break;
-                    }
-                }
-                scenario_reports.push(E2eScenarioReport::aggregate_case(
+                    .await
+                };
+                (key.clone(), *seed, run, subject_observed)
+            }
+            PreparedSuiteCase::Markdown {
+                key,
+                seed,
+                definition,
+                case,
+                ..
+            } => {
+                tracing::info!(
+                    scenario = definition.scenario.id,
+                    case_id = case.case_id,
+                    seed = *seed,
+                    run = repetition + 1,
+                    total_runs = config.runs,
+                    "running Markdown-authored E2E scenario"
+                );
+                let run = run_markdown_with_technical_retries(
+                    &context,
+                    MarkdownRetryRequest {
+                        scenario: &definition.scenario,
+                        source: &definition.source,
+                        subject: &config.subject,
+                        auxiliary: config
+                            .judge
+                            .as_ref()
+                            .expect("validated Markdown auxiliary model"),
+                        audit_analyzer: config.audit_analyzer.as_ref(),
+                        seed: *seed,
+                        technical_retries: config.technical_retries,
+                        progress_interval: config.progress_interval,
+                        control: config.control.as_ref(),
+                        output: &config.output,
+                        system_identity_sha256: &system_identity_sha256,
+                        runs: config.runs,
+                        materialized_plan: config.materialized_markdown_plan.as_ref(),
+                    },
+                )
+                .await;
+                (key.clone(), *seed, run, true)
+            }
+        };
+        incorporate_worker_contracts(&mut worker_contracts, &mut run);
+        let checkpoint_result = commit_run_checkpoint(
+            config.control.as_ref(),
+            &config.output,
+            &slot_id(&slot_key, seed, repetition),
+            &run,
+            subject_observed,
+        )
+        .await;
+        match prepared {
+            PreparedSuiteCase::BuiltIn { runs, .. } | PreparedSuiteCase::Markdown { runs, .. } => {
+                runs.push(run)
+            }
+        }
+        if let Err(error) = checkpoint_result {
+            persistence_errors.push(format!("commit run checkpoint: {error:#}"));
+        }
+    }
+
+    let mut scenario_reports = prepared_cases
+        .into_iter()
+        .map(|prepared| match prepared {
+            PreparedSuiteCase::BuiltIn {
+                definition, runs, ..
+            } => E2eScenarioReport::aggregate_case_with_planned(
+                definition.case,
+                definition.spec.execution,
+                config.runs,
+                runs,
+            ),
+            PreparedSuiteCase::Markdown { case, runs, .. } => {
+                E2eScenarioReport::aggregate_case_with_planned(
                     case,
                     crate::markdown::execution_policy(),
+                    config.runs,
                     runs,
-                ));
+                )
             }
+        })
+        .chain(deferred_cases)
+        .collect::<Vec<_>>();
+    for scenario in &mut scenario_reports {
+        if scenario.aggregate.deferred_runs > 0 && scenario.deferral_reason.is_none() {
+            scenario.deferral_reason = slot_deferral_reason(
+                !persistence_errors.is_empty(),
+                config
+                    .control
+                    .as_ref()
+                    .is_some_and(|control| *control.cancellation.borrow()),
+                suite_started.elapsed(),
+                suite_deadline,
+            )
+            .map(str::to_owned);
         }
     }
 
     crate::scenarios::engineering_ticket::apply_handoff_efficiency(&mut scenario_reports);
 
-    for contract in scenario_reports
-        .iter()
-        .flat_map(|scenario| &scenario.runs)
-        .flat_map(|run| &run.worker_contracts)
-    {
-        if let Some(existing) = worker_contracts
-            .iter()
-            .find(|existing| existing.function_id == contract.function_id)
-        {
-            if existing != contract {
-                bail!(
-                    "function contract '{}' changed between preflight and scenario execution",
-                    contract.function_id
-                );
-            }
-        } else {
-            worker_contracts.push(contract.clone());
-        }
-    }
     worker_contracts.sort_by(|left, right| left.function_id.cmp(&right.function_id));
 
     let completed_at = Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true);
@@ -465,13 +647,22 @@ pub async fn run_suite(config: SuiteRunConfig) -> Result<SuiteRunOutcome> {
         identity::nonempty_env("HARNESS_E2E_ENGINE_REVISION"),
         scenario_reports,
     );
+    preserve_event(
+        config.control.as_ref(),
+        SuiteEvent::Phase(SuitePhase::Finalizing),
+        &mut persistence_errors,
+    )
+    .await;
+    for error in persistence_errors {
+        report.record_persistence_error(error);
+    }
+    report.slot_start_deadline_seconds = config.slot_start_deadline_seconds;
     report.observation_contract = config.observation_contract.clone();
-    emit_phase(config.control.as_ref(), SuitePhase::Finalizing).await?;
-    ensure_not_cancelled(config.control.as_ref())?;
     // Persist a complete objective result and immutable evidence before invoking
     // the complementary analyzer. A provider failure can therefore never erase
     // the completed execution.
-    report.write_to(&config.output, &manifest)?;
+    let objective_persisted =
+        persist_report_preserving_observations(&mut report, &manifest, &config.output)?.is_some();
     let final_assessment_count = report
         .scenarios
         .iter()
@@ -479,12 +670,22 @@ pub async fn run_suite(config: SuiteRunConfig) -> Result<SuiteRunOutcome> {
         .sum::<usize>();
     tracing::info!(
         final_assessment_count,
+        objective_persisted,
         timeout_seconds = FINAL_ASSESSMENT_BATCH_TIMEOUT.as_secs(),
-        "objective results persisted; starting advisory final assessments before runner shutdown"
+        "objective persistence finished; advisory assessments require durable results"
     );
     let final_assessments_started = Instant::now();
-    evaluate_final_assessments(&context, config.judge.as_ref(), &config.output, &mut report)
-        .await?;
+    if objective_persisted {
+        if let Err(error) =
+            evaluate_final_assessments(&context, config.judge.as_ref(), &config.output, &mut report)
+                .await
+        {
+            tracing::warn!(
+                error = %format!("{error:#}"),
+                "advisory final assessments failed; preserving the objective report"
+            );
+        }
+    }
     tracing::info!(
         final_assessment_count,
         duration_ms = final_assessments_started
@@ -493,14 +694,45 @@ pub async fn run_suite(config: SuiteRunConfig) -> Result<SuiteRunOutcome> {
             .min(u64::MAX as u128) as u64,
         "advisory final assessments completed; persisting the final report"
     );
-    let report_path = report.write_to(&config.output, &manifest)?;
-    tracing::info!("final report persisted; shutting down the E2E connection");
+    let report_path =
+        persist_report_preserving_observations(&mut report, &manifest, &config.output)?;
+    if report_path.is_none() {
+        redact_unpersisted_report(&mut report)?;
+    }
+    tracing::info!(
+        persisted = report_path.is_some(),
+        "shutting down the E2E connection"
+    );
     context.shutdown().await;
     Ok(SuiteRunOutcome {
         report,
         manifest,
         report_path,
     })
+}
+
+fn persist_report_preserving_observations(
+    report: &mut E2eReport,
+    manifest: &E2eManifest,
+    output: &Path,
+) -> Result<Option<PathBuf>> {
+    match report.write_to(output, manifest) {
+        Ok(path) => Ok(Some(path)),
+        Err(error) => {
+            report.record_persistence_error(format!("persist results: {error:#}"));
+            Ok(None)
+        }
+    }
+}
+
+fn redact_unpersisted_report(report: &mut E2eReport) -> Result<()> {
+    // Only sanitize the final handoff. Earlier serialization would discard
+    // skipped capture fields that a subsequent persistence attempt still needs.
+    let mut value = serde_json::to_value(&*report)?;
+    let redaction = crate::redaction::RedactionPolicy::from_environment().redact_value(&mut value);
+    *report = serde_json::from_value(value)?;
+    report.redaction.merge(redaction);
+    Ok(())
 }
 
 const MAX_FINAL_ASSESSMENT_ITEMS: usize = 12;
@@ -740,7 +972,26 @@ async fn evaluate_final_assessments(
 
     // Attachment mutates the report, so it happens in the original run order.
     for (item, outcome) in pending.iter().zip(outcomes) {
-        let (assessment, attempts, usage, elapsed) = outcome?;
+        let (assessment, attempts, usage, elapsed) = match outcome {
+            Ok(outcome) => outcome,
+            Err(error) => {
+                tracing::warn!(
+                    scenario = item.scenario_id,
+                    run_id = item.run_id,
+                    attempt_id = item.attempt_id,
+                    error = %format!("{error:#}"),
+                    "advisory final assessment provider failed; recording it as unavailable"
+                );
+                (
+                    failed_unprepared_final_assessment(format!(
+                        "final_assessment_provider_failed: {error:#}; the objective system status is unchanged"
+                    )),
+                    1,
+                    None,
+                    Duration::ZERO,
+                )
+            }
+        };
         let availability = assessment.availability;
         attach_final_assessment(
             report,
@@ -819,9 +1070,19 @@ fn attach_final_assessment(
     judge_expected: bool,
     assessment: AiFinalAssessment,
 ) -> Result<()> {
+    let evaluator_availability = match assessment.availability {
+        AiAssessmentAvailability::Available => crate::report::EvaluatorAvailability::Available,
+        AiAssessmentAvailability::NotRequested | AiAssessmentAvailability::NotEvaluated => {
+            crate::report::EvaluatorAvailability::NotRequired
+        }
+        AiAssessmentAvailability::Unavailable
+        | AiAssessmentAvailability::Malformed
+        | AiAssessmentAvailability::Failed => crate::report::EvaluatorAvailability::Unavailable,
+    };
     {
         let run = &mut report.scenarios[scenario_index].runs[run_index];
         run.final_assessment_input = input_reference;
+        run.evaluators.final_advisory = evaluator_availability;
         accumulate_judge_telemetry(run, attempts, usage);
         run.update_cost(judge_expected);
     }
@@ -1298,6 +1559,24 @@ async fn emit_phase(control: Option<&SuiteControl>, phase: SuitePhase) -> Result
     emit_event(control, SuiteEvent::Phase(phase)).await
 }
 
+async fn emit_attempt_phase(
+    control: Option<&SuiteControl>,
+    phase: SuitePhase,
+    failure_phase: FailurePhase,
+    report: &mut E2eRunReport,
+) -> bool {
+    if let Err(error) = emit_phase(control, phase).await {
+        record_checkpoint_failure(
+            report,
+            failure_phase,
+            format!("persist {phase:?} phase checkpoint: {error:#}"),
+        );
+        false
+    } else {
+        true
+    }
+}
+
 async fn emit_event(control: Option<&SuiteControl>, event: SuiteEvent) -> Result<()> {
     let Some(control) = control else {
         return Ok(());
@@ -1322,6 +1601,355 @@ fn ensure_not_cancelled(control: Option<&SuiteControl>) -> Result<()> {
         bail!("E2E execution was cancelled");
     }
     Ok(())
+}
+
+fn slot_id(scenario: &ScenarioKey, seed: u64, repetition: u32) -> String {
+    let digest = artifact::sha256_value(&json!({
+        "scenario_id": scenario.as_str(),
+        "seed": seed.to_string(),
+        "repetition": repetition,
+    }))
+    .expect("slot identity is serializable");
+    format!("slot-{}", &digest["sha256:".len().."sha256:".len() + 24])
+}
+
+fn planned_slots(config: &SuiteRunConfig) -> Vec<crate::journal::JournalSlot> {
+    let mut slots = Vec::new();
+    for scenario in &config.scenarios {
+        for seed in case_seeds_for_key(scenario, config.seed, &config.rotating_seeds) {
+            let case_id = if let Some(id) = scenario.built_in() {
+                id.materialize("inventory", seed)
+                    .map(|definition| definition.case.case_id)
+            } else {
+                markdown_definition(config, scenario.as_str())
+                    .and_then(|definition| markdown_case(&definition.scenario, seed))
+                    .map(|case| case.case_id)
+            }
+            .unwrap_or_else(|_| format!("unresolved:{}:{seed}", scenario.as_str()));
+            for repetition in 0..config.runs {
+                slots.push(crate::journal::JournalSlot {
+                    slot_id: slot_id(scenario, seed, repetition),
+                    ordinal: slots.len().try_into().unwrap_or(u64::MAX),
+                    scenario_id: scenario.as_str().to_string(),
+                    case_id: case_id.clone(),
+                    seed: seed.to_string(),
+                    repetition,
+                });
+            }
+        }
+    }
+    slots
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn defer_planned_case(
+    control: Option<&SuiteControl>,
+    slots: &[crate::journal::JournalSlot],
+    scenario: &ScenarioKey,
+    seed: u64,
+    version: Option<u32>,
+    runs: u32,
+    reason: String,
+    persistence_errors: &mut Vec<String>,
+) -> E2eScenarioReport {
+    for repetition in 0..runs {
+        preserve_event(
+            control,
+            SuiteEvent::SlotDeferred {
+                slot_id: slot_id(scenario, seed, repetition),
+                reason: reason.clone(),
+            },
+            persistence_errors,
+        )
+        .await;
+    }
+    let case_id = slots
+        .iter()
+        .find(|slot| slot.slot_id == slot_id(scenario, seed, 0))
+        .map(|slot| slot.case_id.clone())
+        .unwrap_or_else(|| format!("unresolved:{}:{seed}", scenario.as_str()));
+    let (version, execution) = match scenario.built_in() {
+        Some(id) => {
+            let spec = id.spec("validation");
+            (spec.version, spec.execution)
+        }
+        None => (version.unwrap_or(0), crate::markdown::execution_policy()),
+    };
+    E2eScenarioReport::deferred(
+        scenario.as_str().into(),
+        case_id,
+        version,
+        execution,
+        runs,
+        reason,
+    )
+}
+
+fn round_robin_slots(runs: u32, cases: usize) -> impl Iterator<Item = (u32, usize)> {
+    (0..runs).flat_map(move |repetition| (0..cases).map(move |case| (repetition, case)))
+}
+
+fn slot_deferral_reason(
+    persistence_failed: bool,
+    cancelled: bool,
+    elapsed: Duration,
+    deadline: Option<Duration>,
+) -> Option<&'static str> {
+    if persistence_failed {
+        Some("execution persistence unavailable; remaining slots require reconciliation")
+    } else if cancelled {
+        Some("execution cancelled before this slot started")
+    } else if deadline.is_some_and(|deadline| elapsed >= deadline) {
+        Some("slot-start deadline exhausted before this slot started")
+    } else {
+        None
+    }
+}
+
+/// Stop admitting work after durability fails, but never discard observed runs.
+async fn preserve_event(
+    control: Option<&SuiteControl>,
+    event: SuiteEvent,
+    errors: &mut Vec<String>,
+) {
+    if errors.is_empty() {
+        if let Err(error) = emit_event(control, event).await {
+            errors.push(format!("persist execution event: {error:#}"));
+        }
+    }
+}
+
+fn record_checkpoint_failure(report: &mut E2eRunReport, phase: FailurePhase, message: String) {
+    report.push_typed_failure(
+        RunStatus::InfrastructureError,
+        phase,
+        "journal_checkpoint_failed",
+        crate::report::RetryScope::None,
+        crate::report::ContaminationScope::None,
+        message,
+    );
+}
+
+pub fn resolve_slot_start_deadline(explicit: Option<u64>) -> Result<Option<u64>> {
+    let configured = std::env::var("HARNESS_E2E_SUITE_DEADLINE_SECONDS").ok();
+    let value = explicit
+        .map(Ok)
+        .or_else(|| configured.map(|value| value.parse::<u64>()));
+    let value = value
+        .transpose()
+        .context("HARNESS_E2E_SUITE_DEADLINE_SECONDS must be a positive integer")?;
+    if value == Some(0) {
+        bail!("slot-start deadline must be greater than zero");
+    }
+    Ok(value)
+}
+
+fn write_immutable_json_artifact<T: Serialize>(
+    output: &std::path::Path,
+    relative_path: &std::path::Path,
+    id: String,
+    kind: &str,
+    value: &T,
+) -> Result<crate::artifact::ArtifactReference> {
+    let mut bytes = serde_json::to_vec_pretty(value)
+        .with_context(|| format!("serialize durable {kind} checkpoint"))?;
+    bytes.push(b'\n');
+    artifact::write_bytes(output, relative_path, id, kind, "application/json", &bytes)
+}
+
+async fn commit_run_checkpoint(
+    control: Option<&SuiteControl>,
+    output: &std::path::Path,
+    slot_id: &str,
+    run: &E2eRunReport,
+    subject_observed: bool,
+) -> Result<()> {
+    // Full, redacted run evidence is durable independently of the event sink.
+    // This also applies to CLI runs, which have no control-plane journal.
+    let mut checkpoint = json!({
+        "schema": "harness-e2e-run-checkpoint/v1",
+        "slot_id": slot_id,
+        "run_id": run.run_id,
+        "attempt_id": run.attempt_id,
+        "attempts": run.retry_attempts.len() + 1,
+        "status": run.status,
+        "completion": run.completion,
+        "technical": run.technical,
+        "objective_score": run.objective_score,
+        "quality_score_completed": run.quality_score_completed,
+        "cost": run.cost,
+        "metrics": run.metrics,
+        "run": run,
+    });
+    // These fields are intentionally skipped by the public Results serializer,
+    // but are required to retain the complete pre-finalization evidence.
+    checkpoint["capture"] = json!({
+        "deliverables": run.deliverables.iter().map(|item| json!({
+            "id": item.id, "content": item.content,
+        })).collect::<Vec<_>>(),
+        "terminal_status": run.terminal_status,
+        "assessment_results": run.assessment_results,
+        "asset_assessments": run.asset_assessments,
+        "asset_capture_manifest": run.asset_capture_manifest,
+        "final_assessment_input": run.final_assessment_input,
+        "asset_redaction": run.asset_redaction,
+        "retry_attempts": run.retry_attempts.iter().map(|attempt| json!({
+            "attempt_id": attempt.attempt_id,
+            "deliverables": attempt.deliverables.iter().map(|item| json!({
+                "id": item.id, "content": item.content,
+            })).collect::<Vec<_>>(),
+            "assessment_results": attempt.assessment_results,
+            "asset_assessments": attempt.asset_assessments,
+            "asset_capture_manifest": attempt.asset_capture_manifest,
+            "asset_redaction": attempt.asset_redaction,
+        })).collect::<Vec<_>>(),
+    });
+    crate::redaction::RedactionPolicy::from_environment().redact_value(&mut checkpoint);
+    let run_artifact = write_immutable_json_artifact(
+        output,
+        &PathBuf::from("journal")
+            .join("runs")
+            .join(slot_id)
+            .join(format!("{}.json", run.run_id)),
+        format!("{slot_id}-{}-run", run.run_id),
+        "run_checkpoint",
+        &checkpoint,
+    )?;
+    if run
+        .failures
+        .iter()
+        .chain(
+            run.retry_attempts
+                .iter()
+                .flat_map(|attempt| &attempt.failures),
+        )
+        .any(|failure| failure.code == "journal_checkpoint_failed")
+    {
+        bail!(
+            "attempt lifecycle checkpoint failed; full run preserved at {}",
+            run_artifact.path
+        );
+    }
+    let Some(control) = control else {
+        return Ok(());
+    };
+    let attempts = run
+        .retry_attempts
+        .iter()
+        .map(|attempt| {
+            (
+                attempt.attempt_id.as_str(),
+                attempt.attempt_number,
+                attempt.status,
+                attempt.completion,
+                attempt.technical,
+                attempt.objective_score,
+                attempt.quality_score_completed,
+                &attempt.cost,
+                attempt.metrics.as_ref(),
+            )
+        })
+        .chain(std::iter::once((
+            run.attempt_id.as_str(),
+            run.attempt_number,
+            run.status,
+            run.completion,
+            run.technical,
+            run.objective_score,
+            run.quality_score_completed,
+            &run.cost,
+            run.metrics.as_ref(),
+        )));
+    for attempt in attempts.filter(|attempt| subject_observed && attempt.8.is_some()) {
+        let (
+            attempt_id,
+            attempt_number,
+            status,
+            completion,
+            technical,
+            objective_score,
+            quality_score_completed,
+            cost,
+            metrics,
+        ) = attempt;
+        let checkpoint = json!({
+            "schema": "harness-e2e-subject-observation-checkpoint/v1",
+            "slot_id": slot_id,
+            "run_id": run.run_id,
+            "attempt_id": attempt_id,
+            "attempt_number": attempt_number,
+            "status": status,
+            "completion": completion,
+            "technical": technical,
+            "objective_score": objective_score,
+            "quality_score_completed": quality_score_completed,
+            "cost": cost,
+            "metrics": metrics,
+        });
+        let artifact = write_immutable_json_artifact(
+            output,
+            &PathBuf::from("journal")
+                .join("observations")
+                .join(slot_id)
+                .join(format!("{attempt_id}.json")),
+            format!("{slot_id}-{attempt_id}-subject-observation"),
+            "subject_observation_checkpoint",
+            &checkpoint,
+        )?;
+        emit_event(
+            Some(control),
+            SuiteEvent::SubjectObservationCommitted {
+                slot_id: slot_id.to_string(),
+                attempt_id: attempt_id.to_string(),
+                artifact,
+            },
+        )
+        .await?;
+    }
+    emit_event(
+        Some(control),
+        SuiteEvent::RunCommitted {
+            slot_id: slot_id.to_string(),
+            run_id: run.run_id.clone(),
+            artifact: run_artifact,
+        },
+    )
+    .await
+}
+
+fn preflight_failure_run(spec: &ScenarioSpec, message: String) -> E2eRunReport {
+    let run_id = Uuid::new_v4().simple().to_string();
+    let attempt_id = Uuid::new_v4().simple().to_string();
+    let mut report = E2eRunReport::new(run_id, attempt_id, 1, String::new(), spec.prompt.clone());
+    report.push_failure(RunStatus::InfrastructureError, FailurePhase::Setup, message);
+    ensure_assessment_results(spec, &mut report);
+    report.refresh_dimensions(false);
+    report
+}
+
+fn incorporate_worker_contracts(
+    observed: &mut Vec<crate::report::ObservedWorkerContract>,
+    run: &mut E2eRunReport,
+) {
+    for contract in run.worker_contracts.clone() {
+        if let Some(existing) = observed
+            .iter()
+            .find(|existing| existing.function_id == contract.function_id)
+        {
+            if existing != &contract {
+                run.push_failure(
+                    RunStatus::InfrastructureError,
+                    FailurePhase::Collect,
+                    format!(
+                        "function contract '{}' changed between preflight and scenario execution",
+                        contract.function_id
+                    ),
+                );
+            }
+        } else {
+            observed.push(contract);
+        }
+    }
 }
 
 fn markdown_definition(config: &SuiteRunConfig, id: &str) -> Result<MarkdownScenarioSource> {
@@ -1351,14 +1979,6 @@ fn validate_config(config: &SuiteRunConfig) -> Result<()> {
     if config.technical_retries > MAX_TECHNICAL_RETRIES {
         bail!("technical retries must be between 0 and {MAX_TECHNICAL_RETRIES}");
     }
-    if config.technical_retries > 0
-        && config
-            .scenarios
-            .iter()
-            .any(|scenario| !scenario.execution_kind().replay_safe())
-    {
-        bail!("non-replayable scenarios require --technical-retries 0");
-    }
     if config.scenarios.is_empty() {
         bail!("at least one scenario is required");
     }
@@ -1375,14 +1995,9 @@ fn validate_config(config: &SuiteRunConfig) -> Result<()> {
             bail!("adaptive resume requires one isolated scenario, one run, and no replay");
         }
     }
-    for scenario in &config.scenarios {
-        let seed = config.seed.unwrap_or_else(|| scenario.canonical_seed());
-        if let Some(scenario) = scenario.built_in() {
-            scenario.materialize("validation", seed)?;
-        } else {
-            markdown_definition(config, scenario.as_str())?;
-        }
-    }
+    // Scenario materialization and local Markdown validation are slot-scoped.
+    // Keeping them out of request validation lets one broken definition become
+    // an explicit deferred slot instead of erasing the whole execution.
     if config
         .scenarios
         .iter()
@@ -1593,8 +2208,8 @@ async fn run_once(context: &Arc<E2eContext>, request: AttemptRequest<'_>) -> E2e
     )
     .await
     {
-        report.push_failure(
-            RunStatus::InfrastructureError,
+        record_checkpoint_failure(
+            &mut report,
             FailurePhase::Setup,
             format!("persist attempt checkpoint: {error:#}"),
         );
@@ -1602,13 +2217,13 @@ async fn run_once(context: &Arc<E2eContext>, request: AttemptRequest<'_>) -> E2e
         report.refresh_dimensions(expects_deliverables);
         return report;
     }
-    if let Err(error) = emit_phase(control, SuitePhase::SettingUp).await {
-        report.push_failure(
-            RunStatus::InfrastructureError,
-            FailurePhase::Setup,
-            format!("persist setup checkpoint: {error:#}"),
-        );
-    }
+    emit_attempt_phase(
+        control,
+        SuitePhase::SettingUp,
+        FailurePhase::Setup,
+        &mut report,
+    )
+    .await;
 
     if report.failures.is_empty() {
         if let Err(error) = execute(
@@ -1629,24 +2244,31 @@ async fn run_once(context: &Arc<E2eContext>, request: AttemptRequest<'_>) -> E2e
         )
         .await
         {
-            report.push_failure(error.status, error.phase, error.message);
+            report.push_typed_failure(
+                error.status,
+                error.phase,
+                error.code,
+                error.retry_scope,
+                error.contamination,
+                error.message,
+            );
         }
     }
 
-    if let Err(error) = emit_phase(control, SuitePhase::Persisting).await {
-        report.push_failure(
-            RunStatus::InfrastructureError,
-            FailurePhase::Collect,
-            format!("persist evaluation checkpoint: {error:#}"),
-        );
-    }
-    if let Err(error) = emit_phase(control, SuitePhase::CleaningUp).await {
-        report.push_failure(
-            RunStatus::InfrastructureError,
-            FailurePhase::Cleanup,
-            format!("persist cleanup checkpoint: {error:#}"),
-        );
-    }
+    emit_attempt_phase(
+        control,
+        SuitePhase::Persisting,
+        FailurePhase::Collect,
+        &mut report,
+    )
+    .await;
+    emit_attempt_phase(
+        control,
+        SuitePhase::CleaningUp,
+        FailurePhase::Cleanup,
+        &mut report,
+    )
+    .await;
     if let Err(error) = context.unbind_turn_completed().await {
         report.push_failure(
             RunStatus::InfrastructureError,
@@ -1749,8 +2371,8 @@ async fn run_once(context: &Arc<E2eContext>, request: AttemptRequest<'_>) -> E2e
     )
     .await
     {
-        report.push_failure(
-            RunStatus::InfrastructureError,
+        record_checkpoint_failure(
+            &mut report,
             FailurePhase::Cleanup,
             format!("persist attempt completion: {error:#}"),
         );
@@ -1856,14 +2478,21 @@ async fn run_adaptive_once(
     )
     .await
     {
-        report.push_failure(
-            RunStatus::InfrastructureError,
+        record_checkpoint_failure(
+            &mut report,
             FailurePhase::Setup,
             format!("persist adaptive attempt checkpoint: {error:#}"),
         );
     }
-    if report.failures.is_empty() {
-        let _ = emit_phase(control, SuitePhase::SettingUp).await;
+    if report.failures.is_empty()
+        && emit_attempt_phase(
+            control,
+            SuitePhase::SettingUp,
+            FailurePhase::Setup,
+            &mut report,
+        )
+        .await
+    {
         match adaptive_runtime(
             scenario_id,
             context.clone(),
@@ -1956,7 +2585,15 @@ async fn run_adaptive_once(
                                 format!("persist adaptive plan evidence: {error:#}"),
                             ),
                         }
-                        if report.failures.is_empty() {
+                        if report.failures.is_empty()
+                            && emit_attempt_phase(
+                                control,
+                                SuitePhase::Executing,
+                                FailurePhase::Execute,
+                                &mut report,
+                            )
+                            .await
+                        {
                             let uses_harness = runtime
                                 .materialized
                                 .definition
@@ -1975,7 +2612,6 @@ async fn run_adaptive_once(
                                     format!("bind adaptive Harness observation: {error:#}"),
                                 );
                             } else {
-                                let _ = emit_phase(control, SuitePhase::Executing).await;
                                 let scenario_contract_sha256 =
                                     crate::scenarios::scenario_contract_sha256(
                                         &case,
@@ -2116,14 +2752,27 @@ async fn run_adaptive_once(
     }
     report.update_efficiency(case.work);
     report.refresh_dimensions(false);
-    let _ = emit_phase(control, SuitePhase::Persisting).await;
-    let _ = emit_event(
+    emit_attempt_phase(
+        control,
+        SuitePhase::Persisting,
+        FailurePhase::Collect,
+        &mut report,
+    )
+    .await;
+    if let Err(error) = emit_event(
         control,
         SuiteEvent::AttemptFinished {
             attempt_id: attempt_id.clone(),
         },
     )
-    .await;
+    .await
+    {
+        record_checkpoint_failure(
+            &mut report,
+            FailurePhase::Cleanup,
+            format!("persist adaptive attempt completion: {error:#}"),
+        );
+    }
     report
 }
 
@@ -2251,24 +2900,32 @@ async fn run_composite_once(
     )
     .await
     {
-        report.push_failure(
-            RunStatus::InfrastructureError,
+        record_checkpoint_failure(
+            &mut report,
             FailurePhase::Setup,
             format!("persist attempt checkpoint: {error:#}"),
         );
     }
 
     if report.failures.is_empty() {
-        if let Err(error) = emit_phase(control, SuitePhase::SettingUp).await {
-            report.push_failure(
-                RunStatus::InfrastructureError,
-                FailurePhase::Setup,
-                format!("persist setup checkpoint: {error:#}"),
-            );
-        }
+        emit_attempt_phase(
+            control,
+            SuitePhase::SettingUp,
+            FailurePhase::Setup,
+            &mut report,
+        )
+        .await;
     }
 
-    if report.failures.is_empty() {
+    if report.failures.is_empty()
+        && emit_attempt_phase(
+            control,
+            SuitePhase::Executing,
+            FailurePhase::Execute,
+            &mut report,
+        )
+        .await
+    {
         match composite_runtime(
             scenario_id,
             context.clone(),
@@ -2293,7 +2950,6 @@ async fn run_composite_once(
                         format!("bind composite Harness observation: {error:#}"),
                     );
                 } else {
-                    let _ = emit_phase(control, SuitePhase::Executing).await;
                     let cancellation = control.map_or_else(
                         || watch::channel(false).1,
                         |control| control.cancellation.clone(),
@@ -2344,14 +3000,27 @@ async fn run_composite_once(
     }
     report.update_efficiency(case.work);
     report.refresh_dimensions(false);
-    let _ = emit_phase(control, SuitePhase::Persisting).await;
-    let _ = emit_event(
+    emit_attempt_phase(
+        control,
+        SuitePhase::Persisting,
+        FailurePhase::Collect,
+        &mut report,
+    )
+    .await;
+    if let Err(error) = emit_event(
         control,
         SuiteEvent::AttemptFinished {
             attempt_id: attempt_id.clone(),
         },
     )
-    .await;
+    .await
+    {
+        record_checkpoint_failure(
+            &mut report,
+            FailurePhase::Cleanup,
+            format!("persist composite attempt completion: {error:#}"),
+        );
+    }
     report
 }
 
@@ -2715,8 +3384,8 @@ async fn run_markdown_once(
     )
     .await
     {
-        report.push_failure(
-            RunStatus::InfrastructureError,
+        record_checkpoint_failure(
+            &mut report,
             FailurePhase::Setup,
             format!("persist Markdown attempt checkpoint: {error:#}"),
         );
@@ -2740,13 +3409,13 @@ async fn run_markdown_once(
         }
     }
     if report.failures.is_empty() {
-        if let Err(error) = emit_phase(request.control, SuitePhase::SettingUp).await {
-            report.push_failure(
-                RunStatus::InfrastructureError,
-                FailurePhase::Setup,
-                format!("persist setup checkpoint: {error:#}"),
-            );
-        }
+        emit_attempt_phase(
+            request.control,
+            SuitePhase::SettingUp,
+            FailurePhase::Setup,
+            &mut report,
+        )
+        .await;
     }
     if report.failures.is_empty() {
         if let Err(error) = context.bind_turn_completed().await {
@@ -2835,8 +3504,15 @@ async fn run_markdown_once(
         }
     }
 
-    if report.failures.is_empty() {
-        let _ = emit_phase(request.control, SuitePhase::Executing).await;
+    if report.failures.is_empty()
+        && emit_attempt_phase(
+            request.control,
+            SuitePhase::Executing,
+            FailurePhase::Execute,
+            &mut report,
+        )
+        .await
+    {
         session_ids.push(subject_session_id.clone());
         match run_markdown_session(
             context,
@@ -2899,7 +3575,13 @@ async fn run_markdown_once(
     }
 
     if report.failures.is_empty() {
-        let _ = emit_phase(request.control, SuitePhase::Collecting).await;
+        emit_attempt_phase(
+            request.control,
+            SuitePhase::Collecting,
+            FailurePhase::Collect,
+            &mut report,
+        )
+        .await;
         evaluate_markdown_validations(
             context,
             &request,
@@ -2968,7 +3650,13 @@ async fn run_markdown_once(
         report.instruction_adherence = Some(adherence);
     }
 
-    let _ = emit_phase(request.control, SuitePhase::CleaningUp).await;
+    emit_attempt_phase(
+        request.control,
+        SuitePhase::CleaningUp,
+        FailurePhase::Cleanup,
+        &mut report,
+    )
+    .await;
     if setup_started || !subject_receipts.is_empty() {
         let cleanup_session_id = format!("e2e_{attempt_id}_cleanup");
         session_ids.push(cleanup_session_id.clone());
@@ -3146,8 +3834,8 @@ async fn run_markdown_once(
     )
     .await
     {
-        report.push_failure(
-            RunStatus::InfrastructureError,
+        record_checkpoint_failure(
+            &mut report,
             FailurePhase::Cleanup,
             format!("persist Markdown attempt completion: {error:#}"),
         );
@@ -4295,6 +4983,7 @@ async fn run_with_technical_retries(
         )
         .await;
         if retry_attempts.len() < technical_retries as usize
+            && scenario_id.execution_kind().replay_safe()
             && is_retryable_technical_failure(&report)
             && control.is_none_or(|control| !*control.cancellation.borrow())
         {
@@ -4321,6 +5010,9 @@ async fn run_with_technical_retries(
 struct RunFailure {
     status: RunStatus,
     phase: FailurePhase,
+    code: String,
+    retry_scope: crate::report::RetryScope,
+    contamination: crate::report::ContaminationScope,
     message: String,
 }
 
@@ -4342,6 +5034,25 @@ impl RunFailure {
         Self {
             status,
             phase,
+            code: crate::report::classify_failure(status, phase),
+            retry_scope: crate::report::RetryScope::None,
+            contamination: crate::report::ContaminationScope::None,
+            message: message.into(),
+        }
+    }
+
+    fn retryable(
+        status: RunStatus,
+        phase: FailurePhase,
+        code: impl Into<String>,
+        message: impl Into<String>,
+    ) -> Self {
+        Self {
+            status,
+            phase,
+            code: code.into(),
+            retry_scope: crate::report::RetryScope::SameSlot,
+            contamination: crate::report::ContaminationScope::None,
             message: message.into(),
         }
     }
@@ -4371,6 +5082,13 @@ async fn execute(
             .await
             .map_err(|error| scenario_setup_failure(error.to_string()))?;
     }
+    // Engineering fixtures are allocated during setup. Use that validated,
+    // attempt-owned root for the subject and its descendants, never the host cwd.
+    let filesystem_metadata =
+        crate::scenarios::engineering_ticket::prepared_filesystem_root(spec.id, run_id)
+            .map_err(|error| scenario_setup_failure(error.to_string()))?
+            .map(|root| json!({ "fs_scope": { "root": root } }))
+            .or(filesystem_metadata);
     let required_functions = crate::scenarios::required_functions(spec.id, run_id);
     report.worker_contracts = context
         .observe_function_contracts(&required_functions)
@@ -4380,7 +5098,7 @@ async fn execute(
         })?;
     emit_phase(control, SuitePhase::Executing)
         .await
-        .map_err(|error| infrastructure_failure(FailurePhase::Execute, error.to_string()))?;
+        .map_err(|error| journal_checkpoint_failure(FailurePhase::Execute, error.to_string()))?;
     ensure_not_cancelled(control)
         .map_err(|error| infrastructure_failure(FailurePhase::Execute, error.to_string()))?;
     context
@@ -4424,7 +5142,7 @@ async fn execute(
                 },
             )
             .await
-            .map_err(|error| subject_failure(FailurePhase::Execute, error.to_string()))?;
+            .map_err(subject_dispatch_failure)?;
         if !response.accepted
             || response.session_id != session_id
             || response.merged == Some(true)
@@ -4457,6 +5175,8 @@ async fn execute(
                 }
             },
         );
+        // Preserve known usage before any later status/transcript read can fail.
+        report.metrics = metrics.clone();
     }
     let metrics = metrics.expect("every scenario has at least one scripted message");
     let terminal_status = match context
@@ -4466,7 +5186,8 @@ async fn execute(
         Ok(Some(status)) => status,
         Ok(None) => {
             capture_partial_observation(context, session_id, report).await;
-            return Err(collection_failure(
+            return Err(RunFailure::new(
+                RunStatus::InfrastructureError,
                 FailurePhase::Collect,
                 format!("harness::status returned no report for {session_id}"),
             ));
@@ -4477,9 +5198,13 @@ async fn execute(
         }
     };
     report.terminal_status = Some(terminal_status);
-    emit_phase(control, SuitePhase::Collecting)
-        .await
-        .map_err(|error| infrastructure_failure(FailurePhase::Collect, error.to_string()))?;
+    emit_attempt_phase(
+        control,
+        SuitePhase::Collecting,
+        FailurePhase::Collect,
+        report,
+    )
+    .await;
     let transcript = context.transcript(session_id).await.map_err(|error| {
         RunFailure::new(
             RunStatus::InfrastructureError,
@@ -4586,9 +5311,13 @@ async fn execute(
         })?;
         observation.deliverables = captured;
     }
-    emit_phase(control, SuitePhase::Evaluating)
-        .await
-        .map_err(|error| infrastructure_failure(FailurePhase::Evaluate, error.to_string()))?;
+    emit_attempt_phase(
+        control,
+        SuitePhase::Evaluating,
+        FailurePhase::Evaluate,
+        report,
+    )
+    .await;
     let mut objective = (spec.evaluate)(context, &observation, run_id)
         .await
         .map_err(|error| {
@@ -4620,6 +5349,10 @@ async fn execute(
             error.to_string(),
         )
     })?;
+    report.set_completion(
+        objective.completion,
+        crate::report::EvaluatorAvailability::Available,
+    );
     report.hard_gates = objective.hard_gates;
     let mut awards = objective.awards;
     let mut criterion_judge = CriterionJudgeState::NotRequested;
@@ -4683,6 +5416,23 @@ async fn execute(
         &criterion_judge,
     );
     update_score(report);
+
+    if spec.needs_judge()
+        && report.score.is_none()
+        && report.hard_gates.iter().all(|gate| gate.passed)
+    {
+        report.push_typed_failure(
+            RunStatus::JudgeError,
+            FailurePhase::Evaluate,
+            "judge_unavailable",
+            crate::report::RetryScope::None,
+            crate::report::ContaminationScope::None,
+            format!(
+                "scenario '{}': objective completion is preserved but judge scoring was unavailable",
+                spec.id
+            ),
+        );
+    }
 
     if !report.asset_assessments.is_empty() {
         match judge_config {
@@ -5064,40 +5814,12 @@ fn is_resource_limit(message: &str) -> bool {
 }
 
 fn is_retryable_technical_failure(report: &E2eRunReport) -> bool {
-    if !matches!(
-        report.status,
-        RunStatus::SubjectError | RunStatus::JudgeError | RunStatus::InfrastructureError
-    ) || report
-        .failures
-        .iter()
-        .any(|failure| failure.phase == FailurePhase::Cleanup)
-    {
-        return false;
-    }
-    report.failures.iter().any(|failure| {
-        let lower = failure.message.to_ascii_lowercase();
-        [
-            "stream ended without",
-            "terminal frame",
-            "connection reset",
-            "connection closed",
-            "broken pipe",
-            "temporarily unavailable",
-            "service unavailable",
-            "rate limit",
-            "too many requests",
-            "http 429",
-            "status 429",
-            "status 502",
-            "status 503",
-            "status 504",
-            "transport error",
-            "network error",
-            "timed out",
-        ]
-        .iter()
-        .any(|needle| lower.contains(needle))
-    })
+    !report.failures.is_empty()
+        && report.failures.iter().all(|failure| {
+            failure.retry_scope == crate::report::RetryScope::SameSlot
+                && failure.contamination == crate::report::ContaminationScope::None
+                && failure.domain != crate::report::FailureDomain::Judge
+        })
 }
 
 fn subject_failure(phase: FailurePhase, message: String) -> RunFailure {
@@ -5107,6 +5829,21 @@ fn subject_failure(phase: FailurePhase, message: String) -> RunFailure {
         RunStatus::SubjectError
     };
     RunFailure::new(status, phase, message)
+}
+
+fn subject_dispatch_failure(error: anyhow::Error) -> RunFailure {
+    if crate::context::request_not_dispatched(&error) {
+        RunFailure::retryable(
+            RunStatus::InfrastructureError,
+            FailurePhase::Execute,
+            "harness_send_not_dispatched",
+            format!("{error:#}"),
+        )
+    } else {
+        // A lost response is not proof that send did not execute. Read failures
+        // retry the read itself in E2eContext, never a completed subject run.
+        subject_failure(FailurePhase::Execute, format!("{error:#}"))
+    }
 }
 
 fn collection_failure(phase: FailurePhase, message: String) -> RunFailure {
@@ -5120,6 +5857,12 @@ fn collection_failure(phase: FailurePhase, message: String) -> RunFailure {
 
 fn infrastructure_failure(phase: FailurePhase, message: String) -> RunFailure {
     RunFailure::new(RunStatus::InfrastructureError, phase, message)
+}
+
+fn journal_checkpoint_failure(phase: FailurePhase, message: String) -> RunFailure {
+    let mut failure = infrastructure_failure(phase, message);
+    failure.code = "journal_checkpoint_failed".into();
+    failure
 }
 
 fn scenario_setup_failure(message: String) -> RunFailure {
@@ -5274,6 +6017,413 @@ fn criterion_reports(spec: &ScenarioSpec, awards: Vec<CriterionAward>) -> Vec<Cr
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn checkpoint_deliverable() -> crate::report::DeliverableReport {
+        crate::report::DeliverableReport {
+            id: "retained-output".into(),
+            kind: "test".into(),
+            media_type: "application/json".into(),
+            content_format: crate::report::DeliverableContentFormat::Json,
+            content_sha256: "sha256:fixture".into(),
+            content_size_bytes: 1,
+            schema_valid: true,
+            provenance_valid: true,
+            invariants: vec![],
+            provenance: vec![],
+            preview: json!({}),
+            artifact: None,
+            content: CapturedDeliverableContent::Json(json!({
+                "evidence": "retained output", "api_key": "private-secret",
+            })),
+        }
+    }
+
+    #[test]
+    fn final_report_write_failure_preserves_redacted_observations_without_a_fake_path() {
+        let output = tempfile::NamedTempFile::new().unwrap();
+        let execution = ExecutionIdentity {
+            execution_id: "execution".into(),
+            lane: "test".into(),
+            started_at: "2026-09-04T00:00:00Z".into(),
+            completed_at: "2026-09-04T00:01:00Z".into(),
+        };
+        let system = crate::identity::SystemUnderTestIdentity {
+            stack: crate::identity::StackIdentity::Source {
+                workers_repository: "iii-hq/workers".into(),
+                workers_revision: "0".repeat(40),
+            },
+            engine_version: "0.22.0".into(),
+            engine_revision: None,
+            harness_version: "1.8.0".into(),
+            e2e_repository: "iii-hq/harness-e2e".into(),
+            e2e_revision: "0".repeat(40),
+            contract_hashes: Default::default(),
+        };
+        let subject = ModelArtifact {
+            model: "model".into(),
+            provider: "provider".into(),
+            context_window: 1000,
+            max_output_tokens: 100,
+            supports_tools: Some(true),
+            supports_vision: None,
+        };
+        let manifest = E2eManifest {
+            execution: execution.clone(),
+            system_under_test: system.clone(),
+            subject: subject.clone(),
+            judge: None,
+            control_plane: ControlPlaneEvidence { functions: vec![] },
+            observation_contract: None,
+            worker_contracts: vec![],
+        };
+        let materialized = ScenarioId::ContextPressure.materialize("test", 1).unwrap();
+        let mut run = test_run_report();
+        run.transcript = Some(json!({"text":"retained evidence", "api_key":"private-secret"}));
+        run.deliverables.push(checkpoint_deliverable());
+        run.finish(RunStatus::Passed);
+        let scenario = E2eScenarioReport::aggregate_case_with_planned(
+            materialized.case,
+            materialized.spec.execution,
+            2,
+            vec![run],
+        );
+        let mut report =
+            E2eReport::new(execution, system, subject, None, None, None, vec![scenario]);
+        assert!(
+            persist_report_preserving_observations(&mut report, &manifest, output.path())
+                .unwrap()
+                .is_none()
+        );
+        // A subsequent persistence attempt must still have the captured bytes;
+        // the public Results serialization intentionally skips this field.
+        assert_eq!(
+            report.scenarios[0].runs[0].deliverables[0]
+                .content
+                .as_json()
+                .unwrap()["evidence"],
+            "retained output"
+        );
+        redact_unpersisted_report(&mut report).unwrap();
+        assert_eq!(report.scenarios[0].aggregate.observed_runs, 1);
+        assert_eq!(report.scenarios[0].aggregate.planned_runs, 2);
+        assert_eq!(
+            report.scenarios[0].runs[0].transcript.as_ref().unwrap()["text"],
+            "retained evidence"
+        );
+        assert_ne!(
+            report.scenarios[0].runs[0].transcript.as_ref().unwrap()["api_key"],
+            "private-secret"
+        );
+        assert!(!report.passed);
+        assert_eq!(report.persistence_errors.len(), 1);
+        assert_eq!(report.report_state, crate::report::ReportState::Partial);
+    }
+
+    #[test]
+    fn schedule_is_round_robin_and_soft_deadline_only_blocks_new_slots() {
+        assert_eq!(
+            round_robin_slots(2, 3).collect::<Vec<_>>(),
+            vec![(0, 0), (0, 1), (0, 2), (1, 0), (1, 1), (1, 2)]
+        );
+        assert_eq!(round_robin_slots(2, 0).count(), 0);
+        assert!(slot_deferral_reason(
+            false,
+            false,
+            Duration::from_secs(9),
+            Some(Duration::from_secs(10))
+        )
+        .is_none());
+        assert!(slot_deferral_reason(
+            false,
+            false,
+            Duration::from_secs(10),
+            Some(Duration::from_secs(10))
+        )
+        .unwrap()
+        .contains("deadline"));
+        assert!(slot_deferral_reason(true, false, Duration::ZERO, None)
+            .unwrap()
+            .contains("persistence"));
+        assert!(slot_deferral_reason(false, true, Duration::ZERO, None)
+            .unwrap()
+            .contains("cancelled"));
+    }
+
+    #[tokio::test]
+    async fn failed_materialization_retains_every_planned_slot_without_fabricating_a_case() {
+        let key = ScenarioKey::Markdown("markdown_missing_case".into());
+        let slots = vec![crate::journal::JournalSlot {
+            slot_id: slot_id(&key, 9, 0),
+            ordinal: 0,
+            scenario_id: key.as_str().into(),
+            case_id: "unresolved:retained-inventory-identity".into(),
+            seed: "9".into(),
+            repetition: 0,
+        }];
+        let mut errors = Vec::new();
+        let deferred = defer_planned_case(
+            None,
+            &slots,
+            &key,
+            9,
+            None,
+            3,
+            "invalid source".into(),
+            &mut errors,
+        )
+        .await;
+        assert_eq!(deferred.case_id, slots[0].case_id);
+        assert!(deferred.case.is_none());
+        assert_eq!(deferred.aggregate.planned_runs, 3);
+        assert_eq!(deferred.aggregate.observed_runs, 0);
+        assert_eq!(deferred.aggregate.deferred_runs, 3);
+        assert_eq!(deferred.deferral_reason.as_deref(), Some("invalid source"));
+        assert!(errors.is_empty());
+    }
+
+    fn checkpoint_control() -> (SuiteControl, mpsc::Receiver<SuiteEventEnvelope>) {
+        let (events, receiver) = mpsc::channel(8);
+        (
+            SuiteControl {
+                execution_id: "execution".into(),
+                lane: "local".into(),
+                events,
+                cancellation: watch::channel(false).1,
+                adaptive_resume: None,
+            },
+            receiver,
+        )
+    }
+
+    #[tokio::test]
+    async fn rejected_phase_prevents_new_work_even_when_later_events_succeed() {
+        for (phase, failure_phase) in [
+            (SuitePhase::SettingUp, FailurePhase::Setup),
+            (SuitePhase::Executing, FailurePhase::Execute),
+            (SuitePhase::Collecting, FailurePhase::Collect),
+            (SuitePhase::Evaluating, FailurePhase::Evaluate),
+            (SuitePhase::Persisting, FailurePhase::Collect),
+            (SuitePhase::CleaningUp, FailurePhase::Cleanup),
+        ] {
+            let output = tempfile::tempdir().unwrap();
+            let (control, mut receiver) = checkpoint_control();
+            let acknowledgements = tokio::spawn(async move {
+                receiver
+                    .recv()
+                    .await
+                    .unwrap()
+                    .acknowledge(Err(anyhow::anyhow!("phase checkpoint rejected")));
+                receiver.recv().await.unwrap().acknowledge(Ok(()));
+            });
+            let mut run = test_run_report();
+            run.transcript = Some(json!({"text": "already captured evidence"}));
+            assert!(!emit_attempt_phase(Some(&control), phase, failure_phase, &mut run).await);
+            assert_eq!(run.failures[0].code, "journal_checkpoint_failed");
+            assert_eq!(run.failures[0].retry_scope, crate::report::RetryScope::None);
+            assert!(!is_retryable_technical_failure(&run));
+            emit_event(
+                Some(&control),
+                SuiteEvent::AttemptFinished {
+                    attempt_id: run.attempt_id.clone(),
+                },
+            )
+            .await
+            .unwrap();
+            acknowledgements.await.unwrap();
+            let error = commit_run_checkpoint(Some(&control), output.path(), "slot", &run, true)
+                .await
+                .unwrap_err();
+            assert!(error
+                .to_string()
+                .contains("attempt lifecycle checkpoint failed"));
+            assert_eq!(run.transcript.unwrap()["text"], "already captured evidence");
+            assert!(slot_deferral_reason(true, false, Duration::ZERO, None).is_some());
+        }
+    }
+
+    #[test]
+    fn execute_phase_failure_has_nonretryable_checkpoint_classification() {
+        let failure = journal_checkpoint_failure(FailurePhase::Execute, "ack rejected".into());
+        assert_eq!(failure.status, RunStatus::InfrastructureError);
+        assert_eq!(failure.code, "journal_checkpoint_failed");
+        assert_eq!(failure.retry_scope, crate::report::RetryScope::None);
+    }
+
+    #[tokio::test]
+    async fn failed_journal_commit_preserves_full_redacted_run_and_stops_new_slots() {
+        let output = tempfile::tempdir().unwrap();
+        let (control, mut receiver) = checkpoint_control();
+        let rejected = tokio::spawn(async move {
+            receiver
+                .recv()
+                .await
+                .unwrap()
+                .acknowledge(Err(anyhow::anyhow!("journal unavailable")));
+        });
+        let mut run = test_run_report();
+        run.transcript = Some(json!({"text":"retained evidence", "api_key":"private-secret"}));
+        run.deliverables.push(checkpoint_deliverable());
+        run.retry_attempts.push(RetryAttemptReport::from(&run));
+        run.finish(RunStatus::Passed);
+        let error = commit_run_checkpoint(Some(&control), output.path(), "slot", &run, false)
+            .await
+            .unwrap_err();
+        rejected.await.unwrap();
+        assert!(error.to_string().contains("journal unavailable"));
+        let bytes = std::fs::read(
+            output
+                .path()
+                .join("journal/runs/slot")
+                .join(format!("{}.json", run.run_id)),
+        )
+        .unwrap();
+        let saved: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(saved["run"]["transcript"]["text"], "retained evidence");
+        assert_ne!(saved["run"]["transcript"]["api_key"], "private-secret");
+        assert!(saved["run"]["hard_gates"].is_array());
+        assert!(saved["run"]["criteria"].is_array());
+        assert_eq!(saved["run"]["status"], "passed");
+        for content in [
+            &saved["capture"]["deliverables"][0]["content"]["content"],
+            &saved["capture"]["retry_attempts"][0]["deliverables"][0]["content"]["content"],
+        ] {
+            assert_eq!(content["evidence"], "retained output");
+            assert_ne!(content["api_key"], "private-secret");
+        }
+        assert!(slot_deferral_reason(true, false, Duration::ZERO, None).is_some());
+    }
+
+    #[tokio::test]
+    async fn missing_attempt_lifecycle_never_emits_an_unknown_observation() {
+        let output = tempfile::tempdir().unwrap();
+        let (control, mut receiver) = checkpoint_control();
+        let mut run = test_run_report();
+        record_checkpoint_failure(&mut run, FailurePhase::Setup, "start rejected".into());
+        assert!(
+            commit_run_checkpoint(Some(&control), output.path(), "slot", &run, true)
+                .await
+                .is_err()
+        );
+        assert!(receiver.try_recv().is_err());
+        assert!(output
+            .path()
+            .join("journal/runs/slot")
+            .join(format!("{}.json", run.run_id))
+            .is_file());
+    }
+
+    #[tokio::test]
+    async fn checkpoint_reaches_a_real_journal_and_replays_without_the_subject() {
+        use crate::journal::{
+            ExecutionJournal, ExecutionJournalEventKind as Event, ExecutionJournalHeader,
+            JournalSlot, EXECUTION_JOURNAL_SCHEMA,
+        };
+        let output = tempfile::tempdir().unwrap();
+        let journal = ExecutionJournal::initialize(
+            output.path(),
+            &ExecutionJournalHeader {
+                schema: EXECUTION_JOURNAL_SCHEMA.into(),
+                execution_id: "execution".into(),
+                request_sha256: "sha256:request".into(),
+                result_contract_sha256: crate::report::RESULT_CONTRACT_SHA256.into(),
+                scoring_profile_sha256: crate::report::SCORING_PROFILE_SHA256.into(),
+                created_at: "now".into(),
+                request: json!({}),
+                runner: json!({}),
+            },
+        )
+        .unwrap();
+        journal
+            .append(
+                "now".into(),
+                Event::SlotInventoryCommitted {
+                    slots: vec![JournalSlot {
+                        slot_id: "slot".into(),
+                        ordinal: 0,
+                        scenario_id: "case".into(),
+                        case_id: "case".into(),
+                        seed: "1".into(),
+                        repetition: 0,
+                    }],
+                },
+            )
+            .unwrap();
+        let (control, mut receiver) = checkpoint_control();
+        let sink_journal = journal.clone();
+        let sink = tokio::spawn(async move {
+            let envelope = receiver.recv().await.unwrap();
+            let result = match &envelope.event {
+                SuiteEvent::RunCommitted {
+                    slot_id,
+                    run_id,
+                    artifact,
+                } => sink_journal
+                    .append(
+                        "now".into(),
+                        Event::RunCommitted {
+                            slot_id: slot_id.clone(),
+                            run_id: run_id.clone(),
+                            artifact: artifact.clone(),
+                        },
+                    )
+                    .map(|_| ()),
+                _ => panic!("unexpected event"),
+            };
+            envelope.acknowledge(result);
+        });
+        commit_run_checkpoint(
+            Some(&control),
+            output.path(),
+            "slot",
+            &test_run_report(),
+            false,
+        )
+        .await
+        .unwrap();
+        sink.await.unwrap();
+        assert_eq!(journal.replay().unwrap().runs_committed, 1);
+    }
+
+    #[tokio::test]
+    async fn persistence_failure_is_recorded_once_and_preserves_the_safe_stop() {
+        let (control, mut receiver) = checkpoint_control();
+        let sink = tokio::spawn(async move {
+            receiver
+                .recv()
+                .await
+                .unwrap()
+                .acknowledge(Err(anyhow::anyhow!("append refused")));
+            assert!(receiver.recv().await.is_none());
+        });
+        let mut errors = Vec::new();
+        preserve_event(
+            Some(&control),
+            SuiteEvent::Phase(SuitePhase::Executing),
+            &mut errors,
+        )
+        .await;
+        preserve_event(
+            Some(&control),
+            SuiteEvent::Phase(SuitePhase::Finalizing),
+            &mut errors,
+        )
+        .await;
+        assert_eq!(errors.len(), 1);
+        drop(control);
+        sink.await.unwrap();
+    }
+
+    #[test]
+    fn ambiguous_transport_after_send_is_never_replayed() {
+        for error in [
+            iii_sdk::errors::Error::NotConnected,
+            iii_sdk::errors::Error::Timeout,
+            iii_sdk::errors::Error::WebSocket("reset".into()),
+        ] {
+            let failure = subject_dispatch_failure(anyhow::Error::new(error));
+            assert_eq!(failure.retry_scope, crate::report::RetryScope::None);
+        }
+    }
 
     fn measurement_deliverable(
         measurements: serde_json::Value,
@@ -5605,6 +6755,7 @@ mod tests {
         assert!(validate_objective_evaluation(
             &spec,
             &ObjectiveEvaluation {
+                completion: crate::report::CompletionState::Completed,
                 hard_gates: Vec::new(),
                 awards: vec![CriterionAward {
                     id: "objective".into(),
@@ -5617,6 +6768,7 @@ mod tests {
         assert!(validate_objective_evaluation(
             &spec,
             &ObjectiveEvaluation {
+                completion: crate::report::CompletionState::Completed,
                 hard_gates: Vec::new(),
                 awards: Vec::new(),
             }
@@ -5625,6 +6777,7 @@ mod tests {
         let error = validate_objective_evaluation(
             &spec,
             &ObjectiveEvaluation {
+                completion: crate::report::CompletionState::Completed,
                 hard_gates: Vec::new(),
                 awards: vec![CriterionAward {
                     id: "objective".into(),
@@ -5646,6 +6799,7 @@ mod tests {
         let unknown = validate_objective_evaluation(
             &spec,
             &ObjectiveEvaluation {
+                completion: crate::report::CompletionState::Completed,
                 hard_gates: Vec::new(),
                 awards: vec![CriterionAward {
                     id: "unknown".into(),
@@ -5663,6 +6817,7 @@ mod tests {
         let duplicate = validate_objective_evaluation(
             &spec,
             &ObjectiveEvaluation {
+                completion: crate::report::CompletionState::Completed,
                 hard_gates: Vec::new(),
                 awards: vec![
                     CriterionAward {
@@ -5687,6 +6842,7 @@ mod tests {
         let empty_gate = validate_objective_evaluation(
             &spec,
             &ObjectiveEvaluation {
+                completion: crate::report::CompletionState::Completed,
                 hard_gates: vec![HardGateReport {
                     id: String::new(),
                     dimension: EvaluationDimension::StructuralIntegrity,
@@ -5759,14 +6915,25 @@ mod tests {
     }
 
     #[test]
-    fn only_transient_technical_failures_are_retried() {
+    fn only_explicitly_typed_transient_failures_are_retried() {
         let mut transient = test_run_report();
-        transient.push_failure(
+        transient.push_typed_failure(
+            RunStatus::SubjectError,
+            FailurePhase::Execute,
+            "subject_transport_transient",
+            crate::report::RetryScope::SameSlot,
+            crate::report::ContaminationScope::None,
+            "zai stream ended without a terminal frame",
+        );
+        assert!(is_retryable_technical_failure(&transient));
+
+        let mut untyped = test_run_report();
+        untyped.push_failure(
             RunStatus::SubjectError,
             FailurePhase::Execute,
             "zai stream ended without a terminal frame",
         );
-        assert!(is_retryable_technical_failure(&transient));
+        assert!(!is_retryable_technical_failure(&untyped));
 
         let mut deterministic = test_run_report();
         deterministic.push_failure(

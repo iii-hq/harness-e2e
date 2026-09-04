@@ -1,9 +1,59 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import {
+  getDashboardDataBridge,
+  installDashboardRuntimeConfig,
+  type RuntimeConfig,
   type StaticVersionSide,
   staticCompatibility,
   staticSideKey,
 } from '@/lib/dashboard-data-source'
+import {
+  type DashboardIiiClient,
+  installDashboardIiiClient,
+} from '@/lib/iii-client'
+
+describe('live dashboard transport', () => {
+  it('fetches fresh execution summaries and invalidates read caches on progress', async () => {
+    const runtime = {
+      mode: 'local',
+      transport: 'iii',
+      page_size: 25,
+      http_fallback: false,
+      functions: {
+        executions_list: 'executions',
+        tests_list: 'tests',
+        changed_trigger: 'changed',
+      },
+    } as RuntimeConfig
+    let handler: (value: Record<string, unknown>) => void = () => {}
+    const trigger = vi.fn(async (_functionId: string) => ({}))
+    const client = {
+      browserId: 'test-browser',
+      trigger,
+      on: vi.fn((_id, callback) => {
+        handler = callback
+        return () => {}
+      }),
+      registerTrigger: vi.fn(() => () => {}),
+    } as unknown as DashboardIiiClient
+    installDashboardRuntimeConfig(runtime)
+    installDashboardIiiClient(client)
+    const bridge = await getDashboardDataBridge()
+    const stop = await bridge.subscribeRunChanges(() => {})
+    await bridge.listExecutions({ ids: ['execution-1'] })
+    await bridge.listExecutions({ ids: ['execution-1'] })
+    expect(
+      trigger.mock.calls.filter(([id]) => id === 'executions'),
+    ).toHaveLength(2)
+    await bridge.listTests()
+    await bridge.listTests()
+    expect(trigger.mock.calls.filter(([id]) => id === 'tests')).toHaveLength(1)
+    handler({ kind: 'progress', execution_id: 'execution-1' })
+    await bridge.listTests()
+    expect(trigger.mock.calls.filter(([id]) => id === 'tests')).toHaveLength(2)
+    stop()
+  })
+})
 
 function side(
   assessment = 'assessment-a',

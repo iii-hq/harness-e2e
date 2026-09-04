@@ -25,7 +25,7 @@ use crate::control::{
     ScenariosListResponse,
 };
 use crate::markdown::ScenarioKey;
-use crate::report::{E2eReport, RunStatus};
+use crate::report::E2eReport;
 
 const MAX_LOG_TAIL_BYTES: u64 = 256 * 1024;
 const MAX_LOG_CHUNK_BYTES: u64 = 64 * 1024;
@@ -163,7 +163,24 @@ impl Controller {
     }
 
     pub(super) async fn execution_summaries(&self) -> Result<Arc<Vec<Value>>> {
-        Ok(Arc::new(self.read_model().await?.summaries.clone()))
+        let mut summaries = self.read_model().await?.summaries.clone();
+        let runs_dir = self.runs_dir.clone();
+        // The historical index is cached; active execution checkpoints are not.
+        // Polling must recover progress even if a change notification was lost.
+        tokio::task::spawn_blocking(move || {
+            for summary in &mut summaries {
+                if matches!(summary["status"].as_str(), Some("running" | "cancelling")) {
+                    if let Some(id) = summary["id"].as_str() {
+                        if let Some(run) = super::store::read_stored_run(&runs_dir.join(id))? {
+                            *summary = super::presenter::stored_execution_summary(&run)?;
+                        }
+                    }
+                }
+            }
+            Ok(Arc::new(summaries))
+        })
+        .await
+        .context("refresh active execution summaries task")?
     }
 
     pub(super) async fn read_model(&self) -> Result<Arc<DashboardReadModel>> {
@@ -504,7 +521,7 @@ impl Controller {
             .flatten();
         let complete = status == JobStatus::Completed
             && report.as_ref().is_some_and(|report| {
-                !report_has_infrastructure_failure(report) && report_matches_plan(report, &plan)
+                report_is_baseline_comparable(report) && report_matches_plan(report, &plan)
             });
         if complete {
             match context.role {
@@ -582,6 +599,7 @@ pub(super) fn control_request(
         rotating_seeds: Vec::new(),
         technical_retries: request.technical_retries,
         progress_interval_seconds: 15,
+        slot_start_deadline_seconds: None,
         run_contract: None,
     })
 }
@@ -676,12 +694,19 @@ fn control_error(error: anyhow::Error) -> ApiError {
     }
 }
 
-fn report_has_infrastructure_failure(report: &E2eReport) -> bool {
-    report
+fn report_is_baseline_comparable(report: &E2eReport) -> bool {
+    let planned = report
         .scenarios
         .iter()
-        .flat_map(|scenario| scenario.runs.iter())
-        .any(|run| run.status == RunStatus::InfrastructureError)
+        .map(|scenario| u64::from(scenario.aggregate.planned_runs))
+        .sum::<u64>();
+    planned > 0
+        && report.report_state == crate::report::ReportState::Complete
+        && report.scenarios.iter().all(|scenario| {
+            scenario.aggregate.observed_runs == scenario.aggregate.planned_runs
+                && scenario.aggregate.undetermined_runs == 0
+                && scenario.aggregate.technical_invalid_runs == 0
+        })
 }
 
 fn report_matches_plan(report: &E2eReport, plan: &LocalPlan) -> bool {
@@ -704,7 +729,8 @@ fn report_matches_plan(report: &E2eReport, plan: &LocalPlan) -> bool {
                 scenario.scenario_id == item.scenario_id
                     && scenario.scenario_version == item.scenario_version
                     && scenario.case_id == item.case_id
-                    && scenario.runs.len() == plan.runs as usize
+                    && scenario.aggregate.planned_runs == plan.runs
+                    && scenario.aggregate.observed_runs == plan.runs
                     && scenario.case.as_ref().is_some_and(|case| {
                         case.seed == item.seed
                             && case.inputs_sha256 == item.inputs_sha256
@@ -778,13 +804,6 @@ pub(super) fn validate_request(request: &mut RunRequest) -> std::result::Result<
         && request.judge_model.is_empty()
     {
         return Err("Markdown scenarios require an explicit judge model and provider".into());
-    }
-    if request.technical_retries > 0
-        && selected
-            .iter()
-            .any(|scenario| !scenario.execution_kind().replay_safe())
-    {
-        return Err("non-replayable scenarios require technical_retries=0".into());
     }
     Ok(())
 }

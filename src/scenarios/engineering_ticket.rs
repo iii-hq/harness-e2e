@@ -1,7 +1,7 @@
 //! Daily engineering ticket benchmark.
 //!
-//! A protected launcher prepares one reviewed fixture worktree and exports it
-//! through `HARNESS_E2E_ENGINEERING_TICKET_FIXTURE_PATH`. The Harness subject
+//! Each attempt prepares the reviewed offline fixture automatically, unless a
+//! launcher supplies `HARNESS_E2E_ENGINEERING_TICKET_FIXTURE_PATH`. The Harness subject
 //! owns the ordinary inspect/reproduce/edit/test/report loop. A runner-owned
 //! post-turn function independently audits every completion attempt and emits
 //! bounded factual feedback without exposing hidden probe source.
@@ -12,6 +12,8 @@ use std::path::{Component, Path, PathBuf};
 use std::process::Stdio;
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
+
+mod fixture;
 
 use anyhow::{bail, Context, Result};
 use iii_sdk::protocol::TriggerRequest;
@@ -498,6 +500,7 @@ struct AttemptRecord {
 #[derive(Debug)]
 struct RuntimeEvidence {
     root: PathBuf,
+    owned_fixture: Option<tempfile::TempDir>,
     case: &'static TaskCase,
     baseline: BaselineRecord,
     evidence_dir: PathBuf,
@@ -629,7 +632,6 @@ impl TaskCase {
 
 fn scenario_for_case(run_id: &str, task: &'static TaskCase) -> ScenarioSpec {
     let auditor = auditor_function_id(run_id);
-    let filesystem_root = std::env::var_os(FIXTURE_PATH_ENV).map(PathBuf::from);
     ScenarioSpec {
         id: ID,
         version: VERSION,
@@ -654,7 +656,8 @@ fn scenario_for_case(run_id: &str, task: &'static TaskCase) -> ScenarioSpec {
             task.full_test.display,
             task.allowed_production_paths.join(", "),
         ),
-        filesystem_root,
+        // Setup resolves either the launcher override or an isolated workspace.
+        filesystem_root: None,
         execution: ExecutionPolicy {
             max_turns: 48,
             max_output_tokens: Some(16_384),
@@ -704,7 +707,9 @@ fn setup_case<'a>(
                 bail!("required engineering capability '{function}' is unavailable");
             }
         }
-        let root = fixture_root_from_env()?;
+        let fixture =
+            fixture::prepare(task.fixture_revision, std::env::var_os(FIXTURE_PATH_ENV)).await?;
+        let root = fixture.root;
         let baseline = preflight_fixture(task, &root).await?;
         let evidence_dir = owned_evidence_dir(run_id)?;
         std::fs::create_dir_all(&evidence_dir).with_context(|| {
@@ -715,6 +720,7 @@ fn setup_case<'a>(
         })?;
         let runtime = Arc::new(Mutex::new(RuntimeEvidence {
             root: root.clone(),
+            owned_fixture: fixture.owned,
             case: task,
             baseline,
             evidence_dir,
@@ -1475,7 +1481,13 @@ fn evaluate_evidence(
         && !evidence.prohibited_effect_observed
         && observation.metrics.complete;
 
-    let mut evaluation = assessment::build_evaluation([
+    let mut evaluation = assessment::build_evaluation(
+        if patch_present {
+            crate::report::CompletionState::Completed
+        } else {
+            crate::report::CompletionState::TaskIncomplete
+        },
+        [
         ENGINEERING_DISCIPLINE.full_or_zero(
             discipline,
             format!(
@@ -1513,7 +1525,8 @@ fn evaluate_evidence(
                 observation.metrics.complete
             ),
         ),
-    ]);
+        ],
+    );
 
     let granular = [
         (
@@ -1842,6 +1855,10 @@ fn artifact_expectation(id: &str, kind: &str, schema: Value) -> ArtifactExpectat
 }
 
 fn cleanup<'a>(_context: &'a E2eContext, run_id: &'a str) -> CleanupFuture<'a> {
+    cleanup_fixture(run_id)
+}
+
+fn cleanup_fixture(run_id: &str) -> CleanupFuture<'_> {
     Box::pin(async move {
         let runtime = runtime_registry()
             .lock()
@@ -1850,14 +1867,15 @@ fn cleanup<'a>(_context: &'a E2eContext, run_id: &'a str) -> CleanupFuture<'a> {
         let Some(runtime) = runtime else {
             return Ok(());
         };
-        let (root, baseline, evidence_dir) = {
-            let evidence = runtime
+        let (root, baseline, evidence_dir, owned_fixture) = {
+            let mut evidence = runtime
                 .lock()
                 .unwrap_or_else(|poisoned| poisoned.into_inner());
             (
                 evidence.root.clone(),
                 evidence.baseline.clone(),
                 evidence.evidence_dir.clone(),
+                evidence.owned_fixture.take(),
             )
         };
         validate_fixture_root(&root)?;
@@ -1888,6 +1906,11 @@ fn cleanup<'a>(_context: &'a E2eContext, run_id: &'a str) -> CleanupFuture<'a> {
             std::fs::remove_dir_all(&evidence_dir)
                 .with_context(|| format!("remove owned evidence {}", evidence_dir.display()))?;
         }
+        if let Some(owned) = owned_fixture {
+            owned
+                .close()
+                .context("remove automatic engineering fixture")?;
+        }
         Ok(())
     })
 }
@@ -1907,10 +1930,7 @@ async fn restore_refs(root: &Path, initial_ref_sha256: &str) -> Result<()> {
     Ok(())
 }
 
-fn fixture_root_from_env() -> Result<PathBuf> {
-    let raw = std::env::var_os(FIXTURE_PATH_ENV)
-        .with_context(|| format!("{FIXTURE_PATH_ENV} must point to the prepared fixture"))?;
-    let path = PathBuf::from(raw);
+fn fixture_root(path: PathBuf) -> Result<PathBuf> {
     if !path.is_absolute() {
         bail!("{FIXTURE_PATH_ENV} must be absolute: {}", path.display());
     }
@@ -2219,6 +2239,7 @@ struct GitCheckpointRecord {
 #[derive(Debug)]
 struct GitHandoffRuntimeEvidence {
     root: PathBuf,
+    owned_fixture: Option<tempfile::TempDir>,
     case: &'static TaskCase,
     baseline: BaselineRecord,
     baseline_refs: String,
@@ -2234,6 +2255,38 @@ type SharedGitHandoffRuntime = Arc<Mutex<GitHandoffRuntimeEvidence>>;
 fn git_handoff_runtime_registry() -> &'static Mutex<HashMap<String, SharedGitHandoffRuntime>> {
     static REGISTRY: OnceLock<Mutex<HashMap<String, SharedGitHandoffRuntime>>> = OnceLock::new();
     REGISTRY.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+/// Resolve only after setup: generated paths belong to an attempt, not the
+/// catalog or the process environment. The same scope is inherited by children.
+pub(crate) fn prepared_filesystem_root(scenario_id: &str, run_id: &str) -> Result<Option<PathBuf>> {
+    let root = match scenario_id {
+        ID => runtime_registry()
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .get(run_id)
+            .map(|runtime| {
+                runtime
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner())
+                    .root
+                    .clone()
+            }),
+        GIT_HANDOFF_ID => git_handoff_runtime_registry()
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .get(run_id)
+            .map(|runtime| {
+                runtime
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner())
+                    .root
+                    .clone()
+            }),
+        _ => return Ok(None),
+    };
+    root.map(Some)
+        .with_context(|| format!("engineering fixture was not prepared for attempt {run_id}"))
 }
 
 pub fn git_handoff_scenario(run_id: &str) -> ScenarioSpec {
@@ -2334,7 +2387,6 @@ pub fn git_handoff_allowed_functions(run_id: &str) -> Vec<String> {
 }
 
 fn git_handoff_scenario_for_case(run_id: &str, task: &'static TaskCase) -> ScenarioSpec {
-    let filesystem_root = std::env::var_os(FIXTURE_PATH_ENV).map(PathBuf::from);
     let planner = planner_session(run_id);
     let implementer = implementer_session(run_id);
     let scope = handoff_state_scope(run_id);
@@ -2361,7 +2413,7 @@ fn git_handoff_scenario_for_case(run_id: &str, task: &'static TaskCase) -> Scena
              FINALIZATION\n\
              8. When the implementation wake arrives with phase `implementation` and a head_sha, unregister the implementation validator and reply `GIT HANDOFF COMPLETE at <head_sha>. PARENT DONE.` If it is an expiry/error notice, unregister the implementation validator and reply `GIT HANDOFF FAILED: implementation checkpoint unavailable. PARENT DONE.`",
         ),
-        filesystem_root,
+        filesystem_root: None,
         execution: ExecutionPolicy {
             max_turns: 64,
             max_output_tokens: Some(16_384),
@@ -2418,7 +2470,9 @@ fn git_handoff_setup<'a>(context: &'a E2eContext, run_id: &'a str) -> CleanupFut
             }
         }
         let task = task_case();
-        let root = fixture_root_from_env()?;
+        let fixture =
+            fixture::prepare(task.fixture_revision, std::env::var_os(FIXTURE_PATH_ENV)).await?;
+        let root = fixture.root;
         let baseline = preflight_fixture(task, &root).await?;
         let remotes = git(&root, &["remote"]).await?;
         if !remotes.trim().is_empty() {
@@ -2442,6 +2496,7 @@ fn git_handoff_setup<'a>(context: &'a E2eContext, run_id: &'a str) -> CleanupFut
         })?;
         let runtime = Arc::new(Mutex::new(GitHandoffRuntimeEvidence {
             root,
+            owned_fixture: fixture.owned,
             case: task,
             baseline,
             baseline_refs,
@@ -3508,6 +3563,35 @@ fn git_handoff_evaluate<'a>(
     run_id: &'a str,
 ) -> EvaluationFuture<'a> {
     Box::pin(async move {
+        let incomplete_reason =
+            git_handoff_runtime_registry()
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .get(run_id)
+                .cloned()
+                .and_then(|runtime| {
+                    let evidence = runtime
+                        .lock()
+                        .unwrap_or_else(|poisoned| poisoned.into_inner());
+                    if !evidence.infrastructure_errors.is_empty() {
+                        None
+                    } else if evidence.plan_head.is_none() {
+                        Some("the subject stopped before an accepted plan checkpoint")
+                    } else if !evidence.attempts.iter().any(|record| {
+                        record.phase == HandoffPhase::Implementation && record.accepted
+                    }) {
+                        Some("the subject stopped before an accepted implementation checkpoint")
+                    } else {
+                        None
+                    }
+                });
+        if let Some(reason) = incomplete_reason {
+            return Ok(assessment::task_incomplete(
+                GIT_HANDOFF_ASSESSMENTS,
+                "terminal_checkpoint_present",
+                reason,
+            ));
+        }
         let evidence = collect_git_handoff_evidence(context, observation, run_id).await?;
         evaluate_git_handoff_evidence(&evidence, observation).await
     })
@@ -3597,7 +3681,13 @@ async fn evaluate_git_handoff_evidence(
         && attempts_persisted
         && same_session_repairs;
 
-    let mut evaluation = assessment::build_evaluation([
+    let mut evaluation = assessment::build_evaluation(
+        if accepted_implementation.is_some() {
+            crate::report::CompletionState::Completed
+        } else {
+            crate::report::CompletionState::TaskIncomplete
+        },
+        [
         HANDOFF_ORCHESTRATION.full_or_zero(
             orchestration,
             format!(
@@ -3645,7 +3735,8 @@ async fn evaluate_git_handoff_evidence(
                 "planner_first_pass={planner_first_pass}, implementer_first_pass={implementer_first_pass}, no_auditor_nudges={no_auditor_nudges}"
             ),
         )?,
-    ]);
+        ],
+    );
 
     let original_branch_preserved = accepted_plan.is_some_and(|record| record.branch_unchanged)
         && latest.is_some_and(|record| record.branch_unchanged);
@@ -4156,18 +4247,27 @@ fn git_handoff_cleanup<'a>(context: &'a E2eContext, run_id: &'a str) -> CleanupF
                 state_cleanup_errors.push(format!("delete handoff state key {key}: {error:#}"));
             }
         }
+        if let Err(error) = git_handoff_cleanup_fixture(run_id).await {
+            state_cleanup_errors.push(format!("restore Git handoff fixture: {error:#}"));
+        }
+        if !state_cleanup_errors.is_empty() {
+            bail!("{}", state_cleanup_errors.join("; "));
+        }
+        Ok(())
+    })
+}
+
+fn git_handoff_cleanup_fixture(run_id: &str) -> CleanupFuture<'_> {
+    Box::pin(async move {
         let runtime = git_handoff_runtime_registry()
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
             .remove(run_id);
         let Some(runtime) = runtime else {
-            if !state_cleanup_errors.is_empty() {
-                bail!("{}", state_cleanup_errors.join("; "));
-            }
             return Ok(());
         };
-        let (root, baseline, baseline_refs, evidence_dir) = {
-            let evidence = runtime
+        let (root, baseline, baseline_refs, evidence_dir, owned_fixture) = {
+            let mut evidence = runtime
                 .lock()
                 .unwrap_or_else(|poisoned| poisoned.into_inner());
             (
@@ -4175,6 +4275,7 @@ fn git_handoff_cleanup<'a>(context: &'a E2eContext, run_id: &'a str) -> CleanupF
                 evidence.baseline.clone(),
                 evidence.baseline_refs.clone(),
                 evidence.evidence_dir.clone(),
+                evidence.owned_fixture.take(),
             )
         };
         validate_fixture_root(&root)?;
@@ -4214,8 +4315,10 @@ fn git_handoff_cleanup<'a>(context: &'a E2eContext, run_id: &'a str) -> CleanupF
                 format!("remove Git handoff evidence {}", evidence_dir.display())
             })?;
         }
-        if !state_cleanup_errors.is_empty() {
-            bail!("{}", state_cleanup_errors.join("; "));
+        if let Some(owned) = owned_fixture {
+            owned
+                .close()
+                .context("remove automatic engineering fixture")?;
         }
         Ok(())
     })

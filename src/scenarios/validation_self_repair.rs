@@ -357,33 +357,40 @@ fn evaluate<'a>(
                 && text.contains("duplicate name: beta")
         });
 
-        Ok(assessment::build_evaluation([
-            DATA_REPAIRED.full_or_zero(
-                repaired,
-                format!("rows={}, remaining violations: {remaining:?}", rows.len()),
-            ),
-            DIAGNOSIS_DRIVEN.full_or_zero(
-                diagnosed && envelope_mode,
-                format!(
-                    "first audit nudge: {:?}; observed {} post-turn registration(s); need \
+        Ok(assessment::build_evaluation(
+            if repaired {
+                crate::report::CompletionState::Completed
+            } else {
+                crate::report::CompletionState::TaskIncomplete
+            },
+            [
+                DATA_REPAIRED.full_or_zero(
+                    repaired,
+                    format!("rows={}, remaining violations: {remaining:?}", rows.len()),
+                ),
+                DIAGNOSIS_DRIVEN.full_or_zero(
+                    diagnosed && envelope_mode,
+                    format!(
+                        "first audit nudge: {:?}; observed {} post-turn registration(s); need \
                      exactly one targeting {auditor} with no payload",
-                    nudges.first(),
-                    registrations.len()
+                        nudges.first(),
+                        registrations.len()
+                    ),
                 ),
-            ),
-            DECISIVE_REPAIR.gate_and_points(
-                matches!(nudges.len(), 1 | 2),
-                match nudges.len() {
-                    1 => DECISIVE_REPAIR.weight(),
-                    2 => 15,
-                    _ => 0,
-                },
-                format!(
-                    "{} audit rejection(s); full marks for repairing in one",
-                    nudges.len()
-                ),
-            )?,
-        ]))
+                DECISIVE_REPAIR.gate_and_points(
+                    matches!(nudges.len(), 1 | 2),
+                    match nudges.len() {
+                        1 => DECISIVE_REPAIR.weight(),
+                        2 => 15,
+                        _ => 0,
+                    },
+                    format!(
+                        "{} audit rejection(s); full marks for repairing in one",
+                        nudges.len()
+                    ),
+                )?,
+            ],
+        ))
     })
 }
 

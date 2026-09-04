@@ -3,6 +3,7 @@ mod assessment_projection;
 mod assets;
 mod bus;
 mod controller;
+mod live_progress;
 mod plans;
 mod presenter;
 mod proxy;
@@ -420,6 +421,39 @@ mod tests {
     }
 
     #[test]
+    fn persistence_errors_and_effective_deadline_survive_dashboard_projections() {
+        let mut report = report();
+        report.slot_start_deadline_seconds = Some(3600);
+        report.record_persistence_error("run checkpoint acknowledgement failed".into());
+        let metadata = metadata();
+        for projection in [
+            execution_summary(&metadata, Some(&report)).unwrap(),
+            execution_detail_value_optional(&metadata, Some(&report)).unwrap(),
+        ] {
+            assert_eq!(projection["status"], "incomplete");
+            assert_eq!(projection["conclusion"], "failure");
+            assert_eq!(projection["execution"]["conclusion"], "failure");
+            assert_eq!(projection["baseline_comparable"], false);
+            assert_eq!(projection["slot_start_deadline_seconds"], 3600);
+            assert_eq!(projection["first_failure"]["kind"], "persistence");
+            assert_eq!(
+                projection["persistence_errors"],
+                json!(["run checkpoint acknowledgement failed"]),
+            );
+        }
+        let detail = execution_detail_value_optional(&metadata, Some(&report)).unwrap();
+        assert!(!detail["reports"].as_array().unwrap().is_empty());
+        assert_eq!(
+            detail["reports"][0]["report"]["slot_start_deadline_seconds"],
+            3600
+        );
+        assert_eq!(
+            detail["reports"][0]["report"]["persistence_errors"],
+            json!(["run checkpoint acknowledgement failed"]),
+        );
+    }
+
+    #[test]
     fn active_and_cancelled_runs_have_partial_details_without_a_report() {
         for (job_status, expected_status) in [
             (JobStatus::Running, "running"),
@@ -436,6 +470,75 @@ mod tests {
             assert_eq!(detail["availability"], "unavailable");
             assert_eq!(detail["reports"], json!([]));
         }
+    }
+
+    #[tokio::test]
+    async fn live_summaries_refresh_without_notifications_and_final_report_takes_over() {
+        use crate::journal::{
+            ExecutionJournal, ExecutionJournalEventKind, ExecutionJournalHeader,
+            EXECUTION_JOURNAL_SCHEMA,
+        };
+        let root = tempfile::tempdir().unwrap();
+        // Initialize before writing metadata so startup recovery does not cancel the fixture.
+        let controller = controller::Controller::new(
+            DashboardArgs {
+                listen: "127.0.0.1:0".parse().unwrap(),
+                url: "ws://localhost:49134".into(),
+                runs_dir: root.path().into(),
+                view_only: true,
+            },
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+        let mut metadata = metadata();
+        metadata.status = JobStatus::Running;
+        metadata.completed_at.clear();
+        let run_dir = root.path().join(&metadata.id);
+        write_metadata(&run_dir, &metadata).unwrap();
+        let journal = ExecutionJournal::initialize(
+            &run_dir,
+            &ExecutionJournalHeader {
+                schema: EXECUTION_JOURNAL_SCHEMA.into(),
+                execution_id: metadata.id.clone(),
+                request_sha256: "request".into(),
+                result_contract_sha256: crate::report::RESULT_CONTRACT_SHA256.into(),
+                scoring_profile_sha256: crate::report::SCORING_PROFILE_SHA256.into(),
+                created_at: metadata.started_at.clone(),
+                request: json!({}),
+                runner: json!({}),
+            },
+        )
+        .unwrap();
+        let summaries = controller.execution_summaries().await.unwrap();
+        assert_eq!(summaries[0]["live_progress"]["committed_events"], 0);
+        journal
+            .append(
+                metadata.started_at.clone(),
+                ExecutionJournalEventKind::PhaseChanged {
+                    phase: "capture".into(),
+                    reason: "test".into(),
+                },
+            )
+            .unwrap();
+        let summaries = controller.execution_summaries().await.unwrap();
+        assert_eq!(summaries[0]["live_progress"]["committed_events"], 1);
+        assert_eq!(summaries[0]["live_progress"]["phase"], "capture");
+        write_report(&run_dir.join("results"));
+        let stored = store::read_stored_run(&run_dir).unwrap().unwrap();
+        let detail = presenter::stored_execution_detail(&stored).unwrap();
+        assert_eq!(detail["status"], "running");
+        assert!(!detail["live_progress"].is_null());
+        metadata.status = JobStatus::Completed;
+        write_metadata(&run_dir, &metadata).unwrap();
+        let summaries = controller.execution_summaries().await.unwrap();
+        assert_eq!(summaries[0]["status"], "passed");
+        assert!(summaries[0]["live_progress"].is_null());
+        let stored = store::read_stored_run(&run_dir).unwrap().unwrap();
+        let detail = presenter::stored_execution_detail(&stored).unwrap();
+        assert_eq!(detail["reports"].as_array().unwrap().len(), 1);
+        assert!(detail["live_progress"].is_null());
     }
 
     #[test]

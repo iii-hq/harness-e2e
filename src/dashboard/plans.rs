@@ -196,8 +196,14 @@ pub(super) fn list_plans(plans_dir: &Path) -> Result<Vec<LocalPlan>> {
             .file_stem()
             .and_then(|value| value.to_str())
             .unwrap_or_default();
-        if let Some(plan) = read_plan(plans_dir, id)? {
-            plans.push(plan);
+        match read_plan(plans_dir, id) {
+            Ok(Some(plan)) => plans.push(plan),
+            Ok(None) => {}
+            Err(error) => tracing::warn!(
+                path = %path.display(),
+                error = %format!("{error:#}"),
+                "ignoring an unsupported or corrupt local E2E plan"
+            ),
         }
     }
     plans.sort_by(|left, right| {
@@ -457,13 +463,6 @@ fn validate_values(request: &PlanCreateRequest) -> Result<()> {
     {
         bail!("Markdown scenarios require an explicit judge model and provider");
     }
-    if request.technical_retries > 0
-        && selected
-            .iter()
-            .any(|scenario| !scenario.execution_kind().replay_safe())
-    {
-        bail!("non-replayable scenarios require technical_retries=0");
-    }
     Ok(())
 }
 
@@ -555,16 +554,10 @@ mod tests {
     }
 
     #[test]
-    fn security_review_plan_requires_zero_technical_retries() {
+    fn security_review_plan_leaves_retry_eligibility_to_each_slot() {
         let mut request = request();
         request.scenarios = vec![ScenarioId::SecurityReview.as_str().into()];
-        assert!(new_plan(&request, "security-with-retry".into())
-            .unwrap_err()
-            .to_string()
-            .contains("technical_retries=0"));
-
-        request.technical_retries = 0;
-        new_plan(&request, "security-without-retry".into())
+        new_plan(&request, "security-with-retry".into())
             .expect("security review plan should use the shared control plane");
     }
 
@@ -602,6 +595,20 @@ mod tests {
             read_plan(directory.path(), &plan.id).unwrap(),
             Some(plan.clone())
         );
+        assert_eq!(list_plans(directory.path()).unwrap(), vec![plan]);
+    }
+
+    #[test]
+    fn listing_isolates_an_unsupported_plan() {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let plan = new_plan(&request(), "plan-supported".into()).expect("plan should materialize");
+        write_plan(directory.path(), &plan).expect("plan should be written");
+        fs::write(
+            directory.path().join("plan-unsupported.json"),
+            br#"{"schema_version":1,"legacy_shape":true}"#,
+        )
+        .expect("legacy fixture should be written");
+
         assert_eq!(list_plans(directory.path()).unwrap(), vec![plan]);
     }
 

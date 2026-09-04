@@ -668,7 +668,7 @@ fn recovery_audit(run_id: &str, transcript: &Value) -> RecoveryAudit {
                 legacy.as_str(),
             ]
             .contains(&call.function_id.as_str())
-                && !call.function_id.starts_with("engine::functions::")
+                && !common::is_contract_discovery(&call.function_id)
         })
         .count();
 
@@ -744,7 +744,13 @@ fn evaluate<'a>(
             && errors == 0
             && snapshot.audit.len() == 3;
 
-        Ok(assessment::build_evaluation([
+        Ok(assessment::build_evaluation(
+            if snapshot.scheduled {
+                crate::report::CompletionState::Completed
+            } else {
+                crate::report::CompletionState::TaskIncomplete
+            },
+            [
             RECOVERED_DELIVERABLE.full_or_zero(
                 receipt_reported,
                 format!("final response must contain the exact receipt `{expected_receipt}`"),
@@ -774,7 +780,8 @@ fn evaluate<'a>(
                     snapshot.audit.len(),
                 ),
             ),
-        ]))
+            ],
+        ))
     })
 }
 

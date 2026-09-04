@@ -1,10 +1,12 @@
+use std::future::Future;
 use std::sync::Mutex;
 use std::time::Duration;
 
 use anyhow::{anyhow, bail, Context, Result};
 use async_trait::async_trait;
+use iii_sdk::errors::Error as SdkError;
 use iii_sdk::protocol::TriggerRequest;
-use iii_sdk::runtime::WorkerMetadata;
+use iii_sdk::runtime::{IIIConnectionState, WorkerMetadata};
 use iii_sdk::{register_worker, IIIClient, InitOptions, RegisterFunction};
 use serde::de::DeserializeOwned;
 use serde::Serialize;
@@ -20,6 +22,8 @@ use crate::wire::{
 
 pub const INVOCATION_TIMEOUT: Duration = Duration::from_secs(120);
 const PROGRESS_SAMPLE_INTERVAL: Duration = Duration::from_secs(15);
+const READ_TRANSPORT_RETRIES: u32 = 2;
+const READ_TRANSPORT_BACKOFF: Duration = Duration::from_millis(100);
 
 pub struct E2eContext {
     client: IIIClient,
@@ -413,21 +417,19 @@ impl E2eContext {
     ) -> Result<Value> {
         let timeout_ms = timeout.as_millis().min(u64::MAX as u128) as u64;
         let outer = timeout + Duration::from_secs(5);
-        match tokio::time::timeout(
-            outer,
-            self.client.trigger(TriggerRequest {
-                function_id: function_id.to_string(),
-                payload,
-                action: None,
-                timeout_ms: Some(timeout_ms),
-            }),
-        )
+        invoke_with_transport_retries(function_id, outer, || async {
+            ensure_connected_before_dispatch(self.client.get_connection_state())?;
+            self.client
+                .trigger(TriggerRequest {
+                    function_id: function_id.to_string(),
+                    payload: payload.clone(),
+                    action: None,
+                    timeout_ms: Some(timeout_ms),
+                })
+                .await
+                .with_context(|| format!("invoke {function_id}"))
+        })
         .await
-        {
-            Ok(Ok(value)) => Ok(value),
-            Ok(Err(error)) => Err(anyhow!("{function_id}: {error}")),
-            Err(_) => bail!("{function_id}: no response within {}ms", outer.as_millis()),
-        }
     }
 
     fn register_observation_sink(&self) {
@@ -458,6 +460,118 @@ impl E2eContext {
         self.binding_id
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+}
+
+/// Classify SDK transport failures without interpreting remote/provider text.
+pub(crate) fn transport_failure_code(error: &anyhow::Error) -> Option<&'static str> {
+    match error.downcast_ref::<SdkError>()? {
+        SdkError::NotConnected => Some("transport_not_connected"),
+        SdkError::Timeout => Some("transport_timeout"),
+        SdkError::WebSocket(_) => Some("transport_websocket"),
+        _ => None,
+    }
+}
+
+#[derive(Debug)]
+struct InvocationNotDispatched;
+
+impl std::fmt::Display for InvocationNotDispatched {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("invocation was not dispatched because the connection was not ready")
+    }
+}
+
+#[derive(Debug)]
+struct EarlierInvocationAttempts(u32);
+
+impl std::fmt::Display for EarlierInvocationAttempts {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(formatter, "invocation failed after {} attempts", self.0)
+    }
+}
+
+/// Raw SDK NotConnected is ambiguous: it can also mean a response channel
+/// closed after dispatch. Only our own pre-dispatch check proves no invocation.
+pub(crate) fn request_not_dispatched(error: &anyhow::Error) -> bool {
+    matches!(
+        error.downcast_ref::<SdkError>(),
+        Some(SdkError::NotConnected)
+    ) && error.downcast_ref::<InvocationNotDispatched>().is_some()
+        && error.downcast_ref::<EarlierInvocationAttempts>().is_none()
+}
+
+fn ensure_connected_before_dispatch(state: IIIConnectionState) -> Result<()> {
+    if state != IIIConnectionState::Connected {
+        return Err(anyhow::Error::new(SdkError::NotConnected).context(InvocationNotDispatched));
+    }
+    Ok(())
+}
+
+fn is_retryable_read(function_id: &str) -> bool {
+    matches!(
+        function_id,
+        "harness::status"
+            | "harness::metrics"
+            | "harness::session-tree"
+            | "session::messages"
+            | "engine::functions::list"
+            | "engine::functions::info"
+            | "router::models::get"
+            | "router::models::list"
+    )
+}
+
+async fn invoke_with_transport_retries<F, Fut>(
+    function_id: &str,
+    budget: Duration,
+    mut invoke: F,
+) -> Result<Value>
+where
+    F: FnMut() -> Fut,
+    Fut: Future<Output = Result<Value>>,
+{
+    let retry_limit = if is_retryable_read(function_id) {
+        READ_TRANSPORT_RETRIES
+    } else {
+        0
+    };
+    // The budget covers all attempts and backoff, so transient errors cannot
+    // multiply an invocation's deadline. Dropping this future cancels both.
+    let result = tokio::time::timeout(budget, async {
+        for attempt in 0..=retry_limit {
+            match invoke().await {
+                Ok(value) => return Ok(value),
+                Err(error) => {
+                    let code = transport_failure_code(&error);
+                    if attempt == retry_limit || code.is_none() {
+                        return Err(if attempt == 0 {
+                            error
+                        } else {
+                            error.context(EarlierInvocationAttempts(attempt + 1))
+                        });
+                    }
+                    tracing::warn!(
+                        function_id,
+                        code,
+                        retry = attempt + 1,
+                        "retrying read-only invocation after a typed transport failure"
+                    );
+                    tokio::time::sleep(READ_TRANSPORT_BACKOFF * (attempt + 1)).await;
+                }
+            }
+        }
+        unreachable!("bounded invocation loop always returns on its last attempt")
+    })
+    .await;
+    match result {
+        Ok(result) => result.with_context(|| format!("invoke {function_id}")),
+        Err(_) => Err(anyhow::Error::new(SdkError::Timeout)).with_context(|| {
+            format!(
+                "{function_id}: no response within {}ms including read retries",
+                budget.as_millis()
+            )
+        }),
     }
 }
 
@@ -529,6 +643,228 @@ fn session_is_terminal(status: &StatusReport) -> Result<bool> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn typed_transport_classification_preserves_sources_and_rejects_provider_text() {
+        for (source, expected) in [
+            (SdkError::NotConnected, Some("transport_not_connected")),
+            (SdkError::Timeout, Some("transport_timeout")),
+            (
+                SdkError::WebSocket("connection closed".into()),
+                Some("transport_websocket"),
+            ),
+            (
+                SdkError::Handler("provider returned 503: websocket timeout".into()),
+                None,
+            ),
+            (
+                SdkError::Remote {
+                    code: "503".into(),
+                    message: "temporarily unavailable".into(),
+                    stacktrace: None,
+                },
+                None,
+            ),
+            (SdkError::Serde("timed out".into()), None),
+        ] {
+            let error = anyhow::Error::new(source).context("capture session evidence");
+            assert_eq!(transport_failure_code(&error), expected);
+            assert!(!request_not_dispatched(&error));
+        }
+        assert_eq!(
+            transport_failure_code(&anyhow!("iii is not connected: timeout 503")),
+            None
+        );
+    }
+
+    #[test]
+    fn no_dispatch_requires_the_local_pre_dispatch_check_and_no_prior_attempts() {
+        ensure_connected_before_dispatch(IIIConnectionState::Connected).unwrap();
+        for state in [
+            IIIConnectionState::Disconnected,
+            IIIConnectionState::Connecting,
+            IIIConnectionState::Reconnecting,
+            IIIConnectionState::Failed,
+        ] {
+            let error = ensure_connected_before_dispatch(state)
+                .unwrap_err()
+                .context("invoke harness::send");
+            assert_eq!(
+                transport_failure_code(&error),
+                Some("transport_not_connected")
+            );
+            assert!(request_not_dispatched(&error));
+            assert!(!request_not_dispatched(
+                &error.context(EarlierInvocationAttempts(2))
+            ));
+        }
+    }
+
+    #[test]
+    fn transport_retries_are_allowlisted_reads_only() {
+        for function_id in [
+            "harness::status",
+            "harness::metrics",
+            "harness::session-tree",
+            "session::messages",
+            "engine::functions::list",
+            "engine::functions::info",
+            "router::models::get",
+            "router::models::list",
+        ] {
+            assert!(is_retryable_read(function_id), "{function_id}");
+        }
+        for function_id in [
+            "harness::send",
+            "harness::spawn",
+            "harness::stop",
+            "harness::teardown",
+            "session::append",
+            "router::models::reconcile",
+            "router::chat",
+            "judge::evaluate",
+            "engine::register_trigger",
+            "unknown::read",
+        ] {
+            assert!(!is_retryable_read(function_id), "{function_id}");
+        }
+    }
+
+    #[tokio::test]
+    async fn read_transport_retries_recover_without_repeating_the_subject() {
+        let expected = json!({"status": "completed"});
+        let mut outcomes = std::collections::VecDeque::from([
+            Err(anyhow::Error::new(SdkError::Timeout).context("read status")),
+            Err(anyhow::Error::new(SdkError::WebSocket("closed".into()))),
+            Ok(expected.clone()),
+        ]);
+        let mut calls = 0;
+        let observed =
+            invoke_with_transport_retries("harness::status", Duration::from_secs(2), || {
+                calls += 1;
+                std::future::ready(outcomes.pop_front().unwrap())
+            })
+            .await
+            .unwrap();
+        assert_eq!(observed, expected);
+        assert_eq!(calls, 3);
+        assert!(outcomes.is_empty());
+    }
+
+    #[tokio::test]
+    async fn read_transport_retries_stop_after_two_additional_attempts() {
+        let mut calls = 0;
+        let error =
+            invoke_with_transport_retries("session::messages", Duration::from_secs(2), || {
+                calls += 1;
+                std::future::ready(Err(ensure_connected_before_dispatch(
+                    IIIConnectionState::Disconnected,
+                )
+                .unwrap_err()))
+            })
+            .await
+            .unwrap_err();
+        assert_eq!(calls, 3);
+        assert_eq!(
+            transport_failure_code(&error),
+            Some("transport_not_connected")
+        );
+        assert!(!request_not_dispatched(&error));
+    }
+
+    #[tokio::test]
+    async fn mutating_calls_never_retry_even_on_typed_transport_failures() {
+        for function_id in ["harness::send", "harness::spawn", "judge::evaluate"] {
+            for source in [
+                SdkError::NotConnected,
+                SdkError::Timeout,
+                SdkError::WebSocket("closed".into()),
+            ] {
+                let mut calls = 0;
+                let error =
+                    invoke_with_transport_retries(function_id, Duration::from_secs(1), || {
+                        calls += 1;
+                        std::future::ready(Err(anyhow::Error::new(source.clone())))
+                    })
+                    .await
+                    .unwrap_err();
+                assert_eq!(calls, 1, "{function_id}");
+                assert!(transport_failure_code(&error).is_some());
+                assert!(!request_not_dispatched(&error));
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn provider_failures_are_not_retried_or_reclassified_as_transport() {
+        let mut calls = 0;
+        let error =
+            invoke_with_transport_retries("harness::status", Duration::from_secs(1), || {
+                calls += 1;
+                std::future::ready(Err(anyhow::Error::new(SdkError::Remote {
+                    code: "provider_error".into(),
+                    message: "503 temporarily unavailable, timeout, NotConnected".into(),
+                    stacktrace: None,
+                })))
+            })
+            .await
+            .unwrap_err();
+        assert_eq!(calls, 1);
+        assert_eq!(transport_failure_code(&error), None);
+
+        let failed_status = json!({"result_error": "503 provider timeout"});
+        let result =
+            invoke_with_transport_retries("harness::status", Duration::from_secs(1), || {
+                calls += 1;
+                std::future::ready(Ok(failed_status.clone()))
+            })
+            .await
+            .unwrap();
+        assert_eq!(calls, 2);
+        assert_eq!(result, failed_status);
+    }
+
+    #[tokio::test]
+    async fn the_original_invocation_budget_includes_retry_backoff() {
+        let mut calls = 0;
+        let error =
+            invoke_with_transport_retries("harness::metrics", Duration::from_millis(10), || {
+                calls += 1;
+                std::future::ready(Err(anyhow::Error::new(SdkError::NotConnected)))
+            })
+            .await
+            .unwrap_err();
+        assert_eq!(calls, 1);
+        assert_eq!(transport_failure_code(&error), Some("transport_timeout"));
+        assert!(!request_not_dispatched(&error));
+    }
+
+    #[tokio::test]
+    async fn cancelling_an_invocation_drops_the_pending_transport_future() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        struct CountDrop<'a>(&'a AtomicUsize);
+        impl Drop for CountDrop<'_> {
+            fn drop(&mut self) {
+                self.0.fetch_add(1, Ordering::SeqCst);
+            }
+        }
+
+        let dropped = AtomicUsize::new(0);
+        let calls = AtomicUsize::new(0);
+        let cancelled = tokio::time::timeout(
+            Duration::from_millis(10),
+            invoke_with_transport_retries("harness::metrics", Duration::from_secs(1), || async {
+                calls.fetch_add(1, Ordering::SeqCst);
+                let _guard = CountDrop(&dropped);
+                std::future::pending::<Result<Value>>().await
+            }),
+        )
+        .await;
+        assert!(cancelled.is_err());
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+        assert_eq!(dropped.load(Ordering::SeqCst), 1);
+    }
 
     fn status(
         turn_id: &str,
