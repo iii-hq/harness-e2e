@@ -1746,7 +1746,9 @@ mod tests {
             .into_iter()
             .next()
             .expect("chess engine build should be registered");
-        let spec = chess.spec.expect("the scoring contract should be projected");
+        let spec = chess
+            .spec
+            .expect("the scoring contract should be projected");
 
         // The prompt reaches the reader as the subject receives it.
         assert!(spec.prompt.contains("perft(fen, depth)"));
@@ -1772,14 +1774,20 @@ mod tests {
             ]
         );
         assert_eq!(
-            spec.criteria.iter().map(|entry| u32::from(entry.weight)).sum::<u32>(),
+            spec.criteria
+                .iter()
+                .map(|entry| u32::from(entry.weight))
+                .sum::<u32>(),
             100
         );
         assert!(spec.criteria[0].description.contains("kernel oracle"));
 
         // The limits the run answers to are part of the contract, not trivia.
         assert_eq!(spec.execution.max_turns, 48);
-        assert_eq!(spec.denied_functions, ["http::*", "browser::*", "github::*"]);
+        assert_eq!(
+            spec.denied_functions,
+            ["http::*", "browser::*", "github::*"]
+        );
     }
 
     #[test]
