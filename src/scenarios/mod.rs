@@ -511,6 +511,17 @@ impl ScenarioId {
         Self::CrossRepoContractMigration,
     ];
 
+    /// Editorial one-paragraph description of the test, for readers rather than
+    /// runners. `None` until a scenario defines a `SUMMARY`; the dashboard then
+    /// shows the prompt alone. Add a `pub const SUMMARY` to a scenario module
+    /// and list it here to give that test a description.
+    pub fn summary(self) -> Option<&'static str> {
+        match self {
+            Self::ChessEngineBuild => Some(chess_engine_build::SUMMARY),
+            _ => None,
+        }
+    }
+
     pub fn as_str(self) -> &'static str {
         match self {
             Self::ContextPressure => context_pressure::ID,

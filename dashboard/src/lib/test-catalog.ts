@@ -1,4 +1,10 @@
-import type { AssessmentSummary } from '@/lib/assessment-contract'
+import type {
+  AssessmentKind,
+  AssessmentPolicy,
+  AssessmentResult,
+  AssessmentSource,
+  AssessmentSummary,
+} from '@/lib/assessment-contract'
 
 export type CohortDescriptor = {
   id: string
@@ -185,6 +191,35 @@ export type TestVersionResult = {
   to_observations: TestObservation[]
 }
 
+/** One scored criterion of a test's contract: what it requires and what a
+ *  failure costs. `description` is the requirement, not an observed result —
+ *  `AssessmentResult.summary` is the observation (audit TH-21). */
+export type TestCriterion = {
+  id: string
+  weight: number
+  description: string
+  kind: AssessmentKind
+  policy: AssessmentPolicy
+  dimension: AssessmentResult['dimension']
+  source: AssessmentSource
+}
+
+/** The scenario definition a reader needs: the task, the scoring contract and
+ *  the limits the run answers to. Absent on responses from older harnesses. */
+export type TestSpec = {
+  summary?: string
+  prompt: string
+  criteria: TestCriterion[]
+  execution: {
+    max_turns: number
+    max_output_tokens?: number
+    max_total_tokens?: number
+    stuck_timeout_seconds: number
+    max_validation_retries?: number
+  }
+  denied_functions: string[]
+}
+
 export type TestCatalogRow = {
   test_id: string
   lifecycle: 'active' | 'retired' | 'never_run'
@@ -219,6 +254,7 @@ export type TestCatalogRow = {
       | 'tail_calibrated'
     compatible_sample_count?: number
   } | null
+  spec?: TestSpec | null
   available_versions: Array<{
     version: number
     execution_count: number

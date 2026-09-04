@@ -308,6 +308,84 @@ describe('assessment workspace component', () => {
     expect(detailHtml).toContain('tabindex="-1"')
   })
 
+  it('does not blame the subject for gates an infrastructure failure never reached', () => {
+    // The real shape of a technical failure: the assessments exist, but the run
+    // died before any of them ran.
+    const abortedRun = {
+      ...model.runs[0],
+      key: 'infrastructure-error',
+      systemStatus: 'infrastructure_error' as const,
+      effectiveStatus: 'infrastructure_error' as const,
+      hasAiDisagreement: false,
+      metrics: { ...model.runs[0].metrics, durationMs: 100 },
+      assessments: model.runs[0].assessments.map((entry) => ({
+        ...entry,
+        outcome: 'not_evaluated' as const,
+        score: undefined,
+      })),
+    }
+    const html = renderToStaticMarkup(
+      <AssessmentPanel
+        model={{ availability: 'available', runs: [abortedRun] }}
+        filter="all"
+      />,
+    )
+    expect(html).toContain('Not evaluated')
+    expect(html).toContain('gate, none reached')
+    expect(html).toContain('1 not evaluated')
+    // The old projection counted not_evaluated as a failure on the subject.
+    expect(html).not.toContain('1 failed')
+    expect(html).not.toContain('1 need review')
+    // The system status is genuinely an error and keeps its red badge; the
+    // metric tiles must not be, since they measured nothing.
+    expect(html).toContain('System: Infrastructure Error')
+    expect(html).not.toContain('[&_[data-metric-value]]:text-danger')
+  })
+
+  it('reads each criterion of the contract against what the run did with it', () => {
+    const spec = {
+      prompt: 'Store the durable result.',
+      criteria: [
+        {
+          id: 'durable_result',
+          weight: 70,
+          description: 'The durable result must be observable after the run.',
+          kind: 'required_check' as const,
+          policy: 'hard_gate' as const,
+          dimension: 'structural_integrity' as const,
+          source: 'deterministic' as const,
+        },
+        {
+          id: 'never_reported',
+          weight: 30,
+          description: 'A criterion this run never reported on.',
+          kind: 'signal' as const,
+          policy: 'advisory' as const,
+          dimension: 'efficiency' as const,
+          source: 'deterministic' as const,
+        },
+      ],
+      execution: { max_turns: 12, stuck_timeout_seconds: 300 },
+      denied_functions: [],
+    }
+    const html = renderToStaticMarkup(
+      <AssessmentPanel
+        model={model}
+        filter="all"
+        spec={spec}
+        onTranscript={() => undefined}
+      />,
+    )
+    expect(html).toContain('what this test required')
+    // The requirement comes from the contract...
+    expect(html).toContain('must be observable after the run')
+    // ...and the verdict from the run.
+    expect(html).toContain('failed')
+    // A criterion the run never reported still shows what it demanded.
+    expect(html).toContain('never_reported')
+    expect(html).toContain('not evaluated')
+  })
+
   it('renders explicit legacy and unavailable states without a default verdict', () => {
     const legacy = renderToStaticMarkup(
       <AssessmentPanel
