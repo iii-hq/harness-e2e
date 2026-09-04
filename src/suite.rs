@@ -4798,6 +4798,13 @@ async fn execute(
             .await
             .map_err(|error| scenario_setup_failure(error.to_string()))?;
     }
+    // Engineering fixtures are allocated during setup. Use that validated,
+    // attempt-owned root for the subject and its descendants, never the host cwd.
+    let filesystem_metadata =
+        crate::scenarios::engineering_ticket::prepared_filesystem_root(spec.id, run_id)
+            .map_err(|error| scenario_setup_failure(error.to_string()))?
+            .map(|root| json!({ "fs_scope": { "root": root } }))
+            .or(filesystem_metadata);
     let required_functions = crate::scenarios::required_functions(spec.id, run_id);
     report.worker_contracts = context
         .observe_function_contracts(&required_functions)
