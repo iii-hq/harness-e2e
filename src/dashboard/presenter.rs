@@ -20,14 +20,36 @@ pub(super) const MAX_EXECUTIONS: usize = 100;
 
 pub(super) fn stored_execution_summary(run: &super::store::StoredRun) -> Result<Value> {
     let mut value = execution_summary(&run.metadata, run.report.as_ref())?;
+    attach_live_progress(&mut value, run)?;
     attach_report_compatibility(&mut value, run)?;
     Ok(value)
 }
 
 pub(super) fn stored_execution_detail(run: &super::store::StoredRun) -> Result<Value> {
     let mut value = execution_detail_value_optional(&run.metadata, run.report.as_ref())?;
+    attach_live_progress(&mut value, run)?;
     attach_report_compatibility(&mut value, run)?;
     Ok(value)
+}
+
+fn attach_live_progress(value: &mut Value, run: &super::store::StoredRun) -> Result<()> {
+    value["live_progress"] = serde_json::to_value(&run.live_progress)?;
+    value["live_progress_error"] = json!(run.live_progress_error);
+    // A report can be written while final assessments are still running.
+    // Keep lifecycle authoritative until the control plane finishes.
+    if run.metadata.status.active() {
+        value["status"] = json!(if run.metadata.status == JobStatus::Cancelling {
+            "cancelling"
+        } else {
+            "running"
+        });
+        value["conclusion"] = json!("");
+        value["completed_at"] = json!("");
+    }
+    if let Some(progress) = &run.live_progress {
+        value["generated_at"] = json!(progress.updated_at);
+    }
+    Ok(())
 }
 
 fn attach_report_compatibility(value: &mut Value, run: &super::store::StoredRun) -> Result<()> {

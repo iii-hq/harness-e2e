@@ -205,9 +205,55 @@ export type DashboardExecutionSummary = JsonObject & {
   workflow_metrics?: DashboardWorkflowMetricSummary | null
   totals?: ExecutionTotals
   assessment_summary?: AssessmentSummary
+  live_progress?: LiveProgress | null
+  live_progress_error?: string | null
   persistence_errors?: string[]
   slot_start_deadline_seconds?: number | null
   baseline_comparable?: boolean
+}
+
+export type LiveProgress = {
+  updated_at: string
+  phase?: string | null
+  terminal: boolean
+  terminal_reason?: string | null
+  committed_events: number
+  planned_slots: number
+  runs_committed: number
+  slots_deferred: number
+  attempts_started: number
+  attempts_finished: number
+  subject_observations_committed: number
+  active_attempt: {
+    scenario_id: string
+    run_id: string
+    attempt_id: string
+    session_id: string
+    started_at: string
+  } | null
+  slots: Array<{
+    slot_id: string
+    scenario_id: string
+    repetition: number
+    state: 'pending' | 'committed' | 'deferred'
+    reason: string | null
+    run_id: string | null
+    completion: CompletionState | null
+    technical: TechnicalState | null
+    objective_score: number | null
+    quality_score_completed: number | null
+  }>
+  completed_runs: number
+  task_incomplete_runs: number
+  undetermined_runs: number
+  technical_invalid_runs: number
+  completion_rate: number | null
+  quality_score_completed: number | null
+  quality_scored_completed_runs: number
+  observed_tokens: number | null
+  token_observed_attempts: number
+  observed_cost_usd: number | null
+  cost_observed_runs: number
 }
 
 export type DashboardRunMetricTotals = JsonObject & {
@@ -575,10 +621,8 @@ function makeBridge(runtime: RuntimeConfig): DashboardDataBridge {
   }
 
   const listExecutions = (input: ExecutionListInput = {}) =>
-    cachedCall<ExecutionManifest>(
-      runtime.functions.executions_list,
-      input,
-      () => httpExecutionList(input),
+    call<ExecutionManifest>(runtime.functions.executions_list, input, () =>
+      httpExecutionList(input),
     )
 
   return {
@@ -686,7 +730,7 @@ function makeBridge(runtime: RuntimeConfig): DashboardDataBridge {
       const client = await getDashboardIiiClient()
       const handlerId = 'iii::harness-e2e-dashboard::changed'
       const offHandler = client.on<JsonObject>(handlerId, (payload) => {
-        if (payload.kind !== 'progress') readCache.clear()
+        readCache.clear()
         handler(payload)
       })
       const offTrigger = client.registerTrigger({

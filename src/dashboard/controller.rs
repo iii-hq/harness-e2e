@@ -163,7 +163,24 @@ impl Controller {
     }
 
     pub(super) async fn execution_summaries(&self) -> Result<Arc<Vec<Value>>> {
-        Ok(Arc::new(self.read_model().await?.summaries.clone()))
+        let mut summaries = self.read_model().await?.summaries.clone();
+        let runs_dir = self.runs_dir.clone();
+        // The historical index is cached; active execution checkpoints are not.
+        // Polling must recover progress even if a change notification was lost.
+        tokio::task::spawn_blocking(move || {
+            for summary in &mut summaries {
+                if matches!(summary["status"].as_str(), Some("running" | "cancelling")) {
+                    if let Some(id) = summary["id"].as_str() {
+                        if let Some(run) = super::store::read_stored_run(&runs_dir.join(id))? {
+                            *summary = super::presenter::stored_execution_summary(&run)?;
+                        }
+                    }
+                }
+            }
+            Ok(Arc::new(summaries))
+        })
+        .await
+        .context("refresh active execution summaries task")?
     }
 
     pub(super) async fn read_model(&self) -> Result<Arc<DashboardReadModel>> {

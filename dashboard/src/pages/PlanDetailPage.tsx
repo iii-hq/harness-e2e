@@ -7,6 +7,7 @@ import {
   useState,
 } from 'react'
 import { DashboardPageActions } from '@/components/DashboardPageActions'
+import { LiveProgressPanel } from '@/components/LiveProgressPanel'
 import { ScenarioChatAction } from '@/components/ScenarioChatAction'
 import {
   buttonClassName,
@@ -55,6 +56,7 @@ import {
   type PlanScenarioComparison,
   type PlanVerdict,
 } from '@/lib/plan-comparison'
+import { watchExecution } from '@/lib/watch-execution'
 
 /* ------------------------------------------------------------- helpers */
 
@@ -387,6 +389,20 @@ export function PlanLifecycle({
             </div>
           </Callout>
         </div>
+      ) : null}
+      {lastRunSummary?.live_progress ? (
+        <LiveProgressPanel
+          progress={lastRunSummary.live_progress}
+          running={
+            lastRunSummary.status === 'running' ||
+            lastRunSummary.status === 'cancelling'
+          }
+        />
+      ) : null}
+      {lastRunSummary?.live_progress_error ? (
+        <p className="mt-4 text-sm text-warning" role="status">
+          {lastRunSummary.live_progress_error}
+        </p>
       ) : null}
       {activeFeedback ? (
         <div className="mt-4" data-plan-run-feedback={activeFeedback.phase}>
@@ -1705,14 +1721,18 @@ export function LocalPlanDetailPage({ planId }: { planId: string }) {
   useEffect(() => {
     if (!bridge || !running || !plan?.last_attempt_id) return
     const attemptId = plan.last_attempt_id
-    const timer = window.setInterval(() => {
-      void loadExecutionSummaries(bridge.listExecutions, [attemptId])
-        .then((summaries) =>
-          setExecutionSummaries((current) => ({ ...current, ...summaries })),
-        )
-        .catch(() => undefined)
-    }, 5_000)
-    return () => window.clearInterval(timer)
+    let active = true
+    const stop = watchExecution(bridge, attemptId, async () => {
+      const summaries = await loadExecutionSummaries(bridge.listExecutions, [
+        attemptId,
+      ])
+      if (active)
+        setExecutionSummaries((current) => ({ ...current, ...summaries }))
+    })
+    return () => {
+      active = false
+      stop()
+    }
   }, [bridge, plan?.last_attempt_id, running])
 
   useEffect(() => {

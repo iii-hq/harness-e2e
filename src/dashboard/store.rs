@@ -22,6 +22,8 @@ pub(super) struct StoredRun {
     pub(super) metadata: RunMetadata,
     pub(super) report: Option<E2eReport>,
     pub(super) unsupported_report: Option<UnsupportedReport>,
+    pub(super) live_progress: Option<super::live_progress::LiveProgress>,
+    pub(super) live_progress_error: Option<String>,
 }
 
 pub(super) fn write_metadata(run_dir: &Path, metadata: &RunMetadata) -> Result<()> {
@@ -100,10 +102,28 @@ pub(super) fn read_stored_run(run_dir: &Path) -> Result<Option<StoredRun>> {
             }
         }
     };
+    let (live_progress, live_progress_error) = if unsupported_report.is_none()
+        && (report.is_none() || metadata.status.active())
+    {
+        match super::live_progress::read(run_dir, &metadata.id) {
+            Ok(progress) => (progress, None),
+            Err(error) => {
+                tracing::warn!(execution_id = %metadata.id, %error, "cannot verify live progress");
+                (
+                    None,
+                    Some("Progress evidence could not be verified. Refresh to try again.".into()),
+                )
+            }
+        }
+    } else {
+        (None, None)
+    };
     Ok(Some(StoredRun {
         metadata,
         report,
         unsupported_report,
+        live_progress,
+        live_progress_error,
     }))
 }
 
@@ -298,6 +318,8 @@ mod tests {
             let original = fs::read(run_dir.join("results.json")).unwrap();
             let stored = read_stored_run(&run_dir).unwrap().unwrap();
             assert!(stored.report.is_none());
+            assert!(stored.live_progress.is_none());
+            assert!(stored.live_progress_error.is_none());
             assert_eq!(
                 stored.unsupported_report.as_ref().unwrap().schema_version,
                 u64::from(version),
