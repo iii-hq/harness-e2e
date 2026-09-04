@@ -927,9 +927,9 @@ function WorkflowStepRow({
           Profile
         </span>
         <div>
-          <div className="h-2 overflow-hidden rounded-[6px] bg-[var(--color-surface-hover)]">
+          <div className="h-2 overflow-hidden rounded-full bg-[var(--color-surface-hover)]">
             <div
-              className={`h-full rounded-[6px] ${barTone}`}
+              className={`h-full rounded-full ${barTone}`}
               style={{ width: `${width}%` }}
             />
           </div>
