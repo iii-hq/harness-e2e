@@ -93,6 +93,10 @@ pub(super) async fn serve(args: DashboardArgs) -> Result<()> {
                 "/api/local/scenarios",
                 axum::routing::post(local_scenario_create),
             )
+            .route(
+                "/api/dashboard/plans/control",
+                axum::routing::post(plan_control),
+            )
             .route("/api/dashboard/plans", get(plans_list).post(plan_create))
             .route("/api/dashboard/plans/:id", get(plan_get).patch(plan_update))
             .route(
@@ -154,6 +158,7 @@ async fn dashboard_config(State(state): State<AppState>) -> Json<Value> {
             "run_start": bus::RUN_START,
             "run_cancel": bus::RUN_CANCEL,
             "plans_list": bus::PLANS_LIST,
+            "plan_control": bus::PLAN_CONTROL,
             "plan_get": bus::PLAN_GET,
             "plan_create": bus::PLAN_CREATE,
             "plan_update": bus::PLAN_UPDATE,
@@ -163,13 +168,31 @@ async fn dashboard_config(State(state): State<AppState>) -> Json<Value> {
     }))
 }
 
+async fn plan_control(
+    State(state): State<AppState>,
+    Json(request): Json<super::plan_store::Request>,
+) -> Result<Json<Value>, ApiError> {
+    state
+        .controller
+        .plan_store
+        .handle(request)
+        .await
+        .map(Json)
+        .map_err(ApiError::internal)
+}
+
 async fn plans_list(State(state): State<AppState>) -> Result<Json<Value>, ApiError> {
     let plans = state
         .controller
         .list_plans()
         .await
         .map_err(ApiError::internal)?;
-    Ok(Json(json!({ "mode": "local", "plans": plans })))
+    let master_plan = crate::test_plan::embedded()
+        .and_then(|plan| plan.catalog())
+        .map_err(ApiError::internal)?;
+    Ok(Json(
+        json!({ "mode": "local", "plans": plans, "master_plan": master_plan }),
+    ))
 }
 
 async fn plan_get(
@@ -205,7 +228,10 @@ async fn plan_run(
     AxumPath(id): AxumPath<String>,
     Json(request): Json<PlanRunRequest>,
 ) -> Result<(StatusCode, Json<LocalPlan>), ApiError> {
-    let plan = state.controller.start_plan(&id, request.role).await?;
+    let plan = state
+        .controller
+        .start_plan(&id, request.role, &request.idempotency_key)
+        .await?;
     Ok((StatusCode::ACCEPTED, Json(plan)))
 }
 
@@ -381,7 +407,7 @@ async fn execution_manifest(State(state): State<AppState>) -> Result<Json<Value>
         "last_update": last_update,
         "repo_url": repository_url(),
         "retention": { "summaries": MAX_EXECUTIONS, "details": MAX_EXECUTIONS },
-        "executions": executions.as_ref(),
+        "executions": executions.iter().filter(|value| value.get("parent_plan_execution_id").is_none()).collect::<Vec<_>>(),
     })))
 }
 
@@ -394,6 +420,14 @@ async fn execution_detail(
         .ok_or_else(|| ApiError::bad_request("execution detail must end in .json"))?
         .to_string();
     validate_execution_id(&id).map_err(ApiError::bad_request)?;
+    if let Some(detail) = state
+        .controller
+        .plan_store
+        .execution_detail(&id)
+        .map_err(ApiError::internal)?
+    {
+        return Ok(Json(detail));
+    }
     let run_dir = state.controller.runs_dir().join(&id);
     let run = read_stored_run(&run_dir)
         .map_err(ApiError::internal)?

@@ -337,6 +337,11 @@ fn expected_fixture_files(assets: &FixtureAssets) -> BTreeMap<&'static str, &str
     ])
 }
 
+/// Read-only readiness check shared by profile admission and native setup.
+pub(crate) fn validate_fixture() -> Result<()> {
+    load_fixture_assets().map(|_| ())
+}
+
 fn load_fixture_assets() -> Result<FixtureAssets> {
     let checkout = fixture_root_from_env()?;
     validate_fixture_revision(&checkout)?;

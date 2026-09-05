@@ -1,10 +1,10 @@
 {
-  "cssBorder1px": 46,
-  "cssRadiiOffToken": 26,
+  "cssBorder1px": 44,
+  "cssRadiiOffToken": 25,
   "cssFontSizesBelow11": 47,
-  "cssBoxShadow": 11,
+  "cssBoxShadow": 10,
   "cssImportant": 13,
-  "cssLinesLegacy": 3099,
+  "cssLinesLegacy": 3053,
   "tsxArbitraryTextBelow11": 1,
   "tsxRoundedOffToken": 37,
   "tsxBorderUtility": 72

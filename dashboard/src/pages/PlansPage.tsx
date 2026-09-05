@@ -3,6 +3,7 @@ import {
   DashboardPageActions,
   dashboardHeaderActionClassName,
 } from '@/components/DashboardPageActions'
+import { MasterTestProfiles } from '@/components/MasterTestProfiles'
 import {
   buttonClassName,
   Callout,
@@ -28,6 +29,7 @@ import {
   type DashboardExecutionSummary,
   getDashboardDataBridge,
   type LocalPlan,
+  type MasterTestPlan,
 } from '@/lib/dashboard-data-source'
 import { formatDate } from '@/lib/execution-view'
 import {
@@ -425,7 +427,9 @@ function PlanRow({
 
 export function PlansPage() {
   const [bridge, setBridge] = useState<DashboardDataBridge | null>(null)
+  const [tab, setTab] = useState<'mine' | 'profiles'>('mine')
   const [plans, setPlans] = useState<LocalPlan[]>([])
+  const [masterPlan, setMasterPlan] = useState<MasterTestPlan | null>(null)
   const [executionSummaries, setExecutionSummaries] = useState<
     Record<string, DashboardExecutionSummary>
   >({})
@@ -444,9 +448,11 @@ export function PlansPage() {
       setBridge(next)
       if (next.mode !== 'local') {
         setPlans([])
+        setMasterPlan(null)
         return
       }
       const response = await next.listPlans()
+      setMasterPlan(response.master_plan ?? null)
       const orderedPlans = [...response.plans].sort((left, right) =>
         right.updated_at.localeCompare(left.updated_at),
       )
@@ -517,13 +523,22 @@ export function PlansPage() {
     return plans.filter((plan) => {
       if (!matchesFilter(plan, filter, comparisonFor(plan))) return false
       if (!normalized) return true
-      return [plan.label, plan.purpose, plan.id, ...plan.scenario_ids]
+      return [
+        plan.label,
+        plan.purpose,
+        plan.id,
+        plan.model,
+        plan.provider,
+        ...plan.scenario_ids,
+      ]
         .join(' ')
         .toLowerCase()
         .includes(normalized)
     })
   }, [comparisonFor, filter, plans, query])
 
+  const totalPlans = plans.length
+  const totalFiltered = filteredPlans.length
   const local = bridge?.mode === 'local'
   const filtered = query.trim() !== '' || filter !== 'all'
   const filters: Array<{ id: PlanFilter; label: string }> = [
@@ -553,7 +568,7 @@ export function PlansPage() {
       <div className="ds-root page-shell w-[calc(100%_-_1.5rem)] max-w-[1420px] pt-5 pb-16 md:w-[calc(100%_-_3rem)]">
         <PageHeader
           title="plans"
-          summary="Capture one baseline, then rerun the same frozen scope after your Harness change."
+          summary="Configure one execution model per plan, run its coverage and follow the results."
           actions={
             local && plans.length > 0 ? (
               <details className="group text-xs text-ink-soft">
@@ -568,7 +583,43 @@ export function PlansPage() {
           }
         />
 
-        {!local && !loading ? (
+        {local ? (
+          <nav className="mt-5 flex gap-2" aria-label="Plan views">
+            <button
+              type="button"
+              aria-pressed={tab === 'mine'}
+              className={buttonClassName({
+                variant: tab === 'mine' ? 'primary' : 'secondary',
+              })}
+              onClick={() => setTab('mine')}
+            >
+              My plans
+            </button>
+            <button
+              type="button"
+              aria-pressed={tab === 'profiles'}
+              className={buttonClassName({
+                variant: tab === 'profiles' ? 'primary' : 'secondary',
+              })}
+              onClick={() => setTab('profiles')}
+            >
+              Templates
+            </button>
+          </nav>
+        ) : null}
+        {local && masterPlan && tab === 'profiles' ? (
+          <>
+            <MasterTestProfiles plan={masterPlan} />
+            <a
+              className={buttonClassName({ variant: 'secondary' })}
+              href={`${hashForNewPlan()}/manual`}
+            >
+              Create a custom plan manually
+            </a>
+          </>
+        ) : null}
+
+        {tab === 'profiles' ? null : !local && !loading ? (
           <div className="mt-6">
             <EmptyState
               title="Available only in the local dashboard"
@@ -624,8 +675,8 @@ export function PlansPage() {
                 {loading
                   ? 'loading…'
                   : filtered
-                    ? `${filteredPlans.length} of ${plans.length} plans`
-                    : `${plans.length} plan${plans.length === 1 ? '' : 's'}`}
+                    ? `${totalFiltered} of ${totalPlans} plans`
+                    : `${totalPlans} plan${totalPlans === 1 ? '' : 's'}`}
               </span>
             </section>
 
@@ -667,7 +718,7 @@ export function PlansPage() {
                     />
                   ))}
                 </div>
-              ) : plans.length === 0 ? (
+              ) : totalPlans === 0 ? (
                 <EmptyState
                   title="No local plans yet"
                   description={

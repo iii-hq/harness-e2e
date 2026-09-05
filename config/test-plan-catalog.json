@@ -1,0 +1,276 @@
+{
+  "definition_sha256": "sha256:47047f9d7c7145682c1930bd6e610b39af4dc1861d0d8f9247506357f1b6ded1",
+  "scenarios": {
+    "browser_cross_site": {
+      "difficulty_weight": 4,
+      "execution_kind": "harness_turn",
+      "markdown": false
+    },
+    "chess_engine_build": {
+      "difficulty_weight": 2,
+      "execution_kind": "harness_turn",
+      "markdown": false
+    },
+    "chess_play_ladder": {
+      "difficulty_weight": 2,
+      "execution_kind": "harness_turn",
+      "markdown": false
+    },
+    "cleanup_under_failure": {
+      "difficulty_weight": 2,
+      "execution_kind": "harness_turn",
+      "markdown": false
+    },
+    "contention_ledger": {
+      "difficulty_weight": 3,
+      "execution_kind": "harness_turn",
+      "markdown": false
+    },
+    "context_pressure": {
+      "difficulty_weight": 1,
+      "execution_kind": "harness_turn",
+      "markdown": false
+    },
+    "cross_app_transaction": {
+      "difficulty_weight": 4,
+      "execution_kind": "harness_turn",
+      "markdown": false
+    },
+    "cross_repo_contract_migration": {
+      "difficulty_weight": 5,
+      "execution_kind": "adaptive_flow",
+      "markdown": false
+    },
+    "database_migration_recovery": {
+      "difficulty_weight": 2,
+      "execution_kind": "harness_turn",
+      "markdown": true
+    },
+    "depth_ladder": {
+      "difficulty_weight": 4,
+      "execution_kind": "harness_turn",
+      "markdown": false
+    },
+    "engineering_endurance_ladder": {
+      "difficulty_weight": 4,
+      "execution_kind": "harness_turn",
+      "markdown": false
+    },
+    "engineering_ticket": {
+      "difficulty_weight": 4,
+      "execution_kind": "harness_turn",
+      "markdown": false
+    },
+    "engineering_ticket_git_handoff": {
+      "difficulty_weight": 4,
+      "execution_kind": "harness_turn",
+      "markdown": false
+    },
+    "fanout_ladder": {
+      "difficulty_weight": 4,
+      "execution_kind": "harness_turn",
+      "markdown": false
+    },
+    "git_regression_forensics": {
+      "difficulty_weight": 4,
+      "execution_kind": "harness_turn",
+      "markdown": false
+    },
+    "incident_response": {
+      "difficulty_weight": 5,
+      "execution_kind": "adaptive_flow",
+      "markdown": false
+    },
+    "insert_record": {
+      "difficulty_weight": 2,
+      "execution_kind": "harness_turn",
+      "markdown": true
+    },
+    "mechanical_reaction": {
+      "difficulty_weight": 2,
+      "execution_kind": "harness_turn",
+      "markdown": false
+    },
+    "minimal_path": {
+      "difficulty_weight": 2,
+      "execution_kind": "harness_turn",
+      "markdown": true
+    },
+    "moving_target": {
+      "difficulty_weight": 2,
+      "execution_kind": "harness_turn",
+      "markdown": false
+    },
+    "performance_regression": {
+      "difficulty_weight": 2,
+      "execution_kind": "harness_turn",
+      "markdown": false
+    },
+    "persistent_state": {
+      "difficulty_weight": 2,
+      "execution_kind": "harness_turn",
+      "markdown": true
+    },
+    "poison_message": {
+      "difficulty_weight": 2,
+      "execution_kind": "harness_turn",
+      "markdown": false
+    },
+    "policy_bound_action": {
+      "difficulty_weight": 4,
+      "execution_kind": "scripted_dialogue",
+      "markdown": false
+    },
+    "prompt_injection_resilience": {
+      "difficulty_weight": 2,
+      "execution_kind": "harness_turn",
+      "markdown": false
+    },
+    "quorum_fan_in": {
+      "difficulty_weight": 3,
+      "execution_kind": "harness_turn",
+      "markdown": false
+    },
+    "receiving_operation": {
+      "difficulty_weight": 4,
+      "execution_kind": "harness_turn",
+      "markdown": false
+    },
+    "release_train_recovery": {
+      "difficulty_weight": 5,
+      "execution_kind": "adaptive_flow",
+      "markdown": false
+    },
+    "research_pipeline": {
+      "difficulty_weight": 4,
+      "execution_kind": "harness_turn",
+      "markdown": false
+    },
+    "secret_hygiene": {
+      "difficulty_weight": 2,
+      "execution_kind": "harness_turn",
+      "markdown": false
+    },
+    "security_review": {
+      "difficulty_weight": 4,
+      "execution_kind": "composite_flow",
+      "markdown": false
+    },
+    "sequential_pipeline": {
+      "difficulty_weight": 2,
+      "execution_kind": "harness_turn",
+      "markdown": true
+    },
+    "shell_coder_sandbox": {
+      "difficulty_weight": 4,
+      "execution_kind": "harness_turn",
+      "markdown": false
+    },
+    "subagent_validation": {
+      "difficulty_weight": 4,
+      "execution_kind": "harness_turn",
+      "markdown": false
+    },
+    "subagent_validation_failure": {
+      "difficulty_weight": 4,
+      "execution_kind": "harness_turn",
+      "markdown": false
+    },
+    "swe_batch_replay": {
+      "difficulty_weight": 2,
+      "execution_kind": "composite_flow",
+      "markdown": false
+    },
+    "swe_cache_invalidation": {
+      "difficulty_weight": 2,
+      "execution_kind": "composite_flow",
+      "markdown": false
+    },
+    "swe_config_isolation": {
+      "difficulty_weight": 2,
+      "execution_kind": "composite_flow",
+      "markdown": false
+    },
+    "swe_contract_migration": {
+      "difficulty_weight": 5,
+      "execution_kind": "composite_flow",
+      "markdown": false
+    },
+    "swe_release_handoff": {
+      "difficulty_weight": 2,
+      "execution_kind": "composite_flow",
+      "markdown": false
+    },
+    "swe_replay_performance": {
+      "difficulty_weight": 2,
+      "execution_kind": "composite_flow",
+      "markdown": false
+    },
+    "swe_replay_recovery": {
+      "difficulty_weight": 2,
+      "execution_kind": "composite_flow",
+      "markdown": false
+    },
+    "swe_service_journey": {
+      "difficulty_weight": 5,
+      "execution_kind": "composite_flow",
+      "markdown": false
+    },
+    "swe_tenant_isolation": {
+      "difficulty_weight": 2,
+      "execution_kind": "composite_flow",
+      "markdown": false
+    },
+    "timer_wake": {
+      "difficulty_weight": 2,
+      "execution_kind": "harness_turn",
+      "markdown": false
+    },
+    "todo_worker_planned": {
+      "difficulty_weight": 4,
+      "execution_kind": "composite_flow",
+      "markdown": false
+    },
+    "todo_worker_simple": {
+      "difficulty_weight": 2,
+      "execution_kind": "harness_turn",
+      "markdown": false
+    },
+    "tool_contract_recovery": {
+      "difficulty_weight": 4,
+      "execution_kind": "harness_turn",
+      "markdown": false
+    },
+    "trend_blog": {
+      "difficulty_weight": 2,
+      "execution_kind": "harness_turn",
+      "markdown": false
+    },
+    "validation_chain": {
+      "difficulty_weight": 2,
+      "execution_kind": "harness_turn",
+      "markdown": false
+    },
+    "validation_loop": {
+      "difficulty_weight": 2,
+      "execution_kind": "harness_turn",
+      "markdown": false
+    },
+    "validation_scope_enforcement": {
+      "difficulty_weight": 2,
+      "execution_kind": "harness_turn",
+      "markdown": false
+    },
+    "validation_self_repair": {
+      "difficulty_weight": 2,
+      "execution_kind": "harness_turn",
+      "markdown": false
+    },
+    "wake_chain_soak": {
+      "difficulty_weight": 2,
+      "execution_kind": "harness_turn",
+      "markdown": false
+    }
+  },
+  "schema": "harness-e2e-campaign-catalog/v1"
+}

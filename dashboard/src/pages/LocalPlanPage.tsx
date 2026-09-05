@@ -9,9 +9,10 @@ import {
   requestQuickExecution,
   validateExecutionSetup,
 } from '@/components/ExecutionSetup'
-import { buttonClassName, PageHeader } from '@/design-system'
+import { buttonClassName, Callout, PageHeader, Select } from '@/design-system'
 import { useDirtyNavigation } from '@/hooks/use-dirty-navigation'
 import {
+  hashForNewPlan,
   hashForPlan,
   hashForPlans,
   hashForWorkspace,
@@ -20,7 +21,10 @@ import {
   type DashboardDataBridge,
   getDashboardDataBridge,
   type JsonObject,
+  type MasterTestProfile,
 } from '@/lib/dashboard-data-source'
+import { type PlanRequirements, planAction } from '@/lib/plan-execution'
+import { Requirements } from './PlanExecutionPage'
 
 type Model = { provider: string; model: string }
 type Catalog = {
@@ -127,7 +131,22 @@ export function planFormDirty(
   )
 }
 
-export function LocalPlanCreatePage() {
+export function LocalPlanCreatePage({
+  profileId,
+  duplicateId,
+  editId,
+}: {
+  profileId?: string
+  duplicateId?: string
+  editId?: string
+} = {}) {
+  const [templates, setTemplates] = useState<MasterTestProfile[]>([])
+  const [templateId, setTemplateId] = useState<string | undefined>(profileId)
+  const [requiredJudges, setRequiredJudges] = useState<string[]>([])
+  const [savedId, setSavedId] = useState<string | null>(null)
+  const [requirements, setRequirements] = useState<PlanRequirements | null>(
+    null,
+  )
   const [bridge, setBridge] = useState<DashboardDataBridge | null>(null)
   const [catalog, setCatalog] = useState<Catalog | null>(null)
   const [label, setLabel] = useState(PLAN_FORM_DEFAULTS.label)
@@ -152,20 +171,18 @@ export function LocalPlanCreatePage() {
 
   const loadCatalog = useCallback(async (source: DashboardDataBridge) => {
     const loaded = catalogValue(await source.getCatalog())
-    const firstModel = loaded.models[0] ? modelKey(loaded.models[0]) : ''
     // Audit RS-13: a scope chosen in the run-suite dialog arrives preselected.
     const handedOver = consumePlanScopeRequest().filter((id) =>
       loaded.scenarios.includes(id),
     )
     setCatalog(loaded)
     setUrl((current) => current || loaded.url)
-    setSubject((current) => current || firstModel)
     if (handedOver.length > 0)
       setScenarios((current) => (current.length > 0 ? current : handedOver))
     initialValues.current = {
       ...initialValues.current,
       url: initialValues.current.url || loaded.url,
-      subject: initialValues.current.subject || firstModel,
+      subject: initialValues.current.subject,
       scenarios:
         initialValues.current.scenarios.length > 0
           ? initialValues.current.scenarios
@@ -184,6 +201,72 @@ export function LocalPlanCreatePage() {
             'Local plans are available only in the local dashboard',
           )
         await loadCatalog(next)
+        const listed = await next.listPlans()
+        setTemplates(listed.master_plan?.profiles ?? [])
+        setRequiredJudges([
+          ...new Set(
+            (listed.master_plan?.profiles ?? []).flatMap((p) =>
+              (p.cases ?? [])
+                .filter((c) => c.judge_required)
+                .map((c) => c.scenario_id),
+            ),
+          ),
+        ])
+        if (duplicateId || editId) {
+          const source = await next.getPlan((duplicateId ?? editId) as string)
+          setLabel(duplicateId ? `${source.label} copy` : source.label)
+          setPurpose(source.purpose)
+          setUrl(source.url)
+          setScenarios(source.scenario_ids)
+          setRuns(String(source.runs))
+          setTechnicalRetries(String(source.technical_retries))
+          setSeed(source.seed === null ? '' : String(source.seed))
+          setJudge(
+            source.judge_model
+              ? modelKey({
+                  model: source.judge_model,
+                  provider: source.judge_provider,
+                })
+              : '',
+          )
+          setSubject(editId ? modelKey(source) : '')
+          setTemplateId(source.template_id ?? undefined)
+          initialValues.current = {
+            ...initialValues.current,
+            label: duplicateId ? `${source.label} copy` : source.label,
+            purpose: source.purpose,
+            url: source.url,
+            subject: editId ? modelKey(source) : '',
+            judge: source.judge_model
+              ? modelKey({
+                  model: source.judge_model,
+                  provider: source.judge_provider,
+                })
+              : '',
+            scenarios: source.scenario_ids,
+            runs: String(source.runs),
+            technicalRetries: String(source.technical_retries),
+            seed: source.seed === null ? '' : String(source.seed),
+          }
+        } else if (profileId) {
+          const template = listed.master_plan?.profiles.find(
+            (p) => p.id === profileId,
+          )
+          if (!template) throw Error('Starting template is unavailable.')
+          setLabel(template.label)
+          setPurpose(template.purpose)
+          setScenarios(template.scenario_ids)
+          setRuns(String(template.repetitions))
+          setTechnicalRetries(String(template.technical_retries))
+          initialValues.current = {
+            ...initialValues.current,
+            label: template.label,
+            purpose: template.purpose,
+            scenarios: template.scenario_ids,
+            runs: String(template.repetitions),
+            technicalRetries: String(template.technical_retries),
+          }
+        }
       })
       .catch((cause) => {
         if (!cancelled) setError(errorText(cause))
@@ -194,7 +277,7 @@ export function LocalPlanCreatePage() {
     return () => {
       cancelled = true
     }
-  }, [loadCatalog])
+  }, [loadCatalog, profileId, duplicateId, editId])
 
   // Audit PN-17: the plan page can retry a catalog load without a reload.
   const refreshCatalog = async () => {
@@ -227,6 +310,11 @@ export function LocalPlanCreatePage() {
   }))
   const runsPerTest = Math.max(1, Number(runs) || 1)
   const retryCount = Math.max(0, Number(technicalRetries) || 0)
+  const judgeRequired =
+    Boolean(
+      templates.find((template) => template.id === templateId)
+        ?.protected_supervisor_required,
+    ) || scenarios.some((id) => requiredJudges.includes(id))
   // Audit PN-05 / PN-15: the primary stays enabled; after a submit attempt
   // the pending items show inline and next to the button.
   const errors = attempted
@@ -236,6 +324,8 @@ export function LocalPlanCreatePage() {
         subject,
         selectedScenarios: scenarios,
         url,
+        judge,
+        judgeRequired,
       })
     : {}
 
@@ -259,12 +349,17 @@ export function LocalPlanCreatePage() {
 
   const create = async (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault()
+    const runAfterSave =
+      (event.nativeEvent as SubmitEvent).submitter?.getAttribute('value') ===
+      'run'
     const nextErrors = validateExecutionSetup({
       mode: 'plan',
       label,
       subject,
       selectedScenarios: scenarios,
       url,
+      judge,
+      judgeRequired,
     })
     if (
       Object.keys(nextErrors).length > 0 ||
@@ -280,7 +375,7 @@ export function LocalPlanCreatePage() {
     setSubmitting(true)
     setError(null)
     try {
-      const plan = await bridge.createPlan({
+      const request = {
         label: label.trim(),
         purpose: purpose.trim(),
         url,
@@ -292,7 +387,16 @@ export function LocalPlanCreatePage() {
         runs: runsPerTest,
         technical_retries: retryCount,
         seed: seed ? Number(seed) : null,
-      })
+      }
+      const plan =
+        editId || savedId
+          ? await bridge.updatePlan((editId ?? savedId) as string, request)
+          : await bridge.createPlan({
+              ...request,
+              template_id: templateId,
+              duplicate_of: duplicateId,
+            })
+      setSavedId(plan.id)
       initialValues.current = {
         label: label.trim(),
         purpose: purpose.trim(),
@@ -304,6 +408,15 @@ export function LocalPlanCreatePage() {
         runs,
         technicalRetries,
         seed,
+      }
+      if (runAfterSave) {
+        const checked = await planAction<PlanRequirements>(bridge, {
+          action: 'requirements',
+          plan_id: plan.id,
+        })
+        setRequirements(checked)
+        if (!checked.ready) return
+        await bridge.startPlan(plan.id, 'baseline')
       }
       window.location.hash = hashForPlan(plan.id)
     } catch (cause) {
@@ -341,7 +454,9 @@ export function LocalPlanCreatePage() {
       <div className="ds-root page-shell w-[calc(100%_-_1.5rem)] max-w-[1420px] pt-5 pb-8 md:w-[calc(100%_-_3rem)]">
         {/* Audit PN-18 / PN-25: a breadcrumb back to plans and the DS heading scale. */}
         <PageHeader
-          title="new plan"
+          title={
+            editId ? 'edit plan' : duplicateId ? 'duplicate plan' : 'new plan'
+          }
           summary="Save a focused scope, capture its baseline, then run the same tests after your change to measure the difference."
           headingId="plan-create-title"
           breadcrumb={[
@@ -361,6 +476,39 @@ export function LocalPlanCreatePage() {
             </a>
           }
         />
+        {!duplicateId && !editId ? (
+          <label className="mt-5 block text-sm" htmlFor="plan-template">
+            Start from a template
+            <Select
+              id="plan-template"
+              className="mt-2 block"
+              aria-label="Start from a template"
+              value={profileId ?? ''}
+              onChange={(event) => {
+                window.location.hash = event.target.value
+                  ? `${hashForNewPlan()}/profile/${event.target.value}`
+                  : hashForNewPlan()
+              }}
+            >
+              <option value="">Blank plan</option>
+              {templates.map((template) => (
+                <option key={template.id} value={template.id}>
+                  {template.label}
+                </option>
+              ))}
+            </Select>
+            <span className="mt-1 block text-xs text-ink-soft">
+              Templates fill the initial scope and policy. Edit them and select
+              the execution model and judge before saving.
+            </span>
+          </label>
+        ) : null}
+        {requirements ? <Requirements value={requirements} /> : null}
+        {savedId ? (
+          <Callout tone="info" title="Draft saved">
+            <a href={hashForPlan(savedId)}>Open saved plan</a>
+          </Callout>
+        ) : null}
         <form
           className="mt-6 grid min-w-0 gap-8"
           onSubmit={create}
@@ -376,6 +524,7 @@ export function LocalPlanCreatePage() {
             url={url}
             subject={subject}
             judge={judge}
+            judgeRequired={judgeRequired}
             modelGroups={modelOptions}
             availableScenarios={catalog?.scenarios ?? []}
             localScenarioIds={catalog?.localScenarioIds ?? []}
@@ -392,7 +541,7 @@ export function LocalPlanCreatePage() {
             runs={runs}
             technicalRetries={technicalRetries}
             seed={seed}
-            disabled={submitting}
+            disabled={submitting || loading}
             catalogLoading={loading}
             catalogStatus={
               loading
@@ -444,7 +593,15 @@ export function LocalPlanCreatePage() {
                 disabled={submitting || loading}
                 aria-busy={submitting}
               >
-                {submitting ? 'creating…' : 'create draft plan'}
+                {submitting ? 'saving…' : 'Save draft'}
+              </button>
+              <button
+                className={buttonClassName({ variant: 'primary' })}
+                type="submit"
+                value="run"
+                disabled={submitting || loading}
+              >
+                Save and run
               </button>
             </ExecutionSetupFooter>
           </div>

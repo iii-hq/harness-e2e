@@ -80,31 +80,6 @@ export type PlanComparison = {
   scenarios: PlanScenarioComparison[]
 }
 
-export const PLAN_CORE_METRICS: PlanMetricId[] = [
-  'pass_rate',
-  'quality',
-  'tokens',
-  'duration',
-  'turns',
-]
-
-export const PLAN_DETAIL_METRICS: PlanMetricId[] = [
-  'pass_rate',
-  'coverage',
-  'hard_gates',
-  'technical_failures',
-  'quality',
-  'confidence',
-  'tokens',
-  'tokens_per_completion',
-  'failed_attempt_tokens',
-  'duration',
-  'cost',
-  'function_calls',
-  'function_errors',
-  'turns',
-]
-
 function finite(value: unknown): number | null {
   return typeof value === 'number' && Number.isFinite(value) ? value : null
 }

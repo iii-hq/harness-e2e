@@ -95,8 +95,30 @@ revision, while `shell_coder_sandbox`, `chess_engine_build`, and `trend_blog`
 share a second pinned revision through `HARNESS_E2E_FIXTURE_PATH`. The protected
 launcher and cleanup boundary are described in
 [docs/engineering-ticket-git-handoff.md](docs/engineering-ticket-git-handoff.md).
-The team-facing composition and didactic description of every daily, weekly,
-and post-deploy scenario is in [docs/e2e-test-plans.md](docs/e2e-test-plans.md).
+The [master test and measurement plan](docs/e2e-test-plans.md) is the single
+strategy document for campaign coverage, purpose-specific profiles, metrics,
+and longitudinal comparison. [config/test-plan.json](config/test-plan.json)
+defines the six executable profiles: smoke, regression, capability, evolution,
+resilience, and endurance. In the dashboard these profiles are starting templates
+for the same plan form and baseline/candidate visualization used by existing plans.
+Choose **New plan**, optionally select a template, edit the scope, and select the
+execution and judge models. **Save draft**, **Save and run**, and **Duplicate plan**
+use one shared lifecycle and retain native evidence. Fault-injection plans export
+to the protected executor. See [executable profile plans](dashboard/README.md#executable-profile-plans).
+
+```bash
+cargo run --locked -- test-plan list
+python3 scripts/run_test_plan.py --profile smoke  # preview; no model calls
+python3 scripts/run_test_plan.py --profile smoke --execute \
+  --model "$HARNESS_E2E_MODEL" --provider "$HARNESS_E2E_PROVIDER" \
+  --judge-model "$HARNESS_E2E_JUDGE_MODEL" --judge-provider "$HARNESS_E2E_JUDGE_PROVIDER"
+```
+
+Use `test-plan sync` after editing the source; CI checks generated campaigns,
+catalogs, and [profile documentation](docs/test-profiles.generated.md).
+Execution preserves native bundles and writes a receipt plus measurements by
+exact case/stack cohort. All profiles remain advisory pending live qualification.
+
 Release Control dispatches `.github/workflows/exact-stack-e2e.yml`
 directly in this repository. The workflow validates the single strict campaign contract,
 executes every common group in an isolated ephemeral stack, routes fault groups

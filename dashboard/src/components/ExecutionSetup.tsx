@@ -67,7 +67,12 @@ export type ExecutionModelGroup = {
   models: { label: string; value: string }[]
 }
 
-export type ExecutionSetupField = 'label' | 'subject' | 'scenarios' | 'url'
+export type ExecutionSetupField =
+  | 'label'
+  | 'subject'
+  | 'judge'
+  | 'scenarios'
+  | 'url'
 export type ExecutionSetupErrors = Partial<Record<ExecutionSetupField, string>>
 
 /** Audit PN-05: validation runs on submit and names each pending item. */
@@ -77,16 +82,22 @@ export function validateExecutionSetup({
   subject,
   selectedScenarios,
   url,
+  judge,
+  judgeRequired,
 }: {
   mode: ExecutionSetupMode
   label: string
   subject: string
   selectedScenarios: string[]
   url: string
+  judge?: string
+  judgeRequired?: boolean
 }): ExecutionSetupErrors {
   const errors: ExecutionSetupErrors = {}
   if (mode === 'plan' && label.trim() === '') errors.label = 'Add a plan label.'
   if (!subject) errors.subject = 'Choose an execution model.'
+  if (judgeRequired && !judge)
+    errors.judge = 'Choose a judge model for the selected tests.'
   if (selectedScenarios.length === 0)
     errors.scenarios = 'Select at least one test.'
   if (url.trim() === '') errors.url = 'The Harness endpoint is missing.'
@@ -101,6 +112,7 @@ export function focusFirstInvalid(
   const order: [ExecutionSetupField, string][] = [
     ['label', `${idPrefix}-label`],
     ['subject', `${idPrefix}-subject`],
+    ['judge', `${idPrefix}-judge`],
     ['scenarios', `${idPrefix}-scenario-search`],
     ['url', `${idPrefix}-url`],
   ]
@@ -169,6 +181,7 @@ type ExecutionSetupProps = {
   url: string
   subject: string
   judge: string
+  judgeRequired?: boolean
   modelGroups: ExecutionModelGroup[]
   availableScenarios: string[]
   localScenarioIds?: string[]
@@ -245,6 +258,7 @@ export function ExecutionSetup({
   url,
   subject,
   judge,
+  judgeRequired = false,
   modelGroups,
   availableScenarios,
   localScenarioIds = [],
@@ -457,17 +471,23 @@ export function ExecutionSetup({
           <Field
             label="Judge model"
             htmlFor={`${idPrefix}-judge`}
-            meta="optional"
+            meta={judgeRequired ? 'required' : 'optional'}
+            error={errors.judge}
           >
             <ProviderModelDropdown
+              invalid={Boolean(errors.judge)}
               id={`${idPrefix}-judge`}
               ariaLabel="Judge model"
               value={judge}
               onChange={onJudgeChange}
               disabled={disabled || modelGroups.length === 0}
               groups={modelGroups}
-              clearLabel="Default judge (automatic)"
-              placeholder="Default judge (automatic)"
+              clearLabel={
+                judgeRequired ? 'Choose a judge' : 'Default judge (automatic)'
+              }
+              placeholder={
+                judgeRequired ? 'Choose a judge' : 'Default judge (automatic)'
+              }
             />
           </Field>
         </div>

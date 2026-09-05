@@ -198,3 +198,55 @@ no unexplained `biome-ignore`, design-system vocabulary only, token colours,
 static Tailwind classes) and the live-evidence recipe: the Rust dashboard in
 local mode (`III_NAMESPACE=my-project harness-e2e dashboard --runs-dir
 ~/.iii/data/harness-e2e --listen 127.0.0.1:4173`) behind `vite preview`.
+
+## Executable profile plans
+
+The dashboard has one kind of plan and one baseline/candidate lifecycle. **My
+plans** uses the existing plan table and detail visualization for every plan.
+**New plan** opens the same form for a blank scope, a starting profile or a copy.
+The six profiles are templates: they populate coverage, purpose, repetitions and
+retry policy. Users may edit the scope and explicitly select execution and judge
+models. The saved plan owns that configuration; later template changes do not
+change it or prevent execution.
+
+**Save draft** keeps the configuration editable. **Save and run** saves it,
+checks requirements and starts the baseline. Busy admission preserves the draft
+and links to active work. **Duplicate plan** preserves scope, policy and evaluator,
+asks for a new execution model and starts without baseline, candidates or history.
+All plans lock configuration at first admission, capture a baseline only after
+complete technically valid evidence, and run candidates through the same controls,
+charts and history. There is no Evolution-specific lifecycle.
+
+The shared Rust coordinator persists every child identity before dispatch and
+reserves admission across the whole execution. It cancels active work before
+releasing admission, retains finished evidence and marks remaining slots. Restart
+reconciles retained children and interrupts the execution without resuming it.
+The main execution list shows the parent; its detail links to native artifacts.
+No synthetic Results v4 report is created. Missing telemetry stays unavailable.
+
+Saved plans have one current schema (`schema_version: 3`) in
+`plan-store/plans/<id>.json`; composed receipts live in
+`plan-store/executions/<id>.json`. Configuration and the materialized snapshot
+share one stored document. Earlier plan formats, directories and histories are
+not loaded or migrated. Current executions retain native child evidence and
+restart reconciliation. Scenario-contract incompatibility blocks admission; the
+starting template revision is provenance only. Fault-injection plans still
+require the protected Release Control executor and can be exported from the
+common detail page.
+
+Creation, reading, updates and starts use the `plan-*` HTTP/iii APIs. Starting a
+plan requires a caller idempotency key. `POST /api/dashboard/plans/control` and
+`e2e::dashboard::plan-control` provide requirements, export, execution lookup and
+cancellation. The former profile-plan endpoint, duplicate creation/start actions,
+native plan-context tracking and manual-route alias have been removed.
+
+Run deterministic browser acceptance after the dashboard build:
+
+```bash
+pnpm exec playwright install chromium
+pnpm test:profiles
+```
+
+This test uses a local fixture server and never calls a model. Rust coordination
+tests materialize every profile, including the 47 Capability and 90 Evolution
+slots, and pass Resilience exports through the existing Python suite validator.

@@ -41,6 +41,7 @@ ROOT_FIELDS = {
     "failure_policy",
     "scoring_profile",
     "groups",
+    "test_plan",
 }
 COMMON_GROUP_FIELDS = {
     "id",
@@ -99,74 +100,23 @@ RESULT_AGGREGATE_TOKEN_FIELDS = (
     "tokens_per_completion",
 )
 
-# Canonical campaign scope. Adding a scenario to a reviewed manifest requires
-# intentionally declaring its execution kind here, preventing typos and,
-# critically, preventing a ScriptedDialogue from silently entering a retryable
-# HarnessTurn group.
+# Generated from the runner's native scenario contracts and the master plan.
+# This keeps profile execution, legacy campaigns and the Rust catalog in parity.
+_GENERATED_CATALOG = json.loads(
+    (pathlib.Path(__file__).resolve().parents[1] / "config/test-plan-catalog.json").read_text()
+)
+_PROFILE_CATALOG = json.loads(
+    (pathlib.Path(__file__).resolve().parents[1] / "config/test-plan-profiles.json").read_text()
+)
 SCENARIO_EXECUTION_KIND = {
-    "timer_wake": "harness_turn",
-    "shell_coder_sandbox": "harness_turn",
-    "chess_engine_build": "harness_turn",
-    "git_regression_forensics": "harness_turn",
-    "contention_ledger": "harness_turn",
-    "security_review": "composite_flow",
-    "engineering_ticket": "harness_turn",
-    "engineering_ticket_git_handoff": "harness_turn",
-    "engineering_endurance_ladder": "harness_turn",
-    "tool_contract_recovery": "harness_turn",
-    "policy_bound_action": "scripted_dialogue",
-    "cross_app_transaction": "harness_turn",
-    "research_pipeline": "harness_turn",
-    "performance_regression": "harness_turn",
-    "browser_cross_site": "harness_turn",
-    "moving_target": "harness_turn",
-    "incident_response": "adaptive_flow",
-    "release_train_recovery": "adaptive_flow",
-    "cross_repo_contract_migration": "adaptive_flow",
-    "swe_config_isolation": "composite_flow",
-    "swe_cache_invalidation": "composite_flow",
-    "swe_batch_replay": "composite_flow",
-    "swe_replay_recovery": "composite_flow",
-    "swe_contract_migration": "composite_flow",
-    "swe_tenant_isolation": "composite_flow",
-    "swe_replay_performance": "composite_flow",
-    "swe_release_handoff": "composite_flow",
-    "swe_service_journey": "composite_flow",
+    key: value["execution_kind"] for key, value in _GENERATED_CATALOG["scenarios"].items()
 }
-
-# Generated from `harness-e2e catalog`. The parser checks the reviewed weight
-# against the same canonical capability tier later embedded in results.json.
-# L0/L1 map to 1; L2..L5 map directly to 2..5.
 SCENARIO_DIFFICULTY_WEIGHT = {
-    "timer_wake": 2,
-    "shell_coder_sandbox": 4,
-    "chess_engine_build": 2,
-    "git_regression_forensics": 4,
-    "contention_ledger": 3,
-    "security_review": 4,
-    "engineering_ticket": 4,
-    "engineering_ticket_git_handoff": 4,
-    "engineering_endurance_ladder": 4,
-    "tool_contract_recovery": 4,
-    "policy_bound_action": 4,
-    "cross_app_transaction": 4,
-    "research_pipeline": 4,
-    "performance_regression": 2,
-    "browser_cross_site": 4,
-    "moving_target": 2,
-    "incident_response": 5,
-    "release_train_recovery": 5,
-    "cross_repo_contract_migration": 5,
-    "swe_config_isolation": 2,
-    "swe_cache_invalidation": 2,
-    "swe_batch_replay": 2,
-    "swe_replay_recovery": 2,
-    "swe_contract_migration": 5,
-    "swe_tenant_isolation": 2,
-    "swe_replay_performance": 2,
-    "swe_release_handoff": 2,
-    "swe_service_journey": 5,
+    key: value["difficulty_weight"] for key, value in _GENERATED_CATALOG["scenarios"].items()
 }
+MARKDOWN_SCENARIO_IDS = frozenset(
+    key for key, value in _GENERATED_CATALOG["scenarios"].items() if value["markdown"]
+)
 
 FAULT_PROFILE_WEIGHT = {
     "weekly-l2-recovery": 2,
@@ -215,6 +165,7 @@ class Campaign:
     failure_policy: str
     scoring_profile: str
     groups: tuple[CampaignGroup, ...]
+    test_plan: dict[str, Any] | None = None
 
 
 def _expect_object(value: Any, label: str) -> dict[str, Any]:
@@ -258,6 +209,41 @@ def _expect_bounded_int(value: Any, label: str, minimum: int, maximum: int) -> i
     return value
 
 
+def validate_test_plan_identity(manifest: dict[str, Any]) -> dict[str, Any] | None:
+    identity = manifest.get("test_plan")
+    if identity is None:
+        return None
+    fields = {"plan_id", "version", "definition_sha256", "profile_id", "profile_sha256",
+              "repetition", "repetitions", "campaign_sha256"}
+    identity = _expect_object(identity, "campaign.test_plan")
+    _reject_unknown_fields(identity, fields, "campaign.test_plan")
+    if identity["plan_id"] != "harness":
+        raise CampaignError("unsupported master plan id")
+    _expect_bounded_int(identity["version"], "test_plan.version", 1, 2**32 - 1)
+    for key in ("definition_sha256", "profile_sha256", "campaign_sha256"):
+        if not isinstance(identity[key], str) or not SHA256_PATTERN.fullmatch(identity[key]):
+            raise CampaignError(f"test_plan.{key} must be a SHA-256 digest")
+    if identity["definition_sha256"] != _GENERATED_CATALOG["definition_sha256"]:
+        raise CampaignError("master plan definition differs from the pinned runner catalog")
+    if identity["profile_id"] not in {"smoke", "regression", "capability", "evolution", "resilience", "endurance"}:
+        raise CampaignError("unknown master plan profile")
+    repetitions = _expect_bounded_int(identity["repetitions"], "test_plan.repetitions", 1, 20)
+    repetition = _expect_bounded_int(identity["repetition"], "test_plan.repetition", 1, repetitions)
+    if manifest["campaign_id"] != f"{identity['profile_id']}-r{repetition:02}":
+        raise CampaignError("campaign id differs from profile repetition identity")
+    native = {key: value for key, value in manifest.items() if key != "test_plan"}
+    if _canonical_sha256(native) != identity["campaign_sha256"]:
+        raise CampaignError("campaign contents differ from the materialized profile digest")
+    if manifest["failure_policy"] != "advisory":
+        raise CampaignError("master plan profiles remain advisory")
+    expected = next(item for item in _PROFILE_CATALOG["profiles"] if item["id"] == identity["profile_id"])
+    if repetitions != expected["repetitions"] or identity["profile_sha256"] != expected["profile_sha256"]:
+        raise CampaignError("profile identity or sample policy differs from the reviewed plan")
+    if expected["campaigns"][repetition - 1] != manifest:
+        raise CampaignError("campaign differs from the reviewed profile composition")
+    return dict(identity)
+
+
 def parse_campaign(
     value: Any,
     source: str = "campaign",
@@ -273,7 +259,8 @@ def parse_campaign(
     }
     root = _expect_object(value, source)
     _reject_seed_fields(root)
-    _reject_unknown_fields(root, ROOT_FIELDS, source)
+    _reject_unknown_fields(root, ROOT_FIELDS, source, ROOT_FIELDS - {"test_plan"})
+    test_plan = validate_test_plan_identity(root)
     if root["kind"] != CAMPAIGN_KIND:
         raise CampaignError(f"{source}.kind must be {CAMPAIGN_KIND!r}")
 
@@ -420,6 +407,7 @@ def parse_campaign(
         failure_policy=failure_policy,
         scoring_profile=scoring_profile,
         groups=tuple(groups),
+        test_plan=test_plan,
     )
 
 
@@ -1090,6 +1078,8 @@ def execute_campaign(
     if not SAFE_EXECUTION_ID.fullmatch(execution_id):
         raise CampaignError("execution_id contains unsafe characters")
     base_environment = dict(os.environ if environ is None else environ)
+    if campaign.test_plan and base_environment.get("HARNESS_E2E_SEED"):
+        raise CampaignError("master profiles require scenario-owned seeds; unset HARNESS_E2E_SEED")
     if not dry_run and any(
         group.execution_kind == "fault_injection" for group in campaign.groups
     ):
@@ -1108,8 +1098,8 @@ def execute_campaign(
                 "provider is required via --provider or HARNESS_E2E_PROVIDER"
             )
         has_markdown = any(
-            group.id == f"{campaign.campaign_id}-markdown"
-            for group in campaign.groups
+            scenario in MARKDOWN_SCENARIO_IDS
+            for group in campaign.groups for scenario in group.scenarios
         )
         resolved_judge_model = judge_model or base_environment.get(
             "HARNESS_E2E_JUDGE_MODEL"
@@ -1176,6 +1166,7 @@ def execute_campaign(
             "lane": campaign.lane,
             "failure_policy": campaign.failure_policy,
             "group": dataclasses.asdict(group),
+            **({"test_plan": campaign.test_plan} if campaign.test_plan else {}),
             "runner": str(e2e_bin),
             "model": model or child_environment.get("HARNESS_E2E_MODEL"),
             "provider": provider or child_environment.get("HARNESS_E2E_PROVIDER"),
@@ -1222,6 +1213,7 @@ def execute_campaign(
     )
     return {
         "kind": "harness-e2e-campaign-summary",
+        **({"test_plan": campaign.test_plan} if campaign.test_plan else {}),
         "campaign_id": campaign.campaign_id,
         "lane": campaign.lane,
         "execution_id": execution_id,
@@ -1275,6 +1267,7 @@ def aggregate_existing_campaign(
     scoring = score_campaign(campaign, group_results)
     return {
         "kind": "harness-e2e-campaign-summary",
+        **({"test_plan": campaign.test_plan} if campaign.test_plan else {}),
         "campaign_id": campaign.campaign_id,
         "lane": campaign.lane,
         "execution_id": execution_id,

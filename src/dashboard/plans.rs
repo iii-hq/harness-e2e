@@ -1,20 +1,17 @@
 use std::collections::BTreeMap;
-use std::fs;
-use std::path::{Path, PathBuf};
 
-use anyhow::{bail, Context, Result};
+use anyhow::{bail, Result};
 use chrono::{SecondsFormat, Utc};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
-use super::RunRequest;
 use crate::artifact;
 use crate::markdown::ScenarioKey;
 #[cfg(test)]
 use crate::scenarios::ScenarioId;
 
-const PLAN_SCHEMA_VERSION: u32 = 1;
+pub(super) const PLAN_SCHEMA_VERSION: u32 = 3;
 
 #[derive(Debug, Clone, Copy, Deserialize, Serialize, JsonSchema, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
@@ -31,13 +28,6 @@ pub(super) enum PlanState {
 pub(super) enum PlanRunRole {
     Baseline,
     Candidate,
-}
-
-#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, PartialEq, Eq)]
-pub(super) struct PlanContext {
-    pub plan_id: String,
-    pub role: PlanRunRole,
-    pub plan_hash: String,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, PartialEq)]
@@ -74,10 +64,13 @@ pub(super) struct LocalPlan {
     pub seed: Option<u64>,
     pub baseline_execution_id: Option<String>,
     pub candidate_execution_ids: Vec<String>,
-    #[serde(default)]
     pub candidate_labels: BTreeMap<String, String>,
     pub incomplete_execution_ids: Vec<String>,
     pub last_attempt_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub template_id: Option<String>,
+    pub protected_executor_required: bool,
+    pub compatible: bool,
 }
 
 #[derive(Debug, Clone, Default, Deserialize, Serialize, JsonSchema)]
@@ -100,6 +93,10 @@ pub(super) struct PlanCreateRequest {
     #[serde(default)]
     pub judge_provider: String,
     pub scenarios: Vec<String>,
+    #[serde(default)]
+    pub template_id: Option<String>,
+    #[serde(default)]
+    pub duplicate_of: Option<String>,
     #[serde(default = "default_runs")]
     pub runs: u32,
     #[serde(default = "default_retries")]
@@ -137,6 +134,7 @@ pub(super) struct PlanRunRequest {
     #[serde(default)]
     pub plan_id: Option<String>,
     pub role: PlanRunRole,
+    pub idempotency_key: String,
 }
 
 fn default_runs() -> u32 {
@@ -145,74 +143,6 @@ fn default_runs() -> u32 {
 
 fn default_retries() -> u8 {
     1
-}
-
-pub(super) fn plans_dir(runs_dir: &Path) -> PathBuf {
-    runs_dir.join("plans")
-}
-
-pub(super) fn write_plan(plans_dir: &Path, plan: &LocalPlan) -> Result<()> {
-    fs::create_dir_all(plans_dir)
-        .with_context(|| format!("create plans directory {}", plans_dir.display()))?;
-    let target = plans_dir.join(format!("{}.json", plan.id));
-    let temporary = plans_dir.join(format!("{}.json.tmp", plan.id));
-    let mut bytes = serde_json::to_vec_pretty(plan)?;
-    bytes.push(b'\n');
-    fs::write(&temporary, bytes).with_context(|| format!("write {}", temporary.display()))?;
-    fs::rename(&temporary, &target).with_context(|| format!("replace {}", target.display()))?;
-    Ok(())
-}
-
-pub(super) fn read_plan(plans_dir: &Path, id: &str) -> Result<Option<LocalPlan>> {
-    let path = plans_dir.join(format!("{id}.json"));
-    if !path.is_file() {
-        return Ok(None);
-    }
-    let plan: LocalPlan = serde_json::from_slice(&fs::read(&path)?)
-        .with_context(|| format!("decode {}", path.display()))?;
-    if plan.schema_version != PLAN_SCHEMA_VERSION {
-        bail!(
-            "unsupported local plan schema version {}",
-            plan.schema_version
-        );
-    }
-    Ok(Some(plan))
-}
-
-pub(super) fn list_plans(plans_dir: &Path) -> Result<Vec<LocalPlan>> {
-    if !plans_dir.is_dir() {
-        return Ok(Vec::new());
-    }
-    let mut plans = Vec::new();
-    for entry in fs::read_dir(plans_dir)? {
-        let entry = entry?;
-        if !entry.file_type()?.is_file()
-            || entry.path().extension().and_then(|value| value.to_str()) != Some("json")
-        {
-            continue;
-        }
-        let path = entry.path();
-        let id = path
-            .file_stem()
-            .and_then(|value| value.to_str())
-            .unwrap_or_default();
-        match read_plan(plans_dir, id) {
-            Ok(Some(plan)) => plans.push(plan),
-            Ok(None) => {}
-            Err(error) => tracing::warn!(
-                path = %path.display(),
-                error = %format!("{error:#}"),
-                "ignoring an unsupported or corrupt local E2E plan"
-            ),
-        }
-    }
-    plans.sort_by(|left, right| {
-        right
-            .updated_at
-            .cmp(&left.updated_at)
-            .then_with(|| right.id.cmp(&left.id))
-    });
-    Ok(plans)
 }
 
 pub(super) fn new_plan(request: &PlanCreateRequest, id: String) -> Result<LocalPlan> {
@@ -245,6 +175,9 @@ pub(super) fn new_plan(request: &PlanCreateRequest, id: String) -> Result<LocalP
         candidate_labels: BTreeMap::new(),
         incomplete_execution_ids: Vec::new(),
         last_attempt_id: None,
+        template_id: request.template_id.clone(),
+        protected_executor_required: false,
+        compatible: true,
     })
 }
 
@@ -362,70 +295,12 @@ pub(super) fn plan_request(plan: &LocalPlan) -> PlanCreateRequest {
         judge_model: plan.judge_model.clone(),
         judge_provider: plan.judge_provider.clone(),
         scenarios: plan.scenario_ids.clone(),
+        template_id: plan.template_id.clone(),
+        duplicate_of: None,
         runs: plan.runs,
         technical_retries: plan.technical_retries,
         seed: plan.seed,
     }
-}
-
-pub(super) fn run_request(plan: &LocalPlan, role: PlanRunRole) -> RunRequest {
-    RunRequest {
-        _caller_worker_id: None,
-        label: format!(
-            "{} · {}",
-            plan.label,
-            match role {
-                PlanRunRole::Baseline => "baseline",
-                PlanRunRole::Candidate => "candidate",
-            }
-        ),
-        url: plan.url.clone(),
-        model: plan.model.clone(),
-        provider: plan.provider.clone(),
-        judge_model: plan.judge_model.clone(),
-        judge_provider: plan.judge_provider.clone(),
-        scenarios: plan.scenario_ids.clone(),
-        runs: plan.runs,
-        technical_retries: plan.technical_retries,
-        seed: plan.seed,
-        plan_context: Some(PlanContext {
-            plan_id: plan.id.clone(),
-            role,
-            plan_hash: plan.scope_hash.clone(),
-        }),
-    }
-}
-
-pub(super) fn record_incomplete_attempt(
-    plans_dir: &Path,
-    context: &PlanContext,
-    execution_id: &str,
-) -> Result<()> {
-    let Some(mut plan) = read_plan(plans_dir, &context.plan_id)? else {
-        return Ok(());
-    };
-    if plan.scope_hash != context.plan_hash {
-        bail!("plan context hash does not match the frozen scope");
-    }
-    if !plan
-        .incomplete_execution_ids
-        .iter()
-        .any(|id| id == execution_id)
-    {
-        plan.incomplete_execution_ids.push(execution_id.to_string());
-    }
-    plan.last_attempt_id = Some(execution_id.to_string());
-    plan.state = match context.role {
-        PlanRunRole::Baseline => PlanState::Draft,
-        PlanRunRole::Candidate if plan.baseline_execution_id.is_some() => PlanState::BaselineReady,
-        PlanRunRole::Candidate => PlanState::Draft,
-    };
-    plan.updated_at = now();
-    write_plan(plans_dir, &plan)
-}
-
-pub(super) fn now() -> String {
-    Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true)
 }
 
 fn validate_values(request: &PlanCreateRequest) -> Result<()> {
@@ -466,7 +341,10 @@ fn validate_values(request: &PlanCreateRequest) -> Result<()> {
     Ok(())
 }
 
-fn resolve_scope(scenario_ids: &[String], seed: Option<u64>) -> Result<Vec<PlanScopeItem>> {
+pub(super) fn resolve_scope(
+    scenario_ids: &[String],
+    seed: Option<u64>,
+) -> Result<Vec<PlanScopeItem>> {
     scenario_ids
         .iter()
         .map(|value| {
@@ -529,6 +407,8 @@ mod tests {
             judge_model: "judge".into(),
             judge_provider: "judge-provider".into(),
             scenarios: vec![ScenarioId::ContextPressure.as_str().into()],
+            template_id: None,
+            duplicate_of: None,
             runs: 1,
             technical_retries: 1,
             seed: None,
@@ -583,33 +463,6 @@ mod tests {
 
         let serialized = serde_json::to_value(decoded).expect("request should serialize");
         assert!(serialized.get("_caller_worker_id").is_none());
-    }
-
-    #[test]
-    fn writes_and_reads_plans_atomically() {
-        let directory = tempfile::tempdir().expect("temporary directory");
-        let plan = new_plan(&request(), "plan-round-trip".into()).expect("plan should materialize");
-        write_plan(directory.path(), &plan).expect("plan should be written");
-        assert!(!directory.path().join("plan-round-trip.json.tmp").exists());
-        assert_eq!(
-            read_plan(directory.path(), &plan.id).unwrap(),
-            Some(plan.clone())
-        );
-        assert_eq!(list_plans(directory.path()).unwrap(), vec![plan]);
-    }
-
-    #[test]
-    fn listing_isolates_an_unsupported_plan() {
-        let directory = tempfile::tempdir().expect("temporary directory");
-        let plan = new_plan(&request(), "plan-supported".into()).expect("plan should materialize");
-        write_plan(directory.path(), &plan).expect("plan should be written");
-        fs::write(
-            directory.path().join("plan-unsupported.json"),
-            br#"{"schema_version":1,"legacy_shape":true}"#,
-        )
-        .expect("legacy fixture should be written");
-
-        assert_eq!(list_plans(directory.path()).unwrap(), vec![plan]);
     }
 
     #[test]
@@ -676,50 +529,5 @@ mod tests {
         )
         .expect_err("unknown executions must be rejected");
         assert!(error.to_string().contains("unknown execution"));
-    }
-
-    #[test]
-    fn reads_schema_v1_plans_created_before_candidate_names() {
-        let plan = new_plan(&request(), "plan-old-v1".into()).expect("plan should materialize");
-        let mut value = serde_json::to_value(plan).expect("plan should serialize");
-        value
-            .as_object_mut()
-            .expect("plan should be an object")
-            .remove("candidate_labels");
-        let decoded: LocalPlan = serde_json::from_value(value).expect("old plan should decode");
-        assert!(decoded.candidate_labels.is_empty());
-    }
-
-    #[test]
-    fn run_requests_carry_the_frozen_plan_context() {
-        let plan = new_plan(&request(), "plan-context".into()).expect("plan should materialize");
-        let run = run_request(&plan, PlanRunRole::Candidate);
-        let context = run.plan_context.expect("plan context");
-        assert_eq!(context.plan_id, plan.id);
-        assert_eq!(context.plan_hash, plan.scope_hash);
-        assert_eq!(context.role, PlanRunRole::Candidate);
-    }
-
-    #[test]
-    fn recovery_records_an_incomplete_attempt_without_promoting_it() {
-        let directory = tempfile::tempdir().expect("temporary directory");
-        let mut plan =
-            new_plan(&request(), "plan-recovery".into()).expect("plan should materialize");
-        plan.locked = true;
-        plan.state = PlanState::BaselineRunning;
-        write_plan(directory.path(), &plan).expect("plan should be written");
-        let context = PlanContext {
-            plan_id: plan.id.clone(),
-            role: PlanRunRole::Baseline,
-            plan_hash: plan.scope_hash.clone(),
-        };
-        record_incomplete_attempt(directory.path(), &context, "local-recovered")
-            .expect("recovery should update the plan");
-        let recovered = read_plan(directory.path(), &plan.id)
-            .expect("plan should be readable")
-            .expect("plan should exist");
-        assert_eq!(recovered.state, PlanState::Draft);
-        assert_eq!(recovered.incomplete_execution_ids, vec!["local-recovered"]);
-        assert!(recovered.baseline_execution_id.is_none());
     }
 }

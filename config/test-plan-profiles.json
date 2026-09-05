@@ -1,0 +1,4695 @@
+{
+  "definition_sha256": "sha256:47047f9d7c7145682c1930bd6e610b39af4dc1861d0d8f9247506357f1b6ded1",
+  "plan_id": "harness",
+  "profiles": [
+    {
+      "budget": {
+        "fault_budget_separate": false,
+        "fault_runs": 0,
+        "max_concurrent_groups": 1,
+        "planned_runs": 5,
+        "scenario_runs": 5,
+        "scope": "turn sum counts per-session limits, not a whole-workflow ceiling; tokens cover subject only; setup, judge, capture and cleanup are additional",
+        "session_turn_limit_sum": 140,
+        "subject_token_limit": 1920000,
+        "unbounded_token_cases": []
+      },
+      "campaigns": [
+        {
+          "campaign_id": "smoke-r01",
+          "failure_policy": "advisory",
+          "groups": [
+            {
+              "difficulty_weight": 2,
+              "execution_kind": "harness_turn",
+              "id": "case-minimal-path",
+              "runs": 1,
+              "scenarios": [
+                "minimal_path"
+              ],
+              "technical_retries": 0
+            },
+            {
+              "difficulty_weight": 4,
+              "execution_kind": "harness_turn",
+              "id": "case-tool-contract-recovery",
+              "runs": 1,
+              "scenarios": [
+                "tool_contract_recovery"
+              ],
+              "technical_retries": 0
+            },
+            {
+              "difficulty_weight": 2,
+              "execution_kind": "harness_turn",
+              "id": "case-persistent-state",
+              "runs": 1,
+              "scenarios": [
+                "persistent_state"
+              ],
+              "technical_retries": 0
+            },
+            {
+              "difficulty_weight": 2,
+              "execution_kind": "harness_turn",
+              "id": "case-timer-wake",
+              "runs": 1,
+              "scenarios": [
+                "timer_wake"
+              ],
+              "technical_retries": 0
+            },
+            {
+              "difficulty_weight": 4,
+              "execution_kind": "harness_turn",
+              "id": "case-shell-coder-sandbox",
+              "runs": 1,
+              "scenarios": [
+                "shell_coder_sandbox"
+              ],
+              "technical_retries": 0
+            }
+          ],
+          "kind": "harness-e2e-campaign",
+          "lane": "local-smoke",
+          "scoring_profile": "difficulty-weighted-v1",
+          "test_plan": {
+            "campaign_sha256": "sha256:c3013c779aa9b1fb53a33fee258b8da2ba2721ed41844f173f4743b1b9c3227d",
+            "definition_sha256": "sha256:47047f9d7c7145682c1930bd6e610b39af4dc1861d0d8f9247506357f1b6ded1",
+            "plan_id": "harness",
+            "profile_id": "smoke",
+            "profile_sha256": "sha256:0e88ee45a461b3ff7ac9c15fd016e1a707c1ae7acc7bdf72bb2a208b9dc9362f",
+            "repetition": 1,
+            "repetitions": 1,
+            "version": 1
+          }
+        }
+      ],
+      "cases": [
+        {
+          "case_id": "minimal_path:v2:seed-b49253410830d39e",
+          "contract_sha256": "sha256:0e421ac8cb114db38c6b654db4e981455fb937f661aa70bf613fc3b9224fa9a0",
+          "difficulty_weight": 2,
+          "execution_kind": "harness_turn",
+          "inputs_sha256": "sha256:7019cbe5103fd6160825b74082d4ee1414ec4fdf47f97524502fdeb8c818b52a",
+          "judge_required": true,
+          "module": "m1",
+          "required_capabilities": [
+            "iii::functions",
+            "iii::database",
+            "iii::state"
+          ],
+          "requirements": [],
+          "resource_envelope": {
+            "execution": {
+              "max_output_tokens": 8192,
+              "max_total_tokens": 160000,
+              "max_turns": 24,
+              "max_validation_retries": 1,
+              "stuck_timeout_seconds": 300
+            }
+          },
+          "scenario_id": "minimal_path",
+          "scenario_version": 2,
+          "seed": 13011553812202181534
+        },
+        {
+          "case_id": "tool_contract_recovery:v2:seed-746f6f6c00000001",
+          "contract_sha256": "sha256:0e6963e736d210d60df264a22f2f43f58dd494831a6ed1a6bee9a3de22e67eab",
+          "difficulty_weight": 4,
+          "execution_kind": "harness_turn",
+          "inputs_sha256": "sha256:45962aba56ce4f173fa009716628a8316a2141e9de9d5355169ba9a031e25972",
+          "judge_required": false,
+          "module": "m6",
+          "required_capabilities": [
+            "e2e::control-plane-v1",
+            "iii::functions"
+          ],
+          "requirements": [],
+          "resource_envelope": {
+            "execution": {
+              "max_output_tokens": 12288,
+              "max_total_tokens": 200000,
+              "max_turns": 12,
+              "stuck_timeout_seconds": 360
+            }
+          },
+          "scenario_id": "tool_contract_recovery",
+          "scenario_version": 2,
+          "seed": 8390047140461674497
+        },
+        {
+          "case_id": "persistent_state:v1:seed-9f29cd67ed8f57ae",
+          "contract_sha256": "sha256:95f2e45b0f59ad6c8f377a79042bb6968da7577ac8c90b003a2fec2302438275",
+          "difficulty_weight": 2,
+          "execution_kind": "harness_turn",
+          "inputs_sha256": "sha256:79b6151d21c29d489d9dd4313f71aee2d1d4760828fd58faf16e83eec0b33ea8",
+          "judge_required": true,
+          "module": "m1",
+          "required_capabilities": [
+            "iii::functions",
+            "iii::database",
+            "iii::state"
+          ],
+          "requirements": [],
+          "resource_envelope": {
+            "execution": {
+              "max_output_tokens": 8192,
+              "max_total_tokens": 160000,
+              "max_turns": 24,
+              "max_validation_retries": 1,
+              "stuck_timeout_seconds": 300
+            }
+          },
+          "scenario_id": "persistent_state",
+          "scenario_version": 1,
+          "seed": 11468923772326598574
+        },
+        {
+          "case_id": "timer_wake:v6:seed-42f1bc17256cf7c7",
+          "contract_sha256": "sha256:946e6c15f5a7a1c0f1bb9bec343c6212621b7501188e9a438cdff0b1cf98eb83",
+          "difficulty_weight": 2,
+          "execution_kind": "harness_turn",
+          "inputs_sha256": "sha256:110c98169deead371a61c0de6c41aef4bef5c43c63de58b1e4439a8dac673237",
+          "judge_required": false,
+          "module": "m3",
+          "required_capabilities": [
+            "e2e::control-plane-v1",
+            "iii::functions",
+            "iii::state",
+            "iii::triggers"
+          ],
+          "requirements": [],
+          "resource_envelope": {
+            "execution": {
+              "max_output_tokens": 8192,
+              "max_total_tokens": 400000,
+              "max_turns": 24,
+              "stuck_timeout_seconds": 120
+            }
+          },
+          "scenario_id": "timer_wake",
+          "scenario_version": 6,
+          "seed": 4823843483488679879
+        },
+        {
+          "case_id": "shell_coder_sandbox:v6:seed-0000000000000803",
+          "contract_sha256": "sha256:b8028791b71172fdb80f1a99f0b9f2fd3eb9def994aa7233a091cbbd2c4cf3fa",
+          "difficulty_weight": 4,
+          "execution_kind": "harness_turn",
+          "inputs_sha256": "sha256:96960b44eae8106098e94a2a78296e6eecf14cd8074416a9b9316ee6dc8fe0df",
+          "judge_required": false,
+          "module": "m5",
+          "required_capabilities": [
+            "e2e::control-plane-v1",
+            "iii::functions",
+            "iii::registry",
+            "iii::coder",
+            "iii::shell"
+          ],
+          "requirements": [
+            "Pinned shared engineering fixture"
+          ],
+          "resource_envelope": {
+            "execution": {
+              "max_output_tokens": 16384,
+              "max_total_tokens": 1000000,
+              "max_turns": 56,
+              "stuck_timeout_seconds": 900
+            }
+          },
+          "scenario_id": "shell_coder_sandbox",
+          "scenario_version": 6,
+          "seed": 2051
+        }
+      ],
+      "id": "smoke",
+      "judge_required": true,
+      "label": "Smoke",
+      "metrics": [
+        "execution_reliability",
+        "completion_rate",
+        "objective_score_coverage"
+      ],
+      "profile_sha256": "sha256:0e88ee45a461b3ff7ac9c15fd016e1a707c1ae7acc7bdf72bb2a208b9dc9362f",
+      "protected_supervisor_required": false,
+      "purpose": "Verify essential behavior in the published stack.",
+      "repetitions": 1,
+      "scenario_ids": [
+        "minimal_path",
+        "tool_contract_recovery",
+        "persistent_state",
+        "timer_wake",
+        "shell_coder_sandbox"
+      ],
+      "technical_retries": 0
+    },
+    {
+      "budget": {
+        "fault_budget_separate": false,
+        "fault_runs": 0,
+        "max_concurrent_groups": 1,
+        "planned_runs": 12,
+        "scenario_runs": 12,
+        "scope": "turn sum counts per-session limits, not a whole-workflow ceiling; tokens cover subject only; setup, judge, capture and cleanup are additional",
+        "session_turn_limit_sum": 692,
+        "subject_token_limit": 8910000,
+        "unbounded_token_cases": []
+      },
+      "campaigns": [
+        {
+          "campaign_id": "regression-r01",
+          "failure_policy": "advisory",
+          "groups": [
+            {
+              "difficulty_weight": 2,
+              "execution_kind": "harness_turn",
+              "id": "case-minimal-path",
+              "runs": 1,
+              "scenarios": [
+                "minimal_path"
+              ],
+              "technical_retries": 1
+            },
+            {
+              "difficulty_weight": 4,
+              "execution_kind": "harness_turn",
+              "id": "case-tool-contract-recovery",
+              "runs": 1,
+              "scenarios": [
+                "tool_contract_recovery"
+              ],
+              "technical_retries": 1
+            },
+            {
+              "difficulty_weight": 2,
+              "execution_kind": "harness_turn",
+              "id": "case-persistent-state",
+              "runs": 1,
+              "scenarios": [
+                "persistent_state"
+              ],
+              "technical_retries": 1
+            },
+            {
+              "difficulty_weight": 2,
+              "execution_kind": "harness_turn",
+              "id": "case-timer-wake",
+              "runs": 1,
+              "scenarios": [
+                "timer_wake"
+              ],
+              "technical_retries": 1
+            },
+            {
+              "difficulty_weight": 4,
+              "execution_kind": "harness_turn",
+              "id": "case-shell-coder-sandbox",
+              "runs": 1,
+              "scenarios": [
+                "shell_coder_sandbox"
+              ],
+              "technical_retries": 1
+            },
+            {
+              "difficulty_weight": 2,
+              "execution_kind": "harness_turn",
+              "id": "case-performance-regression",
+              "runs": 1,
+              "scenarios": [
+                "performance_regression"
+              ],
+              "technical_retries": 1
+            },
+            {
+              "difficulty_weight": 4,
+              "execution_kind": "harness_turn",
+              "id": "case-git-regression-forensics",
+              "runs": 1,
+              "scenarios": [
+                "git_regression_forensics"
+              ],
+              "technical_retries": 1
+            },
+            {
+              "difficulty_weight": 2,
+              "execution_kind": "harness_turn",
+              "id": "case-database-migration-recovery",
+              "runs": 1,
+              "scenarios": [
+                "database_migration_recovery"
+              ],
+              "technical_retries": 1
+            },
+            {
+              "difficulty_weight": 3,
+              "execution_kind": "harness_turn",
+              "id": "case-contention-ledger",
+              "runs": 1,
+              "scenarios": [
+                "contention_ledger"
+              ],
+              "technical_retries": 1
+            },
+            {
+              "difficulty_weight": 2,
+              "execution_kind": "composite_flow",
+              "id": "case-swe-config-isolation",
+              "runs": 1,
+              "scenarios": [
+                "swe_config_isolation"
+              ],
+              "technical_retries": 0
+            },
+            {
+              "difficulty_weight": 2,
+              "execution_kind": "composite_flow",
+              "id": "case-swe-cache-invalidation",
+              "runs": 1,
+              "scenarios": [
+                "swe_cache_invalidation"
+              ],
+              "technical_retries": 0
+            },
+            {
+              "difficulty_weight": 2,
+              "execution_kind": "composite_flow",
+              "id": "case-swe-replay-recovery",
+              "runs": 1,
+              "scenarios": [
+                "swe_replay_recovery"
+              ],
+              "technical_retries": 0
+            }
+          ],
+          "kind": "harness-e2e-campaign",
+          "lane": "local-regression",
+          "scoring_profile": "difficulty-weighted-v1",
+          "test_plan": {
+            "campaign_sha256": "sha256:bf41991b59ffe278cb76e4ec466691a4890cd5035c225871af121940147ff6b6",
+            "definition_sha256": "sha256:47047f9d7c7145682c1930bd6e610b39af4dc1861d0d8f9247506357f1b6ded1",
+            "plan_id": "harness",
+            "profile_id": "regression",
+            "profile_sha256": "sha256:3451fab1157bced8898b3adcb96ed8666bf45347e2a67ab11877913f174d5523",
+            "repetition": 1,
+            "repetitions": 1,
+            "version": 1
+          }
+        }
+      ],
+      "cases": [
+        {
+          "case_id": "minimal_path:v2:seed-b49253410830d39e",
+          "contract_sha256": "sha256:0e421ac8cb114db38c6b654db4e981455fb937f661aa70bf613fc3b9224fa9a0",
+          "difficulty_weight": 2,
+          "execution_kind": "harness_turn",
+          "inputs_sha256": "sha256:7019cbe5103fd6160825b74082d4ee1414ec4fdf47f97524502fdeb8c818b52a",
+          "judge_required": true,
+          "module": "m1",
+          "required_capabilities": [
+            "iii::functions",
+            "iii::database",
+            "iii::state"
+          ],
+          "requirements": [],
+          "resource_envelope": {
+            "execution": {
+              "max_output_tokens": 8192,
+              "max_total_tokens": 160000,
+              "max_turns": 24,
+              "max_validation_retries": 1,
+              "stuck_timeout_seconds": 300
+            }
+          },
+          "scenario_id": "minimal_path",
+          "scenario_version": 2,
+          "seed": 13011553812202181534
+        },
+        {
+          "case_id": "tool_contract_recovery:v2:seed-746f6f6c00000001",
+          "contract_sha256": "sha256:0e6963e736d210d60df264a22f2f43f58dd494831a6ed1a6bee9a3de22e67eab",
+          "difficulty_weight": 4,
+          "execution_kind": "harness_turn",
+          "inputs_sha256": "sha256:45962aba56ce4f173fa009716628a8316a2141e9de9d5355169ba9a031e25972",
+          "judge_required": false,
+          "module": "m6",
+          "required_capabilities": [
+            "e2e::control-plane-v1",
+            "iii::functions"
+          ],
+          "requirements": [],
+          "resource_envelope": {
+            "execution": {
+              "max_output_tokens": 12288,
+              "max_total_tokens": 200000,
+              "max_turns": 12,
+              "stuck_timeout_seconds": 360
+            }
+          },
+          "scenario_id": "tool_contract_recovery",
+          "scenario_version": 2,
+          "seed": 8390047140461674497
+        },
+        {
+          "case_id": "persistent_state:v1:seed-9f29cd67ed8f57ae",
+          "contract_sha256": "sha256:95f2e45b0f59ad6c8f377a79042bb6968da7577ac8c90b003a2fec2302438275",
+          "difficulty_weight": 2,
+          "execution_kind": "harness_turn",
+          "inputs_sha256": "sha256:79b6151d21c29d489d9dd4313f71aee2d1d4760828fd58faf16e83eec0b33ea8",
+          "judge_required": true,
+          "module": "m1",
+          "required_capabilities": [
+            "iii::functions",
+            "iii::database",
+            "iii::state"
+          ],
+          "requirements": [],
+          "resource_envelope": {
+            "execution": {
+              "max_output_tokens": 8192,
+              "max_total_tokens": 160000,
+              "max_turns": 24,
+              "max_validation_retries": 1,
+              "stuck_timeout_seconds": 300
+            }
+          },
+          "scenario_id": "persistent_state",
+          "scenario_version": 1,
+          "seed": 11468923772326598574
+        },
+        {
+          "case_id": "timer_wake:v6:seed-42f1bc17256cf7c7",
+          "contract_sha256": "sha256:946e6c15f5a7a1c0f1bb9bec343c6212621b7501188e9a438cdff0b1cf98eb83",
+          "difficulty_weight": 2,
+          "execution_kind": "harness_turn",
+          "inputs_sha256": "sha256:110c98169deead371a61c0de6c41aef4bef5c43c63de58b1e4439a8dac673237",
+          "judge_required": false,
+          "module": "m3",
+          "required_capabilities": [
+            "e2e::control-plane-v1",
+            "iii::functions",
+            "iii::state",
+            "iii::triggers"
+          ],
+          "requirements": [],
+          "resource_envelope": {
+            "execution": {
+              "max_output_tokens": 8192,
+              "max_total_tokens": 400000,
+              "max_turns": 24,
+              "stuck_timeout_seconds": 120
+            }
+          },
+          "scenario_id": "timer_wake",
+          "scenario_version": 6,
+          "seed": 4823843483488679879
+        },
+        {
+          "case_id": "shell_coder_sandbox:v6:seed-0000000000000803",
+          "contract_sha256": "sha256:b8028791b71172fdb80f1a99f0b9f2fd3eb9def994aa7233a091cbbd2c4cf3fa",
+          "difficulty_weight": 4,
+          "execution_kind": "harness_turn",
+          "inputs_sha256": "sha256:96960b44eae8106098e94a2a78296e6eecf14cd8074416a9b9316ee6dc8fe0df",
+          "judge_required": false,
+          "module": "m5",
+          "required_capabilities": [
+            "e2e::control-plane-v1",
+            "iii::functions",
+            "iii::registry",
+            "iii::coder",
+            "iii::shell"
+          ],
+          "requirements": [
+            "Pinned shared engineering fixture"
+          ],
+          "resource_envelope": {
+            "execution": {
+              "max_output_tokens": 16384,
+              "max_total_tokens": 1000000,
+              "max_turns": 56,
+              "stuck_timeout_seconds": 900
+            }
+          },
+          "scenario_id": "shell_coder_sandbox",
+          "scenario_version": 6,
+          "seed": 2051
+        },
+        {
+          "case_id": "performance_regression:v2:seed-0000000000000411",
+          "contract_sha256": "sha256:d812bfe59f2b073da9c187a5bb81652ff91d3d22ab62af1d0ad84a2a507ecf08",
+          "difficulty_weight": 2,
+          "execution_kind": "harness_turn",
+          "inputs_sha256": "sha256:71335477a91766edc427d640020f8f503786c07fde6cffd91b969d5cc32c9e9d",
+          "judge_required": false,
+          "module": "m5",
+          "required_capabilities": [
+            "e2e::control-plane-v1",
+            "iii::functions",
+            "e2e::filesystem",
+            "e2e::shell",
+            "python3"
+          ],
+          "requirements": [],
+          "resource_envelope": {
+            "execution": {
+              "max_output_tokens": 16384,
+              "max_total_tokens": 400000,
+              "max_turns": 32,
+              "stuck_timeout_seconds": 600
+            }
+          },
+          "scenario_id": "performance_regression",
+          "scenario_version": 2,
+          "seed": 1041
+        },
+        {
+          "case_id": "git_regression_forensics:v2:seed-db29ba9b6a066390",
+          "contract_sha256": "sha256:cb4d778f2683c8e2914a7cdf502db9b3f4baadbe08c2c3eed590a91ff1e0c37e",
+          "difficulty_weight": 4,
+          "execution_kind": "harness_turn",
+          "inputs_sha256": "sha256:948606dc0d1d7b455f26811f925d20391647e6cc2bd5e571228d308cf2e6736f",
+          "judge_required": false,
+          "module": "m5",
+          "required_capabilities": [
+            "e2e::control-plane-v1",
+            "iii::registry",
+            "iii::shell",
+            "git::offline-bundle"
+          ],
+          "requirements": [],
+          "resource_envelope": {
+            "execution": {
+              "max_output_tokens": 12288,
+              "max_total_tokens": 600000,
+              "max_turns": 30,
+              "stuck_timeout_seconds": 600
+            }
+          },
+          "scenario_id": "git_regression_forensics",
+          "scenario_version": 2,
+          "seed": 15792358745012855696
+        },
+        {
+          "case_id": "database_migration_recovery:v2:seed-b42c5f3329163313",
+          "contract_sha256": "sha256:168a302a7c5aca8f9733394f85958f721c81c4107447cb0fcc03d4fd299d0e66",
+          "difficulty_weight": 2,
+          "execution_kind": "harness_turn",
+          "inputs_sha256": "sha256:d8ae845daad0d367d7d1b7a6005ce0e0f7e58ffae0472711334ec7436e79f11d",
+          "judge_required": true,
+          "module": "m1",
+          "required_capabilities": [
+            "iii::functions",
+            "iii::database",
+            "iii::state"
+          ],
+          "requirements": [],
+          "resource_envelope": {
+            "execution": {
+              "max_output_tokens": 8192,
+              "max_total_tokens": 160000,
+              "max_turns": 24,
+              "max_validation_retries": 1,
+              "stuck_timeout_seconds": 300
+            }
+          },
+          "scenario_id": "database_migration_recovery",
+          "scenario_version": 2,
+          "seed": 12982856499139588883
+        },
+        {
+          "case_id": "contention_ledger:v2:seed-e4977fa3ef3182a8",
+          "contract_sha256": "sha256:969cc2109b3408e3e5717580a08dad32541a1f39c4c72dff38048d390f4f4fbf",
+          "difficulty_weight": 3,
+          "execution_kind": "harness_turn",
+          "inputs_sha256": "sha256:388844ac29b55725954fe84a4b86d538f4e21da4fd7e8e6e3bda95d0284e4dcf",
+          "judge_required": false,
+          "module": "m4",
+          "required_capabilities": [
+            "e2e::control-plane-v1",
+            "iii::functions",
+            "iii::database",
+            "iii::state",
+            "iii::triggers",
+            "e2e::subagents"
+          ],
+          "requirements": [],
+          "resource_envelope": {
+            "execution": {
+              "max_output_tokens": 8192,
+              "max_total_tokens": 1000000,
+              "max_turns": 24,
+              "stuck_timeout_seconds": 420
+            }
+          },
+          "scenario_id": "contention_ledger",
+          "scenario_version": 2,
+          "seed": 16471774504200274600
+        },
+        {
+          "case_id": "swe_config_isolation:v1:seed-c10e26e2ce32dea6",
+          "contract_sha256": "sha256:1db94487b74ab7f6a6359c8fa926a8ff38e92c999d01591185bdc50ea58d676b",
+          "difficulty_weight": 2,
+          "execution_kind": "composite_flow",
+          "inputs_sha256": "sha256:2787adec1569a371f520a106dd5e336043b1e039389ff651ab6c0003aef57735",
+          "judge_required": false,
+          "module": "m5",
+          "required_capabilities": [
+            "iii::functions",
+            "e2e::control-plane-v1",
+            "swe::isolated-python-workspace"
+          ],
+          "requirements": [
+            "Isolated service workspace and trusted SWE grader"
+          ],
+          "resource_envelope": {
+            "execution": {
+              "max_output_tokens": 32768,
+              "max_total_tokens": 250000,
+              "max_turns": 64,
+              "stuck_timeout_seconds": 600
+            }
+          },
+          "scenario_id": "swe_config_isolation",
+          "scenario_version": 1,
+          "seed": 13911099054557945510
+        },
+        {
+          "case_id": "swe_cache_invalidation:v1:seed-45d844fc708a7578",
+          "contract_sha256": "sha256:7889003fd18a4235bf4fd76e84448bf833c43d830fb823306a30eedd038ecd2a",
+          "difficulty_weight": 2,
+          "execution_kind": "composite_flow",
+          "inputs_sha256": "sha256:d20b7c8ad34f70e8edc4ff2684bbea9da6e108e65f86e6dad617d4d7767505ba",
+          "judge_required": false,
+          "module": "m5",
+          "required_capabilities": [
+            "iii::functions",
+            "e2e::control-plane-v1",
+            "swe::isolated-python-workspace"
+          ],
+          "requirements": [
+            "Isolated service workspace and trusted SWE grader"
+          ],
+          "resource_envelope": {
+            "execution": {
+              "max_output_tokens": 32768,
+              "max_total_tokens": 250000,
+              "max_turns": 64,
+              "stuck_timeout_seconds": 600
+            }
+          },
+          "scenario_id": "swe_cache_invalidation",
+          "scenario_version": 1,
+          "seed": 5032848434597098872
+        },
+        {
+          "case_id": "swe_replay_recovery:v1:seed-767a302640611a2a",
+          "contract_sha256": "sha256:c0ecec49f2377e70f9b75f67003c2f25ef65fb1544eaf06efe52d2df7c4ca594",
+          "difficulty_weight": 2,
+          "execution_kind": "composite_flow",
+          "inputs_sha256": "sha256:a2acb97c344f271f73610f7f32f01c97ca87d5dd4c8152d36f2d4be0b44ba1f9",
+          "judge_required": false,
+          "module": "m5",
+          "required_capabilities": [
+            "iii::functions",
+            "e2e::control-plane-v1",
+            "swe::isolated-python-workspace"
+          ],
+          "requirements": [
+            "Isolated service workspace and trusted SWE grader"
+          ],
+          "resource_envelope": {
+            "execution": {
+              "max_output_tokens": 32768,
+              "max_total_tokens": 250000,
+              "max_turns": 64,
+              "stuck_timeout_seconds": 600
+            }
+          },
+          "scenario_id": "swe_replay_recovery",
+          "scenario_version": 1,
+          "seed": 8537188984481192490
+        }
+      ],
+      "id": "regression",
+      "judge_required": true,
+      "label": "Regression",
+      "metrics": [
+        "execution_reliability",
+        "completion_rate",
+        "deliverable_success"
+      ],
+      "profile_sha256": "sha256:3451fab1157bced8898b3adcb96ed8666bf45347e2a67ab11877913f174d5523",
+      "protected_supervisor_required": false,
+      "purpose": "Detect broken behavior across representative capabilities.",
+      "repetitions": 1,
+      "scenario_ids": [
+        "minimal_path",
+        "tool_contract_recovery",
+        "persistent_state",
+        "timer_wake",
+        "shell_coder_sandbox",
+        "performance_regression",
+        "git_regression_forensics",
+        "database_migration_recovery",
+        "contention_ledger",
+        "swe_config_isolation",
+        "swe_cache_invalidation",
+        "swe_replay_recovery"
+      ],
+      "technical_retries": 1
+    },
+    {
+      "budget": {
+        "fault_budget_separate": false,
+        "fault_runs": 0,
+        "max_concurrent_groups": 1,
+        "planned_runs": 47,
+        "scenario_runs": 47,
+        "scope": "turn sum counts per-session limits, not a whole-workflow ceiling; tokens cover subject only; setup, judge, capture and cleanup are additional",
+        "session_turn_limit_sum": 1496,
+        "subject_token_limit": null,
+        "unbounded_token_cases": [
+          "context_pressure",
+          "wake_chain_soak"
+        ]
+      },
+      "campaigns": [
+        {
+          "campaign_id": "capability-r01",
+          "failure_policy": "advisory",
+          "groups": [
+            {
+              "difficulty_weight": 2,
+              "execution_kind": "harness_turn",
+              "id": "case-minimal-path",
+              "runs": 1,
+              "scenarios": [
+                "minimal_path"
+              ],
+              "technical_retries": 0
+            },
+            {
+              "difficulty_weight": 2,
+              "execution_kind": "harness_turn",
+              "id": "case-persistent-state",
+              "runs": 1,
+              "scenarios": [
+                "persistent_state"
+              ],
+              "technical_retries": 0
+            },
+            {
+              "difficulty_weight": 2,
+              "execution_kind": "harness_turn",
+              "id": "case-insert-record",
+              "runs": 1,
+              "scenarios": [
+                "insert_record"
+              ],
+              "technical_retries": 0
+            },
+            {
+              "difficulty_weight": 2,
+              "execution_kind": "harness_turn",
+              "id": "case-sequential-pipeline",
+              "runs": 1,
+              "scenarios": [
+                "sequential_pipeline"
+              ],
+              "technical_retries": 0
+            },
+            {
+              "difficulty_weight": 2,
+              "execution_kind": "harness_turn",
+              "id": "case-database-migration-recovery",
+              "runs": 1,
+              "scenarios": [
+                "database_migration_recovery"
+              ],
+              "technical_retries": 0
+            },
+            {
+              "difficulty_weight": 1,
+              "execution_kind": "harness_turn",
+              "id": "case-context-pressure",
+              "runs": 1,
+              "scenarios": [
+                "context_pressure"
+              ],
+              "technical_retries": 0
+            },
+            {
+              "difficulty_weight": 2,
+              "execution_kind": "harness_turn",
+              "id": "case-moving-target",
+              "runs": 1,
+              "scenarios": [
+                "moving_target"
+              ],
+              "technical_retries": 0
+            },
+            {
+              "difficulty_weight": 2,
+              "execution_kind": "harness_turn",
+              "id": "case-mechanical-reaction",
+              "runs": 1,
+              "scenarios": [
+                "mechanical_reaction"
+              ],
+              "technical_retries": 0
+            },
+            {
+              "difficulty_weight": 2,
+              "execution_kind": "harness_turn",
+              "id": "case-timer-wake",
+              "runs": 1,
+              "scenarios": [
+                "timer_wake"
+              ],
+              "technical_retries": 0
+            },
+            {
+              "difficulty_weight": 2,
+              "execution_kind": "harness_turn",
+              "id": "case-validation-loop",
+              "runs": 1,
+              "scenarios": [
+                "validation_loop"
+              ],
+              "technical_retries": 0
+            },
+            {
+              "difficulty_weight": 2,
+              "execution_kind": "harness_turn",
+              "id": "case-validation-self-repair",
+              "runs": 1,
+              "scenarios": [
+                "validation_self_repair"
+              ],
+              "technical_retries": 0
+            },
+            {
+              "difficulty_weight": 2,
+              "execution_kind": "harness_turn",
+              "id": "case-validation-scope-enforcement",
+              "runs": 1,
+              "scenarios": [
+                "validation_scope_enforcement"
+              ],
+              "technical_retries": 0
+            },
+            {
+              "difficulty_weight": 2,
+              "execution_kind": "harness_turn",
+              "id": "case-validation-chain",
+              "runs": 1,
+              "scenarios": [
+                "validation_chain"
+              ],
+              "technical_retries": 0
+            },
+            {
+              "difficulty_weight": 2,
+              "execution_kind": "harness_turn",
+              "id": "case-cleanup-under-failure",
+              "runs": 1,
+              "scenarios": [
+                "cleanup_under_failure"
+              ],
+              "technical_retries": 0
+            },
+            {
+              "difficulty_weight": 2,
+              "execution_kind": "harness_turn",
+              "id": "case-poison-message",
+              "runs": 1,
+              "scenarios": [
+                "poison_message"
+              ],
+              "technical_retries": 0
+            },
+            {
+              "difficulty_weight": 2,
+              "execution_kind": "harness_turn",
+              "id": "case-wake-chain-soak",
+              "runs": 1,
+              "scenarios": [
+                "wake_chain_soak"
+              ],
+              "technical_retries": 0
+            },
+            {
+              "difficulty_weight": 3,
+              "execution_kind": "harness_turn",
+              "id": "case-contention-ledger",
+              "runs": 1,
+              "scenarios": [
+                "contention_ledger"
+              ],
+              "technical_retries": 0
+            },
+            {
+              "difficulty_weight": 3,
+              "execution_kind": "harness_turn",
+              "id": "case-quorum-fan-in",
+              "runs": 1,
+              "scenarios": [
+                "quorum_fan_in"
+              ],
+              "technical_retries": 0
+            },
+            {
+              "difficulty_weight": 4,
+              "execution_kind": "harness_turn",
+              "id": "case-subagent-validation",
+              "runs": 1,
+              "scenarios": [
+                "subagent_validation"
+              ],
+              "technical_retries": 0
+            },
+            {
+              "difficulty_weight": 4,
+              "execution_kind": "harness_turn",
+              "id": "case-subagent-validation-failure",
+              "runs": 1,
+              "scenarios": [
+                "subagent_validation_failure"
+              ],
+              "technical_retries": 0
+            },
+            {
+              "difficulty_weight": 4,
+              "execution_kind": "harness_turn",
+              "id": "case-fanout-ladder",
+              "runs": 1,
+              "scenarios": [
+                "fanout_ladder"
+              ],
+              "technical_retries": 0
+            },
+            {
+              "difficulty_weight": 4,
+              "execution_kind": "harness_turn",
+              "id": "case-depth-ladder",
+              "runs": 1,
+              "scenarios": [
+                "depth_ladder"
+              ],
+              "technical_retries": 0
+            },
+            {
+              "difficulty_weight": 4,
+              "execution_kind": "harness_turn",
+              "id": "case-research-pipeline",
+              "runs": 1,
+              "scenarios": [
+                "research_pipeline"
+              ],
+              "technical_retries": 0
+            },
+            {
+              "difficulty_weight": 4,
+              "execution_kind": "harness_turn",
+              "id": "case-receiving-operation",
+              "runs": 1,
+              "scenarios": [
+                "receiving_operation"
+              ],
+              "technical_retries": 0
+            },
+            {
+              "difficulty_weight": 4,
+              "execution_kind": "harness_turn",
+              "id": "case-shell-coder-sandbox",
+              "runs": 1,
+              "scenarios": [
+                "shell_coder_sandbox"
+              ],
+              "technical_retries": 0
+            },
+            {
+              "difficulty_weight": 2,
+              "execution_kind": "harness_turn",
+              "id": "case-performance-regression",
+              "runs": 1,
+              "scenarios": [
+                "performance_regression"
+              ],
+              "technical_retries": 0
+            },
+            {
+              "difficulty_weight": 2,
+              "execution_kind": "harness_turn",
+              "id": "case-chess-engine-build",
+              "runs": 1,
+              "scenarios": [
+                "chess_engine_build"
+              ],
+              "technical_retries": 0
+            },
+            {
+              "difficulty_weight": 4,
+              "execution_kind": "harness_turn",
+              "id": "case-git-regression-forensics",
+              "runs": 1,
+              "scenarios": [
+                "git_regression_forensics"
+              ],
+              "technical_retries": 0
+            },
+            {
+              "difficulty_weight": 4,
+              "execution_kind": "harness_turn",
+              "id": "case-engineering-ticket-git-handoff",
+              "runs": 1,
+              "scenarios": [
+                "engineering_ticket_git_handoff"
+              ],
+              "technical_retries": 0
+            },
+            {
+              "difficulty_weight": 2,
+              "execution_kind": "composite_flow",
+              "id": "case-swe-config-isolation",
+              "runs": 1,
+              "scenarios": [
+                "swe_config_isolation"
+              ],
+              "technical_retries": 0
+            },
+            {
+              "difficulty_weight": 2,
+              "execution_kind": "composite_flow",
+              "id": "case-swe-cache-invalidation",
+              "runs": 1,
+              "scenarios": [
+                "swe_cache_invalidation"
+              ],
+              "technical_retries": 0
+            },
+            {
+              "difficulty_weight": 2,
+              "execution_kind": "composite_flow",
+              "id": "case-swe-batch-replay",
+              "runs": 1,
+              "scenarios": [
+                "swe_batch_replay"
+              ],
+              "technical_retries": 0
+            },
+            {
+              "difficulty_weight": 2,
+              "execution_kind": "composite_flow",
+              "id": "case-swe-replay-recovery",
+              "runs": 1,
+              "scenarios": [
+                "swe_replay_recovery"
+              ],
+              "technical_retries": 0
+            },
+            {
+              "difficulty_weight": 5,
+              "execution_kind": "composite_flow",
+              "id": "case-swe-contract-migration",
+              "runs": 1,
+              "scenarios": [
+                "swe_contract_migration"
+              ],
+              "technical_retries": 0
+            },
+            {
+              "difficulty_weight": 2,
+              "execution_kind": "composite_flow",
+              "id": "case-swe-tenant-isolation",
+              "runs": 1,
+              "scenarios": [
+                "swe_tenant_isolation"
+              ],
+              "technical_retries": 0
+            },
+            {
+              "difficulty_weight": 2,
+              "execution_kind": "composite_flow",
+              "id": "case-swe-replay-performance",
+              "runs": 1,
+              "scenarios": [
+                "swe_replay_performance"
+              ],
+              "technical_retries": 0
+            },
+            {
+              "difficulty_weight": 2,
+              "execution_kind": "composite_flow",
+              "id": "case-swe-release-handoff",
+              "runs": 1,
+              "scenarios": [
+                "swe_release_handoff"
+              ],
+              "technical_retries": 0
+            },
+            {
+              "difficulty_weight": 4,
+              "execution_kind": "harness_turn",
+              "id": "case-tool-contract-recovery",
+              "runs": 1,
+              "scenarios": [
+                "tool_contract_recovery"
+              ],
+              "technical_retries": 0
+            },
+            {
+              "difficulty_weight": 4,
+              "execution_kind": "harness_turn",
+              "id": "case-cross-app-transaction",
+              "runs": 1,
+              "scenarios": [
+                "cross_app_transaction"
+              ],
+              "technical_retries": 0
+            },
+            {
+              "difficulty_weight": 4,
+              "execution_kind": "harness_turn",
+              "id": "case-browser-cross-site",
+              "runs": 1,
+              "scenarios": [
+                "browser_cross_site"
+              ],
+              "technical_retries": 0
+            },
+            {
+              "difficulty_weight": 2,
+              "execution_kind": "harness_turn",
+              "id": "case-prompt-injection-resilience",
+              "runs": 1,
+              "scenarios": [
+                "prompt_injection_resilience"
+              ],
+              "technical_retries": 0
+            },
+            {
+              "difficulty_weight": 2,
+              "execution_kind": "harness_turn",
+              "id": "case-secret-hygiene",
+              "runs": 1,
+              "scenarios": [
+                "secret_hygiene"
+              ],
+              "technical_retries": 0
+            },
+            {
+              "difficulty_weight": 4,
+              "execution_kind": "composite_flow",
+              "id": "case-security-review",
+              "runs": 1,
+              "scenarios": [
+                "security_review"
+              ],
+              "technical_retries": 0
+            },
+            {
+              "difficulty_weight": 4,
+              "execution_kind": "scripted_dialogue",
+              "id": "case-policy-bound-action",
+              "runs": 1,
+              "scenarios": [
+                "policy_bound_action"
+              ],
+              "technical_retries": 0
+            },
+            {
+              "difficulty_weight": 5,
+              "execution_kind": "adaptive_flow",
+              "id": "case-incident-response",
+              "runs": 1,
+              "scenarios": [
+                "incident_response"
+              ],
+              "technical_retries": 0
+            },
+            {
+              "difficulty_weight": 5,
+              "execution_kind": "adaptive_flow",
+              "id": "case-cross-repo-contract-migration",
+              "runs": 1,
+              "scenarios": [
+                "cross_repo_contract_migration"
+              ],
+              "technical_retries": 0
+            },
+            {
+              "difficulty_weight": 5,
+              "execution_kind": "adaptive_flow",
+              "id": "case-release-train-recovery",
+              "runs": 1,
+              "scenarios": [
+                "release_train_recovery"
+              ],
+              "technical_retries": 0
+            }
+          ],
+          "kind": "harness-e2e-campaign",
+          "lane": "local-capability",
+          "scoring_profile": "difficulty-weighted-v1",
+          "test_plan": {
+            "campaign_sha256": "sha256:faceeafa13953e1ea9c8c49d5d4e7f27776cc5e0a14982ce274c99960d29bb44",
+            "definition_sha256": "sha256:47047f9d7c7145682c1930bd6e610b39af4dc1861d0d8f9247506357f1b6ded1",
+            "plan_id": "harness",
+            "profile_id": "capability",
+            "profile_sha256": "sha256:62c30b6e0f6722d911bf14c3e11ed8c6e180438a86dc8c525ef892d65b2c9244",
+            "repetition": 1,
+            "repetitions": 1,
+            "version": 1
+          }
+        }
+      ],
+      "cases": [
+        {
+          "case_id": "minimal_path:v2:seed-b49253410830d39e",
+          "contract_sha256": "sha256:0e421ac8cb114db38c6b654db4e981455fb937f661aa70bf613fc3b9224fa9a0",
+          "difficulty_weight": 2,
+          "execution_kind": "harness_turn",
+          "inputs_sha256": "sha256:7019cbe5103fd6160825b74082d4ee1414ec4fdf47f97524502fdeb8c818b52a",
+          "judge_required": true,
+          "module": "m1",
+          "required_capabilities": [
+            "iii::functions",
+            "iii::database",
+            "iii::state"
+          ],
+          "requirements": [],
+          "resource_envelope": {
+            "execution": {
+              "max_output_tokens": 8192,
+              "max_total_tokens": 160000,
+              "max_turns": 24,
+              "max_validation_retries": 1,
+              "stuck_timeout_seconds": 300
+            }
+          },
+          "scenario_id": "minimal_path",
+          "scenario_version": 2,
+          "seed": 13011553812202181534
+        },
+        {
+          "case_id": "persistent_state:v1:seed-9f29cd67ed8f57ae",
+          "contract_sha256": "sha256:95f2e45b0f59ad6c8f377a79042bb6968da7577ac8c90b003a2fec2302438275",
+          "difficulty_weight": 2,
+          "execution_kind": "harness_turn",
+          "inputs_sha256": "sha256:79b6151d21c29d489d9dd4313f71aee2d1d4760828fd58faf16e83eec0b33ea8",
+          "judge_required": true,
+          "module": "m1",
+          "required_capabilities": [
+            "iii::functions",
+            "iii::database",
+            "iii::state"
+          ],
+          "requirements": [],
+          "resource_envelope": {
+            "execution": {
+              "max_output_tokens": 8192,
+              "max_total_tokens": 160000,
+              "max_turns": 24,
+              "max_validation_retries": 1,
+              "stuck_timeout_seconds": 300
+            }
+          },
+          "scenario_id": "persistent_state",
+          "scenario_version": 1,
+          "seed": 11468923772326598574
+        },
+        {
+          "case_id": "insert_record:v2:seed-4fe05c80f8dfa3bc",
+          "contract_sha256": "sha256:325bdb8fce097b950bab30f183b6af3752fa4d0e7d7ab381fda7f4feb8ca71d2",
+          "difficulty_weight": 2,
+          "execution_kind": "harness_turn",
+          "inputs_sha256": "sha256:250973e2d48c9e7f4be9d0efbe82980a091bb7edc711f4695752df39e9e44dd2",
+          "judge_required": true,
+          "module": "m1",
+          "required_capabilities": [
+            "iii::functions",
+            "iii::database",
+            "iii::state"
+          ],
+          "requirements": [],
+          "resource_envelope": {
+            "execution": {
+              "max_output_tokens": 8192,
+              "max_total_tokens": 160000,
+              "max_turns": 24,
+              "max_validation_retries": 1,
+              "stuck_timeout_seconds": 300
+            }
+          },
+          "scenario_id": "insert_record",
+          "scenario_version": 2,
+          "seed": 5755702032780469180
+        },
+        {
+          "case_id": "sequential_pipeline:v3:seed-b10fc5b6a3d0d80d",
+          "contract_sha256": "sha256:cefb19fd13c9c36422c492d42f2190b28847d6ceac873b71aebf0ca075a00465",
+          "difficulty_weight": 2,
+          "execution_kind": "harness_turn",
+          "inputs_sha256": "sha256:1935cd05273f02b27f251628aae467418f8189712400c47919f82033904651d3",
+          "judge_required": true,
+          "module": "m1",
+          "required_capabilities": [
+            "iii::functions",
+            "iii::database",
+            "iii::state"
+          ],
+          "requirements": [],
+          "resource_envelope": {
+            "execution": {
+              "max_output_tokens": 8192,
+              "max_total_tokens": 160000,
+              "max_turns": 24,
+              "max_validation_retries": 1,
+              "stuck_timeout_seconds": 300
+            }
+          },
+          "scenario_id": "sequential_pipeline",
+          "scenario_version": 3,
+          "seed": 12758633657586997261
+        },
+        {
+          "case_id": "database_migration_recovery:v2:seed-b42c5f3329163313",
+          "contract_sha256": "sha256:168a302a7c5aca8f9733394f85958f721c81c4107447cb0fcc03d4fd299d0e66",
+          "difficulty_weight": 2,
+          "execution_kind": "harness_turn",
+          "inputs_sha256": "sha256:d8ae845daad0d367d7d1b7a6005ce0e0f7e58ffae0472711334ec7436e79f11d",
+          "judge_required": true,
+          "module": "m1",
+          "required_capabilities": [
+            "iii::functions",
+            "iii::database",
+            "iii::state"
+          ],
+          "requirements": [],
+          "resource_envelope": {
+            "execution": {
+              "max_output_tokens": 8192,
+              "max_total_tokens": 160000,
+              "max_turns": 24,
+              "max_validation_retries": 1,
+              "stuck_timeout_seconds": 300
+            }
+          },
+          "scenario_id": "database_migration_recovery",
+          "scenario_version": 2,
+          "seed": 12982856499139588883
+        },
+        {
+          "case_id": "context_pressure:v4:seed-0000000000000bbb",
+          "contract_sha256": "sha256:ff7a0c3309e43c99358ee774a3355347eb30e008bd23c3f875233328b9471bbb",
+          "difficulty_weight": 1,
+          "execution_kind": "harness_turn",
+          "inputs_sha256": "sha256:64985ff14325eaa89a72e2fd1d70bbbb9fa3f6382b77ef3a0e472c3b0ca0a528",
+          "judge_required": false,
+          "module": "m2",
+          "required_capabilities": [
+            "e2e::control-plane-v1",
+            "iii::functions"
+          ],
+          "requirements": [],
+          "resource_envelope": {
+            "execution": {
+              "max_output_tokens": 16384,
+              "max_turns": 60,
+              "stuck_timeout_seconds": 600
+            }
+          },
+          "scenario_id": "context_pressure",
+          "scenario_version": 4,
+          "seed": 3003
+        },
+        {
+          "case_id": "moving_target:v2:seed-b3d7e8ed72213891",
+          "contract_sha256": "sha256:62a9feac7466b533a684ff7a5884d91c46ce3cd2d427b3f39931cfcd4519cda2",
+          "difficulty_weight": 2,
+          "execution_kind": "harness_turn",
+          "inputs_sha256": "sha256:f0ed0dfb331b9e63a0a05a4c2a1452aecf482759aeb8cfb19737176fe265f56b",
+          "judge_required": false,
+          "module": "m2",
+          "required_capabilities": [
+            "e2e::control-plane-v1",
+            "iii::functions"
+          ],
+          "requirements": [],
+          "resource_envelope": {
+            "execution": {
+              "max_output_tokens": 8192,
+              "max_total_tokens": 200000,
+              "max_turns": 12,
+              "stuck_timeout_seconds": 300
+            }
+          },
+          "scenario_id": "moving_target",
+          "scenario_version": 2,
+          "seed": 12959082559301564561
+        },
+        {
+          "case_id": "mechanical_reaction:v5:seed-e44b446633e05004",
+          "contract_sha256": "sha256:1b3c85450b28f710b376e4dd5b589f0635c43585758d39eaedad515db6059396",
+          "difficulty_weight": 2,
+          "execution_kind": "harness_turn",
+          "inputs_sha256": "sha256:d4e31c53b0f3ce9470db0319857042b71584b015ffd0c87212073a1c31c4a44c",
+          "judge_required": false,
+          "module": "m2",
+          "required_capabilities": [
+            "e2e::control-plane-v1",
+            "iii::functions",
+            "iii::state",
+            "iii::triggers"
+          ],
+          "requirements": [],
+          "resource_envelope": {
+            "execution": {
+              "max_output_tokens": 8192,
+              "max_total_tokens": 250000,
+              "max_turns": 20,
+              "stuck_timeout_seconds": 180
+            }
+          },
+          "scenario_id": "mechanical_reaction",
+          "scenario_version": 5,
+          "seed": 16450317269648560132
+        },
+        {
+          "case_id": "timer_wake:v6:seed-42f1bc17256cf7c7",
+          "contract_sha256": "sha256:946e6c15f5a7a1c0f1bb9bec343c6212621b7501188e9a438cdff0b1cf98eb83",
+          "difficulty_weight": 2,
+          "execution_kind": "harness_turn",
+          "inputs_sha256": "sha256:110c98169deead371a61c0de6c41aef4bef5c43c63de58b1e4439a8dac673237",
+          "judge_required": false,
+          "module": "m3",
+          "required_capabilities": [
+            "e2e::control-plane-v1",
+            "iii::functions",
+            "iii::state",
+            "iii::triggers"
+          ],
+          "requirements": [],
+          "resource_envelope": {
+            "execution": {
+              "max_output_tokens": 8192,
+              "max_total_tokens": 400000,
+              "max_turns": 24,
+              "stuck_timeout_seconds": 120
+            }
+          },
+          "scenario_id": "timer_wake",
+          "scenario_version": 6,
+          "seed": 4823843483488679879
+        },
+        {
+          "case_id": "validation_loop:v5:seed-e03c7c1b584863d5",
+          "contract_sha256": "sha256:585def84f943d12e9cb89c25f9a836a7aedb4581310b91092ca1205fe7af4bbf",
+          "difficulty_weight": 2,
+          "execution_kind": "harness_turn",
+          "inputs_sha256": "sha256:18ae165f28d532cbc319bb96486eaea5d8c6b25c73f89569971be9e8155d9103",
+          "judge_required": false,
+          "module": "m3",
+          "required_capabilities": [
+            "e2e::control-plane-v1",
+            "iii::functions",
+            "iii::database",
+            "iii::state",
+            "iii::triggers"
+          ],
+          "requirements": [],
+          "resource_envelope": {
+            "execution": {
+              "max_output_tokens": 8192,
+              "max_total_tokens": 200000,
+              "max_turns": 16,
+              "stuck_timeout_seconds": 300
+            }
+          },
+          "scenario_id": "validation_loop",
+          "scenario_version": 5,
+          "seed": 16157926019985597397
+        },
+        {
+          "case_id": "validation_self_repair:v5:seed-bee432cb46068137",
+          "contract_sha256": "sha256:1cd09a868f5c54c4fc725dfccbe0bac6c7ac500d68e96e98c7a42d35901fde97",
+          "difficulty_weight": 2,
+          "execution_kind": "harness_turn",
+          "inputs_sha256": "sha256:08ccc145a1359a3835bea64a0a62b8d2fd547685ad14992f778f073a10e2956f",
+          "judge_required": false,
+          "module": "m3",
+          "required_capabilities": [
+            "e2e::control-plane-v1",
+            "iii::functions",
+            "iii::database",
+            "iii::triggers"
+          ],
+          "requirements": [],
+          "resource_envelope": {
+            "execution": {
+              "max_output_tokens": 8192,
+              "max_total_tokens": 200000,
+              "max_turns": 14,
+              "stuck_timeout_seconds": 300
+            }
+          },
+          "scenario_id": "validation_self_repair",
+          "scenario_version": 5,
+          "seed": 13755175010530918711
+        },
+        {
+          "case_id": "validation_scope_enforcement:v5:seed-baa4846209ebe018",
+          "contract_sha256": "sha256:3ae17b1c2b2154bc818816fafa7b0fd9e2637a3fee0392971c548364436a4fa5",
+          "difficulty_weight": 2,
+          "execution_kind": "harness_turn",
+          "inputs_sha256": "sha256:ad506d3bc98960464f786626f071e1e6312085f1bd5365f6805cc45dfee917ca",
+          "judge_required": false,
+          "module": "m3",
+          "required_capabilities": [
+            "e2e::control-plane-v1",
+            "iii::functions",
+            "iii::state",
+            "iii::triggers"
+          ],
+          "requirements": [],
+          "resource_envelope": {
+            "execution": {
+              "max_output_tokens": 8192,
+              "max_total_tokens": 150000,
+              "max_turns": 12,
+              "stuck_timeout_seconds": 300
+            }
+          },
+          "scenario_id": "validation_scope_enforcement",
+          "scenario_version": 5,
+          "seed": 13449019943843258392
+        },
+        {
+          "case_id": "validation_chain:v5:seed-226d3a2498e4d394",
+          "contract_sha256": "sha256:4f339bf6ebc5903f0c9e3f759fe8bf80c95c6579cba12df55295fe12882ecc2b",
+          "difficulty_weight": 2,
+          "execution_kind": "harness_turn",
+          "inputs_sha256": "sha256:0fbb8a0176c3b64758d794d2af3da7f0d0060007716cc103cf8036751e3af14c",
+          "judge_required": false,
+          "module": "m3",
+          "required_capabilities": [
+            "e2e::control-plane-v1",
+            "iii::functions",
+            "iii::database",
+            "iii::state",
+            "iii::triggers"
+          ],
+          "requirements": [],
+          "resource_envelope": {
+            "execution": {
+              "max_output_tokens": 8192,
+              "max_total_tokens": 250000,
+              "max_turns": 24,
+              "stuck_timeout_seconds": 300
+            }
+          },
+          "scenario_id": "validation_chain",
+          "scenario_version": 5,
+          "seed": 2480702898609378196
+        },
+        {
+          "case_id": "cleanup_under_failure:v2:seed-6371da25abda50df",
+          "contract_sha256": "sha256:a4c34a5668994500a84fa8ac524d8fcfa075ca2f7c07e3325ff48d2e4e0507d5",
+          "difficulty_weight": 2,
+          "execution_kind": "harness_turn",
+          "inputs_sha256": "sha256:8139d970e005a390cef9661f73499e2c6cc36d59e0da430591163c716b2df897",
+          "judge_required": false,
+          "module": "m3",
+          "required_capabilities": [
+            "e2e::control-plane-v1",
+            "iii::functions",
+            "iii::state",
+            "iii::triggers"
+          ],
+          "requirements": [],
+          "resource_envelope": {
+            "execution": {
+              "max_output_tokens": 8192,
+              "max_total_tokens": 150000,
+              "max_turns": 10,
+              "stuck_timeout_seconds": 300
+            }
+          },
+          "scenario_id": "cleanup_under_failure",
+          "scenario_version": 2,
+          "seed": 7165748337455026399
+        },
+        {
+          "case_id": "poison_message:v2:seed-a1c42eca474928d1",
+          "contract_sha256": "sha256:accf6d1519098ab0204e9d5f9fdc488ff0e4ba6ca97939eafc7e9933797debf6",
+          "difficulty_weight": 2,
+          "execution_kind": "harness_turn",
+          "inputs_sha256": "sha256:793f66aa4f27e9d3aab9364c369d97b4900765cadb875f12bd2e159133e6da22",
+          "judge_required": false,
+          "module": "m3",
+          "required_capabilities": [
+            "e2e::control-plane-v1",
+            "iii::functions",
+            "iii::state"
+          ],
+          "requirements": [],
+          "resource_envelope": {
+            "execution": {
+              "max_output_tokens": 8192,
+              "max_total_tokens": 200000,
+              "max_turns": 12,
+              "stuck_timeout_seconds": 300
+            }
+          },
+          "scenario_id": "poison_message",
+          "scenario_version": 2,
+          "seed": 11656493181855934673
+        },
+        {
+          "case_id": "wake_chain_soak:v3:seed-000000000000138b",
+          "contract_sha256": "sha256:4fe0b04a859233416166285e632ab85a424da2f23a8d8c7950bf078f6a5a6eae",
+          "difficulty_weight": 2,
+          "execution_kind": "harness_turn",
+          "inputs_sha256": "sha256:be46af03e45d91799ef41e4dd48176351f94d6469be3768b77429838414a64c8",
+          "judge_required": false,
+          "module": "m3",
+          "required_capabilities": [
+            "e2e::control-plane-v1",
+            "iii::functions",
+            "iii::state",
+            "iii::triggers"
+          ],
+          "requirements": [],
+          "resource_envelope": {
+            "execution": {
+              "max_output_tokens": 4096,
+              "max_turns": 108,
+              "stuck_timeout_seconds": 120
+            }
+          },
+          "scenario_id": "wake_chain_soak",
+          "scenario_version": 3,
+          "seed": 5003
+        },
+        {
+          "case_id": "contention_ledger:v2:seed-e4977fa3ef3182a8",
+          "contract_sha256": "sha256:969cc2109b3408e3e5717580a08dad32541a1f39c4c72dff38048d390f4f4fbf",
+          "difficulty_weight": 3,
+          "execution_kind": "harness_turn",
+          "inputs_sha256": "sha256:388844ac29b55725954fe84a4b86d538f4e21da4fd7e8e6e3bda95d0284e4dcf",
+          "judge_required": false,
+          "module": "m4",
+          "required_capabilities": [
+            "e2e::control-plane-v1",
+            "iii::functions",
+            "iii::database",
+            "iii::state",
+            "iii::triggers",
+            "e2e::subagents"
+          ],
+          "requirements": [],
+          "resource_envelope": {
+            "execution": {
+              "max_output_tokens": 8192,
+              "max_total_tokens": 1000000,
+              "max_turns": 24,
+              "stuck_timeout_seconds": 420
+            }
+          },
+          "scenario_id": "contention_ledger",
+          "scenario_version": 2,
+          "seed": 16471774504200274600
+        },
+        {
+          "case_id": "quorum_fan_in:v2:seed-88f6bb75b64934d4",
+          "contract_sha256": "sha256:65c80fd683ad447abbdbbac59d1de0432c8b5c219225a9a1a02b6ab13038afd0",
+          "difficulty_weight": 3,
+          "execution_kind": "harness_turn",
+          "inputs_sha256": "sha256:4fdefa76d98a8b668d38d70a60bbb5cdadbbbadc0f9f058f3d62e829d2a28ba6",
+          "judge_required": false,
+          "module": "m4",
+          "required_capabilities": [
+            "e2e::control-plane-v1",
+            "iii::functions",
+            "iii::state",
+            "iii::triggers",
+            "e2e::subagents"
+          ],
+          "requirements": [],
+          "resource_envelope": {
+            "execution": {
+              "max_output_tokens": 8192,
+              "max_total_tokens": 800000,
+              "max_turns": 20,
+              "stuck_timeout_seconds": 360
+            }
+          },
+          "scenario_id": "quorum_fan_in",
+          "scenario_version": 2,
+          "seed": 9869281747672839380
+        },
+        {
+          "case_id": "subagent_validation:v5:seed-0a970598f493329c",
+          "contract_sha256": "sha256:86d82458d505730182c7c023195040246fd744fcb8d55b96317d834a79fe6318",
+          "difficulty_weight": 4,
+          "execution_kind": "harness_turn",
+          "inputs_sha256": "sha256:dabc67132f258598f065ef25233feec27dc948fe47bfe077b9ff835f19310169",
+          "judge_required": false,
+          "module": "m4",
+          "required_capabilities": [
+            "e2e::control-plane-v1",
+            "iii::functions",
+            "e2e::subagents",
+            "iii::triggers",
+            "iii::database",
+            "iii::state"
+          ],
+          "requirements": [],
+          "resource_envelope": {
+            "execution": {
+              "max_output_tokens": 8192,
+              "max_total_tokens": 400000,
+              "max_turns": 16,
+              "stuck_timeout_seconds": 420
+            }
+          },
+          "scenario_id": "subagent_validation",
+          "scenario_version": 5,
+          "seed": 763084816359043740
+        },
+        {
+          "case_id": "subagent_validation_failure:v5:seed-e8eb75219275959d",
+          "contract_sha256": "sha256:b6557eec6cf737b53365c1235b23ea72dcbb7e95c1ccbbe1b1848931b88e0721",
+          "difficulty_weight": 4,
+          "execution_kind": "harness_turn",
+          "inputs_sha256": "sha256:ff1438bb2a4adc17a4f4dd9a9699d3a71479e3f23082fccba5ea690864483987",
+          "judge_required": false,
+          "module": "m4",
+          "required_capabilities": [
+            "e2e::control-plane-v1",
+            "iii::functions",
+            "iii::database",
+            "iii::state",
+            "iii::triggers",
+            "e2e::subagents"
+          ],
+          "requirements": [],
+          "resource_envelope": {
+            "execution": {
+              "max_output_tokens": 8192,
+              "max_total_tokens": 400000,
+              "max_turns": 16,
+              "stuck_timeout_seconds": 420
+            }
+          },
+          "scenario_id": "subagent_validation_failure",
+          "scenario_version": 5,
+          "seed": 16783637223377835421
+        },
+        {
+          "case_id": "fanout_ladder:v3:seed-00000000000007d4",
+          "contract_sha256": "sha256:2da3f55fe925eb078647316595a888be3445540c518391ea9bf3f940a6e7ff05",
+          "difficulty_weight": 4,
+          "execution_kind": "harness_turn",
+          "inputs_sha256": "sha256:115f94b2795b1857387d38829650c476e9bfc621e15836efe7a694bc201379cd",
+          "judge_required": false,
+          "module": "m4",
+          "required_capabilities": [
+            "e2e::control-plane-v1",
+            "iii::functions",
+            "iii::state",
+            "iii::triggers",
+            "e2e::subagents"
+          ],
+          "requirements": [],
+          "resource_envelope": {
+            "execution": {
+              "max_output_tokens": 16384,
+              "max_total_tokens": 2000000,
+              "max_turns": 48,
+              "stuck_timeout_seconds": 360
+            }
+          },
+          "scenario_id": "fanout_ladder",
+          "scenario_version": 3,
+          "seed": 2004
+        },
+        {
+          "case_id": "depth_ladder:v3:seed-0000000000000fa3",
+          "contract_sha256": "sha256:23d9133284115d2c7d8a6dbd64e8efb21f1aca798b6bdef258593cc18f4e53c3",
+          "difficulty_weight": 4,
+          "execution_kind": "harness_turn",
+          "inputs_sha256": "sha256:406b08da5d84c6898601cb612c8461721d6893235601fa5d0eac6c6b849fbcde",
+          "judge_required": false,
+          "module": "m4",
+          "required_capabilities": [
+            "e2e::control-plane-v1",
+            "iii::functions",
+            "iii::state",
+            "iii::triggers",
+            "e2e::subagents"
+          ],
+          "requirements": [],
+          "resource_envelope": {
+            "execution": {
+              "max_output_tokens": 8192,
+              "max_total_tokens": 1200000,
+              "max_turns": 36,
+              "stuck_timeout_seconds": 420
+            }
+          },
+          "scenario_id": "depth_ladder",
+          "scenario_version": 3,
+          "seed": 4003
+        },
+        {
+          "case_id": "research_pipeline:v6:seed-7265736561720005",
+          "contract_sha256": "sha256:4134369364fffb75917aaff9b065fcd827fd584b15b35721e62fa4e1fa9efdf5",
+          "difficulty_weight": 4,
+          "execution_kind": "harness_turn",
+          "inputs_sha256": "sha256:a5196b9b795468fbc013c40c94613419ca194f6d08ae96ef1adf438d8b8e3c5f",
+          "judge_required": false,
+          "module": "m4",
+          "required_capabilities": [
+            "e2e::control-plane-v1",
+            "iii::functions",
+            "iii::state",
+            "iii::triggers",
+            "e2e::subagents"
+          ],
+          "requirements": [],
+          "resource_envelope": {
+            "execution": {
+              "max_output_tokens": 16384,
+              "max_total_tokens": 600000,
+              "max_turns": 32,
+              "stuck_timeout_seconds": 300
+            }
+          },
+          "scenario_id": "research_pipeline",
+          "scenario_version": 6,
+          "seed": 8243121572235313157
+        },
+        {
+          "case_id": "receiving_operation:v6:seed-efd81b1c09fac6a3",
+          "contract_sha256": "sha256:5c32c4f56b2a83a52865ea466f076fa234d4d5148c3352d87a96334e047d5867",
+          "difficulty_weight": 4,
+          "execution_kind": "harness_turn",
+          "inputs_sha256": "sha256:91ae1f0eca7384f4a22b3d1f6198109a956be942010976e7144c65e2b07428c3",
+          "judge_required": false,
+          "module": "m4",
+          "required_capabilities": [
+            "e2e::control-plane-v1",
+            "iii::functions",
+            "iii::database",
+            "iii::triggers",
+            "e2e::subagents"
+          ],
+          "requirements": [],
+          "resource_envelope": {
+            "execution": {
+              "max_total_tokens": 1200000,
+              "max_turns": 48,
+              "stuck_timeout_seconds": 360
+            }
+          },
+          "scenario_id": "receiving_operation",
+          "scenario_version": 6,
+          "seed": 17282593377274742435
+        },
+        {
+          "case_id": "shell_coder_sandbox:v6:seed-0000000000000803",
+          "contract_sha256": "sha256:b8028791b71172fdb80f1a99f0b9f2fd3eb9def994aa7233a091cbbd2c4cf3fa",
+          "difficulty_weight": 4,
+          "execution_kind": "harness_turn",
+          "inputs_sha256": "sha256:96960b44eae8106098e94a2a78296e6eecf14cd8074416a9b9316ee6dc8fe0df",
+          "judge_required": false,
+          "module": "m5",
+          "required_capabilities": [
+            "e2e::control-plane-v1",
+            "iii::functions",
+            "iii::registry",
+            "iii::coder",
+            "iii::shell"
+          ],
+          "requirements": [
+            "Pinned shared engineering fixture"
+          ],
+          "resource_envelope": {
+            "execution": {
+              "max_output_tokens": 16384,
+              "max_total_tokens": 1000000,
+              "max_turns": 56,
+              "stuck_timeout_seconds": 900
+            }
+          },
+          "scenario_id": "shell_coder_sandbox",
+          "scenario_version": 6,
+          "seed": 2051
+        },
+        {
+          "case_id": "performance_regression:v2:seed-0000000000000411",
+          "contract_sha256": "sha256:d812bfe59f2b073da9c187a5bb81652ff91d3d22ab62af1d0ad84a2a507ecf08",
+          "difficulty_weight": 2,
+          "execution_kind": "harness_turn",
+          "inputs_sha256": "sha256:71335477a91766edc427d640020f8f503786c07fde6cffd91b969d5cc32c9e9d",
+          "judge_required": false,
+          "module": "m5",
+          "required_capabilities": [
+            "e2e::control-plane-v1",
+            "iii::functions",
+            "e2e::filesystem",
+            "e2e::shell",
+            "python3"
+          ],
+          "requirements": [],
+          "resource_envelope": {
+            "execution": {
+              "max_output_tokens": 16384,
+              "max_total_tokens": 400000,
+              "max_turns": 32,
+              "stuck_timeout_seconds": 600
+            }
+          },
+          "scenario_id": "performance_regression",
+          "scenario_version": 2,
+          "seed": 1041
+        },
+        {
+          "case_id": "chess_engine_build:v2:seed-60adff4929acbaad",
+          "contract_sha256": "sha256:79e0612599016c1ad9ccc8c9926bcec8b2b44a5543ed38b06e78513670ac941e",
+          "difficulty_weight": 2,
+          "execution_kind": "harness_turn",
+          "inputs_sha256": "sha256:94f947b834019aaeb500967e2fbd38e4d6390b5622d01780c7be510fd4adbc6f",
+          "judge_required": false,
+          "module": "m5",
+          "required_capabilities": [
+            "e2e::control-plane-v1",
+            "iii::functions",
+            "iii::coder",
+            "iii::shell"
+          ],
+          "requirements": [
+            "Pinned shared engineering fixture"
+          ],
+          "resource_envelope": {
+            "execution": {
+              "max_output_tokens": 65536,
+              "max_total_tokens": 1000000,
+              "max_turns": 48,
+              "stuck_timeout_seconds": 900
+            }
+          },
+          "scenario_id": "chess_engine_build",
+          "scenario_version": 2,
+          "seed": 6966504888308906669
+        },
+        {
+          "case_id": "git_regression_forensics:v2:seed-db29ba9b6a066390",
+          "contract_sha256": "sha256:cb4d778f2683c8e2914a7cdf502db9b3f4baadbe08c2c3eed590a91ff1e0c37e",
+          "difficulty_weight": 4,
+          "execution_kind": "harness_turn",
+          "inputs_sha256": "sha256:948606dc0d1d7b455f26811f925d20391647e6cc2bd5e571228d308cf2e6736f",
+          "judge_required": false,
+          "module": "m5",
+          "required_capabilities": [
+            "e2e::control-plane-v1",
+            "iii::registry",
+            "iii::shell",
+            "git::offline-bundle"
+          ],
+          "requirements": [],
+          "resource_envelope": {
+            "execution": {
+              "max_output_tokens": 12288,
+              "max_total_tokens": 600000,
+              "max_turns": 30,
+              "stuck_timeout_seconds": 600
+            }
+          },
+          "scenario_id": "git_regression_forensics",
+          "scenario_version": 2,
+          "seed": 15792358745012855696
+        },
+        {
+          "case_id": "engineering_ticket_git_handoff:v3:seed-00000000000003ed",
+          "contract_sha256": "sha256:42161377a4a77ea48b53158bf36495b8b5a1d904f0a2830b49b541c8708b647e",
+          "difficulty_weight": 4,
+          "execution_kind": "harness_turn",
+          "inputs_sha256": "sha256:60f47da92792fdc0d76de18bacfe7c55ffb7d0607473020d81925e216d7a7205",
+          "judge_required": false,
+          "module": "m5",
+          "required_capabilities": [
+            "e2e::control-plane-v1",
+            "iii::functions",
+            "iii::coder",
+            "iii::shell",
+            "iii::triggers",
+            "iii::state",
+            "e2e::subagents",
+            "harness::post-turn-validation"
+          ],
+          "requirements": [
+            "Protected Git handoff fixture"
+          ],
+          "resource_envelope": {
+            "execution": {
+              "max_output_tokens": 16384,
+              "max_total_tokens": 600000,
+              "max_turns": 64,
+              "stuck_timeout_seconds": 900
+            }
+          },
+          "scenario_id": "engineering_ticket_git_handoff",
+          "scenario_version": 3,
+          "seed": 1005
+        },
+        {
+          "case_id": "swe_config_isolation:v1:seed-c10e26e2ce32dea6",
+          "contract_sha256": "sha256:1db94487b74ab7f6a6359c8fa926a8ff38e92c999d01591185bdc50ea58d676b",
+          "difficulty_weight": 2,
+          "execution_kind": "composite_flow",
+          "inputs_sha256": "sha256:2787adec1569a371f520a106dd5e336043b1e039389ff651ab6c0003aef57735",
+          "judge_required": false,
+          "module": "m5",
+          "required_capabilities": [
+            "iii::functions",
+            "e2e::control-plane-v1",
+            "swe::isolated-python-workspace"
+          ],
+          "requirements": [
+            "Isolated service workspace and trusted SWE grader"
+          ],
+          "resource_envelope": {
+            "execution": {
+              "max_output_tokens": 32768,
+              "max_total_tokens": 250000,
+              "max_turns": 64,
+              "stuck_timeout_seconds": 600
+            }
+          },
+          "scenario_id": "swe_config_isolation",
+          "scenario_version": 1,
+          "seed": 13911099054557945510
+        },
+        {
+          "case_id": "swe_cache_invalidation:v1:seed-45d844fc708a7578",
+          "contract_sha256": "sha256:7889003fd18a4235bf4fd76e84448bf833c43d830fb823306a30eedd038ecd2a",
+          "difficulty_weight": 2,
+          "execution_kind": "composite_flow",
+          "inputs_sha256": "sha256:d20b7c8ad34f70e8edc4ff2684bbea9da6e108e65f86e6dad617d4d7767505ba",
+          "judge_required": false,
+          "module": "m5",
+          "required_capabilities": [
+            "iii::functions",
+            "e2e::control-plane-v1",
+            "swe::isolated-python-workspace"
+          ],
+          "requirements": [
+            "Isolated service workspace and trusted SWE grader"
+          ],
+          "resource_envelope": {
+            "execution": {
+              "max_output_tokens": 32768,
+              "max_total_tokens": 250000,
+              "max_turns": 64,
+              "stuck_timeout_seconds": 600
+            }
+          },
+          "scenario_id": "swe_cache_invalidation",
+          "scenario_version": 1,
+          "seed": 5032848434597098872
+        },
+        {
+          "case_id": "swe_batch_replay:v1:seed-88f5ebb983b10839",
+          "contract_sha256": "sha256:09dd99076a6d38991296244307b22d177c840e1b610df47c83e410bc4364c4d6",
+          "difficulty_weight": 2,
+          "execution_kind": "composite_flow",
+          "inputs_sha256": "sha256:0f821c0ffe55acc084232a2e12e77b714217372dd0061680e42ce1d6b75463a1",
+          "judge_required": false,
+          "module": "m5",
+          "required_capabilities": [
+            "iii::functions",
+            "e2e::control-plane-v1",
+            "swe::isolated-python-workspace"
+          ],
+          "requirements": [
+            "Isolated service workspace and trusted SWE grader"
+          ],
+          "resource_envelope": {
+            "execution": {
+              "max_output_tokens": 32768,
+              "max_total_tokens": 250000,
+              "max_turns": 64,
+              "stuck_timeout_seconds": 600
+            }
+          },
+          "scenario_id": "swe_batch_replay",
+          "scenario_version": 1,
+          "seed": 9869053340463204409
+        },
+        {
+          "case_id": "swe_replay_recovery:v1:seed-767a302640611a2a",
+          "contract_sha256": "sha256:c0ecec49f2377e70f9b75f67003c2f25ef65fb1544eaf06efe52d2df7c4ca594",
+          "difficulty_weight": 2,
+          "execution_kind": "composite_flow",
+          "inputs_sha256": "sha256:a2acb97c344f271f73610f7f32f01c97ca87d5dd4c8152d36f2d4be0b44ba1f9",
+          "judge_required": false,
+          "module": "m5",
+          "required_capabilities": [
+            "iii::functions",
+            "e2e::control-plane-v1",
+            "swe::isolated-python-workspace"
+          ],
+          "requirements": [
+            "Isolated service workspace and trusted SWE grader"
+          ],
+          "resource_envelope": {
+            "execution": {
+              "max_output_tokens": 32768,
+              "max_total_tokens": 250000,
+              "max_turns": 64,
+              "stuck_timeout_seconds": 600
+            }
+          },
+          "scenario_id": "swe_replay_recovery",
+          "scenario_version": 1,
+          "seed": 8537188984481192490
+        },
+        {
+          "case_id": "swe_contract_migration:v1:seed-2fd297cdfe7c2c06",
+          "contract_sha256": "sha256:d05a609e688e78a12f739b1cb5efb751dc9b4fb990f5bff3f92ec333c3756eab",
+          "difficulty_weight": 5,
+          "execution_kind": "composite_flow",
+          "inputs_sha256": "sha256:6a9e87ae4284aeed0ce7a062332995d5354df5d4d8cf416cbbad67761bb9ed90",
+          "judge_required": false,
+          "module": "m5",
+          "required_capabilities": [
+            "iii::functions",
+            "e2e::control-plane-v1",
+            "swe::isolated-python-workspace"
+          ],
+          "requirements": [
+            "Isolated service workspace and trusted SWE grader"
+          ],
+          "resource_envelope": {
+            "execution": {
+              "max_output_tokens": 32768,
+              "max_total_tokens": 250000,
+              "max_turns": 64,
+              "stuck_timeout_seconds": 600
+            }
+          },
+          "scenario_id": "swe_contract_migration",
+          "scenario_version": 1,
+          "seed": 3445983575885491206
+        },
+        {
+          "case_id": "swe_tenant_isolation:v1:seed-b02181786930daec",
+          "contract_sha256": "sha256:7fc546254302de1e19432d6dd012405c40b9f35021be1bc83db3da5a001842c7",
+          "difficulty_weight": 2,
+          "execution_kind": "composite_flow",
+          "inputs_sha256": "sha256:d22802a28dbbf471d7c1e41780fbf42127eaaf96df138b733f40ad8426283558",
+          "judge_required": false,
+          "module": "m5",
+          "required_capabilities": [
+            "iii::functions",
+            "e2e::control-plane-v1",
+            "swe::isolated-python-workspace"
+          ],
+          "requirements": [
+            "Isolated service workspace and trusted SWE grader"
+          ],
+          "resource_envelope": {
+            "execution": {
+              "max_output_tokens": 32768,
+              "max_total_tokens": 250000,
+              "max_turns": 64,
+              "stuck_timeout_seconds": 600
+            }
+          },
+          "scenario_id": "swe_tenant_isolation",
+          "scenario_version": 1,
+          "seed": 12691567579067636460
+        },
+        {
+          "case_id": "swe_replay_performance:v1:seed-8e9148462638cf31",
+          "contract_sha256": "sha256:518cd7e46ee76bdb4b9b25131444f19c828aaf4aecaa25e880591f30cac25651",
+          "difficulty_weight": 2,
+          "execution_kind": "composite_flow",
+          "inputs_sha256": "sha256:a02661a501989acee0cbcfbce92f5199950616001d537f271fbe109bb3634361",
+          "judge_required": false,
+          "module": "m5",
+          "required_capabilities": [
+            "iii::functions",
+            "e2e::control-plane-v1",
+            "swe::isolated-python-workspace"
+          ],
+          "requirements": [
+            "Isolated service workspace and trusted SWE grader"
+          ],
+          "resource_envelope": {
+            "execution": {
+              "max_output_tokens": 32768,
+              "max_total_tokens": 250000,
+              "max_turns": 64,
+              "stuck_timeout_seconds": 600
+            }
+          },
+          "scenario_id": "swe_replay_performance",
+          "scenario_version": 1,
+          "seed": 10273071691134979889
+        },
+        {
+          "case_id": "swe_release_handoff:v1:seed-6bc90f730de562cd",
+          "contract_sha256": "sha256:3575ed577ee00fee18fb37215adb7c0d9c5e5051bba8944969f76d74e673a437",
+          "difficulty_weight": 2,
+          "execution_kind": "composite_flow",
+          "inputs_sha256": "sha256:ad724f4d82ab18e5ff5a3345764da9283a11fd6011ba0f9b14a8502efe2e5c26",
+          "judge_required": false,
+          "module": "m5",
+          "required_capabilities": [
+            "iii::functions",
+            "e2e::control-plane-v1",
+            "swe::isolated-python-workspace"
+          ],
+          "requirements": [
+            "Isolated service workspace and trusted SWE grader"
+          ],
+          "resource_envelope": {
+            "execution": {
+              "max_output_tokens": 32768,
+              "max_total_tokens": 250000,
+              "max_turns": 64,
+              "stuck_timeout_seconds": 600
+            }
+          },
+          "scenario_id": "swe_release_handoff",
+          "scenario_version": 1,
+          "seed": 7766756019205923533
+        },
+        {
+          "case_id": "tool_contract_recovery:v2:seed-746f6f6c00000001",
+          "contract_sha256": "sha256:0e6963e736d210d60df264a22f2f43f58dd494831a6ed1a6bee9a3de22e67eab",
+          "difficulty_weight": 4,
+          "execution_kind": "harness_turn",
+          "inputs_sha256": "sha256:45962aba56ce4f173fa009716628a8316a2141e9de9d5355169ba9a031e25972",
+          "judge_required": false,
+          "module": "m6",
+          "required_capabilities": [
+            "e2e::control-plane-v1",
+            "iii::functions"
+          ],
+          "requirements": [],
+          "resource_envelope": {
+            "execution": {
+              "max_output_tokens": 12288,
+              "max_total_tokens": 200000,
+              "max_turns": 12,
+              "stuck_timeout_seconds": 360
+            }
+          },
+          "scenario_id": "tool_contract_recovery",
+          "scenario_version": 2,
+          "seed": 8390047140461674497
+        },
+        {
+          "case_id": "cross_app_transaction:v2:seed-63726f7373617070",
+          "contract_sha256": "sha256:ec122d003eea0737b05935a31da8d7172a08887cdc6acf872ad650da2738c7e6",
+          "difficulty_weight": 4,
+          "execution_kind": "harness_turn",
+          "inputs_sha256": "sha256:9b35bd4098b46a2f4901957809e038d37caf38ff803c1c2ce4c8f3c540176be9",
+          "judge_required": false,
+          "module": "m6",
+          "required_capabilities": [
+            "e2e::control-plane-v1",
+            "iii::functions",
+            "e2e::run-scoped-fixtures"
+          ],
+          "requirements": [],
+          "resource_envelope": {
+            "execution": {
+              "max_output_tokens": 8192,
+              "max_total_tokens": 300000,
+              "max_turns": 18,
+              "stuck_timeout_seconds": 360
+            }
+          },
+          "scenario_id": "cross_app_transaction",
+          "scenario_version": 2,
+          "seed": 7165912498747568240
+        },
+        {
+          "case_id": "browser_cross_site:v2:seed-62726f7773650001",
+          "contract_sha256": "sha256:8b6ebffbc697d27259588be8e7b0ea0c2f441238baeff2752cbbdd3226aff012",
+          "difficulty_weight": 4,
+          "execution_kind": "harness_turn",
+          "inputs_sha256": "sha256:5c41dfeefd883d60daf170719861880e6aa2ad21bb670659b0554d3e013313d8",
+          "judge_required": false,
+          "module": "m6",
+          "required_capabilities": [
+            "e2e::control-plane-v1",
+            "browser::interactive",
+            "fixture::multi-origin-http"
+          ],
+          "requirements": [
+            "Browser and three isolated local origins"
+          ],
+          "resource_envelope": {
+            "execution": {
+              "max_output_tokens": 20480,
+              "max_total_tokens": 300000,
+              "max_turns": 20,
+              "stuck_timeout_seconds": 600
+            }
+          },
+          "scenario_id": "browser_cross_site",
+          "scenario_version": 2,
+          "seed": 7093854921889742849
+        },
+        {
+          "case_id": "prompt_injection_resilience:v2:seed-09539adb077e422b",
+          "contract_sha256": "sha256:198a8511bbd1694d68a757081ceb5b59f77ad63e33e9297ee3200c3965719618",
+          "difficulty_weight": 2,
+          "execution_kind": "harness_turn",
+          "inputs_sha256": "sha256:9da3efc68326362b76b2036d874545337af688702b89ec80ce0b2ef1176f5920",
+          "judge_required": false,
+          "module": "m7",
+          "required_capabilities": [
+            "e2e::control-plane-v1",
+            "iii::functions",
+            "iii::state"
+          ],
+          "requirements": [],
+          "resource_envelope": {
+            "execution": {
+              "max_output_tokens": 8192,
+              "max_total_tokens": 122880,
+              "max_turns": 8,
+              "stuck_timeout_seconds": 240
+            }
+          },
+          "scenario_id": "prompt_injection_resilience",
+          "scenario_version": 2,
+          "seed": 672051034922566187
+        },
+        {
+          "case_id": "secret_hygiene:v2:seed-3441e89935c74bad",
+          "contract_sha256": "sha256:b6ad7871338859891ddcbe72bc1ea1940291bff3dc86a5349c3df2bcaa09c791",
+          "difficulty_weight": 2,
+          "execution_kind": "harness_turn",
+          "inputs_sha256": "sha256:799a477ebb58a119a959188e09ac324015db47dd3d21ac5a9f1e4cd14aaf6b1d",
+          "judge_required": false,
+          "module": "m7",
+          "required_capabilities": [
+            "e2e::control-plane-v1",
+            "iii::functions"
+          ],
+          "requirements": [],
+          "resource_envelope": {
+            "execution": {
+              "max_output_tokens": 8192,
+              "max_total_tokens": 122880,
+              "max_turns": 8,
+              "stuck_timeout_seconds": 240
+            }
+          },
+          "scenario_id": "secret_hygiene",
+          "scenario_version": 2,
+          "seed": 3765546508188339117
+        },
+        {
+          "case_id": "security_review:v4:seed-d2a324977d249250",
+          "contract_sha256": "sha256:558ea198f7ec91cbdf4cb1e766c3bd05abdb47a686ab526131ac96b5f38260e2",
+          "difficulty_weight": 4,
+          "execution_kind": "composite_flow",
+          "inputs_sha256": "sha256:df1e7afb339f282c45503722c2e0d9f4cde84f6ba164033880d39d72d6a1c121",
+          "judge_required": false,
+          "module": "m7",
+          "required_capabilities": [
+            "e2e::control-plane-v1",
+            "security_scan::v1",
+            "github::security-read",
+            "security_scan::on-demand"
+          ],
+          "requirements": [
+            "Security scanner worker and review fixture"
+          ],
+          "resource_envelope": {
+            "execution": {
+              "max_total_tokens": 500000,
+              "max_turns": 1,
+              "stuck_timeout_seconds": 420
+            }
+          },
+          "scenario_id": "security_review",
+          "scenario_version": 4,
+          "seed": 15178015402226913872
+        },
+        {
+          "case_id": "policy_bound_action:v2:seed-706f6c6963790001",
+          "contract_sha256": "sha256:241d53398da5445374910b27d6676b6b901c9b49de0f720a2916c8233b2532e7",
+          "difficulty_weight": 4,
+          "execution_kind": "scripted_dialogue",
+          "inputs_sha256": "sha256:efa75658304c2a0010a31c54b01b2407c1454247e7153fc857b983a34f67f02b",
+          "judge_required": false,
+          "module": "m7",
+          "required_capabilities": [
+            "e2e::control-plane-v1",
+            "iii::functions",
+            "harness::scripted-dialogue-v1"
+          ],
+          "requirements": [],
+          "resource_envelope": {
+            "execution": {
+              "max_output_tokens": 8192,
+              "max_total_tokens": 180000,
+              "max_turns": 12,
+              "stuck_timeout_seconds": 360
+            }
+          },
+          "scenario_id": "policy_bound_action",
+          "scenario_version": 2,
+          "seed": 8101813454559051777
+        },
+        {
+          "case_id": "incident_response:v3:seed-f6c726b2e1d379a7",
+          "contract_sha256": "sha256:90d606d630a259a376957908d525bbdecfbac2faab55e4ee8e3b31ae3302c2b6",
+          "difficulty_weight": 5,
+          "execution_kind": "adaptive_flow",
+          "inputs_sha256": "sha256:307dde68547383276eab407158362bbd1511510e3db9c709420407caa0a74801",
+          "judge_required": false,
+          "module": "m8",
+          "required_capabilities": [
+            "e2e::control-plane-v1",
+            "harness::independent_session",
+            "iii::functions",
+            "iii::coder",
+            "iii::shell",
+            "incident_fixture::v1"
+          ],
+          "requirements": [
+            "Disposable incident repository"
+          ],
+          "resource_envelope": {
+            "execution": {
+              "max_total_tokens": 750000,
+              "max_turns": 1,
+              "stuck_timeout_seconds": 600
+            },
+            "workflow": {
+              "max_cost_usd": 25.0,
+              "max_nodes": 20,
+              "max_parallel": 3,
+              "max_total_tokens": 686000,
+              "step_timeout_seconds": 600,
+              "technical_retries": 0,
+              "workflow_timeout_seconds": 3600
+            }
+          },
+          "scenario_id": "incident_response",
+          "scenario_version": 3,
+          "seed": 17782224203430459815
+        },
+        {
+          "case_id": "cross_repo_contract_migration:v1:seed-63726f7373720001",
+          "contract_sha256": "sha256:7d3c138f2310991c9b974a2f38fee2ac8e5571786470e1fcf8a966ce58f1c031",
+          "difficulty_weight": 5,
+          "execution_kind": "adaptive_flow",
+          "inputs_sha256": "sha256:e7822010ef633857e0c4cef878e507a84286c97e69e12eaa0d005db84ab47370",
+          "judge_required": false,
+          "module": "m8",
+          "required_capabilities": [
+            "e2e::adaptive-flow-v1",
+            "e2e::workflow-resume-v1",
+            "git::deterministic-fixture-v1",
+            "cross_repo_contract_simulator::v1"
+          ],
+          "requirements": [
+            "Isolated producer and consumer repositories"
+          ],
+          "resource_envelope": {
+            "execution": {
+              "max_total_tokens": 700000,
+              "max_turns": 1,
+              "stuck_timeout_seconds": 900
+            },
+            "workflow": {
+              "max_cost_usd": 25.0,
+              "max_nodes": 20,
+              "max_parallel": 3,
+              "max_total_tokens": 636000,
+              "step_timeout_seconds": 900,
+              "technical_retries": 0,
+              "workflow_timeout_seconds": 5400
+            }
+          },
+          "scenario_id": "cross_repo_contract_migration",
+          "scenario_version": 1,
+          "seed": 7165912498748653569
+        },
+        {
+          "case_id": "release_train_recovery:v1:seed-72656c6561730001",
+          "contract_sha256": "sha256:8a3ba18d354c2281e89af0ec5a4f60d10d9da9e286cefc3257c1684c1abbbcb1",
+          "difficulty_weight": 5,
+          "execution_kind": "adaptive_flow",
+          "inputs_sha256": "sha256:f20045d9b5e9bb1568b8c10595914d70dc4449148a0f230c0dff5cea383facf7",
+          "judge_required": false,
+          "module": "m8",
+          "required_capabilities": [
+            "e2e::adaptive-flow-v1",
+            "e2e::workflow-resume-v1",
+            "release_train_simulator::v1",
+            "release_shadow::read-only-v1"
+          ],
+          "requirements": [
+            "Release recovery fixture"
+          ],
+          "resource_envelope": {
+            "execution": {
+              "max_total_tokens": 900000,
+              "max_turns": 1,
+              "stuck_timeout_seconds": 900
+            },
+            "workflow": {
+              "max_cost_usd": 30.0,
+              "max_nodes": 24,
+              "max_parallel": 3,
+              "max_total_tokens": 836000,
+              "step_timeout_seconds": 900,
+              "technical_retries": 0,
+              "workflow_timeout_seconds": 7200
+            }
+          },
+          "scenario_id": "release_train_recovery",
+          "scenario_version": 1,
+          "seed": 8243113875653984257
+        }
+      ],
+      "id": "capability",
+      "judge_required": true,
+      "label": "Capability",
+      "metrics": [
+        "deliverable_success",
+        "structural_integrity",
+        "completion_evidence_coverage"
+      ],
+      "profile_sha256": "sha256:62c30b6e0f6722d911bf14c3e11ed8c6e180438a86dc8c525ef892d65b2c9244",
+      "protected_supervisor_required": false,
+      "purpose": "Measure coverage, repeatability and difficulty across capability domains.",
+      "repetitions": 1,
+      "scenario_ids": [
+        "minimal_path",
+        "persistent_state",
+        "insert_record",
+        "sequential_pipeline",
+        "database_migration_recovery",
+        "context_pressure",
+        "moving_target",
+        "mechanical_reaction",
+        "timer_wake",
+        "validation_loop",
+        "validation_self_repair",
+        "validation_scope_enforcement",
+        "validation_chain",
+        "cleanup_under_failure",
+        "poison_message",
+        "wake_chain_soak",
+        "contention_ledger",
+        "quorum_fan_in",
+        "subagent_validation",
+        "subagent_validation_failure",
+        "fanout_ladder",
+        "depth_ladder",
+        "research_pipeline",
+        "receiving_operation",
+        "shell_coder_sandbox",
+        "performance_regression",
+        "chess_engine_build",
+        "git_regression_forensics",
+        "engineering_ticket_git_handoff",
+        "swe_config_isolation",
+        "swe_cache_invalidation",
+        "swe_batch_replay",
+        "swe_replay_recovery",
+        "swe_contract_migration",
+        "swe_tenant_isolation",
+        "swe_replay_performance",
+        "swe_release_handoff",
+        "tool_contract_recovery",
+        "cross_app_transaction",
+        "browser_cross_site",
+        "prompt_injection_resilience",
+        "secret_hygiene",
+        "security_review",
+        "policy_bound_action",
+        "incident_response",
+        "cross_repo_contract_migration",
+        "release_train_recovery"
+      ],
+      "technical_retries": 0
+    },
+    {
+      "budget": {
+        "fault_budget_separate": false,
+        "fault_runs": 0,
+        "max_concurrent_groups": 1,
+        "planned_runs": 90,
+        "scenario_runs": 90,
+        "scope": "turn sum counts per-session limits, not a whole-workflow ceiling; tokens cover subject only; setup, judge, capture and cleanup are additional",
+        "session_turn_limit_sum": 3185,
+        "subject_token_limit": null,
+        "unbounded_token_cases": [
+          "context_pressure"
+        ]
+      },
+      "campaigns": [
+        {
+          "campaign_id": "evolution-r01",
+          "failure_policy": "advisory",
+          "groups": [
+            {
+              "difficulty_weight": 2,
+              "execution_kind": "harness_turn",
+              "id": "case-minimal-path",
+              "runs": 1,
+              "scenarios": [
+                "minimal_path"
+              ],
+              "technical_retries": 0
+            },
+            {
+              "difficulty_weight": 4,
+              "execution_kind": "harness_turn",
+              "id": "case-tool-contract-recovery",
+              "runs": 1,
+              "scenarios": [
+                "tool_contract_recovery"
+              ],
+              "technical_retries": 0
+            },
+            {
+              "difficulty_weight": 2,
+              "execution_kind": "harness_turn",
+              "id": "case-persistent-state",
+              "runs": 1,
+              "scenarios": [
+                "persistent_state"
+              ],
+              "technical_retries": 0
+            },
+            {
+              "difficulty_weight": 2,
+              "execution_kind": "harness_turn",
+              "id": "case-timer-wake",
+              "runs": 1,
+              "scenarios": [
+                "timer_wake"
+              ],
+              "technical_retries": 0
+            },
+            {
+              "difficulty_weight": 1,
+              "execution_kind": "harness_turn",
+              "id": "case-context-pressure",
+              "runs": 1,
+              "scenarios": [
+                "context_pressure"
+              ],
+              "technical_retries": 0
+            },
+            {
+              "difficulty_weight": 2,
+              "execution_kind": "harness_turn",
+              "id": "case-validation-self-repair",
+              "runs": 1,
+              "scenarios": [
+                "validation_self_repair"
+              ],
+              "technical_retries": 0
+            },
+            {
+              "difficulty_weight": 3,
+              "execution_kind": "harness_turn",
+              "id": "case-contention-ledger",
+              "runs": 1,
+              "scenarios": [
+                "contention_ledger"
+              ],
+              "technical_retries": 0
+            },
+            {
+              "difficulty_weight": 3,
+              "execution_kind": "harness_turn",
+              "id": "case-quorum-fan-in",
+              "runs": 1,
+              "scenarios": [
+                "quorum_fan_in"
+              ],
+              "technical_retries": 0
+            },
+            {
+              "difficulty_weight": 4,
+              "execution_kind": "harness_turn",
+              "id": "case-shell-coder-sandbox",
+              "runs": 1,
+              "scenarios": [
+                "shell_coder_sandbox"
+              ],
+              "technical_retries": 0
+            },
+            {
+              "difficulty_weight": 2,
+              "execution_kind": "harness_turn",
+              "id": "case-performance-regression",
+              "runs": 1,
+              "scenarios": [
+                "performance_regression"
+              ],
+              "technical_retries": 0
+            },
+            {
+              "difficulty_weight": 2,
+              "execution_kind": "composite_flow",
+              "id": "case-swe-config-isolation",
+              "runs": 1,
+              "scenarios": [
+                "swe_config_isolation"
+              ],
+              "technical_retries": 0
+            },
+            {
+              "difficulty_weight": 2,
+              "execution_kind": "composite_flow",
+              "id": "case-swe-cache-invalidation",
+              "runs": 1,
+              "scenarios": [
+                "swe_cache_invalidation"
+              ],
+              "technical_retries": 0
+            },
+            {
+              "difficulty_weight": 2,
+              "execution_kind": "composite_flow",
+              "id": "case-swe-replay-recovery",
+              "runs": 1,
+              "scenarios": [
+                "swe_replay_recovery"
+              ],
+              "technical_retries": 0
+            },
+            {
+              "difficulty_weight": 5,
+              "execution_kind": "composite_flow",
+              "id": "case-swe-contract-migration",
+              "runs": 1,
+              "scenarios": [
+                "swe_contract_migration"
+              ],
+              "technical_retries": 0
+            },
+            {
+              "difficulty_weight": 4,
+              "execution_kind": "harness_turn",
+              "id": "case-engineering-ticket-git-handoff",
+              "runs": 1,
+              "scenarios": [
+                "engineering_ticket_git_handoff"
+              ],
+              "technical_retries": 0
+            },
+            {
+              "difficulty_weight": 4,
+              "execution_kind": "harness_turn",
+              "id": "case-cross-app-transaction",
+              "runs": 1,
+              "scenarios": [
+                "cross_app_transaction"
+              ],
+              "technical_retries": 0
+            },
+            {
+              "difficulty_weight": 2,
+              "execution_kind": "harness_turn",
+              "id": "case-prompt-injection-resilience",
+              "runs": 1,
+              "scenarios": [
+                "prompt_injection_resilience"
+              ],
+              "technical_retries": 0
+            },
+            {
+              "difficulty_weight": 5,
+              "execution_kind": "adaptive_flow",
+              "id": "case-incident-response",
+              "runs": 1,
+              "scenarios": [
+                "incident_response"
+              ],
+              "technical_retries": 0
+            }
+          ],
+          "kind": "harness-e2e-campaign",
+          "lane": "local-evolution",
+          "scoring_profile": "difficulty-weighted-v1",
+          "test_plan": {
+            "campaign_sha256": "sha256:081c9e2ab88865ca5f271351ece1f07fd4607f34340c2879ad1c989b3ff3afe9",
+            "definition_sha256": "sha256:47047f9d7c7145682c1930bd6e610b39af4dc1861d0d8f9247506357f1b6ded1",
+            "plan_id": "harness",
+            "profile_id": "evolution",
+            "profile_sha256": "sha256:ea1b64fa9c480bca81a971f29849e22af89b7579c9f4c9991d58a8a91cdd3c4f",
+            "repetition": 1,
+            "repetitions": 5,
+            "version": 1
+          }
+        },
+        {
+          "campaign_id": "evolution-r02",
+          "failure_policy": "advisory",
+          "groups": [
+            {
+              "difficulty_weight": 2,
+              "execution_kind": "harness_turn",
+              "id": "case-minimal-path",
+              "runs": 1,
+              "scenarios": [
+                "minimal_path"
+              ],
+              "technical_retries": 0
+            },
+            {
+              "difficulty_weight": 4,
+              "execution_kind": "harness_turn",
+              "id": "case-tool-contract-recovery",
+              "runs": 1,
+              "scenarios": [
+                "tool_contract_recovery"
+              ],
+              "technical_retries": 0
+            },
+            {
+              "difficulty_weight": 2,
+              "execution_kind": "harness_turn",
+              "id": "case-persistent-state",
+              "runs": 1,
+              "scenarios": [
+                "persistent_state"
+              ],
+              "technical_retries": 0
+            },
+            {
+              "difficulty_weight": 2,
+              "execution_kind": "harness_turn",
+              "id": "case-timer-wake",
+              "runs": 1,
+              "scenarios": [
+                "timer_wake"
+              ],
+              "technical_retries": 0
+            },
+            {
+              "difficulty_weight": 1,
+              "execution_kind": "harness_turn",
+              "id": "case-context-pressure",
+              "runs": 1,
+              "scenarios": [
+                "context_pressure"
+              ],
+              "technical_retries": 0
+            },
+            {
+              "difficulty_weight": 2,
+              "execution_kind": "harness_turn",
+              "id": "case-validation-self-repair",
+              "runs": 1,
+              "scenarios": [
+                "validation_self_repair"
+              ],
+              "technical_retries": 0
+            },
+            {
+              "difficulty_weight": 3,
+              "execution_kind": "harness_turn",
+              "id": "case-contention-ledger",
+              "runs": 1,
+              "scenarios": [
+                "contention_ledger"
+              ],
+              "technical_retries": 0
+            },
+            {
+              "difficulty_weight": 3,
+              "execution_kind": "harness_turn",
+              "id": "case-quorum-fan-in",
+              "runs": 1,
+              "scenarios": [
+                "quorum_fan_in"
+              ],
+              "technical_retries": 0
+            },
+            {
+              "difficulty_weight": 4,
+              "execution_kind": "harness_turn",
+              "id": "case-shell-coder-sandbox",
+              "runs": 1,
+              "scenarios": [
+                "shell_coder_sandbox"
+              ],
+              "technical_retries": 0
+            },
+            {
+              "difficulty_weight": 2,
+              "execution_kind": "harness_turn",
+              "id": "case-performance-regression",
+              "runs": 1,
+              "scenarios": [
+                "performance_regression"
+              ],
+              "technical_retries": 0
+            },
+            {
+              "difficulty_weight": 2,
+              "execution_kind": "composite_flow",
+              "id": "case-swe-config-isolation",
+              "runs": 1,
+              "scenarios": [
+                "swe_config_isolation"
+              ],
+              "technical_retries": 0
+            },
+            {
+              "difficulty_weight": 2,
+              "execution_kind": "composite_flow",
+              "id": "case-swe-cache-invalidation",
+              "runs": 1,
+              "scenarios": [
+                "swe_cache_invalidation"
+              ],
+              "technical_retries": 0
+            },
+            {
+              "difficulty_weight": 2,
+              "execution_kind": "composite_flow",
+              "id": "case-swe-replay-recovery",
+              "runs": 1,
+              "scenarios": [
+                "swe_replay_recovery"
+              ],
+              "technical_retries": 0
+            },
+            {
+              "difficulty_weight": 5,
+              "execution_kind": "composite_flow",
+              "id": "case-swe-contract-migration",
+              "runs": 1,
+              "scenarios": [
+                "swe_contract_migration"
+              ],
+              "technical_retries": 0
+            },
+            {
+              "difficulty_weight": 4,
+              "execution_kind": "harness_turn",
+              "id": "case-engineering-ticket-git-handoff",
+              "runs": 1,
+              "scenarios": [
+                "engineering_ticket_git_handoff"
+              ],
+              "technical_retries": 0
+            },
+            {
+              "difficulty_weight": 4,
+              "execution_kind": "harness_turn",
+              "id": "case-cross-app-transaction",
+              "runs": 1,
+              "scenarios": [
+                "cross_app_transaction"
+              ],
+              "technical_retries": 0
+            },
+            {
+              "difficulty_weight": 2,
+              "execution_kind": "harness_turn",
+              "id": "case-prompt-injection-resilience",
+              "runs": 1,
+              "scenarios": [
+                "prompt_injection_resilience"
+              ],
+              "technical_retries": 0
+            },
+            {
+              "difficulty_weight": 5,
+              "execution_kind": "adaptive_flow",
+              "id": "case-incident-response",
+              "runs": 1,
+              "scenarios": [
+                "incident_response"
+              ],
+              "technical_retries": 0
+            }
+          ],
+          "kind": "harness-e2e-campaign",
+          "lane": "local-evolution",
+          "scoring_profile": "difficulty-weighted-v1",
+          "test_plan": {
+            "campaign_sha256": "sha256:453cd63e405a1c6df45acf6dfb600cba5e61ceac93654079a151ac04b44e291f",
+            "definition_sha256": "sha256:47047f9d7c7145682c1930bd6e610b39af4dc1861d0d8f9247506357f1b6ded1",
+            "plan_id": "harness",
+            "profile_id": "evolution",
+            "profile_sha256": "sha256:ea1b64fa9c480bca81a971f29849e22af89b7579c9f4c9991d58a8a91cdd3c4f",
+            "repetition": 2,
+            "repetitions": 5,
+            "version": 1
+          }
+        },
+        {
+          "campaign_id": "evolution-r03",
+          "failure_policy": "advisory",
+          "groups": [
+            {
+              "difficulty_weight": 2,
+              "execution_kind": "harness_turn",
+              "id": "case-minimal-path",
+              "runs": 1,
+              "scenarios": [
+                "minimal_path"
+              ],
+              "technical_retries": 0
+            },
+            {
+              "difficulty_weight": 4,
+              "execution_kind": "harness_turn",
+              "id": "case-tool-contract-recovery",
+              "runs": 1,
+              "scenarios": [
+                "tool_contract_recovery"
+              ],
+              "technical_retries": 0
+            },
+            {
+              "difficulty_weight": 2,
+              "execution_kind": "harness_turn",
+              "id": "case-persistent-state",
+              "runs": 1,
+              "scenarios": [
+                "persistent_state"
+              ],
+              "technical_retries": 0
+            },
+            {
+              "difficulty_weight": 2,
+              "execution_kind": "harness_turn",
+              "id": "case-timer-wake",
+              "runs": 1,
+              "scenarios": [
+                "timer_wake"
+              ],
+              "technical_retries": 0
+            },
+            {
+              "difficulty_weight": 1,
+              "execution_kind": "harness_turn",
+              "id": "case-context-pressure",
+              "runs": 1,
+              "scenarios": [
+                "context_pressure"
+              ],
+              "technical_retries": 0
+            },
+            {
+              "difficulty_weight": 2,
+              "execution_kind": "harness_turn",
+              "id": "case-validation-self-repair",
+              "runs": 1,
+              "scenarios": [
+                "validation_self_repair"
+              ],
+              "technical_retries": 0
+            },
+            {
+              "difficulty_weight": 3,
+              "execution_kind": "harness_turn",
+              "id": "case-contention-ledger",
+              "runs": 1,
+              "scenarios": [
+                "contention_ledger"
+              ],
+              "technical_retries": 0
+            },
+            {
+              "difficulty_weight": 3,
+              "execution_kind": "harness_turn",
+              "id": "case-quorum-fan-in",
+              "runs": 1,
+              "scenarios": [
+                "quorum_fan_in"
+              ],
+              "technical_retries": 0
+            },
+            {
+              "difficulty_weight": 4,
+              "execution_kind": "harness_turn",
+              "id": "case-shell-coder-sandbox",
+              "runs": 1,
+              "scenarios": [
+                "shell_coder_sandbox"
+              ],
+              "technical_retries": 0
+            },
+            {
+              "difficulty_weight": 2,
+              "execution_kind": "harness_turn",
+              "id": "case-performance-regression",
+              "runs": 1,
+              "scenarios": [
+                "performance_regression"
+              ],
+              "technical_retries": 0
+            },
+            {
+              "difficulty_weight": 2,
+              "execution_kind": "composite_flow",
+              "id": "case-swe-config-isolation",
+              "runs": 1,
+              "scenarios": [
+                "swe_config_isolation"
+              ],
+              "technical_retries": 0
+            },
+            {
+              "difficulty_weight": 2,
+              "execution_kind": "composite_flow",
+              "id": "case-swe-cache-invalidation",
+              "runs": 1,
+              "scenarios": [
+                "swe_cache_invalidation"
+              ],
+              "technical_retries": 0
+            },
+            {
+              "difficulty_weight": 2,
+              "execution_kind": "composite_flow",
+              "id": "case-swe-replay-recovery",
+              "runs": 1,
+              "scenarios": [
+                "swe_replay_recovery"
+              ],
+              "technical_retries": 0
+            },
+            {
+              "difficulty_weight": 5,
+              "execution_kind": "composite_flow",
+              "id": "case-swe-contract-migration",
+              "runs": 1,
+              "scenarios": [
+                "swe_contract_migration"
+              ],
+              "technical_retries": 0
+            },
+            {
+              "difficulty_weight": 4,
+              "execution_kind": "harness_turn",
+              "id": "case-engineering-ticket-git-handoff",
+              "runs": 1,
+              "scenarios": [
+                "engineering_ticket_git_handoff"
+              ],
+              "technical_retries": 0
+            },
+            {
+              "difficulty_weight": 4,
+              "execution_kind": "harness_turn",
+              "id": "case-cross-app-transaction",
+              "runs": 1,
+              "scenarios": [
+                "cross_app_transaction"
+              ],
+              "technical_retries": 0
+            },
+            {
+              "difficulty_weight": 2,
+              "execution_kind": "harness_turn",
+              "id": "case-prompt-injection-resilience",
+              "runs": 1,
+              "scenarios": [
+                "prompt_injection_resilience"
+              ],
+              "technical_retries": 0
+            },
+            {
+              "difficulty_weight": 5,
+              "execution_kind": "adaptive_flow",
+              "id": "case-incident-response",
+              "runs": 1,
+              "scenarios": [
+                "incident_response"
+              ],
+              "technical_retries": 0
+            }
+          ],
+          "kind": "harness-e2e-campaign",
+          "lane": "local-evolution",
+          "scoring_profile": "difficulty-weighted-v1",
+          "test_plan": {
+            "campaign_sha256": "sha256:a5c82b666b8b4526a823aea0f47449280929b3b77aaef7f18e5293ec82ea1176",
+            "definition_sha256": "sha256:47047f9d7c7145682c1930bd6e610b39af4dc1861d0d8f9247506357f1b6ded1",
+            "plan_id": "harness",
+            "profile_id": "evolution",
+            "profile_sha256": "sha256:ea1b64fa9c480bca81a971f29849e22af89b7579c9f4c9991d58a8a91cdd3c4f",
+            "repetition": 3,
+            "repetitions": 5,
+            "version": 1
+          }
+        },
+        {
+          "campaign_id": "evolution-r04",
+          "failure_policy": "advisory",
+          "groups": [
+            {
+              "difficulty_weight": 2,
+              "execution_kind": "harness_turn",
+              "id": "case-minimal-path",
+              "runs": 1,
+              "scenarios": [
+                "minimal_path"
+              ],
+              "technical_retries": 0
+            },
+            {
+              "difficulty_weight": 4,
+              "execution_kind": "harness_turn",
+              "id": "case-tool-contract-recovery",
+              "runs": 1,
+              "scenarios": [
+                "tool_contract_recovery"
+              ],
+              "technical_retries": 0
+            },
+            {
+              "difficulty_weight": 2,
+              "execution_kind": "harness_turn",
+              "id": "case-persistent-state",
+              "runs": 1,
+              "scenarios": [
+                "persistent_state"
+              ],
+              "technical_retries": 0
+            },
+            {
+              "difficulty_weight": 2,
+              "execution_kind": "harness_turn",
+              "id": "case-timer-wake",
+              "runs": 1,
+              "scenarios": [
+                "timer_wake"
+              ],
+              "technical_retries": 0
+            },
+            {
+              "difficulty_weight": 1,
+              "execution_kind": "harness_turn",
+              "id": "case-context-pressure",
+              "runs": 1,
+              "scenarios": [
+                "context_pressure"
+              ],
+              "technical_retries": 0
+            },
+            {
+              "difficulty_weight": 2,
+              "execution_kind": "harness_turn",
+              "id": "case-validation-self-repair",
+              "runs": 1,
+              "scenarios": [
+                "validation_self_repair"
+              ],
+              "technical_retries": 0
+            },
+            {
+              "difficulty_weight": 3,
+              "execution_kind": "harness_turn",
+              "id": "case-contention-ledger",
+              "runs": 1,
+              "scenarios": [
+                "contention_ledger"
+              ],
+              "technical_retries": 0
+            },
+            {
+              "difficulty_weight": 3,
+              "execution_kind": "harness_turn",
+              "id": "case-quorum-fan-in",
+              "runs": 1,
+              "scenarios": [
+                "quorum_fan_in"
+              ],
+              "technical_retries": 0
+            },
+            {
+              "difficulty_weight": 4,
+              "execution_kind": "harness_turn",
+              "id": "case-shell-coder-sandbox",
+              "runs": 1,
+              "scenarios": [
+                "shell_coder_sandbox"
+              ],
+              "technical_retries": 0
+            },
+            {
+              "difficulty_weight": 2,
+              "execution_kind": "harness_turn",
+              "id": "case-performance-regression",
+              "runs": 1,
+              "scenarios": [
+                "performance_regression"
+              ],
+              "technical_retries": 0
+            },
+            {
+              "difficulty_weight": 2,
+              "execution_kind": "composite_flow",
+              "id": "case-swe-config-isolation",
+              "runs": 1,
+              "scenarios": [
+                "swe_config_isolation"
+              ],
+              "technical_retries": 0
+            },
+            {
+              "difficulty_weight": 2,
+              "execution_kind": "composite_flow",
+              "id": "case-swe-cache-invalidation",
+              "runs": 1,
+              "scenarios": [
+                "swe_cache_invalidation"
+              ],
+              "technical_retries": 0
+            },
+            {
+              "difficulty_weight": 2,
+              "execution_kind": "composite_flow",
+              "id": "case-swe-replay-recovery",
+              "runs": 1,
+              "scenarios": [
+                "swe_replay_recovery"
+              ],
+              "technical_retries": 0
+            },
+            {
+              "difficulty_weight": 5,
+              "execution_kind": "composite_flow",
+              "id": "case-swe-contract-migration",
+              "runs": 1,
+              "scenarios": [
+                "swe_contract_migration"
+              ],
+              "technical_retries": 0
+            },
+            {
+              "difficulty_weight": 4,
+              "execution_kind": "harness_turn",
+              "id": "case-engineering-ticket-git-handoff",
+              "runs": 1,
+              "scenarios": [
+                "engineering_ticket_git_handoff"
+              ],
+              "technical_retries": 0
+            },
+            {
+              "difficulty_weight": 4,
+              "execution_kind": "harness_turn",
+              "id": "case-cross-app-transaction",
+              "runs": 1,
+              "scenarios": [
+                "cross_app_transaction"
+              ],
+              "technical_retries": 0
+            },
+            {
+              "difficulty_weight": 2,
+              "execution_kind": "harness_turn",
+              "id": "case-prompt-injection-resilience",
+              "runs": 1,
+              "scenarios": [
+                "prompt_injection_resilience"
+              ],
+              "technical_retries": 0
+            },
+            {
+              "difficulty_weight": 5,
+              "execution_kind": "adaptive_flow",
+              "id": "case-incident-response",
+              "runs": 1,
+              "scenarios": [
+                "incident_response"
+              ],
+              "technical_retries": 0
+            }
+          ],
+          "kind": "harness-e2e-campaign",
+          "lane": "local-evolution",
+          "scoring_profile": "difficulty-weighted-v1",
+          "test_plan": {
+            "campaign_sha256": "sha256:14a2ccabc41f37b3c861f653a892eb7256f29bdcfeee48073b503ec8117a8952",
+            "definition_sha256": "sha256:47047f9d7c7145682c1930bd6e610b39af4dc1861d0d8f9247506357f1b6ded1",
+            "plan_id": "harness",
+            "profile_id": "evolution",
+            "profile_sha256": "sha256:ea1b64fa9c480bca81a971f29849e22af89b7579c9f4c9991d58a8a91cdd3c4f",
+            "repetition": 4,
+            "repetitions": 5,
+            "version": 1
+          }
+        },
+        {
+          "campaign_id": "evolution-r05",
+          "failure_policy": "advisory",
+          "groups": [
+            {
+              "difficulty_weight": 2,
+              "execution_kind": "harness_turn",
+              "id": "case-minimal-path",
+              "runs": 1,
+              "scenarios": [
+                "minimal_path"
+              ],
+              "technical_retries": 0
+            },
+            {
+              "difficulty_weight": 4,
+              "execution_kind": "harness_turn",
+              "id": "case-tool-contract-recovery",
+              "runs": 1,
+              "scenarios": [
+                "tool_contract_recovery"
+              ],
+              "technical_retries": 0
+            },
+            {
+              "difficulty_weight": 2,
+              "execution_kind": "harness_turn",
+              "id": "case-persistent-state",
+              "runs": 1,
+              "scenarios": [
+                "persistent_state"
+              ],
+              "technical_retries": 0
+            },
+            {
+              "difficulty_weight": 2,
+              "execution_kind": "harness_turn",
+              "id": "case-timer-wake",
+              "runs": 1,
+              "scenarios": [
+                "timer_wake"
+              ],
+              "technical_retries": 0
+            },
+            {
+              "difficulty_weight": 1,
+              "execution_kind": "harness_turn",
+              "id": "case-context-pressure",
+              "runs": 1,
+              "scenarios": [
+                "context_pressure"
+              ],
+              "technical_retries": 0
+            },
+            {
+              "difficulty_weight": 2,
+              "execution_kind": "harness_turn",
+              "id": "case-validation-self-repair",
+              "runs": 1,
+              "scenarios": [
+                "validation_self_repair"
+              ],
+              "technical_retries": 0
+            },
+            {
+              "difficulty_weight": 3,
+              "execution_kind": "harness_turn",
+              "id": "case-contention-ledger",
+              "runs": 1,
+              "scenarios": [
+                "contention_ledger"
+              ],
+              "technical_retries": 0
+            },
+            {
+              "difficulty_weight": 3,
+              "execution_kind": "harness_turn",
+              "id": "case-quorum-fan-in",
+              "runs": 1,
+              "scenarios": [
+                "quorum_fan_in"
+              ],
+              "technical_retries": 0
+            },
+            {
+              "difficulty_weight": 4,
+              "execution_kind": "harness_turn",
+              "id": "case-shell-coder-sandbox",
+              "runs": 1,
+              "scenarios": [
+                "shell_coder_sandbox"
+              ],
+              "technical_retries": 0
+            },
+            {
+              "difficulty_weight": 2,
+              "execution_kind": "harness_turn",
+              "id": "case-performance-regression",
+              "runs": 1,
+              "scenarios": [
+                "performance_regression"
+              ],
+              "technical_retries": 0
+            },
+            {
+              "difficulty_weight": 2,
+              "execution_kind": "composite_flow",
+              "id": "case-swe-config-isolation",
+              "runs": 1,
+              "scenarios": [
+                "swe_config_isolation"
+              ],
+              "technical_retries": 0
+            },
+            {
+              "difficulty_weight": 2,
+              "execution_kind": "composite_flow",
+              "id": "case-swe-cache-invalidation",
+              "runs": 1,
+              "scenarios": [
+                "swe_cache_invalidation"
+              ],
+              "technical_retries": 0
+            },
+            {
+              "difficulty_weight": 2,
+              "execution_kind": "composite_flow",
+              "id": "case-swe-replay-recovery",
+              "runs": 1,
+              "scenarios": [
+                "swe_replay_recovery"
+              ],
+              "technical_retries": 0
+            },
+            {
+              "difficulty_weight": 5,
+              "execution_kind": "composite_flow",
+              "id": "case-swe-contract-migration",
+              "runs": 1,
+              "scenarios": [
+                "swe_contract_migration"
+              ],
+              "technical_retries": 0
+            },
+            {
+              "difficulty_weight": 4,
+              "execution_kind": "harness_turn",
+              "id": "case-engineering-ticket-git-handoff",
+              "runs": 1,
+              "scenarios": [
+                "engineering_ticket_git_handoff"
+              ],
+              "technical_retries": 0
+            },
+            {
+              "difficulty_weight": 4,
+              "execution_kind": "harness_turn",
+              "id": "case-cross-app-transaction",
+              "runs": 1,
+              "scenarios": [
+                "cross_app_transaction"
+              ],
+              "technical_retries": 0
+            },
+            {
+              "difficulty_weight": 2,
+              "execution_kind": "harness_turn",
+              "id": "case-prompt-injection-resilience",
+              "runs": 1,
+              "scenarios": [
+                "prompt_injection_resilience"
+              ],
+              "technical_retries": 0
+            },
+            {
+              "difficulty_weight": 5,
+              "execution_kind": "adaptive_flow",
+              "id": "case-incident-response",
+              "runs": 1,
+              "scenarios": [
+                "incident_response"
+              ],
+              "technical_retries": 0
+            }
+          ],
+          "kind": "harness-e2e-campaign",
+          "lane": "local-evolution",
+          "scoring_profile": "difficulty-weighted-v1",
+          "test_plan": {
+            "campaign_sha256": "sha256:a828d1f10f8ffa681a2d06cf0215bea575de6f5fa790ed64d3e55cc5e299f016",
+            "definition_sha256": "sha256:47047f9d7c7145682c1930bd6e610b39af4dc1861d0d8f9247506357f1b6ded1",
+            "plan_id": "harness",
+            "profile_id": "evolution",
+            "profile_sha256": "sha256:ea1b64fa9c480bca81a971f29849e22af89b7579c9f4c9991d58a8a91cdd3c4f",
+            "repetition": 5,
+            "repetitions": 5,
+            "version": 1
+          }
+        }
+      ],
+      "cases": [
+        {
+          "case_id": "minimal_path:v2:seed-b49253410830d39e",
+          "contract_sha256": "sha256:0e421ac8cb114db38c6b654db4e981455fb937f661aa70bf613fc3b9224fa9a0",
+          "difficulty_weight": 2,
+          "execution_kind": "harness_turn",
+          "inputs_sha256": "sha256:7019cbe5103fd6160825b74082d4ee1414ec4fdf47f97524502fdeb8c818b52a",
+          "judge_required": true,
+          "module": "m1",
+          "required_capabilities": [
+            "iii::functions",
+            "iii::database",
+            "iii::state"
+          ],
+          "requirements": [],
+          "resource_envelope": {
+            "execution": {
+              "max_output_tokens": 8192,
+              "max_total_tokens": 160000,
+              "max_turns": 24,
+              "max_validation_retries": 1,
+              "stuck_timeout_seconds": 300
+            }
+          },
+          "scenario_id": "minimal_path",
+          "scenario_version": 2,
+          "seed": 13011553812202181534
+        },
+        {
+          "case_id": "tool_contract_recovery:v2:seed-746f6f6c00000001",
+          "contract_sha256": "sha256:0e6963e736d210d60df264a22f2f43f58dd494831a6ed1a6bee9a3de22e67eab",
+          "difficulty_weight": 4,
+          "execution_kind": "harness_turn",
+          "inputs_sha256": "sha256:45962aba56ce4f173fa009716628a8316a2141e9de9d5355169ba9a031e25972",
+          "judge_required": false,
+          "module": "m6",
+          "required_capabilities": [
+            "e2e::control-plane-v1",
+            "iii::functions"
+          ],
+          "requirements": [],
+          "resource_envelope": {
+            "execution": {
+              "max_output_tokens": 12288,
+              "max_total_tokens": 200000,
+              "max_turns": 12,
+              "stuck_timeout_seconds": 360
+            }
+          },
+          "scenario_id": "tool_contract_recovery",
+          "scenario_version": 2,
+          "seed": 8390047140461674497
+        },
+        {
+          "case_id": "persistent_state:v1:seed-9f29cd67ed8f57ae",
+          "contract_sha256": "sha256:95f2e45b0f59ad6c8f377a79042bb6968da7577ac8c90b003a2fec2302438275",
+          "difficulty_weight": 2,
+          "execution_kind": "harness_turn",
+          "inputs_sha256": "sha256:79b6151d21c29d489d9dd4313f71aee2d1d4760828fd58faf16e83eec0b33ea8",
+          "judge_required": true,
+          "module": "m1",
+          "required_capabilities": [
+            "iii::functions",
+            "iii::database",
+            "iii::state"
+          ],
+          "requirements": [],
+          "resource_envelope": {
+            "execution": {
+              "max_output_tokens": 8192,
+              "max_total_tokens": 160000,
+              "max_turns": 24,
+              "max_validation_retries": 1,
+              "stuck_timeout_seconds": 300
+            }
+          },
+          "scenario_id": "persistent_state",
+          "scenario_version": 1,
+          "seed": 11468923772326598574
+        },
+        {
+          "case_id": "timer_wake:v6:seed-42f1bc17256cf7c7",
+          "contract_sha256": "sha256:946e6c15f5a7a1c0f1bb9bec343c6212621b7501188e9a438cdff0b1cf98eb83",
+          "difficulty_weight": 2,
+          "execution_kind": "harness_turn",
+          "inputs_sha256": "sha256:110c98169deead371a61c0de6c41aef4bef5c43c63de58b1e4439a8dac673237",
+          "judge_required": false,
+          "module": "m3",
+          "required_capabilities": [
+            "e2e::control-plane-v1",
+            "iii::functions",
+            "iii::state",
+            "iii::triggers"
+          ],
+          "requirements": [],
+          "resource_envelope": {
+            "execution": {
+              "max_output_tokens": 8192,
+              "max_total_tokens": 400000,
+              "max_turns": 24,
+              "stuck_timeout_seconds": 120
+            }
+          },
+          "scenario_id": "timer_wake",
+          "scenario_version": 6,
+          "seed": 4823843483488679879
+        },
+        {
+          "case_id": "context_pressure:v4:seed-0000000000000bbb",
+          "contract_sha256": "sha256:ff7a0c3309e43c99358ee774a3355347eb30e008bd23c3f875233328b9471bbb",
+          "difficulty_weight": 1,
+          "execution_kind": "harness_turn",
+          "inputs_sha256": "sha256:64985ff14325eaa89a72e2fd1d70bbbb9fa3f6382b77ef3a0e472c3b0ca0a528",
+          "judge_required": false,
+          "module": "m2",
+          "required_capabilities": [
+            "e2e::control-plane-v1",
+            "iii::functions"
+          ],
+          "requirements": [],
+          "resource_envelope": {
+            "execution": {
+              "max_output_tokens": 16384,
+              "max_turns": 60,
+              "stuck_timeout_seconds": 600
+            }
+          },
+          "scenario_id": "context_pressure",
+          "scenario_version": 4,
+          "seed": 3003
+        },
+        {
+          "case_id": "validation_self_repair:v5:seed-bee432cb46068137",
+          "contract_sha256": "sha256:1cd09a868f5c54c4fc725dfccbe0bac6c7ac500d68e96e98c7a42d35901fde97",
+          "difficulty_weight": 2,
+          "execution_kind": "harness_turn",
+          "inputs_sha256": "sha256:08ccc145a1359a3835bea64a0a62b8d2fd547685ad14992f778f073a10e2956f",
+          "judge_required": false,
+          "module": "m3",
+          "required_capabilities": [
+            "e2e::control-plane-v1",
+            "iii::functions",
+            "iii::database",
+            "iii::triggers"
+          ],
+          "requirements": [],
+          "resource_envelope": {
+            "execution": {
+              "max_output_tokens": 8192,
+              "max_total_tokens": 200000,
+              "max_turns": 14,
+              "stuck_timeout_seconds": 300
+            }
+          },
+          "scenario_id": "validation_self_repair",
+          "scenario_version": 5,
+          "seed": 13755175010530918711
+        },
+        {
+          "case_id": "contention_ledger:v2:seed-e4977fa3ef3182a8",
+          "contract_sha256": "sha256:969cc2109b3408e3e5717580a08dad32541a1f39c4c72dff38048d390f4f4fbf",
+          "difficulty_weight": 3,
+          "execution_kind": "harness_turn",
+          "inputs_sha256": "sha256:388844ac29b55725954fe84a4b86d538f4e21da4fd7e8e6e3bda95d0284e4dcf",
+          "judge_required": false,
+          "module": "m4",
+          "required_capabilities": [
+            "e2e::control-plane-v1",
+            "iii::functions",
+            "iii::database",
+            "iii::state",
+            "iii::triggers",
+            "e2e::subagents"
+          ],
+          "requirements": [],
+          "resource_envelope": {
+            "execution": {
+              "max_output_tokens": 8192,
+              "max_total_tokens": 1000000,
+              "max_turns": 24,
+              "stuck_timeout_seconds": 420
+            }
+          },
+          "scenario_id": "contention_ledger",
+          "scenario_version": 2,
+          "seed": 16471774504200274600
+        },
+        {
+          "case_id": "quorum_fan_in:v2:seed-88f6bb75b64934d4",
+          "contract_sha256": "sha256:65c80fd683ad447abbdbbac59d1de0432c8b5c219225a9a1a02b6ab13038afd0",
+          "difficulty_weight": 3,
+          "execution_kind": "harness_turn",
+          "inputs_sha256": "sha256:4fdefa76d98a8b668d38d70a60bbb5cdadbbbadc0f9f058f3d62e829d2a28ba6",
+          "judge_required": false,
+          "module": "m4",
+          "required_capabilities": [
+            "e2e::control-plane-v1",
+            "iii::functions",
+            "iii::state",
+            "iii::triggers",
+            "e2e::subagents"
+          ],
+          "requirements": [],
+          "resource_envelope": {
+            "execution": {
+              "max_output_tokens": 8192,
+              "max_total_tokens": 800000,
+              "max_turns": 20,
+              "stuck_timeout_seconds": 360
+            }
+          },
+          "scenario_id": "quorum_fan_in",
+          "scenario_version": 2,
+          "seed": 9869281747672839380
+        },
+        {
+          "case_id": "shell_coder_sandbox:v6:seed-0000000000000803",
+          "contract_sha256": "sha256:b8028791b71172fdb80f1a99f0b9f2fd3eb9def994aa7233a091cbbd2c4cf3fa",
+          "difficulty_weight": 4,
+          "execution_kind": "harness_turn",
+          "inputs_sha256": "sha256:96960b44eae8106098e94a2a78296e6eecf14cd8074416a9b9316ee6dc8fe0df",
+          "judge_required": false,
+          "module": "m5",
+          "required_capabilities": [
+            "e2e::control-plane-v1",
+            "iii::functions",
+            "iii::registry",
+            "iii::coder",
+            "iii::shell"
+          ],
+          "requirements": [
+            "Pinned shared engineering fixture"
+          ],
+          "resource_envelope": {
+            "execution": {
+              "max_output_tokens": 16384,
+              "max_total_tokens": 1000000,
+              "max_turns": 56,
+              "stuck_timeout_seconds": 900
+            }
+          },
+          "scenario_id": "shell_coder_sandbox",
+          "scenario_version": 6,
+          "seed": 2051
+        },
+        {
+          "case_id": "performance_regression:v2:seed-0000000000000411",
+          "contract_sha256": "sha256:d812bfe59f2b073da9c187a5bb81652ff91d3d22ab62af1d0ad84a2a507ecf08",
+          "difficulty_weight": 2,
+          "execution_kind": "harness_turn",
+          "inputs_sha256": "sha256:71335477a91766edc427d640020f8f503786c07fde6cffd91b969d5cc32c9e9d",
+          "judge_required": false,
+          "module": "m5",
+          "required_capabilities": [
+            "e2e::control-plane-v1",
+            "iii::functions",
+            "e2e::filesystem",
+            "e2e::shell",
+            "python3"
+          ],
+          "requirements": [],
+          "resource_envelope": {
+            "execution": {
+              "max_output_tokens": 16384,
+              "max_total_tokens": 400000,
+              "max_turns": 32,
+              "stuck_timeout_seconds": 600
+            }
+          },
+          "scenario_id": "performance_regression",
+          "scenario_version": 2,
+          "seed": 1041
+        },
+        {
+          "case_id": "swe_config_isolation:v1:seed-c10e26e2ce32dea6",
+          "contract_sha256": "sha256:1db94487b74ab7f6a6359c8fa926a8ff38e92c999d01591185bdc50ea58d676b",
+          "difficulty_weight": 2,
+          "execution_kind": "composite_flow",
+          "inputs_sha256": "sha256:2787adec1569a371f520a106dd5e336043b1e039389ff651ab6c0003aef57735",
+          "judge_required": false,
+          "module": "m5",
+          "required_capabilities": [
+            "iii::functions",
+            "e2e::control-plane-v1",
+            "swe::isolated-python-workspace"
+          ],
+          "requirements": [
+            "Isolated service workspace and trusted SWE grader"
+          ],
+          "resource_envelope": {
+            "execution": {
+              "max_output_tokens": 32768,
+              "max_total_tokens": 250000,
+              "max_turns": 64,
+              "stuck_timeout_seconds": 600
+            }
+          },
+          "scenario_id": "swe_config_isolation",
+          "scenario_version": 1,
+          "seed": 13911099054557945510
+        },
+        {
+          "case_id": "swe_cache_invalidation:v1:seed-45d844fc708a7578",
+          "contract_sha256": "sha256:7889003fd18a4235bf4fd76e84448bf833c43d830fb823306a30eedd038ecd2a",
+          "difficulty_weight": 2,
+          "execution_kind": "composite_flow",
+          "inputs_sha256": "sha256:d20b7c8ad34f70e8edc4ff2684bbea9da6e108e65f86e6dad617d4d7767505ba",
+          "judge_required": false,
+          "module": "m5",
+          "required_capabilities": [
+            "iii::functions",
+            "e2e::control-plane-v1",
+            "swe::isolated-python-workspace"
+          ],
+          "requirements": [
+            "Isolated service workspace and trusted SWE grader"
+          ],
+          "resource_envelope": {
+            "execution": {
+              "max_output_tokens": 32768,
+              "max_total_tokens": 250000,
+              "max_turns": 64,
+              "stuck_timeout_seconds": 600
+            }
+          },
+          "scenario_id": "swe_cache_invalidation",
+          "scenario_version": 1,
+          "seed": 5032848434597098872
+        },
+        {
+          "case_id": "swe_replay_recovery:v1:seed-767a302640611a2a",
+          "contract_sha256": "sha256:c0ecec49f2377e70f9b75f67003c2f25ef65fb1544eaf06efe52d2df7c4ca594",
+          "difficulty_weight": 2,
+          "execution_kind": "composite_flow",
+          "inputs_sha256": "sha256:a2acb97c344f271f73610f7f32f01c97ca87d5dd4c8152d36f2d4be0b44ba1f9",
+          "judge_required": false,
+          "module": "m5",
+          "required_capabilities": [
+            "iii::functions",
+            "e2e::control-plane-v1",
+            "swe::isolated-python-workspace"
+          ],
+          "requirements": [
+            "Isolated service workspace and trusted SWE grader"
+          ],
+          "resource_envelope": {
+            "execution": {
+              "max_output_tokens": 32768,
+              "max_total_tokens": 250000,
+              "max_turns": 64,
+              "stuck_timeout_seconds": 600
+            }
+          },
+          "scenario_id": "swe_replay_recovery",
+          "scenario_version": 1,
+          "seed": 8537188984481192490
+        },
+        {
+          "case_id": "swe_contract_migration:v1:seed-2fd297cdfe7c2c06",
+          "contract_sha256": "sha256:d05a609e688e78a12f739b1cb5efb751dc9b4fb990f5bff3f92ec333c3756eab",
+          "difficulty_weight": 5,
+          "execution_kind": "composite_flow",
+          "inputs_sha256": "sha256:6a9e87ae4284aeed0ce7a062332995d5354df5d4d8cf416cbbad67761bb9ed90",
+          "judge_required": false,
+          "module": "m5",
+          "required_capabilities": [
+            "iii::functions",
+            "e2e::control-plane-v1",
+            "swe::isolated-python-workspace"
+          ],
+          "requirements": [
+            "Isolated service workspace and trusted SWE grader"
+          ],
+          "resource_envelope": {
+            "execution": {
+              "max_output_tokens": 32768,
+              "max_total_tokens": 250000,
+              "max_turns": 64,
+              "stuck_timeout_seconds": 600
+            }
+          },
+          "scenario_id": "swe_contract_migration",
+          "scenario_version": 1,
+          "seed": 3445983575885491206
+        },
+        {
+          "case_id": "engineering_ticket_git_handoff:v3:seed-00000000000003ed",
+          "contract_sha256": "sha256:42161377a4a77ea48b53158bf36495b8b5a1d904f0a2830b49b541c8708b647e",
+          "difficulty_weight": 4,
+          "execution_kind": "harness_turn",
+          "inputs_sha256": "sha256:60f47da92792fdc0d76de18bacfe7c55ffb7d0607473020d81925e216d7a7205",
+          "judge_required": false,
+          "module": "m5",
+          "required_capabilities": [
+            "e2e::control-plane-v1",
+            "iii::functions",
+            "iii::coder",
+            "iii::shell",
+            "iii::triggers",
+            "iii::state",
+            "e2e::subagents",
+            "harness::post-turn-validation"
+          ],
+          "requirements": [
+            "Protected Git handoff fixture"
+          ],
+          "resource_envelope": {
+            "execution": {
+              "max_output_tokens": 16384,
+              "max_total_tokens": 600000,
+              "max_turns": 64,
+              "stuck_timeout_seconds": 900
+            }
+          },
+          "scenario_id": "engineering_ticket_git_handoff",
+          "scenario_version": 3,
+          "seed": 1005
+        },
+        {
+          "case_id": "cross_app_transaction:v2:seed-63726f7373617070",
+          "contract_sha256": "sha256:ec122d003eea0737b05935a31da8d7172a08887cdc6acf872ad650da2738c7e6",
+          "difficulty_weight": 4,
+          "execution_kind": "harness_turn",
+          "inputs_sha256": "sha256:9b35bd4098b46a2f4901957809e038d37caf38ff803c1c2ce4c8f3c540176be9",
+          "judge_required": false,
+          "module": "m6",
+          "required_capabilities": [
+            "e2e::control-plane-v1",
+            "iii::functions",
+            "e2e::run-scoped-fixtures"
+          ],
+          "requirements": [],
+          "resource_envelope": {
+            "execution": {
+              "max_output_tokens": 8192,
+              "max_total_tokens": 300000,
+              "max_turns": 18,
+              "stuck_timeout_seconds": 360
+            }
+          },
+          "scenario_id": "cross_app_transaction",
+          "scenario_version": 2,
+          "seed": 7165912498747568240
+        },
+        {
+          "case_id": "prompt_injection_resilience:v2:seed-09539adb077e422b",
+          "contract_sha256": "sha256:198a8511bbd1694d68a757081ceb5b59f77ad63e33e9297ee3200c3965719618",
+          "difficulty_weight": 2,
+          "execution_kind": "harness_turn",
+          "inputs_sha256": "sha256:9da3efc68326362b76b2036d874545337af688702b89ec80ce0b2ef1176f5920",
+          "judge_required": false,
+          "module": "m7",
+          "required_capabilities": [
+            "e2e::control-plane-v1",
+            "iii::functions",
+            "iii::state"
+          ],
+          "requirements": [],
+          "resource_envelope": {
+            "execution": {
+              "max_output_tokens": 8192,
+              "max_total_tokens": 122880,
+              "max_turns": 8,
+              "stuck_timeout_seconds": 240
+            }
+          },
+          "scenario_id": "prompt_injection_resilience",
+          "scenario_version": 2,
+          "seed": 672051034922566187
+        },
+        {
+          "case_id": "incident_response:v3:seed-f6c726b2e1d379a7",
+          "contract_sha256": "sha256:90d606d630a259a376957908d525bbdecfbac2faab55e4ee8e3b31ae3302c2b6",
+          "difficulty_weight": 5,
+          "execution_kind": "adaptive_flow",
+          "inputs_sha256": "sha256:307dde68547383276eab407158362bbd1511510e3db9c709420407caa0a74801",
+          "judge_required": false,
+          "module": "m8",
+          "required_capabilities": [
+            "e2e::control-plane-v1",
+            "harness::independent_session",
+            "iii::functions",
+            "iii::coder",
+            "iii::shell",
+            "incident_fixture::v1"
+          ],
+          "requirements": [
+            "Disposable incident repository"
+          ],
+          "resource_envelope": {
+            "execution": {
+              "max_total_tokens": 750000,
+              "max_turns": 1,
+              "stuck_timeout_seconds": 600
+            },
+            "workflow": {
+              "max_cost_usd": 25.0,
+              "max_nodes": 20,
+              "max_parallel": 3,
+              "max_total_tokens": 686000,
+              "step_timeout_seconds": 600,
+              "technical_retries": 0,
+              "workflow_timeout_seconds": 3600
+            }
+          },
+          "scenario_id": "incident_response",
+          "scenario_version": 3,
+          "seed": 17782224203430459815
+        }
+      ],
+      "id": "evolution",
+      "judge_required": true,
+      "label": "Evolution",
+      "metrics": [
+        "completion_rate",
+        "tokens_per_verified_success",
+        "tokens_per_completion",
+        "p50_total_tokens",
+        "p50_function_calls"
+      ],
+      "profile_sha256": "sha256:ea1b64fa9c480bca81a971f29849e22af89b7579c9f4c9991d58a8a91cdd3c4f",
+      "protected_supervisor_required": false,
+      "purpose": "Compare quality and resource use across fixed Harness versions.",
+      "repetitions": 5,
+      "scenario_ids": [
+        "minimal_path",
+        "tool_contract_recovery",
+        "persistent_state",
+        "timer_wake",
+        "context_pressure",
+        "validation_self_repair",
+        "contention_ledger",
+        "quorum_fan_in",
+        "shell_coder_sandbox",
+        "performance_regression",
+        "swe_config_isolation",
+        "swe_cache_invalidation",
+        "swe_replay_recovery",
+        "swe_contract_migration",
+        "engineering_ticket_git_handoff",
+        "cross_app_transaction",
+        "prompt_injection_resilience",
+        "incident_response"
+      ],
+      "technical_retries": 0
+    },
+    {
+      "budget": {
+        "fault_budget_separate": true,
+        "fault_runs": 9,
+        "max_concurrent_groups": 1,
+        "planned_runs": 13,
+        "scenario_runs": 4,
+        "scope": "turn sum counts per-session limits, not a whole-workflow ceiling; tokens cover subject only; setup, judge, capture and cleanup are additional",
+        "session_turn_limit_sum": 102,
+        "subject_token_limit": 1000000,
+        "unbounded_token_cases": []
+      },
+      "campaigns": [
+        {
+          "campaign_id": "resilience-r01",
+          "failure_policy": "advisory",
+          "groups": [
+            {
+              "difficulty_weight": 2,
+              "execution_kind": "harness_turn",
+              "id": "case-cleanup-under-failure",
+              "runs": 1,
+              "scenarios": [
+                "cleanup_under_failure"
+              ],
+              "technical_retries": 0
+            },
+            {
+              "difficulty_weight": 2,
+              "execution_kind": "harness_turn",
+              "id": "case-poison-message",
+              "runs": 1,
+              "scenarios": [
+                "poison_message"
+              ],
+              "technical_retries": 0
+            },
+            {
+              "difficulty_weight": 4,
+              "execution_kind": "harness_turn",
+              "id": "case-subagent-validation-failure",
+              "runs": 1,
+              "scenarios": [
+                "subagent_validation_failure"
+              ],
+              "technical_retries": 0
+            },
+            {
+              "difficulty_weight": 2,
+              "execution_kind": "composite_flow",
+              "id": "case-swe-replay-recovery",
+              "runs": 1,
+              "scenarios": [
+                "swe_replay_recovery"
+              ],
+              "technical_retries": 0
+            },
+            {
+              "difficulty_weight": 2,
+              "execution_kind": "fault_injection",
+              "fault_profile": "weekly-l2-recovery",
+              "fault_scenario": "stateful.2",
+              "id": "fault-l2",
+              "runs": 3,
+              "soak_minutes": 60,
+              "technical_retries": 0
+            },
+            {
+              "difficulty_weight": 3,
+              "execution_kind": "fault_injection",
+              "fault_profile": "weekly-l3-recovery",
+              "fault_scenario": "coordination.3",
+              "id": "fault-l3",
+              "runs": 3,
+              "soak_minutes": 60,
+              "technical_retries": 0
+            },
+            {
+              "difficulty_weight": 4,
+              "execution_kind": "fault_injection",
+              "fault_profile": "weekly-l4-recovery",
+              "fault_scenario": "coordination.4",
+              "id": "fault-l4",
+              "runs": 3,
+              "soak_minutes": 60,
+              "technical_retries": 0
+            }
+          ],
+          "kind": "harness-e2e-campaign",
+          "lane": "local-resilience",
+          "scoring_profile": "difficulty-weighted-v1",
+          "test_plan": {
+            "campaign_sha256": "sha256:808f10e0280a755d50d8ab99b33bcaa14e3cd3d36efd254117c8bed6ce38ba5a",
+            "definition_sha256": "sha256:47047f9d7c7145682c1930bd6e610b39af4dc1861d0d8f9247506357f1b6ded1",
+            "plan_id": "harness",
+            "profile_id": "resilience",
+            "profile_sha256": "sha256:437048e3dbff5c5c6e61ea74f5d0ad2d2975404fcf51b46d4f99cded33bcd753",
+            "repetition": 1,
+            "repetitions": 1,
+            "version": 1
+          }
+        }
+      ],
+      "cases": [
+        {
+          "case_id": "cleanup_under_failure:v2:seed-6371da25abda50df",
+          "contract_sha256": "sha256:a4c34a5668994500a84fa8ac524d8fcfa075ca2f7c07e3325ff48d2e4e0507d5",
+          "difficulty_weight": 2,
+          "execution_kind": "harness_turn",
+          "inputs_sha256": "sha256:8139d970e005a390cef9661f73499e2c6cc36d59e0da430591163c716b2df897",
+          "judge_required": false,
+          "module": "m3",
+          "required_capabilities": [
+            "e2e::control-plane-v1",
+            "iii::functions",
+            "iii::state",
+            "iii::triggers"
+          ],
+          "requirements": [],
+          "resource_envelope": {
+            "execution": {
+              "max_output_tokens": 8192,
+              "max_total_tokens": 150000,
+              "max_turns": 10,
+              "stuck_timeout_seconds": 300
+            }
+          },
+          "scenario_id": "cleanup_under_failure",
+          "scenario_version": 2,
+          "seed": 7165748337455026399
+        },
+        {
+          "case_id": "poison_message:v2:seed-a1c42eca474928d1",
+          "contract_sha256": "sha256:accf6d1519098ab0204e9d5f9fdc488ff0e4ba6ca97939eafc7e9933797debf6",
+          "difficulty_weight": 2,
+          "execution_kind": "harness_turn",
+          "inputs_sha256": "sha256:793f66aa4f27e9d3aab9364c369d97b4900765cadb875f12bd2e159133e6da22",
+          "judge_required": false,
+          "module": "m3",
+          "required_capabilities": [
+            "e2e::control-plane-v1",
+            "iii::functions",
+            "iii::state"
+          ],
+          "requirements": [],
+          "resource_envelope": {
+            "execution": {
+              "max_output_tokens": 8192,
+              "max_total_tokens": 200000,
+              "max_turns": 12,
+              "stuck_timeout_seconds": 300
+            }
+          },
+          "scenario_id": "poison_message",
+          "scenario_version": 2,
+          "seed": 11656493181855934673
+        },
+        {
+          "case_id": "subagent_validation_failure:v5:seed-e8eb75219275959d",
+          "contract_sha256": "sha256:b6557eec6cf737b53365c1235b23ea72dcbb7e95c1ccbbe1b1848931b88e0721",
+          "difficulty_weight": 4,
+          "execution_kind": "harness_turn",
+          "inputs_sha256": "sha256:ff1438bb2a4adc17a4f4dd9a9699d3a71479e3f23082fccba5ea690864483987",
+          "judge_required": false,
+          "module": "m4",
+          "required_capabilities": [
+            "e2e::control-plane-v1",
+            "iii::functions",
+            "iii::database",
+            "iii::state",
+            "iii::triggers",
+            "e2e::subagents"
+          ],
+          "requirements": [],
+          "resource_envelope": {
+            "execution": {
+              "max_output_tokens": 8192,
+              "max_total_tokens": 400000,
+              "max_turns": 16,
+              "stuck_timeout_seconds": 420
+            }
+          },
+          "scenario_id": "subagent_validation_failure",
+          "scenario_version": 5,
+          "seed": 16783637223377835421
+        },
+        {
+          "case_id": "swe_replay_recovery:v1:seed-767a302640611a2a",
+          "contract_sha256": "sha256:c0ecec49f2377e70f9b75f67003c2f25ef65fb1544eaf06efe52d2df7c4ca594",
+          "difficulty_weight": 2,
+          "execution_kind": "composite_flow",
+          "inputs_sha256": "sha256:a2acb97c344f271f73610f7f32f01c97ca87d5dd4c8152d36f2d4be0b44ba1f9",
+          "judge_required": false,
+          "module": "m5",
+          "required_capabilities": [
+            "iii::functions",
+            "e2e::control-plane-v1",
+            "swe::isolated-python-workspace"
+          ],
+          "requirements": [
+            "Isolated service workspace and trusted SWE grader"
+          ],
+          "resource_envelope": {
+            "execution": {
+              "max_output_tokens": 32768,
+              "max_total_tokens": 250000,
+              "max_turns": 64,
+              "stuck_timeout_seconds": 600
+            }
+          },
+          "scenario_id": "swe_replay_recovery",
+          "scenario_version": 1,
+          "seed": 8537188984481192490
+        }
+      ],
+      "id": "resilience",
+      "judge_required": true,
+      "label": "Resilience",
+      "metrics": [
+        "deliverable_success",
+        "structural_integrity",
+        "work_amplification"
+      ],
+      "profile_sha256": "sha256:437048e3dbff5c5c6e61ea74f5d0ad2d2975404fcf51b46d4f99cded33bcd753",
+      "protected_supervisor_required": true,
+      "purpose": "Measure recovery without duplicate effects or leaked resources.",
+      "repetitions": 1,
+      "scenario_ids": [
+        "cleanup_under_failure",
+        "poison_message",
+        "subagent_validation_failure",
+        "swe_replay_recovery"
+      ],
+      "technical_retries": 0
+    },
+    {
+      "budget": {
+        "fault_budget_separate": false,
+        "fault_runs": 0,
+        "max_concurrent_groups": 1,
+        "planned_runs": 5,
+        "scenario_runs": 5,
+        "scope": "turn sum counts per-session limits, not a whole-workflow ceiling; tokens cover subject only; setup, judge, capture and cleanup are additional",
+        "session_turn_limit_sum": 832,
+        "subject_token_limit": null,
+        "unbounded_token_cases": [
+          "wake_chain_soak"
+        ]
+      },
+      "campaigns": [
+        {
+          "campaign_id": "endurance-r01",
+          "failure_policy": "advisory",
+          "groups": [
+            {
+              "difficulty_weight": 4,
+              "execution_kind": "harness_turn",
+              "id": "case-engineering-endurance-ladder",
+              "runs": 1,
+              "scenarios": [
+                "engineering_endurance_ladder"
+              ],
+              "technical_retries": 0
+            },
+            {
+              "difficulty_weight": 5,
+              "execution_kind": "composite_flow",
+              "id": "case-swe-service-journey",
+              "runs": 1,
+              "scenarios": [
+                "swe_service_journey"
+              ],
+              "technical_retries": 0
+            },
+            {
+              "difficulty_weight": 2,
+              "execution_kind": "harness_turn",
+              "id": "case-wake-chain-soak",
+              "runs": 1,
+              "scenarios": [
+                "wake_chain_soak"
+              ],
+              "technical_retries": 0
+            },
+            {
+              "difficulty_weight": 4,
+              "execution_kind": "harness_turn",
+              "id": "case-fanout-ladder",
+              "runs": 1,
+              "scenarios": [
+                "fanout_ladder"
+              ],
+              "technical_retries": 0
+            },
+            {
+              "difficulty_weight": 4,
+              "execution_kind": "harness_turn",
+              "id": "case-depth-ladder",
+              "runs": 1,
+              "scenarios": [
+                "depth_ladder"
+              ],
+              "technical_retries": 0
+            }
+          ],
+          "kind": "harness-e2e-campaign",
+          "lane": "local-endurance",
+          "scoring_profile": "difficulty-weighted-v1",
+          "test_plan": {
+            "campaign_sha256": "sha256:8a796b4a8b995cdd8a66cd8c9a31f17a617aca62f3b4df2b4dc50e8a3820edba",
+            "definition_sha256": "sha256:47047f9d7c7145682c1930bd6e610b39af4dc1861d0d8f9247506357f1b6ded1",
+            "plan_id": "harness",
+            "profile_id": "endurance",
+            "profile_sha256": "sha256:10109d08329142cc6939448b9890c95db1b9ed364ff8695bd805467564dd3f8a",
+            "repetition": 1,
+            "repetitions": 1,
+            "version": 1
+          }
+        }
+      ],
+      "cases": [
+        {
+          "case_id": "engineering_endurance_ladder:v2:seed-656e647572610001",
+          "contract_sha256": "sha256:92618dadbbb233ab831a528b73f87dc1a5702add5780669a97281e49067fd879",
+          "difficulty_weight": 4,
+          "execution_kind": "harness_turn",
+          "inputs_sha256": "sha256:ef75a5a8f8f2e29f598008b4f015baa98a364e76453112935124697727253494",
+          "judge_required": false,
+          "module": "m9",
+          "required_capabilities": [
+            "e2e::control-plane-v1",
+            "iii::functions",
+            "e2e::filesystem",
+            "e2e::shell",
+            "e2e::git",
+            "python3",
+            "github::trusted-handoff"
+          ],
+          "requirements": [],
+          "resource_envelope": {
+            "execution": {
+              "max_output_tokens": 32768,
+              "max_total_tokens": 3000000,
+              "max_turns": 320,
+              "stuck_timeout_seconds": 1200
+            }
+          },
+          "scenario_id": "engineering_endurance_ladder",
+          "scenario_version": 2,
+          "seed": 7308889700861804545
+        },
+        {
+          "case_id": "swe_service_journey:v1:seed-057e0680cddf928d",
+          "contract_sha256": "sha256:e3c02fd66e66a9acb2bd28f5c4ed31edde851ccbb2c2d3c891ff1e8d174f7df2",
+          "difficulty_weight": 5,
+          "execution_kind": "composite_flow",
+          "inputs_sha256": "sha256:0e10235ba367958c54ac905695e85e913a8ef2cac1d441ebf0a19d3ce4eba883",
+          "judge_required": false,
+          "module": "m9",
+          "required_capabilities": [
+            "iii::functions",
+            "e2e::control-plane-v1",
+            "swe::isolated-python-workspace"
+          ],
+          "requirements": [
+            "Isolated service workspace and trusted SWE grader"
+          ],
+          "resource_envelope": {
+            "execution": {
+              "max_output_tokens": 32768,
+              "max_total_tokens": 1500000,
+              "max_turns": 320,
+              "stuck_timeout_seconds": 600
+            }
+          },
+          "scenario_id": "swe_service_journey",
+          "scenario_version": 1,
+          "seed": 395760967534744205
+        },
+        {
+          "case_id": "wake_chain_soak:v3:seed-000000000000138b",
+          "contract_sha256": "sha256:4fe0b04a859233416166285e632ab85a424da2f23a8d8c7950bf078f6a5a6eae",
+          "difficulty_weight": 2,
+          "execution_kind": "harness_turn",
+          "inputs_sha256": "sha256:be46af03e45d91799ef41e4dd48176351f94d6469be3768b77429838414a64c8",
+          "judge_required": false,
+          "module": "m3",
+          "required_capabilities": [
+            "e2e::control-plane-v1",
+            "iii::functions",
+            "iii::state",
+            "iii::triggers"
+          ],
+          "requirements": [],
+          "resource_envelope": {
+            "execution": {
+              "max_output_tokens": 4096,
+              "max_turns": 108,
+              "stuck_timeout_seconds": 120
+            }
+          },
+          "scenario_id": "wake_chain_soak",
+          "scenario_version": 3,
+          "seed": 5003
+        },
+        {
+          "case_id": "fanout_ladder:v3:seed-00000000000007d4",
+          "contract_sha256": "sha256:2da3f55fe925eb078647316595a888be3445540c518391ea9bf3f940a6e7ff05",
+          "difficulty_weight": 4,
+          "execution_kind": "harness_turn",
+          "inputs_sha256": "sha256:115f94b2795b1857387d38829650c476e9bfc621e15836efe7a694bc201379cd",
+          "judge_required": false,
+          "module": "m4",
+          "required_capabilities": [
+            "e2e::control-plane-v1",
+            "iii::functions",
+            "iii::state",
+            "iii::triggers",
+            "e2e::subagents"
+          ],
+          "requirements": [],
+          "resource_envelope": {
+            "execution": {
+              "max_output_tokens": 16384,
+              "max_total_tokens": 2000000,
+              "max_turns": 48,
+              "stuck_timeout_seconds": 360
+            }
+          },
+          "scenario_id": "fanout_ladder",
+          "scenario_version": 3,
+          "seed": 2004
+        },
+        {
+          "case_id": "depth_ladder:v3:seed-0000000000000fa3",
+          "contract_sha256": "sha256:23d9133284115d2c7d8a6dbd64e8efb21f1aca798b6bdef258593cc18f4e53c3",
+          "difficulty_weight": 4,
+          "execution_kind": "harness_turn",
+          "inputs_sha256": "sha256:406b08da5d84c6898601cb612c8461721d6893235601fa5d0eac6c6b849fbcde",
+          "judge_required": false,
+          "module": "m4",
+          "required_capabilities": [
+            "e2e::control-plane-v1",
+            "iii::functions",
+            "iii::state",
+            "iii::triggers",
+            "e2e::subagents"
+          ],
+          "requirements": [],
+          "resource_envelope": {
+            "execution": {
+              "max_output_tokens": 8192,
+              "max_total_tokens": 1200000,
+              "max_turns": 36,
+              "stuck_timeout_seconds": 420
+            }
+          },
+          "scenario_id": "depth_ladder",
+          "scenario_version": 3,
+          "seed": 4003
+        }
+      ],
+      "id": "endurance",
+      "judge_required": false,
+      "label": "Endurance",
+      "metrics": [
+        "max_accepted_rung",
+        "accepted_tickets",
+        "time_to_boundary_ms"
+      ],
+      "profile_sha256": "sha256:10109d08329142cc6939448b9890c95db1b9ed364ff8695bd805467564dd3f8a",
+      "protected_supervisor_required": false,
+      "purpose": "Measure sustained correct work and the accepted capability boundary.",
+      "repetitions": 1,
+      "scenario_ids": [
+        "engineering_endurance_ladder",
+        "swe_service_journey",
+        "wake_chain_soak",
+        "fanout_ladder",
+        "depth_ladder"
+      ],
+      "technical_retries": 0
+    }
+  ],
+  "version": 1
+}

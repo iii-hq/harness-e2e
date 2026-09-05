@@ -67,7 +67,14 @@ import {
   type PlanVerdict,
   executionMetricValue as planMetricValue,
 } from '@/lib/plan-comparison'
+import {
+  downloadJson,
+  type PlanExecution,
+  type PlanRequirements,
+  planAction,
+} from '@/lib/plan-execution'
 import { watchExecution } from '@/lib/watch-execution'
+import { PlanProgress, Requirements } from './PlanExecutionPage'
 
 /* ------------------------------------------------------------- helpers */
 
@@ -2324,6 +2331,12 @@ function PlanScenarioComparisonTable({
 /* ------------------------------------------------------------------ page */
 
 export function LocalPlanDetailPage({ planId }: { planId: string }) {
+  const [requirements, setRequirements] = useState<PlanRequirements | null>(
+    null,
+  )
+  const [activeExecution, setActiveExecution] = useState<PlanExecution | null>(
+    null,
+  )
   const [bridge, setBridge] = useState<DashboardDataBridge | null>(null)
   const [plan, setPlan] = useState<LocalPlan | null>(null)
   const [executionSummaries, setExecutionSummaries] = useState<
@@ -2378,6 +2391,54 @@ export function LocalPlanDetailPage({ planId }: { planId: string }) {
     }, 2_000)
     return () => window.clearInterval(timer)
   }, [load, running])
+
+  useEffect(() => {
+    if (!bridge || !running || !plan?.last_attempt_id?.startsWith('plan-')) {
+      setActiveExecution(null)
+      return
+    }
+    let live = true
+    const refresh = () =>
+      planAction<PlanExecution>(bridge, {
+        action: 'execution',
+        execution_id: plan.last_attempt_id,
+      })
+        .then((value) => {
+          if (live) setActiveExecution(value)
+        })
+        .catch(() => undefined)
+    void refresh()
+    const timer = setInterval(() => void refresh(), 2000)
+    return () => {
+      live = false
+      clearInterval(timer)
+    }
+  }, [bridge, running, plan?.last_attempt_id])
+  const exportPlan = async () => {
+    if (!bridge || !plan) return
+    try {
+      downloadJson(
+        await planAction(bridge, { action: 'export', plan_id: plan.id }),
+        `${plan.id}.json`,
+      )
+    } catch (cause) {
+      setLoadError(errorText(cause))
+    }
+  }
+  const cancelPlan = async () => {
+    if (!bridge || !activeExecution) return
+    try {
+      setActiveExecution(
+        await planAction<PlanExecution>(bridge, {
+          action: 'cancel',
+          execution_id: activeExecution.id,
+        }),
+      )
+      await load()
+    } catch (cause) {
+      setLoadError(errorText(cause))
+    }
+  }
 
   const executionIdKey = [
     plan?.baseline_execution_id ?? '',
@@ -2504,6 +2565,21 @@ export function LocalPlanDetailPage({ planId }: { planId: string }) {
       executionId: null,
     })
     try {
+      const checked = await planAction<PlanRequirements>(bridge, {
+        action: 'requirements',
+        plan_id: plan.id,
+      })
+      setRequirements(checked)
+      if (!checked.ready) {
+        setRunFeedback({
+          role,
+          phase: 'error',
+          message:
+            'Execution requirements need attention. Your saved plan is preserved.',
+          executionId: null,
+        })
+        return
+      }
       const nextPlan = await bridge.startPlan(plan.id, role)
       setPlan(nextPlan)
       setRunFeedback({
@@ -2684,20 +2760,86 @@ export function LocalPlanDetailPage({ planId }: { planId: string }) {
               title={plan.label || plan.id}
               summary={plan.purpose || ''}
               actions={
-                <StatusBadge
-                  status={readiness.status}
-                  label={readiness.label}
-                />
+                <div className="flex flex-wrap items-center gap-2">
+                  <StatusBadge
+                    status={readiness.status}
+                    label={readiness.label}
+                  />
+                  {!plan.locked ? (
+                    <a
+                      className={buttonClassName({
+                        variant: 'secondary',
+                        size: 'compact',
+                      })}
+                      href={`${hashForNewPlan()}/edit/${plan.id}`}
+                    >
+                      Edit plan
+                    </a>
+                  ) : null}
+                  <a
+                    className={buttonClassName({
+                      variant: 'secondary',
+                      size: 'compact',
+                    })}
+                    href={`${hashForNewPlan()}/duplicate/${plan.id}`}
+                  >
+                    Duplicate plan
+                  </a>
+                  <button
+                    type="button"
+                    className={buttonClassName({
+                      variant: 'quiet',
+                      size: 'compact',
+                    })}
+                    onClick={() => void exportPlan()}
+                  >
+                    Export plan
+                  </button>
+                </div>
               }
             />
-            <PlanLifecycle
-              plan={plan}
-              starting={starting}
-              feedback={runFeedback}
-              onStart={(role) => void start(role)}
-              baselineSummary={baselineSummary}
-              lastRunSummary={lastRunSummary}
-            />
+            {requirements ? <Requirements value={requirements} /> : null}
+            {loadError ? (
+              <Callout tone="warning" title="Plan action unavailable">
+                {loadError}
+              </Callout>
+            ) : null}
+            {plan.protected_executor_required ? (
+              <Callout tone="warning" title="Protected executor required">
+                Export this plan for Release Control. Its fault-injection work
+                requires the protected executor.
+              </Callout>
+            ) : plan.compatible === false ? (
+              <Callout tone="warning" title="Saved scope unavailable">
+                A saved scenario contract is unavailable in this runner. The
+                plan and its evidence remain available.
+              </Callout>
+            ) : (
+              <PlanLifecycle
+                plan={plan}
+                starting={starting}
+                feedback={runFeedback}
+                onStart={(role) => void start(role)}
+                baselineSummary={baselineSummary}
+                lastRunSummary={lastRunSummary}
+              />
+            )}
+            {activeExecution ? (
+              <>
+                <PlanProgress execution={activeExecution} />
+                <button
+                  className={buttonClassName({
+                    variant: 'secondary',
+                    className: 'justify-self-start',
+                  })}
+                  disabled={activeExecution.state === 'cancelling'}
+                  type="button"
+                  onClick={() => void cancelPlan()}
+                >
+                  Cancel execution
+                </button>
+              </>
+            ) : null}
             <PlanScope plan={plan} baselineSummary={baselineSummary} />
             {/* Audit ED-26: layer 0 is the comparison — verdict, trend tiles,
                 what moved by test. Executions, exact tables and provenance are

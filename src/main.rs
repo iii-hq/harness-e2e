@@ -40,6 +40,11 @@ enum Command {
     },
     /// Validate every scenarios/*.md file without running a model.
     ValidateScenarios(ValidateScenariosArgs),
+    /// Inspect and materialize the reviewed master test plan without executing models.
+    TestPlan {
+        #[command(subcommand)]
+        command: TestPlanCommand,
+    },
     /// List models registered in the running stack.
     Models(ModelsArgs),
     /// Execute one or more quality scenarios against a running stack.
@@ -56,6 +61,67 @@ enum Command {
     FaultPlan(FaultPlanArgs),
     /// Classify observed recovery from a protected supervisor's fault journal.
     FaultEvaluate(FaultEvaluateArgs),
+}
+
+#[derive(Debug, Subcommand)]
+enum TestPlanCommand {
+    /// Measure independent profile invocations, retaining each fixed cohort.
+    Measure {
+        #[arg(long = "results", required = true)]
+        results: Vec<PathBuf>,
+    },
+    /// List the six profiles, their coverage, sample sizes and resource envelopes.
+    List,
+    /// Print the single reviewed source definition.
+    Definition,
+    /// Export immutable profile inputs and compatible campaign manifests.
+    Materialize {
+        #[arg(long)]
+        profile: String,
+        #[arg(long)]
+        output: Option<PathBuf>,
+    },
+    /// Generate compatibility manifests and catalog views (or check for drift).
+    Sync {
+        #[arg(long, default_value = ".")]
+        root: PathBuf,
+        #[arg(long)]
+        check: bool,
+    },
+}
+
+fn test_plan(command: TestPlanCommand) -> Result<()> {
+    if let TestPlanCommand::Measure { results } = command {
+        println!(
+            "{}",
+            serde_json::to_string(&harness_e2e::test_plan::measure(&results)?)?
+        );
+        return Ok(());
+    }
+    let plan = harness_e2e::test_plan::embedded()?;
+    let value = match command {
+        TestPlanCommand::Measure { .. } => unreachable!("measure handled above"),
+        TestPlanCommand::List => plan.catalog()?,
+        TestPlanCommand::Definition => serde_json::to_value(&plan)?,
+        TestPlanCommand::Materialize { profile, output } => {
+            let snapshot = plan.materialize(&profile)?;
+            let value = serde_json::to_value(snapshot)?;
+            if let Some(output) = output {
+                std::fs::write(
+                    output,
+                    format!("{}\n", serde_json::to_string_pretty(&value)?),
+                )?;
+                return Ok(());
+            }
+            value
+        }
+        TestPlanCommand::Sync { root, check } => {
+            plan.sync(&root, check)?;
+            serde_json::json!({"checked": check, "definition_sha256": plan.digest()?})
+        }
+    };
+    println!("{}", serde_json::to_string(&value)?);
+    Ok(())
 }
 
 #[derive(Debug, Args)]
@@ -259,6 +325,7 @@ async fn main() -> Result<()> {
             Ok(())
         }
         Some(Command::ValidateScenarios(args)) => validate_scenarios(args),
+        Some(Command::TestPlan { command }) => test_plan(command),
         Some(Command::Models(args)) => models(args).await,
         Some(Command::Run(args)) => run(args).await,
         Some(Command::ReplayMaterialized(args)) => replay_materialized(args).await,

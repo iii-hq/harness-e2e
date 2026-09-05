@@ -2,7 +2,6 @@ use std::fs;
 use std::path::Path;
 
 use anyhow::{bail, Context, Result};
-use chrono::{SecondsFormat, Utc};
 use serde::Serialize;
 use serde_json::Value;
 
@@ -168,9 +167,7 @@ fn unsupported_metadata(run_dir: &Path, envelope: &Value) -> Result<RunMetadata>
             runs: 0,
             technical_retries: 0,
             seed: None,
-            plan_context: None,
         },
-        plan_context: None,
     })
 }
 
@@ -230,31 +227,8 @@ fn observed_metadata(run_dir: &Path, report: &E2eReport) -> Result<RunMetadata> 
             runs: requested_runs,
             technical_retries: 0,
             seed,
-            plan_context: None,
         },
-        plan_context: None,
     })
-}
-
-pub(super) fn recover_interrupted_runs(runs_dir: &Path) -> Result<Vec<RunMetadata>> {
-    let mut recovered = Vec::new();
-    for entry in fs::read_dir(runs_dir)? {
-        let entry = entry?;
-        if !entry.file_type()?.is_dir() {
-            continue;
-        }
-        let Some(mut metadata) = read_metadata(&entry.path())? else {
-            continue;
-        };
-        if metadata.status.active() {
-            metadata.status = JobStatus::Failed;
-            metadata.completed_at = Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true);
-            metadata.error = "dashboard stopped before the runner completed".into();
-            write_metadata(&entry.path(), &metadata)?;
-            recovered.push(metadata);
-        }
-    }
-    Ok(recovered)
 }
 
 pub(super) fn load_runs(runs_dir: &Path) -> Result<Vec<StoredRun>> {

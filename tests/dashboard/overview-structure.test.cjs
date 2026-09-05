@@ -223,7 +223,7 @@ test('keeps metric history rows readable and opens details on demand', () => {
 test('makes local plan scope selection focused and readable', () => {
   // Audit PN-18 / PN-25 / PN-02: DS header with a breadcrumb, one column,
   // and the sticky footer instead of the review aside.
-  assert.match(planPage, /title="new plan"/)
+  assert.match(planPage, /title=\{\s*editId \? 'edit plan' : duplicateId \? 'duplicate plan' : 'new plan'/)
   assert.match(planPage, /breadcrumb=\{\[/)
   assert.match(planPage, /ExecutionSetup/)
   assert.match(planPage, /ExecutionSetupFooter/)
