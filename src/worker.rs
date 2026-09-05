@@ -147,14 +147,17 @@ fn expand_home(value: &str) -> Result<PathBuf> {
 }
 
 async fn wait_for_state(iii: &iii_sdk::IIIClient) -> Result<()> {
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
+    // The probe reads the execution scope, so it slows down as durable history
+    // grows. A one second budget starts failing after a few dozen executions and
+    // the worker then never registers.
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(60);
     loop {
         let ready = iii
             .trigger(TriggerRequest {
-                function_id: "state::list".into(),
+                function_id: "state::list_keys".into(),
                 payload: serde_json::json!({ "scope": "harness_e2e_execution" }),
                 action: None,
-                timeout_ms: Some(1_000),
+                timeout_ms: Some(15_000),
             })
             .await
             .is_ok();
@@ -162,7 +165,7 @@ async fn wait_for_state(iii: &iii_sdk::IIIClient) -> Result<()> {
             return Ok(());
         }
         if tokio::time::Instant::now() >= deadline {
-            bail!("state::list was not ready within 30 seconds");
+            bail!("state::list_keys was not ready before the startup deadline");
         }
         tokio::time::sleep(Duration::from_millis(100)).await;
     }

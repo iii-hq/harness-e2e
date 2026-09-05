@@ -1502,18 +1502,21 @@ impl ControlPlane {
     }
 
     async fn restore(&self) -> Result<()> {
+        // Fetch records separately: the accumulated reports can exceed a WebSocket frame.
         let listed = self
-            .trigger("state::list", json!({ "scope": RECORD_SCOPE }))
+            .trigger("state::list_keys", json!({ "scope": RECORD_SCOPE }))
             .await
-            .context("list persisted E2E executions")?;
-        let records = listed
-            .as_array()
-            .cloned()
-            .unwrap_or_default()
-            .into_iter()
-            .filter_map(|value| serde_json::from_value::<ExecutionRecord>(value).ok())
-            .collect::<Vec<_>>();
-        for mut record in records {
+            .context("list persisted E2E execution keys")?;
+        let keys: Vec<String> = serde_json::from_value(listed["keys"].clone())
+            .context("decode persisted E2E execution keys")?;
+        for key in keys {
+            let value = self
+                .trigger("state::get", json!({ "scope": RECORD_SCOPE, "key": key }))
+                .await
+                .context("read persisted E2E execution")?;
+            let Ok(mut record) = serde_json::from_value::<ExecutionRecord>(value) else {
+                continue;
+            };
             let execution_id = record.execution_id.clone();
             if !record.phase.terminal() {
                 let journal = match self.initialize_or_open_journal(&record) {
@@ -3438,6 +3441,70 @@ mod tests {
             observation_artifact: None,
             archive: None,
         }
+    }
+
+    #[tokio::test]
+    async fn restore_fetches_records_separately_when_history_exceeds_a_websocket_frame() {
+        use futures_util::{SinkExt, StreamExt};
+        use tokio_tungstenite::tungstenite::Message;
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("ws://{}", listener.local_addr().unwrap());
+        let mut record = observation_record();
+        record.phase = ExecutionPhase::Completed;
+        record.request.run_contract = None;
+        record.error = "x".repeat(9 * 1024 * 1024);
+        let server =
+            tokio::spawn(async move {
+                let (socket, _) = listener.accept().await.unwrap();
+                let mut socket = tokio_tungstenite::accept_async(socket).await.unwrap();
+                let mut reads = 0;
+                while let Some(Ok(frame)) = socket.next().await {
+                    let Message::Text(message) = frame else {
+                        continue;
+                    };
+                    let message: Value = serde_json::from_str(&message).unwrap();
+                    if message["type"] != "invokefunction" || message["invocation_id"].is_null() {
+                        continue;
+                    }
+                    let result = match message["function_id"].as_str().unwrap() {
+                        "state::list_keys" => json!({"keys": ["first", "second"]}),
+                        "state::get" => {
+                            reads += 1;
+                            record.execution_id = message["data"]["key"].as_str().unwrap().into();
+                            serde_json::to_value(&record).unwrap()
+                        }
+                        other => panic!("unexpected bulk restore call: {other}"),
+                    };
+                    socket.send(Message::Text(json!({
+                    "type": "invocationresult", "invocation_id": message["invocation_id"],
+                    "function_id": message["function_id"], "result": result,
+                }).to_string())).await.unwrap();
+                    if reads == 2 {
+                        break;
+                    }
+                }
+                assert_eq!(reads, 2);
+            });
+        let client = iii_sdk::register_worker(&url, iii_sdk::InitOptions::default());
+        tokio::time::timeout(Duration::from_secs(5), async {
+            while client.get_connection_state() != iii_sdk::runtime::IIIConnectionState::Connected {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .unwrap();
+        let root = tempfile::tempdir().unwrap();
+        let control = tokio::time::timeout(
+            Duration::from_secs(10),
+            ControlPlane::new(client.clone(), url, root.path().into()),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        assert_eq!(control.records().await.len(), 2);
+        client.shutdown_async().await;
+        server.await.unwrap();
     }
 
     fn retained_report(record: &ExecutionRecord) -> E2eReport {
