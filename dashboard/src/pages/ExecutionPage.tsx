@@ -215,20 +215,45 @@ function formatReportedCost(value: number | null) {
  *  the status it publishes (audit ED-05). Read by the overview's derivation. */
 export function executionBoundaries(
   presentation: ExecutionPresentation,
-  primaryRun: AssessmentRunView | null,
+  runs: AssessmentRunView[],
 ): OutcomeRow[] {
-  const systemStatus = primaryRun?.systemStatus ?? presentation.attention
-  const advisoryStatus =
-    primaryRun?.finalAssessment.result?.verdict ??
-    primaryRun?.finalAssessment.availability ??
-    'unavailable'
-  const effectiveStatus = primaryRun?.effectiveStatus ?? systemStatus
-  const boundaries: OutcomeRow[] = [
-    { role: 'system', value: systemStatus },
-    { role: 'advisory', value: advisoryStatus },
+  const summarize = (
+    role: OutcomeRow['role'],
+    values: string[],
+  ): OutcomeRow => {
+    const counts = new Map<string, number>()
+    for (const value of values) counts.set(value, (counts.get(value) ?? 0) + 1)
+    if (counts.size === 1) return { role, value: values[0] }
+    return {
+      role,
+      value: 'partial',
+      label: [...counts]
+        .map(([value, count]) => `${count} ${value.replaceAll('_', ' ')}`)
+        .join(' · '),
+    }
+  }
+  const system = runs.length
+    ? runs.map((run) => run.systemStatus)
+    : [presentation.attention]
+  const advisory = runs.length
+    ? runs.map(
+        (run) =>
+          run.finalAssessment.result?.verdict ??
+          run.finalAssessment.availability,
+      )
+    : ['unavailable']
+  const boundaries = [
+    summarize('system', system),
+    summarize('advisory', advisory),
   ]
-  if (effectiveStatus !== systemStatus)
-    boundaries.push({ role: 'effective', value: effectiveStatus })
+  if (runs.some((run) => run.effectiveStatus !== run.systemStatus)) {
+    boundaries.push(
+      summarize(
+        'effective',
+        runs.map((run) => run.effectiveStatus),
+      ),
+    )
+  }
   return boundaries
 }
 
@@ -853,7 +878,7 @@ export function ExecutionPage({
     scenarioMatrix?.items ?? [],
     primaryRun,
   )
-  const boundaries = executionBoundaries(presentation, primaryRun)
+  const boundaries = executionBoundaries(presentation, assessmentModel.runs)
   const runCount = runCountFromDetail(detail)
   const runtimeSeconds =
     presentation.modelRuntimeSeconds ?? summaryMetrics?.durationSeconds ?? null
@@ -919,7 +944,9 @@ export function ExecutionPage({
           summary={
             detail.live_progress
               ? `${detail.live_progress.runs_committed} of ${detail.live_progress.planned_slots} runs recorded · ${live ? 'results are provisional' : 'partial evidence preserved'}`
-              : verdict.headline
+              : live
+                ? 'Execution in progress · results are provisional'
+                : verdict.headline
           }
           headingId="execution-title"
           breadcrumb={[
@@ -1008,7 +1035,7 @@ export function ExecutionPage({
             failed. {detail.persistence_errors.join(' · ')}
           </p>
         ) : null}
-        {noRun || live ? (
+        {(noRun || live) && !(detail.plan_execution && live) ? (
           <LiveState
             presentation={presentation}
             status={status}
@@ -1018,7 +1045,24 @@ export function ExecutionPage({
           />
         ) : null}
         {detail.plan_execution && live ? (
-          <PlanProgress execution={detail.plan_execution} />
+          <PlanProgress
+            execution={detail.plan_execution}
+            actions={
+              local ? (
+                <button
+                  type="button"
+                  className={buttonClassName({
+                    variant: 'secondary',
+                    size: 'compact',
+                  })}
+                  onClick={() => void cancelRun()}
+                  disabled={cancelling}
+                >
+                  {cancelling ? 'cancelling…' : 'cancel execution'}
+                </button>
+              ) : undefined
+            }
+          />
         ) : null}
         {detail.live_progress ? (
           <LiveProgressPanel progress={detail.live_progress} running={live} />

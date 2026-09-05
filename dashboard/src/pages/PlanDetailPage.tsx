@@ -153,7 +153,7 @@ export function planReadiness(plan: LocalPlan): {
         }
       : {
           status: 'incomplete',
-          label: 'draft · scope fixed at creation',
+          label: 'draft · scope editable',
           detail:
             'The scope is defined but no completed baseline report exists.',
         }

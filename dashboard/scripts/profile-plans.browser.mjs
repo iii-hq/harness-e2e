@@ -335,6 +335,13 @@ try {
       .count(),
     0,
   )
+  assert.equal(await page.locator('[data-live-state]').count(), 0)
+  assert.equal(await page.locator('progress').count(), 1)
+  await page
+    .getByText('Execution in progress · results are provisional', {
+      exact: true,
+    })
+    .waitFor()
   await page.getByRole('button', { name: /^cancel execution$/i }).click()
   await page.locator('[data-execution-overview]').waitFor()
   await page.getByRole('link', { name: 'back to plan', exact: true }).click()

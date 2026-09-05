@@ -1,3 +1,4 @@
+import type { ReactNode } from 'react'
 import { Callout, Panel } from '@/design-system'
 import { hashForExecution, hashForPlan } from '@/hooks/use-hash-route'
 import {
@@ -50,7 +51,13 @@ export function Requirements({ value }: { value: PlanRequirements }) {
   )
 }
 
-export function PlanProgress({ execution }: { execution: PlanExecution }) {
+export function PlanProgress({
+  execution,
+  actions,
+}: {
+  execution: PlanExecution
+  actions?: ReactNode
+}) {
   const planned = execution.slots.length
   const finished = execution.slots.filter((s) => s.state === 'finished').length
   const observed = execution.slots.reduce((sum, s) => sum + s.observed, 0)
@@ -71,6 +78,7 @@ export function PlanProgress({ execution }: { execution: PlanExecution }) {
         <span className="text-xs text-ink-soft">
           {finished} / {planned} slots finished
         </span>
+        {actions}
       </div>
       <progress
         className="mt-4 h-2 w-full accent-current text-ink"

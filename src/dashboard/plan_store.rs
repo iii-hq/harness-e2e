@@ -320,11 +320,18 @@ impl PlanStore {
             .context("Plan execution missing")?;
         let execution = self.read_execution(id)?;
         let mut reports = Vec::new();
+        let mut assessments = Vec::new();
         for slot in &execution.slots {
             let native = if slot.observed > 0 {
                 super::store::read_stored_run(&self.root.join(&slot.execution_id)).and_then(|run| {
-                    run.map(|run| super::presenter::stored_execution_detail(&run))
-                        .transpose()
+                    run.map(|run| {
+                        let detail = super::presenter::stored_execution_detail(&run)?;
+                        if let Some(report) = run.report {
+                            assessments.extend(report.assessment_contract.runs);
+                        }
+                        Ok(detail)
+                    })
+                    .transpose()
                 })
             } else {
                 Ok(None)
@@ -346,6 +353,8 @@ impl PlanStore {
                 })),
             }
         }
+        summary["assessment_summary"] =
+            json!(super::assessment_projection::summarize(assessments.iter()));
         summary["reports"] = json!(reports);
         summary["plan_execution"] = serde_json::to_value(&execution)?;
         summary["native_execution_ids"] = json!(execution
@@ -1635,6 +1644,7 @@ mod tests {
         }
         let detail = manager.execution_detail(&baseline.id).unwrap().unwrap();
         assert_eq!(detail["id"], baseline.id);
+        assert_eq!(detail["assessment_summary"]["run_count"], 4);
         assert_eq!(detail["subjects"][0]["judge"]["model"], plan.judge_model);
         assert_eq!(detail["native_execution_ids"].as_array().unwrap().len(), 4);
         let reports = detail["reports"].as_array().unwrap();

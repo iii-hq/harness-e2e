@@ -113,17 +113,20 @@ export function contractScent(
   contracts: ReturnType<typeof buildScenarioMatrix>['contracts'],
 ): string {
   if (contracts.length === 0) return 'results contract unavailable'
-  const [first] = contracts
-  const line = [
-    `results contract ${first.reportState ?? 'unavailable'}`,
-    first.objectiveOutcome ?? 'unavailable',
-    first.schemaVersion === null
-      ? 'schema unavailable'
-      : `Results v${first.schemaVersion}`,
-    shortHash(first.resultContractSha256),
-    `scoring profile ${shortHash(first.scoringProfileSha256)}`,
+  const distinct = (values: string[]) => [...new Set(values)].join(' / ')
+  return [
+    `results contract ${distinct(contracts.map((c) => c.reportState ?? 'unavailable'))}`,
+    distinct(contracts.map((c) => c.objectiveOutcome ?? 'unavailable')),
+    distinct(
+      contracts.map((c) =>
+        c.schemaVersion === null
+          ? 'schema unavailable'
+          : `Results v${c.schemaVersion}`,
+      ),
+    ),
+    distinct(contracts.map((c) => shortHash(c.resultContractSha256))),
+    `scoring profile ${distinct(contracts.map((c) => shortHash(c.scoringProfileSha256)))}`,
   ].join(' · ')
-  return contracts.length > 1 ? `${contracts.length} contracts · ${line}` : line
 }
 
 export function ResultContractStrip({
@@ -139,8 +142,8 @@ export function ResultContractStrip({
         className="text-sm text-ink-muted"
         data-results-contract="unavailable"
       >
-        Results v3 contract unavailable. Objective outcome and report
-        completeness are not inferred from execution status.
+        Results contract unavailable. Objective outcome and report completeness
+        are not inferred from execution status.
       </Panel>
     )
   }

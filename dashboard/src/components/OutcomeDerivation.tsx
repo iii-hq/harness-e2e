@@ -43,7 +43,7 @@ export function outcomeStatus(value: string): OperationalStatus {
   return 'unavailable'
 }
 
-export type OutcomeRow = { role: OutcomeRole; value: string }
+export type OutcomeRow = { role: OutcomeRole; value: string; label?: string }
 
 export function OutcomeDerivation({
   rows,
@@ -57,13 +57,10 @@ export function OutcomeDerivation({
   return (
     <dl className={`m-0 grid gap-2 ${className ?? ''}`} data-outcome-derivation>
       {inputs.map((row) => (
-        <div
-          className="grid items-baseline gap-x-4 gap-y-0.5 @[560px]:grid-cols-[13rem_minmax(0,1fr)]"
-          key={row.role}
-        >
-          <dt className="m-0">
+        <div className="grid items-baseline gap-x-4 gap-y-0.5" key={row.role}>
+          <dt className="m-0 min-w-0 [&_.ds-status-badge]:whitespace-normal">
             <StatusBadge
-              label={titleCase(row.value).toLowerCase()}
+              label={row.label ?? titleCase(row.value).toLowerCase()}
               status={outcomeStatus(row.value)}
             />
           </dt>
@@ -74,10 +71,12 @@ export function OutcomeDerivation({
       ))}
       {effective ? (
         // The published status carries the weight; the two above are its inputs.
-        <div className="mt-1 grid items-baseline gap-x-4 gap-y-0.5 @[560px]:grid-cols-[13rem_minmax(0,1fr)]">
-          <dt className="m-0 text-[0.9375rem] font-semibold [&_.ds-status-badge]:text-[0.9375rem] [&_.ds-status-badge]:font-semibold">
+        <div className="mt-1 grid items-baseline gap-x-4 gap-y-0.5">
+          <dt className="m-0 min-w-0 text-[0.9375rem] font-semibold [&_.ds-status-badge]:whitespace-normal [&_.ds-status-badge]:text-[0.9375rem] [&_.ds-status-badge]:font-semibold">
             <StatusBadge
-              label={titleCase(effective.value).toLowerCase()}
+              label={
+                effective.label ?? titleCase(effective.value).toLowerCase()
+              }
               status={outcomeStatus(effective.value)}
             />
           </dt>
