@@ -624,6 +624,24 @@ describe('retained criterion points', () => {
     })
   })
 
+  it('accepts compact plan execution summaries without slots', () => {
+    const baseline = scored([10, 20])
+    const candidate = scored([20, 40])
+    Object.assign(baseline, { plan_execution: { planned: 2 } })
+    Object.assign(candidate, { plan_execution: { planned: 2 } })
+
+    const result = buildScenarioComparisons(
+      baseline,
+      candidate,
+    )[0].metrics.find((metric) => metric.id === 'criterion:delivery:40')
+
+    expect(result).toMatchObject({
+      baseline: 15,
+      candidate: 30,
+      evidence: { baseline_planned: 2, candidate_planned: 2 },
+    })
+  })
+
   it('pairs explicit rounds when an earlier child report is unavailable', () => {
     const left = scored([0, 30])
     const right = scored([20, 10])

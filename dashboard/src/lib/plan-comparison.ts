@@ -495,10 +495,11 @@ function criterionPoints(
         })
       })
   })
-  const planned = detail.plan_execution
-    ? detail.plan_execution.slots.filter(
-        (slot) => slot.scenario_id === scenarioId,
-      ).length
+  const slots = Array.isArray(detail.plan_execution?.slots)
+    ? detail.plan_execution.slots
+    : null
+  const planned = slots
+    ? slots.filter((slot) => slot.scenario_id === scenarioId).length
     : finite(scenarioMap(execution).get(scenarioId)?.runs)
   const criteria = new Map(
     [...new Set(samples.map((sample) => sample.id))].map((id) => {
