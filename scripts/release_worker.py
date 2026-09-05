@@ -28,11 +28,7 @@ SCHEMA_KEYS = frozenset(
     {"type", "properties", "$ref", "allOf", "anyOf", "oneOf", "enum", "items", "const"}
 )
 TARGETS = (
-    "x86_64-apple-darwin",
     "aarch64-apple-darwin",
-    "x86_64-pc-windows-msvc",
-    "i686-pc-windows-msvc",
-    "aarch64-pc-windows-msvc",
     "x86_64-unknown-linux-gnu",
     "x86_64-unknown-linux-musl",
     "aarch64-unknown-linux-gnu",
@@ -311,9 +307,8 @@ def build_payload(
         digest = checksum_path.read_text(encoding="utf-8").split()[0].lower()
         if not SHA256_RE.fullmatch(digest):
             raise ValueError(f"invalid SHA-256 in {checksum_path.name}")
-        extension = "zip" if "windows" in target else "tar.gz"
         binaries[target] = {
-            "url": f"{repo_url}/releases/download/{tag}/{WORKER_NAME}-{target}.{extension}",
+            "url": f"{repo_url}/releases/download/{tag}/{WORKER_NAME}-{target}.tar.gz",
             "sha256": digest,
         }
 
