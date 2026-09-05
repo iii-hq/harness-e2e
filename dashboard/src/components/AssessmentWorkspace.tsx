@@ -117,7 +117,11 @@ export function revealTechnicalSection() {
   )) {
     dialog.close()
   }
-  document.getElementById('technical')?.scrollIntoView({ block: 'start' })
+  // Audit ED-26: provenance is a closed layer on the execution page; opening
+  // it here fires its toggle event, so the page's state follows.
+  const technical = document.getElementById('technical')
+  if (technical instanceof HTMLDetailsElement) technical.open = true
+  technical?.scrollIntoView({ block: 'start' })
 }
 
 function metricRatio(entry: AssessmentEntry | undefined) {

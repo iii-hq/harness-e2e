@@ -297,7 +297,7 @@ test('organizes detail into progressive disclosure sections', () => {
   assert.match(executionPage, /\[anchor, loadedExecutionId\]/)
   assert.doesNotMatch(executionPage, /\[anchor, detail\]/)
   assert.doesNotMatch(executionPage, /id="evidence"|Evidence register/)
-  assert.match(executionPage, /ScenarioMatrix detail/)
+  assert.match(executionPage, /<ScenarioMatrix\s+detail=\{detail\}/)
   assert.match(scenarioMatrix, /AssessmentWorkspace/)
   assert.match(scenarioMatrix, /SemanticTestFlow/)
   assert.match(scenarioMatrix, /WorkflowDurationProfile/)
@@ -311,9 +311,25 @@ test('organizes detail into progressive disclosure sections', () => {
   assert.match(executionPage, /executionVerdict\(/)
   assert.match(executionPage, /data-identity-band/)
   assert.match(executionPage, /data-section-bar/)
-  assert.match(executionPage, /id: 'metrics', label: 'metrics'/)
+  assert.match(executionPage, /id: 'metrics', label: 'counts'/)
   assert.match(executionPage, /if \(anchor === 'metrics'\) return 'metrics'/)
-  assert.ok(executionPage.indexOf('<ExecutionMetricsPanel detail={detail}') < executionPage.indexOf('<ResultsSection\n'))
+  // Audit ED-26: layer 0 is the grouped metrics; narrative, results, counts
+  // and provenance follow as closed rows with a scent, opened by their anchor.
+  assert.match(executionPage, /<ExecutionOverview detail=\{detail\}/)
+  const layerOrder = [
+    '<ExecutionOverview',
+    'id="summary"',
+    'id="results"',
+    'id="metrics"',
+    'id="technical"',
+  ].map((needle) => executionPage.indexOf(needle))
+  assert.ok(layerOrder.every((index, i) => index >= 0 && (i === 0 || index > layerOrder[i - 1])), layerOrder.join(','))
+  assert.match(executionPage, /scent=\{narrativeScent\(verdict\)\}/)
+  assert.match(executionPage, /scent=\{resultsScent\(/)
+  assert.match(executionPage, /scent=\{countsScent\(detail\)\}/)
+  assert.match(executionPage, /scent=\{contractScent\(/)
+  assert.match(executionPage, /<ExecutionMetricsPanel detail=\{detail\} headless \/>/)
+  assert.match(executionPage, /showContract=\{false\}/)
   assert.match(executionPage, /data-live-state/)
   assert.match(executionPage, /next step/)
   assert.match(executionPage, /what happened/)

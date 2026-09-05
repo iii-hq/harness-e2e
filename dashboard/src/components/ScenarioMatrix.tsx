@@ -32,9 +32,13 @@ import {
 export function ScenarioMatrix({
   detail,
   onTranscript,
+  showContract = true,
 }: {
   detail: DashboardExecutionDetail
   onTranscript: (run: AssessmentRunView, title: string) => void
+  /** The results contract is provenance; the layered execution page renders
+   *  it in the provenance layer instead of above the table (audit ED-29). */
+  showContract?: boolean
 }) {
   const model = useMemo(() => buildScenarioMatrix(detail), [detail])
   // Audit SM-07: the Structure column only carries information when at
@@ -66,7 +70,9 @@ export function ScenarioMatrix({
 
   return (
     <div className="grid gap-4">
-      <ResultContractStrip contracts={model.contracts} />
+      {showContract ? (
+        <ResultContractStrip contracts={model.contracts} />
+      ) : null}
       <ScenarioSummary summary={model.summary} />
       <div className="overflow-hidden rounded-[var(--ds-radius-md)] border border-[var(--color-edge)] bg-panel">
         <div
@@ -101,7 +107,26 @@ export function ScenarioMatrix({
   )
 }
 
-function ResultContractStrip({
+/** Closed-row scent for the provenance layer of the execution page: the
+ *  contract in one line, hashes kept as hashes (audit ED-26 / ED-30). */
+export function contractScent(
+  contracts: ReturnType<typeof buildScenarioMatrix>['contracts'],
+): string {
+  if (contracts.length === 0) return 'results contract unavailable'
+  const [first] = contracts
+  const line = [
+    `results contract ${first.reportState ?? 'unavailable'}`,
+    first.objectiveOutcome ?? 'unavailable',
+    first.schemaVersion === null
+      ? 'schema unavailable'
+      : `Results v${first.schemaVersion}`,
+    shortHash(first.resultContractSha256),
+    `scoring profile ${shortHash(first.scoringProfileSha256)}`,
+  ].join(' · ')
+  return contracts.length > 1 ? `${contracts.length} contracts · ${line}` : line
+}
+
+export function ResultContractStrip({
   contracts,
 }: {
   contracts: ReturnType<typeof buildScenarioMatrix>['contracts']
@@ -124,7 +149,7 @@ function ResultContractStrip({
       as="section"
       tone="raised"
       padding="compact"
-      className="grid gap-3"
+      className="grid min-w-0 gap-3"
       aria-label="Results contract"
     >
       {contracts.map((contract) => (
@@ -133,13 +158,15 @@ function ResultContractStrip({
           className="grid gap-3 sm:grid-cols-2 lg:grid-cols-5"
           data-results-contract={contract.valid ? 'valid' : 'invalid'}
         >
+          {/* Audit ED-30: title case belongs to words. Applied to every value it
+              turned a hash into "Sha256:A7eb…" and a version into "Results V4". */}
           <ContractFact
             label="report state"
-            value={contract.reportState ?? 'unavailable'}
+            value={titleCase(contract.reportState ?? 'unavailable')}
           />
           <ContractFact
             label="objective outcome"
-            value={contract.objectiveOutcome ?? 'unavailable'}
+            value={titleCase(contract.objectiveOutcome ?? 'unavailable')}
           />
           <ContractFact
             label="schema"
@@ -168,7 +195,7 @@ function ContractFact({ label, value }: { label: string; value: string }) {
     <span className="min-w-0">
       <span className="ds-label block">{label}</span>
       <strong className="mt-1 block truncate font-mono text-xs text-ink">
-        {titleCase(value)}
+        {value}
       </strong>
     </span>
   )

@@ -4,11 +4,19 @@ import type { AssessmentRunView } from '@/lib/assessment-view'
 import type { DashboardExecutionDetail } from '@/lib/dashboard-data-source'
 import { executionVerdict } from '@/lib/execution-verdict'
 import { buildExecutionPresentation } from '@/lib/execution-view'
-import type { ScenarioMatrixSummary } from '@/lib/scenario-matrix'
+import type {
+  ScenarioMatrixItem,
+  ScenarioMatrixSummary,
+} from '@/lib/scenario-matrix'
 import {
   buildSummaryExecutionMetrics,
-  DecisionSection,
+  CountsSection,
+  countsScent,
+  executionBoundaries,
+  NarrativeSection,
+  narrativeScent,
   provenanceEntries,
+  resultsScent,
 } from '@/pages/ExecutionPage'
 
 const detail = {
@@ -148,60 +156,108 @@ describe('execution verdict', () => {
   })
 })
 
-describe('execution decision section', () => {
-  // Audit ED-05: the status is stated once; "effective" only when it differs.
-  it('states the verdict once and keeps the boundaries as fields', () => {
-    const html = renderToStaticMarkup(
-      <DecisionSection
-        detail={detail}
-        presentation={buildExecutionPresentation(detail)}
-        verdict={executionVerdict(
-          buildExecutionPresentation(detail),
-          scenarioSummary(),
-          [],
-          run,
-        )}
-        primaryRun={run}
-        metrics={null}
-        scenarioSummary={scenarioSummary()}
-      />,
-    )
-    expect(html).toContain('>decision<')
-    expect(html).toContain('1 failure · 1 passed')
-    // The three outcomes read as one derivation: two inputs and what the
-    // contract publishes, each named by its role.
-    expect(html).toContain('data-outcome-derivation')
-    expect(html).toContain('system · deterministic gates')
-    expect(html).toContain('advisory · separate qualitative conclusion')
-    expect(html).toContain('effective · the status the result contract')
+describe('execution layers', () => {
+  // Audit ED-05: two inputs and, only when it differs, the published status.
+  it('derives the outcome once and adds the effective status only when it differs', () => {
+    const presentation = buildExecutionPresentation(detail)
+    expect(executionBoundaries(presentation, run)).toEqual([
+      { role: 'system', value: 'passed' },
+      { role: 'advisory', value: 'pass_with_concerns' },
+      { role: 'effective', value: 'passed_with_concerns' },
+    ])
+    expect(
+      executionBoundaries(presentation, {
+        ...run,
+        effectiveStatus: 'passed',
+        systemStatus: 'passed',
+      }).map((row) => row.role),
+    ).toEqual(['system', 'advisory'])
+  })
+
+  // Audit ED-26: the words live in a layer; its closed row says what they say.
+  it('tells what happened and what to do, and scents the closed row with both', () => {
+    const presentation = buildExecutionPresentation(detail)
+    const verdict = executionVerdict(presentation, scenarioSummary(), [], run)
+    const html = renderToStaticMarkup(<NarrativeSection verdict={verdict} />)
+    expect(html).toContain('next step')
     expect(html).toContain(
       'Emit a complete per-path detection manifest and rerun.',
     )
     expect(html).not.toContain('System: Passed')
     expect(html).not.toContain('AI: Pass With Concerns')
-    expect(html).toContain('46')
-    expect(html).toContain('17 evidence references')
-    expect(html).toContain('not captured for this run')
+    expect(narrativeScent(verdict)).toBe(
+      'Emit a complete per-path detection manifest and rerun',
+    )
+    expect(
+      narrativeScent({
+        ...verdict,
+        diagnosis: 'Only three of four seeded paths were detected. More text.',
+      }),
+    ).toBe(
+      'Only three of four seeded paths were detected · Emit a complete per-path detection manifest and rerun',
+    )
   })
 
-  it('hides the effective boundary when it repeats the objective one', () => {
-    const presentation = buildExecutionPresentation(detail)
+  it('keeps report coverage and retained assessments in the counts layer, headless', () => {
     const html = renderToStaticMarkup(
-      <DecisionSection
+      <CountsSection
         detail={detail}
-        presentation={presentation}
-        verdict={executionVerdict(presentation, scenarioSummary(), [], run)}
-        primaryRun={{
-          ...run,
-          effectiveStatus: 'passed',
-          systemStatus: 'passed',
-        }}
+        presentation={buildExecutionPresentation(detail)}
         metrics={null}
         scenarioSummary={scenarioSummary()}
       />,
     )
-    expect(html).toContain('system · deterministic gates')
-    expect(html).not.toContain('effective · the status')
+    expect(html).toContain('1/2')
+    expect(html).toContain('46')
+    expect(html).toContain('17 evidence references')
+    expect(html).toContain('not captured for this run')
+    // The layer row is the heading: no second title, no second anchor.
+    expect(html).not.toContain('execution summary')
+    expect(html).not.toContain('id="metrics"')
+    expect(html).toContain('No compatible run evidence')
+    expect(countsScent(detail)).toBe(
+      'no compatible run evidence to consolidate · assessments 46, 17 evidence references',
+    )
+  })
+
+  it('scents the results row with each scenario verdict and runtime', () => {
+    const items = [
+      {
+        scenarioId: 'minimal_path',
+        scenarioVersion: 2,
+        objective: { label: 'Passed', status: 'passed', raw: 'passed' },
+        advisory: { label: 'AI passed', status: 'passed' },
+        durationMs: 167_000,
+      },
+      {
+        scenarioId: 'persistent_state',
+        scenarioVersion: 1,
+        objective: { label: 'Passed', status: 'passed', raw: 'passed' },
+        advisory: { label: 'AI concerns', status: 'recommendation' },
+        durationMs: 128_000,
+      },
+      {
+        scenarioId: 'research_pipeline',
+        scenarioVersion: null,
+        objective: {
+          label: 'Unavailable',
+          status: 'unavailable',
+          raw: 'unavailable',
+        },
+        advisory: { label: 'No report', status: 'unavailable' },
+        durationMs: null,
+      },
+    ] as unknown as ScenarioMatrixItem[]
+    // Scenarios are separated by a wider, non-collapsing gap than the facts
+    // inside each one.
+    expect(resultsScent(items)).toBe(
+      [
+        'minimal path v2 passed · 2m 47s',
+        'persistent state v1 passed, ai concerns · 2m 08s',
+        'research pipeline unavailable',
+      ].join(' \u00a0·\u00a0 '),
+    )
+    expect(resultsScent([])).toBe('no scenario report retained')
   })
 })
 

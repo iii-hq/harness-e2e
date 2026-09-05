@@ -35,6 +35,21 @@ describe('execution summary panel', () => {
     expect(html).not.toContain('<details')
   })
 
+  // Audit ED-26: inside the counts layer the layer row is the heading.
+  it('renders headless inside a layer: same numbers, no title, no anchor', () => {
+    const detail = executionMetricsFixture([
+      { runs: [metricRun('a', 100_000, { quality_score_completed: 60 })] },
+    ])
+    const html = renderToStaticMarkup(
+      <ExecutionMetricsPanel detail={detail} headless />,
+    )
+    expect(html).toContain('data-execution-metrics="headless"')
+    expect(html).not.toContain('execution summary')
+    expect(html).not.toContain('id="metrics"')
+    expect(html).toContain('100,000')
+    expect(html).toContain('1/1 runs with telemetry')
+  })
+
   it('marks observed subtotals and distinguishes missing cost from zero', () => {
     const detail = executionMetricsFixture([
       {
