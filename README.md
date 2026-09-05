@@ -9,7 +9,7 @@ Runtime discovery, execution, observation, state access, and cleanup all happen
 through functions registered in iii. The only product input is an immutable
 subject artifact or an already-running iii stack.
 
-The [SWE service suite](docs/swe-service.md) provides eight isolated engineering
+The SWE service suite provides eight isolated engineering
 tasks and a continuous eight-ticket journey over the same Python service, with
 optional delegation, immutable checkpoints, isolated verification, and a trusted
 GitHub handoff.
@@ -32,7 +32,7 @@ pnpm --dir dashboard build
 cargo test --locked --all-targets
 cargo clippy --locked --all-targets -- -D warnings
 node --test tests/dashboard/*.test.cjs
-python3 -m unittest discover -s tests/python -p 'test_*.py'
+HARNESS_E2E_BIN="$PWD/target/debug/harness-e2e" python3 -m unittest discover -s tests/python -p 'test_*.py'
 ```
 
 List the materialized scenarios and their scenario versions:
@@ -46,8 +46,8 @@ cargo run --locked --bin harness-e2e -- validate-scenarios
 New declarative scenarios are authored only as `scenarios/*.md`. The compiler
 embeds the exact source, validates the canonical English section structure,
 and exposes the resulting file-stem id through the CLI, worker catalog,
-campaign runner, dashboard, and canonical result artifacts. See
-[docs/markdown-scenarios.md](docs/markdown-scenarios.md).
+campaign runner, dashboard, and canonical result artifacts. Required sections are
+Version, Before Test, Prompt and Validations. Plans select their scenarios explicitly.
 
 Replay an archived input only through its immutable plan (the runner rejects
 any scenario, model, policy, budget, stack, runner, run-count, or retry drift):
@@ -70,18 +70,14 @@ cargo run --locked --bin harness-e2e -- run \
 Validate one of the checked-in canonical campaign assets:
 
 ```bash
-python3 scripts/run_e2e_campaign.py config/campaigns/post-deploy.json --validate-only
-python3 scripts/run_e2e_campaign.py config/campaigns/daily.json --dry-run
+python3 scripts/run_e2e_campaign.py config/campaigns/endurance.json --e2e-bin target/debug/harness-e2e --validate-only
+python3 scripts/run_e2e_campaign.py config/campaigns/endurance.json --e2e-bin target/debug/harness-e2e --dry-run
 ```
 
 Operational campaign execution is dispatched only by Release Control through
 `.github/workflows/exact-stack-e2e.yml`. The repository no longer
 publishes independent daily, weekly, post-deploy, or fault-stress dispatch
 workflows.
-
-Adaptive L5 classification, trusted planning boundaries, resume semantics, and
-the canonical incident/release/cross-repository cases are documented in
-[`docs/l5-adaptive-scenarios.md`](docs/l5-adaptive-scenarios.md).
 
 Campaign manifests never select or rotate seeds. They separate replay-safe
 turns from scripted dialogue and composite flows, persist a summary for every
@@ -93,12 +89,8 @@ The code-focused campaigns use protected disposable checkouts of
 `iii-hq/e2e-fixture`. The engineering handoff uses its dedicated pinned
 revision, while `shell_coder_sandbox`, `chess_engine_build`, and `trend_blog`
 share a second pinned revision through `HARNESS_E2E_FIXTURE_PATH`. The protected
-launcher and cleanup boundary are described in
-[docs/engineering-ticket-git-handoff.md](docs/engineering-ticket-git-handoff.md).
-The [master test and measurement plan](docs/e2e-test-plans.md) is the single
-strategy document for campaign coverage, purpose-specific profiles, metrics,
-and longitudinal comparison. [config/test-plan.json](config/test-plan.json)
-defines the six executable profiles: smoke, regression, capability, evolution,
+launcher enforces the fixture and cleanup boundary.
+[config/test-plan.json](config/test-plan.json) defines the six executable profiles: smoke, regression, capability, evolution,
 resilience, and endurance. In the dashboard these profiles are starting templates
 for the same plan form and baseline/candidate visualization used by existing plans.
 Choose **New plan**, optionally select a template, edit the scope, and select the
@@ -108,16 +100,10 @@ to the protected executor. See [executable profile plans](dashboard/README.md#ex
 
 ```bash
 cargo run --locked -- test-plan list
-python3 scripts/run_test_plan.py --profile smoke  # preview; no model calls
-python3 scripts/run_test_plan.py --profile smoke --execute \
-  --model "$HARNESS_E2E_MODEL" --provider "$HARNESS_E2E_PROVIDER" \
-  --judge-model "$HARNESS_E2E_JUDGE_MODEL" --judge-provider "$HARNESS_E2E_JUDGE_PROVIDER"
 ```
 
-Use `test-plan sync` after editing the source; CI checks generated campaigns,
-catalogs, and [profile documentation](docs/test-profiles.generated.md).
-Execution preserves native bundles and writes a receipt plus measurements by
-exact case/stack cohort. All profiles remain advisory pending live qualification.
+Templates and execution rules are materialized directly by Rust from the source
+and native contracts. There are no generated catalogs to synchronize.
 
 Release Control dispatches `.github/workflows/exact-stack-e2e.yml`
 directly in this repository. The workflow validates the single strict campaign contract,
@@ -143,7 +129,7 @@ Vite server proxies runtime data, the scoped iii WebSocket, and local-run APIs
 to the Rust dashboard on port 4173.
 
 Rust-defined composite scenarios, including the multi-test `security_review`
-example, use the shared result schema v2 and read-only execution projection.
+example, use the current shared result schema and read-only execution projection.
 
 The running Harness must publish request and response schemas compatible with
 the current typed surface. Missing or incompatible fields fail preflight; no
@@ -203,7 +189,7 @@ are ingested through `database::*`. The runner has no S3, GCS, R2, SQL-driver,
 or Harness dependency.
 
 Weekly Stress materializes deterministic fault plans and evaluates journals from a
-protected supervisor. See [docs/fault-injection.md](docs/fault-injection.md).
+protected supervisor.
 Lane promotion is governed by
 [`config/policies/cutover.json`](config/policies/cutover.json).
 

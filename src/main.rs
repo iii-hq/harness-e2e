@@ -65,60 +65,17 @@ enum Command {
 
 #[derive(Debug, Subcommand)]
 enum TestPlanCommand {
-    /// Measure independent profile invocations, retaining each fixed cohort.
-    Measure {
-        #[arg(long = "results", required = true)]
-        results: Vec<PathBuf>,
-    },
-    /// List the six profiles, their coverage, sample sizes and resource envelopes.
+    /// List the current templates and their materialized coverage.
     List,
-    /// Print the single reviewed source definition.
-    Definition,
-    /// Export immutable profile inputs and compatible campaign manifests.
-    Materialize {
-        #[arg(long)]
-        profile: String,
-        #[arg(long)]
-        output: Option<PathBuf>,
-    },
-    /// Generate compatibility manifests and catalog views (or check for drift).
-    Sync {
-        #[arg(long, default_value = ".")]
-        root: PathBuf,
-        #[arg(long)]
-        check: bool,
-    },
+    /// Print native execution kinds and weights for campaign admission.
+    Catalog,
 }
 
 fn test_plan(command: TestPlanCommand) -> Result<()> {
-    if let TestPlanCommand::Measure { results } = command {
-        println!(
-            "{}",
-            serde_json::to_string(&harness_e2e::test_plan::measure(&results)?)?
-        );
-        return Ok(());
-    }
     let plan = harness_e2e::test_plan::embedded()?;
     let value = match command {
-        TestPlanCommand::Measure { .. } => unreachable!("measure handled above"),
         TestPlanCommand::List => plan.catalog()?,
-        TestPlanCommand::Definition => serde_json::to_value(&plan)?,
-        TestPlanCommand::Materialize { profile, output } => {
-            let snapshot = plan.materialize(&profile)?;
-            let value = serde_json::to_value(snapshot)?;
-            if let Some(output) = output {
-                std::fs::write(
-                    output,
-                    format!("{}\n", serde_json::to_string_pretty(&value)?),
-                )?;
-                return Ok(());
-            }
-            value
-        }
-        TestPlanCommand::Sync { root, check } => {
-            plan.sync(&root, check)?;
-            serde_json::json!({"checked": check, "definition_sha256": plan.digest()?})
-        }
+        TestPlanCommand::Catalog => plan.campaign_catalog()?,
     };
     println!("{}", serde_json::to_string(&value)?);
     Ok(())
@@ -199,9 +156,6 @@ struct RunArgs {
 struct ValidateScenariosArgs {
     #[arg(long, default_value = "scenarios")]
     directory: PathBuf,
-
-    #[arg(long, default_value = "config/campaigns")]
-    campaigns: PathBuf,
 
     /// Optional previous scenarios directory used to enforce version bumps.
     #[arg(long)]
@@ -337,9 +291,9 @@ async fn main() -> Result<()> {
 }
 
 fn validate_scenarios(args: ValidateScenariosArgs) -> Result<()> {
-    let scenarios = markdown::validate_directory(&args.directory, &args.campaigns)?;
+    let scenarios = markdown::validate_directory(&args.directory)?;
     if let Some(base_directory) = args.base_directory.as_deref() {
-        markdown::validate_version_progression(&scenarios, base_directory, &args.campaigns)?;
+        markdown::validate_version_progression(&scenarios, base_directory)?;
     }
     println!(
         "{}",

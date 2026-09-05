@@ -10,7 +10,6 @@ import type {
 import {
   buildExecutionPresentation,
   failureBreakdown,
-  isUnsupportedExecution,
 } from '@/lib/execution-view'
 import {
   generalRunMetrics,
@@ -195,7 +194,7 @@ export function executionMetricValue(
   execution: DashboardExecutionSummary | null | undefined,
   id: PlanMetricId,
 ): number | null {
-  if (!execution || isUnsupportedExecution(execution)) return null
+  if (!execution) return null
   const executionTotals = totals(execution)
   const assessment = objectValue(execution.assessment_summary)
   switch (id) {
@@ -475,8 +474,8 @@ function generalMetricComparisons(
   candidateSummary: DashboardScenarioMetricSummary | undefined,
   compatible: boolean,
 ): PlanMetricComparison[] {
-  const left = generalRunMetrics(baseline, baseline?.semantic_tests ?? [])
-  const right = generalRunMetrics(candidate, candidate?.semantic_tests ?? [])
+  const left = generalRunMetrics(baseline)
+  const right = generalRunMetrics(candidate)
   const metric = (
     id: PlanMetricId,
     label: string,
@@ -588,14 +587,8 @@ export function buildScenarioComparisons(
     const rightMetrics = candidateMetrics.get(id)
     const leftRun = primaryScenarioRun(baseline, id)
     const rightRun = primaryScenarioRun(candidate, id)
-    const leftGeneral = generalRunMetrics(
-      leftRun,
-      leftRun?.semantic_tests ?? [],
-    )
-    const rightGeneral = generalRunMetrics(
-      rightRun,
-      rightRun?.semantic_tests ?? [],
-    )
+    const leftGeneral = generalRunMetrics(leftRun)
+    const rightGeneral = generalRunMetrics(rightRun)
     const versionMismatch =
       left?.scenario_version != null &&
       right?.scenario_version != null &&
@@ -735,18 +728,6 @@ export function buildPlanComparison(
         'Both a retained baseline and a completed candidate are required before deltas can be calculated.',
       baseline: baseline ?? null,
       candidate: candidate ?? null,
-      metrics: [],
-      scenarios: [],
-    }
-  }
-  if (isUnsupportedExecution(baseline) || isUnsupportedExecution(candidate)) {
-    return {
-      verdict: 'inconclusive',
-      headline: 'Result contracts are incompatible',
-      detail:
-        'Historical evidence remains available, but unsupported result contracts cannot be compared or selected as baselines.',
-      baseline,
-      candidate,
       metrics: [],
       scenarios: [],
     }

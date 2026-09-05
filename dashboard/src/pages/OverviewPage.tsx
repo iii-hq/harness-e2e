@@ -58,8 +58,6 @@ export function statusCopy(presentation: ExecutionPresentation) {
     return { label: 'incomplete', status: 'incomplete' as const }
   if (presentation.attention === 'unavailable')
     return { label: 'no report', status: 'unavailable' as const }
-  if (presentation.attention === 'unsupported')
-    return { label: 'unsupported', status: 'unavailable' as const }
   if (presentation.breakdown.hard_gate > 0)
     return { label: 'hard gate', status: 'hard_gate' as const }
   if (

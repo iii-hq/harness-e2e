@@ -1,7 +1,7 @@
 import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
 import type { MasterTestPlan } from '@/lib/dashboard-data-source'
-import { MasterTestProfiles, profileExport } from './MasterTestProfiles'
+import { MasterTestProfiles } from './MasterTestProfiles'
 
 const plan: MasterTestPlan = {
   plan_id: 'harness',
@@ -18,9 +18,6 @@ const plan: MasterTestPlan = {
       technical_retries: 0,
       profile_sha256: 'sha256:profile',
       protected_supervisor_required: true,
-      campaigns: [
-        { campaign_id: 'resilience-r01', test_plan: { repetition: 1 } },
-      ],
       budget: {
         planned_runs: 10,
         scenario_runs: 1,
@@ -39,16 +36,8 @@ describe('master test profiles', () => {
     expect(html).toContain('Resilience')
     expect(html).toContain('Protected fault executor')
     expect(html).toContain('not available for all cases')
-    expect(html).toContain('Export Resilience profile')
+    expect(html).toContain('Create Resilience plan')
     expect(html).toContain('work_amplification')
     expect(html).not.toContain('run baseline')
-  })
-
-  it('exports the exact campaign policy and frozen identity for the CLI importer', () => {
-    const exported = profileExport(plan, plan.profiles[0])
-    expect(exported.schema).toBe('harness-e2e-profile-campaigns/v1')
-    expect(exported.definition_sha256).toBe(plan.definition_sha256)
-    expect(exported.profile.campaigns).toEqual(plan.profiles[0].campaigns)
-    expect(exported.profile.profile_sha256).toBe('sha256:profile')
   })
 })

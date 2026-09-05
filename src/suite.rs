@@ -3214,7 +3214,6 @@ pub(crate) fn markdown_case(
         seed,
         json!({
             "source_path": scenario.source_path,
-            "plans": scenario.plans,
             "source_sha256": scenario.source_sha256,
             "behavior_sha256": scenario.behavior_sha256,
             "compiled_sha256": scenario.compiled_sha256,

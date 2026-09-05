@@ -49,7 +49,6 @@ import {
   formatDate,
   formatDuration,
   formatPercent,
-  unsupportedExecutionReason,
 } from '@/lib/execution-view'
 import { executionTitle } from '@/lib/overview-signal'
 import {
@@ -122,8 +121,6 @@ function executionStatus(presentation: ExecutionPresentation): {
     return { status: 'incomplete', label: 'Incomplete' }
   if (presentation.attention === 'unavailable')
     return { status: 'unavailable', label: 'Unavailable' }
-  if (presentation.attention === 'unsupported')
-    return { status: 'unavailable', label: 'Unsupported' }
   if (presentation.breakdown.hard_gate > 0)
     return { status: 'hard_gate', label: 'Hard gate failed' }
   if (
@@ -627,10 +624,7 @@ function LiveState({
         <span className="font-mono text-xs text-ink-soft">
           {[scope, elapsed ? `${elapsed} elapsed` : null]
             .filter(Boolean)
-            .join(' · ') ||
-            (presentation.attention === 'unsupported'
-              ? 'historical result retained'
-              : 'no progress reported yet')}
+            .join(' · ') || 'no progress reported yet'}
         </span>
         {running && onCancel ? (
           <button
@@ -648,13 +642,11 @@ function LiveState({
         ) : null}
       </div>
       <p className="mt-3 mb-0 max-w-[70ch] text-xs leading-5 text-ink-soft">
-        {presentation.attention === 'unsupported'
-          ? unsupportedExecutionReason(presentation.execution)
-          : running
-            ? 'This page follows recorded progress automatically. The final report and decision appear when the execution finishes.'
-            : hasProgress
-              ? 'The final report is unavailable. Recorded checkpoints remain visible below as partial evidence, not a final verdict.'
-              : 'No report or verified progress is available for this execution.'}
+        {running
+          ? 'This page follows recorded progress automatically. The final report and decision appear when the execution finishes.'
+          : hasProgress
+            ? 'The final report is unavailable. Recorded checkpoints remain visible below as partial evidence, not a final verdict.'
+            : 'No report or verified progress is available for this execution.'}
       </p>
     </Panel>
   )
@@ -946,7 +938,7 @@ export function ExecutionPage({
                 <Link2 size={13} aria-hidden="true" />
                 {copied ? 'link copied' : 'copy link'}
               </button>
-              {local && presentation.attention !== 'unsupported' ? (
+              {local ? (
                 <a
                   className={buttonClassName({
                     variant: 'secondary',

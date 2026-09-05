@@ -1,34 +1,6 @@
 import { buttonClassName, Panel } from '@/design-system'
 import { hashForNewPlan } from '@/hooks/use-hash-route'
-import type {
-  MasterTestPlan,
-  MasterTestProfile,
-} from '@/lib/dashboard-data-source'
-
-export function profileExport(
-  plan: MasterTestPlan,
-  profile: MasterTestProfile,
-) {
-  return {
-    schema: 'harness-e2e-profile-campaigns/v1',
-    plan_id: plan.plan_id,
-    version: plan.version,
-    definition_sha256: plan.definition_sha256,
-    profile,
-  }
-}
-
-function download(plan: MasterTestPlan, profile: MasterTestProfile) {
-  const content = `${JSON.stringify(profileExport(plan, profile), null, 2)}\n`
-  const url = URL.createObjectURL(
-    new Blob([content], { type: 'application/json' }),
-  )
-  const link = document.createElement('a')
-  link.href = url
-  link.download = `harness-${profile.id}-v${plan.version}.json`
-  link.click()
-  setTimeout(() => URL.revokeObjectURL(url), 1000)
-}
+import type { MasterTestPlan } from '@/lib/dashboard-data-source'
 
 export function MasterTestProfiles({ plan }: { plan: MasterTestPlan }) {
   return (
@@ -103,17 +75,6 @@ export function MasterTestProfiles({ plan }: { plan: MasterTestPlan }) {
               >
                 Create plan
               </a>
-              <button
-                type="button"
-                className={buttonClassName({
-                  variant: 'secondary',
-                  size: 'compact',
-                })}
-                onClick={() => download(plan, profile)}
-                aria-label={`Export ${profile.label} profile`}
-              >
-                export profile
-              </button>
             </div>
           </div>
         ))}

@@ -10,7 +10,6 @@ import {
   signalMetric,
 } from '@/lib/overview-signal'
 import {
-  RecentExecutions,
   RunningStrip,
   trendCaption,
   trendDelta,
@@ -50,28 +49,6 @@ function summary(
 }
 
 describe('running execution navigation', () => {
-  it('keeps an unsupported historical execution linked and explicitly labelled', () => {
-    const html = renderToStaticMarkup(
-      <RecentExecutions
-        total={1}
-        presentations={[
-          buildExecutionPresentation(
-            summary({
-              id: 'legacy-execution',
-              status: 'unsupported',
-              availability: 'unsupported',
-            }),
-          ),
-        ]}
-      />,
-    )
-    expect(html).toContain('unsupported')
-    expect(html).toContain('href="#/execution/legacy-execution"')
-    expect(html).toContain('gpt-5.6-terra')
-    expect(html).toContain('Not reported')
-    expect(html).not.toContain('100%')
-  })
-
   it('adds a detail button beside cancel for the current execution', () => {
     const html = renderToStaticMarkup(
       <RunningStrip

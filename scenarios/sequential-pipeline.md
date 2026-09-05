@@ -1,10 +1,5 @@
 # Complete a strict sequential pipeline
 
-## Plans
-
-- daily
-- weekly
-
 ## Version
 
 3

@@ -2395,14 +2395,6 @@ impl E2eReport {
             }
             if let Some(case) = &scenario.case {
                 case.validate()?;
-                let expected_method = crate::scenarios::ComplexityMethod::CapabilityV2;
-                if case.complexity.method != expected_method {
-                    bail!(
-                        "results schema_version {} requires {:?} complexity classification",
-                        self.schema_version,
-                        expected_method
-                    );
-                }
                 if scenario.case_id != case.case_id
                     || scenario.scenario_id != case.scenario_id
                     || scenario.scenario_version != case.scenario_version

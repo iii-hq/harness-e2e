@@ -1,10 +1,5 @@
 # Migrate persistent state
 
-## Plans
-
-- daily
-- weekly
-
 ## Version
 
 1

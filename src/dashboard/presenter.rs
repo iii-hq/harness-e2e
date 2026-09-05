@@ -21,14 +21,12 @@ pub(super) const MAX_EXECUTIONS: usize = 100;
 pub(super) fn stored_execution_summary(run: &super::store::StoredRun) -> Result<Value> {
     let mut value = execution_summary(&run.metadata, run.report.as_ref())?;
     attach_live_progress(&mut value, run)?;
-    attach_report_compatibility(&mut value, run)?;
     Ok(value)
 }
 
 pub(super) fn stored_execution_detail(run: &super::store::StoredRun) -> Result<Value> {
     let mut value = execution_detail_value_optional(&run.metadata, run.report.as_ref())?;
     attach_live_progress(&mut value, run)?;
-    attach_report_compatibility(&mut value, run)?;
     Ok(value)
 }
 
@@ -48,35 +46,6 @@ fn attach_live_progress(value: &mut Value, run: &super::store::StoredRun) -> Res
     }
     if let Some(progress) = &run.live_progress {
         value["generated_at"] = json!(progress.updated_at);
-    }
-    Ok(())
-}
-
-fn attach_report_compatibility(value: &mut Value, run: &super::store::StoredRun) -> Result<()> {
-    let Some(unsupported) = &run.unsupported_report else {
-        return Ok(());
-    };
-    value["status"] = json!("unsupported");
-    value["availability"] = json!("unsupported");
-    value["conclusion"] = json!("");
-    value["execution"]["conclusion"] = json!("");
-    value["baseline_comparable"] = json!(false);
-    value["requested_runs"] = Value::Null;
-    value["result_compatibility"] = serde_json::to_value(unsupported)?;
-    value["first_failure"] = json!({
-        "kind": "unsupported_results_schema",
-        "message": format!(
-            "Results schema v{} is retained as historical evidence, but is incompatible with v{}. Metrics and baseline comparisons are unavailable; no migration or re-execution was performed.",
-            unsupported.schema_version, unsupported.expected_schema_version,
-        ),
-    });
-    if !run.metadata.request.model.is_empty() || !run.metadata.request.provider.is_empty() {
-        value["subjects"] = json!([{
-            "id": slug(&format!("{}-{}", run.metadata.request.provider, run.metadata.request.model)),
-            "model": run.metadata.request.model,
-            "provider": run.metadata.request.provider,
-            "scenarios": [],
-        }]);
     }
     Ok(())
 }

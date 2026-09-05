@@ -869,64 +869,24 @@ fn prepared_plan(plan: LocalPlan, snapshot: Option<ProfileSnapshot>) -> Result<S
 }
 fn snapshot_for_plan(plan: &super::plans::LocalPlan) -> Result<ProfileSnapshot> {
     let master = test_plan::embedded()?;
-    let mut snapshot = master.materialize(plan.template_id.as_deref().unwrap_or("smoke"))?;
-    snapshot.profile.id = "saved-plan".into();
-    snapshot.profile.label = plan.label.clone();
-    snapshot.profile.purpose = plan.purpose.clone();
-    snapshot.profile.modules.clear();
-    snapshot.profile.scenarios = plan.scenario_ids.clone();
-    snapshot.profile.repetitions = plan.runs;
-    snapshot.profile.technical_retries = plan.technical_retries;
-    snapshot.profile.lane = "local".into();
+    let mut profile = master
+        .profiles
+        .iter()
+        .find(|profile| profile.id == plan.template_id.as_deref().unwrap_or("smoke"))
+        .context("Unknown plan template")?
+        .clone();
+    profile.id = "saved-plan".into();
+    profile.label = plan.label.clone();
+    profile.purpose = plan.purpose.clone();
+    profile.modules.clear();
+    profile.scenarios = plan.scenario_ids.clone();
+    profile.repetitions = plan.runs;
+    profile.technical_retries = plan.technical_retries;
+    profile.lane = "local".into();
     if plan.template_id.is_none() {
-        snapshot.profile.fault_groups.clear();
+        profile.fault_groups.clear();
     }
-    snapshot.scenario_ids = plan.scenario_ids.clone();
-    snapshot.cases = plan
-        .scenarios
-        .iter()
-        .map(|case| {
-            let mut value = serde_json::to_value(case)?;
-            let key = case
-                .scenario_id
-                .parse::<crate::markdown::ScenarioKey>()
-                .ok();
-            value["judge_required"] =
-                json!(key.as_ref().is_none_or(|key| key.built_in().is_none()));
-            value["requirements"] = json!(master
-                .requirements
-                .get(&case.scenario_id)
-                .cloned()
-                .unwrap_or_default());
-            Ok(value)
-        })
-        .collect::<Result<_>>()?;
-    let catalog =
-        crate::control::scenarios_list(crate::control::ScenariosListRequest { seed: plan.seed })?;
-    let mut groups = Vec::new();
-    for id in &plan.scenario_ids {
-        let key = id.parse::<crate::markdown::ScenarioKey>().ok();
-        groups.push(json!({"id": format!("case-{}", id.replace('_', "-")), "scenarios": [id], "runs": 1,
-            "technical_retries": if key.as_ref().is_some_and(|key| key.execution_kind().replay_safe()) { plan.technical_retries } else { 0 }, "difficulty_weight": catalog.scenarios.iter().find(|case| case.scenario_id.as_str() == id).map(|case| test_plan::weight(case.classification.tier)),
-            "execution_kind": key.as_ref().map(test_plan::execution_kind).unwrap_or("harness_turn")}));
-    }
-    for fault in &snapshot.profile.fault_groups {
-        groups.push(serde_json::to_value(fault)?);
-    }
-    snapshot.campaigns = (1..=plan.runs).map(|round| json!({"kind": "harness-e2e-campaign", "campaign_id": format!("saved-plan-r{round:02}"),
-        "lane": "local", "failure_policy": "advisory", "scoring_profile": "difficulty-weighted-v1", "groups": groups})).collect();
-    let fault_runs: u64 = snapshot
-        .profile
-        .fault_groups
-        .iter()
-        .map(|g| u64::from(g.runs))
-        .sum::<u64>()
-        * u64::from(plan.runs);
-    snapshot.budget = json!({"planned_runs": plan.scenario_ids.len() as u64 * u64::from(plan.runs) + fault_runs, "scenario_runs": plan.scenario_ids.len() as u64 * u64::from(plan.runs), "fault_runs": fault_runs});
-    snapshot.protected_supervisor_required = fault_runs > 0;
-    snapshot.profile_sha256 =
-        artifact::sha256_value(&json!({"profile": snapshot.profile, "cases": snapshot.cases}))?;
-    Ok(snapshot)
+    master.materialize_scope(profile, plan.seed)
 }
 
 fn configuration_digest(config: &LocalPlan, snapshot_digest: &str) -> Result<String> {
@@ -1277,7 +1237,7 @@ pub(super) fn execution_summary(execution: &PlanExecution) -> Value {
 fn export(plan: &SavedPlan) -> Result<Value> {
     let suites: Vec<_> = plan.snapshot.campaigns.iter().map(|campaign| {
         let groups: Vec<_> = campaign["groups"].as_array().into_iter().flatten().map(|g| { let mut g = g.clone(); if let Some(object) = g.as_object_mut() { if let Some(weight) = object.remove("difficulty_weight") { object.insert("weight".into(), weight); } } g }).collect();
-        json!({"id": campaign["campaign_id"], "label": plan.snapshot.profile.label, "lane": campaign["lane"], "seed": null, "subject": {"model": plan.plan.model, "provider": plan.plan.provider}, "judge": {"model": plan.plan.judge_model, "provider": plan.plan.judge_provider}, "groups": groups, "test_plan": campaign["test_plan"]})
+        json!({"id": campaign["campaign_id"], "label": plan.snapshot.profile.label, "lane": campaign["lane"], "seed": null, "subject": {"model": plan.plan.model, "provider": plan.plan.provider}, "judge": {"model": plan.plan.judge_model, "provider": plan.plan.judge_provider}, "groups": groups})
     }).collect();
     Ok(
         json!({"schema": "harness-e2e-profile-campaigns/v1", "plan_id": plan.snapshot.plan_id, "version": plan.snapshot.version, "definition_sha256": plan.snapshot.definition_sha256,
@@ -1805,17 +1765,6 @@ mod tests {
             if profile == "evolution" {
                 assert!(cohorts.iter().all(|c| c["aggregate"]["observed_runs"] == 5));
                 let paths = result_paths(&execution, root.path());
-                let comparison = test_plan::compare_measurements(&paths, &paths).unwrap();
-                assert_eq!(comparison["comparisons"].as_array().unwrap().len(), 18);
-                for cohort in comparison["comparisons"].as_array().unwrap() {
-                    assert_eq!(
-                        cohort["metrics"]["from_run_ids"].as_array().unwrap().len(),
-                        5
-                    );
-                    assert!(
-                        cohort["metrics"]["from"]["consumption"]["total_tokens_consumed"].is_null()
-                    );
-                }
                 assert!(test_plan::measure(&[paths[0].clone(), paths[0].clone()]).is_err());
             }
             let repeated = manager

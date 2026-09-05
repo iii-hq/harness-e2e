@@ -77,7 +77,7 @@ export type AssessmentRunMetrics = {
 export type AssessmentAggregateMetrics = AssessmentRunMetrics
 
 export type AssessmentWorkspaceModel = {
-  availability: 'available' | 'unavailable' | 'legacy'
+  availability: 'available' | 'unavailable'
   runs: AssessmentRunView[]
 }
 
@@ -130,15 +130,11 @@ export const LOW_CONFIDENCE_THRESHOLD = 0.75
 export function buildAssessmentWorkspace(
   detail: DashboardExecutionDetail | null | undefined,
 ): AssessmentWorkspaceModel {
-  if (!detail) return { availability: 'legacy', runs: [] }
+  if (!detail) return { availability: 'unavailable', runs: [] }
   const runs: AssessmentRunView[] = []
-  let unavailable = false
 
   for (const record of detail.reports ?? []) {
     if (!record.available || !record.report) continue
-    if (record.report.assessment_availability === 'unavailable') {
-      unavailable = true
-    }
     for (const scenario of record.report.scenarios ?? []) {
       for (const projectedRun of scenario.runs ?? []) {
         const contract = projectedRun.assessment
@@ -164,7 +160,7 @@ export function buildAssessmentWorkspace(
     )
     return { availability: 'available', runs }
   }
-  return { availability: unavailable ? 'unavailable' : 'legacy', runs: [] }
+  return { availability: 'unavailable', runs: [] }
 }
 
 function assessmentRunPriority(run: AssessmentRunView) {

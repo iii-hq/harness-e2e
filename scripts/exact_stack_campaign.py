@@ -128,10 +128,7 @@ def validate_suite(suite: Any) -> dict[str, Any]:
         raise ValueError("suite.id must be kebab-case")
     require_text(suite.get("label"), "suite.label")
     require_text(suite.get("lane"), "suite.lane")
-    if "test_plan" in suite:
-        if suite.get("seed") is not None:
-            raise ValueError("master test profiles use scenario-owned canonical seeds")
-    else:
+    if suite.get("seed") is not None:
         require_positive_integer(suite.get("seed"), "suite.seed")
     validate_identity(suite, "subject")
     validate_identity(suite, "judge")
@@ -169,9 +166,6 @@ def validate_suite(suite: Any) -> dict[str, Any]:
             raise ValueError(f"{label}.scenarios must be a non-empty unique array")
         for scenario in scenarios:
             require_text(scenario, f"{label}.scenarios[]")
-    if "test_plan" in suite:
-        from run_e2e_campaign import parse_campaign
-        parse_campaign(campaign_manifest({"suite": suite}))
     return suite
 
 
@@ -392,7 +386,6 @@ def campaign_manifest(contract: dict[str, Any]) -> dict[str, Any]:
         groups.append(materialized)
     return {
         "kind": "harness-e2e-campaign",
-        **({"test_plan": suite["test_plan"]} if "test_plan" in suite else {}),
         "campaign_id": suite["id"],
         "lane": suite["lane"],
         "failure_policy": "advisory",

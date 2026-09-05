@@ -355,8 +355,8 @@ describe('assessment presentation model', () => {
     })
   })
 
-  it('renders legacy and explicitly unavailable contracts as different states', () => {
-    expect(buildAssessmentWorkspace(undefined).availability).toBe('legacy')
+  it('keeps missing assessment contracts unavailable', () => {
+    expect(buildAssessmentWorkspace(undefined).availability).toBe('unavailable')
     const unavailable = detail(contract())
     unavailable.reports[0].report = {
       ...unavailable.reports[0].report,

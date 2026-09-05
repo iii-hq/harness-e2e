@@ -278,6 +278,21 @@ jobs:
           done < <(python3 scripts/exact_stack_campaign.py groups \
             --contract target/harness-e2e-campaign/stack-lock.json)
 
+      - uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # 1.97.1
+
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+
+      - uses: pnpm/action-setup@fc06bc1257f339d1d5d8b3a19a8cae5388b55320 # v5
+        with:
+          version: 11.13.1
+
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
+        with:
+          node-version: 22
+
+      - name: Build exact campaign catalog
+        run: cargo build --locked --bin harness-e2e
+
       - name: Aggregate with exact Harness scoring implementation
         id: aggregate
         continue-on-error: true
@@ -288,6 +303,7 @@ jobs:
             --output target/harness-e2e-campaign/campaign-manifest.json
           python3 scripts/run_e2e_campaign.py \
             target/harness-e2e-campaign/campaign-manifest.json \
+            --e2e-bin "$PWD/target/debug/harness-e2e" \
             --aggregate-existing-root target/harness-e2e-campaign/groups \
             --execution-id '${{ inputs.execution_id }}' \
             --summary target/harness-e2e-campaign/campaign-summary.json \

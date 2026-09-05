@@ -1,5 +1,6 @@
 // Deterministic browser coverage for the executable-plan journey. No models run.
 import assert from 'node:assert/strict'
+import { execFileSync } from 'node:child_process'
 import { readFile } from 'node:fs/promises'
 import { createServer } from 'node:http'
 import path from 'node:path'
@@ -8,7 +9,11 @@ import { chromium } from 'playwright'
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..')
 const master = JSON.parse(
-  await readFile(path.join(root, 'config/test-plan-profiles.json'), 'utf8'),
+  execFileSync(
+    process.env.HARNESS_E2E_BIN ?? path.join(root, 'target/debug/harness-e2e'),
+    ['test-plan', 'list'],
+    { encoding: 'utf8' },
+  ),
 )
 const plans = []
 const executions = new Map()

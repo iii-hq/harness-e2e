@@ -431,7 +431,6 @@ test('publisher writes only the JSON manifest', () => {
   assert.match(publisher, /MANIFEST_FILENAME = "executions\.json"/)
   assert.match(publisher, /write_json_atomic\(manifest_path/)
   assert.match(publisher, /"mode": "published"/)
-  assert.match(publisher, /legacy_manifest_path\.unlink/)
   assert.doesNotMatch(publisher, /HARNESS_EXECUTIONS/)
 })
 

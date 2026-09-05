@@ -94,7 +94,6 @@ export type MasterTestProfile = {
   technical_retries: number
   profile_sha256: string
   protected_supervisor_required: boolean
-  campaigns: JsonObject[]
   budget: {
     planned_runs: number
     scenario_runs: number

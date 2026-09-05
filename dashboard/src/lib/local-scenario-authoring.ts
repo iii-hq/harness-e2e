@@ -21,7 +21,6 @@ type MarkdownHeading = {
 }
 
 const REQUIRED_SECTIONS = [
-  'Plans',
   'Version',
   'Before Test',
   'Prompt',
@@ -315,8 +314,6 @@ export function buildLocalScenarioSource(draft: LocalScenarioDraft) {
   ])
   return [
     `# ${draft.title.trim()}`,
-    '## Plans',
-    '- local',
     '## Version',
     draft.version.trim(),
     '## Before Test',
@@ -360,13 +357,6 @@ export function parseLocalScenarioSource(
       `Sections must appear once in this order: ${REQUIRED_SECTIONS.join(', ')}.`,
     )
   }
-
-  const plans = sectionBody(source, headings, 'Plans')
-    .split('\n')
-    .map((line) => line.trim())
-    .filter(Boolean)
-  if (plans.length !== 1 || plans[0] !== '- local')
-    throw new Error('Local tests must contain only “- local” under Plans.')
 
   const version = parsePositiveInteger(
     sectionBody(source, headings, 'Version'),

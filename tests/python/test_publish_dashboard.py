@@ -176,12 +176,9 @@ def contains_key(value: object, forbidden: str) -> bool:
 
 
 class PublishDashboardTests(unittest.TestCase):
-    def test_publish_writes_json_manifest_and_removes_legacy_runtime_artifact(self) -> None:
+    def test_publish_writes_json_manifest(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             site = Path(directory)
-            (site / "executions.js").write_text(
-                "window.HARNESS_EXECUTIONS = {\"executions\": []};\n"
-            )
             updated = publish(
                 site,
                 snapshot_path=None,
@@ -194,7 +191,6 @@ class PublishDashboardTests(unittest.TestCase):
 
             manifest_path = site / "executions.json"
             self.assertEqual(json.loads(manifest_path.read_text()), updated)
-            self.assertFalse((site / "executions.js").exists())
             self.assertEqual(updated["executions"][0]["availability"], "unavailable")
 
     def test_shared_assessment_projection_fixture(self) -> None:

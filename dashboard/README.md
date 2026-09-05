@@ -20,7 +20,7 @@ the objective system outcome, the advisory AI conclusion, and the canonical
 effective status. The assessment matrix can be filtered by failures, confidence,
 availability, asset involvement, or AI evaluation. Every conclusion retains its
 criterion or analyzer identity and links to the immutable evidence register;
-missing and legacy assessment data is shown as unavailable rather than inferred.
+missing assessment data is shown as unavailable rather than inferred.
 
 Install, validate, and run the frontend with hot reload:
 
@@ -191,14 +191,6 @@ pnpm screenshots -- --base standalone --out .screenshots/after
 Captures and a typography census (`census.json`) land in
 `dashboard/.screenshots/`, which is ignored by git.
 
-The remaining design-audit work is split into four briefs under
-[`docs/ui-migration/`](docs/ui-migration/README.md). That README also holds the
-rules every UI pull request follows (copy-pinned tests change with the copy,
-no unexplained `biome-ignore`, design-system vocabulary only, token colours,
-static Tailwind classes) and the live-evidence recipe: the Rust dashboard in
-local mode (`III_NAMESPACE=my-project harness-e2e dashboard --runs-dir
-~/.iii/data/harness-e2e --listen 127.0.0.1:4173`) behind `vite preview`.
-
 ## Executable profile plans
 
 The dashboard has one kind of plan and one baseline/candidate lifecycle. **My
@@ -240,7 +232,7 @@ plan requires a caller idempotency key. `POST /api/dashboard/plans/control` and
 cancellation. The former profile-plan endpoint, duplicate creation/start actions,
 native plan-context tracking and manual-route alias have been removed.
 
-Run deterministic browser acceptance after the dashboard build:
+Run deterministic browser acceptance after building the dashboard and Rust binary:
 
 ```bash
 pnpm exec playwright install chromium

@@ -32,7 +32,7 @@ use crate::judge::JudgeConfig;
 use crate::longitudinal::{self, ComparisonPolicy, ComparisonResponse};
 use crate::markdown::{
     MarkdownScenarioSource, ScenarioKey, LOCAL_SCENARIO_DIRECTORY, LOCAL_SCENARIO_MAX_BYTES,
-    LOCAL_SCENARIO_PLAN_ID, LOCAL_SCENARIO_REQUIRED_SECTIONS, LOCAL_SCENARIO_TEMPLATE,
+    LOCAL_SCENARIO_REQUIRED_SECTIONS, LOCAL_SCENARIO_TEMPLATE,
 };
 use crate::report::{
     E2eManifest, E2eObservationEnvelope, E2eReport, ObservationDataAvailability,
@@ -377,8 +377,6 @@ pub struct ScenarioAuthoringGuideResponse {
     pub file_name_rules: Vec<String>,
     /// Required H2 headings, in their exact order.
     pub required_h2_sections: Vec<String>,
-    /// Only accepted entry under the Plans heading for local definitions.
-    pub required_plan: String,
     /// Rules for weighted H3 validation criteria.
     pub validation_rules: Vec<String>,
     /// Recommended safe sequence for an agent authoring a local test.
@@ -400,7 +398,7 @@ pub struct LocalScenarioCreateRequest {
     /// Existing files are rejected instead of overwritten.
     pub file_name: String,
     /// Complete Markdown test definition. It must contain one H1 followed by
-    /// the required H2 sections in order, use only `- local` under Plans, and
+    /// the required H2 sections in order and
     /// contain positive `### Name (N%)` validations totaling exactly 100%.
     pub source: String,
 }
@@ -416,8 +414,6 @@ pub struct ScenarioDescriptor {
     pub origin: ScenarioOrigin,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub title: Option<String>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub plans: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub author_version: Option<u32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1899,7 +1895,6 @@ fn scenario_authoring_guide() -> ScenarioAuthoringGuideResponse {
             .into_iter()
             .map(str::to_string)
             .collect(),
-        required_plan: LOCAL_SCENARIO_PLAN_ID.into(),
         validation_rules: vec![
             "Add at least one H3 criterion under Validations.".into(),
             "Format every criterion heading as ### Name (N%) with a positive integer weight."
@@ -1908,9 +1903,7 @@ fn scenario_authoring_guide() -> ScenarioAuthoringGuideResponse {
             "Provide non-empty instructions below every validation heading.".into(),
         ],
         workflow: vec![
-            format!(
-                "Draft source from this template and keep Plans set to {LOCAL_SCENARIO_PLAN_ID}."
-            ),
+            "Draft source from this template.".into(),
             format!("Call {SCENARIOS_CREATE_ID} with file_name and the complete source."),
             format!(
                 "Call {SCENARIOS_LIST_ID} to confirm the returned id appears with origin local."
@@ -2485,7 +2478,6 @@ fn materialize_scenario_descriptor(
                 scenario_id,
                 origin: ScenarioOrigin::BuiltIn,
                 title: None,
-                plans: Vec::new(),
                 author_version: None,
                 source_path: None,
                 source_sha256: None,
@@ -2562,7 +2554,6 @@ fn materialize_markdown_descriptor(
         scenario_id,
         origin,
         title: Some(scenario.title),
-        plans: scenario.plans,
         author_version: Some(scenario.version),
         source_path: Some(scenario.source_path),
         source_sha256: Some(scenario.source_sha256),
@@ -3131,7 +3122,6 @@ mod tests {
         assert_eq!(guide.create_function, SCENARIOS_CREATE_ID);
         assert_eq!(guide.list_function, SCENARIOS_LIST_ID);
         assert_eq!(guide.run_function, RUN_ID);
-        assert_eq!(guide.required_plan, LOCAL_SCENARIO_PLAN_ID);
         assert_eq!(
             guide.required_h2_sections,
             LOCAL_SCENARIO_REQUIRED_SECTIONS.map(str::to_string)
@@ -3280,7 +3270,6 @@ mod tests {
             .find(|scenario| scenario.scenario_id.as_str() == "insert_record")
             .unwrap();
         assert_eq!(markdown.origin, ScenarioOrigin::Markdown);
-        assert_eq!(markdown.plans, ["daily", "weekly"]);
         assert_eq!(markdown.author_version, Some(2));
         assert!(markdown
             .source_sha256
@@ -3292,7 +3281,7 @@ mod tests {
     #[test]
     fn scenarios_list_includes_local_markdown_from_the_worker_data_directory() {
         let root = tempfile::tempdir().unwrap();
-        let source = "# Console draft\n\n## Plans\n\n- local\n\n## Version\n\n1\n\n## Before Test\n\nPrepare isolated state.\n\n## Prompt\n\nComplete the local task.\n\n## Validations\n\n### Correct result (100%)\n\nThe requested result exists.\n";
+        let source = "# Console draft\n\n## Version\n\n1\n\n## Before Test\n\nPrepare isolated state.\n\n## Prompt\n\nComplete the local task.\n\n## Validations\n\n### Correct result (100%)\n\nThe requested result exists.\n";
         crate::markdown::create_local_scenario(root.path(), "console-draft.md", source).unwrap();
 
         let response =
@@ -3304,7 +3293,6 @@ mod tests {
             .unwrap();
         assert_eq!(local.origin, ScenarioOrigin::Local);
         assert_eq!(local.title.as_deref(), Some("Console draft"));
-        assert_eq!(local.plans, ["local"]);
         assert_eq!(local.seed, 9);
         assert!(local
             .source_path
@@ -3317,7 +3305,7 @@ mod tests {
     #[test]
     fn local_markdown_is_frozen_for_execution_and_unknown_ids_are_rejected() {
         let root = tempfile::tempdir().unwrap();
-        let source = "# Frozen draft\n\n## Plans\n\n- local\n\n## Version\n\n1\n\n## Before Test\n\nPrepare isolated state.\n\n## Prompt\n\nComplete the frozen task.\n\n## Validations\n\n### Correct result (100%)\n\nThe requested result exists.\n";
+        let source = "# Frozen draft\n\n## Version\n\n1\n\n## Before Test\n\nPrepare isolated state.\n\n## Prompt\n\nComplete the frozen task.\n\n## Validations\n\n### Correct result (100%)\n\nThe requested result exists.\n";
         crate::markdown::create_local_scenario(root.path(), "frozen-draft.md", source).unwrap();
         let selected = vec!["local_frozen_draft".parse::<ScenarioKey>().unwrap()];
 

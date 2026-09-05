@@ -448,7 +448,7 @@ describe('scenario matrix presentation model', () => {
     ])
   })
 
-  it('backfills general security-review metrics from retained evidence', () => {
+  it('keeps missing security-review usage unavailable', () => {
     const detail = executionDetail()
     const run = detail.reports[0]?.report?.scenarios[0]?.runs[0]
     const scan = run?.semantic_tests?.[0]
@@ -470,26 +470,26 @@ describe('scenario matrix presentation model', () => {
       },
       {
         label: 'Total tokens',
-        value: '3,500',
-        detail: 'Evaluator usage · backfilled',
+        value: '—',
+        detail: 'Not captured for this run',
         band: 'execution',
       },
       {
         label: 'Function calls',
-        value: '9',
-        detail: 'Workflow operations · backfilled',
+        value: '—',
+        detail: 'Not captured for this run',
         band: 'execution',
       },
       {
         label: 'Function errors',
-        value: '0',
-        detail: 'Workflow failures · backfilled',
+        value: '—',
+        detail: 'Not captured for this run',
         band: 'execution',
       },
       {
         label: 'Reported cost',
-        value: '$0.0000',
-        detail: 'Local run · no metered charge',
+        value: '—',
+        detail: 'Not captured for this run',
         band: 'execution',
       },
     ])

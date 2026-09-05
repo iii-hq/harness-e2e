@@ -1,7 +1,6 @@
-//! One reviewed source for profiles and compatibility campaign snapshots.
+//! One reviewed source for test-plan templates.
 //! Materialization is pure: it never contacts iii or calls a model.
 use std::collections::{BTreeMap, BTreeSet};
-use std::path::Path;
 
 use anyhow::{bail, ensure, Context, Result};
 use schemars::JsonSchema;
@@ -33,7 +32,6 @@ pub struct MasterPlan {
     pub diagnostics: Vec<String>,
     pub requirements: BTreeMap<String, Vec<String>>,
     pub profiles: Vec<Profile>,
-    pub compatibility_campaigns: BTreeMap<String, Value>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -70,19 +68,6 @@ pub struct FaultGroup {
     pub fault_profile: String,
     pub fault_scenario: String,
     pub soak_minutes: u32,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
-pub struct PlanIdentity {
-    pub plan_id: String,
-    pub version: u32,
-    pub definition_sha256: String,
-    pub profile_id: String,
-    pub profile_sha256: String,
-    pub repetition: u32,
-    pub repetitions: u32,
-    pub campaign_sha256: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -135,8 +120,8 @@ pub(crate) fn weight(tier: ComplexityTier) -> u8 {
     }
 }
 
-fn native_catalog() -> Result<BTreeMap<String, ScenarioDescriptor>> {
-    Ok(scenarios_list(ScenariosListRequest { seed: None })?
+fn native_catalog(seed: Option<u64>) -> Result<BTreeMap<String, ScenarioDescriptor>> {
+    Ok(scenarios_list(ScenariosListRequest { seed })?
         .scenarios
         .into_iter()
         .map(|entry| (entry.scenario_id.to_string(), entry))
@@ -242,12 +227,6 @@ impl MasterPlan {
             profiles == PROFILE_IDS.into_iter().collect(),
             "master plan must declare the six reviewed profiles"
         );
-        for (id, manifest) in &self.compatibility_campaigns {
-            ensure!(
-                safe_id(id) && manifest["campaign_id"] == *id,
-                "invalid compatibility campaign"
-            );
-        }
         Ok(())
     }
 
@@ -280,8 +259,16 @@ impl MasterPlan {
             .find(|p| p.id == id)
             .context("unknown test profile")?
             .clone();
+        self.materialize_scope(profile, None)
+    }
+
+    pub(crate) fn materialize_scope(
+        &self,
+        profile: Profile,
+        seed: Option<u64>,
+    ) -> Result<ProfileSnapshot> {
         let scenario_ids = self.select(&profile)?;
-        let native = native_catalog()?;
+        let native = native_catalog(seed)?;
         let definition_sha256 = self.digest()?;
         let mut cases = Vec::new();
         let mut ordinary_groups = Vec::new();
@@ -299,7 +286,7 @@ impl MasterPlan {
             let admission: crate::control::RunRequest = serde_json::from_value(json!({
                 "idempotency_key": format!("plan-preview:{}:{id}", profile.id), "lane": profile.lane,
                 "model": "preview", "provider": "preview", "judge_model": "preview", "judge_provider": "preview",
-                "scenarios": [id], "runs": 1, "technical_retries": retries,
+                "scenarios": [id], "runs": 1, "seed": seed, "technical_retries": retries,
             }))?;
             crate::control::validate_run_request(&admission)?;
             let attempts = u64::from(profile.repetitions) * (1 + u64::from(retries));
@@ -348,21 +335,10 @@ impl MasterPlan {
                     .map(serde_json::to_value)
                     .collect::<std::result::Result<Vec<_>, _>>()?,
             );
-            let mut campaign = json!({
+            let campaign = json!({
                 "kind": "harness-e2e-campaign", "campaign_id": format!("{}-r{repetition:02}", profile.id),
                 "lane": profile.lane, "failure_policy": "advisory", "scoring_profile": "difficulty-weighted-v1", "groups": groups,
             });
-            let identity = PlanIdentity {
-                plan_id: self.plan_id.clone(),
-                version: self.version,
-                definition_sha256: definition_sha256.clone(),
-                profile_id: profile.id.clone(),
-                profile_sha256: profile_sha256.clone(),
-                repetition,
-                repetitions: profile.repetitions,
-                campaign_sha256: artifact::sha256_value(&campaign)?,
-            };
-            campaign["test_plan"] = serde_json::to_value(identity)?;
             campaigns.push(campaign);
         }
         let fault_runs: u64 = profile
@@ -399,7 +375,6 @@ impl MasterPlan {
                 "scenario_ids": snapshot.scenario_ids, "repetitions": profile.repetitions,
                 "technical_retries": profile.technical_retries, "budget": snapshot.budget,
                 "profile_sha256": snapshot.profile_sha256, "protected_supervisor_required": snapshot.protected_supervisor_required,
-                "campaigns": snapshot.campaigns,
                 "judge_required": snapshot.protected_supervisor_required || snapshot.cases.iter().any(|c| c["judge_required"] == true),
                 "cases": snapshot.cases}));
         }
@@ -410,118 +385,12 @@ impl MasterPlan {
 
     pub fn campaign_catalog(&self) -> Result<Value> {
         let mut scenarios = BTreeMap::new();
-        for (id, case) in native_catalog()? {
+        for (id, case) in native_catalog(None)? {
             scenarios.insert(id, json!({"execution_kind": execution_kind(&case.scenario_id), "difficulty_weight": weight(case.classification.tier), "markdown": case.scenario_id.built_in().is_none()}));
         }
         Ok(
             json!({"schema": "harness-e2e-campaign-catalog/v1", "definition_sha256": self.digest()?, "scenarios": scenarios}),
         )
-    }
-
-    fn profile_documentation(&self, catalog: &Value) -> String {
-        let mut text = format!("# Generated Harness test profiles\n\nGenerated from [config/test-plan.json](../config/test-plan.json), revision {}.\nEdit the source, then run \u{0060}cargo run --locked -- test-plan sync\u{0060}.\nAll profiles are advisory; repetitions are independent invocations.\n\n| Profile | Cases | Repetitions | Planned slots | Execution |\n| --- | ---: | ---: | ---: | --- |\n", self.version);
-        for profile in catalog["profiles"].as_array().expect("catalog profiles") {
-            text.push_str(&format!(
-                "| {} | {} | {} | {} | {} |\n",
-                profile["label"].as_str().unwrap(),
-                profile["scenario_ids"].as_array().unwrap().len(),
-                profile["repetitions"],
-                profile["budget"]["planned_runs"],
-                if profile["protected_supervisor_required"] == true {
-                    "Protected fault executor"
-                } else {
-                    "Campaign runner"
-                }
-            ));
-        }
-        for profile in &self.profiles {
-            text.push_str(&format!("\n## {}\n\n{}\n\nCases: {}.\n\nMeasures: {}.\n\nRetry ceiling: {}; non-replay-safe cases always use zero.\n", profile.label, profile.purpose, self.select(profile).expect("validated profile").iter().map(|id| format!("`{id}`")).collect::<Vec<_>>().join(", "), profile.metrics.iter().map(|id| format!("`{id}`")).collect::<Vec<_>>().join(", "), profile.technical_retries));
-            for fault in &profile.fault_groups {
-                text.push_str(&format!(
-                    "\nFault: `{}` / `{}`, {} repetitions, {} minutes soak.\n",
-                    fault.fault_profile, fault.fault_scenario, fault.runs, fault.soak_minutes
-                ));
-            }
-        }
-        text.push_str("\n## Capability modules\n\n| Module | Cases |\n| --- | --- |\n");
-        for module in &self.modules {
-            text.push_str(&format!(
-                "| {} — {} | {} |\n",
-                module.id,
-                module.label,
-                module
-                    .scenarios
-                    .iter()
-                    .map(|id| format!("`{id}`"))
-                    .collect::<Vec<_>>()
-                    .join(", ")
-            ));
-        }
-        text.push_str(&format!(
-            "\nDiagnostic cases: {}.\n",
-            self.diagnostics
-                .iter()
-                .map(|id| format!("`{id}`"))
-                .collect::<Vec<_>>()
-                .join(", ")
-        ));
-        text
-    }
-
-    /// Regenerate only owned outputs; check mode is read-only and CI uses it.
-    pub fn sync(&self, root: &Path, check: bool) -> Result<()> {
-        let mut outputs = BTreeMap::new();
-        for (id, campaign) in &self.compatibility_campaigns {
-            outputs.insert(
-                root.join("config/campaigns").join(format!("{id}.json")),
-                campaign.clone(),
-            );
-        }
-        outputs.insert(
-            root.join("config/test-plan-catalog.json"),
-            self.campaign_catalog()?,
-        );
-        let catalog = self.catalog()?;
-        outputs.insert(root.join("config/test-plan-profiles.json"), catalog.clone());
-        let documentation = self.profile_documentation(&catalog);
-        let doc_path = root.join("docs/test-profiles.generated.md");
-        if check {
-            ensure!(
-                std::fs::read_to_string(&doc_path).ok().as_deref() == Some(documentation.as_str()),
-                "generated profile documentation is stale"
-            );
-        } else {
-            std::fs::create_dir_all(doc_path.parent().context("documentation parent")?)?;
-            std::fs::write(doc_path, documentation)?;
-        }
-        for (path, value) in outputs {
-            if check {
-                let current: Value = serde_json::from_slice(
-                    &std::fs::read(&path)
-                        .with_context(|| format!("read generated {}", path.display()))?,
-                )?;
-                ensure!(
-                    current == value,
-                    "generated {} is stale; run harness-e2e test-plan sync",
-                    path.display()
-                );
-            } else {
-                if std::fs::read(&path)
-                    .ok()
-                    .and_then(|bytes| serde_json::from_slice::<Value>(&bytes).ok())
-                    .as_ref()
-                    == Some(&value)
-                {
-                    continue;
-                }
-                std::fs::create_dir_all(path.parent().context("generated output parent")?)?;
-                std::fs::write(
-                    &path,
-                    format!("{}\n", serde_json::to_string_pretty(&value)?),
-                )?;
-            }
-        }
-        Ok(())
     }
 }
 
@@ -601,112 +470,9 @@ pub fn measure(paths: &[std::path::PathBuf]) -> Result<Value> {
     )
 }
 
-/// Compare all compatible repetitions using the native longitudinal metrics.
-/// Cohort mismatches remain visible; this endpoint never emits promotion gates.
-pub fn compare_measurements(
-    from: &[std::path::PathBuf],
-    to: &[std::path::PathBuf],
-) -> Result<Value> {
-    let (from, from_deferred) = measurement_cohorts(from)?;
-    let (to, to_deferred) = measurement_cohorts(to)?;
-    let index = |cohorts: &MeasurementCohorts| -> Result<BTreeMap<String, Vec<String>>> {
-        let mut families: BTreeMap<String, Vec<String>> = BTreeMap::new();
-        for (digest, (identity, _)) in cohorts {
-            families
-                .entry(artifact::sha256_value(&comparison_fixed_identity(
-                    identity,
-                ))?)
-                .or_default()
-                .push(digest.clone());
-        }
-        Ok(families)
-    };
-    let from_index = index(&from)?;
-    let to_index = index(&to)?;
-    let keys = from_index
-        .keys()
-        .chain(to_index.keys())
-        .collect::<BTreeSet<_>>();
-    let mut comparisons = Vec::new();
-    let mut excluded = Vec::new();
-    for key in keys {
-        let left = from_index.get(key).map(Vec::as_slice).unwrap_or_default();
-        let right = to_index.get(key).map(Vec::as_slice).unwrap_or_default();
-        if let ([left], [right]) = (left, right) {
-            let (left_identity, left_case) = &from[left];
-            let (right_identity, right_case) = &to[right];
-            comparisons.push(json!({"cohort_sha256": key, "scenario_id": left_case.scenario_id,
-                "from_cohort_sha256": left, "to_cohort_sha256": right, "from_identity": left_identity, "to_identity": right_identity,
-                "metrics": crate::longitudinal::compare_case_descriptive(left_case, right_case)}));
-        } else {
-            for (side, ids, cohorts) in [("baseline", left, &from), ("candidate", right, &to)] {
-                for id in ids {
-                    excluded.push(json!({"cohort_sha256": id, "side": side, "identity": cohorts[id].0,
-                    "reason": "Case, model, runner revision or fixed execution contract has no unique compatible cohort on the other side."}));
-                }
-            }
-        }
-    }
-    Ok(
-        json!({"schema": "harness-e2e-profile-comparison/v1", "interpretation": "descriptive_only",
-        "treatment": "Harness version and Workers source revision; all other recorded identities remain fixed. Results do not establish causality or promotion gates.",
-        "comparisons": comparisons, "excluded": excluded, "baseline_deferred": from_deferred, "candidate_deferred": to_deferred}),
-    )
-}
-
-fn comparison_fixed_identity(identity: &Value) -> Value {
-    let mut fixed = identity.clone();
-    if let Some(system) = fixed["system_under_test"].as_object_mut() {
-        system.remove("harness_version");
-        if let Some(stack) = system.get_mut("stack").and_then(Value::as_object_mut) {
-            if stack.get("mode").and_then(Value::as_str) == Some("source") {
-                stack.remove("workers_revision");
-            } else if let Some(versions) = stack
-                .get_mut("stack_versions")
-                .and_then(Value::as_object_mut)
-            {
-                versions.remove("harness");
-                stack.remove("stack_lock_digest");
-            }
-        }
-    }
-    fixed
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn evolution_only_pairs_declared_treatment_changes_and_retains_fixed_identity() {
-        let identity = json!({"case": {"version": 1}, "subject": {"model": "subject"}, "judge": {"model": "judge"},
-            "system_under_test": {"harness_version": "1", "engine_version": "1", "e2e_revision": "runner-1", "contract_hashes": {"send": "contract"}, "stack": {"mode": "source", "workers_repository": "workers", "workers_revision": "a"}}});
-        let mut candidate = identity.clone();
-        candidate["system_under_test"]["harness_version"] = json!("2");
-        candidate["system_under_test"]["stack"]["workers_revision"] = json!("b");
-        assert_eq!(
-            comparison_fixed_identity(&identity),
-            comparison_fixed_identity(&candidate)
-        );
-        for path in [
-            vec!["subject", "model"],
-            vec!["case", "version"],
-            vec!["system_under_test", "e2e_revision"],
-            vec!["system_under_test", "engine_version"],
-            vec!["system_under_test", "contract_hashes", "send"],
-        ] {
-            let mut changed = candidate.clone();
-            let mut field = &mut changed;
-            for key in path {
-                field = &mut field[key];
-            }
-            *field = json!("incompatible");
-            assert_ne!(
-                comparison_fixed_identity(&identity),
-                comparison_fixed_identity(&changed)
-            );
-        }
-    }
 
     #[test]
     fn profile_samples_preserve_independent_execution_and_retry_boundaries() {
@@ -725,15 +491,6 @@ mod tests {
             let mut rounds = BTreeSet::new();
             for campaign in snapshot.campaigns {
                 assert!(rounds.insert(campaign["campaign_id"].as_str().unwrap().to_string()));
-                let mut native = campaign.clone();
-                let identity: PlanIdentity = serde_json::from_value(
-                    native.as_object_mut().unwrap().remove("test_plan").unwrap(),
-                )
-                .unwrap();
-                assert_eq!(
-                    identity.campaign_sha256,
-                    artifact::sha256_value(&native).unwrap()
-                );
                 let groups = campaign["groups"].as_array().unwrap();
                 let mut selected = BTreeSet::new();
                 for group in groups {
@@ -798,18 +555,5 @@ mod tests {
             .as_array()
             .unwrap()
             .is_empty());
-    }
-
-    #[test]
-    fn generated_assets_are_reproducible_and_drift_is_rejected() {
-        let plan = embedded().unwrap();
-        let root = tempfile::tempdir().unwrap();
-        plan.sync(root.path(), false).unwrap();
-        plan.sync(root.path(), true).unwrap();
-        let daily = root.path().join("config/campaigns/daily.json");
-        let mut value: Value = serde_json::from_slice(&std::fs::read(&daily).unwrap()).unwrap();
-        value["groups"][0]["technical_retries"] = json!(0);
-        std::fs::write(daily, serde_json::to_vec(&value).unwrap()).unwrap();
-        assert!(plan.sync(root.path(), true).is_err());
     }
 }

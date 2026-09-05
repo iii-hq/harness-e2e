@@ -68,20 +68,6 @@ function execution(
 }
 
 describe('local plan comparison view model', () => {
-  it('does not calculate deltas from unsupported historical contracts', () => {
-    const comparison = buildPlanComparison(
-      execution('legacy', {
-        status: 'unsupported',
-        availability: 'unsupported',
-      }),
-      execution('current'),
-    )
-    expect(comparison.verdict).toBe('inconclusive')
-    expect(comparison.headline).toBe('Result contracts are incompatible')
-    expect(comparison.metrics).toEqual([])
-    expect(comparison.scenarios).toEqual([])
-  })
-
   it('keeps objective stability separate from directional efficiency', () => {
     const comparison = buildPlanComparison(
       execution('baseline'),
@@ -380,7 +366,7 @@ describe('local plan comparison view model', () => {
     expect(row.metrics.every((metric) => metric.delta === null)).toBe(true)
   })
 
-  it('compares backfilled general metrics for security review', () => {
+  it('does not invent security-review consumption from evaluator usage', () => {
     const detail = (id: string, outputTokens: number) =>
       ({
         ...execution(id),
@@ -454,33 +440,11 @@ describe('local plan comparison view model', () => {
       detail('candidate', 400),
     )
 
-    expect(row.execution_metrics).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          id: 'tokens',
-          baseline: 3500,
-          candidate: 3400,
-          delta: -100,
-          format: 'tokens',
-        }),
-        expect.objectContaining({
-          id: 'cost',
-          baseline: 0,
-          candidate: 0,
-          format: 'usd',
-        }),
-        expect.objectContaining({
-          id: 'function_calls',
-          baseline: 13,
-          candidate: 13,
-        }),
-        expect.objectContaining({
-          id: 'function_errors',
-          baseline: 0,
-          candidate: 0,
-        }),
-      ]),
-    )
+    for (const metric of row.execution_metrics) {
+      expect(metric.baseline).toBeNull()
+      expect(metric.candidate).toBeNull()
+      expect(metric.delta).toBeNull()
+    }
   })
 
   // The two token metrics #88 added to the execution page reach the plan

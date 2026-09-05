@@ -65,13 +65,11 @@ pub enum ComplexityTier {
 #[serde(rename_all = "snake_case")]
 pub enum ComplexityMethod {
     #[default]
-    LegacyV1,
     CapabilityV2,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct ComplexityClassification {
-    #[serde(default)]
     pub method: ComplexityMethod,
     pub tier: ComplexityTier,
     pub profile: ComplexityProfile,
@@ -79,27 +77,11 @@ pub struct ComplexityClassification {
 
 impl ComplexityClassification {
     pub fn derive(profile: ComplexityProfile) -> Self {
-        Self::derive_for_method(profile, ComplexityMethod::CapabilityV2)
-    }
-
-    pub fn derive_for_method(profile: ComplexityProfile, method: ComplexityMethod) -> Self {
-        let tier = match method {
-            ComplexityMethod::LegacyV1 => legacy_tier(profile),
-            ComplexityMethod::CapabilityV2 => capability_v2_tier(profile),
-        };
         Self {
-            method,
-            tier,
+            method: ComplexityMethod::CapabilityV2,
+            tier: capability_v2_tier(profile),
             profile,
         }
-    }
-}
-
-fn legacy_tier(profile: ComplexityProfile) -> ComplexityTier {
-    if profile.ambiguity_level >= 7 && (profile.validation_loops >= 2 || profile.wake_cycles >= 2) {
-        ComplexityTier::L5Adaptive
-    } else {
-        lower_tier(profile)
     }
 }
 
@@ -442,12 +424,7 @@ impl ScenarioCase {
         if sha256_value(&self.inputs)? != self.inputs_sha256 {
             bail!("scenario case inputs do not match inputs_sha256");
         }
-        if self.complexity
-            != ComplexityClassification::derive_for_method(
-                self.complexity.profile,
-                self.complexity.method,
-            )
-        {
+        if self.complexity != ComplexityClassification::derive(self.complexity.profile) {
             bail!("scenario case complexity classification is inconsistent");
         }
         self.characterization.validate()?;
@@ -573,14 +550,6 @@ mod tests {
             ..ComplexityProfile::default()
         };
         assert_eq!(
-            ComplexityClassification::derive_for_method(
-                formerly_adaptive,
-                ComplexityMethod::LegacyV1,
-            )
-            .tier,
-            ComplexityTier::L5Adaptive
-        );
-        assert_eq!(
             ComplexityClassification::derive(formerly_adaptive).tier,
             ComplexityTier::L2Stateful
         );
@@ -612,34 +581,6 @@ mod tests {
         .unwrap();
         case.inputs = serde_json::json!({"value": 2});
         assert!(case.validate().is_err());
-    }
-
-    #[test]
-    fn legacy_classification_defaults_when_the_method_and_v2_fields_are_absent() {
-        let classification: ComplexityClassification = serde_json::from_value(serde_json::json!({
-            "tier": "l5_adaptive",
-            "profile": {
-                "planning_depth": 3,
-                "dependency_depth": 2,
-                "parallel_branches": 0,
-                "external_systems": 0,
-                "state_transitions": 0,
-                "wake_cycles": 0,
-                "validation_loops": 2,
-                "artifact_count": 1,
-                "coordination_edges": 0,
-                "ambiguity_level": 8
-            }
-        }))
-        .unwrap();
-        assert_eq!(classification.method, ComplexityMethod::LegacyV1);
-        assert_eq!(
-            classification,
-            ComplexityClassification::derive_for_method(
-                classification.profile,
-                ComplexityMethod::LegacyV1,
-            )
-        );
     }
 
     #[test]
