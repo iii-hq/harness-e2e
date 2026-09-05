@@ -261,7 +261,7 @@ test('renders plan pages on the design system with no legacy plan CSS', () => {
 
 test('exposes baseline and arbitrary candidate comparison controls', () => {
   assert.match(plansPage, /Latest candidate vs baseline/)
-  assert.match(plansPage, /regressed/)
+  assert.doesNotMatch(plansPage, /regressed/)
   assert.match(plansPage, /DeltaValue/)
   assert.match(planDetailPage, /baseline and candidates/)
   // One filter row scopes every chart and table; it never changes the
@@ -269,8 +269,8 @@ test('exposes baseline and arbitrary candidate comparison controls', () => {
   assert.match(planDetailPage, /data-plan-filter-row/)
   assert.match(planDetailPage, /the official baseline stored with the plan never changes here/)
   assert.match(planDetailPage, /PLAN_COMPARISON_TABLE_METRICS/)
-  assert.match(planDetailPage, /planMetricWinnerIds/)
-  assert.match(planDetailPage, /Best values are highlighted/)
+  assert.doesNotMatch(planDetailPage, /planMetricWinnerIds/)
+  assert.doesNotMatch(planDetailPage, /Best values are highlighted/)
   // Layer 0 draws the comparison: trend tiles with sparklines and what moved
   // by test as diverging bars; the two token metrics from #88 are tiles.
   assert.match(planDetailPage, /data-plan-trend/)

@@ -8,19 +8,13 @@ import type {
   JsonObject,
 } from '@/lib/dashboard-data-source'
 import {
-  buildExecutionPresentation,
-  failureBreakdown,
-} from '@/lib/execution-view'
-import {
   generalRunMetrics,
   workflowMetricEntriesFromRecord,
   workflowMetricLabel,
   workflowMetricUnit,
 } from '@/lib/workflow-metrics'
 
-export type PlanVerdict = 'improved' | 'stable' | 'regressed' | 'inconclusive'
-export type MetricTone = 'positive' | 'negative' | 'neutral' | 'unavailable'
-export type MetricDirection = 'higher' | 'lower' | 'context'
+export type MetricTone = 'neutral' | 'unavailable'
 export type MetricFormat =
   | 'percent_points'
   | 'score'
@@ -31,9 +25,7 @@ export type MetricFormat =
   | 'usd'
 
 export type PlanMetricId =
-  | 'pass_rate'
   | 'coverage'
-  | 'hard_gates'
   | 'technical_failures'
   | 'quality'
   | 'confidence'
@@ -53,24 +45,29 @@ export type PlanMetricComparison = {
   candidate: number | null
   delta: number | null
   delta_percent: number | null
-  direction: MetricDirection
   format: MetricFormat
   tone: MetricTone
+  evidence?: {
+    baseline_observed: number
+    candidate_observed: number
+    baseline_planned: number | null
+    candidate_planned: number | null
+    paired: number
+    paired_baseline: number | null
+    paired_candidate: number | null
+  }
 }
 
 export type PlanScenarioComparison = {
   id: string
   compatible: boolean
   reason: string | null
-  baseline_status: string
-  candidate_status: string
   metrics: PlanMetricComparison[]
   execution_metrics: PlanMetricComparison[]
   workflow_metrics: PlanMetricComparison[]
 }
 
 export type PlanComparison = {
-  verdict: PlanVerdict
   headline: string
   detail: string
   baseline: DashboardExecutionSummary | null
@@ -151,24 +148,11 @@ function derivedSecurityMetricTotal(
   return found ? total : null
 }
 
-function metricTone(
-  baseline: number | null,
-  candidate: number | null,
-  direction: MetricDirection,
-): MetricTone {
-  if (baseline === null || candidate === null) return 'unavailable'
-  const delta = candidate - baseline
-  if (Math.abs(delta) < 1e-9 || direction === 'context') return 'neutral'
-  const improved = direction === 'higher' ? delta > 0 : delta < 0
-  return improved ? 'positive' : 'negative'
-}
-
 function comparisonMetric(
   id: PlanMetricId | `workflow:${string}` | `criterion:${string}`,
   label: string,
   baseline: number | null,
   candidate: number | null,
-  direction: MetricDirection,
   format: MetricFormat,
 ): PlanMetricComparison {
   const delta =
@@ -184,9 +168,8 @@ function comparisonMetric(
       delta === null || !baselineMagnitude
         ? null
         : (delta / baselineMagnitude) * 100,
-    direction,
     format,
-    tone: metricTone(baseline, candidate, direction),
+    tone: delta === null ? 'unavailable' : 'neutral',
   }
 }
 
@@ -198,12 +181,8 @@ export function executionMetricValue(
   const executionTotals = totals(execution)
   const assessment = objectValue(execution.assessment_summary)
   switch (id) {
-    case 'pass_rate':
-      return percentPoints(finite(executionTotals.scenario_pass_rate))
     case 'coverage':
       return percentPoints(finite(executionTotals.report_coverage))
-    case 'hard_gates':
-      return finite(executionTotals.hard_gate_failures)
     case 'technical_failures':
       return (
         finite(executionTotals.technical_failures) ??
@@ -260,119 +239,24 @@ function allMetrics(
       executionMetricValue(baseline, id),
       executionMetricValue(candidate, id),
     ] as const
-  const build = (
-    id: PlanMetricId,
-    label: string,
-    direction: MetricDirection,
-    format: MetricFormat,
-  ) => {
+  const build = (id: PlanMetricId, label: string, format: MetricFormat) => {
     const [left, right] = value(id)
-    return comparisonMetric(id, label, left, right, direction, format)
+    return comparisonMetric(id, label, left, right, format)
   }
   return [
-    build('pass_rate', 'Pass rate', 'higher', 'percent_points'),
-    build('coverage', 'Coverage', 'higher', 'percent_points'),
-    build('hard_gates', 'Hard gates', 'lower', 'count'),
-    build('technical_failures', 'Technical failures', 'lower', 'count'),
-    build('quality', 'Quality score', 'higher', 'score'),
-    build('confidence', 'Confidence', 'context', 'percent_points'),
-    build('tokens', 'Total tokens', 'lower', 'tokens'),
-    build('tokens_per_completion', 'Tokens per completion', 'lower', 'tokens'),
-    build('failed_attempt_tokens', 'Failed attempt tokens', 'lower', 'tokens'),
-    build('duration', 'Duration', 'lower', 'seconds'),
-    build('cost', 'Cost', 'lower', 'usd'),
-    build('function_calls', 'Function calls', 'context', 'count'),
-    build('function_errors', 'Function errors', 'lower', 'count'),
-    build('turns', 'Turns', 'lower', 'count'),
+    build('coverage', 'Coverage', 'percent_points'),
+    build('technical_failures', 'Technical failures', 'count'),
+    build('quality', 'Advisory quality', 'score'),
+    build('confidence', 'Confidence', 'percent_points'),
+    build('tokens', 'Total tokens', 'tokens'),
+    build('tokens_per_completion', 'Tokens per completion', 'tokens'),
+    build('failed_attempt_tokens', 'Failed attempt tokens', 'tokens'),
+    build('duration', 'Duration', 'seconds'),
+    build('cost', 'Cost', 'usd'),
+    build('function_calls', 'Function calls', 'count'),
+    build('function_errors', 'Function errors', 'count'),
+    build('turns', 'Turns', 'count'),
   ]
-}
-
-function unreliable(execution: DashboardExecutionSummary): boolean {
-  const presentation = buildExecutionPresentation(execution)
-  const breakdown = presentation.breakdown
-  return (
-    !presentation.available ||
-    executionMetricValue(execution, 'pass_rate') === null ||
-    executionMetricValue(execution, 'coverage') === null ||
-    [
-      'running',
-      'cancelling',
-      'cancelled',
-      'incomplete',
-      'unavailable',
-    ].includes(presentation.attention) ||
-    breakdown.infrastructure > 0 ||
-    breakdown.judge > 0 ||
-    breakdown.inconclusive > 0 ||
-    (executionMetricValue(execution, 'technical_failures') ?? 0) > 0
-  )
-}
-
-function objectiveVerdict(
-  baseline: DashboardExecutionSummary,
-  candidate: DashboardExecutionSummary,
-): Pick<PlanComparison, 'verdict' | 'headline' | 'detail'> {
-  if (unreliable(baseline) || unreliable(candidate)) {
-    return {
-      verdict: 'inconclusive',
-      headline: 'Comparison is inconclusive',
-      detail:
-        'Infrastructure, evaluator, coverage, or retained evidence prevents a reliable objective comparison.',
-    }
-  }
-
-  const baselineBreakdown = failureBreakdown(baseline)
-  const candidateBreakdown = failureBreakdown(candidate)
-  const baselinePassRate = executionMetricValue(baseline, 'pass_rate')
-  const candidatePassRate = executionMetricValue(candidate, 'pass_rate')
-  const baselineCoverage = executionMetricValue(baseline, 'coverage')
-  const candidateCoverage = executionMetricValue(candidate, 'coverage')
-  const comparisons = [
-    [baselineBreakdown.hard_gate, candidateBreakdown.hard_gate, 'lower'],
-    [baselineBreakdown.subject, candidateBreakdown.subject, 'lower'],
-    [
-      baselineBreakdown.resource_limit,
-      candidateBreakdown.resource_limit,
-      'lower',
-    ],
-    [baselinePassRate, candidatePassRate, 'higher'],
-    [baselineCoverage, candidateCoverage, 'higher'],
-  ] as const
-  let improved = false
-  let regressed = false
-  for (const [left, right, direction] of comparisons) {
-    if (left === null || right === null || left === right) continue
-    const better = direction === 'higher' ? right > left : right < left
-    improved ||= better
-    regressed ||= !better
-  }
-  if (regressed) {
-    return {
-      verdict: 'regressed',
-      headline: 'Objective regression detected',
-      detail:
-        'The candidate worsened at least one blocking outcome, pass-rate, or coverage signal relative to the baseline.',
-    }
-  }
-  if (improved) {
-    return {
-      verdict: 'improved',
-      headline: 'Objective results improved',
-      detail:
-        'The candidate improved an objective outcome without worsening another blocking signal.',
-    }
-  }
-  const remainingBlockers =
-    candidateBreakdown.hard_gate +
-    candidateBreakdown.subject +
-    candidateBreakdown.resource_limit
-  return {
-    verdict: 'stable',
-    headline: 'Objective results are stable',
-    detail: remainingBlockers
-      ? `The candidate matches the baseline, but ${remainingBlockers} blocking ${remainingBlockers === 1 ? 'event remains' : 'events remain'}.`
-      : 'Pass rate, coverage, and blocking outcomes match the baseline.',
-  }
 }
 
 function scenarioMap(detail: DashboardExecutionSummary) {
@@ -392,15 +276,6 @@ function scenarioMetricMap(detail: DashboardExecutionSummary) {
       metric,
     ]),
   )
-}
-
-function scenarioStatus(summary: DashboardScenarioSummary | undefined) {
-  if (!summary) return 'Not reported'
-  if (typeof summary.status === 'string' && summary.status)
-    return summary.status
-  if (summary.passed === true) return 'passed'
-  if (summary.passed === false) return 'failed'
-  return 'Not reported'
 }
 
 function scenarioAverage(
@@ -481,7 +356,6 @@ function generalMetricComparisons(
     label: string,
     leftValue: number | null,
     rightValue: number | null,
-    direction: MetricDirection,
     format: MetricFormat,
   ) =>
     comparisonMetric(
@@ -489,7 +363,6 @@ function generalMetricComparisons(
       label,
       compatible ? leftValue : null,
       compatible ? rightValue : null,
-      direction,
       format,
     )
   return [
@@ -498,7 +371,6 @@ function generalMetricComparisons(
       'Cost',
       left.costUsd ?? scenarioAverage(baselineSummary, 'cost_usd'),
       right.costUsd ?? scenarioAverage(candidateSummary, 'cost_usd'),
-      'lower',
       'usd',
     ),
     metric(
@@ -506,7 +378,6 @@ function generalMetricComparisons(
       'Tokens',
       left.totalTokens ?? scenarioAverage(baselineSummary, 'tokens'),
       right.totalTokens ?? scenarioAverage(candidateSummary, 'tokens'),
-      'lower',
       'tokens',
     ),
     metric(
@@ -515,7 +386,6 @@ function generalMetricComparisons(
       left.functionCalls ?? scenarioAverage(baselineSummary, 'function_calls'),
       right.functionCalls ??
         scenarioAverage(candidateSummary, 'function_calls'),
-      'context',
       'count',
     ),
     metric(
@@ -525,7 +395,6 @@ function generalMetricComparisons(
         scenarioAverage(baselineSummary, 'function_call_errors'),
       right.functionCallErrors ??
         scenarioAverage(candidateSummary, 'function_call_errors'),
-      'lower',
       'count',
     ),
     metric(
@@ -535,7 +404,6 @@ function generalMetricComparisons(
         runDurationSeconds(baseline),
       scenarioAverage(candidateSummary, 'duration_seconds') ??
         runDurationSeconds(candidate),
-      'lower',
       'seconds',
     ),
   ]
@@ -560,7 +428,6 @@ function workflowMetricComparisons(
         workflowMetricLabel(path),
         compatible ? (left.get(path) ?? null) : null,
         compatible ? (right.get(path) ?? null) : null,
-        'context',
         workflowMetricUnit(path),
       ),
     )
@@ -570,57 +437,140 @@ function criterionPoints(
   execution: DashboardExecutionSummary,
   scenarioId: string,
 ) {
-  const records = (execution as DashboardExecutionDetail).reports ?? []
-  const scenarios = records
-    .filter((record) => record.scenario_id === scenarioId)
-    .flatMap((record) =>
-      record.available
-        ? (record.report?.scenarios.filter(
-            (scenario) => scenario.scenario_id === scenarioId,
-          ) ?? [])
-        : [],
-    )
-  const runs = scenarios.flatMap((scenario) => scenario.runs)
-  const criteria = runs.map((run) =>
-    (Array.isArray(run.criteria) ? run.criteria : []).map(objectValue),
+  const detail = execution as DashboardExecutionDetail
+  const records = (detail.reports ?? []).filter(
+    (record) => record.scenario_id === scenarioId,
   )
-  const keys = new Map(
-    criteria.flatMap((items) =>
-      items.map((item) => [`${item.id}:${item.possible}`, item] as const),
-    ),
-  )
-  const complete =
-    scenarios.length > 0 &&
-    records
-      .filter((record) => record.scenario_id === scenarioId)
-      .every((record) => record.available) &&
-    scenarios.every(
-      (scenario) => scenario.aggregate?.planned_runs === scenario.runs.length,
-    ) &&
-    new Set(runs.map((run) => run.run_id)).size === runs.length &&
-    runs.every((run) => run.technical === 'valid')
-  return new Map(
-    [...keys].map(([key, criterion]) => {
-      const awards = criteria.map((items) => {
-        const matches = items.filter(
-          (item) =>
-            item.id === criterion.id && item.possible === criterion.possible,
-        )
-        return matches.length === 1 ? finite(matches[0].awarded) : null
+  const samples = records.flatMap((record) => {
+    if (!record.available || !record.report) return []
+    const report = record.report
+    return report.scenarios
+      .filter((scenario) => scenario.scenario_id === scenarioId)
+      .flatMap((scenario) => {
+        const subject = objectValue(report.subject)
+        const judge = objectValue(report.judge)
+        const caseValue = objectValue(scenario.case)
+        const policy = objectValue(scenario.execution_policy)
+        const identity = [
+          report.result_contract_sha256,
+          report.scoring_profile_sha256,
+          scenario.case_id,
+          caseValue.inputs_sha256,
+          subject.model,
+          subject.provider,
+          judge.model,
+          judge.provider,
+          report.judge_protocol,
+        ]
+        return scenario.runs.flatMap((run, index) => {
+          const round =
+            finite(record.round) ??
+            (scenario.aggregate?.planned_runs === scenario.runs.length
+              ? index + 1
+              : null)
+          const pair =
+            round !== null &&
+            identity.every(
+              (value) => typeof value === 'string' && value.length > 0,
+            ) &&
+            Object.keys(policy).length > 0
+              ? JSON.stringify([
+                  ...identity,
+                  Object.keys(policy)
+                    .sort()
+                    .map((key) => [key, policy[key]]),
+                  round,
+                ])
+              : null
+          return (Array.isArray(run.criteria) ? run.criteria : [])
+            .map(objectValue)
+            .map((criterion) => ({
+              id: `${criterion.id}:${criterion.possible}`,
+              label: `Criterion ${criterion.id} · mean points / ${criterion.possible}`,
+              runId: run.run_id,
+              pair,
+              value:
+                run.technical === 'valid' ? finite(criterion.awarded) : null,
+            }))
+        })
       })
+  })
+  const planned = detail.plan_execution
+    ? detail.plan_execution.slots.filter(
+        (slot) => slot.scenario_id === scenarioId,
+      ).length
+    : finite(scenarioMap(execution).get(scenarioId)?.runs)
+  const criteria = new Map(
+    [...new Set(samples.map((sample) => sample.id))].map((id) => {
+      const values = samples.filter((sample) => sample.id === id)
+      const unique = values.filter(
+        (sample) =>
+          values.filter((other) => other.runId === sample.runId).length === 1,
+      )
       return [
-        key,
+        id,
         {
-          label: `Criterion ${criterion.id} · mean points / ${criterion.possible}`,
-          value:
-            complete && awards.every((value) => value !== null)
-              ? awards.reduce<number>((sum, value) => sum + (value ?? 0), 0) /
-                awards.length
-              : null,
+          label: values[0].label,
+          samples: unique.filter((sample) => sample.value !== null),
         },
       ]
     }),
   )
+  return { criteria, planned }
+}
+
+function criterionComparisons(
+  baseline: DashboardExecutionSummary,
+  candidate: DashboardExecutionSummary,
+  scenarioId: string,
+  compatible: boolean,
+): PlanMetricComparison[] {
+  const left = criterionPoints(baseline, scenarioId)
+  const right = criterionPoints(candidate, scenarioId)
+  const mean = (values: Array<number | null>) =>
+    values.length
+      ? values.reduce<number>((sum, value) => sum + (value ?? 0), 0) /
+        values.length
+      : null
+  return [...new Map([...left.criteria, ...right.criteria])]
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([id, descriptor]) => {
+      const before = left.criteria.get(id)?.samples ?? []
+      const after = right.criteria.get(id)?.samples ?? []
+      const pairs = compatible
+        ? before.flatMap((sample) => {
+            const matches = after.filter(
+              (other) => sample.pair !== null && other.pair === sample.pair,
+            )
+            return matches.length === 1 &&
+              before.filter((other) => other.pair === sample.pair).length === 1
+              ? [[sample.value, matches[0].value]]
+              : []
+          })
+        : []
+      const pairedBaseline = mean(pairs.map((pair) => pair[0]))
+      const pairedCandidate = mean(pairs.map((pair) => pair[1]))
+      return {
+        ...comparisonMetric(
+          `criterion:${id}`,
+          descriptor.label,
+          pairedBaseline,
+          pairedCandidate,
+          'score',
+        ),
+        baseline: mean(before.map((sample) => sample.value)),
+        candidate: mean(after.map((sample) => sample.value)),
+        evidence: {
+          baseline_observed: before.length,
+          candidate_observed: after.length,
+          baseline_planned: left.planned,
+          candidate_planned: right.planned,
+          paired: pairs.length,
+          paired_baseline: pairedBaseline,
+          paired_candidate: pairedCandidate,
+        },
+      }
+    })
 }
 
 export function buildScenarioComparisons(
@@ -666,7 +616,6 @@ export function buildScenarioComparisons(
       label: string,
       baselineValue: number | null,
       candidateValue: number | null,
-      direction: MetricDirection,
       format: MetricFormat,
     ) =>
       comparisonMetric(
@@ -674,11 +623,8 @@ export function buildScenarioComparisons(
         label,
         compatible ? baselineValue : null,
         compatible ? candidateValue : null,
-        direction,
         format,
       )
-    const leftCriteria = criterionPoints(baseline, id)
-    const rightCriteria = criterionPoints(candidate, id)
     return {
       id,
       compatible,
@@ -687,35 +633,13 @@ export function buildScenarioComparisons(
         : versionMismatch || caseMismatch || contractMismatch
           ? 'The retained scenario contract differs between executions.'
           : null,
-      baseline_status: scenarioStatus(left),
-      candidate_status: scenarioStatus(right),
       metrics: [
-        ...[...new Map([...leftCriteria, ...rightCriteria])]
-          .sort(([left], [right]) => left.localeCompare(right))
-          .map(([key, descriptor]) =>
-            comparisonMetric(
-              `criterion:${key}`,
-              descriptor.label,
-              compatible ? (leftCriteria.get(key)?.value ?? null) : null,
-              compatible ? (rightCriteria.get(key)?.value ?? null) : null,
-              'higher',
-              'score',
-            ),
-          ),
-        metric(
-          'pass_rate',
-          'Pass rate',
-          percentPoints(finite(left?.pass_rate)),
-          percentPoints(finite(right?.pass_rate)),
-          'higher',
-          'percent_points',
-        ),
+        ...criterionComparisons(baseline, candidate, id, compatible),
         metric(
           'quality',
-          'Quality score',
+          'Advisory quality',
           finite(left?.assessment_summary?.median_quality_score),
           finite(right?.assessment_summary?.median_quality_score),
-          'higher',
           'score',
         ),
         metric(
@@ -723,7 +647,6 @@ export function buildScenarioComparisons(
           'Tokens',
           scenarioAverage(leftMetrics, 'tokens') ?? leftGeneral.totalTokens,
           scenarioAverage(rightMetrics, 'tokens') ?? rightGeneral.totalTokens,
-          'lower',
           'tokens',
         ),
         metric(
@@ -731,7 +654,6 @@ export function buildScenarioComparisons(
           'Tokens per completion',
           scenarioAverage(leftMetrics, 'tokens_per_completion'),
           scenarioAverage(rightMetrics, 'tokens_per_completion'),
-          'lower',
           'tokens',
         ),
         metric(
@@ -739,7 +661,6 @@ export function buildScenarioComparisons(
           'Failed attempt tokens',
           scenarioAverage(leftMetrics, 'failed_attempt_tokens'),
           scenarioAverage(rightMetrics, 'failed_attempt_tokens'),
-          'lower',
           'tokens',
         ),
         metric(
@@ -747,7 +668,6 @@ export function buildScenarioComparisons(
           'Duration',
           scenarioAverage(leftMetrics, 'duration_seconds'),
           scenarioAverage(rightMetrics, 'duration_seconds'),
-          'lower',
           'seconds',
         ),
         metric(
@@ -755,7 +675,6 @@ export function buildScenarioComparisons(
           'Cost',
           scenarioAverage(leftMetrics, 'cost_usd') ?? leftGeneral.costUsd,
           scenarioAverage(rightMetrics, 'cost_usd') ?? rightGeneral.costUsd,
-          'lower',
           'usd',
         ),
         metric(
@@ -763,7 +682,6 @@ export function buildScenarioComparisons(
           'Turns',
           scenarioAverage(leftMetrics, 'turns') ?? runTurns(leftRun),
           scenarioAverage(rightMetrics, 'turns') ?? runTurns(rightRun),
-          'lower',
           'count',
         ),
       ],
@@ -793,7 +711,6 @@ export function buildPlanComparison(
 ): PlanComparison {
   if (!baseline || !candidate) {
     return {
-      verdict: 'inconclusive',
       headline: 'Comparison is unavailable',
       detail:
         'Both a retained baseline and a completed candidate are required before deltas can be calculated.',
@@ -804,7 +721,9 @@ export function buildPlanComparison(
     }
   }
   return {
-    ...objectiveVerdict(baseline, candidate),
+    headline: 'Retained observations',
+    detail:
+      'Review criterion points, coverage and consumption together. Differences describe observations; they do not establish a winner or equivalence.',
     baseline,
     candidate,
     metrics: allMetrics(baseline, candidate),

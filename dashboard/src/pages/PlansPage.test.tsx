@@ -64,9 +64,7 @@ function execution(id: string, passRate: number): DashboardExecutionSummary {
 }
 
 describe('plan list comparison summary', () => {
-  // Audit P-02 / P-10: one verdict, signed core deltas coloured by outcome,
-  // unreported figures hidden.
-  it('shows the latest candidate verdict and the signed core deltas', () => {
+  it('shows coverage and neutral signed deltas despite objective failures', () => {
     const html = renderToStaticMarkup(
       <PlanComparisonSummary
         plan={plan}
@@ -74,14 +72,15 @@ describe('plan list comparison summary', () => {
         candidate={execution('candidate-2', 50)}
       />,
     )
-    expect(html).toContain('>regressed<')
+    expect(html).not.toContain('>regressed<')
+    expect(html).toContain('Retained observations')
     expect(html).toContain('candidate #2')
-    expect(html).toContain('>pass<')
-    expect(html).toContain('−50pp')
-    expect(html).toContain('ds-delta-negative')
+    expect(html).toContain('>coverage<')
+    expect(html).not.toContain('−50pp')
+    expect(html).not.toContain('ds-delta-negative')
     expect(html).toContain('>tokens<')
     expect(html).toContain('−10%')
-    expect(html).toContain('ds-delta-positive')
+    expect(html).not.toContain('ds-delta-positive')
     expect(html).not.toContain('Not reported')
     expect(html).not.toContain('Not comparable')
   })
