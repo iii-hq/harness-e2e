@@ -1468,7 +1468,7 @@ export function TestHistoryPage({ testId }: { testId: string }) {
                   <MetricCard
                     label="objective score"
                     value={formatScore(median(scores))}
-                    detail={`judge quality · /100 · ${metricCaption(knownMetricCount(scores), allObservations.length)}`}
+                    detail={`deterministic validators · /100 · ${metricCaption(knownMetricCount(scores), allObservations.length)}`}
                   />
                 ) : null}
                 {knownMetricCount(durations) > 0 ? (
@@ -1753,7 +1753,10 @@ export function TestHistoryPage({ testId }: { testId: string }) {
                             label={result.label}
                           />
                         </td>
-                        <td data-label="Score" className={numericCellClassName}>
+                        <td
+                          data-label="Objective score"
+                          className={numericCellClassName}
+                        >
                           {formatScore(item.median_score)}
                         </td>
                         <td

@@ -123,7 +123,7 @@ describe('assessment workspace component', () => {
     expect(rendered).toContain('Duration')
     expect(rendered).toContain('1m 02s')
     expect(rendered).toContain('Function errors')
-    expect(rendered).toContain('Runtime telemetry')
+    expect(rendered).toContain('Telemetry')
     expect(rendered).toContain('grid-flow-dense')
     expect(rendered).toContain('sm:grid-cols-2 lg:grid-cols-4')
     expect(rendered).toContain('Input tokens')

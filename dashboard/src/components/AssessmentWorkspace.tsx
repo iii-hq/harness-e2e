@@ -265,7 +265,7 @@ function primaryRunMetrics(run: AssessmentRunView): PrimaryMetric[] {
           tone: metricToneForEntry(patchApplicability),
         }
       : {
-          label: 'Runtime',
+          label: 'Duration',
           value: formatRunDuration(run.metrics.durationMs),
           detail: 'Subject execution time',
           context: 'Observed',
@@ -922,7 +922,7 @@ function AssessmentDetailContent({
           id={`${safeId(run.key)}-runtime`}
           className="min-h-11 cursor-pointer px-4 py-3 text-sm font-semibold text-ink"
         >
-          Runtime telemetry
+          Telemetry
         </summary>
         <div
           className="grid gap-2 border-t border-line p-3 sm:grid-cols-2 lg:grid-cols-4"
@@ -1189,7 +1189,7 @@ function RunAssessment({
 
       <footer className="flex flex-col gap-3 p-3 sm:flex-row sm:items-center sm:justify-between">
         <p className="m-0 font-mono text-label text-ink-muted">
-          Runtime {formatRunDuration(run.metrics.durationMs)} · Tokens{' '}
+          Duration {formatRunDuration(run.metrics.durationMs)} · Tokens{' '}
           {formatMetricCount(run.metrics.totalTokens)} · Function errors{' '}
           {formatMetricCount(run.metrics.functionCallErrors)}
         </p>

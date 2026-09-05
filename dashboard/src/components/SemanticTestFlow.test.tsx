@@ -120,7 +120,7 @@ describe('SemanticTestFlow', () => {
     expect(html).toContain('1 hard gate failed')
     expect(html).toContain('Decision evidence')
     expect(html).toContain('Technical evidence')
-    expect(html).toContain('Additional runtime counters')
+    expect(html).toContain('Additional counters')
     expect(html).not.toContain('<table')
     expect(html).not.toContain('Security review execution')
   })

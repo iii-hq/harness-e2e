@@ -139,7 +139,7 @@ const CORE_DELTAS: Array<{ id: PlanMetricId; label: string }> = [
   { id: 'coverage', label: 'coverage' },
   { id: 'quality', label: 'quality' },
   { id: 'tokens', label: 'tokens' },
-  { id: 'duration', label: 'time' },
+  { id: 'duration', label: 'duration' },
 ]
 
 function MetricDelta({
