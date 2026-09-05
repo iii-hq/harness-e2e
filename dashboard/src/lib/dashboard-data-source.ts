@@ -561,7 +561,7 @@ export type RuntimeConfig = {
     run_status: string
     run_start: string
     run_cancel: string
-    profile_plan?: string
+    plan_control: string
     plans_list: string
     plan_get: string
     plan_create: string
@@ -591,7 +591,7 @@ export type DashboardDataBridge = {
   listTests(input?: TestsListInput): Promise<TestsListResponse>
   getTestVersion(input: TestVersionInput): Promise<TestVersionResult>
   getTestHistory(input: TestHistoryInput): Promise<TestHistoryResponse>
-  profilePlan?(request: JsonObject): Promise<JsonObject>
+  planControl(request: JsonObject): Promise<JsonObject>
   listPlans(): Promise<LocalPlansResponse>
   getPlan(planId: string): Promise<LocalPlan>
   createPlan(request: JsonObject): Promise<LocalPlan>
@@ -701,15 +701,12 @@ function makeBridge(runtime: RuntimeConfig): DashboardDataBridge {
         input as unknown as JsonObject,
         () => httpTestHistory(input),
       ),
-    profilePlan: (request) =>
-      call<JsonObject>(
-        runtime.functions.profile_plan ?? 'e2e::dashboard::profile-plan',
-        request,
-        () =>
-          httpJson<JsonObject>('./api/dashboard/profile-plans', {
-            method: 'POST',
-            body: JSON.stringify(request),
-          }),
+    planControl: (request) =>
+      call<JsonObject>(runtime.functions.plan_control, request, () =>
+        httpJson<JsonObject>('./api/dashboard/plans/control', {
+          method: 'POST',
+          body: JSON.stringify(request),
+        }),
       ),
     listPlans: () =>
       call<LocalPlansResponse>(runtime.functions.plans_list, {}, () =>
@@ -738,16 +735,22 @@ function makeBridge(runtime: RuntimeConfig): DashboardDataBridge {
             { method: 'PATCH', body: JSON.stringify(request) },
           ),
       ),
-    startPlan: (planId, role) =>
-      call<LocalPlan>(
-        runtime.functions.plan_run_start,
-        { plan_id: planId, role },
-        () =>
-          httpJson<LocalPlan>(
-            `./api/dashboard/plans/${encodeURIComponent(planId)}/runs`,
-            { method: 'POST', body: JSON.stringify({ role }) },
-          ),
-      ),
+    startPlan: (planId, role) => {
+      const request = {
+        plan_id: planId,
+        role,
+        idempotency_key: crypto.randomUUID(),
+      }
+      return call<LocalPlan>(runtime.functions.plan_run_start, request, () =>
+        httpJson<LocalPlan>(
+          `./api/dashboard/plans/${encodeURIComponent(planId)}/runs`,
+          {
+            method: 'POST',
+            body: JSON.stringify(request),
+          },
+        ),
+      )
+    },
     getCatalog: (url) =>
       call(runtime.functions.catalog_get, url ? { url } : {}, () =>
         httpJson(
@@ -912,8 +915,8 @@ function makeStaticBridge(): DashboardDataBridge {
         'Test metric history is available only in the local dashboard',
       )
     },
-    profilePlan: async () => {
-      throw new Error('Profile plans are available only in the local dashboard')
+    planControl: async () => {
+      throw new Error('Plan controls are available only in the local dashboard')
     },
     listPlans: async () => {
       throw new Error('Local plans are available only in the local dashboard')

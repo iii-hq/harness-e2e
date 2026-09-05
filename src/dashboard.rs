@@ -76,8 +76,6 @@ struct RunRequest {
     technical_retries: u8,
     #[serde(default)]
     seed: Option<u64>,
-    #[serde(default)]
-    plan_context: Option<plans::PlanContext>,
 }
 
 #[derive(Debug, Clone, Copy, Deserialize, Serialize, JsonSchema, PartialEq, Eq)]
@@ -107,8 +105,6 @@ struct RunMetadata {
     returncode: Option<i32>,
     error: String,
     request: RunRequest,
-    #[serde(default)]
-    plan_context: Option<plans::PlanContext>,
 }
 
 #[derive(Debug, Serialize, JsonSchema)]
@@ -224,7 +220,6 @@ mod tests {
             runs: 1,
             technical_retries: 1,
             seed: Some(42),
-            plan_context: None,
         }
     }
 
@@ -326,7 +321,6 @@ mod tests {
             returncode: Some(0),
             error: String::new(),
             request: request(),
-            plan_context: None,
         }
     }
 
@@ -355,8 +349,10 @@ mod tests {
             serde_json::from_value(value).expect("engine metadata should be accepted");
         assert_eq!(decoded._caller_worker_id.as_deref(), Some("browser-worker"));
 
-        let serialized = serde_json::to_value(decoded).expect("request should serialize");
+        let mut serialized = serde_json::to_value(decoded).expect("request should serialize");
         assert!(serialized.get("_caller_worker_id").is_none());
+        serialized["plan_context"] = serde_json::json!({"plan_id": "old-plan"});
+        assert!(serde_json::from_value::<RunRequest>(serialized).is_err());
     }
 
     #[test]

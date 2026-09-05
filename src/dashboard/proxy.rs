@@ -11,8 +11,8 @@ use tokio_tungstenite::tungstenite::Message as TungMessage;
 
 use super::bus::{
     BROWSER_FUNCTION_PREFIX, CATALOG_GET, CHANGED_TRIGGER, EVALUATED_VERSIONS_LIST,
-    EXECUTIONS_LIST, EXECUTION_GET, LOCAL_SCENARIO_CREATE, PLANS_LIST, PLAN_CREATE, PLAN_GET,
-    PLAN_RUN_START, PLAN_UPDATE, PROFILE_PLAN, RUN_CANCEL, RUN_START, RUN_STATUS, TESTS_LIST,
+    EXECUTIONS_LIST, EXECUTION_GET, LOCAL_SCENARIO_CREATE, PLANS_LIST, PLAN_CONTROL, PLAN_CREATE,
+    PLAN_GET, PLAN_RUN_START, PLAN_UPDATE, RUN_CANCEL, RUN_START, RUN_STATUS, TESTS_LIST,
     TEST_HISTORY_GET, TEST_VERSION_GET,
 };
 
@@ -173,7 +173,7 @@ fn allowed_invocation(id: &str) -> bool {
             | PLAN_CREATE
             | PLAN_UPDATE
             | PLAN_RUN_START
-            | PROFILE_PLAN
+            | PLAN_CONTROL
             | RUN_STATUS
             | RUN_START
             | RUN_CANCEL
@@ -240,7 +240,7 @@ mod tests {
             PLAN_CREATE,
             PLAN_UPDATE,
             PLAN_RUN_START,
-            PROFILE_PLAN,
+            PLAN_CONTROL,
             LOCAL_SCENARIO_CREATE,
         ] {
             let allowed =
@@ -252,6 +252,11 @@ mod tests {
         }
         assert!(filter_browser_text(
             r#"{"type":"invokefunction","function_id":"shell::exec","data":{}}"#,
+            &mut policy,
+        )
+        .is_none());
+        assert!(filter_browser_text(
+            r#"{"type":"invokefunction","function_id":"e2e::dashboard::profile-plan","data":{}}"#,
             &mut policy,
         )
         .is_none());

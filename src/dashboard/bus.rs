@@ -35,7 +35,7 @@ pub(super) const TEST_VERSION_GET: &str = "e2e::dashboard::test-version-get";
 pub(super) const TEST_HISTORY_GET: &str = "e2e::dashboard::test-history-get";
 pub(super) const CATALOG_GET: &str = "e2e::dashboard::catalog-get";
 pub(super) const LOCAL_SCENARIO_CREATE: &str = "e2e::dashboard::local-scenario-create";
-pub(super) const PROFILE_PLAN: &str = "e2e::dashboard::profile-plan";
+pub(super) const PLAN_CONTROL: &str = "e2e::dashboard::plan-control";
 pub(super) const PLANS_LIST: &str = "e2e::dashboard::plans-list";
 pub(super) const PLAN_GET: &str = "e2e::dashboard::plan-get";
 pub(super) const PLAN_CREATE: &str = "e2e::dashboard::plan-create";
@@ -387,7 +387,7 @@ pub(super) fn register_functions(iii: &IIIClient, controller: Arc<Controller>) {
             })
         },
     );
-    register(iii, PROFILE_PLAN, "Configure, export and execute saved plans, and inspect or cancel their composed executions.", {
+    register(iii, PLAN_CONTROL, "Configure, export and execute saved plans, and inspect or cancel their composed executions.", {
         let controller = controller.clone();
         RegisterFunction::new_async(move |request: super::plan_store::Request| {
             let controller = controller.clone();
@@ -458,7 +458,7 @@ pub(super) fn register_functions(iii: &IIIClient, controller: Arc<Controller>) {
                         .as_deref()
                         .ok_or_else(|| handler_error("plan_id is required"))?;
                     controller
-                        .start_plan(id, request.role)
+                        .start_plan(id, request.role, &request.idempotency_key)
                         .await
                         .map_err(|error| Error::Handler(error.message))
                 }

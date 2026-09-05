@@ -12,7 +12,7 @@ import { getDashboardDataBridge } from '@/lib/dashboard-data-source'
 import {
   type PlanExecution,
   type PlanRequirements,
-  profileAction,
+  planAction,
   running,
 } from '@/lib/plan-execution'
 
@@ -73,11 +73,9 @@ export function PlanProgress({ execution }: { execution: PlanExecution }) {
     <Panel aria-label="Plan execution progress">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <h2 className="my-0 text-sm font-semibold text-ink">
-          {execution.role === 'run'
-            ? 'Execution'
-            : execution.role === 'baseline'
-              ? 'Reference execution'
-              : 'Candidate execution'}{' '}
+          {execution.role === 'baseline'
+            ? 'Baseline execution'
+            : 'Candidate execution'}{' '}
           · {execution.state}
         </h2>
         <span className="text-xs text-ink-soft">
@@ -129,7 +127,7 @@ export function PlanExecutionPage({ executionId }: { executionId: string }) {
     const load = async () => {
       try {
         const bridge = await getDashboardDataBridge()
-        const value = await profileAction<PlanExecution>(bridge, {
+        const value = await planAction<PlanExecution>(bridge, {
           action: 'execution',
           execution_id: executionId,
         })
@@ -149,7 +147,7 @@ export function PlanExecutionPage({ executionId }: { executionId: string }) {
     try {
       const bridge = await getDashboardDataBridge()
       setExecution(
-        await profileAction<PlanExecution>(bridge, {
+        await planAction<PlanExecution>(bridge, {
           action: 'cancel',
           execution_id: executionId,
         }),

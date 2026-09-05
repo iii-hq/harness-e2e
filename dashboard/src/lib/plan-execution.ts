@@ -16,7 +16,7 @@ export type PlanSlot = {
 export type PlanExecution = {
   id: string
   plan_id: string
-  role: 'run' | 'baseline' | 'candidate'
+  role: 'baseline' | 'candidate'
   state: string
   started_at: string
   finished_at: string | null
@@ -50,15 +50,11 @@ export type PlanRequirements = {
     plan_id?: string
   }
 }
-export async function profileAction<T>(
+export async function planAction<T>(
   bridge: DashboardDataBridge,
   request: JsonObject,
 ): Promise<T> {
-  if (!bridge.profilePlan)
-    throw new Error(
-      'Profile plan controls are unavailable. Refresh the dashboard and worker.',
-    )
-  return (await bridge.profilePlan(request)) as T
+  return (await bridge.planControl(request)) as T
 }
 export function running(state: string) {
   return state === 'running' || state === 'cancelling'

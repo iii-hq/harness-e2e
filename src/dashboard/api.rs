@@ -94,8 +94,8 @@ pub(super) async fn serve(args: DashboardArgs) -> Result<()> {
                 axum::routing::post(local_scenario_create),
             )
             .route(
-                "/api/dashboard/profile-plans",
-                axum::routing::post(profile_plan),
+                "/api/dashboard/plans/control",
+                axum::routing::post(plan_control),
             )
             .route("/api/dashboard/plans", get(plans_list).post(plan_create))
             .route("/api/dashboard/plans/:id", get(plan_get).patch(plan_update))
@@ -158,7 +158,7 @@ async fn dashboard_config(State(state): State<AppState>) -> Json<Value> {
             "run_start": bus::RUN_START,
             "run_cancel": bus::RUN_CANCEL,
             "plans_list": bus::PLANS_LIST,
-            "profile_plan": bus::PROFILE_PLAN,
+            "plan_control": bus::PLAN_CONTROL,
             "plan_get": bus::PLAN_GET,
             "plan_create": bus::PLAN_CREATE,
             "plan_update": bus::PLAN_UPDATE,
@@ -168,7 +168,7 @@ async fn dashboard_config(State(state): State<AppState>) -> Json<Value> {
     }))
 }
 
-async fn profile_plan(
+async fn plan_control(
     State(state): State<AppState>,
     Json(request): Json<super::plan_store::Request>,
 ) -> Result<Json<Value>, ApiError> {
@@ -228,7 +228,10 @@ async fn plan_run(
     AxumPath(id): AxumPath<String>,
     Json(request): Json<PlanRunRequest>,
 ) -> Result<(StatusCode, Json<LocalPlan>), ApiError> {
-    let plan = state.controller.start_plan(&id, request.role).await?;
+    let plan = state
+        .controller
+        .start_plan(&id, request.role, &request.idempotency_key)
+        .await?;
     Ok((StatusCode::ACCEPTED, Json(plan)))
 }
 

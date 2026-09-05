@@ -23,7 +23,7 @@ import {
   type JsonObject,
   type MasterTestProfile,
 } from '@/lib/dashboard-data-source'
-import { type PlanRequirements, profileAction } from '@/lib/plan-execution'
+import { type PlanRequirements, planAction } from '@/lib/plan-execution'
 import { Requirements } from './PlanExecutionPage'
 
 type Model = { provider: string; model: string }
@@ -410,7 +410,7 @@ export function LocalPlanCreatePage({
         seed,
       }
       if (runAfterSave) {
-        const checked = await profileAction<PlanRequirements>(bridge, {
+        const checked = await planAction<PlanRequirements>(bridge, {
           action: 'requirements',
           plan_id: plan.id,
         })

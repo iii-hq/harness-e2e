@@ -13,28 +13,32 @@ import {
 } from '@/lib/iii-client'
 
 describe('live dashboard transport', () => {
-  it('carries profile operations through iii and the standalone HTTP bridge', async () => {
-    const trigger = vi.fn(async () => ({ execution_id: 'plan-native' }))
+  it('carries current plan controls and idempotent starts through iii and HTTP', async () => {
+    const trigger = vi.fn(async () => ({ ready: true }))
     installDashboardIiiClient({ trigger } as unknown as DashboardIiiClient)
     const request = {
-      action: 'start',
-      plan_id: 'profile-1',
-      idempotency_key: 'once',
-      role: 'run',
+      action: 'requirements',
+      plan_id: 'plan-1',
     }
     installDashboardRuntimeConfig({
       mode: 'local',
       transport: 'iii',
-      functions: { profile_plan: 'profile-control' },
+      functions: { plan_control: 'plan-control', plan_run_start: 'plan-start' },
     } as RuntimeConfig)
     const live = await getDashboardDataBridge()
-    await expect(live.profilePlan?.(request)).resolves.toEqual({
-      execution_id: 'plan-native',
+    await expect(live.planControl?.(request)).resolves.toEqual({
+      ready: true,
     })
-    expect(trigger).toHaveBeenCalledWith('profile-control', request)
+    expect(trigger).toHaveBeenCalledWith('plan-control', request)
+    await live.startPlan('plan-1', 'baseline')
+    expect(trigger).toHaveBeenCalledWith('plan-start', {
+      plan_id: 'plan-1',
+      role: 'baseline',
+      idempotency_key: expect.any(String),
+    })
     const fetch = vi.fn(
       async (_url: string, _options?: RequestInit) =>
-        new Response(JSON.stringify({ id: 'profile-copy' }), { status: 200 }),
+        new Response(JSON.stringify({ id: 'plan-1' }), { status: 200 }),
     )
     vi.stubGlobal('fetch', fetch)
     try {
@@ -45,13 +49,21 @@ describe('live dashboard transport', () => {
       } as RuntimeConfig)
       const http = await getDashboardDataBridge()
       await expect(
-        http.profilePlan?.({
-          action: 'duplicate',
-          plan_id: 'profile-1',
-          model: 'chosen',
+        http.planControl?.({
+          action: 'export',
+          plan_id: 'plan-1',
         }),
-      ).resolves.toEqual({ id: 'profile-copy' })
-      expect(fetch.mock.calls[0]?.[0]).toBe('./api/dashboard/profile-plans')
+      ).resolves.toEqual({ id: 'plan-1' })
+      expect(fetch.mock.calls[0]?.[0]).toBe('./api/dashboard/plans/control')
+      await http.startPlan('plan-1', 'baseline')
+      expect(fetch.mock.calls.at(-1)?.[0]).toBe(
+        './api/dashboard/plans/plan-1/runs',
+      )
+      expect(JSON.parse(String(fetch.mock.calls.at(-1)?.[1]?.body))).toEqual({
+        plan_id: 'plan-1',
+        role: 'baseline',
+        idempotency_key: expect.any(String),
+      })
     } finally {
       vi.unstubAllGlobals()
     }

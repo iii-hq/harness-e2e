@@ -24,7 +24,7 @@ describe('executable plan journey', () => {
       validateExecutionSetup({ ...config, subject: 'model', judge: 'judge' }),
     ).toEqual({})
   })
-  it('uses the shared form for templates, duplication and the old manual URL', () => {
+  it('routes templates and duplication, and rejects the old manual URL', () => {
     expect(routeFromHash('#/plans/new/profile/smoke')).toEqual({
       page: 'plan-create',
       profileId: 'smoke',
@@ -33,14 +33,12 @@ describe('executable plan journey', () => {
       page: 'plan-create',
       duplicateId: 'profile-example',
     })
-    expect(routeFromHash('#/plans/new/manual')).toEqual(
-      routeFromHash('#/plans/new'),
-    )
+    expect(routeFromHash('#/plans/new/manual')).toBeNull()
   })
   it('uses every planned slot as progress denominator and separates result axes', () => {
     const execution = {
       state: 'running',
-      role: 'run',
+      role: 'baseline',
       slots: [
         {
           state: 'finished',

@@ -139,7 +139,7 @@ export function routeFromHash(rawHash: string): DashboardRoute | null {
         return { page: 'plan-create', duplicateId: rest[2] }
       if (rest[1] === 'edit' && rest[2])
         return { page: 'plan-create', editId: rest[2] }
-      return { page: 'plan-create' }
+      return rest[1] ? null : { page: 'plan-create' }
     }
     return { page: 'plan-detail', planId: rest[0] }
   }

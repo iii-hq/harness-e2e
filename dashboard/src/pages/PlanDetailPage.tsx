@@ -71,7 +71,7 @@ import {
   downloadJson,
   type PlanExecution,
   type PlanRequirements,
-  profileAction,
+  planAction,
 } from '@/lib/plan-execution'
 import { watchExecution } from '@/lib/watch-execution'
 import { PlanProgress, Requirements } from './PlanExecutionPage'
@@ -2399,7 +2399,7 @@ export function LocalPlanDetailPage({ planId }: { planId: string }) {
     }
     let live = true
     const refresh = () =>
-      profileAction<PlanExecution>(bridge, {
+      planAction<PlanExecution>(bridge, {
         action: 'execution',
         execution_id: plan.last_attempt_id,
       })
@@ -2418,7 +2418,7 @@ export function LocalPlanDetailPage({ planId }: { planId: string }) {
     if (!bridge || !plan) return
     try {
       downloadJson(
-        await profileAction(bridge, { action: 'export', plan_id: plan.id }),
+        await planAction(bridge, { action: 'export', plan_id: plan.id }),
         `${plan.id}.json`,
       )
     } catch (cause) {
@@ -2429,7 +2429,7 @@ export function LocalPlanDetailPage({ planId }: { planId: string }) {
     if (!bridge || !activeExecution) return
     try {
       setActiveExecution(
-        await profileAction<PlanExecution>(bridge, {
+        await planAction<PlanExecution>(bridge, {
           action: 'cancel',
           execution_id: activeExecution.id,
         }),
@@ -2565,7 +2565,7 @@ export function LocalPlanDetailPage({ planId }: { planId: string }) {
       executionId: null,
     })
     try {
-      const checked = await profileAction<PlanRequirements>(bridge, {
+      const checked = await planAction<PlanRequirements>(bridge, {
         action: 'requirements',
         plan_id: plan.id,
       })

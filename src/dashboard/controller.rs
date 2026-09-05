@@ -1,4 +1,3 @@
-use std::collections::{BTreeSet, HashMap};
 use std::env;
 use std::fs::{self, File};
 use std::io::{Read, Seek, SeekFrom};
@@ -11,20 +10,18 @@ use tokio::sync::{broadcast, Mutex, RwLock};
 use url::Url;
 
 use super::bus::DashboardEvents;
-use super::plans::{self, LocalPlan, PlanCreateRequest, PlanRunRole, PlanState, PlanUpdateRequest};
+use super::plans::{LocalPlan, PlanCreateRequest, PlanRunRole, PlanUpdateRequest};
 use super::read_model::DashboardReadModel;
-use super::store::{read_metadata, read_report, recover_interrupted_runs, write_metadata};
+use super::store::write_metadata;
 use super::{
     ApiError, DashboardArgs, Defaults, JobStatus, JobView, RunMetadata, RunRequest, RunSnapshot,
 };
-use crate::artifact;
 use crate::control::{
     ControlPlane, ExecutionPhase, ExecutionRecord, LocalScenarioCreateRequest,
     LocalScenarioCreateResponse, RunRequest as ControlRunRequest, ScenariosListRequest,
     ScenariosListResponse,
 };
 use crate::markdown::ScenarioKey;
-use crate::report::E2eReport;
 
 const MAX_LOG_TAIL_BYTES: u64 = 256 * 1024;
 const MAX_LOG_CHUNK_BYTES: u64 = 64 * 1024;
@@ -36,12 +33,9 @@ struct ControllerState {
 pub(super) struct Controller {
     pub(super) plan_store: Arc<super::plan_store::PlanStore>,
     runs_dir: PathBuf,
-    plans_dir: PathBuf,
     defaults: Defaults,
     control: Option<ControlPlane>,
     state: Mutex<ControllerState>,
-    pending_plan_contexts: RwLock<HashMap<String, plans::PlanContext>>,
-    plan_lock: Mutex<()>,
     read_model: RwLock<Option<Arc<DashboardReadModel>>>,
     events: Option<Arc<DashboardEvents>>,
 }
@@ -55,19 +49,6 @@ impl Controller {
         validate_stack_url(&args.url)?;
         fs::create_dir_all(&args.runs_dir)
             .with_context(|| format!("create {}", args.runs_dir.display()))?;
-        let plans_dir = plans::plans_dir(&args.runs_dir);
-        fs::create_dir_all(&plans_dir)
-            .with_context(|| format!("create {}", plans_dir.display()))?;
-        let recovered_runs = recover_interrupted_runs(&args.runs_dir)?;
-        for metadata in &recovered_runs {
-            if let Some(context) = metadata
-                .plan_context
-                .as_ref()
-                .or(metadata.request.plan_context.as_ref())
-            {
-                plans::record_incomplete_attempt(&plans_dir, context, &metadata.id)?;
-            }
-        }
         if let Some(control) = control.as_ref() {
             if control.url() != args.url {
                 bail!(
@@ -93,7 +74,6 @@ impl Controller {
         let controller = Arc::new(Self {
             plan_store,
             runs_dir: args.runs_dir,
-            plans_dir,
             defaults: Defaults {
                 url: args.url,
                 model: env::var("HARNESS_E2E_MODEL").unwrap_or_default(),
@@ -108,8 +88,6 @@ impl Controller {
             },
             control,
             state: Mutex::new(ControllerState { job: None }),
-            pending_plan_contexts: RwLock::new(HashMap::new()),
-            plan_lock: Mutex::new(()),
             read_model: RwLock::new(None),
             events,
         });
@@ -252,10 +230,11 @@ impl Controller {
         self: &Arc<Self>,
         id: &str,
         role: PlanRunRole,
+        idempotency_key: &str,
     ) -> Result<LocalPlan, ApiError> {
         validate_plan_id(id).map_err(|error| ApiError::bad_request(error.to_string()))?;
         self.plan_store
-            .start_local(id, role)
+            .start_local(id, idempotency_key, role)
             .await
             .map_err(ApiError::internal)
     }
@@ -272,36 +251,17 @@ impl Controller {
     ) -> Result<String, ApiError> {
         validate_request(&mut request).map_err(ApiError::bad_request)?;
         self.require_current_url(&request.url)?;
-        if let Some(context) = request.plan_context.as_ref() {
-            self.validate_plan_context(context).await?;
-        }
         let control = self
             .control
             .as_ref()
             .ok_or_else(|| ApiError::conflict("the E2E control plane is not available"))?;
         let control_request = control_request(&request).map_err(ApiError::bad_request)?;
-        let idempotency_key = control_request.idempotency_key.clone();
-        if let Some(context) = request.plan_context.clone() {
-            self.pending_plan_contexts
-                .write()
-                .await
-                .insert(idempotency_key.clone(), context);
-        }
-        let accepted = match control.run(control_request).await {
-            Ok(accepted) => accepted,
-            Err(error) => {
-                self.pending_plan_contexts
-                    .write()
-                    .await
-                    .remove(&idempotency_key);
-                return Err(control_error(error));
-            }
-        };
+        let accepted = control.run(control_request).await.map_err(control_error)?;
         let record = control
             .record(&accepted.execution_id)
             .await
             .map_err(ApiError::internal)?;
-        let mut metadata = metadata_from_record(&record, request.plan_context.clone());
+        let mut metadata = metadata_from_record(&record);
         metadata.request = request;
         write_metadata(&self.runs_dir.join(&accepted.execution_id), &metadata)
             .map_err(ApiError::internal)?;
@@ -309,35 +269,6 @@ impl Controller {
         self.invalidate_summaries().await;
         self.emit_change("started", &accepted.execution_id).await;
         Ok(accepted.execution_id)
-    }
-
-    async fn validate_plan_context(&self, context: &plans::PlanContext) -> Result<(), ApiError> {
-        let plan = self
-            .get_plan(&context.plan_id)
-            .await
-            .map_err(|error| ApiError::bad_request(error.to_string()))?;
-        if context.plan_hash != plan.scope_hash {
-            return Err(ApiError::conflict(
-                "plan context does not match the frozen scope",
-            ));
-        }
-        match context.role {
-            PlanRunRole::Baseline
-                if plan.state != PlanState::Draft || plan.baseline_execution_id.is_some() =>
-            {
-                Err(ApiError::conflict(
-                    "the plan already has a baseline or baseline attempt",
-                ))
-            }
-            PlanRunRole::Candidate
-                if plan.baseline_execution_id.is_none() || plan.state == PlanState::Draft =>
-            {
-                Err(ApiError::conflict(
-                    "a completed baseline is required before a candidate",
-                ))
-            }
-            _ => Ok(()),
-        }
     }
 
     pub(super) async fn cancel(&self) -> Result<(), ApiError> {
@@ -414,38 +345,10 @@ impl Controller {
 
     async fn sync_control_record(&self, record: ExecutionRecord) -> Result<()> {
         let run_dir = self.runs_dir.join(&record.execution_id);
-        let previous = read_metadata(&run_dir)?;
-        let previous_terminal = previous
-            .as_ref()
-            .is_some_and(|metadata| !metadata.status.active());
-        let plan_context = self
-            .pending_plan_contexts
-            .read()
-            .await
-            .get(&record.request.idempotency_key)
-            .cloned()
-            .or_else(|| {
-                previous.as_ref().and_then(|metadata| {
-                    metadata
-                        .plan_context
-                        .clone()
-                        .or_else(|| metadata.request.plan_context.clone())
-                })
-            });
-        let mut metadata = metadata_from_record(&record, plan_context.clone());
+        let mut metadata = metadata_from_record(&record);
         metadata.request.url = self.defaults.url.clone();
         write_metadata(&run_dir, &metadata)?;
         self.set_current_job(metadata.clone()).await;
-        if !previous_terminal && terminal(record.phase) {
-            if let Some(context) = plan_context {
-                self.record_plan_attempt(&context, &record.execution_id, metadata.status)
-                    .await?;
-            }
-            self.pending_plan_contexts
-                .write()
-                .await
-                .remove(&record.request.idempotency_key);
-        }
         self.invalidate_summaries().await;
         self.emit_change(change_kind(&record), &record.execution_id)
             .await;
@@ -460,65 +363,6 @@ impl Controller {
         if replace {
             state.job = Some(metadata);
         }
-    }
-
-    async fn record_plan_attempt(
-        &self,
-        context: &plans::PlanContext,
-        execution_id: &str,
-        status: JobStatus,
-    ) -> Result<()> {
-        let _plan_guard = self.plan_lock.lock().await;
-        let Some(mut plan) = plans::read_plan(&self.plans_dir, &context.plan_id)? else {
-            return Ok(());
-        };
-        if context.plan_hash != plan.scope_hash {
-            bail!(
-                "plan context hash does not match the frozen scope for '{}'",
-                context.plan_id
-            );
-        }
-        plan.updated_at = plans::now();
-        plan.last_attempt_id = Some(execution_id.into());
-        let report = read_report(&self.runs_dir.join(execution_id))
-            .ok()
-            .flatten();
-        let complete = status == JobStatus::Completed
-            && report.as_ref().is_some_and(|report| {
-                report_is_baseline_comparable(report) && report_matches_plan(report, &plan)
-            });
-        if complete {
-            match context.role {
-                PlanRunRole::Baseline => {
-                    plan.baseline_execution_id = Some(execution_id.into());
-                    plan.state = PlanState::BaselineReady;
-                }
-                PlanRunRole::Candidate => {
-                    if !plan
-                        .candidate_execution_ids
-                        .iter()
-                        .any(|id| id == execution_id)
-                    {
-                        plan.candidate_execution_ids.push(execution_id.into());
-                    }
-                    plan.state = PlanState::ComparisonReady;
-                }
-            }
-        } else {
-            if !plan
-                .incomplete_execution_ids
-                .iter()
-                .any(|id| id == execution_id)
-            {
-                plan.incomplete_execution_ids.push(execution_id.into());
-            }
-            if context.role == PlanRunRole::Baseline {
-                plan.state = PlanState::Draft;
-            } else if plan.baseline_execution_id.is_some() {
-                plan.state = PlanState::BaselineReady;
-            }
-        }
-        plans::write_plan(&self.plans_dir, &plan)
     }
 }
 
@@ -568,10 +412,7 @@ pub(super) fn control_request(
     })
 }
 
-fn metadata_from_record(
-    record: &ExecutionRecord,
-    plan_context: Option<plans::PlanContext>,
-) -> RunMetadata {
+fn metadata_from_record(record: &ExecutionRecord) -> RunMetadata {
     let status = job_status(record);
     let label = if record.request.label.trim().is_empty() {
         "e2e::* control-plane run".into()
@@ -611,9 +452,7 @@ fn metadata_from_record(
             runs: record.request.runs,
             technical_retries: record.request.technical_retries,
             seed: record.request.seed,
-            plan_context: plan_context.clone(),
         },
-        plan_context,
     }
 }
 
@@ -656,59 +495,6 @@ fn control_error(error: anyhow::Error) -> ApiError {
     } else {
         ApiError::bad_request(message)
     }
-}
-
-fn report_is_baseline_comparable(report: &E2eReport) -> bool {
-    let planned = report
-        .scenarios
-        .iter()
-        .map(|scenario| u64::from(scenario.aggregate.planned_runs))
-        .sum::<u64>();
-    planned > 0
-        && report.report_state == crate::report::ReportState::Complete
-        && report.scenarios.iter().all(|scenario| {
-            scenario.aggregate.observed_runs == scenario.aggregate.planned_runs
-                && scenario.aggregate.undetermined_runs == 0
-                && scenario.aggregate.technical_invalid_runs == 0
-        })
-}
-
-fn report_matches_plan(report: &E2eReport, plan: &LocalPlan) -> bool {
-    if report.scenarios.len() != plan.scenarios.len() {
-        return false;
-    }
-    let expected = plan
-        .scenarios
-        .iter()
-        .map(|item| (item.scenario_id.as_str(), item.case_id.as_str()))
-        .collect::<BTreeSet<_>>();
-    let observed = report
-        .scenarios
-        .iter()
-        .map(|scenario| (scenario.scenario_id.as_str(), scenario.case_id.as_str()))
-        .collect::<BTreeSet<_>>();
-    expected == observed
-        && plan.scenarios.iter().all(|item| {
-            report.scenarios.iter().any(|scenario| {
-                scenario.scenario_id == item.scenario_id
-                    && scenario.scenario_version == item.scenario_version
-                    && scenario.case_id == item.case_id
-                    && scenario.aggregate.planned_runs == plan.runs
-                    && scenario.aggregate.observed_runs == plan.runs
-                    && scenario.case.as_ref().is_some_and(|case| {
-                        case.seed == item.seed
-                            && case.inputs_sha256 == item.inputs_sha256
-                            && artifact::sha256_value(&json!({
-                                "scenario_id": scenario.scenario_id,
-                                "scenario_version": scenario.scenario_version,
-                                "case": case,
-                                "execution_policy": scenario.execution_policy,
-                            }))
-                            .ok()
-                            .is_some_and(|hash| hash == item.contract_sha256)
-                    })
-            })
-        })
 }
 
 fn validate_plan_id(value: &str) -> Result<()> {

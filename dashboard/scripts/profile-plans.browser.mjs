@@ -34,7 +34,7 @@ function createPlan(request) {
     ...configuration,
     ...request,
     id: `saved-${plans.length + 1}`,
-    schema_version: 1,
+    schema_version: 3,
     scenarios: request.scenarios.map((scenario_id) => ({
       scenario_id,
       scenario_version: 1,
@@ -126,7 +126,11 @@ const server = createServer(async (req, res) => {
         page_size: 25,
         functions: {},
       }
-    else if (url.pathname === '/api/dashboard/plans') {
+    else if (url.pathname === '/api/dashboard/plans/control') {
+      let body = ''
+      for await (const chunk of req) body += chunk
+      value = operation(JSON.parse(body))
+    } else if (url.pathname === '/api/dashboard/plans') {
       if (req.method === 'POST') {
         let body = ''
         for await (const chunk of req) body += chunk
@@ -160,11 +164,7 @@ const server = createServer(async (req, res) => {
       }
     else if (url.pathname === '/api/local/run')
       value = { job: null, defaults: configuration }
-    else if (url.pathname === '/api/dashboard/profile-plans') {
-      let body = ''
-      for await (const chunk of req) body += chunk
-      value = operation(JSON.parse(body))
-    } else if (url.pathname.startsWith('/api/'))
+    else if (url.pathname.startsWith('/api/'))
       value = {
         executions: [],
         total: 0,

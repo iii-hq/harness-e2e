@@ -224,18 +224,21 @@ reconciles retained children and interrupts the execution without resuming it.
 The main execution list shows the parent; its detail links to native artifacts.
 No synthetic Results v4 report is created. Missing telemetry stays unavailable.
 
-`plans/<id>.json` reads both historical formats into the same plan contract. Reads
-preserve existing bytes; saving or admitting an old plan retains its baseline,
-candidates, labels and incomplete attempts in the stored configuration. Composed
-receipts remain in `plan-executions/<id>.json`. Scenario-contract incompatibility
-blocks admission while preserving consultation and export; the starting template
-revision is provenance only. Fault-injection work still requires the protected
-Release Control executor and can be exported from the common plan detail.
+Saved plans have one current schema (`schema_version: 3`) in
+`plan-store/plans/<id>.json`; composed receipts live in
+`plan-store/executions/<id>.json`. Configuration and the materialized snapshot
+share one stored document. Earlier plan formats, directories and histories are
+not loaded or migrated. Current executions retain native child evidence and
+restart reconciliation. Scenario-contract incompatibility blocks admission; the
+starting template revision is provenance only. Fault-injection plans still
+require the protected Release Control executor and can be exported from the
+common detail page.
 
-Creation, reading, updates and starts use the existing `plan-*` HTTP/iii APIs.
-`POST /api/dashboard/profile-plans` and `e2e::dashboard::profile-plan` remain
-compatible controls for requirements, export and composed execution evidence;
-their historical creation/start actions delegate to the same plan logic.
+Creation, reading, updates and starts use the `plan-*` HTTP/iii APIs. Starting a
+plan requires a caller idempotency key. `POST /api/dashboard/plans/control` and
+`e2e::dashboard::plan-control` provide requirements, export, execution lookup and
+cancellation. The former profile-plan endpoint, duplicate creation/start actions,
+native plan-context tracking and manual-route alias have been removed.
 
 Run deterministic browser acceptance after the dashboard build:
 

@@ -14,89 +14,28 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use tokio::sync::Mutex;
 
+use super::plans::{LocalPlan, PlanRunRole as Role, PLAN_SCHEMA_VERSION};
 use crate::artifact;
 use crate::control::{execution_id_for_key, ControlPlane, ExecutionRecord, RunRequest};
 use crate::report::{E2eReport, ReportState};
 use crate::test_plan::{self, ProfileSnapshot};
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
-pub(super) struct Configuration {
-    pub label: String,
-    pub profile_id: String,
-    pub url: String,
-    pub model: String,
-    pub provider: String,
-    #[serde(default)]
-    pub judge_model: String,
-    #[serde(default)]
-    pub judge_provider: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub(super) struct SavedPlan {
-    pub schema_version: u32,
-    pub id: String,
-    pub created_at: String,
-    pub updated_at: String,
-    pub locked: bool,
-    pub configuration: Configuration,
+    #[serde(flatten)]
+    pub plan: LocalPlan,
     pub snapshot: ProfileSnapshot,
     pub snapshot_sha256: String,
     pub configuration_sha256: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub base: Option<super::plans::LocalPlan>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "snake_case")]
-pub(super) enum Role {
-    Run,
-    Baseline,
-    Candidate,
 }
 
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
 #[serde(tag = "action", rename_all = "snake_case")]
 pub(super) enum Request {
-    Requirements {
-        configuration: Option<Configuration>,
-        plan_id: Option<String>,
-    },
-    Create {
-        configuration: Configuration,
-    },
-    Update {
-        plan_id: String,
-        configuration: Configuration,
-    },
-    Get {
-        plan_id: String,
-    },
-    Duplicate {
-        plan_id: String,
-        label: String,
-        model: String,
-        provider: String,
-    },
-    Export {
-        plan_id: String,
-    },
-    Start {
-        plan_id: String,
-        idempotency_key: String,
-        role: Role,
-    },
-    Execution {
-        execution_id: String,
-    },
-    Cancel {
-        execution_id: String,
-    },
-    Compare {
-        plan_id: String,
-        candidate_id: String,
-    },
+    Requirements { plan_id: String },
+    Export { plan_id: String },
+    Execution { execution_id: String },
+    Cancel { execution_id: String },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -158,7 +97,7 @@ impl PlanExecution {
 
 #[async_trait]
 trait Runner: Send + Sync {
-    async fn requirements(&self, config: &Configuration) -> Result<Vec<Check>>;
+    async fn requirements(&self, config: &LocalPlan) -> Result<Vec<Check>>;
     async fn active(&self) -> Option<Value>;
     async fn reserve(&self, owner: &str) -> Result<()>;
     async fn release(&self, owner: &str);
@@ -168,7 +107,7 @@ trait Runner: Send + Sync {
 }
 #[async_trait]
 impl Runner for ControlPlane {
-    async fn requirements(&self, config: &Configuration) -> Result<Vec<Check>> {
+    async fn requirements(&self, config: &LocalPlan) -> Result<Vec<Check>> {
         let models =
             serde_json::to_value(crate::catalog::list_with_client(self.client(), None).await?)?;
         let contains = |model: &str, provider: &str| {
@@ -217,7 +156,11 @@ impl Runner for ControlPlane {
                 .map(|e| format!("Native control-plane contracts are incompatible: {e:#}"))
                 .unwrap_or_else(|| "Native control-plane contracts are compatible.".into()),
         ));
-        if config.profile_id == "shell-coder-fixture" {
+        if config
+            .scenario_ids
+            .iter()
+            .any(|id| id == "shell_coder_sandbox")
+        {
             let fixture = crate::scenarios::shell_coder_sandbox::validate_fixture();
             checks.push(check(
                 "shared_fixture",
@@ -279,8 +222,8 @@ impl PlanStore {
             runner: control.map(|c| Arc::new(c) as Arc<dyn Runner>),
             lock: Mutex::new(()),
         });
-        fs::create_dir_all(manager.root.join("plans"))?;
-        fs::create_dir_all(manager.root.join("plan-executions"))?;
+        fs::create_dir_all(manager.root.join("plan-store/plans"))?;
+        fs::create_dir_all(manager.root.join("plan-store/executions"))?;
         if manager.runner.is_some() {
             manager.reconcile().await?;
         }
@@ -293,26 +236,28 @@ impl PlanStore {
     }
     fn plan_path(&self, id: &str) -> Result<PathBuf> {
         safe_id(id)?;
-        Ok(self.root.join("plans").join(format!("{id}.json")))
+        Ok(self
+            .root
+            .join("plan-store/plans")
+            .join(format!("{id}.json")))
     }
     fn execution_path(&self, id: &str) -> Result<PathBuf> {
         safe_id(id)?;
-        Ok(self.root.join("plan-executions").join(format!("{id}.json")))
+        Ok(self
+            .root
+            .join("plan-store/executions")
+            .join(format!("{id}.json")))
     }
     fn read_plan(&self, id: &str) -> Result<SavedPlan> {
-        let value: Value = serde_json::from_slice(&fs::read(self.plan_path(id)?)?)?;
-        if value["schema_version"] == 1 {
-            return prepared_plan(serde_json::from_value(value)?, None);
-        }
-        let plan: SavedPlan = serde_json::from_value(value)?;
+        let plan: SavedPlan = serde_json::from_slice(&fs::read(self.plan_path(id)?)?)?;
         ensure!(
-            plan.schema_version == 2 && plan.id == id,
+            plan.plan.schema_version == PLAN_SCHEMA_VERSION && plan.plan.id == id,
             "Unsupported plan identity or schema"
         );
         Ok(plan)
     }
     fn write_plan(&self, plan: &SavedPlan) -> Result<()> {
-        write_json(&self.plan_path(&plan.id)?, plan)
+        write_json(&self.plan_path(&plan.plan.id)?, plan)
     }
     fn read_execution(&self, id: &str) -> Result<PlanExecution> {
         let execution: PlanExecution =
@@ -327,7 +272,7 @@ impl PlanStore {
         write_json(&self.execution_path(&execution.id)?, execution)
     }
     pub(super) fn executions(&self) -> Result<Vec<PlanExecution>> {
-        read_json_directory(&self.root.join("plan-executions"))
+        read_json_directory(&self.root.join("plan-store/executions"))
     }
     pub(super) fn dashboard_summaries(
         &self,
@@ -346,12 +291,12 @@ impl PlanStore {
                 "interrupted" => "incomplete",
                 other => other,
             };
-            values.push(json!({"id": execution.id, "label": plan.configuration.label, "run_id": execution.id,
-                "kind": "profile_plan", "plan_id": plan.id, "profile_id": plan.configuration.profile_id, "plan_execution": summary,
+            values.push(json!({"id": execution.id, "label": plan.plan.label, "run_id": execution.id,
+                "kind": "plan", "plan_id": plan.plan.id, "template_id": plan.plan.template_id, "plan_execution": summary,
                 "attempt": 1, "workflow_name": "Harness plan", "workflow_url": null, "event": "local", "actor": "local",
                 "started_at": execution.started_at, "completed_at": execution.finished_at.as_deref().unwrap_or(""), "generated_at": execution.updated_at,
                 "status": status, "conclusion": if status == "passed" { "success" } else { "" }, "availability": "available", "lane": plan.snapshot.profile.lane,
-                "subjects": [{"id": plan.configuration.model, "model": plan.configuration.model, "provider": plan.configuration.provider, "scenarios": []}],
+                "subjects": [{"id": plan.plan.model, "model": plan.plan.model, "provider": plan.plan.provider, "scenarios": []}],
                 "requested_runs": execution.slots.len(), "scenario_metrics": [], "execution": {"id": execution.id},
                 "totals": {"expected_reports": execution.slots.len(), "received_reports": summary["observed"], "missing_reports": execution.slots.len() as u64 - summary["observed"].as_u64().unwrap_or(0),
                     "report_coverage": summary["observed"].as_f64().map(|observed| observed / execution.slots.len().max(1) as f64), "passed_scenarios": summary["passed"], "total_tokens": null, "total_cost_usd": null},
@@ -392,26 +337,12 @@ impl PlanStore {
         history.sort_by(|a, b| b.started_at.cmp(&a.started_at));
         Ok(history)
     }
-    fn view(&self, plan: &SavedPlan) -> Result<Value> {
-        let history = self.history(&plan.id)?;
-        let mut value = serde_json::to_value(plan)?;
-        value["last_execution"] = history
-            .first()
-            .map(execution_summary)
-            .unwrap_or(Value::Null);
-        value["history"] = json!(history.iter().map(execution_summary).collect::<Vec<_>>());
-        let canonical = self.canonical(plan)?;
-        for (key, item) in serde_json::to_value(canonical)?.as_object().unwrap() {
-            value[key] = item.clone();
-        }
-        Ok(value)
-    }
     pub(super) fn get_local(&self, id: &str) -> Result<super::plans::LocalPlan> {
         self.canonical(&self.read_plan(id)?)
     }
     pub(super) fn list_local(&self) -> Result<Vec<super::plans::LocalPlan>> {
         let mut plans = Vec::new();
-        for entry in fs::read_dir(self.root.join("plans"))? {
+        for entry in fs::read_dir(self.root.join("plan-store/plans"))? {
             let entry = entry?;
             let path = entry.path();
             if !entry.file_type()?.is_file()
@@ -438,22 +369,8 @@ impl PlanStore {
     }
     fn canonical(&self, saved: &SavedPlan) -> Result<super::plans::LocalPlan> {
         use super::plans::PlanState;
-        let mut plan = match &saved.base {
-            Some(plan) => plan.clone(),
-            None => serde_json::from_value(json!({
-                "schema_version": 1, "id": saved.id, "label": saved.configuration.label,
-                "purpose": saved.snapshot.profile.purpose, "created_at": saved.created_at, "updated_at": saved.updated_at,
-                "state": "draft", "locked": saved.locked, "scope_hash": saved.configuration_sha256,
-                "url": saved.configuration.url, "model": saved.configuration.model, "provider": saved.configuration.provider,
-                "judge_model": saved.configuration.judge_model, "judge_provider": saved.configuration.judge_provider,
-                "scenarios": saved.snapshot.cases.iter().map(|c| { let mut c = c.clone(); c["complexity_tier"] = json!("profile"); c }).collect::<Vec<_>>(),
-                "scenario_ids": saved.snapshot.scenario_ids, "runs": saved.snapshot.profile.repetitions,
-                "technical_retries": saved.snapshot.profile.technical_retries, "seed": null,
-                "baseline_execution_id": null, "candidate_execution_ids": [], "incomplete_execution_ids": [], "last_attempt_id": null,
-                "template_id": saved.snapshot.profile.id
-            }))?,
-        };
-        let history = self.history(&saved.id)?;
+        let mut plan = saved.plan.clone();
+        let history = self.history(&saved.plan.id)?;
         for execution in history.iter().rev() {
             if execution.active() {
                 continue;
@@ -487,7 +404,7 @@ impl PlanStore {
                 PlanState::Draft
             };
         }
-        plan.locked = saved.locked || plan.locked || !history.is_empty();
+        plan.locked = plan.locked || !history.is_empty();
         plan.compatible = verify_snapshot(saved).is_ok();
         plan.protected_executor_required = saved.snapshot.protected_supervisor_required;
         Ok(plan)
@@ -522,7 +439,7 @@ impl PlanStore {
             None
         };
         let prepared = prepared_plan(plan, snapshot)?;
-        validate_config(&prepared.configuration, &prepared.snapshot, &self.url)?;
+        validate_config(&prepared.plan, &prepared.snapshot, &self.url)?;
         self.write_plan(&prepared)?;
         self.canonical(&prepared)
     }
@@ -540,22 +457,17 @@ impl PlanStore {
             plan.clone(),
             (old_scope == plan.scope_hash).then_some(saved.snapshot),
         )?;
-        validate_config(&prepared.configuration, &prepared.snapshot, &self.url)?;
+        validate_config(&prepared.plan, &prepared.snapshot, &self.url)?;
         self.write_plan(&prepared)?;
         self.canonical(&prepared)
     }
     pub(super) async fn start_local(
         self: &Arc<Self>,
         id: &str,
-        role: super::plans::PlanRunRole,
+        idempotency_key: &str,
+        role: Role,
     ) -> Result<super::plans::LocalPlan> {
-        let role = match role {
-            super::plans::PlanRunRole::Baseline => Role::Baseline,
-            super::plans::PlanRunRole::Candidate => Role::Candidate,
-        };
-        let admitted = self
-            .start(id, &uuid::Uuid::new_v4().to_string(), role)
-            .await?;
+        let admitted = self.start(id, idempotency_key, role).await?;
         ensure!(
             admitted["blocked"] != true,
             "Plan admission is blocked: {}",
@@ -566,112 +478,20 @@ impl PlanStore {
 
     pub(super) async fn handle(self: &Arc<Self>, request: Request) -> Result<Value> {
         match request {
-            Request::Requirements {
-                configuration,
-                plan_id,
-            } => {
-                let plan = plan_id.map(|id| self.read_plan(&id)).transpose()?;
-                let config = configuration
-                    .or_else(|| plan.as_ref().map(|p| p.configuration.clone()))
-                    .context("Select a plan and execution model.")?;
-                self.requirements(&config, plan.as_ref()).await
-            }
-            Request::Create { configuration } => {
-                let snapshot = test_plan::embedded()?.materialize(&configuration.profile_id)?;
-                let request = serde_json::from_value(
-                    json!({"label": configuration.label, "purpose": snapshot.profile.purpose,
-                    "url": configuration.url, "model": configuration.model, "provider": configuration.provider,
-                    "judge_model": configuration.judge_model, "judge_provider": configuration.judge_provider,
-                    "scenarios": snapshot.scenario_ids, "runs": snapshot.profile.repetitions, "technical_retries": snapshot.profile.technical_retries,
-                    "template_id": configuration.profile_id}),
-                )?;
-                let plan = self.create_local(request).await?;
-                self.view(&self.read_plan(&plan.id)?)
-            }
-            Request::Update {
-                plan_id,
-                configuration,
-            } => {
-                let update = serde_json::from_value(
-                    json!({"label": configuration.label, "url": configuration.url,
-                    "model": configuration.model, "provider": configuration.provider, "judge_model": configuration.judge_model, "judge_provider": configuration.judge_provider}),
-                )?;
-                self.update_local(&plan_id, update).await?;
-                self.view(&self.read_plan(&plan_id)?)
-            }
-            Request::Get { plan_id } => self.view(&self.read_plan(&plan_id)?),
-            Request::Duplicate {
-                plan_id,
-                label,
-                model,
-                provider,
-            } => {
-                let mut request = super::plans::plan_request(&self.get_local(&plan_id)?);
-                request.label = label;
-                request.model = model;
-                request.provider = provider;
-                request.duplicate_of = Some(plan_id);
-                let plan = self.create_local(request).await?;
-                self.view(&self.read_plan(&plan.id)?)
+            Request::Requirements { plan_id } => {
+                self.requirements(&self.read_plan(&plan_id)?).await
             }
             Request::Export { plan_id } => export(&self.read_plan(&plan_id)?),
-            Request::Start {
-                plan_id,
-                idempotency_key,
-                role,
-            } => self.start(&plan_id, &idempotency_key, role).await,
             Request::Execution { execution_id } => {
                 Ok(serde_json::to_value(self.read_execution(&execution_id)?)?)
             }
             Request::Cancel { execution_id } => self.cancel(&execution_id).await,
-            Request::Compare {
-                plan_id,
-                candidate_id,
-            } => {
-                let history = self.history(&plan_id)?;
-                let baseline = history
-                    .iter()
-                    .rev()
-                    .find(|e| matches!(e.role, Role::Baseline) && e.baseline_eligible)
-                    .context("No complete, technically valid baseline is available.")?;
-                let candidate = history
-                    .iter()
-                    .find(|e| {
-                        e.id == candidate_id && matches!(e.role, Role::Candidate) && !e.active()
-                    })
-                    .context("Candidate execution is unavailable.")?;
-                ensure!(
-                    baseline.configuration_sha256 == candidate.configuration_sha256,
-                    "Plan configurations differ"
-                );
-                let mut comparison = test_plan::compare_measurements(
-                    &result_paths(baseline, &self.root),
-                    &result_paths(candidate, &self.root),
-                )?;
-                let complete = baseline.baseline_eligible && candidate.baseline_eligible;
-                comparison["coverage_complete"] = json!(complete);
-                if !complete {
-                    comparison["unavailable"] = json!("Efficiency deltas are unavailable because this execution does not have complete, technically valid coverage.");
-                    if let Some(cohorts) = comparison["comparisons"].as_array_mut() {
-                        for cohort in cohorts {
-                            cohort["metrics"]["delta"] = Value::Null;
-                        }
-                    }
-                }
-                Ok(comparison)
-            }
         }
     }
-    async fn requirements(
-        &self,
-        config: &Configuration,
-        plan: Option<&SavedPlan>,
-    ) -> Result<Value> {
-        let snapshot = match plan {
-            Some(plan) => plan.snapshot.clone(),
-            None => test_plan::embedded()?.materialize(&config.profile_id)?,
-        };
-        let validation = validate_config(config, &snapshot, &self.url);
+    async fn requirements(&self, plan: &SavedPlan) -> Result<Value> {
+        let snapshot = &plan.snapshot;
+        let config = &plan.plan;
+        let validation = validate_config(config, snapshot, &self.url);
         let mut checks = vec![check(
             "configuration",
             validation.is_ok(),
@@ -680,7 +500,7 @@ impl PlanStore {
                 .map(|e| e.to_string())
                 .unwrap_or_else(|| "Model and evaluator configuration is complete.".into()),
         )];
-        if let Some(plan) = plan {
+        {
             let identity = verify_snapshot(plan);
             checks.push(check(
                 "revision",
@@ -693,18 +513,7 @@ impl PlanStore {
         }
         checks.push(check("executor", !snapshot.protected_supervisor_required, if snapshot.protected_supervisor_required { "Export this plan for the protected Release Control executor. Dashboard execution is unavailable." } else { "Native Harness executor." }));
         let active = if let Some(runner) = &self.runner {
-            let mut runtime_config = config.clone();
-            runtime_config.profile_id = if snapshot
-                .scenario_ids
-                .iter()
-                .any(|id| id == "shell_coder_sandbox")
-            {
-                "shell-coder-fixture"
-            } else {
-                "saved-plan"
-            }
-            .into();
-            match runner.requirements(&runtime_config).await {
+            match runner.requirements(config).await {
                 Ok(runtime) => checks.extend(runtime),
                 Err(error) => checks.push(check(
                     "stack",
@@ -771,8 +580,7 @@ impl PlanStore {
             ensure!(
                 existing.plan_id == plan_id
                     && existing.configuration_sha256 == plan.configuration_sha256
-                    && (matches!(role, Role::Run)
-                        || serde_json::to_value(&existing.role)? == serde_json::to_value(&role)?),
+                    && existing.role == role,
                 "Idempotency key already belongs to a different plan request."
             );
             return Ok(json!({"execution_id": id, "duplicate": true, "execution": existing}));
@@ -780,11 +588,6 @@ impl PlanStore {
         verify_snapshot(&plan)?;
         let canonical = self.canonical(&plan)?;
         let has_baseline = canonical.baseline_execution_id.is_some();
-        let role = match role {
-            Role::Run if has_baseline => Role::Candidate,
-            Role::Run => Role::Baseline,
-            role => role,
-        };
         ensure!(
             matches!(
                 (&role, has_baseline),
@@ -792,7 +595,7 @@ impl PlanStore {
             ),
             "A plan captures one valid baseline before running candidates."
         );
-        let preflight = self.requirements(&plan.configuration, Some(&plan)).await?;
+        let preflight = self.requirements(&plan).await?;
         if preflight["ready"] != true {
             return Ok(json!({"blocked": true, "requirements": preflight}));
         }
@@ -819,8 +622,8 @@ impl PlanStore {
         let persist = (|| -> Result<()> {
             execution.slots = materialize_slots(&plan, &id)?;
             // Lock first: if receipt persistence fails, no child has started.
-            plan.locked = true;
-            plan.updated_at = now();
+            plan.plan.locked = true;
+            plan.plan.updated_at = now();
             self.write_plan(&plan)?;
             self.write_execution(&execution)
         })();
@@ -1052,34 +855,16 @@ fn read_json_directory<T: serde::de::DeserializeOwned>(path: &Path) -> Result<Ve
     }
     Ok(result)
 }
-fn prepared_plan(
-    base: super::plans::LocalPlan,
-    snapshot: Option<ProfileSnapshot>,
-) -> Result<SavedPlan> {
+fn prepared_plan(plan: LocalPlan, snapshot: Option<ProfileSnapshot>) -> Result<SavedPlan> {
     let snapshot = snapshot
         .map(Ok)
-        .unwrap_or_else(|| snapshot_for_plan(&base))?;
-    let configuration = Configuration {
-        label: base.label.clone(),
-        profile_id: snapshot.profile.id.clone(),
-        url: base.url.clone(),
-        model: base.model.clone(),
-        provider: base.provider.clone(),
-        judge_model: base.judge_model.clone(),
-        judge_provider: base.judge_provider.clone(),
-    };
+        .unwrap_or_else(|| snapshot_for_plan(&plan))?;
     let snapshot_sha256 = artifact::sha256_value(&snapshot)?;
     Ok(SavedPlan {
-        schema_version: 2,
-        id: base.id.clone(),
-        created_at: base.created_at.clone(),
-        updated_at: base.updated_at.clone(),
-        locked: base.locked,
-        configuration_sha256: configuration_digest(&configuration, &snapshot_sha256)?,
-        configuration,
+        configuration_sha256: configuration_digest(&plan, &snapshot_sha256)?,
+        plan,
         snapshot,
         snapshot_sha256,
-        base: Some(base),
     })
 }
 fn snapshot_for_plan(plan: &super::plans::LocalPlan) -> Result<ProfileSnapshot> {
@@ -1144,14 +929,22 @@ fn snapshot_for_plan(plan: &super::plans::LocalPlan) -> Result<ProfileSnapshot> 
     Ok(snapshot)
 }
 
-fn configuration_digest(config: &Configuration, snapshot_digest: &str) -> Result<String> {
-    artifact::sha256_value(&json!({"configuration": config, "snapshot_sha256": snapshot_digest}))
+fn configuration_digest(config: &LocalPlan, snapshot_digest: &str) -> Result<String> {
+    artifact::sha256_value(&json!({
+        "label": config.label, "purpose": config.purpose, "url": config.url,
+        "model": config.model, "provider": config.provider,
+        "judge_model": config.judge_model, "judge_provider": config.judge_provider,
+        "scenarios": config.scenarios, "scenario_ids": config.scenario_ids,
+        "runs": config.runs, "technical_retries": config.technical_retries, "seed": config.seed,
+        "template_id": config.template_id, "scope_hash": config.scope_hash,
+        "snapshot_sha256": snapshot_digest,
+    }))
 }
 fn judge_required(snapshot: &ProfileSnapshot) -> bool {
     snapshot.protected_supervisor_required
         || snapshot.cases.iter().any(|c| c["judge_required"] == true)
 }
-fn validate_config(config: &Configuration, snapshot: &ProfileSnapshot, url: &str) -> Result<()> {
+fn validate_config(config: &LocalPlan, snapshot: &ProfileSnapshot, url: &str) -> Result<()> {
     ensure!(
         !config.label.trim().is_empty() && config.label.len() <= 160,
         "Enter a plan name (up to 160 characters)."
@@ -1169,10 +962,6 @@ fn validate_config(config: &Configuration, snapshot: &ProfileSnapshot, url: &str
         "The selected work requires an evaluator."
     );
     ensure!(
-        config.profile_id == snapshot.profile.id,
-        "Profile identity differs from its snapshot."
-    );
-    ensure!(
         config.url == url,
         "This plan belongs to a different stack endpoint."
     );
@@ -1181,7 +970,7 @@ fn validate_config(config: &Configuration, snapshot: &ProfileSnapshot, url: &str
 fn verify_snapshot(plan: &SavedPlan) -> Result<()> {
     ensure!(
         artifact::sha256_value(&plan.snapshot)? == plan.snapshot_sha256
-            && configuration_digest(&plan.configuration, &plan.snapshot_sha256)?
+            && configuration_digest(&plan.plan, &plan.snapshot_sha256)?
                 == plan.configuration_sha256,
         "Saved plan configuration or snapshot digest differs."
     );
@@ -1214,7 +1003,7 @@ fn materialize_slots(plan: &SavedPlan, owner: &str) -> Result<Vec<Slot>> {
                 .as_str()
                 .context("Native scenario required")?;
             let key = format!("{owner}:round-{}:{group_id}", round + 1);
-            let c = &plan.configuration;
+            let c = &plan.plan;
             // Use the saved seed. Native materialization and envelopes are
             // checked again independently for every invocation.
             let request: RunRequest = serde_json::from_value(
@@ -1282,7 +1071,7 @@ fn update_slot(
         report.execution.execution_id == slot.execution_id,
         "Native artifact belongs to a different execution"
     );
-    let config = &plan.configuration;
+    let config = &plan.plan;
     ensure!(
         report.subject.model == config.model && report.subject.provider == config.provider,
         "Execution model identity differs"
@@ -1488,7 +1277,7 @@ pub(super) fn execution_summary(execution: &PlanExecution) -> Value {
 fn export(plan: &SavedPlan) -> Result<Value> {
     let suites: Vec<_> = plan.snapshot.campaigns.iter().map(|campaign| {
         let groups: Vec<_> = campaign["groups"].as_array().into_iter().flatten().map(|g| { let mut g = g.clone(); if let Some(object) = g.as_object_mut() { if let Some(weight) = object.remove("difficulty_weight") { object.insert("weight".into(), weight); } } g }).collect();
-        json!({"id": campaign["campaign_id"], "label": plan.snapshot.profile.label, "lane": campaign["lane"], "seed": null, "subject": {"model": plan.configuration.model, "provider": plan.configuration.provider}, "judge": {"model": plan.configuration.judge_model, "provider": plan.configuration.judge_provider}, "groups": groups, "test_plan": campaign["test_plan"]})
+        json!({"id": campaign["campaign_id"], "label": plan.snapshot.profile.label, "lane": campaign["lane"], "seed": null, "subject": {"model": plan.plan.model, "provider": plan.plan.provider}, "judge": {"model": plan.plan.judge_model, "provider": plan.plan.judge_provider}, "groups": groups, "test_plan": campaign["test_plan"]})
     }).collect();
     Ok(
         json!({"schema": "harness-e2e-profile-campaigns/v1", "plan_id": plan.snapshot.plan_id, "version": plan.snapshot.version, "definition_sha256": plan.snapshot.definition_sha256,
@@ -1670,7 +1459,7 @@ mod tests {
     }
     #[async_trait]
     impl Runner for FakeRunner {
-        async fn requirements(&self, _: &Configuration) -> Result<Vec<Check>> {
+        async fn requirements(&self, _: &LocalPlan) -> Result<Vec<Check>> {
             Ok(Vec::new())
         }
         async fn active(&self) -> Option<Value> {
@@ -1685,8 +1474,8 @@ mod tests {
             ensure!(active.is_none(), "busy");
             *active = Some(owner.into());
             if self.fail_receipt.load(Ordering::SeqCst) {
-                fs::remove_dir(self.root.join("plan-executions"))?;
-                fs::write(self.root.join("plan-executions"), b"unwritable")?;
+                fs::remove_dir(self.root.join("plan-store/executions"))?;
+                fs::write(self.root.join("plan-store/executions"), b"unwritable")?;
             }
             Ok(())
         }
@@ -1704,7 +1493,7 @@ mod tests {
             // The whole receipt and every deterministic child are already on disk.
             let receipt: PlanExecution = serde_json::from_slice(&fs::read(
                 self.root
-                    .join("plan-executions")
+                    .join("plan-store/executions")
                     .join(format!("{owner}.json")),
             )?)?;
             let id = execution_id_for_key(&request.idempotency_key);
@@ -1733,23 +1522,20 @@ mod tests {
             Ok(())
         }
     }
-    fn config(profile: &str) -> Configuration {
-        Configuration {
-            label: "Profile test".into(),
-            profile_id: profile.into(),
-            url: "ws://localhost:49134".into(),
-            model: "model".into(),
-            provider: "provider".into(),
-            judge_model: "judge".into(),
-            judge_provider: "provider".into(),
-        }
+    fn request(profile: &str) -> super::super::plans::PlanCreateRequest {
+        let snapshot = test_plan::embedded().unwrap().materialize(profile).unwrap();
+        serde_json::from_value(json!({"label": "Plan test", "purpose": snapshot.profile.purpose,
+            "url": "ws://localhost:49134", "model": "model", "provider": "provider",
+            "judge_model": "judge", "judge_provider": "provider", "scenarios": snapshot.scenario_ids,
+            "runs": snapshot.profile.repetitions, "technical_retries": snapshot.profile.technical_retries,
+            "template_id": profile})).unwrap()
     }
     fn manager(root: &Path, runner: Arc<FakeRunner>) -> Arc<PlanStore> {
-        fs::create_dir_all(root.join("plans")).unwrap();
-        fs::create_dir_all(root.join("plan-executions")).unwrap();
+        fs::create_dir_all(root.join("plan-store/plans")).unwrap();
+        fs::create_dir_all(root.join("plan-store/executions")).unwrap();
         Arc::new(PlanStore {
             root: root.into(),
-            url: config("smoke").url,
+            url: request("smoke").url,
             runner: Some(runner),
             lock: Mutex::new(()),
         })
@@ -1768,25 +1554,9 @@ mod tests {
         .expect("coordinator did not finish")
     }
     async fn admitted(manager: &Arc<PlanStore>, profile: &str, key: &str) -> (String, String) {
-        let plan = manager
-            .handle(Request::Create {
-                configuration: config(profile),
-            })
-            .await
-            .unwrap();
-        let id = plan["id"].as_str().unwrap().to_string();
-        let response = manager
-            .start(
-                &id,
-                key,
-                if profile == "evolution" {
-                    Role::Baseline
-                } else {
-                    Role::Run
-                },
-            )
-            .await
-            .unwrap();
+        let plan = manager.create_local(request(profile)).await.unwrap();
+        let id = plan.id.as_str().to_string();
+        let response = manager.start(&id, key, Role::Baseline).await.unwrap();
         (id, response["execution_id"].as_str().unwrap().into())
     }
     #[test]
@@ -1843,11 +1613,11 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn templates_and_legacy_plans_share_scope_edits_and_baseline_candidate_lifecycle() {
+    async fn templates_use_the_shared_scope_edits_and_baseline_candidate_lifecycle() {
         let root = tempfile::tempdir().unwrap();
         let runner = Arc::new(FakeRunner::new(root.path().into()));
         let manager = manager(root.path(), runner.clone());
-        let request = serde_json::from_value(json!({"label": "Edited Smoke", "purpose": "Custom scope from a template", "url": config("smoke").url,
+        let request = serde_json::from_value(json!({"label": "Edited Smoke", "purpose": "Custom scope from a template", "url": request("smoke").url,
             "model": "model", "provider": "provider", "judge_model": "judge", "judge_provider": "provider",
             "scenarios": ["minimal_path", "persistent_state"], "runs": 2, "technical_retries": 0, "template_id": "smoke"})).unwrap();
         let plan = manager.create_local(request).await.unwrap();
@@ -1859,10 +1629,10 @@ mod tests {
         saved.snapshot.definition_sha256 = "historical-template-revision".into();
         saved.snapshot_sha256 = artifact::sha256_value(&saved.snapshot).unwrap();
         saved.configuration_sha256 =
-            configuration_digest(&saved.configuration, &saved.snapshot_sha256).unwrap();
+            configuration_digest(&saved.plan, &saved.snapshot_sha256).unwrap();
         manager.write_plan(&saved).unwrap();
         let started = manager
-            .start_local(&plan.id, super::super::plans::PlanRunRole::Baseline)
+            .start_local(&plan.id, "baseline", Role::Baseline)
             .await
             .unwrap();
         let baseline = terminal(&manager, started.last_attempt_id.as_deref().unwrap()).await;
@@ -1893,7 +1663,7 @@ mod tests {
             .await
             .is_err());
         let started = manager
-            .start_local(&plan.id, super::super::plans::PlanRunRole::Candidate)
+            .start_local(&plan.id, "candidate", Role::Candidate)
             .await
             .unwrap();
         let candidate = terminal(&manager, started.last_attempt_id.as_deref().unwrap()).await;
@@ -1901,81 +1671,49 @@ mod tests {
             manager.get_local(&plan.id).unwrap().candidate_execution_ids,
             vec![candidate.id]
         );
-        let mut legacy_request = super::super::plans::plan_request(&ready);
-        legacy_request.template_id = None;
-        legacy_request.runs = 1;
-        legacy_request.scenarios = vec!["minimal_path".into()];
-        let mut legacy =
-            super::super::plans::new_plan(&legacy_request, "retained-native-plan".into()).unwrap();
-        legacy.baseline_execution_id = Some("retained-native-baseline".into());
-        legacy
-            .candidate_execution_ids
-            .push("retained-native-candidate".into());
-        legacy.locked = true;
-        legacy.state = super::super::plans::PlanState::ComparisonReady;
-        super::super::plans::write_plan(&root.path().join("plans"), &legacy).unwrap();
-        let started = manager
-            .start_local(&legacy.id, super::super::plans::PlanRunRole::Candidate)
-            .await
-            .unwrap();
-        let candidate = terminal(&manager, started.last_attempt_id.as_deref().unwrap()).await;
-        let retained = manager.get_local(&legacy.id).unwrap();
-        assert_eq!(
-            retained.baseline_execution_id.as_deref(),
-            Some("retained-native-baseline")
-        );
-        assert_eq!(
-            retained.candidate_execution_ids,
-            vec!["retained-native-candidate".to_owned(), candidate.id]
-        );
-        assert_eq!(manager.list_local().unwrap().len(), 2);
     }
 
     #[tokio::test]
-    async fn legacy_plan_bytes_and_history_are_preserved_beside_v2() {
+    async fn current_store_rejects_old_formats_and_does_not_load_old_history() {
         let root = tempfile::tempdir().unwrap();
+        // Previous directories are outside the current store, including interrupted receipts.
+        fs::create_dir_all(root.path().join("plans")).unwrap();
+        fs::create_dir_all(root.path().join("plan-executions")).unwrap();
+        fs::write(root.path().join("plans/old.json"), b"old plan").unwrap();
+        fs::write(root.path().join("plan-executions/old.json"), b"old receipt").unwrap();
         let runner = Arc::new(FakeRunner::new(root.path().into()));
         let manager = manager(root.path(), runner);
-        let request = serde_json::from_value(json!({"label": "Legacy", "url": config("smoke").url, "model": "model", "provider": "provider", "judge_model": "judge", "judge_provider": "provider", "scenarios": ["minimal_path"], "runs": 1, "technical_retries": 0})).unwrap();
-        let mut legacy = super::super::plans::new_plan(&request, "legacy-retained".into()).unwrap();
-        legacy.baseline_execution_id = Some("baseline-retained".into());
-        legacy
-            .candidate_execution_ids
-            .push("candidate-retained".into());
-        super::super::plans::write_plan(&root.path().join("plans"), &legacy).unwrap();
-        let path = root.path().join("plans/legacy-retained.json");
-        let original = fs::read(&path).unwrap();
-        manager
-            .handle(Request::Create {
-                configuration: config("smoke"),
-            })
-            .await
-            .unwrap();
         manager.reconcile().await.unwrap();
+        assert!(manager.list_local().unwrap().is_empty());
+        assert!(manager.executions().unwrap().is_empty());
+        let plan = manager.create_local(request("smoke")).await.unwrap();
+        let saved = manager.read_plan(&plan.id).unwrap();
+        let encoded = serde_json::to_value(&saved).unwrap();
+        assert!(encoded.get("base").is_none());
+        assert!(encoded.get("configuration").is_none());
+        assert_eq!(encoded["schema_version"], PLAN_SCHEMA_VERSION);
+        for version in [1, 2] {
+            let mut old = encoded.clone();
+            old["schema_version"] = json!(version);
+            write_json(&manager.plan_path(&plan.id).unwrap(), &old).unwrap();
+            assert!(manager.get_local(&plan.id).is_err());
+        }
+        manager.write_plan(&saved).unwrap();
         fs::write(
-            root.path().join("plans/unsupported.json"),
-            br#"{"schema_version":3}"#,
-        )
-        .unwrap();
-        fs::write(root.path().join("plans/corrupt.json"), b"invalid json").unwrap();
-        let listed = manager.list_local().unwrap();
-        assert_eq!(listed.len(), 2);
-        let retained = listed.iter().find(|plan| plan.id == legacy.id).unwrap();
-        assert_eq!(retained.candidate_execution_ids, vec!["candidate-retained"]);
-        assert_eq!(
-            retained.baseline_execution_id.as_deref(),
-            Some("baseline-retained")
-        );
-        assert_eq!(fs::read(path).unwrap(), original);
-        fs::write(
-            root.path().join("plan-executions/corrupt.json"),
+            root.path().join("plan-store/plans/corrupt.json"),
             b"invalid json",
         )
         .unwrap();
-        assert!(
-            manager.list_local().is_err(),
-            "Shared history errors must remain visible"
-        );
+        assert_eq!(manager.list_local().unwrap().len(), 1);
+        fs::write(
+            root.path().join("plan-store/executions/corrupt.json"),
+            b"invalid json",
+        )
+        .unwrap();
+        assert!(manager.list_local().is_err());
+        for action in ["create", "update", "get", "duplicate", "start", "compare"] {
+            assert!(serde_json::from_value::<Request>(json!({"action": action})).is_err());
+        }
     }
 
     #[tokio::test]
@@ -1984,56 +1722,45 @@ mod tests {
         let runner = Arc::new(FakeRunner::new(root.path().into()));
         let manager = manager(root.path(), runner);
         for profile in test_plan::PROFILE_IDS {
-            let value = manager
-                .handle(Request::Create {
-                    configuration: config(profile),
-                })
-                .await
-                .unwrap();
-            let id = value["id"].as_str().unwrap();
+            let value = manager.create_local(request(profile)).await.unwrap();
+            let id = value.id.as_str();
             let mut plan = manager.read_plan(id).unwrap();
             verify_snapshot(&plan).unwrap();
             let round_trip: SavedPlan =
                 serde_json::from_slice(&fs::read(manager.plan_path(id).unwrap()).unwrap()).unwrap();
             assert_eq!(round_trip.snapshot_sha256, plan.snapshot_sha256);
-            let copy = manager
-                .handle(Request::Duplicate {
-                    plan_id: id.into(),
-                    label: "Copy".into(),
-                    model: "another".into(),
-                    provider: "another-provider".into(),
-                })
-                .await
-                .unwrap();
-            assert_ne!(copy["id"], id);
-            assert_eq!(copy["history"], json!([]));
-            assert_eq!(copy["locked"], false);
-            assert_eq!(copy["snapshot"], value["snapshot"]);
-            assert_eq!(copy["configuration"]["judge_model"], "judge");
-            assert!(copy["baseline_execution_id"].is_null());
+            let mut duplicate = request(profile);
+            duplicate.duplicate_of = Some(id.into());
+            duplicate.label = "Copy".into();
+            duplicate.model = "another".into();
+            duplicate.provider = "another-provider".into();
+            let copy = manager.create_local(duplicate).await.unwrap();
+            assert_ne!(copy.id, id);
+            assert!(manager.history(&copy.id).unwrap().is_empty());
+            assert!(!copy.locked);
+            assert_eq!(
+                manager.read_plan(&copy.id).unwrap().snapshot_sha256,
+                plan.snapshot_sha256
+            );
+            assert_eq!(copy.judge_model, "judge");
+            assert!(copy.baseline_execution_id.is_none());
+            assert!(copy.candidate_execution_ids.is_empty());
+            let mut changed = plan.clone();
+            changed.plan.model = "tampered-model".into();
+            assert!(verify_snapshot(&changed).is_err());
             plan.snapshot.profile.repetitions += 1;
             assert!(verify_snapshot(&plan).is_err());
             manager.write_plan(&plan).unwrap();
-            assert_eq!(manager.view(&plan).unwrap()["compatible"], false);
+            assert!(!manager.get_local(id).unwrap().compatible);
             assert!(export(&plan).is_ok());
         }
-        let mut missing = config("smoke");
+        let mut missing = request("smoke");
         missing.model.clear();
-        assert!(manager
-            .handle(Request::Create {
-                configuration: missing
-            })
-            .await
-            .is_err());
-        let mut missing = config("smoke");
+        assert!(manager.create_local(missing).await.is_err());
+        let mut missing = request("smoke");
         missing.judge_model.clear();
         missing.judge_provider.clear();
-        assert!(manager
-            .handle(Request::Create {
-                configuration: missing
-            })
-            .await
-            .is_err());
+        assert!(manager.create_local(missing).await.is_err());
     }
     #[tokio::test]
     async fn native_coordination_covers_all_slots_including_capability_and_evolution() {
@@ -2092,23 +1819,15 @@ mod tests {
                 assert!(test_plan::measure(&[paths[0].clone(), paths[0].clone()]).is_err());
             }
             let repeated = manager
-                .start(
-                    &plan_id,
-                    profile,
-                    if profile == "evolution" {
-                        Role::Baseline
-                    } else {
-                        Role::Run
-                    },
-                )
+                .start(&plan_id, profile, Role::Baseline)
                 .await
                 .unwrap();
             assert_eq!(repeated["duplicate"], true);
             assert!(manager
-                .handle(Request::Update {
-                    plan_id,
-                    configuration: config(profile)
-                })
+                .update_local(
+                    &plan_id,
+                    serde_json::from_value(json!({"model": "changed"})).unwrap()
+                )
                 .await
                 .is_err());
         }
@@ -2120,9 +1839,15 @@ mod tests {
         runner.hold.store(true, Ordering::SeqCst);
         let manager = manager(root.path(), runner.clone());
         let (plan, id) = admitted(&manager, "smoke", "cancel").await;
-        let duplicate = manager.start(&plan, "cancel", Role::Run).await.unwrap();
+        let duplicate = manager
+            .start(&plan, "cancel", Role::Baseline)
+            .await
+            .unwrap();
         assert_eq!(duplicate["duplicate"], true);
-        let other = manager.start(&plan, "another", Role::Run).await.unwrap();
+        let other = manager
+            .start(&plan, "another", Role::Baseline)
+            .await
+            .unwrap();
         assert_eq!(other["blocked"], true);
         tokio::time::timeout(Duration::from_secs(5), async {
             while runner.submitted.load(Ordering::SeqCst) == 0 {
@@ -2156,9 +1881,11 @@ mod tests {
             assert_eq!(execution.state, "interrupted");
             assert!(!execution.baseline_eligible);
             assert_eq!(runner.submitted.load(Ordering::SeqCst), 1);
-            assert!(manager.view(&manager.read_plan(&plan).unwrap()).unwrap()
-                ["baseline_execution_id"]
-                .is_null());
+            assert!(manager
+                .get_local(&plan)
+                .unwrap()
+                .baseline_execution_id
+                .is_none());
         }
     }
     #[tokio::test]
@@ -2166,15 +1893,10 @@ mod tests {
         let root = tempfile::tempdir().unwrap();
         let runner = Arc::new(FakeRunner::new(root.path().into()));
         let manager = manager(root.path(), runner.clone());
-        let plan = manager
-            .handle(Request::Create {
-                configuration: config("smoke"),
-            })
-            .await
-            .unwrap();
+        let plan = manager.create_local(request("smoke")).await.unwrap();
         runner.fail_receipt.store(true, Ordering::SeqCst);
         assert!(manager
-            .start(plan["id"].as_str().unwrap(), "fail-write", Role::Run)
+            .start(plan.id.as_str(), "fail-write", Role::Baseline)
             .await
             .is_err());
         assert_eq!(runner.submitted.load(Ordering::SeqCst), 0);
@@ -2205,23 +1927,19 @@ mod tests {
         assert_eq!(recovered.slots[0].state, "finished");
         assert_eq!(recovered.slots[2].state, "not_run");
         assert_eq!(runner.submitted.load(Ordering::SeqCst), before);
-        assert!(
-            manager.view(&manager.read_plan(&plan).unwrap()).unwrap()["baseline_execution_id"]
-                .is_null()
-        );
+        assert!(manager
+            .get_local(&plan)
+            .unwrap()
+            .baseline_execution_id
+            .is_none());
     }
     #[tokio::test]
     async fn resilience_export_is_accepted_by_the_existing_protected_suite_validator() {
         let root = tempfile::tempdir().unwrap();
         let runner = Arc::new(FakeRunner::new(root.path().into()));
         let manager = manager(root.path(), runner);
-        let plan = manager
-            .handle(Request::Create {
-                configuration: config("resilience"),
-            })
-            .await
-            .unwrap();
-        let saved = manager.read_plan(plan["id"].as_str().unwrap()).unwrap();
+        let plan = manager.create_local(request("resilience")).await.unwrap();
+        let saved = manager.read_plan(plan.id.as_str()).unwrap();
         assert_eq!(saved.snapshot.budget["planned_runs"], 13);
         let export = export(&saved).unwrap();
         let path = root.path().join("export.json");
@@ -2233,12 +1951,6 @@ mod tests {
             String::from_utf8_lossy(&result.stderr)
         );
         assert!(materialize_slots(&saved, "protected").is_err());
-        assert_eq!(
-            manager
-                .requirements(&saved.configuration, Some(&saved))
-                .await
-                .unwrap()["ready"],
-            false
-        );
+        assert_eq!(manager.requirements(&saved).await.unwrap()["ready"], false);
     }
 }
