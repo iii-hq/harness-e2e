@@ -349,7 +349,7 @@ function LedgerTable({
             pass rate
           </th>
           <th scope="col" className={numericCellClassName}>
-            runtime
+            duration
           </th>
           <th scope="col" className={numericCellClassName}>
             tokens
@@ -599,7 +599,7 @@ export function ExecutionsPage() {
               <option value="newest">newest first</option>
               <option value="oldest">oldest first</option>
               <option value="result">result</option>
-              <option value="runtime">longest runtime</option>
+              <option value="runtime">longest duration</option>
               <option value="tokens">most tokens</option>
             </Select>
           </div>

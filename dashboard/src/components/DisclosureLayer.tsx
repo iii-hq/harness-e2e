@@ -4,7 +4,7 @@ import type { ReactNode, SyntheticEvent } from 'react'
 /** One layer of a page that shows its metrics first and everything else on
  *  demand. The closed row carries a scent — enough to decide whether to open
  *  it — so hiding never means losing (audit ED-26). The row is the shape the
- *  dashboard already uses for "Physical attempt outcomes" and "Inspect scenario
+ *  dashboard already uses for "attempts" and "Inspect scenario
  *  evidence": chevron, bold label, mono summary, a fill rather than a border. */
 export function DisclosureLayer({
   id,

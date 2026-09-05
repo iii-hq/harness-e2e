@@ -82,7 +82,7 @@ export function ScenarioMatrix({
           <span>Scenario</span>
           <span>Objective result</span>
           <span>Advisory</span>
-          <span>Runtime</span>
+          <span>Duration</span>
           {showStructure ? <span>Structure</span> : null}
         </div>
         <ol className="m-0 grid list-none p-0">
@@ -339,7 +339,7 @@ function ScenarioRow({
             label={item.advisory.label}
           />
         </MatrixCell>
-        <MatrixCell label="Runtime">
+        <MatrixCell label="Duration">
           <strong className="font-mono text-xs font-semibold tabular-nums text-ink">
             {formatScenarioDuration(item.durationMs)}
           </strong>
@@ -451,7 +451,7 @@ function ScenarioExpansion({
         <RunOutcomeLedger runs={item.runs} />
         {!item.available ? (
           <div className="border-t border-[var(--color-rule)] px-4 py-6 text-sm leading-6 text-ink-muted md:px-5">
-            The expected report for this scenario is unavailable. Runtime,
+            The expected report for this scenario is unavailable. Duration,
             workflow, and advisory data are intentionally not inferred.
           </div>
         ) : item.workflowSteps.length > 0 ? (
@@ -519,7 +519,7 @@ function ScenarioReliabilityBand({
     ['completion evidence coverage', aggregate.completion_evidence_coverage],
     ['completion rate', aggregate.completion_rate],
     ['objective score coverage', aggregate.objective_score_coverage],
-    ['quality coverage', aggregate.quality_coverage],
+    ['advisory quality coverage', aggregate.quality_coverage],
   ] as const
   const tokenMetrics = [
     ['subject tokens', aggregate.total_tokens_consumed],
@@ -551,7 +551,7 @@ function ScenarioReliabilityBand({
           />
         ))}
         <AggregateFact
-          label="quality score completed"
+          label="advisory quality"
           value={
             aggregate.quality_score_completed == null
               ? '—'
@@ -641,7 +641,7 @@ function RunOutcomeLedger({ runs }: { runs: DashboardRunProjection[] }) {
           className="size-4 shrink-0 -rotate-90 text-ink-muted transition-transform group-open:rotate-0"
           aria-hidden="true"
         />
-        Physical attempt outcomes
+        attempts
         <span className="ml-auto font-mono text-label font-normal text-ink-muted">
           {attempts.length} {attempts.length === 1 ? 'attempt' : 'attempts'}
         </span>

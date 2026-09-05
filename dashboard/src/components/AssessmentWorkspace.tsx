@@ -272,7 +272,7 @@ function primaryRunMetrics(run: AssessmentRunView): PrimaryMetric[] {
           tone: run.metrics.durationMs == null ? 'unavailable' : 'neutral',
         },
     {
-      label: 'AI quality',
+      label: 'advisory quality',
       value:
         aiResult?.quality_score != null
           ? `${aiResult.quality_score}/100`

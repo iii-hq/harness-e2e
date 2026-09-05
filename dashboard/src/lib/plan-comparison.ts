@@ -300,9 +300,9 @@ function allMetrics(
     build('coverage', 'Coverage', 'higher', 'percent_points'),
     build('hard_gates', 'Hard gates', 'lower', 'count'),
     build('technical_failures', 'Technical failures', 'lower', 'count'),
-    build('quality', 'Quality score', 'higher', 'score'),
+    build('quality', 'Advisory quality', 'higher', 'score'),
     build('confidence', 'Confidence', 'context', 'percent_points'),
-    build('tokens', 'Total tokens', 'lower', 'tokens'),
+    build('tokens', 'Tokens', 'lower', 'tokens'),
     build('tokens_per_completion', 'Tokens per completion', 'lower', 'tokens'),
     build('failed_attempt_tokens', 'Failed attempt tokens', 'lower', 'tokens'),
     build('duration', 'Duration', 'lower', 'seconds'),
@@ -556,7 +556,7 @@ function generalMetricComparisons(
     ),
     metric(
       'duration',
-      'Time',
+      'Duration',
       scenarioAverage(baselineSummary, 'duration_seconds') ??
         runDurationSeconds(baseline),
       scenarioAverage(candidateSummary, 'duration_seconds') ??
@@ -673,7 +673,7 @@ export function buildScenarioComparisons(
         ),
         metric(
           'quality',
-          'Quality score',
+          'Advisory quality',
           finite(left?.assessment_summary?.median_quality_score),
           finite(right?.assessment_summary?.median_quality_score),
           'higher',

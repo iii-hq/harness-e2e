@@ -285,7 +285,7 @@ describe('scenario matrix presentation model', () => {
       buildScenarioMatrix(detail).items[1]?.primaryMetrics.slice(0, 4),
     ).toEqual([
       {
-        label: 'Validation score',
+        label: 'Objective score',
         value: '80/100',
         detail: 'Deterministic sum of isolated validator outcomes',
         band: 'scoring',
@@ -346,13 +346,13 @@ describe('scenario matrix presentation model', () => {
     )
     expect(security.primaryMetrics).toEqual([
       {
-        label: 'Runtime',
+        label: 'Duration',
         value: '3.0 s',
         detail: 'Average scenario duration',
         band: 'execution',
       },
       {
-        label: 'Total tokens',
+        label: 'Tokens',
         value: '1,000',
         detail: '1/2 workflow steps reported',
         band: 'execution',
@@ -370,7 +370,7 @@ describe('scenario matrix presentation model', () => {
         band: 'execution',
       },
       {
-        label: 'Reported cost',
+        label: 'Cost',
         value: '—',
         detail: 'Not captured for this run',
         band: 'execution',
@@ -463,13 +463,13 @@ describe('scenario matrix presentation model', () => {
 
     expect(buildScenarioMatrix(detail).items[0]?.primaryMetrics).toEqual([
       {
-        label: 'Runtime',
+        label: 'Duration',
         value: '3.0 s',
         detail: 'Average scenario duration',
         band: 'execution',
       },
       {
-        label: 'Total tokens',
+        label: 'Tokens',
         value: '3,500',
         detail: 'Evaluator usage · backfilled',
         band: 'execution',
@@ -487,7 +487,7 @@ describe('scenario matrix presentation model', () => {
         band: 'execution',
       },
       {
-        label: 'Reported cost',
+        label: 'Cost',
         value: '$0.0000',
         detail: 'Local run · no metered charge',
         band: 'execution',

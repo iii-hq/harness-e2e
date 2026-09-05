@@ -463,7 +463,7 @@ export function RowDetails({
       },
     ),
     pair(
-      'median runtime',
+      'median duration',
       formatDuration(result.from?.median_duration_seconds),
       formatDuration(result.to?.median_duration_seconds),
       {

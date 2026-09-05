@@ -275,7 +275,12 @@ const COMPARISON_METRICS: Array<{
   betterWhen: 'higher' | 'lower' | 'neither'
   format: (value: number | null) => string
 }> = [
-  { key: 'score', label: 'score', betterWhen: 'higher', format: formatScore },
+  {
+    key: 'score',
+    label: 'objective score',
+    betterWhen: 'higher',
+    format: formatScore,
+  },
   {
     key: 'duration',
     label: 'duration',
@@ -286,13 +291,13 @@ const COMPARISON_METRICS: Array<{
   { key: 'cost', label: 'cost', betterWhen: 'lower', format: formatCost },
   {
     key: 'functionCalls',
-    label: 'functions',
+    label: 'function calls',
     betterWhen: 'neither',
     format: formatCount,
   },
   {
     key: 'functionErrors',
-    label: 'errors',
+    label: 'function errors',
     betterWhen: 'lower',
     format: formatCount,
   },
@@ -399,7 +404,7 @@ export function ScoreTrendChart({
         className="block h-40 w-full font-mono text-label"
         viewBox={`0 0 ${width} 160`}
         role="img"
-        aria-label="Median score per retained execution, oldest on the left"
+        aria-label="Objective score per retained execution, oldest on the left"
         data-score-trend
       >
         {[top, gate, bottom].map((y) => (
@@ -858,7 +863,7 @@ function ExecutionDetailsDialog({
   ).length
   const result = statusPresentation(observation.status)
   const metrics = [
-    ['score', formatScore(observation.median_score)],
+    ['objective score', formatScore(observation.median_score)],
     ['duration', formatDuration(observation.median_duration_seconds)],
     ['tokens', formatTokens(observation.median_tokens)],
     ['cost', formatCost(observation.median_cost_usd)],
@@ -1448,9 +1453,9 @@ export function TestHistoryPage({ testId }: { testId: string }) {
                 data-history-tiles
               >
                 <MetricCard
-                  label="successful runs"
-                  value={`${passedCount} / ${allObservations.length}`}
-                  detail="objective result"
+                  label="pass rate"
+                  value={`${Math.round((passedCount / allObservations.length) * 100)}%`}
+                  detail={`${passedCount} of ${allObservations.length} runs passed`}
                   tone={
                     passedCount === allObservations.length
                       ? 'positive'
@@ -1461,7 +1466,7 @@ export function TestHistoryPage({ testId }: { testId: string }) {
                 />
                 {knownMetricCount(scores) > 0 ? (
                   <MetricCard
-                    label="median score"
+                    label="objective score"
                     value={formatScore(median(scores))}
                     detail={`judge quality · /100 · ${metricCaption(knownMetricCount(scores), allObservations.length)}`}
                   />
@@ -1666,7 +1671,7 @@ export function TestHistoryPage({ testId }: { testId: string }) {
                     <th scope="col">model · system</th>
                     <th scope="col">result</th>
                     <th scope="col" className={numericCellClassName}>
-                      score
+                      objective score
                     </th>
                     <th scope="col" className={numericCellClassName}>
                       duration

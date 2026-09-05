@@ -496,7 +496,7 @@ function primaryMetrics(
     finiteNumber(run?.wall_time_ms ?? run?.efficiency?.wall_time_ms)
   const missingDetail = run ? 'Not captured for this run' : 'No run retained'
   const runtimeMetric = {
-    label: 'Runtime',
+    label: 'Duration',
     value: durationMs == null ? '—' : formatDuration(durationMs),
     detail:
       duration.kind === 'average'
@@ -508,7 +508,7 @@ function primaryMetrics(
   const markdownMetrics = run?.markdown_execution
     ? [
         {
-          label: 'Validation score',
+          label: 'Objective score',
           value:
             finiteNumber(run.validation_score) == null
               ? 'Unavailable'
@@ -540,7 +540,7 @@ function primaryMetrics(
   const executionMetrics = [
     runtimeMetric,
     {
-      label: 'Total tokens',
+      label: 'Tokens',
       value: totalTokens == null ? '—' : formatCount(totalTokens),
       detail:
         runUsage.totalTokens != null
@@ -574,7 +574,7 @@ function primaryMetrics(
             : 'Subject execution errors',
     },
     {
-      label: 'Reported cost',
+      label: 'Cost',
       value: costUsd == null ? '—' : formatCost(costUsd),
       detail:
         runUsage.costUsd != null

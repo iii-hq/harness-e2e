@@ -522,7 +522,7 @@ describe('local plan execution comparison', () => {
           },
           {
             id: 'duration',
-            label: 'Time',
+            label: 'Duration',
             baseline: 0.3,
             candidate: 0.4,
             delta: 0.1,
@@ -592,7 +592,7 @@ describe('local plan execution comparison', () => {
     expect(layersHtml).toContain('Function calls')
     expect(layersHtml).toContain('Function errors')
     expect(layersHtml).toContain('Turns')
-    expect(layersHtml).toContain('Time')
+    expect(layersHtml).toContain('Duration')
     expect(layersHtml).toContain('data-plan-by-test')
     expect(layersHtml).not.toContain('Findings')
     expect(layersHtml).toMatch(/data-scenario-id="security_review" open=""/)

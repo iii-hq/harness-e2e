@@ -246,7 +246,7 @@ function SignalMetrics({
       data-signal-metrics
     >
       <MetricCard
-        label="scenario pass rate"
+        label="pass rate"
         value={formatPercent(presentation.passRate)}
         detail={
           presentation.breakdown.total > 0
@@ -273,7 +273,7 @@ function SignalMetrics({
         />
       ) : (
         <MetricCard
-          label="report coverage"
+          label="coverage"
           value={formatPercent(presentation.coverage)}
           detail={
             presentation.expectedReports !== null &&
@@ -296,7 +296,7 @@ function SignalMetrics({
         />
       )}
       <MetricCard
-        label={workflow ? 'workflow runtime' : 'runtime'}
+        label={workflow ? 'workflow duration' : 'duration'}
         value={formatDuration(runtimeSeconds)}
         detail={trendCaption(
           signal.runtime,
@@ -411,7 +411,7 @@ export function RunningStrip({
       </h2>
       {running.length === 0 ? (
         <p className="mt-2 mb-0 text-xs text-ink-soft">
-          Nothing is running. The binary executes one experiment at a time.
+          Nothing is running. The binary runs one execution at a time.
         </p>
       ) : (
         <ul className="m-0 mt-2 grid list-none gap-2 p-0">

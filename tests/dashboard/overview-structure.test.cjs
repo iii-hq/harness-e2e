@@ -35,7 +35,7 @@ test('prioritizes the first-read execution signal', () => {
   // Audit O-01/O-06/O-08/O-17: a signal panel, not the ledger — latest band,
   // trend deltas, attention queue, running strip, five recent rows.
   assert.match(overviewPage, /latest execution/)
-  assert.match(overviewPage, /scenario pass rate/)
+  assert.match(overviewPage, /pass rate/)
   assert.match(overviewPage, /data-recent-executions/)
   assert.match(overviewPage, /data-attention-queue/)
   assert.match(overviewPage, /data-running-strip/)
@@ -101,7 +101,7 @@ test('keeps the overview operational, dense, and Tailwind-based', () => {
 test('adapts overview metrics when persisted workflow evidence is available', () => {
   assert.match(overviewPage, /execution\.workflow_metrics/)
   assert.match(overviewPage, /semantic steps/)
-  assert.match(overviewPage, /workflow runtime/)
+  assert.match(overviewPage, /workflow duration/)
   assert.match(overviewPage, /hard gates passed/)
   assert.match(overviewPage, /workflowProgress/)
 })
@@ -362,7 +362,7 @@ test('organizes detail into progressive disclosure sections', () => {
   assert.match(executionPage, /scenario results/)
   assert.match(scenarioMatrix, /Objective result/)
   assert.match(scenarioMatrix, /Advisory/)
-  assert.match(scenarioMatrix, /Runtime/)
+  assert.match(scenarioMatrix, /Duration/)
   assert.match(scenarioMatrix, /Structure/)
   assert.match(executionPage, /buildScenarioMatrix\(detail\)/)
   assert.match(executionPage, /@\/design-system\/styles\.css/)

@@ -115,7 +115,7 @@ describe('assessment workspace component', () => {
     expect(rendered).toContain('data-primary-run-metrics')
     expect(rendered).toContain('Objective hard gates')
     expect(rendered).toContain('Assessment outcomes')
-    expect(rendered).toContain('AI quality')
+    expect(rendered).toContain('advisory quality')
     expect(rendered).toContain('Tokens')
     expect(rendered).toContain('22,668')
     expect(rendered).toContain('Function calls')

@@ -401,7 +401,7 @@ export function CountsSection({
           tone={summary?.assessment_count ? 'neutral' : 'unavailable'}
         />
         <MetricCard
-          label="reported cost"
+          label="cost"
           value={
             metrics?.totalCostUsd == null
               ? '—'
@@ -876,7 +876,10 @@ export function ExecutionPage({
       'started',
       presentation.startedAt ? formatDate(presentation.startedAt) : '—',
     ],
-    ['runtime', runtimeSeconds === null ? '—' : formatDuration(runtimeSeconds)],
+    [
+      'duration',
+      runtimeSeconds === null ? '—' : formatDuration(runtimeSeconds),
+    ],
     [
       'tokens',
       summaryMetrics?.totalTokens == null

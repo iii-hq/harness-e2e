@@ -149,7 +149,7 @@ function compact(value: number) {
 
 const CORE_DELTAS: Array<{ id: PlanMetricId; label: string }> = [
   { id: 'pass_rate', label: 'pass' },
-  { id: 'quality', label: 'score' },
+  { id: 'quality', label: 'quality' },
   { id: 'tokens', label: 'tokens' },
   { id: 'duration', label: 'time' },
 ]
