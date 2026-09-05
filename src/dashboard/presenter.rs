@@ -901,7 +901,11 @@ pub(super) fn validate_execution_id(value: &str) -> std::result::Result<(), Stri
         && value
             .chars()
             .all(|character| character.is_ascii_alphanumeric() || character == '-');
-    let control_plane_id = value.len() == 32 && value.bytes().all(|byte| byte.is_ascii_hexdigit());
+    let native_or_plan_id = value.strip_prefix("plan-").unwrap_or(value);
+    let control_plane_id = native_or_plan_id.len() == 32
+        && native_or_plan_id
+            .bytes()
+            .all(|byte| byte.is_ascii_hexdigit());
     if local_id || control_plane_id {
         Ok(())
     } else {

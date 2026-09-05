@@ -170,11 +170,11 @@ async fn dashboard_config(State(state): State<AppState>) -> Json<Value> {
 
 async fn profile_plan(
     State(state): State<AppState>,
-    Json(request): Json<super::profile_plans::Request>,
+    Json(request): Json<super::plan_store::Request>,
 ) -> Result<Json<Value>, ApiError> {
     state
         .controller
-        .profile_plans
+        .plan_store
         .handle(request)
         .await
         .map(Json)
@@ -191,7 +191,7 @@ async fn plans_list(State(state): State<AppState>) -> Result<Json<Value>, ApiErr
         .and_then(|plan| plan.catalog())
         .map_err(ApiError::internal)?;
     Ok(Json(
-        json!({ "mode": "local", "plans": plans, "master_plan": master_plan, "profile_plans": state.controller.profile_plans.list().map_err(ApiError::internal)? }),
+        json!({ "mode": "local", "plans": plans, "master_plan": master_plan }),
     ))
 }
 
@@ -417,6 +417,14 @@ async fn execution_detail(
         .ok_or_else(|| ApiError::bad_request("execution detail must end in .json"))?
         .to_string();
     validate_execution_id(&id).map_err(ApiError::bad_request)?;
+    if let Some(detail) = state
+        .controller
+        .plan_store
+        .execution_detail(&id)
+        .map_err(ApiError::internal)?
+    {
+        return Ok(Json(detail));
+    }
     let run_dir = state.controller.runs_dir().join(&id);
     let run = read_stored_run(&run_dir)
         .map_err(ApiError::internal)?

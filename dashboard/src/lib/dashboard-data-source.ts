@@ -67,12 +67,14 @@ export type LocalPlan = {
   candidate_labels?: Record<string, string>
   incomplete_execution_ids: string[]
   last_attempt_id: string | null
+  template_id?: string | null
+  protected_executor_required?: boolean
+  compatible?: boolean
 }
 
 export type LocalPlansResponse = {
   mode: 'local'
   plans: LocalPlan[]
-  profile_plans?: import('./profile-plan').ProfilePlan[]
   master_plan?: MasterTestPlan
 }
 

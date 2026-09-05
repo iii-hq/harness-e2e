@@ -263,7 +263,7 @@ export function ProviderModelDropdown({
             }))
             .filter((group) => group.models.length > 0)}
           value={value}
-          clearLabel={clearLabel}
+          clearLabel={query.trim() ? undefined : clearLabel}
           collapsedProviders={collapsedProviders}
           onToggleProvider={toggleProvider}
           onSelect={select}

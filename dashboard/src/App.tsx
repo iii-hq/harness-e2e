@@ -1,18 +1,13 @@
 import { useEffect } from 'react'
 import { DashboardShell } from '@/components/DashboardShell'
-import { PLAN_SCOPE_INTENT_KEY } from '@/components/ExecutionSetup'
 import { type DashboardRoute, useHashRoute } from '@/hooks/use-hash-route'
 import { ScenarioChatProvider } from '@/lib/scenario-chat-context'
 import { ExecutionPage } from '@/pages/ExecutionPage'
 import { ExecutionsPage } from '@/pages/ExecutionsPage'
 import { LocalPlanCreatePage, LocalPlanDetailPage } from '@/pages/LocalPlanPage'
 import { OverviewPage } from '@/pages/OverviewPage'
+import { PlanExecutionPage } from '@/pages/PlanExecutionPage'
 import { PlansPage } from '@/pages/PlansPage'
-import {
-  ProfileExecutionPage,
-  ProfilePlanCreatePage,
-  ProfilePlanDetailPage,
-} from '@/pages/ProfilePlanPage'
 import { TestHistoryPage } from '@/pages/TestHistoryPage'
 import { TestsCatalogPage } from '@/pages/TestsCatalogPage'
 import { TestsPage } from '@/pages/TestsPage'
@@ -22,7 +17,7 @@ function RoutedPage({ route }: { route: DashboardRoute }) {
     case 'execution':
       if (route.executionId.startsWith('plan-'))
         return (
-          <ProfileExecutionPage
+          <PlanExecutionPage
             key={route.executionId}
             executionId={route.executionId}
           />
@@ -41,30 +36,16 @@ function RoutedPage({ route }: { route: DashboardRoute }) {
     case 'plans':
       return <PlansPage />
     case 'plan-create':
-      if (
-        route.manual ||
-        (!route.profileId &&
-          !route.duplicateId &&
-          !route.editId &&
-          sessionStorage.getItem(PLAN_SCOPE_INTENT_KEY))
-      )
-        return <LocalPlanCreatePage />
       return (
-        <ProfilePlanCreatePage
-          key={
-            route.editId ?? route.duplicateId ?? route.profileId ?? 'chooser'
-          }
+        <LocalPlanCreatePage
+          key={route.editId ?? route.duplicateId ?? route.profileId ?? 'new'}
           profileId={route.profileId}
           duplicateId={route.duplicateId}
           editId={route.editId}
         />
       )
     case 'plan-detail':
-      if (route.planId.startsWith('profile-'))
-        return (
-          <ProfilePlanDetailPage key={route.planId} planId={route.planId} />
-        )
-      return <LocalPlanDetailPage planId={route.planId} />
+      return <LocalPlanDetailPage key={route.planId} planId={route.planId} />
     case 'overview':
       if (route.view === 'tests') return <TestsCatalogPage />
       if (route.view === 'executions') return <ExecutionsPage />

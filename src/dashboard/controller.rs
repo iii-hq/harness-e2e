@@ -6,7 +6,6 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use anyhow::{bail, Context, Result};
-use chrono::Utc;
 use serde_json::{json, Value};
 use tokio::sync::{broadcast, Mutex, RwLock};
 use url::Url;
@@ -35,7 +34,7 @@ struct ControllerState {
 }
 
 pub(super) struct Controller {
-    pub(super) profile_plans: Arc<super::profile_plans::ProfilePlans>,
+    pub(super) plan_store: Arc<super::plan_store::PlanStore>,
     runs_dir: PathBuf,
     plans_dir: PathBuf,
     defaults: Defaults,
@@ -85,14 +84,14 @@ impl Controller {
                 );
             }
         }
-        let profile_plans = super::profile_plans::ProfilePlans::new(
+        let plan_store = super::plan_store::PlanStore::new(
             args.runs_dir.clone(),
             args.url.clone(),
             control.clone(),
         )
         .await?;
         let controller = Arc::new(Self {
-            profile_plans,
+            plan_store,
             runs_dir: args.runs_dir,
             plans_dir,
             defaults: Defaults {
@@ -172,7 +171,7 @@ impl Controller {
 
     pub(super) async fn execution_summaries(&self) -> Result<Arc<Vec<Value>>> {
         let mut summaries = self.read_model().await?.summaries.clone();
-        let (parents, children) = self.profile_plans.dashboard_summaries()?;
+        let (parents, children) = self.plan_store.dashboard_summaries()?;
         let runs_dir = self.runs_dir.clone();
         // The historical index is cached; active execution checkpoints are not.
         // Polling must recover progress even if a change notification was lost.
@@ -218,21 +217,12 @@ impl Controller {
     }
 
     pub(super) async fn list_plans(&self) -> Result<Vec<LocalPlan>> {
-        let plans_dir = self.plans_dir.clone();
-        tokio::task::spawn_blocking(move || plans::list_plans(&plans_dir))
-            .await
-            .context("list local plans task")?
+        self.plan_store.list_local()
     }
 
     pub(super) async fn get_plan(&self, id: &str) -> Result<LocalPlan> {
         validate_plan_id(id)?;
-        let plans_dir = self.plans_dir.clone();
-        let id = id.to_string();
-        let lookup_id = id.clone();
-        tokio::task::spawn_blocking(move || plans::read_plan(&plans_dir, &lookup_id))
-            .await
-            .context("read local plan task")??
-            .with_context(|| format!("local plan '{id}' not found"))
+        self.plan_store.get_local(id)
     }
 
     pub(super) async fn create_plan(
@@ -240,16 +230,10 @@ impl Controller {
         request: PlanCreateRequest,
     ) -> Result<LocalPlan, ApiError> {
         self.require_current_url(&request.url)?;
-        let _plan_guard = self.plan_lock.lock().await;
-        let id = format!(
-            "plan-{}-{}",
-            Utc::now().format("%Y%m%dT%H%M%S"),
-            &uuid::Uuid::new_v4().simple().to_string()[..8]
-        );
-        let plan = plans::new_plan(&request, id)
-            .map_err(|error| ApiError::bad_request(error.to_string()))?;
-        plans::write_plan(&self.plans_dir, &plan).map_err(ApiError::internal)?;
-        Ok(plan)
+        self.plan_store
+            .create_local(request)
+            .await
+            .map_err(ApiError::internal)
     }
 
     pub(super) async fn update_plan(
@@ -257,17 +241,11 @@ impl Controller {
         id: &str,
         update: PlanUpdateRequest,
     ) -> Result<LocalPlan, ApiError> {
-        let _plan_guard = self.plan_lock.lock().await;
         validate_plan_id(id).map_err(|error| ApiError::bad_request(error.to_string()))?;
-        let mut plan = self
-            .get_plan(id)
+        self.plan_store
+            .update_local(id, update)
             .await
-            .map_err(|error| ApiError::not_found(error.to_string()))?;
-        plans::apply_update(&mut plan, &update)
-            .map_err(|error| ApiError::bad_request(error.to_string()))?;
-        self.require_current_url(&plan.url)?;
-        plans::write_plan(&self.plans_dir, &plan).map_err(ApiError::internal)?;
-        Ok(plan)
+            .map_err(ApiError::internal)
     }
 
     pub(super) async fn start_plan(
@@ -275,41 +253,11 @@ impl Controller {
         id: &str,
         role: PlanRunRole,
     ) -> Result<LocalPlan, ApiError> {
-        let _plan_guard = self.plan_lock.lock().await;
         validate_plan_id(id).map_err(|error| ApiError::bad_request(error.to_string()))?;
-        let mut plan = self
-            .get_plan(id)
+        self.plan_store
+            .start_local(id, role)
             .await
-            .map_err(|error| ApiError::not_found(error.to_string()))?;
-        self.require_current_url(&plan.url)?;
-        match role {
-            PlanRunRole::Baseline
-                if plan.state != PlanState::Draft || plan.baseline_execution_id.is_some() =>
-            {
-                return Err(ApiError::conflict(
-                    "the plan already has a baseline or baseline attempt",
-                ));
-            }
-            PlanRunRole::Candidate
-                if plan.baseline_execution_id.is_none() || plan.state == PlanState::Draft =>
-            {
-                return Err(ApiError::conflict(
-                    "a completed baseline is required before a candidate",
-                ));
-            }
-            _ => {}
-        }
-        let request = plans::run_request(&plan, role);
-        let execution_id = self.start(request).await?;
-        plan.locked = true;
-        plan.last_attempt_id = Some(execution_id.clone());
-        plan.state = match role {
-            PlanRunRole::Baseline => PlanState::BaselineRunning,
-            PlanRunRole::Candidate => PlanState::CandidateRunning,
-        };
-        plan.updated_at = plans::now();
-        plans::write_plan(&self.plans_dir, &plan).map_err(ApiError::internal)?;
-        Ok(plan)
+            .map_err(ApiError::internal)
     }
 
     async fn emit_change(&self, kind: &str, execution_id: &str) {

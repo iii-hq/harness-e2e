@@ -1,26 +1,27 @@
 import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
+import { validateExecutionSetup } from '@/components/ExecutionSetup'
 import { routeFromHash } from '@/hooks/use-hash-route'
-import { type PlanExecution, planErrors } from '@/lib/profile-plan'
-import { PlanProgress, Requirements } from './ProfilePlanPage'
+import type { PlanExecution } from '@/lib/plan-execution'
+import { PlanProgress, Requirements } from './PlanExecutionPage'
 
 describe('executable profile plan journey', () => {
   it('requires an explicit execution model and the required evaluator', () => {
     const config = {
+      mode: 'plan' as const,
       label: 'Smoke',
-      profile_id: 'smoke',
+      subject: '',
+      judge: '',
+      judgeRequired: true,
+      selectedScenarios: ['minimal_path'],
       url: 'ws://localhost',
-      model: '',
-      provider: '',
-      judge_model: '',
-      judge_provider: '',
     }
-    expect(planErrors(config, true)).toEqual({
-      model: 'Select an execution model.',
-      judge: 'This profile requires an evaluator.',
+    expect(validateExecutionSetup(config)).toEqual({
+      subject: 'Choose an execution model.',
+      judge: 'Choose a judge model for the selected tests.',
     })
     expect(
-      planErrors({ ...config, model: 'subject', provider: 'provider' }, false),
+      validateExecutionSetup({ ...config, subject: 'model', judge: 'judge' }),
     ).toEqual({})
   })
   it('keeps refreshable profile, duplication and manual routes', () => {

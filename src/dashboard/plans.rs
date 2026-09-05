@@ -8,6 +8,7 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
+#[cfg(test)]
 use super::RunRequest;
 use crate::artifact;
 use crate::markdown::ScenarioKey;
@@ -78,6 +79,12 @@ pub(super) struct LocalPlan {
     pub candidate_labels: BTreeMap<String, String>,
     pub incomplete_execution_ids: Vec<String>,
     pub last_attempt_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub template_id: Option<String>,
+    #[serde(default)]
+    pub protected_executor_required: bool,
+    #[serde(default = "compatible_default")]
+    pub compatible: bool,
 }
 
 #[derive(Debug, Clone, Default, Deserialize, Serialize, JsonSchema)]
@@ -100,6 +107,10 @@ pub(super) struct PlanCreateRequest {
     #[serde(default)]
     pub judge_provider: String,
     pub scenarios: Vec<String>,
+    #[serde(default)]
+    pub template_id: Option<String>,
+    #[serde(default)]
+    pub duplicate_of: Option<String>,
     #[serde(default = "default_runs")]
     pub runs: u32,
     #[serde(default = "default_retries")]
@@ -137,6 +148,10 @@ pub(super) struct PlanRunRequest {
     #[serde(default)]
     pub plan_id: Option<String>,
     pub role: PlanRunRole,
+}
+
+fn compatible_default() -> bool {
+    true
 }
 
 fn default_runs() -> u32 {
@@ -183,6 +198,7 @@ pub(super) fn read_plan(plans_dir: &Path, id: &str) -> Result<Option<LocalPlan>>
     Ok(Some(plan))
 }
 
+#[cfg(test)]
 pub(super) fn list_plans(plans_dir: &Path) -> Result<Vec<LocalPlan>> {
     if !plans_dir.is_dir() {
         return Ok(Vec::new());
@@ -249,6 +265,9 @@ pub(super) fn new_plan(request: &PlanCreateRequest, id: String) -> Result<LocalP
         candidate_labels: BTreeMap::new(),
         incomplete_execution_ids: Vec::new(),
         last_attempt_id: None,
+        template_id: request.template_id.clone(),
+        protected_executor_required: false,
+        compatible: true,
     })
 }
 
@@ -366,12 +385,15 @@ pub(super) fn plan_request(plan: &LocalPlan) -> PlanCreateRequest {
         judge_model: plan.judge_model.clone(),
         judge_provider: plan.judge_provider.clone(),
         scenarios: plan.scenario_ids.clone(),
+        template_id: plan.template_id.clone(),
+        duplicate_of: None,
         runs: plan.runs,
         technical_retries: plan.technical_retries,
         seed: plan.seed,
     }
 }
 
+#[cfg(test)]
 pub(super) fn run_request(plan: &LocalPlan, role: PlanRunRole) -> RunRequest {
     RunRequest {
         _caller_worker_id: None,
@@ -470,7 +492,10 @@ fn validate_values(request: &PlanCreateRequest) -> Result<()> {
     Ok(())
 }
 
-fn resolve_scope(scenario_ids: &[String], seed: Option<u64>) -> Result<Vec<PlanScopeItem>> {
+pub(super) fn resolve_scope(
+    scenario_ids: &[String],
+    seed: Option<u64>,
+) -> Result<Vec<PlanScopeItem>> {
     scenario_ids
         .iter()
         .map(|value| {
@@ -533,6 +558,8 @@ mod tests {
             judge_model: "judge".into(),
             judge_provider: "judge-provider".into(),
             scenarios: vec![ScenarioId::ContextPressure.as_str().into()],
+            template_id: None,
+            duplicate_of: None,
             runs: 1,
             technical_retries: 1,
             seed: None,

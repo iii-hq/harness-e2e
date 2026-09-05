@@ -99,12 +99,12 @@ The [master test and measurement plan](docs/e2e-test-plans.md) is the single
 strategy document for campaign coverage, purpose-specific profiles, metrics,
 and longitudinal comparison. [config/test-plan.json](config/test-plan.json)
 defines the six executable profiles: smoke, regression, capability, evolution,
-resilience, and endurance. In the dashboard, choose **New plan**, select a
-profile, execution model and required evaluator, then **Save draft** or **Save and
-run**. Plans retain pinned coverage, native execution evidence and history;
-**Duplicate plan** starts an empty history with a newly selected model. Resilience
-exports to the protected executor. Existing custom comparison plans remain
-available. See [executable profile plans](dashboard/README.md#executable-profile-plans).
+resilience, and endurance. In the dashboard these profiles are starting templates
+for the same plan form and baseline/candidate visualization used by existing plans.
+Choose **New plan**, optionally select a template, edit the scope, and select the
+execution and judge models. **Save draft**, **Save and run**, and **Duplicate plan**
+use one shared lifecycle and retain native evidence. Fault-injection plans export
+to the protected executor. See [executable profile plans](dashboard/README.md#executable-profile-plans).
 
 ```bash
 cargo run --locked -- test-plan list

@@ -122,7 +122,6 @@ struct PlansListResponse {
     mode: String,
     plans: Vec<super::plans::LocalPlan>,
     master_plan: Value,
-    profile_plans: Vec<Value>,
 }
 
 #[derive(Debug, Serialize, JsonSchema)]
@@ -380,7 +379,6 @@ pub(super) fn register_functions(iii: &IIIClient, controller: Arc<Controller>) {
                     Ok(PlansListResponse {
                         mode: "local".into(),
                         plans,
-                        profile_plans: controller.profile_plans.list().map_err(handler_error)?,
                         master_plan: crate::test_plan::embedded()
                             .and_then(|plan| plan.catalog())
                             .map_err(handler_error)?,
@@ -389,11 +387,11 @@ pub(super) fn register_functions(iii: &IIIClient, controller: Arc<Controller>) {
             })
         },
     );
-    register(iii, PROFILE_PLAN, "Configure, export and execute pinned profile plans, and inspect or cancel their composed executions.", {
+    register(iii, PROFILE_PLAN, "Configure, export and execute saved plans, and inspect or cancel their composed executions.", {
         let controller = controller.clone();
-        RegisterFunction::new_async(move |request: super::profile_plans::Request| {
+        RegisterFunction::new_async(move |request: super::plan_store::Request| {
             let controller = controller.clone();
-            async move { controller.profile_plans.handle(request).await.map_err(handler_error) }
+            async move { controller.plan_store.handle(request).await.map_err(handler_error) }
         })
     });
     register(iii, PLAN_GET, "Read one local plan.", {
@@ -657,6 +655,12 @@ pub(super) async fn execution_bundle(
     .await?;
     if manifest.executions.is_empty() {
         bail!("execution not found");
+    }
+    if let Some(detail) = controller
+        .plan_store
+        .execution_detail(&request.execution_id)?
+    {
+        return Ok(ExecutionBundle { manifest, detail });
     }
     let run_dir = controller.runs_dir().join(&request.execution_id);
     let run = tokio::task::spawn_blocking(move || read_stored_run(&run_dir))

@@ -9,9 +9,12 @@ roda. Cada execução preserva sua configuração e seus resultados imutáveis.
 [`config/test-plan.json`](../config/test-plan.json) é a fonte executável única;
 CLI, dashboard, campanhas e [composição gerada](test-profiles.generated.md)
 consomem essa definição. Os manifests anteriores são saídas de compatibilidade,
-com a mesma semântica. A Console e o dashboard standalone criam planos de perfil
-com um modelo e avaliador explícitos, executam os grupos pelo coordenador Rust
-e conservam os artefatos nativos. O [fluxo e contrato de persistência](../dashboard/README.md#executable-profile-plans)
+com a mesma semântica. A Console e o dashboard standalone criam planos
+com um modelo e avaliador explícitos. Os perfis são modelos iniciais editáveis:
+todos os planos usam a mesma listagem, formulário, visualização e ciclo de
+baseline/candidatos. O coordenador Rust compartilhado executa os grupos e conserva
+os artefatos nativos; a revisão do perfil de origem não condiciona a execução
+do escopo salvo. O [fluxo e contrato de persistência](../dashboard/README.md#executable-profile-plans)
 explicam criação, duplicação, cancelamento e recuperação. A validação de Smoke
 na stack de desenvolvimento não qualifica os demais perfis; calibração e
 migração da agenda de produção permanecem nas etapas F3–F5.

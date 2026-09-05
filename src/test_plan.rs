@@ -125,7 +125,7 @@ pub fn execution_kind(key: &ScenarioKey) -> &'static str {
     }
 }
 
-fn weight(tier: ComplexityTier) -> u8 {
+pub(crate) fn weight(tier: ComplexityTier) -> u8 {
     match tier {
         ComplexityTier::L0Atomic | ComplexityTier::L1Sequential => 1,
         ComplexityTier::L2Stateful => 2,

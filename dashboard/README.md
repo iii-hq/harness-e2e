@@ -201,41 +201,41 @@ local mode (`III_NAMESPACE=my-project harness-e2e dashboard --runs-dir
 
 ## Executable profile plans
 
-Plans opens on **My plans**. **New plan** selects one of the six official profiles;
-**Create a custom plan manually** retains the existing custom comparison flow.
-Select an execution model and, when required, an evaluator. **Save draft** keeps
-an editable configuration; **Save and run** checks the stack and admits the whole
-profile. There is no automatic queue. Busy admission preserves the saved draft
-and links to active work.
+The dashboard has one kind of plan and one baseline/candidate lifecycle. **My
+plans** uses the existing plan table and detail visualization for every plan.
+**New plan** opens the same form for a blank scope, a starting profile or a copy.
+The six profiles are templates: they populate coverage, purpose, repetitions and
+retry policy. Users may edit the scope and explicitly select execution and judge
+models. The saved plan owns that configuration; later template changes do not
+change it or prevent execution.
 
-A profile plan fixes its materialized coverage, scenario seeds, envelopes,
-repetitions and retry policy. Configuration locks at first admission. **Duplicate
-plan** preserves coverage, policy and evaluator, asks for a new execution model,
-and creates an empty history. Ordinary profiles support **Run again**. Evolution
-captures an immutable reference only after complete, technically valid coverage,
-then admits candidates. Objective failures remain visible independently of
-completion and technical validity. Comparisons include all compatible repetitions
-and remain descriptive; they do not produce promotion gates.
+**Save draft** keeps the configuration editable. **Save and run** saves it,
+checks requirements and starts the baseline. Busy admission preserves the draft
+and links to active work. **Duplicate plan** preserves scope, policy and evaluator,
+asks for a new execution model and starts without baseline, candidates or history.
+All plans lock configuration at first admission, capture a baseline only after
+complete technically valid evidence, and run candidates through the same controls,
+charts and history. There is no Evolution-specific lifecycle.
 
-The native Rust coordinator reserves admission across every child. It writes the
-parent receipt and all child identities before dispatch, cancels the active child
-before releasing admission, and leaves unstarted slots explicit. Restarted work
-is reconciled and interrupted; nothing resumes automatically. Results and evidence
-stay in native child artifacts. The main execution list shows the parent; native
-children open from the detail view.
+The shared Rust coordinator persists every child identity before dispatch and
+reserves admission across the whole execution. It cancels active work before
+releasing admission, retains finished evidence and marks remaining slots. Restart
+reconciles retained children and interrupts the execution without resuming it.
+The main execution list shows the parent; its detail links to native artifacts.
+No synthetic Results v4 report is created. Missing telemetry stays unavailable.
 
-Saved plans use `plans/<id>.json` schema 2; composed receipts use
-`plan-executions/<id>.json` (`harness-e2e-plan-execution/v1`) under the configured
-data directory. Version 1 plans retain their files and baseline/candidate history.
-A runner missing the pinned profile revision can still display, duplicate and
-export the plan, but cannot execute it. Resilience exports configured suites for
-the protected Release Control executor; dashboard fault execution is unavailable.
+`plans/<id>.json` reads both historical formats into the same plan contract. Reads
+preserve existing bytes; saving or admitting an old plan retains its baseline,
+candidates, labels and incomplete attempts in the stored configuration. Composed
+receipts remain in `plan-executions/<id>.json`. Scenario-contract incompatibility
+blocks admission while preserving consultation and export; the starting template
+revision is provenance only. Fault-injection work still requires the protected
+Release Control executor and can be exported from the common plan detail.
 
-Both the standalone HTTP bridge (`POST /api/dashboard/profile-plans`) and Console
-iii bridge (`e2e::dashboard::profile-plan`) accept the same `action` requests:
-`requirements`, `create`, `update`, `get`, `duplicate`, `export`, `start`,
-`execution`, `cancel`, and `compare`. `start` requires a caller idempotency key and
-returns `execution_id`; repeating the same request does not run it twice.
+Creation, reading, updates and starts use the existing `plan-*` HTTP/iii APIs.
+`POST /api/dashboard/profile-plans` and `e2e::dashboard::profile-plan` remain
+compatible controls for requirements, export and composed execution evidence;
+their historical creation/start actions delegate to the same plan logic.
 
 Run deterministic browser acceptance after the dashboard build:
 
