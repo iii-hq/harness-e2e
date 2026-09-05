@@ -241,7 +241,9 @@ describe('ScenarioMatrix', () => {
     expect(html).toContain('4 scenarios')
     expect(html).toContain('report state')
     expect(html).toContain('objective outcome')
-    expect(html).toContain(`Results V${RESULTS_SCHEMA_VERSION}`)
+    // Audit ED-30: the version keeps its own casing; title case is for words.
+    expect(html).toContain(`Results v${RESULTS_SCHEMA_VERSION}`)
+    expect(html).not.toContain('Sha256:')
     expect(html).toContain('Completion and evidence yield')
     expect(html).toContain('execution reliability')
     expect(html).toContain('quality score completed')

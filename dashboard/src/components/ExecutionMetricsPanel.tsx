@@ -1,4 +1,4 @@
-import { useMemo } from 'react'
+import { type ReactNode, useMemo } from 'react'
 import { DataTable, DataTableRow, MetricCard, Panel } from '@/design-system'
 import type { DashboardExecutionDetail } from '@/lib/dashboard-data-source'
 import {
@@ -22,10 +22,40 @@ function cost(value: number | null) {
   return value > 0 && value < 0.0001 ? '<$0.0001' : `$${value.toFixed(4)}`
 }
 
+/** Audit ED-26: inside the "counts and coverage" layer the layer row is the
+ *  heading, so the panel renders headless — same numbers, no second title. */
+function Shell({
+  headless,
+  children,
+}: {
+  headless: boolean
+  children: ReactNode
+}) {
+  if (headless)
+    return (
+      <div className="min-w-0" data-execution-metrics="headless">
+        {children}
+      </div>
+    )
+  return (
+    <Panel
+      as="section"
+      id="metrics"
+      className="scroll-mt-24"
+      aria-labelledby="execution-metrics-heading"
+      data-execution-metrics
+    >
+      {children}
+    </Panel>
+  )
+}
+
 export function ExecutionMetricsPanel({
   detail,
+  headless = false,
 }: {
   detail: DashboardExecutionDetail
+  headless?: boolean
 }) {
   const metrics = useMemo(() => buildExecutionMetrics(detail), [detail])
   const counts = [
@@ -95,26 +125,22 @@ export function ExecutionMetricsPanel({
     },
   ]
   return (
-    <Panel
-      as="section"
-      id="metrics"
-      className="scroll-mt-24"
-      aria-labelledby="execution-metrics-heading"
-      data-execution-metrics
-    >
-      <div className="flex flex-wrap items-baseline justify-between gap-3">
-        <h2
-          id="execution-metrics-heading"
-          className="m-0 text-sm font-semibold text-ink"
-        >
-          execution summary
-        </h2>
-        <span className="font-mono text-xs text-ink-muted">
-          {metrics.includedScenarios}/{metrics.scenarios} scenarios ·{' '}
-          {metrics.observed} runs ·{' '}
-          {metrics.partial ? 'partial evidence' : 'retained results'}
-        </span>
-      </div>
+    <Shell headless={headless}>
+      {headless ? null : (
+        <div className="flex flex-wrap items-baseline justify-between gap-3">
+          <h2
+            id="execution-metrics-heading"
+            className="m-0 text-sm font-semibold text-ink"
+          >
+            execution summary
+          </h2>
+          <span className="font-mono text-xs text-ink-muted">
+            {metrics.includedScenarios}/{metrics.scenarios} scenarios ·{' '}
+            {metrics.observed} runs ·{' '}
+            {metrics.partial ? 'partial evidence' : 'retained results'}
+          </span>
+        </div>
+      )}
       <p className="mt-2 mb-0 text-xs leading-5 text-ink-soft">
         Whole-execution metrics, pooled across all scenarios and repetitions.
         Report coverage and scenario pass rate are not task completion.
@@ -245,6 +271,6 @@ export function ExecutionMetricsPanel({
           </p>
         </>
       )}
-    </Panel>
+    </Shell>
   )
 }

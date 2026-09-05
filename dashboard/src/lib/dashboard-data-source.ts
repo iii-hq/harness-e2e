@@ -92,6 +92,10 @@ export type ExecutionTotals = JsonObject & {
   function_calls?: number | null
   function_call_errors?: number | null
   turns?: number | null
+  /** Retry plus non-completed consumption, pooled across scenarios. */
+  failed_attempt_tokens?: number | null
+  /** Subject tokens over completed logical runs, pooled across scenarios. */
+  tokens_per_completion?: number | null
 }
 
 export type DashboardModelIdentity = JsonObject & {
@@ -129,6 +133,8 @@ export type DashboardScenarioMetricSummary = JsonObject & {
     function_calls?: number | null
     turns?: number | null
     tokens?: number | null
+    failed_attempt_tokens?: number | null
+    tokens_per_completion?: number | null
     work_amplification?: number | null
   }
   samples?: JsonObject & {
@@ -137,6 +143,8 @@ export type DashboardScenarioMetricSummary = JsonObject & {
     function_call_errors?: number | null
     function_calls?: number | null
     turns?: number | null
+    failed_attempt_tokens?: number | null
+    tokens_per_completion?: number | null
     tokens?: number | null
     work_amplification?: number | null
   }

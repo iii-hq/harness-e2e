@@ -1,13 +1,23 @@
 import { ExternalLink, PencilLine } from 'lucide-react'
 import {
   type FormEvent,
+  type ReactNode,
   useCallback,
   useEffect,
   useMemo,
   useState,
 } from 'react'
 import { DashboardPageActions } from '@/components/DashboardPageActions'
+import { DisclosureLayer } from '@/components/DisclosureLayer'
 import { LiveProgressPanel } from '@/components/LiveProgressPanel'
+import {
+  DivergingBars,
+  type DivergingGroup,
+  Dumbbell,
+  type DumbbellRow,
+  Sparkline,
+  type SparklinePoint,
+} from '@/components/PlanCharts'
 import { ScenarioChatAction } from '@/components/ScenarioChatAction'
 import {
   buttonClassName,
@@ -55,6 +65,7 @@ import {
   type PlanMetricId,
   type PlanScenarioComparison,
   type PlanVerdict,
+  executionMetricValue as planMetricValue,
 } from '@/lib/plan-comparison'
 import { watchExecution } from '@/lib/watch-execution'
 
@@ -271,22 +282,24 @@ export function PlanLifecycle({
     onStart(role)
   }
 
+  // Audit ED-26: one line, not a callout — the state is in the header badge
+  // and the charts below say what the run changed.
   return (
     <Panel
       as="section"
-      padding="default"
+      padding="compact"
       aria-labelledby="plan-lifecycle-title"
       data-plan-lifecycle={nextAction.state}
     >
       <div
-        className="grid gap-4 @[840px]:grid-cols-[minmax(0,1fr)_auto] @[840px]:items-start"
+        className="grid gap-3 @[840px]:grid-cols-[minmax(0,1fr)_auto] @[840px]:items-center"
         aria-live="polite"
       >
         <div className="min-w-0">
-          <h2 id="plan-lifecycle-title" className="m-0 text-base font-semibold">
+          <h2 id="plan-lifecycle-title" className="m-0 text-sm font-semibold">
             {nextAction.title}
           </h2>
-          <p className="mt-1 mb-0 max-w-[48rem] text-sm leading-6 text-ink-soft">
+          <p className="mt-0.5 mb-0 max-w-[64rem] text-xs leading-5 text-ink-soft">
             {nextAction.detail}
           </p>
           {baselineAttention && plan.baseline_execution_id ? (
@@ -427,68 +440,85 @@ export function PlanLifecycle({
 
 /* --------------------------------------------------------------- scope */
 
-/** Audit PD-06: the scope is visible, test by test, not just counted. */
-export function PlanScope({ plan }: { plan: LocalPlan }) {
-  const created = formatDate(plan.created_at)
-  return (
-    <Panel as="section" padding="default" aria-labelledby="plan-scope-title">
-      <h2 id="plan-scope-title" className="m-0 text-base font-semibold">
-        scope{plan.locked ? ' · locked at baseline' : ''}
-      </h2>
-      <ul className="m-0 mt-3 flex list-none flex-wrap gap-2 p-0">
-        {plan.scenarios.map((scenario) => (
-          <li key={`${scenario.scenario_id}:${scenario.scenario_version}`}>
-            <a
-              className={buttonClassName({
-                variant: 'secondary',
-                size: 'compact',
-              })}
-              href={hashForTestHistory(scenario.scenario_id)}
-            >
-              {scenario.scenario_id} v{scenario.scenario_version}
-            </a>
-          </li>
+/** Audit PD-06 / ED-26: the scope stays visible test by test — as one band of
+ *  facts, the way the execution page carries its identity, not a panel. The
+ *  endpoint is provenance and lives in that layer. */
+export function PlanScope({
+  plan,
+  baselineSummary = null,
+}: {
+  plan: LocalPlan
+  baselineSummary?: DashboardExecutionSummary | null
+}) {
+  const scenarios = plan.scenarios.length
+    ? plan.scenarios.map((scenario) => ({
+        id: scenario.scenario_id,
+        label: `${scenario.scenario_id} v${scenario.scenario_version}`,
+      }))
+    : plan.scenario_ids.map((id) => ({ id, label: id }))
+  const baselineCaptured =
+    baselineSummary?.completed_at ?? baselineSummary?.started_at ?? null
+  const facts: Array<[string, ReactNode]> = [
+    [
+      plan.locked ? 'scope · locked' : 'scope',
+      <span className="flex flex-wrap gap-x-2 gap-y-1" key="scope">
+        {scenarios.map((scenario, index) => (
+          <a
+            className="text-ink underline-offset-4 hover:underline"
+            href={hashForTestHistory(scenario.id)}
+            key={scenario.id}
+          >
+            {scenario.label}
+            {index < scenarios.length - 1 ? ' ·' : ''}
+          </a>
         ))}
-        {plan.scenarios.length === 0
-          ? plan.scenario_ids.map((id) => (
-              <li key={id}>
-                <a
-                  className={buttonClassName({
-                    variant: 'secondary',
-                    size: 'compact',
-                  })}
-                  href={hashForTestHistory(id)}
-                >
-                  {id}
-                </a>
-              </li>
-            ))
-          : null}
-      </ul>
-      <dl className="m-0 mt-4 grid gap-x-6 gap-y-2 text-sm @[640px]:grid-cols-[auto_minmax(0,1fr)]">
-        <dt className="ds-label">runs</dt>
-        <dd className="m-0 font-mono">
-          {plan.runs} per test · {plan.technical_retries} retr
-          {plan.technical_retries === 1 ? 'y' : 'ies'} ·{' '}
-          {plan.seed === null ? 'canonical seed' : `seed ${plan.seed}`}
-        </dd>
-        <dt className="ds-label">model</dt>
-        <dd className="m-0 font-mono">
-          {plan.model || 'not set'}
-          {plan.provider ? ` · ${plan.provider}` : ''}
-        </dd>
-        <dt className="ds-label">judge</dt>
-        <dd className="m-0 font-mono">
-          {plan.judge_model
-            ? `${plan.judge_model}${plan.judge_provider ? ` · ${plan.judge_provider}` : ''}`
-            : 'automatic · default protocol'}
-        </dd>
-        <dt className="ds-label">endpoint</dt>
-        <dd className="m-0 break-all font-mono text-ink-soft">{plan.url}</dd>
-        <dt className="ds-label">created</dt>
-        <dd className="m-0 font-mono text-ink-soft">{created}</dd>
-      </dl>
-    </Panel>
+      </span>,
+    ],
+    [
+      'runs',
+      `${plan.runs} per test · ${plan.technical_retries} retr${plan.technical_retries === 1 ? 'y' : 'ies'} · ${plan.seed === null ? 'canonical seed' : `seed ${plan.seed}`}`,
+    ],
+    [
+      'model',
+      plan.model
+        ? `${plan.model}${plan.provider ? ` · ${plan.provider}` : ''}`
+        : 'not set',
+    ],
+    [
+      'judge',
+      plan.judge_model
+        ? `${plan.judge_model}${plan.judge_provider ? ` · ${plan.judge_provider}` : ''}`
+        : 'automatic · default protocol',
+    ],
+    [
+      'baseline captured',
+      baselineCaptured
+        ? formatDate(baselineCaptured)
+        : plan.baseline_execution_id
+          ? 'date unavailable'
+          : 'not captured',
+    ],
+    ['created', formatDate(plan.created_at)],
+    [
+      'id',
+      plan.id.length > 20
+        ? `${plan.id.slice(0, 9)}…${plan.id.slice(-8)}`
+        : plan.id,
+    ],
+  ]
+  return (
+    <dl
+      className="m-0 flex flex-wrap gap-x-6 gap-y-2 rounded-[6px] bg-[var(--surface-fill)] px-4 py-3 font-mono text-xs"
+      aria-label="Plan scope"
+      data-plan-scope
+    >
+      {facts.map(([label, value]) => (
+        <div className="flex min-w-0 items-baseline gap-2" key={label}>
+          <dt className="ds-label whitespace-nowrap">{label}</dt>
+          <dd className="m-0 min-w-0 break-words text-ink">{value}</dd>
+        </div>
+      ))}
+    </dl>
   )
 }
 
@@ -776,14 +806,44 @@ const RUN_METRICS: Array<{ id: RunMetric; label: string }> = [
  * hidden (audit PD-12); incomplete attempts stay listed but excluded from
  * winners. Exported under its historical name for the callers and tests.
  */
+/** Closed-row scent for the executions layer: who ran, how it ended, when,
+ *  and what it consumed (audit ED-26). */
+export function executionsScent(
+  plan: LocalPlan,
+  rows: ExecutionHistoryRow[],
+): string {
+  return rows
+    .map((row) => {
+      const status = executionStatus(row.summary, row.fallback)
+      const timestamp = row.summary?.completed_at || row.summary?.started_at
+      const tokens = executionMetricNumber(row.summary, 'tokens')
+      return [
+        row.role === 'attempt' ? row.label : planExecutionLabel(plan, row.id),
+        status.label,
+        timestamp
+          ? `${row.fallback === 'running' ? 'since ' : ''}${formatDate(timestamp)}`
+          : null,
+        tokens === null
+          ? null
+          : `${Math.round(tokens).toLocaleString('en-US')} tokens`,
+      ]
+        .filter(Boolean)
+        .join(' · ')
+    })
+    .join(' \u00a0·\u00a0 ')
+}
+
 export function PlanRunHistory({
   plan,
   summaries,
   onRenameCandidate,
+  headless = false,
 }: {
   plan: LocalPlan
   summaries: Record<string, DashboardExecutionSummary>
   onRenameCandidate?: (executionId: string, label: string) => Promise<void>
+  /** Inside the executions layer the layer row is the heading. */
+  headless?: boolean
 }) {
   const rows = executionHistoryRows(plan, summaries)
   if (rows.length === 0) return null
@@ -791,144 +851,154 @@ export function PlanRunHistory({
     rows.some((row) => executionMetricNumber(row.summary, id) !== null),
   )
 
-  return (
-    <Panel
-      as="section"
-      padding="default"
-      aria-labelledby="plan-run-history-title"
-      data-plan-run-history
-    >
-      <div className="flex flex-wrap items-end justify-between gap-3">
-        <div>
-          <h2
-            id="plan-run-history-title"
-            className="m-0 text-base font-semibold"
-          >
-            runs · {rows.length}
-          </h2>
-          <p className="mt-1 mb-0 text-xs leading-5 text-ink-soft">
+  const Shell = headless
+    ? ({ children }: { children: ReactNode }) => (
+        <div className="min-w-0" data-plan-run-history="headless">
+          <p className="mt-0 mb-3 text-xs leading-5 text-ink-soft">
             Every retained run with its result and usage. Incomplete attempts
             remain excluded from metric winners.
           </p>
+          {children}
         </div>
-      </div>
-      <div className="mt-4">
-        <DataTable caption={`Plan runs, ${rows.length}`} collapse>
-          <thead>
-            <tr>
-              <th scope="col">Run</th>
-              <th scope="col">Result</th>
-              <th scope="col">Captured</th>
-              {metrics.map((metric) => (
-                <th
-                  key={metric.id}
-                  scope="col"
-                  className={numericCellClassName}
-                >
-                  {metric.label}
-                </th>
-              ))}
-              <th scope="col">
-                <span className="ds-visually-hidden">Report</span>
+      )
+    : ({ children }: { children: ReactNode }) => (
+        <Panel
+          as="section"
+          padding="default"
+          aria-labelledby="plan-run-history-title"
+          data-plan-run-history
+        >
+          <div className="flex flex-wrap items-end justify-between gap-3">
+            <div>
+              <h2
+                id="plan-run-history-title"
+                className="m-0 text-base font-semibold"
+              >
+                runs · {rows.length}
+              </h2>
+              <p className="mt-1 mb-0 text-xs leading-5 text-ink-soft">
+                Every retained run with its result and usage. Incomplete
+                attempts remain excluded from metric winners.
+              </p>
+            </div>
+          </div>
+          <div className="mt-4">{children}</div>
+        </Panel>
+      )
+
+  return (
+    <Shell>
+      <DataTable caption={`Plan runs, ${rows.length}`} collapse>
+        <thead>
+          <tr>
+            <th scope="col">Run</th>
+            <th scope="col">Result</th>
+            <th scope="col">Captured</th>
+            {metrics.map((metric) => (
+              <th key={metric.id} scope="col" className={numericCellClassName}>
+                {metric.label}
               </th>
-            </tr>
-          </thead>
-          <tbody>
-            {rows.map((row) => {
-              const status = executionStatus(row.summary, row.fallback)
-              const timestamp =
-                row.summary?.completed_at || row.summary?.started_at || ''
-              const role =
-                row.role === 'baseline'
-                  ? 'baseline'
-                  : row.role === 'candidate'
-                    ? `candidate ${row.candidateNumber ?? ''}`.trim()
-                    : 'attempt'
-              const displayLabel =
-                row.role === 'attempt'
-                  ? row.label
-                  : planExecutionLabel(plan, row.id)
-              return (
-                <DataTableRow
-                  key={`${row.role}:${row.id}`}
-                  data-run-role={row.role}
-                >
-                  <td data-label="Run">
-                    <span className="grid gap-1">
-                      <span className="ds-label">{role}</span>
-                      <span className="flex flex-wrap items-center gap-2">
-                        <strong className="font-mono text-[0.8125rem] text-ink">
-                          {displayLabel}
-                        </strong>
-                        {row.role === 'candidate' && onRenameCandidate ? (
-                          <ExecutionNameControl
-                            executionId={row.id}
-                            fallbackLabel={`Candidate #${row.candidateNumber ?? 1}`}
-                            label={plan.candidate_labels?.[row.id] ?? ''}
-                            onRename={onRenameCandidate}
-                          />
-                        ) : null}
-                      </span>
-                      <code
-                        className="font-mono text-label text-ink-muted"
-                        title={row.id}
-                      >
-                        {row.id.length > 18
-                          ? `${row.id.slice(0, 12)}…${row.id.slice(-4)}`
-                          : row.id}
-                      </code>
+            ))}
+            <th scope="col">
+              <span className="ds-visually-hidden">Report</span>
+            </th>
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((row) => {
+            const status = executionStatus(row.summary, row.fallback)
+            const timestamp =
+              row.summary?.completed_at || row.summary?.started_at || ''
+            const role =
+              row.role === 'baseline'
+                ? 'baseline'
+                : row.role === 'candidate'
+                  ? `candidate ${row.candidateNumber ?? ''}`.trim()
+                  : 'attempt'
+            const displayLabel =
+              row.role === 'attempt'
+                ? row.label
+                : planExecutionLabel(plan, row.id)
+            return (
+              <DataTableRow
+                key={`${row.role}:${row.id}`}
+                data-run-role={row.role}
+              >
+                <td data-label="Run">
+                  <span className="grid gap-1">
+                    <span className="ds-label">{role}</span>
+                    <span className="flex flex-wrap items-center gap-2">
+                      <strong className="font-mono text-[0.8125rem] text-ink">
+                        {displayLabel}
+                      </strong>
+                      {row.role === 'candidate' && onRenameCandidate ? (
+                        <ExecutionNameControl
+                          executionId={row.id}
+                          fallbackLabel={`Candidate #${row.candidateNumber ?? 1}`}
+                          label={plan.candidate_labels?.[row.id] ?? ''}
+                          onRename={onRenameCandidate}
+                        />
+                      ) : null}
                     </span>
-                  </td>
-                  <td data-label="Result">
-                    <StatusBadge status={status.status} label={status.label} />
-                    {row.detail ? (
-                      <span className="mt-1 block text-xs text-ink-muted">
-                        {row.detail}
-                      </span>
-                    ) : null}
-                  </td>
-                  <td data-label="Captured">
-                    <time
-                      className="text-xs text-ink-soft"
-                      dateTime={timestamp || undefined}
+                    <code
+                      className="font-mono text-label text-ink-muted"
+                      title={row.id}
                     >
-                      {timestamp ? formatDate(timestamp) : 'date unavailable'}
-                    </time>
+                      {row.id.length > 18
+                        ? `${row.id.slice(0, 12)}…${row.id.slice(-4)}`
+                        : row.id}
+                    </code>
+                  </span>
+                </td>
+                <td data-label="Result">
+                  <StatusBadge status={status.status} label={status.label} />
+                  {row.detail ? (
+                    <span className="mt-1 block text-xs text-ink-muted">
+                      {row.detail}
+                    </span>
+                  ) : null}
+                </td>
+                <td data-label="Captured">
+                  <time
+                    className="text-xs text-ink-soft"
+                    dateTime={timestamp || undefined}
+                  >
+                    {timestamp ? formatDate(timestamp) : 'date unavailable'}
+                  </time>
+                </td>
+                {metrics.map((metric) => (
+                  <td
+                    key={metric.id}
+                    data-label={metric.label}
+                    className={numericCellClassName}
+                  >
+                    {executionMetricValue(row.summary, metric.id)}
                   </td>
-                  {metrics.map((metric) => (
-                    <td
-                      key={metric.id}
-                      data-label={metric.label}
-                      className={numericCellClassName}
-                    >
-                      {executionMetricValue(row.summary, metric.id)}
-                    </td>
-                  ))}
-                  <td className="text-right">
-                    <a
-                      aria-label={`Open report for ${displayLabel}`}
-                      className={buttonClassName({
-                        variant: 'secondary',
-                        size: 'compact',
-                      })}
-                      href={hashForExecution(row.id)}
-                      title={`Open report for ${displayLabel}`}
-                    >
-                      <ExternalLink
-                        aria-hidden="true"
-                        size={13}
-                        strokeWidth={1.8}
-                      />
-                      report
-                    </a>
-                  </td>
-                </DataTableRow>
-              )
-            })}
-          </tbody>
-        </DataTable>
-      </div>
-    </Panel>
+                ))}
+                <td className="text-right">
+                  <a
+                    aria-label={`Open report for ${displayLabel}`}
+                    className={buttonClassName({
+                      variant: 'secondary',
+                      size: 'compact',
+                    })}
+                    href={hashForExecution(row.id)}
+                    title={`Open report for ${displayLabel}`}
+                  >
+                    <ExternalLink
+                      aria-hidden="true"
+                      size={13}
+                      strokeWidth={1.8}
+                    />
+                    report
+                  </a>
+                </td>
+              </DataTableRow>
+            )
+          })}
+        </tbody>
+      </DataTable>
+    </Shell>
   )
 }
 
@@ -943,22 +1013,56 @@ const planVerdictStatus: Record<PlanVerdict, OperationalStatus> = {
   inconclusive: 'inconclusive',
 }
 
+/** Every metric the plan compares, in the order the all-metrics layer lists
+ *  them. Audit PD-12 still applies: a metric no column reports is not a row. */
 export const PLAN_COMPARISON_TABLE_METRICS = [
   'pass_rate',
+  'coverage',
+  'hard_gates',
+  'technical_failures',
   'quality',
-  'duration',
+  'confidence',
   'tokens',
+  'tokens_per_completion',
+  'failed_attempt_tokens',
+  'duration',
   'cost',
-  'turns',
   'function_calls',
   'function_errors',
+  'turns',
 ] as const
+
+/** Layer 0 draws these as trend tiles, grouped the way the execution page
+ *  groups its metrics: what came out, then what it consumed. */
+export const PLAN_TREND_BANDS: Array<{
+  id: string
+  label: string
+  metrics: PlanMetricId[]
+}> = [
+  { id: 'outcome', label: 'outcome', metrics: ['pass_rate', 'quality'] },
+  {
+    id: 'consumption',
+    label: 'consumption',
+    metrics: [
+      'tokens',
+      'tokens_per_completion',
+      'failed_attempt_tokens',
+      'duration',
+      'turns',
+    ],
+  },
+]
+const PLAN_TREND_METRICS: PlanMetricId[] = PLAN_TREND_BANDS.flatMap(
+  (band) => band.metrics,
+)
 
 const PLAN_SCENARIO_TABLE_METRICS: PlanMetricId[] = [
   'pass_rate',
   'quality',
   'duration',
   'tokens',
+  'tokens_per_completion',
+  'failed_attempt_tokens',
   'cost',
   'turns',
   'function_calls',
@@ -972,6 +1076,13 @@ const PLAN_SCENARIO_SUMMARY_METRICS: PlanMetricId[] = [
   'turns',
 ]
 
+/** The dumbbells in the by-test layer: magnitude the percentages hide. */
+const PLAN_DUMBBELL_METRICS: Array<{ id: PlanMetricId; caption: string }> = [
+  { id: 'tokens', caption: 'subject · lower is better' },
+  { id: 'duration', caption: 'per run · lower is better' },
+  { id: 'quality', caption: 'advisory · higher is better' },
+]
+
 const SCENARIO_BASELINE_ID = '__visual_baseline__'
 
 function directionLabel(direction: MetricDirection | undefined) {
@@ -982,38 +1093,85 @@ function directionLabel(direction: MetricDirection | undefined) {
       : 'Context only'
 }
 
-export function PlanExecutionHistory({
-  plan,
-  summaries,
-  visualBaselineId,
-  comparisonCandidateIds,
-  selectedCandidateId,
-  scenarioComparison = null,
-  onVisualBaselineChange,
-  onToggleCandidate,
-  loading,
-  error = null,
+/** A chart legend's key: the mark itself, drawn, never a colored word. */
+function LegendSwatch({
+  shape,
+  color,
 }: {
+  shape: 'bar' | 'dot'
+  color: string
+}) {
+  return (
+    <svg width="10" height="10" aria-hidden="true" style={{ display: 'block' }}>
+      {shape === 'bar' ? (
+        <rect width="10" height="10" rx="3" fill={color} />
+      ) : (
+        <circle cx="5" cy="5" r="4" fill={color} />
+      )}
+    </svg>
+  )
+}
+
+type ComparisonColumn = {
+  row: ExecutionHistoryRow
+  isVisualBaseline: boolean
+  rowComparison: PlanComparison | null
+  metricSource: PlanComparison | null
+  selected: boolean
+}
+
+type MetricRow = {
+  id: PlanMetricId
+  entries: Array<{
+    column: ComparisonColumn
+    metric: PlanMetricComparison | null
+    side: 'baseline' | 'candidate'
+    value: number | null
+  }>
+}
+
+export type PlanComparisonInput = {
   plan: LocalPlan
   summaries: Record<string, DashboardExecutionSummary>
   visualBaselineId: string | null
   comparisonCandidateIds: string[]
   selectedCandidateId: string | null
   scenarioComparison?: PlanComparison | null
-  onVisualBaselineChange: (id: string) => void
-  onToggleCandidate: (id: string, selected: boolean) => void
-  loading: boolean
-  error?: string | null
-}) {
-  // Comparison controls are only useful once there is an official baseline
-  // and a second completed execution to compare with it.
-  if (
-    !plan.baseline_execution_id ||
-    plan.candidate_execution_ids.length === 0
-  ) {
-    return null
-  }
+}
 
+export type PlanComparisonModel = {
+  rows: ExecutionHistoryRow[]
+  baseline: DashboardExecutionSummary | null
+  selectableRows: ExecutionHistoryRow[]
+  columns: ComparisonColumn[]
+  selectedColumn: ComparisonColumn | undefined
+  headline: PlanComparison | null
+  scenarioComparisons: Array<{
+    id: string
+    label: string
+    comparison: PlanComparison
+  }>
+  metricRows: MetricRow[]
+  hiddenMetrics: number
+}
+
+/** Everything the overview and its layers read: one derivation, shared, so
+ *  the tiles, the chart, the tables and the scents never disagree. */
+export function buildPlanComparisonModel(
+  input: PlanComparisonInput,
+): PlanComparisonModel | null {
+  const {
+    plan,
+    summaries,
+    visualBaselineId,
+    comparisonCandidateIds,
+    selectedCandidateId,
+    scenarioComparison = null,
+  } = input
+  // Comparison is only useful once there is an official baseline and a
+  // second completed execution to compare with it.
+  if (!plan.baseline_execution_id || plan.candidate_execution_ids.length === 0)
+    return null
   const rows = executionHistoryRows(plan, summaries)
   const baseline = visualBaselineId
     ? (summaries[visualBaselineId] ?? null)
@@ -1025,7 +1183,7 @@ export function PlanExecutionHistory({
   const comparisonRows = rows.filter((row) =>
     comparisonCandidateIds.includes(row.id),
   )
-  const comparisonColumns = [
+  const columns: ComparisonColumn[] = [
     ...(visualBaselineRow ? [visualBaselineRow] : []),
     ...comparisonRows,
   ].map((row) => {
@@ -1045,7 +1203,7 @@ export function PlanExecutionHistory({
       selected: row.id === selectedCandidateId,
     }
   })
-  const scenarioComparisons = comparisonColumns.flatMap((column) => {
+  const scenarioComparisons = columns.flatMap((column) => {
     if (column.isVisualBaseline) return []
     const comparison =
       column.selected && scenarioComparison
@@ -1061,11 +1219,9 @@ export function PlanExecutionHistory({
         ]
       : []
   })
-  const selectedColumn = comparisonColumns.find((column) => column.selected)
-  const headlineComparison = selectedColumn?.rowComparison ?? null
-  // Audit PD-12: a metric that no column reports is not a row.
-  const metricRows = PLAN_COMPARISON_TABLE_METRICS.map((id) => {
-    const entries = comparisonColumns.map((column) => {
+  const selectedColumn = columns.find((column) => column.selected)
+  const metricRows: MetricRow[] = PLAN_COMPARISON_TABLE_METRICS.map((id) => {
+    const entries = columns.map((column) => {
       const metric = column.metricSource
         ? metricById(column.metricSource, id)
         : null
@@ -1076,7 +1232,268 @@ export function PlanExecutionHistory({
     })
     return { id, entries }
   }).filter(({ entries }) => entries.some(({ value }) => value !== null))
-  const hiddenMetrics = PLAN_COMPARISON_TABLE_METRICS.length - metricRows.length
+  return {
+    rows,
+    baseline,
+    selectableRows,
+    columns,
+    selectedColumn,
+    headline: selectedColumn?.rowComparison ?? null,
+    scenarioComparisons,
+    metricRows,
+    hiddenMetrics: PLAN_COMPARISON_TABLE_METRICS.length - metricRows.length,
+  }
+}
+
+export type PlanTrendTile = {
+  id: PlanMetricId
+  label: string
+  value: string
+  delta: string | null
+  tone: PlanMetricComparison['tone']
+  reference: number | null
+  points: SparklinePoint[]
+}
+
+function formatWith(
+  descriptor: PlanMetricComparison | null,
+  value: number | null,
+) {
+  if (value === null) return 'not reported'
+  return descriptor
+    ? formatPlanMetricValue({ ...descriptor, baseline: value }, 'baseline')
+    : String(value)
+}
+
+/** One tile per metric: the selected candidate's value, its delta against the
+ *  reference, and every completed execution in capture order behind it. */
+export function planTrendTiles(
+  plan: LocalPlan,
+  summaries: Record<string, DashboardExecutionSummary>,
+  model: PlanComparisonModel,
+  visualBaselineId: string | null,
+  ids: PlanMetricId[],
+): PlanTrendTile[] {
+  const orderedIds = [
+    plan.baseline_execution_id,
+    ...plan.candidate_execution_ids,
+  ].filter((id): id is string => Boolean(id))
+  const running =
+    ['baseline_running', 'candidate_running'].includes(plan.state) &&
+    plan.last_attempt_id &&
+    !orderedIds.includes(plan.last_attempt_id)
+      ? plan.last_attempt_id
+      : null
+  const selected = model.selectedColumn
+  const referenceSource = model.columns[0]?.metricSource ?? null
+  return ids.map((id) => {
+    const source = selected?.metricSource
+      ? metricById(selected.metricSource, id)
+      : null
+    const descriptor =
+      source ?? (referenceSource ? metricById(referenceSource, id) : null)
+    const side: 'baseline' | 'candidate' = selected?.rowComparison
+      ? 'candidate'
+      : 'baseline'
+    const points: SparklinePoint[] = orderedIds.map((executionId) => {
+      const value = planMetricValue(summaries[executionId] ?? null, id)
+      return {
+        id: executionId,
+        label: `${planExecutionLabel(plan, executionId)} · ${formatWith(descriptor, value)}`,
+        value,
+        role:
+          executionId === visualBaselineId
+            ? 'baseline'
+            : executionId === selected?.row.id
+              ? 'selected'
+              : 'other',
+      }
+    })
+    if (running)
+      points.push({
+        id: running,
+        label: 'running',
+        value: null,
+        role: 'running',
+      })
+    return {
+      id,
+      label: descriptor?.label ?? titleCase(id),
+      value: source ? formatPlanMetricValue(source, side) : '—',
+      delta:
+        source && selected?.rowComparison
+          ? formatPlanMetricDelta(source)
+          : null,
+      tone: source?.tone ?? 'unavailable',
+      reference: planMetricValue(model.baseline, id),
+      points,
+    }
+  })
+}
+
+/** A metric moved when its delta rounds to something a reader can see: a
+ *  tenth of a second on a five-minute run prints as "−0.0%" and is noise. */
+function hasMoved(metric: PlanMetricComparison): boolean {
+  if (metric.delta === null || Math.abs(metric.delta) <= 1e-9) return false
+  return metric.delta_percent === null || Math.abs(metric.delta_percent) >= 0.05
+}
+
+/** Relative change signed by improvement so right is always better; a change
+ *  from zero has no percentage and takes the full bar. */
+function improvementPercent(metric: PlanMetricComparison): number {
+  const magnitude =
+    metric.delta_percent === null
+      ? 100
+      : Math.min(100, Math.abs(metric.delta_percent))
+  return metric.tone === 'positive' ? magnitude : -magnitude
+}
+
+function trendMetricsOf(scenario: PlanScenarioComparison) {
+  const available = [...scenario.metrics, ...scenario.execution_metrics]
+  return PLAN_TREND_METRICS.flatMap((id) => {
+    const metric = available.find((candidate) => candidate.id === id)
+    return metric && metric.baseline !== null && metric.candidate !== null
+      ? [metric]
+      : []
+  })
+}
+
+/** What moved by test: one group per test, one bar per metric that changed,
+ *  the unchanged ones named once instead of drawn as empty rows. */
+export function planMovementGroups(
+  comparison: PlanComparison | null,
+): DivergingGroup[] {
+  if (!comparison) return []
+  return comparison.scenarios.map((scenario) => {
+    const metrics = trendMetricsOf(scenario)
+    const moved = metrics.filter(
+      (metric) => hasMoved(metric) && metric.tone !== 'neutral',
+    )
+    const unchanged = metrics.filter(
+      (metric) => metric.delta !== null && !hasMoved(metric),
+    )
+    return {
+      id: scenario.id,
+      title: scenarioName(scenario.id),
+      subtitle: scenario.compatible
+        ? `${titleCase(scenario.baseline_status)} → ${titleCase(scenario.candidate_status)} · ${moved.length} of ${metrics.length} metrics moved`
+        : (scenario.reason ?? 'not comparable'),
+      rows: moved.map((metric) => ({
+        id: metric.id,
+        label: metric.label.toLowerCase(),
+        improvement: improvementPercent(metric),
+        valueLabel: formatPlanMetricDelta(metric),
+        tone: metric.tone === 'positive' ? 'positive' : 'negative',
+      })),
+      unchanged: unchanged
+        .map(
+          (metric) =>
+            `${metric.label.toLowerCase()} ${formatPlanMetricValue(metric, 'baseline')}`,
+        )
+        .join(' · '),
+    }
+  })
+}
+
+const LAYER_SEPARATOR = ' \u00a0·\u00a0 '
+
+/** Closed-row scents for the layers under the overview (audit ED-26). */
+export function planLayerScents(model: PlanComparisonModel): {
+  byTest: string
+  metrics: string
+} {
+  const selected =
+    model.scenarioComparisons.find(
+      (entry) => entry.id === model.selectedColumn?.row.id,
+    ) ?? model.scenarioComparisons[0]
+  const byTest = selected
+    ? selected.comparison.scenarios
+        .map((scenario) => {
+          const moved = trendMetricsOf(scenario)
+            .filter(
+              (metric) =>
+                PLAN_SCENARIO_SUMMARY_METRICS.includes(
+                  metric.id as PlanMetricId,
+                ) && hasMoved(metric),
+            )
+            .map(
+              (metric) =>
+                `${metric.label.toLowerCase()} ${formatPlanMetricDelta(metric).split(' · ').at(-1)}`,
+            )
+          return [
+            `${scenarioName(scenario.id).toLowerCase()} ${scenario.baseline_status.toLowerCase()} → ${scenario.candidate_status.toLowerCase()}`,
+            ...moved,
+          ].join(' · ')
+        })
+        .join(LAYER_SEPARATOR)
+    : 'exact values per test once a candidate completes'
+  const reference = model.columns[0]
+  const candidate = model.selectedColumn ?? model.columns[1]
+  const metrics = model.metricRows
+    .filter((row) => !PLAN_TREND_METRICS.includes(row.id))
+    .map((row) => {
+      const left = row.entries.find((entry) => entry.column === reference)
+      const right = row.entries.find((entry) => entry.column === candidate)
+      const descriptor = left?.metric ?? right?.metric ?? null
+      const label = descriptor?.label.toLowerCase() ?? titleCase(row.id)
+      return `${label} ${formatWith(descriptor, left?.value ?? null)} → ${formatWith(descriptor, right?.value ?? null)}`
+    })
+  if (model.hiddenMetrics > 0)
+    metrics.push(
+      `${model.hiddenMetrics} metric${model.hiddenMetrics === 1 ? '' : 's'} not reported`,
+    )
+  return { byTest, metrics: metrics.join(' · ') }
+}
+
+/** Audit PD-05 / ED-26: the plan's comparison is the page. Layer 0 is the
+ *  filter row, the verdict, the trend tiles and what moved by test; exact
+ *  tables open on demand below. */
+export function PlanExecutionHistory({
+  plan,
+  summaries,
+  visualBaselineId,
+  comparisonCandidateIds,
+  selectedCandidateId,
+  scenarioComparison = null,
+  onVisualBaselineChange,
+  onToggleCandidate,
+  loading,
+  error = null,
+}: PlanComparisonInput & {
+  onVisualBaselineChange: (id: string) => void
+  onToggleCandidate: (id: string, selected: boolean) => void
+  loading: boolean
+  error?: string | null
+}) {
+  const model = buildPlanComparisonModel({
+    plan,
+    summaries,
+    visualBaselineId,
+    comparisonCandidateIds,
+    selectedCandidateId,
+    scenarioComparison,
+  })
+  if (!model) return null
+  const tiles = planTrendTiles(
+    plan,
+    summaries,
+    model,
+    visualBaselineId,
+    PLAN_TREND_METRICS,
+  )
+  const selectedComparison =
+    model.scenarioComparisons.find((entry) => entry.id === selectedCandidateId)
+      ?.comparison ?? null
+  const groups = planMovementGroups(selectedComparison)
+  const referenceLabel = visualBaselineId
+    ? planExecutionLabel(plan, visualBaselineId)
+    : 'reference'
+  const candidateLabel = selectedCandidateId
+    ? planExecutionLabel(plan, selectedCandidateId)
+    : 'candidate'
+  const completedCount = tiles[0]?.points.filter(
+    (point) => point.value !== null,
+  ).length
 
   return (
     <Panel
@@ -1085,73 +1502,38 @@ export function PlanExecutionHistory({
       aria-labelledby="plan-execution-history-title"
       data-plan-comparison
     >
-      <div className="flex flex-wrap items-end justify-between gap-3">
-        <div className="min-w-0">
-          <h2
-            id="plan-execution-history-title"
-            className="m-0 text-base font-semibold"
+      <h2 id="plan-execution-history-title" className="ds-visually-hidden">
+        baseline and candidates
+      </h2>
+      {/* One filter row scopes every chart and table below it. It changes the
+          visual reference only; the official baseline stays with the plan. */}
+      <div
+        className="flex flex-wrap items-center justify-between gap-3"
+        data-plan-filter-row
+      >
+        <div className="flex flex-wrap items-center gap-2">
+          <label
+            className="inline-flex items-center gap-2 font-mono text-xs text-ink-muted"
+            htmlFor="plan-visual-baseline"
           >
-            baseline and candidates
-          </h2>
-          <p className="mt-1 mb-0 max-w-[48rem] text-xs leading-5 text-ink-soft">
-            Choose a visual baseline and any number of candidates. This view
-            never changes the official baseline stored with the plan.
-          </p>
-        </div>
-        <span className="font-mono text-xs text-ink-muted">
-          {loading
-            ? 'loading…'
-            : `${visualBaselineId ? '1 visual baseline' : 'Baseline pending'} · ${comparisonCandidateIds.length} selected`}
-        </span>
-      </div>
-      {error ? (
-        <div className="mt-4">
-          <Callout
-            tone="warning"
-            title="Execution summaries could not be loaded"
-          >
-            Retained ids and report links remain available.{' '}
-            <span className="font-mono">{error}</span>
-          </Callout>
-        </div>
-      ) : null}
-      {headlineComparison ? (
-        <div className="mt-4 flex flex-wrap items-center gap-3 text-sm">
-          <StatusBadge
-            status={planVerdictStatus[headlineComparison.verdict]}
-            label={headlineComparison.verdict}
-          />
-          <span className="text-ink-soft">{headlineComparison.headline}</span>
-        </div>
-      ) : null}
-      <div className="mt-4 grid gap-4 @[840px]:grid-cols-[minmax(16rem,0.9fr)_minmax(0,1.1fr)]">
-        <div className="grid gap-2 text-xs font-semibold text-ink-soft">
-          <label htmlFor="plan-visual-baseline">Visual baseline</label>
-          <Select
-            id="plan-visual-baseline"
-            value={visualBaselineId ?? ''}
-            disabled={loading || selectableRows.length === 0}
-            onChange={(event) => onVisualBaselineChange(event.target.value)}
-          >
-            {selectableRows.map((row) => (
-              <option key={row.id} value={row.id}>
-                {planExecutionLabel(plan, row.id)}
-              </option>
-            ))}
-          </Select>
-          <span className="font-normal text-ink-muted">
-            The official plan baseline remains unchanged.
-          </span>
-        </div>
-        <fieldset className="m-0 min-w-0 border-0 p-0">
-          <legend className="text-xs font-semibold text-ink-soft">
-            Compare candidates
-          </legend>
-          <span className="mt-1 block text-xs text-ink-muted">
-            Select one or more executions to show in the table.
-          </span>
-          <div className="mt-2 flex flex-wrap gap-2">
-            {selectableRows
+            reference
+            <Select
+              id="plan-visual-baseline"
+              value={visualBaselineId ?? ''}
+              disabled={loading || model.selectableRows.length === 0}
+              onChange={(event) => onVisualBaselineChange(event.target.value)}
+            >
+              {model.selectableRows.map((row) => (
+                <option key={row.id} value={row.id}>
+                  {planExecutionLabel(plan, row.id)}
+                </option>
+              ))}
+            </Select>
+          </label>
+          <fieldset className="m-0 flex min-w-0 flex-wrap items-center gap-2 p-0">
+            <legend className="ds-visually-hidden">Compare candidates</legend>
+            <span className="ds-label">candidates</span>
+            {model.selectableRows
               .filter((row) => row.id !== visualBaselineId)
               .map((row) => {
                 const selected = comparisonCandidateIds.includes(row.id)
@@ -1177,154 +1559,492 @@ export function PlanExecutionHistory({
                   </label>
                 )
               })}
-          </div>
-        </fieldset>
+          </fieldset>
+        </div>
+        <span className="font-mono text-label text-ink-muted">
+          {loading
+            ? 'loading…'
+            : 'the official baseline stored with the plan never changes here'}
+        </span>
       </div>
-      <div className="mt-4">
-        <DataTable
-          caption="Plan metrics in rows, with the visual baseline and selected candidates in columns. Best values are highlighted."
-          minWidth={`${12 + comparisonColumns.length * 12}rem`}
-          collapse
-          className="[&_.is-winner]:font-semibold [&_.is-winner]:text-success"
+      {error ? (
+        <div className="mt-4">
+          <Callout
+            tone="warning"
+            title="Execution summaries could not be loaded"
+          >
+            Retained ids and report links remain available.{' '}
+            <span className="font-mono">{error}</span>
+          </Callout>
+        </div>
+      ) : null}
+      {model.headline ? (
+        <div
+          className="mt-5 grid gap-x-4 gap-y-2 @[720px]:grid-cols-[12rem_minmax(0,1fr)] @[720px]:items-baseline"
+          data-plan-verdict
         >
-          <thead>
-            <tr>
-              <th scope="col">Metric</th>
-              {comparisonColumns.map(({ row, isVisualBaseline, selected }) => (
-                <th
-                  className={
-                    [
-                      isVisualBaseline ? 'is-baseline' : '',
-                      selected ? 'is-selected' : '',
-                    ]
-                      .filter(Boolean)
-                      .join(' ') || undefined
-                  }
-                  data-execution-id={row.id}
-                  key={`${row.role}:${row.id}`}
-                  scope="col"
-                  title={row.id}
-                >
-                  <span className="grid gap-0.5 normal-case tracking-normal">
-                    <span className="ds-label">
-                      {isVisualBaseline ? 'Reference' : 'Candidate'}
-                      {selected ? ' · selected' : ''}
-                    </span>
-                    <strong className="font-mono text-[0.8125rem] font-semibold text-ink">
-                      {planExecutionLabel(plan, row.id)}
-                    </strong>
-                    <span className="font-mono text-label font-normal text-ink-muted">
-                      {[
-                        row.detail,
-                        row.summary?.completed_at
-                          ? formatDate(row.summary.completed_at)
-                          : 'Date unavailable',
-                      ]
-                        .filter(Boolean)
-                        .join(' · ')}
-                    </span>
-                  </span>
-                </th>
-              ))}
-            </tr>
-          </thead>
-          <tbody>
-            {metricRows.map(({ id, entries }) => {
-              const descriptor = entries.find(({ metric }) => metric)?.metric
-              const winnerIds = new Set(
-                planMetricWinnerIds(
-                  entries.map(({ column, value }) => ({
-                    id: column.row.id,
-                    value,
-                  })),
-                  descriptor?.direction ?? 'context',
-                ),
-              )
-              const direction = directionLabel(descriptor?.direction)
-              return (
-                <tr data-metric-id={id} key={id}>
-                  <th scope="row" className="normal-case tracking-normal">
-                    <span className="grid gap-0.5">
-                      <strong className="font-mono text-[0.8125rem] font-semibold text-ink">
-                        {descriptor?.label ?? titleCase(id)}
+          <StatusBadge
+            status={planVerdictStatus[model.headline.verdict]}
+            label={model.headline.verdict}
+          />
+          <p className="m-0 text-sm leading-6">
+            <strong className="font-semibold">
+              {model.headline.headline}.
+            </strong>{' '}
+            <span className="text-ink-soft">{model.headline.detail}</span>
+          </p>
+        </div>
+      ) : null}
+      <div className="mt-5 grid gap-5" data-plan-trend>
+        {PLAN_TREND_BANDS.map((band, index) => (
+          <div className="grid min-w-0 gap-2" key={band.id}>
+            <div className="flex flex-wrap items-baseline justify-between gap-3">
+              <span className="ds-label">
+                {band.label} · {candidateLabel.toLowerCase()} vs{' '}
+                {referenceLabel.toLowerCase()}
+              </span>
+              {index === 0 ? (
+                <span className="font-mono text-label text-ink-muted">
+                  sparkline: {completedCount ?? 0} completed execution
+                  {completedCount === 1 ? '' : 's'} in capture order · gray dot
+                  is the reference · hollow dot is still running
+                </span>
+              ) : null}
+            </div>
+            <div
+              className={`grid min-w-0 gap-3 @[560px]:grid-cols-2 ${
+                band.metrics.length > 3
+                  ? '@[960px]:grid-cols-5'
+                  : '@[960px]:grid-cols-2'
+              }`}
+            >
+              {tiles
+                .filter((tile) => band.metrics.includes(tile.id))
+                .map((tile) => (
+                  <article
+                    className="grid min-w-0 gap-1.5 rounded-[6px] bg-panel p-3"
+                    key={tile.id}
+                    data-trend-metric={tile.id}
+                  >
+                    <span className="ds-label">{tile.label.toLowerCase()}</span>
+                    <div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
+                      <strong className="font-mono text-xl font-semibold tracking-tight text-ink">
+                        {tile.value}
                       </strong>
                       <span
-                        className="font-mono text-label font-normal text-ink-muted"
-                        role="tooltip"
-                        id={`plan-metric-direction-${id}`}
+                        className={`font-mono text-label ${metricToneClass[tile.tone]}`}
                       >
-                        {direction}
+                        {tile.delta ?? 'not comparable'}
                       </span>
-                    </span>
-                  </th>
-                  {entries.map(({ column, metric, side }) => {
-                    const winner = winnerIds.has(column.row.id)
-                    return (
-                      <td
-                        className={
-                          [
-                            column.isVisualBaseline ? 'is-baseline' : '',
-                            column.selected ? 'is-selected' : '',
-                            winner ? 'is-winner' : '',
-                          ]
-                            .filter(Boolean)
-                            .join(' ') || undefined
-                        }
-                        data-execution-id={column.row.id}
-                        data-label={planExecutionLabel(plan, column.row.id)}
-                        key={column.row.id}
-                      >
-                        {metric ? (
-                          <span className="grid gap-0.5 font-mono tabular-nums">
-                            <span className="flex items-baseline gap-2">
-                              <strong>
-                                {formatPlanMetricValue(metric, side)}
-                              </strong>
-                              {winner ? (
-                                <span className="ds-label text-success">
-                                  Best
-                                </span>
-                              ) : null}
-                            </span>
-                            {!column.isVisualBaseline &&
-                            column.rowComparison ? (
-                              <small
-                                className={`text-label ${metricToneClass[metric.tone]}`}
-                              >
-                                {formatPlanMetricDelta(metric)}
-                              </small>
-                            ) : !column.isVisualBaseline ? (
-                              <small className="text-label text-ink-muted">
-                                Not comparable
-                              </small>
-                            ) : null}
-                          </span>
-                        ) : (
-                          <span className="text-ink-muted">—</span>
-                        )}
-                      </td>
-                    )
-                  })}
-                </tr>
-              )
-            })}
-          </tbody>
-        </DataTable>
-        {hiddenMetrics > 0 ? (
-          <p className="mt-2 mb-0 font-mono text-label text-ink-muted">
-            {hiddenMetrics} metric{hiddenMetrics === 1 ? '' : 's'} not reported
-            by this harness · hidden
-          </p>
-        ) : null}
+                    </div>
+                    <Sparkline
+                      points={tile.points}
+                      reference={tile.reference}
+                      label={`${tile.label} across executions`}
+                    />
+                  </article>
+                ))}
+            </div>
+          </div>
+        ))}
       </div>
-      {scenarioComparisons.some(
-        ({ comparison }) => comparison.scenarios.length > 0,
-      ) ? (
-        <div className="mt-6">
-          <PlanScenarioComparisonTable comparisons={scenarioComparisons} />
+      {groups.length > 0 ? (
+        <div className="mt-5 grid min-w-0 gap-2" data-plan-what-moved>
+          <div className="flex flex-wrap items-baseline justify-between gap-3">
+            <span className="ds-label">
+              what moved by test · relative change vs{' '}
+              {referenceLabel.toLowerCase()}, right is better
+            </span>
+            <span className="inline-flex flex-wrap items-center gap-4 font-mono text-label text-ink-muted">
+              <span className="inline-flex items-center gap-1.5">
+                <LegendSwatch shape="bar" color="var(--success)" />
+                improved
+              </span>
+              <span className="inline-flex items-center gap-1.5">
+                <LegendSwatch shape="bar" color="var(--danger)" />
+                regressed
+              </span>
+              <span>labels carry the metric&apos;s own unit</span>
+            </span>
+          </div>
+          <div className="rounded-[6px] bg-panel px-4 pt-3 pb-2">
+            <DivergingBars
+              groups={groups}
+              label={`Relative change per test, ${candidateLabel} against ${referenceLabel}`}
+            />
+            <p className="mt-2 mb-0 font-mono text-label text-ink-muted">
+              a bar is relative change against the reference run · exact values
+              in the by-test layer below
+            </p>
+          </div>
         </div>
       ) : null}
     </Panel>
+  )
+}
+
+function dumbbellRows(
+  comparison: PlanComparison,
+  id: PlanMetricId,
+): { rows: DumbbellRow[]; descriptor: PlanMetricComparison | null } {
+  let descriptor: PlanMetricComparison | null = null
+  const rows = comparison.scenarios.flatMap((scenario) => {
+    const metric = [...scenario.metrics, ...scenario.execution_metrics].find(
+      (candidate) => candidate.id === id,
+    )
+    if (!metric || (metric.baseline === null && metric.candidate === null))
+      return []
+    descriptor ??= metric
+    return [
+      {
+        id: scenario.id,
+        label: scenarioName(scenario.id).toLowerCase(),
+        baseline: metric.baseline,
+        candidate: metric.candidate,
+        baselineLabel: formatPlanMetricValue(metric, 'baseline'),
+        candidateLabel: formatPlanMetricValue(metric, 'candidate'),
+      },
+    ]
+  })
+  return { rows, descriptor }
+}
+
+/** Before → after per test on one axis per metric (audit PD-13). */
+export function PlanDumbbells({ comparison }: { comparison: PlanComparison }) {
+  const panels = PLAN_DUMBBELL_METRICS.flatMap(({ id, caption }) => {
+    const { rows, descriptor } = dumbbellRows(comparison, id)
+    if (rows.length === 0 || !descriptor) return []
+    const values = rows.flatMap((row) =>
+      [row.baseline, row.candidate].filter(
+        (value): value is number => value !== null,
+      ),
+    )
+    const max = Math.max(...values, 0)
+    const top = id === 'quality' ? 100 : max * 1.15 || 1
+    const ticks = [0, top / 2, top].map((value) => ({
+      value,
+      label: formatWith(descriptor, value),
+    }))
+    return [{ id, caption, rows, descriptor, top, ticks }]
+  })
+  if (panels.length === 0) return null
+  return (
+    <div className="grid min-w-0 gap-2" data-plan-dumbbells>
+      <div className="flex flex-wrap items-baseline justify-between gap-3">
+        <span className="ds-label">before → after, per test</span>
+        <span className="inline-flex flex-wrap items-center gap-4 font-mono text-label text-ink-muted">
+          <span className="inline-flex items-center gap-1.5">
+            <LegendSwatch shape="dot" color="var(--text-muted)" />
+            reference
+          </span>
+          <span className="inline-flex items-center gap-1.5">
+            <LegendSwatch shape="dot" color="var(--accent)" />
+            candidate
+          </span>
+        </span>
+      </div>
+      <div className="grid min-w-0 gap-3 @[720px]:grid-cols-3">
+        {panels.map((panel) => (
+          <article
+            className="grid min-w-0 gap-2 rounded-[6px] bg-panel p-3"
+            key={panel.id}
+            data-dumbbell-metric={panel.id}
+          >
+            <div className="flex flex-wrap items-baseline justify-between gap-2">
+              <span className="ds-label">
+                {panel.descriptor.label.toLowerCase()}
+              </span>
+              <span className="font-mono text-label text-ink-muted">
+                {panel.caption}
+              </span>
+            </div>
+            <Dumbbell
+              rows={panel.rows}
+              domain={[0, panel.top]}
+              ticks={panel.ticks}
+              label={`${panel.descriptor.label} per test, reference against candidate`}
+            />
+          </article>
+        ))}
+      </div>
+    </div>
+  )
+}
+
+/** The all-metrics table: every metric in rows, the reference and each
+ *  selected candidate in columns, strict winners marked. */
+export function PlanMetricsTable({
+  plan,
+  model,
+}: {
+  plan: LocalPlan
+  model: PlanComparisonModel
+}) {
+  return (
+    <div className="min-w-0">
+      <DataTable
+        caption="Plan metrics in rows, with the visual baseline and selected candidates in columns. Best values are highlighted."
+        minWidth={`${12 + model.columns.length * 12}rem`}
+        collapse
+        className="[&_.is-winner]:font-semibold [&_.is-winner]:text-success"
+      >
+        <thead>
+          <tr>
+            <th scope="col">Metric</th>
+            {model.columns.map(({ row, isVisualBaseline, selected }) => (
+              <th
+                className={
+                  [
+                    isVisualBaseline ? 'is-baseline' : '',
+                    selected ? 'is-selected' : '',
+                  ]
+                    .filter(Boolean)
+                    .join(' ') || undefined
+                }
+                data-execution-id={row.id}
+                key={`${row.role}:${row.id}`}
+                scope="col"
+                title={row.id}
+              >
+                <span className="grid gap-0.5 normal-case tracking-normal">
+                  <span className="ds-label">
+                    {isVisualBaseline ? 'Reference' : 'Candidate'}
+                    {selected ? ' · selected' : ''}
+                  </span>
+                  <strong className="font-mono text-[0.8125rem] font-semibold text-ink">
+                    {planExecutionLabel(plan, row.id)}
+                  </strong>
+                  <span className="font-mono text-label font-normal text-ink-muted">
+                    {[
+                      row.detail,
+                      row.summary?.completed_at
+                        ? formatDate(row.summary.completed_at)
+                        : 'Date unavailable',
+                    ]
+                      .filter(Boolean)
+                      .join(' · ')}
+                  </span>
+                </span>
+              </th>
+            ))}
+          </tr>
+        </thead>
+        <tbody>
+          {model.metricRows.map(({ id, entries }) => {
+            const descriptor = entries.find(({ metric }) => metric)?.metric
+            const winnerIds = new Set(
+              planMetricWinnerIds(
+                entries.map(({ column, value }) => ({
+                  id: column.row.id,
+                  value,
+                })),
+                descriptor?.direction ?? 'context',
+              ),
+            )
+            const direction = directionLabel(descriptor?.direction)
+            return (
+              <tr data-metric-id={id} key={id}>
+                <th scope="row" className="normal-case tracking-normal">
+                  <span className="grid gap-0.5">
+                    <strong className="font-mono text-[0.8125rem] font-semibold text-ink">
+                      {descriptor?.label ?? titleCase(id)}
+                    </strong>
+                    <span
+                      className="font-mono text-label font-normal text-ink-muted"
+                      role="tooltip"
+                      id={`plan-metric-direction-${id}`}
+                    >
+                      {direction}
+                    </span>
+                  </span>
+                </th>
+                {entries.map(({ column, metric, side }) => {
+                  const winner = winnerIds.has(column.row.id)
+                  return (
+                    <td
+                      className={
+                        [
+                          column.isVisualBaseline ? 'is-baseline' : '',
+                          column.selected ? 'is-selected' : '',
+                          winner ? 'is-winner' : '',
+                        ]
+                          .filter(Boolean)
+                          .join(' ') || undefined
+                      }
+                      data-execution-id={column.row.id}
+                      data-label={planExecutionLabel(plan, column.row.id)}
+                      key={column.row.id}
+                    >
+                      {metric ? (
+                        <span className="grid gap-0.5 font-mono tabular-nums">
+                          <span className="flex items-baseline gap-2">
+                            <strong>
+                              {formatPlanMetricValue(metric, side)}
+                            </strong>
+                            {winner ? (
+                              <span className="ds-label text-success">
+                                Best
+                              </span>
+                            ) : null}
+                          </span>
+                          {!column.isVisualBaseline && column.rowComparison ? (
+                            <small
+                              className={`text-label ${metricToneClass[metric.tone]}`}
+                            >
+                              {formatPlanMetricDelta(metric)}
+                            </small>
+                          ) : !column.isVisualBaseline ? (
+                            <small className="text-label text-ink-muted">
+                              Not comparable
+                            </small>
+                          ) : null}
+                        </span>
+                      ) : (
+                        <span className="text-ink-muted">—</span>
+                      )}
+                    </td>
+                  )
+                })}
+              </tr>
+            )
+          })}
+        </tbody>
+      </DataTable>
+      {model.hiddenMetrics > 0 ? (
+        <p className="mt-2 mb-0 font-mono text-label text-ink-muted">
+          {model.hiddenMetrics} metric{model.hiddenMetrics === 1 ? '' : 's'} not
+          reported by this harness · hidden
+        </p>
+      ) : null}
+    </div>
+  )
+}
+
+/** The layers under the overview: by test (dumbbells, then exact tables) and
+ *  all metrics. Each closed row carries its scent (audit ED-26). */
+export function PlanComparisonLayers(props: PlanComparisonInput) {
+  const [open, setOpen] = useState<{ byTest: boolean; metrics: boolean }>({
+    byTest: false,
+    metrics: false,
+  })
+  const model = buildPlanComparisonModel(props)
+  if (!model) return null
+  const scents = planLayerScents(model)
+  const selectedComparison =
+    model.scenarioComparisons.find(
+      (entry) => entry.id === props.selectedCandidateId,
+    )?.comparison ?? null
+  const scenarioCount = new Set(
+    model.scenarioComparisons.flatMap(({ comparison }) =>
+      comparison.scenarios.map((scenario) => scenario.id),
+    ),
+  ).size
+  return (
+    <>
+      {scenarioCount > 0 ? (
+        <DisclosureLayer
+          id="plan-by-test"
+          label={`by test · ${scenarioCount} ${scenarioCount === 1 ? 'test' : 'tests'}`}
+          scent={scents.byTest}
+          open={open.byTest}
+          onToggle={(next) =>
+            setOpen((current) => ({ ...current, byTest: next }))
+          }
+        >
+          <div className="grid min-w-0 gap-4">
+            {selectedComparison ? (
+              <PlanDumbbells comparison={selectedComparison} />
+            ) : null}
+            <PlanScenarioComparisonTable
+              comparisons={model.scenarioComparisons}
+            />
+          </div>
+        </DisclosureLayer>
+      ) : null}
+      <DisclosureLayer
+        id="plan-metrics"
+        label={`all metrics · ${model.metricRows.length}`}
+        scent={scents.metrics}
+        open={open.metrics}
+        onToggle={(next) =>
+          setOpen((current) => ({ ...current, metrics: next }))
+        }
+      >
+        <PlanMetricsTable plan={props.plan} model={model} />
+      </DisclosureLayer>
+    </>
+  )
+}
+
+/* ---------------------------------------------------------- provenance */
+
+function shortHash(value: string) {
+  return value.length > 22 ? `${value.slice(0, 19)}…` : value
+}
+
+export function planProvenanceEntries(
+  plan: LocalPlan,
+): Array<[string, string]> {
+  const rows: Array<[string, string | null | undefined]> = [
+    ['plan id', plan.id],
+    ['scope hash', plan.scope_hash],
+    ['endpoint', plan.url],
+    ['schema', plan.schema_version ? `v${plan.schema_version}` : null],
+    ['created', formatDate(plan.created_at)],
+    ['updated', plan.updated_at ? formatDate(plan.updated_at) : null],
+    ['official baseline', plan.baseline_execution_id],
+    [
+      'candidates',
+      plan.candidate_execution_ids.length
+        ? plan.candidate_execution_ids.join(' · ')
+        : null,
+    ],
+    ...plan.scenarios.map((scenario): [string, string] => [
+      `${scenario.scenario_id} v${scenario.scenario_version}`,
+      [
+        scenario.case_id ? `case ${scenario.case_id}` : null,
+        `seed ${scenario.seed}`,
+        scenario.complexity_tier ? `tier ${scenario.complexity_tier}` : null,
+        scenario.contract_sha256
+          ? `contract ${shortHash(scenario.contract_sha256)}`
+          : null,
+        scenario.inputs_sha256
+          ? `inputs ${shortHash(scenario.inputs_sha256)}`
+          : null,
+      ]
+        .filter(Boolean)
+        .join(' · '),
+    ]),
+  ]
+  return rows.filter((row): row is [string, string] => Boolean(row[1]))
+}
+
+export function planProvenanceScent(plan: LocalPlan): string {
+  return [
+    plan.id,
+    `scope ${shortHash(plan.scope_hash)}`,
+    `endpoint ${plan.url}`,
+    `created ${formatDate(plan.created_at)}`,
+    plan.updated_at ? `updated ${formatDate(plan.updated_at)}` : null,
+  ]
+    .filter(Boolean)
+    .join(' · ')
+}
+
+/** Raw fields and immutable identity, the same shape the execution page uses. */
+export function PlanProvenance({ plan }: { plan: LocalPlan }) {
+  return (
+    <dl
+      className="m-0 grid min-w-0 grid-cols-[max-content_minmax(0,1fr)] gap-x-6 gap-y-2 font-mono text-xs"
+      data-plan-provenance
+    >
+      {planProvenanceEntries(plan).map(([key, value]) => (
+        <div key={key} className="contents">
+          <dt className="ds-label">{key}</dt>
+          <dd className="m-0 break-all text-ink">{value}</dd>
+        </div>
+      ))}
+    </dl>
   )
 }
 
@@ -1376,10 +2096,11 @@ function PlanScenarioComparisonTable({
   if (scenarioIds.length === 0) return null
   return (
     <section aria-labelledby="plan-by-test-title" data-plan-by-test>
+      {/* The layer row above is the heading; this names what the tables add. */}
       <div className="flex flex-wrap items-end justify-between gap-3">
         <div>
-          <h3 id="plan-by-test-title" className="m-0 text-sm font-semibold">
-            by test
+          <h3 id="plan-by-test-title" className="ds-label m-0">
+            exact values
           </h3>
           <p className="mt-1 mb-0 text-xs leading-5 text-ink-soft">
             Outcome and efficiency per test. Expand a row for exact values and
@@ -1629,6 +2350,9 @@ export function LocalPlanDetailPage({ planId }: { planId: string }) {
   const [loading, setLoading] = useState(true)
   const [starting, setStarting] = useState<PlanRunRole | null>(null)
   const [runFeedback, setRunFeedback] = useState<PlanRunFeedback | null>(null)
+  // Audit ED-26: the layers under the overview open on demand; the plan route
+  // carries no anchor, so the reader's toggles are the only state.
+  const [openLayers, setOpenLayers] = useState<Record<string, boolean>>({})
 
   const load = useCallback(async () => {
     const next = bridge ?? (await getDashboardDataBridge())
@@ -1879,6 +2603,18 @@ export function LocalPlanDetailPage({ planId }: { planId: string }) {
   const lastRunSummary =
     (latestCandidateId ? executionSummaries[latestCandidateId] : null) ??
     baselineSummary
+  const historyRows = plan ? executionHistoryRows(plan, executionSummaries) : []
+  const comparisonInput = plan
+    ? {
+        plan,
+        summaries: executionSummaries,
+        visualBaselineId,
+        comparisonCandidateIds,
+        selectedCandidateId,
+        scenarioComparison:
+          comparisonLoading || comparisonError ? null : comparison,
+      }
+    : null
 
   return (
     <>
@@ -1962,26 +2698,56 @@ export function LocalPlanDetailPage({ planId }: { planId: string }) {
               baselineSummary={baselineSummary}
               lastRunSummary={lastRunSummary}
             />
-            <PlanScope plan={plan} />
-            <PlanRunHistory
-              plan={plan}
-              summaries={executionSummaries}
-              onRenameCandidate={renameCandidate}
-            />
-            <PlanExecutionHistory
-              plan={plan}
-              summaries={executionSummaries}
-              visualBaselineId={visualBaselineId}
-              comparisonCandidateIds={comparisonCandidateIds}
-              selectedCandidateId={selectedCandidateId}
-              scenarioComparison={
-                comparisonLoading || comparisonError ? null : comparison
-              }
-              onVisualBaselineChange={changeVisualBaseline}
-              onToggleCandidate={toggleComparisonCandidate}
-              loading={historyLoading}
-              error={historyError}
-            />
+            <PlanScope plan={plan} baselineSummary={baselineSummary} />
+            {/* Audit ED-26: layer 0 is the comparison — verdict, trend tiles,
+                what moved by test. Executions, exact tables and provenance are
+                closed rows with a scent until the reader needs them. */}
+            {comparisonInput ? (
+              <PlanExecutionHistory
+                {...comparisonInput}
+                onVisualBaselineChange={changeVisualBaseline}
+                onToggleCandidate={toggleComparisonCandidate}
+                loading={historyLoading}
+                error={historyError}
+              />
+            ) : null}
+            <div className="grid min-w-0 gap-3">
+              {historyRows.length > 0 ? (
+                <DisclosureLayer
+                  id="plan-executions"
+                  label={`executions · ${historyRows.length}`}
+                  scent={executionsScent(plan, historyRows)}
+                  open={openLayers.executions ?? false}
+                  onToggle={(open) =>
+                    setOpenLayers((current) => ({
+                      ...current,
+                      executions: open,
+                    }))
+                  }
+                >
+                  <PlanRunHistory
+                    plan={plan}
+                    summaries={executionSummaries}
+                    onRenameCandidate={renameCandidate}
+                    headless
+                  />
+                </DisclosureLayer>
+              ) : null}
+              {comparisonInput ? (
+                <PlanComparisonLayers {...comparisonInput} />
+              ) : null}
+              <DisclosureLayer
+                id="plan-provenance"
+                label="provenance"
+                scent={planProvenanceScent(plan)}
+                open={openLayers.provenance ?? false}
+                onToggle={(open) =>
+                  setOpenLayers((current) => ({ ...current, provenance: open }))
+                }
+              >
+                <PlanProvenance plan={plan} />
+              </DisclosureLayer>
+            </div>
           </div>
         ) : null}
       </div>

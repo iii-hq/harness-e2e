@@ -39,6 +39,8 @@ export type PlanMetricId =
   | 'quality'
   | 'confidence'
   | 'tokens'
+  | 'tokens_per_completion'
+  | 'failed_attempt_tokens'
   | 'duration'
   | 'cost'
   | 'function_calls'
@@ -94,6 +96,8 @@ export const PLAN_DETAIL_METRICS: PlanMetricId[] = [
   'quality',
   'confidence',
   'tokens',
+  'tokens_per_completion',
+  'failed_attempt_tokens',
   'duration',
   'cost',
   'function_calls',
@@ -237,6 +241,10 @@ export function executionMetricValue(
       return percentPoints(finite(assessment.median_confidence))
     case 'tokens':
       return finite(executionTotals.total_tokens)
+    case 'tokens_per_completion':
+      return finite(executionTotals.tokens_per_completion)
+    case 'failed_attempt_tokens':
+      return finite(executionTotals.failed_attempt_tokens)
     case 'duration':
       return finite(executionTotals.wall_time_seconds)
     case 'cost':
@@ -295,6 +303,8 @@ function allMetrics(
     build('quality', 'Quality score', 'higher', 'score'),
     build('confidence', 'Confidence', 'context', 'percent_points'),
     build('tokens', 'Total tokens', 'lower', 'tokens'),
+    build('tokens_per_completion', 'Tokens per completion', 'lower', 'tokens'),
+    build('failed_attempt_tokens', 'Failed attempt tokens', 'lower', 'tokens'),
     build('duration', 'Duration', 'lower', 'seconds'),
     build('cost', 'Cost', 'lower', 'usd'),
     build('function_calls', 'Function calls', 'context', 'count'),
@@ -423,6 +433,8 @@ function scenarioAverage(
   metric: DashboardScenarioMetricSummary | undefined,
   key:
     | 'tokens'
+    | 'tokens_per_completion'
+    | 'failed_attempt_tokens'
     | 'duration_seconds'
     | 'cost_usd'
     | 'function_calls'
@@ -672,6 +684,22 @@ export function buildScenarioComparisons(
           'Tokens',
           scenarioAverage(leftMetrics, 'tokens') ?? leftGeneral.totalTokens,
           scenarioAverage(rightMetrics, 'tokens') ?? rightGeneral.totalTokens,
+          'lower',
+          'tokens',
+        ),
+        metric(
+          'tokens_per_completion',
+          'Tokens per completion',
+          scenarioAverage(leftMetrics, 'tokens_per_completion'),
+          scenarioAverage(rightMetrics, 'tokens_per_completion'),
+          'lower',
+          'tokens',
+        ),
+        metric(
+          'failed_attempt_tokens',
+          'Failed attempt tokens',
+          scenarioAverage(leftMetrics, 'failed_attempt_tokens'),
+          scenarioAverage(rightMetrics, 'failed_attempt_tokens'),
           'lower',
           'tokens',
         ),

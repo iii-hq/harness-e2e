@@ -13,7 +13,7 @@ use super::assessment_projection::{
 use super::store::load_runs;
 use super::{JobStatus, RunMetadata};
 use crate::identity::StackIdentity;
-use crate::report::{E2eReport, E2eRunReport, E2eScenarioReport};
+use crate::report::{E2eReport, E2eRunReport, E2eScenarioReport, ScenarioAggregate};
 use crate::workflow::{WorkflowStepReport, WorkflowStepStatus};
 
 pub(super) const MAX_EXECUTIONS: usize = 100;
@@ -195,6 +195,31 @@ pub(super) fn execution_summary(
         "incomplete"
     };
     let totals = efficiency_totals(report);
+    let aggregates: Vec<&ScenarioAggregate> = report
+        .scenarios
+        .iter()
+        .map(|scenario| &scenario.aggregate)
+        .collect();
+    // Built apart from the summary literal: `json!` recurses per key and the
+    // summary already sits at the macro's recursion limit.
+    let execution_totals = json!({
+        "expected_reports": expected,
+        "received_reports": expected,
+        "report_coverage": 100.0,
+        "passed_scenarios": passed,
+        "scenario_pass_rate": if expected == 0 { 0.0 } else { passed as f64 / expected as f64 * 100.0 },
+        "total_cost_usd": total_cost_usd,
+        "wall_time_seconds": wall_time_seconds,
+        "hard_gate_failures": hard_gate_failures,
+        "technical_failures": technical_failures,
+        "missing_reports": 0,
+        "retries": retries,
+        "total_tokens": totals.0,
+        "function_calls": totals.1,
+        "function_call_errors": totals.2,
+        "failed_attempt_tokens": failed_attempt_token_total(&aggregates),
+        "tokens_per_completion": pooled_tokens_per_completion(&aggregates),
+    });
     let execution_identity = &report.execution;
     let system = &report.system_under_test;
     let engine_revision = system
@@ -247,22 +272,7 @@ pub(super) fn execution_summary(
         "scenario_metrics": scenario_metrics(&subject_id, report),
         "workflow_metrics": workflow_metric_summary_for_report(report),
         "assessment_summary": assessment_summary,
-        "totals": {
-            "expected_reports": expected,
-            "received_reports": expected,
-            "report_coverage": 100.0,
-            "passed_scenarios": passed,
-            "scenario_pass_rate": if expected == 0 { 0.0 } else { passed as f64 / expected as f64 * 100.0 },
-            "total_cost_usd": total_cost_usd,
-            "wall_time_seconds": wall_time_seconds,
-            "hard_gate_failures": hard_gate_failures,
-            "technical_failures": technical_failures,
-            "missing_reports": 0,
-            "retries": retries,
-            "total_tokens": totals.0,
-            "function_calls": totals.1,
-            "function_call_errors": totals.2,
-        },
+        "totals": execution_totals,
         "workflow_duration_seconds": wall_time_seconds,
         "first_failure": first_failure(report),
     });
@@ -428,6 +438,32 @@ fn scenario_metrics(subject_id: &str, report: &E2eReport) -> Vec<Value> {
                 averages.insert(name.into(), json!(mean(&values)));
                 samples.insert(name.into(), json!(values.len()));
             }
+            // Retry and completion accounting comes from the scenario aggregate,
+            // which already reasons over every attempt; per run it is the mean,
+            // so it reads beside `tokens`, and per completion it is the ratio
+            // the aggregate publishes.
+            let run_count = scenario.runs.len();
+            let failed_attempt_tokens = scenario
+                .aggregate
+                .failed_attempt_tokens
+                .filter(|_| run_count > 0)
+                .map(|value| value as f64 / run_count as f64);
+            averages.insert("failed_attempt_tokens".into(), json!(failed_attempt_tokens));
+            samples.insert(
+                "failed_attempt_tokens".into(),
+                json!(failed_attempt_tokens.map_or(0, |_| run_count)),
+            );
+            averages.insert(
+                "tokens_per_completion".into(),
+                json!(scenario.aggregate.tokens_per_completion),
+            );
+            samples.insert(
+                "tokens_per_completion".into(),
+                json!(scenario
+                    .aggregate
+                    .tokens_per_completion
+                    .map_or(0, |_| scenario.aggregate.completed_runs)),
+            );
             let mut contract = json!({
                 "case_id": if scenario.case_id.is_empty() { Value::Null } else { json!(scenario.case_id) },
                 "execution_policy": scenario.execution_policy,
@@ -873,6 +909,47 @@ pub(super) fn validate_execution_id(value: &str) -> std::result::Result<(), Stri
     }
 }
 
+/// Failed-attempt tokens pooled across scenarios. `None` as soon as one
+/// scenario could not account for them: a partial sum is not a total.
+fn failed_attempt_token_total(aggregates: &[&ScenarioAggregate]) -> Option<u64> {
+    complete_sum_u64(
+        aggregates
+            .iter()
+            .map(|aggregate| aggregate.failed_attempt_tokens),
+    )
+}
+
+/// Subject tokens over completed logical runs, pooled across scenarios rather
+/// than averaged from per-scenario ratios. `None` without complete token
+/// accounting or without a completed run.
+fn pooled_tokens_per_completion(aggregates: &[&ScenarioAggregate]) -> Option<f64> {
+    tokens_per_completion(
+        aggregates
+            .iter()
+            .map(|aggregate| (aggregate.total_tokens_consumed, aggregate.completed_runs)),
+    )
+}
+
+fn complete_sum_u64(values: impl Iterator<Item = Option<u64>>) -> Option<u64> {
+    let mut total = 0_u64;
+    let mut seen = false;
+    for value in values {
+        total = total.checked_add(value?)?;
+        seen = true;
+    }
+    seen.then_some(total)
+}
+
+fn tokens_per_completion(scenarios: impl Iterator<Item = (Option<u64>, u32)>) -> Option<f64> {
+    let mut tokens = 0_u64;
+    let mut completed = 0_u32;
+    for (scenario_tokens, scenario_completed) in scenarios {
+        tokens = tokens.checked_add(scenario_tokens?)?;
+        completed = completed.saturating_add(scenario_completed);
+    }
+    (completed > 0).then(|| tokens as f64 / completed as f64)
+}
+
 fn sum_complete(values: &[Option<f64>]) -> Option<f64> {
     (!values.is_empty())
         .then(|| {
@@ -938,6 +1015,35 @@ mod workflow_usage_tests {
                 function_call_errors: Some(1),
             }
         );
+    }
+
+    #[test]
+    fn pools_failed_attempt_tokens_only_when_every_scenario_accounts_for_them() {
+        assert_eq!(
+            complete_sum_u64([Some(1_500), Some(0), Some(250)].into_iter()),
+            Some(1_750)
+        );
+        assert_eq!(
+            complete_sum_u64([Some(1_500), None].into_iter()),
+            None,
+            "a partial sum is not a total"
+        );
+        assert_eq!(complete_sum_u64(std::iter::empty()), None);
+    }
+
+    #[test]
+    fn pools_tokens_per_completion_over_completed_runs_not_per_scenario_ratios() {
+        // 6,000 tokens over 3 completed runs = 2,000, not the mean of the
+        // per-scenario ratios (4,000 / 1 and 2,000 / 2 would average 3,000).
+        assert_eq!(
+            tokens_per_completion([(Some(4_000), 1), (Some(2_000), 2)].into_iter()),
+            Some(2_000.0)
+        );
+        assert_eq!(
+            tokens_per_completion([(Some(4_000), 1), (None, 2)].into_iter()),
+            None
+        );
+        assert_eq!(tokens_per_completion([(Some(4_000), 0)].into_iter()), None);
     }
 
     #[test]

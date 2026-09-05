@@ -457,14 +457,22 @@ export function LocalPlanCreatePage() {
 // The plan detail lives in PlanDetailPage.tsx; these names stay importable
 // from here for the router and the tests.
 export {
+  executionHistoryRows,
+  executionsScent,
   LocalPlanDetailPage,
   PLAN_COMPARISON_TABLE_METRICS,
+  PLAN_TREND_BANDS,
+  PlanComparisonLayers,
   PlanExecutionHistory,
   PlanLifecycle,
   PlanNonComparableAttempts,
   PlanRunHistory,
   PlanScope,
   planMetricWinnerIds,
+  planMovementGroups,
+  planProvenanceEntries,
+  planProvenanceScent,
   planReadiness,
+  planTrendTiles,
   selectedPlanCandidate,
 } from './PlanDetailPage'

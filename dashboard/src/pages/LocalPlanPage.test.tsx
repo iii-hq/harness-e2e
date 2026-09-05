@@ -4,14 +4,22 @@ import type {
   DashboardExecutionSummary,
   LocalPlan,
 } from '@/lib/dashboard-data-source'
+import { formatDate } from '@/lib/execution-view'
 import { buildPlanComparison } from '@/lib/plan-comparison'
 import {
+  executionHistoryRows,
+  executionsScent,
   PLAN_FORM_DEFAULTS,
+  PlanComparisonLayers,
   PlanExecutionHistory,
   PlanLifecycle,
   PlanNonComparableAttempts,
+  PlanScope,
   planFormDirty,
   planMetricWinnerIds,
+  planMovementGroups,
+  planProvenanceEntries,
+  planProvenanceScent,
   selectedPlanCandidate,
 } from '@/pages/LocalPlanPage'
 
@@ -93,6 +101,9 @@ function execution(
   }
 }
 
+// Fixture timestamps render in the reader's locale, like the page does.
+const captured = formatDate('2026-08-17T12:00:00Z')
+
 describe('local plan lifecycle', () => {
   it('keeps a started candidate visible with one clear active-execution action', () => {
     const html = renderToStaticMarkup(
@@ -167,6 +178,12 @@ describe('local plan lifecycle', () => {
 })
 
 describe('local plan execution comparison', () => {
+  const controls = {
+    onVisualBaselineChange: () => undefined,
+    onToggleCandidate: () => undefined,
+    loading: false,
+  }
+
   it('hides comparison controls until a baseline and another execution exist', () => {
     const html = renderToStaticMarkup(
       <PlanExecutionHistory
@@ -180,9 +197,7 @@ describe('local plan execution comparison', () => {
         visualBaselineId="baseline-1"
         comparisonCandidateIds={[]}
         selectedCandidateId={null}
-        onVisualBaselineChange={() => undefined}
-        onToggleCandidate={() => undefined}
-        loading={false}
+        {...controls}
       />,
     )
 
@@ -201,16 +216,16 @@ describe('local plan execution comparison', () => {
         visualBaselineId={null}
         comparisonCandidateIds={['candidate-1']}
         selectedCandidateId="candidate-1"
-        onVisualBaselineChange={() => undefined}
-        onToggleCandidate={() => undefined}
-        loading={false}
+        {...controls}
       />,
     )
 
     expect(noBaselineHtml).toBe('')
   })
 
-  it('pivots metrics into rows, keeps newest candidates first and separates incomplete attempts', () => {
+  // Audit ED-26: layer 0 is the filter row, the verdict and the trend tiles;
+  // the pivoted table opens in the all-metrics layer beneath it.
+  it('leads with trend tiles, keeps the pivoted table in a layer and separates incomplete attempts', () => {
     const plan: LocalPlan = {
       ...candidateRunningPlan,
       state: 'comparison_ready',
@@ -233,18 +248,17 @@ describe('local plan execution comparison', () => {
         },
       }),
     }
-    const historyHtml = renderToStaticMarkup(
-      <PlanExecutionHistory
-        plan={plan}
-        summaries={summaries}
-        visualBaselineId="baseline-1"
-        comparisonCandidateIds={['candidate-1', 'candidate-2']}
-        selectedCandidateId="candidate-2"
-        onVisualBaselineChange={() => undefined}
-        onToggleCandidate={() => undefined}
-        loading={false}
-      />,
+    const input = {
+      plan,
+      summaries,
+      visualBaselineId: 'baseline-1',
+      comparisonCandidateIds: ['candidate-1', 'candidate-2'],
+      selectedCandidateId: 'candidate-2',
+    }
+    const overviewHtml = renderToStaticMarkup(
+      <PlanExecutionHistory {...input} {...controls} />,
     )
+    const layersHtml = renderToStaticMarkup(<PlanComparisonLayers {...input} />)
     const diagnosticsHtml = renderToStaticMarkup(
       <PlanNonComparableAttempts
         plan={plan}
@@ -252,55 +266,125 @@ describe('local plan execution comparison', () => {
         onRenameCandidate={async () => undefined}
       />,
     )
-    const html = historyHtml + diagnosticsHtml
-    const tableHtml = historyHtml.slice(
-      historyHtml.indexOf('<table'),
-      historyHtml.indexOf('</table>') + '</table>'.length,
+    const html = overviewHtml + layersHtml + diagnosticsHtml
+    const tableHtml = layersHtml.slice(
+      layersHtml.indexOf('<table'),
+      layersHtml.indexOf('</table>') + '</table>'.length,
     )
 
-    expect(html.indexOf('Baseline')).toBeLessThan(html.indexOf('Candidate #2'))
-    expect(html.indexOf('Candidate #2')).toBeLessThan(
-      html.indexOf('Candidate #1'),
-    )
-    expect(html).toContain('Incomplete attempt')
-    expect(html).toContain('Incomplete attempts remain excluded')
+    // One filter row scopes everything; it never touches the official baseline.
+    expect(overviewHtml).toContain('data-plan-filter-row')
+    expect(overviewHtml).toContain('>reference<')
+    expect(overviewHtml).toContain('>candidates<')
+    expect(overviewHtml).toContain('<option value="baseline-1" selected="">')
+    expect(
+      overviewHtml.match(/data-candidate-option="selected"/g),
+    ).toHaveLength(2)
+    expect(overviewHtml).toContain('never changes here')
+    expect(overviewHtml).toContain('data-plan-verdict')
+    expect(overviewHtml).toContain('Objective results are stable')
+    // Trend tiles: the selected candidate's value, its delta, and a sparkline
+    // with one point per completed execution.
+    expect(overviewHtml).toContain('data-trend-metric="pass_rate"')
+    expect(overviewHtml).toContain('data-trend-metric="tokens"')
+    expect(overviewHtml).toContain('data-trend-metric="duration"')
+    expect(overviewHtml).toContain('data-trend-metric="turns"')
+    expect(overviewHtml).toContain('-100 · -10.0%')
+    expect(overviewHtml.match(/data-point-role="baseline"/g)).toHaveLength(7)
+    expect(overviewHtml.match(/data-point-role="selected"/g)).toHaveLength(7)
+    expect(overviewHtml.match(/data-point-role="other"/g)).toHaveLength(7)
+    expect(overviewHtml).not.toContain('<table')
+    // The layers carry the exact numbers.
+    expect(layersHtml).toContain('id="plan-metrics"')
+    expect(layersHtml).toContain('all metrics · ')
     expect(html).toContain('baseline and candidates')
-    expect(html).toContain('1 visual baseline · 2 selected')
-    expect(html).toContain('Visual baseline')
-    expect(html).toContain('Official baseline')
-    expect(html).toContain('Compare candidates')
-    expect(html).toContain(
-      'Select one or more executions to show in the table.',
-    )
-    expect(html).not.toContain('Choose what appears below.')
-    expect(html).toContain('Reference')
-    expect(html).toContain('Candidate')
-    expect(html).toContain('never changes the official baseline')
-    expect(html).toContain('<th scope="col">Metric</th>')
-    expect(html).toContain('Pass rate')
-    expect(html).toContain('Higher is better')
-    expect(html).toContain('Lower is better')
-    expect(html).toContain('role="tooltip"')
-    expect(html).toContain('--ds-table-min-width:48rem')
+    expect(tableHtml).toContain('<th scope="col">Metric</th>')
     expect(tableHtml).toContain('>Reference<')
+    expect(tableHtml).toContain('Pass rate')
+    expect(tableHtml).toContain('Higher is better')
+    expect(tableHtml).toContain('Lower is better')
+    expect(tableHtml).toContain('role="tooltip"')
+    expect(layersHtml).toContain('--ds-table-min-width:48rem')
     expect(tableHtml).not.toMatch(/improved/i)
-    expect(tableHtml).not.toContain('View details')
-    expect(tableHtml).not.toContain('Viewing details')
-    expect(tableHtml).not.toContain('View report')
-    expect(html).toContain('-100 · -10.0%')
-    expect(html).toContain('+100 · +10.0%')
-    expect(html).toMatch(
+    expect(tableHtml).toContain('+100 · +10.0%')
+    expect(tableHtml).toMatch(
       /data-metric-id="tokens"[\s\S]*?<td class="is-selected is-winner" data-execution-id="candidate-2"/,
     )
-    expect(html).toContain('Best')
-    expect(html).toContain('runs · ')
-    expect(html).toContain('data-label="Tokens"')
-    expect(html).toContain('data-label="Duration"')
-    expect(html).toContain('aria-label="Open report for Official baseline"')
-    expect(html).toContain('title="baseline-1"')
-    expect(historyHtml).not.toContain('runs · ')
+    expect(tableHtml).toContain('Best')
+    // Executions keep newest candidates first and list incomplete attempts.
+    expect(diagnosticsHtml.indexOf('Baseline')).toBeLessThan(
+      diagnosticsHtml.indexOf('Candidate #2'),
+    )
+    expect(diagnosticsHtml.indexOf('Candidate #2')).toBeLessThan(
+      diagnosticsHtml.indexOf('Candidate #1'),
+    )
+    expect(diagnosticsHtml).toContain('Incomplete attempt')
+    expect(diagnosticsHtml).toContain('Incomplete attempts remain excluded')
+    expect(diagnosticsHtml).toContain('runs · ')
+    expect(diagnosticsHtml).toContain('data-label="Tokens"')
+    expect(diagnosticsHtml).toContain('data-label="Duration"')
+    expect(diagnosticsHtml).toContain(
+      'aria-label="Open report for Official baseline"',
+    )
+    expect(diagnosticsHtml).toContain('title="baseline-1"')
+    expect(overviewHtml).not.toContain('runs · ')
     expect(diagnosticsHtml).toMatch(
       /^<section class="ds-panel[^"]*"[^>]*data-plan-run-history/,
+    )
+  })
+
+  it('draws the two new token metrics as tiles and rows when the totals carry them', () => {
+    const plan: LocalPlan = {
+      ...candidateRunningPlan,
+      state: 'comparison_ready',
+      candidate_execution_ids: ['candidate-1'],
+      last_attempt_id: 'candidate-1',
+    }
+    const withTokens = (id: string, perCompletion: number, failed: number) =>
+      execution(id, {
+        totals: {
+          ...execution(id).totals,
+          tokens_per_completion: perCompletion,
+          failed_attempt_tokens: failed,
+        },
+      })
+    const input = {
+      plan,
+      summaries: {
+        'baseline-1': withTokens('baseline-1', 1_000, 400),
+        'candidate-1': withTokens('candidate-1', 800, 0),
+      },
+      visualBaselineId: 'baseline-1',
+      comparisonCandidateIds: ['candidate-1'],
+      selectedCandidateId: 'candidate-1',
+    }
+    const overviewHtml = renderToStaticMarkup(
+      <PlanExecutionHistory {...input} {...controls} />,
+    )
+    const layersHtml = renderToStaticMarkup(<PlanComparisonLayers {...input} />)
+
+    expect(overviewHtml).toContain('data-trend-metric="tokens_per_completion"')
+    expect(overviewHtml).toContain('data-trend-metric="failed_attempt_tokens"')
+    expect(overviewHtml).toContain('tokens per completion')
+    expect(overviewHtml).toContain('failed attempt tokens')
+    expect(overviewHtml).toContain('-200 · -20.0%')
+    expect(overviewHtml).toContain('-400 · -100.0%')
+    expect(layersHtml).toContain('data-metric-id="tokens_per_completion"')
+    expect(layersHtml).toContain('data-metric-id="failed_attempt_tokens"')
+    // Without the totals the tiles still exist but say so instead of zero.
+    const bare = renderToStaticMarkup(
+      <PlanExecutionHistory
+        {...input}
+        summaries={{
+          'baseline-1': execution('baseline-1'),
+          'candidate-1': execution('candidate-1'),
+        }}
+        {...controls}
+      />,
+    )
+    expect(bare).toContain('data-trend-metric="failed_attempt_tokens"')
+    expect(bare).toMatch(
+      /data-trend-metric="failed_attempt_tokens"[\s\S]*?>Not reported<[\s\S]*?Not comparable/,
     )
   })
 
@@ -331,39 +415,34 @@ describe('local plan execution comparison', () => {
       },
       last_attempt_id: 'candidate-2',
     }
-    const historyHtml = renderToStaticMarkup(
+    const summaries = {
+      'baseline-1': execution('baseline-1'),
+      'candidate-1': execution('candidate-1'),
+      'candidate-2': execution('candidate-2'),
+    }
+    const overviewHtml = renderToStaticMarkup(
       <PlanExecutionHistory
         plan={plan}
-        summaries={{
-          'baseline-1': execution('baseline-1'),
-          'candidate-1': execution('candidate-1'),
-          'candidate-2': execution('candidate-2'),
-        }}
+        summaries={summaries}
         visualBaselineId="baseline-1"
         comparisonCandidateIds={['candidate-1', 'candidate-2']}
         selectedCandidateId="candidate-2"
-        onVisualBaselineChange={() => undefined}
-        onToggleCandidate={() => undefined}
-        loading={false}
+        {...controls}
       />,
     )
     const executionsHtml = renderToStaticMarkup(
       <PlanNonComparableAttempts
         plan={plan}
-        summaries={{
-          'baseline-1': execution('baseline-1'),
-          'candidate-1': execution('candidate-1'),
-          'candidate-2': execution('candidate-2'),
-        }}
+        summaries={summaries}
         onRenameCandidate={async () => undefined}
       />,
     )
-    const html = historyHtml + executionsHtml
+    const html = overviewHtml + executionsHtml
 
     expect(html).toContain('Harness Latest')
     expect(html).toContain('Harness Next')
     expect(html).toContain('runs · ')
-    expect(html).toContain('Visual baseline')
+    expect(overviewHtml).toContain('>reference<')
     expect(html).toContain('baseline-1')
     expect(html).toContain('candidate-1')
     expect(html).toContain('candidate-2')
@@ -372,7 +451,27 @@ describe('local plan execution comparison', () => {
     ).toHaveLength(2)
     expect(html).toContain('data-plan-run-history')
     expect(executionsHtml).toContain('data-label="Turns"')
-    expect(html).toContain('Compare candidates')
+    expect(overviewHtml).toContain('Compare candidates')
+    // The executions layer reads the same rows headless, under the layer row.
+    const headless = renderToStaticMarkup(
+      <PlanNonComparableAttempts
+        plan={plan}
+        summaries={summaries}
+        onRenameCandidate={async () => undefined}
+        headless
+      />,
+    )
+    expect(headless).toContain('data-plan-run-history="headless"')
+    expect(headless).not.toContain('runs · ')
+    expect(
+      executionsScent(plan, executionHistoryRows(plan, summaries)).split(
+        ' \u00a0·\u00a0 ',
+      ),
+    ).toEqual([
+      `Official baseline · passed · ${captured} · 1,000 tokens`,
+      `Harness Next · passed · ${captured} · 1,000 tokens`,
+      `Harness Latest · passed · ${captured} · 1,000 tokens`,
+    ])
   })
 
   it('renders general security metrics as baseline to candidate evidence', () => {
@@ -470,38 +569,57 @@ describe('local plan execution comparison', () => {
         ],
       },
     ]
-
-    const html = renderToStaticMarkup(
-      <PlanExecutionHistory
-        plan={{
-          ...candidateRunningPlan,
-          state: 'comparison_ready',
-          candidate_execution_ids: ['candidate-1'],
-        }}
-        summaries={{ 'baseline-1': baseline, 'candidate-1': candidate }}
-        visualBaselineId="baseline-1"
-        comparisonCandidateIds={['candidate-1']}
-        selectedCandidateId="candidate-1"
-        scenarioComparison={comparison}
-        onVisualBaselineChange={() => undefined}
-        onToggleCandidate={() => undefined}
-        loading={false}
-      />,
+    const input = {
+      plan: {
+        ...candidateRunningPlan,
+        state: 'comparison_ready' as const,
+        candidate_execution_ids: ['candidate-1'],
+      },
+      summaries: { 'baseline-1': baseline, 'candidate-1': candidate },
+      visualBaselineId: 'baseline-1',
+      comparisonCandidateIds: ['candidate-1'],
+      selectedCandidateId: 'candidate-1',
+      scenarioComparison: comparison,
+    }
+    const overviewHtml = renderToStaticMarkup(
+      <PlanExecutionHistory {...input} {...controls} />,
     )
+    const layersHtml = renderToStaticMarkup(<PlanComparisonLayers {...input} />)
 
-    expect(html).toContain('by test')
-    expect(html).toContain('Tokens')
-    expect(html).toContain('Cost')
-    expect(html).toContain('Function calls')
-    expect(html).toContain('Function errors')
-    expect(html).toContain('Turns')
-    expect(html).toContain('Time')
-    expect(html).toContain('data-plan-by-test')
-    expect(html).not.toContain('Findings')
-    expect(html).toMatch(/data-scenario-id="security_review" open=""/)
+    expect(layersHtml).toContain('by test')
+    expect(layersHtml).toContain('Tokens')
+    expect(layersHtml).toContain('Cost')
+    expect(layersHtml).toContain('Function calls')
+    expect(layersHtml).toContain('Function errors')
+    expect(layersHtml).toContain('Turns')
+    expect(layersHtml).toContain('Time')
+    expect(layersHtml).toContain('data-plan-by-test')
+    expect(layersHtml).not.toContain('Findings')
+    expect(layersHtml).toMatch(/data-scenario-id="security_review" open=""/)
+    // What moved: three bars, oriented by improvement, the unchanged named once.
+    expect(overviewHtml).toContain('data-plan-what-moved')
+    const groups = planMovementGroups(comparison)
+    expect(groups).toHaveLength(1)
+    expect(
+      groups[0].rows.map((row) => [row.id, row.improvement, row.tone]),
+    ).toEqual([
+      ['tokens', -3.11, 'negative'],
+      ['duration', -33.33, 'negative'],
+      ['turns', 50, 'positive'],
+    ])
+    expect(groups[0].rows.map((row) => row.valueLabel)).toEqual([
+      '+142 · +3.1%',
+      '+0.1s · +33.3%',
+      '-1 · -50.0%',
+    ])
+    expect(groups[0].subtitle).toBe('Passed → Passed · 3 of 3 metrics moved')
+    // Dumbbells draw the magnitude the percentages hide.
+    expect(layersHtml).toContain('data-dumbbell-metric="tokens"')
+    expect(layersHtml).toContain('data-dumbbell-metric="duration"')
+    expect(layersHtml).not.toContain('data-dumbbell-metric="quality"')
   })
 
-  it('shows eight scenario metrics including turns and highlights strict winners', () => {
+  it('shows ten scenario metrics including the new token ones and highlights strict winners', () => {
     const scenarioExecution = (
       id: string,
       tokens: number,
@@ -531,6 +649,8 @@ describe('local plan execution comparison', () => {
             averages: {
               cost_usd: 0.1,
               tokens,
+              tokens_per_completion: tokens,
+              failed_attempt_tokens: id === 'baseline-1' ? 500 : 0,
               function_calls: 13,
               function_call_errors: 0,
               turns: id === 'baseline-1' ? 2 : 1,
@@ -543,7 +663,7 @@ describe('local plan execution comparison', () => {
     const candidateOne = scenarioExecution('candidate-1', 4_000)
     const candidateTwo = scenarioExecution('candidate-2', 3_800)
     const html = renderToStaticMarkup(
-      <PlanExecutionHistory
+      <PlanComparisonLayers
         plan={{
           ...candidateRunningPlan,
           state: 'comparison_ready',
@@ -559,9 +679,6 @@ describe('local plan execution comparison', () => {
         comparisonCandidateIds={['candidate-1', 'candidate-2']}
         selectedCandidateId="candidate-2"
         scenarioComparison={buildPlanComparison(baseline, candidateTwo)}
-        onVisualBaselineChange={() => undefined}
-        onToggleCandidate={() => undefined}
-        loading={false}
       />,
     )
     const scenarioHtml = html.slice(html.indexOf('data-plan-by-test'))
@@ -569,7 +686,7 @@ describe('local plan execution comparison', () => {
     expect(scenarioHtml).toContain('Candidate #1')
     expect(scenarioHtml).toContain('Candidate #2')
     expect(scenarioHtml).toContain('2 candidates')
-    expect(scenarioHtml.match(/data-scenario-metric-id=/g)).toHaveLength(8)
+    expect(scenarioHtml.match(/data-scenario-metric-id=/g)).toHaveLength(10)
     for (const metricId of [
       'pass_rate',
       'quality',
@@ -577,6 +694,8 @@ describe('local plan execution comparison', () => {
       'turns',
       'duration',
       'tokens',
+      'tokens_per_completion',
+      'failed_attempt_tokens',
       'function_calls',
       'function_errors',
     ]) {
@@ -614,16 +733,18 @@ describe('local plan execution comparison', () => {
         visualBaselineId="candidate-2"
         comparisonCandidateIds={['baseline-1', 'candidate-1']}
         selectedCandidateId="baseline-1"
-        onVisualBaselineChange={() => undefined}
-        onToggleCandidate={() => undefined}
-        loading={false}
+        {...controls}
       />,
     )
 
     expect(html).toContain('<option value="candidate-2" selected="">')
     expect(html).toContain('Candidate #2')
-    expect(html).toContain('The official plan baseline remains unchanged.')
-    expect(html).toContain('1 visual baseline · 2 selected')
+    expect(html).toContain('never changes here')
+    expect(html.match(/data-candidate-option="selected"/g)).toHaveLength(2)
+    // The reference point in every sparkline is the visual baseline.
+    expect(html).toMatch(
+      /data-point-role="baseline"[\s\S]*?<title>Candidate #2 · /,
+    )
   })
 
   it('selects the latest candidate automatically and preserves a valid manual selection', () => {
@@ -631,5 +752,48 @@ describe('local plan execution comparison', () => {
     expect(selectedPlanCandidate('one', false, ['one', 'two'])).toBe('two')
     expect(selectedPlanCandidate('one', true, ['one', 'two'])).toBe('one')
     expect(selectedPlanCandidate('removed', true, ['one', 'two'])).toBe('two')
+  })
+})
+
+describe('local plan scope and provenance', () => {
+  it('reads the scope as one band of facts and keeps the endpoint for provenance', () => {
+    const plan: LocalPlan = {
+      ...candidateRunningPlan,
+      scenarios: [
+        {
+          scenario_id: 'minimal_path',
+          scenario_version: 2,
+          case_id: 'case-a',
+          seed: 7,
+          inputs_sha256: 'sha256:1111111111111111111111',
+          contract_sha256: 'sha256:2222222222222222222222',
+          complexity_tier: 'baseline',
+        },
+      ],
+    }
+    const html = renderToStaticMarkup(
+      <PlanScope plan={plan} baselineSummary={execution('baseline-1')} />,
+    )
+    expect(html).toContain('data-plan-scope')
+    expect(html).toContain('scope · locked')
+    expect(html).toContain('minimal_path v2')
+    expect(html).toContain('1 per test · 0 retries · canonical seed')
+    expect(html).toContain('baseline captured')
+    expect(html).toContain(captured)
+    expect(html).not.toContain('example.invalid')
+
+    const entries = planProvenanceEntries(plan)
+    expect(entries).toContainEqual([
+      'endpoint',
+      'https://example.invalid/catalog',
+    ])
+    expect(entries).toContainEqual(['scope hash', 'sha256:scope'])
+    expect(entries).toContainEqual([
+      'minimal_path v2',
+      'case case-a · seed 7 · tier baseline · contract sha256:222222222222… · inputs sha256:111111111111…',
+    ])
+    expect(planProvenanceScent(plan)).toContain(
+      'plan-1 · scope sha256:scope · endpoint https://example.invalid/catalog',
+    )
   })
 })

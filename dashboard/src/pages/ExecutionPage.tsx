@@ -1,21 +1,18 @@
-import { ArrowRight, ChevronDown, Link2 } from 'lucide-react'
-import {
-  type ReactNode,
-  useCallback,
-  useEffect,
-  useMemo,
-  useState,
-} from 'react'
+import { ArrowRight, Link2 } from 'lucide-react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import { AssessmentDetailDialog } from '@/components/AssessmentWorkspace'
 import { DashboardPageActions } from '@/components/DashboardPageActions'
+import { DisclosureLayer } from '@/components/DisclosureLayer'
 import { ExecutionMetricsPanel } from '@/components/ExecutionMetricsPanel'
+import { ExecutionOverview } from '@/components/ExecutionOverview'
 import { requestQuickExecution } from '@/components/ExecutionSetup'
 import { LiveProgressPanel } from '@/components/LiveProgressPanel'
+import type { OutcomeRow } from '@/components/OutcomeDerivation'
 import {
-  OutcomeDerivation,
-  type OutcomeRow,
-} from '@/components/OutcomeDerivation'
-import { ScenarioMatrix } from '@/components/ScenarioMatrix'
+  contractScent,
+  ResultContractStrip,
+  ScenarioMatrix,
+} from '@/components/ScenarioMatrix'
 import { TranscriptDialog } from '@/components/TranscriptDialog'
 import {
   buttonClassName,
@@ -41,6 +38,7 @@ import {
   type ExecutionTotals,
   getDashboardDataBridge,
 } from '@/lib/dashboard-data-source'
+import { buildExecutionMetrics } from '@/lib/execution-metrics'
 import {
   type ExecutionVerdict,
   executionVerdict,
@@ -56,6 +54,8 @@ import {
 import { executionTitle } from '@/lib/overview-signal'
 import {
   buildScenarioMatrix,
+  formatScenarioDuration,
+  type ScenarioMatrixItem,
   type ScenarioMatrixSummary,
 } from '@/lib/scenario-matrix'
 import { watchExecution } from '@/lib/watch-execution'
@@ -206,67 +206,14 @@ function formatReportedCost(value: number | null) {
   return `$${value.toFixed(4)}`
 }
 
-/* ---------------------------------------------------------------- verdict */
+/* ---------------------------------------------------------------- layers */
 
-function SectionPanel({
-  id,
-  title,
-  summary,
-  actions,
-  children,
-}: {
-  id: string
-  title: string
-  summary?: string
-  actions?: ReactNode
-  children: ReactNode
-}) {
-  return (
-    <Panel
-      as="section"
-      id={id}
-      className="scroll-mt-24"
-      aria-labelledby={`${id}-heading`}
-    >
-      <div className="mb-4 flex flex-wrap items-start justify-between gap-3">
-        <div className="min-w-0">
-          <h2
-            className="m-0 text-sm font-semibold text-ink"
-            id={`${id}-heading`}
-          >
-            {title}
-          </h2>
-          {summary ? (
-            <p className="mt-1 mb-0 max-w-[70ch] text-xs leading-5 text-ink-soft">
-              {summary}
-            </p>
-          ) : null}
-        </div>
-        {actions ? (
-          <div className="flex flex-wrap items-center gap-2">{actions}</div>
-        ) : null}
-      </div>
-      {children}
-    </Panel>
-  )
-}
-
-/** Audit ED-03 / ED-05: one verdict for the execution, stated once. */
-export function DecisionSection({
-  presentation,
-  detail,
-  verdict,
-  primaryRun,
-  metrics,
-  scenarioSummary,
-}: {
-  presentation: ExecutionPresentation
-  detail: DashboardExecutionDetail
-  verdict: ExecutionVerdict
-  primaryRun: AssessmentRunView | null
-  metrics: SummaryExecutionMetrics | null
-  scenarioSummary: ScenarioMatrixSummary | null
-}) {
+/** The two inputs the result contract combines and, only when it differs,
+ *  the status it publishes (audit ED-05). Read by the overview's derivation. */
+export function executionBoundaries(
+  presentation: ExecutionPresentation,
+  primaryRun: AssessmentRunView | null,
+): OutcomeRow[] {
   const systemStatus = primaryRun?.systemStatus ?? presentation.attention
   const advisoryStatus =
     primaryRun?.finalAssessment.result?.verdict ??
@@ -277,55 +224,131 @@ export function DecisionSection({
     { role: 'system', value: systemStatus },
     { role: 'advisory', value: advisoryStatus },
   ]
-  // Audit ED-05: the effective status only appears when it differs.
   if (effectiveStatus !== systemStatus)
     boundaries.push({ role: 'effective', value: effectiveStatus })
+  return boundaries
+}
+
+function firstSentence(value: string | null | undefined): string | null {
+  if (!value) return null
+  const match = value.match(/^.*?[.!?](?=\s|$)/)
+  return (match ? match[0] : value).replace(/\.$/, '')
+}
+
+/** Audit ED-26: every closed layer carries a scent — enough of its content to
+ *  decide whether to open it. The narrative's is what happened, then what to do. */
+export function narrativeScent(verdict: ExecutionVerdict): string {
+  return [firstSentence(verdict.diagnosis), firstSentence(verdict.nextStep)]
+    .filter(Boolean)
+    .join(' · ')
+}
+
+/** One line per scenario: name, objective verdict, advisory when it adds
+ *  something, runtime. The table behind it has the same order. */
+export function resultsScent(items: ScenarioMatrixItem[]): string {
+  if (items.length === 0) return 'no scenario report retained'
+  return items
+    .map((item) => {
+      const name = `${item.scenarioId.replace(/_/g, ' ')}${
+        item.scenarioVersion == null ? '' : ` v${item.scenarioVersion}`
+      }`
+      const advisory =
+        item.advisory.status === 'passed' ||
+        item.advisory.status === 'unavailable'
+          ? ''
+          : `, ${item.advisory.label.toLowerCase()}`
+      const runtime =
+        item.durationMs == null
+          ? ''
+          : ` · ${formatScenarioDuration(item.durationMs)}`
+      return `${name} ${item.objective.label.toLowerCase()}${advisory}${runtime}`
+    })
+    .join(' \u00a0·\u00a0 ')
+}
+
+/** The counts the layer opens onto, with the four that are usually zero
+ *  folded into one clause when they all are. */
+export function countsScent(detail: DashboardExecutionDetail): string {
+  const metrics = buildExecutionMetrics(detail)
+  const summary = detail.assessment_summary
+  const evidence =
+    typeof summary?.evidence_reference_count === 'number'
+      ? `${summary.evidence_reference_count} evidence reference${summary.evidence_reference_count === 1 ? '' : 's'}`
+      : 'no evidence references retained'
+  const assessments = `assessments ${
+    summary?.assessment_count
+      ? summary.assessment_count.toLocaleString('en-US')
+      : 'none retained'
+  }, ${evidence}`
+  if (metrics.includedScenarios === 0)
+    return `no compatible run evidence to consolidate · ${assessments}`
+  const quiet =
+    metrics.incomplete +
+      metrics.undetermined +
+      metrics.deferred +
+      metrics.technicalInvalid ===
+    0
+  return [
+    `planned ${metrics.planned}`,
+    `recorded ${metrics.observed}`,
+    `completed ${metrics.completed}`,
+    quiet
+      ? 'no incomplete, undetermined, deferred or technically invalid runs'
+      : `${metrics.incomplete} incomplete · ${metrics.undetermined} undetermined · ${metrics.deferred} deferred · ${metrics.technicalInvalid} technically invalid`,
+    assessments,
+  ].join(' · ')
+}
+
+/** Audit ED-03 / ED-05: one verdict for the execution, stated once. The
+ *  derivation leads the overview; this layer carries the words. */
+export function NarrativeSection({ verdict }: { verdict: ExecutionVerdict }) {
+  // Audit ED-22: two columns use the width instead of stopping at 80ch.
+  return (
+    <div
+      className="grid gap-x-8 gap-y-4 @[900px]:grid-cols-[minmax(0,1.35fr)_minmax(0,1fr)]"
+      data-narrative
+    >
+      {verdict.diagnosis ? (
+        <div className="grid content-start gap-1">
+          <span className="ds-label">what happened</span>
+          <p className="m-0 text-sm leading-6 text-pretty text-ink">
+            {verdict.diagnosis}
+          </p>
+        </div>
+      ) : null}
+      <div className="grid content-start gap-1">
+        <span className="ds-label">next step</span>
+        <p className="m-0 text-sm leading-6 text-pretty text-ink-soft">
+          {verdict.nextStep}
+        </p>
+      </div>
+    </div>
+  )
+}
+
+/** The counts-and-coverage layer: report coverage and retained assessments
+ *  first, then the pooled counts and consumption table, headless. */
+export function CountsSection({
+  presentation,
+  detail,
+  metrics,
+  scenarioSummary,
+}: {
+  presentation: ExecutionPresentation
+  detail: DashboardExecutionDetail
+  metrics: SummaryExecutionMetrics | null
+  scenarioSummary: ScenarioMatrixSummary | null
+}) {
   const summary = detail.assessment_summary
   const coverageComplete =
     presentation.coverage != null &&
     (presentation.coverage === 1 || presentation.coverage >= 100)
   const scenarioCount = scenarioSummary?.total ?? 0
   return (
-    <SectionPanel
-      id="summary"
-      title="decision"
-      summary={verdict.headline}
-      actions={
-        <a
-          className={buttonClassName({
-            variant: 'secondary',
-            size: 'compact',
-            className: 'no-underline',
-          })}
-          href={hashForExecution(detail.id, 'results')}
-        >
-          inspect retained evidence
-          <ArrowRight size={13} aria-hidden="true" />
-        </a>
-      }
-    >
-      <OutcomeDerivation rows={boundaries} />
-      {/* Audit ED-22: the narrative used to stop at 80ch and leave the right
-          half of a 1400px panel empty. Two columns use the width instead. */}
-      <div className="mt-5 grid gap-x-8 gap-y-4 @[900px]:grid-cols-[minmax(0,1.35fr)_minmax(0,1fr)]">
-        {verdict.diagnosis ? (
-          <div className="grid content-start gap-1">
-            <span className="ds-label">what happened</span>
-            <p className="m-0 text-sm leading-6 text-pretty text-ink">
-              {verdict.diagnosis}
-            </p>
-          </div>
-        ) : null}
-        <div className="grid content-start gap-1">
-          <span className="ds-label">next step</span>
-          <p className="m-0 text-sm leading-6 text-pretty text-ink-soft">
-            {verdict.nextStep}
-          </p>
-        </div>
-      </div>
+    <div className="grid gap-5" data-counts>
       {/* Audit ED-18: one column below 640px, no delta wrapping into a
           second line beside the label. */}
-      <div className="mt-5 grid gap-3 @[560px]:grid-cols-2 @[960px]:grid-cols-4">
+      <div className="grid min-w-0 gap-3 @[560px]:grid-cols-2 @[960px]:grid-cols-4">
         <MetricCard
           label="scenarios"
           value={
@@ -392,18 +415,13 @@ export function DecisionSection({
           tone={metrics?.totalCostUsd == null ? 'unavailable' : 'neutral'}
         />
       </div>
-    </SectionPanel>
+      <ExecutionMetricsPanel detail={detail} headless />
+    </div>
   )
 }
 
-function ResultsSection({
-  detail,
-  onTranscript,
-}: {
-  detail: DashboardExecutionDetail
-  onTranscript: (run: AssessmentRunView, title: string) => void
-}) {
-  const runCount = (detail.reports ?? []).reduce(
+function runCountFromDetail(detail: DashboardExecutionDetail) {
+  return (detail.reports ?? []).reduce(
     (total, record) =>
       total +
       (record.report?.scenarios ?? []).reduce(
@@ -412,21 +430,6 @@ function ResultsSection({
         0,
       ),
     0,
-  )
-  const scenarioCount = buildScenarioMatrix(detail).summary.total
-  return (
-    <SectionPanel
-      id="results"
-      title="scenario results"
-      actions={
-        <span className="font-mono text-label text-ink-muted">
-          {scenarioCount} {scenarioCount === 1 ? 'scenario' : 'scenarios'} ·{' '}
-          {runCount} {runCount === 1 ? 'run' : 'runs'}
-        </span>
-      }
-    >
-      <ScenarioMatrix detail={detail} onTranscript={onTranscript} />
-    </SectionPanel>
   )
 }
 
@@ -490,80 +493,73 @@ export function provenanceEntries(
   return rows.filter((row): row is [string, string] => Boolean(row[1]))
 }
 
-function TechnicalSection({
+/** Audit ED-10 / ED-29: the results contract is provenance too, so it opens
+ *  here with the raw fields instead of sitting above the scenario table. */
+function ProvenanceSection({
   detail,
   presentation,
+  contracts,
 }: {
   detail: DashboardExecutionDetail
   presentation: ExecutionPresentation
+  contracts: ReturnType<typeof buildScenarioMatrix>['contracts']
 }) {
   const entries = provenanceEntries(detail, presentation)
   const raw = JSON.stringify(detail, null, 2)
   const [copied, setCopied] = useState(false)
-  const line = entries.map(([key, value]) => `${key} ${value}`).join(' · ')
-  // Audit ED-10 / ED-05: provenance is one collapsed line until asked for.
   return (
-    <Panel as="section" id="technical" className="scroll-mt-24">
-      <details data-provenance>
-        <summary className="flex min-h-9 cursor-pointer list-none items-center gap-3 text-xs marker:hidden">
-          <ChevronDown
-            className="size-4 shrink-0 -rotate-90 text-ink-muted transition-transform duration-[var(--ds-duration-fast)] group-open:rotate-0 motion-reduce:transition-none"
-            aria-hidden="true"
-          />
-          <span className="font-semibold text-ink">
-            raw fields and immutable identity
-          </span>
-          <span className="ms-auto hidden truncate font-mono text-label text-ink-muted @[720px]:block">
-            {line.slice(0, 120)}
-          </span>
-        </summary>
-        <dl className="m-0 mt-4 grid grid-cols-[max-content_minmax(0,1fr)] gap-x-6 gap-y-2 font-mono text-xs">
-          {entries.map(([key, value]) => (
-            <div key={key} className="contents">
-              <dt className="ds-label">{key}</dt>
-              <dd className="m-0 break-all text-ink">{value}</dd>
-            </div>
-          ))}
-        </dl>
-        <div className="mt-4 flex flex-wrap gap-2">
-          <button
-            type="button"
-            className={buttonClassName({
-              variant: 'secondary',
-              size: 'compact',
-            })}
-            onClick={() => {
-              void navigator.clipboard?.writeText(raw).then(() => {
-                setCopied(true)
-                window.setTimeout(() => setCopied(false), 1500)
-              })
-            }}
-          >
-            {copied ? 'copied' : 'copy json'}
-          </button>
-        </div>
-        <pre className="mt-3 mb-0 max-h-[480px] overflow-auto rounded-[6px] bg-canvas p-4 font-mono text-xs leading-5 text-ink-soft">
-          {raw}
-        </pre>
-      </details>
-    </Panel>
+    <div className="grid gap-4" data-provenance>
+      <ResultContractStrip contracts={contracts} />
+      <dl className="m-0 grid min-w-0 grid-cols-[max-content_minmax(0,1fr)] gap-x-6 gap-y-2 font-mono text-xs">
+        {entries.map(([key, value]) => (
+          <div key={key} className="contents">
+            <dt className="ds-label">{key}</dt>
+            <dd className="m-0 break-all text-ink">{value}</dd>
+          </div>
+        ))}
+      </dl>
+      <div className="flex flex-wrap gap-2">
+        <button
+          type="button"
+          className={buttonClassName({
+            variant: 'secondary',
+            size: 'compact',
+          })}
+          onClick={() => {
+            void navigator.clipboard?.writeText(raw).then(() => {
+              setCopied(true)
+              window.setTimeout(() => setCopied(false), 1500)
+            })
+          }}
+        >
+          {copied ? 'copied' : 'copy json'}
+        </button>
+      </div>
+      <pre className="m-0 min-w-0 max-h-[480px] overflow-auto rounded-[6px] bg-canvas p-4 font-mono text-xs leading-5 text-ink-soft">
+        {raw}
+      </pre>
+    </div>
   )
 }
 
-/** Audit ED-07: the anchors the router already accepts get a visible bar. */
+/** Audit ED-07 / ED-26: the anchors the router accepts stay a visible bar;
+ *  each one now opens its layer, so deep links keep working. */
 const SECTIONS: Array<{ id: DetailSection; label: string }> = [
-  { id: 'summary', label: 'decision' },
-  { id: 'metrics', label: 'metrics' },
+  { id: 'summary', label: 'what happened' },
   { id: 'results', label: 'results' },
+  { id: 'metrics', label: 'counts' },
   { id: 'technical', label: 'provenance' },
 ]
 
 function SectionBar({
   active,
   executionId,
+  onSelect,
 }: {
-  active: DetailSection
+  active: DetailSection | null
   executionId: string
+  /** Re-opens a layer the reader closed when its anchor is already current. */
+  onSelect: (section: DetailSection) => void
 }) {
   return (
     <nav
@@ -581,6 +577,7 @@ function SectionBar({
           })}
           href={hashForExecution(executionId, section.id)}
           aria-current={active === section.id ? 'true' : undefined}
+          onClick={() => onSelect(section.id)}
         >
           {section.label}
         </a>
@@ -683,7 +680,23 @@ export function ExecutionPage({
     run: AssessmentRunView
     title: string
   } | null>(null)
-  const section = sectionFromAnchor(anchor)
+  // Audit ED-26: the URL opens its layer; toggles the reader makes afterwards
+  // hold until the anchor changes, then the URL wins again. No effect needed.
+  const anchorSection = anchor ? sectionFromAnchor(anchor) : null
+  const [toggles, setToggles] = useState<{
+    anchor: string | null | undefined
+    layers: Partial<Record<DetailSection, boolean>>
+  }>({ anchor, layers: {} })
+  const layers = toggles.anchor === anchor ? toggles.layers : {}
+  const layerOpen = (id: DetailSection) => layers[id] ?? anchorSection === id
+  const setLayer = (id: DetailSection, open: boolean) =>
+    setToggles((current) => ({
+      anchor,
+      layers: {
+        ...(current.anchor === anchor ? current.layers : {}),
+        [id]: open,
+      },
+    }))
   const beginRequest = useLatestRequest()
   const loadedExecutionId = detail?.id
 
@@ -819,7 +832,7 @@ export function ExecutionPage({
           <span className="ds-visually-hidden">Loading execution report</span>
           <div className="grid gap-4">
             <div className="h-12 w-72 animate-pulse rounded-[6px] bg-[var(--surface-fill)] motion-reduce:animate-none" />
-            {['decision', 'results', 'provenance'].map((placeholder) => (
+            {['overview', 'results', 'provenance'].map((placeholder) => (
               <div
                 key={placeholder}
                 className="h-40 animate-pulse rounded-[6px] bg-[var(--surface-fill)] motion-reduce:animate-none"
@@ -842,6 +855,8 @@ export function ExecutionPage({
     scenarioMatrix?.items ?? [],
     primaryRun,
   )
+  const boundaries = executionBoundaries(presentation, primaryRun)
+  const runCount = runCountFromDetail(detail)
   const runtimeSeconds =
     presentation.modelRuntimeSeconds ?? summaryMetrics?.durationSeconds ?? null
   const noRun = !presentation.available || (scenarioSummary?.total ?? 0) === 0
@@ -997,22 +1012,84 @@ export function ExecutionPage({
         ) : null}
         {!noRun && !live ? (
           <>
-            <SectionBar active={section} executionId={detail.id} />
-            <div className="grid min-w-0 gap-5">
-              <DecisionSection
-                presentation={presentation}
-                detail={detail}
-                verdict={verdict}
-                primaryRun={primaryRun}
-                metrics={summaryMetrics}
-                scenarioSummary={scenarioSummary}
-              />
-              <ExecutionMetricsPanel detail={detail} />
-              <ResultsSection
-                detail={detail}
-                onTranscript={(run, title) => setTranscript({ run, title })}
-              />
-              <TechnicalSection detail={detail} presentation={presentation} />
+            <SectionBar
+              active={anchorSection}
+              executionId={detail.id}
+              onSelect={(id) => setLayer(id, true)}
+            />
+            {/* Audit ED-26: layer 0 is the grouped metrics; everything else
+                is a closed row with a scent until the reader needs it. */}
+            <div className="grid min-w-0 gap-3">
+              <ExecutionOverview detail={detail} boundaries={boundaries} />
+              <DisclosureLayer
+                id="summary"
+                label="what happened and next step"
+                scent={narrativeScent(verdict)}
+                open={layerOpen('summary')}
+                onToggle={(open) => setLayer('summary', open)}
+                actions={
+                  <a
+                    className={buttonClassName({
+                      variant: 'secondary',
+                      size: 'compact',
+                      className: 'no-underline',
+                    })}
+                    href={hashForExecution(detail.id, 'results')}
+                  >
+                    inspect retained evidence
+                    <ArrowRight size={13} aria-hidden="true" />
+                  </a>
+                }
+              >
+                <NarrativeSection verdict={verdict} />
+              </DisclosureLayer>
+              <DisclosureLayer
+                id="results"
+                label="scenario results"
+                scent={resultsScent(scenarioMatrix?.items ?? [])}
+                open={layerOpen('results')}
+                onToggle={(open) => setLayer('results', open)}
+                actions={
+                  <span className="font-mono text-label font-normal text-ink-muted">
+                    {scenarioSummary?.total ?? 0}{' '}
+                    {scenarioSummary?.total === 1 ? 'scenario' : 'scenarios'} ·{' '}
+                    {runCount} {runCount === 1 ? 'run' : 'runs'}
+                  </span>
+                }
+              >
+                <ScenarioMatrix
+                  detail={detail}
+                  onTranscript={(run, title) => setTranscript({ run, title })}
+                  showContract={false}
+                />
+              </DisclosureLayer>
+              <DisclosureLayer
+                id="metrics"
+                label="counts and coverage"
+                scent={countsScent(detail)}
+                open={layerOpen('metrics')}
+                onToggle={(open) => setLayer('metrics', open)}
+              >
+                <CountsSection
+                  presentation={presentation}
+                  detail={detail}
+                  metrics={summaryMetrics}
+                  scenarioSummary={scenarioSummary}
+                />
+              </DisclosureLayer>
+              <DisclosureLayer
+                id="technical"
+                label="provenance"
+                scent={contractScent(scenarioMatrix?.contracts ?? [])}
+                open={layerOpen('technical')}
+                onToggle={(open) => setLayer('technical', open)}
+              >
+                <ProvenanceSection
+                  detail={detail}
+                  presentation={presentation}
+                  contracts={scenarioMatrix?.contracts ?? []}
+                />
+              </DisclosureLayer>
             </div>
           </>
         ) : null}
