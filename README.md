@@ -105,12 +105,33 @@ cargo run --locked -- test-plan list
 Templates and execution rules are materialized directly by Rust from the source
 and native contracts. There are no generated catalogs to synchronize.
 
-Release Control dispatches `.github/workflows/exact-stack-e2e.yml`
-directly in this repository. The workflow validates the single strict campaign contract,
-executes every common group in an isolated ephemeral stack, routes fault groups
-to the protected runner, and produces one root bundle without rebuilding the
-native Harness artifacts. `workers` supplies versioned components of the stack
-under test; it does not orchestrate campaigns.
+Release Control dispatches `.github/workflows/exact-stack-e2e.yml` directly in
+this repository with five inputs and no decisions of its own: `execution_id`,
+the `plan` naming one profile of `config/test-plan.json`, a `stack` policy
+(`{"policy":"latest"}` or exact versions), the executor commit `runner_sha`,
+and the `cli_version` to install.
+
+Everything else is resolved here, from the commit pinned by `runner_sha`:
+
+1. `harness-e2e test-plan materialize --profile <id>` expands the profile into
+   its campaigns, groups and cases, with a `profile_sha256` over the result.
+2. `scripts/resolve_stack_lock.py` turns the stack policy into one exact
+   `rc-e2e/v2` contract per campaign — every Registry version resolved, `latest`
+   never surviving into a contract — which `scripts/exact_stack_campaign.py`
+   validates as before.
+3. Each group runs in an isolated ephemeral stack; fault groups route to the
+   protected runner; one root bundle is produced without rebuilding the native
+   Harness artifacts.
+
+`scripts/report_execution.py` posts what was observed to Release Control's run
+ledger over OIDC: `materialized` before anything runs, one `shard` per campaign
+group whatever that group did, and a `summary` whatever the finalizer did. Runs
+come from `results.json`, or from the journal checkpoints when a group died
+before writing one; a group that produced neither still reports, saying so. No
+execution is silently lost.
+
+`workers` supplies versioned components of the stack under test; it does not
+orchestrate campaigns.
 
 ## Dashboard
 
@@ -268,9 +289,10 @@ baseline/candidate cohort.
 ## Runtime-only package boundary
 
 This repository executes exact-stack Test Plans and never publishes itself as
-a Registry worker. Release Control supplies a digest-locked stack and an
-immutable executor SHA to `exact-stack-e2e.yml`; every Registry version in the
-lock is exact, including historical candidates.
+a Registry worker. Release Control supplies a stack policy and an immutable
+executor SHA to `exact-stack-e2e.yml`; the contract this repository assembles
+from them pins every Registry version to an exact one, including historical
+candidates, because a campaign has to be able to say afterwards what it ran.
 
 The root `iii.worker.yaml` remains the public manifest for local `iii worker`
 development and package compatibility. The root `worker-compose.yaml` remains

@@ -64,12 +64,47 @@ class WorkflowBoundaryTests(unittest.TestCase):
     def test_the_campaign_workflow_knows_nothing_about_the_contract(self):
         """The workflow is read from the default branch; the executor is pinned
         per campaign by runner_sha. Any contract field the workflow reads itself
-        would have to change in lockstep with the contract, so it reads none."""
+        would have to change in lockstep with the contract, so it reads none —
+        the scripts checked out at runner_sha read them all."""
         workflow = (ROOT / ".github/workflows/exact-stack-e2e.yml").read_text(encoding="utf-8")
         for selector in (".suite", ".plan.definition", ".security.", ".orchestration", ".runner."):
             self.assertNotIn(selector, workflow, f"workflow selects contract field {selector}")
-        self.assertIn("exact_stack_campaign.py admit", workflow)
+        self.assertIn("exact_stack_campaign.py digest", workflow)
         self.assertIn("exact_stack_campaign.py groups", workflow)
+        self.assertIn("exact_stack_campaign.py validate", workflow)
+
+    def test_release_control_dispatches_a_profile_and_resolves_nothing(self):
+        """The five inputs of the run ledger. Release Control names an
+        execution, a plan with its profile, a stack policy, the executor commit
+        and the CLI; the composition and every exact version are resolved here."""
+        workflow = (ROOT / ".github/workflows/exact-stack-e2e.yml").read_text(encoding="utf-8")
+        block = workflow.split("    inputs:\n", 1)[1].split("\npermissions:", 1)[0]
+        self.assertEqual(
+            sorted(re.findall(r"^      (\w+):$", block, re.MULTILINE)),
+            ["cli_version", "execution_id", "plan", "runner_sha", "stack"],
+        )
+        # An absent input is a silent default; every one of the five is stated.
+        self.assertEqual(block.count("required: true"), 5)
+        # The composition belongs to the runner: the profile is materialized
+        # from the pinned commit, never read out of the dispatch.
+        self.assertIn("test-plan materialize --profile", workflow)
+        self.assertIn("scripts/resolve_stack_lock.py", workflow)
+
+    def test_every_execution_reports_whatever_it_managed_to_observe(self):
+        """No execution is lost: the profile is reported before anything runs,
+        each shard reports its runs whatever the group did, and the summary is
+        posted whatever the finalizer did."""
+        workflow = (ROOT / ".github/workflows/exact-stack-e2e.yml").read_text(encoding="utf-8")
+        for kind in ("materialized", "shard", "summary"):
+            self.assertIn(f"report_execution.py {kind}", workflow)
+        shard = workflow.split("Report this shard's runs", 1)[1]
+        self.assertTrue(shard.lstrip().startswith("if: always()"), "the shard report must be unconditional")
+        summary = workflow.split("Report the campaign summary", 1)[1]
+        self.assertTrue(summary.lstrip().startswith("if: always()"), "the summary report must be unconditional")
+        # Admission is gone with the campaign it admitted; the reports carry
+        # the OIDC identity now, and the first one binds the run.
+        self.assertNotIn("/admit", workflow)
+        self.assertNotIn("exact_stack_campaign.py admit", workflow)
 
     def test_exact_stack_is_the_only_release_control_executor(self):
         workflows = {path.name for path in (ROOT / ".github/workflows").glob("*.yml")}
