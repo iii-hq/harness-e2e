@@ -5,7 +5,7 @@ import { routeFromHash } from '@/hooks/use-hash-route'
 import type { PlanExecution } from '@/lib/plan-execution'
 import { PlanProgress, Requirements } from './PlanExecutionPage'
 
-describe('executable profile plan journey', () => {
+describe('executable plan journey', () => {
   it('requires an explicit execution model and the required evaluator', () => {
     const config = {
       mode: 'plan' as const,
@@ -24,7 +24,7 @@ describe('executable profile plan journey', () => {
       validateExecutionSetup({ ...config, subject: 'model', judge: 'judge' }),
     ).toEqual({})
   })
-  it('keeps refreshable profile, duplication and manual routes', () => {
+  it('uses the shared form for templates, duplication and the old manual URL', () => {
     expect(routeFromHash('#/plans/new/profile/smoke')).toEqual({
       page: 'plan-create',
       profileId: 'smoke',
@@ -33,10 +33,9 @@ describe('executable profile plan journey', () => {
       page: 'plan-create',
       duplicateId: 'profile-example',
     })
-    expect(routeFromHash('#/plans/new/manual')).toEqual({
-      page: 'plan-create',
-      manual: true,
-    })
+    expect(routeFromHash('#/plans/new/manual')).toEqual(
+      routeFromHash('#/plans/new'),
+    )
   })
   it('uses every planned slot as progress denominator and separates result axes', () => {
     const execution = {

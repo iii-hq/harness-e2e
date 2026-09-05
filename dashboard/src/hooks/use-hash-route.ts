@@ -24,24 +24,8 @@ export type DashboardRoute =
       profileId?: string
       duplicateId?: string
       editId?: string
-      manual?: boolean
     }
   | { page: 'plan-detail'; planId: string }
-
-export type DashboardRoutes = {
-  current: () => DashboardRoute
-  workspace: (view?: WorkspaceView) => string
-  execution: (
-    executionId: string,
-    anchor?: string | null,
-    runId?: string | null,
-  ) => string
-  compare: (left?: string | null, right?: string | null) => string
-  testHistory: (testId: string) => string
-  plans: () => string
-  newPlan: () => string
-  plan: (planId: string) => string
-}
 
 const workspaceViews = new Set<WorkspaceView>([
   'overview',
@@ -155,7 +139,6 @@ export function routeFromHash(rawHash: string): DashboardRoute | null {
         return { page: 'plan-create', duplicateId: rest[2] }
       if (rest[1] === 'edit' && rest[2])
         return { page: 'plan-create', editId: rest[2] }
-      if (rest[1] === 'manual') return { page: 'plan-create', manual: true }
       return { page: 'plan-create' }
     }
     return { page: 'plan-detail', planId: rest[0] }
@@ -212,17 +195,6 @@ export function hashForPlans(): string {
 
 export function hashForPlan(planId: string): string {
   return dashboardHash(`plans/${encodeSegment(planId)}`)
-}
-
-export const dashboardRoutes: DashboardRoutes = {
-  current: currentDashboardRoute,
-  workspace: hashForWorkspace,
-  execution: hashForExecution,
-  compare: hashForComparison,
-  testHistory: hashForTestHistory,
-  plans: hashForPlans,
-  newPlan: hashForNewPlan,
-  plan: hashForPlan,
 }
 
 export function routeRenderIdentity(route: DashboardRoute): string {

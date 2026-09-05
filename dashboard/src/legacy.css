@@ -39,52 +39,6 @@ body {
   min-height: 100dvh;
 }
 
-.app-load-error {
-  position: fixed;
-  z-index: 1000;
-  right: 20px;
-  bottom: 20px;
-  display: grid;
-  grid-template-columns: auto minmax(0, 1fr) auto;
-  align-items: center;
-  width: min(520px, calc(100vw - 40px));
-  gap: 12px;
-  padding: 14px 16px;
-  border: 1px solid color-mix(in srgb, var(--danger) 35%, transparent);
-  border-radius: var(--radius-sm);
-  background: color-mix(in srgb, var(--surface) 94%, var(--danger));
-  box-shadow: var(--shadow);
-  color: var(--text);
-}
-
-.app-load-error > svg {
-  color: var(--danger);
-}
-
-.app-load-error div {
-  display: grid;
-  min-width: 0;
-  gap: 2px;
-}
-
-.app-load-error span {
-  overflow: hidden;
-  color: var(--text-soft);
-  font-size: 0.78rem;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.app-load-error button {
-  padding: 7px 10px;
-  border: 1px solid var(--line-strong);
-  border-radius: 8px;
-  background: transparent;
-  color: var(--text);
-  cursor: pointer;
-  font-weight: 700;
-}
-
 #latest-evidence,
 #comparison,
 #efficiency,

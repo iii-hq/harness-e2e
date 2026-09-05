@@ -8,8 +8,6 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
-#[cfg(test)]
-use super::RunRequest;
 use crate::artifact;
 use crate::markdown::ScenarioKey;
 #[cfg(test)]
@@ -198,43 +196,6 @@ pub(super) fn read_plan(plans_dir: &Path, id: &str) -> Result<Option<LocalPlan>>
     Ok(Some(plan))
 }
 
-#[cfg(test)]
-pub(super) fn list_plans(plans_dir: &Path) -> Result<Vec<LocalPlan>> {
-    if !plans_dir.is_dir() {
-        return Ok(Vec::new());
-    }
-    let mut plans = Vec::new();
-    for entry in fs::read_dir(plans_dir)? {
-        let entry = entry?;
-        if !entry.file_type()?.is_file()
-            || entry.path().extension().and_then(|value| value.to_str()) != Some("json")
-        {
-            continue;
-        }
-        let path = entry.path();
-        let id = path
-            .file_stem()
-            .and_then(|value| value.to_str())
-            .unwrap_or_default();
-        match read_plan(plans_dir, id) {
-            Ok(Some(plan)) => plans.push(plan),
-            Ok(None) => {}
-            Err(error) => tracing::warn!(
-                path = %path.display(),
-                error = %format!("{error:#}"),
-                "ignoring an unsupported or corrupt local E2E plan"
-            ),
-        }
-    }
-    plans.sort_by(|left, right| {
-        right
-            .updated_at
-            .cmp(&left.updated_at)
-            .then_with(|| right.id.cmp(&left.id))
-    });
-    Ok(plans)
-}
-
 pub(super) fn new_plan(request: &PlanCreateRequest, id: String) -> Result<LocalPlan> {
     validate_values(request)?;
     let scenarios = resolve_scope(&request.scenarios, request.seed)?;
@@ -390,35 +351,6 @@ pub(super) fn plan_request(plan: &LocalPlan) -> PlanCreateRequest {
         runs: plan.runs,
         technical_retries: plan.technical_retries,
         seed: plan.seed,
-    }
-}
-
-#[cfg(test)]
-pub(super) fn run_request(plan: &LocalPlan, role: PlanRunRole) -> RunRequest {
-    RunRequest {
-        _caller_worker_id: None,
-        label: format!(
-            "{} · {}",
-            plan.label,
-            match role {
-                PlanRunRole::Baseline => "baseline",
-                PlanRunRole::Candidate => "candidate",
-            }
-        ),
-        url: plan.url.clone(),
-        model: plan.model.clone(),
-        provider: plan.provider.clone(),
-        judge_model: plan.judge_model.clone(),
-        judge_provider: plan.judge_provider.clone(),
-        scenarios: plan.scenario_ids.clone(),
-        runs: plan.runs,
-        technical_retries: plan.technical_retries,
-        seed: plan.seed,
-        plan_context: Some(PlanContext {
-            plan_id: plan.id.clone(),
-            role,
-            plan_hash: plan.scope_hash.clone(),
-        }),
     }
 }
 
@@ -626,21 +558,6 @@ mod tests {
             read_plan(directory.path(), &plan.id).unwrap(),
             Some(plan.clone())
         );
-        assert_eq!(list_plans(directory.path()).unwrap(), vec![plan]);
-    }
-
-    #[test]
-    fn listing_isolates_an_unsupported_plan() {
-        let directory = tempfile::tempdir().expect("temporary directory");
-        let plan = new_plan(&request(), "plan-supported".into()).expect("plan should materialize");
-        write_plan(directory.path(), &plan).expect("plan should be written");
-        fs::write(
-            directory.path().join("plan-unsupported.json"),
-            br#"{"schema_version":1,"legacy_shape":true}"#,
-        )
-        .expect("legacy fixture should be written");
-
-        assert_eq!(list_plans(directory.path()).unwrap(), vec![plan]);
     }
 
     #[test]
@@ -719,16 +636,6 @@ mod tests {
             .remove("candidate_labels");
         let decoded: LocalPlan = serde_json::from_value(value).expect("old plan should decode");
         assert!(decoded.candidate_labels.is_empty());
-    }
-
-    #[test]
-    fn run_requests_carry_the_frozen_plan_context() {
-        let plan = new_plan(&request(), "plan-context".into()).expect("plan should materialize");
-        let run = run_request(&plan, PlanRunRole::Candidate);
-        let context = run.plan_context.expect("plan context");
-        assert_eq!(context.plan_id, plan.id);
-        assert_eq!(context.plan_hash, plan.scope_hash);
-        assert_eq!(context.role, PlanRunRole::Candidate);
     }
 
     #[test]

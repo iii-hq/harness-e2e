@@ -392,32 +392,14 @@ impl PlanStore {
         history.sort_by(|a, b| b.started_at.cmp(&a.started_at));
         Ok(history)
     }
-    pub(super) fn list(&self) -> Result<Vec<Value>> {
-        let mut values = Vec::new();
-        for value in read_json_directory::<Value>(&self.root.join("plans"))? {
-            let id = value["id"].as_str().context("Plan identity missing")?;
-            values.push(self.view(&self.read_plan(id)?)?);
-        }
-        values.sort_by(|a, b| b["created_at"].as_str().cmp(&a["created_at"].as_str()));
-        Ok(values)
-    }
     fn view(&self, plan: &SavedPlan) -> Result<Value> {
         let history = self.history(&plan.id)?;
-        let baseline = history
-            .iter()
-            .rev()
-            .find(|e| matches!(e.role, Role::Baseline) && e.baseline_eligible)
-            .map(|e| &e.id);
         let mut value = serde_json::to_value(plan)?;
-        value["state"] = json!(history.first().map(|e| e.state.as_str()).unwrap_or("draft"));
         value["last_execution"] = history
             .first()
             .map(execution_summary)
             .unwrap_or(Value::Null);
-        value["baseline_execution_id"] = json!(baseline);
         value["history"] = json!(history.iter().map(execution_summary).collect::<Vec<_>>());
-        value["compatible"] = json!(verify_snapshot(plan).is_ok());
-        value["locked"] = json!(plan.locked || !history.is_empty());
         let canonical = self.canonical(plan)?;
         for (key, item) in serde_json::to_value(canonical)?.as_object().unwrap() {
             value[key] = item.clone();
@@ -428,11 +410,31 @@ impl PlanStore {
         self.canonical(&self.read_plan(id)?)
     }
     pub(super) fn list_local(&self) -> Result<Vec<super::plans::LocalPlan>> {
-        self.list()?
-            .into_iter()
-            .map(serde_json::from_value)
-            .collect::<std::result::Result<_, _>>()
-            .map_err(Into::into)
+        let mut plans = Vec::new();
+        for entry in fs::read_dir(self.root.join("plans"))? {
+            let entry = entry?;
+            let path = entry.path();
+            if !entry.file_type()?.is_file()
+                || path.extension().and_then(|value| value.to_str()) != Some("json")
+            {
+                continue;
+            }
+            let id = path
+                .file_stem()
+                .and_then(|value| value.to_str())
+                .unwrap_or_default();
+            match self.get_local(id) {
+                Ok(plan) => plans.push(plan),
+                Err(error) => tracing::warn!(path = %path.display(), error = %error,
+                    "ignoring an unsupported or corrupt local E2E plan"),
+            }
+        }
+        plans.sort_by(|a, b| {
+            b.updated_at
+                .cmp(&a.updated_at)
+                .then_with(|| b.id.cmp(&a.id))
+        });
+        Ok(plans)
     }
     fn canonical(&self, saved: &SavedPlan) -> Result<super::plans::LocalPlan> {
         use super::plans::PlanState;
@@ -1950,13 +1952,20 @@ mod tests {
             .await
             .unwrap();
         manager.reconcile().await.unwrap();
-        let retained = super::super::plans::list_plans(&root.path().join("plans")).unwrap();
-        assert_eq!(retained.len(), 1);
+        fs::write(
+            root.path().join("plans/unsupported.json"),
+            br#"{"schema_version":3}"#,
+        )
+        .unwrap();
+        fs::write(root.path().join("plans/corrupt.json"), b"invalid json").unwrap();
+        let listed = manager.list_local().unwrap();
+        assert_eq!(listed.len(), 2);
+        let retained = listed.iter().find(|plan| plan.id == legacy.id).unwrap();
+        assert_eq!(retained.candidate_execution_ids, vec!["candidate-retained"]);
         assert_eq!(
-            retained[0].candidate_execution_ids,
-            vec!["candidate-retained"]
+            retained.baseline_execution_id.as_deref(),
+            Some("baseline-retained")
         );
-        assert_eq!(manager.list().unwrap().len(), 2);
         assert_eq!(fs::read(path).unwrap(), original);
     }
 
