@@ -261,7 +261,16 @@ impl ScenarioCharacterization {
             | "policy_bound_action"
             | "cross_app_transaction"
             | "performance_regression"
-            | "browser_cross_site" => ExecutionRealism::RealisticSimulator,
+            | "browser_cross_site"
+            | "swe_config_isolation"
+            | "swe_cache_invalidation"
+            | "swe_batch_replay"
+            | "swe_replay_recovery"
+            | "swe_contract_migration"
+            | "swe_tenant_isolation"
+            | "swe_replay_performance"
+            | "swe_release_handoff"
+            | "swe_service_journey" => ExecutionRealism::RealisticSimulator,
             _ => ExecutionRealism::Synthetic,
         };
         Self {

@@ -183,6 +183,19 @@ jobs:
           HARNESS_E2E_HARNESS_ROOT: ${{ github.workspace }}
         run: scripts/run_exact_stack_fault.sh
 
+      - name: Publish SWE journey handoff
+        if: always() && matrix.execution_kind != 'fault_injection'
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ secrets.E2E_FIXTURE_GITHUB_TOKEN }}
+          SWE_EXECUTION_ID: ${{ inputs.execution_id }}-${{ inputs.attempt }}-${{ matrix.group_id }}
+          SWE_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          python3 scripts/publish_swe_campaign.py \
+            --reports-dir target/harness-e2e-exact-stack/deliverables \
+            --execution-id "$SWE_EXECUTION_ID" --run-url "$SWE_RUN_URL" \
+            --output target/harness-e2e-exact-stack/swe-publication.json
+
       - name: Package factual group evidence
         id: group_package
         if: always()

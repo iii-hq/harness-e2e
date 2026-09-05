@@ -9,6 +9,11 @@ Runtime discovery, execution, observation, state access, and cleanup all happen
 through functions registered in iii. The only product input is an immutable
 subject artifact or an already-running iii stack.
 
+The [SWE service suite](docs/swe-service.md) provides eight isolated engineering
+tasks and a continuous eight-ticket journey over the same Python service, with
+optional delegation, immutable checkpoints, isolated verification, and a trusted
+GitHub handoff.
+
 ## Binaries
 
 - `harness-e2e` is started by Compose and registers the asynchronous `e2e::*`

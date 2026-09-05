@@ -60,4 +60,9 @@ jobs:
       - run: cargo test --locked --all-targets
       - run: cargo clippy --locked --all-targets -- -D warnings
       - run: node --test tests/dashboard/*.test.cjs
-      - run: python3 -m unittest discover -s tests/python -p 'test_*.py'
+      - name: Prepare the isolated SWE verifier runtime
+        run: docker pull python@sha256:1042b61448fef4ba92d16a8c7eb4996d027568ce64792a7877fd88511e0af7c6
+      - name: Verify Python contracts and OS isolation
+        env:
+          SWE_REQUIRE_OS_ISOLATION: "1"
+        run: python3 -m unittest discover -s tests/python -p 'test_*.py'

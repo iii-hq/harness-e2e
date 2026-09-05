@@ -47,6 +47,7 @@ pub mod security_review;
 pub mod shell_coder_sandbox;
 pub mod subagent_validation;
 pub mod subagent_validation_failure;
+pub mod swe_service;
 pub mod timer_wake;
 pub mod todo_worker;
 pub mod tool_contract_recovery;
@@ -233,7 +234,16 @@ impl MaterializedScenario {
                 self.case.scenario_version
             );
         }
-        if self.case.deliverable_contract.artifacts.is_empty() != self.capture.is_none() {
+        // Composite workflows capture through their trusted steps and cleanup hook.
+        let workflow_capture = self.capture.is_none()
+            && !self.case.deliverable_contract.artifacts.is_empty()
+            && ScenarioId::ALL.iter().any(|scenario| {
+                scenario.as_str() == self.spec.id
+                    && scenario.execution_kind() == ScenarioExecutionKind::CompositeFlow
+            });
+        if self.case.deliverable_contract.artifacts.is_empty() != self.capture.is_none()
+            && !workflow_capture
+        {
             bail!(
                 "scenario '{}' must declare both a deliverable contract and capture hook, or neither",
                 self.spec.id
@@ -469,10 +479,28 @@ pub enum ScenarioId {
     ReleaseTrainRecovery,
     #[value(name = "cross_repo_contract_migration")]
     CrossRepoContractMigration,
+    #[value(name = "swe_config_isolation")]
+    SweConfigIsolation,
+    #[value(name = "swe_cache_invalidation")]
+    SweCacheInvalidation,
+    #[value(name = "swe_batch_replay")]
+    SweBatchReplay,
+    #[value(name = "swe_replay_recovery")]
+    SweReplayRecovery,
+    #[value(name = "swe_contract_migration")]
+    SweContractMigration,
+    #[value(name = "swe_tenant_isolation")]
+    SweTenantIsolation,
+    #[value(name = "swe_replay_performance")]
+    SweReplayPerformance,
+    #[value(name = "swe_release_handoff")]
+    SweReleaseHandoff,
+    #[value(name = "swe_service_journey")]
+    SweServiceJourney,
 }
 
 impl ScenarioId {
-    pub const ALL: [Self; 40] = [
+    pub const ALL: [Self; 49] = [
         Self::ContextPressure,
         Self::ShellCoderSandbox,
         Self::ResearchPipeline,
@@ -513,6 +541,15 @@ impl ScenarioId {
         Self::BrowserCrossSite,
         Self::ReleaseTrainRecovery,
         Self::CrossRepoContractMigration,
+        Self::SweConfigIsolation,
+        Self::SweCacheInvalidation,
+        Self::SweBatchReplay,
+        Self::SweReplayRecovery,
+        Self::SweContractMigration,
+        Self::SweTenantIsolation,
+        Self::SweReplayPerformance,
+        Self::SweReleaseHandoff,
+        Self::SweServiceJourney,
     ];
 
     /// Editorial one-paragraph description of the test, for readers rather than
@@ -568,6 +605,15 @@ impl ScenarioId {
             Self::BrowserCrossSite => browser_cross_site::ID,
             Self::ReleaseTrainRecovery => release_train_recovery::ID,
             Self::CrossRepoContractMigration => cross_repo_contract_migration::ID,
+            Self::SweConfigIsolation => "swe_config_isolation",
+            Self::SweCacheInvalidation => "swe_cache_invalidation",
+            Self::SweBatchReplay => "swe_batch_replay",
+            Self::SweReplayRecovery => "swe_replay_recovery",
+            Self::SweContractMigration => "swe_contract_migration",
+            Self::SweTenantIsolation => "swe_tenant_isolation",
+            Self::SweReplayPerformance => "swe_replay_performance",
+            Self::SweReleaseHandoff => "swe_release_handoff",
+            Self::SweServiceJourney => "swe_service_journey",
         }
     }
 
@@ -613,6 +659,15 @@ impl ScenarioId {
             Self::BrowserCrossSite => browser_cross_site::scenario(run_id),
             Self::ReleaseTrainRecovery => release_train_recovery::scenario(run_id),
             Self::CrossRepoContractMigration => cross_repo_contract_migration::scenario(run_id),
+            Self::SweConfigIsolation
+            | Self::SweCacheInvalidation
+            | Self::SweBatchReplay
+            | Self::SweReplayRecovery
+            | Self::SweContractMigration
+            | Self::SweTenantIsolation
+            | Self::SweReplayPerformance
+            | Self::SweReleaseHandoff
+            | Self::SweServiceJourney => swe_service::spec(self),
         }
     }
 
@@ -670,6 +725,15 @@ impl ScenarioId {
             Self::CrossRepoContractMigration => {
                 cross_repo_contract_migration::materialize(namespace, seed)?
             }
+            Self::SweConfigIsolation
+            | Self::SweCacheInvalidation
+            | Self::SweBatchReplay
+            | Self::SweReplayRecovery
+            | Self::SweContractMigration
+            | Self::SweTenantIsolation
+            | Self::SweReplayPerformance
+            | Self::SweReleaseHandoff
+            | Self::SweServiceJourney => swe_service::materialize(self)?,
         };
         materialized.validate()?;
         Ok(materialized)
@@ -754,12 +818,31 @@ impl ScenarioId {
                 | Self::BrowserCrossSite
                 | Self::ReleaseTrainRecovery
                 | Self::CrossRepoContractMigration
+                | Self::SweConfigIsolation
+                | Self::SweCacheInvalidation
+                | Self::SweBatchReplay
+                | Self::SweReplayRecovery
+                | Self::SweContractMigration
+                | Self::SweTenantIsolation
+                | Self::SweReplayPerformance
+                | Self::SweReleaseHandoff
+                | Self::SweServiceJourney
         )
     }
 
     pub fn execution_kind(self) -> ScenarioExecutionKind {
         match self {
-            Self::SecurityReview | Self::TodoWorkerPlanned => ScenarioExecutionKind::CompositeFlow,
+            Self::SecurityReview
+            | Self::TodoWorkerPlanned
+            | Self::SweConfigIsolation
+            | Self::SweCacheInvalidation
+            | Self::SweBatchReplay
+            | Self::SweReplayRecovery
+            | Self::SweContractMigration
+            | Self::SweTenantIsolation
+            | Self::SweReplayPerformance
+            | Self::SweReleaseHandoff
+            | Self::SweServiceJourney => ScenarioExecutionKind::CompositeFlow,
             Self::IncidentResponse
             | Self::ReleaseTrainRecovery
             | Self::CrossRepoContractMigration => ScenarioExecutionKind::AdaptiveFlow,
@@ -829,7 +912,7 @@ mod tests {
 
     use super::*;
     #[test]
-    fn registry_contains_forty_unique_valid_scenarios() {
+    fn registry_contains_forty_nine_unique_valid_scenarios() {
         let mut ids = HashSet::new();
         for scenario in ScenarioId::ALL {
             assert!(ids.insert(scenario.as_str()));
@@ -838,7 +921,7 @@ mod tests {
                 .materialize("run", scenario.canonical_seed())
                 .unwrap();
         }
-        assert_eq!(ids.len(), 40);
+        assert_eq!(ids.len(), 49);
     }
 
     #[test]
@@ -872,7 +955,7 @@ mod tests {
         // These are the 38 built-in scenarios that remain from the catalog
         // present when capability_v2 was introduced.
         // The two AdaptiveFlow scenarios added by the following delivery stages
-        // start independently at v1 and bring the built-in catalog to 40 entries.
+        // started independently at v1 and brought that catalog generation to 40 entries.
         let expected = [
             (ScenarioId::ContextPressure, 4),
             (ScenarioId::ShellCoderSandbox, 6),
@@ -1085,7 +1168,12 @@ mod tests {
                 scenario.execution_kind(),
                 ScenarioExecutionKind::CompositeFlow | ScenarioExecutionKind::AdaptiveFlow
             ) {
-                assert!(first.case.deliverable_contract.artifacts.is_empty());
+                if swe_service::is_swe(scenario) {
+                    assert!(!first.case.deliverable_contract.artifacts.is_empty());
+                    assert!(first.case.deliverable_contract.capture_before_cleanup);
+                } else {
+                    assert!(first.case.deliverable_contract.artifacts.is_empty());
+                }
                 assert!(first.capture.is_none());
                 continue;
             }
