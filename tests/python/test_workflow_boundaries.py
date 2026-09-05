@@ -1,4 +1,5 @@
 import json
+import os
 import re
 import pathlib
 import unittest
@@ -89,6 +90,35 @@ class WorkflowBoundaryTests(unittest.TestCase):
         # from the pinned commit, never read out of the dispatch.
         self.assertIn("test-plan materialize --profile", workflow)
         self.assertIn("scripts/resolve_stack_lock.py", workflow)
+
+    def test_the_dispatched_plan_reaches_disk_as_the_plan(self):
+        """The recording step must write the dispatch, not a verdict about it.
+
+        `jq -e 'type == "object"'` validates and then writes its own `true`,
+        which every later step reads as the plan. Run the real command."""
+        import shutil
+        import subprocess
+
+        if not shutil.which("jq"):
+            self.skipTest("jq is not installed")
+        workflow = (ROOT / ".github/workflows/exact-stack-e2e.yml").read_text(encoding="utf-8")
+        block = workflow.split("Record the dispatch", 1)[1].split("- uses:", 1)[0]
+        command = next(line.strip() for line in block.splitlines() if "plan.json" in line)
+        command = command.replace("target/harness-e2e-contract/plan.json", "/dev/stdout")
+        plan = json.dumps({"key": "harness-regression", "profile": {"plan_id": "harness", "id": "regression"}})
+
+        written = subprocess.run(
+            ["bash", "-c", command], env={"PLAN": plan, "PATH": os.environ["PATH"]},
+            capture_output=True, text=True, check=True,
+        ).stdout
+        self.assertEqual(json.loads(written), json.loads(plan))
+
+        # And a dispatch that is not an object still fails the step.
+        rejected = subprocess.run(
+            ["bash", "-c", command], env={"PLAN": "true", "PATH": os.environ["PATH"]},
+            capture_output=True, text=True,
+        )
+        self.assertNotEqual(rejected.returncode, 0)
 
     def test_every_execution_reports_whatever_it_managed_to_observe(self):
         """No execution is lost: the profile is reported before anything runs,
