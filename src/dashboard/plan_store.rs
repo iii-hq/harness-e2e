@@ -423,8 +423,8 @@ impl PlanStore {
                 .file_stem()
                 .and_then(|value| value.to_str())
                 .unwrap_or_default();
-            match self.get_local(id) {
-                Ok(plan) => plans.push(plan),
+            match self.read_plan(id) {
+                Ok(plan) => plans.push(self.canonical(&plan)?),
                 Err(error) => tracing::warn!(path = %path.display(), error = %error,
                     "ignoring an unsupported or corrupt local E2E plan"),
             }
@@ -1967,6 +1967,15 @@ mod tests {
             Some("baseline-retained")
         );
         assert_eq!(fs::read(path).unwrap(), original);
+        fs::write(
+            root.path().join("plan-executions/corrupt.json"),
+            b"invalid json",
+        )
+        .unwrap();
+        assert!(
+            manager.list_local().is_err(),
+            "Shared history errors must remain visible"
+        );
     }
 
     #[tokio::test]
