@@ -252,7 +252,11 @@ test('renders plan pages on the design system with no legacy plan CSS', () => {
   assert.doesNotMatch(planPage, /className="(?:panel|page-heading|plan-)/)
   assert.doesNotMatch(planDetailPage, /className="(?:panel|page-heading|plan-)/)
   assert.match(planDetailPage, /<PageHeader[\s\S]*breadcrumb=/)
-  assert.match(planDetailPage, /<PlanLifecycle[\s\S]*<PlanScope[\s\S]*<PlanRunHistory[\s\S]*<PlanExecutionHistory/)
+  // Audit ED-26: the comparison is layer 0; executions, exact tables and
+  // provenance are closed rows beneath it.
+  assert.match(planDetailPage, /<PlanLifecycle[\s\S]*<PlanScope[\s\S]*<PlanExecutionHistory[\s\S]*<DisclosureLayer[\s\S]*id="plan-executions"[\s\S]*<PlanRunHistory[\s\S]*headless[\s\S]*<PlanComparisonLayers[\s\S]*id="plan-provenance"/)
+  assert.match(planDetailPage, /data-plan-scope/)
+  assert.doesNotMatch(planDetailPage, /<PlanScope plan=\{plan\} \/>/)
 })
 
 test('exposes baseline and arbitrary candidate comparison controls', () => {
@@ -260,11 +264,21 @@ test('exposes baseline and arbitrary candidate comparison controls', () => {
   assert.match(plansPage, /regressed/)
   assert.match(plansPage, /DeltaValue/)
   assert.match(planDetailPage, /baseline and candidates/)
-  assert.match(planDetailPage, /Choose a visual baseline and any number of candidates/)
+  // One filter row scopes every chart and table; it never changes the
+  // official baseline stored with the plan.
+  assert.match(planDetailPage, /data-plan-filter-row/)
+  assert.match(planDetailPage, /the official baseline stored with the plan never changes here/)
   assert.match(planDetailPage, /PLAN_COMPARISON_TABLE_METRICS/)
   assert.match(planDetailPage, /planMetricWinnerIds/)
   assert.match(planDetailPage, /Best values are highlighted/)
-  assert.match(planDetailPage, /Visual baseline/)
+  // Layer 0 draws the comparison: trend tiles with sparklines and what moved
+  // by test as diverging bars; the two token metrics from #88 are tiles.
+  assert.match(planDetailPage, /data-plan-trend/)
+  assert.match(planDetailPage, /<Sparkline/)
+  assert.match(planDetailPage, /data-plan-what-moved/)
+  assert.match(planDetailPage, /<DivergingBars/)
+  assert.match(planDetailPage, /<Dumbbell/)
+  assert.match(planDetailPage, /'tokens_per_completion',\s*'failed_attempt_tokens'/)
   // Audit PD-12: a metric that no column reports is not a row.
   assert.match(planDetailPage, /entries\.some\(\(\{ value \}\) => value !== null\)/)
 })
