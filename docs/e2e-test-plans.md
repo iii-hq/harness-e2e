@@ -9,9 +9,25 @@ roda. Cada execução preserva sua configuração e seus resultados imutáveis.
 [`config/test-plan.json`](../config/test-plan.json) é a fonte executável única;
 CLI, dashboard, campanhas e [composição gerada](test-profiles.generated.md)
 consomem essa definição. Os manifests anteriores são saídas de compatibilidade,
-com a mesma semântica. Esta implementação foi validada sem executar modelos;
-qualificação dos perfis, calibração e migração da agenda de produção permanecem
-nas etapas F3–F5.
+com a mesma semântica. A Console e o dashboard standalone criam planos de perfil
+com um modelo e avaliador explícitos, executam os grupos pelo coordenador Rust
+e conservam os artefatos nativos. O [fluxo e contrato de persistência](../dashboard/README.md#executable-profile-plans)
+explicam criação, duplicação, cancelamento e recuperação. A validação de Smoke
+na stack de desenvolvimento não qualifica os demais perfis; calibração e
+migração da agenda de produção permanecem nas etapas F3–F5.
+
+**Validação integrada em 2026-09-05:** a Console admitiu o Smoke com
+`deepseek-v4-flash` / `deepseek` e avaliador `codex/gpt-5.6-terra` /
+`openai-codex`, após conferir catálogo, contratos e fixture. A execução
+`plan-e1731886e4a7cb7fd23cdecb8d0dca8b` terminou os cinco slots, com cobertura e
+validade técnica 5/5, conclusão de tarefa 3/5 e correção objetiva 2/5.
+`minimal_path` e `persistent_state` passaram; `tool_contract_recovery` e
+`shell_coder_sandbox` falharam em hard gates, e `timer_wake` atingiu limite de
+recurso. As falhas conservaram evidências nativas e não impediram os grupos
+seguintes. A admissão repetida retornou a mesma identidade; uma chamada nativa
+concorrente foi rejeitada durante a reserva do plano. Os demais perfis foram
+validados por testes determinísticos de materialização e coordenação, sem
+campanhas adicionais com modelos.
 
 ## 1. O que está sendo unificado
 

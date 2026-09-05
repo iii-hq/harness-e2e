@@ -168,8 +168,12 @@ pub(super) fn read_plan(plans_dir: &Path, id: &str) -> Result<Option<LocalPlan>>
     if !path.is_file() {
         return Ok(None);
     }
-    let plan: LocalPlan = serde_json::from_slice(&fs::read(&path)?)
+    let value: serde_json::Value = serde_json::from_slice(&fs::read(&path)?)
         .with_context(|| format!("decode {}", path.display()))?;
+    if value["schema_version"] == 2 {
+        return Ok(None);
+    }
+    let plan: LocalPlan = serde_json::from_value(value)?;
     if plan.schema_version != PLAN_SCHEMA_VERSION {
         bail!(
             "unsupported local plan schema version {}",

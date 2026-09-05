@@ -85,7 +85,7 @@ pub struct PlanIdentity {
     pub campaign_sha256: String,
 }
 
-#[derive(Debug, Clone, Serialize, JsonSchema)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct ProfileSnapshot {
     pub schema: String,
     pub plan_id: String,
@@ -399,7 +399,9 @@ impl MasterPlan {
                 "scenario_ids": snapshot.scenario_ids, "repetitions": profile.repetitions,
                 "technical_retries": profile.technical_retries, "budget": snapshot.budget,
                 "profile_sha256": snapshot.profile_sha256, "protected_supervisor_required": snapshot.protected_supervisor_required,
-                "campaigns": snapshot.campaigns}));
+                "campaigns": snapshot.campaigns,
+                "judge_required": snapshot.protected_supervisor_required || snapshot.cases.iter().any(|c| c["judge_required"] == true),
+                "cases": snapshot.cases}));
         }
         Ok(
             json!({"plan_id": self.plan_id, "version": self.version, "definition_sha256": self.digest()?, "profiles": profiles}),
@@ -525,7 +527,9 @@ impl MasterPlan {
 
 /// Aggregate a profile's independent invocations using the existing Results
 /// contract. Different cases, models or stack identities are never pooled.
-pub fn measure(paths: &[std::path::PathBuf]) -> Result<Value> {
+type MeasurementCohorts = BTreeMap<String, (Value, crate::report::E2eScenarioReport)>;
+
+fn measurement_cohorts(paths: &[std::path::PathBuf]) -> Result<(MeasurementCohorts, Vec<Value>)> {
     use crate::report::{E2eReport, E2eScenarioReport};
     ensure!(
         !paths.is_empty(),
@@ -551,6 +555,12 @@ pub fn measure(paths: &[std::path::PathBuf]) -> Result<Value> {
                     observations.insert((run.run_id.clone(), run.attempt_id.clone())),
                     "duplicate run/attempt in profile evidence"
                 );
+                for retry in &run.retry_attempts {
+                    ensure!(
+                        observations.insert((retry.run_id.clone(), retry.attempt_id.clone())),
+                        "duplicate retry attempt in profile evidence"
+                    );
+                }
             }
             let identity = json!({"case": case, "execution_policy": scenario.execution_policy,
                 "system_under_test": report.system_under_test, "subject": report.subject,
@@ -575,6 +585,11 @@ pub fn measure(paths: &[std::path::PathBuf]) -> Result<Value> {
             }
         }
     }
+    Ok((cohorts, deferred))
+}
+
+pub fn measure(paths: &[std::path::PathBuf]) -> Result<Value> {
+    let (cohorts, deferred) = measurement_cohorts(paths)?;
     let cohorts: Vec<_> = cohorts.into_iter().map(|(digest, (identity, scenario))| {
         json!({"cohort_sha256": digest, "identity": identity, "scenario_id": scenario.scenario_id,
             "aggregate": scenario.aggregate, "consumption": crate::longitudinal::consumption_metrics(&scenario.runs),
@@ -586,9 +601,112 @@ pub fn measure(paths: &[std::path::PathBuf]) -> Result<Value> {
     )
 }
 
+/// Compare all compatible repetitions using the native longitudinal metrics.
+/// Cohort mismatches remain visible; this endpoint never emits promotion gates.
+pub fn compare_measurements(
+    from: &[std::path::PathBuf],
+    to: &[std::path::PathBuf],
+) -> Result<Value> {
+    let (from, from_deferred) = measurement_cohorts(from)?;
+    let (to, to_deferred) = measurement_cohorts(to)?;
+    let index = |cohorts: &MeasurementCohorts| -> Result<BTreeMap<String, Vec<String>>> {
+        let mut families: BTreeMap<String, Vec<String>> = BTreeMap::new();
+        for (digest, (identity, _)) in cohorts {
+            families
+                .entry(artifact::sha256_value(&comparison_fixed_identity(
+                    identity,
+                ))?)
+                .or_default()
+                .push(digest.clone());
+        }
+        Ok(families)
+    };
+    let from_index = index(&from)?;
+    let to_index = index(&to)?;
+    let keys = from_index
+        .keys()
+        .chain(to_index.keys())
+        .collect::<BTreeSet<_>>();
+    let mut comparisons = Vec::new();
+    let mut excluded = Vec::new();
+    for key in keys {
+        let left = from_index.get(key).map(Vec::as_slice).unwrap_or_default();
+        let right = to_index.get(key).map(Vec::as_slice).unwrap_or_default();
+        if let ([left], [right]) = (left, right) {
+            let (left_identity, left_case) = &from[left];
+            let (right_identity, right_case) = &to[right];
+            comparisons.push(json!({"cohort_sha256": key, "scenario_id": left_case.scenario_id,
+                "from_cohort_sha256": left, "to_cohort_sha256": right, "from_identity": left_identity, "to_identity": right_identity,
+                "metrics": crate::longitudinal::compare_case_descriptive(left_case, right_case)}));
+        } else {
+            for (side, ids, cohorts) in [("baseline", left, &from), ("candidate", right, &to)] {
+                for id in ids {
+                    excluded.push(json!({"cohort_sha256": id, "side": side, "identity": cohorts[id].0,
+                    "reason": "Case, model, runner revision or fixed execution contract has no unique compatible cohort on the other side."}));
+                }
+            }
+        }
+    }
+    Ok(
+        json!({"schema": "harness-e2e-profile-comparison/v1", "interpretation": "descriptive_only",
+        "treatment": "Harness version and Workers source revision; all other recorded identities remain fixed. Results do not establish causality or promotion gates.",
+        "comparisons": comparisons, "excluded": excluded, "baseline_deferred": from_deferred, "candidate_deferred": to_deferred}),
+    )
+}
+
+fn comparison_fixed_identity(identity: &Value) -> Value {
+    let mut fixed = identity.clone();
+    if let Some(system) = fixed["system_under_test"].as_object_mut() {
+        system.remove("harness_version");
+        if let Some(stack) = system.get_mut("stack").and_then(Value::as_object_mut) {
+            if stack.get("mode").and_then(Value::as_str) == Some("source") {
+                stack.remove("workers_revision");
+            } else if let Some(versions) = stack
+                .get_mut("stack_versions")
+                .and_then(Value::as_object_mut)
+            {
+                versions.remove("harness");
+                stack.remove("stack_lock_digest");
+            }
+        }
+    }
+    fixed
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn evolution_only_pairs_declared_treatment_changes_and_retains_fixed_identity() {
+        let identity = json!({"case": {"version": 1}, "subject": {"model": "subject"}, "judge": {"model": "judge"},
+            "system_under_test": {"harness_version": "1", "engine_version": "1", "e2e_revision": "runner-1", "contract_hashes": {"send": "contract"}, "stack": {"mode": "source", "workers_repository": "workers", "workers_revision": "a"}}});
+        let mut candidate = identity.clone();
+        candidate["system_under_test"]["harness_version"] = json!("2");
+        candidate["system_under_test"]["stack"]["workers_revision"] = json!("b");
+        assert_eq!(
+            comparison_fixed_identity(&identity),
+            comparison_fixed_identity(&candidate)
+        );
+        for path in [
+            vec!["subject", "model"],
+            vec!["case", "version"],
+            vec!["system_under_test", "e2e_revision"],
+            vec!["system_under_test", "engine_version"],
+            vec!["system_under_test", "contract_hashes", "send"],
+        ] {
+            let mut changed = candidate.clone();
+            let mut field = &mut changed;
+            for key in path {
+                field = &mut field[key];
+            }
+            *field = json!("incompatible");
+            assert_ne!(
+                comparison_fixed_identity(&identity),
+                comparison_fixed_identity(&changed)
+            );
+        }
+    }
 
     #[test]
     fn profile_samples_preserve_independent_execution_and_retry_boundaries() {

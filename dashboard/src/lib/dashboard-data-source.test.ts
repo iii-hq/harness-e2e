@@ -13,6 +13,50 @@ import {
 } from '@/lib/iii-client'
 
 describe('live dashboard transport', () => {
+  it('carries profile operations through iii and the standalone HTTP bridge', async () => {
+    const trigger = vi.fn(async () => ({ execution_id: 'plan-native' }))
+    installDashboardIiiClient({ trigger } as unknown as DashboardIiiClient)
+    const request = {
+      action: 'start',
+      plan_id: 'profile-1',
+      idempotency_key: 'once',
+      role: 'run',
+    }
+    installDashboardRuntimeConfig({
+      mode: 'local',
+      transport: 'iii',
+      functions: { profile_plan: 'profile-control' },
+    } as RuntimeConfig)
+    const live = await getDashboardDataBridge()
+    await expect(live.profilePlan?.(request)).resolves.toEqual({
+      execution_id: 'plan-native',
+    })
+    expect(trigger).toHaveBeenCalledWith('profile-control', request)
+    const fetch = vi.fn(
+      async (_url: string, _options?: RequestInit) =>
+        new Response(JSON.stringify({ id: 'profile-copy' }), { status: 200 }),
+    )
+    vi.stubGlobal('fetch', fetch)
+    try {
+      installDashboardRuntimeConfig({
+        mode: 'local',
+        transport: 'static',
+        functions: {},
+      } as RuntimeConfig)
+      const http = await getDashboardDataBridge()
+      await expect(
+        http.profilePlan?.({
+          action: 'duplicate',
+          plan_id: 'profile-1',
+          model: 'chosen',
+        }),
+      ).resolves.toEqual({ id: 'profile-copy' })
+      expect(fetch.mock.calls[0]?.[0]).toBe('./api/dashboard/profile-plans')
+    } finally {
+      vi.unstubAllGlobals()
+    }
+  })
+
   it('fetches fresh execution summaries and invalidates read caches on progress', async () => {
     const runtime = {
       mode: 'local',

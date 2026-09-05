@@ -93,6 +93,10 @@ pub(super) async fn serve(args: DashboardArgs) -> Result<()> {
                 "/api/local/scenarios",
                 axum::routing::post(local_scenario_create),
             )
+            .route(
+                "/api/dashboard/profile-plans",
+                axum::routing::post(profile_plan),
+            )
             .route("/api/dashboard/plans", get(plans_list).post(plan_create))
             .route("/api/dashboard/plans/:id", get(plan_get).patch(plan_update))
             .route(
@@ -154,6 +158,7 @@ async fn dashboard_config(State(state): State<AppState>) -> Json<Value> {
             "run_start": bus::RUN_START,
             "run_cancel": bus::RUN_CANCEL,
             "plans_list": bus::PLANS_LIST,
+            "profile_plan": bus::PROFILE_PLAN,
             "plan_get": bus::PLAN_GET,
             "plan_create": bus::PLAN_CREATE,
             "plan_update": bus::PLAN_UPDATE,
@@ -161,6 +166,19 @@ async fn dashboard_config(State(state): State<AppState>) -> Json<Value> {
             "changed_trigger": bus::CHANGED_TRIGGER,
         }
     }))
+}
+
+async fn profile_plan(
+    State(state): State<AppState>,
+    Json(request): Json<super::profile_plans::Request>,
+) -> Result<Json<Value>, ApiError> {
+    state
+        .controller
+        .profile_plans
+        .handle(request)
+        .await
+        .map(Json)
+        .map_err(ApiError::internal)
 }
 
 async fn plans_list(State(state): State<AppState>) -> Result<Json<Value>, ApiError> {
@@ -173,7 +191,7 @@ async fn plans_list(State(state): State<AppState>) -> Result<Json<Value>, ApiErr
         .and_then(|plan| plan.catalog())
         .map_err(ApiError::internal)?;
     Ok(Json(
-        json!({ "mode": "local", "plans": plans, "master_plan": master_plan }),
+        json!({ "mode": "local", "plans": plans, "master_plan": master_plan, "profile_plans": state.controller.profile_plans.list().map_err(ApiError::internal)? }),
     ))
 }
 
@@ -386,7 +404,7 @@ async fn execution_manifest(State(state): State<AppState>) -> Result<Json<Value>
         "last_update": last_update,
         "repo_url": repository_url(),
         "retention": { "summaries": MAX_EXECUTIONS, "details": MAX_EXECUTIONS },
-        "executions": executions.as_ref(),
+        "executions": executions.iter().filter(|value| value.get("parent_plan_execution_id").is_none()).collect::<Vec<_>>(),
     })))
 }
 

@@ -19,7 +19,13 @@ export type DashboardRoute =
   | { page: 'compare'; left: string | null; right: string | null }
   | { page: 'test-history'; testId: string }
   | { page: 'plans' }
-  | { page: 'plan-create' }
+  | {
+      page: 'plan-create'
+      profileId?: string
+      duplicateId?: string
+      editId?: string
+      manual?: boolean
+    }
   | { page: 'plan-detail'; planId: string }
 
 export type DashboardRoutes = {
@@ -142,7 +148,16 @@ export function routeFromHash(rawHash: string): DashboardRoute | null {
   }
   if (head === 'plans') {
     if (!rest[0]) return { page: 'plans' }
-    if (rest[0] === 'new') return { page: 'plan-create' }
+    if (rest[0] === 'new') {
+      if (rest[1] === 'profile' && rest[2])
+        return { page: 'plan-create', profileId: rest[2] }
+      if (rest[1] === 'duplicate' && rest[2])
+        return { page: 'plan-create', duplicateId: rest[2] }
+      if (rest[1] === 'edit' && rest[2])
+        return { page: 'plan-create', editId: rest[2] }
+      if (rest[1] === 'manual') return { page: 'plan-create', manual: true }
+      return { page: 'plan-create' }
+    }
     return { page: 'plan-detail', planId: rest[0] }
   }
   return null

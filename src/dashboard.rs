@@ -6,6 +6,7 @@ mod controller;
 mod live_progress;
 mod plans;
 mod presenter;
+mod profile_plans;
 mod proxy;
 mod read_model;
 mod store;

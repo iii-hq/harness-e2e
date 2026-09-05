@@ -1,4 +1,5 @@
 import { buttonClassName, Panel } from '@/design-system'
+import { hashForNewPlan } from '@/hooks/use-hash-route'
 import type {
   MasterTestPlan,
   MasterTestProfile,
@@ -41,7 +42,7 @@ export function MasterTestProfiles({ plan }: { plan: MasterTestPlan }) {
           Master test plan · v{plan.version}
         </h2>
         <p className="mt-1 mb-0 text-xs leading-5 text-ink-soft">
-          Choose the purpose of the evaluation. Exports preserve cases,
+          Choose the purpose of the evaluation. Plans preserve cases,
           independent repetitions and retry policy. All profiles report advisory
           evidence.
         </p>
@@ -91,17 +92,29 @@ export function MasterTestProfiles({ plan }: { plan: MasterTestPlan }) {
                 <span className="block">Protected fault executor</span>
               ) : null}
             </div>
-            <button
-              type="button"
-              className={buttonClassName({
-                variant: 'secondary',
-                size: 'compact',
-              })}
-              onClick={() => download(plan, profile)}
-              aria-label={`Export ${profile.label} profile`}
-            >
-              export profile
-            </button>
+            <div className="flex flex-wrap gap-2">
+              <a
+                className={buttonClassName({
+                  variant: 'primary',
+                  size: 'compact',
+                })}
+                href={`${hashForNewPlan()}/profile/${profile.id}`}
+                aria-label={`Create ${profile.label} plan`}
+              >
+                Create plan
+              </a>
+              <button
+                type="button"
+                className={buttonClassName({
+                  variant: 'secondary',
+                  size: 'compact',
+                })}
+                onClick={() => download(plan, profile)}
+                aria-label={`Export ${profile.label} profile`}
+              >
+                export profile
+              </button>
+            </div>
           </div>
         ))}
       </div>

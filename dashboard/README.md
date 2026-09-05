@@ -198,3 +198,52 @@ no unexplained `biome-ignore`, design-system vocabulary only, token colours,
 static Tailwind classes) and the live-evidence recipe: the Rust dashboard in
 local mode (`III_NAMESPACE=my-project harness-e2e dashboard --runs-dir
 ~/.iii/data/harness-e2e --listen 127.0.0.1:4173`) behind `vite preview`.
+
+## Executable profile plans
+
+Plans opens on **My plans**. **New plan** selects one of the six official profiles;
+**Create a custom plan manually** retains the existing custom comparison flow.
+Select an execution model and, when required, an evaluator. **Save draft** keeps
+an editable configuration; **Save and run** checks the stack and admits the whole
+profile. There is no automatic queue. Busy admission preserves the saved draft
+and links to active work.
+
+A profile plan fixes its materialized coverage, scenario seeds, envelopes,
+repetitions and retry policy. Configuration locks at first admission. **Duplicate
+plan** preserves coverage, policy and evaluator, asks for a new execution model,
+and creates an empty history. Ordinary profiles support **Run again**. Evolution
+captures an immutable reference only after complete, technically valid coverage,
+then admits candidates. Objective failures remain visible independently of
+completion and technical validity. Comparisons include all compatible repetitions
+and remain descriptive; they do not produce promotion gates.
+
+The native Rust coordinator reserves admission across every child. It writes the
+parent receipt and all child identities before dispatch, cancels the active child
+before releasing admission, and leaves unstarted slots explicit. Restarted work
+is reconciled and interrupted; nothing resumes automatically. Results and evidence
+stay in native child artifacts. The main execution list shows the parent; native
+children open from the detail view.
+
+Saved plans use `plans/<id>.json` schema 2; composed receipts use
+`plan-executions/<id>.json` (`harness-e2e-plan-execution/v1`) under the configured
+data directory. Version 1 plans retain their files and baseline/candidate history.
+A runner missing the pinned profile revision can still display, duplicate and
+export the plan, but cannot execute it. Resilience exports configured suites for
+the protected Release Control executor; dashboard fault execution is unavailable.
+
+Both the standalone HTTP bridge (`POST /api/dashboard/profile-plans`) and Console
+iii bridge (`e2e::dashboard::profile-plan`) accept the same `action` requests:
+`requirements`, `create`, `update`, `get`, `duplicate`, `export`, `start`,
+`execution`, `cancel`, and `compare`. `start` requires a caller idempotency key and
+returns `execution_id`; repeating the same request does not run it twice.
+
+Run deterministic browser acceptance after the dashboard build:
+
+```bash
+pnpm exec playwright install chromium
+pnpm test:profiles
+```
+
+This test uses a local fixture server and never calls a model. Rust coordination
+tests materialize every profile, including the 47 Capability and 90 Evolution
+slots, and pass Resilience exports through the existing Python suite validator.

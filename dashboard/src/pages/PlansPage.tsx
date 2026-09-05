@@ -42,6 +42,7 @@ import {
   type PlanMetricId,
   type PlanVerdict,
 } from '@/lib/plan-comparison'
+import { type ProfilePlan, running } from '@/lib/profile-plan'
 
 type PlanFilter = 'all' | 'needs_action' | 'running' | 'compared' | 'regressed'
 
@@ -128,6 +129,24 @@ function matchesFilter(
     )
   if (filter === 'regressed') return comparison?.verdict === 'regressed'
   return plan.candidate_execution_ids.length > 0
+}
+
+function matchesProfileFilter(plan: ProfilePlan, filter: PlanFilter) {
+  if (filter === 'all') return true
+  if (filter === 'running') return running(plan.state)
+  if (filter === 'needs_action')
+    return (
+      !plan.compatible ||
+      plan.state === 'draft' ||
+      plan.state === 'interrupted' ||
+      plan.state === 'cancelled'
+    )
+  if (filter === 'compared')
+    return plan.history.some(
+      (execution) =>
+        execution.role === 'candidate' && !running(execution.state),
+    )
+  return false
 }
 
 function modelLabel(plan: LocalPlan) {
@@ -427,6 +446,8 @@ function PlanRow({
 
 export function PlansPage() {
   const [bridge, setBridge] = useState<DashboardDataBridge | null>(null)
+  const [tab, setTab] = useState<'mine' | 'profiles'>('mine')
+  const [profilePlans, setProfilePlans] = useState<ProfilePlan[]>([])
   const [plans, setPlans] = useState<LocalPlan[]>([])
   const [masterPlan, setMasterPlan] = useState<MasterTestPlan | null>(null)
   const [executionSummaries, setExecutionSummaries] = useState<
@@ -452,6 +473,7 @@ export function PlansPage() {
       }
       const response = await next.listPlans()
       setMasterPlan(response.master_plan ?? null)
+      setProfilePlans(response.profile_plans ?? [])
       const orderedPlans = [...response.plans].sort((left, right) =>
         right.updated_at.localeCompare(left.updated_at),
       )
@@ -500,22 +522,25 @@ export function PlansPage() {
     const count = (candidate: PlanFilter) =>
       plans.filter((plan) =>
         matchesFilter(plan, candidate, comparisonFor(plan)),
-      ).length
+      ).length +
+      profilePlans.filter((plan) => matchesProfileFilter(plan, candidate))
+        .length
     return {
-      all: plans.length,
+      all: plans.length + profilePlans.length,
       needs_action: count('needs_action'),
       running: count('running'),
       compared: count('compared'),
       regressed: count('regressed'),
     }
-  }, [comparisonFor, plans])
+  }, [comparisonFor, plans, profilePlans])
 
   // Audit P-13: a list with a running plan refreshes itself.
   useEffect(() => {
-    if (counts.running === 0) return
+    if (counts.running === 0 && !profilePlans.some((p) => running(p.state)))
+      return
     const timer = window.setInterval(() => void load({ silent: true }), 5_000)
     return () => window.clearInterval(timer)
-  }, [counts.running, load])
+  }, [counts.running, load, profilePlans])
 
   const filteredPlans = useMemo(() => {
     const normalized = query.trim().toLowerCase()
@@ -529,6 +554,23 @@ export function PlansPage() {
     })
   }, [comparisonFor, filter, plans, query])
 
+  const filteredProfilePlans = profilePlans.filter(
+    (plan) =>
+      matchesProfileFilter(plan, filter) &&
+      [
+        plan.configuration.label,
+        plan.configuration.model,
+        plan.configuration.provider,
+        plan.snapshot.profile.label,
+        plan.snapshot.profile.purpose,
+        ...plan.snapshot.scenario_ids,
+      ]
+        .join(' ')
+        .toLowerCase()
+        .includes(query.trim().toLowerCase()),
+  )
+  const totalPlans = plans.length + profilePlans.length
+  const totalFiltered = filteredPlans.length + filteredProfilePlans.length
   const local = bridge?.mode === 'local'
   const filtered = query.trim() !== '' || filter !== 'all'
   const filters: Array<{ id: PlanFilter; label: string }> = [
@@ -558,7 +600,7 @@ export function PlansPage() {
       <div className="ds-root page-shell w-[calc(100%_-_1.5rem)] max-w-[1420px] pt-5 pb-16 md:w-[calc(100%_-_3rem)]">
         <PageHeader
           title="plans"
-          summary="Choose a test profile by purpose, or compare a Harness change against a frozen baseline."
+          summary="Configure one execution model per plan, run its coverage and follow the results."
           actions={
             local && plans.length > 0 ? (
               <details className="group text-xs text-ink-soft">
@@ -573,9 +615,43 @@ export function PlansPage() {
           }
         />
 
-        {local && masterPlan ? <MasterTestProfiles plan={masterPlan} /> : null}
+        {local ? (
+          <nav className="mt-5 flex gap-2" aria-label="Plan views">
+            <button
+              type="button"
+              aria-pressed={tab === 'mine'}
+              className={buttonClassName({
+                variant: tab === 'mine' ? 'primary' : 'secondary',
+              })}
+              onClick={() => setTab('mine')}
+            >
+              My plans
+            </button>
+            <button
+              type="button"
+              aria-pressed={tab === 'profiles'}
+              className={buttonClassName({
+                variant: tab === 'profiles' ? 'primary' : 'secondary',
+              })}
+              onClick={() => setTab('profiles')}
+            >
+              Profiles
+            </button>
+          </nav>
+        ) : null}
+        {local && masterPlan && tab === 'profiles' ? (
+          <>
+            <MasterTestProfiles plan={masterPlan} />
+            <a
+              className={buttonClassName({ variant: 'secondary' })}
+              href={`${hashForNewPlan()}/manual`}
+            >
+              Create a custom plan manually
+            </a>
+          </>
+        ) : null}
 
-        {!local && !loading ? (
+        {tab === 'profiles' ? null : !local && !loading ? (
           <div className="mt-6">
             <EmptyState
               title="Available only in the local dashboard"
@@ -631,10 +707,82 @@ export function PlansPage() {
                 {loading
                   ? 'loading…'
                   : filtered
-                    ? `${filteredPlans.length} of ${plans.length} plans`
-                    : `${plans.length} plan${plans.length === 1 ? '' : 's'}`}
+                    ? `${totalFiltered} of ${totalPlans} plans`
+                    : `${totalPlans} plan${totalPlans === 1 ? '' : 's'}`}
               </span>
             </section>
+
+            {local && tab === 'mine' && filteredProfilePlans.length > 0 ? (
+              <div className="mt-5">
+                <DataTable caption="My profile plans" collapse>
+                  <thead>
+                    <tr>
+                      <th>Plan</th>
+                      <th>Profile</th>
+                      <th>Model</th>
+                      <th>State</th>
+                      <th>Last execution</th>
+                      <th>Action</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {filteredProfilePlans.map((plan) => (
+                      <DataTableRow key={plan.id} href={hashForPlan(plan.id)}>
+                        <td data-label="Plan">
+                          <a
+                            className="font-semibold text-ink hover:underline"
+                            href={hashForPlan(plan.id)}
+                          >
+                            {plan.configuration.label}
+                          </a>
+                        </td>
+                        <td data-label="Profile">
+                          {plan.snapshot.profile.label}
+                        </td>
+                        <td
+                          data-label="Model"
+                          className="break-words font-mono"
+                        >
+                          {plan.configuration.model}
+                        </td>
+                        <td data-label="State">
+                          {plan.compatible
+                            ? plan.state
+                            : 'Incompatible revision'}
+                        </td>
+                        <td data-label="Last execution">
+                          {plan.last_execution
+                            ? `${shortDate(plan.last_execution.started_at)} · ${plan.last_execution.finished}/${plan.last_execution.planned} slots`
+                            : 'No executions'}
+                        </td>
+                        <td data-label="Action">
+                          <a
+                            className={buttonClassName({
+                              variant: 'secondary',
+                              size: 'compact',
+                            })}
+                            href={hashForPlan(plan.id)}
+                          >
+                            {running(plan.state)
+                              ? 'Follow execution'
+                              : plan.snapshot.protected_supervisor_required
+                                ? 'Export plan'
+                                : plan.state === 'draft'
+                                  ? 'Run plan'
+                                  : 'View results'}
+                          </a>
+                        </td>
+                      </DataTableRow>
+                    ))}
+                  </tbody>
+                </DataTable>
+              </div>
+            ) : null}
+            {profilePlans.length > 0 && plans.length > 0 ? (
+              <h2 className="mt-8 text-sm font-semibold text-ink">
+                Custom and legacy plans
+              </h2>
+            ) : null}
 
             {comparisonError && !error ? (
               <div className="mt-4">
@@ -674,7 +822,8 @@ export function PlansPage() {
                     />
                   ))}
                 </div>
-              ) : plans.length === 0 ? (
+              ) : filteredPlans.length === 0 &&
+                filteredProfilePlans.length > 0 ? null : totalPlans === 0 ? (
                 <EmptyState
                   title="No local plans yet"
                   description={

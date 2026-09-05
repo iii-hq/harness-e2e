@@ -35,6 +35,7 @@ struct ControllerState {
 }
 
 pub(super) struct Controller {
+    pub(super) profile_plans: Arc<super::profile_plans::ProfilePlans>,
     runs_dir: PathBuf,
     plans_dir: PathBuf,
     defaults: Defaults,
@@ -84,7 +85,14 @@ impl Controller {
                 );
             }
         }
+        let profile_plans = super::profile_plans::ProfilePlans::new(
+            args.runs_dir.clone(),
+            args.url.clone(),
+            control.clone(),
+        )
+        .await?;
         let controller = Arc::new(Self {
+            profile_plans,
             runs_dir: args.runs_dir,
             plans_dir,
             defaults: Defaults {
@@ -164,6 +172,7 @@ impl Controller {
 
     pub(super) async fn execution_summaries(&self) -> Result<Arc<Vec<Value>>> {
         let mut summaries = self.read_model().await?.summaries.clone();
+        let (parents, children) = self.profile_plans.dashboard_summaries()?;
         let runs_dir = self.runs_dir.clone();
         // The historical index is cached; active execution checkpoints are not.
         // Polling must recover progress even if a change notification was lost.
@@ -177,6 +186,13 @@ impl Controller {
                     }
                 }
             }
+            for summary in &mut summaries {
+                if let Some(parent) = summary["id"].as_str().and_then(|id| children.get(id)) {
+                    summary["parent_plan_execution_id"] = json!(parent);
+                }
+            }
+            summaries.extend(parents);
+            summaries.sort_by(|a, b| b["started_at"].as_str().cmp(&a["started_at"].as_str()));
             Ok(Arc::new(summaries))
         })
         .await

@@ -35,6 +35,7 @@ pub(super) const TEST_VERSION_GET: &str = "e2e::dashboard::test-version-get";
 pub(super) const TEST_HISTORY_GET: &str = "e2e::dashboard::test-history-get";
 pub(super) const CATALOG_GET: &str = "e2e::dashboard::catalog-get";
 pub(super) const LOCAL_SCENARIO_CREATE: &str = "e2e::dashboard::local-scenario-create";
+pub(super) const PROFILE_PLAN: &str = "e2e::dashboard::profile-plan";
 pub(super) const PLANS_LIST: &str = "e2e::dashboard::plans-list";
 pub(super) const PLAN_GET: &str = "e2e::dashboard::plan-get";
 pub(super) const PLAN_CREATE: &str = "e2e::dashboard::plan-create";
@@ -121,6 +122,7 @@ struct PlansListResponse {
     mode: String,
     plans: Vec<super::plans::LocalPlan>,
     master_plan: Value,
+    profile_plans: Vec<Value>,
 }
 
 #[derive(Debug, Serialize, JsonSchema)]
@@ -378,6 +380,7 @@ pub(super) fn register_functions(iii: &IIIClient, controller: Arc<Controller>) {
                     Ok(PlansListResponse {
                         mode: "local".into(),
                         plans,
+                        profile_plans: controller.profile_plans.list().map_err(handler_error)?,
                         master_plan: crate::test_plan::embedded()
                             .and_then(|plan| plan.catalog())
                             .map_err(handler_error)?,
@@ -386,6 +389,13 @@ pub(super) fn register_functions(iii: &IIIClient, controller: Arc<Controller>) {
             })
         },
     );
+    register(iii, PROFILE_PLAN, "Configure, export and execute pinned profile plans, and inspect or cancel their composed executions.", {
+        let controller = controller.clone();
+        RegisterFunction::new_async(move |request: super::profile_plans::Request| {
+            let controller = controller.clone();
+            async move { controller.profile_plans.handle(request).await.map_err(handler_error) }
+        })
+    });
     register(iii, PLAN_GET, "Read one local plan.", {
         let controller = controller.clone();
         RegisterFunction::new_async(move |request: PlanGetRequest| {
@@ -589,7 +599,7 @@ pub(super) async fn execution_list(
     let filtered = all
         .iter()
         .filter(|execution| {
-            (ids.is_empty()
+            ((ids.is_empty() && execution.get("parent_plan_execution_id").is_none())
                 || execution
                     .get("id")
                     .and_then(Value::as_str)
@@ -799,7 +809,7 @@ pub(super) async fn local_scenario_create(
     controller.create_local_scenario(request).await
 }
 
-fn function_ids(listed: &Value) -> impl Iterator<Item = &str> {
+pub(super) fn function_ids(listed: &Value) -> impl Iterator<Item = &str> {
     listed
         .as_array()
         .or_else(|| listed.as_object()?.values().find_map(Value::as_array))

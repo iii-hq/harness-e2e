@@ -152,20 +152,18 @@ export function LocalPlanCreatePage() {
 
   const loadCatalog = useCallback(async (source: DashboardDataBridge) => {
     const loaded = catalogValue(await source.getCatalog())
-    const firstModel = loaded.models[0] ? modelKey(loaded.models[0]) : ''
     // Audit RS-13: a scope chosen in the run-suite dialog arrives preselected.
     const handedOver = consumePlanScopeRequest().filter((id) =>
       loaded.scenarios.includes(id),
     )
     setCatalog(loaded)
     setUrl((current) => current || loaded.url)
-    setSubject((current) => current || firstModel)
     if (handedOver.length > 0)
       setScenarios((current) => (current.length > 0 ? current : handedOver))
     initialValues.current = {
       ...initialValues.current,
       url: initialValues.current.url || loaded.url,
-      subject: initialValues.current.subject || firstModel,
+      subject: initialValues.current.subject,
       scenarios:
         initialValues.current.scenarios.length > 0
           ? initialValues.current.scenarios

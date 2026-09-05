@@ -72,6 +72,7 @@ export type LocalPlan = {
 export type LocalPlansResponse = {
   mode: 'local'
   plans: LocalPlan[]
+  profile_plans?: import('./profile-plan').ProfilePlan[]
   master_plan?: MasterTestPlan
 }
 
@@ -80,6 +81,12 @@ export type MasterTestProfile = {
   label: string
   purpose: string
   metrics: string[]
+  judge_required?: boolean
+  cases?: Array<{
+    scenario_id: string
+    judge_required: boolean
+    requirements: string[]
+  }>
   scenario_ids: string[]
   repetitions: number
   technical_retries: number
@@ -552,6 +559,7 @@ export type RuntimeConfig = {
     run_status: string
     run_start: string
     run_cancel: string
+    profile_plan?: string
     plans_list: string
     plan_get: string
     plan_create: string
@@ -581,6 +589,7 @@ export type DashboardDataBridge = {
   listTests(input?: TestsListInput): Promise<TestsListResponse>
   getTestVersion(input: TestVersionInput): Promise<TestVersionResult>
   getTestHistory(input: TestHistoryInput): Promise<TestHistoryResponse>
+  profilePlan?(request: JsonObject): Promise<JsonObject>
   listPlans(): Promise<LocalPlansResponse>
   getPlan(planId: string): Promise<LocalPlan>
   createPlan(request: JsonObject): Promise<LocalPlan>
@@ -689,6 +698,16 @@ function makeBridge(runtime: RuntimeConfig): DashboardDataBridge {
         runtime.functions.test_history_get,
         input as unknown as JsonObject,
         () => httpTestHistory(input),
+      ),
+    profilePlan: (request) =>
+      call<JsonObject>(
+        runtime.functions.profile_plan ?? 'e2e::dashboard::profile-plan',
+        request,
+        () =>
+          httpJson<JsonObject>('./api/dashboard/profile-plans', {
+            method: 'POST',
+            body: JSON.stringify(request),
+          }),
       ),
     listPlans: () =>
       call<LocalPlansResponse>(runtime.functions.plans_list, {}, () =>
@@ -890,6 +909,9 @@ function makeStaticBridge(): DashboardDataBridge {
       throw new Error(
         'Test metric history is available only in the local dashboard',
       )
+    },
+    profilePlan: async () => {
+      throw new Error('Profile plans are available only in the local dashboard')
     },
     listPlans: async () => {
       throw new Error('Local plans are available only in the local dashboard')

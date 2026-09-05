@@ -91,7 +91,7 @@ pub enum ExecutionPhase {
 }
 
 impl ExecutionPhase {
-    fn terminal(self) -> bool {
+    pub(crate) fn terminal(self) -> bool {
         matches!(
             self,
             Self::Completed
@@ -493,6 +493,7 @@ struct ControlPlaneInner {
     url: String,
     output_root: PathBuf,
     admission: Mutex<()>,
+    plan_reservation: Mutex<Option<String>>,
     records: RwLock<HashMap<String, ExecutionRecord>>,
     cancellations: Mutex<HashMap<String, watch::Sender<bool>>>,
     scenario_lock: Mutex<()>,
@@ -530,6 +531,7 @@ impl ControlPlane {
                 url,
                 output_root,
                 admission: Mutex::new(()),
+                plan_reservation: Mutex::new(None),
                 records: RwLock::new(HashMap::new()),
                 cancellations: Mutex::new(HashMap::new()),
                 scenario_lock: Mutex::new(()),
@@ -788,6 +790,45 @@ impl ControlPlane {
         &self.inner.url
     }
 
+    pub(crate) fn client(&self) -> &IIIClient {
+        &self.inner.iii
+    }
+
+    /// Uses the native admission lock, so HTTP, iii and composed runs obey the
+    /// same reservation even between children of a plan execution.
+    pub(crate) async fn reserve_plan(&self, owner: &str) -> Result<()> {
+        let _admission = self.inner.admission.lock().await;
+        let mut reservation = self.inner.plan_reservation.lock().await;
+        if let Some(active) = reservation.as_ref() {
+            anyhow::ensure!(active == owner, "plan execution {active} is active");
+            return Ok(());
+        }
+        if let Some(active) = self
+            .inner
+            .records
+            .read()
+            .await
+            .values()
+            .find(|r| !r.phase.terminal())
+        {
+            bail!("execution {} is active", active.execution_id);
+        }
+        *reservation = Some(owner.to_owned());
+        Ok(())
+    }
+
+    pub(crate) async fn release_plan(&self, owner: &str) {
+        let _admission = self.inner.admission.lock().await;
+        let mut reservation = self.inner.plan_reservation.lock().await;
+        if reservation.as_deref() == Some(owner) {
+            *reservation = None;
+        }
+    }
+
+    pub(crate) async fn active_plan(&self) -> Option<String> {
+        self.inner.plan_reservation.lock().await.clone()
+    }
+
     pub fn output_root(&self) -> &Path {
         &self.inner.output_root
     }
@@ -860,7 +901,19 @@ impl ControlPlane {
         .context("load local scenarios for execution task")?
     }
 
-    pub async fn run(&self, mut request: RunRequest) -> Result<RunAccepted> {
+    pub async fn run(&self, request: RunRequest) -> Result<RunAccepted> {
+        self.run_owned(request, None).await
+    }
+
+    pub(crate) async fn run_plan_child(
+        &self,
+        owner: &str,
+        request: RunRequest,
+    ) -> Result<RunAccepted> {
+        self.run_owned(request, Some(owner)).await
+    }
+
+    async fn run_owned(&self, mut request: RunRequest, owner: Option<&str>) -> Result<RunAccepted> {
         request.slot_start_deadline_seconds =
             crate::suite::resolve_slot_start_deadline(request.slot_start_deadline_seconds)?;
         request.local_markdown_scenarios = self
@@ -874,6 +927,13 @@ impl ControlPlane {
             .map(artifact::sha256_value)
             .transpose()?;
         let _admission = self.inner.admission.lock().await;
+        let reservation = self.inner.plan_reservation.lock().await;
+        anyhow::ensure!(
+            reservation.as_deref() == owner,
+            "plan execution {} owns admission",
+            reservation.as_deref().unwrap_or("reservation unavailable")
+        );
+        drop(reservation);
         let execution_id = execution_id_for_key(&request.idempotency_key);
         if let Some(record) = self.inner.records.read().await.get(&execution_id).cloned() {
             if record.request != request {
@@ -1867,7 +1927,7 @@ fn handler_error(error: anyhow::Error) -> Error {
     Error::Handler(format!("{error:#}"))
 }
 
-fn execution_id_for_key(idempotency_key: &str) -> String {
+pub(crate) fn execution_id_for_key(idempotency_key: &str) -> String {
     let digest = Sha256::digest(format!("{CONTROL_CONTRACT_NAME}:{idempotency_key}").as_bytes());
     format!("{:x}", digest)[..32].to_string()
 }

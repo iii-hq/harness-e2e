@@ -99,14 +99,19 @@ The [master test and measurement plan](docs/e2e-test-plans.md) is the single
 strategy document for campaign coverage, purpose-specific profiles, metrics,
 and longitudinal comparison. [config/test-plan.json](config/test-plan.json)
 defines the six executable profiles: smoke, regression, capability, evolution,
-resilience, and endurance. The dashboard previews their coverage and exports
-their pinned campaigns; existing custom comparison plans remain available.
+resilience, and endurance. In the dashboard, choose **New plan**, select a
+profile, execution model and required evaluator, then **Save draft** or **Save and
+run**. Plans retain pinned coverage, native execution evidence and history;
+**Duplicate plan** starts an empty history with a newly selected model. Resilience
+exports to the protected executor. Existing custom comparison plans remain
+available. See [executable profile plans](dashboard/README.md#executable-profile-plans).
 
 ```bash
 cargo run --locked -- test-plan list
 python3 scripts/run_test_plan.py --profile smoke  # preview; no model calls
 python3 scripts/run_test_plan.py --profile smoke --execute \
-  --model "$HARNESS_E2E_MODEL" --provider "$HARNESS_E2E_PROVIDER"
+  --model "$HARNESS_E2E_MODEL" --provider "$HARNESS_E2E_PROVIDER" \
+  --judge-model "$HARNESS_E2E_JUDGE_MODEL" --judge-provider "$HARNESS_E2E_JUDGE_PROVIDER"
 ```
 
 Use `test-plan sync` after editing the source; CI checks generated campaigns,

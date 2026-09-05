@@ -905,6 +905,23 @@ fn exclude_case(
         }));
 }
 
+/// Descriptive metrics across every retained compatible repetition. The raw
+/// observations include infrastructure failures for consumption accounting.
+pub(crate) fn compare_case_descriptive(
+    from: &E2eScenarioReport,
+    to: &E2eScenarioReport,
+) -> serde_json::Value {
+    let (left, left_excluded) = eligible_runs(ComparisonSide::From, from);
+    let (right, right_excluded) = eligible_runs(ComparisonSide::To, to);
+    let from_metrics = case_metrics(&left, &from.runs);
+    let to_metrics = case_metrics(&right, &to.runs);
+    serde_json::json!({"from": from_metrics, "to": to_metrics,
+        "delta": benchmark_delta(&from_metrics, &to_metrics),
+        "from_run_ids": left.iter().map(|r| &r.run_id).collect::<Vec<_>>(),
+        "to_run_ids": right.iter().map(|r| &r.run_id).collect::<Vec<_>>(),
+        "excluded_runs": left_excluded.into_iter().chain(right_excluded).collect::<Vec<_>>()})
+}
+
 fn case_metrics(runs: &[&E2eRunReport], observed_runs: &[E2eRunReport]) -> CaseMetrics {
     let total_runs = observed_runs.len();
     let mut unavailable = BTreeMap::new();

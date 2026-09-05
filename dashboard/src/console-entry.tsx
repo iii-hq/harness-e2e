@@ -33,6 +33,7 @@ const runtimeConfig: RuntimeConfig = {
     run_start: 'e2e::dashboard::run-start',
     run_cancel: 'e2e::dashboard::run-cancel',
     plans_list: 'e2e::dashboard::plans-list',
+    profile_plan: 'e2e::dashboard::profile-plan',
     plan_get: 'e2e::dashboard::plan-get',
     plan_create: 'e2e::dashboard::plan-create',
     plan_update: 'e2e::dashboard::plan-update',
