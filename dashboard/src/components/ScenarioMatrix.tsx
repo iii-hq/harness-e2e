@@ -522,7 +522,7 @@ function ScenarioReliabilityBand({
     ['advisory quality coverage', aggregate.quality_coverage],
   ] as const
   const tokenMetrics = [
-    ['subject tokens', aggregate.total_tokens_consumed],
+    ['tokens', aggregate.total_tokens_consumed],
     ['judge tokens', aggregate.judge_tokens_consumed],
     ['completed p50 tokens', aggregate.tokens_completed_p50],
     ['failed attempt tokens', aggregate.failed_attempt_tokens],
@@ -656,8 +656,8 @@ function RunOutcomeLedger({ runs }: { runs: DashboardRunProjection[] }) {
               <th className="px-4 py-2 font-semibold">completion evaluator</th>
               <th className="px-4 py-2 font-semibold">quality evaluator</th>
               <th className="px-4 py-2 font-semibold">final advisory</th>
-              <th className="px-4 py-2 font-semibold">objective</th>
-              <th className="px-4 py-2 font-semibold">quality</th>
+              <th className="px-4 py-2 font-semibold">objective score</th>
+              <th className="px-4 py-2 font-semibold">advisory quality</th>
             </tr>
           </thead>
           <tbody>

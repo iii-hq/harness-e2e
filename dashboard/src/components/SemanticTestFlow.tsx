@@ -154,7 +154,7 @@ function WorkflowMetricsOverview({
           }
         />
         <WorkflowMetric
-          label="Runtime"
+          label="Duration"
           value={formatDuration(metrics.durationMs)}
           caption="total step duration"
         />
@@ -203,7 +203,7 @@ function WorkflowMetricsOverview({
       {numericMetrics.length > 0 && (
         <details className="group mt-3 rounded-md border border-line bg-panel/40">
           <summary className="flex min-h-11 cursor-pointer list-none items-center justify-between gap-3 px-3 py-2 text-xs font-semibold text-ink marker:hidden">
-            <span>Additional runtime counters</span>
+            <span>Additional counters</span>
             <span className="font-mono text-label font-normal text-ink-muted">
               {numericMetrics.length} metrics
             </span>
@@ -452,7 +452,7 @@ function SemanticTestCard({
               </div>
               {test.cost_usd != null && (
                 <div>
-                  <dt className="text-ink-muted">Reported cost</dt>
+                  <dt className="text-ink-muted">Cost</dt>
                   <dd className="m-0 mt-0.5 font-mono text-label text-ink-soft">
                     ${test.cost_usd.toFixed(4)}
                   </dd>

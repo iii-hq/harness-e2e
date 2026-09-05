@@ -2258,7 +2258,7 @@ function PlanScenarioComparisonTable({
                                 ? 'is-winner'
                                 : undefined
                             }
-                            data-label="Baseline"
+                            data-label="Reference"
                           >
                             <span className="flex items-baseline gap-2 font-mono tabular-nums">
                               <b>

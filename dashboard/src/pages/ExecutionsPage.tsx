@@ -291,7 +291,7 @@ function LedgerRowCells({ row }: { row: LedgerRow }) {
           ? '—'
           : formatPercent(percentPoints(presentation.passRate), false)}
       </td>
-      <td data-label="Runtime" className={numericCellClassName}>
+      <td data-label="Duration" className={numericCellClassName}>
         {presentation.modelRuntimeSeconds === null
           ? '—'
           : formatDuration(presentation.modelRuntimeSeconds)}
