@@ -625,7 +625,6 @@ export {
   PlanNonComparableAttempts,
   PlanRunHistory,
   PlanScope,
-  planMetricWinnerIds,
   planMovementGroups,
   planProvenanceEntries,
   planProvenanceScent,

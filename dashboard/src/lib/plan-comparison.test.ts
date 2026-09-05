@@ -68,7 +68,7 @@ function execution(
 }
 
 describe('local plan comparison view model', () => {
-  it('keeps objective stability separate from directional efficiency', () => {
+  it('reports signed consumption changes without declaring a winner', () => {
     const comparison = buildPlanComparison(
       execution('baseline'),
       execution('candidate', {
@@ -80,20 +80,20 @@ describe('local plan comparison view model', () => {
       }),
     )
 
-    expect(comparison.verdict).toBe('stable')
+    expect(comparison).not.toHaveProperty('verdict')
     expect(metricById(comparison, 'tokens')).toMatchObject({
       delta: 1000,
       delta_percent: 10,
-      tone: 'negative',
+      tone: 'neutral',
     })
     expect(metricById(comparison, 'duration')).toMatchObject({
       delta: -2,
       delta_percent: -10,
-      tone: 'positive',
+      tone: 'neutral',
     })
   })
 
-  it('makes an added hard-gate failure an objective regression', () => {
+  it('retains evidence without turning a hard-gate failure into a global verdict', () => {
     const candidate = execution('candidate', {
       totals: {
         ...execution('candidate').totals,
@@ -111,8 +111,7 @@ describe('local plan comparison view model', () => {
 
     expect(buildPlanComparison(execution('baseline'), candidate)).toMatchObject(
       {
-        verdict: 'regressed',
-        headline: 'Objective regression detected',
+        headline: 'Retained observations',
       },
     )
   })
@@ -124,9 +123,9 @@ describe('local plan comparison view model', () => {
         technical_failures: 1,
       },
     })
-    expect(buildPlanComparison(execution('baseline'), candidate).verdict).toBe(
-      'inconclusive',
-    )
+    expect(
+      buildPlanComparison(execution('baseline'), candidate),
+    ).not.toHaveProperty('verdict')
   })
 
   it('preserves missing cost as unavailable instead of zero', () => {
@@ -142,7 +141,7 @@ describe('local plan comparison view model', () => {
     })
   })
 
-  it('makes missing objective evidence inconclusive instead of assuming stability', () => {
+  it('does not assume stability when objective evidence is missing', () => {
     const candidate = execution('candidate', {
       totals: {
         ...execution('candidate').totals,
@@ -150,9 +149,9 @@ describe('local plan comparison view model', () => {
       },
     })
 
-    expect(buildPlanComparison(execution('baseline'), candidate).verdict).toBe(
-      'inconclusive',
-    )
+    expect(
+      buildPlanComparison(execution('baseline'), candidate),
+    ).not.toHaveProperty('verdict')
   })
 
   it('derives fully reported function errors from retained scenario metrics', () => {
@@ -191,7 +190,7 @@ describe('local plan comparison view model', () => {
       baseline: 1,
       candidate: 0,
       delta: -1,
-      tone: 'positive',
+      tone: 'neutral',
     })
   })
 
@@ -229,7 +228,7 @@ describe('local plan comparison view model', () => {
       baseline: 4,
       candidate: 2,
       delta: -2,
-      tone: 'positive',
+      tone: 'neutral',
     })
     expect(comparison.scenarios[0]?.metrics).toEqual(
       expect.arrayContaining([
@@ -237,7 +236,7 @@ describe('local plan comparison view model', () => {
           id: 'turns',
           baseline: 2,
           candidate: 1,
-          tone: 'positive',
+          tone: 'neutral',
         }),
       ]),
     )
@@ -487,22 +486,22 @@ describe('local plan comparison view model', () => {
       baseline: 5_000,
       candidate: 4_000,
       delta: -1_000,
-      direction: 'lower',
+
       format: 'tokens',
-      tone: 'positive',
+      tone: 'neutral',
     })
     expect(metricById(comparison, 'failed_attempt_tokens')).toMatchObject({
       label: 'Failed attempt tokens',
       baseline: 1_500,
       candidate: 0,
-      tone: 'positive',
+      tone: 'neutral',
     })
     const scenario = comparison.scenarios.find(
       (entry) => entry.id === 'minimal_path',
     )
     expect(
       scenario?.metrics.find((metric) => metric.id === 'failed_attempt_tokens'),
-    ).toMatchObject({ baseline: 1_500, candidate: 0, tone: 'positive' })
+    ).toMatchObject({ baseline: 1_500, candidate: 0, tone: 'neutral' })
     expect(
       scenario?.metrics.find((metric) => metric.id === 'tokens_per_completion'),
     ).toMatchObject({ baseline: 5_000, candidate: 4_000 })
@@ -591,7 +590,10 @@ describe('retained criterion points', () => {
         (metric) => metric.id === 'criterion:delivery:40',
       ),
     ).toMatchObject({ baseline: 15, candidate: 30, delta: 15 })
-    expect(comparison.scenarios[0].candidate_status).toBe('failed')
+    expect(comparison.scenarios[0]).not.toHaveProperty('candidate_status')
+    expect(comparison.metrics.map((metric) => metric.id)).not.toEqual(
+      expect.arrayContaining(['pass_rate', 'hard_gates']),
+    )
     expect(
       comparison.metrics.some((metric) => metric.id.startsWith('criterion:')),
     ).toBe(false)
