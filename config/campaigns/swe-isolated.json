@@ -1,0 +1,73 @@
+{
+  "kind": "harness-e2e-campaign",
+  "campaign_id": "swe-isolated",
+  "lane": "swe-isolated",
+  "failure_policy": "advisory",
+  "scoring_profile": "difficulty-weighted-v1",
+  "groups": [
+    {
+      "id": "swe-config-isolation",
+      "execution_kind": "composite_flow",
+      "runs": 1,
+      "technical_retries": 0,
+      "difficulty_weight": 2,
+      "scenarios": ["swe_config_isolation"]
+    },
+    {
+      "id": "swe-cache-invalidation",
+      "execution_kind": "composite_flow",
+      "runs": 1,
+      "technical_retries": 0,
+      "difficulty_weight": 2,
+      "scenarios": ["swe_cache_invalidation"]
+    },
+    {
+      "id": "swe-batch-replay",
+      "execution_kind": "composite_flow",
+      "runs": 1,
+      "technical_retries": 0,
+      "difficulty_weight": 2,
+      "scenarios": ["swe_batch_replay"]
+    },
+    {
+      "id": "swe-replay-recovery",
+      "execution_kind": "composite_flow",
+      "runs": 1,
+      "technical_retries": 0,
+      "difficulty_weight": 2,
+      "scenarios": ["swe_replay_recovery"]
+    },
+    {
+      "id": "swe-contract-migration",
+      "execution_kind": "composite_flow",
+      "runs": 1,
+      "technical_retries": 0,
+      "difficulty_weight": 5,
+      "scenarios": ["swe_contract_migration"]
+    },
+    {
+      "id": "swe-tenant-isolation",
+      "execution_kind": "composite_flow",
+      "runs": 1,
+      "technical_retries": 0,
+      "difficulty_weight": 2,
+      "scenarios": ["swe_tenant_isolation"]
+    },
+    {
+      "id": "swe-replay-performance",
+      "execution_kind": "composite_flow",
+      "runs": 1,
+      "technical_retries": 0,
+      "difficulty_weight": 2,
+      "scenarios": ["swe_replay_performance"]
+    },
+    {
+      "id": "swe-release-handoff",
+      "execution_kind": "composite_flow",
+      "runs": 1,
+      "technical_retries": 0,
+      "difficulty_weight": 2,
+      "scenarios": ["swe_release_handoff"]
+    }
+  ]
+}

@@ -97,6 +97,36 @@ pub struct WorkflowEvaluationResult {
     pub evidence_ids: Vec<String>,
 }
 
+/// Internal scheduler signal, separate from the shared abort notification.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WorkflowTerminationReason {
+    Cancelled = 1,
+    Deadline = 2,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct WorkflowTermination(std::sync::Arc<std::sync::atomic::AtomicU8>);
+
+impl WorkflowTermination {
+    pub fn reason(&self) -> Option<WorkflowTerminationReason> {
+        match self.0.load(std::sync::atomic::Ordering::Acquire) {
+            1 => Some(WorkflowTerminationReason::Cancelled),
+            2 => Some(WorkflowTerminationReason::Deadline),
+            _ => None,
+        }
+    }
+
+    pub(crate) fn set(&self, reason: WorkflowTerminationReason) {
+        // The first terminal event remains authoritative if another races it.
+        let _ = self.0.compare_exchange(
+            0,
+            reason as u8,
+            std::sync::atomic::Ordering::AcqRel,
+            std::sync::atomic::Ordering::Acquire,
+        );
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct StepExecutorContext {
     pub workflow_id: String,
@@ -108,6 +138,7 @@ pub struct StepExecutorContext {
     pub inputs: BTreeMap<String, TypedPortValue>,
     pub output_dir: PathBuf,
     pub cancellation: watch::Receiver<bool>,
+    pub termination: WorkflowTermination,
 }
 
 #[derive(Debug, Clone)]

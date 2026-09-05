@@ -750,6 +750,7 @@ mod tests {
                     inputs: BTreeMap::new(),
                     output_dir: temporary.path().join("output"),
                     cancellation: tokio::sync::watch::channel(false).1,
+                    termination: Default::default(),
                 })
                 .await?;
         }

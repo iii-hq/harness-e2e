@@ -123,6 +123,15 @@ SCENARIO_EXECUTION_KIND = {
     "incident_response": "adaptive_flow",
     "release_train_recovery": "adaptive_flow",
     "cross_repo_contract_migration": "adaptive_flow",
+    "swe_config_isolation": "composite_flow",
+    "swe_cache_invalidation": "composite_flow",
+    "swe_batch_replay": "composite_flow",
+    "swe_replay_recovery": "composite_flow",
+    "swe_contract_migration": "composite_flow",
+    "swe_tenant_isolation": "composite_flow",
+    "swe_replay_performance": "composite_flow",
+    "swe_release_handoff": "composite_flow",
+    "swe_service_journey": "composite_flow",
 }
 
 # Generated from `harness-e2e catalog`. The parser checks the reviewed weight
@@ -148,6 +157,15 @@ SCENARIO_DIFFICULTY_WEIGHT = {
     "incident_response": 5,
     "release_train_recovery": 5,
     "cross_repo_contract_migration": 5,
+    "swe_config_isolation": 2,
+    "swe_cache_invalidation": 2,
+    "swe_batch_replay": 2,
+    "swe_replay_recovery": 2,
+    "swe_contract_migration": 5,
+    "swe_tenant_isolation": 2,
+    "swe_replay_performance": 2,
+    "swe_release_handoff": 2,
+    "swe_service_journey": 5,
 }
 
 FAULT_PROFILE_WEIGHT = {
