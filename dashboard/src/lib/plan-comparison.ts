@@ -47,7 +47,7 @@ export type PlanMetricId =
   | 'turns'
 
 export type PlanMetricComparison = {
-  id: PlanMetricId | `workflow:${string}`
+  id: PlanMetricId | `workflow:${string}` | `criterion:${string}`
   label: string
   baseline: number | null
   candidate: number | null
@@ -164,7 +164,7 @@ function metricTone(
 }
 
 function comparisonMetric(
-  id: PlanMetricId | `workflow:${string}`,
+  id: PlanMetricId | `workflow:${string}` | `criterion:${string}`,
   label: string,
   baseline: number | null,
   candidate: number | null,
@@ -566,6 +566,63 @@ function workflowMetricComparisons(
     )
 }
 
+function criterionPoints(
+  execution: DashboardExecutionSummary,
+  scenarioId: string,
+) {
+  const records = (execution as DashboardExecutionDetail).reports ?? []
+  const scenarios = records
+    .filter((record) => record.scenario_id === scenarioId)
+    .flatMap((record) =>
+      record.available
+        ? (record.report?.scenarios.filter(
+            (scenario) => scenario.scenario_id === scenarioId,
+          ) ?? [])
+        : [],
+    )
+  const runs = scenarios.flatMap((scenario) => scenario.runs)
+  const criteria = runs.map((run) =>
+    (Array.isArray(run.criteria) ? run.criteria : []).map(objectValue),
+  )
+  const keys = new Map(
+    criteria.flatMap((items) =>
+      items.map((item) => [`${item.id}:${item.possible}`, item] as const),
+    ),
+  )
+  const complete =
+    scenarios.length > 0 &&
+    records
+      .filter((record) => record.scenario_id === scenarioId)
+      .every((record) => record.available) &&
+    scenarios.every(
+      (scenario) => scenario.aggregate?.planned_runs === scenario.runs.length,
+    ) &&
+    new Set(runs.map((run) => run.run_id)).size === runs.length &&
+    runs.every((run) => run.technical === 'valid')
+  return new Map(
+    [...keys].map(([key, criterion]) => {
+      const awards = criteria.map((items) => {
+        const matches = items.filter(
+          (item) =>
+            item.id === criterion.id && item.possible === criterion.possible,
+        )
+        return matches.length === 1 ? finite(matches[0].awarded) : null
+      })
+      return [
+        key,
+        {
+          label: `Criterion ${criterion.id} · mean points / ${criterion.possible}`,
+          value:
+            complete && awards.every((value) => value !== null)
+              ? awards.reduce<number>((sum, value) => sum + (value ?? 0), 0) /
+                awards.length
+              : null,
+        },
+      ]
+    }),
+  )
+}
+
 export function buildScenarioComparisons(
   baseline: DashboardExecutionSummary,
   candidate: DashboardExecutionSummary,
@@ -620,6 +677,8 @@ export function buildScenarioComparisons(
         direction,
         format,
       )
+    const leftCriteria = criterionPoints(baseline, id)
+    const rightCriteria = criterionPoints(candidate, id)
     return {
       id,
       compatible,
@@ -631,6 +690,18 @@ export function buildScenarioComparisons(
       baseline_status: scenarioStatus(left),
       candidate_status: scenarioStatus(right),
       metrics: [
+        ...[...new Map([...leftCriteria, ...rightCriteria])]
+          .sort(([left], [right]) => left.localeCompare(right))
+          .map(([key, descriptor]) =>
+            comparisonMetric(
+              `criterion:${key}`,
+              descriptor.label,
+              compatible ? (leftCriteria.get(key)?.value ?? null) : null,
+              compatible ? (rightCriteria.get(key)?.value ?? null) : null,
+              'higher',
+              'score',
+            ),
+          ),
         metric(
           'pass_rate',
           'Pass rate',

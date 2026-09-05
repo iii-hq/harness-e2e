@@ -662,6 +662,18 @@ describe('local plan execution comparison', () => {
     const baseline = scenarioExecution('baseline-1', 4_500)
     const candidateOne = scenarioExecution('candidate-1', 4_000)
     const candidateTwo = scenarioExecution('candidate-2', 3_800)
+    const comparison = buildPlanComparison(baseline, candidateTwo)
+    comparison.scenarios[0].metrics.push({
+      id: 'criterion:delivery:40',
+      label: 'Criterion delivery · mean points / 40',
+      baseline: 15,
+      candidate: 30,
+      delta: 15,
+      delta_percent: 100,
+      direction: 'higher',
+      format: 'score',
+      tone: 'positive',
+    })
     const html = renderToStaticMarkup(
       <PlanComparisonLayers
         plan={{
@@ -678,7 +690,7 @@ describe('local plan execution comparison', () => {
         visualBaselineId="baseline-1"
         comparisonCandidateIds={['candidate-1', 'candidate-2']}
         selectedCandidateId="candidate-2"
-        scenarioComparison={buildPlanComparison(baseline, candidateTwo)}
+        scenarioComparison={comparison}
       />,
     )
     const scenarioHtml = html.slice(html.indexOf('data-plan-by-test'))
@@ -686,7 +698,11 @@ describe('local plan execution comparison', () => {
     expect(scenarioHtml).toContain('Candidate #1')
     expect(scenarioHtml).toContain('Candidate #2')
     expect(scenarioHtml).toContain('2 candidates')
-    expect(scenarioHtml.match(/data-scenario-metric-id=/g)).toHaveLength(10)
+    expect(scenarioHtml.match(/data-scenario-metric-id=/g)).toHaveLength(11)
+    expect(scenarioHtml).toContain(
+      'data-scenario-metric-id="criterion:delivery:40"',
+    )
+    expect(scenarioHtml).toContain('Criterion delivery · mean points / 40')
     for (const metricId of [
       'pass_rate',
       'quality',

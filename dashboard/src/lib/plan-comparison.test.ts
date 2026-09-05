@@ -531,3 +531,76 @@ describe('local plan comparison view model', () => {
     expect(Object.keys(result)).toHaveLength(205)
   })
 })
+
+describe('retained criterion points', () => {
+  function scored(awards: Array<number | null>, possible = 40) {
+    return {
+      ...execution('scored'),
+      subjects: [
+        {
+          id: 'model',
+          scenarios: [{ id: 'test', scenario_version: 1, passed: false }],
+        },
+      ],
+      reports: [
+        {
+          subject_id: 'model',
+          scenario_id: 'test',
+          available: true,
+          report: {
+            scenarios: [
+              {
+                scenario_id: 'test',
+                aggregate: { planned_runs: awards.length },
+                runs: awards.map((awarded, index) => ({
+                  run_id: `run-${index}`,
+                  technical: 'valid',
+                  status: 'hard_gate_failed',
+                  objective_score: 0,
+                  criteria: [{ id: 'delivery', possible, awarded }],
+                })),
+              },
+            ],
+          },
+        },
+      ],
+    } as unknown as DashboardExecutionDetail
+  }
+
+  it('shows partial progress across repetitions without replacing the hard-gate result or global score', () => {
+    const left = scored([10, 20])
+    const right = scored([20, 40])
+    const comparison = buildPlanComparison(left, right)
+    expect(
+      comparison.scenarios[0].metrics.find(
+        (metric) => metric.id === 'criterion:delivery:40',
+      ),
+    ).toMatchObject({ baseline: 15, candidate: 30, delta: 15 })
+    expect(comparison.scenarios[0].candidate_status).toBe('failed')
+    expect(
+      comparison.metrics.some((metric) => metric.id.startsWith('criterion:')),
+    ).toBe(false)
+    expect(right.reports[0].report?.scenarios[0].runs[0].objective_score).toBe(
+      0,
+    )
+  })
+
+  it('does not turn missing points, changed weights or invalid evidence into progress', () => {
+    for (const right of [scored([20, null]), scored([20, 30], 50)]) {
+      expect(
+        buildScenarioComparisons(scored([10, 20]), right)[0].metrics.find(
+          (metric) => metric.id === 'criterion:delivery:40',
+        )?.delta,
+      ).toBeNull()
+    }
+    const invalid = scored([20, 30])
+    const report = invalid.reports[0].report
+    if (!report) throw new Error('Missing test report')
+    report.scenarios[0].runs[0].technical = 'technical_invalid'
+    expect(
+      buildScenarioComparisons(scored([10, 20]), invalid)[0].metrics.find(
+        (metric) => metric.id === 'criterion:delivery:40',
+      )?.candidate,
+    ).toBeNull()
+  })
+})

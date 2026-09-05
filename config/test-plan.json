@@ -67,7 +67,8 @@
         "swe_contract_migration",
         "swe_tenant_isolation",
         "swe_replay_performance",
-        "swe_release_handoff"
+        "swe_release_handoff",
+        "typescript_chat_service"
       ]
     },
     {
@@ -177,6 +178,9 @@
     ],
     "todo_worker_planned": [
       "Disposable worker registry and Compose project"
+    ],
+    "typescript_chat_service": [
+      "Node 22.6+ on the runner host for direct TypeScript execution"
     ]
   },
   "profiles": [

@@ -1781,7 +1781,7 @@ mod tests {
         for (profile, expected) in [
             ("smoke", 5),
             ("regression", 12),
-            ("capability", 47),
+            ("capability", 48),
             ("evolution", 90),
             ("endurance", 5),
         ] {

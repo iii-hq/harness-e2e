@@ -90,6 +90,10 @@ The code-focused campaigns use protected disposable checkouts of
 revision, while `shell_coder_sandbox`, `chess_engine_build`, and `trend_blog`
 share a second pinned revision through `HARNESS_E2E_FIXTURE_PATH`. The protected
 launcher enforces the fixture and cleanup boundary.
+`typescript_chat_service` carries its own frozen skeleton in the repository and
+needs no checkout, but it does require Node 22.6 or newer on the runner host: the
+subject's TypeScript application is executed directly through Node type
+stripping, both by the public suite and by the runner-owned behavioral probe.
 [config/test-plan.json](config/test-plan.json) defines the six executable profiles: smoke, regression, capability, evolution,
 resilience, and endurance. In the dashboard these profiles are starting templates
 for the same plan form and baseline/candidate visualization used by existing plans.

@@ -2076,7 +2076,12 @@ function scenarioMetricWinnerIds(
 
 function scenarioMetrics(scenario: PlanScenarioComparison) {
   const available = [...scenario.metrics, ...scenario.execution_metrics]
-  return PLAN_SCENARIO_TABLE_METRICS.flatMap((id) => {
+  return [
+    ...PLAN_SCENARIO_TABLE_METRICS,
+    ...available
+      .filter((metric) => metric.id.startsWith('criterion:'))
+      .map((metric) => metric.id),
+  ].flatMap((id) => {
     const metric = available.find((candidate) => candidate.id === id)
     return metric ? [metric] : []
   })
@@ -2111,7 +2116,8 @@ function PlanScenarioComparisonTable({
           </h3>
           <p className="mt-1 mb-0 text-xs leading-5 text-ink-soft">
             Outcome and efficiency per test. Expand a row for exact values and
-            deltas.
+            deltas. Criterion points include failed hard gates and do not change
+            the verdict. Missing evidence is not zero.
           </p>
         </div>
         <span className="font-mono text-xs text-ink-muted">
@@ -2231,7 +2237,13 @@ function PlanScenarioComparisonTable({
                     </tr>
                   </thead>
                   <tbody>
-                    {PLAN_SCENARIO_TABLE_METRICS.map((metricId) => {
+                    {[
+                      ...new Set(
+                        metricLists.flatMap((list) =>
+                          list.map((metric) => metric.id),
+                        ),
+                      ),
+                    ].map((metricId) => {
                       const metrics = metricLists.map(
                         (list) =>
                           list.find(({ id }) => id === metricId) ?? null,

@@ -52,6 +52,7 @@ pub mod timer_wake;
 pub mod todo_worker;
 pub mod tool_contract_recovery;
 pub mod trend_blog;
+pub mod typescript_chat_service;
 pub mod validation_chain;
 pub mod validation_hook;
 pub mod validation_loop;
@@ -465,6 +466,8 @@ pub enum ScenarioId {
     ChessPlayLadder,
     #[value(name = "trend_blog")]
     TrendBlog,
+    #[value(name = "typescript_chat_service")]
+    TypescriptChatService,
     #[value(name = "tool_contract_recovery")]
     ToolContractRecovery,
     #[value(name = "policy_bound_action")]
@@ -500,7 +503,7 @@ pub enum ScenarioId {
 }
 
 impl ScenarioId {
-    pub const ALL: [Self; 49] = [
+    pub const ALL: [Self; 50] = [
         Self::ContextPressure,
         Self::ShellCoderSandbox,
         Self::ResearchPipeline,
@@ -534,6 +537,7 @@ impl ScenarioId {
         Self::ChessEngineBuild,
         Self::ChessPlayLadder,
         Self::TrendBlog,
+        Self::TypescriptChatService,
         Self::ToolContractRecovery,
         Self::PolicyBoundAction,
         Self::CrossAppTransaction,
@@ -559,6 +563,7 @@ impl ScenarioId {
     pub fn summary(self) -> Option<&'static str> {
         match self {
             Self::ChessEngineBuild => Some(chess_engine_build::SUMMARY),
+            Self::TypescriptChatService => Some(typescript_chat_service::SUMMARY),
             _ => None,
         }
     }
@@ -598,6 +603,7 @@ impl ScenarioId {
             Self::ChessEngineBuild => chess_engine_build::ID,
             Self::ChessPlayLadder => chess_play_ladder::ID,
             Self::TrendBlog => trend_blog::ID,
+            Self::TypescriptChatService => typescript_chat_service::ID,
             Self::ToolContractRecovery => tool_contract_recovery::ID,
             Self::PolicyBoundAction => policy_bound_action::ID,
             Self::CrossAppTransaction => cross_app_transaction::ID,
@@ -652,6 +658,7 @@ impl ScenarioId {
             Self::ChessEngineBuild => chess_engine_build::scenario(run_id),
             Self::ChessPlayLadder => chess_play_ladder::scenario(run_id),
             Self::TrendBlog => trend_blog::scenario(run_id),
+            Self::TypescriptChatService => typescript_chat_service::scenario(run_id),
             Self::ToolContractRecovery => tool_contract_recovery::scenario(run_id),
             Self::PolicyBoundAction => policy_bound_action::scenario(run_id),
             Self::CrossAppTransaction => cross_app_transaction::scenario(run_id),
@@ -716,6 +723,7 @@ impl ScenarioId {
             Self::ChessEngineBuild => chess_engine_build::materialize(namespace, seed)?,
             Self::ChessPlayLadder => chess_play_ladder::materialize(namespace, seed)?,
             Self::TrendBlog => trend_blog::materialize(namespace, seed)?,
+            Self::TypescriptChatService => typescript_chat_service::materialize(namespace, seed)?,
             Self::ToolContractRecovery => tool_contract_recovery::materialize(namespace, seed)?,
             Self::PolicyBoundAction => policy_bound_action::materialize(namespace, seed)?,
             Self::CrossAppTransaction => cross_app_transaction::materialize(namespace, seed)?,
@@ -791,6 +799,9 @@ impl ScenarioId {
         if self == Self::CrossRepoContractMigration {
             return cross_repo_contract_migration::CANONICAL_SEED;
         }
+        if self == Self::TypescriptChatService {
+            return typescript_chat_service::CANONICAL_SEED;
+        }
         // Stable FNV-1a keeps canonical cases reproducible without tying their
         // identity to a particular execution or retry attempt.
         stable_seed(self.as_str())
@@ -818,6 +829,7 @@ impl ScenarioId {
                 | Self::BrowserCrossSite
                 | Self::ReleaseTrainRecovery
                 | Self::CrossRepoContractMigration
+                | Self::TypescriptChatService
                 | Self::SweConfigIsolation
                 | Self::SweCacheInvalidation
                 | Self::SweBatchReplay
@@ -882,6 +894,7 @@ pub fn allowed_functions(scenario_id: &str, run_id: &str) -> Option<Vec<String>>
         cross_app_transaction::ID => Some(cross_app_transaction::allowed_functions(run_id)),
         research_pipeline::ID => Some(research_pipeline::allowed_functions(run_id)),
         performance_regression::ID => Some(performance_regression::allowed_functions(run_id)),
+        typescript_chat_service::ID => Some(typescript_chat_service::allowed_functions(run_id)),
         browser_cross_site::ID => Some(browser_cross_site::allowed_functions(run_id)),
         _ => None,
     }
@@ -912,7 +925,7 @@ mod tests {
 
     use super::*;
     #[test]
-    fn registry_contains_forty_nine_unique_valid_scenarios() {
+    fn registry_contains_fifty_unique_valid_scenarios() {
         let mut ids = HashSet::new();
         for scenario in ScenarioId::ALL {
             assert!(ids.insert(scenario.as_str()));
@@ -921,7 +934,7 @@ mod tests {
                 .materialize("run", scenario.canonical_seed())
                 .unwrap();
         }
-        assert_eq!(ids.len(), 49);
+        assert_eq!(ids.len(), 50);
     }
 
     #[test]
