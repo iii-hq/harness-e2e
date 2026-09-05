@@ -649,7 +649,7 @@ dependencies = [
 
 [[package]]
 name = "harness-e2e"
-version = "0.6.13-experimental"
+version = "0.7.0-experimental"
 dependencies = [
  "anyhow",
  "async-trait",
