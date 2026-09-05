@@ -47,7 +47,7 @@ export type PlanMetricId =
   | 'turns'
 
 export type PlanMetricComparison = {
-  id: PlanMetricId | `workflow:${string}`
+  id: PlanMetricId | `workflow:${string}` | `criterion:${string}`
   label: string
   baseline: number | null
   candidate: number | null
@@ -56,6 +56,15 @@ export type PlanMetricComparison = {
   direction: MetricDirection
   format: MetricFormat
   tone: MetricTone
+  evidence?: {
+    baseline_observed: number
+    candidate_observed: number
+    baseline_planned: number | null
+    candidate_planned: number | null
+    paired: number
+    paired_baseline: number | null
+    paired_candidate: number | null
+  }
 }
 
 export type PlanScenarioComparison = {
@@ -164,7 +173,7 @@ function metricTone(
 }
 
 function comparisonMetric(
-  id: PlanMetricId | `workflow:${string}`,
+  id: PlanMetricId | `workflow:${string}` | `criterion:${string}`,
   label: string,
   baseline: number | null,
   candidate: number | null,
@@ -566,6 +575,147 @@ function workflowMetricComparisons(
     )
 }
 
+function criterionPoints(
+  execution: DashboardExecutionSummary,
+  scenarioId: string,
+) {
+  const detail = execution as DashboardExecutionDetail
+  const records = (detail.reports ?? []).filter(
+    (record) => record.scenario_id === scenarioId,
+  )
+  const samples = records.flatMap((record) => {
+    if (!record.available || !record.report) return []
+    const report = record.report
+    return report.scenarios
+      .filter((scenario) => scenario.scenario_id === scenarioId)
+      .flatMap((scenario) => {
+        const subject = objectValue(report.subject)
+        const judge = objectValue(report.judge)
+        const caseValue = objectValue(scenario.case)
+        const policy = objectValue(scenario.execution_policy)
+        const identity = [
+          report.result_contract_sha256,
+          report.scoring_profile_sha256,
+          scenario.case_id,
+          caseValue.inputs_sha256,
+          subject.model,
+          subject.provider,
+          judge.model,
+          judge.provider,
+          report.judge_protocol,
+        ]
+        return scenario.runs.flatMap((run, index) => {
+          const round =
+            finite(record.round) ??
+            (scenario.aggregate?.planned_runs === scenario.runs.length
+              ? index + 1
+              : null)
+          const pair =
+            round !== null &&
+            identity.every(
+              (value) => typeof value === 'string' && value.length > 0,
+            ) &&
+            Object.keys(policy).length > 0
+              ? JSON.stringify([
+                  ...identity,
+                  Object.keys(policy)
+                    .sort()
+                    .map((key) => [key, policy[key]]),
+                  round,
+                ])
+              : null
+          return (Array.isArray(run.criteria) ? run.criteria : [])
+            .map(objectValue)
+            .map((criterion) => ({
+              id: `${criterion.id}:${criterion.possible}`,
+              label: `Criterion ${criterion.id} · mean points / ${criterion.possible}`,
+              runId: run.run_id,
+              pair,
+              value:
+                run.technical === 'valid' ? finite(criterion.awarded) : null,
+            }))
+        })
+      })
+  })
+  const planned = detail.plan_execution
+    ? detail.plan_execution.slots.filter(
+        (slot) => slot.scenario_id === scenarioId,
+      ).length
+    : finite(scenarioMap(execution).get(scenarioId)?.runs)
+  const criteria = new Map(
+    [...new Set(samples.map((sample) => sample.id))].map((id) => {
+      const values = samples.filter((sample) => sample.id === id)
+      const unique = values.filter(
+        (sample) =>
+          values.filter((other) => other.runId === sample.runId).length === 1,
+      )
+      return [
+        id,
+        {
+          label: values[0].label,
+          samples: unique.filter((sample) => sample.value !== null),
+        },
+      ]
+    }),
+  )
+  return { criteria, planned }
+}
+
+function criterionComparisons(
+  baseline: DashboardExecutionSummary,
+  candidate: DashboardExecutionSummary,
+  scenarioId: string,
+  compatible: boolean,
+): PlanMetricComparison[] {
+  const left = criterionPoints(baseline, scenarioId)
+  const right = criterionPoints(candidate, scenarioId)
+  const mean = (values: Array<number | null>) =>
+    values.length
+      ? values.reduce<number>((sum, value) => sum + (value ?? 0), 0) /
+        values.length
+      : null
+  return [...new Map([...left.criteria, ...right.criteria])]
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([id, descriptor]) => {
+      const before = left.criteria.get(id)?.samples ?? []
+      const after = right.criteria.get(id)?.samples ?? []
+      const pairs = compatible
+        ? before.flatMap((sample) => {
+            const matches = after.filter(
+              (other) => sample.pair !== null && other.pair === sample.pair,
+            )
+            return matches.length === 1 &&
+              before.filter((other) => other.pair === sample.pair).length === 1
+              ? [[sample.value, matches[0].value]]
+              : []
+          })
+        : []
+      const pairedBaseline = mean(pairs.map((pair) => pair[0]))
+      const pairedCandidate = mean(pairs.map((pair) => pair[1]))
+      return {
+        ...comparisonMetric(
+          `criterion:${id}`,
+          descriptor.label,
+          pairedBaseline,
+          pairedCandidate,
+          'context',
+          'score',
+        ),
+        baseline: mean(before.map((sample) => sample.value)),
+        candidate: mean(after.map((sample) => sample.value)),
+        evidence: {
+          baseline_observed: before.length,
+          candidate_observed: after.length,
+          baseline_planned: left.planned,
+          candidate_planned: right.planned,
+          paired: pairs.length,
+          paired_baseline: pairedBaseline,
+          paired_candidate: pairedCandidate,
+        },
+      }
+    })
+}
+
 export function buildScenarioComparisons(
   baseline: DashboardExecutionSummary,
   candidate: DashboardExecutionSummary,
@@ -631,6 +781,7 @@ export function buildScenarioComparisons(
       baseline_status: scenarioStatus(left),
       candidate_status: scenarioStatus(right),
       metrics: [
+        ...criterionComparisons(baseline, candidate, id, compatible),
         metric(
           'pass_rate',
           'Pass rate',

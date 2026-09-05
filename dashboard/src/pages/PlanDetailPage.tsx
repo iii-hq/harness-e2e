@@ -2076,7 +2076,12 @@ function scenarioMetricWinnerIds(
 
 function scenarioMetrics(scenario: PlanScenarioComparison) {
   const available = [...scenario.metrics, ...scenario.execution_metrics]
-  return PLAN_SCENARIO_TABLE_METRICS.flatMap((id) => {
+  return [
+    ...PLAN_SCENARIO_TABLE_METRICS,
+    ...available
+      .filter((metric) => metric.id.startsWith('criterion:'))
+      .map((metric) => metric.id),
+  ].flatMap((id) => {
     const metric = available.find((candidate) => candidate.id === id)
     return metric ? [metric] : []
   })
@@ -2111,7 +2116,9 @@ function PlanScenarioComparisonTable({
           </h3>
           <p className="mt-1 mb-0 text-xs leading-5 text-ink-soft">
             Outcome and efficiency per test. Expand a row for exact values and
-            deltas.
+            deltas. Criterion means include retained points from incomplete
+            tasks. Differences use matched repetitions only. Missing evidence is
+            not zero.
           </p>
         </div>
         <span className="font-mono text-xs text-ink-muted">
@@ -2231,7 +2238,13 @@ function PlanScenarioComparisonTable({
                     </tr>
                   </thead>
                   <tbody>
-                    {PLAN_SCENARIO_TABLE_METRICS.map((metricId) => {
+                    {[
+                      ...new Set(
+                        metricLists.flatMap((list) =>
+                          list.map((metric) => metric.id),
+                        ),
+                      ),
+                    ].map((metricId) => {
                       const metrics = metricLists.map(
                         (list) =>
                           list.find(({ id }) => id === metricId) ?? null,
@@ -2277,6 +2290,13 @@ function PlanScenarioComparisonTable({
                                 </span>
                               ) : null}
                             </span>
+                            {descriptor.evidence ? (
+                              <small className="font-mono text-label text-ink-muted">
+                                {descriptor.evidence.baseline_observed}/
+                                {descriptor.evidence.baseline_planned ?? '—'}{' '}
+                                evaluated
+                              </small>
+                            ) : null}
                           </td>
                           {metrics.map((metric, index) => (
                             <td
@@ -2308,6 +2328,38 @@ function PlanScenarioComparisonTable({
                                   >
                                     {formatPlanMetricDelta(metric)}
                                   </small>
+                                  {metric.evidence ? (
+                                    <small className="text-label text-ink-muted">
+                                      {metric.evidence.candidate_observed}/
+                                      {metric.evidence.candidate_planned ?? '—'}{' '}
+                                      evaluated · {metric.evidence.paired}{' '}
+                                      matched repetitions
+                                      {metric.evidence.paired > 0 ? (
+                                        <>
+                                          {' '}
+                                          · paired means{' '}
+                                          {formatPlanMetricValue(
+                                            {
+                                              ...metric,
+                                              baseline:
+                                                metric.evidence.paired_baseline,
+                                            },
+                                            'baseline',
+                                          )}{' '}
+                                          →{' '}
+                                          {formatPlanMetricValue(
+                                            {
+                                              ...metric,
+                                              candidate:
+                                                metric.evidence
+                                                  .paired_candidate,
+                                            },
+                                            'candidate',
+                                          )}
+                                        </>
+                                      ) : null}
+                                    </small>
+                                  ) : null}
                                 </span>
                               ) : (
                                 <span className="text-ink-muted">—</span>

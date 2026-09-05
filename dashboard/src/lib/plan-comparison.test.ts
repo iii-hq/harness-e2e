@@ -531,3 +531,203 @@ describe('local plan comparison view model', () => {
     expect(Object.keys(result)).toHaveLength(205)
   })
 })
+
+describe('retained criterion points', () => {
+  function scored(awards: Array<number | null>, possible = 40) {
+    return {
+      ...execution('scored'),
+      subjects: [
+        {
+          id: 'model',
+          scenarios: [
+            {
+              id: 'test',
+              scenario_version: 1,
+              passed: false,
+              runs: awards.length,
+            },
+          ],
+        },
+      ],
+      reports: [
+        {
+          subject_id: 'model',
+          scenario_id: 'test',
+          available: true,
+          report: {
+            result_contract_sha256: 'results-contract',
+            scoring_profile_sha256: 'scoring-contract',
+            subject: { model: 'subject', provider: 'provider' },
+            judge: { model: 'judge', provider: 'provider' },
+            judge_protocol: 'assessment-json',
+            scenarios: [
+              {
+                scenario_id: 'test',
+                case_id: 'test-case',
+                case: { inputs_sha256: 'inputs' },
+                execution_policy: { max_turns: 24 },
+                aggregate: { planned_runs: awards.length },
+                runs: awards.map((awarded, index) => ({
+                  run_id: `run-${index}`,
+                  technical: 'valid',
+                  status: 'hard_gate_failed',
+                  objective_score: 0,
+                  criteria: [{ id: 'delivery', possible, awarded }],
+                })),
+              },
+            ],
+          },
+        },
+      ],
+    } as unknown as DashboardExecutionDetail
+  }
+
+  it('shows partial progress across repetitions without replacing the hard-gate result or global score', () => {
+    const left = scored([10, 20])
+    const right = scored([20, 40])
+    const comparison = buildPlanComparison(left, right)
+    expect(
+      comparison.scenarios[0].metrics.find(
+        (metric) => metric.id === 'criterion:delivery:40',
+      ),
+    ).toMatchObject({ baseline: 15, candidate: 30, delta: 15 })
+    expect(comparison.scenarios[0].candidate_status).toBe('failed')
+    expect(
+      comparison.metrics.some((metric) => metric.id.startsWith('criterion:')),
+    ).toBe(false)
+    expect(right.reports[0].report?.scenarios[0].runs[0].objective_score).toBe(
+      0,
+    )
+  })
+
+  it('uses only matched repetitions for deltas while displaying every measured point', () => {
+    const result = buildScenarioComparisons(
+      scored([0, 30]),
+      scored([20, null]),
+    )[0].metrics.find((metric) => metric.id === 'criterion:delivery:40')
+    expect(result).toMatchObject({
+      baseline: 15,
+      candidate: 20,
+      delta: 20,
+      tone: 'neutral',
+      evidence: {
+        baseline_observed: 2,
+        candidate_observed: 1,
+        baseline_planned: 2,
+        candidate_planned: 2,
+        paired: 1,
+        paired_baseline: 0,
+        paired_candidate: 20,
+      },
+    })
+  })
+
+  it('pairs explicit rounds when an earlier child report is unavailable', () => {
+    const left = scored([0, 30])
+    const right = scored([20, 10])
+    for (const detail of [left, right]) {
+      const record = detail.reports[0]
+      const report = record.report
+      if (!report) throw new Error('Missing fixture')
+      const scenario = report.scenarios[0]
+      detail.reports = scenario.runs.map((run, index) => ({
+        ...record,
+        round: index + 1,
+        report: {
+          ...report,
+          scenarios: [
+            {
+              ...scenario,
+              aggregate: { ...scenario.aggregate, planned_runs: 1 },
+              runs: [run],
+            },
+          ],
+        },
+      }))
+    }
+    right.reports[0].available = false
+    right.reports.reverse()
+    const result = buildScenarioComparisons(left, right)[0].metrics.find(
+      (metric) => metric.id === 'criterion:delivery:40',
+    )
+    expect(result).toMatchObject({
+      baseline: 15,
+      candidate: 10,
+      delta: -20,
+      evidence: { paired: 1, paired_baseline: 30, paired_candidate: 10 },
+    })
+  })
+
+  it('preserves measured points from incomplete tasks but never pairs different cases or budgets', () => {
+    const right = scored([20, 30])
+    const report = right.reports[0].report
+    if (!report) throw new Error('Missing fixture')
+    const scenario = report.scenarios[0]
+    scenario.runs[0].completion = 'task_incomplete'
+    scenario.runs[0].status = 'resource_limit'
+    expect(
+      buildScenarioComparisons(scored([10, 20]), right)[0].metrics.find(
+        (metric) => metric.id === 'criterion:delivery:40',
+      ),
+    ).toMatchObject({ candidate: 25, delta: 10 })
+    scenario.execution_policy = { max_turns: 48 }
+    expect(
+      buildScenarioComparisons(scored([10, 20]), right)[0].metrics.find(
+        (metric) => metric.id === 'criterion:delivery:40',
+      ),
+    ).toMatchObject({ candidate: 25, delta: null })
+    scenario.execution_policy = { max_turns: 24 }
+    scenario.case = { inputs_sha256: 'different-inputs' }
+    expect(
+      buildScenarioComparisons(scored([10, 20]), right)[0].metrics.find(
+        (metric) => metric.id === 'criterion:delivery:40',
+      ),
+    ).toMatchObject({ candidate: 25, delta: null })
+  })
+
+  it('keeps points visible without pairing changed weights or unknown identity', () => {
+    const right = scored([20, 30], 50)
+    expect(
+      buildScenarioComparisons(scored([10, 20]), right)[0].metrics.find(
+        (metric) => metric.id === 'criterion:delivery:40',
+      )?.delta,
+    ).toBeNull()
+    const report = right.reports[0].report
+    if (!report) throw new Error('Missing fixture')
+    delete report.subject
+    const result = buildScenarioComparisons(
+      scored([10, 20], 50),
+      right,
+    )[0].metrics.find((metric) => metric.id === 'criterion:delivery:50')
+    expect(result).toMatchObject({
+      candidate: 25,
+      delta: null,
+      evidence: { paired: 0 },
+    })
+  })
+
+  it('excludes invalid and duplicate evidence without discarding independent valid observations', () => {
+    const right = scored([20, 30])
+    const report = right.reports[0].report
+    if (!report) throw new Error('Missing fixture')
+    report.scenarios[0].runs[0].technical = 'technical_invalid'
+    let result = buildScenarioComparisons(
+      scored([10, 20]),
+      right,
+    )[0].metrics.find((metric) => metric.id === 'criterion:delivery:40')
+    expect(result).toMatchObject({
+      candidate: 30,
+      delta: 10,
+      evidence: { candidate_observed: 1, paired: 1 },
+    })
+    right.reports.push(right.reports[0])
+    result = buildScenarioComparisons(scored([10, 20]), right)[0].metrics.find(
+      (metric) => metric.id === 'criterion:delivery:40',
+    )
+    expect(result).toMatchObject({
+      candidate: null,
+      delta: null,
+      evidence: { candidate_observed: 0 },
+    })
+  })
+})
