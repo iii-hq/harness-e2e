@@ -483,6 +483,78 @@ describe('local plan comparison view model', () => {
     )
   })
 
+  // The two token metrics #88 added to the execution page reach the plan
+  // through the summary totals (pooled) and the per-scenario averages.
+  it('compares failed-attempt tokens and tokens per completion when reported', () => {
+    const withTokens = (id: string, perCompletion: number, failed: number) =>
+      execution(id, {
+        totals: {
+          ...execution(id).totals,
+          tokens_per_completion: perCompletion,
+          failed_attempt_tokens: failed,
+        },
+        scenario_metrics: [
+          {
+            scenario_id: 'minimal_path',
+            scenario_version: 2,
+            contract_fingerprint: 'minimal-v2',
+            run_count: 1,
+            averages: {
+              tokens: perCompletion,
+              tokens_per_completion: perCompletion,
+              failed_attempt_tokens: failed,
+            },
+          },
+        ],
+        subjects: [
+          {
+            id: 'subject',
+            scenarios: [{ id: 'minimal_path', scenario_version: 2 }],
+          },
+        ] as never,
+      })
+    const comparison = buildPlanComparison(
+      withTokens('baseline-1', 5_000, 1_500),
+      withTokens('candidate-1', 4_000, 0),
+    )
+
+    expect(metricById(comparison, 'tokens_per_completion')).toMatchObject({
+      label: 'Tokens per completion',
+      baseline: 5_000,
+      candidate: 4_000,
+      delta: -1_000,
+      direction: 'lower',
+      format: 'tokens',
+      tone: 'positive',
+    })
+    expect(metricById(comparison, 'failed_attempt_tokens')).toMatchObject({
+      label: 'Failed attempt tokens',
+      baseline: 1_500,
+      candidate: 0,
+      tone: 'positive',
+    })
+    const scenario = comparison.scenarios.find(
+      (entry) => entry.id === 'minimal_path',
+    )
+    expect(
+      scenario?.metrics.find((metric) => metric.id === 'failed_attempt_tokens'),
+    ).toMatchObject({ baseline: 1_500, candidate: 0, tone: 'positive' })
+    expect(
+      scenario?.metrics.find((metric) => metric.id === 'tokens_per_completion'),
+    ).toMatchObject({ baseline: 5_000, candidate: 4_000 })
+
+    // Absent totals stay unavailable, never zero.
+    const bare = buildPlanComparison(
+      execution('baseline-1'),
+      execution('candidate-1'),
+    )
+    expect(metricById(bare, 'failed_attempt_tokens')).toMatchObject({
+      baseline: null,
+      candidate: null,
+      tone: 'unavailable',
+    })
+  })
+
   it('loads referenced summaries in bounded batches', async () => {
     const ids = Array.from({ length: 205 }, (_, index) => `execution-${index}`)
     const list = vi.fn(async ({ ids: batch }: { ids: string[] }) => ({
