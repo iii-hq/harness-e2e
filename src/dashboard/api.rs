@@ -169,7 +169,12 @@ async fn plans_list(State(state): State<AppState>) -> Result<Json<Value>, ApiErr
         .list_plans()
         .await
         .map_err(ApiError::internal)?;
-    Ok(Json(json!({ "mode": "local", "plans": plans })))
+    let master_plan = crate::test_plan::embedded()
+        .and_then(|plan| plan.catalog())
+        .map_err(ApiError::internal)?;
+    Ok(Json(
+        json!({ "mode": "local", "plans": plans, "master_plan": master_plan }),
+    ))
 }
 
 async fn plan_get(

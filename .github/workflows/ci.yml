@@ -57,6 +57,8 @@ jobs:
             exit 1
           fi
       - run: cargo fmt --all -- --check
+      - name: Verify generated master plan assets
+        run: cargo run --locked -- test-plan sync --check
       - run: cargo test --locked --all-targets
       - run: cargo clippy --locked --all-targets -- -D warnings
       - run: node --test tests/dashboard/*.test.cjs

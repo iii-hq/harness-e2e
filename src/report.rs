@@ -3684,6 +3684,31 @@ mod tests {
     }
 
     #[test]
+    fn profile_measurements_preserve_replications_and_reject_duplicate_evidence() {
+        let first = tempfile::tempdir().unwrap();
+        let second = tempfile::tempdir().unwrap();
+        let mut one = report(vec![aggregate(vec![run(100, true)])]);
+        let first_path = one.write_to(first.path(), &manifest()).unwrap();
+        let mut second_run = run(0, false);
+        second_run.run_id = "second-run".into();
+        second_run.attempt_id = "second-attempt".into();
+        let mut two = report(vec![aggregate(vec![second_run])]);
+        let second_path = two.write_to(second.path(), &manifest()).unwrap();
+        let measured = crate::test_plan::measure(&[first_path.clone(), second_path]).unwrap();
+        assert_eq!(measured["cohorts"].as_array().unwrap().len(), 1);
+        assert_eq!(measured["cohorts"][0]["aggregate"]["planned_runs"], 2);
+        assert_eq!(measured["cohorts"][0]["aggregate"]["observed_runs"], 2);
+        assert_eq!(measured["cohorts"][0]["consumption"]["observed_runs"], 2);
+        assert_eq!(measured["interpretation"], "descriptive_only");
+        assert!(crate::test_plan::measure(&[first_path.clone(), first_path]).is_err());
+        let repeated = tempfile::tempdir().unwrap();
+        let repeated_path = one.write_to(repeated.path(), &manifest()).unwrap();
+        assert!(
+            crate::test_plan::measure(&[first.path().join("results.json"), repeated_path]).is_err()
+        );
+    }
+
+    #[test]
     fn wholly_deferred_scenario_has_no_fabricated_case_or_run() {
         let mut deferred = E2eScenarioReport::deferred(
             "unmaterialized".into(),

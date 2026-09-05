@@ -1998,7 +1998,7 @@ fn finalize_restarted_journal(
     )
 }
 
-fn validate_run_request(request: &RunRequest) -> Result<LaneBudget> {
+pub(crate) fn validate_run_request(request: &RunRequest) -> Result<LaneBudget> {
     if request.slot_start_deadline_seconds == Some(0) {
         bail!("slot_start_deadline_seconds must be greater than zero");
     }

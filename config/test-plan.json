@@ -1,0 +1,772 @@
+{
+  "schema": "harness-e2e-master-test-plan/v1",
+  "plan_id": "harness",
+  "version": 1,
+  "modules": [
+    {
+      "id": "m1",
+      "label": "State and basic execution",
+      "scenarios": [
+        "minimal_path",
+        "persistent_state",
+        "insert_record",
+        "sequential_pipeline",
+        "database_migration_recovery"
+      ]
+    },
+    {
+      "id": "m2",
+      "label": "Context and instructions",
+      "scenarios": [
+        "context_pressure",
+        "moving_target",
+        "mechanical_reaction"
+      ]
+    },
+    {
+      "id": "m3",
+      "label": "Wakes and recovery",
+      "scenarios": [
+        "timer_wake",
+        "validation_loop",
+        "validation_self_repair",
+        "validation_scope_enforcement",
+        "validation_chain",
+        "cleanup_under_failure",
+        "poison_message",
+        "wake_chain_soak"
+      ]
+    },
+    {
+      "id": "m4",
+      "label": "Coordination",
+      "scenarios": [
+        "contention_ledger",
+        "quorum_fan_in",
+        "subagent_validation",
+        "subagent_validation_failure",
+        "fanout_ladder",
+        "depth_ladder",
+        "research_pipeline",
+        "receiving_operation"
+      ]
+    },
+    {
+      "id": "m5",
+      "label": "Software engineering",
+      "scenarios": [
+        "shell_coder_sandbox",
+        "performance_regression",
+        "chess_engine_build",
+        "git_regression_forensics",
+        "engineering_ticket_git_handoff",
+        "swe_config_isolation",
+        "swe_cache_invalidation",
+        "swe_batch_replay",
+        "swe_replay_recovery",
+        "swe_contract_migration",
+        "swe_tenant_isolation",
+        "swe_replay_performance",
+        "swe_release_handoff"
+      ]
+    },
+    {
+      "id": "m6",
+      "label": "Integration",
+      "scenarios": [
+        "tool_contract_recovery",
+        "cross_app_transaction",
+        "browser_cross_site"
+      ]
+    },
+    {
+      "id": "m7",
+      "label": "Security and policy",
+      "scenarios": [
+        "prompt_injection_resilience",
+        "secret_hygiene",
+        "security_review",
+        "policy_bound_action"
+      ]
+    },
+    {
+      "id": "m8",
+      "label": "Adaptive operations",
+      "scenarios": [
+        "incident_response",
+        "cross_repo_contract_migration",
+        "release_train_recovery"
+      ]
+    },
+    {
+      "id": "m9",
+      "label": "Continuous engineering",
+      "scenarios": [
+        "engineering_endurance_ladder",
+        "swe_service_journey"
+      ]
+    }
+  ],
+  "diagnostics": [
+    "engineering_ticket",
+    "trend_blog",
+    "todo_worker_simple",
+    "todo_worker_planned",
+    "chess_play_ladder"
+  ],
+  "requirements": {
+    "swe_config_isolation": [
+      "Isolated service workspace and trusted SWE grader"
+    ],
+    "swe_cache_invalidation": [
+      "Isolated service workspace and trusted SWE grader"
+    ],
+    "swe_batch_replay": [
+      "Isolated service workspace and trusted SWE grader"
+    ],
+    "swe_replay_recovery": [
+      "Isolated service workspace and trusted SWE grader"
+    ],
+    "swe_contract_migration": [
+      "Isolated service workspace and trusted SWE grader"
+    ],
+    "swe_tenant_isolation": [
+      "Isolated service workspace and trusted SWE grader"
+    ],
+    "swe_replay_performance": [
+      "Isolated service workspace and trusted SWE grader"
+    ],
+    "swe_release_handoff": [
+      "Isolated service workspace and trusted SWE grader"
+    ],
+    "swe_service_journey": [
+      "Isolated service workspace and trusted SWE grader"
+    ],
+    "shell_coder_sandbox": [
+      "Pinned shared engineering fixture"
+    ],
+    "chess_engine_build": [
+      "Pinned shared engineering fixture"
+    ],
+    "trend_blog": [
+      "Pinned shared engineering fixture"
+    ],
+    "engineering_ticket_git_handoff": [
+      "Protected Git handoff fixture"
+    ],
+    "engineering_ticket": [
+      "Protected engineering ticket fixture"
+    ],
+    "browser_cross_site": [
+      "Browser and three isolated local origins"
+    ],
+    "security_review": [
+      "Security scanner worker and review fixture"
+    ],
+    "incident_response": [
+      "Disposable incident repository"
+    ],
+    "cross_repo_contract_migration": [
+      "Isolated producer and consumer repositories"
+    ],
+    "release_train_recovery": [
+      "Release recovery fixture"
+    ],
+    "todo_worker_simple": [
+      "Disposable worker registry and Compose project"
+    ],
+    "todo_worker_planned": [
+      "Disposable worker registry and Compose project"
+    ]
+  },
+  "profiles": [
+    {
+      "id": "smoke",
+      "label": "Smoke",
+      "purpose": "Verify essential behavior in the published stack.",
+      "metrics": [
+        "execution_reliability",
+        "completion_rate",
+        "objective_score_coverage"
+      ],
+      "modules": [],
+      "scenarios": [
+        "minimal_path",
+        "tool_contract_recovery",
+        "persistent_state",
+        "timer_wake",
+        "shell_coder_sandbox"
+      ],
+      "repetitions": 1,
+      "technical_retries": 0,
+      "lane": "local-smoke",
+      "fault_groups": []
+    },
+    {
+      "id": "regression",
+      "label": "Regression",
+      "purpose": "Detect broken behavior across representative capabilities.",
+      "metrics": [
+        "execution_reliability",
+        "completion_rate",
+        "deliverable_success"
+      ],
+      "modules": [],
+      "scenarios": [
+        "minimal_path",
+        "tool_contract_recovery",
+        "persistent_state",
+        "timer_wake",
+        "shell_coder_sandbox",
+        "performance_regression",
+        "git_regression_forensics",
+        "database_migration_recovery",
+        "contention_ledger",
+        "swe_config_isolation",
+        "swe_cache_invalidation",
+        "swe_replay_recovery"
+      ],
+      "repetitions": 1,
+      "technical_retries": 1,
+      "lane": "local-regression",
+      "fault_groups": []
+    },
+    {
+      "id": "capability",
+      "label": "Capability",
+      "purpose": "Measure coverage, repeatability and difficulty across capability domains.",
+      "metrics": [
+        "deliverable_success",
+        "structural_integrity",
+        "completion_evidence_coverage"
+      ],
+      "modules": [
+        "m1",
+        "m2",
+        "m3",
+        "m4",
+        "m5",
+        "m6",
+        "m7",
+        "m8"
+      ],
+      "scenarios": [],
+      "repetitions": 1,
+      "technical_retries": 0,
+      "lane": "local-capability",
+      "fault_groups": []
+    },
+    {
+      "id": "evolution",
+      "label": "Evolution",
+      "purpose": "Compare quality and resource use across fixed Harness versions.",
+      "metrics": [
+        "completion_rate",
+        "tokens_per_verified_success",
+        "tokens_per_completion",
+        "p50_total_tokens",
+        "p50_function_calls"
+      ],
+      "modules": [],
+      "scenarios": [
+        "minimal_path",
+        "tool_contract_recovery",
+        "persistent_state",
+        "timer_wake",
+        "context_pressure",
+        "validation_self_repair",
+        "contention_ledger",
+        "quorum_fan_in",
+        "shell_coder_sandbox",
+        "performance_regression",
+        "swe_config_isolation",
+        "swe_cache_invalidation",
+        "swe_replay_recovery",
+        "swe_contract_migration",
+        "engineering_ticket_git_handoff",
+        "cross_app_transaction",
+        "prompt_injection_resilience",
+        "incident_response"
+      ],
+      "repetitions": 5,
+      "technical_retries": 0,
+      "lane": "local-evolution",
+      "fault_groups": []
+    },
+    {
+      "id": "resilience",
+      "label": "Resilience",
+      "purpose": "Measure recovery without duplicate effects or leaked resources.",
+      "metrics": [
+        "deliverable_success",
+        "structural_integrity",
+        "work_amplification"
+      ],
+      "modules": [],
+      "scenarios": [
+        "cleanup_under_failure",
+        "poison_message",
+        "subagent_validation_failure",
+        "swe_replay_recovery"
+      ],
+      "repetitions": 1,
+      "technical_retries": 0,
+      "lane": "local-resilience",
+      "fault_groups": [
+        {
+          "execution_kind": "fault_injection",
+          "runs": 3,
+          "technical_retries": 0,
+          "difficulty_weight": 2,
+          "fault_profile": "weekly-l2-recovery",
+          "fault_scenario": "stateful.2",
+          "soak_minutes": 60,
+          "id": "fault-l2"
+        },
+        {
+          "execution_kind": "fault_injection",
+          "runs": 3,
+          "technical_retries": 0,
+          "difficulty_weight": 3,
+          "fault_profile": "weekly-l3-recovery",
+          "fault_scenario": "coordination.3",
+          "soak_minutes": 60,
+          "id": "fault-l3"
+        },
+        {
+          "execution_kind": "fault_injection",
+          "runs": 3,
+          "technical_retries": 0,
+          "difficulty_weight": 4,
+          "fault_profile": "weekly-l4-recovery",
+          "fault_scenario": "coordination.4",
+          "soak_minutes": 60,
+          "id": "fault-l4"
+        }
+      ]
+    },
+    {
+      "id": "endurance",
+      "label": "Endurance",
+      "purpose": "Measure sustained correct work and the accepted capability boundary.",
+      "metrics": [
+        "max_accepted_rung",
+        "accepted_tickets",
+        "time_to_boundary_ms"
+      ],
+      "modules": [],
+      "scenarios": [
+        "engineering_endurance_ladder",
+        "swe_service_journey",
+        "wake_chain_soak",
+        "fanout_ladder",
+        "depth_ladder"
+      ],
+      "repetitions": 1,
+      "technical_retries": 0,
+      "lane": "local-endurance",
+      "fault_groups": []
+    }
+  ],
+  "compatibility_campaigns": {
+    "daily": {
+      "kind": "harness-e2e-campaign",
+      "campaign_id": "daily",
+      "lane": "daily",
+      "failure_policy": "advisory",
+      "scoring_profile": "difficulty-weighted-v1",
+      "groups": [
+        {
+          "id": "daily-canary",
+          "execution_kind": "harness_turn",
+          "runs": 1,
+          "technical_retries": 1,
+          "difficulty_weight": 4,
+          "scenarios": [
+            "tool_contract_recovery"
+          ]
+        },
+        {
+          "id": "daily-code",
+          "execution_kind": "harness_turn",
+          "runs": 1,
+          "technical_retries": 1,
+          "difficulty_weight": 4,
+          "scenarios": [
+            "shell_coder_sandbox",
+            "performance_regression",
+            "engineering_ticket_git_handoff"
+          ]
+        },
+        {
+          "id": "daily-hard-code",
+          "execution_kind": "harness_turn",
+          "runs": 1,
+          "technical_retries": 1,
+          "difficulty_weight": 4,
+          "scenarios": [
+            "chess_engine_build",
+            "git_regression_forensics"
+          ]
+        },
+        {
+          "id": "daily-markdown",
+          "execution_kind": "harness_turn",
+          "runs": 1,
+          "technical_retries": 1,
+          "difficulty_weight": 2,
+          "scenarios": [
+            "database_migration_recovery",
+            "insert_record",
+            "minimal_path",
+            "persistent_state",
+            "sequential_pipeline"
+          ]
+        }
+      ]
+    },
+    "endurance": {
+      "kind": "harness-e2e-campaign",
+      "campaign_id": "endurance",
+      "lane": "endurance",
+      "failure_policy": "advisory",
+      "scoring_profile": "difficulty-weighted-v1",
+      "groups": [
+        {
+          "id": "engineering-endurance",
+          "execution_kind": "harness_turn",
+          "runs": 1,
+          "technical_retries": 0,
+          "difficulty_weight": 4,
+          "scenarios": [
+            "engineering_endurance_ladder"
+          ]
+        }
+      ]
+    },
+    "post-deploy": {
+      "kind": "harness-e2e-campaign",
+      "campaign_id": "post-deploy",
+      "lane": "post-deploy",
+      "failure_policy": "advisory",
+      "scoring_profile": "difficulty-weighted-v1",
+      "groups": [
+        {
+          "id": "release-canary",
+          "execution_kind": "harness_turn",
+          "runs": 1,
+          "technical_retries": 0,
+          "difficulty_weight": 4,
+          "scenarios": [
+            "tool_contract_recovery"
+          ]
+        },
+        {
+          "id": "release-code",
+          "execution_kind": "harness_turn",
+          "runs": 1,
+          "technical_retries": 0,
+          "difficulty_weight": 4,
+          "scenarios": [
+            "shell_coder_sandbox",
+            "performance_regression",
+            "chess_engine_build",
+            "engineering_ticket_git_handoff"
+          ]
+        },
+        {
+          "id": "release-integration",
+          "execution_kind": "harness_turn",
+          "runs": 1,
+          "technical_retries": 0,
+          "difficulty_weight": 4,
+          "scenarios": [
+            "cross_app_transaction",
+            "browser_cross_site"
+          ]
+        },
+        {
+          "id": "release-train-adaptive",
+          "execution_kind": "adaptive_flow",
+          "runs": 1,
+          "technical_retries": 0,
+          "difficulty_weight": 5,
+          "scenarios": [
+            "release_train_recovery"
+          ]
+        },
+        {
+          "id": "post-deploy-markdown",
+          "execution_kind": "harness_turn",
+          "runs": 1,
+          "technical_retries": 0,
+          "difficulty_weight": 2,
+          "scenarios": [
+            "database_migration_recovery"
+          ]
+        }
+      ]
+    },
+    "swe-continuous": {
+      "kind": "harness-e2e-campaign",
+      "campaign_id": "swe-continuous",
+      "lane": "swe-continuous",
+      "failure_policy": "advisory",
+      "scoring_profile": "difficulty-weighted-v1",
+      "groups": [
+        {
+          "id": "swe-service-journey",
+          "execution_kind": "composite_flow",
+          "runs": 1,
+          "technical_retries": 0,
+          "difficulty_weight": 5,
+          "scenarios": [
+            "swe_service_journey"
+          ]
+        }
+      ]
+    },
+    "swe-isolated": {
+      "kind": "harness-e2e-campaign",
+      "campaign_id": "swe-isolated",
+      "lane": "swe-isolated",
+      "failure_policy": "advisory",
+      "scoring_profile": "difficulty-weighted-v1",
+      "groups": [
+        {
+          "id": "swe-config-isolation",
+          "execution_kind": "composite_flow",
+          "runs": 1,
+          "technical_retries": 0,
+          "difficulty_weight": 2,
+          "scenarios": [
+            "swe_config_isolation"
+          ]
+        },
+        {
+          "id": "swe-cache-invalidation",
+          "execution_kind": "composite_flow",
+          "runs": 1,
+          "technical_retries": 0,
+          "difficulty_weight": 2,
+          "scenarios": [
+            "swe_cache_invalidation"
+          ]
+        },
+        {
+          "id": "swe-batch-replay",
+          "execution_kind": "composite_flow",
+          "runs": 1,
+          "technical_retries": 0,
+          "difficulty_weight": 2,
+          "scenarios": [
+            "swe_batch_replay"
+          ]
+        },
+        {
+          "id": "swe-replay-recovery",
+          "execution_kind": "composite_flow",
+          "runs": 1,
+          "technical_retries": 0,
+          "difficulty_weight": 2,
+          "scenarios": [
+            "swe_replay_recovery"
+          ]
+        },
+        {
+          "id": "swe-contract-migration",
+          "execution_kind": "composite_flow",
+          "runs": 1,
+          "technical_retries": 0,
+          "difficulty_weight": 5,
+          "scenarios": [
+            "swe_contract_migration"
+          ]
+        },
+        {
+          "id": "swe-tenant-isolation",
+          "execution_kind": "composite_flow",
+          "runs": 1,
+          "technical_retries": 0,
+          "difficulty_weight": 2,
+          "scenarios": [
+            "swe_tenant_isolation"
+          ]
+        },
+        {
+          "id": "swe-replay-performance",
+          "execution_kind": "composite_flow",
+          "runs": 1,
+          "technical_retries": 0,
+          "difficulty_weight": 2,
+          "scenarios": [
+            "swe_replay_performance"
+          ]
+        },
+        {
+          "id": "swe-release-handoff",
+          "execution_kind": "composite_flow",
+          "runs": 1,
+          "technical_retries": 0,
+          "difficulty_weight": 2,
+          "scenarios": [
+            "swe_release_handoff"
+          ]
+        }
+      ]
+    },
+    "weekly": {
+      "kind": "harness-e2e-campaign",
+      "campaign_id": "weekly",
+      "lane": "weekly",
+      "failure_policy": "advisory",
+      "scoring_profile": "difficulty-weighted-v1",
+      "groups": [
+        {
+          "id": "weekly-canary",
+          "execution_kind": "harness_turn",
+          "runs": 1,
+          "technical_retries": 1,
+          "difficulty_weight": 2,
+          "scenarios": [
+            "timer_wake"
+          ]
+        },
+        {
+          "id": "weekly-shell-parity",
+          "execution_kind": "harness_turn",
+          "runs": 3,
+          "technical_retries": 1,
+          "difficulty_weight": 4,
+          "scenarios": [
+            "shell_coder_sandbox"
+          ]
+        },
+        {
+          "id": "weekly-performance",
+          "execution_kind": "harness_turn",
+          "runs": 5,
+          "technical_retries": 1,
+          "difficulty_weight": 2,
+          "scenarios": [
+            "performance_regression"
+          ]
+        },
+        {
+          "id": "weekly-chess-build",
+          "execution_kind": "harness_turn",
+          "runs": 3,
+          "technical_retries": 1,
+          "difficulty_weight": 2,
+          "scenarios": [
+            "chess_engine_build"
+          ]
+        },
+        {
+          "id": "weekly-git-forensics",
+          "execution_kind": "harness_turn",
+          "runs": 3,
+          "technical_retries": 1,
+          "difficulty_weight": 4,
+          "scenarios": [
+            "git_regression_forensics"
+          ]
+        },
+        {
+          "id": "weekly-engineering-handoff",
+          "execution_kind": "harness_turn",
+          "runs": 3,
+          "technical_retries": 1,
+          "difficulty_weight": 4,
+          "scenarios": [
+            "engineering_ticket_git_handoff"
+          ]
+        },
+        {
+          "id": "weekly-contention",
+          "execution_kind": "harness_turn",
+          "runs": 3,
+          "technical_retries": 1,
+          "difficulty_weight": 3,
+          "scenarios": [
+            "contention_ledger"
+          ]
+        },
+        {
+          "id": "weekly-security-review",
+          "execution_kind": "composite_flow",
+          "runs": 1,
+          "technical_retries": 0,
+          "difficulty_weight": 4,
+          "scenarios": [
+            "security_review"
+          ]
+        },
+        {
+          "id": "weekly-incident-adaptive",
+          "execution_kind": "adaptive_flow",
+          "runs": 1,
+          "technical_retries": 0,
+          "difficulty_weight": 5,
+          "scenarios": [
+            "incident_response"
+          ]
+        },
+        {
+          "id": "weekly-cross-repo-adaptive",
+          "execution_kind": "adaptive_flow",
+          "runs": 1,
+          "technical_retries": 0,
+          "difficulty_weight": 5,
+          "scenarios": [
+            "cross_repo_contract_migration"
+          ]
+        },
+        {
+          "id": "weekly-fault-l2",
+          "execution_kind": "fault_injection",
+          "runs": 3,
+          "technical_retries": 0,
+          "difficulty_weight": 2,
+          "fault_profile": "weekly-l2-recovery",
+          "fault_scenario": "stateful.2",
+          "soak_minutes": 60
+        },
+        {
+          "id": "weekly-fault-l3",
+          "execution_kind": "fault_injection",
+          "runs": 3,
+          "technical_retries": 0,
+          "difficulty_weight": 3,
+          "fault_profile": "weekly-l3-recovery",
+          "fault_scenario": "coordination.3",
+          "soak_minutes": 60
+        },
+        {
+          "id": "weekly-fault-l4",
+          "execution_kind": "fault_injection",
+          "runs": 3,
+          "technical_retries": 0,
+          "difficulty_weight": 4,
+          "fault_profile": "weekly-l4-recovery",
+          "fault_scenario": "coordination.4",
+          "soak_minutes": 60
+        },
+        {
+          "id": "weekly-markdown",
+          "execution_kind": "harness_turn",
+          "runs": 3,
+          "technical_retries": 1,
+          "difficulty_weight": 2,
+          "scenarios": [
+            "database_migration_recovery",
+            "insert_record",
+            "minimal_path",
+            "persistent_state",
+            "sequential_pipeline"
+          ]
+        }
+      ]
+    }
+  }
+}

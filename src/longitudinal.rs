@@ -9,7 +9,8 @@ use serde::{Deserialize, Serialize};
 use crate::artifact::{self, ArtifactReference};
 use crate::identity::{StackIdentity, SystemUnderTestIdentity};
 use crate::report::{
-    DimensionReport, E2eReport, E2eRunReport, E2eScenarioReport, EvaluationDimension, RunStatus,
+    CompletionState, DimensionReport, E2eReport, E2eRunReport, E2eScenarioReport,
+    EvaluationDimension, RunStatus, TechnicalState,
 };
 use crate::scenarios::ComplexityTier;
 
@@ -294,8 +295,166 @@ pub struct RateEstimate {
     pub ci95_upper: f64,
 }
 
+/// Subject-side usage across all observed attempts. Success-conditioned values
+/// are descriptive and must be read with completion, correctness and coverage.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct ConsumptionMetrics {
+    pub observed_runs: u32,
+    pub completed_runs: u32,
+    pub verified_successes: u32,
+    pub total_tokens_consumed: Option<u64>,
+    pub tokens_per_completion: Option<f64>,
+    pub tokens_per_verified_success: Option<f64>,
+    pub p50_total_tokens: Option<f64>,
+    pub p95_total_tokens: Option<f64>,
+    pub p50_function_calls: Option<f64>,
+    pub p95_function_calls: Option<f64>,
+    pub unavailable: BTreeMap<String, String>,
+}
+
+fn complete_efficiency(run: &E2eRunReport) -> Option<&crate::report::EfficiencyReport> {
+    let efficiency = run.efficiency.as_ref()?;
+    (!efficiency.unavailable.contains_key("retry_efficiency")
+        && efficiency.technical_attempts as usize == run.retry_attempts.len() + 1)
+        .then_some(efficiency)
+}
+
+pub fn consumption_metrics(runs: &[E2eRunReport]) -> ConsumptionMetrics {
+    let mut result = ConsumptionMetrics {
+        observed_runs: runs.len().try_into().unwrap_or(u32::MAX),
+        completed_runs: runs
+            .iter()
+            .filter(|r| r.completion == CompletionState::Completed)
+            .count()
+            .try_into()
+            .unwrap_or(u32::MAX),
+        verified_successes: runs
+            .iter()
+            .filter(|r| {
+                r.completion == CompletionState::Completed
+                    && r.technical == TechnicalState::Valid
+                    && r.status == RunStatus::Passed
+                    && r.objective_score.is_some()
+                    && !r.hard_gates.is_empty()
+                    && r.hard_gates.iter().all(|g| g.passed)
+                    && r.deliverables.iter().all(|d| d.passed())
+            })
+            .count()
+            .try_into()
+            .unwrap_or(u32::MAX),
+        ..ConsumptionMetrics::default()
+    };
+    let identities: BTreeSet<_> = runs.iter().map(|r| (&r.run_id, &r.attempt_id)).collect();
+    if identities.len() != runs.len() || runs.is_empty() {
+        result.unavailable.insert(
+            "consumption".into(),
+            "no observations or duplicate run/attempt identities".into(),
+        );
+        return result;
+    }
+    let tokens = runs
+        .iter()
+        .map(|run| complete_efficiency(run)?.total_tokens)
+        .collect::<Option<Vec<_>>>();
+    let calls = runs
+        .iter()
+        .map(|run| Some(complete_efficiency(run)?.function_calls? as f64))
+        .collect::<Option<Vec<_>>>();
+    result.total_tokens_consumed = tokens
+        .as_ref()
+        .and_then(|values| values.iter().try_fold(0_u64, |sum, n| sum.checked_add(*n)));
+    let token_values =
+        tokens.map(|values| values.into_iter().map(|n| n as f64).collect::<Vec<_>>());
+    result.p50_total_tokens = token_values.as_deref().and_then(median);
+    result.p95_total_tokens =
+        tail_metric(&token_values, "p95_total_tokens", &mut result.unavailable);
+    result.p50_function_calls = calls.as_deref().and_then(median);
+    result.p95_function_calls = tail_metric(&calls, "p95_function_calls", &mut result.unavailable);
+    result.tokens_per_completion = result
+        .total_tokens_consumed
+        .zip((result.completed_runs > 0).then_some(result.completed_runs))
+        .map(|(n, d)| n as f64 / f64::from(d));
+    result.tokens_per_verified_success = result
+        .total_tokens_consumed
+        .zip((result.verified_successes > 0).then_some(result.verified_successes))
+        .map(|(n, d)| n as f64 / f64::from(d));
+    if result.total_tokens_consumed.is_none() {
+        result.unavailable.insert(
+            "total_tokens_consumed".into(),
+            "missing attempt usage, incomplete retry evidence, or token sum overflow".into(),
+        );
+    }
+    if calls.is_none() {
+        result.unavailable.insert(
+            "function_calls".into(),
+            "missing call telemetry or incomplete retry evidence".into(),
+        );
+    }
+    if result.completed_runs == 0 {
+        result
+            .unavailable
+            .insert("tokens_per_completion".into(), "no completed runs".into());
+    }
+    if result.verified_successes == 0 {
+        result.unavailable.insert(
+            "tokens_per_verified_success".into(),
+            "no technically valid, objectively verified successes".into(),
+        );
+    }
+    result
+}
+
+fn consumption_delta(
+    from: &ConsumptionMetrics,
+    to: &ConsumptionMetrics,
+) -> BTreeMap<String, DeltaValue> {
+    [
+        (
+            "total_tokens_consumed",
+            from.total_tokens_consumed.map(|n| n as f64),
+            to.total_tokens_consumed.map(|n| n as f64),
+        ),
+        (
+            "tokens_per_completion",
+            from.tokens_per_completion,
+            to.tokens_per_completion,
+        ),
+        (
+            "tokens_per_verified_success",
+            from.tokens_per_verified_success,
+            to.tokens_per_verified_success,
+        ),
+        (
+            "p50_total_tokens",
+            from.p50_total_tokens,
+            to.p50_total_tokens,
+        ),
+        (
+            "p95_total_tokens",
+            from.p95_total_tokens,
+            to.p95_total_tokens,
+        ),
+        (
+            "p50_function_calls",
+            from.p50_function_calls,
+            to.p50_function_calls,
+        ),
+        (
+            "p95_function_calls",
+            from.p95_function_calls,
+            to.p95_function_calls,
+        ),
+    ]
+    .into_iter()
+    .filter_map(|(id, left, right)| metric_delta(left, right).map(|value| (id.into(), value)))
+    .collect()
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct CaseMetrics {
+    /// Includes every observed run, even those excluded from quality comparison.
+    #[serde(default)]
+    pub consumption: ConsumptionMetrics,
     pub included_runs: u32,
     pub excluded_infrastructure_runs: u32,
     pub deliverable_success: Option<RateEstimate>,
@@ -324,6 +483,9 @@ pub struct DeltaValue {
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct BenchmarkDelta {
+    /// Descriptive only; these deltas never create a regression gate.
+    #[serde(default)]
+    pub consumption: BTreeMap<String, DeltaValue>,
     pub deliverable_success_rate: Option<DeltaValue>,
     pub structural_integrity_rate: Option<DeltaValue>,
     pub technical_failure_rate: Option<DeltaValue>,
@@ -501,8 +663,8 @@ pub fn compare_reports(
             }
             continue;
         }
-        let from_metrics = case_metrics(&from_runs, from_case.runs.len());
-        let to_metrics = case_metrics(&to_runs, to_case.runs.len());
+        let from_metrics = case_metrics(&from_runs, &from_case.runs);
+        let to_metrics = case_metrics(&to_runs, &to_case.runs);
         let delta = benchmark_delta(&from_metrics, &to_metrics);
         let regressions = regression_signals(
             &from_case.scenario_id,
@@ -743,7 +905,8 @@ fn exclude_case(
         }));
 }
 
-fn case_metrics(runs: &[&E2eRunReport], total_runs: usize) -> CaseMetrics {
+fn case_metrics(runs: &[&E2eRunReport], observed_runs: &[E2eRunReport]) -> CaseMetrics {
+    let total_runs = observed_runs.len();
     let mut unavailable = BTreeMap::new();
     let deliverable_success = dimension_rate(runs, EvaluationDimension::Deliverable);
     if deliverable_success.is_none() {
@@ -836,6 +999,7 @@ fn case_metrics(runs: &[&E2eRunReport], total_runs: usize) -> CaseMetrics {
         );
     }
     CaseMetrics {
+        consumption: consumption_metrics(observed_runs),
         included_runs: runs.len().try_into().unwrap_or(u32::MAX),
         excluded_infrastructure_runs: total_runs
             .saturating_sub(runs.len())
@@ -874,6 +1038,7 @@ fn benchmark_delta(from: &CaseMetrics, to: &CaseMetrics) -> BenchmarkDelta {
         }};
     }
     BenchmarkDelta {
+        consumption: consumption_delta(&from.consumption, &to.consumption),
         deliverable_success_rate: delta!(
             "deliverable_success_rate",
             from.deliverable_success.as_ref().map(|value| value.rate),
@@ -1704,6 +1869,102 @@ mod tests {
             None,
             vec![scenario],
         )
+    }
+
+    fn usage_run(index: u64, tokens: u64) -> E2eRunReport {
+        let mut run = comparable_run(index, false, false);
+        run.completion = CompletionState::Completed;
+        run.technical = TechnicalState::Valid;
+        run.objective_score = Some(100);
+        run.hard_gates = vec![crate::report::HardGateReport {
+            id: "verified".into(),
+            dimension: EvaluationDimension::Deliverable,
+            passed: true,
+            reason: "independent probe".into(),
+        }];
+        run.efficiency = Some(
+            serde_json::from_value(serde_json::json!({
+                "wall_time_ms": 100, "root_turns": 2, "child_turns": 0, "child_sessions": 0,
+                "function_calls": 0, "function_call_errors": 0, "validation_retries": 0,
+                "transient_resumes": 0, "wake_resumes": 0, "effective_fan_out": 0,
+                "critical_path_ms": 100, "input_tokens": tokens, "output_tokens": 0,
+                "total_tokens": tokens, "cost_usd": null, "minimum_expected_work": 1,
+                "observed_work": 2, "work_amplification": 2.0, "technical_attempts": 1,
+                "observed_complexity": {}, "unavailable": {}
+            }))
+            .unwrap(),
+        );
+        run
+    }
+
+    #[test]
+    fn consumption_preserves_failed_and_infrastructure_usage_without_rewarding_failure() {
+        let first = usage_run(1, 100);
+        let mut failed = usage_run(2, 20);
+        failed.completion = CompletionState::TaskIncomplete;
+        failed.status = RunStatus::HardGateFailed;
+        failed.hard_gates[0].passed = false;
+        let mut infra = usage_run(3, 10);
+        infra.completion = CompletionState::Undetermined;
+        infra.technical = TechnicalState::TechnicalInvalid;
+        infra.status = RunStatus::InfrastructureError;
+        let raw = vec![first, failed, infra];
+        let eligible = vec![&raw[0], &raw[1]];
+        let metrics = case_metrics(&eligible, &raw);
+        assert_eq!(metrics.excluded_infrastructure_runs, 1);
+        assert_eq!(metrics.consumption.total_tokens_consumed, Some(130));
+        assert_eq!(metrics.consumption.tokens_per_verified_success, Some(130.0));
+        assert_eq!(metrics.consumption.verified_successes, 1);
+        assert_eq!(metrics.consumption.p95_total_tokens, None);
+        assert_eq!(metrics.consumption.p50_function_calls, Some(0.0));
+    }
+
+    #[test]
+    fn incomplete_retry_and_duplicate_observations_never_supply_cheap_efficiency() {
+        let mut run = usage_run(1, 100);
+        let retry = crate::report::RetryAttemptReport::from(&usage_run(2, 20));
+        run.retry_attempts.push(retry);
+        assert_eq!(
+            consumption_metrics(&[run.clone()]).total_tokens_consumed,
+            None
+        );
+        run.efficiency.as_mut().unwrap().technical_attempts = 2;
+        run.efficiency.as_mut().unwrap().total_tokens = Some(120);
+        assert_eq!(
+            consumption_metrics(&[run.clone()]).total_tokens_consumed,
+            Some(120)
+        );
+        run.efficiency
+            .as_mut()
+            .unwrap()
+            .unavailable
+            .insert("retry_efficiency".into(), "missing attempt".into());
+        assert_eq!(
+            consumption_metrics(&[run.clone()]).total_tokens_consumed,
+            None
+        );
+        assert!(consumption_metrics(&[run.clone(), run])
+            .unavailable
+            .contains_key("consumption"));
+    }
+
+    #[test]
+    fn consumption_tail_requires_twenty_and_zero_baseline_has_no_ratio() {
+        let runs: Vec<_> = (1..=20).map(|n| usage_run(n, n)).collect();
+        assert_eq!(consumption_metrics(&runs[..19]).p95_total_tokens, None);
+        assert_eq!(consumption_metrics(&runs).p95_total_tokens, Some(19.0));
+        let zero = consumption_metrics(&[usage_run(100, 0)]);
+        let candidate = consumption_metrics(&[usage_run(101, 5)]);
+        assert_eq!(
+            consumption_delta(&zero, &candidate)["p50_total_tokens"].relative_ratio,
+            None
+        );
+        let mut not_verified = usage_run(200, 5);
+        not_verified.technical = TechnicalState::TechnicalInvalid;
+        assert_eq!(
+            consumption_metrics(&[not_verified]).tokens_per_verified_success,
+            None
+        );
     }
 
     fn comparable_run(index: u64, failed: bool, regress: bool) -> E2eRunReport {

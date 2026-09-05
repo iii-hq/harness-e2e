@@ -120,6 +120,7 @@ struct PlanGetRequest {
 struct PlansListResponse {
     mode: String,
     plans: Vec<super::plans::LocalPlan>,
+    master_plan: Value,
 }
 
 #[derive(Debug, Serialize, JsonSchema)]
@@ -377,6 +378,9 @@ pub(super) fn register_functions(iii: &IIIClient, controller: Arc<Controller>) {
                     Ok(PlansListResponse {
                         mode: "local".into(),
                         plans,
+                        master_plan: crate::test_plan::embedded()
+                            .and_then(|plan| plan.catalog())
+                            .map_err(handler_error)?,
                     })
                 }
             })

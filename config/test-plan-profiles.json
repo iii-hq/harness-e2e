@@ -1,0 +1,2131 @@
+{
+  "definition_sha256": "sha256:47047f9d7c7145682c1930bd6e610b39af4dc1861d0d8f9247506357f1b6ded1",
+  "plan_id": "harness",
+  "profiles": [
+    {
+      "budget": {
+        "fault_budget_separate": false,
+        "fault_runs": 0,
+        "max_concurrent_groups": 1,
+        "planned_runs": 5,
+        "scenario_runs": 5,
+        "scope": "turn sum counts per-session limits, not a whole-workflow ceiling; tokens cover subject only; setup, judge, capture and cleanup are additional",
+        "session_turn_limit_sum": 140,
+        "subject_token_limit": 1920000,
+        "unbounded_token_cases": []
+      },
+      "campaigns": [
+        {
+          "campaign_id": "smoke-r01",
+          "failure_policy": "advisory",
+          "groups": [
+            {
+              "difficulty_weight": 2,
+              "execution_kind": "harness_turn",
+              "id": "case-minimal-path",
+              "runs": 1,
+              "scenarios": [
+                "minimal_path"
+              ],
+              "technical_retries": 0
+            },
+            {
+              "difficulty_weight": 4,
+              "execution_kind": "harness_turn",
+              "id": "case-tool-contract-recovery",
+              "runs": 1,
+              "scenarios": [
+                "tool_contract_recovery"
+              ],
+              "technical_retries": 0
+            },
+            {
+              "difficulty_weight": 2,
+              "execution_kind": "harness_turn",
+              "id": "case-persistent-state",
+              "runs": 1,
+              "scenarios": [
+                "persistent_state"
+              ],
+              "technical_retries": 0
+            },
+            {
+              "difficulty_weight": 2,
+              "execution_kind": "harness_turn",
+              "id": "case-timer-wake",
+              "runs": 1,
+              "scenarios": [
+                "timer_wake"
+              ],
+              "technical_retries": 0
+            },
+            {
+              "difficulty_weight": 4,
+              "execution_kind": "harness_turn",
+              "id": "case-shell-coder-sandbox",
+              "runs": 1,
+              "scenarios": [
+                "shell_coder_sandbox"
+              ],
+              "technical_retries": 0
+            }
+          ],
+          "kind": "harness-e2e-campaign",
+          "lane": "local-smoke",
+          "scoring_profile": "difficulty-weighted-v1",
+          "test_plan": {
+            "campaign_sha256": "sha256:c3013c779aa9b1fb53a33fee258b8da2ba2721ed41844f173f4743b1b9c3227d",
+            "definition_sha256": "sha256:47047f9d7c7145682c1930bd6e610b39af4dc1861d0d8f9247506357f1b6ded1",
+            "plan_id": "harness",
+            "profile_id": "smoke",
+            "profile_sha256": "sha256:0e88ee45a461b3ff7ac9c15fd016e1a707c1ae7acc7bdf72bb2a208b9dc9362f",
+            "repetition": 1,
+            "repetitions": 1,
+            "version": 1
+          }
+        }
+      ],
+      "id": "smoke",
+      "label": "Smoke",
+      "metrics": [
+        "execution_reliability",
+        "completion_rate",
+        "objective_score_coverage"
+      ],
+      "profile_sha256": "sha256:0e88ee45a461b3ff7ac9c15fd016e1a707c1ae7acc7bdf72bb2a208b9dc9362f",
+      "protected_supervisor_required": false,
+      "purpose": "Verify essential behavior in the published stack.",
+      "repetitions": 1,
+      "scenario_ids": [
+        "minimal_path",
+        "tool_contract_recovery",
+        "persistent_state",
+        "timer_wake",
+        "shell_coder_sandbox"
+      ],
+      "technical_retries": 0
+    },
+    {
+      "budget": {
+        "fault_budget_separate": false,
+        "fault_runs": 0,
+        "max_concurrent_groups": 1,
+        "planned_runs": 12,
+        "scenario_runs": 12,
+        "scope": "turn sum counts per-session limits, not a whole-workflow ceiling; tokens cover subject only; setup, judge, capture and cleanup are additional",
+        "session_turn_limit_sum": 692,
+        "subject_token_limit": 8910000,
+        "unbounded_token_cases": []
+      },
+      "campaigns": [
+        {
+          "campaign_id": "regression-r01",
+          "failure_policy": "advisory",
+          "groups": [
+            {
+              "difficulty_weight": 2,
+              "execution_kind": "harness_turn",
+              "id": "case-minimal-path",
+              "runs": 1,
+              "scenarios": [
+                "minimal_path"
+              ],
+              "technical_retries": 1
+            },
+            {
+              "difficulty_weight": 4,
+              "execution_kind": "harness_turn",
+              "id": "case-tool-contract-recovery",
+              "runs": 1,
+              "scenarios": [
+                "tool_contract_recovery"
+              ],
+              "technical_retries": 1
+            },
+            {
+              "difficulty_weight": 2,
+              "execution_kind": "harness_turn",
+              "id": "case-persistent-state",
+              "runs": 1,
+              "scenarios": [
+                "persistent_state"
+              ],
+              "technical_retries": 1
+            },
+            {
+              "difficulty_weight": 2,
+              "execution_kind": "harness_turn",
+              "id": "case-timer-wake",
+              "runs": 1,
+              "scenarios": [
+                "timer_wake"
+              ],
+              "technical_retries": 1
+            },
+            {
+              "difficulty_weight": 4,
+              "execution_kind": "harness_turn",
+              "id": "case-shell-coder-sandbox",
+              "runs": 1,
+              "scenarios": [
+                "shell_coder_sandbox"
+              ],
+              "technical_retries": 1
+            },
+            {
+              "difficulty_weight": 2,
+              "execution_kind": "harness_turn",
+              "id": "case-performance-regression",
+              "runs": 1,
+              "scenarios": [
+                "performance_regression"
+              ],
+              "technical_retries": 1
+            },
+            {
+              "difficulty_weight": 4,
+              "execution_kind": "harness_turn",
+              "id": "case-git-regression-forensics",
+              "runs": 1,
+              "scenarios": [
+                "git_regression_forensics"
+              ],
+              "technical_retries": 1
+            },
+            {
+              "difficulty_weight": 2,
+              "execution_kind": "harness_turn",
+              "id": "case-database-migration-recovery",
+              "runs": 1,
+              "scenarios": [
+                "database_migration_recovery"
+              ],
+              "technical_retries": 1
+            },
+            {
+              "difficulty_weight": 3,
+              "execution_kind": "harness_turn",
+              "id": "case-contention-ledger",
+              "runs": 1,
+              "scenarios": [
+                "contention_ledger"
+              ],
+              "technical_retries": 1
+            },
+            {
+              "difficulty_weight": 2,
+              "execution_kind": "composite_flow",
+              "id": "case-swe-config-isolation",
+              "runs": 1,
+              "scenarios": [
+                "swe_config_isolation"
+              ],
+              "technical_retries": 0
+            },
+            {
+              "difficulty_weight": 2,
+              "execution_kind": "composite_flow",
+              "id": "case-swe-cache-invalidation",
+              "runs": 1,
+              "scenarios": [
+                "swe_cache_invalidation"
+              ],
+              "technical_retries": 0
+            },
+            {
+              "difficulty_weight": 2,
+              "execution_kind": "composite_flow",
+              "id": "case-swe-replay-recovery",
+              "runs": 1,
+              "scenarios": [
+                "swe_replay_recovery"
+              ],
+              "technical_retries": 0
+            }
+          ],
+          "kind": "harness-e2e-campaign",
+          "lane": "local-regression",
+          "scoring_profile": "difficulty-weighted-v1",
+          "test_plan": {
+            "campaign_sha256": "sha256:bf41991b59ffe278cb76e4ec466691a4890cd5035c225871af121940147ff6b6",
+            "definition_sha256": "sha256:47047f9d7c7145682c1930bd6e610b39af4dc1861d0d8f9247506357f1b6ded1",
+            "plan_id": "harness",
+            "profile_id": "regression",
+            "profile_sha256": "sha256:3451fab1157bced8898b3adcb96ed8666bf45347e2a67ab11877913f174d5523",
+            "repetition": 1,
+            "repetitions": 1,
+            "version": 1
+          }
+        }
+      ],
+      "id": "regression",
+      "label": "Regression",
+      "metrics": [
+        "execution_reliability",
+        "completion_rate",
+        "deliverable_success"
+      ],
+      "profile_sha256": "sha256:3451fab1157bced8898b3adcb96ed8666bf45347e2a67ab11877913f174d5523",
+      "protected_supervisor_required": false,
+      "purpose": "Detect broken behavior across representative capabilities.",
+      "repetitions": 1,
+      "scenario_ids": [
+        "minimal_path",
+        "tool_contract_recovery",
+        "persistent_state",
+        "timer_wake",
+        "shell_coder_sandbox",
+        "performance_regression",
+        "git_regression_forensics",
+        "database_migration_recovery",
+        "contention_ledger",
+        "swe_config_isolation",
+        "swe_cache_invalidation",
+        "swe_replay_recovery"
+      ],
+      "technical_retries": 1
+    },
+    {
+      "budget": {
+        "fault_budget_separate": false,
+        "fault_runs": 0,
+        "max_concurrent_groups": 1,
+        "planned_runs": 47,
+        "scenario_runs": 47,
+        "scope": "turn sum counts per-session limits, not a whole-workflow ceiling; tokens cover subject only; setup, judge, capture and cleanup are additional",
+        "session_turn_limit_sum": 1496,
+        "subject_token_limit": null,
+        "unbounded_token_cases": [
+          "context_pressure",
+          "wake_chain_soak"
+        ]
+      },
+      "campaigns": [
+        {
+          "campaign_id": "capability-r01",
+          "failure_policy": "advisory",
+          "groups": [
+            {
+              "difficulty_weight": 2,
+              "execution_kind": "harness_turn",
+              "id": "case-minimal-path",
+              "runs": 1,
+              "scenarios": [
+                "minimal_path"
+              ],
+              "technical_retries": 0
+            },
+            {
+              "difficulty_weight": 2,
+              "execution_kind": "harness_turn",
+              "id": "case-persistent-state",
+              "runs": 1,
+              "scenarios": [
+                "persistent_state"
+              ],
+              "technical_retries": 0
+            },
+            {
+              "difficulty_weight": 2,
+              "execution_kind": "harness_turn",
+              "id": "case-insert-record",
+              "runs": 1,
+              "scenarios": [
+                "insert_record"
+              ],
+              "technical_retries": 0
+            },
+            {
+              "difficulty_weight": 2,
+              "execution_kind": "harness_turn",
+              "id": "case-sequential-pipeline",
+              "runs": 1,
+              "scenarios": [
+                "sequential_pipeline"
+              ],
+              "technical_retries": 0
+            },
+            {
+              "difficulty_weight": 2,
+              "execution_kind": "harness_turn",
+              "id": "case-database-migration-recovery",
+              "runs": 1,
+              "scenarios": [
+                "database_migration_recovery"
+              ],
+              "technical_retries": 0
+            },
+            {
+              "difficulty_weight": 1,
+              "execution_kind": "harness_turn",
+              "id": "case-context-pressure",
+              "runs": 1,
+              "scenarios": [
+                "context_pressure"
+              ],
+              "technical_retries": 0
+            },
+            {
+              "difficulty_weight": 2,
+              "execution_kind": "harness_turn",
+              "id": "case-moving-target",
+              "runs": 1,
+              "scenarios": [
+                "moving_target"
+              ],
+              "technical_retries": 0
+            },
+            {
+              "difficulty_weight": 2,
+              "execution_kind": "harness_turn",
+              "id": "case-mechanical-reaction",
+              "runs": 1,
+              "scenarios": [
+                "mechanical_reaction"
+              ],
+              "technical_retries": 0
+            },
+            {
+              "difficulty_weight": 2,
+              "execution_kind": "harness_turn",
+              "id": "case-timer-wake",
+              "runs": 1,
+              "scenarios": [
+                "timer_wake"
+              ],
+              "technical_retries": 0
+            },
+            {
+              "difficulty_weight": 2,
+              "execution_kind": "harness_turn",
+              "id": "case-validation-loop",
+              "runs": 1,
+              "scenarios": [
+                "validation_loop"
+              ],
+              "technical_retries": 0
+            },
+            {
+              "difficulty_weight": 2,
+              "execution_kind": "harness_turn",
+              "id": "case-validation-self-repair",
+              "runs": 1,
+              "scenarios": [
+                "validation_self_repair"
+              ],
+              "technical_retries": 0
+            },
+            {
+              "difficulty_weight": 2,
+              "execution_kind": "harness_turn",
+              "id": "case-validation-scope-enforcement",
+              "runs": 1,
+              "scenarios": [
+                "validation_scope_enforcement"
+              ],
+              "technical_retries": 0
+            },
+            {
+              "difficulty_weight": 2,
+              "execution_kind": "harness_turn",
+              "id": "case-validation-chain",
+              "runs": 1,
+              "scenarios": [
+                "validation_chain"
+              ],
+              "technical_retries": 0
+            },
+            {
+              "difficulty_weight": 2,
+              "execution_kind": "harness_turn",
+              "id": "case-cleanup-under-failure",
+              "runs": 1,
+              "scenarios": [
+                "cleanup_under_failure"
+              ],
+              "technical_retries": 0
+            },
+            {
+              "difficulty_weight": 2,
+              "execution_kind": "harness_turn",
+              "id": "case-poison-message",
+              "runs": 1,
+              "scenarios": [
+                "poison_message"
+              ],
+              "technical_retries": 0
+            },
+            {
+              "difficulty_weight": 2,
+              "execution_kind": "harness_turn",
+              "id": "case-wake-chain-soak",
+              "runs": 1,
+              "scenarios": [
+                "wake_chain_soak"
+              ],
+              "technical_retries": 0
+            },
+            {
+              "difficulty_weight": 3,
+              "execution_kind": "harness_turn",
+              "id": "case-contention-ledger",
+              "runs": 1,
+              "scenarios": [
+                "contention_ledger"
+              ],
+              "technical_retries": 0
+            },
+            {
+              "difficulty_weight": 3,
+              "execution_kind": "harness_turn",
+              "id": "case-quorum-fan-in",
+              "runs": 1,
+              "scenarios": [
+                "quorum_fan_in"
+              ],
+              "technical_retries": 0
+            },
+            {
+              "difficulty_weight": 4,
+              "execution_kind": "harness_turn",
+              "id": "case-subagent-validation",
+              "runs": 1,
+              "scenarios": [
+                "subagent_validation"
+              ],
+              "technical_retries": 0
+            },
+            {
+              "difficulty_weight": 4,
+              "execution_kind": "harness_turn",
+              "id": "case-subagent-validation-failure",
+              "runs": 1,
+              "scenarios": [
+                "subagent_validation_failure"
+              ],
+              "technical_retries": 0
+            },
+            {
+              "difficulty_weight": 4,
+              "execution_kind": "harness_turn",
+              "id": "case-fanout-ladder",
+              "runs": 1,
+              "scenarios": [
+                "fanout_ladder"
+              ],
+              "technical_retries": 0
+            },
+            {
+              "difficulty_weight": 4,
+              "execution_kind": "harness_turn",
+              "id": "case-depth-ladder",
+              "runs": 1,
+              "scenarios": [
+                "depth_ladder"
+              ],
+              "technical_retries": 0
+            },
+            {
+              "difficulty_weight": 4,
+              "execution_kind": "harness_turn",
+              "id": "case-research-pipeline",
+              "runs": 1,
+              "scenarios": [
+                "research_pipeline"
+              ],
+              "technical_retries": 0
+            },
+            {
+              "difficulty_weight": 4,
+              "execution_kind": "harness_turn",
+              "id": "case-receiving-operation",
+              "runs": 1,
+              "scenarios": [
+                "receiving_operation"
+              ],
+              "technical_retries": 0
+            },
+            {
+              "difficulty_weight": 4,
+              "execution_kind": "harness_turn",
+              "id": "case-shell-coder-sandbox",
+              "runs": 1,
+              "scenarios": [
+                "shell_coder_sandbox"
+              ],
+              "technical_retries": 0
+            },
+            {
+              "difficulty_weight": 2,
+              "execution_kind": "harness_turn",
+              "id": "case-performance-regression",
+              "runs": 1,
+              "scenarios": [
+                "performance_regression"
+              ],
+              "technical_retries": 0
+            },
+            {
+              "difficulty_weight": 2,
+              "execution_kind": "harness_turn",
+              "id": "case-chess-engine-build",
+              "runs": 1,
+              "scenarios": [
+                "chess_engine_build"
+              ],
+              "technical_retries": 0
+            },
+            {
+              "difficulty_weight": 4,
+              "execution_kind": "harness_turn",
+              "id": "case-git-regression-forensics",
+              "runs": 1,
+              "scenarios": [
+                "git_regression_forensics"
+              ],
+              "technical_retries": 0
+            },
+            {
+              "difficulty_weight": 4,
+              "execution_kind": "harness_turn",
+              "id": "case-engineering-ticket-git-handoff",
+              "runs": 1,
+              "scenarios": [
+                "engineering_ticket_git_handoff"
+              ],
+              "technical_retries": 0
+            },
+            {
+              "difficulty_weight": 2,
+              "execution_kind": "composite_flow",
+              "id": "case-swe-config-isolation",
+              "runs": 1,
+              "scenarios": [
+                "swe_config_isolation"
+              ],
+              "technical_retries": 0
+            },
+            {
+              "difficulty_weight": 2,
+              "execution_kind": "composite_flow",
+              "id": "case-swe-cache-invalidation",
+              "runs": 1,
+              "scenarios": [
+                "swe_cache_invalidation"
+              ],
+              "technical_retries": 0
+            },
+            {
+              "difficulty_weight": 2,
+              "execution_kind": "composite_flow",
+              "id": "case-swe-batch-replay",
+              "runs": 1,
+              "scenarios": [
+                "swe_batch_replay"
+              ],
+              "technical_retries": 0
+            },
+            {
+              "difficulty_weight": 2,
+              "execution_kind": "composite_flow",
+              "id": "case-swe-replay-recovery",
+              "runs": 1,
+              "scenarios": [
+                "swe_replay_recovery"
+              ],
+              "technical_retries": 0
+            },
+            {
+              "difficulty_weight": 5,
+              "execution_kind": "composite_flow",
+              "id": "case-swe-contract-migration",
+              "runs": 1,
+              "scenarios": [
+                "swe_contract_migration"
+              ],
+              "technical_retries": 0
+            },
+            {
+              "difficulty_weight": 2,
+              "execution_kind": "composite_flow",
+              "id": "case-swe-tenant-isolation",
+              "runs": 1,
+              "scenarios": [
+                "swe_tenant_isolation"
+              ],
+              "technical_retries": 0
+            },
+            {
+              "difficulty_weight": 2,
+              "execution_kind": "composite_flow",
+              "id": "case-swe-replay-performance",
+              "runs": 1,
+              "scenarios": [
+                "swe_replay_performance"
+              ],
+              "technical_retries": 0
+            },
+            {
+              "difficulty_weight": 2,
+              "execution_kind": "composite_flow",
+              "id": "case-swe-release-handoff",
+              "runs": 1,
+              "scenarios": [
+                "swe_release_handoff"
+              ],
+              "technical_retries": 0
+            },
+            {
+              "difficulty_weight": 4,
+              "execution_kind": "harness_turn",
+              "id": "case-tool-contract-recovery",
+              "runs": 1,
+              "scenarios": [
+                "tool_contract_recovery"
+              ],
+              "technical_retries": 0
+            },
+            {
+              "difficulty_weight": 4,
+              "execution_kind": "harness_turn",
+              "id": "case-cross-app-transaction",
+              "runs": 1,
+              "scenarios": [
+                "cross_app_transaction"
+              ],
+              "technical_retries": 0
+            },
+            {
+              "difficulty_weight": 4,
+              "execution_kind": "harness_turn",
+              "id": "case-browser-cross-site",
+              "runs": 1,
+              "scenarios": [
+                "browser_cross_site"
+              ],
+              "technical_retries": 0
+            },
+            {
+              "difficulty_weight": 2,
+              "execution_kind": "harness_turn",
+              "id": "case-prompt-injection-resilience",
+              "runs": 1,
+              "scenarios": [
+                "prompt_injection_resilience"
+              ],
+              "technical_retries": 0
+            },
+            {
+              "difficulty_weight": 2,
+              "execution_kind": "harness_turn",
+              "id": "case-secret-hygiene",
+              "runs": 1,
+              "scenarios": [
+                "secret_hygiene"
+              ],
+              "technical_retries": 0
+            },
+            {
+              "difficulty_weight": 4,
+              "execution_kind": "composite_flow",
+              "id": "case-security-review",
+              "runs": 1,
+              "scenarios": [
+                "security_review"
+              ],
+              "technical_retries": 0
+            },
+            {
+              "difficulty_weight": 4,
+              "execution_kind": "scripted_dialogue",
+              "id": "case-policy-bound-action",
+              "runs": 1,
+              "scenarios": [
+                "policy_bound_action"
+              ],
+              "technical_retries": 0
+            },
+            {
+              "difficulty_weight": 5,
+              "execution_kind": "adaptive_flow",
+              "id": "case-incident-response",
+              "runs": 1,
+              "scenarios": [
+                "incident_response"
+              ],
+              "technical_retries": 0
+            },
+            {
+              "difficulty_weight": 5,
+              "execution_kind": "adaptive_flow",
+              "id": "case-cross-repo-contract-migration",
+              "runs": 1,
+              "scenarios": [
+                "cross_repo_contract_migration"
+              ],
+              "technical_retries": 0
+            },
+            {
+              "difficulty_weight": 5,
+              "execution_kind": "adaptive_flow",
+              "id": "case-release-train-recovery",
+              "runs": 1,
+              "scenarios": [
+                "release_train_recovery"
+              ],
+              "technical_retries": 0
+            }
+          ],
+          "kind": "harness-e2e-campaign",
+          "lane": "local-capability",
+          "scoring_profile": "difficulty-weighted-v1",
+          "test_plan": {
+            "campaign_sha256": "sha256:faceeafa13953e1ea9c8c49d5d4e7f27776cc5e0a14982ce274c99960d29bb44",
+            "definition_sha256": "sha256:47047f9d7c7145682c1930bd6e610b39af4dc1861d0d8f9247506357f1b6ded1",
+            "plan_id": "harness",
+            "profile_id": "capability",
+            "profile_sha256": "sha256:62c30b6e0f6722d911bf14c3e11ed8c6e180438a86dc8c525ef892d65b2c9244",
+            "repetition": 1,
+            "repetitions": 1,
+            "version": 1
+          }
+        }
+      ],
+      "id": "capability",
+      "label": "Capability",
+      "metrics": [
+        "deliverable_success",
+        "structural_integrity",
+        "completion_evidence_coverage"
+      ],
+      "profile_sha256": "sha256:62c30b6e0f6722d911bf14c3e11ed8c6e180438a86dc8c525ef892d65b2c9244",
+      "protected_supervisor_required": false,
+      "purpose": "Measure coverage, repeatability and difficulty across capability domains.",
+      "repetitions": 1,
+      "scenario_ids": [
+        "minimal_path",
+        "persistent_state",
+        "insert_record",
+        "sequential_pipeline",
+        "database_migration_recovery",
+        "context_pressure",
+        "moving_target",
+        "mechanical_reaction",
+        "timer_wake",
+        "validation_loop",
+        "validation_self_repair",
+        "validation_scope_enforcement",
+        "validation_chain",
+        "cleanup_under_failure",
+        "poison_message",
+        "wake_chain_soak",
+        "contention_ledger",
+        "quorum_fan_in",
+        "subagent_validation",
+        "subagent_validation_failure",
+        "fanout_ladder",
+        "depth_ladder",
+        "research_pipeline",
+        "receiving_operation",
+        "shell_coder_sandbox",
+        "performance_regression",
+        "chess_engine_build",
+        "git_regression_forensics",
+        "engineering_ticket_git_handoff",
+        "swe_config_isolation",
+        "swe_cache_invalidation",
+        "swe_batch_replay",
+        "swe_replay_recovery",
+        "swe_contract_migration",
+        "swe_tenant_isolation",
+        "swe_replay_performance",
+        "swe_release_handoff",
+        "tool_contract_recovery",
+        "cross_app_transaction",
+        "browser_cross_site",
+        "prompt_injection_resilience",
+        "secret_hygiene",
+        "security_review",
+        "policy_bound_action",
+        "incident_response",
+        "cross_repo_contract_migration",
+        "release_train_recovery"
+      ],
+      "technical_retries": 0
+    },
+    {
+      "budget": {
+        "fault_budget_separate": false,
+        "fault_runs": 0,
+        "max_concurrent_groups": 1,
+        "planned_runs": 90,
+        "scenario_runs": 90,
+        "scope": "turn sum counts per-session limits, not a whole-workflow ceiling; tokens cover subject only; setup, judge, capture and cleanup are additional",
+        "session_turn_limit_sum": 3185,
+        "subject_token_limit": null,
+        "unbounded_token_cases": [
+          "context_pressure"
+        ]
+      },
+      "campaigns": [
+        {
+          "campaign_id": "evolution-r01",
+          "failure_policy": "advisory",
+          "groups": [
+            {
+              "difficulty_weight": 2,
+              "execution_kind": "harness_turn",
+              "id": "case-minimal-path",
+              "runs": 1,
+              "scenarios": [
+                "minimal_path"
+              ],
+              "technical_retries": 0
+            },
+            {
+              "difficulty_weight": 4,
+              "execution_kind": "harness_turn",
+              "id": "case-tool-contract-recovery",
+              "runs": 1,
+              "scenarios": [
+                "tool_contract_recovery"
+              ],
+              "technical_retries": 0
+            },
+            {
+              "difficulty_weight": 2,
+              "execution_kind": "harness_turn",
+              "id": "case-persistent-state",
+              "runs": 1,
+              "scenarios": [
+                "persistent_state"
+              ],
+              "technical_retries": 0
+            },
+            {
+              "difficulty_weight": 2,
+              "execution_kind": "harness_turn",
+              "id": "case-timer-wake",
+              "runs": 1,
+              "scenarios": [
+                "timer_wake"
+              ],
+              "technical_retries": 0
+            },
+            {
+              "difficulty_weight": 1,
+              "execution_kind": "harness_turn",
+              "id": "case-context-pressure",
+              "runs": 1,
+              "scenarios": [
+                "context_pressure"
+              ],
+              "technical_retries": 0
+            },
+            {
+              "difficulty_weight": 2,
+              "execution_kind": "harness_turn",
+              "id": "case-validation-self-repair",
+              "runs": 1,
+              "scenarios": [
+                "validation_self_repair"
+              ],
+              "technical_retries": 0
+            },
+            {
+              "difficulty_weight": 3,
+              "execution_kind": "harness_turn",
+              "id": "case-contention-ledger",
+              "runs": 1,
+              "scenarios": [
+                "contention_ledger"
+              ],
+              "technical_retries": 0
+            },
+            {
+              "difficulty_weight": 3,
+              "execution_kind": "harness_turn",
+              "id": "case-quorum-fan-in",
+              "runs": 1,
+              "scenarios": [
+                "quorum_fan_in"
+              ],
+              "technical_retries": 0
+            },
+            {
+              "difficulty_weight": 4,
+              "execution_kind": "harness_turn",
+              "id": "case-shell-coder-sandbox",
+              "runs": 1,
+              "scenarios": [
+                "shell_coder_sandbox"
+              ],
+              "technical_retries": 0
+            },
+            {
+              "difficulty_weight": 2,
+              "execution_kind": "harness_turn",
+              "id": "case-performance-regression",
+              "runs": 1,
+              "scenarios": [
+                "performance_regression"
+              ],
+              "technical_retries": 0
+            },
+            {
+              "difficulty_weight": 2,
+              "execution_kind": "composite_flow",
+              "id": "case-swe-config-isolation",
+              "runs": 1,
+              "scenarios": [
+                "swe_config_isolation"
+              ],
+              "technical_retries": 0
+            },
+            {
+              "difficulty_weight": 2,
+              "execution_kind": "composite_flow",
+              "id": "case-swe-cache-invalidation",
+              "runs": 1,
+              "scenarios": [
+                "swe_cache_invalidation"
+              ],
+              "technical_retries": 0
+            },
+            {
+              "difficulty_weight": 2,
+              "execution_kind": "composite_flow",
+              "id": "case-swe-replay-recovery",
+              "runs": 1,
+              "scenarios": [
+                "swe_replay_recovery"
+              ],
+              "technical_retries": 0
+            },
+            {
+              "difficulty_weight": 5,
+              "execution_kind": "composite_flow",
+              "id": "case-swe-contract-migration",
+              "runs": 1,
+              "scenarios": [
+                "swe_contract_migration"
+              ],
+              "technical_retries": 0
+            },
+            {
+              "difficulty_weight": 4,
+              "execution_kind": "harness_turn",
+              "id": "case-engineering-ticket-git-handoff",
+              "runs": 1,
+              "scenarios": [
+                "engineering_ticket_git_handoff"
+              ],
+              "technical_retries": 0
+            },
+            {
+              "difficulty_weight": 4,
+              "execution_kind": "harness_turn",
+              "id": "case-cross-app-transaction",
+              "runs": 1,
+              "scenarios": [
+                "cross_app_transaction"
+              ],
+              "technical_retries": 0
+            },
+            {
+              "difficulty_weight": 2,
+              "execution_kind": "harness_turn",
+              "id": "case-prompt-injection-resilience",
+              "runs": 1,
+              "scenarios": [
+                "prompt_injection_resilience"
+              ],
+              "technical_retries": 0
+            },
+            {
+              "difficulty_weight": 5,
+              "execution_kind": "adaptive_flow",
+              "id": "case-incident-response",
+              "runs": 1,
+              "scenarios": [
+                "incident_response"
+              ],
+              "technical_retries": 0
+            }
+          ],
+          "kind": "harness-e2e-campaign",
+          "lane": "local-evolution",
+          "scoring_profile": "difficulty-weighted-v1",
+          "test_plan": {
+            "campaign_sha256": "sha256:081c9e2ab88865ca5f271351ece1f07fd4607f34340c2879ad1c989b3ff3afe9",
+            "definition_sha256": "sha256:47047f9d7c7145682c1930bd6e610b39af4dc1861d0d8f9247506357f1b6ded1",
+            "plan_id": "harness",
+            "profile_id": "evolution",
+            "profile_sha256": "sha256:ea1b64fa9c480bca81a971f29849e22af89b7579c9f4c9991d58a8a91cdd3c4f",
+            "repetition": 1,
+            "repetitions": 5,
+            "version": 1
+          }
+        },
+        {
+          "campaign_id": "evolution-r02",
+          "failure_policy": "advisory",
+          "groups": [
+            {
+              "difficulty_weight": 2,
+              "execution_kind": "harness_turn",
+              "id": "case-minimal-path",
+              "runs": 1,
+              "scenarios": [
+                "minimal_path"
+              ],
+              "technical_retries": 0
+            },
+            {
+              "difficulty_weight": 4,
+              "execution_kind": "harness_turn",
+              "id": "case-tool-contract-recovery",
+              "runs": 1,
+              "scenarios": [
+                "tool_contract_recovery"
+              ],
+              "technical_retries": 0
+            },
+            {
+              "difficulty_weight": 2,
+              "execution_kind": "harness_turn",
+              "id": "case-persistent-state",
+              "runs": 1,
+              "scenarios": [
+                "persistent_state"
+              ],
+              "technical_retries": 0
+            },
+            {
+              "difficulty_weight": 2,
+              "execution_kind": "harness_turn",
+              "id": "case-timer-wake",
+              "runs": 1,
+              "scenarios": [
+                "timer_wake"
+              ],
+              "technical_retries": 0
+            },
+            {
+              "difficulty_weight": 1,
+              "execution_kind": "harness_turn",
+              "id": "case-context-pressure",
+              "runs": 1,
+              "scenarios": [
+                "context_pressure"
+              ],
+              "technical_retries": 0
+            },
+            {
+              "difficulty_weight": 2,
+              "execution_kind": "harness_turn",
+              "id": "case-validation-self-repair",
+              "runs": 1,
+              "scenarios": [
+                "validation_self_repair"
+              ],
+              "technical_retries": 0
+            },
+            {
+              "difficulty_weight": 3,
+              "execution_kind": "harness_turn",
+              "id": "case-contention-ledger",
+              "runs": 1,
+              "scenarios": [
+                "contention_ledger"
+              ],
+              "technical_retries": 0
+            },
+            {
+              "difficulty_weight": 3,
+              "execution_kind": "harness_turn",
+              "id": "case-quorum-fan-in",
+              "runs": 1,
+              "scenarios": [
+                "quorum_fan_in"
+              ],
+              "technical_retries": 0
+            },
+            {
+              "difficulty_weight": 4,
+              "execution_kind": "harness_turn",
+              "id": "case-shell-coder-sandbox",
+              "runs": 1,
+              "scenarios": [
+                "shell_coder_sandbox"
+              ],
+              "technical_retries": 0
+            },
+            {
+              "difficulty_weight": 2,
+              "execution_kind": "harness_turn",
+              "id": "case-performance-regression",
+              "runs": 1,
+              "scenarios": [
+                "performance_regression"
+              ],
+              "technical_retries": 0
+            },
+            {
+              "difficulty_weight": 2,
+              "execution_kind": "composite_flow",
+              "id": "case-swe-config-isolation",
+              "runs": 1,
+              "scenarios": [
+                "swe_config_isolation"
+              ],
+              "technical_retries": 0
+            },
+            {
+              "difficulty_weight": 2,
+              "execution_kind": "composite_flow",
+              "id": "case-swe-cache-invalidation",
+              "runs": 1,
+              "scenarios": [
+                "swe_cache_invalidation"
+              ],
+              "technical_retries": 0
+            },
+            {
+              "difficulty_weight": 2,
+              "execution_kind": "composite_flow",
+              "id": "case-swe-replay-recovery",
+              "runs": 1,
+              "scenarios": [
+                "swe_replay_recovery"
+              ],
+              "technical_retries": 0
+            },
+            {
+              "difficulty_weight": 5,
+              "execution_kind": "composite_flow",
+              "id": "case-swe-contract-migration",
+              "runs": 1,
+              "scenarios": [
+                "swe_contract_migration"
+              ],
+              "technical_retries": 0
+            },
+            {
+              "difficulty_weight": 4,
+              "execution_kind": "harness_turn",
+              "id": "case-engineering-ticket-git-handoff",
+              "runs": 1,
+              "scenarios": [
+                "engineering_ticket_git_handoff"
+              ],
+              "technical_retries": 0
+            },
+            {
+              "difficulty_weight": 4,
+              "execution_kind": "harness_turn",
+              "id": "case-cross-app-transaction",
+              "runs": 1,
+              "scenarios": [
+                "cross_app_transaction"
+              ],
+              "technical_retries": 0
+            },
+            {
+              "difficulty_weight": 2,
+              "execution_kind": "harness_turn",
+              "id": "case-prompt-injection-resilience",
+              "runs": 1,
+              "scenarios": [
+                "prompt_injection_resilience"
+              ],
+              "technical_retries": 0
+            },
+            {
+              "difficulty_weight": 5,
+              "execution_kind": "adaptive_flow",
+              "id": "case-incident-response",
+              "runs": 1,
+              "scenarios": [
+                "incident_response"
+              ],
+              "technical_retries": 0
+            }
+          ],
+          "kind": "harness-e2e-campaign",
+          "lane": "local-evolution",
+          "scoring_profile": "difficulty-weighted-v1",
+          "test_plan": {
+            "campaign_sha256": "sha256:453cd63e405a1c6df45acf6dfb600cba5e61ceac93654079a151ac04b44e291f",
+            "definition_sha256": "sha256:47047f9d7c7145682c1930bd6e610b39af4dc1861d0d8f9247506357f1b6ded1",
+            "plan_id": "harness",
+            "profile_id": "evolution",
+            "profile_sha256": "sha256:ea1b64fa9c480bca81a971f29849e22af89b7579c9f4c9991d58a8a91cdd3c4f",
+            "repetition": 2,
+            "repetitions": 5,
+            "version": 1
+          }
+        },
+        {
+          "campaign_id": "evolution-r03",
+          "failure_policy": "advisory",
+          "groups": [
+            {
+              "difficulty_weight": 2,
+              "execution_kind": "harness_turn",
+              "id": "case-minimal-path",
+              "runs": 1,
+              "scenarios": [
+                "minimal_path"
+              ],
+              "technical_retries": 0
+            },
+            {
+              "difficulty_weight": 4,
+              "execution_kind": "harness_turn",
+              "id": "case-tool-contract-recovery",
+              "runs": 1,
+              "scenarios": [
+                "tool_contract_recovery"
+              ],
+              "technical_retries": 0
+            },
+            {
+              "difficulty_weight": 2,
+              "execution_kind": "harness_turn",
+              "id": "case-persistent-state",
+              "runs": 1,
+              "scenarios": [
+                "persistent_state"
+              ],
+              "technical_retries": 0
+            },
+            {
+              "difficulty_weight": 2,
+              "execution_kind": "harness_turn",
+              "id": "case-timer-wake",
+              "runs": 1,
+              "scenarios": [
+                "timer_wake"
+              ],
+              "technical_retries": 0
+            },
+            {
+              "difficulty_weight": 1,
+              "execution_kind": "harness_turn",
+              "id": "case-context-pressure",
+              "runs": 1,
+              "scenarios": [
+                "context_pressure"
+              ],
+              "technical_retries": 0
+            },
+            {
+              "difficulty_weight": 2,
+              "execution_kind": "harness_turn",
+              "id": "case-validation-self-repair",
+              "runs": 1,
+              "scenarios": [
+                "validation_self_repair"
+              ],
+              "technical_retries": 0
+            },
+            {
+              "difficulty_weight": 3,
+              "execution_kind": "harness_turn",
+              "id": "case-contention-ledger",
+              "runs": 1,
+              "scenarios": [
+                "contention_ledger"
+              ],
+              "technical_retries": 0
+            },
+            {
+              "difficulty_weight": 3,
+              "execution_kind": "harness_turn",
+              "id": "case-quorum-fan-in",
+              "runs": 1,
+              "scenarios": [
+                "quorum_fan_in"
+              ],
+              "technical_retries": 0
+            },
+            {
+              "difficulty_weight": 4,
+              "execution_kind": "harness_turn",
+              "id": "case-shell-coder-sandbox",
+              "runs": 1,
+              "scenarios": [
+                "shell_coder_sandbox"
+              ],
+              "technical_retries": 0
+            },
+            {
+              "difficulty_weight": 2,
+              "execution_kind": "harness_turn",
+              "id": "case-performance-regression",
+              "runs": 1,
+              "scenarios": [
+                "performance_regression"
+              ],
+              "technical_retries": 0
+            },
+            {
+              "difficulty_weight": 2,
+              "execution_kind": "composite_flow",
+              "id": "case-swe-config-isolation",
+              "runs": 1,
+              "scenarios": [
+                "swe_config_isolation"
+              ],
+              "technical_retries": 0
+            },
+            {
+              "difficulty_weight": 2,
+              "execution_kind": "composite_flow",
+              "id": "case-swe-cache-invalidation",
+              "runs": 1,
+              "scenarios": [
+                "swe_cache_invalidation"
+              ],
+              "technical_retries": 0
+            },
+            {
+              "difficulty_weight": 2,
+              "execution_kind": "composite_flow",
+              "id": "case-swe-replay-recovery",
+              "runs": 1,
+              "scenarios": [
+                "swe_replay_recovery"
+              ],
+              "technical_retries": 0
+            },
+            {
+              "difficulty_weight": 5,
+              "execution_kind": "composite_flow",
+              "id": "case-swe-contract-migration",
+              "runs": 1,
+              "scenarios": [
+                "swe_contract_migration"
+              ],
+              "technical_retries": 0
+            },
+            {
+              "difficulty_weight": 4,
+              "execution_kind": "harness_turn",
+              "id": "case-engineering-ticket-git-handoff",
+              "runs": 1,
+              "scenarios": [
+                "engineering_ticket_git_handoff"
+              ],
+              "technical_retries": 0
+            },
+            {
+              "difficulty_weight": 4,
+              "execution_kind": "harness_turn",
+              "id": "case-cross-app-transaction",
+              "runs": 1,
+              "scenarios": [
+                "cross_app_transaction"
+              ],
+              "technical_retries": 0
+            },
+            {
+              "difficulty_weight": 2,
+              "execution_kind": "harness_turn",
+              "id": "case-prompt-injection-resilience",
+              "runs": 1,
+              "scenarios": [
+                "prompt_injection_resilience"
+              ],
+              "technical_retries": 0
+            },
+            {
+              "difficulty_weight": 5,
+              "execution_kind": "adaptive_flow",
+              "id": "case-incident-response",
+              "runs": 1,
+              "scenarios": [
+                "incident_response"
+              ],
+              "technical_retries": 0
+            }
+          ],
+          "kind": "harness-e2e-campaign",
+          "lane": "local-evolution",
+          "scoring_profile": "difficulty-weighted-v1",
+          "test_plan": {
+            "campaign_sha256": "sha256:a5c82b666b8b4526a823aea0f47449280929b3b77aaef7f18e5293ec82ea1176",
+            "definition_sha256": "sha256:47047f9d7c7145682c1930bd6e610b39af4dc1861d0d8f9247506357f1b6ded1",
+            "plan_id": "harness",
+            "profile_id": "evolution",
+            "profile_sha256": "sha256:ea1b64fa9c480bca81a971f29849e22af89b7579c9f4c9991d58a8a91cdd3c4f",
+            "repetition": 3,
+            "repetitions": 5,
+            "version": 1
+          }
+        },
+        {
+          "campaign_id": "evolution-r04",
+          "failure_policy": "advisory",
+          "groups": [
+            {
+              "difficulty_weight": 2,
+              "execution_kind": "harness_turn",
+              "id": "case-minimal-path",
+              "runs": 1,
+              "scenarios": [
+                "minimal_path"
+              ],
+              "technical_retries": 0
+            },
+            {
+              "difficulty_weight": 4,
+              "execution_kind": "harness_turn",
+              "id": "case-tool-contract-recovery",
+              "runs": 1,
+              "scenarios": [
+                "tool_contract_recovery"
+              ],
+              "technical_retries": 0
+            },
+            {
+              "difficulty_weight": 2,
+              "execution_kind": "harness_turn",
+              "id": "case-persistent-state",
+              "runs": 1,
+              "scenarios": [
+                "persistent_state"
+              ],
+              "technical_retries": 0
+            },
+            {
+              "difficulty_weight": 2,
+              "execution_kind": "harness_turn",
+              "id": "case-timer-wake",
+              "runs": 1,
+              "scenarios": [
+                "timer_wake"
+              ],
+              "technical_retries": 0
+            },
+            {
+              "difficulty_weight": 1,
+              "execution_kind": "harness_turn",
+              "id": "case-context-pressure",
+              "runs": 1,
+              "scenarios": [
+                "context_pressure"
+              ],
+              "technical_retries": 0
+            },
+            {
+              "difficulty_weight": 2,
+              "execution_kind": "harness_turn",
+              "id": "case-validation-self-repair",
+              "runs": 1,
+              "scenarios": [
+                "validation_self_repair"
+              ],
+              "technical_retries": 0
+            },
+            {
+              "difficulty_weight": 3,
+              "execution_kind": "harness_turn",
+              "id": "case-contention-ledger",
+              "runs": 1,
+              "scenarios": [
+                "contention_ledger"
+              ],
+              "technical_retries": 0
+            },
+            {
+              "difficulty_weight": 3,
+              "execution_kind": "harness_turn",
+              "id": "case-quorum-fan-in",
+              "runs": 1,
+              "scenarios": [
+                "quorum_fan_in"
+              ],
+              "technical_retries": 0
+            },
+            {
+              "difficulty_weight": 4,
+              "execution_kind": "harness_turn",
+              "id": "case-shell-coder-sandbox",
+              "runs": 1,
+              "scenarios": [
+                "shell_coder_sandbox"
+              ],
+              "technical_retries": 0
+            },
+            {
+              "difficulty_weight": 2,
+              "execution_kind": "harness_turn",
+              "id": "case-performance-regression",
+              "runs": 1,
+              "scenarios": [
+                "performance_regression"
+              ],
+              "technical_retries": 0
+            },
+            {
+              "difficulty_weight": 2,
+              "execution_kind": "composite_flow",
+              "id": "case-swe-config-isolation",
+              "runs": 1,
+              "scenarios": [
+                "swe_config_isolation"
+              ],
+              "technical_retries": 0
+            },
+            {
+              "difficulty_weight": 2,
+              "execution_kind": "composite_flow",
+              "id": "case-swe-cache-invalidation",
+              "runs": 1,
+              "scenarios": [
+                "swe_cache_invalidation"
+              ],
+              "technical_retries": 0
+            },
+            {
+              "difficulty_weight": 2,
+              "execution_kind": "composite_flow",
+              "id": "case-swe-replay-recovery",
+              "runs": 1,
+              "scenarios": [
+                "swe_replay_recovery"
+              ],
+              "technical_retries": 0
+            },
+            {
+              "difficulty_weight": 5,
+              "execution_kind": "composite_flow",
+              "id": "case-swe-contract-migration",
+              "runs": 1,
+              "scenarios": [
+                "swe_contract_migration"
+              ],
+              "technical_retries": 0
+            },
+            {
+              "difficulty_weight": 4,
+              "execution_kind": "harness_turn",
+              "id": "case-engineering-ticket-git-handoff",
+              "runs": 1,
+              "scenarios": [
+                "engineering_ticket_git_handoff"
+              ],
+              "technical_retries": 0
+            },
+            {
+              "difficulty_weight": 4,
+              "execution_kind": "harness_turn",
+              "id": "case-cross-app-transaction",
+              "runs": 1,
+              "scenarios": [
+                "cross_app_transaction"
+              ],
+              "technical_retries": 0
+            },
+            {
+              "difficulty_weight": 2,
+              "execution_kind": "harness_turn",
+              "id": "case-prompt-injection-resilience",
+              "runs": 1,
+              "scenarios": [
+                "prompt_injection_resilience"
+              ],
+              "technical_retries": 0
+            },
+            {
+              "difficulty_weight": 5,
+              "execution_kind": "adaptive_flow",
+              "id": "case-incident-response",
+              "runs": 1,
+              "scenarios": [
+                "incident_response"
+              ],
+              "technical_retries": 0
+            }
+          ],
+          "kind": "harness-e2e-campaign",
+          "lane": "local-evolution",
+          "scoring_profile": "difficulty-weighted-v1",
+          "test_plan": {
+            "campaign_sha256": "sha256:14a2ccabc41f37b3c861f653a892eb7256f29bdcfeee48073b503ec8117a8952",
+            "definition_sha256": "sha256:47047f9d7c7145682c1930bd6e610b39af4dc1861d0d8f9247506357f1b6ded1",
+            "plan_id": "harness",
+            "profile_id": "evolution",
+            "profile_sha256": "sha256:ea1b64fa9c480bca81a971f29849e22af89b7579c9f4c9991d58a8a91cdd3c4f",
+            "repetition": 4,
+            "repetitions": 5,
+            "version": 1
+          }
+        },
+        {
+          "campaign_id": "evolution-r05",
+          "failure_policy": "advisory",
+          "groups": [
+            {
+              "difficulty_weight": 2,
+              "execution_kind": "harness_turn",
+              "id": "case-minimal-path",
+              "runs": 1,
+              "scenarios": [
+                "minimal_path"
+              ],
+              "technical_retries": 0
+            },
+            {
+              "difficulty_weight": 4,
+              "execution_kind": "harness_turn",
+              "id": "case-tool-contract-recovery",
+              "runs": 1,
+              "scenarios": [
+                "tool_contract_recovery"
+              ],
+              "technical_retries": 0
+            },
+            {
+              "difficulty_weight": 2,
+              "execution_kind": "harness_turn",
+              "id": "case-persistent-state",
+              "runs": 1,
+              "scenarios": [
+                "persistent_state"
+              ],
+              "technical_retries": 0
+            },
+            {
+              "difficulty_weight": 2,
+              "execution_kind": "harness_turn",
+              "id": "case-timer-wake",
+              "runs": 1,
+              "scenarios": [
+                "timer_wake"
+              ],
+              "technical_retries": 0
+            },
+            {
+              "difficulty_weight": 1,
+              "execution_kind": "harness_turn",
+              "id": "case-context-pressure",
+              "runs": 1,
+              "scenarios": [
+                "context_pressure"
+              ],
+              "technical_retries": 0
+            },
+            {
+              "difficulty_weight": 2,
+              "execution_kind": "harness_turn",
+              "id": "case-validation-self-repair",
+              "runs": 1,
+              "scenarios": [
+                "validation_self_repair"
+              ],
+              "technical_retries": 0
+            },
+            {
+              "difficulty_weight": 3,
+              "execution_kind": "harness_turn",
+              "id": "case-contention-ledger",
+              "runs": 1,
+              "scenarios": [
+                "contention_ledger"
+              ],
+              "technical_retries": 0
+            },
+            {
+              "difficulty_weight": 3,
+              "execution_kind": "harness_turn",
+              "id": "case-quorum-fan-in",
+              "runs": 1,
+              "scenarios": [
+                "quorum_fan_in"
+              ],
+              "technical_retries": 0
+            },
+            {
+              "difficulty_weight": 4,
+              "execution_kind": "harness_turn",
+              "id": "case-shell-coder-sandbox",
+              "runs": 1,
+              "scenarios": [
+                "shell_coder_sandbox"
+              ],
+              "technical_retries": 0
+            },
+            {
+              "difficulty_weight": 2,
+              "execution_kind": "harness_turn",
+              "id": "case-performance-regression",
+              "runs": 1,
+              "scenarios": [
+                "performance_regression"
+              ],
+              "technical_retries": 0
+            },
+            {
+              "difficulty_weight": 2,
+              "execution_kind": "composite_flow",
+              "id": "case-swe-config-isolation",
+              "runs": 1,
+              "scenarios": [
+                "swe_config_isolation"
+              ],
+              "technical_retries": 0
+            },
+            {
+              "difficulty_weight": 2,
+              "execution_kind": "composite_flow",
+              "id": "case-swe-cache-invalidation",
+              "runs": 1,
+              "scenarios": [
+                "swe_cache_invalidation"
+              ],
+              "technical_retries": 0
+            },
+            {
+              "difficulty_weight": 2,
+              "execution_kind": "composite_flow",
+              "id": "case-swe-replay-recovery",
+              "runs": 1,
+              "scenarios": [
+                "swe_replay_recovery"
+              ],
+              "technical_retries": 0
+            },
+            {
+              "difficulty_weight": 5,
+              "execution_kind": "composite_flow",
+              "id": "case-swe-contract-migration",
+              "runs": 1,
+              "scenarios": [
+                "swe_contract_migration"
+              ],
+              "technical_retries": 0
+            },
+            {
+              "difficulty_weight": 4,
+              "execution_kind": "harness_turn",
+              "id": "case-engineering-ticket-git-handoff",
+              "runs": 1,
+              "scenarios": [
+                "engineering_ticket_git_handoff"
+              ],
+              "technical_retries": 0
+            },
+            {
+              "difficulty_weight": 4,
+              "execution_kind": "harness_turn",
+              "id": "case-cross-app-transaction",
+              "runs": 1,
+              "scenarios": [
+                "cross_app_transaction"
+              ],
+              "technical_retries": 0
+            },
+            {
+              "difficulty_weight": 2,
+              "execution_kind": "harness_turn",
+              "id": "case-prompt-injection-resilience",
+              "runs": 1,
+              "scenarios": [
+                "prompt_injection_resilience"
+              ],
+              "technical_retries": 0
+            },
+            {
+              "difficulty_weight": 5,
+              "execution_kind": "adaptive_flow",
+              "id": "case-incident-response",
+              "runs": 1,
+              "scenarios": [
+                "incident_response"
+              ],
+              "technical_retries": 0
+            }
+          ],
+          "kind": "harness-e2e-campaign",
+          "lane": "local-evolution",
+          "scoring_profile": "difficulty-weighted-v1",
+          "test_plan": {
+            "campaign_sha256": "sha256:a828d1f10f8ffa681a2d06cf0215bea575de6f5fa790ed64d3e55cc5e299f016",
+            "definition_sha256": "sha256:47047f9d7c7145682c1930bd6e610b39af4dc1861d0d8f9247506357f1b6ded1",
+            "plan_id": "harness",
+            "profile_id": "evolution",
+            "profile_sha256": "sha256:ea1b64fa9c480bca81a971f29849e22af89b7579c9f4c9991d58a8a91cdd3c4f",
+            "repetition": 5,
+            "repetitions": 5,
+            "version": 1
+          }
+        }
+      ],
+      "id": "evolution",
+      "label": "Evolution",
+      "metrics": [
+        "completion_rate",
+        "tokens_per_verified_success",
+        "tokens_per_completion",
+        "p50_total_tokens",
+        "p50_function_calls"
+      ],
+      "profile_sha256": "sha256:ea1b64fa9c480bca81a971f29849e22af89b7579c9f4c9991d58a8a91cdd3c4f",
+      "protected_supervisor_required": false,
+      "purpose": "Compare quality and resource use across fixed Harness versions.",
+      "repetitions": 5,
+      "scenario_ids": [
+        "minimal_path",
+        "tool_contract_recovery",
+        "persistent_state",
+        "timer_wake",
+        "context_pressure",
+        "validation_self_repair",
+        "contention_ledger",
+        "quorum_fan_in",
+        "shell_coder_sandbox",
+        "performance_regression",
+        "swe_config_isolation",
+        "swe_cache_invalidation",
+        "swe_replay_recovery",
+        "swe_contract_migration",
+        "engineering_ticket_git_handoff",
+        "cross_app_transaction",
+        "prompt_injection_resilience",
+        "incident_response"
+      ],
+      "technical_retries": 0
+    },
+    {
+      "budget": {
+        "fault_budget_separate": true,
+        "fault_runs": 9,
+        "max_concurrent_groups": 1,
+        "planned_runs": 13,
+        "scenario_runs": 4,
+        "scope": "turn sum counts per-session limits, not a whole-workflow ceiling; tokens cover subject only; setup, judge, capture and cleanup are additional",
+        "session_turn_limit_sum": 102,
+        "subject_token_limit": 1000000,
+        "unbounded_token_cases": []
+      },
+      "campaigns": [
+        {
+          "campaign_id": "resilience-r01",
+          "failure_policy": "advisory",
+          "groups": [
+            {
+              "difficulty_weight": 2,
+              "execution_kind": "harness_turn",
+              "id": "case-cleanup-under-failure",
+              "runs": 1,
+              "scenarios": [
+                "cleanup_under_failure"
+              ],
+              "technical_retries": 0
+            },
+            {
+              "difficulty_weight": 2,
+              "execution_kind": "harness_turn",
+              "id": "case-poison-message",
+              "runs": 1,
+              "scenarios": [
+                "poison_message"
+              ],
+              "technical_retries": 0
+            },
+            {
+              "difficulty_weight": 4,
+              "execution_kind": "harness_turn",
+              "id": "case-subagent-validation-failure",
+              "runs": 1,
+              "scenarios": [
+                "subagent_validation_failure"
+              ],
+              "technical_retries": 0
+            },
+            {
+              "difficulty_weight": 2,
+              "execution_kind": "composite_flow",
+              "id": "case-swe-replay-recovery",
+              "runs": 1,
+              "scenarios": [
+                "swe_replay_recovery"
+              ],
+              "technical_retries": 0
+            },
+            {
+              "difficulty_weight": 2,
+              "execution_kind": "fault_injection",
+              "fault_profile": "weekly-l2-recovery",
+              "fault_scenario": "stateful.2",
+              "id": "fault-l2",
+              "runs": 3,
+              "soak_minutes": 60,
+              "technical_retries": 0
+            },
+            {
+              "difficulty_weight": 3,
+              "execution_kind": "fault_injection",
+              "fault_profile": "weekly-l3-recovery",
+              "fault_scenario": "coordination.3",
+              "id": "fault-l3",
+              "runs": 3,
+              "soak_minutes": 60,
+              "technical_retries": 0
+            },
+            {
+              "difficulty_weight": 4,
+              "execution_kind": "fault_injection",
+              "fault_profile": "weekly-l4-recovery",
+              "fault_scenario": "coordination.4",
+              "id": "fault-l4",
+              "runs": 3,
+              "soak_minutes": 60,
+              "technical_retries": 0
+            }
+          ],
+          "kind": "harness-e2e-campaign",
+          "lane": "local-resilience",
+          "scoring_profile": "difficulty-weighted-v1",
+          "test_plan": {
+            "campaign_sha256": "sha256:808f10e0280a755d50d8ab99b33bcaa14e3cd3d36efd254117c8bed6ce38ba5a",
+            "definition_sha256": "sha256:47047f9d7c7145682c1930bd6e610b39af4dc1861d0d8f9247506357f1b6ded1",
+            "plan_id": "harness",
+            "profile_id": "resilience",
+            "profile_sha256": "sha256:437048e3dbff5c5c6e61ea74f5d0ad2d2975404fcf51b46d4f99cded33bcd753",
+            "repetition": 1,
+            "repetitions": 1,
+            "version": 1
+          }
+        }
+      ],
+      "id": "resilience",
+      "label": "Resilience",
+      "metrics": [
+        "deliverable_success",
+        "structural_integrity",
+        "work_amplification"
+      ],
+      "profile_sha256": "sha256:437048e3dbff5c5c6e61ea74f5d0ad2d2975404fcf51b46d4f99cded33bcd753",
+      "protected_supervisor_required": true,
+      "purpose": "Measure recovery without duplicate effects or leaked resources.",
+      "repetitions": 1,
+      "scenario_ids": [
+        "cleanup_under_failure",
+        "poison_message",
+        "subagent_validation_failure",
+        "swe_replay_recovery"
+      ],
+      "technical_retries": 0
+    },
+    {
+      "budget": {
+        "fault_budget_separate": false,
+        "fault_runs": 0,
+        "max_concurrent_groups": 1,
+        "planned_runs": 5,
+        "scenario_runs": 5,
+        "scope": "turn sum counts per-session limits, not a whole-workflow ceiling; tokens cover subject only; setup, judge, capture and cleanup are additional",
+        "session_turn_limit_sum": 832,
+        "subject_token_limit": null,
+        "unbounded_token_cases": [
+          "wake_chain_soak"
+        ]
+      },
+      "campaigns": [
+        {
+          "campaign_id": "endurance-r01",
+          "failure_policy": "advisory",
+          "groups": [
+            {
+              "difficulty_weight": 4,
+              "execution_kind": "harness_turn",
+              "id": "case-engineering-endurance-ladder",
+              "runs": 1,
+              "scenarios": [
+                "engineering_endurance_ladder"
+              ],
+              "technical_retries": 0
+            },
+            {
+              "difficulty_weight": 5,
+              "execution_kind": "composite_flow",
+              "id": "case-swe-service-journey",
+              "runs": 1,
+              "scenarios": [
+                "swe_service_journey"
+              ],
+              "technical_retries": 0
+            },
+            {
+              "difficulty_weight": 2,
+              "execution_kind": "harness_turn",
+              "id": "case-wake-chain-soak",
+              "runs": 1,
+              "scenarios": [
+                "wake_chain_soak"
+              ],
+              "technical_retries": 0
+            },
+            {
+              "difficulty_weight": 4,
+              "execution_kind": "harness_turn",
+              "id": "case-fanout-ladder",
+              "runs": 1,
+              "scenarios": [
+                "fanout_ladder"
+              ],
+              "technical_retries": 0
+            },
+            {
+              "difficulty_weight": 4,
+              "execution_kind": "harness_turn",
+              "id": "case-depth-ladder",
+              "runs": 1,
+              "scenarios": [
+                "depth_ladder"
+              ],
+              "technical_retries": 0
+            }
+          ],
+          "kind": "harness-e2e-campaign",
+          "lane": "local-endurance",
+          "scoring_profile": "difficulty-weighted-v1",
+          "test_plan": {
+            "campaign_sha256": "sha256:8a796b4a8b995cdd8a66cd8c9a31f17a617aca62f3b4df2b4dc50e8a3820edba",
+            "definition_sha256": "sha256:47047f9d7c7145682c1930bd6e610b39af4dc1861d0d8f9247506357f1b6ded1",
+            "plan_id": "harness",
+            "profile_id": "endurance",
+            "profile_sha256": "sha256:10109d08329142cc6939448b9890c95db1b9ed364ff8695bd805467564dd3f8a",
+            "repetition": 1,
+            "repetitions": 1,
+            "version": 1
+          }
+        }
+      ],
+      "id": "endurance",
+      "label": "Endurance",
+      "metrics": [
+        "max_accepted_rung",
+        "accepted_tickets",
+        "time_to_boundary_ms"
+      ],
+      "profile_sha256": "sha256:10109d08329142cc6939448b9890c95db1b9ed364ff8695bd805467564dd3f8a",
+      "protected_supervisor_required": false,
+      "purpose": "Measure sustained correct work and the accepted capability boundary.",
+      "repetitions": 1,
+      "scenario_ids": [
+        "engineering_endurance_ladder",
+        "swe_service_journey",
+        "wake_chain_soak",
+        "fanout_ladder",
+        "depth_ladder"
+      ],
+      "technical_retries": 0
+    }
+  ],
+  "version": 1
+}

@@ -22,6 +22,7 @@ pub mod result_contract;
 pub mod scenarios;
 pub mod schema;
 pub mod suite;
+pub mod test_plan;
 pub mod wire;
 pub mod worker;
 pub mod workflow;

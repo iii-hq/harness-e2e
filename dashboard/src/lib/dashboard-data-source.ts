@@ -72,6 +72,35 @@ export type LocalPlan = {
 export type LocalPlansResponse = {
   mode: 'local'
   plans: LocalPlan[]
+  master_plan?: MasterTestPlan
+}
+
+export type MasterTestProfile = {
+  id: string
+  label: string
+  purpose: string
+  metrics: string[]
+  scenario_ids: string[]
+  repetitions: number
+  technical_retries: number
+  profile_sha256: string
+  protected_supervisor_required: boolean
+  campaigns: JsonObject[]
+  budget: {
+    planned_runs: number
+    scenario_runs: number
+    fault_runs: number
+    session_turn_limit_sum: number
+    subject_token_limit: number | null
+    unbounded_token_cases: string[]
+  }
+}
+
+export type MasterTestPlan = {
+  plan_id: string
+  version: number
+  definition_sha256: string
+  profiles: MasterTestProfile[]
 }
 
 export type ExecutionTotals = JsonObject & {

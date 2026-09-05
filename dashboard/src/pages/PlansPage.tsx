@@ -3,6 +3,7 @@ import {
   DashboardPageActions,
   dashboardHeaderActionClassName,
 } from '@/components/DashboardPageActions'
+import { MasterTestProfiles } from '@/components/MasterTestProfiles'
 import {
   buttonClassName,
   Callout,
@@ -28,6 +29,7 @@ import {
   type DashboardExecutionSummary,
   getDashboardDataBridge,
   type LocalPlan,
+  type MasterTestPlan,
 } from '@/lib/dashboard-data-source'
 import { formatDate } from '@/lib/execution-view'
 import {
@@ -426,6 +428,7 @@ function PlanRow({
 export function PlansPage() {
   const [bridge, setBridge] = useState<DashboardDataBridge | null>(null)
   const [plans, setPlans] = useState<LocalPlan[]>([])
+  const [masterPlan, setMasterPlan] = useState<MasterTestPlan | null>(null)
   const [executionSummaries, setExecutionSummaries] = useState<
     Record<string, DashboardExecutionSummary>
   >({})
@@ -444,9 +447,11 @@ export function PlansPage() {
       setBridge(next)
       if (next.mode !== 'local') {
         setPlans([])
+        setMasterPlan(null)
         return
       }
       const response = await next.listPlans()
+      setMasterPlan(response.master_plan ?? null)
       const orderedPlans = [...response.plans].sort((left, right) =>
         right.updated_at.localeCompare(left.updated_at),
       )
@@ -553,7 +558,7 @@ export function PlansPage() {
       <div className="ds-root page-shell w-[calc(100%_-_1.5rem)] max-w-[1420px] pt-5 pb-16 md:w-[calc(100%_-_3rem)]">
         <PageHeader
           title="plans"
-          summary="Capture one baseline, then rerun the same frozen scope after your Harness change."
+          summary="Choose a test profile by purpose, or compare a Harness change against a frozen baseline."
           actions={
             local && plans.length > 0 ? (
               <details className="group text-xs text-ink-soft">
@@ -567,6 +572,8 @@ export function PlansPage() {
             ) : undefined
           }
         />
+
+        {local && masterPlan ? <MasterTestProfiles plan={masterPlan} /> : null}
 
         {!local && !loading ? (
           <div className="mt-6">
