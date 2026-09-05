@@ -37,13 +37,11 @@ import {
   formatPlanMetricValue,
   loadExecutionSummaries,
   metricById,
-  type PlanComparison,
   type PlanMetricComparison,
   type PlanMetricId,
-  type PlanVerdict,
 } from '@/lib/plan-comparison'
 
-type PlanFilter = 'all' | 'needs_action' | 'running' | 'compared' | 'regressed'
+type PlanFilter = 'all' | 'needs_action' | 'running' | 'compared'
 
 export type PlanStatePresentation = {
   status: OperationalStatus
@@ -107,18 +105,7 @@ export function planStatePresentation(plan: LocalPlan): PlanStatePresentation {
   }
 }
 
-const verdictStatus: Record<PlanVerdict, OperationalStatus> = {
-  improved: 'passed',
-  stable: 'unavailable',
-  regressed: 'failed',
-  inconclusive: 'inconclusive',
-}
-
-function matchesFilter(
-  plan: LocalPlan,
-  filter: PlanFilter,
-  comparison: PlanComparison | null,
-) {
+function matchesFilter(plan: LocalPlan, filter: PlanFilter) {
   if (filter === 'all') return true
   if (filter === 'needs_action')
     return plan.state === 'draft' || plan.state === 'baseline_ready'
@@ -126,7 +113,6 @@ function matchesFilter(
     return (
       plan.state === 'baseline_running' || plan.state === 'candidate_running'
     )
-  if (filter === 'regressed') return comparison?.verdict === 'regressed'
   return plan.candidate_execution_ids.length > 0
 }
 
@@ -150,17 +136,12 @@ function compact(value: number) {
 }
 
 const CORE_DELTAS: Array<{ id: PlanMetricId; label: string }> = [
-  { id: 'pass_rate', label: 'pass' },
+  { id: 'coverage', label: 'coverage' },
   { id: 'quality', label: 'score' },
   { id: 'tokens', label: 'tokens' },
   { id: 'duration', label: 'time' },
 ]
 
-/**
- * Audit P-02: one rule for colour. The number keeps the ink; the delta is
- * signed and carries the direction; red means an objective regression,
- * amber a worse efficiency figure, no colour no change.
- */
 function MetricDelta({
   label,
   metric,
@@ -186,13 +167,7 @@ function MetricDelta({
       <DeltaValue
         value={value}
         format={(magnitude) => `${compact(magnitude)}${unit}`}
-        betterWhen={
-          metric.direction === 'higher'
-            ? 'higher'
-            : metric.direction === 'lower'
-              ? 'lower'
-              : 'neither'
-        }
+        betterWhen="neither"
       />
     </span>
   )
@@ -223,14 +198,17 @@ export function PlanBaselineCell({
       ? formatPlanMetricValue(metric, 'baseline')
       : null
   }
-  const pass = value('pass_rate')
+  const coverage = value('coverage')
   const tokens = value('tokens')
   const duration = value('duration')
   const turns = value('turns')
   return (
     <span className="grid gap-0.5 font-mono text-xs tabular-nums">
       <span className="text-ink">
-        {[pass, tokens ? `${tokens} tokens` : null]
+        {[
+          coverage ? `${coverage} coverage` : null,
+          tokens ? `${tokens} tokens` : null,
+        ]
           .filter(Boolean)
           .join(' · ') || 'no figures reported'}
       </span>
@@ -246,7 +224,7 @@ export function PlanBaselineCell({
 }
 
 /**
- * The "latest candidate vs baseline" column: the verdict and the signed
+ * The "latest candidate vs baseline" column: the signed
  * core deltas, or the sentence that says why there is nothing to compare.
  */
 export function PlanComparisonSummary({
@@ -296,10 +274,7 @@ export function PlanComparisonSummary({
   return (
     <span className="grid gap-1 text-xs">
       <span className="flex flex-wrap items-center gap-2">
-        <StatusBadge
-          status={verdictStatus[comparison.verdict]}
-          label={comparison.verdict}
-        />
+        <span className="text-ink">{comparison.headline}</span>
         <span className="text-ink-muted">
           candidate #{candidateCount}
           {candidate?.completed_at
@@ -483,33 +458,16 @@ export function PlansPage() {
     void load()
   }, [load])
 
-  const comparisonFor = useCallback(
-    (plan: LocalPlan) => {
-      const candidateId = plan.candidate_execution_ids.at(-1) ?? ''
-      if (!candidateId) return null
-      return buildPlanComparison(
-        plan.baseline_execution_id
-          ? executionSummaries[plan.baseline_execution_id]
-          : null,
-        executionSummaries[candidateId],
-      )
-    },
-    [executionSummaries],
-  )
-
   const counts = useMemo(() => {
     const count = (candidate: PlanFilter) =>
-      plans.filter((plan) =>
-        matchesFilter(plan, candidate, comparisonFor(plan)),
-      ).length
+      plans.filter((plan) => matchesFilter(plan, candidate)).length
     return {
       all: plans.length,
       needs_action: count('needs_action'),
       running: count('running'),
       compared: count('compared'),
-      regressed: count('regressed'),
     }
-  }, [comparisonFor, plans])
+  }, [plans])
 
   // Audit P-13: a list with a running plan refreshes itself.
   useEffect(() => {
@@ -521,7 +479,7 @@ export function PlansPage() {
   const filteredPlans = useMemo(() => {
     const normalized = query.trim().toLowerCase()
     return plans.filter((plan) => {
-      if (!matchesFilter(plan, filter, comparisonFor(plan))) return false
+      if (!matchesFilter(plan, filter)) return false
       if (!normalized) return true
       return [
         plan.label,
@@ -535,7 +493,7 @@ export function PlansPage() {
         .toLowerCase()
         .includes(normalized)
     })
-  }, [comparisonFor, filter, plans, query])
+  }, [filter, plans, query])
 
   const totalPlans = plans.length
   const totalFiltered = filteredPlans.length
@@ -546,7 +504,6 @@ export function PlansPage() {
     { id: 'needs_action', label: 'needs action' },
     { id: 'running', label: 'running' },
     { id: 'compared', label: 'compared' },
-    { id: 'regressed', label: 'regressed' },
   ]
 
   return (
@@ -655,13 +612,6 @@ export function PlansPage() {
                     key={candidate.id}
                     active={filter === candidate.id}
                     count={counts[candidate.id]}
-                    className={
-                      candidate.id === 'regressed' &&
-                      counts.regressed > 0 &&
-                      filter !== 'regressed'
-                        ? 'text-danger'
-                        : undefined
-                    }
                     onClick={() => setFilter(candidate.id)}
                   >
                     {candidate.label}

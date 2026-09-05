@@ -16,7 +16,6 @@ import {
   PlanNonComparableAttempts,
   PlanScope,
   planFormDirty,
-  planMetricWinnerIds,
   planMovementGroups,
   planProvenanceEntries,
   planProvenanceScent,
@@ -223,7 +222,7 @@ describe('local plan execution comparison', () => {
     expect(noBaselineHtml).toBe('')
   })
 
-  // Audit ED-26: layer 0 is the filter row, the verdict and the trend tiles;
+  // Audit ED-26: layer 0 is the filter row, the observations and the trend tiles;
   // the pivoted table opens in the all-metrics layer beneath it.
   it('leads with trend tiles, keeps the pivoted table in a layer and separates incomplete attempts', () => {
     const plan: LocalPlan = {
@@ -281,11 +280,11 @@ describe('local plan execution comparison', () => {
       overviewHtml.match(/data-candidate-option="selected"/g),
     ).toHaveLength(2)
     expect(overviewHtml).toContain('never changes here')
-    expect(overviewHtml).toContain('data-plan-verdict')
-    expect(overviewHtml).toContain('Objective results are stable')
+    expect(overviewHtml).toContain('data-plan-observations')
+    expect(overviewHtml).toContain('Retained observations')
     // Trend tiles: the selected candidate's value, its delta, and a sparkline
     // with one point per completed execution.
-    expect(overviewHtml).toContain('data-trend-metric="pass_rate"')
+    expect(overviewHtml).toContain('data-trend-metric="coverage"')
     expect(overviewHtml).toContain('data-trend-metric="tokens"')
     expect(overviewHtml).toContain('data-trend-metric="duration"')
     expect(overviewHtml).toContain('data-trend-metric="turns"')
@@ -300,17 +299,18 @@ describe('local plan execution comparison', () => {
     expect(html).toContain('baseline and candidates')
     expect(tableHtml).toContain('<th scope="col">Metric</th>')
     expect(tableHtml).toContain('>Reference<')
-    expect(tableHtml).toContain('Pass rate')
-    expect(tableHtml).toContain('Higher is better')
-    expect(tableHtml).toContain('Lower is better')
-    expect(tableHtml).toContain('role="tooltip"')
+    expect(tableHtml).toContain('Coverage')
+    expect(tableHtml).not.toContain('Pass rate')
+    expect(tableHtml).not.toContain('Higher is better')
+    expect(tableHtml).not.toContain('Lower is better')
+    expect(tableHtml).not.toContain('role="tooltip"')
     expect(layersHtml).toContain('--ds-table-min-width:48rem')
     expect(tableHtml).not.toMatch(/improved/i)
     expect(tableHtml).toContain('+100 · +10.0%')
     expect(tableHtml).toMatch(
-      /data-metric-id="tokens"[\s\S]*?<td class="is-selected is-winner" data-execution-id="candidate-2"/,
+      /data-metric-id="tokens"[\s\S]*?<td class="is-selected" data-execution-id="candidate-2"/,
     )
-    expect(tableHtml).toContain('Best')
+    expect(tableHtml).not.toContain('Best')
     // Executions keep newest candidates first and list incomplete attempts.
     expect(diagnosticsHtml.indexOf('Baseline')).toBeLessThan(
       diagnosticsHtml.indexOf('Candidate #2'),
@@ -319,7 +319,7 @@ describe('local plan execution comparison', () => {
       diagnosticsHtml.indexOf('Candidate #1'),
     )
     expect(diagnosticsHtml).toContain('Incomplete attempt')
-    expect(diagnosticsHtml).toContain('Incomplete attempts remain excluded')
+    expect(diagnosticsHtml).toContain('Incomplete attempts are not included')
     expect(diagnosticsHtml).toContain('runs · ')
     expect(diagnosticsHtml).toContain('data-label="Tokens"')
     expect(diagnosticsHtml).toContain('data-label="Duration"')
@@ -385,22 +385,6 @@ describe('local plan execution comparison', () => {
     expect(bare).toContain('data-trend-metric="failed_attempt_tokens"')
     expect(bare).toMatch(
       /data-trend-metric="failed_attempt_tokens"[\s\S]*?>Not reported<[\s\S]*?Not comparable/,
-    )
-  })
-
-  it('selects only strict metric winners and leaves ties blank', () => {
-    const values = [
-      { id: 'baseline', value: 90 },
-      { id: 'candidate-1', value: 95 },
-      { id: 'candidate-2', value: 95 },
-      { id: 'missing', value: null },
-    ]
-
-    expect(planMetricWinnerIds(values, 'higher')).toEqual([])
-    expect(planMetricWinnerIds(values, 'lower')).toEqual(['baseline'])
-    expect(planMetricWinnerIds(values, 'context')).toEqual([])
-    expect(planMetricWinnerIds([{ id: 'only', value: 1 }], 'higher')).toEqual(
-      [],
     )
   })
 
@@ -483,8 +467,6 @@ describe('local plan execution comparison', () => {
         id: 'security_review',
         compatible: true,
         reason: null,
-        baseline_status: 'passed',
-        candidate_status: 'passed',
         metrics: [],
         execution_metrics: [
           {
@@ -494,7 +476,7 @@ describe('local plan execution comparison', () => {
             candidate: 0,
             delta: 0,
             delta_percent: null,
-            direction: 'lower',
+
             format: 'usd',
             tone: 'neutral',
           },
@@ -505,9 +487,9 @@ describe('local plan execution comparison', () => {
             candidate: 4703,
             delta: 142,
             delta_percent: 3.11,
-            direction: 'lower',
+
             format: 'tokens',
-            tone: 'negative',
+            tone: 'neutral',
           },
           {
             id: 'function_calls',
@@ -516,7 +498,7 @@ describe('local plan execution comparison', () => {
             candidate: 13,
             delta: 0,
             delta_percent: 0,
-            direction: 'context',
+
             format: 'count',
             tone: 'neutral',
           },
@@ -527,9 +509,9 @@ describe('local plan execution comparison', () => {
             candidate: 0.4,
             delta: 0.1,
             delta_percent: 33.33,
-            direction: 'lower',
+
             format: 'seconds',
-            tone: 'negative',
+            tone: 'neutral',
           },
           {
             id: 'function_errors',
@@ -538,7 +520,7 @@ describe('local plan execution comparison', () => {
             candidate: 0,
             delta: 0,
             delta_percent: null,
-            direction: 'lower',
+
             format: 'count',
             tone: 'neutral',
           },
@@ -549,9 +531,9 @@ describe('local plan execution comparison', () => {
             candidate: 1,
             delta: -1,
             delta_percent: -50,
-            direction: 'lower',
+
             format: 'count',
-            tone: 'positive',
+            tone: 'neutral',
           },
         ],
         workflow_metrics: [
@@ -562,7 +544,7 @@ describe('local plan execution comparison', () => {
             candidate: 5,
             delta: 1,
             delta_percent: 25,
-            direction: 'context',
+
             format: 'count',
             tone: 'neutral',
           },
@@ -596,30 +578,28 @@ describe('local plan execution comparison', () => {
     expect(layersHtml).toContain('data-plan-by-test')
     expect(layersHtml).not.toContain('Findings')
     expect(layersHtml).toMatch(/data-scenario-id="security_review" open=""/)
-    // What moved: three bars, oriented by improvement, the unchanged named once.
+    // What moved: three bars, oriented by signed change, the unchanged named once.
     expect(overviewHtml).toContain('data-plan-what-moved')
     const groups = planMovementGroups(comparison)
     expect(groups).toHaveLength(1)
-    expect(
-      groups[0].rows.map((row) => [row.id, row.improvement, row.tone]),
-    ).toEqual([
-      ['tokens', -3.11, 'negative'],
-      ['duration', -33.33, 'negative'],
-      ['turns', 50, 'positive'],
+    expect(groups[0].rows.map((row) => [row.id, row.change])).toEqual([
+      ['tokens', 3.11],
+      ['duration', 33.33],
+      ['turns', -50],
     ])
     expect(groups[0].rows.map((row) => row.valueLabel)).toEqual([
       '+142 · +3.1%',
       '+0.1s · +33.3%',
       '-1 · -50.0%',
     ])
-    expect(groups[0].subtitle).toBe('Passed → Passed · 3 of 3 metrics moved')
+    expect(groups[0].subtitle).toBe('3 of 3 metrics moved')
     // Dumbbells draw the magnitude the percentages hide.
     expect(layersHtml).toContain('data-dumbbell-metric="tokens"')
     expect(layersHtml).toContain('data-dumbbell-metric="duration"')
     expect(layersHtml).not.toContain('data-dumbbell-metric="quality"')
   })
 
-  it('shows ten scenario metrics including the new token ones and highlights strict winners', () => {
+  it('shows criterion evidence and consumption without highlighting winners', () => {
     const scenarioExecution = (
       id: string,
       tokens: number,
@@ -662,6 +642,27 @@ describe('local plan execution comparison', () => {
     const baseline = scenarioExecution('baseline-1', 4_500)
     const candidateOne = scenarioExecution('candidate-1', 4_000)
     const candidateTwo = scenarioExecution('candidate-2', 3_800)
+    const comparison = buildPlanComparison(baseline, candidateTwo)
+    comparison.scenarios[0].metrics.push({
+      id: 'criterion:delivery:40',
+      label: 'Criterion delivery · mean points / 40',
+      baseline: 15,
+      candidate: 30,
+      delta: 15,
+      delta_percent: 100,
+
+      format: 'score',
+      tone: 'neutral',
+      evidence: {
+        baseline_observed: 2,
+        candidate_observed: 1,
+        baseline_planned: 2,
+        candidate_planned: 2,
+        paired: 1,
+        paired_baseline: 15,
+        paired_candidate: 30,
+      },
+    })
     const html = renderToStaticMarkup(
       <PlanComparisonLayers
         plan={{
@@ -678,7 +679,7 @@ describe('local plan execution comparison', () => {
         visualBaselineId="baseline-1"
         comparisonCandidateIds={['candidate-1', 'candidate-2']}
         selectedCandidateId="candidate-2"
-        scenarioComparison={buildPlanComparison(baseline, candidateTwo)}
+        scenarioComparison={comparison}
       />,
     )
     const scenarioHtml = html.slice(html.indexOf('data-plan-by-test'))
@@ -687,8 +688,13 @@ describe('local plan execution comparison', () => {
     expect(scenarioHtml).toContain('Candidate #2')
     expect(scenarioHtml).toContain('2 candidates')
     expect(scenarioHtml.match(/data-scenario-metric-id=/g)).toHaveLength(10)
+    expect(scenarioHtml).toContain(
+      'data-scenario-metric-id="criterion:delivery:40"',
+    )
+    expect(scenarioHtml).toContain('Criterion delivery · mean points / 40')
+    expect(scenarioHtml).toContain('1 matched repetitions')
+    expect(scenarioHtml).toContain('paired means 15 → 30')
     for (const metricId of [
-      'pass_rate',
       'quality',
       'cost',
       'turns',
@@ -701,12 +707,13 @@ describe('local plan execution comparison', () => {
     ]) {
       expect(scenarioHtml).toContain(`data-scenario-metric-id="${metricId}"`)
     }
-    // The expanded table marks the strict winner per metric.
+    // Values and paired evidence remain visible without ranking candidates.
     expect(scenarioHtml).toMatch(
-      /data-scenario-metric-id="tokens"[\s\S]*?<td class="is-winner" data-label="Candidate #2"/,
+      /data-scenario-metric-id="tokens"[\s\S]*?<td data-label="Candidate #2"/,
     )
     expect(scenarioHtml).toContain('data-scenario-metrics')
-    expect(scenarioHtml).toContain('class="is-winner"')
+    expect(scenarioHtml).not.toContain('is-winner')
+    expect(scenarioHtml).not.toContain('Best')
   })
 
   it('can use a candidate as a visual-only baseline', () => {
