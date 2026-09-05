@@ -306,9 +306,7 @@ try {
   )
   await select('Execution model', 'codex/gpt-5.6-terra')
   await page.getByRole('button', { name: 'Save and run', exact: true }).click()
-  await page
-    .getByRole('button', { name: /^cancel execution$/i })
-    .waitFor()
+  await page.getByRole('button', { name: /^cancel execution$/i }).waitFor()
   assert.equal(plans.length, 3)
   assert.equal(active.role, 'baseline')
   assert.equal(active.slots.length, 5)
@@ -337,9 +335,7 @@ try {
       .count(),
     0,
   )
-  await page
-    .getByRole('button', { name: /^cancel execution$/i })
-    .click()
+  await page.getByRole('button', { name: /^cancel execution$/i }).click()
   await page.locator('[data-execution-overview]').waitFor()
   await page.getByRole('link', { name: 'back to plan', exact: true }).click()
   await page

@@ -296,7 +296,7 @@ impl PlanStore {
                 "attempt": 1, "workflow_name": "Harness plan", "workflow_url": null, "event": "local", "actor": "local",
                 "started_at": execution.started_at, "completed_at": execution.finished_at.as_deref().unwrap_or(""), "generated_at": execution.updated_at,
                 "status": status, "conclusion": if status == "passed" { "success" } else { "" }, "availability": "available", "lane": plan.snapshot.profile.lane,
-                "subjects": [{"id": plan.plan.model, "model": plan.plan.model, "provider": plan.plan.provider, "scenarios": []}],
+                "subjects": [{"id": plan.plan.model, "model": plan.plan.model, "provider": plan.plan.provider, "judge": if plan.plan.judge_model.is_empty() { Value::Null } else { json!({"model": plan.plan.judge_model, "provider": plan.plan.judge_provider}) }, "scenarios": []}],
                 "requested_runs": execution.slots.len(), "scenario_metrics": [], "execution": {"id": execution.id},
                 "totals": {"expected_reports": execution.slots.len(), "received_reports": summary["observed"], "missing_reports": execution.slots.len() as u64 - summary["observed"].as_u64().unwrap_or(0),
                     "report_coverage": summary["observed"].as_f64().map(|observed| observed / execution.slots.len().max(1) as f64), "passed_scenarios": summary["passed"], "total_tokens": null, "total_cost_usd": null},
@@ -1635,6 +1635,7 @@ mod tests {
         }
         let detail = manager.execution_detail(&baseline.id).unwrap().unwrap();
         assert_eq!(detail["id"], baseline.id);
+        assert_eq!(detail["subjects"][0]["judge"]["model"], plan.judge_model);
         assert_eq!(detail["native_execution_ids"].as_array().unwrap().len(), 4);
         let reports = detail["reports"].as_array().unwrap();
         assert_eq!(reports.len(), 4);
