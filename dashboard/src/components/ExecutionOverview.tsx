@@ -173,7 +173,7 @@ export function ExecutionOverview({
                 </>
               )}
               <MetricCard
-                label="quality on completed tasks"
+                label="advisory quality"
                 value={
                   metrics.qualityMedian === null
                     ? '—'
@@ -213,7 +213,7 @@ export function ExecutionOverview({
               data-usage-coverage={complete ? 'complete' : 'partial'}
             >
               <MetricCard
-                label="subject tokens"
+                label="tokens"
                 value={usageValue(metrics.subjectTokens, number)}
                 detail={
                   complete
@@ -260,7 +260,7 @@ export function ExecutionOverview({
 
           <div className="grid min-w-0 gap-2">
             <div className="flex flex-wrap items-baseline justify-between gap-3">
-              <span className="ds-label">runtime and calls</span>
+              <span className="ds-label">duration and calls</span>
               <span className="font-mono text-label text-ink-muted">
                 {complete
                   ? `recorded run efficiency, including retries · ${metrics.functionCalls.samples} of ${metrics.functionCalls.expected} runs`
@@ -269,7 +269,7 @@ export function ExecutionOverview({
             </div>
             <div className="grid min-w-0 gap-3 @[560px]:grid-cols-2 @[960px]:grid-cols-4">
               <MetricCard
-                label="accumulated run time"
+                label="duration"
                 value={usageValue(metrics.durationMs, (v) =>
                   v === null ? '—' : formatDuration(v / 1_000),
                 )}
@@ -298,7 +298,7 @@ export function ExecutionOverview({
                 }
               />
               <MetricCard
-                label="execution cost"
+                label="cost"
                 value={usageValue(metrics.cost, cost)}
                 detail={
                   metrics.cost.samples === metrics.cost.expected

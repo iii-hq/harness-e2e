@@ -142,7 +142,7 @@ describe('comparison row states', () => {
     )
     expect(html).toContain('pass rate')
     expect(html).toContain('median cost')
-    expect(html).not.toContain('median runtime')
+    expect(html).not.toContain('median duration')
     expect(html).not.toContain('median tokens')
     expect(html).toContain('No retained observations.')
     expect(html).toContain('open history')
