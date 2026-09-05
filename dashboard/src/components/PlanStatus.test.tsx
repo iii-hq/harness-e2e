@@ -3,7 +3,7 @@ import { describe, expect, it } from 'vitest'
 import { validateExecutionSetup } from '@/components/ExecutionSetup'
 import { routeFromHash } from '@/hooks/use-hash-route'
 import type { PlanExecution } from '@/lib/plan-execution'
-import { PlanProgress, Requirements } from './PlanExecutionPage'
+import { PlanProgress, Requirements } from './PlanStatus'
 
 describe('executable plan journey', () => {
   it('requires an explicit execution model and the required evaluator', () => {

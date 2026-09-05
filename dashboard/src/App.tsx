@@ -6,7 +6,6 @@ import { ExecutionPage } from '@/pages/ExecutionPage'
 import { ExecutionsPage } from '@/pages/ExecutionsPage'
 import { LocalPlanCreatePage, LocalPlanDetailPage } from '@/pages/LocalPlanPage'
 import { OverviewPage } from '@/pages/OverviewPage'
-import { PlanExecutionPage } from '@/pages/PlanExecutionPage'
 import { PlansPage } from '@/pages/PlansPage'
 import { TestHistoryPage } from '@/pages/TestHistoryPage'
 import { TestsCatalogPage } from '@/pages/TestsCatalogPage'
@@ -15,13 +14,6 @@ import { TestsPage } from '@/pages/TestsPage'
 function RoutedPage({ route }: { route: DashboardRoute }) {
   switch (route.page) {
     case 'execution':
-      if (route.executionId.startsWith('plan-'))
-        return (
-          <PlanExecutionPage
-            key={route.executionId}
-            executionId={route.executionId}
-          />
-        )
       return (
         <ExecutionPage
           executionId={route.executionId}

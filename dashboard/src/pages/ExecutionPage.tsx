@@ -8,6 +8,7 @@ import { ExecutionOverview } from '@/components/ExecutionOverview'
 import { requestQuickExecution } from '@/components/ExecutionSetup'
 import { LiveProgressPanel } from '@/components/LiveProgressPanel'
 import type { OutcomeRow } from '@/components/OutcomeDerivation'
+import { PlanProgress } from '@/components/PlanStatus'
 import {
   contractScent,
   ResultContractStrip,
@@ -23,7 +24,11 @@ import {
   Panel,
   StatusBadge,
 } from '@/design-system'
-import { hashForExecution, hashForWorkspace } from '@/hooks/use-hash-route'
+import {
+  hashForExecution,
+  hashForPlan,
+  hashForWorkspace,
+} from '@/hooks/use-hash-route'
 import { useLatestRequest } from '@/hooks/use-latest-request'
 import {
   type AssessmentRunMetrics,
@@ -51,6 +56,7 @@ import {
   formatPercent,
 } from '@/lib/execution-view'
 import { executionTitle } from '@/lib/overview-signal'
+import { planAction } from '@/lib/plan-execution'
 import {
   buildScenarioMatrix,
   formatScenarioDuration,
@@ -887,7 +893,14 @@ export function ExecutionPage({
     if (bridge?.mode !== 'local') return
     setCancelling(true)
     try {
-      await bridge.cancelRun()
+      if (detail.plan_execution) {
+        await planAction(bridge, {
+          action: 'cancel',
+          execution_id: executionId,
+        })
+      } else {
+        await bridge.cancelRun()
+      }
       await load()
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : String(cause))
@@ -945,15 +958,20 @@ export function ExecutionPage({
                     size: 'compact',
                     className: 'no-underline',
                   })}
-                  href={hashForWorkspace()}
+                  href={
+                    detail.plan_id
+                      ? hashForPlan(detail.plan_id)
+                      : hashForWorkspace()
+                  }
                   onClick={() =>
+                    !detail.plan_id &&
                     requestQuickExecution(
                       scenarioMatrix?.items.map((item) => item.scenarioId) ??
                         [],
                     )
                   }
                 >
-                  re-run same scope
+                  {detail.plan_id ? 'back to plan' : 're-run same scope'}
                 </a>
               ) : null}
             </>
@@ -995,9 +1013,12 @@ export function ExecutionPage({
             presentation={presentation}
             status={status}
             cancelling={cancelling}
-            hasProgress={Boolean(detail.live_progress)}
+            hasProgress={Boolean(detail.live_progress || detail.plan_execution)}
             onCancel={local ? () => void cancelRun() : undefined}
           />
+        ) : null}
+        {detail.plan_execution && live ? (
+          <PlanProgress execution={detail.plan_execution} />
         ) : null}
         {detail.live_progress ? (
           <LiveProgressPanel progress={detail.live_progress} running={live} />

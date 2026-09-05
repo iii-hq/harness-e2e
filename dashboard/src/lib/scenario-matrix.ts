@@ -281,7 +281,9 @@ function unavailableScenario(
 
   return {
     key: `${record?.subject_id ?? 'unknown'}:${scenarioId}:unavailable:${reportIndex}`,
-    reason: 'The expected report for this scenario was not retained.',
+    reason:
+      nonEmptyString(record?.error) ??
+      'The expected report for this scenario was not retained.',
     reportIndex,
     scenarioIndex: null,
     subjectId: record?.subject_id ?? 'Unknown subject',

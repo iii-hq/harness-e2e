@@ -18,6 +18,7 @@ import {
   Sparkline,
   type SparklinePoint,
 } from '@/components/PlanCharts'
+import { PlanProgress, Requirements } from '@/components/PlanStatus'
 import { ScenarioChatAction } from '@/components/ScenarioChatAction'
 import {
   buttonClassName,
@@ -74,7 +75,6 @@ import {
   planAction,
 } from '@/lib/plan-execution'
 import { watchExecution } from '@/lib/watch-execution'
-import { PlanProgress, Requirements } from './PlanExecutionPage'
 
 /* ------------------------------------------------------------- helpers */
 

@@ -9,6 +9,7 @@ import {
   requestQuickExecution,
   validateExecutionSetup,
 } from '@/components/ExecutionSetup'
+import { Requirements } from '@/components/PlanStatus'
 import { buttonClassName, Callout, PageHeader, Select } from '@/design-system'
 import { useDirtyNavigation } from '@/hooks/use-dirty-navigation'
 import {
@@ -24,7 +25,6 @@ import {
   type MasterTestProfile,
 } from '@/lib/dashboard-data-source'
 import { type PlanRequirements, planAction } from '@/lib/plan-execution'
-import { Requirements } from './PlanExecutionPage'
 
 type Model = { provider: string; model: string }
 type Catalog = {

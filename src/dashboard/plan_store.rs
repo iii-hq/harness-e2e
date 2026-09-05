@@ -318,9 +318,37 @@ impl PlanStore {
             .into_iter()
             .find(|value| value["id"] == id)
             .context("Plan execution missing")?;
-        summary["reports"] = json!([]);
-        summary["native_execution_ids"] = json!(self
-            .read_execution(id)?
+        let execution = self.read_execution(id)?;
+        let mut reports = Vec::new();
+        for slot in &execution.slots {
+            let native = if slot.observed > 0 {
+                super::store::read_stored_run(&self.root.join(&slot.execution_id)).and_then(|run| {
+                    run.map(|run| super::presenter::stored_execution_detail(&run))
+                        .transpose()
+                })
+            } else {
+                Ok(None)
+            };
+            match native {
+                Ok(Some(detail)) if detail["reports"].as_array().is_some_and(|reports| !reports.is_empty()) => {
+                    for mut report in detail["reports"].as_array().unwrap().clone() {
+                        report["subject_id"] = summary["subjects"][0]["id"].clone();
+                        report["native_execution_id"] = json!(slot.execution_id);
+                        report["round"] = json!(slot.round);
+                        reports.push(report);
+                    }
+                }
+                result => reports.push(json!({
+                    "subject_id": summary["subjects"][0]["id"], "scenario_id": slot.scenario_id,
+                    "native_execution_id": slot.execution_id, "round": slot.round,
+                    "available": false, "report": null,
+                    "error": result.err().map(|error| format!("{error:#}")).or_else(|| slot.error.clone()),
+                })),
+            }
+        }
+        summary["reports"] = json!(reports);
+        summary["plan_execution"] = serde_json::to_value(&execution)?;
+        summary["native_execution_ids"] = json!(execution
             .slots
             .iter()
             .map(|slot| &slot.execution_id)
@@ -1608,6 +1636,21 @@ mod tests {
         let detail = manager.execution_detail(&baseline.id).unwrap().unwrap();
         assert_eq!(detail["id"], baseline.id);
         assert_eq!(detail["native_execution_ids"].as_array().unwrap().len(), 4);
+        let reports = detail["reports"].as_array().unwrap();
+        assert_eq!(reports.len(), 4);
+        assert!(reports.iter().all(|report| report["available"] == true));
+        for (report, slot) in reports.iter().zip(&baseline.slots) {
+            assert_eq!(report["native_execution_id"], slot.execution_id);
+            assert_eq!(
+                report["report"]["scenarios"][0]["scenario_id"],
+                slot.scenario_id
+            );
+            assert_eq!(report["round"], slot.round);
+        }
+        assert_eq!(
+            detail["plan_execution"]["slots"].as_array().unwrap().len(),
+            4
+        );
         assert!(detail["totals"]["scenario_pass_rate"].is_number());
         assert!(baseline.baseline_eligible);
         let ready = manager.get_local(&plan.id).unwrap();
@@ -1830,6 +1873,15 @@ mod tests {
             assert_eq!(execution.state, "interrupted");
             assert!(!execution.baseline_eligible);
             assert_eq!(runner.submitted.load(Ordering::SeqCst), 1);
+            let detail = manager.execution_detail(&id).unwrap().unwrap();
+            let reports = detail["reports"].as_array().unwrap();
+            assert_eq!(reports.len(), 90);
+            // Reconciliation retains evidence from the persisted child even
+            // when admission returned a different identity; remaining slots stay explicit.
+            assert_eq!(reports[0]["available"], wrong_identity);
+            assert!(reports[1..]
+                .iter()
+                .all(|report| report["available"] == false));
             assert!(manager
                 .get_local(&plan)
                 .unwrap()

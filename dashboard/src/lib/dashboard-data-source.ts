@@ -4,6 +4,7 @@ import type {
   RunAssessmentContract,
 } from '@/lib/assessment-contract'
 import { getDashboardIiiClient } from '@/lib/iii-client'
+import type { PlanExecution } from '@/lib/plan-execution'
 import type { RESULTS_SCHEMA_VERSION } from '@/lib/result-contract.generated'
 import type {
   EvaluatedVersionsResponse,
@@ -521,6 +522,8 @@ export type DashboardReportProjection = JsonObject & {
 }
 
 export type DashboardExecutionDetail = DashboardExecutionSummary & {
+  plan_execution?: PlanExecution
+  plan_id?: string
   reports: Array<
     JsonObject & {
       subject_id: string

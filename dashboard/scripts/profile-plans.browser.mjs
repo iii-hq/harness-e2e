@@ -120,6 +120,33 @@ function operation(request) {
   }
   throw Error(`Unexpected operation ${request.action}`)
 }
+function executionDetail(execution) {
+  const plan = plans.find((p) => p.id === execution.plan_id)
+  return {
+    id: execution.id,
+    label: plan.label,
+    plan_id: plan.id,
+    plan_execution: execution,
+    status: execution.state,
+    event: 'local',
+    availability: 'aggregate',
+    subjects: [
+      {
+        id: plan.model,
+        model: plan.model,
+        provider: plan.provider,
+        scenarios: [],
+      },
+    ],
+    reports: execution.slots.map((slot) => ({
+      subject_id: plan.model,
+      scenario_id: slot.scenario_id,
+      native_execution_id: slot.execution_id,
+      available: false,
+    })),
+    totals: { expected_reports: execution.slots.length, received_reports: 0 },
+  }
+}
 const server = createServer(async (req, res) => {
   try {
     const url = new URL(req.url, 'http://localhost')
@@ -158,6 +185,13 @@ const server = createServer(async (req, res) => {
         for await (const chunk of req) body += chunk
         value = Object.assign(plan, JSON.parse(body))
       } else value = plan
+    } else if (url.pathname === '/api/dashboard/executions') {
+      value = { executions: [...executions.values()].map(executionDetail) }
+    } else if (url.pathname.startsWith('/api/dashboard/executions/')) {
+      const detail = executionDetail(
+        executions.get(url.pathname.split('/').at(-1)),
+      )
+      value = { detail, manifest: { executions: [detail] } }
     } else if (url.pathname === '/api/local/catalog')
       value = {
         url: configuration.url,
@@ -273,7 +307,7 @@ try {
   await select('Execution model', 'codex/gpt-5.6-terra')
   await page.getByRole('button', { name: 'Save and run', exact: true }).click()
   await page
-    .getByRole('button', { name: 'Cancel execution', exact: true })
+    .getByRole('button', { name: /^cancel execution$/i })
     .waitFor()
   assert.equal(plans.length, 3)
   assert.equal(active.role, 'baseline')
@@ -292,9 +326,22 @@ try {
   assert.equal(plans.length, 4)
   assert.equal(plans[3].state, 'draft')
   await page.getByRole('link', { name: 'Follow active execution' }).click()
+  const executionId = active.id
+  await page.goto(
+    `http://127.0.0.1:${server.address().port}/#/execution/${executionId}`,
+  )
+  await page.getByRole('link', { name: 'back to plan', exact: true }).waitFor()
+  assert.equal(
+    await page
+      .getByRole('heading', { name: 'Plan execution', exact: true })
+      .count(),
+    0,
+  )
   await page
-    .getByRole('button', { name: 'Cancel execution', exact: true })
+    .getByRole('button', { name: /^cancel execution$/i })
     .click()
+  await page.locator('[data-execution-overview]').waitFor()
+  await page.getByRole('link', { name: 'back to plan', exact: true }).click()
   await page
     .getByText('baseline retry available · scope locked', { exact: true })
     .waitFor()
