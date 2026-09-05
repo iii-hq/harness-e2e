@@ -58,7 +58,7 @@ expected_version=$(jq -r '.orchestration.roots[] | select(.role == "runner") | .
 python3 "$contract_tool" manifest --contract "$contract_path" \
   --output "$artifact_dir/campaign-manifest.json"
 python3 "$HARNESS_E2E_HARNESS_ROOT/scripts/run_e2e_campaign.py" \
-  "$artifact_dir/campaign-manifest.json" --validate-only >/dev/null
+  "$artifact_dir/campaign-manifest.json" --e2e-bin "$e2e_bin" --validate-only >/dev/null
 
 failure_phase=plan
 "$e2e_bin" fault-plan --profile "$profile_path" --output "$plan"

@@ -68,21 +68,7 @@ function execution(
 }
 
 describe('local plan comparison view model', () => {
-  it('does not calculate deltas from unsupported historical contracts', () => {
-    const comparison = buildPlanComparison(
-      execution('legacy', {
-        status: 'unsupported',
-        availability: 'unsupported',
-      }),
-      execution('current'),
-    )
-    expect(comparison.verdict).toBe('inconclusive')
-    expect(comparison.headline).toBe('Result contracts are incompatible')
-    expect(comparison.metrics).toEqual([])
-    expect(comparison.scenarios).toEqual([])
-  })
-
-  it('keeps objective stability separate from directional efficiency', () => {
+  it('reports signed consumption changes without declaring a winner', () => {
     const comparison = buildPlanComparison(
       execution('baseline'),
       execution('candidate', {
@@ -94,20 +80,20 @@ describe('local plan comparison view model', () => {
       }),
     )
 
-    expect(comparison.verdict).toBe('stable')
+    expect(comparison).not.toHaveProperty('verdict')
     expect(metricById(comparison, 'tokens')).toMatchObject({
       delta: 1000,
       delta_percent: 10,
-      tone: 'negative',
+      tone: 'neutral',
     })
     expect(metricById(comparison, 'duration')).toMatchObject({
       delta: -2,
       delta_percent: -10,
-      tone: 'positive',
+      tone: 'neutral',
     })
   })
 
-  it('makes an added hard-gate failure an objective regression', () => {
+  it('retains evidence without turning a hard-gate failure into a global verdict', () => {
     const candidate = execution('candidate', {
       totals: {
         ...execution('candidate').totals,
@@ -125,8 +111,7 @@ describe('local plan comparison view model', () => {
 
     expect(buildPlanComparison(execution('baseline'), candidate)).toMatchObject(
       {
-        verdict: 'regressed',
-        headline: 'Objective regression detected',
+        headline: 'Retained observations',
       },
     )
   })
@@ -138,9 +123,9 @@ describe('local plan comparison view model', () => {
         technical_failures: 1,
       },
     })
-    expect(buildPlanComparison(execution('baseline'), candidate).verdict).toBe(
-      'inconclusive',
-    )
+    expect(
+      buildPlanComparison(execution('baseline'), candidate),
+    ).not.toHaveProperty('verdict')
   })
 
   it('preserves missing cost as unavailable instead of zero', () => {
@@ -156,7 +141,7 @@ describe('local plan comparison view model', () => {
     })
   })
 
-  it('makes missing objective evidence inconclusive instead of assuming stability', () => {
+  it('does not assume stability when objective evidence is missing', () => {
     const candidate = execution('candidate', {
       totals: {
         ...execution('candidate').totals,
@@ -164,9 +149,9 @@ describe('local plan comparison view model', () => {
       },
     })
 
-    expect(buildPlanComparison(execution('baseline'), candidate).verdict).toBe(
-      'inconclusive',
-    )
+    expect(
+      buildPlanComparison(execution('baseline'), candidate),
+    ).not.toHaveProperty('verdict')
   })
 
   it('derives fully reported function errors from retained scenario metrics', () => {
@@ -205,7 +190,7 @@ describe('local plan comparison view model', () => {
       baseline: 1,
       candidate: 0,
       delta: -1,
-      tone: 'positive',
+      tone: 'neutral',
     })
   })
 
@@ -243,7 +228,7 @@ describe('local plan comparison view model', () => {
       baseline: 4,
       candidate: 2,
       delta: -2,
-      tone: 'positive',
+      tone: 'neutral',
     })
     expect(comparison.scenarios[0]?.metrics).toEqual(
       expect.arrayContaining([
@@ -251,7 +236,7 @@ describe('local plan comparison view model', () => {
           id: 'turns',
           baseline: 2,
           candidate: 1,
-          tone: 'positive',
+          tone: 'neutral',
         }),
       ]),
     )
@@ -380,7 +365,7 @@ describe('local plan comparison view model', () => {
     expect(row.metrics.every((metric) => metric.delta === null)).toBe(true)
   })
 
-  it('compares backfilled general metrics for security review', () => {
+  it('does not invent security-review consumption from evaluator usage', () => {
     const detail = (id: string, outputTokens: number) =>
       ({
         ...execution(id),
@@ -454,33 +439,11 @@ describe('local plan comparison view model', () => {
       detail('candidate', 400),
     )
 
-    expect(row.execution_metrics).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          id: 'tokens',
-          baseline: 3500,
-          candidate: 3400,
-          delta: -100,
-          format: 'tokens',
-        }),
-        expect.objectContaining({
-          id: 'cost',
-          baseline: 0,
-          candidate: 0,
-          format: 'usd',
-        }),
-        expect.objectContaining({
-          id: 'function_calls',
-          baseline: 13,
-          candidate: 13,
-        }),
-        expect.objectContaining({
-          id: 'function_errors',
-          baseline: 0,
-          candidate: 0,
-        }),
-      ]),
-    )
+    for (const metric of row.execution_metrics) {
+      expect(metric.baseline).toBeNull()
+      expect(metric.candidate).toBeNull()
+      expect(metric.delta).toBeNull()
+    }
   })
 
   // The two token metrics #88 added to the execution page reach the plan
@@ -523,22 +486,22 @@ describe('local plan comparison view model', () => {
       baseline: 5_000,
       candidate: 4_000,
       delta: -1_000,
-      direction: 'lower',
+
       format: 'tokens',
-      tone: 'positive',
+      tone: 'neutral',
     })
     expect(metricById(comparison, 'failed_attempt_tokens')).toMatchObject({
       label: 'Failed attempt tokens',
       baseline: 1_500,
       candidate: 0,
-      tone: 'positive',
+      tone: 'neutral',
     })
     const scenario = comparison.scenarios.find(
       (entry) => entry.id === 'minimal_path',
     )
     expect(
       scenario?.metrics.find((metric) => metric.id === 'failed_attempt_tokens'),
-    ).toMatchObject({ baseline: 1_500, candidate: 0, tone: 'positive' })
+    ).toMatchObject({ baseline: 1_500, candidate: 0, tone: 'neutral' })
     expect(
       scenario?.metrics.find((metric) => metric.id === 'tokens_per_completion'),
     ).toMatchObject({ baseline: 5_000, candidate: 4_000 })
@@ -565,5 +528,208 @@ describe('local plan comparison view model', () => {
 
     expect(list).toHaveBeenCalledTimes(3)
     expect(Object.keys(result)).toHaveLength(205)
+  })
+})
+
+describe('retained criterion points', () => {
+  function scored(awards: Array<number | null>, possible = 40) {
+    return {
+      ...execution('scored'),
+      subjects: [
+        {
+          id: 'model',
+          scenarios: [
+            {
+              id: 'test',
+              scenario_version: 1,
+              passed: false,
+              runs: awards.length,
+            },
+          ],
+        },
+      ],
+      reports: [
+        {
+          subject_id: 'model',
+          scenario_id: 'test',
+          available: true,
+          report: {
+            result_contract_sha256: 'results-contract',
+            scoring_profile_sha256: 'scoring-contract',
+            subject: { model: 'subject', provider: 'provider' },
+            judge: { model: 'judge', provider: 'provider' },
+            judge_protocol: 'assessment-json',
+            scenarios: [
+              {
+                scenario_id: 'test',
+                case_id: 'test-case',
+                case: { inputs_sha256: 'inputs' },
+                execution_policy: { max_turns: 24 },
+                aggregate: { planned_runs: awards.length },
+                runs: awards.map((awarded, index) => ({
+                  run_id: `run-${index}`,
+                  technical: 'valid',
+                  status: 'hard_gate_failed',
+                  objective_score: 0,
+                  criteria: [{ id: 'delivery', possible, awarded }],
+                })),
+              },
+            ],
+          },
+        },
+      ],
+    } as unknown as DashboardExecutionDetail
+  }
+
+  it('shows partial progress across repetitions without replacing the hard-gate result or global score', () => {
+    const left = scored([10, 20])
+    const right = scored([20, 40])
+    const comparison = buildPlanComparison(left, right)
+    expect(
+      comparison.scenarios[0].metrics.find(
+        (metric) => metric.id === 'criterion:delivery:40',
+      ),
+    ).toMatchObject({ baseline: 15, candidate: 30, delta: 15 })
+    expect(comparison.scenarios[0]).not.toHaveProperty('candidate_status')
+    expect(comparison.metrics.map((metric) => metric.id)).not.toEqual(
+      expect.arrayContaining(['pass_rate', 'hard_gates']),
+    )
+    expect(
+      comparison.metrics.some((metric) => metric.id.startsWith('criterion:')),
+    ).toBe(false)
+    expect(right.reports[0].report?.scenarios[0].runs[0].objective_score).toBe(
+      0,
+    )
+  })
+
+  it('uses only matched repetitions for deltas while displaying every measured point', () => {
+    const result = buildScenarioComparisons(
+      scored([0, 30]),
+      scored([20, null]),
+    )[0].metrics.find((metric) => metric.id === 'criterion:delivery:40')
+    expect(result).toMatchObject({
+      baseline: 15,
+      candidate: 20,
+      delta: 20,
+      tone: 'neutral',
+      evidence: {
+        baseline_observed: 2,
+        candidate_observed: 1,
+        baseline_planned: 2,
+        candidate_planned: 2,
+        paired: 1,
+        paired_baseline: 0,
+        paired_candidate: 20,
+      },
+    })
+  })
+
+  it('pairs explicit rounds when an earlier child report is unavailable', () => {
+    const left = scored([0, 30])
+    const right = scored([20, 10])
+    for (const detail of [left, right]) {
+      const record = detail.reports[0]
+      const report = record.report
+      if (!report) throw new Error('Missing fixture')
+      const scenario = report.scenarios[0]
+      detail.reports = scenario.runs.map((run, index) => ({
+        ...record,
+        round: index + 1,
+        report: {
+          ...report,
+          scenarios: [
+            {
+              ...scenario,
+              aggregate: { ...scenario.aggregate, planned_runs: 1 },
+              runs: [run],
+            },
+          ],
+        },
+      }))
+    }
+    right.reports[0].available = false
+    right.reports.reverse()
+    const result = buildScenarioComparisons(left, right)[0].metrics.find(
+      (metric) => metric.id === 'criterion:delivery:40',
+    )
+    expect(result).toMatchObject({
+      baseline: 15,
+      candidate: 10,
+      delta: -20,
+      evidence: { paired: 1, paired_baseline: 30, paired_candidate: 10 },
+    })
+  })
+
+  it('preserves measured points from incomplete tasks but never pairs different cases or budgets', () => {
+    const right = scored([20, 30])
+    const report = right.reports[0].report
+    if (!report) throw new Error('Missing fixture')
+    const scenario = report.scenarios[0]
+    scenario.runs[0].completion = 'task_incomplete'
+    scenario.runs[0].status = 'resource_limit'
+    expect(
+      buildScenarioComparisons(scored([10, 20]), right)[0].metrics.find(
+        (metric) => metric.id === 'criterion:delivery:40',
+      ),
+    ).toMatchObject({ candidate: 25, delta: 10 })
+    scenario.execution_policy = { max_turns: 48 }
+    expect(
+      buildScenarioComparisons(scored([10, 20]), right)[0].metrics.find(
+        (metric) => metric.id === 'criterion:delivery:40',
+      ),
+    ).toMatchObject({ candidate: 25, delta: null })
+    scenario.execution_policy = { max_turns: 24 }
+    scenario.case = { inputs_sha256: 'different-inputs' }
+    expect(
+      buildScenarioComparisons(scored([10, 20]), right)[0].metrics.find(
+        (metric) => metric.id === 'criterion:delivery:40',
+      ),
+    ).toMatchObject({ candidate: 25, delta: null })
+  })
+
+  it('keeps points visible without pairing changed weights or unknown identity', () => {
+    const right = scored([20, 30], 50)
+    expect(
+      buildScenarioComparisons(scored([10, 20]), right)[0].metrics.find(
+        (metric) => metric.id === 'criterion:delivery:40',
+      )?.delta,
+    ).toBeNull()
+    const report = right.reports[0].report
+    if (!report) throw new Error('Missing fixture')
+    delete report.subject
+    const result = buildScenarioComparisons(
+      scored([10, 20], 50),
+      right,
+    )[0].metrics.find((metric) => metric.id === 'criterion:delivery:50')
+    expect(result).toMatchObject({
+      candidate: 25,
+      delta: null,
+      evidence: { paired: 0 },
+    })
+  })
+
+  it('excludes invalid and duplicate evidence without discarding independent valid observations', () => {
+    const right = scored([20, 30])
+    const report = right.reports[0].report
+    if (!report) throw new Error('Missing fixture')
+    report.scenarios[0].runs[0].technical = 'technical_invalid'
+    let result = buildScenarioComparisons(
+      scored([10, 20]),
+      right,
+    )[0].metrics.find((metric) => metric.id === 'criterion:delivery:40')
+    expect(result).toMatchObject({
+      candidate: 30,
+      delta: 10,
+      evidence: { candidate_observed: 1, paired: 1 },
+    })
+    right.reports.push(right.reports[0])
+    result = buildScenarioComparisons(scored([10, 20]), right)[0].metrics.find(
+      (metric) => metric.id === 'criterion:delivery:40',
+    )
+    expect(result).toMatchObject({
+      candidate: null,
+      delta: null,
+      evidence: { candidate_observed: 0 },
+    })
   })
 })

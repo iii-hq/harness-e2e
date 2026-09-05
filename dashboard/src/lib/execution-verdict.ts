@@ -1,6 +1,5 @@
 import type { AssessmentRunView } from '@/lib/assessment-view'
 import type { ExecutionPresentation } from '@/lib/execution-view'
-import { unsupportedExecutionReason } from '@/lib/execution-view'
 import type {
   ScenarioMatrixItem,
   ScenarioMatrixSummary,
@@ -13,7 +12,6 @@ export const NO_RUN_STATES = new Set([
   'running',
   'incomplete',
   'unavailable',
-  'unsupported',
 ])
 
 export type ExecutionVerdict = {
@@ -66,15 +64,6 @@ export function executionVerdict(
   primaryRun: AssessmentRunView | null = null,
 ): ExecutionVerdict {
   const attention = presentation.attention
-  if (attention === 'unsupported') {
-    return {
-      headline: 'unsupported result contract · historical evidence retained',
-      worst: null,
-      nextStep:
-        'Read the original artifacts with a compatible reader. This execution cannot be used as a baseline.',
-      diagnosis: unsupportedExecutionReason(presentation.execution),
-    }
-  }
   if (!summary || summary.total === 0) {
     return {
       headline: NO_RUN_STATES.has(attention)

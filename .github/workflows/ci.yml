@@ -45,6 +45,10 @@ jobs:
           else
             cargo run --locked -- validate-scenarios
           fi
+      - name: Validate executable plan browser flows
+        run: |
+          pnpm --dir dashboard exec playwright install --with-deps chromium
+          pnpm --dir dashboard test:profiles
       - name: Verify repository independence
         run: |
           cargo metadata --locked --format-version 1 --no-deps > metadata.json
@@ -65,4 +69,5 @@ jobs:
       - name: Verify Python contracts and OS isolation
         env:
           SWE_REQUIRE_OS_ISOLATION: "1"
+          HARNESS_E2E_BIN: ${{ github.workspace }}/target/debug/harness-e2e
         run: python3 -m unittest discover -s tests/python -p 'test_*.py'

@@ -3,6 +3,7 @@ import {
   DashboardPageActions,
   dashboardHeaderActionClassName,
 } from '@/components/DashboardPageActions'
+import { MasterTestProfiles } from '@/components/MasterTestProfiles'
 import {
   buttonClassName,
   Callout,
@@ -28,6 +29,7 @@ import {
   type DashboardExecutionSummary,
   getDashboardDataBridge,
   type LocalPlan,
+  type MasterTestPlan,
 } from '@/lib/dashboard-data-source'
 import { formatDate } from '@/lib/execution-view'
 import {
@@ -35,13 +37,11 @@ import {
   formatPlanMetricValue,
   loadExecutionSummaries,
   metricById,
-  type PlanComparison,
   type PlanMetricComparison,
   type PlanMetricId,
-  type PlanVerdict,
 } from '@/lib/plan-comparison'
 
-type PlanFilter = 'all' | 'needs_action' | 'running' | 'compared' | 'regressed'
+type PlanFilter = 'all' | 'needs_action' | 'running' | 'compared'
 
 export type PlanStatePresentation = {
   status: OperationalStatus
@@ -105,18 +105,7 @@ export function planStatePresentation(plan: LocalPlan): PlanStatePresentation {
   }
 }
 
-const verdictStatus: Record<PlanVerdict, OperationalStatus> = {
-  improved: 'passed',
-  stable: 'unavailable',
-  regressed: 'failed',
-  inconclusive: 'inconclusive',
-}
-
-function matchesFilter(
-  plan: LocalPlan,
-  filter: PlanFilter,
-  comparison: PlanComparison | null,
-) {
+function matchesFilter(plan: LocalPlan, filter: PlanFilter) {
   if (filter === 'all') return true
   if (filter === 'needs_action')
     return plan.state === 'draft' || plan.state === 'baseline_ready'
@@ -124,7 +113,6 @@ function matchesFilter(
     return (
       plan.state === 'baseline_running' || plan.state === 'candidate_running'
     )
-  if (filter === 'regressed') return comparison?.verdict === 'regressed'
   return plan.candidate_execution_ids.length > 0
 }
 
@@ -148,17 +136,12 @@ function compact(value: number) {
 }
 
 const CORE_DELTAS: Array<{ id: PlanMetricId; label: string }> = [
-  { id: 'pass_rate', label: 'pass' },
+  { id: 'coverage', label: 'coverage' },
   { id: 'quality', label: 'score' },
   { id: 'tokens', label: 'tokens' },
   { id: 'duration', label: 'time' },
 ]
 
-/**
- * Audit P-02: one rule for colour. The number keeps the ink; the delta is
- * signed and carries the direction; red means an objective regression,
- * amber a worse efficiency figure, no colour no change.
- */
 function MetricDelta({
   label,
   metric,
@@ -184,13 +167,7 @@ function MetricDelta({
       <DeltaValue
         value={value}
         format={(magnitude) => `${compact(magnitude)}${unit}`}
-        betterWhen={
-          metric.direction === 'higher'
-            ? 'higher'
-            : metric.direction === 'lower'
-              ? 'lower'
-              : 'neither'
-        }
+        betterWhen="neither"
       />
     </span>
   )
@@ -221,14 +198,17 @@ export function PlanBaselineCell({
       ? formatPlanMetricValue(metric, 'baseline')
       : null
   }
-  const pass = value('pass_rate')
+  const coverage = value('coverage')
   const tokens = value('tokens')
   const duration = value('duration')
   const turns = value('turns')
   return (
     <span className="grid gap-0.5 font-mono text-xs tabular-nums">
       <span className="text-ink">
-        {[pass, tokens ? `${tokens} tokens` : null]
+        {[
+          coverage ? `${coverage} coverage` : null,
+          tokens ? `${tokens} tokens` : null,
+        ]
           .filter(Boolean)
           .join(' · ') || 'no figures reported'}
       </span>
@@ -244,7 +224,7 @@ export function PlanBaselineCell({
 }
 
 /**
- * The "latest candidate vs baseline" column: the verdict and the signed
+ * The "latest candidate vs baseline" column: the signed
  * core deltas, or the sentence that says why there is nothing to compare.
  */
 export function PlanComparisonSummary({
@@ -294,10 +274,7 @@ export function PlanComparisonSummary({
   return (
     <span className="grid gap-1 text-xs">
       <span className="flex flex-wrap items-center gap-2">
-        <StatusBadge
-          status={verdictStatus[comparison.verdict]}
-          label={comparison.verdict}
-        />
+        <span className="text-ink">{comparison.headline}</span>
         <span className="text-ink-muted">
           candidate #{candidateCount}
           {candidate?.completed_at
@@ -425,7 +402,9 @@ function PlanRow({
 
 export function PlansPage() {
   const [bridge, setBridge] = useState<DashboardDataBridge | null>(null)
+  const [tab, setTab] = useState<'mine' | 'profiles'>('mine')
   const [plans, setPlans] = useState<LocalPlan[]>([])
+  const [masterPlan, setMasterPlan] = useState<MasterTestPlan | null>(null)
   const [executionSummaries, setExecutionSummaries] = useState<
     Record<string, DashboardExecutionSummary>
   >({})
@@ -444,9 +423,11 @@ export function PlansPage() {
       setBridge(next)
       if (next.mode !== 'local') {
         setPlans([])
+        setMasterPlan(null)
         return
       }
       const response = await next.listPlans()
+      setMasterPlan(response.master_plan ?? null)
       const orderedPlans = [...response.plans].sort((left, right) =>
         right.updated_at.localeCompare(left.updated_at),
       )
@@ -477,33 +458,16 @@ export function PlansPage() {
     void load()
   }, [load])
 
-  const comparisonFor = useCallback(
-    (plan: LocalPlan) => {
-      const candidateId = plan.candidate_execution_ids.at(-1) ?? ''
-      if (!candidateId) return null
-      return buildPlanComparison(
-        plan.baseline_execution_id
-          ? executionSummaries[plan.baseline_execution_id]
-          : null,
-        executionSummaries[candidateId],
-      )
-    },
-    [executionSummaries],
-  )
-
   const counts = useMemo(() => {
     const count = (candidate: PlanFilter) =>
-      plans.filter((plan) =>
-        matchesFilter(plan, candidate, comparisonFor(plan)),
-      ).length
+      plans.filter((plan) => matchesFilter(plan, candidate)).length
     return {
       all: plans.length,
       needs_action: count('needs_action'),
       running: count('running'),
       compared: count('compared'),
-      regressed: count('regressed'),
     }
-  }, [comparisonFor, plans])
+  }, [plans])
 
   // Audit P-13: a list with a running plan refreshes itself.
   useEffect(() => {
@@ -515,15 +479,24 @@ export function PlansPage() {
   const filteredPlans = useMemo(() => {
     const normalized = query.trim().toLowerCase()
     return plans.filter((plan) => {
-      if (!matchesFilter(plan, filter, comparisonFor(plan))) return false
+      if (!matchesFilter(plan, filter)) return false
       if (!normalized) return true
-      return [plan.label, plan.purpose, plan.id, ...plan.scenario_ids]
+      return [
+        plan.label,
+        plan.purpose,
+        plan.id,
+        plan.model,
+        plan.provider,
+        ...plan.scenario_ids,
+      ]
         .join(' ')
         .toLowerCase()
         .includes(normalized)
     })
-  }, [comparisonFor, filter, plans, query])
+  }, [filter, plans, query])
 
+  const totalPlans = plans.length
+  const totalFiltered = filteredPlans.length
   const local = bridge?.mode === 'local'
   const filtered = query.trim() !== '' || filter !== 'all'
   const filters: Array<{ id: PlanFilter; label: string }> = [
@@ -531,7 +504,6 @@ export function PlansPage() {
     { id: 'needs_action', label: 'needs action' },
     { id: 'running', label: 'running' },
     { id: 'compared', label: 'compared' },
-    { id: 'regressed', label: 'regressed' },
   ]
 
   return (
@@ -553,7 +525,7 @@ export function PlansPage() {
       <div className="ds-root page-shell w-[calc(100%_-_1.5rem)] max-w-[1420px] pt-5 pb-16 md:w-[calc(100%_-_3rem)]">
         <PageHeader
           title="plans"
-          summary="Capture one baseline, then rerun the same frozen scope after your Harness change."
+          summary="Configure one execution model per plan, run its coverage and follow the results."
           actions={
             local && plans.length > 0 ? (
               <details className="group text-xs text-ink-soft">
@@ -568,7 +540,43 @@ export function PlansPage() {
           }
         />
 
-        {!local && !loading ? (
+        {local ? (
+          <nav className="mt-5 flex gap-2" aria-label="Plan views">
+            <button
+              type="button"
+              aria-pressed={tab === 'mine'}
+              className={buttonClassName({
+                variant: tab === 'mine' ? 'primary' : 'secondary',
+              })}
+              onClick={() => setTab('mine')}
+            >
+              My plans
+            </button>
+            <button
+              type="button"
+              aria-pressed={tab === 'profiles'}
+              className={buttonClassName({
+                variant: tab === 'profiles' ? 'primary' : 'secondary',
+              })}
+              onClick={() => setTab('profiles')}
+            >
+              Templates
+            </button>
+          </nav>
+        ) : null}
+        {local && masterPlan && tab === 'profiles' ? (
+          <>
+            <MasterTestProfiles plan={masterPlan} />
+            <a
+              className={buttonClassName({ variant: 'secondary' })}
+              href={`${hashForNewPlan()}/manual`}
+            >
+              Create a custom plan manually
+            </a>
+          </>
+        ) : null}
+
+        {tab === 'profiles' ? null : !local && !loading ? (
           <div className="mt-6">
             <EmptyState
               title="Available only in the local dashboard"
@@ -604,13 +612,6 @@ export function PlansPage() {
                     key={candidate.id}
                     active={filter === candidate.id}
                     count={counts[candidate.id]}
-                    className={
-                      candidate.id === 'regressed' &&
-                      counts.regressed > 0 &&
-                      filter !== 'regressed'
-                        ? 'text-danger'
-                        : undefined
-                    }
                     onClick={() => setFilter(candidate.id)}
                   >
                     {candidate.label}
@@ -624,8 +625,8 @@ export function PlansPage() {
                 {loading
                   ? 'loading…'
                   : filtered
-                    ? `${filteredPlans.length} of ${plans.length} plans`
-                    : `${plans.length} plan${plans.length === 1 ? '' : 's'}`}
+                    ? `${totalFiltered} of ${totalPlans} plans`
+                    : `${totalPlans} plan${totalPlans === 1 ? '' : 's'}`}
               </span>
             </section>
 
@@ -667,7 +668,7 @@ export function PlansPage() {
                     />
                   ))}
                 </div>
-              ) : plans.length === 0 ? (
+              ) : totalPlans === 0 ? (
                 <EmptyState
                   title="No local plans yet"
                   description={

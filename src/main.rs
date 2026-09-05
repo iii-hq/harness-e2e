@@ -40,6 +40,11 @@ enum Command {
     },
     /// Validate every scenarios/*.md file without running a model.
     ValidateScenarios(ValidateScenariosArgs),
+    /// Inspect and materialize the reviewed master test plan without executing models.
+    TestPlan {
+        #[command(subcommand)]
+        command: TestPlanCommand,
+    },
     /// List models registered in the running stack.
     Models(ModelsArgs),
     /// Execute one or more quality scenarios against a running stack.
@@ -56,6 +61,24 @@ enum Command {
     FaultPlan(FaultPlanArgs),
     /// Classify observed recovery from a protected supervisor's fault journal.
     FaultEvaluate(FaultEvaluateArgs),
+}
+
+#[derive(Debug, Subcommand)]
+enum TestPlanCommand {
+    /// List the current templates and their materialized coverage.
+    List,
+    /// Print native execution kinds and weights for campaign admission.
+    Catalog,
+}
+
+fn test_plan(command: TestPlanCommand) -> Result<()> {
+    let plan = harness_e2e::test_plan::embedded()?;
+    let value = match command {
+        TestPlanCommand::List => plan.catalog()?,
+        TestPlanCommand::Catalog => plan.campaign_catalog()?,
+    };
+    println!("{}", serde_json::to_string(&value)?);
+    Ok(())
 }
 
 #[derive(Debug, Args)]
@@ -133,9 +156,6 @@ struct RunArgs {
 struct ValidateScenariosArgs {
     #[arg(long, default_value = "scenarios")]
     directory: PathBuf,
-
-    #[arg(long, default_value = "config/campaigns")]
-    campaigns: PathBuf,
 
     /// Optional previous scenarios directory used to enforce version bumps.
     #[arg(long)]
@@ -259,6 +279,7 @@ async fn main() -> Result<()> {
             Ok(())
         }
         Some(Command::ValidateScenarios(args)) => validate_scenarios(args),
+        Some(Command::TestPlan { command }) => test_plan(command),
         Some(Command::Models(args)) => models(args).await,
         Some(Command::Run(args)) => run(args).await,
         Some(Command::ReplayMaterialized(args)) => replay_materialized(args).await,
@@ -270,9 +291,9 @@ async fn main() -> Result<()> {
 }
 
 fn validate_scenarios(args: ValidateScenariosArgs) -> Result<()> {
-    let scenarios = markdown::validate_directory(&args.directory, &args.campaigns)?;
+    let scenarios = markdown::validate_directory(&args.directory)?;
     if let Some(base_directory) = args.base_directory.as_deref() {
-        markdown::validate_version_progression(&scenarios, base_directory, &args.campaigns)?;
+        markdown::validate_version_progression(&scenarios, base_directory)?;
     }
     println!(
         "{}",

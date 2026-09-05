@@ -76,6 +76,7 @@ export function buildExecutionMetrics(
             item.scenarioIndex
           ]
     const scenarioKey = JSON.stringify([
+      detail.reports[item.reportIndex]?.native_execution_id,
       item.subjectId,
       item.scenarioId,
       item.scenarioVersion,

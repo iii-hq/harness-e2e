@@ -1,10 +1,5 @@
 # Insert a database record
 
-## Plans
-
-- daily
-- weekly
-
 ## Version
 
 2

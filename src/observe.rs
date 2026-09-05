@@ -157,16 +157,6 @@ pub fn missing_turn_completed_trigger() -> anyhow::Error {
     )
 }
 
-pub fn binding_id(response: &Value) -> Result<String> {
-    response
-        .get("id")
-        .or_else(|| response.get("subscription_id"))
-        .and_then(Value::as_str)
-        .filter(|id| !id.is_empty())
-        .map(str::to_string)
-        .ok_or_else(|| anyhow!("engine::register_trigger response is missing id"))
-}
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct MetricsProgress {
     sessions: u64,
@@ -590,16 +580,6 @@ mod tests {
         let error = missing_turn_completed_trigger().to_string();
         assert!(error.contains("unsupported"), "{error}");
         assert!(error.contains(TURN_COMPLETED_TRIGGER), "{error}");
-    }
-
-    #[test]
-    fn binding_id_accepts_id_or_subscription_id() {
-        assert_eq!(binding_id(&json!({ "id": "sub-1" })).unwrap(), "sub-1");
-        assert_eq!(
-            binding_id(&json!({ "subscription_id": "sub-2" })).unwrap(),
-            "sub-2"
-        );
-        assert!(binding_id(&json!({})).is_err());
     }
 
     #[tokio::test]

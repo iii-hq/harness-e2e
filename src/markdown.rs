@@ -4,7 +4,7 @@
 //! document into a closed, hash-addressed runtime representation. It never asks
 //! a model to rewrite or interpret author text.
 
-use std::collections::{BTreeSet, HashSet};
+use std::collections::HashSet;
 use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -19,16 +19,11 @@ use serde_json::json;
 use crate::artifact;
 use crate::scenarios::{ExecutionPolicy, ScenarioExecutionKind, ScenarioId};
 
-const REQUIRED_SECTIONS: [&str; 5] = ["Plans", "Version", "Before Test", "Prompt", "Validations"];
-pub const LOCAL_SCENARIO_REQUIRED_SECTIONS: [&str; 5] = REQUIRED_SECTIONS;
-pub const LOCAL_SCENARIO_PLAN_ID: &str = "local";
+const REQUIRED_SECTIONS: [&str; 4] = ["Version", "Before Test", "Prompt", "Validations"];
+pub const LOCAL_SCENARIO_REQUIRED_SECTIONS: [&str; 4] = REQUIRED_SECTIONS;
 pub const LOCAL_SCENARIO_DIRECTORY: &str = "local-scenarios";
 pub const LOCAL_SCENARIO_MAX_BYTES: usize = 256 * 1024;
 pub const LOCAL_SCENARIO_TEMPLATE: &str = "# Local scenario
-
-## Plans
-
-- local
 
 ## Version
 
@@ -58,11 +53,6 @@ Confirm the run stayed within the intended scope and left no residual state.
 #[include = "*.md"]
 struct EmbeddedScenarios;
 
-#[derive(RustEmbed)]
-#[folder = "config/campaigns/"]
-#[include = "*.json"]
-struct EmbeddedCampaigns;
-
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct MarkdownCriterion {
     pub id: String,
@@ -77,7 +67,6 @@ pub struct CompiledMarkdownScenario {
     pub title: String,
     pub source_path: String,
     pub version: u32,
-    pub plans: Vec<String>,
     pub before_test: String,
     pub prompt: String,
     pub validations: Vec<MarkdownCriterion>,
@@ -255,14 +244,13 @@ struct Heading {
 }
 
 pub fn embedded_catalog() -> Result<Vec<CompiledMarkdownScenario>> {
-    let plans = embedded_plan_ids()?;
     let mut scenarios = EmbeddedScenarios::iter()
         .map(|path| {
             let bytes = EmbeddedScenarios::get(path.as_ref())
                 .with_context(|| format!("read embedded Markdown scenario {path}"))?;
             let source = std::str::from_utf8(bytes.data.as_ref())
                 .with_context(|| format!("scenario {path} is not UTF-8"))?;
-            compile(path.as_ref(), source, &plans)
+            compile(path.as_ref(), source)
         })
         .collect::<Result<Vec<_>>>()?;
     validate_unique_ids(&scenarios)?;
@@ -427,18 +415,13 @@ pub fn create_local_scenario(
 }
 
 pub fn compile_local(path: &str, source: &str) -> Result<CompiledMarkdownScenario> {
-    let mut scenario = compile(
-        path,
-        source,
-        &BTreeSet::from([LOCAL_SCENARIO_PLAN_ID.to_string()]),
-    )?;
+    let mut scenario = compile(path, source)?;
     scenario.id = format!("local_{}", scenario.id);
     scenario.compiled_sha256 = artifact::sha256_value(&json!({
         "id": scenario.id,
         "title": scenario.title,
         "source_path": scenario.source_path,
         "version": scenario.version,
-        "plans": scenario.plans,
         "before_test": scenario.before_test,
         "prompt": scenario.prompt,
         "validations": scenario.validations,
@@ -511,11 +494,7 @@ pub const fn execution_policy() -> ExecutionPolicy {
     }
 }
 
-pub fn validate_directory(
-    directory: &Path,
-    campaigns: &Path,
-) -> Result<Vec<CompiledMarkdownScenario>> {
-    let plans = plan_ids_from_directory(campaigns)?;
+pub fn validate_directory(directory: &Path) -> Result<Vec<CompiledMarkdownScenario>> {
     let mut paths = fs::read_dir(directory)
         .with_context(|| format!("read Markdown scenario directory {}", directory.display()))?
         .map(|entry| entry.map(|entry| entry.path()))
@@ -531,7 +510,7 @@ pub fn validate_directory(
                 .file_name()
                 .and_then(|name| name.to_str())
                 .context("Markdown scenario path must have a UTF-8 file name")?;
-            compile(name, &source, &plans)
+            compile(name, &source)
         })
         .collect::<Result<Vec<_>>>()?;
     validate_unique_ids(&scenarios)?;
@@ -542,9 +521,8 @@ pub fn validate_directory(
 pub fn validate_version_progression(
     current: &[CompiledMarkdownScenario],
     base_directory: &Path,
-    campaigns: &Path,
 ) -> Result<()> {
-    let base = validate_directory(base_directory, campaigns)?;
+    let base = validate_directory(base_directory)?;
     validate_compiled_version_progression(current, &base)
 }
 
@@ -581,11 +559,7 @@ fn validate_compiled_version_progression(
     Ok(())
 }
 
-pub fn compile(
-    path: &str,
-    source: &str,
-    allowed_plans: &BTreeSet<String>,
-) -> Result<CompiledMarkdownScenario> {
+pub fn compile(path: &str, source: &str) -> Result<CompiledMarkdownScenario> {
     if source.trim().is_empty() {
         bail!("scenario {path} is empty");
     }
@@ -638,8 +612,6 @@ pub fn compile(
         );
     }
 
-    let plans_body = section_body(source, &headings, "Plans")?;
-    let plans = parse_plans(path, plans_body, allowed_plans)?;
     let version = section_body(source, &headings, "Version")?
         .trim()
         .parse::<u32>()
@@ -674,7 +646,6 @@ pub fn compile(
         "title": title,
         "source_path": path,
         "version": version,
-        "plans": plans,
         "before_test": before_test,
         "prompt": prompt,
         "validations": validations,
@@ -686,7 +657,6 @@ pub fn compile(
         title,
         source_path: path.to_string(),
         version,
-        plans,
         before_test,
         prompt,
         validations,
@@ -775,27 +745,6 @@ fn section_body<'a>(source: &'a str, headings: &[Heading], title: &str) -> Resul
         .find(|candidate| candidate.level <= 2)
         .map_or(source.len(), |candidate| candidate.line_start);
     Ok(&source[heading.body_start..end])
-}
-
-fn parse_plans(path: &str, body: &str, allowed: &BTreeSet<String>) -> Result<Vec<String>> {
-    let mut plans = Vec::new();
-    for line in body.lines().map(str::trim).filter(|line| !line.is_empty()) {
-        let plan = line
-            .strip_prefix("- ")
-            .with_context(|| format!("scenario {path} plans must be a Markdown bullet list"))?
-            .trim();
-        if !allowed.contains(plan) {
-            bail!("scenario {path} references unknown plan '{plan}'");
-        }
-        if plans.iter().any(|existing| existing == plan) {
-            bail!("scenario {path} repeats plan '{plan}'");
-        }
-        plans.push(plan.to_string());
-    }
-    if plans.is_empty() {
-        bail!("scenario {path} must belong to at least one plan");
-    }
-    Ok(plans)
 }
 
 fn parse_validations(
@@ -901,42 +850,6 @@ fn slug(value: &str) -> Result<String> {
     Ok(normalized)
 }
 
-fn embedded_plan_ids() -> Result<BTreeSet<String>> {
-    let mut plans = BTreeSet::new();
-    for path in EmbeddedCampaigns::iter() {
-        let bytes = EmbeddedCampaigns::get(path.as_ref())
-            .with_context(|| format!("read embedded campaign {path}"))?;
-        let value: serde_json::Value = serde_json::from_slice(bytes.data.as_ref())
-            .with_context(|| format!("decode embedded campaign {path}"))?;
-        let id = value
-            .get("campaign_id")
-            .and_then(serde_json::Value::as_str)
-            .with_context(|| format!("campaign {path} has no campaign_id"))?;
-        plans.insert(id.to_string());
-    }
-    Ok(plans)
-}
-
-fn plan_ids_from_directory(directory: &Path) -> Result<BTreeSet<String>> {
-    let mut plans = BTreeSet::new();
-    for entry in fs::read_dir(directory)
-        .with_context(|| format!("read campaign directory {}", directory.display()))?
-    {
-        let path = entry?.path();
-        if path.extension().and_then(|extension| extension.to_str()) != Some("json") {
-            continue;
-        }
-        let value: serde_json::Value = serde_json::from_slice(&fs::read(&path)?)
-            .with_context(|| format!("decode campaign {}", path.display()))?;
-        let id = value
-            .get("campaign_id")
-            .and_then(serde_json::Value::as_str)
-            .with_context(|| format!("campaign {} has no campaign_id", path.display()))?;
-        plans.insert(id.to_string());
-    }
-    Ok(plans)
-}
-
 fn validate_unique_ids(scenarios: &[CompiledMarkdownScenario]) -> Result<()> {
     let built_ins = ScenarioId::ALL
         .into_iter()
@@ -1001,33 +914,22 @@ pub fn default_scenario_directory() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("scenarios")
 }
 
-pub fn default_campaign_directory() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("config/campaigns")
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    fn plans() -> BTreeSet<String> {
-        ["daily", "weekly"]
-            .into_iter()
-            .map(str::to_string)
-            .collect()
-    }
-
     fn source() -> &'static str {
-        "# Insert row\n\n## Plans\n\n- daily\n- weekly\n\n## Version\n\n1\n\n## Before Test\n\nPrepare the database.\n\n## Prompt\n\nInsert one row.\n\n## Validations\n\n### Row exists (80%)\n\nThe row exists.\n\n### Under ten turns (20%)\n\nFewer than ten turns were used.\n"
+        "# Insert row\n\n## Version\n\n1\n\n## Before Test\n\nPrepare the database.\n\n## Prompt\n\nInsert one row.\n\n## Validations\n\n### Row exists (80%)\n\nThe row exists.\n\n### Under ten turns (20%)\n\nFewer than ten turns were used.\n"
     }
 
     fn local_source() -> String {
-        source().replace("- daily\n- weekly", "- local")
+        source().to_string()
     }
 
     #[test]
     fn compiles_and_hashes_a_canonical_document() {
-        let first = compile("insert-row.md", source(), &plans()).unwrap();
-        let second = compile("insert-row.md", source(), &plans()).unwrap();
+        let first = compile("insert-row.md", source()).unwrap();
+        let second = compile("insert-row.md", source()).unwrap();
         assert_eq!(first, second);
         assert_eq!(first.id, "insert_row");
         assert_eq!(first.validation_weight(), 100);
@@ -1035,7 +937,7 @@ mod tests {
     }
 
     #[test]
-    fn scenario_keys_preserve_legacy_json_and_accept_markdown_ids() {
+    fn scenario_keys_accept_builtin_and_markdown_ids() {
         let built_in = ScenarioKey::BuiltIn(ScenarioId::ContextPressure);
         assert_eq!(
             serde_json::to_string(&built_in).unwrap(),
@@ -1063,15 +965,6 @@ mod tests {
     }
 
     #[test]
-    fn plan_membership_does_not_change_behavior_hash() {
-        let first = compile("insert-row.md", source(), &plans()).unwrap();
-        let changed = source().replace("- weekly\n", "");
-        let second = compile("insert-row.md", &changed, &plans()).unwrap();
-        assert_eq!(first.behavior_sha256, second.behavior_sha256);
-        assert_ne!(first.compiled_sha256, second.compiled_sha256);
-    }
-
-    #[test]
     fn renders_only_frozen_run_and_seed_variables() {
         let templated = source()
             .replace(
@@ -1079,7 +972,7 @@ mod tests {
                 "Prepare scope {{run_id}} for seed {{seed}}.",
             )
             .replace("Insert one row.", "Insert one row for {{run_id}}.");
-        let scenario = compile("insert-row.md", &templated, &plans()).unwrap();
+        let scenario = compile("insert-row.md", &templated).unwrap();
 
         let rendered = render(&scenario, "run-123", 42);
 
@@ -1093,13 +986,13 @@ mod tests {
     #[test]
     fn rejects_unknown_or_unclosed_template_variables() {
         let unknown = source().replace("Prepare the database.", "Prepare {{attempt_id}}.");
-        assert!(compile("invalid.md", &unknown, &plans())
+        assert!(compile("invalid.md", &unknown)
             .unwrap_err()
             .to_string()
             .contains("unsupported template variable"));
 
         let unclosed = source().replace("Prepare the database.", "Prepare {{run_id.");
-        assert!(compile("invalid.md", &unclosed, &plans())
+        assert!(compile("invalid.md", &unclosed)
             .unwrap_err()
             .to_string()
             .contains("unclosed template variable"));
@@ -1107,41 +1000,34 @@ mod tests {
 
     #[test]
     fn external_formatting_and_title_do_not_change_behavior_hash() {
-        let first = compile("insert-row.md", source(), &plans()).unwrap();
+        let first = compile("insert-row.md", source()).unwrap();
         let changed = source().replacen("# Insert row", "\n# Insert one row", 1);
-        let second = compile("insert-row.md", &changed, &plans()).unwrap();
+        let second = compile("insert-row.md", &changed).unwrap();
         assert_eq!(first.behavior_sha256, second.behavior_sha256);
         assert_ne!(first.source_sha256, second.source_sha256);
     }
 
     #[test]
-    fn rejects_missing_sections_unknown_plans_and_bad_weights() {
+    fn rejects_missing_sections_and_bad_weights() {
         let missing = source().replace("## Prompt", "## Missing");
-        assert!(compile("invalid.md", &missing, &plans()).is_err());
-        let unknown = source().replace("- weekly", "- monthly");
-        assert!(compile("invalid.md", &unknown, &plans()).is_err());
+        assert!(compile("invalid.md", &missing).is_err());
         let weights = source().replace("(20%)", "(19%)");
-        assert!(compile("invalid.md", &weights, &plans()).is_err());
+        assert!(compile("invalid.md", &weights).is_err());
         let repeated = source().replace("## Prompt", "## Prompt\n\nDuplicate.\n\n## Prompt");
-        assert!(compile("invalid.md", &repeated, &plans()).is_err());
+        assert!(compile("invalid.md", &repeated).is_err());
         let malformed = source().replace("### Row exists (80%)", "### Row exists — 80%");
-        assert!(compile("invalid.md", &malformed, &plans()).is_err());
+        assert!(compile("invalid.md", &malformed).is_err());
         let reordered = source().replace(
             "## Before Test\n\nPrepare the database.\n\n## Prompt\n\nInsert one row.",
             "## Prompt\n\nInsert one row.\n\n## Before Test\n\nPrepare the database.",
         );
-        assert!(compile("invalid.md", &reordered, &plans()).is_err());
+        assert!(compile("invalid.md", &reordered).is_err());
     }
 
     #[test]
     fn rejects_frontmatter_and_unsafe_file_names() {
-        assert!(compile(
-            "invalid.md",
-            &format!("---\na: b\n---\n{}", source()),
-            &plans()
-        )
-        .is_err());
-        assert!(compile("unsafe!.md", source(), &plans()).is_err());
+        assert!(compile("invalid.md", &format!("---\na: b\n---\n{}", source()),).is_err());
+        assert!(compile("unsafe!.md", source()).is_err());
     }
 
     #[test]
@@ -1150,23 +1036,23 @@ mod tests {
             "Insert one row.",
             "Use this example:\n\n```md\n## Not a section\n### Not a criterion (99%)\n```",
         );
-        let compiled = compile("insert-row.md", &changed, &plans()).unwrap();
+        let compiled = compile("insert-row.md", &changed).unwrap();
         assert!(compiled.prompt.contains("## Not a section"));
         assert_eq!(compiled.validations.len(), 2);
     }
 
     #[test]
     fn detects_duplicate_generated_ids() {
-        let first = compile("insert-row.md", source(), &plans()).unwrap();
-        let second = compile("insert_row.md", source(), &plans()).unwrap();
+        let first = compile("insert-row.md", source()).unwrap();
+        let second = compile("insert_row.md", source()).unwrap();
         assert!(validate_unique_ids(&[first, second]).is_err());
     }
 
     #[test]
-    fn behavioral_changes_require_a_version_increment_but_plan_changes_do_not() {
-        let base = compile("insert-row.md", source(), &plans()).unwrap();
+    fn behavioral_changes_require_a_version_increment() {
+        let base = compile("insert-row.md", source()).unwrap();
         let changed_prompt = source().replace("Insert one row.", "Insert exactly one row.");
-        let unchanged_version = compile("insert-row.md", &changed_prompt, &plans()).unwrap();
+        let unchanged_version = compile("insert-row.md", &changed_prompt).unwrap();
         assert!(validate_compiled_version_progression(
             std::slice::from_ref(&unchanged_version),
             std::slice::from_ref(&base),
@@ -1176,7 +1062,6 @@ mod tests {
         let bumped = compile(
             "insert-row.md",
             &changed_prompt.replace("## Version\n\n1", "## Version\n\n2"),
-            &plans(),
         )
         .unwrap();
         validate_compiled_version_progression(
@@ -1184,14 +1069,6 @@ mod tests {
             std::slice::from_ref(&base),
         )
         .unwrap();
-
-        let plan_only = compile(
-            "insert-row.md",
-            &source().replace("- weekly\n", ""),
-            &plans(),
-        )
-        .unwrap();
-        validate_compiled_version_progression(&[plan_only], &[base]).unwrap();
     }
 
     #[test]
@@ -1201,7 +1078,6 @@ mod tests {
             create_local_scenario(root.path(), "console-draft.md", &local_source()).unwrap();
 
         assert_eq!(definition.scenario.id, "local_console_draft");
-        assert_eq!(definition.scenario.plans, ["local"]);
         assert_eq!(
             definition.scenario.source_path,
             "local-scenarios/console-draft.md"

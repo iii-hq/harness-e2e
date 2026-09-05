@@ -179,12 +179,7 @@ export function catalogComplexityPresentation(
   if (!row.complexity) return { value: null, detail: null }
   return {
     value: complexityTierLabels[row.complexity.tier],
-    detail:
-      row.complexity.method === 'capability_v2'
-        ? 'capability v2'
-        : row.complexity.method === 'legacy_v1'
-          ? 'legacy v1'
-          : null,
+    detail: row.complexity.method === 'capability_v2' ? 'capability v2' : null,
   }
 }
 

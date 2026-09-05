@@ -13,6 +13,62 @@ import {
 } from '@/lib/iii-client'
 
 describe('live dashboard transport', () => {
+  it('carries current plan controls and idempotent starts through iii and HTTP', async () => {
+    const trigger = vi.fn(async () => ({ ready: true }))
+    installDashboardIiiClient({ trigger } as unknown as DashboardIiiClient)
+    const request = {
+      action: 'requirements',
+      plan_id: 'plan-1',
+    }
+    installDashboardRuntimeConfig({
+      mode: 'local',
+      transport: 'iii',
+      functions: { plan_control: 'plan-control', plan_run_start: 'plan-start' },
+    } as RuntimeConfig)
+    const live = await getDashboardDataBridge()
+    await expect(live.planControl?.(request)).resolves.toEqual({
+      ready: true,
+    })
+    expect(trigger).toHaveBeenCalledWith('plan-control', request)
+    await live.startPlan('plan-1', 'baseline')
+    expect(trigger).toHaveBeenCalledWith('plan-start', {
+      plan_id: 'plan-1',
+      role: 'baseline',
+      idempotency_key: expect.any(String),
+    })
+    const fetch = vi.fn(
+      async (_url: string, _options?: RequestInit) =>
+        new Response(JSON.stringify({ id: 'plan-1' }), { status: 200 }),
+    )
+    vi.stubGlobal('fetch', fetch)
+    try {
+      installDashboardRuntimeConfig({
+        mode: 'local',
+        transport: 'static',
+        functions: {},
+      } as RuntimeConfig)
+      const http = await getDashboardDataBridge()
+      await expect(
+        http.planControl?.({
+          action: 'export',
+          plan_id: 'plan-1',
+        }),
+      ).resolves.toEqual({ id: 'plan-1' })
+      expect(fetch.mock.calls[0]?.[0]).toBe('./api/dashboard/plans/control')
+      await http.startPlan('plan-1', 'baseline')
+      expect(fetch.mock.calls.at(-1)?.[0]).toBe(
+        './api/dashboard/plans/plan-1/runs',
+      )
+      expect(JSON.parse(String(fetch.mock.calls.at(-1)?.[1]?.body))).toEqual({
+        plan_id: 'plan-1',
+        role: 'baseline',
+        idempotency_key: expect.any(String),
+      })
+    } finally {
+      vi.unstubAllGlobals()
+    }
+  })
+
   it('fetches fresh execution summaries and invalidates read caches on progress', async () => {
     const runtime = {
       mode: 'local',

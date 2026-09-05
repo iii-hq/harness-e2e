@@ -37,7 +37,7 @@ describe('plan charts', () => {
     expect(html).toContain('x2="100%"')
   })
 
-  it('orients diverging bars by improvement and names the unchanged once', () => {
+  it('orients diverging bars by signed change and names the unchanged once', () => {
     const html = renderToStaticMarkup(
       <DivergingBars
         label="Relative change per test"
@@ -45,22 +45,20 @@ describe('plan charts', () => {
           {
             id: 'minimal_path',
             title: 'Minimal Path',
-            subtitle: 'Passed → Passed · 2 of 4 metrics moved',
+            subtitle: '2 of 4 metrics moved',
             unchanged: 'quality score 90 · turns 2',
             rows: [
               {
                 id: 'tokens',
                 label: 'tokens',
-                improvement: 68.4,
+                change: 68.4,
                 valueLabel: '-7K · -68.4%',
-                tone: 'positive',
               },
               {
                 id: 'duration',
                 label: 'duration',
-                improvement: -10.7,
+                change: -10.7,
                 valueLabel: '+16.2s · +10.7%',
-                tone: 'negative',
               },
             ],
           },
@@ -71,15 +69,41 @@ describe('plan charts', () => {
     expect(html).toContain('unchanged: quality score 90 · turns 2')
     const tokens = html.slice(html.indexOf('data-diverging-row="tokens"'))
     const duration = html.slice(html.indexOf('data-diverging-row="duration"'))
-    // The improved bar starts at the reference and grows right; the regressed
+    // An increase starts at the reference and grows right; a decrease
     // one starts left of it. Labels sit at the tip, in text ink.
     expect(tokens).toMatch(/<rect x="58\.00%"/)
     expect(duration).toMatch(/<rect x="5[0-7]\.\d\d%"/)
     expect(tokens).toContain('text-anchor="start"')
     expect(duration).toContain('text-anchor="end"')
-    expect(html).toContain('fill="var(--success, #356f3d)"')
-    expect(html).toContain('fill="var(--danger, #c4001d)"')
+    expect(html).toContain('fill="var(--accent, #b8420f)"')
+    expect(html).not.toMatch(/var\(--(?:success|danger)/)
     expect(html).toContain('>reference<')
+  })
+
+  it('shows an absolute delta without inventing a percentage when the reference is zero', () => {
+    const html = renderToStaticMarkup(
+      <DivergingBars
+        label="Relative change"
+        groups={[
+          {
+            id: 'case',
+            title: 'Case',
+            subtitle: '',
+            unchanged: '',
+            rows: [
+              {
+                id: 'tokens',
+                label: 'tokens',
+                change: null,
+                valueLabel: '+20',
+              },
+            ],
+          },
+        ]}
+      />,
+    )
+    expect(html).toContain('>+20</text>')
+    expect(html).toContain('width="0.00%"')
   })
 
   it('collapses a dumbbell whose ends coincide into one marked point', () => {

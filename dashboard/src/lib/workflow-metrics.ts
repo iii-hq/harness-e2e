@@ -46,68 +46,25 @@ export type GeneralRunMetrics = {
   functionCalls: number | null
   functionCallErrors: number | null
   costUsd: number | null
-  backfilled: boolean
 }
 
 export function generalRunMetrics(
   run: DashboardRunProjection | null | undefined,
-  tests: readonly SemanticTestReport[],
 ): GeneralRunMetrics {
   const totals = run?.metrics?.totals
   const input = nullableNumber(totals?.input_tokens)
   const output = nullableNumber(totals?.output_tokens)
-  const explicitTokens = nullableNumber(
-    totals?.total_tokens ?? run?.efficiency?.total_tokens,
-  )
-  const explicitCalls = nullableNumber(
-    totals?.function_calls ?? run?.efficiency?.function_calls,
-  )
-  const explicitErrors = nullableNumber(
-    totals?.function_call_errors ?? run?.efficiency?.function_call_errors,
-  )
-  const explicitCost = nullableNumber(run?.cost?.total_usd)
-  const securityReview = tests.some((test) => test.node_id === 'scan_commit_a')
-  if (!securityReview) {
-    return {
-      totalTokens:
-        explicitTokens ??
-        (input != null && output != null ? input + output : null),
-      functionCalls: explicitCalls,
-      functionCallErrors: explicitErrors,
-      costUsd: explicitCost,
-      backfilled: false,
-    }
-  }
-
-  const workflow = aggregateWorkflowMetrics(tests)
-  const judgeInput = nullableNumber(run?.judge_usage?.input_tokens)
-  const judgeOutput = nullableNumber(run?.judge_usage?.output_tokens)
-  const calls =
-    (workflow.numericMetrics.request_count ?? 0) +
-    (workflow.numericMetrics['poll.poll_count'] ?? 0) +
-    (workflow.numericMetrics.reconciliation_operations ?? 0) +
-    (tests.some((test) => test.node_id === 'scan_commit_a') ? 1 : 0) +
-    (tests.some((test) => test.node_id === 'list_run_history') ? 1 : 0)
-  const errors = tests.reduce(
-    (total, test) => total + (test.failures?.length ?? 0),
-    0,
-  )
   return {
     totalTokens:
-      explicitTokens ??
-      (input != null && output != null
-        ? input + output
-        : judgeInput != null && judgeOutput != null
-          ? judgeInput + judgeOutput
-          : null),
-    functionCalls: explicitCalls ?? calls,
-    functionCallErrors: explicitErrors ?? errors,
-    costUsd: explicitCost ?? 0,
-    backfilled:
-      explicitTokens == null ||
-      explicitCalls == null ||
-      explicitErrors == null ||
-      explicitCost == null,
+      nullableNumber(totals?.total_tokens ?? run?.efficiency?.total_tokens) ??
+      (input != null && output != null ? input + output : null),
+    functionCalls: nullableNumber(
+      totals?.function_calls ?? run?.efficiency?.function_calls,
+    ),
+    functionCallErrors: nullableNumber(
+      totals?.function_call_errors ?? run?.efficiency?.function_call_errors,
+    ),
+    costUsd: nullableNumber(run?.cost?.total_usd),
   }
 }
 
@@ -119,9 +76,7 @@ export function summedGeneralRunMetricsFromDetail(
   )
   if (runs.length === 0) return null
 
-  const values = runs.map((run) =>
-    generalRunMetrics(run, run.semantic_tests ?? []),
-  )
+  const values = runs.map(generalRunMetrics)
   const sumComplete = (
     select: (metrics: GeneralRunMetrics) => number | null,
   ): number | null => {
@@ -136,7 +91,6 @@ export function summedGeneralRunMetricsFromDetail(
     functionCalls: sumComplete((metrics) => metrics.functionCalls),
     functionCallErrors: sumComplete((metrics) => metrics.functionCallErrors),
     costUsd: sumComplete((metrics) => metrics.costUsd),
-    backfilled: values.some((metrics) => metrics.backfilled),
   }
 }
 
@@ -282,43 +236,24 @@ export function workflowMetricUnit(path: string): 'count' | 'milliseconds' {
   return path.endsWith('_ms') ? 'milliseconds' : 'count'
 }
 
-/**
- * Read the usage contract emitted by Harness-backed workflow steps. Direct
- * keys remain supported for reports produced before the canonical `totals`
- * envelope was introduced.
- */
+/** Read the native usage totals; absent measurements remain unavailable. */
 export function workflowStepUsage(
   metrics: JsonValue | undefined | null,
 ): WorkflowStepUsage {
-  const inputTokens = firstNumericMetric(metrics, [
-    ['totals', 'input_tokens'],
-    ['input_tokens'],
-  ])
-  const outputTokens = firstNumericMetric(metrics, [
-    ['totals', 'output_tokens'],
-    ['output_tokens'],
-  ])
-  const explicitTotalTokens = firstNumericMetric(metrics, [
-    ['totals', 'total_tokens'],
-    ['total_tokens'],
-    ['tokens'],
-  ])
-
+  const inputTokens = numericMetricAtPath(metrics, ['totals', 'input_tokens'])
+  const outputTokens = numericMetricAtPath(metrics, ['totals', 'output_tokens'])
   return {
     inputTokens,
     outputTokens,
     totalTokens:
-      explicitTotalTokens ??
+      numericMetricAtPath(metrics, ['totals', 'total_tokens']) ??
       (inputTokens != null && outputTokens != null
         ? inputTokens + outputTokens
         : null),
-    functionCalls: firstNumericMetric(metrics, [
-      ['totals', 'function_calls'],
-      ['function_calls'],
-    ]),
-    functionCallErrors: firstNumericMetric(metrics, [
-      ['totals', 'function_call_errors'],
-      ['function_call_errors'],
+    functionCalls: numericMetricAtPath(metrics, ['totals', 'function_calls']),
+    functionCallErrors: numericMetricAtPath(metrics, [
+      'totals',
+      'function_call_errors',
     ]),
   }
 }
@@ -339,17 +274,6 @@ const USAGE_METRIC_PATHS = new Set([
 
 function finiteNumber(value: unknown): number {
   return typeof value === 'number' && Number.isFinite(value) ? value : 0
-}
-
-function firstNumericMetric(
-  value: JsonValue | undefined | null,
-  paths: readonly (readonly string[])[],
-): number | null {
-  for (const path of paths) {
-    const metric = numericMetricAtPath(value, path)
-    if (metric != null) return metric
-  }
-  return null
 }
 
 function numericMetricAtPath(

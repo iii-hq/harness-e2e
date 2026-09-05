@@ -5,8 +5,9 @@ use std::time::Duration;
 use anyhow::{anyhow, bail, Context, Result};
 use async_trait::async_trait;
 use iii_sdk::errors::Error as SdkError;
-use iii_sdk::protocol::TriggerRequest;
+use iii_sdk::protocol::{RegisterTriggerInput, TriggerRequest};
 use iii_sdk::runtime::{IIIConnectionState, WorkerMetadata};
+use iii_sdk::trigger::Trigger;
 use iii_sdk::{register_worker, IIIClient, InitOptions, RegisterFunction};
 use serde::de::DeserializeOwned;
 use serde::Serialize;
@@ -17,7 +18,7 @@ use crate::observe::{self, ObserveHub, ObserveSubscription, TreeObserver};
 use crate::report::ObservedWorkerContract;
 use crate::wire::{
     self, ControlPlaneEvidence, SessionMetricsResponse, SessionTreeResponse, StatusReport,
-    StopResponse, TeardownResponse, TurnCompletedEvent, TurnStatus,
+    StopResponse, TeardownResponse, TurnCompletedEvent,
 };
 
 pub const INVOCATION_TIMEOUT: Duration = Duration::from_secs(120);
@@ -28,7 +29,7 @@ const READ_TRANSPORT_BACKOFF: Duration = Duration::from_millis(100);
 pub struct E2eContext {
     client: IIIClient,
     hub: ObserveHub,
-    binding_id: Mutex<Option<String>>,
+    binding: Mutex<Option<Trigger>>,
 }
 
 pub struct RuntimeVersions {
@@ -48,7 +49,7 @@ impl E2eContext {
         Self {
             client,
             hub: ObserveHub::new(),
-            binding_id: Mutex::new(None),
+            binding: Mutex::new(None),
         }
     }
 }
@@ -72,7 +73,7 @@ impl E2eContext {
         let context = Self {
             client,
             hub: ObserveHub::new(),
-            binding_id: Mutex::new(None),
+            binding: Mutex::new(None),
         };
         context.wait_until_ready().await?;
         context.register_observation_sink();
@@ -216,37 +217,21 @@ impl E2eContext {
         if !observe::turn_completed_available(&listed) {
             return Err(observe::missing_turn_completed_trigger());
         }
-        let response = self
-            .trigger_value(
-                "engine::register_trigger",
-                json!({
-                    "trigger_type": observe::TURN_COMPLETED_TRIGGER,
-                    "function_id": observe::SINK_FUNCTION_ID,
-                    "config": {},
-                }),
-            )
-            .await
-            .context("bind harness::turn-completed")?;
-        let id = observe::binding_id(&response)?;
-        *self.lock_binding() = Some(id);
+        // Observation is a worker-owned subscription in the stack namespace.
+        // engine::register_trigger creates a durable binding in default instead.
+        let binding = self.client.register_trigger(RegisterTriggerInput::new(
+            observe::TURN_COMPLETED_TRIGGER,
+            observe::SINK_FUNCTION_ID,
+            json!({}),
+        ))?;
+        *self.lock_binding() = Some(binding);
         Ok(())
     }
 
     pub async fn unbind_turn_completed(&self) -> Result<()> {
-        let id = self.lock_binding().clone();
-        let Some(id) = id else {
-            return Ok(());
-        };
-        self.trigger_value(
-            "engine::unregister_trigger",
-            json!({
-                "id": id,
-                "trigger_type": observe::TURN_COMPLETED_TRIGGER,
-            }),
-        )
-        .await
-        .context("unbind harness::turn-completed")?;
-        self.lock_binding().take();
+        if let Some(binding) = self.lock_binding().take() {
+            binding.unregister();
+        }
         self.hub.drain();
         Ok(())
     }
@@ -456,8 +441,8 @@ impl E2eContext {
         );
     }
 
-    fn lock_binding(&self) -> std::sync::MutexGuard<'_, Option<String>> {
-        self.binding_id
+    fn lock_binding(&self) -> std::sync::MutexGuard<'_, Option<Trigger>> {
+        self.binding
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
     }
@@ -620,24 +605,6 @@ fn function_ids(listed: &Value) -> impl Iterator<Item = &str> {
                 .or_else(|| item.get("function_id").and_then(Value::as_str))
                 .or_else(|| item.get("id").and_then(Value::as_str))
         })
-}
-
-#[allow(dead_code)]
-fn session_is_terminal(status: &StatusReport) -> Result<bool> {
-    match status.status {
-        TurnStatus::Completed => Ok(!status.expects_wake),
-        TurnStatus::Failed | TurnStatus::Cancelled => {
-            bail!(
-                "turn ended as {:?}: {}",
-                status.status,
-                status
-                    .result_error
-                    .as_deref()
-                    .unwrap_or("no error was reported")
-            );
-        }
-        TurnStatus::Running | TurnStatus::AwaitingFunctions => Ok(false),
-    }
 }
 
 #[cfg(test)]
@@ -864,50 +831,6 @@ mod tests {
         assert!(cancelled.is_err());
         assert_eq!(calls.load(Ordering::SeqCst), 1);
         assert_eq!(dropped.load(Ordering::SeqCst), 1);
-    }
-
-    fn status(
-        turn_id: &str,
-        status: TurnStatus,
-        expects_wake: bool,
-        result_error: Option<&str>,
-    ) -> StatusReport {
-        StatusReport::from_normalized(crate::wire::StatusReportPayload {
-            session_id: "session".to_string(),
-            turn_id: Some(turn_id.to_string()),
-            status,
-            step: 0,
-            turn_count: 1,
-            max_turns: 100,
-            pending_function_calls: Vec::new(),
-            children: Vec::new(),
-            expects_wake,
-            queued: Vec::new(),
-            result_error: result_error.map(str::to_string),
-            validation_retries: 0,
-            transient_resumes: 0,
-        })
-    }
-
-    #[test]
-    fn a_wake_can_advance_the_session_to_a_new_turn() {
-        let parked = status("turn-initial", TurnStatus::Completed, true, None);
-        let resumed = status("turn-after-wake", TurnStatus::Running, false, None);
-        let completed = status("turn-after-wake", TurnStatus::Completed, false, None);
-
-        assert!(!session_is_terminal(&parked).unwrap());
-        assert!(!session_is_terminal(&resumed).unwrap());
-        assert!(session_is_terminal(&completed).unwrap());
-    }
-
-    #[test]
-    fn failed_and_cancelled_turns_are_errors() {
-        for turn_status in [TurnStatus::Failed, TurnStatus::Cancelled] {
-            let report = status("turn", turn_status, false, Some("provider stopped"));
-
-            let error = session_is_terminal(&report).unwrap_err();
-            assert!(error.to_string().contains("provider stopped"));
-        }
     }
 
     #[test]

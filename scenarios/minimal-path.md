@@ -1,10 +1,5 @@
 # Store one exact state value efficiently
 
-## Plans
-
-- daily
-- weekly
-
 ## Version
 
 2

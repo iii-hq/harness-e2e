@@ -417,7 +417,6 @@ impl DashboardReadModel {
                         "id": run.metadata.id,
                         "completed_at": run.metadata.completed_at,
                         "status": run.metadata.status,
-                        "unsupported_report": run.unsupported_report,
                     })
                 })
                 .collect::<Vec<_>>(),

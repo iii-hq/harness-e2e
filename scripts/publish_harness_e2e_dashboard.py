@@ -1896,52 +1896,6 @@ def build_static_test_catalog(
     return catalog
 
 
-def _metadata_from_summary(execution: dict[str, Any]) -> dict[str, Any]:
-    source = execution.get("source", {})
-    if not isinstance(source, dict):
-        source = {}
-    return {
-        "id": str(execution.get("id") or ""),
-        "run_id": str(execution.get("run_id") or ""),
-        "attempt": int(optional_number(execution.get("attempt")) or 1),
-        "workflow_name": str(execution.get("workflow_name") or ""),
-        "workflow_url": str(execution.get("workflow_url") or ""),
-        "event": str(execution.get("event") or ""),
-        "actor": str(execution.get("actor") or ""),
-        "started_at": str(execution.get("started_at") or ""),
-        "completed_at": str(execution.get("completed_at") or ""),
-        "conclusion": str(execution.get("conclusion") or ""),
-        "head_sha": str(source.get("sha") or ""),
-        "head_branch": str(source.get("ref") or ""),
-        "repository": str(source.get("repository") or ""),
-    }
-
-
-def migrate_retained_details(
-    site_dir: Path,
-    manifest: dict[str, Any],
-) -> None:
-    """Migrate retained reports while preserving their complete detail fields."""
-    runs_dir = site_dir / "runs"
-    for execution in manifest.get("executions", []):
-        if not isinstance(execution, dict):
-            continue
-        relative_path = execution.get("detail_path")
-        if not isinstance(relative_path, str) or not relative_path.startswith("runs/"):
-            continue
-        candidate = site_dir / relative_path
-        if candidate.parent != runs_dir or not candidate.is_file():
-            continue
-        retained = load_json(candidate)
-        if retained is None:
-            continue
-        public_detail = complete_public_detail(
-            retained,
-            _metadata_from_summary(execution),
-        )
-        write_json_atomic(candidate, public_detail)
-
-
 def publish(
     site_dir: Path,
     *,
@@ -1959,9 +1913,7 @@ def publish(
     runs_dir = site_dir / "runs"
     runs_dir.mkdir(parents=True, exist_ok=True)
     manifest_path = site_dir / MANIFEST_FILENAME
-    legacy_manifest_path = site_dir / "executions.js"
     manifest = load_manifest(manifest_path)
-    migrate_retained_details(site_dir, manifest)
     raw_snapshot = load_json(snapshot_path)
     raw_detail = load_json(detail_path)
     snapshot, snapshot_identity_failure = validate_artifact_identity(
@@ -2077,7 +2029,6 @@ def publish(
         "executions": executions,
     }
     write_json_atomic(manifest_path, updated)
-    legacy_manifest_path.unlink(missing_ok=True)
     return updated
 
 

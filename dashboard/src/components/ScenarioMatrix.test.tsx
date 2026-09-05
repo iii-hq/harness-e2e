@@ -1,12 +1,13 @@
 import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
-import { ScenarioMatrix } from '@/components/ScenarioMatrix'
+import { contractScent, ScenarioMatrix } from '@/components/ScenarioMatrix'
 import type { DashboardExecutionDetail } from '@/lib/dashboard-data-source'
 import {
   RESULT_CONTRACT_SHA256,
   RESULTS_SCHEMA_VERSION,
   SCORING_PROFILE_SHA256,
 } from '@/lib/result-contract.generated'
+import { buildScenarioMatrix } from '@/lib/scenario-matrix'
 
 const resultContract = {
   schema_version: RESULTS_SCHEMA_VERSION,
@@ -303,4 +304,14 @@ describe('ScenarioMatrix', () => {
     expect(html).toContain('Task Incomplete')
     expect(html).toContain('Not Required')
   })
+})
+
+it('shows every retained outcome in aggregate provenance', () => {
+  const contracts = buildScenarioMatrix(detail).contracts
+  expect(
+    contractScent([
+      { ...contracts[0], objectiveOutcome: 'passed' },
+      { ...contracts[0], objectiveOutcome: 'failed' },
+    ]),
+  ).toContain('passed / failed')
 })

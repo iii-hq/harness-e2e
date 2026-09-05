@@ -24,6 +24,7 @@ import sys
 import time
 import uuid
 from collections.abc import Callable, Mapping, Sequence
+from functools import cache
 from typing import Any
 
 from result_contract import (
@@ -99,97 +100,24 @@ RESULT_AGGREGATE_TOKEN_FIELDS = (
     "tokens_per_completion",
 )
 
-# Canonical campaign scope. Adding a scenario to a reviewed manifest requires
-# intentionally declaring its execution kind here, preventing typos and,
-# critically, preventing a ScriptedDialogue from silently entering a retryable
-# HarnessTurn group.
-SCENARIO_EXECUTION_KIND = {
-    "timer_wake": "harness_turn",
-    "shell_coder_sandbox": "harness_turn",
-    "chess_engine_build": "harness_turn",
-    "git_regression_forensics": "harness_turn",
-    "contention_ledger": "harness_turn",
-    "security_review": "composite_flow",
-    "engineering_ticket": "harness_turn",
-    "engineering_ticket_git_handoff": "harness_turn",
-    "engineering_endurance_ladder": "harness_turn",
-    "tool_contract_recovery": "harness_turn",
-    "policy_bound_action": "scripted_dialogue",
-    "cross_app_transaction": "harness_turn",
-    "research_pipeline": "harness_turn",
-    "performance_regression": "harness_turn",
-    "browser_cross_site": "harness_turn",
-    "moving_target": "harness_turn",
-    "incident_response": "adaptive_flow",
-    "release_train_recovery": "adaptive_flow",
-    "cross_repo_contract_migration": "adaptive_flow",
-    "swe_config_isolation": "composite_flow",
-    "swe_cache_invalidation": "composite_flow",
-    "swe_batch_replay": "composite_flow",
-    "swe_replay_recovery": "composite_flow",
-    "swe_contract_migration": "composite_flow",
-    "swe_tenant_isolation": "composite_flow",
-    "swe_replay_performance": "composite_flow",
-    "swe_release_handoff": "composite_flow",
-    "swe_service_journey": "composite_flow",
-}
+DEFAULT_E2E_BIN = pathlib.Path(os.environ.get("HARNESS_E2E_BIN", "target/release/harness-e2e"))
 
-# Generated from `harness-e2e catalog`. The parser checks the reviewed weight
-# against the same canonical capability tier later embedded in results.json.
-# L0/L1 map to 1; L2..L5 map directly to 2..5.
-SCENARIO_DIFFICULTY_WEIGHT = {
-    "timer_wake": 2,
-    "shell_coder_sandbox": 4,
-    "chess_engine_build": 2,
-    "git_regression_forensics": 4,
-    "contention_ledger": 3,
-    "security_review": 4,
-    "engineering_ticket": 4,
-    "engineering_ticket_git_handoff": 4,
-    "engineering_endurance_ladder": 4,
-    "tool_contract_recovery": 4,
-    "policy_bound_action": 4,
-    "cross_app_transaction": 4,
-    "research_pipeline": 4,
-    "performance_regression": 2,
-    "browser_cross_site": 4,
-    "moving_target": 2,
-    "incident_response": 5,
-    "release_train_recovery": 5,
-    "cross_repo_contract_migration": 5,
-    "swe_config_isolation": 2,
-    "swe_cache_invalidation": 2,
-    "swe_batch_replay": 2,
-    "swe_replay_recovery": 2,
-    "swe_contract_migration": 5,
-    "swe_tenant_isolation": 2,
-    "swe_replay_performance": 2,
-    "swe_release_handoff": 2,
-    "swe_service_journey": 5,
-}
+
+@cache
+def scenario_catalog(binary: pathlib.Path = DEFAULT_E2E_BIN) -> dict:
+    """Read admission rules from the same native runner that executes the suite."""
+    try:
+        result = subprocess.check_output([str(binary), "test-plan", "catalog"], text=True)
+        return json.loads(result)["scenarios"]
+    except (OSError, subprocess.CalledProcessError, ValueError, KeyError) as error:
+        raise CampaignError(f"cannot read native campaign catalog from {binary}: {error}") from error
+
 
 FAULT_PROFILE_WEIGHT = {
     "weekly-l2-recovery": 2,
     "weekly-l3-recovery": 3,
     "weekly-l4-recovery": 4,
 }
-
-MARKDOWN_SCENARIO_KIND = "harness_turn"
-MARKDOWN_SCENARIO_WEIGHT = 2
-MARKDOWN_SCENARIO_SECTIONS = {
-    "Plans",
-    "Version",
-    "Before Test",
-    "Prompt",
-    "Validations",
-}
-MARKDOWN_PLAN_EXECUTION = {
-    "daily": (1, 1),
-    "weekly": (3, 1),
-    "post-deploy": (1, 0),
-    "endurance": (1, 0),
-}
-
 
 class CampaignError(ValueError):
     """A campaign is invalid or cannot be executed safely."""
@@ -215,6 +143,7 @@ class Campaign:
     failure_policy: str
     scoring_profile: str
     groups: tuple[CampaignGroup, ...]
+    judge_required: bool
 
 
 def _expect_object(value: Any, label: str) -> dict[str, Any]:
@@ -261,16 +190,11 @@ def _expect_bounded_int(value: Any, label: str, minimum: int, maximum: int) -> i
 def parse_campaign(
     value: Any,
     source: str = "campaign",
-    markdown_scenarios: frozenset[str] = frozenset(),
+    catalog: dict | None = None,
 ) -> Campaign:
-    scenario_kinds = {
-        **SCENARIO_EXECUTION_KIND,
-        **{scenario: MARKDOWN_SCENARIO_KIND for scenario in markdown_scenarios},
-    }
-    scenario_weights = {
-        **SCENARIO_DIFFICULTY_WEIGHT,
-        **{scenario: MARKDOWN_SCENARIO_WEIGHT for scenario in markdown_scenarios},
-    }
+    catalog = scenario_catalog() if catalog is None else catalog
+    scenario_kinds = {key: value["execution_kind"] for key, value in catalog.items()}
+    scenario_weights = {key: value["difficulty_weight"] for key, value in catalog.items()}
     root = _expect_object(value, source)
     _reject_seed_fields(root)
     _reject_unknown_fields(root, ROOT_FIELDS, source)
@@ -420,11 +344,12 @@ def parse_campaign(
         failure_policy=failure_policy,
         scoring_profile=scoring_profile,
         groups=tuple(groups),
+        judge_required=any(catalog.get(scenario, {}).get("markdown", False) for group in groups for scenario in group.scenarios),
     )
 
 
 def load_campaign(
-    path: pathlib.Path, scenarios_directory: pathlib.Path | None = None
+    path: pathlib.Path, catalog: dict | None = None
 ) -> Campaign:
     try:
         value = json.loads(path.read_text(encoding="utf-8"))
@@ -434,110 +359,7 @@ def load_campaign(
         raise CampaignError(
             f"{path}:{error.lineno}:{error.colno}: invalid JSON: {error.msg}"
         ) from error
-    markdown: frozenset[str] = frozenset()
-    if scenarios_directory is not None:
-        campaign_id = value.get("campaign_id") if isinstance(value, dict) else None
-        if isinstance(campaign_id, str) and campaign_id:
-            markdown = frozenset(
-                discover_markdown_scenarios(scenarios_directory, campaign_id)
-            )
-    return parse_campaign(value, str(path), markdown)
-
-
-def discover_markdown_scenarios(
-    directory: pathlib.Path, campaign_id: str
-) -> tuple[str, ...]:
-    """Read plan participation only; the Rust compiler remains authoritative."""
-    if not directory.exists():
-        return ()
-    selected: list[str] = []
-    for path in sorted(directory.glob("*.md")):
-        source = path.read_text(encoding="utf-8")
-        structural_source = _without_fenced_markdown(source, path)
-        headings = re.findall(
-            r"^## ([^\r\n]+)\r?$", structural_source, flags=re.MULTILINE
-        )
-        if set(headings) != MARKDOWN_SCENARIO_SECTIONS or len(headings) != len(
-            MARKDOWN_SCENARIO_SECTIONS
-        ):
-            raise CampaignError(
-                f"{path} must contain each canonical Markdown section exactly once"
-            )
-        plans_match = re.search(
-            r"^## Plans\r?\n(?P<body>.*?)(?=^## )",
-            structural_source,
-            flags=re.MULTILINE | re.DOTALL,
-        )
-        if plans_match is None:
-            raise CampaignError(f"{path} has no parseable Plans section")
-        plans = [
-            line.removeprefix("- ").strip()
-            for line in plans_match.group("body").splitlines()
-            if line.strip()
-        ]
-        if any(
-            not line.startswith("- ")
-            for line in plans_match.group("body").splitlines()
-            if line.strip()
-        ):
-            raise CampaignError(f"{path} Plans section must be a Markdown bullet list")
-        if campaign_id not in plans:
-            continue
-        stem = path.stem.lower().replace("-", "_").replace(" ", "_")
-        if not re.fullmatch(r"[a-z][a-z0-9_]*", stem) or "__" in stem:
-            raise CampaignError(f"{path} cannot produce a safe Markdown scenario id")
-        selected.append(stem)
-    if len(selected) != len(set(selected)):
-        raise CampaignError("Markdown scenarios produce duplicate ids")
-    return tuple(selected)
-
-
-def _without_fenced_markdown(source: str, path: pathlib.Path) -> str:
-    lines: list[str] = []
-    fence: str | None = None
-    for line in source.splitlines(keepends=True):
-        stripped = line.lstrip()
-        marker = stripped[:1] if stripped[:1] in {"`", "~"} else None
-        is_fence = marker is not None and len(stripped) - len(stripped.lstrip(marker)) >= 3
-        if is_fence:
-            if fence is None:
-                fence = marker
-            elif fence == marker:
-                fence = None
-            lines.append("\n" if line.endswith("\n") else "")
-        elif fence is None:
-            lines.append(line)
-        else:
-            lines.append("\n" if line.endswith("\n") else "")
-    if fence is not None:
-        raise CampaignError(f"{path} contains an unclosed fenced code block")
-    return "".join(lines)
-
-
-def markdown_group(campaign_id: str, directory: pathlib.Path) -> CampaignGroup | None:
-    """The group a campaign's Markdown plan membership describes, or None.
-
-    Nothing calls this while a campaign runs. The manifest is the only authority
-    on which groups exist, so the checked-in manifests carry this group verbatim
-    and a test holds them to what discovery would produce.
-    """
-    scenarios = discover_markdown_scenarios(directory, campaign_id)
-    if not scenarios:
-        return None
-    try:
-        runs, technical_retries = MARKDOWN_PLAN_EXECUTION[campaign_id]
-    except KeyError as error:
-        raise CampaignError(
-            f"campaign {campaign_id!r} has no canonical Markdown execution policy"
-        ) from error
-    return CampaignGroup(
-        id=f"{campaign_id}-markdown",
-        execution_kind="harness_turn",
-        runs=runs,
-        technical_retries=technical_retries,
-        difficulty_weight=MARKDOWN_SCENARIO_WEIGHT,
-        scenarios=scenarios,
-    )
+    return parse_campaign(value, str(path), catalog)
 
 
 def build_group_command(
@@ -1107,10 +929,7 @@ def execute_campaign(
             raise CampaignError(
                 "provider is required via --provider or HARNESS_E2E_PROVIDER"
             )
-        has_markdown = any(
-            group.id == f"{campaign.campaign_id}-markdown"
-            for group in campaign.groups
-        )
+        has_markdown = campaign.judge_required
         resolved_judge_model = judge_model or base_environment.get(
             "HARNESS_E2E_JUDGE_MODEL"
         )
@@ -1176,6 +995,7 @@ def execute_campaign(
             "lane": campaign.lane,
             "failure_policy": campaign.failure_policy,
             "group": dataclasses.asdict(group),
+
             "runner": str(e2e_bin),
             "model": model or child_environment.get("HARNESS_E2E_MODEL"),
             "provider": provider or child_environment.get("HARNESS_E2E_PROVIDER"),
@@ -1222,6 +1042,7 @@ def execute_campaign(
     )
     return {
         "kind": "harness-e2e-campaign-summary",
+
         "campaign_id": campaign.campaign_id,
         "lane": campaign.lane,
         "execution_id": execution_id,
@@ -1275,6 +1096,7 @@ def aggregate_existing_campaign(
     scoring = score_campaign(campaign, group_results)
     return {
         "kind": "harness-e2e-campaign-summary",
+
         "campaign_id": campaign.campaign_id,
         "lane": campaign.lane,
         "execution_id": execution_id,
@@ -1448,9 +1270,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--e2e-bin",
         type=pathlib.Path,
-        default=pathlib.Path(
-            os.environ.get("HARNESS_E2E_BIN", "target/release/harness-e2e")
-        ),
+        default=DEFAULT_E2E_BIN,
     )
     parser.add_argument(
         "--output-root",
@@ -1476,9 +1296,6 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--judge-model")
     parser.add_argument("--judge-provider")
     parser.add_argument("--url")
-    parser.add_argument(
-        "--scenarios-directory", type=pathlib.Path, default=pathlib.Path("scenarios")
-    )
     parser.add_argument("--progress-interval-seconds", type=int)
     return parser
 
@@ -1486,7 +1303,7 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: Sequence[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     try:
-        campaign = load_campaign(args.manifest, args.scenarios_directory)
+        campaign = load_campaign(args.manifest, scenario_catalog(args.e2e_bin))
         scoring_profile = _load_json(args.scoring_profile)
         if scoring_profile.get("profile") != SCORING_PROFILE:
             raise CampaignError("scoring profile identity does not match the campaign")

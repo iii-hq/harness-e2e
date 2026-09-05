@@ -23,8 +23,6 @@ const SURFACE = 'var(--panel, #fafafa)'
 const HAIRLINE = 'var(--line, rgba(20, 16, 8, 0.16))'
 const MUTED = 'var(--text-muted, #6e6b67)'
 const ACCENT = 'var(--accent, #b8420f)'
-const SUCCESS = 'var(--success, #356f3d)'
-const DANGER = 'var(--danger, #c4001d)'
 
 function pct(value: number) {
   return `${value.toFixed(2)}%`
@@ -143,12 +141,9 @@ export function Sparkline({
 export type DivergingRow = {
   id: string
   label: string
-  /** Relative change oriented by improvement: positive is better, whatever
-   *  the metric's own direction. */
-  improvement: number
+  change: number | null
   /** The delta in the metric's own unit, shown at the bar's tip. */
   valueLabel: string
-  tone: 'positive' | 'negative'
 }
 
 export type DivergingGroup = {
@@ -166,7 +161,7 @@ const AXIS = 30
 const LABEL_COLUMN = 18 // percent reserved for the row label
 const HALF = (100 - LABEL_COLUMN - 2) / 2 // percent for ±100%
 
-/** What moved by test: a diverging bar per changed metric, right is better. */
+/** What moved by test: a diverging bar per changed metric, increases extend right. */
 export function DivergingBars({
   groups,
   label,
@@ -186,8 +181,8 @@ export function DivergingBars({
     [50, '+50%'],
     [100, '+100%'],
   ]
-  const xOf = (improvement: number) =>
-    center + (Math.max(-100, Math.min(100, improvement)) / 100) * HALF
+  const xOf = (change: number) =>
+    center + (Math.max(-100, Math.min(100, change)) / 100) * HALF
   return (
     <svg
       width="100%"
@@ -245,11 +240,10 @@ export function DivergingBars({
             </text>
             {group.rows.map((row, index) => {
               const yMid = top + GROUP_HEAD + index * ROW + ROW / 2
-              const tip = xOf(row.improvement)
+              const tip = xOf(row.change ?? 0)
               const left = Math.min(center, tip)
               const width = Math.abs(tip - center)
-              const better = row.improvement >= 0
-              const color = row.tone === 'positive' ? SUCCESS : DANGER
+              const increased = (row.change ?? 0) >= 0
               return (
                 <g key={row.id} data-diverging-row={row.id}>
                   <text
@@ -268,20 +262,20 @@ export function DivergingBars({
                     width={pct(width)}
                     height="10"
                     rx="4"
-                    fill={color}
+                    fill={ACCENT}
                   />
                   <rect
-                    x={pct(better ? center : center - 0.4)}
+                    x={pct(increased ? center : center - 0.4)}
                     y={yMid - 5}
                     width={pct(Math.min(width, 0.4))}
                     height="10"
-                    fill={color}
+                    fill={ACCENT}
                   />
                   <text
                     x={pct(tip)}
-                    dx={better ? 10 : -10}
+                    dx={increased ? 10 : -10}
                     y={yMid + 4}
-                    textAnchor={better ? 'start' : 'end'}
+                    textAnchor={increased ? 'start' : 'end'}
                     fontSize="11"
                     fill="var(--text, #0a0a0a)"
                     fontFamily="var(--font-mono)"

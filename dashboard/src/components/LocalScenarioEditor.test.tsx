@@ -63,7 +63,6 @@ describe('local Markdown scenario editor', () => {
     expect(html).not.toContain('rounded-lg')
     expect(html).toContain('bg-[var(--surface-fill)] p-3')
     for (const section of [
-      '## Plans',
       '## Version',
       '## Before Test',
       '## Prompt',
@@ -71,7 +70,6 @@ describe('local Markdown scenario editor', () => {
     ]) {
       expect(LOCAL_SCENARIO_TEMPLATE).toContain(section)
     }
-    expect(LOCAL_SCENARIO_TEMPLATE).toContain('- local')
   })
 
   // Audit NT-02: every field reports its own problem at once.
@@ -169,7 +167,6 @@ describe('local Markdown scenario editor', () => {
 
     const source = buildLocalScenarioSource(draft)
     expect(source).toContain('# Database recovery')
-    expect(source).toContain('## Plans\n\n- local')
     expect(source).toContain('## Version\n\n2')
     expect(source).toContain('### Record restored (80%)')
     expect(source).toContain('### Safe cleanup (20%)')
@@ -181,10 +178,6 @@ describe('local Markdown scenario editor', () => {
     const imported = parseLocalScenarioSource(
       `
 # Stateful test
-
-## Plans
-
-- local
 
 ## Version
 

@@ -303,7 +303,7 @@ impl DurableHistory {
     ) -> Result<ArchiveResponse> {
         let basis = archive_basis(report, observation)?;
         let identity_sha256 = basis.identity_sha256.clone();
-        let archive_id = archive_id(&basis, report, observation, retention_class)?;
+        let archive_id = archive_id(&basis, retention_class)?;
         let created_at = basis.completed_at.clone();
         let completed_at = DateTime::parse_from_rfc3339(&created_at)
             .context("execution completed_at must be RFC 3339")?
@@ -1058,26 +1058,12 @@ fn baseline_comparable(report: &E2eReport) -> bool {
         })
 }
 
-fn archive_id(
-    basis: &ArchiveBasis,
-    report: Option<&E2eReport>,
-    observation: Option<&E2eObservationEnvelope>,
-    retention: RetentionClass,
-) -> Result<String> {
-    let digest = if observation.is_none() {
-        let report = report.context("legacy archive identity requires a report")?;
-        artifact::sha256_value(&json!({
-            "execution": report.execution,
-            "system": report.system_under_test,
-            "retention": retention,
-        }))?
-    } else {
-        artifact::sha256_value(&json!({
-            "execution_id": basis.execution_id,
-            "identity_sha256": basis.identity_sha256,
-            "retention": retention,
-        }))?
-    };
+fn archive_id(basis: &ArchiveBasis, retention: RetentionClass) -> Result<String> {
+    let digest = artifact::sha256_value(&json!({
+        "execution_id": basis.execution_id,
+        "identity_sha256": basis.identity_sha256,
+        "retention": retention,
+    }))?;
     Ok(digest_component(&digest)[..32].to_string())
 }
 
@@ -1441,20 +1427,8 @@ mod tests {
     fn terminal_observation_is_a_stable_archive_identity_without_a_report() {
         let observation = terminal_observation();
         let basis = archive_basis(None, Some(&observation)).unwrap();
-        let first = archive_id(
-            &basis,
-            None,
-            Some(&observation),
-            RetentionClass::Longitudinal,
-        )
-        .unwrap();
-        let second = archive_id(
-            &basis,
-            None,
-            Some(&observation),
-            RetentionClass::Longitudinal,
-        )
-        .unwrap();
+        let first = archive_id(&basis, RetentionClass::Longitudinal).unwrap();
+        let second = archive_id(&basis, RetentionClass::Longitudinal).unwrap();
         assert_eq!(first, second);
         assert_eq!(basis.execution_id, "execution-1");
 

@@ -94,27 +94,6 @@ function scenarioSummary(overrides: Partial<ScenarioMatrixSummary> = {}) {
 }
 
 describe('execution verdict', () => {
-  it('explains retained but incompatible history without suggesting an automatic re-run', () => {
-    const unsupported = buildExecutionPresentation({
-      ...detail,
-      status: 'unsupported',
-      availability: 'unsupported',
-      first_failure: {
-        kind: 'unsupported_results_schema',
-        message: 'Results schema v3 cannot be compared with v4.',
-      },
-    })
-    const verdict = executionVerdict(unsupported, null)
-    expect(verdict.headline).toBe(
-      'unsupported result contract · historical evidence retained',
-    )
-    expect(verdict.diagnosis).toBe(
-      'Results schema v3 cannot be compared with v4.',
-    )
-    expect(verdict.nextStep).toContain('cannot be used as a baseline')
-    expect(verdict.nextStep).not.toContain('Re-run')
-  })
-
   // Audit ED-03: one aggregated verdict, never a per-scenario headline
   // contradicting the objective one.
   it('aggregates the scenario outcomes into one sentence', () => {
@@ -160,18 +139,37 @@ describe('execution layers', () => {
   // Audit ED-05: two inputs and, only when it differs, the published status.
   it('derives the outcome once and adds the effective status only when it differs', () => {
     const presentation = buildExecutionPresentation(detail)
-    expect(executionBoundaries(presentation, run)).toEqual([
+    expect(executionBoundaries(presentation, [run])).toEqual([
       { role: 'system', value: 'passed' },
       { role: 'advisory', value: 'pass_with_concerns' },
       { role: 'effective', value: 'passed_with_concerns' },
     ])
     expect(
-      executionBoundaries(presentation, {
-        ...run,
-        effectiveStatus: 'passed',
-        systemStatus: 'passed',
-      }).map((row) => row.role),
+      executionBoundaries(presentation, [
+        {
+          ...run,
+          effectiveStatus: 'passed',
+          systemStatus: 'passed',
+        },
+      ]).map((row) => row.role),
     ).toEqual(['system', 'advisory'])
+  })
+
+  it('includes later failures in the aggregate outcome instead of reporting only the first run', () => {
+    const rows = executionBoundaries(buildExecutionPresentation(detail), [
+      { ...run, systemStatus: 'passed', effectiveStatus: 'passed' },
+      {
+        ...run,
+        systemStatus: 'hard_gate_failed',
+        effectiveStatus: 'hard_gate_failed',
+      },
+    ])
+    expect(rows[0]).toEqual({
+      role: 'system',
+      value: 'partial',
+      label: '1 passed · 1 hard gate failed',
+    })
+    expect(rows.map((row) => row.role)).toEqual(['system', 'advisory'])
   })
 
   // Audit ED-26: the words live in a layer; its closed row says what they say.
@@ -359,7 +357,6 @@ describe('execution provenance', () => {
         functionCalls: 16,
         functionCallErrors: 0,
         costUsd: null,
-        backfilled: true,
       },
     )
 

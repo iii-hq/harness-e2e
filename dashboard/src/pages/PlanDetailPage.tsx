@@ -18,6 +18,7 @@ import {
   Sparkline,
   type SparklinePoint,
 } from '@/components/PlanCharts'
+import { PlanProgress, Requirements } from '@/components/PlanStatus'
 import { ScenarioChatAction } from '@/components/ScenarioChatAction'
 import {
   buttonClassName,
@@ -58,15 +59,19 @@ import {
   formatPlanMetricDelta,
   formatPlanMetricValue,
   loadExecutionSummaries,
-  type MetricDirection,
   metricById,
   type PlanComparison,
   type PlanMetricComparison,
   type PlanMetricId,
   type PlanScenarioComparison,
-  type PlanVerdict,
   executionMetricValue as planMetricValue,
 } from '@/lib/plan-comparison'
+import {
+  downloadJson,
+  type PlanExecution,
+  type PlanRequirements,
+  planAction,
+} from '@/lib/plan-execution'
 import { watchExecution } from '@/lib/watch-execution'
 
 /* ------------------------------------------------------------- helpers */
@@ -108,8 +113,6 @@ function scenarioName(scenario: string) {
 }
 
 const metricToneClass: Record<PlanMetricComparison['tone'], string> = {
-  positive: 'text-success',
-  negative: 'text-danger',
   neutral: 'text-ink-soft',
   unavailable: 'text-ink-muted',
 }
@@ -146,7 +149,7 @@ export function planReadiness(plan: LocalPlan): {
         }
       : {
           status: 'incomplete',
-          label: 'draft · scope fixed at creation',
+          label: 'draft · scope editable',
           detail:
             'The scope is defined but no completed baseline report exists.',
         }
@@ -629,28 +632,6 @@ export function selectedPlanCandidate(
   return candidateIds.at(-1) ?? null
 }
 
-export function planMetricWinnerIds(
-  values: Array<{ id: string; value: number | null }>,
-  direction: MetricDirection,
-) {
-  if (direction === 'context') return []
-  const comparable = values.filter(
-    (entry): entry is { id: string; value: number } => entry.value !== null,
-  )
-  if (comparable.length < 2) return []
-  const winnerValue = comparable.reduce(
-    (best, entry) =>
-      direction === 'higher'
-        ? Math.max(best, entry.value)
-        : Math.min(best, entry.value),
-    comparable[0].value,
-  )
-  const winners = comparable
-    .filter((entry) => Math.abs(entry.value - winnerValue) < 1e-9)
-    .map((entry) => entry.id)
-  return winners.length === 1 ? winners : []
-}
-
 export function planExecutionLabel(
   plan: LocalPlan,
   executionId: string | null,
@@ -804,7 +785,7 @@ const RUN_METRICS: Array<{ id: RunMetric; label: string }> = [
 /**
  * Every retained run as a timeline row. Columns that no run reports are
  * hidden (audit PD-12); incomplete attempts stay listed but excluded from
- * winners. Exported under its historical name for the callers and tests.
+ * comparison.
  */
 /** Closed-row scent for the executions layer: who ran, how it ended, when,
  *  and what it consumed (audit ED-26). */
@@ -856,7 +837,7 @@ export function PlanRunHistory({
         <div className="min-w-0" data-plan-run-history="headless">
           <p className="mt-0 mb-3 text-xs leading-5 text-ink-soft">
             Every retained run with its result and usage. Incomplete attempts
-            remain excluded from metric winners.
+            are not included in this comparison.
           </p>
           {children}
         </div>
@@ -878,7 +859,7 @@ export function PlanRunHistory({
               </h2>
               <p className="mt-1 mb-0 text-xs leading-5 text-ink-soft">
                 Every retained run with its result and usage. Incomplete
-                attempts remain excluded from metric winners.
+                attempts are not included in this comparison.
               </p>
             </div>
           </div>
@@ -1006,19 +987,10 @@ export { PlanRunHistory as PlanNonComparableAttempts }
 
 /* ----------------------------------------------------------- comparison */
 
-const planVerdictStatus: Record<PlanVerdict, OperationalStatus> = {
-  improved: 'passed',
-  stable: 'unavailable',
-  regressed: 'failed',
-  inconclusive: 'inconclusive',
-}
-
 /** Every metric the plan compares, in the order the all-metrics layer lists
  *  them. Audit PD-12 still applies: a metric no column reports is not a row. */
 export const PLAN_COMPARISON_TABLE_METRICS = [
-  'pass_rate',
   'coverage',
-  'hard_gates',
   'technical_failures',
   'quality',
   'confidence',
@@ -1039,7 +1011,7 @@ export const PLAN_TREND_BANDS: Array<{
   label: string
   metrics: PlanMetricId[]
 }> = [
-  { id: 'outcome', label: 'outcome', metrics: ['pass_rate', 'quality'] },
+  { id: 'evidence', label: 'evidence', metrics: ['coverage', 'quality'] },
   {
     id: 'consumption',
     label: 'consumption',
@@ -1057,7 +1029,6 @@ const PLAN_TREND_METRICS: PlanMetricId[] = PLAN_TREND_BANDS.flatMap(
 )
 
 const PLAN_SCENARIO_TABLE_METRICS: PlanMetricId[] = [
-  'pass_rate',
   'quality',
   'duration',
   'tokens',
@@ -1078,20 +1049,10 @@ const PLAN_SCENARIO_SUMMARY_METRICS: PlanMetricId[] = [
 
 /** The dumbbells in the by-test layer: magnitude the percentages hide. */
 const PLAN_DUMBBELL_METRICS: Array<{ id: PlanMetricId; caption: string }> = [
-  { id: 'tokens', caption: 'subject · lower is better' },
-  { id: 'duration', caption: 'per run · lower is better' },
-  { id: 'quality', caption: 'advisory · higher is better' },
+  { id: 'tokens', caption: 'subject' },
+  { id: 'duration', caption: 'per run' },
+  { id: 'quality', caption: 'advisory' },
 ]
-
-const SCENARIO_BASELINE_ID = '__visual_baseline__'
-
-function directionLabel(direction: MetricDirection | undefined) {
-  return direction === 'higher'
-    ? 'Higher is better'
-    : direction === 'lower'
-      ? 'Lower is better'
-      : 'Context only'
-}
 
 /** A chart legend's key: the mark itself, drawn, never a colored word. */
 function LegendSwatch({
@@ -1338,16 +1299,6 @@ function hasMoved(metric: PlanMetricComparison): boolean {
   return metric.delta_percent === null || Math.abs(metric.delta_percent) >= 0.05
 }
 
-/** Relative change signed by improvement so right is always better; a change
- *  from zero has no percentage and takes the full bar. */
-function improvementPercent(metric: PlanMetricComparison): number {
-  const magnitude =
-    metric.delta_percent === null
-      ? 100
-      : Math.min(100, Math.abs(metric.delta_percent))
-  return metric.tone === 'positive' ? magnitude : -magnitude
-}
-
 function trendMetricsOf(scenario: PlanScenarioComparison) {
   const available = [...scenario.metrics, ...scenario.execution_metrics]
   return PLAN_TREND_METRICS.flatMap((id) => {
@@ -1366,9 +1317,7 @@ export function planMovementGroups(
   if (!comparison) return []
   return comparison.scenarios.map((scenario) => {
     const metrics = trendMetricsOf(scenario)
-    const moved = metrics.filter(
-      (metric) => hasMoved(metric) && metric.tone !== 'neutral',
-    )
+    const moved = metrics.filter(hasMoved)
     const unchanged = metrics.filter(
       (metric) => metric.delta !== null && !hasMoved(metric),
     )
@@ -1376,14 +1325,13 @@ export function planMovementGroups(
       id: scenario.id,
       title: scenarioName(scenario.id),
       subtitle: scenario.compatible
-        ? `${titleCase(scenario.baseline_status)} → ${titleCase(scenario.candidate_status)} · ${moved.length} of ${metrics.length} metrics moved`
+        ? `${moved.length} of ${metrics.length} metrics moved`
         : (scenario.reason ?? 'not comparable'),
       rows: moved.map((metric) => ({
         id: metric.id,
         label: metric.label.toLowerCase(),
-        improvement: improvementPercent(metric),
+        change: metric.delta_percent,
         valueLabel: formatPlanMetricDelta(metric),
-        tone: metric.tone === 'positive' ? 'positive' : 'negative',
       })),
       unchanged: unchanged
         .map(
@@ -1420,10 +1368,7 @@ export function planLayerScents(model: PlanComparisonModel): {
               (metric) =>
                 `${metric.label.toLowerCase()} ${formatPlanMetricDelta(metric).split(' · ').at(-1)}`,
             )
-          return [
-            `${scenarioName(scenario.id).toLowerCase()} ${scenario.baseline_status.toLowerCase()} → ${scenario.candidate_status.toLowerCase()}`,
-            ...moved,
-          ].join(' · ')
+          return [scenarioName(scenario.id).toLowerCase(), ...moved].join(' · ')
         })
         .join(LAYER_SEPARATOR)
     : 'exact values per test once a candidate completes'
@@ -1446,7 +1391,7 @@ export function planLayerScents(model: PlanComparisonModel): {
 }
 
 /** Audit PD-05 / ED-26: the plan's comparison is the page. Layer 0 is the
- *  filter row, the verdict, the trend tiles and what moved by test; exact
+ *  filter row, the observations, the trend tiles and what moved by test; exact
  *  tables open on demand below. */
 export function PlanExecutionHistory({
   plan,
@@ -1579,14 +1524,7 @@ export function PlanExecutionHistory({
         </div>
       ) : null}
       {model.headline ? (
-        <div
-          className="mt-5 grid gap-x-4 gap-y-2 @[720px]:grid-cols-[12rem_minmax(0,1fr)] @[720px]:items-baseline"
-          data-plan-verdict
-        >
-          <StatusBadge
-            status={planVerdictStatus[model.headline.verdict]}
-            label={model.headline.verdict}
-          />
+        <div className="mt-5" data-plan-observations>
           <p className="m-0 text-sm leading-6">
             <strong className="font-semibold">
               {model.headline.headline}.
@@ -1653,17 +1591,9 @@ export function PlanExecutionHistory({
           <div className="flex flex-wrap items-baseline justify-between gap-3">
             <span className="ds-label">
               what moved by test · relative change vs{' '}
-              {referenceLabel.toLowerCase()}, right is better
+              {referenceLabel.toLowerCase()} · left decreases, right increases
             </span>
             <span className="inline-flex flex-wrap items-center gap-4 font-mono text-label text-ink-muted">
-              <span className="inline-flex items-center gap-1.5">
-                <LegendSwatch shape="bar" color="var(--success)" />
-                improved
-              </span>
-              <span className="inline-flex items-center gap-1.5">
-                <LegendSwatch shape="bar" color="var(--danger)" />
-                regressed
-              </span>
               <span>labels carry the metric&apos;s own unit</span>
             </span>
           </div>
@@ -1772,7 +1702,7 @@ export function PlanDumbbells({ comparison }: { comparison: PlanComparison }) {
 }
 
 /** The all-metrics table: every metric in rows, the reference and each
- *  selected candidate in columns, strict winners marked. */
+ *  selected candidate in columns. */
 export function PlanMetricsTable({
   plan,
   model,
@@ -1783,10 +1713,9 @@ export function PlanMetricsTable({
   return (
     <div className="min-w-0">
       <DataTable
-        caption="Plan metrics in rows, with the visual baseline and selected candidates in columns. Best values are highlighted."
+        caption="Plan metrics in rows, with the visual baseline and selected candidates in columns."
         minWidth={`${12 + model.columns.length * 12}rem`}
         collapse
-        className="[&_.is-winner]:font-semibold [&_.is-winner]:text-success"
       >
         <thead>
           <tr>
@@ -1832,16 +1761,6 @@ export function PlanMetricsTable({
         <tbody>
           {model.metricRows.map(({ id, entries }) => {
             const descriptor = entries.find(({ metric }) => metric)?.metric
-            const winnerIds = new Set(
-              planMetricWinnerIds(
-                entries.map(({ column, value }) => ({
-                  id: column.row.id,
-                  value,
-                })),
-                descriptor?.direction ?? 'context',
-              ),
-            )
-            const direction = directionLabel(descriptor?.direction)
             return (
               <tr data-metric-id={id} key={id}>
                 <th scope="row" className="normal-case tracking-normal">
@@ -1849,24 +1768,15 @@ export function PlanMetricsTable({
                     <strong className="font-mono text-[0.8125rem] font-semibold text-ink">
                       {descriptor?.label ?? titleCase(id)}
                     </strong>
-                    <span
-                      className="font-mono text-label font-normal text-ink-muted"
-                      role="tooltip"
-                      id={`plan-metric-direction-${id}`}
-                    >
-                      {direction}
-                    </span>
                   </span>
                 </th>
                 {entries.map(({ column, metric, side }) => {
-                  const winner = winnerIds.has(column.row.id)
                   return (
                     <td
                       className={
                         [
                           column.isVisualBaseline ? 'is-baseline' : '',
                           column.selected ? 'is-selected' : '',
-                          winner ? 'is-winner' : '',
                         ]
                           .filter(Boolean)
                           .join(' ') || undefined
@@ -1881,11 +1791,6 @@ export function PlanMetricsTable({
                             <strong>
                               {formatPlanMetricValue(metric, side)}
                             </strong>
-                            {winner ? (
-                              <span className="ds-label text-success">
-                                Best
-                              </span>
-                            ) : null}
                           </span>
                           {!column.isVisualBaseline && column.rowComparison ? (
                             <small
@@ -2048,28 +1953,14 @@ export function PlanProvenance({ plan }: { plan: LocalPlan }) {
   )
 }
 
-function scenarioMetricWinnerIds(
-  descriptor: PlanMetricComparison,
-  metrics: Array<PlanMetricComparison | null>,
-  comparisons: Array<{ id: string }>,
-) {
-  return new Set(
-    planMetricWinnerIds(
-      [
-        { id: SCENARIO_BASELINE_ID, value: descriptor.baseline },
-        ...metrics.map((metric, index) => ({
-          id: comparisons[index].id,
-          value: metric?.candidate ?? null,
-        })),
-      ],
-      descriptor.direction,
-    ),
-  )
-}
-
 function scenarioMetrics(scenario: PlanScenarioComparison) {
   const available = [...scenario.metrics, ...scenario.execution_metrics]
-  return PLAN_SCENARIO_TABLE_METRICS.flatMap((id) => {
+  return [
+    ...PLAN_SCENARIO_TABLE_METRICS,
+    ...available
+      .filter((metric) => metric.id.startsWith('criterion:'))
+      .map((metric) => metric.id),
+  ].flatMap((id) => {
     const metric = available.find((candidate) => candidate.id === id)
     return metric ? [metric] : []
   })
@@ -2103,8 +1994,10 @@ function PlanScenarioComparisonTable({
             exact values
           </h3>
           <p className="mt-1 mb-0 text-xs leading-5 text-ink-soft">
-            Outcome and efficiency per test. Expand a row for exact values and
-            deltas.
+            Evidence and consumption per test. Expand a row for exact values and
+            deltas. Criterion means include retained points from incomplete
+            tasks. Criterion differences use matched repetitions only. Missing
+            evidence is not zero.
           </p>
         </div>
         <span className="font-mono text-xs text-ink-muted">
@@ -2122,10 +2015,6 @@ function PlanScenarioComparisonTable({
                 (scenario) => scenario.id === scenarioId,
               ) ?? null,
           }))
-          const firstScenario = scenarioColumns.find(
-            ({ scenario }) => scenario,
-          )?.scenario
-          if (!firstScenario) return null
           const metricLists = scenarioColumns.map(({ scenario }) =>
             scenario ? scenarioMetrics(scenario) : [],
           )
@@ -2146,12 +2035,7 @@ function PlanScenarioComparisonTable({
                   </code>
                 </span>
                 <span className="font-mono text-xs text-ink-soft">
-                  {titleCase(firstScenario.baseline_status)} →{' '}
-                  {scenarioColumns
-                    .map(({ scenario }) =>
-                      titleCase(scenario?.candidate_status ?? 'not reported'),
-                    )
-                    .join(' · ')}
+                  Retained observations
                 </span>
                 <span className="flex flex-wrap gap-x-3 gap-y-1 font-mono text-label text-ink-muted">
                   {PLAN_SCENARIO_SUMMARY_METRICS.map((metricId) => {
@@ -2179,7 +2063,6 @@ function PlanScenarioComparisonTable({
                   caption={`Metrics for ${scenarioName(scenarioId)}, comparing the visual baseline with selected candidates.`}
                   minWidth={`${14 + comparisons.length * 10}rem`}
                   collapse
-                  className="[&_.is-winner]:font-semibold [&_.is-winner]:text-success"
                   data-scenario-metrics
                 >
                   <thead>
@@ -2224,7 +2107,13 @@ function PlanScenarioComparisonTable({
                     </tr>
                   </thead>
                   <tbody>
-                    {PLAN_SCENARIO_TABLE_METRICS.map((metricId) => {
+                    {[
+                      ...new Set(
+                        metricLists.flatMap((list) =>
+                          list.map((metric) => metric.id),
+                        ),
+                      ),
+                    ].map((metricId) => {
                       const metrics = metricLists.map(
                         (list) =>
                           list.find(({ id }) => id === metricId) ?? null,
@@ -2237,11 +2126,6 @@ function PlanScenarioComparisonTable({
                         metrics.every((metric) => metric?.candidate == null)
                       )
                         return null
-                      const winnerIds = scenarioMetricWinnerIds(
-                        descriptor,
-                        metrics,
-                        comparisons,
-                      )
                       return (
                         <tr data-scenario-metric-id={metricId} key={metricId}>
                           <th
@@ -2252,32 +2136,22 @@ function PlanScenarioComparisonTable({
                               {descriptor.label}
                             </span>
                           </th>
-                          <td
-                            className={
-                              winnerIds.has(SCENARIO_BASELINE_ID)
-                                ? 'is-winner'
-                                : undefined
-                            }
-                            data-label="Baseline"
-                          >
+                          <td data-label="Baseline">
                             <span className="flex items-baseline gap-2 font-mono tabular-nums">
                               <b>
                                 {formatPlanMetricValue(descriptor, 'baseline')}
                               </b>
-                              {winnerIds.has(SCENARIO_BASELINE_ID) ? (
-                                <span className="ds-label text-success">
-                                  Best
-                                </span>
-                              ) : null}
                             </span>
+                            {descriptor.evidence ? (
+                              <small className="font-mono text-label text-ink-muted">
+                                {descriptor.evidence.baseline_observed}/
+                                {descriptor.evidence.baseline_planned ?? '—'}{' '}
+                                evaluated
+                              </small>
+                            ) : null}
                           </td>
                           {metrics.map((metric, index) => (
                             <td
-                              className={
-                                winnerIds.has(comparisons[index].id)
-                                  ? 'is-winner'
-                                  : undefined
-                              }
                               data-label={comparisons[index].label}
                               key={comparisons[index].id}
                             >
@@ -2290,17 +2164,44 @@ function PlanScenarioComparisonTable({
                                         'candidate',
                                       )}
                                     </b>
-                                    {winnerIds.has(comparisons[index].id) ? (
-                                      <span className="ds-label text-success">
-                                        Best
-                                      </span>
-                                    ) : null}
                                   </span>
                                   <small
                                     className={`text-label ${metricToneClass[metric.tone]}`}
                                   >
                                     {formatPlanMetricDelta(metric)}
                                   </small>
+                                  {metric.evidence ? (
+                                    <small className="text-label text-ink-muted">
+                                      {metric.evidence.candidate_observed}/
+                                      {metric.evidence.candidate_planned ?? '—'}{' '}
+                                      evaluated · {metric.evidence.paired}{' '}
+                                      matched repetitions
+                                      {metric.evidence.paired > 0 ? (
+                                        <>
+                                          {' '}
+                                          · paired means{' '}
+                                          {formatPlanMetricValue(
+                                            {
+                                              ...metric,
+                                              baseline:
+                                                metric.evidence.paired_baseline,
+                                            },
+                                            'baseline',
+                                          )}{' '}
+                                          →{' '}
+                                          {formatPlanMetricValue(
+                                            {
+                                              ...metric,
+                                              candidate:
+                                                metric.evidence
+                                                  .paired_candidate,
+                                            },
+                                            'candidate',
+                                          )}
+                                        </>
+                                      ) : null}
+                                    </small>
+                                  ) : null}
                                 </span>
                               ) : (
                                 <span className="text-ink-muted">—</span>
@@ -2324,6 +2225,12 @@ function PlanScenarioComparisonTable({
 /* ------------------------------------------------------------------ page */
 
 export function LocalPlanDetailPage({ planId }: { planId: string }) {
+  const [requirements, setRequirements] = useState<PlanRequirements | null>(
+    null,
+  )
+  const [activeExecution, setActiveExecution] = useState<PlanExecution | null>(
+    null,
+  )
   const [bridge, setBridge] = useState<DashboardDataBridge | null>(null)
   const [plan, setPlan] = useState<LocalPlan | null>(null)
   const [executionSummaries, setExecutionSummaries] = useState<
@@ -2378,6 +2285,54 @@ export function LocalPlanDetailPage({ planId }: { planId: string }) {
     }, 2_000)
     return () => window.clearInterval(timer)
   }, [load, running])
+
+  useEffect(() => {
+    if (!bridge || !running || !plan?.last_attempt_id?.startsWith('plan-')) {
+      setActiveExecution(null)
+      return
+    }
+    let live = true
+    const refresh = () =>
+      planAction<PlanExecution>(bridge, {
+        action: 'execution',
+        execution_id: plan.last_attempt_id,
+      })
+        .then((value) => {
+          if (live) setActiveExecution(value)
+        })
+        .catch(() => undefined)
+    void refresh()
+    const timer = setInterval(() => void refresh(), 2000)
+    return () => {
+      live = false
+      clearInterval(timer)
+    }
+  }, [bridge, running, plan?.last_attempt_id])
+  const exportPlan = async () => {
+    if (!bridge || !plan) return
+    try {
+      downloadJson(
+        await planAction(bridge, { action: 'export', plan_id: plan.id }),
+        `${plan.id}.json`,
+      )
+    } catch (cause) {
+      setLoadError(errorText(cause))
+    }
+  }
+  const cancelPlan = async () => {
+    if (!bridge || !activeExecution) return
+    try {
+      setActiveExecution(
+        await planAction<PlanExecution>(bridge, {
+          action: 'cancel',
+          execution_id: activeExecution.id,
+        }),
+      )
+      await load()
+    } catch (cause) {
+      setLoadError(errorText(cause))
+    }
+  }
 
   const executionIdKey = [
     plan?.baseline_execution_id ?? '',
@@ -2504,6 +2459,21 @@ export function LocalPlanDetailPage({ planId }: { planId: string }) {
       executionId: null,
     })
     try {
+      const checked = await planAction<PlanRequirements>(bridge, {
+        action: 'requirements',
+        plan_id: plan.id,
+      })
+      setRequirements(checked)
+      if (!checked.ready) {
+        setRunFeedback({
+          role,
+          phase: 'error',
+          message:
+            'Execution requirements need attention. Your saved plan is preserved.',
+          executionId: null,
+        })
+        return
+      }
       const nextPlan = await bridge.startPlan(plan.id, role)
       setPlan(nextPlan)
       setRunFeedback({
@@ -2684,22 +2654,88 @@ export function LocalPlanDetailPage({ planId }: { planId: string }) {
               title={plan.label || plan.id}
               summary={plan.purpose || ''}
               actions={
-                <StatusBadge
-                  status={readiness.status}
-                  label={readiness.label}
-                />
+                <div className="flex flex-wrap items-center gap-2">
+                  <StatusBadge
+                    status={readiness.status}
+                    label={readiness.label}
+                  />
+                  {!plan.locked ? (
+                    <a
+                      className={buttonClassName({
+                        variant: 'secondary',
+                        size: 'compact',
+                      })}
+                      href={`${hashForNewPlan()}/edit/${plan.id}`}
+                    >
+                      Edit plan
+                    </a>
+                  ) : null}
+                  <a
+                    className={buttonClassName({
+                      variant: 'secondary',
+                      size: 'compact',
+                    })}
+                    href={`${hashForNewPlan()}/duplicate/${plan.id}`}
+                  >
+                    Duplicate plan
+                  </a>
+                  <button
+                    type="button"
+                    className={buttonClassName({
+                      variant: 'quiet',
+                      size: 'compact',
+                    })}
+                    onClick={() => void exportPlan()}
+                  >
+                    Export plan
+                  </button>
+                </div>
               }
             />
-            <PlanLifecycle
-              plan={plan}
-              starting={starting}
-              feedback={runFeedback}
-              onStart={(role) => void start(role)}
-              baselineSummary={baselineSummary}
-              lastRunSummary={lastRunSummary}
-            />
+            {requirements ? <Requirements value={requirements} /> : null}
+            {loadError ? (
+              <Callout tone="warning" title="Plan action unavailable">
+                {loadError}
+              </Callout>
+            ) : null}
+            {plan.protected_executor_required ? (
+              <Callout tone="warning" title="Protected executor required">
+                Export this plan for Release Control. Its fault-injection work
+                requires the protected executor.
+              </Callout>
+            ) : plan.compatible === false ? (
+              <Callout tone="warning" title="Saved scope unavailable">
+                A saved scenario contract is unavailable in this runner. The
+                plan and its evidence remain available.
+              </Callout>
+            ) : (
+              <PlanLifecycle
+                plan={plan}
+                starting={starting}
+                feedback={runFeedback}
+                onStart={(role) => void start(role)}
+                baselineSummary={baselineSummary}
+                lastRunSummary={lastRunSummary}
+              />
+            )}
+            {activeExecution ? (
+              <>
+                <PlanProgress execution={activeExecution} />
+                <button
+                  className={buttonClassName({
+                    variant: 'secondary',
+                    className: 'justify-self-start',
+                  })}
+                  disabled={activeExecution.state === 'cancelling'}
+                  type="button"
+                  onClick={() => void cancelPlan()}
+                >
+                  Cancel execution
+                </button>
+              </>
+            ) : null}
             <PlanScope plan={plan} baselineSummary={baselineSummary} />
-            {/* Audit ED-26: layer 0 is the comparison — verdict, trend tiles,
+            {/* Audit ED-26: layer 0 is the comparison — observations, trend tiles,
                 what moved by test. Executions, exact tables and provenance are
                 closed rows with a scent until the reader needs them. */}
             {comparisonInput ? (

@@ -281,7 +281,9 @@ function unavailableScenario(
 
   return {
     key: `${record?.subject_id ?? 'unknown'}:${scenarioId}:unavailable:${reportIndex}`,
-    reason: 'The expected report for this scenario was not retained.',
+    reason:
+      nonEmptyString(record?.error) ??
+      'The expected report for this scenario was not retained.',
     reportIndex,
     scenarioIndex: null,
     subjectId: record?.subject_id ?? 'Unknown subject',
@@ -469,7 +471,7 @@ function primaryMetrics(
   tests: SemanticTestReport[],
   duration: { value: number | null; kind: 'single' | 'average' | null },
 ): ScenarioMatrixItem['primaryMetrics'] {
-  const runUsage = generalRunMetrics(run, tests)
+  const runUsage = generalRunMetrics(run)
   const workflow = tests.length > 0 ? aggregateWorkflowMetrics(tests) : null
   const workflowCosts = tests.map((test) => finiteNumber(test.cost_usd))
   const workflowCost =
@@ -544,9 +546,7 @@ function primaryMetrics(
       value: totalTokens == null ? '—' : formatCount(totalTokens),
       detail:
         runUsage.totalTokens != null
-          ? runUsage.backfilled
-            ? 'Evaluator usage · backfilled'
-            : 'Subject execution usage'
+          ? 'Subject execution usage'
           : workflow && workflow.tokenMetricSteps > 0
             ? `${workflow.tokenMetricSteps}/${workflow.stepCount} workflow steps reported`
             : missingDetail,
@@ -555,32 +555,24 @@ function primaryMetrics(
       label: 'Function calls',
       value: functionCalls == null ? '—' : formatCount(functionCalls),
       detail:
-        runUsage.backfilled && functionCalls != null
-          ? 'Workflow operations · backfilled'
-          : functionErrors == null
-            ? functionCalls == null
-              ? missingDetail
-              : 'Error count not captured'
-            : `${formatCount(functionErrors)} errors`,
+        functionErrors == null
+          ? functionCalls == null
+            ? missingDetail
+            : 'Error count not captured'
+          : `${formatCount(functionErrors)} errors`,
     },
     {
       label: 'Function errors',
       value: functionErrors == null ? '—' : formatCount(functionErrors),
       detail:
-        functionErrors == null
-          ? missingDetail
-          : runUsage.backfilled
-            ? 'Workflow failures · backfilled'
-            : 'Subject execution errors',
+        functionErrors == null ? missingDetail : 'Subject execution errors',
     },
     {
       label: 'Reported cost',
       value: costUsd == null ? '—' : formatCost(costUsd),
       detail:
         runUsage.costUsd != null
-          ? runUsage.backfilled
-            ? 'Local run · no metered charge'
-            : 'Subject execution cost'
+          ? 'Subject execution cost'
           : workflowCost != null && workflow
             ? `Reported by all ${workflow.stepCount} workflow steps`
             : missingDetail,

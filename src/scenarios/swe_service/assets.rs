@@ -300,12 +300,24 @@ module.run([sys.executable,'-I','-c',script,sys.argv[2],sys.argv[3]])
                 stopped.exists(),
                 "TERM must reach a verifier in another session"
             );
-            let status = std::process::Command::new("kill")
-                .args(["-0", pid.trim()])
-                .stderr(Stdio::null())
-                .status()
-                .unwrap();
-            assert!(!status.success(), "verifier must be reaped");
+            // The signal handler writes `stopped` before exiting. Wait for
+            // the controller to reap it, rather than racing that final exit.
+            let deadline = tokio::time::Instant::now() + Duration::from_secs(2);
+            loop {
+                let status = std::process::Command::new("kill")
+                    .args(["-0", pid.trim()])
+                    .stderr(Stdio::null())
+                    .status()
+                    .unwrap();
+                if !status.success() {
+                    break;
+                }
+                assert!(
+                    tokio::time::Instant::now() < deadline,
+                    "verifier must be reaped"
+                );
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
         }
     }
 }

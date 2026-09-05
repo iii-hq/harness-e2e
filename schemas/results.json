@@ -888,17 +888,13 @@
     "ComplexityClassification": {
       "type": "object",
       "required": [
+        "method",
         "profile",
         "tier"
       ],
       "properties": {
         "method": {
-          "default": "legacy_v1",
-          "allOf": [
-            {
-              "$ref": "#/definitions/ComplexityMethod"
-            }
-          ]
+          "$ref": "#/definitions/ComplexityMethod"
         },
         "profile": {
           "$ref": "#/definitions/ComplexityProfile"
@@ -911,7 +907,6 @@
     "ComplexityMethod": {
       "type": "string",
       "enum": [
-        "legacy_v1",
         "capability_v2"
       ]
     },

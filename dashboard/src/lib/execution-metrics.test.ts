@@ -259,6 +259,33 @@ describe('whole-execution metrics', () => {
     expect(buildExecutionMetrics(deferred).planned).toBe(3)
   })
 
+  it('pools independent plan repetitions without counting repeated native evidence twice', () => {
+    const detail = executionMetricsFixture([
+      { runs: [metricRun('round-1', 100)] },
+      { runs: [metricRun('round-2', 200)] },
+    ])
+    for (const [index, record] of detail.reports.entries()) {
+      record.native_execution_id = `native-${index}`
+      const scenario = record.report?.scenarios[0]
+      if (!scenario) throw new Error('missing scenario fixture')
+      scenario.scenario_id = 'repeated-case'
+      scenario.case_id = 'same-case'
+    }
+    expect(buildExecutionMetrics(detail)).toMatchObject({
+      scopeComplete: true,
+      planned: 2,
+      completed: 2,
+      subjectTokens: { total: 300 },
+    })
+    detail.reports.push(structuredClone(detail.reports[0]))
+    expect(buildExecutionMetrics(detail)).toMatchObject({
+      scopeComplete: false,
+      planned: 2,
+      completed: 2,
+      subjectTokens: { total: null, observed: 300 },
+    })
+  })
+
   it('preserves a measured zero but rejects unsafe or negative token telemetry', () => {
     const zero = buildExecutionMetrics(
       executionMetricsFixture([{ runs: [metricRun('a', 0)] }]),

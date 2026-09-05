@@ -37,6 +37,8 @@ type ProviderModelDropdownProps = {
   /** Renders a first option that clears the value, e.g. "Default judge". */
   clearLabel?: string
   disabled?: boolean
+  invalid?: boolean
+  describedBy?: string
   required?: boolean
   optionValue?: (provider: string, model: string) => string
 }
@@ -73,6 +75,8 @@ export function ProviderModelDropdown({
   id,
   clearLabel,
   disabled = false,
+  invalid,
+  describedBy,
   required = false,
   optionValue,
 }: ProviderModelDropdownProps) {
@@ -80,6 +84,7 @@ export function ProviderModelDropdown({
   const triggerRef = useRef<HTMLButtonElement>(null)
   const menuRef = useRef<HTMLDivElement>(null)
   const [open, setOpen] = useState(false)
+  const [query, setQuery] = useState('')
   // Audit PN-07 / RS-08: providers start expanded so a model is one click
   // away; collapsing a long provider is opt-in.
   const [collapsedProviders, setCollapsedProviders] = useState<Set<string>>(
@@ -123,9 +128,11 @@ export function ProviderModelDropdown({
     if (!open) return
     const menu = menuRef.current
     const target =
+      menu?.querySelector<HTMLElement>('input[type="search"]') ??
       menu?.querySelector<HTMLElement>(
         '[role="option"][aria-selected="true"]',
-      ) ?? menu?.querySelector<HTMLElement>(OPTION_SELECTOR)
+      ) ??
+      menu?.querySelector<HTMLElement>(OPTION_SELECTOR)
     target?.focus()
   }, [open])
 
@@ -189,6 +196,8 @@ export function ProviderModelDropdown({
         className="ds-input flex items-center justify-between gap-2.5 text-left"
         aria-label={labelledBy ? undefined : ariaLabel}
         aria-labelledby={labelledBy}
+        aria-invalid={invalid}
+        aria-describedby={describedBy}
         aria-haspopup="listbox"
         aria-controls={menuId}
         aria-expanded={open}
@@ -241,9 +250,20 @@ export function ProviderModelDropdown({
           id={menuId}
           ariaLabel={labelledBy ? undefined : ariaLabel}
           labelledBy={labelledBy}
-          groups={normalizedGroups}
+          search={query}
+          onSearch={setQuery}
+          groups={normalizedGroups
+            .map((group) => ({
+              ...group,
+              models: group.models.filter((model) =>
+                `${group.provider} ${model.label}`
+                  .toLowerCase()
+                  .includes(query.toLowerCase()),
+              ),
+            }))
+            .filter((group) => group.models.length > 0)}
           value={value}
-          clearLabel={clearLabel}
+          clearLabel={query.trim() ? undefined : clearLabel}
           collapsedProviders={collapsedProviders}
           onToggleProvider={toggleProvider}
           onSelect={select}
@@ -267,7 +287,11 @@ export function ProviderModelMenu({
   onToggleProvider,
   onSelect,
   onKeyDown,
+  search,
+  onSearch,
 }: {
+  search?: string
+  onSearch?: (value: string) => void
   ref?: React.Ref<HTMLDivElement>
   id: string
   ariaLabel?: string
@@ -283,89 +307,104 @@ export function ProviderModelMenu({
   return (
     <div
       ref={ref}
+      role="dialog"
+      aria-label="Model selection"
       onKeyDown={onKeyDown}
       className="absolute z-50 mt-2 grid max-h-80 w-full min-w-[15rem] overflow-auto rounded-[6px] border border-[var(--color-edge)] bg-panel p-1.5 shadow-[var(--shadow-panel)]"
-      id={id}
-      role="listbox"
-      aria-label={ariaLabel}
-      aria-labelledby={labelledBy}
     >
-      {clearLabel ? (
-        <button
-          type="button"
-          role="option"
-          aria-selected={value === ''}
-          className={`${optionClassName(value === '')} mb-1`}
-          onClick={() => onSelect('')}
-        >
-          <span>{clearLabel}</span>
-          {value === '' && <Check size={14} aria-hidden="true" />}
-        </button>
+      {onSearch ? (
+        <input
+          className="ds-input mb-2"
+          type="search"
+          aria-label={`Search ${ariaLabel ?? 'models'}`}
+          placeholder="Search model or provider…"
+          value={search ?? ''}
+          onChange={(event) => onSearch(event.target.value)}
+        />
       ) : null}
-      {groups.length === 0 ? (
-        <div className="p-5 text-center text-xs text-ink-muted">
-          No models available
-        </div>
-      ) : (
-        groups.map((group) => {
-          const collapsed = collapsedProviders.has(group.provider)
-          const groupId = [
-            id,
-            group.provider.replace(/[^a-zA-Z0-9_-]/g, '-'),
-          ].join('-')
-          const groupLabelId = `${groupId}-label`
-          return (
-            // biome-ignore lint/a11y/useSemanticElements: a fieldset is not a valid child of a listbox
-            <div
-              className="border-b border-[var(--color-rule)] py-1 last:border-b-0"
-              role="group"
-              aria-labelledby={groupLabelId}
-              key={group.provider}
-            >
-              <button
-                type="button"
-                id={groupLabelId}
-                tabIndex={-1}
-                className="flex min-h-9 w-full items-center gap-2 rounded-[6px] border-0 bg-transparent px-2 text-left font-mono text-label font-semibold text-[var(--color-ink-faint)] transition-colors duration-[var(--ds-duration-fast)] hover:bg-panel-raised hover:text-ink"
-                aria-expanded={!collapsed}
-                aria-controls={groupId}
-                onClick={() => onToggleProvider(group.provider)}
+      <div
+        id={id}
+        role="listbox"
+        aria-label={ariaLabel}
+        aria-labelledby={labelledBy}
+      >
+        {clearLabel ? (
+          <button
+            type="button"
+            role="option"
+            aria-selected={value === ''}
+            className={`${optionClassName(value === '')} mb-1`}
+            onClick={() => onSelect('')}
+          >
+            <span>{clearLabel}</span>
+            {value === '' && <Check size={14} aria-hidden="true" />}
+          </button>
+        ) : null}
+        {groups.length === 0 ? (
+          <div className="p-5 text-center text-xs text-ink-muted">
+            No models available
+          </div>
+        ) : (
+          groups.map((group) => {
+            const collapsed = collapsedProviders.has(group.provider)
+            const groupId = [
+              id,
+              group.provider.replace(/[^a-zA-Z0-9_-]/g, '-'),
+            ].join('-')
+            const groupLabelId = `${groupId}-label`
+            return (
+              // biome-ignore lint/a11y/useSemanticElements: a fieldset is not a valid child of a listbox
+              <div
+                className="border-b border-[var(--color-rule)] py-1 last:border-b-0"
+                role="group"
+                aria-labelledby={groupLabelId}
+                key={group.provider}
               >
-                <ChevronRight
-                  size={14}
-                  aria-hidden="true"
-                  className={`shrink-0 transition-transform duration-[var(--ds-duration-fast)] ${collapsed ? '' : 'rotate-90'}`}
-                />
-                <span className="min-w-0 flex-1 overflow-hidden text-ellipsis whitespace-nowrap">
-                  {group.provider}
-                </span>
-                <small className="font-mono text-label font-normal text-ink-muted">
-                  {group.models.length}
-                </small>
-              </button>
-              {!collapsed && (
-                <div className="grid gap-0.5 pb-1 pl-5" id={groupId}>
-                  {group.models.map((model) => (
-                    <button
-                      type="button"
-                      role="option"
-                      aria-selected={model.value === value}
-                      className={optionClassName(model.value === value)}
-                      key={model.value}
-                      onClick={() => onSelect(model.value)}
-                    >
-                      <span>{model.label}</span>
-                      {model.value === value && (
-                        <Check size={14} aria-hidden="true" />
-                      )}
-                    </button>
-                  ))}
-                </div>
-              )}
-            </div>
-          )
-        })
-      )}
+                <button
+                  type="button"
+                  id={groupLabelId}
+                  tabIndex={-1}
+                  className="flex min-h-9 w-full items-center gap-2 rounded-[6px] border-0 bg-transparent px-2 text-left font-mono text-label font-semibold text-[var(--color-ink-faint)] transition-colors duration-[var(--ds-duration-fast)] hover:bg-panel-raised hover:text-ink"
+                  aria-expanded={!collapsed}
+                  aria-controls={groupId}
+                  onClick={() => onToggleProvider(group.provider)}
+                >
+                  <ChevronRight
+                    size={14}
+                    aria-hidden="true"
+                    className={`shrink-0 transition-transform duration-[var(--ds-duration-fast)] ${collapsed ? '' : 'rotate-90'}`}
+                  />
+                  <span className="min-w-0 flex-1 overflow-hidden text-ellipsis whitespace-nowrap">
+                    {group.provider}
+                  </span>
+                  <small className="font-mono text-label font-normal text-ink-muted">
+                    {group.models.length}
+                  </small>
+                </button>
+                {!collapsed && (
+                  <div className="grid gap-0.5 pb-1 pl-5" id={groupId}>
+                    {group.models.map((model) => (
+                      <button
+                        type="button"
+                        role="option"
+                        aria-selected={model.value === value}
+                        className={optionClassName(model.value === value)}
+                        key={model.value}
+                        onClick={() => onSelect(model.value)}
+                      >
+                        <span>{model.label}</span>
+                        {model.value === value && (
+                          <Check size={14} aria-hidden="true" />
+                        )}
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )
+          })
+        )}
+      </div>
     </div>
   )
 }

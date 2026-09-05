@@ -223,7 +223,7 @@ test('keeps metric history rows readable and opens details on demand', () => {
 test('makes local plan scope selection focused and readable', () => {
   // Audit PN-18 / PN-25 / PN-02: DS header with a breadcrumb, one column,
   // and the sticky footer instead of the review aside.
-  assert.match(planPage, /title="new plan"/)
+  assert.match(planPage, /title=\{\s*editId \? 'edit plan' : duplicateId \? 'duplicate plan' : 'new plan'/)
   assert.match(planPage, /breadcrumb=\{\[/)
   assert.match(planPage, /ExecutionSetup/)
   assert.match(planPage, /ExecutionSetupFooter/)
@@ -261,7 +261,7 @@ test('renders plan pages on the design system with no legacy plan CSS', () => {
 
 test('exposes baseline and arbitrary candidate comparison controls', () => {
   assert.match(plansPage, /Latest candidate vs baseline/)
-  assert.match(plansPage, /regressed/)
+  assert.doesNotMatch(plansPage, /regressed/)
   assert.match(plansPage, /DeltaValue/)
   assert.match(planDetailPage, /baseline and candidates/)
   // One filter row scopes every chart and table; it never changes the
@@ -269,8 +269,8 @@ test('exposes baseline and arbitrary candidate comparison controls', () => {
   assert.match(planDetailPage, /data-plan-filter-row/)
   assert.match(planDetailPage, /the official baseline stored with the plan never changes here/)
   assert.match(planDetailPage, /PLAN_COMPARISON_TABLE_METRICS/)
-  assert.match(planDetailPage, /planMetricWinnerIds/)
-  assert.match(planDetailPage, /Best values are highlighted/)
+  assert.doesNotMatch(planDetailPage, /planMetricWinnerIds/)
+  assert.doesNotMatch(planDetailPage, /Best values are highlighted/)
   // Layer 0 draws the comparison: trend tiles with sparklines and what moved
   // by test as diverging bars; the two token metrics from #88 are tiles.
   assert.match(planDetailPage, /data-plan-trend/)
@@ -431,7 +431,6 @@ test('publisher writes only the JSON manifest', () => {
   assert.match(publisher, /MANIFEST_FILENAME = "executions\.json"/)
   assert.match(publisher, /write_json_atomic\(manifest_path/)
   assert.match(publisher, /"mode": "published"/)
-  assert.match(publisher, /legacy_manifest_path\.unlink/)
   assert.doesNotMatch(publisher, /HARNESS_EXECUTIONS/)
 })
 

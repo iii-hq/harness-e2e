@@ -394,20 +394,13 @@ describe('assessment workspace component', () => {
     expect(html).toContain('not evaluated')
   })
 
-  it('renders explicit legacy and unavailable states without a default verdict', () => {
-    const legacy = renderToStaticMarkup(
-      <AssessmentPanel
-        model={{ availability: 'legacy', runs: [] }}
-        filter="all"
-      />,
-    )
+  it('renders unavailable assessments without a default verdict', () => {
     const unavailable = renderToStaticMarkup(
       <AssessmentPanel
         model={{ availability: 'unavailable', runs: [] }}
         filter="all"
       />,
     )
-    expect(legacy).toContain('has no assessment contract')
     expect(unavailable).toContain('Assessment data is unavailable')
     expect(unavailable).toContain(
       'No status or AI conclusion has been inferred',

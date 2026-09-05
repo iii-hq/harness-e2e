@@ -28,9 +28,16 @@ function RoutedPage({ route }: { route: DashboardRoute }) {
     case 'plans':
       return <PlansPage />
     case 'plan-create':
-      return <LocalPlanCreatePage />
+      return (
+        <LocalPlanCreatePage
+          key={route.editId ?? route.duplicateId ?? route.profileId ?? 'new'}
+          profileId={route.profileId}
+          duplicateId={route.duplicateId}
+          editId={route.editId}
+        />
+      )
     case 'plan-detail':
-      return <LocalPlanDetailPage planId={route.planId} />
+      return <LocalPlanDetailPage key={route.planId} planId={route.planId} />
     case 'overview':
       if (route.view === 'tests') return <TestsCatalogPage />
       if (route.view === 'executions') return <ExecutionsPage />

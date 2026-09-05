@@ -1,11 +1,5 @@
 # Recover an interrupted database migration
 
-## Plans
-
-- daily
-- weekly
-- post-deploy
-
 ## Version
 
 2

@@ -128,7 +128,8 @@ def validate_suite(suite: Any) -> dict[str, Any]:
         raise ValueError("suite.id must be kebab-case")
     require_text(suite.get("label"), "suite.label")
     require_text(suite.get("lane"), "suite.lane")
-    require_positive_integer(suite.get("seed"), "suite.seed")
+    if suite.get("seed") is not None:
+        require_positive_integer(suite.get("seed"), "suite.seed")
     validate_identity(suite, "subject")
     validate_identity(suite, "judge")
 

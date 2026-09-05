@@ -1252,14 +1252,11 @@ export function AssessmentPanel({
     return (
       <div className="rounded-lg border border-dashed border-line bg-panel-subtle p-5">
         <strong className="block text-sm text-ink">
-          {model.availability === 'unavailable'
-            ? 'Assessment data is unavailable'
-            : 'This retained result has no assessment contract'}
+          Assessment data is unavailable
         </strong>
         <p className="mt-2 mb-0 text-sm leading-5 text-ink-muted">
-          {model.availability === 'unavailable'
-            ? 'The producer explicitly reported that no assessment contract is available. No status or AI conclusion has been inferred.'
-            : 'Legacy and aggregate-only results remain readable, but they cannot show assessment conclusions or evidence.'}
+          No assessment contract is available. No status or AI conclusion has
+          been inferred.
         </p>
       </div>
     )

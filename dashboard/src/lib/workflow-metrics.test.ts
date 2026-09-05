@@ -137,13 +137,13 @@ describe('workflow metrics', () => {
     expect(workflowMetricEntries(metrics)).toEqual([])
   })
 
-  it('keeps partial usage explicit and reads legacy direct keys', () => {
+  it('keeps partial native usage explicit', () => {
     const tests = [
       {
-        node_id: 'legacy',
+        node_id: 'partial',
         status: 'succeeded',
         duration_ms: 10,
-        metrics: { total_tokens: 900, function_calls: 3 },
+        metrics: { totals: { total_tokens: 900, function_calls: 3 } },
       },
       {
         node_id: 'operational-only',
@@ -258,11 +258,10 @@ describe('workflow metrics', () => {
     } as unknown as DashboardExecutionDetail
 
     expect(summedGeneralRunMetricsFromDetail(detail)).toMatchObject({
-      totalTokens: 9_145,
-      functionCalls: 16,
-      functionCallErrors: 0,
+      totalTokens: null,
+      functionCalls: null,
+      functionCallErrors: null,
       costUsd: null,
-      backfilled: true,
     })
   })
 })

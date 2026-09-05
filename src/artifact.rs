@@ -222,7 +222,7 @@ fn canonical_json(value: serde_json::Value) -> serde_json::Value {
     }
 }
 
-fn validate_relative_path(path: &Path) -> Result<()> {
+pub(crate) fn validate_relative_path(path: &Path) -> Result<()> {
     if path.as_os_str().is_empty() || path.is_absolute() {
         bail!("artifact path must be a non-empty relative path");
     }

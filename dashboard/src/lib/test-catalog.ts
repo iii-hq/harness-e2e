@@ -225,7 +225,7 @@ export type TestCatalogRow = {
   lifecycle: 'active' | 'retired' | 'never_run'
   current_version: number | null
   complexity?: {
-    method?: 'legacy_v1' | 'capability_v2'
+    method?: 'capability_v2'
     tier:
       | 'l0_atomic'
       | 'l1_sequential'

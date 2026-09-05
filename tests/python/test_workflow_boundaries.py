@@ -78,7 +78,6 @@ class WorkflowBoundaryTests(unittest.TestCase):
         self.assertNotIn("release.yml", workflows)
 
     def test_weekly_stress_delegates_privileged_actions_to_protected_launchers(self):
-        self.assertIn("e2e::archive", (ROOT / "docs/fault-injection.md").read_text())
         self.assertFalse(
             (ROOT / "config/profiles/weekly-l5-recovery.json").exists()
         )
@@ -113,19 +112,6 @@ class WorkflowBoundaryTests(unittest.TestCase):
         self.assertIn('"failure_policy": "advisory"', contract_tool)
         self.assertNotIn("config/campaigns", contract_tool)
 
-        expected_adaptive = {"post-deploy.json": 1, "weekly.json": 2}
-        for name, expected_count in expected_adaptive.items():
-            manifest = json.loads(
-                (ROOT / "config/campaigns" / name).read_text(encoding="utf-8")
-            )
-            adaptive = [
-                group
-                for group in manifest["groups"]
-                if group["execution_kind"] == "adaptive_flow"
-            ]
-            self.assertEqual(len(adaptive), expected_count)
-            self.assertTrue(all(group["runs"] == 1 for group in adaptive))
-            self.assertTrue(all(group["technical_retries"] == 0 for group in adaptive))
 
     def test_canonical_gate_pins_and_authorizes_the_e2e_revision(self):
         workflow = (ROOT / ".github/workflows/canonical-gate.yml").read_text(
