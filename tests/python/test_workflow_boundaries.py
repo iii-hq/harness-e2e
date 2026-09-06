@@ -136,6 +136,76 @@ class WorkflowBoundaryTests(unittest.TestCase):
         self.assertNotIn("/admit", workflow)
         self.assertNotIn("exact_stack_campaign.py admit", workflow)
 
+    def test_finalizer_aggregates_only_campaigns_from_the_current_execution(self):
+        import subprocess
+        import tempfile
+        import textwrap
+
+        workflow = (ROOT / ".github/workflows/exact-stack-e2e.yml").read_text(encoding="utf-8")
+        finalizer = workflow.split("\n  finalize:", 1)[1]
+        self.assertLess(
+            finalizer.index("Swatinem/rust-cache"),
+            finalizer.index("Restore deterministic group paths"),
+        )
+        restore = finalizer.split("- name: Restore deterministic group paths", 1)[
+            1
+        ].split("\n      - uses:", 1)[0]
+        command = textwrap.dedent(restore.split("run: |\n", 1)[1])
+        command = command.replace(
+            "${{ inputs.execution_id }}", "execution-1"
+        ).replace("${{ github.run_attempt }}", "1")
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = pathlib.Path(directory)
+            campaign_root = root / "target/harness-e2e-campaign"
+            stale_regression = campaign_root / "regression-r01"
+            stale_regression.mkdir(parents=True)
+            (stale_regression / "stack-lock.json").write_text('{"campaign":"stale"}')
+            (stale_regression / "campaign-summary.json").write_text(
+                '{"campaign":"stale"}'
+            )
+            (campaign_root / "obsolete-r01").mkdir()
+            contracts = root / "target/harness-e2e-contract/contracts"
+            contracts.mkdir(parents=True)
+            scripts = root / "scripts"
+            scripts.mkdir()
+            (scripts / "exact_stack_campaign.py").write_text(
+                "import sys\nassert sys.argv[1] == 'groups'\nprint('case-minimal-path')\n"
+            )
+            campaigns = ("smoke-r01", "capability-r01", "regression-r01")
+            for campaign in campaigns:
+                (contracts / f"{campaign}.json").write_text(f'{{"campaign":"{campaign}"}}')
+                group = root / (
+                    "target/downloaded-groups/"
+                    f"e2e-observation-execution-1-{campaign}-case-minimal-path-gh-1"
+                )
+                group.mkdir(parents=True)
+                (group / "result.json").write_text("{}")
+
+            subprocess.run(["bash", "-c", command], cwd=root, check=True)
+
+            self.assertEqual(
+                sorted(path.name for path in campaign_root.iterdir()),
+                ["capability-r01", "regression-r01", "smoke-r01"],
+            )
+            for campaign in campaigns:
+                contract = contracts / f"{campaign}.json"
+                self.assertTrue(contract.is_file())
+                self.assertEqual(
+                    (campaign_root / campaign / "stack-lock.json").read_text(),
+                    contract.read_text(),
+                )
+                self.assertTrue(
+                    (
+                        campaign_root
+                        / campaign
+                        / "groups/case-minimal-path/result.json"
+                    ).is_file()
+                )
+            self.assertFalse(
+                (campaign_root / "regression-r01/campaign-summary.json").exists()
+            )
+
     def test_exact_stack_is_the_only_release_control_executor(self):
         workflows = {path.name for path in (ROOT / ".github/workflows").glob("*.yml")}
         self.assertIn("exact-stack-e2e.yml", workflows)
