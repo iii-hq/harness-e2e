@@ -75,7 +75,7 @@ export function ExecutionMetricsPanel({
     note: string
   }> = [
     {
-      label: 'Subject tokens',
+      label: 'Tokens',
       metric: metrics.subjectTokens,
       format: number,
       unit: 'runs',
@@ -96,14 +96,14 @@ export function ExecutionMetricsPanel({
       note: 'Retries plus terminal attempts of non-completed tasks.',
     },
     {
-      label: 'Execution cost',
+      label: 'Cost',
       metric: metrics.cost,
       format: cost,
       unit: 'runs',
       note: 'Reported subject and judge cost, including retries.',
     },
     {
-      label: 'Accumulated run time',
+      label: 'Duration',
       metric: metrics.durationMs,
       format: (value) => (value === null ? '—' : formatDuration(value / 1_000)),
       unit: 'runs',
@@ -186,7 +186,7 @@ export function ExecutionMetricsPanel({
               detail={`${metrics.completed + metrics.incomplete}/${metrics.planned} planned runs determined`}
             />
             <MetricCard
-              label="quality on completed tasks"
+              label="advisory quality"
               value={
                 metrics.qualityMedian === null
                   ? '—'

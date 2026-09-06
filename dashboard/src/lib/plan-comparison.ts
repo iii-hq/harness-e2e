@@ -248,7 +248,7 @@ function allMetrics(
     build('technical_failures', 'Technical failures', 'count'),
     build('quality', 'Advisory quality', 'score'),
     build('confidence', 'Confidence', 'percent_points'),
-    build('tokens', 'Total tokens', 'tokens'),
+    build('tokens', 'Tokens', 'tokens'),
     build('tokens_per_completion', 'Tokens per completion', 'tokens'),
     build('failed_attempt_tokens', 'Failed attempt tokens', 'tokens'),
     build('duration', 'Duration', 'seconds'),
@@ -399,7 +399,7 @@ function generalMetricComparisons(
     ),
     metric(
       'duration',
-      'Time',
+      'Duration',
       scenarioAverage(baselineSummary, 'duration_seconds') ??
         runDurationSeconds(baseline),
       scenarioAverage(candidateSummary, 'duration_seconds') ??

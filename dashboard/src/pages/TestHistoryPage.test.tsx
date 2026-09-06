@@ -95,7 +95,9 @@ describe('test history comparison', () => {
     )
     expect(html).toContain('data-test-comparison')
     expect(html).toContain('>mixed result<')
-    expect(html).toContain('no longer passes · score down · duration down')
+    expect(html).toContain(
+      'no longer passes · objective score down · duration down',
+    )
     expect(html).toContain('data-comparison-metric="score"')
     expect(html).toContain('ds-delta-negative')
     expect(html).toContain('ds-delta-positive')

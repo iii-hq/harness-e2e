@@ -778,8 +778,8 @@ const RUN_METRICS: Array<{ id: RunMetric; label: string }> = [
   { id: 'tokens', label: 'Tokens' },
   { id: 'duration', label: 'Duration' },
   { id: 'turns', label: 'Turns' },
-  { id: 'calls', label: 'Calls' },
-  { id: 'errors', label: 'Errors' },
+  { id: 'calls', label: 'Function calls' },
+  { id: 'errors', label: 'Function errors' },
 ]
 
 /**
@@ -2073,7 +2073,7 @@ function PlanScenarioComparisonTable({
                           <span className="grid">
                             <span className="ds-label">Reference</span>
                             <strong className="font-mono text-[0.8125rem] text-ink">
-                              Baseline
+                              Reference
                             </strong>
                           </span>
                           <ScenarioChatAction
@@ -2136,7 +2136,7 @@ function PlanScenarioComparisonTable({
                               {descriptor.label}
                             </span>
                           </th>
-                          <td data-label="Baseline">
+                          <td data-label="Reference">
                             <span className="flex items-baseline gap-2 font-mono tabular-nums">
                               <b>
                                 {formatPlanMetricValue(descriptor, 'baseline')}
