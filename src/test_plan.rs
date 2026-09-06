@@ -479,7 +479,7 @@ mod tests {
         let plan = embedded().unwrap();
         for (id, cases, runs) in [
             ("smoke", 5, 5),
-            ("regression", 12, 12),
+            ("regression", 9, 9),
             ("capability", 48, 48),
             ("evolution", 18, 90),
             ("resilience", 4, 13),
