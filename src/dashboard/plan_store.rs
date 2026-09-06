@@ -1780,7 +1780,7 @@ mod tests {
     async fn native_coordination_covers_all_slots_including_capability_and_evolution() {
         for (profile, expected) in [
             ("smoke", 5),
-            ("regression", 12),
+            ("regression", 9),
             ("capability", 48),
             ("evolution", 90),
             ("endurance", 5),

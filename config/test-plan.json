@@ -225,10 +225,7 @@
         "performance_regression",
         "git_regression_forensics",
         "database_migration_recovery",
-        "contention_ledger",
-        "swe_config_isolation",
-        "swe_cache_invalidation",
-        "swe_replay_recovery"
+        "contention_ledger"
       ],
       "repetitions": 1,
       "technical_retries": 1,

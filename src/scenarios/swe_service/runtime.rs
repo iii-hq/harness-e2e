@@ -329,7 +329,15 @@ impl Shared {
         if value.get("workspace_readable") != Some(&Value::Bool(true))
             || value.get("trusted_unreadable") != Some(&Value::Bool(true))
         {
-            bail!("SWE shell must see the exported workspace and must not read controller state or future snapshots");
+            // The probe is trusted output, never the subject's, so it is safe
+            // to report. Without it the two invariants are indistinguishable
+            // in the failure, and telling them apart needs a whole
+            // investigation: one means the fixture never reached the
+            // workspace, the other that nothing confines the shell's child.
+            bail!(
+                "SWE shell must see the exported workspace and must not read controller state or \
+                 future snapshots (probe: {value})"
+            );
         }
         // Fail before model calls when the trusted code verifier has no OS boundary.
         let baseline = assets::command(
