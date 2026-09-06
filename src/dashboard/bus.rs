@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::sync::{Arc, Mutex};
 
 use anyhow::{bail, Context, Result};
@@ -123,6 +123,8 @@ struct PlansListResponse {
     plans: Vec<super::plans::LocalPlan>,
     master_plan: Value,
 }
+
+type PlanControlResponse = BTreeMap<String, Value>;
 
 #[derive(Debug, Serialize, JsonSchema)]
 pub(super) struct CatalogResponse {
@@ -391,7 +393,14 @@ pub(super) fn register_functions(iii: &IIIClient, controller: Arc<Controller>) {
         let controller = controller.clone();
         RegisterFunction::new_async(move |request: super::plan_store::Request| {
             let controller = controller.clone();
-            async move { controller.plan_store.handle(request).await.map_err(handler_error) }
+            async move {
+                let response = controller
+                    .plan_store
+                    .handle(request)
+                    .await
+                    .map_err(handler_error)?;
+                serde_json::from_value::<PlanControlResponse>(response).map_err(handler_error)
+            }
         })
     });
     register(iii, PLAN_GET, "Read one local plan.", {
