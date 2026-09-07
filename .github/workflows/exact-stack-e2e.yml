@@ -215,9 +215,7 @@ jobs:
 
       - name: Install SWE execution isolation
         if: startsWith(matrix.group_id, 'case-swe-')
-        run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y bubblewrap
+        run: scripts/install_bwrap.sh
 
       - name: Execute common campaign group
         id: common

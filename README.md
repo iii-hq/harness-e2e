@@ -13,8 +13,8 @@ The SWE service suite provides eight isolated engineering
 tasks and a continuous eight-ticket journey over the same Python service, with
 optional delegation, immutable checkpoints, isolated verification, and a trusted
 GitHub handoff.
-SWE execution requires Linux with `/usr/bin/bwrap` (the `bubblewrap` package)
-and enabled unprivileged user namespaces. Commands and file operations run
+SWE execution requires Linux with `/usr/bin/bwrap` 0.11.1 and enabled
+unprivileged user namespaces. CI installs the pinned build with `scripts/install_bwrap.sh`. Commands and file operations run
 inside the attempt workspace; controller files remain outside that boundary.
 
 ## Binaries

@@ -62,9 +62,7 @@ jobs:
           fi
       - run: cargo fmt --all -- --check
       - name: Prepare SWE execution isolation
-        run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y bubblewrap
+        run: scripts/install_bwrap.sh
       - run: cargo test --locked --all-targets
       - run: cargo clippy --locked --all-targets -- -D warnings
       - run: node --test tests/dashboard/*.test.cjs
