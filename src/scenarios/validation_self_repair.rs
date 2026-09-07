@@ -246,7 +246,6 @@ fn scenario_for_case(run_id: &str) -> ScenarioSpec {
         // the loop doing its job; live run 1: the model "renamed the second
         // beta to delta", created a duplicate delta, and was caught.
         criteria: assessment::criteria(ASSESSMENTS),
-        judge_reference: None,
         setup: Some(setup),
         evaluate,
         cleanup: Some(cleanup),

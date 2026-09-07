@@ -9,7 +9,7 @@ use serde_json::Value;
 
 use crate::artifact::{self, ArtifactReference};
 use crate::assessment::{
-    AssessmentContract, AssessmentResult, AssessmentTargetKind, AssetAssessmentResult,
+    AssessmentContract, AssessmentResult, AssessmentTargetKind, AssetValidationResult,
     EvidenceReference,
 };
 use crate::identity::{ExecutionIdentity, StackIdentity, SystemUnderTestIdentity};
@@ -239,7 +239,6 @@ pub struct ModelUsageReport {
 #[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
 pub struct CostReport {
     pub subject_usd: Option<f64>,
-    pub judge_usd: Option<f64>,
     pub total_usd: Option<f64>,
 }
 
@@ -338,7 +337,6 @@ pub enum EvaluatorAvailability {
 pub struct EvaluatorStates {
     pub completion: EvaluatorAvailability,
     pub quality: EvaluatorAvailability,
-    pub final_advisory: EvaluatorAvailability,
 }
 
 impl RunStatus {
@@ -400,8 +398,6 @@ pub struct RetryAttemptReport {
     pub objective_score: Option<u8>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub quality_score_completed: Option<u8>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub judge_usage: Option<ModelUsageReport>,
     pub cost: CostReport,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub transcript: Option<Value>,
@@ -431,7 +427,7 @@ pub struct RetryAttemptReport {
     pub assessment_results: Vec<AssessmentResult>,
     #[serde(skip)]
     #[schemars(skip)]
-    pub asset_assessments: Vec<AssetAssessmentResult>,
+    pub asset_assessments: Vec<AssetValidationResult>,
     #[serde(skip)]
     #[schemars(skip)]
     pub asset_capture_manifest: Option<ArtifactReference>,
@@ -454,7 +450,6 @@ impl From<&E2eRunReport> for RetryAttemptReport {
             evaluators: report.evaluators.clone(),
             objective_score: report.objective_score,
             quality_score_completed: report.quality_score_completed,
-            judge_usage: report.judge_usage.clone(),
             cost: report.cost.clone(),
             transcript: report.transcript.clone(),
             metrics: report.metrics.clone(),
@@ -503,10 +498,6 @@ pub struct E2eRunReport {
     pub transcript: Option<Value>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub metrics: Option<SessionMetricsResponse>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub judge_attempts: Option<u8>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub judge_usage: Option<ModelUsageReport>,
     pub cost: CostReport,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub evidence: Vec<ArtifactReference>,
@@ -551,13 +542,10 @@ pub struct E2eRunReport {
     pub assessment_results: Vec<AssessmentResult>,
     #[serde(skip)]
     #[schemars(skip)]
-    pub asset_assessments: Vec<AssetAssessmentResult>,
+    pub asset_assessments: Vec<AssetValidationResult>,
     #[serde(skip)]
     #[schemars(skip)]
     pub asset_capture_manifest: Option<ArtifactReference>,
-    #[serde(skip)]
-    #[schemars(skip)]
-    pub final_assessment_input: Option<ArtifactReference>,
     #[serde(skip)]
     #[schemars(skip)]
     pub asset_redaction: crate::redaction::RedactionReport,
@@ -590,8 +578,6 @@ impl E2eRunReport {
             criteria: Vec::new(),
             transcript: None,
             metrics: None,
-            judge_attempts: None,
-            judge_usage: None,
             cost: CostReport::default(),
             evidence: Vec::new(),
             worker_contracts: Vec::new(),
@@ -610,7 +596,6 @@ impl E2eRunReport {
             assessment_results: Vec::new(),
             asset_assessments: Vec::new(),
             asset_capture_manifest: None,
-            final_assessment_input: None,
             asset_redaction: crate::redaction::RedactionReport::default(),
         }
     }
@@ -752,23 +737,14 @@ impl E2eRunReport {
         }
     }
 
-    pub fn update_cost(&mut self, judge_expected: bool) {
+    pub fn update_cost(&mut self) {
         let subject_usd = self
             .metrics
             .as_ref()
             .and_then(|metrics| metrics.totals.cost_usd);
-        let judge_skipped = !judge_expected;
-        let judge_usd = if judge_skipped {
-            Some(0.0)
-        } else {
-            self.judge_usage.as_ref().and_then(|usage| usage.cost_usd)
-        };
         self.cost = CostReport {
             subject_usd,
-            judge_usd,
-            total_usd: subject_usd
-                .zip(judge_usd)
-                .map(|(subject, judge)| subject + judge),
+            total_usd: subject_usd,
         };
     }
 
@@ -990,12 +966,6 @@ impl E2eRunReport {
                 .iter()
                 .map(|attempt| attempt.cost.subject_usd)
                 .chain([self.cost.subject_usd]),
-        );
-        self.cost.judge_usd = sum_cost(
-            retry_attempts
-                .iter()
-                .map(|attempt| attempt.cost.judge_usd)
-                .chain([self.cost.judge_usd]),
         );
         self.cost.total_usd = sum_cost(
             retry_attempts
@@ -1330,7 +1300,6 @@ pub struct ScenarioAggregate {
     pub quality_score_completed: Option<f64>,
     pub quality_coverage: Option<f64>,
     pub total_tokens_consumed: Option<u64>,
-    pub judge_tokens_consumed: Option<u64>,
     pub tokens_completed_p50: Option<f64>,
     pub failed_attempt_tokens: Option<u64>,
     pub tokens_per_completion: Option<f64>,
@@ -1438,20 +1407,6 @@ fn sum_u64(values: impl IntoIterator<Item = Option<u64>>) -> Option<u64> {
     values
         .into_iter()
         .try_fold(0_u64, |total, value| total.checked_add(value?))
-}
-
-fn usage_tokens(usage: Option<&ModelUsageReport>) -> Option<u64> {
-    let usage = usage?;
-    usage.input_tokens?.checked_add(usage.output_tokens?)
-}
-
-fn run_judge_tokens(run: &E2eRunReport) -> Option<u64> {
-    sum_u64(
-        run.retry_attempts
-            .iter()
-            .map(|attempt| usage_tokens(attempt.judge_usage.as_ref()))
-            .chain(std::iter::once(usage_tokens(run.judge_usage.as_ref()))),
-    )
 }
 
 fn failed_attempt_tokens(run: &E2eRunReport) -> Option<u64> {
@@ -1597,7 +1552,6 @@ impl E2eScenarioReport {
         );
         let total_tokens_consumed =
             sum_u64(runs.iter().map(|run| run.efficiency.as_ref()?.total_tokens));
-        let judge_tokens_consumed = sum_u64(runs.iter().map(run_judge_tokens));
         let completed_token_values = runs
             .iter()
             .filter(|run| run.completion == CompletionState::Completed)
@@ -1623,7 +1577,6 @@ impl E2eScenarioReport {
         let required_passes = required_passes(planned_runs);
         let cost = CostReport {
             subject_usd: sum_cost(runs.iter().map(|run| run.cost.subject_usd)),
-            judge_usd: sum_cost(runs.iter().map(|run| run.cost.judge_usd)),
             total_usd: sum_cost(runs.iter().map(|run| run.cost.total_usd)),
         };
         let robustness = robustness_report(&runs);
@@ -1658,7 +1611,6 @@ impl E2eScenarioReport {
                 quality_score_completed,
                 quality_coverage: ratio(quality_scored_completed_runs, completed_runs),
                 total_tokens_consumed,
-                judge_tokens_consumed,
                 tokens_completed_p50,
                 failed_attempt_tokens,
                 tokens_per_completion,
@@ -1889,7 +1841,6 @@ pub struct ObservationIdentity {
 #[serde(rename_all = "snake_case")]
 pub enum ObservationObjective {
     Passed,
-    QualityAdvisory,
     HardGateFailed,
     TechnicalFailed,
     InfrastructureFailed,
@@ -2216,8 +2167,6 @@ pub struct E2eReport {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub judge: Option<ModelArtifact>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub judge_protocol: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub engine_revision: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub observation_contract: Option<ObservationRunContract>,
@@ -2234,7 +2183,6 @@ impl E2eReport {
         system_under_test: SystemUnderTestIdentity,
         subject: ModelArtifact,
         judge: Option<ModelArtifact>,
-        judge_protocol: Option<String>,
         engine_revision: Option<String>,
         scenarios: Vec<E2eScenarioReport>,
     ) -> Self {
@@ -2269,7 +2217,6 @@ impl E2eReport {
             manifest: None,
             subject,
             judge,
-            judge_protocol,
             engine_revision,
             observation_contract: None,
             passed,
@@ -2664,7 +2611,6 @@ impl E2eReport {
                         metrics: run.metrics.as_ref(),
                         deliverables: &mut run.deliverables,
                         asset_capture_manifest: run.asset_capture_manifest.as_ref(),
-                        final_assessment_input: run.final_assessment_input.as_ref(),
                         references: &mut run.evidence,
                     },
                 )?;
@@ -2691,7 +2637,6 @@ impl E2eReport {
                             metrics: attempt.metrics.as_ref(),
                             deliverables: &mut attempt.deliverables,
                             asset_capture_manifest: attempt.asset_capture_manifest.as_ref(),
-                            final_assessment_input: None,
                             references: &mut attempt.evidence,
                         },
                     )?;
@@ -2919,7 +2864,7 @@ fn redact_structured_assessments(
     policy: &crate::redaction::RedactionPolicy,
     redaction: &mut crate::redaction::RedactionReport,
     assessments: &mut Vec<AssessmentResult>,
-    assets: &mut Vec<AssetAssessmentResult>,
+    assets: &mut Vec<AssetValidationResult>,
 ) -> Result<()> {
     let mut value = serde_json::to_value(&*assessments)
         .context("serialize per-assessment results before redaction")?;
@@ -2999,7 +2944,6 @@ struct AttemptEvidence<'a> {
     metrics: Option<&'a SessionMetricsResponse>,
     deliverables: &'a mut [DeliverableReport],
     asset_capture_manifest: Option<&'a ArtifactReference>,
-    final_assessment_input: Option<&'a ArtifactReference>,
     references: &'a mut Vec<ArtifactReference>,
 }
 
@@ -3014,7 +2958,6 @@ fn materialize_attempt_evidence(
         metrics,
         deliverables,
         asset_capture_manifest,
-        final_assessment_input,
         references,
     } = evidence;
     let root = PathBuf::from("evidence").join(run_id).join(attempt_id);
@@ -3039,10 +2982,6 @@ fn materialize_attempt_evidence(
     if let Some(manifest) = asset_capture_manifest {
         manifest.verify(output)?;
         references.push(manifest.clone());
-    }
-    if let Some(input) = final_assessment_input {
-        input.verify(output)?;
-        references.push(input.clone());
     }
     let deliverable_root = PathBuf::from("deliverables").join(run_id).join(attempt_id);
     for deliverable in deliverables {
@@ -3315,8 +3254,8 @@ mod tests {
 
     use super::*;
     use crate::assessment::{
-        AssessmentKind, AssessmentOutcome, AssessmentPolicy, AssessmentScore, AssessmentSource,
-        AssessmentTarget, SystemStatus,
+        AssessmentKind, AssessmentOutcome, AssessmentPolicy, AssessmentScore, AssessmentTarget,
+        SystemStatus,
     };
     use crate::identity::StackIdentity;
     use crate::scenarios::{ArtifactExpectation, InvariantSpec};
@@ -3436,7 +3375,7 @@ mod tests {
     }
 
     fn report(scenarios: Vec<E2eScenarioReport>) -> E2eReport {
-        E2eReport::new(execution(), system(), model(), None, None, None, scenarios)
+        E2eReport::new(execution(), system(), model(), None, None, scenarios)
     }
 
     fn run(score: u8, passed: bool) -> E2eRunReport {
@@ -3497,18 +3436,15 @@ mod tests {
         let mut first = run(90, true);
         first.cost = CostReport {
             subject_usd: Some(0.1),
-            judge_usd: Some(0.02),
-            total_usd: Some(0.12),
+            total_usd: Some(0.1),
         };
         let mut second = run(90, true);
         second.cost = CostReport {
             subject_usd: Some(0.2),
-            judge_usd: None,
             total_usd: None,
         };
         let report = aggregate(vec![first, second]);
         assert!((report.aggregate.cost.subject_usd.unwrap() - 0.3).abs() < f64::EPSILON);
-        assert_eq!(report.aggregate.cost.judge_usd, None);
         assert_eq!(report.aggregate.cost.total_usd, None);
     }
 
@@ -3962,7 +3898,6 @@ mod tests {
         failed.wall_time_ms = 2_000;
         failed.cost = CostReport {
             subject_usd: Some(0.10),
-            judge_usd: Some(0.0),
             total_usd: Some(0.10),
         };
         failed.push_failure(
@@ -3977,7 +3912,6 @@ mod tests {
         passed.wall_time_ms = 3_000;
         passed.cost = CostReport {
             subject_usd: Some(0.20),
-            judge_usd: Some(0.0),
             total_usd: Some(0.20),
         };
         passed.attach_retry_attempts(vec![RetryAttemptReport::from(&failed)]);
@@ -4173,17 +4107,13 @@ mod tests {
             kind: AssessmentKind::RequiredCheck,
             policy: AssessmentPolicy::HardGate,
             dimension: EvaluationDimension::StructuralIntegrity,
-            source: AssessmentSource::Deterministic,
             outcome: AssessmentOutcome::Passed,
             score: Some(AssessmentScore {
                 awarded: 100,
                 possible: 100,
             }),
-            confidence: None,
             summary: "deterministic evidence passed".into(),
             evidence: Vec::new(),
-            analyzer: None,
-            analyzer_usage: None,
         });
         let mut report = report(vec![aggregate(vec![run])]);
 
@@ -4262,10 +4192,6 @@ mod tests {
         assert_eq!(
             decoded.assessment_contract.runs[0].system_status,
             crate::assessment::SystemStatus::HardGateFailed
-        );
-        assert_eq!(
-            decoded.assessment_contract.runs[0].effective_status,
-            crate::assessment::EffectiveStatus::HardGateFailed
         );
     }
 
@@ -4539,10 +4465,10 @@ mod tests {
         let (decoded, _) = E2eReport::read_from(output.path()).unwrap();
         let asset = &decoded.assessment_contract.runs[0].assets[0];
         assert_eq!(
-            asset.validation.outcome,
+            asset.outcome,
             crate::assessment::AssetValidationOutcome::RemovedDuringCleanup
         );
-        assert_eq!(asset.validation.evidence.len(), 1);
+        assert_eq!(asset.evidence.len(), 1);
         assert!(decoded.scenarios[0].runs[0]
             .evidence
             .iter()

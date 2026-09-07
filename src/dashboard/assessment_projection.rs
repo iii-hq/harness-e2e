@@ -6,10 +6,7 @@ use serde::Serialize;
 use serde_json::{json, Value};
 
 use crate::artifact;
-use crate::assessment::{
-    AiAssessmentAvailability, AiVerdict, AssessmentOutcome, EffectiveStatus, RunAssessmentContract,
-    SystemStatus,
-};
+use crate::assessment::{AssessmentOutcome, RunAssessmentContract, SystemStatus};
 use crate::report::{E2eReport, E2eScenarioReport};
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, JsonSchema)]
@@ -40,7 +37,6 @@ pub(super) struct AssetValidationCounts {
 pub(super) struct StatusCounts {
     pub unavailable: usize,
     pub passed: usize,
-    pub passed_with_concerns: usize,
     pub hard_gate_failed: usize,
     pub subject_error: usize,
     pub judge_error: usize,
@@ -48,39 +44,18 @@ pub(super) struct StatusCounts {
     pub infrastructure_error: usize,
 }
 
+/// Objective assessment totals for a set of runs. Every count is derived from
+/// deterministic evidence: hard gates, deterministic criteria, and asset
+/// validation.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, JsonSchema)]
-pub(super) struct AiAvailabilityCounts {
-    pub not_requested: usize,
-    pub not_evaluated: usize,
-    pub available: usize,
-    pub unavailable: usize,
-    pub malformed: usize,
-    pub failed: usize,
-}
-
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, JsonSchema)]
-pub(super) struct AiVerdictCounts {
-    pub pass: usize,
-    pub pass_with_concerns: usize,
-    pub fail: usize,
-    pub inconclusive: usize,
-}
-
-#[derive(Debug, Clone, Default, PartialEq, Serialize, JsonSchema)]
 pub(super) struct AssessmentSummary {
     pub run_count: usize,
     pub assessment_count: usize,
     pub asset_count: usize,
     pub evidence_reference_count: usize,
     pub system_statuses: StatusCounts,
-    pub effective_statuses: StatusCounts,
     pub assessment_outcomes: AssessmentOutcomeCounts,
-    pub asset_qualitative_outcomes: AssessmentOutcomeCounts,
     pub asset_validation_outcomes: AssetValidationCounts,
-    pub ai_availability: AiAvailabilityCounts,
-    pub ai_verdicts: AiVerdictCounts,
-    pub median_quality_score: Option<f64>,
-    pub median_confidence: Option<f64>,
 }
 
 pub(super) fn summarize<'a>(
@@ -88,17 +63,10 @@ pub(super) fn summarize<'a>(
 ) -> AssessmentSummary {
     let mut summary = AssessmentSummary::default();
     let mut evidence = BTreeSet::new();
-    let mut quality_scores = Vec::new();
-    let mut confidence = Vec::new();
 
     for contract in contracts {
         summary.run_count += 1;
         increment_system_status(&mut summary.system_statuses, contract.system_status);
-        increment_effective_status(&mut summary.effective_statuses, contract.effective_status);
-        increment_ai_availability(
-            &mut summary.ai_availability,
-            contract.ai_final_assessment.availability,
-        );
 
         for assessment in &contract.assessments {
             summary.assessment_count += 1;
@@ -109,34 +77,14 @@ pub(super) fn summarize<'a>(
         }
         for asset in &contract.assets {
             summary.asset_count += 1;
-            increment_asset_validation(
-                &mut summary.asset_validation_outcomes,
-                asset.validation.outcome,
-            );
-            increment_assessment_outcome(
-                &mut summary.asset_qualitative_outcomes,
-                asset.qualitative_assessment.outcome,
-            );
-            for reference in &asset.validation.evidence {
-                evidence.insert(evidence_identity(reference));
-            }
-            for reference in &asset.qualitative_assessment.evidence {
-                evidence.insert(evidence_identity(reference));
-            }
-        }
-        if let Some(result) = &contract.ai_final_assessment.result {
-            increment_ai_verdict(&mut summary.ai_verdicts, result.verdict);
-            quality_scores.push(f64::from(result.quality_score));
-            confidence.push(result.confidence);
-            for reference in &result.evidence {
+            increment_asset_validation(&mut summary.asset_validation_outcomes, asset.outcome);
+            for reference in &asset.evidence {
                 evidence.insert(evidence_identity(reference));
             }
         }
     }
 
     summary.evidence_reference_count = evidence.len();
-    summary.median_quality_score = median(quality_scores);
-    summary.median_confidence = median(confidence);
     summary
 }
 
@@ -172,19 +120,6 @@ pub(super) fn assessment_profile_sha256(
                 "kind": assessment.kind,
                 "policy": assessment.policy,
                 "dimension": assessment.dimension,
-                "source": assessment.source,
-            }))?);
-        }
-        for asset in &contract.assets {
-            let assessment = &asset.qualitative_assessment;
-            definitions.insert(serde_json::to_string(&json!({
-                "asset_id": asset.validation.asset_id,
-                "criterion_id": assessment.criterion_id,
-                "target": assessment.target,
-                "kind": assessment.kind,
-                "policy": assessment.policy,
-                "dimension": assessment.dimension,
-                "source": assessment.source,
             }))?);
         }
     }
@@ -192,26 +127,6 @@ pub(super) fn assessment_profile_sha256(
         "scenario_version": scenario_version,
         "assessments": definitions,
     }))
-}
-
-pub(super) fn analyzer_profile_sha256(contracts: &[&RunAssessmentContract]) -> Result<String> {
-    let mut analyzers = BTreeSet::new();
-    for contract in contracts {
-        for assessment in &contract.assessments {
-            if let Some(analyzer) = &assessment.analyzer {
-                analyzers.insert(analyzer_identity(analyzer));
-            }
-        }
-        for asset in &contract.assets {
-            if let Some(analyzer) = &asset.qualitative_assessment.analyzer {
-                analyzers.insert(analyzer_identity(analyzer));
-            }
-        }
-        if let Some(analyzer) = &contract.ai_final_assessment.analyzer {
-            analyzers.insert(analyzer_identity(analyzer));
-        }
-    }
-    artifact::sha256_value(&json!({ "analyzers": analyzers }))
 }
 
 pub(super) fn project_scenario_report(
@@ -250,15 +165,6 @@ pub(super) fn project_scenario_report(
     }
     value["assessment_summary"] = serde_json::to_value(summarize(contracts))?;
     Ok(value)
-}
-
-fn analyzer_identity(analyzer: &crate::assessment::AnalyzerIdentity) -> String {
-    serde_json::to_string(&json!({
-        "analyzer": analyzer.analyzer,
-        "provider": analyzer.provider,
-        "model": analyzer.model,
-    }))
-    .expect("serialize analyzer profile")
 }
 
 fn evidence_identity(reference: &crate::assessment::EvidenceReference) -> String {
@@ -312,52 +218,6 @@ fn increment_system_status(counts: &mut StatusCounts, value: SystemStatus) {
     }
 }
 
-fn increment_effective_status(counts: &mut StatusCounts, value: EffectiveStatus) {
-    match value {
-        EffectiveStatus::Unavailable => counts.unavailable += 1,
-        EffectiveStatus::Passed => counts.passed += 1,
-        EffectiveStatus::PassedWithConcerns => counts.passed_with_concerns += 1,
-        EffectiveStatus::HardGateFailed => counts.hard_gate_failed += 1,
-        EffectiveStatus::SubjectError => counts.subject_error += 1,
-        EffectiveStatus::JudgeError => counts.judge_error += 1,
-        EffectiveStatus::ResourceLimit => counts.resource_limit += 1,
-        EffectiveStatus::InfrastructureError => counts.infrastructure_error += 1,
-    }
-}
-
-fn increment_ai_availability(counts: &mut AiAvailabilityCounts, value: AiAssessmentAvailability) {
-    match value {
-        AiAssessmentAvailability::NotRequested => counts.not_requested += 1,
-        AiAssessmentAvailability::NotEvaluated => counts.not_evaluated += 1,
-        AiAssessmentAvailability::Available => counts.available += 1,
-        AiAssessmentAvailability::Unavailable => counts.unavailable += 1,
-        AiAssessmentAvailability::Malformed => counts.malformed += 1,
-        AiAssessmentAvailability::Failed => counts.failed += 1,
-    }
-}
-
-fn increment_ai_verdict(counts: &mut AiVerdictCounts, value: AiVerdict) {
-    match value {
-        AiVerdict::Pass => counts.pass += 1,
-        AiVerdict::PassWithConcerns => counts.pass_with_concerns += 1,
-        AiVerdict::Fail => counts.fail += 1,
-        AiVerdict::Inconclusive => counts.inconclusive += 1,
-    }
-}
-
-fn median(mut values: Vec<f64>) -> Option<f64> {
-    if values.is_empty() {
-        return None;
-    }
-    values.sort_by(f64::total_cmp);
-    let midpoint = values.len() / 2;
-    Some(if values.len().is_multiple_of(2) {
-        (values[midpoint - 1] + values[midpoint]) / 2.0
-    } else {
-        values[midpoint]
-    })
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -385,10 +245,6 @@ mod tests {
             )
             .unwrap(),
             expected["assessment_profile_sha256"]
-        );
-        assert_eq!(
-            analyzer_profile_sha256(&runs).unwrap(),
-            expected["analyzer_profile_sha256"]
         );
     }
 }

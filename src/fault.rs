@@ -1218,7 +1218,6 @@ mod tests {
             evaluators: crate::report::EvaluatorStates {
                 completion: crate::report::EvaluatorAvailability::Available,
                 quality: crate::report::EvaluatorAvailability::Available,
-                final_advisory: crate::report::EvaluatorAvailability::NotRequired,
             },
             objective_score: Some(10),
             quality_score_completed: Some(10),
@@ -1226,8 +1225,6 @@ mod tests {
             criteria: Vec::new(),
             transcript: None,
             metrics: None,
-            judge_attempts: None,
-            judge_usage: None,
             cost: CostReport::default(),
             evidence: Vec::new(),
             worker_contracts: Vec::new(),
@@ -1277,7 +1274,6 @@ mod tests {
             assessment_results: Vec::new(),
             asset_assessments: Vec::new(),
             asset_capture_manifest: None,
-            final_assessment_input: None,
             asset_redaction: Default::default(),
         };
         let scenario = E2eScenarioReport {
@@ -1312,7 +1308,6 @@ mod tests {
                 quality_score_completed: Some(10.0),
                 quality_coverage: Some(1.0),
                 total_tokens_consumed: None,
-                judge_tokens_consumed: None,
                 tokens_completed_p50: None,
                 failed_attempt_tokens: None,
                 tokens_per_completion: None,
@@ -1383,7 +1378,6 @@ mod tests {
                 supports_vision: Some(false),
             },
             judge: None,
-            judge_protocol: None,
             engine_revision: None,
             observation_contract: None,
             passed: true,

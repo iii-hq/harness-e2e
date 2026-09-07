@@ -39,20 +39,10 @@ const REASON_WARNINGS: Record<string, ComparisonWarning> = {
     detail:
       'At least one side contains multiple assessment definitions for the same scenario version.',
   },
-  analyzer_profile_changed: {
-    title: 'Analyzer profile changed',
-    detail:
-      'The analyzer, provider, or model differs between versions. AI conclusions are shown but their score delta is disabled.',
-  },
-  analyzer_profile_conflict: {
-    title: 'Analyzer profile conflict',
-    detail:
-      'At least one side contains multiple analyzer, provider, or model identities for the same test version.',
-  },
   cohort_changed: {
     title: 'Evaluation cohort changed',
     detail:
-      'Subject, judge, model, protocol, or lane identity differs. Cross-cohort deltas are not valid.',
+      'Subject, judge, model, or lane identity differs. Cross-cohort deltas are not valid.',
   },
   missing_side: {
     title: 'Evidence is missing on one side',
@@ -78,16 +68,6 @@ const REASON_WARNINGS: Record<string, ComparisonWarning> = {
     title: 'Assessment profile conflict',
     detail:
       'At least one side contains multiple assessment definitions for the same scenario version.',
-  },
-  analyzer_changed: {
-    title: 'Analyzer profile changed',
-    detail:
-      'The analyzer, provider, or model differs between versions. AI conclusions are shown but their score delta is disabled.',
-  },
-  analyzer_conflict: {
-    title: 'Analyzer profile conflict',
-    detail:
-      'At least one side contains multiple analyzer, provider, or model identities for the same test version.',
   },
 }
 
@@ -156,9 +136,7 @@ export function matchesResultFilter(row: TestCatalogRow, filter: ResultFilter) {
       result?.compatibility === 'contract_changed' ||
       result?.compatibility === 'contract_conflict' ||
       result?.compatibility === 'assessment_changed' ||
-      result?.compatibility === 'assessment_conflict' ||
-      result?.compatibility === 'analyzer_changed' ||
-      result?.compatibility === 'analyzer_conflict'
+      result?.compatibility === 'assessment_conflict'
     )
   }
   if (!result?.to) return false

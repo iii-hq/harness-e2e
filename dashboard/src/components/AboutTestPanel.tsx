@@ -46,11 +46,10 @@ export function hardGateCount(criteria: TestCriterion[]): number {
 
 export function criteriaCaption(criteria: TestCriterion[]): string {
   const gates = hardGateCount(criteria)
-  const judged = criteria.some((criterion) => criterion.source === 'judge')
   return [
     `${criteria.length} ${criteria.length === 1 ? 'criterion' : 'criteria'}`,
     gates > 0 ? `${gates} hard ${gates === 1 ? 'gate' : 'gates'}` : null,
-    judged ? 'judge-scored' : 'deterministic, no judge model',
+    'deterministic',
   ]
     .filter(Boolean)
     .join(' · ')

@@ -395,7 +395,6 @@ fn scenario_for_case(run_id: &str, rung: Rung) -> ScenarioSpec {
         },
         denied_functions: &["state::*"],
         criteria: assessment::criteria(ASSESSMENTS),
-        judge_reference: None,
         setup: Some(setup_depth_3),
         evaluate,
         cleanup: Some(cleanup),

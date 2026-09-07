@@ -102,8 +102,9 @@ stripping, both by the public suite and by the runner-owned behavioral probe.
 resilience, and endurance. In the dashboard these profiles are starting templates
 for the same plan form and baseline/candidate visualization used by existing plans.
 Choose **New plan**, optionally select a template, edit the scope, and select the
-execution and judge models. **Save draft**, **Save and run**, and **Duplicate plan**
-use one shared lifecycle and retain native evidence. Fault-injection plans export
+execution model, plus the judge model when the scope includes a Markdown test.
+**Save draft**, **Save and run**, and **Duplicate plan** use one shared lifecycle
+and retain native evidence. Fault-injection plans export
 to the protected executor. See [executable profile plans](dashboard/README.md#executable-profile-plans).
 
 ```bash
@@ -241,9 +242,10 @@ Contract compatibility is established at runtime from
 `engine::functions::list` and `engine::functions::info`; the checked-in schemas
 are parity fixtures, not a linked product API.
 
-The assessment and on-demand analysis boundary has one current payload shape,
-written only to `results.json`; scenario contracts are the only versioned
-domain.
+The deterministic assessment boundary has one current payload shape, written
+only to `results.json`; scenario contracts are the only versioned domain. The
+judge model is auxiliary: Markdown tests use it for their validators and
+instruction adherence, and only those tests require it.
 
 Deterministic, pre-cleanup asset capture applies explicit safety limits and
 writes an unversioned sidecar containing the canonical deterministic validation

@@ -254,7 +254,6 @@ mod tests {
         run.status = RunStatus::Passed;
         run.cost = CostReport {
             subject_usd: Some(0.1),
-            judge_usd: Some(0.0),
             total_usd: Some(0.1),
         };
         E2eReport::new(
@@ -268,7 +267,6 @@ mod tests {
                 supports_tools: Some(true),
                 supports_vision: Some(false),
             },
-            None,
             None,
             None,
             vec![E2eScenarioReport::aggregate(
@@ -382,10 +380,6 @@ mod tests {
         );
         assert_eq!(summary["subjects"][0]["engine_revision"], "engine-revision");
         assert_eq!(summary["assessment_summary"]["run_count"], 1);
-        assert_eq!(
-            summary["assessment_summary"]["ai_availability"]["not_evaluated"],
-            1
-        );
         assert_eq!(
             summary["subjects"][0]["scenarios"][0]["assessment_summary"]["run_count"],
             1
@@ -591,7 +585,6 @@ mod tests {
                 supports_tools: Some(false),
                 supports_vision: Some(false),
             });
-            value.judge_protocol = Some("json".into());
             let execution = &mut value.execution;
             execution.execution_id = format!("execution-{index}");
             execution.completed_at = format!("2026-08-0{}T12:00:02Z", index + 7);
@@ -701,9 +694,6 @@ mod tests {
         assert_eq!(detail.from_observations[0].assessment_summary.run_count, 3);
         assert!(detail.from_observations[0]
             .assessment_profile_sha256
-            .starts_with("sha256:"));
-        assert!(detail.from_observations[0]
-            .analyzer_profile_sha256
             .starts_with("sha256:"));
         assert!(model
             .tests_list(TestsListRequest {

@@ -1,4 +1,3 @@
-import type { AssessmentRunView } from '@/lib/assessment-view'
 import type { ExecutionPresentation } from '@/lib/execution-view'
 import type {
   ScenarioMatrixItem,
@@ -19,10 +18,8 @@ export type ExecutionVerdict = {
   headline: string
   /** The scenario the next step comes from, when there is one. */
   worst: ScenarioMatrixItem | null
-  /** What to do next, from the worst scenario's advisory or a fallback. */
+  /** What to do next, derived from the aggregated objective outcome. */
   nextStep: string
-  /** What happened, from the worst scenario's diagnosis, when retained. */
-  diagnosis: string | null
 }
 
 const SEVERITY: Array<{ status: string; label: string; plural: string }> = [
@@ -61,7 +58,6 @@ export function executionVerdict(
   presentation: ExecutionPresentation,
   summary: ScenarioMatrixSummary | null,
   items: ScenarioMatrixItem[] = [],
-  primaryRun: AssessmentRunView | null = null,
 ): ExecutionVerdict {
   const attention = presentation.attention
   if (!summary || summary.total === 0) {
@@ -76,7 +72,6 @@ export function executionVerdict(
           : attention === 'running' || attention === 'cancelling'
             ? 'The report appears when the run finishes.'
             : 'Re-run the execution to obtain a report.',
-      diagnosis: null,
     }
   }
   const parts = SEVERITY.map(({ status, label, plural }) => {
@@ -88,29 +83,12 @@ export function executionVerdict(
     SEVERITY.map(({ status }) =>
       items.find((item) => item.objective.status === status),
     ).find(Boolean) ?? null
-  const aiResult = primaryRun?.finalAssessment.result
-  const worstRun = worst?.primaryRun ?? null
-  const worstAssessment =
-    worstRun && typeof worstRun === 'object'
-      ? (
-          worstRun as {
-            ai_final_assessment?: {
-              result?: { diagnosis?: string; recommendation?: string }
-            }
-          }
-        ).ai_final_assessment?.result
-      : undefined
-  const diagnosis = worstAssessment?.diagnosis ?? aiResult?.diagnosis ?? null
-  const recommendation =
-    worstAssessment?.recommendation ?? aiResult?.recommendation ?? null
   return {
     headline: parts.join(' · '),
     worst,
     nextStep:
-      recommendation ??
-      (parts.length === 1 && summary.passed === summary.total
+      parts.length === 1 && summary.passed === summary.total
         ? 'Nothing to act on: every scenario passed.'
-        : 'Inspect the retained evidence of the failing scenario before deciding whether to re-run.'),
-    diagnosis,
+        : 'Inspect the retained evidence of the failing scenario before deciding whether to re-run.',
   }
 }

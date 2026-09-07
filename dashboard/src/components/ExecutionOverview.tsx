@@ -1,8 +1,8 @@
 import { useMemo } from 'react'
 import {
-  OutcomeDerivation,
-  type OutcomeRow,
-} from '@/components/OutcomeDerivation'
+  type SystemOutcome,
+  SystemOutcomeBadge,
+} from '@/components/SystemOutcome'
 import { MetricCard, Panel } from '@/design-system'
 import type { DashboardExecutionDetail } from '@/lib/dashboard-data-source'
 import {
@@ -44,7 +44,6 @@ export function completionIsTrivial(metrics: ExecutionMetrics): boolean {
 
 const TELEMETRY_METRICS: ReadonlyArray<keyof ExecutionMetrics> = [
   'subjectTokens',
-  'judgeTokens',
   'failedAttemptTokens',
   'durationMs',
   'functionCalls',
@@ -95,10 +94,10 @@ function usageValue(
  *  demand below it (audit ED-26). */
 export function ExecutionOverview({
   detail,
-  boundaries,
+  outcome,
 }: {
   detail: DashboardExecutionDetail
-  boundaries: OutcomeRow[]
+  outcome: SystemOutcome
 }) {
   const metrics = useMemo(() => buildExecutionMetrics(detail), [detail])
   const trivial = completionIsTrivial(metrics)
@@ -115,7 +114,7 @@ export function ExecutionOverview({
     >
       <div className="grid min-w-0 gap-2">
         <span className="ds-label">outcome</span>
-        <OutcomeDerivation rows={boundaries} />
+        <SystemOutcomeBadge outcome={outcome} />
       </div>
 
       {metrics.includedScenarios === 0 ? (
@@ -204,12 +203,12 @@ export function ExecutionOverview({
               <span className="ds-label">tokens</span>
               <span className="font-mono text-label text-ink-muted">
                 {complete
-                  ? `subject telemetry from ${metrics.subjectTokens.samples} of ${metrics.subjectTokens.expected} runs · judge from ${metrics.judgeTokens.samples} of ${metrics.judgeTokens.expected} attempts`
+                  ? `subject telemetry from ${metrics.subjectTokens.samples} of ${metrics.subjectTokens.expected} runs`
                   : 'coverage shown per metric'}
               </span>
             </div>
             <div
-              className={`grid min-w-0 gap-3 @[560px]:grid-cols-2 ${foldP50 ? '@[960px]:grid-cols-4' : '@[960px]:grid-cols-5'}`}
+              className={`grid min-w-0 gap-3 @[560px]:grid-cols-2 ${foldP50 ? '@[960px]:grid-cols-3' : '@[960px]:grid-cols-4'}`}
               data-usage-coverage={complete ? 'complete' : 'partial'}
             >
               <MetricCard
@@ -219,15 +218,6 @@ export function ExecutionOverview({
                   complete
                     ? 'includes retries exactly once'
                     : `includes retries exactly once · ${coverageNote(metrics.subjectTokens, 'runs')}`
-                }
-              />
-              <MetricCard
-                label="judge tokens"
-                value={usageValue(metrics.judgeTokens, number)}
-                detail={
-                  complete
-                    ? 'separate from subject consumption'
-                    : `separate from subject consumption · ${coverageNote(metrics.judgeTokens, 'attempts')}`
                 }
               />
               <MetricCard
@@ -302,8 +292,8 @@ export function ExecutionOverview({
                 value={usageValue(metrics.cost, cost)}
                 detail={
                   metrics.cost.samples === metrics.cost.expected
-                    ? 'subject and judge, including retries'
-                    : `${metrics.cost.samples} of ${metrics.cost.expected} runs reported cost · subject and judge, including retries`
+                    ? 'subject execution, including retries'
+                    : `${metrics.cost.samples} of ${metrics.cost.expected} runs reported cost · subject execution, including retries`
                 }
                 tone={
                   metrics.cost.total === null && metrics.cost.observed === null

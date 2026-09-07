@@ -444,7 +444,7 @@ export function ExecutionSetup({
       <SetupSection
         id={`${idPrefix}-models`}
         title="Choose the model and judge"
-        description="The model and judge are saved with the result."
+        description="The model is saved with the result; Markdown tests also save their judge."
       >
         <div className="grid items-start gap-4 sm:grid-cols-2">
           <Field
@@ -468,25 +468,26 @@ export function ExecutionSetup({
               }
             />
           </Field>
+          {/* Only Markdown scenarios run a judge, so the field is required
+              with one selected and inert without any. */}
           <Field
             label="Judge model"
             htmlFor={`${idPrefix}-judge`}
-            meta={judgeRequired ? 'required' : 'optional'}
+            meta={judgeRequired ? 'required' : 'not used'}
+            hint={judgeRequired ? undefined : 'Only Markdown tests use a judge'}
             error={errors.judge}
           >
             <ProviderModelDropdown
               invalid={Boolean(errors.judge)}
               id={`${idPrefix}-judge`}
               ariaLabel="Judge model"
-              value={judge}
+              value={judgeRequired ? judge : ''}
               onChange={onJudgeChange}
-              disabled={disabled || modelGroups.length === 0}
+              disabled={disabled || !judgeRequired || modelGroups.length === 0}
               groups={modelGroups}
-              clearLabel={
-                judgeRequired ? 'Choose a judge' : 'Default judge (automatic)'
-              }
+              clearLabel="Choose a judge"
               placeholder={
-                judgeRequired ? 'Choose a judge' : 'Default judge (automatic)'
+                judgeRequired ? 'Choose a judge' : 'No judge for these tests'
               }
             />
           </Field>
@@ -897,7 +898,7 @@ export function executionSetupSummary({
     `${selectedScenarios} test${selectedScenarios === 1 ? '' : 's'}`,
     `${runs} run${runs === 1 ? '' : 's'}`,
     subject || 'no model',
-    judge ? `judge ${judge}` : 'default judge',
+    judge ? `judge ${judge}` : 'no judge',
   ].join(' · ')
   const detail = [
     `${runsPerScenario} run${runsPerScenario === 1 ? '' : 's'} per test`,

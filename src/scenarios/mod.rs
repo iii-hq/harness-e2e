@@ -9,7 +9,7 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::assessment::{AssessmentKind, AssessmentPolicy, AssessmentSource};
+use crate::assessment::{AssessmentKind, AssessmentPolicy};
 use crate::context::E2eContext;
 use crate::report::{CompletionState, HardGateReport};
 use crate::wire::SessionMetricsResponse;
@@ -90,7 +90,6 @@ pub struct CriterionSpec {
     pub kind: AssessmentKind,
     pub policy: AssessmentPolicy,
     pub dimension: crate::report::EvaluationDimension,
-    pub source: AssessmentSource,
 }
 
 impl CriterionSpec {
@@ -107,7 +106,6 @@ impl CriterionSpec {
             kind: AssessmentKind::RequiredCheck,
             policy: AssessmentPolicy::HardGate,
             dimension,
-            source: AssessmentSource::Deterministic,
         }
     }
 
@@ -124,19 +122,6 @@ impl CriterionSpec {
             kind: AssessmentKind::Signal,
             policy: AssessmentPolicy::Advisory,
             dimension,
-            source: AssessmentSource::Deterministic,
-        }
-    }
-
-    pub const fn advisory_judge(id: &'static str, weight: u8, description: &'static str) -> Self {
-        Self {
-            id,
-            weight,
-            description,
-            kind: AssessmentKind::Signal,
-            policy: AssessmentPolicy::Advisory,
-            dimension: crate::report::EvaluationDimension::StructuralIntegrity,
-            source: AssessmentSource::Judge,
         }
     }
 }
@@ -203,7 +188,6 @@ pub struct ScenarioSpec {
     pub execution: ExecutionPolicy,
     pub denied_functions: &'static [&'static str],
     pub criteria: Vec<CriterionSpec>,
-    pub judge_reference: Option<Value>,
     /// Runs BEFORE the prompt is sent; a failure aborts the run.
     pub setup: Option<ScenarioSetup>,
     pub evaluate: ScenarioEvaluator,
@@ -288,10 +272,7 @@ impl ScenarioSpec {
                     criterion.id
                 );
             }
-            if criterion.kind == AssessmentKind::AssetQuality
-                || criterion.kind == AssessmentKind::AssetValidation
-                || criterion.source == AssessmentSource::AssetAnalyzer
-            {
+            if criterion.kind == AssessmentKind::AssetValidation {
                 bail!(
                     "scenario '{}': criterion '{}' uses asset-only assessment metadata",
                     self.id,
@@ -303,15 +284,6 @@ impl ScenarioSpec {
             {
                 bail!(
                     "scenario '{}': hard-gated criterion '{}' must be a required check",
-                    self.id,
-                    criterion.id
-                );
-            }
-            if criterion.source != AssessmentSource::Deterministic
-                && criterion.policy != AssessmentPolicy::Advisory
-            {
-                bail!(
-                    "scenario '{}': AI-derived criterion '{}' must remain advisory",
                     self.id,
                     criterion.id
                 );
@@ -341,10 +313,6 @@ impl ScenarioSpec {
             );
         }
         Ok(())
-    }
-
-    pub fn needs_judge(&self) -> bool {
-        self.judge_reference.is_some()
     }
 }
 
@@ -1269,10 +1237,11 @@ mod tests {
     #[test]
     fn validation_reports_criterion_values_before_weight_total() {
         let mut spec = ScenarioId::ContextPressure.spec("run");
-        spec.criteria = vec![CriterionSpec::advisory_judge(
+        spec.criteria = vec![CriterionSpec::advisory_deterministic(
             "durable_result",
             0,
             "invalid",
+            crate::report::EvaluationDimension::StructuralIntegrity,
         )];
 
         assert_eq!(
@@ -1285,8 +1254,18 @@ mod tests {
     fn validation_reports_duplicate_criterion_indexes() {
         let mut spec = ScenarioId::ContextPressure.spec("run");
         spec.criteria = vec![
-            CriterionSpec::advisory_judge("duplicate", 50, "first"),
-            CriterionSpec::advisory_judge("duplicate", 50, "second"),
+            CriterionSpec::advisory_deterministic(
+                "duplicate",
+                50,
+                "first",
+                crate::report::EvaluationDimension::StructuralIntegrity,
+            ),
+            CriterionSpec::advisory_deterministic(
+                "duplicate",
+                50,
+                "second",
+                crate::report::EvaluationDimension::StructuralIntegrity,
+            ),
         ];
 
         assert_eq!(

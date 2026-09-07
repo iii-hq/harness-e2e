@@ -248,7 +248,7 @@ function SignalMetrics({
         value={formatPercent(presentation.passRate)}
         detail={
           presentation.breakdown.total > 0
-            ? `${presentation.breakdown.passed + presentation.breakdown.passed_with_concerns} of ${presentation.breakdown.total} scenarios passed`
+            ? `${presentation.breakdown.passed} of ${presentation.breakdown.total} scenarios passed`
             : trendCaption(
                 signal.passRate,
                 (value) => `${Math.round(value)}%`,
@@ -309,7 +309,7 @@ function SignalMetrics({
         detail={trendCaption(
           signal.tokens,
           (value) => tokensLabel(value),
-          'subject + judge usage',
+          'subject execution usage',
         )}
         tone={typeof totalTokens === 'number' ? 'neutral' : 'unavailable'}
       />

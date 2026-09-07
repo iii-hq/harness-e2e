@@ -34,10 +34,6 @@ export type ScenarioMatrixItem = {
     label: string
     raw: string
   }
-  advisory: {
-    status: OperationalStatus
-    label: string
-  }
   durationMs: number | null
   durationKind: 'single' | 'average' | null
   runCount: number
@@ -237,7 +233,6 @@ function scenarioItem(
     scenarioVersion: scenario.scenario_version,
     available: true,
     objective,
-    advisory: advisoryStatus(primaryRun),
     durationMs: duration.value,
     durationKind: duration.kind,
     runCount: runs.length,
@@ -252,16 +247,13 @@ function scenarioItem(
 
 /**
  * Audit SM-01: a scenario that did not pass says why, from the retained
- * evidence — the judge's diagnosis first, then the first technical failure.
+ * evidence — the first technical failure the run recorded.
  */
 export function failureReason(run: DashboardRunProjection | null) {
   if (!run) return null
   const record = run as unknown as {
-    ai_final_assessment?: { result?: { diagnosis?: string } }
     failures?: Array<{ message?: string; reason?: string }>
   }
-  const diagnosis = record.ai_final_assessment?.result?.diagnosis
-  if (typeof diagnosis === 'string' && diagnosis.trim()) return diagnosis.trim()
   const failure = record.failures?.find(
     (entry) => entry && (entry.message || entry.reason),
   )
@@ -295,7 +287,6 @@ function unavailableScenario(
       label: 'Unavailable',
       raw: 'unavailable',
     },
-    advisory: { status: 'unavailable', label: 'No report' },
     durationMs: null,
     durationKind: null,
     runCount: 0,
@@ -357,7 +348,6 @@ function validAggregate(value: unknown): DashboardScenarioAggregate | null {
     'quality_score_completed',
     'quality_coverage',
     'total_tokens_consumed',
-    'judge_tokens_consumed',
     'tokens_completed_p50',
     'failed_attempt_tokens',
     'tokens_per_completion',
@@ -417,25 +407,6 @@ function objectiveStatus(rawValue: string): ScenarioMatrixItem['objective'] {
     return { status: 'incomplete', label: humanize(raw), raw }
   }
   return { status: 'failed', label: humanize(raw || 'failed'), raw }
-}
-
-function advisoryStatus(
-  run: DashboardRunProjection | null,
-): ScenarioMatrixItem['advisory'] {
-  const assessment = run?.assessment?.ai_final_assessment
-  const verdict = assessment?.result?.verdict
-  if (verdict === 'pass') return { status: 'passed', label: 'AI passed' }
-  if (verdict === 'pass_with_concerns') {
-    return { status: 'recommendation', label: 'AI concerns' }
-  }
-  if (verdict === 'fail') return { status: 'failed', label: 'AI failed' }
-  if (verdict === 'inconclusive') {
-    return { status: 'inconclusive', label: 'AI inconclusive' }
-  }
-  if (assessment?.availability === 'failed') {
-    return { status: 'failed', label: 'AI unavailable' }
-  }
-  return { status: 'unavailable', label: 'No advisory' }
 }
 
 function scenarioDuration(
@@ -523,7 +494,7 @@ function primaryMetrics(
             finiteNumber(run.instruction_adherence?.score) == null
               ? title(run.instruction_adherence?.availability ?? 'unavailable')
               : `${finiteNumber(run.instruction_adherence?.score)}/100`,
-          detail: 'Advisory prompt-following assessment',
+          detail: 'Judge-scored prompt-following, Markdown tests only',
         },
         {
           label: 'Pipeline integrity',

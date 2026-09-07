@@ -94,7 +94,6 @@ RESULT_AGGREGATE_RATE_FIELDS = (
 )
 RESULT_AGGREGATE_TOKEN_FIELDS = (
     "total_tokens_consumed",
-    "judge_tokens_consumed",
     "tokens_completed_p50",
     "failed_attempt_tokens",
     "tokens_per_completion",

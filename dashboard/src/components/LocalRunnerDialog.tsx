@@ -244,7 +244,8 @@ export function LocalRunnerDialog({
   }))
   const runsPerScenario = Math.max(1, Number(form.runs) || 1)
   const technicalRetries = Math.max(0, Number(form.technicalRetries) || 0)
-  // The worker refuses a local Markdown scenario without a judge.
+  // Only Markdown scenarios run a judge, and the worker refuses a local
+  // Markdown scenario without one.
   const needsJudge = form.scenarios.some((id) =>
     (catalog?.localScenarios ?? []).some((scenario) => scenario.id === id),
   )
@@ -268,6 +269,8 @@ export function LocalRunnerDialog({
         subject: form.subject,
         selectedScenarios: form.scenarios,
         url: form.url,
+        judge: form.judge,
+        judgeRequired: needsJudge,
       })
     : {}
   const pending = Object.values(errors)
@@ -276,10 +279,9 @@ export function LocalRunnerDialog({
     setForm((current) => ({ ...current, [key]: value }))
   }
 
-  // The worker refuses a local Markdown scenario without an explicit judge,
-  // so selecting one fills the judge with the execution model. The rule used
-  // to key on a "markdown_" prefix that the compiler no longer emits; the
-  // catalog's own local list is the source of truth.
+  // The catalog's own local list is the source of truth for which selected
+  // tests are Markdown; the "markdown_" prefix the compiler no longer emits
+  // used to decide it.
   const updateScenarios = (scenarios: string[]) => {
     setForm((current) => ({ ...current, scenarios }))
   }
@@ -292,6 +294,8 @@ export function LocalRunnerDialog({
       subject: form.subject,
       selectedScenarios: form.scenarios,
       url: form.url,
+      judge: form.judge,
+      judgeRequired: needsJudge,
     })
     if (Object.keys(nextErrors).length > 0 || !bridge || !selectedSubject) {
       setAttempted(true)
@@ -302,10 +306,9 @@ export function LocalRunnerDialog({
     setSubmitting(true)
     setError(null)
     try {
-      // A local scenario always travels with a judge; without an explicit
-      // one it follows the execution model, resolved here so it can never
-      // lag behind a model chosen after the scenario was ticked.
-      const judge = selectedJudge ?? (needsJudge ? selectedSubject : null)
+      // Only Markdown scenarios travel with a judge, and validation refuses
+      // to submit without one, so nothing is inferred here.
+      const judge = needsJudge ? selectedJudge : null
       const response = await bridge.startRun({
         // RunRequest.label is intentionally a string: empty labels remain
         // compatible with persisted execution metadata.
@@ -349,10 +352,9 @@ export function LocalRunnerDialog({
     subject: selectedSubject
       ? `${selectedSubject.provider} / ${selectedSubject.model}`
       : '',
-    judge: selectedJudge
-      ? `${selectedJudge.provider} / ${selectedJudge.model}`
-      : needsJudge && selectedSubject
-        ? `${selectedSubject.provider} / ${selectedSubject.model} · same as model`
+    judge:
+      needsJudge && selectedJudge
+        ? `${selectedJudge.provider} / ${selectedJudge.model}`
         : '',
     url: form.url,
   }
@@ -468,6 +470,7 @@ export function LocalRunnerDialog({
           url={form.url}
           subject={form.subject}
           judge={form.judge}
+          judgeRequired={needsJudge}
           modelGroups={modelOptions}
           availableScenarios={catalog?.scenarios ?? []}
           localScenarioIds={

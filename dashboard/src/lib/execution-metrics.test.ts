@@ -39,7 +39,6 @@ describe('whole-execution metrics', () => {
       qualitySamples: 2,
       subjectTokens: { total: 240_000, samples: 3, expected: 3 },
       failedAttemptTokens: { total: 20_000 },
-      judgeTokens: { total: 120, samples: 3, expected: 3 },
       durationMs: { total: 3_000 },
       functionCalls: { total: 30 },
     })
@@ -86,7 +85,7 @@ describe('whole-execution metrics', () => {
     expect(metrics.tokensPerCompletion).toBe(1_110 / 4)
   })
 
-  it('includes physical retries exactly once for tokens, judge usage and cost', () => {
+  it('includes physical retries exactly once for tokens and cost', () => {
     const run = metricRun('a', 150, {
       cost: { total_usd: 0.3 },
       wall_time_ms: 3_000,
@@ -107,11 +106,6 @@ describe('whole-execution metrics', () => {
     expect(metrics.failedAttemptTokens.total).toBe(50)
     expect(metrics.cost.total).toBe(0.3)
     expect(metrics.durationMs.total).toBe(3_000)
-    expect(metrics.judgeTokens).toMatchObject({
-      total: 80,
-      samples: 2,
-      expected: 2,
-    })
     run.completion = 'task_incomplete'
     run.quality_score_completed = null
     const incomplete = buildExecutionMetrics(
@@ -124,7 +118,6 @@ describe('whole-execution metrics', () => {
   it('preserves known usage when another run lacks telemetry without inventing efficiency', () => {
     const unknown = metricRun('unknown', null, {
       cost: null,
-      judge_usage: null,
       efficiency: null,
       wall_time_ms: null,
     })
@@ -145,11 +138,6 @@ describe('whole-execution metrics', () => {
       observed: 0.1,
       samples: 1,
       expected: 2,
-    })
-    expect(metrics.judgeTokens).toMatchObject({
-      total: null,
-      observed: 40,
-      samples: 1,
     })
     expect(metrics.tokensPerCompletion).toBeNull()
     expect(metrics.tokensCompletedP50).toBeNull()

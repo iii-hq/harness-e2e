@@ -1404,15 +1404,8 @@ mod tests {
                 observation_contract: None,
                 worker_contracts: Vec::new(),
             };
-            let mut report = E2eReport::new(
-                execution,
-                system,
-                subject,
-                judge,
-                Some("profile-test".into()),
-                None,
-                vec![scenario],
-            );
+            let mut report =
+                E2eReport::new(execution, system, subject, judge, None, vec![scenario]);
             let output = self.root.join(&id);
             fs::create_dir_all(&output)?;
             let path = report.write_to(&output, &manifest)?;

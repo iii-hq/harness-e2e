@@ -12,15 +12,14 @@ Local and static modes carry the same assessment summaries and comparison
 identities. Local details join every run to its current assessment contract.
 Static report artifacts use a bounded allowlist and never publish raw prompts,
 transcripts, generated-asset previews, or private artifact paths; they retain
-only approved conclusions, analyzer provenance, and immutable evidence
-references.
+only the deterministic conclusions and immutable evidence references.
 
-Execution details present the assessment contract in three explicit layers:
-the objective system outcome, the advisory AI conclusion, and the canonical
-effective status. The assessment matrix can be filtered by failures, confidence,
-availability, asset involvement, or AI evaluation. Every conclusion retains its
-criterion or analyzer identity and links to the immutable evidence register;
-missing assessment data is shown as unavailable rather than inferred.
+Execution details present the assessment contract as one objective layer: the
+system outcome of each run and the deterministic conclusions that produced it.
+The assessment matrix can be filtered by failures, availability, or asset
+involvement. Every conclusion retains its criterion identity and links to the
+immutable evidence register; missing assessment data is shown as unavailable
+rather than inferred.
 
 Install, validate, and run the frontend with hot reload:
 
@@ -57,11 +56,12 @@ The dashboard can now execute one or more scenarios against the Harness already
 running at `III_URL`. It discovers registered provider/model pairs from that
 stack and scenario ids from the same E2E binary only when the execution dialog
 opens. The primary form only asks for an optional label, a subject model, and
-scenarios; URL, judge override, run count, and technical retries remain under
-**Advanced options** with safe defaults. Use **Refresh catalog** after restarting
-the Harness or changing its URL. The binary runs only one experiment at a time,
-streams incremental log chunks, indexes the resulting `results.json`, and keeps
-run metadata and logs under `target/harness-e2e-local-runs/`.
+scenarios; URL, the judge model Markdown tests need, run count, and technical
+retries remain under **Advanced options** with safe defaults. Use **Refresh
+catalog** after restarting the Harness or changing its URL. The binary runs only
+one experiment at a time, streams incremental log chunks, indexes the resulting
+`results.json`, and keeps run metadata and logs under
+`target/harness-e2e-local-runs/`.
 
 Local data follows the Console architecture: the React shell opens one lazy
 WebSocket to the Rust server, which proxies only the dashboard's allow-listed iii
@@ -197,9 +197,9 @@ The dashboard has one kind of plan and one baseline/candidate lifecycle. Plan ex
 plans** uses the existing plan table and detail visualization for every plan.
 **New plan** opens the same form for a blank scope, a starting profile or a copy.
 The six profiles are templates: they populate coverage, purpose, repetitions and
-retry policy. Users may edit the scope and explicitly select execution and judge
-models. The saved plan owns that configuration; later template changes do not
-change it or prevent execution.
+retry policy. Users may edit the scope and explicitly select the execution model,
+plus the judge model when the scope includes a Markdown test. The saved plan owns
+that configuration; later template changes do not change it or prevent execution.
 
 **Save draft** keeps the configuration editable. **Save and run** saves it,
 checks requirements and starts the baseline. Busy admission preserves the draft

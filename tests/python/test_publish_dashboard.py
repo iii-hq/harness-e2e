@@ -10,7 +10,6 @@ ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "scripts"))
 
 from publish_harness_e2e_dashboard import (
-    _analyzer_profile_sha256,
     _assessment_profile_sha256,
     _assessment_summary,
     build_static_test_catalog,
@@ -60,13 +59,11 @@ def report(revision: str, scores: list[int]) -> dict:
                 {
                     "criterion_id": "correctness",
                     "target": {"kind": "criterion", "id": "correctness"},
-                    "kind": "signal",
-                    "policy": "advisory",
+                    "kind": "required_check",
+                    "policy": "hard_gate",
                     "dimension": "structural_integrity",
-                    "source": "judge",
                     "outcome": "passed",
                     "score": {"awarded": run["score"], "possible": 100},
-                    "confidence": 0.9,
                     "summary": "Correct result",
                     "evidence": [
                         {
@@ -74,42 +71,21 @@ def report(revision: str, scores: list[int]) -> dict:
                             "artifact_sha256": "sha256:evidence",
                         }
                     ],
-                    "analyzer": {
-                        "analyzer": "criterion-assessment",
-                        "provider": "openai",
-                        "model": "judge",
-                        "input_sha256": "sha256:criterion-input",
-                    },
                 }
             ],
-            "assets": [],
-            "ai_final_assessment": {
-                "availability": "available",
-                "result": {
-                    "verdict": "pass",
-                    "quality_score": run["score"],
-                    "confidence": 0.95,
-                    "summary": "Passed",
-                    "facts": ["System passed"],
-                    "strengths": [],
-                    "concerns": [],
-                    "recommendation": "Accept",
-                    "limitations": [],
+            "assets": [
+                {
+                    "asset_id": "artifact",
+                    "outcome": "valid",
+                    "summary": "Asset matches the declared contract",
                     "evidence": [
                         {
-                            "artifact_id": "transcript",
-                            "artifact_sha256": "sha256:evidence",
+                            "artifact_id": "artifact",
+                            "artifact_sha256": "sha256:asset",
                         }
                     ],
-                },
-                "analyzer": {
-                    "analyzer": "final-assessment",
-                    "provider": "openai",
-                    "model": "judge",
-                    "input_sha256": "sha256:final-input",
-                },
-            },
-            "effective_status": "passed",
+                }
+            ],
         }
         for run in runs
     ]
@@ -117,7 +93,6 @@ def report(revision: str, scores: list[int]) -> dict:
         "execution": {"lane": "daily"},
         "subject": {"provider": "openai", "model": "subject"},
         "judge": {"provider": "openai", "model": "judge"},
-        "judge_protocol": "plain-json",
         "system_under_test": {
             "stack": {
                 "mode": "source",
@@ -204,9 +179,6 @@ class PublishDashboardTests(unittest.TestCase):
             _assessment_profile_sha256(expected["scenario_version"], runs),
             expected["assessment_profile_sha256"],
         )
-        self.assertEqual(
-            _analyzer_profile_sha256(runs), expected["analyzer_profile_sha256"]
-        )
 
     def test_static_catalog_pools_raw_runs_and_shards_evidence(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -261,18 +233,72 @@ class PublishDashboardTests(unittest.TestCase):
                     for side in sides.values()
                 )
             )
+            self.assertTrue(
+                all("analyzer_profiles" not in side for side in sides.values())
+            )
+            cohort = catalog["evaluated_versions"]["cohorts"][0]
+            self.assertNotIn("judge_protocol", cohort)
+            self.assertEqual(cohort["judge_model"], "judge")
             shard_path = site / row["shards"]["3"].removeprefix("./")
             shard = json.loads(shard_path.read_text())
             self.assertEqual(len(shard["observations"]), 2)
             self.assertNotIn("runs", shard["observations"][0])
             self.assertIn("cohort_id", shard["observations"][0])
+            self.assertNotIn("analyzer_profile_sha256", shard["observations"][0])
             self.assertTrue(
                 shard["observations"][0]["assessment_profile_sha256"].startswith(
                     "sha256:"
                 )
             )
 
-    def test_legacy_detail_is_explicitly_unavailable_without_analyzer_output(self) -> None:
+    def test_projected_assessment_keeps_only_deterministic_conclusions(self) -> None:
+        public = complete_public_detail(
+            {
+                "reports": [
+                    {
+                        "available": True,
+                        "subject_id": "openai-subject",
+                        "scenario_id": "coordination.parallel",
+                        "report": report("a" * 40, [100]),
+                    }
+                ]
+            },
+            metadata("deterministic-execution"),
+        )
+        projected_report = public["reports"][0]["report"]
+        self.assertEqual(projected_report["assessment_availability"], "available")
+        projected_run = projected_report["scenarios"][0]["runs"][0]["assessment"]
+        self.assertEqual(projected_run["system_status"], "passed")
+        self.assertEqual(
+            projected_run["assets"],
+            [
+                {
+                    "asset_id": "artifact",
+                    "outcome": "valid",
+                    "summary": "Asset matches the declared contract",
+                    "evidence": [
+                        {
+                            "artifact_id": "artifact",
+                            "artifact_sha256": "sha256:asset",
+                        }
+                    ],
+                }
+            ],
+        )
+        summary = projected_report["assessment_summary"]
+        self.assertEqual(summary["asset_validation_outcomes"]["valid"], 1)
+        self.assertEqual(summary["evidence_reference_count"], 2)
+        for forbidden in (
+            "ai_final_assessment",
+            "effective_status",
+            "analyzer",
+            "confidence",
+            "qualitative_assessment",
+            "judge_protocol",
+        ):
+            self.assertFalse(contains_key(public, forbidden), forbidden)
+
+    def test_legacy_detail_without_contract_is_explicitly_unavailable(self) -> None:
         legacy = report("a" * 40, [100])
         legacy.pop("assessment_contract")
         public = complete_public_detail(
@@ -292,10 +318,8 @@ class PublishDashboardTests(unittest.TestCase):
         self.assertEqual(projected_report["assessment_availability"], "unavailable")
         projected_run = projected_report["scenarios"][0]["runs"][0]["assessment"]
         self.assertEqual(projected_run["system_status"], "unavailable")
-        self.assertEqual(
-            projected_run["ai_final_assessment"]["availability"], "not_evaluated"
-        )
-        self.assertNotIn("analyzer", projected_run["ai_final_assessment"])
+        self.assertEqual(projected_run["assessments"], [])
+        self.assertEqual(projected_run["assets"], [])
 
 
 if __name__ == "__main__":

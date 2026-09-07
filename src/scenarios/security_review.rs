@@ -48,7 +48,6 @@ pub fn scenario(_run_id: &str) -> ScenarioSpec {
                 EvaluationDimension::Deliverable,
             ),
         ],
-        judge_reference: None,
         setup: None,
         evaluate: composite_only_evaluator,
         cleanup: None,

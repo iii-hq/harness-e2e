@@ -57,6 +57,10 @@ describe('execution setup sheet', () => {
 
     for (const html of [plan, quick]) {
       expect(html).toContain('Choose the model and judge')
+      // Only Markdown tests use a judge, so the field is inert without one.
+      expect(html).toContain('Judge model')
+      expect(html).toContain('Only Markdown tests use a judge')
+      expect(html).not.toContain('Default judge (automatic)')
       expect(html).toContain('Pick the tests')
       expect(html).toContain('Advanced · sampling, retries and seed')
       expect(html).toContain('Search by name or id')
@@ -145,7 +149,7 @@ describe('execution setup sheet', () => {
       url: 'ws://127.0.0.1:49134',
     })
     expect(summary.headline).toBe(
-      '2 tests · 2 runs · anthropic / claude-fable-5 · default judge',
+      '2 tests · 2 runs · anthropic / claude-fable-5 · no judge',
     )
     expect(summary.detail).toBe(
       '1 run per test · 1 retry · canonical seed · ws://127.0.0.1:49134',

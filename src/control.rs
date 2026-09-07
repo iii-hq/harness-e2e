@@ -194,6 +194,8 @@ pub struct RunRequest {
     pub lane: String,
     pub model: String,
     pub provider: String,
+    /// Auxiliary model for Markdown scenarios only (validators, instruction
+    /// adherence, setup and cleanup); supply model and provider together.
     #[serde(default)]
     pub judge_model: Option<String>,
     #[serde(default)]
@@ -1087,7 +1089,7 @@ impl ControlPlane {
         } else {
             unique_scenarios(&request.scenarios)
         };
-        let judge = Some(judge_config(&request));
+        let judge = judge_config(&request);
         let audit_analyzer = audit_config(&request);
         let outcome = run_suite(SuiteRunConfig {
             url: self.inner.url.clone(),
@@ -2330,17 +2332,15 @@ fn audit_config(request: &RunRequest) -> Option<JudgeConfig> {
         .map(|(model, provider)| JudgeConfig { model, provider })
 }
 
-fn judge_config(request: &RunRequest) -> JudgeConfig {
-    JudgeConfig {
-        model: request
-            .judge_model
-            .clone()
-            .unwrap_or_else(|| request.model.clone()),
-        provider: request
-            .judge_provider
-            .clone()
-            .unwrap_or_else(|| request.provider.clone()),
-    }
+/// The judge is the auxiliary model Markdown scenarios use for their
+/// validators and instruction adherence. Built-in scenarios never use it, so
+/// there is no default: it exists only when the request names it.
+fn judge_config(request: &RunRequest) -> Option<JudgeConfig> {
+    request
+        .judge_model
+        .clone()
+        .zip(request.judge_provider.clone())
+        .map(|(model, provider)| JudgeConfig { model, provider })
 }
 
 fn unique_scenarios(scenarios: &[ScenarioKey]) -> Vec<ScenarioKey> {
@@ -3551,7 +3551,6 @@ mod tests {
                 supports_tools: Some(true),
                 supports_vision: None,
             },
-            None,
             None,
             None,
             vec![crate::report::E2eScenarioReport::aggregate(

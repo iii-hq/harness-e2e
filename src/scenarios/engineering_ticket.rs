@@ -667,7 +667,6 @@ fn scenario_for_case(run_id: &str, task: &'static TaskCase) -> ScenarioSpec {
         },
         denied_functions: &["http::*", "browser::*", "github::*"],
         criteria: assessment::criteria(ASSESSMENTS),
-        judge_reference: None,
         setup: Some(setup_for(task)),
         evaluate,
         cleanup: Some(cleanup),
@@ -2423,7 +2422,6 @@ fn git_handoff_scenario_for_case(run_id: &str, task: &'static TaskCase) -> Scena
         },
         denied_functions: &["http::*", "browser::*", "github::*"],
         criteria: assessment::criteria(GIT_HANDOFF_ASSESSMENTS),
-        judge_reference: None,
         setup: Some(git_handoff_setup),
         evaluate: git_handoff_evaluate,
         cleanup: Some(git_handoff_cleanup),
@@ -4607,17 +4605,13 @@ mod tests {
                 kind: criterion.kind,
                 policy: criterion.policy,
                 dimension: criterion.dimension,
-                source: criterion.source,
                 outcome: AssessmentOutcome::Passed,
                 score: Some(AssessmentScore {
                     awarded: criterion.weight,
                     possible: criterion.weight,
                 }),
-                confidence: None,
                 summary: "test evidence passed".into(),
                 evidence: Vec::new(),
-                analyzer: None,
-                analyzer_usage: None,
             })
             .collect();
         run.score = Some(100);

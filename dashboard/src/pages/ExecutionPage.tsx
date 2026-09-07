@@ -7,13 +7,13 @@ import { ExecutionMetricsPanel } from '@/components/ExecutionMetricsPanel'
 import { ExecutionOverview } from '@/components/ExecutionOverview'
 import { requestQuickExecution } from '@/components/ExecutionSetup'
 import { LiveProgressPanel } from '@/components/LiveProgressPanel'
-import type { OutcomeRow } from '@/components/OutcomeDerivation'
 import { PlanProgress } from '@/components/PlanStatus'
 import {
   contractScent,
   ResultContractStrip,
   ScenarioMatrix,
 } from '@/components/ScenarioMatrix'
+import type { SystemOutcome } from '@/components/SystemOutcome'
 import { TranscriptDialog } from '@/components/TranscriptDialog'
 import {
   buttonClassName,
@@ -211,50 +211,24 @@ function formatReportedCost(value: number | null) {
 
 /* ---------------------------------------------------------------- layers */
 
-/** The two inputs the result contract combines and, only when it differs,
- *  the status it publishes (audit ED-05). Read by the overview's derivation. */
-export function executionBoundaries(
+/** The one status the result contract publishes, pooled over the retained
+ *  runs (audit ED-05). Read by the overview. */
+export function executionOutcome(
   presentation: ExecutionPresentation,
   runs: AssessmentRunView[],
-): OutcomeRow[] {
-  const summarize = (
-    role: OutcomeRow['role'],
-    values: string[],
-  ): OutcomeRow => {
-    const counts = new Map<string, number>()
-    for (const value of values) counts.set(value, (counts.get(value) ?? 0) + 1)
-    if (counts.size === 1) return { role, value: values[0] }
-    return {
-      role,
-      value: 'partial',
-      label: [...counts]
-        .map(([value, count]) => `${count} ${value.replaceAll('_', ' ')}`)
-        .join(' · '),
-    }
-  }
-  const system = runs.length
+): SystemOutcome {
+  const values = runs.length
     ? runs.map((run) => run.systemStatus)
     : [presentation.attention]
-  const advisory = runs.length
-    ? runs.map(
-        (run) =>
-          run.finalAssessment.result?.verdict ??
-          run.finalAssessment.availability,
-      )
-    : ['unavailable']
-  const boundaries = [
-    summarize('system', system),
-    summarize('advisory', advisory),
-  ]
-  if (runs.some((run) => run.effectiveStatus !== run.systemStatus)) {
-    boundaries.push(
-      summarize(
-        'effective',
-        runs.map((run) => run.effectiveStatus),
-      ),
-    )
+  const counts = new Map<string, number>()
+  for (const value of values) counts.set(value, (counts.get(value) ?? 0) + 1)
+  if (counts.size === 1) return { value: values[0] }
+  return {
+    value: 'partial',
+    label: [...counts]
+      .map(([value, count]) => `${count} ${value.replaceAll('_', ' ')}`)
+      .join(' · '),
   }
-  return boundaries
 }
 
 function firstSentence(value: string | null | undefined): string | null {
@@ -264,15 +238,13 @@ function firstSentence(value: string | null | undefined): string | null {
 }
 
 /** Audit ED-26: every closed layer carries a scent — enough of its content to
- *  decide whether to open it. The narrative's is what happened, then what to do. */
+ *  decide whether to open it. The narrative's is what to do next. */
 export function narrativeScent(verdict: ExecutionVerdict): string {
-  return [firstSentence(verdict.diagnosis), firstSentence(verdict.nextStep)]
-    .filter(Boolean)
-    .join(' · ')
+  return firstSentence(verdict.nextStep) ?? ''
 }
 
-/** One line per scenario: name, objective verdict, advisory when it adds
- *  something, runtime. The table behind it has the same order. */
+/** One line per scenario: name, objective verdict, runtime. The table behind
+ *  it has the same order. */
 export function resultsScent(items: ScenarioMatrixItem[]): string {
   if (items.length === 0) return 'no scenario report retained'
   return items
@@ -280,16 +252,11 @@ export function resultsScent(items: ScenarioMatrixItem[]): string {
       const name = `${item.scenarioId.replace(/_/g, ' ')}${
         item.scenarioVersion == null ? '' : ` v${item.scenarioVersion}`
       }`
-      const advisory =
-        item.advisory.status === 'passed' ||
-        item.advisory.status === 'unavailable'
-          ? ''
-          : `, ${item.advisory.label.toLowerCase()}`
       const runtime =
         item.durationMs == null
           ? ''
           : ` · ${formatScenarioDuration(item.durationMs)}`
-      return `${name} ${item.objective.label.toLowerCase()}${advisory}${runtime}`
+      return `${name} ${item.objective.label.toLowerCase()}${runtime}`
     })
     .join(' \u00a0·\u00a0 ')
 }
@@ -328,22 +295,10 @@ export function countsScent(detail: DashboardExecutionDetail): string {
 }
 
 /** Audit ED-03 / ED-05: one verdict for the execution, stated once. The
- *  derivation leads the overview; this layer carries the words. */
+ *  system outcome leads the overview; this layer carries the words. */
 export function NarrativeSection({ verdict }: { verdict: ExecutionVerdict }) {
-  // Audit ED-22: two columns use the width instead of stopping at 80ch.
   return (
-    <div
-      className="grid gap-x-8 gap-y-4 @[900px]:grid-cols-[minmax(0,1.35fr)_minmax(0,1fr)]"
-      data-narrative
-    >
-      {verdict.diagnosis ? (
-        <div className="grid content-start gap-1">
-          <span className="ds-label">what happened</span>
-          <p className="m-0 text-sm leading-6 text-pretty text-ink">
-            {verdict.diagnosis}
-          </p>
-        </div>
-      ) : null}
+    <div className="grid gap-y-4" data-narrative>
       <div className="grid content-start gap-1">
         <span className="ds-label">next step</span>
         <p className="m-0 text-sm leading-6 text-pretty text-ink-soft">
@@ -573,7 +528,7 @@ function ProvenanceSection({
 /** Audit ED-07 / ED-26: the anchors the router accepts stay a visible bar;
  *  each one now opens its layer, so deep links keep working. */
 const SECTIONS: Array<{ id: DetailSection; label: string }> = [
-  { id: 'summary', label: 'what happened' },
+  { id: 'summary', label: 'next step' },
   { id: 'results', label: 'results' },
   { id: 'metrics', label: 'counts' },
   { id: 'technical', label: 'provenance' },
@@ -866,7 +821,6 @@ export function ExecutionPage({
       </div>
     )
 
-  const primaryRun = assessmentModel.runs[0] ?? null
   const evidenceRun = runId
     ? (assessmentModel.runs.find((run) => run.runId === runId) ?? null)
     : null
@@ -876,9 +830,8 @@ export function ExecutionPage({
     presentation,
     scenarioSummary,
     scenarioMatrix?.items ?? [],
-    primaryRun,
   )
-  const boundaries = executionBoundaries(presentation, assessmentModel.runs)
+  const outcome = executionOutcome(presentation, assessmentModel.runs)
   const runCount = runCountFromDetail(detail)
   const runtimeSeconds =
     presentation.modelRuntimeSeconds ?? summaryMetrics?.durationSeconds ?? null
@@ -893,7 +846,7 @@ export function ExecutionPage({
     ],
     [
       'judge',
-      presentation.judges.map((model) => model.model).join(', ') || 'automatic',
+      presentation.judges.map((model) => model.model).join(', ') || 'no judge',
     ],
     [
       'started',
@@ -1077,10 +1030,10 @@ export function ExecutionPage({
             {/* Audit ED-26: layer 0 is the grouped metrics; everything else
                 is a closed row with a scent until the reader needs it. */}
             <div className="grid min-w-0 gap-3">
-              <ExecutionOverview detail={detail} boundaries={boundaries} />
+              <ExecutionOverview detail={detail} outcome={outcome} />
               <DisclosureLayer
                 id="summary"
-                label="what happened and next step"
+                label="next step"
                 scent={narrativeScent(verdict)}
                 open={layerOpen('summary')}
                 onToggle={(open) => setLayer('summary', open)}

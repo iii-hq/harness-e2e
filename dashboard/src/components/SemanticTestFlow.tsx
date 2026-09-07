@@ -606,7 +606,7 @@ function summarizeTestOutcome(test: SemanticTestReport): {
   if (gates.length > 0) {
     return {
       title: `All ${gates.length} hard ${pluralize(gates.length, 'gate')} passed`,
-      detail: `${test.evaluations?.length ?? 0} advisory ${pluralize(test.evaluations?.length ?? 0, 'evaluation')} recorded without overriding the objective result.`,
+      detail: `${test.evaluations?.length ?? 0} step ${pluralize(test.evaluations?.length ?? 0, 'evaluation')} recorded without overriding the objective result.`,
       tone: 'text-success',
     }
   }

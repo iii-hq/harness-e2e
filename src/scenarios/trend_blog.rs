@@ -283,7 +283,6 @@ fn scenario_for_case(run_id: &str) -> ScenarioSpec {
         // which is what makes the anti-fabrication gate meaningful.
         denied_functions: &["http::*", "browser::*", "web::*"],
         criteria: assessment::criteria(ASSESSMENTS),
-        judge_reference: None,
         setup: Some(setup),
         evaluate,
         cleanup: Some(cleanup),

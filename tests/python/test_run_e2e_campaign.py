@@ -540,7 +540,9 @@ class CampaignRunnerTests(unittest.TestCase):
                 json.dumps({"schema_version": 3, "passed": True, "scenarios": []}),
                 encoding="utf-8",
             )
-            with self.assertRaisesRegex(CampaignError, "schema_version must be 4"):
+            with self.assertRaisesRegex(
+                CampaignError, f"schema_version must be {RESULTS_SCHEMA_VERSION}"
+            ):
                 score_campaign(campaign, [{"group_id": "core", "output": str(output)}])
 
     def test_compact_aggregate_keeps_only_bundle_references(self):
@@ -673,7 +675,6 @@ class CampaignRunnerTests(unittest.TestCase):
                                         "quality_score_completed": median,
                                         "quality_coverage": 1.0,
                                         "total_tokens_consumed": 1200,
-                                        "judge_tokens_consumed": 100,
                                         "tokens_completed_p50": 1200.0,
                                         "failed_attempt_tokens": 0,
                                         "tokens_per_completion": 1200.0,

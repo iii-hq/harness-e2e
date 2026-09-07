@@ -39,7 +39,6 @@ function aggregate(overrides: Record<string, unknown> = {}) {
     quality_score_completed: 88,
     quality_coverage: 1,
     total_tokens_consumed: 1200,
-    judge_tokens_consumed: 100,
     tokens_completed_p50: 1200,
     failed_attempt_tokens: 0,
     tokens_per_completion: 1200,
@@ -94,7 +93,6 @@ function executionDetail() {
                   evaluators: {
                     completion: 'available',
                     quality: 'available',
-                    final_advisory: 'available',
                   },
                   objective_score: 100,
                   quality_score_completed: 88,
@@ -103,7 +101,6 @@ function executionDetail() {
                     run_id: 'run-security',
                     attempt_id: 'attempt-security',
                     system_status: 'passed',
-                    effective_status: 'passed_with_concerns',
                     assessments: [
                       {
                         criterion_id: 'seeded_vulnerability_detection',
@@ -112,10 +109,6 @@ function executionDetail() {
                         summary: 'Detected 3 of 4 seeded paths.',
                       },
                     ],
-                    ai_final_assessment: {
-                      availability: 'available',
-                      result: { verdict: 'pass_with_concerns' },
-                    },
                   },
                   semantic_tests: [
                     {
@@ -183,7 +176,6 @@ function executionDetail() {
                 quality_score_completed: null,
                 quality_coverage: null,
                 total_tokens_consumed: null,
-                judge_tokens_consumed: null,
                 tokens_completed_p50: null,
                 failed_attempt_tokens: null,
                 tokens_per_completion: null,
@@ -199,16 +191,13 @@ function executionDetail() {
                   evaluators: {
                     completion: 'available',
                     quality: 'not_required',
-                    final_advisory: 'not_required',
                   },
                   objective_score: 0,
                   quality_score_completed: null,
                   wall_time_ms: 1_500,
                   assessment: {
                     system_status: 'hard_gate_failed',
-                    effective_status: 'hard_gate_failed',
                     assessments: [],
-                    ai_final_assessment: { availability: 'not_requested' },
                   },
                 },
               ],
@@ -245,7 +234,6 @@ function executionDetail() {
                 quality_score_completed: null,
                 quality_coverage: null,
                 total_tokens_consumed: null,
-                judge_tokens_consumed: null,
                 tokens_completed_p50: null,
                 failed_attempt_tokens: null,
                 tokens_per_completion: null,
@@ -293,7 +281,7 @@ describe('scenario matrix presentation model', () => {
       {
         label: 'Instruction adherence',
         value: '92/100',
-        detail: 'Advisory prompt-following assessment',
+        detail: 'Judge-scored prompt-following, Markdown tests only',
         band: 'scoring',
       },
       {
@@ -328,10 +316,7 @@ describe('scenario matrix presentation model', () => {
       status: 'passed',
       label: 'Passed',
     })
-    expect(security.advisory).toMatchObject({
-      status: 'recommendation',
-      label: 'AI concerns',
-    })
+    expect(security).not.toHaveProperty('advisory')
     expect(security.durationMs).toBe(3_000)
     expect(security.durationKind).toBe('average')
     expect(security.workflowSteps).toHaveLength(2)
@@ -459,7 +444,6 @@ describe('scenario matrix presentation model', () => {
     }
     scan.node_id = 'scan_commit_a'
     scan.cost_usd = null
-    run.judge_usage = { input_tokens: 3_000, output_tokens: 500 }
 
     expect(buildScenarioMatrix(detail).items[0]?.primaryMetrics).toEqual([
       {

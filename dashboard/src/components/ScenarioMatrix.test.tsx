@@ -37,7 +37,6 @@ function aggregate(overrides: Record<string, unknown> = {}) {
     quality_score_completed: 88,
     quality_coverage: 1,
     total_tokens_consumed: 1200,
-    judge_tokens_consumed: 100,
     tokens_completed_p50: 1200,
     failed_attempt_tokens: 0,
     tokens_per_completion: 1200,
@@ -76,7 +75,6 @@ const detail = {
                 evaluators: {
                   completion: 'available',
                   quality: 'available',
-                  final_advisory: 'available',
                 },
                 objective_score: 100,
                 quality_score_completed: 88,
@@ -85,12 +83,7 @@ const detail = {
                   run_id: 'run-security',
                   attempt_id: 'attempt-security',
                   system_status: 'passed',
-                  effective_status: 'passed_with_concerns',
                   assessments: [],
-                  ai_final_assessment: {
-                    availability: 'available',
-                    result: { verdict: 'pass_with_concerns' },
-                  },
                 },
                 semantic_tests: [
                   {
@@ -154,7 +147,6 @@ const detail = {
               quality_score_completed: null,
               quality_coverage: null,
               total_tokens_consumed: null,
-              judge_tokens_consumed: null,
               tokens_completed_p50: null,
               failed_attempt_tokens: null,
               tokens_per_completion: null,
@@ -170,15 +162,12 @@ const detail = {
                 evaluators: {
                   completion: 'available',
                   quality: 'not_required',
-                  final_advisory: 'not_required',
                 },
                 objective_score: 0,
                 quality_score_completed: null,
                 assessment: {
                   system_status: 'hard_gate_failed',
-                  effective_status: 'hard_gate_failed',
                   assessments: [],
-                  ai_final_assessment: { availability: 'not_requested' },
                 },
               },
             ],
@@ -215,7 +204,6 @@ const detail = {
               quality_score_completed: null,
               quality_coverage: null,
               total_tokens_consumed: null,
-              judge_tokens_consumed: null,
               tokens_completed_p50: null,
               failed_attempt_tokens: null,
               tokens_per_completion: null,
@@ -256,7 +244,8 @@ describe('ScenarioMatrix', () => {
     expect(html).toContain('1 unavailable')
     expect(html).toContain('Security Review v2')
     expect(html).toContain('Objective result')
-    expect(html).toContain('AI concerns')
+    expect(html).not.toContain('Advisory')
+    expect(html).not.toContain('judge tokens')
     expect(html).toContain('Workflow · 2 steps')
     expect(html).toContain('Workflow duration profile')
     expect(html).toContain('Tokens')

@@ -244,7 +244,6 @@ pub struct ExecutionCohortIdentity {
     pub subject_model: String,
     pub judge_provider: Option<String>,
     pub judge_model: Option<String>,
-    pub judge_protocol: Option<String>,
     pub e2e_repository: Option<String>,
 }
 
@@ -780,7 +779,6 @@ fn execution_identity(lane: &str, report: &E2eReport) -> ExecutionCohortIdentity
         subject_model: report.subject.model.clone(),
         judge_provider: report.judge.as_ref().map(|judge| judge.provider.clone()),
         judge_model: report.judge.as_ref().map(|judge| judge.model.clone()),
-        judge_protocol: report.judge_protocol.clone(),
         e2e_repository: Some(report.system_under_test.e2e_repository.clone()),
     }
 }
@@ -800,10 +798,6 @@ fn identity_differences(
         (
             "judge model identity differs",
             from.judge_provider != to.judge_provider || from.judge_model != to.judge_model,
-        ),
-        (
-            "judge protocol differs",
-            from.judge_protocol != to.judge_protocol,
         ),
         (
             "E2E repository identity differs",
@@ -1864,7 +1858,6 @@ mod tests {
             },
             None,
             None,
-            None,
             vec![scenario],
         )
     }
@@ -1983,7 +1976,6 @@ mod tests {
         let cost = if regress { 1.30 } else { 1.0 };
         run.cost = CostReport {
             subject_usd: Some(cost),
-            judge_usd: Some(0.0),
             total_usd: Some(cost),
         };
         run.dimensions = vec![

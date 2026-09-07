@@ -33,7 +33,7 @@ pub(super) fn stored_execution_detail(run: &super::store::StoredRun) -> Result<V
 fn attach_live_progress(value: &mut Value, run: &super::store::StoredRun) -> Result<()> {
     value["live_progress"] = serde_json::to_value(&run.live_progress)?;
     value["live_progress_error"] = json!(run.live_progress_error);
-    // A report can be written while final assessments are still running.
+    // A report can be written while the control plane is still finalizing.
     // Keep lifecycle authoritative until the control plane finishes.
     if run.metadata.status.active() {
         value["status"] = json!(if run.metadata.status == JobStatus::Cancelling {
@@ -362,7 +362,7 @@ fn scenario_metrics(subject_id: &str, report: &E2eReport) -> Vec<Value> {
         .map(|scenario| {
             let metric = |run: &E2eRunReport, name: &str| -> Option<f64> {
                 match name {
-                    "tokens" => run_total_tokens(&scenario.scenario_id, run),
+                    "tokens" => run_total_tokens(run),
                     "duration_seconds" => Some(run.wall_time_ms as f64 / 1000.0),
                     "cost_usd" => run_total_cost(&scenario.scenario_id, run),
                     "function_calls" => run_function_calls(&scenario.scenario_id, run),
@@ -657,7 +657,7 @@ fn efficiency_totals(report: &E2eReport) -> (Option<f64>, Option<f64>, Option<f6
     let mut errors = Vec::new();
     for scenario in &report.scenarios {
         for run in &scenario.runs {
-            tokens.push(run_total_tokens(&scenario.scenario_id, run));
+            tokens.push(run_total_tokens(run));
             calls.push(run_function_calls(&scenario.scenario_id, run));
             errors.push(run_function_call_errors(&scenario.scenario_id, run));
         }
@@ -669,24 +669,14 @@ fn efficiency_totals(report: &E2eReport) -> (Option<f64>, Option<f64>, Option<f6
     )
 }
 
-fn run_total_tokens(scenario_id: &str, run: &E2eRunReport) -> Option<f64> {
-    run.metrics
-        .as_ref()
-        .and_then(|metrics| {
-            metrics
-                .totals
-                .input_tokens
-                .zip(metrics.totals.output_tokens)
-                .map(|(input, output)| (input + output) as f64)
-        })
-        .or_else(|| {
-            (scenario_id == "security_review").then_some(())?;
-            run.judge_usage
-                .as_ref()?
-                .input_tokens
-                .zip(run.judge_usage.as_ref()?.output_tokens)
-                .map(|(input, output)| (input + output) as f64)
-        })
+fn run_total_tokens(run: &E2eRunReport) -> Option<f64> {
+    run.metrics.as_ref().and_then(|metrics| {
+        metrics
+            .totals
+            .input_tokens
+            .zip(metrics.totals.output_tokens)
+            .map(|(input, output)| (input + output) as f64)
+    })
 }
 
 fn run_function_calls(scenario_id: &str, run: &E2eRunReport) -> Option<f64> {

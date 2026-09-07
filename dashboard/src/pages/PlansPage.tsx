@@ -137,7 +137,7 @@ function compact(value: number) {
 
 const CORE_DELTAS: Array<{ id: PlanMetricId; label: string }> = [
   { id: 'coverage', label: 'coverage' },
-  { id: 'quality', label: 'score' },
+  { id: 'technical_failures', label: 'technical failures' },
   { id: 'tokens', label: 'tokens' },
   { id: 'duration', label: 'time' },
 ]

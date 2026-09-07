@@ -8,8 +8,7 @@
         "subject_provider": "zai",
         "subject_model": "glm-5.2",
         "judge_provider": "openai",
-        "judge_model": "gpt-5.4",
-        "judge_protocol": "plain-json"
+        "judge_model": "gpt-5.4"
       }
     ],
     "versions": [

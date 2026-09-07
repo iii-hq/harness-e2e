@@ -141,7 +141,6 @@ pub fn spec(scenario: ScenarioId) -> ScenarioSpec {
             "Deliver the requested ticket or all eight journey tickets while preserving accepted software and protected checks.",
             EvaluationDimension::Deliverable,
         )],
-        judge_reference: None,
         setup: None,
         evaluate: |_context, _observation, _run_id| Box::pin(async {
             Ok(ObjectiveEvaluation {
@@ -261,7 +260,6 @@ pub(crate) fn attach_report(
         .and_then(|metrics| metrics.totals.cost_usd)
     {
         report.cost.subject_usd = Some(cost);
-        report.cost.judge_usd = Some(0.0);
         report.cost.total_usd = Some(cost);
     }
     if matches!(

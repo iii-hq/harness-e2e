@@ -46,13 +46,13 @@ describe('provider model menu', () => {
         ariaLabel="Judge model"
         groups={groups}
         value=""
-        clearLabel="Default judge (automatic)"
+        clearLabel="All judges"
         collapsedProviders={new Set(['anthropic'])}
         onToggleProvider={() => undefined}
         onSelect={() => undefined}
       />,
     )
-    expect(html.indexOf('Default judge (automatic)')).toBeLessThan(
+    expect(html.indexOf('All judges')).toBeLessThan(
       html.indexOf('claude') === -1 ? html.length : html.indexOf('claude'),
     )
     expect(html).toContain('aria-selected="true"')

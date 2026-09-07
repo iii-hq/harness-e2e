@@ -267,7 +267,6 @@ observed it. If any goal is unmet, report `INCOMPLETE` instead and name the goal
         },
         denied_functions: &["web::*", "scrapling::*", "http::*"],
         criteria: assessment::criteria(ASSESSMENTS),
-        judge_reference: None,
         setup: Some(setup),
         evaluate,
         cleanup: Some(cleanup),

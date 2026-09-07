@@ -113,12 +113,6 @@ export function compareTestObservations(
     'Assessment profile',
     reasons,
   )
-  sameRequired(
-    baseline.analyzer_profile_sha256,
-    candidate.analyzer_profile_sha256,
-    'Analyzer profile',
-    reasons,
-  )
   sameRequired(baseline.cohort_id, candidate.cohort_id, 'Cohort', reasons)
   sameRequired(
     baseline.stack_mode,
@@ -148,12 +142,6 @@ export function compareTestObservations(
     baseline.judge_model,
     candidate.judge_model,
     'Judge model',
-    reasons,
-  )
-  sameOptional(
-    baseline.judge_protocol,
-    candidate.judge_protocol,
-    'Judge protocol',
     reasons,
   )
 

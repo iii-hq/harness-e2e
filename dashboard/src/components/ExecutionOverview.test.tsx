@@ -12,10 +12,7 @@ import {
   metricRun,
 } from '@/test-fixtures/execution-metrics'
 
-const boundaries = [
-  { role: 'system' as const, value: 'passed' },
-  { role: 'advisory' as const, value: 'pass' },
-]
+const outcome = { value: 'passed' }
 
 describe('execution overview', () => {
   // Audit ED-27: three ratios that are 100% by construction are one fact.
@@ -27,15 +24,15 @@ describe('execution overview', () => {
     const metrics = buildExecutionMetrics(detail)
     expect(completionIsTrivial(metrics)).toBe(true)
     const html = renderToStaticMarkup(
-      <ExecutionOverview detail={detail} boundaries={boundaries} />,
+      <ExecutionOverview detail={detail} outcome={outcome} />,
     )
     expect(html).toContain('data-completion="trivial"')
     expect(html).toContain('every planned run completed')
     expect(html).toContain('2/2')
     expect(html).not.toContain('completion rate')
     expect(html).not.toContain('execution reliability')
-    // The derivation leads, in the same shape the evidence record uses.
-    expect(html).toContain('data-outcome-derivation')
+    // The status leads, in the same shape the evidence record uses.
+    expect(html).toContain('data-system-outcome')
   })
 
   it('keeps the three ratios apart as soon as one run did not complete', () => {
@@ -53,7 +50,7 @@ describe('execution overview', () => {
     const metrics = buildExecutionMetrics(detail)
     expect(completionIsTrivial(metrics)).toBe(false)
     const html = renderToStaticMarkup(
-      <ExecutionOverview detail={detail} boundaries={boundaries} />,
+      <ExecutionOverview detail={detail} outcome={outcome} />,
     )
     expect(html).toContain('data-completion="detailed"')
     expect(html).toContain('completion rate')
@@ -70,7 +67,7 @@ describe('execution overview', () => {
     ])
     expect(usageCoverageComplete(buildExecutionMetrics(complete))).toBe(true)
     const full = renderToStaticMarkup(
-      <ExecutionOverview detail={complete} boundaries={boundaries} />,
+      <ExecutionOverview detail={complete} outcome={outcome} />,
     )
     expect(full).toContain('data-usage-coverage="complete"')
     expect(full).toContain('subject telemetry from 2 of 2 runs')
@@ -86,7 +83,7 @@ describe('execution overview', () => {
     ])
     expect(usageCoverageComplete(buildExecutionMetrics(partial))).toBe(false)
     const html = renderToStaticMarkup(
-      <ExecutionOverview detail={partial} boundaries={boundaries} />,
+      <ExecutionOverview detail={partial} outcome={outcome} />,
     )
     expect(html).toContain('data-usage-coverage="partial"')
     expect(html).toContain('1/2 runs with telemetry')
@@ -109,7 +106,7 @@ describe('execution overview', () => {
     ])
     expect(p50EqualsPerCompletion(buildExecutionMetrics(three))).toBe(false)
     const html = renderToStaticMarkup(
-      <ExecutionOverview detail={three} boundaries={boundaries} />,
+      <ExecutionOverview detail={three} outcome={outcome} />,
     )
     expect(html).toContain('completed p50 tokens')
   })
@@ -118,7 +115,7 @@ describe('execution overview', () => {
     const detail = executionMetricsFixture([{ runs: [metricRun('a', 100)] }])
     detail.reports[0].available = false
     const html = renderToStaticMarkup(
-      <ExecutionOverview detail={detail} boundaries={boundaries} />,
+      <ExecutionOverview detail={detail} outcome={outcome} />,
     )
     expect(html).toContain('No compatible run evidence')
     expect(html).not.toContain('100%')

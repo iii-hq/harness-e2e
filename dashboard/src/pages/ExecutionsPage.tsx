@@ -277,7 +277,7 @@ function LedgerRowCells({ row }: { row: LedgerRow }) {
           {presentation.subjects[0]?.provider ?? ''}
           {presentation.judges.length > 0
             ? ` · judge ${presentation.judges[0].model}`
-            : ' · judge automatic'}
+            : ' · no judge'}
         </span>
       </td>
       <td data-label="Scope" className={numericCellClassName}>

@@ -178,7 +178,6 @@ pub fn scenario(_run_id: &str) -> ScenarioSpec {
         },
         denied_functions: &[],
         criteria: CRITERIA.to_vec(),
-        judge_reference: None,
         setup: None,
         evaluate: composite_only_evaluator,
         cleanup: None,
@@ -309,7 +308,7 @@ fn composite_only_evaluator<'a>(
 mod tests {
     use std::collections::HashSet;
 
-    use crate::assessment::{AssessmentKind, AssessmentPolicy, AssessmentSource};
+    use crate::assessment::{AssessmentKind, AssessmentPolicy};
 
     use super::*;
 
@@ -391,7 +390,6 @@ mod tests {
         assert!(spec.criteria.iter().all(|criterion| {
             criterion.kind == AssessmentKind::RequiredCheck
                 && criterion.policy == AssessmentPolicy::HardGate
-                && criterion.source == AssessmentSource::Deterministic
         }));
         assert_eq!(
             spec.criteria

@@ -114,6 +114,10 @@ struct RunArgs {
     #[arg(long, env = "HARNESS_E2E_PROVIDER")]
     provider: String,
 
+    /// Auxiliary model for Markdown scenarios (validators, instruction
+    /// adherence, setup and cleanup sessions). Required together with
+    /// --judge-provider whenever a Markdown scenario is selected; built-in
+    /// scenarios are assessed deterministically and never use it.
     #[arg(long, env = "HARNESS_E2E_JUDGE_MODEL")]
     judge_model: Option<String>,
 
@@ -409,11 +413,10 @@ async fn run(args: RunArgs) -> Result<()> {
     if has_markdown && (args.judge_model.is_none() || args.judge_provider.is_none()) {
         bail!("Markdown scenarios require explicit --judge-model and --judge-provider values");
     }
-    let judge = Some(judge_config(
-        &subject,
-        args.judge_model,
-        args.judge_provider,
-    ));
+    let judge = args
+        .judge_model
+        .zip(args.judge_provider)
+        .map(|(model, provider)| JudgeConfig { model, provider });
     let audit_analyzer = args
         .audit_model
         .zip(args.audit_provider)
@@ -521,17 +524,6 @@ async fn replay_materialized(args: ReplayMaterializedArgs) -> Result<()> {
         bail!("materialized Markdown replay failed");
     }
     Ok(())
-}
-
-fn judge_config(
-    subject: &SubjectConfig,
-    model: Option<String>,
-    provider: Option<String>,
-) -> JudgeConfig {
-    JudgeConfig {
-        model: model.unwrap_or_else(|| subject.model.clone()),
-        provider: provider.unwrap_or_else(|| subject.provider.clone()),
-    }
 }
 
 #[cfg(test)]
@@ -661,17 +653,6 @@ mod tests {
             panic!("expected dashboard command");
         };
         assert!(args.view_only);
-    }
-
-    #[test]
-    fn final_analyzer_defaults_to_the_subject_for_every_run() {
-        let subject = SubjectConfig {
-            model: "model".into(),
-            provider: "provider".into(),
-        };
-        let judge = judge_config(&subject, None, None);
-        assert_eq!(judge.model, subject.model);
-        assert_eq!(judge.provider, subject.provider);
     }
 
     #[test]

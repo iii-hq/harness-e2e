@@ -25,7 +25,6 @@ const spec: TestSpec = {
       kind: 'required_check',
       policy: 'hard_gate',
       dimension: 'deliverable',
-      source: 'deterministic',
     },
     {
       id: 'build_discipline',
@@ -34,7 +33,6 @@ const spec: TestSpec = {
       kind: 'signal',
       policy: 'advisory',
       dimension: 'efficiency',
-      source: 'deterministic',
     },
   ],
   execution: {
@@ -116,14 +114,14 @@ describe('about test panel', () => {
     expect(ABOUT_PANEL_STORAGE_KEY).toBe('harness-e2e:about-test-open')
   })
 
-  it('summarises the contract without claiming a judge that never runs', () => {
+  it('summarises the contract as the deterministic scoring it is', () => {
     expect(totalWeight(spec.criteria)).toBe(50)
     expect(hardGateCount(spec.criteria)).toBe(1)
     expect(criteriaCaption(spec.criteria)).toBe(
-      '2 criteria · 1 hard gate · deterministic, no judge model',
+      '2 criteria · 1 hard gate · deterministic',
     )
-    expect(criteriaCaption([{ ...spec.criteria[0], source: 'judge' }])).toBe(
-      '1 criterion · 1 hard gate · judge-scored',
+    expect(criteriaCaption([spec.criteria[1]])).toBe(
+      '1 criterion · deterministic',
     )
   })
 

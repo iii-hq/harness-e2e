@@ -499,7 +499,8 @@ export function LocalPlanCreatePage({
             </Select>
             <span className="mt-1 block text-xs text-ink-soft">
               Templates fill the initial scope and policy. Edit them and select
-              the execution model and judge before saving.
+              the execution model before saving; only Markdown tests also need a
+              judge.
             </span>
           </label>
         ) : null}

@@ -992,8 +992,6 @@ export { PlanRunHistory as PlanNonComparableAttempts }
 export const PLAN_COMPARISON_TABLE_METRICS = [
   'coverage',
   'technical_failures',
-  'quality',
-  'confidence',
   'tokens',
   'tokens_per_completion',
   'failed_attempt_tokens',
@@ -1011,7 +1009,11 @@ export const PLAN_TREND_BANDS: Array<{
   label: string
   metrics: PlanMetricId[]
 }> = [
-  { id: 'evidence', label: 'evidence', metrics: ['coverage', 'quality'] },
+  {
+    id: 'evidence',
+    label: 'evidence',
+    metrics: ['coverage', 'technical_failures'],
+  },
   {
     id: 'consumption',
     label: 'consumption',
@@ -1029,7 +1031,6 @@ const PLAN_TREND_METRICS: PlanMetricId[] = PLAN_TREND_BANDS.flatMap(
 )
 
 const PLAN_SCENARIO_TABLE_METRICS: PlanMetricId[] = [
-  'quality',
   'duration',
   'tokens',
   'tokens_per_completion',
@@ -1041,7 +1042,6 @@ const PLAN_SCENARIO_TABLE_METRICS: PlanMetricId[] = [
 ]
 
 const PLAN_SCENARIO_SUMMARY_METRICS: PlanMetricId[] = [
-  'quality',
   'duration',
   'tokens',
   'turns',
@@ -1051,7 +1051,6 @@ const PLAN_SCENARIO_SUMMARY_METRICS: PlanMetricId[] = [
 const PLAN_DUMBBELL_METRICS: Array<{ id: PlanMetricId; caption: string }> = [
   { id: 'tokens', caption: 'subject' },
   { id: 'duration', caption: 'per run' },
-  { id: 'quality', caption: 'advisory' },
 ]
 
 /** A chart legend's key: the mark itself, drawn, never a colored word. */
@@ -1650,7 +1649,7 @@ export function PlanDumbbells({ comparison }: { comparison: PlanComparison }) {
       ),
     )
     const max = Math.max(...values, 0)
-    const top = id === 'quality' ? 100 : max * 1.15 || 1
+    const top = max * 1.15 || 1
     const ticks = [0, top / 2, top].map((value) => ({
       value,
       label: formatWith(descriptor, value),

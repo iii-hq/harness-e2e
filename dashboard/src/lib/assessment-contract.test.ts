@@ -16,10 +16,12 @@ describe('assessment result contract', () => {
 
     expect(contract).toEqual(result.assessment_contract)
     expect(contract.runs[0]?.system_status).toBe('hard_gate_failed')
-    expect(contract.runs[0]?.ai_final_assessment.availability).toBe(
-      'unavailable',
-    )
-    expect(contract.runs[0]?.effective_status).toBe('hard_gate_failed')
+    // The run publishes one status: no advisory verdict, no effective status.
+    expect(contract.runs[0]).not.toHaveProperty('ai_final_assessment')
+    expect(contract.runs[0]).not.toHaveProperty('effective_status')
+    // Assets are flat validation results, with no qualitative wrapper.
+    expect(contract.runs[0]?.assets?.[0]?.asset_id).toBe('result')
+    expect(contract.runs[0]?.assets?.[0]?.outcome).toBe('valid')
     expect(summarizeAssessmentContract(contract)).toEqual(
       result.dashboard_projection.summary,
     )

@@ -34,7 +34,7 @@ type ProviderModelDropdownProps = {
   labelledBy?: string
   /** Id for the trigger so a <label htmlFor> can name it. */
   id?: string
-  /** Renders a first option that clears the value, e.g. "Default judge". */
+  /** Renders a first option that clears the value, e.g. "All judges". */
   clearLabel?: string
   disabled?: boolean
   invalid?: boolean

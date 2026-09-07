@@ -22,7 +22,6 @@ export function metricRun(
     evaluators: {
       completion: 'not_required',
       quality: 'available',
-      final_advisory: 'not_required',
     },
     objective_score: 100,
     quality_score_completed: 80,
@@ -32,7 +31,6 @@ export function metricRun(
       function_calls: 10,
       function_call_errors: 0,
     },
-    judge_usage: { input_tokens: 30, output_tokens: 10 },
     cost: { total_usd: 0.1 },
     wall_time_ms: 1_000,
     retry_attempts: [],
@@ -95,7 +93,6 @@ export function executionMetricsFixture(
                 quality_score_completed: null,
                 quality_coverage: null,
                 total_tokens_consumed: null,
-                judge_tokens_consumed: null,
                 tokens_completed_p50: null,
                 failed_attempt_tokens: null,
                 tokens_per_completion: null,

@@ -138,25 +138,22 @@ export function summaryStatus(summary: TestSideSummary | null): {
   return { status: 'passed', label: 'passed' }
 }
 
-/** Audit CP-04: the AI verdict is one short phrase, only when it exists. */
-export function aiVerdictLabel(summary: TestSideSummary) {
-  const verdicts = summary.assessment_summary?.ai_verdicts
-  if (!verdicts) return null
-  if (verdicts.fail > 0) return 'ai: fail'
-  if (verdicts.pass_with_concerns > 0)
-    return `ai: ${verdicts.pass_with_concerns} concern${verdicts.pass_with_concerns === 1 ? '' : 's'}`
-  if (verdicts.pass > 0) return 'ai: no concerns'
-  if (verdicts.inconclusive > 0) return 'ai: inconclusive'
-  return null
+/** Audit CP-04: how many assessments the side did not pass, when any. */
+export function unmetAssessmentsLabel(summary: TestSideSummary) {
+  const outcomes = summary.assessment_summary?.assessment_outcomes
+  if (!outcomes) return null
+  const unmet = outcomes.failed + outcomes.error + outcomes.partial
+  if (unmet === 0) return null
+  return `${unmet} assessment${unmet === 1 ? '' : 's'} unmet`
 }
 
-/** One line per side: status · score/100 · ai note (audit CP-04 / CP-16). */
+/** One line per side: status · score/100 · unmet assessments (audit CP-04 / CP-16). */
 export function SideResult({ summary }: { summary: TestSideSummary | null }) {
   const status = summaryStatus(summary)
   if (!summary) {
     return <span className="font-mono text-xs text-ink-muted">no evidence</span>
   }
-  const ai = aiVerdictLabel(summary)
+  const unmet = unmetAssessmentsLabel(summary)
   return (
     <span className="flex flex-wrap items-center gap-x-2 gap-y-1">
       <StatusBadge status={status.status} label={status.label} />
@@ -170,8 +167,8 @@ export function SideResult({ summary }: { summary: TestSideSummary | null }) {
       >
         n={summary.scored_runs}
       </span>
-      {ai ? (
-        <span className="font-mono text-label text-ink-soft">{ai}</span>
+      {unmet ? (
+        <span className="font-mono text-label text-ink-soft">{unmet}</span>
       ) : null}
     </span>
   )
@@ -317,8 +314,6 @@ function compatibilityLabel(result: TestVersionResult | null) {
     contract_conflict: 'contract conflict',
     assessment_changed: 'assessment profile changed',
     assessment_conflict: 'assessment profile conflict',
-    analyzer_changed: 'analyzer profile changed',
-    analyzer_conflict: 'analyzer profile conflict',
   }[result.compatibility]
 }
 
@@ -1288,7 +1283,7 @@ export function TestsPage({
   const cohortLabel = (cohort: CohortDescriptor) => {
     const judge = cohort.judge_model
       ? `judge ${compactModel(cohort.judge_model)}`
-      : 'automatic judge'
+      : 'no judge'
     return `${compactModel(cohort.subject_model)} · lane ${cohort.lane} · ${judge}`
   }
   const cohortsWithPairs = (evaluated?.cohorts ?? []).filter(
@@ -1320,7 +1315,7 @@ export function TestsPage({
   const bLabel = bVersion ? bVersion.label.toLowerCase() : 'b'
   const headline =
     activeCohort && aVersion && bVersion
-      ? `${compactModel(activeCohort.subject_model)} judged by ${activeCohort.judge_model ? compactModel(activeCohort.judge_model) : 'the automatic judge'} · ${aLabel} → ${bLabel}`
+      ? `${compactModel(activeCohort.subject_model)} judged by ${activeCohort.judge_model ? compactModel(activeCohort.judge_model) : 'no judge'} · ${aLabel} → ${bLabel}`
       : 'two system versions, same model and judge'
 
   const shareLink = () => {
@@ -1417,8 +1412,8 @@ export function TestsPage({
               </Select>
               <span className="font-mono text-label text-ink-muted">
                 {activeCohort
-                  ? `subject ${activeCohort.subject_provider}/${activeCohort.subject_model} · judge ${activeCohort.judge_provider ? `${activeCohort.judge_provider}/${activeCohort.judge_model}` : 'automatic'}${activeCohort.judge_protocol ? ` · ${activeCohort.judge_protocol}` : ''}`
-                  : 'system version = the workers under test · cohort = which model was judged by which judge'}
+                  ? `subject ${activeCohort.subject_provider}/${activeCohort.subject_model} · judge ${activeCohort.judge_provider ? `${activeCohort.judge_provider}/${activeCohort.judge_model}` : 'no judge'}`
+                  : 'system version = the workers under test · cohort = which model ran with which Markdown judge'}
                 {evaluated
                   ? ` · ${cohortsWithPairs} of ${evaluated.cohorts.length} cohorts have ≥ 2 versions`
                   : ''}

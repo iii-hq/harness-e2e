@@ -15,8 +15,8 @@ export function MasterTestProfiles({ plan }: { plan: MasterTestPlan }) {
         </h2>
         <p className="mt-1 mb-0 text-xs leading-5 text-ink-soft">
           Choose the purpose of the evaluation. Plans preserve cases,
-          independent repetitions and retry policy. All profiles report advisory
-          evidence.
+          independent repetitions and retry policy. All profiles report the
+          deterministic assessment contract.
         </p>
       </div>
       <div className="divide-y divide-line">

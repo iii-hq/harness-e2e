@@ -23,14 +23,7 @@ describe('SemanticTestFlow', () => {
                   {
                     run_id: 'run-1',
                     attempt_id: 'attempt-1',
-                    assessment: {
-                      ai_final_assessment: {
-                        analyzer_usage: {
-                          input_tokens: 3344,
-                          output_tokens: 970,
-                        },
-                      },
-                    },
+                    assessment: { system_status: 'passed' },
                     scenario_flow: {
                       definition_sha256: `sha256:${'a'.repeat(64)}`,
                       snapshot: { executable: false },
