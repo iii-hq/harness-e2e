@@ -236,6 +236,16 @@ pub(crate) fn attach_report(
         .and_then(serde_json::Value::as_str)
         .unwrap_or("infrastructure_error");
     let completed = terminal == "completed";
+    if matches!(terminal, "completed" | "capability_failure") {
+        report.set_completion(
+            if completed {
+                crate::report::CompletionState::Completed
+            } else {
+                crate::report::CompletionState::TaskIncomplete
+            },
+            crate::report::EvaluatorAvailability::Available,
+        );
+    }
     if let Some(session) = value.get("session_id").and_then(serde_json::Value::as_str) {
         report.session_id = session.into();
     }

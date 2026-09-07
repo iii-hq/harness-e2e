@@ -3660,6 +3660,102 @@ mod tests {
     }
 
     #[test]
+    fn swe_terminal_completion_survives_results_persistence() {
+        for (terminal, status, completion, score, technical, objective) in [
+            (
+                "completed",
+                RunStatus::Passed,
+                CompletionState::Completed,
+                100,
+                TechnicalState::Valid,
+                Some(100),
+            ),
+            (
+                "completed",
+                RunStatus::InfrastructureError,
+                CompletionState::Completed,
+                100,
+                TechnicalState::TechnicalInvalid,
+                None,
+            ),
+            (
+                "capability_failure",
+                RunStatus::HardGateFailed,
+                CompletionState::TaskIncomplete,
+                0,
+                TechnicalState::Valid,
+                Some(0),
+            ),
+        ] {
+            let output = tempfile::tempdir().unwrap();
+            let attempt = format!("attempt-{score}");
+            let path = output
+                .path()
+                .join("deliverables")
+                .join(&attempt)
+                .join("swe_service_report.json");
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(
+                path,
+                serde_json::to_vec(&serde_json::json!({
+                    "schema": "swe-service-report/v1",
+                    "scenario_id": "swe_config_isolation",
+                    "fixture_revision": crate::scenarios::swe_service::FIXTURE_REVISION,
+                    "accepted_head": "0123456789abcdef0123456789abcdef01234567",
+                    "accepted_tickets": if terminal == "completed" { vec![1] } else { Vec::new() },
+                    "terminal_status": terminal,
+                    "accepted_patch": "",
+                    "unaccepted_patch": ""
+                }))
+                .unwrap(),
+            )
+            .unwrap();
+            let materialized = crate::scenarios::swe_service::materialize(
+                crate::scenarios::ScenarioId::SweConfigIsolation,
+            )
+            .unwrap();
+            let mut run = E2eRunReport::new(
+                "run".into(),
+                attempt.clone(),
+                1,
+                "session".into(),
+                "prompt".into(),
+            );
+            run.score = Some(score);
+            if status == RunStatus::InfrastructureError {
+                run.push_failure(status, FailurePhase::Execute, "technical failure");
+            } else {
+                run.finish(status);
+            }
+            crate::scenarios::swe_service::attach_report(
+                output.path(),
+                &attempt,
+                &materialized.case,
+                &mut run,
+            )
+            .unwrap();
+
+            assert_eq!(run.technical, technical);
+            assert_eq!(run.completion, completion);
+            assert_eq!(run.objective_score, objective);
+            let scenario = E2eScenarioReport::aggregate_case(
+                materialized.case,
+                materialized.spec.execution,
+                vec![run],
+            );
+            let path = report(vec![scenario])
+                .write_to(output.path(), &manifest())
+                .unwrap();
+            let (persisted, persisted_path) = E2eReport::read_from(&path).unwrap();
+            assert_eq!(persisted_path, path);
+            let persisted = &persisted.scenarios[0].runs[0];
+            assert_eq!(persisted.technical, technical);
+            assert_eq!(persisted.completion, completion);
+            assert_eq!(persisted.objective_score, objective);
+        }
+    }
+
+    #[test]
     fn initially_invalid_run_becomes_valid_when_execution_succeeds() {
         let mut completed = E2eRunReport::new(
             "run".into(),
