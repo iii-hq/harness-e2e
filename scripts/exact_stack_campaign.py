@@ -530,6 +530,14 @@ def project_scaffold(
 
     orchestration = contract["orchestration"]
     roots = {root["worker"]: root["version"] for root in orchestration["roots"]}
+    scenarios = {
+        scenario for group in contract["suite"]["groups"] for scenario in group.get("scenarios", [])
+    }
+    harness_override = {}
+    if "fanout_ladder" in scenarios:
+        harness_override["max_children"] = 16
+    if "depth_ladder" in scenarios:
+        harness_override["max_depth"] = 6
     unknown_env_files = sorted(set(env_files) - set(roots))
     if unknown_env_files:
         raise ValueError(f"env files name unknown project roots: {', '.join(unknown_env_files)}")
@@ -569,6 +577,9 @@ def project_scaffold(
         if worker == runner_worker(contract):
             container["config_name"] = f"{namespace}-harness-e2e"
             container["config_override"] = {"data_dir": str(data_dir)}
+        elif worker == APPLICATION and harness_override:
+            container["config_name"] = f"{namespace}-harness"
+            container["config_override"] = harness_override
         containers[worker] = container
 
     return {
