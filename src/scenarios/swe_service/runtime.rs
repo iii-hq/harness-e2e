@@ -35,13 +35,14 @@ struct Attempt {
     attempt_id: String,
     session_id: String,
     checkpoint_id: String,
+    exec_id: String,
     prepared: Value,
 }
 
 #[derive(Default)]
 struct SharedState {
     attempt: Option<Attempt>,
-    registration: Option<FunctionRef>,
+    registrations: Vec<FunctionRef>,
     stop_reason: Option<String>,
     metrics: Option<Value>,
     transcript: Option<Value>,
@@ -70,6 +71,23 @@ struct CheckpointRequest {
     head: String,
     #[serde(default)]
     revision_id: Option<String>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct WorkspaceExecRequest {
+    #[serde(rename = "_caller_worker_id", default)]
+    #[schemars(skip)]
+    _caller_worker_id: Option<String>,
+    command: String,
+    #[serde(default)]
+    args: Vec<String>,
+    #[serde(default = "default_exec_timeout_ms")]
+    timeout_ms: u64,
+}
+
+fn default_exec_timeout_ms() -> u64 {
+    30_000
 }
 
 struct Executor {
@@ -241,6 +259,7 @@ impl Shared {
             attempt_id: execution.attempt_id.clone(),
             session_id: format!("swe_{}", execution.attempt_id),
             checkpoint_id: format!("e2etest::swe_checkpoint_{}", execution.attempt_id),
+            exec_id: format!("e2etest::swe_exec_{}", execution.attempt_id),
             prepared: Value::Null,
         };
         self.state
@@ -286,7 +305,25 @@ impl Shared {
             .attempt = Some(attempt.clone());
         self.verify_boundary(&attempt).await?;
         let callback = self.clone();
-        let registration = self.harness.client().register_function(
+        let exec_registration = self.harness.client().register_function(
+            attempt.exec_id.clone(),
+            RegisterFunction::new_async(move |request: WorkspaceExecRequest| {
+                let shared = callback.clone();
+                async move {
+                    shared
+                        .workspace_exec(request)
+                        .await
+                        .map_err(|error| iii_sdk::errors::Error::from(format!("{error:#}")))
+                }
+            })
+            .description(
+                "Run one command inside the isolated SWE workspace. Pass the program in command, \
+                 each argument in args, and an optional timeout_ms up to 120000. The working \
+                 directory is the repository root; host paths and network are unavailable.",
+            ),
+        );
+        let callback = self.clone();
+        let checkpoint_registration = self.harness.client().register_function(
             attempt.checkpoint_id.clone(),
             RegisterFunction::new_async(move |request: CheckpointRequest| {
                 let shared = callback.clone();
@@ -305,7 +342,7 @@ impl Shared {
         self.state
             .lock()
             .unwrap_or_else(|error| error.into_inner())
-            .registration = Some(registration);
+            .registrations = vec![exec_registration, checkpoint_registration];
         Ok(completed(true))
     }
 
@@ -315,11 +352,28 @@ impl Shared {
         std::fs::write(&canary, &secret)?;
         // This is a trusted preflight, never placed in the subject transcript.
         let script = "import json,pathlib,sys; p=pathlib.Path(sys.argv[1]); ok=p.is_file(); q=pathlib.Path(sys.argv[2]);\ntry:\n q.read_bytes(); isolated=False\nexcept (PermissionError,FileNotFoundError):\n isolated=True\nprint(json.dumps({'workspace_readable':ok,'trusted_unreadable':isolated}))";
-        let output = self.harness.trigger_value("shell::exec", json!({
-            "command":"python3", "args":["-I","-c",script,attempt.workspace.join("README.md").to_string_lossy(),canary.to_string_lossy()],
-            "cwd":attempt.workspace, "timeout_ms":15000,
-            "fs_scope":{"root":attempt.workspace,"grants":[],"boundary":"workspace"},
-        })).await.context("SWE requires a workspace-only isolated shell worker")?;
+        let output = self
+            .isolated_exec(
+                attempt,
+                WorkspaceExecRequest {
+                    _caller_worker_id: None,
+                    command: "python3".into(),
+                    args: vec![
+                        "-I".into(),
+                        "-c".into(),
+                        script.into(),
+                        attempt
+                            .workspace
+                            .join("README.md")
+                            .to_string_lossy()
+                            .into_owned(),
+                        canary.to_string_lossy().into_owned(),
+                    ],
+                    timeout_ms: 15_000,
+                },
+            )
+            .await
+            .context("SWE requires bubblewrap workspace isolation")?;
         if output.get("exit_code").and_then(Value::as_i64) != Some(0) {
             bail!("SWE isolated shell cannot execute the workspace boundary preflight");
         }
@@ -371,6 +425,34 @@ impl Shared {
         Ok(())
     }
 
+    async fn workspace_exec(&self, request: WorkspaceExecRequest) -> Result<Value> {
+        let attempt = self.attempt()?;
+        self.isolated_exec(&attempt, request).await
+    }
+
+    async fn isolated_exec(
+        &self,
+        attempt: &Attempt,
+        request: WorkspaceExecRequest,
+    ) -> Result<Value> {
+        if request.command.is_empty() || request.timeout_ms == 0 || request.timeout_ms > 120_000 {
+            bail!("command must be non-empty and timeout_ms must be between 1 and 120000");
+        }
+        let args = isolated_argv(&attempt.workspace, request.command, request.args);
+        self.harness
+            .trigger_value(
+                "shell::exec",
+                json!({
+                    "command":"/usr/bin/bwrap",
+                    "args":args,
+                    "cwd":attempt.workspace,
+                    "timeout_ms":request.timeout_ms,
+                    "fs_scope":{"root":attempt.workspace,"grants":[],"boundary":"workspace"},
+                }),
+            )
+            .await
+    }
+
     async fn checkpoint(&self, request: CheckpointRequest) -> Result<Value> {
         if !(1..=8).contains(&request.ticket)
             || request.head.len() != 40
@@ -399,8 +481,8 @@ impl Shared {
     async fn subject(&self, execution: &StepExecutorContext) -> Result<StepExecutorOutput> {
         let attempt = self.attempt()?;
         let prompt = format!(
-            "Work as the software engineer responsible for the service in {}. Read its public contracts, investigate the request, implement it, add your own regression tests under tests/agent, and maintain useful documentation. You may delegate when useful; you remain responsible for integration. Only this workspace is authorized. Preserve tests/reference and benchmark controls.\n\n{}\n\nDeliver a clean committed change by calling {} with the current ticket number and full HEAD SHA. Preserve accepted commits. If requirements are revealed, acknowledge their revision_id on the next submission; a compatible implementation may reuse the same SHA. Continue in this same session when a next ticket is returned. On rejected, address the evidence; on completed or capability_failure, stop and summarize the last accepted work. Do not invent future tickets.",
-            attempt.workspace.display(), attempt.prepared.get("prompt").and_then(Value::as_str).context("missing first ticket")?, attempt.checkpoint_id,
+            "Work as the software engineer responsible for the service in {}. Read its public contracts, investigate the request, implement it, add your own regression tests under tests/agent, and maintain useful documentation. You may delegate when useful; you remain responsible for integration. Only this workspace is authorized. Preserve tests/reference and benchmark controls. Use {} for every command and file read or write; it always starts at the repository root.\n\n{}\n\nDeliver a clean committed change by calling {} with the current ticket number and full HEAD SHA. Preserve accepted commits. If requirements are revealed, acknowledge their revision_id on the next submission; a compatible implementation may reuse the same SHA. Continue in this same session when a next ticket is returned. On rejected, address the evidence; on completed or capability_failure, stop and summarize the last accepted work. Do not invent future tickets.",
+            attempt.workspace.display(), attempt.exec_id, attempt.prepared.get("prompt").and_then(Value::as_str).context("missing first ticket")?, attempt.checkpoint_id,
         );
         // Harness may accept the unique ID even when its response is lost or malformed.
         self.state
@@ -432,8 +514,6 @@ impl Shared {
                             "engine::functions::info",
                             "engine::triggers::list",
                             "engine::triggers::info",
-                            "coder::*",
-                            "shell::*",
                             "harness::spawn",
                             "harness::status",
                             "harness::session-tree",
@@ -442,10 +522,12 @@ impl Shared {
                         ]
                         .into_iter()
                         .map(str::to_string)
-                        .chain([attempt.checkpoint_id.clone()])
+                        .chain([attempt.exec_id.clone(), attempt.checkpoint_id.clone()])
                         .collect(),
                         deny: [
                             "e2e::*",
+                            "coder::*",
+                            "shell::*",
                             "github::*",
                             "configuration::*",
                             "compose::*",
@@ -790,13 +872,13 @@ impl WorkflowCleanupHook for Shared {
                 .await
                 .context("SWE final capture exhausted shutdown budget")
                 .and_then(|result| result);
-            if let Some(registration) = self
-                .state
-                .lock()
-                .unwrap_or_else(|error| error.into_inner())
-                .registration
-                .take()
-            {
+            for registration in std::mem::take(
+                &mut self
+                    .state
+                    .lock()
+                    .unwrap_or_else(|error| error.into_inner())
+                    .registrations,
+            ) {
                 registration.unregister();
             }
             let teardown = if send_attempted {
@@ -884,6 +966,54 @@ fn safe_component(value: &str) -> Result<()> {
     Ok(())
 }
 
+fn isolated_argv(workspace: &Path, command: String, args: Vec<String>) -> Vec<String> {
+    let mut isolated = vec![
+        "--unshare-all",
+        "--die-with-parent",
+        "--new-session",
+        "--cap-drop",
+        "ALL",
+        "--clearenv",
+    ]
+    .into_iter()
+    .map(str::to_string)
+    .collect::<Vec<_>>();
+    for root in ["/usr", "/lib", "/lib64", "/bin"] {
+        if Path::new(root).exists() {
+            isolated.extend(["--ro-bind".into(), root.into(), root.into()]);
+        }
+    }
+    isolated.extend([
+        "--proc".into(),
+        "/proc".into(),
+        "--dev".into(),
+        "/dev".into(),
+        "--tmpfs".into(),
+        "/tmp".into(),
+        "--bind".into(),
+        workspace.to_string_lossy().into_owned(),
+        workspace.to_string_lossy().into_owned(),
+        "--chdir".into(),
+        workspace.to_string_lossy().into_owned(),
+        "--setenv".into(),
+        "PATH".into(),
+        "/usr/local/bin:/usr/bin:/bin".into(),
+        "--setenv".into(),
+        "HOME".into(),
+        "/tmp".into(),
+        "--setenv".into(),
+        "TMPDIR".into(),
+        "/tmp".into(),
+        "--setenv".into(),
+        "LANG".into(),
+        "C.UTF-8".into(),
+        "--".into(),
+        command,
+    ]);
+    isolated.extend(args);
+    isolated
+}
+
 fn aggregate_limit(metrics: &SessionMetricsResponse, case: Case) -> Option<&'static str> {
     if metrics.totals.turns > u64::from(case.generations()) {
         return Some("generations");
@@ -925,6 +1055,7 @@ mod tests {
         wait_for_cancel: bool,
         final_metrics: SessionMetricsResponse,
         calls: Mutex<Vec<String>>,
+        sent: Mutex<Vec<Value>>,
         slow_stops: bool,
     }
 
@@ -935,6 +1066,7 @@ mod tests {
                 wait_for_cancel: false,
                 final_metrics: metrics(turns, input, output),
                 calls: Mutex::new(Vec::new()),
+                sent: Mutex::new(Vec::new()),
                 slow_stops: false,
             }
         }
@@ -952,6 +1084,10 @@ mod tests {
             bail!("unexpected boundary call")
         }
         async fn send(&self, request: SendRequest) -> Result<SendResponse> {
+            self.sent
+                .lock()
+                .unwrap()
+                .push(serde_json::to_value(&request).unwrap());
             let id = request.session_id.unwrap();
             self.record(format!("send:{id}"));
             if self.lose_send {
@@ -1082,6 +1218,7 @@ mod tests {
                     attempt_id: context.attempt_id.clone(),
                     session_id: "swe_attempt-test".into(),
                     checkpoint_id: "test::checkpoint".into(),
+                    exec_id: "test::exec".into(),
                     prepared,
                 }),
                 ..Default::default()
@@ -1112,6 +1249,32 @@ mod tests {
             assert_eq!(report["metrics"]["totals"]["turns"], turns);
             shared.cleanup(&cleanup_context(&context)).await.unwrap();
         }
+    }
+
+    #[tokio::test]
+    async fn subject_can_only_execute_commands_through_the_isolated_function() {
+        let api = Arc::new(FakeHarness::new(1, 1, 1));
+        let (_temp, shared, context) = fixture(api.clone()).await;
+        shared.subject(&context).await.unwrap();
+        let sent = api.sent.lock().unwrap();
+        let policy = &sent[0]["options"]["functions"];
+        assert!(policy["allow"]
+            .as_array()
+            .unwrap()
+            .contains(&json!("test::exec")));
+        assert!(policy["deny"]
+            .as_array()
+            .unwrap()
+            .contains(&json!("shell::*")));
+        assert!(policy["deny"]
+            .as_array()
+            .unwrap()
+            .contains(&json!("coder::*")));
+        assert!(!policy["allow"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|function| function.as_str() == Some("coder::*")));
     }
 
     #[tokio::test]
@@ -1339,5 +1502,51 @@ mod tests {
             "ticket":1,"head":"a".repeat(40),"state_file":"/foreign/state.json",
         }))
         .is_err());
+    }
+
+    #[test]
+    #[cfg(target_os = "linux")]
+    fn workspace_exec_is_writable_but_cannot_see_private_files_or_host_processes() {
+        let temp = tempfile::tempdir().unwrap();
+        let workspace = temp.path().join("workspace");
+        std::fs::create_dir(&workspace).unwrap();
+        let private = temp.path().join("private");
+        std::fs::write(&private, "hidden").unwrap();
+        let mut host_process = std::process::Command::new("sleep")
+            .arg("30")
+            .spawn()
+            .unwrap();
+        let script = "import json,os,pathlib,subprocess,sys; pathlib.Path('change').write_text('ok'); subprocess.run(['git','init','-q'],check=True); subprocess.run(['git','config','user.name','SWE'],check=True); subprocess.run(['git','config','user.email','swe@example.invalid'],check=True); subprocess.run(['git','add','change'],check=True); subprocess.run(['git','commit','-qm','change'],check=True); print(json.dumps({'cwd':os.getcwd(),'private':pathlib.Path(sys.argv[1]).exists(),'host_process':pathlib.Path('/proc',sys.argv[2]).exists()}))";
+        let args = isolated_argv(
+            &workspace,
+            "python3".into(),
+            vec![
+                "-I".into(),
+                "-c".into(),
+                script.into(),
+                private.to_string_lossy().into_owned(),
+                host_process.id().to_string(),
+            ],
+        );
+        let output = std::process::Command::new("/usr/bin/bwrap")
+            .args(args)
+            .output()
+            .expect("bubblewrap is required for SWE scenarios");
+        let _ = host_process.kill();
+        let _ = host_process.wait();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let evidence: Value = serde_json::from_slice(&output.stdout).unwrap();
+        assert_eq!(evidence["cwd"], workspace.to_string_lossy().as_ref());
+        assert_eq!(evidence["private"], false);
+        assert_eq!(evidence["host_process"], false);
+        assert_eq!(
+            std::fs::read_to_string(workspace.join("change")).unwrap(),
+            "ok"
+        );
+        assert!(workspace.join(".git").is_dir());
     }
 }

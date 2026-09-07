@@ -213,6 +213,10 @@ jobs:
       - name: Install iii project scaffold tooling
         run: python3 -m pip install --quiet pyyaml
 
+      - name: Install SWE execution isolation
+        if: startsWith(matrix.group_id, 'case-swe-')
+        run: scripts/install_bwrap.sh
+
       - name: Execute common campaign group
         id: common
         if: matrix.execution_kind != 'fault_injection'

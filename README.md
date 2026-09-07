@@ -13,6 +13,10 @@ The SWE service suite provides eight isolated engineering
 tasks and a continuous eight-ticket journey over the same Python service, with
 optional delegation, immutable checkpoints, isolated verification, and a trusted
 GitHub handoff.
+SWE execution requires Linux with `/usr/bin/bwrap` and enabled unprivileged user
+namespaces. CI installs the distribution AppArmor profile needed by Bubblewrap.
+Commands and file operations run inside the attempt workspace; controller files
+remain outside that boundary.
 
 ## Binaries
 

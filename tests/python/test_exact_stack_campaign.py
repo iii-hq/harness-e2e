@@ -379,6 +379,24 @@ class ReleaseControlCampaignTest(unittest.TestCase):
         self.assertEqual(environment["HARNESS_E2E_STACK_MODE"], "registry")
         self.assertEqual(environment["HARNESS_E2E_WORKERS_REVISION"], "b" * 40)
         self.assertIn("harness", json.loads(environment["HARNESS_E2E_STACK_VERSIONS"]))
+        self.assertNotIn("config_override", scaffold["containers"]["harness"])
+        self.assertNotIn("config_name", scaffold["containers"]["harness"])
+
+    def test_scaffold_provisions_only_requested_harness_limits(self):
+        for scenarios, expected in (
+            (["fanout_ladder"], {"max_children": 16}),
+            (["depth_ladder"], {"max_depth": 6}),
+            (["fanout_ladder", "depth_ladder"], {"max_children": 16, "max_depth": 6}),
+        ):
+            with self.subTest(scenarios=scenarios), tempfile.TemporaryDirectory() as directory:
+                contract = campaign_contract()
+                contract["suite"]["groups"][0]["scenarios"] = scenarios
+                scaffold = MODULE.project_scaffold(
+                    contract, "project-one", Path(directory).resolve() / "runs", {}, {}
+                )
+                harness = scaffold["containers"]["harness"]
+                self.assertEqual(harness["config_override"], expected)
+                self.assertEqual(harness["config_name"], "project-one-harness")
 
     def test_rejects_forbidden_artifacts_and_version_conflicts(self):
         forbidden = campaign_contract()

@@ -15,7 +15,7 @@ use super::{
 };
 use crate::report::EvaluationDimension;
 
-pub const VERSION: u32 = 1;
+pub const VERSION: u32 = 2;
 pub const REPORT_ID: &str = "swe_service_report";
 pub const FIXTURE_REPOSITORY: &str = "iii-hq/e2e-fixture";
 pub const FIXTURE_REVISION: &str = "ab373b11ae167ef853f5b5c5184cdcd431a444ea";
