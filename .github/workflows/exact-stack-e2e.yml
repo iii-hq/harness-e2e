@@ -164,6 +164,7 @@ jobs:
     environment: harness-e2e-trusted
     strategy:
       fail-fast: false
+      max-parallel: 9
       matrix: ${{ fromJSON(needs.prepare.outputs.matrix) }}
     env:
       HARNESS_E2E_ARTIFACTS_DIR: ${{ github.workspace }}/target/harness-e2e-exact-stack
