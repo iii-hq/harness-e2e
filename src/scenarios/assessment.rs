@@ -1,6 +1,6 @@
 use anyhow::{bail, Result};
 
-use crate::assessment::{AssessmentKind, AssessmentPolicy, AssessmentSource, DeclaredAssessment};
+use crate::assessment::{AssessmentKind, AssessmentPolicy, DeclaredAssessment};
 use crate::report::{CompletionState, EvaluationDimension, HardGateReport};
 
 use super::{CriterionAward, CriterionSpec, ObjectiveEvaluation, ScenarioSpec};
@@ -176,7 +176,6 @@ impl AssessmentSpec {
             kind: declaration.kind,
             policy: declaration.policy,
             dimension: declaration.dimension,
-            source: declaration.source,
         }
     }
 
@@ -192,7 +191,6 @@ impl AssessmentSpec {
             kind,
             policy,
             dimension: self.dimension,
-            source: AssessmentSource::Deterministic,
         }
     }
 }
@@ -208,7 +206,6 @@ impl ScenarioSpec {
                 kind: criterion.kind,
                 policy: criterion.policy,
                 dimension: criterion.dimension,
-                source: criterion.source,
             })
             .collect()
     }
@@ -335,7 +332,6 @@ mod tests {
         assert_eq!(criteria[0].description, "A required outcome.");
         assert_eq!(criteria[0].kind, AssessmentKind::RequiredCheck);
         assert_eq!(criteria[0].policy, AssessmentPolicy::HardGate);
-        assert_eq!(criteria[0].source, AssessmentSource::Deterministic);
         assert_eq!(criteria[1].id, "signal");
         assert_eq!(criteria[1].weight, 30);
         assert_eq!(criteria[1].description, "A quality signal.");

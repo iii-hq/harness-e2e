@@ -1,4 +1,6 @@
 import type {
+  AnalyzerIdentity,
+  AnalyzerUsage,
   AssessmentContract,
   AssessmentSummary,
   RunAssessmentContract,
@@ -333,7 +335,6 @@ export type EvaluatorAvailability =
 export type DashboardEvaluatorStates = {
   completion: EvaluatorAvailability
   quality: EvaluatorAvailability
-  final_advisory: EvaluatorAvailability
 }
 
 export type DashboardScenarioAggregate = JsonObject & {
@@ -355,7 +356,6 @@ export type DashboardScenarioAggregate = JsonObject & {
   quality_score_completed: number | null
   quality_coverage: number | null
   total_tokens_consumed: number | null
-  judge_tokens_consumed: number | null
   tokens_completed_p50: number | null
   failed_attempt_tokens: number | null
   tokens_per_completion: number | null
@@ -445,12 +445,16 @@ export type DashboardRunProjection = JsonObject & {
   quality_score_completed: number | null
   score?: number | null
   validation_score?: number | null
+  /** Markdown scenarios only: the judge-scored prompt-following pass, with
+   *  the analyzer identity and usage it recorded. */
   instruction_adherence?:
     | (JsonObject & {
         availability: 'available' | 'unavailable' | 'failed'
         score?: number | null
         summary?: string
         requirements?: JsonValue[]
+        analyzer?: AnalyzerIdentity
+        analyzer_usage?: AnalyzerUsage
       })
     | null
   markdown_execution?:
@@ -469,13 +473,6 @@ export type DashboardRunProjection = JsonObject & {
   metrics?: DashboardRunMetrics | null
   cost?: DashboardRunCost | null
   efficiency?: DashboardRunEfficiency | null
-  judge_usage?:
-    | (JsonObject & {
-        input_tokens?: number | null
-        output_tokens?: number | null
-        cost_usd?: number | null
-      })
-    | null
   semantic_tests?: SemanticTestReport[]
   scenario_flow?: ScenarioFlowEvidence | null
   retry_attempts?: DashboardRetryAttemptProjection[]
@@ -832,7 +829,6 @@ export type StaticVersionSide = {
   summary: TestSideSummary
   contracts: Record<string, string | null>
   assessment_profiles: Record<string, string | null>
-  analyzer_profiles: Record<string, string | null>
 }
 
 type StaticCatalogRow = TestCatalogRow & {
@@ -1089,24 +1085,6 @@ export function staticCompatibility(
     return {
       compatibility: 'assessment_changed',
       reasons: ['assessment_profile_changed'],
-    }
-  }
-  if (
-    Object.values(from.analyzer_profiles).some((value) => value === null) ||
-    Object.values(to.analyzer_profiles).some((value) => value === null)
-  ) {
-    return {
-      compatibility: 'analyzer_conflict',
-      reasons: ['analyzer_profile_conflict'],
-    }
-  }
-  if (
-    JSON.stringify(from.analyzer_profiles) !==
-    JSON.stringify(to.analyzer_profiles)
-  ) {
-    return {
-      compatibility: 'analyzer_changed',
-      reasons: ['analyzer_profile_changed'],
     }
   }
   return { compatibility: 'compatible', reasons: [] }

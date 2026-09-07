@@ -346,7 +346,6 @@ test('organizes detail into progressive disclosure sections', () => {
   assert.match(executionPage, /showContract=\{false\}/)
   assert.match(executionPage, /data-live-state/)
   assert.match(executionPage, /next step/)
-  assert.match(executionPage, /what happened/)
   assert.match(executionPage, /copy link/)
   assert.match(executionPage, /re-run same scope/)
   assert.match(executionPage, /watchExecution\(bridge, executionId, load\)/)
@@ -359,9 +358,22 @@ test('organizes detail into progressive disclosure sections', () => {
     executionPage,
     /Passed objectively; advisory review found gaps|System: |AI: |Recommended next step|Benchmark results|Effective harness/,
   )
+  // The advisory AI conclusion and the effective status are gone: the system
+  // status is the only outcome the result contract publishes.
+  assert.match(executionPage, /executionOutcome\(presentation/)
+  assert.match(executionPage, /<ExecutionOverview detail=\{detail\} outcome=\{outcome\} \/>/)
+  assert.doesNotMatch(
+    executionPage,
+    /OutcomeDerivation|advisory|effectiveStatus|finalAssessment|diagnosis/,
+  )
+  assert.match(read('src', 'components', 'SystemOutcome.tsx'), /data-system-outcome/)
+  assert.equal(
+    fs.existsSync(path.join(dashboardRoot, 'src', 'components', 'OutcomeDerivation.tsx')),
+    false,
+  )
   assert.match(executionPage, /scenario results/)
   assert.match(scenarioMatrix, /Objective result/)
-  assert.match(scenarioMatrix, /Advisory/)
+  assert.doesNotMatch(scenarioMatrix, /Advisory|advisory|judge tokens|final_advisory/)
   assert.match(scenarioMatrix, /Runtime/)
   assert.match(scenarioMatrix, /Structure/)
   assert.match(executionPage, /buildScenarioMatrix\(detail\)/)
@@ -416,7 +428,11 @@ test('groups execution and judge models under their providers', () => {
     assert.match(view, /ProviderModelDropdown/)
   }
   assert.match(executionSetup, /Execution model/)
+  // The label stays, but only Markdown tests reach a judge now.
   assert.match(executionSetup, /Judge model/)
+  assert.match(executionSetup, /Only Markdown tests use a judge/)
+  assert.doesNotMatch(executionSetup, /Default judge \(automatic\)/)
+  assert.match(runner, /judgeRequired=\{needsJudge\}/)
   assert.match(modelDropdown, /collapsedProviders/)
   assert.match(
     modelDropdown,

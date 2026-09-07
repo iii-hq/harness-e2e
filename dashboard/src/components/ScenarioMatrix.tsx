@@ -81,7 +81,6 @@ export function ScenarioMatrix({
         >
           <span>Scenario</span>
           <span>Objective result</span>
-          <span>Advisory</span>
           <span>Runtime</span>
           {showStructure ? <span>Structure</span> : null}
         </div>
@@ -210,9 +209,9 @@ function shortHash(value: string | null) {
 }
 
 const MATRIX_COLUMNS =
-  'lg:grid-cols-[minmax(13rem,1.2fr)_minmax(9rem,0.75fr)_minmax(10rem,1fr)_minmax(7rem,0.55fr)]'
+  'lg:grid-cols-[minmax(13rem,1.4fr)_minmax(9rem,0.75fr)_minmax(7rem,0.55fr)]'
 const MATRIX_COLUMNS_WITH_STRUCTURE =
-  'lg:grid-cols-[minmax(13rem,1.2fr)_minmax(9rem,0.75fr)_minmax(10rem,1fr)_minmax(7rem,0.55fr)_minmax(8rem,0.7fr)]'
+  'lg:grid-cols-[minmax(13rem,1.4fr)_minmax(9rem,0.75fr)_minmax(7rem,0.55fr)_minmax(8rem,0.7fr)]'
 
 function matrixColumns(showStructure: boolean) {
   return showStructure ? MATRIX_COLUMNS_WITH_STRUCTURE : MATRIX_COLUMNS
@@ -336,12 +335,6 @@ function ScenarioRow({
             label={item.objective.label}
           />
         </MatrixCell>
-        <MatrixCell label="Advisory">
-          <StatusBadge
-            status={item.advisory.status}
-            label={item.advisory.label}
-          />
-        </MatrixCell>
         <MatrixCell label="Runtime">
           <strong className="font-mono text-xs font-semibold tabular-nums text-ink">
             {formatScenarioDuration(item.durationMs)}
@@ -454,8 +447,8 @@ function ScenarioExpansion({
         <RunOutcomeLedger runs={item.runs} />
         {!item.available ? (
           <div className="border-t border-[var(--color-rule)] px-4 py-6 text-sm leading-6 text-ink-muted md:px-5">
-            The expected report for this scenario is unavailable. Runtime,
-            workflow, and advisory data are intentionally not inferred.
+            The expected report for this scenario is unavailable. Runtime and
+            workflow data are intentionally not inferred.
           </div>
         ) : item.workflowSteps.length > 0 ? (
           <WorkflowDurationProfile tests={item.workflowSteps} />
@@ -526,7 +519,6 @@ function ScenarioReliabilityBand({
   ] as const
   const tokenMetrics = [
     ['subject tokens', aggregate.total_tokens_consumed],
-    ['judge tokens', aggregate.judge_tokens_consumed],
     ['completed p50 tokens', aggregate.tokens_completed_p50],
     ['failed attempt tokens', aggregate.failed_attempt_tokens],
     ['tokens per completion', aggregate.tokens_per_completion],
@@ -658,7 +650,6 @@ function RunOutcomeLedger({ runs }: { runs: DashboardRunProjection[] }) {
               <th className="px-4 py-2 font-semibold">technical</th>
               <th className="px-4 py-2 font-semibold">completion evaluator</th>
               <th className="px-4 py-2 font-semibold">quality evaluator</th>
-              <th className="px-4 py-2 font-semibold">final advisory</th>
               <th className="px-4 py-2 font-semibold">objective</th>
               <th className="px-4 py-2 font-semibold">quality</th>
             </tr>
@@ -679,9 +670,6 @@ function RunOutcomeLedger({ runs }: { runs: DashboardRunProjection[] }) {
                 </td>
                 <td className="px-4 py-3">
                   {evaluatorLabel(attempt.evaluators?.quality)}
-                </td>
-                <td className="px-4 py-3">
-                  {evaluatorLabel(attempt.evaluators?.final_advisory)}
                 </td>
                 <td className="px-4 py-3 font-mono tabular-nums">
                   {scoreLabel(attempt.objectiveScore)}
@@ -736,18 +724,12 @@ function ScenarioResultBand({ item }: { item: ScenarioMatrixItem }) {
   )
   return (
     <div className="grid gap-4" data-scenario-primary-metrics>
-      <MetricBandGroup label="outcome" columns="sm:grid-cols-2">
+      <MetricBandGroup label="outcome" columns="sm:grid-cols-1">
         <ResultFact
           label="Objective"
           value={item.objective.label}
           status={item.objective.status}
           detail="Authoritative system result"
-        />
-        <ResultFact
-          label="Advisory"
-          value={item.advisory.label}
-          status={item.advisory.status}
-          detail="Does not override objective result"
         />
       </MetricBandGroup>
       {scoring.length > 0 ? (

@@ -732,7 +732,6 @@ pub fn scenario(run_id: &str) -> ScenarioSpec {
         },
         denied_functions: &["state::*", "database::*", "http::*", "browser::*", "shell::*", "coder::*"],
         criteria: assessment::criteria(ASSESSMENTS),
-        judge_reference: None,
         setup: Some(setup),
         evaluate,
         cleanup: Some(cleanup),

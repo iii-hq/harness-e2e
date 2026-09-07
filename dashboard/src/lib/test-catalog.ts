@@ -2,7 +2,6 @@ import type {
   AssessmentKind,
   AssessmentPolicy,
   AssessmentResult,
-  AssessmentSource,
   AssessmentSummary,
 } from '@/lib/assessment-contract'
 
@@ -13,7 +12,6 @@ export type CohortDescriptor = {
   subject_model: string
   judge_provider: string | null
   judge_model: string | null
-  judge_protocol: string | null
 }
 
 export type EvaluatedVersion = {
@@ -79,7 +77,6 @@ export type HistorySeries = {
   seed: number | null
   contract_sha256: string
   assessment_profile_sha256: string
-  analyzer_profile_sha256: string
   system_version_id: string | null
   system_label: string
   stack_mode: string
@@ -90,7 +87,6 @@ export type HistorySeries = {
   subject_model: string
   judge_provider: string | null
   judge_model: string | null
-  judge_protocol: string | null
   cohort_id: string
   execution_count: number
   run_count: number
@@ -139,7 +135,6 @@ export type TestObservation = {
   case_id: string
   contract_sha256: string
   assessment_profile_sha256: string
-  analyzer_profile_sha256: string
   status: string
   median_score: number | null
   run_count: number
@@ -157,7 +152,6 @@ export type TestObservation = {
   subject_model?: string
   judge_provider?: string | null
   judge_model?: string | null
-  judge_protocol?: string | null
   median_cost_usd?: number | null
   median_tokens?: number | null
   median_duration_seconds?: number | null
@@ -176,8 +170,6 @@ export type TestVersionResult = {
     | 'contract_conflict'
     | 'assessment_changed'
     | 'assessment_conflict'
-    | 'analyzer_changed'
-    | 'analyzer_conflict'
   compatibility_reasons: string[]
   from: TestSideSummary | null
   to: TestSideSummary | null
@@ -201,7 +193,6 @@ export type TestCriterion = {
   kind: AssessmentKind
   policy: AssessmentPolicy
   dimension: AssessmentResult['dimension']
-  source: AssessmentSource
 }
 
 /** The scenario definition a reader needs: the task, the scoring contract and

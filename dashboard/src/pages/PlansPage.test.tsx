@@ -57,8 +57,6 @@ function execution(id: string, passRate: number): DashboardExecutionSummary {
     assessment_summary: {
       system_statuses:
         passRate === 100 ? { passed: 2 } : { passed: 1, hard_gate_failed: 1 },
-      median_quality_score: 90,
-      median_confidence: 0.9,
     } as never,
   }
 }

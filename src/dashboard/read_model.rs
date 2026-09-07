@@ -7,15 +7,12 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
 use super::assessment_projection::{
-    analyzer_profile_sha256, assessment_profile_sha256, contracts_for_scenario, summarize,
-    AssessmentSummary,
+    assessment_profile_sha256, contracts_for_scenario, summarize, AssessmentSummary,
 };
 use super::presenter::{stored_execution_summary, MAX_EXECUTIONS};
 use super::store::{load_runs, StoredRun};
 use crate::artifact;
-use crate::assessment::{
-    AssessmentKind, AssessmentPolicy, AssessmentSource, RunAssessmentContract,
-};
+use crate::assessment::{AssessmentKind, AssessmentPolicy, RunAssessmentContract};
 use crate::identity::StackIdentity;
 use crate::report::{E2eRunReport, E2eScenarioReport, EvaluationDimension, RunStatus};
 use crate::scenarios::{
@@ -90,7 +87,6 @@ pub(super) struct CohortDescriptor {
     pub subject_model: String,
     pub judge_provider: Option<String>,
     pub judge_model: Option<String>,
-    pub judge_protocol: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, JsonSchema)]
@@ -169,7 +165,6 @@ pub(super) struct TestObservation {
     pub case_id: String,
     pub contract_sha256: String,
     pub assessment_profile_sha256: String,
-    pub analyzer_profile_sha256: String,
     pub status: String,
     pub median_score: Option<f64>,
     pub run_count: usize,
@@ -187,7 +182,6 @@ pub(super) struct TestObservation {
     pub subject_model: String,
     pub judge_provider: Option<String>,
     pub judge_model: Option<String>,
-    pub judge_protocol: Option<String>,
     pub median_cost_usd: Option<f64>,
     pub median_tokens: Option<f64>,
     pub median_duration_seconds: Option<f64>,
@@ -204,7 +198,6 @@ pub(super) struct HistorySeries {
     pub seed: Option<u64>,
     pub contract_sha256: String,
     pub assessment_profile_sha256: String,
-    pub analyzer_profile_sha256: String,
     pub system_version_id: Option<String>,
     pub system_label: String,
     pub stack_mode: String,
@@ -215,7 +208,6 @@ pub(super) struct HistorySeries {
     pub subject_model: String,
     pub judge_provider: Option<String>,
     pub judge_model: Option<String>,
-    pub judge_protocol: Option<String>,
     pub cohort_id: String,
     pub execution_count: usize,
     pub run_count: usize,
@@ -317,7 +309,6 @@ pub(super) struct TestCriterionProjection {
     pub kind: AssessmentKind,
     pub policy: AssessmentPolicy,
     pub dimension: EvaluationDimension,
-    pub source: AssessmentSource,
 }
 
 #[derive(Debug, Clone, Serialize, JsonSchema)]
@@ -356,7 +347,6 @@ struct Observation {
     case_id: String,
     contract_sha256: String,
     assessment_profile_sha256: String,
-    analyzer_profile_sha256: String,
     status: String,
     scenario_version: u32,
     seed: Option<u64>,
@@ -369,7 +359,6 @@ struct Observation {
     subject_model: String,
     judge_provider: Option<String>,
     judge_model: Option<String>,
-    judge_protocol: Option<String>,
     runs: Vec<RunMetrics>,
 }
 
@@ -450,7 +439,6 @@ impl DashboardReadModel {
             subject_model: report.subject.model.clone(),
             judge_provider: report.judge.as_ref().map(|judge| judge.provider.clone()),
             judge_model: report.judge.as_ref().map(|judge| judge.model.clone()),
-            judge_protocol: report.judge_protocol.clone(),
         };
         let cohort_id = artifact::sha256_value(&json!({
             "lane": cohort.lane,
@@ -458,7 +446,6 @@ impl DashboardReadModel {
             "subject_model": cohort.subject_model,
             "judge_provider": cohort.judge_provider,
             "judge_model": cohort.judge_model,
-            "judge_protocol": cohort.judge_protocol,
         }))?;
         self.cohorts
             .entry(cohort_id.clone())
@@ -487,7 +474,6 @@ impl DashboardReadModel {
             let contracts = contracts_for_scenario(report, scenario);
             let assessment_profile_sha256 =
                 assessment_profile_sha256(scenario.scenario_version, &contracts)?;
-            let analyzer_profile_sha256 = analyzer_profile_sha256(&contracts)?;
             let contract_by_run = contracts
                 .iter()
                 .map(|contract| {
@@ -538,7 +524,6 @@ impl DashboardReadModel {
                 case_id: scenario.case_id.clone(),
                 contract_sha256,
                 assessment_profile_sha256,
-                analyzer_profile_sha256,
                 status: scenario_status(scenario).into(),
                 scenario_version: scenario.scenario_version,
                 seed: scenario.case.as_ref().map(|case| case.seed),
@@ -551,7 +536,6 @@ impl DashboardReadModel {
                 subject_model: report.subject.model.clone(),
                 judge_provider: report.judge.as_ref().map(|judge| judge.provider.clone()),
                 judge_model: report.judge.as_ref().map(|judge| judge.model.clone()),
-                judge_protocol: report.judge_protocol.clone(),
                 runs,
             });
         }
@@ -984,7 +968,6 @@ fn spec_projection(id: ScenarioId, spec: &ScenarioSpec) -> TestSpecProjection {
                 kind: criterion.kind,
                 policy: criterion.policy,
                 dimension: criterion.dimension,
-                source: criterion.source,
             })
             .collect(),
         execution: spec.execution,
@@ -996,7 +979,7 @@ fn spec_projection(id: ScenarioId, spec: &ScenarioSpec) -> TestSpecProjection {
     }
 }
 
-type CalibrationGroupKey = (String, String, String, String, String);
+type CalibrationGroupKey = (String, String, String, String);
 
 fn calibration_projection(
     entry: &TestVersionEntry,
@@ -1010,7 +993,6 @@ fn calibration_projection(
                     observation.case_id.clone(),
                     observation.contract_sha256.clone(),
                     observation.assessment_profile_sha256.clone(),
-                    observation.analyzer_profile_sha256.clone(),
                 ),
                 observation.runs.len(),
             )
@@ -1352,21 +1334,6 @@ fn compatibility(from: &[&Observation], to: &[&Observation]) -> (&'static str, V
             vec!["assessment_profile_changed".into()],
         );
     }
-    let Some(from_analyzers) = case_profiles(from, |value| &value.analyzer_profile_sha256) else {
-        return (
-            "analyzer_conflict",
-            vec!["analyzer_profile_conflict".into()],
-        );
-    };
-    let Some(to_analyzers) = case_profiles(to, |value| &value.analyzer_profile_sha256) else {
-        return (
-            "analyzer_conflict",
-            vec!["analyzer_profile_conflict".into()],
-        );
-    };
-    if from_analyzers != to_analyzers {
-        return ("analyzer_changed", vec!["analyzer_profile_changed".into()]);
-    }
     ("compatible", Vec::new())
 }
 
@@ -1435,7 +1402,6 @@ fn public_observation(observation: &&Observation) -> TestObservation {
         case_id: observation.case_id.clone(),
         contract_sha256: observation.contract_sha256.clone(),
         assessment_profile_sha256: observation.assessment_profile_sha256.clone(),
-        analyzer_profile_sha256: observation.analyzer_profile_sha256.clone(),
         status: observation.status.clone(),
         median_score: median(scores.clone()),
         run_count: observation.runs.len(),
@@ -1453,7 +1419,6 @@ fn public_observation(observation: &&Observation) -> TestObservation {
         subject_model: observation.subject_model.clone(),
         judge_provider: observation.judge_provider.clone(),
         judge_model: observation.judge_model.clone(),
-        judge_protocol: observation.judge_protocol.clone(),
         median_cost_usd: median(costs),
         median_tokens: median(tokens),
         median_duration_seconds: median(durations),
@@ -1531,12 +1496,10 @@ fn history_series_key(observation: &Observation) -> String {
         observation.harness_revision.as_deref().unwrap_or_default(),
         observation.engine_revision.as_deref().unwrap_or_default(),
         observation.assessment_profile_sha256.as_str(),
-        observation.analyzer_profile_sha256.as_str(),
         observation.subject_provider.as_str(),
         observation.subject_model.as_str(),
         observation.judge_provider.as_deref().unwrap_or_default(),
         observation.judge_model.as_deref().unwrap_or_default(),
-        observation.judge_protocol.as_deref().unwrap_or_default(),
     ]
     .join("::")
 }
@@ -1573,7 +1536,6 @@ fn history_series(id: String, observations: &[&Observation]) -> HistorySeries {
         seed: first.seed,
         contract_sha256: first.contract_sha256.clone(),
         assessment_profile_sha256: first.assessment_profile_sha256.clone(),
-        analyzer_profile_sha256: first.analyzer_profile_sha256.clone(),
         system_version_id: first.evaluated_version_id.clone(),
         system_label: first.system_label.clone(),
         stack_mode: first.stack_mode.clone(),
@@ -1584,7 +1546,6 @@ fn history_series(id: String, observations: &[&Observation]) -> HistorySeries {
         subject_model: first.subject_model.clone(),
         judge_provider: first.judge_provider.clone(),
         judge_model: first.judge_model.clone(),
-        judge_protocol: first.judge_protocol.clone(),
         cohort_id: first.cohort_id.clone(),
         execution_count: observations
             .iter()
@@ -1667,7 +1628,6 @@ mod tests {
             format!("case-{suffix}"),
             format!("contract-{suffix}"),
             format!("assessment-{suffix}"),
-            format!("analyzer-{suffix}"),
         )
     }
 

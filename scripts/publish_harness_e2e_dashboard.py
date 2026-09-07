@@ -412,14 +412,6 @@ def _public_evidence(value: Any) -> list[dict[str, Any]]:
     ]
 
 
-def _public_analyzer(value: Any) -> dict[str, Any] | None:
-    if not isinstance(value, dict):
-        return None
-    return _bounded_json(
-        _pick(value, ("analyzer", "provider", "model", "input_sha256"))
-    )
-
-
 def _public_assessment(value: Any) -> dict[str, Any] | None:
     if not isinstance(value, dict):
         return None
@@ -432,83 +424,28 @@ def _public_assessment(value: Any) -> dict[str, Any] | None:
                 "kind",
                 "policy",
                 "dimension",
-                "source",
                 "outcome",
                 "score",
-                "confidence",
                 "summary",
             ),
         )
     )
     assessment["evidence"] = _public_evidence(value.get("evidence"))
-    analyzer = _public_analyzer(value.get("analyzer"))
-    if analyzer is not None:
-        assessment["analyzer"] = analyzer
-    if isinstance(value.get("analyzer_usage"), dict):
-        assessment["analyzer_usage"] = _pick(
-            value["analyzer_usage"],
-            ("latency_ms", "input_tokens", "output_tokens", "cost_usd"),
-        )
     return assessment
 
 
 def _public_asset_assessment(value: Any) -> dict[str, Any] | None:
-    if not isinstance(value, dict) or not isinstance(value.get("validation"), dict):
-        return None
-    validation = _bounded_json(
-        _pick(value["validation"], ("asset_id", "outcome", "summary"))
-    )
-    validation["evidence"] = _public_evidence(value["validation"].get("evidence"))
-    qualitative = _public_assessment(value.get("qualitative_assessment"))
-    if qualitative is None:
-        return None
-    return {"validation": validation, "qualitative_assessment": qualitative}
-
-
-def _public_final_assessment(value: Any) -> dict[str, Any]:
     if not isinstance(value, dict):
-        return {
-            "availability": "not_evaluated",
-            "reason": "assessment contract unavailable",
-        }
-    assessment = _bounded_json(_pick(value, ("availability", "reason")))
-    result = value.get("result")
-    if isinstance(result, dict):
-        public_result = _bounded_json(
-            _pick(
-                result,
-                (
-                    "verdict",
-                    "quality_score",
-                    "confidence",
-                    "summary",
-                    "facts",
-                    "strengths",
-                    "concerns",
-                    "recommendation",
-                    "limitations",
-                ),
-            )
-        )
-        public_result["evidence"] = _public_evidence(result.get("evidence"))
-        assessment["result"] = public_result
-    analyzer = _public_analyzer(value.get("analyzer"))
-    if analyzer is not None:
-        assessment["analyzer"] = analyzer
-    if isinstance(value.get("analyzer_usage"), dict):
-        assessment["analyzer_usage"] = _pick(
-            value["analyzer_usage"],
-            ("latency_ms", "input_tokens", "output_tokens", "cost_usd"),
-        )
-    return assessment
+        return None
+    validation = _bounded_json(_pick(value, ("asset_id", "outcome", "summary")))
+    validation["evidence"] = _public_evidence(value.get("evidence"))
+    return validation
 
 
 def _public_run_assessment(value: Any) -> dict[str, Any] | None:
     if not isinstance(value, dict):
         return None
-    run = _bounded_json(
-        _pick(value, ("run_id", "attempt_id", "system_status", "effective_status"))
-    )
+    run = _bounded_json(_pick(value, ("run_id", "attempt_id", "system_status")))
     run["assessments"] = [
         assessment
         for item in value.get("assessments", [])[:MAX_PUBLIC_LIST_ITEMS]
@@ -519,9 +456,6 @@ def _public_run_assessment(value: Any) -> dict[str, Any] | None:
         for item in value.get("assets", [])[:MAX_PUBLIC_LIST_ITEMS]
         if (assessment := _public_asset_assessment(item)) is not None
     ] if isinstance(value.get("assets"), list) else []
-    run["ai_final_assessment"] = _public_final_assessment(
-        value.get("ai_final_assessment")
-    )
     return run
 
 
@@ -543,11 +477,6 @@ def _unavailable_run_assessment(value: dict[str, Any]) -> dict[str, Any]:
         "system_status": "unavailable",
         "assessments": [],
         "assets": [],
-        "ai_final_assessment": {
-            "availability": "not_evaluated",
-            "reason": "assessment contract unavailable",
-        },
-        "effective_status": "unavailable",
     }
 
 
@@ -565,7 +494,7 @@ def _public_retry(value: Any) -> dict[str, Any] | None:
             "status",
         ),
     )
-    retry["cost"] = _pick(value.get("cost"), ("subject_usd", "judge_usd", "total_usd"))
+    retry["cost"] = _pick(value.get("cost"), ("subject_usd", "total_usd"))
     retry["failures"] = _public_failures(value.get("failures"))
     retry["deliverables"] = _public_deliverables(value.get("deliverables"))
     retry["dimensions"] = _public_dimensions(value.get("dimensions"))
@@ -588,13 +517,12 @@ def _public_run(
             "wall_time_ms",
             "score",
             "status",
-            "judge_attempts",
         ),
     )
     metrics = _public_metrics(value.get("metrics"))
     if metrics is not None:
         run["metrics"] = metrics
-    run["cost"] = _pick(value.get("cost"), ("subject_usd", "judge_usd", "total_usd"))
+    run["cost"] = _pick(value.get("cost"), ("subject_usd", "total_usd"))
     run["criteria"] = _bounded_json(value.get("criteria", []))
     run["hard_gates"] = _public_gates(value.get("hard_gates"))
     run["failures"] = _public_failures(value.get("failures"))
@@ -642,7 +570,7 @@ def _public_scenario(
     if isinstance(raw_aggregate, dict):
         aggregate["cost"] = _pick(
             raw_aggregate.get("cost"),
-            ("subject_usd", "judge_usd", "total_usd"),
+            ("subject_usd", "total_usd"),
         )
     scenario["aggregate"] = aggregate
     scenario["runs"] = [
@@ -749,7 +677,6 @@ def _public_report(value: Any) -> dict[str, Any] | None:
                 "manifest",
                 "subject",
                 "judge",
-                "judge_protocol",
                 "engine_revision",
                 "passed",
                 "redaction",
@@ -1266,7 +1193,6 @@ def _assessment_summary(runs: list[dict[str, Any]]) -> dict[str, Any]:
     status_keys = (
         "unavailable",
         "passed",
-        "passed_with_concerns",
         "hard_gate_failed",
         "subject_error",
         "judge_error",
@@ -1293,33 +1219,16 @@ def _assessment_summary(runs: list[dict[str, Any]]) -> dict[str, Any]:
         "unexpected",
         "not_evaluated",
     )
-    availability_keys = (
-        "not_requested",
-        "not_evaluated",
-        "available",
-        "unavailable",
-        "malformed",
-        "failed",
-    )
-    verdict_keys = ("pass", "pass_with_concerns", "fail", "inconclusive")
     summary = {
         "run_count": 0,
         "assessment_count": 0,
         "asset_count": 0,
         "evidence_reference_count": 0,
         "system_statuses": dict.fromkeys(status_keys, 0),
-        "effective_statuses": dict.fromkeys(status_keys, 0),
         "assessment_outcomes": dict.fromkeys(outcome_keys, 0),
-        "asset_qualitative_outcomes": dict.fromkeys(outcome_keys, 0),
         "asset_validation_outcomes": dict.fromkeys(validation_keys, 0),
-        "ai_availability": dict.fromkeys(availability_keys, 0),
-        "ai_verdicts": dict.fromkeys(verdict_keys, 0),
-        "median_quality_score": None,
-        "median_confidence": None,
     }
     evidence: set[tuple[str, str, str]] = set()
-    quality_scores: list[float] = []
-    confidence: list[float] = []
 
     def count(bucket: str, key: Any) -> None:
         name = str(key or "")
@@ -1346,7 +1255,6 @@ def _assessment_summary(runs: list[dict[str, Any]]) -> dict[str, Any]:
             continue
         summary["run_count"] += 1
         count("system_statuses", run.get("system_status"))
-        count("effective_statuses", run.get("effective_status"))
         assessments = run.get("assessments", [])
         if isinstance(assessments, list):
             for assessment in assessments:
@@ -1361,33 +1269,10 @@ def _assessment_summary(runs: list[dict[str, Any]]) -> dict[str, Any]:
                 if not isinstance(asset, dict):
                     continue
                 summary["asset_count"] += 1
-                validation = asset.get("validation", {})
-                qualitative = asset.get("qualitative_assessment", {})
-                if isinstance(validation, dict):
-                    count("asset_validation_outcomes", validation.get("outcome"))
-                    remember(validation.get("evidence"))
-                if isinstance(qualitative, dict):
-                    count("asset_qualitative_outcomes", qualitative.get("outcome"))
-                    remember(qualitative.get("evidence"))
-        final = run.get("ai_final_assessment", {})
-        if not isinstance(final, dict):
-            continue
-        count("ai_availability", final.get("availability"))
-        result = final.get("result")
-        if not isinstance(result, dict):
-            continue
-        count("ai_verdicts", result.get("verdict"))
-        score = optional_number(result.get("quality_score"))
-        final_confidence = optional_number(result.get("confidence"))
-        if score is not None:
-            quality_scores.append(score)
-        if final_confidence is not None:
-            confidence.append(final_confidence)
-        remember(result.get("evidence"))
+                count("asset_validation_outcomes", asset.get("outcome"))
+                remember(asset.get("evidence"))
 
     summary["evidence_reference_count"] = len(evidence)
-    summary["median_quality_score"] = _median(quality_scores)
-    summary["median_confidence"] = _median(confidence)
     return summary
 
 
@@ -1398,7 +1283,6 @@ def _assessment_profile_sha256(
     definitions: set[str] = set()
     for run in runs:
         assessments = run.get("assessments", [])
-        assets = run.get("assets", [])
         if isinstance(assessments, list):
             for assessment in assessments:
                 if not isinstance(assessment, dict):
@@ -1413,39 +1297,8 @@ def _assessment_profile_sha256(
                                 "kind",
                                 "policy",
                                 "dimension",
-                                "source",
                             ),
                         ),
-                        ensure_ascii=False,
-                        separators=(",", ":"),
-                        sort_keys=True,
-                    )
-                )
-        if isinstance(assets, list):
-            for asset in assets:
-                if not isinstance(asset, dict):
-                    continue
-                validation = asset.get("validation", {})
-                qualitative = asset.get("qualitative_assessment", {})
-                if not isinstance(validation, dict) or not isinstance(qualitative, dict):
-                    continue
-                definition = {
-                    "asset_id": validation.get("asset_id"),
-                    **_pick(
-                        qualitative,
-                        (
-                            "criterion_id",
-                            "target",
-                            "kind",
-                            "policy",
-                            "dimension",
-                            "source",
-                        ),
-                    ),
-                }
-                definitions.add(
-                    json.dumps(
-                        definition,
                         ensure_ascii=False,
                         separators=(",", ":"),
                         sort_keys=True,
@@ -1454,41 +1307,6 @@ def _assessment_profile_sha256(
     return _sha256_json(
         {"scenario_version": scenario_version, "assessments": sorted(definitions)}
     )
-
-
-def _analyzer_profile_sha256(runs: list[dict[str, Any]]) -> str:
-    analyzers: set[str] = set()
-
-    def remember(value: Any) -> None:
-        if not isinstance(value, dict):
-            return
-        analyzers.add(
-            json.dumps(
-                _pick(value, ("analyzer", "provider", "model")),
-                ensure_ascii=False,
-                separators=(",", ":"),
-                sort_keys=True,
-            )
-        )
-
-    for run in runs:
-        assessments = run.get("assessments", [])
-        assets = run.get("assets", [])
-        if isinstance(assessments, list):
-            for assessment in assessments:
-                if isinstance(assessment, dict):
-                    remember(assessment.get("analyzer"))
-        if isinstance(assets, list):
-            for asset in assets:
-                if not isinstance(asset, dict):
-                    continue
-                qualitative = asset.get("qualitative_assessment", {})
-                if isinstance(qualitative, dict):
-                    remember(qualitative.get("analyzer"))
-        final = run.get("ai_final_assessment", {})
-        if isinstance(final, dict):
-            remember(final.get("analyzer"))
-    return _sha256_json({"analyzers": sorted(analyzers)})
 
 
 def _median(values: list[float]) -> float | None:
@@ -1653,7 +1471,6 @@ def build_static_test_catalog(
                 "subject_model": str(subject.get("model") or ""),
                 "judge_provider": str(judge.get("provider") or "") or None,
                 "judge_model": str(judge.get("model") or "") or None,
-                "judge_protocol": str(report.get("judge_protocol") or "") or None,
             }
             cohort_id = _sha256_json(cohort_value)
             cohorts.setdefault(cohort_id, {"id": cohort_id, **cohort_value})
@@ -1721,9 +1538,6 @@ def build_static_test_catalog(
                         "assessment_profile_sha256": _assessment_profile_sha256(
                             test_version, assessment_runs
                         ),
-                        "analyzer_profile_sha256": _analyzer_profile_sha256(
-                            assessment_runs
-                        ),
                         "status": _scenario_status(scenario),
                         "runs": runs,
                     }
@@ -1769,7 +1583,6 @@ def build_static_test_catalog(
                         "case_id",
                         "contract_sha256",
                         "assessment_profile_sha256",
-                        "analyzer_profile_sha256",
                         "status",
                     )
                 }
@@ -1833,7 +1646,6 @@ def build_static_test_catalog(
         for (cohort_id, evaluated_id), side_observations in grouped_sides.items():
             contracts: dict[str, str | None] = {}
             assessment_profiles: dict[str, str | None] = {}
-            analyzer_profiles: dict[str, str | None] = {}
             for observation in side_observations:
                 case_id = observation["case_id"]
                 contract = observation["contract_sha256"]
@@ -1849,18 +1661,10 @@ def build_static_test_catalog(
                     and assessment_profiles[case_id] != assessment_profile
                     else assessment_profile
                 )
-                analyzer_profile = observation["analyzer_profile_sha256"]
-                analyzer_profiles[case_id] = (
-                    None
-                    if case_id in analyzer_profiles
-                    and analyzer_profiles[case_id] != analyzer_profile
-                    else analyzer_profile
-                )
             sides[f"{cohort_id}::{evaluated_id}"] = {
                 "summary": _side_summary(evaluated_id, side_observations),
                 "contracts": dict(sorted(contracts.items())),
                 "assessment_profiles": dict(sorted(assessment_profiles.items())),
-                "analyzer_profiles": dict(sorted(analyzer_profiles.items())),
             }
         row["version_results"][str(test_version)] = {"sides": sides}
 

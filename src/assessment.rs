@@ -4,8 +4,8 @@ use anyhow::{bail, Context, Result};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-use crate::artifact::{self, ArtifactReference};
-use crate::report::{DimensionReport, E2eReport, FailureRecord, RunStatus};
+use crate::artifact::ArtifactReference;
+use crate::report::{E2eReport, RunStatus};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
@@ -13,7 +13,6 @@ pub enum AssessmentKind {
     RequiredCheck,
     Signal,
     AssetValidation,
-    AssetQuality,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -21,14 +20,6 @@ pub enum AssessmentKind {
 pub enum AssessmentPolicy {
     HardGate,
     Advisory,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "snake_case")]
-pub enum AssessmentSource {
-    Deterministic,
-    Judge,
-    AssetAnalyzer,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -48,11 +39,11 @@ pub enum AssessmentOutcome {
 #[serde(rename_all = "snake_case")]
 pub enum AssessmentTargetKind {
     Criterion,
-    Asset,
 }
 
 /// Canonical assessment metadata retained from the scenario declaration until
-/// the per-attempt result is materialized.
+/// the per-attempt result is materialized. Every assessment is deterministic:
+/// built-in scenarios never delegate a criterion to a model.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DeclaredAssessment {
     pub criterion_id: String,
@@ -61,7 +52,6 @@ pub struct DeclaredAssessment {
     pub kind: AssessmentKind,
     pub policy: AssessmentPolicy,
     pub dimension: crate::report::EvaluationDimension,
-    pub source: AssessmentSource,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -170,18 +160,6 @@ pub struct AnalyzerUsage {
     pub cost_usd: Option<f64>,
 }
 
-impl AnalyzerUsage {
-    fn validate(&self) -> Result<()> {
-        if self
-            .cost_usd
-            .is_some_and(|cost| !cost.is_finite() || cost < 0.0)
-        {
-            bail!("analyzer cost must be finite and non-negative");
-        }
-        Ok(())
-    }
-}
-
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct AssessmentResult {
     pub criterion_id: String,
@@ -189,19 +167,12 @@ pub struct AssessmentResult {
     pub kind: AssessmentKind,
     pub policy: AssessmentPolicy,
     pub dimension: crate::report::EvaluationDimension,
-    pub source: AssessmentSource,
     pub outcome: AssessmentOutcome,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub score: Option<AssessmentScore>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub confidence: Option<f64>,
     pub summary: String,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub evidence: Vec<EvidenceReference>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub analyzer: Option<AnalyzerIdentity>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub analyzer_usage: Option<AnalyzerUsage>,
 }
 
 impl AssessmentResult {
@@ -230,7 +201,6 @@ impl AssessmentResult {
                 self.criterion_id
             );
         }
-        validate_confidence(self.confidence, "assessment confidence")?;
         let mut evidence_ids = BTreeSet::new();
         for evidence in &self.evidence {
             evidence.validate()?;
@@ -245,47 +215,9 @@ impl AssessmentResult {
                 );
             }
         }
-        if let Some(analyzer) = &self.analyzer {
-            analyzer.validate()?;
-        }
-        if let Some(usage) = &self.analyzer_usage {
-            usage.validate()?;
-        }
-        if self.analyzer_usage.is_some() && self.analyzer.is_none() {
-            bail!(
-                "assessment '{}' analyzer usage requires analyzer identity",
-                self.criterion_id
-            );
-        }
-        if self.source == AssessmentSource::Deterministic
-            && (self.analyzer.is_some() || self.analyzer_usage.is_some())
-        {
-            bail!(
-                "deterministic assessment '{}' cannot contain AI analyzer metadata",
-                self.criterion_id
-            );
-        }
         if self.policy == AssessmentPolicy::HardGate && self.kind != AssessmentKind::RequiredCheck {
             bail!(
                 "hard-gated assessment '{}' must be a required check",
-                self.criterion_id
-            );
-        }
-        if self.source != AssessmentSource::Deterministic
-            && self.policy != AssessmentPolicy::Advisory
-        {
-            bail!("AI assessment '{}' must remain advisory", self.criterion_id);
-        }
-        let execution_was_attempted = !matches!(
-            self.outcome,
-            AssessmentOutcome::NotEvaluated | AssessmentOutcome::Unavailable
-        );
-        if self.source != AssessmentSource::Deterministic
-            && execution_was_attempted
-            && self.analyzer.is_none()
-        {
-            bail!(
-                "AI assessment '{}' requires analyzer identity",
                 self.criterion_id
             );
         }
@@ -339,29 +271,6 @@ impl AssetValidationResult {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
-pub struct AssetAssessmentResult {
-    pub validation: AssetValidationResult,
-    pub qualitative_assessment: AssessmentResult,
-}
-
-impl AssetAssessmentResult {
-    fn validate(&self) -> Result<()> {
-        self.validation.validate()?;
-        self.qualitative_assessment.validate()?;
-        if self.qualitative_assessment.kind != AssessmentKind::AssetQuality
-            || self.qualitative_assessment.target.kind != AssessmentTargetKind::Asset
-            || self.qualitative_assessment.target.id != self.validation.asset_id
-        {
-            bail!(
-                "asset '{}' qualitative assessment targets a different asset",
-                self.validation.asset_id
-            );
-        }
-        Ok(())
-    }
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum SystemStatus {
@@ -387,490 +296,6 @@ impl From<RunStatus> for SystemStatus {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "snake_case")]
-pub enum EffectiveStatus {
-    Unavailable,
-    Passed,
-    PassedWithConcerns,
-    HardGateFailed,
-    SubjectError,
-    JudgeError,
-    ResourceLimit,
-    InfrastructureError,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "snake_case")]
-pub enum AiAssessmentAvailability {
-    NotRequested,
-    NotEvaluated,
-    Available,
-    Unavailable,
-    Malformed,
-    Failed,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "snake_case")]
-pub enum AiVerdict {
-    Pass,
-    PassWithConcerns,
-    Fail,
-    Inconclusive,
-}
-
-const MAX_FINAL_ASSESSMENT_INPUT_BYTES: usize = 64 * 1024;
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
-pub struct FinalAssessmentSubject {
-    pub execution_id: String,
-    pub run_id: String,
-    pub attempt_id: String,
-    pub scenario_id: String,
-    pub scenario_version: u32,
-    pub case_id: String,
-    pub system_status: SystemStatus,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
-pub struct FinalAssessmentMetric {
-    pub id: String,
-    pub value: f64,
-    pub unit: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
-pub struct FinalAssessmentExcerpt {
-    pub kind: String,
-    pub summary: String,
-    pub evidence: EvidenceReference,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
-pub struct FinalAssessmentCleanup {
-    pub succeeded: bool,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub failures: Vec<String>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
-pub struct FinalAssessmentValidationProbe {
-    pub id: String,
-    pub outcome: String,
-    pub summary: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
-pub struct FinalAssessmentValidationCoverage {
-    pub required: Vec<String>,
-    pub covered: Vec<String>,
-    pub omitted: Vec<String>,
-    pub complete: bool,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
-pub struct FinalAssessmentValidationRepeatability {
-    pub planned: u8,
-    pub completed: u8,
-    pub passed: u8,
-    pub interpretation: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
-pub struct FinalAssessmentLongitudinalRobustness {
-    pub sample_size: u32,
-    pub minimum_sample_size: u32,
-    pub eligible: bool,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub technical_failure_rate: Option<f64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub flaky_rate: Option<f64>,
-    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
-    pub unavailable_reasons: BTreeMap<String, String>,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
-pub struct FinalAssessmentValidation {
-    pub bundle: EvidenceReference,
-    pub contract_sha256: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub plan_sha256: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub candidate_sha256: Option<String>,
-    pub probes: Vec<FinalAssessmentValidationProbe>,
-    pub coverage: FinalAssessmentValidationCoverage,
-    pub validation_attempts: u32,
-    pub correction_attempts: u32,
-    pub repeatability: FinalAssessmentValidationRepeatability,
-    pub longitudinal_robustness: FinalAssessmentLongitudinalRobustness,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub limitations: Vec<String>,
-}
-
-impl FinalAssessmentValidation {
-    fn validate(&self) -> Result<()> {
-        self.bundle.validate()?;
-        validate_sha256(&self.contract_sha256, "validation contract hash")?;
-        if let Some(plan) = &self.plan_sha256 {
-            validate_sha256(plan, "validation plan hash")?;
-        }
-        if let Some(candidate) = &self.candidate_sha256 {
-            validate_sha256(candidate, "validation candidate hash")?;
-        }
-        if self.probes.len() > 12 {
-            bail!("final assessment validation includes more than 12 probes");
-        }
-        let mut probe_ids = BTreeSet::new();
-        for probe in &self.probes {
-            required(&probe.id, "validation probe id")?;
-            required(&probe.summary, "validation probe summary")?;
-            if probe.summary.chars().count() > 1_000 {
-                bail!(
-                    "validation probe '{}' summary exceeds 1000 characters",
-                    probe.id
-                );
-            }
-            if !matches!(
-                probe.outcome.as_str(),
-                "passed" | "failed" | "not_evaluated" | "infrastructure_error"
-            ) {
-                bail!("validation probe '{}' has an unknown outcome", probe.id);
-            }
-            if !probe_ids.insert(probe.id.as_str()) {
-                bail!("final assessment validation repeats probe '{}'", probe.id);
-            }
-        }
-        for (label, ids) in [
-            ("required", &self.coverage.required),
-            ("covered", &self.coverage.covered),
-            ("omitted", &self.coverage.omitted),
-        ] {
-            if ids.len() > 12 {
-                bail!("validation coverage {label} exceeds 12 entries");
-            }
-            for id in ids {
-                required(id, "validation coverage id")?;
-            }
-        }
-        if self.coverage.complete != self.coverage.omitted.is_empty() {
-            bail!("validation coverage completion differs from omitted probes");
-        }
-        if self.validation_attempts == 0 || self.correction_attempts >= self.validation_attempts {
-            bail!("validation attempt counts are inconsistent");
-        }
-        if self.repeatability.completed > self.repeatability.planned
-            || self.repeatability.passed > self.repeatability.completed
-        {
-            bail!("validation repeatability counts are inconsistent");
-        }
-        required(
-            &self.repeatability.interpretation,
-            "validation repeatability interpretation",
-        )?;
-        let robustness = &self.longitudinal_robustness;
-        if robustness.minimum_sample_size == 0
-            || robustness.eligible != (robustness.sample_size >= robustness.minimum_sample_size)
-        {
-            bail!("longitudinal robustness eligibility is inconsistent");
-        }
-        for (label, rate) in [
-            ("technical failure", robustness.technical_failure_rate),
-            ("flaky", robustness.flaky_rate),
-        ] {
-            if rate.is_some_and(|value| !value.is_finite() || !(0.0..=1.0).contains(&value)) {
-                bail!("longitudinal {label} rate is invalid");
-            }
-        }
-        if !robustness.eligible && robustness.unavailable_reasons.is_empty() {
-            bail!("ineligible longitudinal robustness requires an unavailable reason");
-        }
-        for (id, reason) in &robustness.unavailable_reasons {
-            required(id, "longitudinal unavailable metric")?;
-            required(reason, "longitudinal unavailable reason")?;
-        }
-        for limitation in &self.limitations {
-            required(limitation, "validation limitation")?;
-        }
-        Ok(())
-    }
-}
-
-/// Sanitized, bounded, and reproducible input for the automatic per-run AI
-/// assessment. Raw transcripts and generated asset contents are deliberately
-/// absent; the analyzer receives only their immutable evidence identities.
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
-pub struct FinalAssessmentInput {
-    pub subject: FinalAssessmentSubject,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub assessments: Vec<AssessmentResult>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub assets: Vec<AssetAssessmentResult>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub dimensions: Vec<DimensionReport>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub failures: Vec<FailureRecord>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub metrics: Vec<FinalAssessmentMetric>,
-    pub cleanup: FinalAssessmentCleanup,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub validation: Option<FinalAssessmentValidation>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub excerpts: Vec<FinalAssessmentExcerpt>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub limitations: Vec<String>,
-}
-
-impl FinalAssessmentInput {
-    pub fn validate(&self) -> Result<()> {
-        required(&self.subject.execution_id, "final assessment execution id")?;
-        required(&self.subject.run_id, "final assessment run id")?;
-        required(&self.subject.attempt_id, "final assessment attempt id")?;
-        required(&self.subject.scenario_id, "final assessment scenario id")?;
-        required(&self.subject.case_id, "final assessment case id")?;
-        if self.subject.scenario_version == 0 {
-            bail!("final assessment scenario version must be positive");
-        }
-        for assessment in &self.assessments {
-            assessment.validate()?;
-        }
-        for asset in &self.assets {
-            asset.validate()?;
-        }
-        let mut metric_ids = BTreeSet::new();
-        for metric in &self.metrics {
-            required(&metric.id, "final assessment metric id")?;
-            required(&metric.unit, "final assessment metric unit")?;
-            if !metric.value.is_finite() {
-                bail!("final assessment metric '{}' must be finite", metric.id);
-            }
-            if !metric_ids.insert(metric.id.as_str()) {
-                bail!("final assessment repeats metric '{}'", metric.id);
-            }
-        }
-        for failure in &self.failures {
-            required(&failure.message, "final assessment failure summary")?;
-        }
-        for failure in &self.cleanup.failures {
-            required(failure, "final assessment cleanup failure")?;
-        }
-        if self.cleanup.succeeded != self.cleanup.failures.is_empty() {
-            bail!("final assessment cleanup outcome differs from its failure list");
-        }
-        if let Some(validation) = &self.validation {
-            validation.validate()?;
-        }
-        for excerpt in &self.excerpts {
-            required(&excerpt.kind, "final assessment excerpt kind")?;
-            required(&excerpt.summary, "final assessment excerpt summary")?;
-            excerpt.evidence.validate()?;
-        }
-        for limitation in &self.limitations {
-            required(limitation, "final assessment input limitation")?;
-        }
-        let encoded = serde_json::to_vec(self).context("serialize final assessment input")?;
-        if encoded.len() > MAX_FINAL_ASSESSMENT_INPUT_BYTES {
-            bail!(
-                "final assessment input is {} bytes; maximum is {}",
-                encoded.len(),
-                MAX_FINAL_ASSESSMENT_INPUT_BYTES
-            );
-        }
-        Ok(())
-    }
-
-    pub fn sha256(&self) -> Result<String> {
-        self.validate()?;
-        artifact::sha256_value(self)
-    }
-
-    pub fn evidence_references(&self) -> Vec<&EvidenceReference> {
-        let mut references = self
-            .assessments
-            .iter()
-            .flat_map(|assessment| &assessment.evidence)
-            .collect::<Vec<_>>();
-        for asset in &self.assets {
-            references.extend(&asset.validation.evidence);
-            references.extend(&asset.qualitative_assessment.evidence);
-        }
-        if let Some(validation) = &self.validation {
-            references.push(&validation.bundle);
-        }
-        references.extend(self.excerpts.iter().map(|excerpt| &excerpt.evidence));
-        references
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
-pub struct FinalAssessmentResult {
-    pub verdict: AiVerdict,
-    pub quality_score: u8,
-    pub confidence: f64,
-    pub summary: String,
-    pub facts: Vec<String>,
-    pub strengths: Vec<String>,
-    pub concerns: Vec<String>,
-    /// What actually occurred in this execution — the decisive outcome and its
-    /// proximate cause. Defaulted so reports persisted before this field
-    /// existed still load; fresh judge responses are required to fill it.
-    #[serde(default, skip_serializing_if = "String::is_empty")]
-    pub diagnosis: String,
-    pub recommendation: String,
-    pub limitations: Vec<String>,
-    pub evidence: Vec<EvidenceReference>,
-}
-
-impl FinalAssessmentResult {
-    pub fn validate(&self) -> Result<()> {
-        if self.quality_score > 100 {
-            bail!("final AI quality score must be in 0..=100");
-        }
-        validate_confidence(Some(self.confidence), "final AI confidence")?;
-        required(&self.summary, "final AI summary")?;
-        required(&self.recommendation, "final AI recommendation")?;
-        if self.facts.is_empty() {
-            bail!("final AI assessment requires at least one factual observation");
-        }
-        for fact in &self.facts {
-            required(fact, "final AI fact")?;
-        }
-        for strength in &self.strengths {
-            required(strength, "final AI strength")?;
-        }
-        for concern in &self.concerns {
-            required(concern, "final AI concern")?;
-        }
-        for limitation in &self.limitations {
-            required(limitation, "final AI limitation")?;
-        }
-        let mut evidence_ids = BTreeSet::new();
-        for evidence in &self.evidence {
-            evidence.validate()?;
-            if !evidence_ids.insert((
-                evidence.artifact_id.as_str(),
-                evidence.artifact_sha256.as_str(),
-                evidence.locator.as_deref(),
-            )) {
-                bail!("final AI assessment repeats an evidence identity");
-            }
-        }
-        Ok(())
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
-pub struct AiFinalAssessment {
-    pub availability: AiAssessmentAvailability,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub result: Option<FinalAssessmentResult>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub analyzer: Option<AnalyzerIdentity>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub analyzer_usage: Option<AnalyzerUsage>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub reason: Option<String>,
-}
-
-impl AiFinalAssessment {
-    pub fn not_evaluated(reason: impl Into<String>) -> Self {
-        Self {
-            availability: AiAssessmentAvailability::NotEvaluated,
-            result: None,
-            analyzer: None,
-            analyzer_usage: None,
-            reason: Some(reason.into()),
-        }
-    }
-
-    pub fn validate(&self) -> Result<()> {
-        if self.analyzer_usage.is_some() && self.analyzer.is_none() {
-            bail!("final AI analyzer usage requires analyzer identity");
-        }
-        if let Some(usage) = &self.analyzer_usage {
-            usage.validate()?;
-        }
-        match self.availability {
-            AiAssessmentAvailability::Available => {
-                self.result
-                    .as_ref()
-                    .context("available final AI assessment has no result")?
-                    .validate()?;
-                self.analyzer
-                    .as_ref()
-                    .context("available final AI assessment has no analyzer identity")?
-                    .validate()?;
-                if self.reason.is_some() {
-                    bail!("available final AI assessment cannot have an unavailability reason");
-                }
-            }
-            AiAssessmentAvailability::Unavailable
-            | AiAssessmentAvailability::Malformed
-            | AiAssessmentAvailability::Failed => {
-                if self.result.is_some() {
-                    bail!("unavailable final AI assessment cannot contain a result");
-                }
-                required(
-                    self.reason.as_deref().unwrap_or_default(),
-                    "final AI unavailability reason",
-                )?;
-                if let Some(analyzer) = &self.analyzer {
-                    analyzer.validate()?;
-                }
-            }
-            AiAssessmentAvailability::NotRequested | AiAssessmentAvailability::NotEvaluated => {
-                if self.result.is_some() {
-                    bail!("non-evaluated final AI assessment cannot contain a result");
-                }
-                required(
-                    self.reason.as_deref().unwrap_or_default(),
-                    "final AI non-evaluation reason",
-                )?;
-                if let Some(analyzer) = &self.analyzer {
-                    analyzer.validate()?;
-                }
-            }
-        }
-        Ok(())
-    }
-}
-
-pub fn derive_effective_status(
-    system_status: SystemStatus,
-    ai_final_assessment: &AiFinalAssessment,
-) -> EffectiveStatus {
-    match system_status {
-        SystemStatus::Unavailable => EffectiveStatus::Unavailable,
-        SystemStatus::HardGateFailed => EffectiveStatus::HardGateFailed,
-        SystemStatus::SubjectError => EffectiveStatus::SubjectError,
-        SystemStatus::JudgeError => EffectiveStatus::JudgeError,
-        SystemStatus::ResourceLimit => EffectiveStatus::ResourceLimit,
-        SystemStatus::InfrastructureError => EffectiveStatus::InfrastructureError,
-        SystemStatus::Passed => match ai_final_assessment
-            .result
-            .as_ref()
-            .map(|value| value.verdict)
-        {
-            Some(AiVerdict::PassWithConcerns | AiVerdict::Fail | AiVerdict::Inconclusive) => {
-                EffectiveStatus::PassedWithConcerns
-            }
-            Some(AiVerdict::Pass) | None => EffectiveStatus::Passed,
-        },
-    }
-}
-
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct RunAssessmentContract {
     pub run_id: String,
@@ -879,26 +304,13 @@ pub struct RunAssessmentContract {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub assessments: Vec<AssessmentResult>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub assets: Vec<AssetAssessmentResult>,
-    pub ai_final_assessment: AiFinalAssessment,
-    pub effective_status: EffectiveStatus,
+    pub assets: Vec<AssetValidationResult>,
 }
 
 impl RunAssessmentContract {
     fn validate(&self) -> Result<()> {
         required(&self.run_id, "assessment run id")?;
         required(&self.attempt_id, "assessment attempt id")?;
-        self.ai_final_assessment.validate()?;
-        let derived = derive_effective_status(self.system_status, &self.ai_final_assessment);
-        if self.effective_status != derived {
-            bail!(
-                "run '{}:{}' effective status {:?} differs from derived {:?}",
-                self.run_id,
-                self.attempt_id,
-                self.effective_status,
-                derived
-            );
-        }
         let mut assessment_ids = BTreeSet::new();
         for assessment in &self.assessments {
             assessment.validate()?;
@@ -918,12 +330,12 @@ impl RunAssessmentContract {
         let mut asset_ids = BTreeSet::new();
         for asset in &self.assets {
             asset.validate()?;
-            if !asset_ids.insert(asset.validation.asset_id.as_str()) {
+            if !asset_ids.insert(asset.asset_id.as_str()) {
                 bail!(
                     "run '{}:{}' repeats asset '{}'",
                     self.run_id,
                     self.attempt_id,
-                    asset.validation.asset_id
+                    asset.asset_id
                 );
             }
         }
@@ -931,19 +343,11 @@ impl RunAssessmentContract {
     }
 
     fn evidence_references(&self) -> Vec<&EvidenceReference> {
-        let mut references = self
-            .assessments
+        self.assessments
             .iter()
             .flat_map(|assessment| &assessment.evidence)
-            .collect::<Vec<_>>();
-        for asset in &self.assets {
-            references.extend(&asset.validation.evidence);
-            references.extend(&asset.qualitative_assessment.evidence);
-        }
-        if let Some(result) = &self.ai_final_assessment.result {
-            references.extend(&result.evidence);
-        }
-        references
+            .chain(self.assets.iter().flat_map(|asset| &asset.evidence))
+            .collect()
     }
 }
 
@@ -958,40 +362,16 @@ type ExpectedRuns<'a> = BTreeMap<(&'a str, &'a str), ExpectedRunEvidence<'a>>;
 
 impl AssessmentContract {
     pub fn from_assessment_evidence(report: &E2eReport) -> Self {
-        let previous = report
-            .assessment_contract
-            .runs
-            .iter()
-            .map(|run| {
-                (
-                    (run.run_id.as_str(), run.attempt_id.as_str()),
-                    run.ai_final_assessment.clone(),
-                )
-            })
-            .collect::<BTreeMap<_, _>>();
         let runs = report
             .scenarios
             .iter()
             .flat_map(|scenario| &scenario.runs)
-            .map(|run| {
-                let system_status = SystemStatus::from(run.status);
-                let ai_final_assessment = previous
-                    .get(&(run.run_id.as_str(), run.attempt_id.as_str()))
-                    .cloned()
-                    .unwrap_or_else(|| {
-                        AiFinalAssessment::not_evaluated(
-                            "final AI assessment has not been evaluated",
-                        )
-                    });
-                RunAssessmentContract {
-                    run_id: run.run_id.clone(),
-                    attempt_id: run.attempt_id.clone(),
-                    system_status,
-                    assessments: run.assessment_results.clone(),
-                    assets: run.asset_assessments.clone(),
-                    effective_status: derive_effective_status(system_status, &ai_final_assessment),
-                    ai_final_assessment,
-                }
+            .map(|run| RunAssessmentContract {
+                run_id: run.run_id.clone(),
+                attempt_id: run.attempt_id.clone(),
+                system_status: SystemStatus::from(run.status),
+                assessments: run.assessment_results.clone(),
+                assets: run.asset_assessments.clone(),
             })
             .collect::<Vec<_>>();
         Self { runs }
@@ -1017,26 +397,6 @@ impl AssessmentContract {
         }
         expected
     }
-
-    pub fn set_final_assessment(
-        &mut self,
-        run_id: &str,
-        attempt_id: &str,
-        assessment: AiFinalAssessment,
-    ) -> Result<()> {
-        assessment.validate()?;
-        let run = self
-            .runs
-            .iter_mut()
-            .find(|run| run.run_id == run_id && run.attempt_id == attempt_id)
-            .with_context(|| {
-                format!("cannot attach final AI assessment to unknown run '{run_id}:{attempt_id}'")
-            })?;
-        run.effective_status = derive_effective_status(run.system_status, &assessment);
-        run.ai_final_assessment = assessment;
-        run.validate()
-    }
-
     pub fn validate(&self, report: &E2eReport) -> Result<()> {
         let expected = Self::expected_runs(report);
         let expected_run_count = report
@@ -1121,18 +481,14 @@ pub(crate) fn semantic_test_assessments(
             kind: AssessmentKind::RequiredCheck,
             policy: AssessmentPolicy::HardGate,
             dimension: crate::report::EvaluationDimension::StructuralIntegrity,
-            source: AssessmentSource::Deterministic,
             outcome: if gate.passed {
                 AssessmentOutcome::Passed
             } else {
                 AssessmentOutcome::Failed
             },
             score: None,
-            confidence: None,
             summary: gate.reason.clone(),
             evidence: references(&gate.evidence_ids),
-            analyzer: None,
-            analyzer_usage: None,
         }));
         assessments.extend(step.evaluations.iter().map(|evaluation| {
             let score = evaluation.score.and_then(|value| {
@@ -1150,7 +506,6 @@ pub(crate) fn semantic_test_assessments(
                 kind: AssessmentKind::Signal,
                 policy: AssessmentPolicy::Advisory,
                 dimension: crate::report::EvaluationDimension::Deliverable,
-                source: AssessmentSource::Deterministic,
                 outcome: match evaluation.outcome {
                     crate::workflow::WorkflowEvaluationOutcome::Passed => AssessmentOutcome::Passed,
                     crate::workflow::WorkflowEvaluationOutcome::Failed => AssessmentOutcome::Failed,
@@ -1166,11 +521,8 @@ pub(crate) fn semantic_test_assessments(
                     }
                 },
                 score,
-                confidence: None,
                 summary: evaluation.summary.clone(),
                 evidence: references(&evaluation.evidence_ids),
-                analyzer: None,
-                analyzer_usage: None,
             }
         }));
     }
@@ -1198,7 +550,6 @@ pub(crate) fn semantic_test_assessments(
                 AssessmentPolicy::HardGate
             },
             dimension: crate::report::EvaluationDimension::Deliverable,
-            source: AssessmentSource::Deterministic,
             outcome: match criterion.outcome {
                 crate::workflow::WorkflowEvaluationOutcome::Passed => AssessmentOutcome::Passed,
                 crate::workflow::WorkflowEvaluationOutcome::Failed => AssessmentOutcome::Failed,
@@ -1214,244 +565,11 @@ pub(crate) fn semantic_test_assessments(
                 }
             },
             score,
-            confidence: None,
             summary: criterion.summary.clone(),
             evidence: references(&criterion.evidence_ids),
-            analyzer: None,
-            analyzer_usage: None,
         }
     }));
     assessments
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "snake_case")]
-pub enum AnalysisScope {
-    Execution,
-    Test,
-    Comparison,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-pub struct AnalysisSubject {
-    pub execution_id: String,
-    pub run_id: String,
-    pub attempt_id: String,
-    pub scenario_id: String,
-    pub scenario_version: u32,
-    pub case_id: String,
-    pub system_status: SystemStatus,
-    pub effective_status: EffectiveStatus,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
-pub struct AnalysisMetric {
-    pub id: String,
-    pub value: f64,
-    pub unit: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-pub struct AnalysisExcerpt {
-    pub kind: String,
-    pub summary: String,
-    pub evidence: EvidenceReference,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
-pub struct AnalysisBundle {
-    pub scope: AnalysisScope,
-    pub input_sha256: String,
-    pub subjects: Vec<AnalysisSubject>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub assessments: Vec<AssessmentResult>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub assets: Vec<AssetAssessmentResult>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub dimensions: Vec<DimensionReport>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub failures: Vec<FailureRecord>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub evidence: Vec<ArtifactReference>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub metrics: Vec<AnalysisMetric>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub excerpts: Vec<AnalysisExcerpt>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub limitations: Vec<String>,
-}
-
-impl AnalysisBundle {
-    pub fn validate(&self) -> Result<()> {
-        validate_sha256(&self.input_sha256, "analysis bundle input hash")?;
-        if self.subjects.is_empty() {
-            bail!("analysis bundle requires at least one subject");
-        }
-        if self.scope == AnalysisScope::Comparison && self.subjects.len() != 2 {
-            bail!("comparison analysis requires exactly two subjects");
-        }
-        let mut subjects = BTreeSet::new();
-        for subject in &self.subjects {
-            required(&subject.execution_id, "analysis subject execution id")?;
-            required(&subject.run_id, "analysis subject run id")?;
-            required(&subject.attempt_id, "analysis subject attempt id")?;
-            required(&subject.scenario_id, "analysis subject scenario id")?;
-            required(&subject.case_id, "analysis subject case id")?;
-            if subject.scenario_version == 0 {
-                bail!("analysis subject scenario version must be positive");
-            }
-            if !subjects.insert((
-                subject.execution_id.as_str(),
-                subject.run_id.as_str(),
-                subject.attempt_id.as_str(),
-            )) {
-                bail!("analysis bundle repeats a subject identity");
-            }
-        }
-        for assessment in &self.assessments {
-            assessment.validate()?;
-        }
-        for asset in &self.assets {
-            asset.validate()?;
-        }
-        for excerpt in &self.excerpts {
-            required(&excerpt.kind, "analysis excerpt kind")?;
-            required(&excerpt.summary, "analysis excerpt summary")?;
-            excerpt.evidence.validate()?;
-        }
-        for metric in &self.metrics {
-            required(&metric.id, "analysis metric id")?;
-            required(&metric.unit, "analysis metric unit")?;
-            if !metric.value.is_finite() {
-                bail!("analysis metric value must be finite");
-            }
-        }
-        for limitation in &self.limitations {
-            required(limitation, "analysis bundle limitation")?;
-        }
-        Ok(())
-    }
-
-    pub fn sha256(&self) -> Result<String> {
-        self.validate()?;
-        artifact::sha256_value(self)
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-pub struct AnalysisFact {
-    pub summary: String,
-    pub evidence: Vec<EvidenceReference>,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
-pub struct AnalysisInterpretation {
-    pub summary: String,
-    pub confidence: f64,
-    pub evidence: Vec<EvidenceReference>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-pub struct AnalysisOpportunity {
-    pub priority: u8,
-    pub summary: String,
-    pub expected_impact: String,
-    pub validation_method: String,
-    pub evidence: Vec<EvidenceReference>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-pub struct AnalysisLimitation {
-    pub summary: String,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub evidence: Vec<EvidenceReference>,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
-pub struct AnalysisResponse {
-    pub input_sha256: String,
-    pub analyzer: AnalyzerIdentity,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub facts: Vec<AnalysisFact>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub interpretations: Vec<AnalysisInterpretation>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub opportunities: Vec<AnalysisOpportunity>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub limitations: Vec<AnalysisLimitation>,
-}
-
-impl AnalysisResponse {
-    pub fn validate(&self) -> Result<()> {
-        validate_sha256(&self.input_sha256, "analysis response input hash")?;
-        self.analyzer.validate()?;
-        if self.input_sha256 != self.analyzer.input_sha256 {
-            bail!("analysis response input hash differs from analyzer identity");
-        }
-        for fact in &self.facts {
-            required(&fact.summary, "analysis fact")?;
-            if fact.evidence.is_empty() {
-                bail!("analysis facts require evidence");
-            }
-            for evidence in &fact.evidence {
-                evidence.validate()?;
-            }
-        }
-        for interpretation in &self.interpretations {
-            required(&interpretation.summary, "analysis interpretation")?;
-            validate_confidence(Some(interpretation.confidence), "interpretation confidence")?;
-            if interpretation.evidence.is_empty() {
-                bail!("analysis interpretations require evidence");
-            }
-            for evidence in &interpretation.evidence {
-                evidence.validate()?;
-            }
-        }
-        for opportunity in &self.opportunities {
-            if !(1..=5).contains(&opportunity.priority) {
-                bail!("analysis opportunity priority must be in 1..=5");
-            }
-            required(&opportunity.summary, "analysis opportunity")?;
-            required(&opportunity.expected_impact, "analysis opportunity impact")?;
-            required(
-                &opportunity.validation_method,
-                "analysis opportunity validation",
-            )?;
-            if opportunity.evidence.is_empty() {
-                bail!("analysis opportunities require evidence");
-            }
-            for evidence in &opportunity.evidence {
-                evidence.validate()?;
-            }
-        }
-        for limitation in &self.limitations {
-            required(&limitation.summary, "analysis limitation")?;
-            for evidence in &limitation.evidence {
-                evidence.validate()?;
-            }
-        }
-        Ok(())
-    }
-
-    pub fn validate_for(&self, bundle: &AnalysisBundle) -> Result<()> {
-        self.validate()?;
-        let bundle_sha256 = bundle.sha256()?;
-        if self.input_sha256 != bundle_sha256 {
-            bail!("analysis response input hash differs from its AnalysisBundle");
-        }
-        Ok(())
-    }
-}
-
-fn validate_confidence(value: Option<f64>, label: &str) -> Result<()> {
-    if let Some(value) = value {
-        if !value.is_finite() || !(0.0..=1.0).contains(&value) {
-            bail!("{label} must be in 0..=1");
-        }
-    }
-    Ok(())
 }
 
 fn validate_sha256(value: &str, label: &str) -> Result<()> {
@@ -1474,265 +592,61 @@ fn required(value: &str, label: &str) -> Result<()> {
     }
     Ok(())
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    fn validation_input() -> FinalAssessmentInput {
-        FinalAssessmentInput {
-            subject: FinalAssessmentSubject {
-                execution_id: "execution-1".into(),
-                run_id: "run-1".into(),
-                attempt_id: "attempt-1".into(),
-                scenario_id: "todo_worker_self_validating".into(),
-                scenario_version: 1,
-                case_id: "case-1".into(),
-                system_status: SystemStatus::Passed,
-            },
-            assessments: Vec::new(),
-            assets: Vec::new(),
-            dimensions: Vec::new(),
-            failures: Vec::new(),
-            metrics: Vec::new(),
-            cleanup: FinalAssessmentCleanup {
-                succeeded: true,
-                failures: Vec::new(),
-            },
-            validation: Some(FinalAssessmentValidation {
-                bundle: EvidenceReference {
-                    artifact_id: "todo_validation_evidence".into(),
-                    artifact_sha256: format!("sha256:{}", "a".repeat(64)),
-                    locator: None,
-                },
-                contract_sha256: format!("sha256:{}", "b".repeat(64)),
-                plan_sha256: None,
-                candidate_sha256: Some(format!("sha256:{}", "c".repeat(64))),
-                probes: vec![FinalAssessmentValidationProbe {
-                    id: "todo_crud_isolated".into(),
-                    outcome: "passed".into(),
-                    summary: "3/3 bounded CRUD cycles passed.".into(),
-                }],
-                coverage: FinalAssessmentValidationCoverage {
-                    required: vec!["todo_crud_isolated".into()],
-                    covered: vec!["todo_crud_isolated".into()],
-                    omitted: Vec::new(),
-                    complete: true,
-                },
-                validation_attempts: 1,
-                correction_attempts: 0,
-                repeatability: FinalAssessmentValidationRepeatability {
-                    planned: 3,
-                    completed: 3,
-                    passed: 3,
-                    interpretation: "3/3 is observed in-run repeatability, not broad reliability."
-                        .into(),
-                },
-                longitudinal_robustness: FinalAssessmentLongitudinalRobustness {
-                    sample_size: 1,
-                    minimum_sample_size: 5,
-                    eligible: false,
-                    technical_failure_rate: Some(0.0),
-                    flaky_rate: None,
-                    unavailable_reasons: BTreeMap::from([(
-                        "robustness".into(),
-                        "requires five comparable runs".into(),
-                    )]),
-                },
-                limitations: vec!["Longitudinal reliability is unavailable.".into()],
-            }),
-            excerpts: Vec::new(),
-            limitations: Vec::new(),
-        }
-    }
-
-    fn unavailable_ai() -> AiFinalAssessment {
-        AiFinalAssessment {
-            availability: AiAssessmentAvailability::Unavailable,
-            result: None,
-            analyzer: None,
-            analyzer_usage: None,
-            reason: Some("provider unavailable".into()),
-        }
-    }
-
-    fn available_ai(verdict: AiVerdict) -> AiFinalAssessment {
-        AiFinalAssessment {
-            availability: AiAssessmentAvailability::Available,
-            result: Some(FinalAssessmentResult {
-                verdict,
-                quality_score: 88,
-                confidence: 0.9,
-                summary: "Evidence-grounded advisory conclusion.".into(),
-                facts: vec!["The objective execution completed.".into()],
-                strengths: vec!["The observed result was internally coherent.".into()],
-                concerns: Vec::new(),
-                diagnosis: "Every hard gate passed on the first attempt.".into(),
-                recommendation: "Retain the objective checks as the release gate.".into(),
-                limitations: vec!["Only bounded persisted evidence was analyzed.".into()],
-                evidence: Vec::new(),
-            }),
-            analyzer: Some(AnalyzerIdentity {
-                analyzer: "final-assessment".into(),
-                provider: Some("provider".into()),
-                model: Some("model".into()),
-                input_sha256: format!("sha256:{}", "a".repeat(64)),
-            }),
-            analyzer_usage: None,
-            reason: None,
-        }
-    }
-
-    #[test]
-    fn objective_failures_cannot_be_promoted_by_ai() {
-        let ai = available_ai(AiVerdict::Pass);
-
-        for (system, expected) in [
-            (
-                SystemStatus::HardGateFailed,
-                EffectiveStatus::HardGateFailed,
-            ),
-            (SystemStatus::SubjectError, EffectiveStatus::SubjectError),
-            (SystemStatus::JudgeError, EffectiveStatus::JudgeError),
-            (SystemStatus::ResourceLimit, EffectiveStatus::ResourceLimit),
-            (
-                SystemStatus::InfrastructureError,
-                EffectiveStatus::InfrastructureError,
-            ),
-        ] {
-            assert_eq!(derive_effective_status(system, &ai), expected);
-        }
-    }
-
-    #[test]
-    fn unavailable_ai_does_not_corrupt_a_passing_system_status() {
-        let ai = unavailable_ai();
-        ai.validate().unwrap();
-        assert_eq!(
-            derive_effective_status(SystemStatus::Passed, &ai),
-            EffectiveStatus::Passed
-        );
-    }
-
-    #[test]
-    fn advisory_concerns_only_qualify_a_system_pass() {
-        for verdict in [
-            AiVerdict::PassWithConcerns,
-            AiVerdict::Fail,
-            AiVerdict::Inconclusive,
-        ] {
-            let ai = available_ai(verdict);
-            ai.validate().unwrap();
-            assert_eq!(
-                derive_effective_status(SystemStatus::Passed, &ai),
-                EffectiveStatus::PassedWithConcerns
-            );
-        }
-        assert_eq!(
-            derive_effective_status(SystemStatus::Passed, &available_ai(AiVerdict::Pass)),
-            EffectiveStatus::Passed
-        );
-    }
-
-    #[test]
-    fn non_executed_asset_assessment_does_not_invent_analyzer_identity() {
-        let assessment = AssessmentResult {
-            criterion_id: "asset_quality".into(),
+    fn deterministic_result() -> AssessmentResult {
+        AssessmentResult {
+            criterion_id: "durable_result".into(),
             target: AssessmentTarget {
-                kind: AssessmentTargetKind::Asset,
-                id: "result".into(),
+                kind: AssessmentTargetKind::Criterion,
+                id: "durable_result".into(),
             },
-            kind: AssessmentKind::AssetQuality,
-            policy: AssessmentPolicy::Advisory,
-            dimension: crate::report::EvaluationDimension::Deliverable,
-            source: AssessmentSource::AssetAnalyzer,
-            outcome: AssessmentOutcome::NotEvaluated,
-            score: None,
-            confidence: None,
-            summary: "Asset quality has not been evaluated.".into(),
+            kind: AssessmentKind::RequiredCheck,
+            policy: AssessmentPolicy::HardGate,
+            dimension: crate::report::EvaluationDimension::StructuralIntegrity,
+            outcome: AssessmentOutcome::Failed,
+            score: Some(AssessmentScore {
+                awarded: 0,
+                possible: 70,
+            }),
+            summary: "The expected durable result was not observed.".into(),
             evidence: Vec::new(),
-            analyzer: None,
-            analyzer_usage: None,
-        };
-
-        assessment.validate().unwrap();
+        }
     }
 
     #[test]
-    fn malformed_scores_and_confidence_are_rejected() {
+    fn malformed_scores_are_rejected() {
         assert!(AssessmentScore {
             awarded: 11,
             possible: 10
         }
         .validate()
         .is_err());
-        assert!(validate_confidence(Some(1.01), "confidence").is_err());
-        assert!(validate_confidence(Some(f64::NAN), "confidence").is_err());
+        assert!(AssessmentScore {
+            awarded: 0,
+            possible: 0
+        }
+        .validate()
+        .is_err());
     }
 
     #[test]
-    fn final_validation_is_bounded_and_exposes_only_its_bundle_identity() {
-        let mut input = validation_input();
-        input.validate().unwrap();
-        let references = input.evidence_references();
-        assert_eq!(references.len(), 1);
-        assert_eq!(references[0].artifact_id, "todo_validation_evidence");
-
-        input.validation.as_mut().unwrap().probes[0].summary = "x".repeat(1_001);
-        assert!(input.validate().is_err());
+    fn hard_gates_must_be_required_checks() {
+        let mut result = deterministic_result();
+        result.validate().unwrap();
+        result.kind = AssessmentKind::Signal;
+        assert!(result.validate().is_err());
     }
 
     #[test]
-    fn final_validation_cannot_bypass_the_sixty_four_kib_input_limit() {
-        let mut input = validation_input();
-        input.validation.as_mut().unwrap().limitations = vec!["x".repeat(70 * 1024)];
-        assert!(input.validate().is_err());
-    }
-
-    #[test]
-    fn analysis_response_is_bound_to_the_canonical_bundle() {
-        let mut bundle = AnalysisBundle {
-            scope: AnalysisScope::Execution,
-            input_sha256: format!("sha256:{}", "a".repeat(64)),
-            subjects: vec![AnalysisSubject {
-                execution_id: "execution-1".into(),
-                run_id: "run-1".into(),
-                attempt_id: "attempt-1".into(),
-                scenario_id: "direct_answer".into(),
-                scenario_version: 1,
-                case_id: "case-1".into(),
-                system_status: SystemStatus::Passed,
-                effective_status: EffectiveStatus::Passed,
-            }],
-            assessments: Vec::new(),
-            assets: Vec::new(),
-            dimensions: Vec::new(),
-            failures: Vec::new(),
-            evidence: Vec::new(),
-            metrics: Vec::new(),
-            excerpts: Vec::new(),
-            limitations: Vec::new(),
-        };
-        let bundle_sha256 = bundle.sha256().unwrap();
-        let response = AnalysisResponse {
-            input_sha256: bundle_sha256.clone(),
-            analyzer: AnalyzerIdentity {
-                analyzer: "manual-analysis".into(),
-                provider: Some("provider".into()),
-                model: Some("model".into()),
-                input_sha256: bundle_sha256,
-            },
-            facts: Vec::new(),
-            interpretations: Vec::new(),
-            opportunities: Vec::new(),
-            limitations: Vec::new(),
-        };
-
-        response.validate_for(&bundle).unwrap();
-        bundle
-            .limitations
-            .push("No trace spans were available.".into());
-        assert!(response.validate_for(&bundle).is_err());
+    fn unavailable_assessments_cannot_carry_a_score() {
+        let mut result = deterministic_result();
+        result.outcome = AssessmentOutcome::NotEvaluated;
+        assert!(result.validate().is_err());
+        result.score = None;
+        result.validate().unwrap();
     }
 
     #[test]
@@ -1746,9 +660,7 @@ mod tests {
 
         assert_eq!(contract.runs.len(), 1);
         contract.runs[0].validate().unwrap();
-        assert_eq!(
-            contract.runs[0].effective_status,
-            EffectiveStatus::HardGateFailed
-        );
+        assert_eq!(contract.runs[0].system_status, SystemStatus::HardGateFailed);
+        assert_eq!(contract.runs[0].assets.len(), 1);
     }
 }

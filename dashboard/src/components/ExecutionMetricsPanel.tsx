@@ -82,13 +82,6 @@ export function ExecutionMetricsPanel({
       note: 'Includes retries exactly once.',
     },
     {
-      label: 'Judge tokens',
-      metric: metrics.judgeTokens,
-      format: number,
-      unit: 'attempts',
-      note: 'Separate from subject consumption.',
-    },
-    {
       label: 'Failed attempt tokens',
       metric: metrics.failedAttemptTokens,
       format: number,
@@ -100,7 +93,7 @@ export function ExecutionMetricsPanel({
       metric: metrics.cost,
       format: cost,
       unit: 'runs',
-      note: 'Reported subject and judge cost, including retries.',
+      note: 'Reported subject cost, including retries.',
     },
     {
       label: 'Accumulated run time',

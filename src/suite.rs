@@ -5,7 +5,6 @@ use std::time::{Duration, Instant};
 
 use anyhow::{bail, Context, Result};
 use chrono::{SecondsFormat, Utc};
-use futures_util::stream::StreamExt;
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use serde_json::json;
 use tokio::sync::{mpsc, oneshot, watch};
@@ -13,12 +12,8 @@ use uuid::Uuid;
 
 use crate::artifact;
 use crate::assessment::{
-    AiAssessmentAvailability, AiFinalAssessment, AnalyzerIdentity, AnalyzerUsage,
-    AssessmentOutcome, AssessmentResult, AssessmentScore, AssessmentTarget, AssessmentTargetKind,
-    EvidenceReference, FinalAssessmentCleanup, FinalAssessmentExcerpt, FinalAssessmentInput,
-    FinalAssessmentLongitudinalRobustness, FinalAssessmentMetric, FinalAssessmentSubject,
-    FinalAssessmentValidation, FinalAssessmentValidationCoverage, FinalAssessmentValidationProbe,
-    FinalAssessmentValidationRepeatability, SystemStatus,
+    AnalyzerIdentity, AnalyzerUsage, AssessmentOutcome, AssessmentResult, AssessmentScore,
+    AssessmentTarget, AssessmentTargetKind,
 };
 use crate::asset::{self, AssetCaptureLimits};
 use crate::context::E2eContext;
@@ -37,9 +32,9 @@ use crate::report::{
 };
 use crate::scenarios::common;
 use crate::scenarios::{
-    CapturedDeliverableContent, ComplexityProfile, CriterionAward, DeliverableContract,
-    MaterializedScenario, ObjectiveEvaluation, ScenarioCase, ScenarioDeliverableCapture,
-    ScenarioExecutionKind, ScenarioId, ScenarioObservation, ScenarioSpec,
+    ComplexityProfile, CriterionAward, DeliverableContract, MaterializedScenario,
+    ObjectiveEvaluation, ScenarioCase, ScenarioDeliverableCapture, ScenarioExecutionKind,
+    ScenarioId, ScenarioObservation, ScenarioSpec,
 };
 use crate::wire::{
     ControlPlaneEvidence, FunctionPolicy, MessageInput, Model, SendOptions, SendRequest,
@@ -56,14 +51,6 @@ use crate::workflow::{
 
 const MAX_RUNS: u32 = 20;
 const MAX_TECHNICAL_RETRIES: u8 = 3;
-// Objective results are already durable when this advisory phase begins. Keep
-// analyzer/provider stalls from holding the CLI child (and its plan lifecycle)
-// indefinitely; timing out the advisory assessment never changes run status.
-const FINAL_ASSESSMENT_BATCH_TIMEOUT: Duration = Duration::from_secs(120);
-// The advisory analyzer is one provider round trip per run, so a sequential batch
-// fits only `budget / latency` runs and coverage collapses as a block grows.
-// Evaluations are independent, so they run concurrently under the same budget.
-const FINAL_ASSESSMENT_CONCURRENCY: usize = 4;
 
 pub(crate) fn e2e_function_policy(spec: &ScenarioSpec, run_id: &str) -> FunctionPolicy {
     let mut deny = vec!["e2e::*".to_string()];
@@ -260,24 +247,24 @@ pub async fn run_suite(config: SuiteRunConfig) -> Result<SuiteRunOutcome> {
         .scenarios
         .iter()
         .any(|scenario| scenario.built_in().is_none());
+    // The judge is the auxiliary model Markdown scenarios use for their
+    // validators and instruction adherence. Built-in scenarios are assessed
+    // deterministically, so without a Markdown scenario it is never resolved
+    // and never enters the report identity.
     let judge_model = match config.judge.as_ref() {
-        Some(judge) => match resolve_model(&context, &judge.model, &judge.provider).await {
-            Ok(model) => Some(model),
-            Err(error) if has_markdown => {
-                return Err(error).context(
-                    "resolve the explicit auxiliary model required by Markdown scenarios",
-                );
-            }
-            Err(error) => {
-                tracing::warn!(
-                    provider = judge.provider,
-                    model = judge.model,
-                    error = %format!("{error:#}"),
-                    "configured analyzer is unavailable; preserving execution and recording advisory unavailability"
-                );
-                None
-            }
-        },
+        Some(judge) if has_markdown => Some(
+            resolve_model(&context, &judge.model, &judge.provider)
+                .await
+                .context("resolve the explicit auxiliary model required by Markdown scenarios")?,
+        ),
+        Some(judge) => {
+            tracing::info!(
+                provider = judge.provider,
+                model = judge.model,
+                "judge model is configured but no Markdown scenario is selected; it will not be used"
+            );
+            None
+        }
         None => None,
     };
     let built_in_scenarios = config
@@ -493,7 +480,6 @@ pub async fn run_suite(config: SuiteRunConfig) -> Result<SuiteRunOutcome> {
                         RetryRequest {
                             scenario_id,
                             subject: &config.subject,
-                            judge_config: config.judge.as_ref(),
                             audit_analyzer: config.audit_analyzer.as_ref(),
                             seed: *seed,
                             technical_retries: config.technical_retries,
@@ -640,10 +626,6 @@ pub async fn run_suite(config: SuiteRunConfig) -> Result<SuiteRunOutcome> {
         system_under_test,
         subject,
         judge,
-        config
-            .judge
-            .as_ref()
-            .map(|_| judge::JUDGE_PROTOCOL.to_string()),
         identity::nonempty_env("HARNESS_E2E_ENGINE_REVISION"),
         scenario_reports,
     );
@@ -658,42 +640,6 @@ pub async fn run_suite(config: SuiteRunConfig) -> Result<SuiteRunOutcome> {
     }
     report.slot_start_deadline_seconds = config.slot_start_deadline_seconds;
     report.observation_contract = config.observation_contract.clone();
-    // Persist a complete objective result and immutable evidence before invoking
-    // the complementary analyzer. A provider failure can therefore never erase
-    // the completed execution.
-    let objective_persisted =
-        persist_report_preserving_observations(&mut report, &manifest, &config.output)?.is_some();
-    let final_assessment_count = report
-        .scenarios
-        .iter()
-        .map(|scenario| scenario.runs.len())
-        .sum::<usize>();
-    tracing::info!(
-        final_assessment_count,
-        objective_persisted,
-        timeout_seconds = FINAL_ASSESSMENT_BATCH_TIMEOUT.as_secs(),
-        "objective persistence finished; advisory assessments require durable results"
-    );
-    let final_assessments_started = Instant::now();
-    if objective_persisted {
-        if let Err(error) =
-            evaluate_final_assessments(&context, config.judge.as_ref(), &config.output, &mut report)
-                .await
-        {
-            tracing::warn!(
-                error = %format!("{error:#}"),
-                "advisory final assessments failed; preserving the objective report"
-            );
-        }
-    }
-    tracing::info!(
-        final_assessment_count,
-        duration_ms = final_assessments_started
-            .elapsed()
-            .as_millis()
-            .min(u64::MAX as u128) as u64,
-        "advisory final assessments completed; persisting the final report"
-    );
     let report_path =
         persist_report_preserving_observations(&mut report, &manifest, &config.output)?;
     if report_path.is_none() {
@@ -733,793 +679,6 @@ fn redact_unpersisted_report(report: &mut E2eReport) -> Result<()> {
     *report = serde_json::from_value(value)?;
     report.redaction.merge(redaction);
     Ok(())
-}
-
-const MAX_FINAL_ASSESSMENT_ITEMS: usize = 12;
-const MAX_FINAL_ASSESSMENT_TEXT_CHARS: usize = 500;
-const MAX_FINAL_ASSESSMENT_EVIDENCE_ITEMS: usize = 4;
-const MAX_FINAL_ASSESSMENT_VALUE_ITEMS: usize = 16;
-const MAX_FINAL_ASSESSMENT_VALUE_DEPTH: usize = 4;
-const MAX_FINAL_ASSESSMENT_VALUE_BYTES: usize = 4 * 1024;
-
-/// One advisory analyzer outcome: the assessment, the attempts it took, the
-/// analyzer usage when the provider reported it, and how long it ran.
-type FinalAssessmentOutcome = (
-    AiFinalAssessment,
-    u8,
-    Option<crate::report::ModelUsageReport>,
-    Duration,
-);
-
-/// One advisory analyzer round trip under the shared batch budget. Extracted so
-/// the concurrent stream holds a concrete future type instead of an inferred
-/// closure future.
-async fn evaluate_one_final_assessment(
-    context: &E2eContext,
-    config: &JudgeConfig,
-    input: &FinalAssessmentInput,
-    batch_started: Instant,
-) -> Result<FinalAssessmentOutcome> {
-    let assessment_started = Instant::now();
-    let remaining = FINAL_ASSESSMENT_BATCH_TIMEOUT.saturating_sub(batch_started.elapsed());
-    if remaining.is_zero() {
-        return Ok((
-            timed_out_final_assessment(input, config, Duration::ZERO)?,
-            0,
-            None,
-            assessment_started.elapsed(),
-        ));
-    }
-    match tokio::time::timeout(
-        remaining,
-        judge::evaluate_final_assessment(context, config, input),
-    )
-    .await
-    {
-        Ok(outcome) => {
-            let outcome = outcome?;
-            Ok((
-                outcome.assessment,
-                outcome.attempts,
-                outcome.usage,
-                assessment_started.elapsed(),
-            ))
-        }
-        Err(_) => Ok((
-            timed_out_final_assessment(input, config, assessment_started.elapsed())?,
-            1,
-            None,
-            assessment_started.elapsed(),
-        )),
-    }
-}
-
-async fn evaluate_final_assessments(
-    context: &E2eContext,
-    judge_config: Option<&JudgeConfig>,
-    output: &std::path::Path,
-    report: &mut E2eReport,
-) -> Result<()> {
-    struct PendingAssessment {
-        scenario_index: usize,
-        run_index: usize,
-        scenario_id: String,
-        run_id: String,
-        attempt_id: String,
-        run_status: RunStatus,
-        ordinal: usize,
-        input: FinalAssessmentInput,
-        input_reference: crate::artifact::ArtifactReference,
-    }
-
-    let total = report
-        .scenarios
-        .iter()
-        .map(|scenario| scenario.runs.len())
-        .sum::<usize>();
-    let batch_started = Instant::now();
-    let mut ordinal = 0usize;
-    let mut pending: Vec<PendingAssessment> = Vec::new();
-
-    // Preparation touches the report, so it stays sequential and cheap: it only
-    // builds and persists each input, and records the runs that never reach the
-    // analyzer.
-    for scenario_index in 0..report.scenarios.len() {
-        for run_index in 0..report.scenarios[scenario_index].runs.len() {
-            ordinal += 1;
-            let (scenario_id, run_id, attempt_id, run_status, input) = {
-                let scenario = &report.scenarios[scenario_index];
-                let run = &scenario.runs[run_index];
-                let contract = report
-                    .assessment_contract
-                    .runs
-                    .iter()
-                    .find(|candidate| {
-                        candidate.run_id == run.run_id && candidate.attempt_id == run.attempt_id
-                    })
-                    .with_context(|| {
-                        format!(
-                            "missing preliminary assessment contract for '{}:{}'",
-                            run.run_id, run.attempt_id
-                        )
-                    })?;
-                (
-                    scenario.scenario_id.clone(),
-                    run.run_id.clone(),
-                    run.attempt_id.clone(),
-                    run.status,
-                    final_assessment_input(&report.execution.execution_id, scenario, run, contract),
-                )
-            };
-            tracing::info!(
-                scenario = scenario_id,
-                run_id,
-                attempt_id,
-                status = ?run_status,
-                ordinal,
-                total,
-                "starting advisory final assessment"
-            );
-            if let Err(error) = input.validate() {
-                attach_final_assessment(
-                    report,
-                    scenario_index,
-                    run_index,
-                    &run_id,
-                    &attempt_id,
-                    None,
-                    0,
-                    None,
-                    judge_config.is_some(),
-                    failed_unprepared_final_assessment(format!(
-                        "final_assessment_input_invalid: {error:#}"
-                    )),
-                )?;
-                tracing::warn!(
-                    scenario = scenario_id,
-                    run_id,
-                    attempt_id,
-                    ordinal,
-                    total,
-                    error = %format!("{error:#}"),
-                    "advisory final assessment input was invalid"
-                );
-                continue;
-            }
-            let input_reference = match artifact::write_json(
-                output,
-                &PathBuf::from("evidence")
-                    .join(&run_id)
-                    .join(&attempt_id)
-                    .join("final-assessment-input.json"),
-                "final-assessment-input",
-                "final_assessment_input",
-                &input,
-            ) {
-                Ok(reference) => reference,
-                Err(error) => {
-                    attach_final_assessment(
-                        report,
-                        scenario_index,
-                        run_index,
-                        &run_id,
-                        &attempt_id,
-                        None,
-                        0,
-                        None,
-                        judge_config.is_some(),
-                        failed_unprepared_final_assessment(format!(
-                            "final_assessment_input_persistence_failed: {error:#}"
-                        )),
-                    )?;
-                    tracing::warn!(
-                        scenario = scenario_id,
-                        run_id,
-                        attempt_id,
-                        ordinal,
-                        total,
-                        error = %format!("{error:#}"),
-                        "advisory final assessment input could not be persisted"
-                    );
-                    continue;
-                }
-            };
-            pending.push(PendingAssessment {
-                scenario_index,
-                run_index,
-                scenario_id,
-                run_id,
-                attempt_id,
-                run_status,
-                ordinal,
-                input,
-                input_reference,
-            });
-        }
-    }
-
-    // Only the analyzer round trips run concurrently. The batch budget is still
-    // shared and still advisory: a run that outlives it is reported as timed out
-    // and the objective status is untouched.
-    let outcomes: Vec<Result<FinalAssessmentOutcome>> = match judge_config {
-        Some(config) => {
-            let mut round_trips = Vec::with_capacity(pending.len());
-            for item in &pending {
-                round_trips.push(evaluate_one_final_assessment(
-                    context,
-                    config,
-                    &item.input,
-                    batch_started,
-                ));
-            }
-            futures_util::stream::iter(round_trips)
-                .buffered(FINAL_ASSESSMENT_CONCURRENCY)
-                .collect()
-                .await
-        }
-        None => pending
-            .iter()
-            .map(|item| {
-                Ok((
-                    unavailable_final_assessment(&item.input)?,
-                    0,
-                    None,
-                    Duration::ZERO,
-                ))
-            })
-            .collect(),
-    };
-
-    // Attachment mutates the report, so it happens in the original run order.
-    for (item, outcome) in pending.iter().zip(outcomes) {
-        let (assessment, attempts, usage, elapsed) = match outcome {
-            Ok(outcome) => outcome,
-            Err(error) => {
-                tracing::warn!(
-                    scenario = item.scenario_id,
-                    run_id = item.run_id,
-                    attempt_id = item.attempt_id,
-                    error = %format!("{error:#}"),
-                    "advisory final assessment provider failed; recording it as unavailable"
-                );
-                (
-                    failed_unprepared_final_assessment(format!(
-                        "final_assessment_provider_failed: {error:#}; the objective system status is unchanged"
-                    )),
-                    1,
-                    None,
-                    Duration::ZERO,
-                )
-            }
-        };
-        let availability = assessment.availability;
-        attach_final_assessment(
-            report,
-            item.scenario_index,
-            item.run_index,
-            &item.run_id,
-            &item.attempt_id,
-            Some(item.input_reference.clone()),
-            attempts,
-            usage.as_ref(),
-            judge_config.is_some(),
-            assessment,
-        )?;
-        tracing::info!(
-            scenario = item.scenario_id,
-            run_id = item.run_id,
-            attempt_id = item.attempt_id,
-            status = ?item.run_status,
-            availability = ?availability,
-            attempts,
-            ordinal = item.ordinal,
-            total,
-            duration_ms = elapsed.as_millis().min(u64::MAX as u128) as u64,
-            "advisory final assessment finished"
-        );
-    }
-
-    for scenario_index in 0..report.scenarios.len() {
-        report.scenarios[scenario_index].refresh_aggregate()?;
-    }
-    report.passed =
-        !report.scenarios.is_empty() && report.scenarios.iter().all(|scenario| scenario.passed);
-    Ok(())
-}
-
-fn timed_out_final_assessment(
-    input: &FinalAssessmentInput,
-    config: &JudgeConfig,
-    elapsed: Duration,
-) -> Result<AiFinalAssessment> {
-    let elapsed_ms = elapsed.as_millis().min(u64::MAX as u128) as u64;
-    let assessment = AiFinalAssessment {
-        availability: AiAssessmentAvailability::Failed,
-        result: None,
-        analyzer: Some(AnalyzerIdentity {
-            analyzer: "final-assessment".into(),
-            provider: Some(config.provider.clone()),
-            model: Some(config.model.clone()),
-            input_sha256: input.sha256()?,
-        }),
-        analyzer_usage: Some(AnalyzerUsage {
-            latency_ms: Some(elapsed_ms),
-            input_tokens: None,
-            output_tokens: None,
-            cost_usd: None,
-        }),
-        reason: Some(format!(
-            "final_assessment_timeout: advisory analysis exceeded the {} second suite finalization budget; the objective system status is unchanged",
-            FINAL_ASSESSMENT_BATCH_TIMEOUT.as_secs()
-        )),
-    };
-    assessment.validate()?;
-    Ok(assessment)
-}
-
-#[allow(clippy::too_many_arguments)]
-fn attach_final_assessment(
-    report: &mut E2eReport,
-    scenario_index: usize,
-    run_index: usize,
-    run_id: &str,
-    attempt_id: &str,
-    input_reference: Option<crate::artifact::ArtifactReference>,
-    attempts: u8,
-    usage: Option<&crate::report::ModelUsageReport>,
-    judge_expected: bool,
-    assessment: AiFinalAssessment,
-) -> Result<()> {
-    let evaluator_availability = match assessment.availability {
-        AiAssessmentAvailability::Available => crate::report::EvaluatorAvailability::Available,
-        AiAssessmentAvailability::NotRequested | AiAssessmentAvailability::NotEvaluated => {
-            crate::report::EvaluatorAvailability::NotRequired
-        }
-        AiAssessmentAvailability::Unavailable
-        | AiAssessmentAvailability::Malformed
-        | AiAssessmentAvailability::Failed => crate::report::EvaluatorAvailability::Unavailable,
-    };
-    {
-        let run = &mut report.scenarios[scenario_index].runs[run_index];
-        run.final_assessment_input = input_reference;
-        run.evaluators.final_advisory = evaluator_availability;
-        accumulate_judge_telemetry(run, attempts, usage);
-        run.update_cost(judge_expected);
-    }
-    report
-        .assessment_contract
-        .set_final_assessment(run_id, attempt_id, assessment)
-}
-
-fn failed_unprepared_final_assessment(reason: String) -> AiFinalAssessment {
-    AiFinalAssessment {
-        availability: AiAssessmentAvailability::Failed,
-        result: None,
-        analyzer: None,
-        analyzer_usage: None,
-        reason: Some(reason),
-    }
-}
-
-fn unavailable_final_assessment(input: &FinalAssessmentInput) -> Result<AiFinalAssessment> {
-    let assessment = AiFinalAssessment {
-        availability: AiAssessmentAvailability::Unavailable,
-        result: None,
-        analyzer: Some(AnalyzerIdentity {
-            analyzer: "final-assessment".into(),
-            provider: None,
-            model: None,
-            input_sha256: input.sha256()?,
-        }),
-        analyzer_usage: None,
-        reason: Some(
-            "final_assessment_unavailable: no analyzer provider and model were configured".into(),
-        ),
-    };
-    assessment.validate()?;
-    Ok(assessment)
-}
-
-fn final_assessment_input(
-    execution_id: &str,
-    scenario: &E2eScenarioReport,
-    run: &E2eRunReport,
-    contract: &crate::assessment::RunAssessmentContract,
-) -> FinalAssessmentInput {
-    let mut limitations = vec![
-        "Raw transcript content is excluded; only immutable transcript evidence identity is supplied."
-            .into(),
-        "Generated asset content is excluded; only validated assessment summaries and immutable evidence identities are supplied."
-            .into(),
-    ];
-    let mut assessments = contract
-        .assessments
-        .iter()
-        .take(MAX_FINAL_ASSESSMENT_ITEMS)
-        .cloned()
-        .map(|mut assessment| {
-            assessment.summary = bounded_text(&assessment.summary);
-            assessment
-                .evidence
-                .truncate(MAX_FINAL_ASSESSMENT_EVIDENCE_ITEMS);
-            assessment
-        })
-        .collect::<Vec<_>>();
-    if contract.assessments.len() > assessments.len() {
-        limitations.push(format!(
-            "Only the first {} per-requirement assessments were included.",
-            assessments.len()
-        ));
-    }
-    let mut assets = contract
-        .assets
-        .iter()
-        .take(MAX_FINAL_ASSESSMENT_ITEMS)
-        .cloned()
-        .map(|mut asset| {
-            asset.validation.summary = bounded_text(&asset.validation.summary);
-            asset
-                .validation
-                .evidence
-                .truncate(MAX_FINAL_ASSESSMENT_EVIDENCE_ITEMS);
-            asset.qualitative_assessment.summary =
-                bounded_text(&asset.qualitative_assessment.summary);
-            asset
-                .qualitative_assessment
-                .evidence
-                .truncate(MAX_FINAL_ASSESSMENT_EVIDENCE_ITEMS);
-            asset
-        })
-        .collect::<Vec<_>>();
-    if contract.assets.len() > assets.len() {
-        limitations.push(format!(
-            "Only the first {} asset assessments were included.",
-            assets.len()
-        ));
-    }
-    let dimensions = run
-        .dimensions
-        .iter()
-        .take(MAX_FINAL_ASSESSMENT_ITEMS)
-        .cloned()
-        .map(|mut dimension| {
-            dimension.signals = bounded_json(&dimension.signals, 0);
-            dimension
-        })
-        .collect();
-    let failures = run
-        .failures
-        .iter()
-        .take(MAX_FINAL_ASSESSMENT_ITEMS)
-        .cloned()
-        .map(|mut failure| {
-            failure.message = bounded_text(&failure.message);
-            failure
-        })
-        .collect::<Vec<_>>();
-    if run.failures.len() > failures.len() {
-        limitations.push(format!(
-            "Only the first {} execution failures were included.",
-            failures.len()
-        ));
-    }
-    let cleanup_failures = failures
-        .iter()
-        .filter(|failure| failure.phase == FailurePhase::Cleanup)
-        .map(|failure| failure.message.clone())
-        .collect::<Vec<_>>();
-    let excerpts = run
-        .evidence
-        .iter()
-        .filter(|reference| reference.kind == "transcript")
-        .take(2)
-        .map(|reference| FinalAssessmentExcerpt {
-            kind: "transcript".into(),
-            summary: "A sanitized transcript is available as immutable evidence; its raw content was not sent to the final analyzer."
-                .into(),
-            evidence: EvidenceReference::from(reference),
-        })
-        .collect();
-    let validation = final_assessment_validation(scenario, run);
-    if validation.is_none()
-        && matches!(
-            scenario.scenario_id.as_str(),
-            crate::scenarios::todo_worker::SIMPLE_ID | crate::scenarios::todo_worker::PLANNED_ID
-        )
-    {
-        limitations.push(
-            "No complete Todo validation bundle was available for the final assessment projection."
-                .into(),
-        );
-    }
-
-    FinalAssessmentInput {
-        subject: FinalAssessmentSubject {
-            execution_id: execution_id.to_string(),
-            run_id: run.run_id.clone(),
-            attempt_id: run.attempt_id.clone(),
-            scenario_id: scenario.scenario_id.clone(),
-            scenario_version: scenario.scenario_version,
-            case_id: scenario.case_id.clone(),
-            system_status: SystemStatus::from(run.status),
-        },
-        assessments: std::mem::take(&mut assessments),
-        assets: std::mem::take(&mut assets),
-        dimensions,
-        failures,
-        metrics: final_assessment_metrics(scenario, run),
-        cleanup: FinalAssessmentCleanup {
-            succeeded: cleanup_failures.is_empty(),
-            failures: cleanup_failures,
-        },
-        validation,
-        excerpts,
-        limitations,
-    }
-}
-
-fn final_assessment_validation(
-    scenario: &E2eScenarioReport,
-    run: &E2eRunReport,
-) -> Option<FinalAssessmentValidation> {
-    use crate::scenarios::todo_worker::{ProbeOutcome, ValidationEvidenceBundle};
-
-    let atomic = run.deliverables.iter().find_map(|deliverable| {
-        if deliverable.kind != "todo_validation_evidence" {
-            return None;
-        }
-        let CapturedDeliverableContent::Json(value) = &deliverable.content else {
-            return None;
-        };
-        Some((
-            serde_json::from_value::<ValidationEvidenceBundle>(value.clone()).ok()?,
-            deliverable.artifact.as_ref()?.clone(),
-        ))
-    });
-    let composite = run.semantic_tests.iter().find_map(|step| {
-        let output = step.outputs.get("validation_bundle")?;
-        let bundle =
-            serde_json::from_value::<ValidationEvidenceBundle>(output.value.clone()).ok()?;
-        let reference = step
-            .assets
-            .iter()
-            .find(|asset| asset.kind == "todo_validation_evidence")?
-            .artifact
-            .clone();
-        Some((bundle, reference))
-    });
-    let (bundle, reference) = atomic.or(composite)?;
-    let final_attempt = bundle.attempts.last()?;
-    let mut grouped = std::collections::BTreeMap::<String, Vec<_>>::new();
-    for probe in &final_attempt.probes {
-        grouped.entry(probe.id.clone()).or_default().push(probe);
-    }
-    let probes = grouped
-        .into_iter()
-        .take(12)
-        .map(|(id, observations)| {
-            let outcome = if observations
-                .iter()
-                .all(|probe| probe.outcome == ProbeOutcome::Passed)
-            {
-                "passed"
-            } else if observations
-                .iter()
-                .any(|probe| probe.outcome == ProbeOutcome::InfrastructureError)
-            {
-                "infrastructure_error"
-            } else if observations
-                .iter()
-                .any(|probe| probe.outcome == ProbeOutcome::Failed)
-            {
-                "failed"
-            } else {
-                "not_evaluated"
-            };
-            let summary = observations
-                .iter()
-                .map(|probe| {
-                    format!(
-                        "repetition={} outcome={:?} observed={}",
-                        probe.repetition,
-                        probe.outcome,
-                        serde_json::to_string(&bounded_json(&probe.observed, 0))
-                            .unwrap_or_default()
-                    )
-                })
-                .collect::<Vec<_>>()
-                .join("; ");
-            FinalAssessmentValidationProbe {
-                id,
-                outcome: outcome.into(),
-                summary: summary.chars().take(1_000).collect(),
-            }
-        })
-        .collect();
-    let validation_attempts = bundle.attempts.len().try_into().unwrap_or(u32::MAX);
-    let correction_attempts = bundle.nudges.min(validation_attempts.saturating_sub(1));
-    let robustness = &scenario.aggregate.robustness;
-    let mut limitations = bundle
-        .limitations
-        .iter()
-        .map(|value| bounded_text(value))
-        .collect::<Vec<_>>();
-    if !robustness.eligible {
-        limitations.push(format!(
-            "Longitudinal reliability is unavailable: {} comparable run(s), minimum {}.",
-            robustness.sample_size, robustness.minimum_sample_size
-        ));
-    }
-    Some(FinalAssessmentValidation {
-        bundle: EvidenceReference::from(&reference),
-        contract_sha256: bundle.contract_sha256,
-        plan_sha256: bundle.plan_sha256,
-        candidate_sha256: bundle.subject.candidate_sha256,
-        probes,
-        coverage: FinalAssessmentValidationCoverage {
-            required: bundle.coverage.required,
-            covered: bundle.coverage.covered,
-            omitted: bundle.coverage.omitted,
-            complete: bundle.coverage.complete,
-        },
-        validation_attempts,
-        correction_attempts,
-        repeatability: FinalAssessmentValidationRepeatability {
-            planned: bundle.repeatability.planned,
-            completed: bundle.repeatability.completed,
-            passed: bundle.repeatability.passed,
-            interpretation: format!(
-                "{}/{} planned CRUD cycles passed within this run; this is observed in-run repeatability, not broad reliability.",
-                bundle.repeatability.passed, bundle.repeatability.planned
-            ),
-        },
-        longitudinal_robustness: FinalAssessmentLongitudinalRobustness {
-            sample_size: robustness.sample_size,
-            minimum_sample_size: robustness.minimum_sample_size,
-            eligible: robustness.eligible,
-            technical_failure_rate: robustness.technical_failure_rate,
-            flaky_rate: robustness.flaky_rate,
-            unavailable_reasons: robustness.unavailable.clone(),
-        },
-        limitations,
-    })
-}
-
-fn final_assessment_metrics(
-    scenario: &E2eScenarioReport,
-    run: &E2eRunReport,
-) -> Vec<FinalAssessmentMetric> {
-    let mut metrics = Vec::new();
-    push_final_metric(
-        &mut metrics,
-        "wall_time",
-        Some(run.wall_time_ms as f64),
-        "ms",
-    );
-    push_final_metric(
-        &mut metrics,
-        "objective_score",
-        run.score.map(f64::from),
-        "points",
-    );
-    push_final_metric(&mut metrics, "subject_cost", run.cost.subject_usd, "usd");
-    push_final_metric(&mut metrics, "judge_cost", run.cost.judge_usd, "usd");
-    if let Some(efficiency) = &run.efficiency {
-        push_final_metric(
-            &mut metrics,
-            "function_calls",
-            efficiency.function_calls.map(|value| value as f64),
-            "count",
-        );
-        push_final_metric(
-            &mut metrics,
-            "function_call_errors",
-            efficiency.function_call_errors.map(|value| value as f64),
-            "count",
-        );
-        push_final_metric(
-            &mut metrics,
-            "validation_retries",
-            efficiency.validation_retries.map(|value| value as f64),
-            "count",
-        );
-        push_final_metric(
-            &mut metrics,
-            "work_amplification",
-            efficiency.work_amplification,
-            "ratio",
-        );
-        push_final_metric(
-            &mut metrics,
-            "technical_attempts",
-            Some(f64::from(efficiency.technical_attempts)),
-            "count",
-        );
-    }
-    let robustness = &scenario.aggregate.robustness;
-    push_final_metric(
-        &mut metrics,
-        "robustness_sample_size",
-        Some(f64::from(robustness.sample_size)),
-        "count",
-    );
-    push_final_metric(
-        &mut metrics,
-        "technical_failure_rate",
-        robustness.technical_failure_rate,
-        "ratio",
-    );
-    push_final_metric(&mut metrics, "flaky_rate", robustness.flaky_rate, "ratio");
-    metrics
-}
-
-fn push_final_metric(
-    metrics: &mut Vec<FinalAssessmentMetric>,
-    id: &str,
-    value: Option<f64>,
-    unit: &str,
-) {
-    if let Some(value) = value.filter(|value| value.is_finite()) {
-        metrics.push(FinalAssessmentMetric {
-            id: id.into(),
-            value,
-            unit: unit.into(),
-        });
-    }
-}
-
-fn bounded_text(value: &str) -> String {
-    let mut bounded = value
-        .chars()
-        .take(MAX_FINAL_ASSESSMENT_TEXT_CHARS)
-        .collect::<String>();
-    if value.chars().count() > MAX_FINAL_ASSESSMENT_TEXT_CHARS {
-        bounded.push('…');
-    }
-    bounded
-}
-
-fn bounded_json(value: &serde_json::Value, depth: usize) -> serde_json::Value {
-    let bounded = bounded_json_inner(value, depth);
-    if serde_json::to_vec(&bounded)
-        .is_ok_and(|encoded| encoded.len() <= MAX_FINAL_ASSESSMENT_VALUE_BYTES)
-    {
-        bounded
-    } else {
-        serde_json::json!({
-            "omitted": true,
-            "reason": "bounded final assessment signal exceeded 4096 bytes",
-            "sha256": artifact::sha256_value(value).ok(),
-        })
-    }
-}
-
-fn bounded_json_inner(value: &serde_json::Value, depth: usize) -> serde_json::Value {
-    if depth >= MAX_FINAL_ASSESSMENT_VALUE_DEPTH {
-        return serde_json::Value::String("[omitted at depth limit]".into());
-    }
-    match value {
-        serde_json::Value::String(value) => serde_json::Value::String(bounded_text(value)),
-        serde_json::Value::Array(values) => serde_json::Value::Array(
-            values
-                .iter()
-                .take(MAX_FINAL_ASSESSMENT_VALUE_ITEMS)
-                .map(|value| bounded_json_inner(value, depth + 1))
-                .collect(),
-        ),
-        serde_json::Value::Object(values) => {
-            let mut entries = values.iter().collect::<Vec<_>>();
-            entries.sort_by(|left, right| left.0.cmp(right.0));
-            serde_json::Value::Object(
-                entries
-                    .into_iter()
-                    .take(MAX_FINAL_ASSESSMENT_VALUE_ITEMS)
-                    .map(|(key, value)| (key.clone(), bounded_json_inner(value, depth + 1)))
-                    .collect(),
-            )
-        }
-        value => value.clone(),
-    }
 }
 
 async fn preflight_case(
@@ -1791,7 +950,6 @@ async fn commit_run_checkpoint(
         "assessment_results": run.assessment_results,
         "asset_assessments": run.asset_assessments,
         "asset_capture_manifest": run.asset_capture_manifest,
-        "final_assessment_input": run.final_assessment_input,
         "asset_redaction": run.asset_redaction,
         "retry_attempts": run.retry_attempts.iter().map(|attempt| json!({
             "attempt_id": attempt.attempt_id,
@@ -2089,7 +1247,6 @@ struct AttemptRequest<'a> {
     run_id: &'a str,
     attempt_number: u32,
     subject: &'a SubjectConfig,
-    judge_config: Option<&'a JudgeConfig>,
     audit_analyzer: Option<&'a JudgeConfig>,
     seed: u64,
     progress_interval: Option<Duration>,
@@ -2107,7 +1264,6 @@ async fn run_once(context: &Arc<E2eContext>, request: AttemptRequest<'_>) -> E2e
         run_id,
         attempt_number,
         subject,
-        judge_config,
         audit_analyzer,
         seed,
         progress_interval,
@@ -2230,7 +1386,6 @@ async fn run_once(context: &Arc<E2eContext>, request: AttemptRequest<'_>) -> E2e
             context.as_ref(),
             ExecutionRequest {
                 subject,
-                judge_config,
                 run_id: &attempt_id,
                 session_id: &session_id,
                 spec: &spec,
@@ -2315,7 +1470,7 @@ async fn run_once(context: &Arc<E2eContext>, request: AttemptRequest<'_>) -> E2e
     if report
         .asset_assessments
         .iter()
-        .any(|asset| asset.validation.outcome != crate::assessment::AssetValidationOutcome::Valid)
+        .any(|asset| asset.outcome != crate::assessment::AssetValidationOutcome::Valid)
     {
         if let Some(gate) = report
             .hard_gates
@@ -2332,8 +1487,8 @@ async fn run_once(context: &Arc<E2eContext>, request: AttemptRequest<'_>) -> E2e
     ensure_assessment_results(&spec, &mut report);
     if report.failures.is_empty() {
         if report.hard_gates.iter().any(|gate| !gate.passed) {
-            // Judge-backed scenarios skip the judge on a gate failure, leaving no
-            // criterion awards; the run must still enter the aggregate as a score.
+            // A gate failure can leave no criterion awards; the run must still
+            // enter the aggregate as a score.
             report.score.get_or_insert(0);
             report.finish(RunStatus::HardGateFailed);
         } else if report.score.is_some()
@@ -2347,15 +1502,13 @@ async fn run_once(context: &Arc<E2eContext>, request: AttemptRequest<'_>) -> E2e
                 RunStatus::InfrastructureError,
                 FailurePhase::Evaluate,
                 format!(
-                    "scenario '{}': evaluation completed without a score; expected criterion awards or a judge score",
+                    "scenario '{}': evaluation completed without a score; expected criterion awards",
                     spec.id
                 ),
             );
         }
     }
-    report.update_cost(
-        spec.needs_judge() || (!report.asset_assessments.is_empty() && judge_config.is_some()),
-    );
+    report.update_cost();
     report.update_efficiency(case.work);
     report.refresh_dimensions(expects_deliverables);
     // Status, score, cost, and efficiency are final; the behavioral audit
@@ -3129,7 +2282,6 @@ pub(crate) fn populate_composite_report_with_terminal(
     });
     report.cost = CostReport {
         subject_usd: workflow.aggregate_cost_usd,
-        judge_usd: Some(0.0),
         total_usd: workflow.aggregate_cost_usd,
     };
     for step in &workflow.steps {
@@ -3845,7 +2997,7 @@ async fn run_markdown_once(
             );
         }
     }
-    report.update_cost(true);
+    report.update_cost();
     if let Ok(case) = markdown_case(request.scenario, request.seed) {
         report.update_efficiency(case.work);
     }
@@ -4964,7 +4116,6 @@ fn markdown_cleanup_policy_for_surfaces(
 struct RetryRequest<'a> {
     scenario_id: ScenarioId,
     subject: &'a SubjectConfig,
-    judge_config: Option<&'a JudgeConfig>,
     audit_analyzer: Option<&'a JudgeConfig>,
     seed: u64,
     technical_retries: u8,
@@ -4982,7 +4133,6 @@ async fn run_with_technical_retries(
     let RetryRequest {
         scenario_id,
         subject,
-        judge_config,
         audit_analyzer,
         seed,
         technical_retries,
@@ -5005,7 +4155,6 @@ async fn run_with_technical_retries(
                 run_id: &run_id,
                 attempt_number,
                 subject,
-                judge_config,
                 audit_analyzer,
                 seed,
                 progress_interval,
@@ -5054,7 +4203,6 @@ struct RunFailure {
 
 struct ExecutionRequest<'a> {
     subject: &'a SubjectConfig,
-    judge_config: Option<&'a JudgeConfig>,
     run_id: &'a str,
     session_id: &'a str,
     spec: &'a ScenarioSpec,
@@ -5101,7 +4249,6 @@ async fn execute(
 ) -> Result<(), RunFailure> {
     let ExecutionRequest {
         subject,
-        judge_config,
         run_id,
         session_id,
         spec,
@@ -5365,9 +4512,10 @@ async fn execute(
         })?;
     if !case.deliverable_contract.artifacts.is_empty() {
         let passed = !report.asset_assessments.is_empty()
-            && report.asset_assessments.iter().all(|asset| {
-                asset.validation.outcome == crate::assessment::AssetValidationOutcome::Valid
-            });
+            && report
+                .asset_assessments
+                .iter()
+                .all(|asset| asset.outcome == crate::assessment::AssetValidationOutcome::Valid);
         objective.hard_gates.push(HardGateReport {
             id: "deliverable_contract".to_string(),
             dimension: EvaluationDimension::Deliverable,
@@ -5390,115 +4538,10 @@ async fn execute(
         crate::report::EvaluatorAvailability::Available,
     );
     report.hard_gates = objective.hard_gates;
-    let mut awards = objective.awards;
-    let mut criterion_judge = CriterionJudgeState::NotRequested;
-
-    if spec.needs_judge() && report.hard_gates.iter().all(|gate| gate.passed) {
-        match judge_config {
-            None => {
-                criterion_judge = CriterionJudgeState::Unavailable(
-                    "judge_unavailable: no judge provider and model were configured",
-                );
-            }
-            Some(judge_config) => {
-                match judge::evaluate(context, judge_config, spec, &observation.response)
-                    .await
-                    .map_err(|error| {
-                        RunFailure::new(
-                            RunStatus::InfrastructureError,
-                            FailurePhase::Evaluate,
-                            format!("scenario '{}' prepare judge evaluation: {error:#}", spec.id),
-                        )
-                    })? {
-                    judge::JudgeEvaluation::Completed(outcome) => {
-                        let judge::JudgeOutcome {
-                            awards: judge_awards,
-                            confidences,
-                            attempts,
-                            usage,
-                            analyzer,
-                            analyzer_usage,
-                        } = outcome;
-                        accumulate_judge_telemetry(report, attempts, usage.as_ref());
-                        awards = judge_awards;
-                        criterion_judge = CriterionJudgeState::Completed {
-                            confidences,
-                            analyzer,
-                            usage: analyzer_usage,
-                        };
-                    }
-                    judge::JudgeEvaluation::Failed(failure) => {
-                        accumulate_judge_telemetry(
-                            report,
-                            failure.attempts,
-                            failure.usage.as_ref(),
-                        );
-                        criterion_judge = CriterionJudgeState::Failed(failure);
-                    }
-                }
-            }
-        }
-    } else if spec.needs_judge() {
-        criterion_judge = CriterionJudgeState::Unavailable(
-            "judge_not_evaluated: objective hard gate failure prevented advisory judging",
-        );
-    }
-
-    report.criteria = criterion_reports(spec, awards);
-    report.assessment_results = materialize_assessment_results(
-        spec,
-        &report.criteria,
-        &report.hard_gates,
-        &criterion_judge,
-    );
+    report.criteria = criterion_reports(spec, objective.awards);
+    report.assessment_results =
+        materialize_assessment_results(spec, &report.criteria, &report.hard_gates);
     update_score(report);
-
-    if spec.needs_judge()
-        && report.score.is_none()
-        && report.hard_gates.iter().all(|gate| gate.passed)
-    {
-        report.push_typed_failure(
-            RunStatus::JudgeError,
-            FailurePhase::Evaluate,
-            "judge_unavailable",
-            crate::report::RetryScope::None,
-            crate::report::ContaminationScope::None,
-            format!(
-                "scenario '{}': objective completion is preserved but judge scoring was unavailable",
-                spec.id
-            ),
-        );
-    }
-
-    if !report.asset_assessments.is_empty() {
-        match judge_config {
-            Some(judge_config) => {
-                let outcome = judge::evaluate_asset_quality(
-                    context,
-                    judge_config,
-                    &report.deliverables,
-                    &report.asset_assessments,
-                )
-                .await
-                .map_err(|error| {
-                    RunFailure::new(
-                        RunStatus::InfrastructureError,
-                        FailurePhase::Evaluate,
-                        format!("scenario '{}' prepare asset judge: {error:#}", spec.id),
-                    )
-                })?;
-                for (asset, qualitative) in report.asset_assessments.iter_mut().zip(outcome.results)
-                {
-                    asset.qualitative_assessment = qualitative;
-                }
-                accumulate_judge_telemetry(report, outcome.attempts, outcome.usage.as_ref());
-            }
-            None => mark_asset_judge_unavailable(
-                &mut report.asset_assessments,
-                "judge_unavailable: no judge provider and model were configured",
-            ),
-        }
-    }
     Ok(())
 }
 
@@ -5548,17 +4591,6 @@ fn captured_measurements(
     Ok(measurements)
 }
 
-enum CriterionJudgeState {
-    NotRequested,
-    Unavailable(&'static str),
-    Completed {
-        confidences: HashMap<String, f64>,
-        analyzer: AnalyzerIdentity,
-        usage: AnalyzerUsage,
-    },
-    Failed(judge::JudgeFailure),
-}
-
 fn ensure_assessment_results(spec: &ScenarioSpec, report: &mut E2eRunReport) {
     let declared = spec.declared_assessments();
     let complete = report.assessment_results.len() == declared.len()
@@ -5577,19 +4609,12 @@ fn ensure_assessment_results(spec: &ScenarioSpec, report: &mut E2eRunReport) {
         .unwrap_or_else(|| {
             "assessment_not_evaluated: execution did not reach assessment materialization".into()
         });
-    report.assessment_results = materialize_assessment_results(
-        spec,
-        &report.criteria,
-        &report.hard_gates,
-        &CriterionJudgeState::NotRequested,
-    );
+    report.assessment_results =
+        materialize_assessment_results(spec, &report.criteria, &report.hard_gates);
     for result in &mut report.assessment_results {
         result.outcome = AssessmentOutcome::NotEvaluated;
         result.score = None;
-        result.confidence = None;
         result.summary = reason.clone();
-        result.analyzer = None;
-        result.analyzer_usage = None;
     }
 }
 
@@ -5597,7 +4622,6 @@ fn materialize_assessment_results(
     spec: &ScenarioSpec,
     criteria: &[CriterionReport],
     hard_gates: &[HardGateReport],
-    judge_state: &CriterionJudgeState,
 ) -> Vec<AssessmentResult> {
     spec.declared_assessments()
         .into_iter()
@@ -5608,76 +4632,7 @@ fn materialize_assessment_results(
             let hard_gate_failed = hard_gates
                 .iter()
                 .any(|gate| gate.id == declaration.criterion_id && !gate.passed);
-            let (outcome, score, confidence, summary, analyzer, analyzer_usage) = if declaration
-                .source
-                == crate::assessment::AssessmentSource::Judge
-            {
-                match judge_state {
-                    CriterionJudgeState::Completed {
-                        confidences,
-                        analyzer,
-                        usage,
-                    } => {
-                        let awarded = criterion.and_then(|criterion| criterion.awarded);
-                        (
-                            score_assessment_outcome(
-                                awarded,
-                                declaration.possible,
-                                hard_gate_failed,
-                            ),
-                            awarded.map(|awarded| AssessmentScore {
-                                awarded,
-                                possible: declaration.possible,
-                            }),
-                            confidences.get(&declaration.criterion_id).copied(),
-                            criterion
-                                .map(|criterion| criterion.reason.clone())
-                                .unwrap_or_else(|| "Judge returned no criterion result.".into()),
-                            Some(analyzer.clone()),
-                            Some(usage.clone()),
-                        )
-                    }
-                    CriterionJudgeState::Failed(failure) => (
-                        failure.kind.outcome(),
-                        None,
-                        None,
-                        failure.summary(),
-                        Some(failure.analyzer.clone()),
-                        Some(failure.analyzer_usage.clone()),
-                    ),
-                    CriterionJudgeState::Unavailable(reason) => (
-                        AssessmentOutcome::Unavailable,
-                        None,
-                        None,
-                        (*reason).to_string(),
-                        None,
-                        None,
-                    ),
-                    CriterionJudgeState::NotRequested => (
-                        AssessmentOutcome::NotEvaluated,
-                        None,
-                        None,
-                        "Judge assessment was not requested.".into(),
-                        None,
-                        None,
-                    ),
-                }
-            } else {
-                let awarded = criterion.and_then(|criterion| criterion.awarded);
-                (
-                    score_assessment_outcome(awarded, declaration.possible, hard_gate_failed),
-                    awarded.map(|awarded| AssessmentScore {
-                        awarded,
-                        possible: declaration.possible,
-                    }),
-                    None,
-                    criterion
-                        .map(|criterion| criterion.reason.clone())
-                        .unwrap_or_else(|| "Deterministic assessment was not evaluated.".into()),
-                    None,
-                    None,
-                )
-            };
+            let awarded = criterion.and_then(|criterion| criterion.awarded);
             AssessmentResult {
                 criterion_id: declaration.criterion_id.clone(),
                 target: AssessmentTarget {
@@ -5687,14 +4642,15 @@ fn materialize_assessment_results(
                 kind: declaration.kind,
                 policy: declaration.policy,
                 dimension: declaration.dimension,
-                source: declaration.source,
-                outcome,
-                score,
-                confidence,
-                summary,
+                outcome: score_assessment_outcome(awarded, declaration.possible, hard_gate_failed),
+                score: awarded.map(|awarded| AssessmentScore {
+                    awarded,
+                    possible: declaration.possible,
+                }),
+                summary: criterion
+                    .map(|criterion| criterion.reason.clone())
+                    .unwrap_or_else(|| "Deterministic assessment was not evaluated.".into()),
                 evidence: Vec::new(),
-                analyzer,
-                analyzer_usage,
             }
         })
         .collect()
@@ -5712,60 +4668,6 @@ fn score_assessment_outcome(
         Some(0) => AssessmentOutcome::Failed,
         Some(_) => AssessmentOutcome::Partial,
     }
-}
-
-fn mark_asset_judge_unavailable(
-    assessments: &mut [crate::assessment::AssetAssessmentResult],
-    reason: &str,
-) {
-    for asset in assessments {
-        if asset.validation.evidence.is_empty() {
-            asset.qualitative_assessment.outcome = AssessmentOutcome::NotEvaluated;
-            asset.qualitative_assessment.summary =
-                "Asset quality was not evaluated because no immutable content evidence was captured."
-                    .into();
-            continue;
-        }
-        asset.qualitative_assessment.outcome = AssessmentOutcome::Unavailable;
-        asset.qualitative_assessment.score = None;
-        asset.qualitative_assessment.confidence = None;
-        asset.qualitative_assessment.summary = reason.to_string();
-        asset.qualitative_assessment.evidence = asset.validation.evidence.clone();
-        asset.qualitative_assessment.analyzer = None;
-        asset.qualitative_assessment.analyzer_usage = None;
-    }
-}
-
-fn accumulate_judge_telemetry(
-    report: &mut E2eRunReport,
-    attempts: u8,
-    usage: Option<&crate::report::ModelUsageReport>,
-) {
-    if attempts > 0 {
-        report.judge_attempts = Some(report.judge_attempts.unwrap_or(0).saturating_add(attempts));
-    }
-    let Some(usage) = usage else {
-        return;
-    };
-    report.judge_usage = Some(match report.judge_usage.take() {
-        None => usage.clone(),
-        Some(existing) => crate::report::ModelUsageReport {
-            input_tokens: sum_usage(existing.input_tokens, usage.input_tokens),
-            output_tokens: sum_usage(existing.output_tokens, usage.output_tokens),
-            cache_read_tokens: sum_usage(existing.cache_read_tokens, usage.cache_read_tokens),
-            cache_write_tokens: sum_usage(existing.cache_write_tokens, usage.cache_write_tokens),
-            reasoning_tokens: sum_usage(existing.reasoning_tokens, usage.reasoning_tokens),
-            cost_usd: existing
-                .cost_usd
-                .zip(usage.cost_usd)
-                .map(|(left, right)| left + right),
-        },
-    });
-}
-
-fn sum_usage(left: Option<u64>, right: Option<u64>) -> Option<u64> {
-    left.zip(right)
-        .and_then(|(left, right)| left.checked_add(right))
 }
 
 fn prepare_filesystem_root(spec: &ScenarioSpec) -> Result<Option<serde_json::Value>, RunFailure> {
@@ -5942,22 +4844,6 @@ fn validate_objective_evaluation(
         }
     }
 
-    if spec.needs_judge() {
-        if evaluation.awards.is_empty() {
-            return Ok(());
-        }
-        bail!(
-            "scenario '{}': evaluation contract violation: judge-backed evaluator returned awards [{}]; expected no awards because the judge owns criterion scoring",
-            spec.id,
-            evaluation
-                .awards
-                .iter()
-                .map(|award| format!("'{}'", award.id))
-                .collect::<Vec<_>>()
-                .join(", ")
-        );
-    }
-
     let criteria: HashMap<_, _> = spec
         .criteria
         .iter()
@@ -6053,6 +4939,7 @@ fn criterion_reports(spec: &ScenarioSpec, awards: Vec<CriterionAward>) -> Vec<Cr
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::scenarios::CapturedDeliverableContent;
 
     fn checkpoint_deliverable() -> crate::report::DeliverableReport {
         crate::report::DeliverableReport {
@@ -6123,8 +5010,7 @@ mod tests {
             2,
             vec![run],
         );
-        let mut report =
-            E2eReport::new(execution, system, subject, None, None, None, vec![scenario]);
+        let mut report = E2eReport::new(execution, system, subject, None, None, vec![scenario]);
         assert!(
             persist_report_preserving_observations(&mut report, &manifest, output.path())
                 .unwrap()
@@ -6555,8 +5441,12 @@ mod tests {
                 max_validation_retries: None,
             },
             denied_functions: &[],
-            criteria: vec![CriterionSpec::advisory_judge("objective", 100, "objective")],
-            judge_reference: None,
+            criteria: vec![CriterionSpec::required_deterministic(
+                "objective",
+                100,
+                "objective",
+                EvaluationDimension::StructuralIntegrity,
+            )],
             setup: None,
             evaluate: evaluator as ScenarioEvaluator,
             cleanup: None,
@@ -6572,9 +5462,13 @@ mod tests {
                 "Required deterministic behavior.",
                 EvaluationDimension::StructuralIntegrity,
             ),
-            CriterionSpec::advisory_judge("quality", 30, "Advisory judge quality signal."),
+            CriterionSpec::advisory_deterministic(
+                "quality",
+                30,
+                "Advisory deterministic quality signal.",
+                EvaluationDimension::Deliverable,
+            ),
         ];
-        spec.judge_reference = Some(serde_json::json!({"expected": "quality"}));
         spec
     }
 
@@ -6616,12 +5510,7 @@ mod tests {
             reason: "required behavior was incomplete".into(),
         }];
 
-        let results = materialize_assessment_results(
-            &spec,
-            &criteria,
-            &gates,
-            &CriterionJudgeState::NotRequested,
-        );
+        let results = materialize_assessment_results(&spec, &criteria, &gates);
 
         assert_eq!(results.len(), 2);
         assert_eq!(results[0].criterion_id, "required");
@@ -6638,88 +5527,6 @@ mod tests {
         assert_eq!(results[1].dimension, EvaluationDimension::Efficiency);
         assert_eq!(results[1].outcome, AssessmentOutcome::Partial);
         assert_eq!(results[1].score.as_ref().unwrap().awarded, 12);
-    }
-
-    #[test]
-    fn malformed_judge_result_is_advisory_and_preserves_deterministic_result() {
-        let spec = mixed_assessment_spec();
-        let criteria = vec![
-            CriterionReport {
-                id: "required".into(),
-                possible: 70,
-                awarded: Some(70),
-                reason: "deterministic evidence passed".into(),
-            },
-            CriterionReport {
-                id: "quality".into(),
-                possible: 30,
-                awarded: None,
-                reason: "not evaluated".into(),
-            },
-        ];
-        let failure = judge::JudgeFailure {
-            kind: judge::JudgeFailureKind::MalformedOutput,
-            message: "response omitted quality".into(),
-            attempts: 3,
-            usage: None,
-            analyzer: AnalyzerIdentity {
-                analyzer: "criterion-assessment".into(),
-                provider: Some("provider".into()),
-                model: Some("model".into()),
-                input_sha256: format!("sha256:{}", "a".repeat(64)),
-            },
-            analyzer_usage: AnalyzerUsage {
-                latency_ms: Some(10),
-                ..AnalyzerUsage::default()
-            },
-        };
-
-        let results = materialize_assessment_results(
-            &spec,
-            &criteria,
-            &[],
-            &CriterionJudgeState::Failed(failure),
-        );
-
-        assert_eq!(results[0].outcome, AssessmentOutcome::Passed);
-        assert_eq!(results[0].score.as_ref().unwrap().awarded, 70);
-        assert_eq!(results[1].outcome, AssessmentOutcome::Error);
-        assert!(results[1].summary.starts_with("judge_malformed_output:"));
-        assert_eq!(
-            results[1].policy,
-            crate::assessment::AssessmentPolicy::Advisory
-        );
-        results.iter().for_each(|result| result.validate().unwrap());
-    }
-
-    #[test]
-    fn unavailable_judge_is_explicit_without_inventing_a_score() {
-        let spec = mixed_assessment_spec();
-        let criteria = vec![
-            CriterionReport {
-                id: "required".into(),
-                possible: 70,
-                awarded: Some(70),
-                reason: "passed".into(),
-            },
-            CriterionReport {
-                id: "quality".into(),
-                possible: 30,
-                awarded: None,
-                reason: "not evaluated".into(),
-            },
-        ];
-        let results = materialize_assessment_results(
-            &spec,
-            &criteria,
-            &[],
-            &CriterionJudgeState::Unavailable("judge_unavailable: provider was not configured"),
-        );
-
-        assert_eq!(results[1].outcome, AssessmentOutcome::Unavailable);
-        assert!(results[1].score.is_none());
-        assert!(results[1].analyzer.is_none());
-        results[1].validate().unwrap();
     }
 
     #[test]
@@ -6994,95 +5801,6 @@ mod tests {
             "scenario exceeded its deadline",
         );
         assert!(!is_retryable_technical_failure(&budget));
-    }
-
-    #[test]
-    fn final_input_excludes_raw_content_and_keeps_stable_evidence_identity() {
-        let mut run = test_run_report();
-        run.status = RunStatus::Passed;
-        run.prompt = "secret prompt content that must not reach the analyzer".into();
-        run.transcript = Some(serde_json::json!({
-            "messages": ["secret transcript content that must not reach the analyzer"]
-        }));
-        run.evidence.push(crate::artifact::ArtifactReference {
-            id: "transcript".into(),
-            kind: "transcript".into(),
-            path: "evidence/run/attempt/transcript.json".into(),
-            sha256: format!("sha256:{}", "a".repeat(64)),
-            size_bytes: 42,
-            media_type: "application/json".into(),
-        });
-        run.dimensions = vec![crate::report::DimensionReport {
-            dimension: EvaluationDimension::Efficiency,
-            passed: None,
-            signals: serde_json::json!({
-                "deep": {"one": {"two": {"three": "deep content must be omitted"}}}
-            }),
-        }];
-        let scenario = E2eScenarioReport::aggregate(
-            "direct_answer",
-            2,
-            ExecutionPolicy {
-                max_turns: 1,
-                max_output_tokens: Some(100),
-                max_total_tokens: Some(100),
-                stuck_timeout_seconds: 1,
-                max_validation_retries: None,
-            },
-            vec![run],
-        );
-        let run = &scenario.runs[0];
-        let contract = crate::assessment::RunAssessmentContract {
-            run_id: run.run_id.clone(),
-            attempt_id: run.attempt_id.clone(),
-            system_status: SystemStatus::Passed,
-            assessments: Vec::new(),
-            assets: Vec::new(),
-            ai_final_assessment: AiFinalAssessment::not_evaluated("preliminary persistence"),
-            effective_status: crate::assessment::EffectiveStatus::Passed,
-        };
-
-        let input = final_assessment_input("execution-1", &scenario, run, &contract);
-        input.validate().unwrap();
-        let encoded = serde_json::to_string(&input).unwrap();
-        assert!(!encoded.contains("secret prompt content"));
-        assert!(!encoded.contains("secret transcript content"));
-        assert!(!encoded.contains("deep content must be omitted"));
-        assert_eq!(input.excerpts[0].evidence.artifact_id, "transcript");
-
-        let unavailable = unavailable_final_assessment(&input).unwrap();
-        assert_eq!(
-            unavailable.availability,
-            AiAssessmentAvailability::Unavailable
-        );
-        assert_eq!(
-            unavailable.analyzer.unwrap().input_sha256,
-            input.sha256().unwrap()
-        );
-
-        let timed_out = timed_out_final_assessment(
-            &input,
-            &JudgeConfig {
-                model: "judge-model".into(),
-                provider: "judge-provider".into(),
-            },
-            FINAL_ASSESSMENT_BATCH_TIMEOUT,
-        )
-        .unwrap();
-        assert_eq!(timed_out.availability, AiAssessmentAvailability::Failed);
-        assert_eq!(
-            timed_out.analyzer.as_ref().unwrap().input_sha256,
-            input.sha256().unwrap()
-        );
-        assert_eq!(
-            timed_out.analyzer.as_ref().unwrap().model.as_deref(),
-            Some("judge-model")
-        );
-        assert!(timed_out
-            .reason
-            .as_deref()
-            .unwrap()
-            .contains("objective system status is unchanged"));
     }
 
     #[test]

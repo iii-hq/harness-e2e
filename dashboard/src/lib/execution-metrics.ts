@@ -33,7 +33,6 @@ export type ExecutionMetrics = {
   objectiveMedian: number | null
   objectiveSamples: number
   subjectTokens: UsageCoverage
-  judgeTokens: UsageCoverage
   failedAttemptTokens: UsageCoverage
   cost: UsageCoverage
   durationMs: UsageCoverage
@@ -116,10 +115,6 @@ export function buildExecutionMetrics(
   const objective = runs.map((run) => score(run.objective_score))
   const subjectTokens = coverage(runs.map(tokens), scopeComplete)
   const completedTokens = coverage(completed.map(tokens), scopeComplete)
-  const physicalAttempts = runs.flatMap((run) => [
-    ...(run.retry_attempts ?? []),
-    run,
-  ])
   return {
     scenarios: matrix.items.length,
     includedScenarios: included.length,
@@ -144,16 +139,6 @@ export function buildExecutionMetrics(
     objectiveMedian: median(objective),
     objectiveSamples: objective.filter((value) => value !== null).length,
     subjectTokens,
-    judgeTokens: coverage(
-      physicalAttempts.map((attempt) => {
-        const input = counter(field(attempt.judge_usage, 'input_tokens'))
-        const output = counter(field(attempt.judge_usage, 'output_tokens'))
-        return input === null || output === null
-          ? null
-          : counter(input + output)
-      }),
-      scopeComplete,
-    ),
     failedAttemptTokens: coverage(
       runs.map((run) => {
         // Terminal run efficiency already includes retries. For an incomplete

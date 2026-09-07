@@ -70,7 +70,6 @@ pub fn scenario(_run_id: &str) -> ScenarioSpec {
         },
         denied_functions: &[],
         criteria: CRITERIA.to_vec(),
-        judge_reference: None,
         setup: None,
         evaluate: adaptive_only_evaluator,
         cleanup: None,

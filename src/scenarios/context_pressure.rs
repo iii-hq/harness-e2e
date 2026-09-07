@@ -300,7 +300,6 @@ seal=<seal from the charter>
         },
         denied_functions: &["state::*"],
         criteria: assessment::criteria(ASSESSMENTS),
-        judge_reference: None,
         setup: Some(setup),
         evaluate,
         cleanup: None,

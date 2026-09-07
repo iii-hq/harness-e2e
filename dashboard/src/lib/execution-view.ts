@@ -25,7 +25,6 @@ export type FailureCategory =
 
 export type FailureBreakdown = Record<FailureCategory, number> & {
   passed: number
-  passed_with_concerns: number
   total: number
   issues: number
 }
@@ -65,7 +64,6 @@ const CATEGORY_ORDER: FailureCategory[] = [
 
 const STATUS_KEYS = [
   'passed',
-  'passed_with_concerns',
   'hard_gate_failed',
   'infrastructure_error',
   'resource_limit',
@@ -145,7 +143,6 @@ export function failureBreakdown(
     hard_gate: countStatus(counts, 'hard_gate_failed'),
     inconclusive: countStatus(counts, 'unavailable'),
     passed: countStatus(counts, 'passed'),
-    passed_with_concerns: countStatus(counts, 'passed_with_concerns'),
     total: 0,
     issues: 0,
   }
@@ -156,7 +153,6 @@ export function failureBreakdown(
   if (breakdown.total === 0) {
     breakdown.total =
       breakdown.passed +
-      breakdown.passed_with_concerns +
       breakdown.hard_gate +
       breakdown.infrastructure +
       breakdown.resource_limit +
@@ -188,8 +184,7 @@ export function attentionState(
     (category) => breakdown[category] > 0,
   )
   if (hasAttention) return 'needs_attention'
-  if (breakdown.passed > 0 || breakdown.passed_with_concerns > 0)
-    return 'passed'
+  if (breakdown.passed > 0) return 'passed'
   return 'unavailable'
 }
 
@@ -308,7 +303,7 @@ export function categoryLabel(category: FailureCategory): string {
     infrastructure: 'Infrastructure',
     resource_limit: 'Resource limit',
     subject: 'Subject model',
-    judge: 'Judge model',
+    judge: 'Markdown judge',
     hard_gate: 'Hard gate',
     inconclusive: 'Inconclusive',
   }[category]

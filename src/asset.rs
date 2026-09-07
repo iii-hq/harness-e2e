@@ -9,13 +9,9 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::artifact::{self, ArtifactReference};
-use crate::assessment::{
-    AssessmentKind, AssessmentOutcome, AssessmentPolicy, AssessmentResult, AssessmentSource,
-    AssessmentTarget, AssessmentTargetKind, AssetAssessmentResult, AssetValidationOutcome,
-    AssetValidationResult, EvidenceReference,
-};
+use crate::assessment::{AssetValidationOutcome, AssetValidationResult, EvidenceReference};
 use crate::redaction::{RedactionPolicy, RedactionReport};
-use crate::report::{DeliverableContentFormat, DeliverableReport, EvaluationDimension};
+use crate::report::{DeliverableContentFormat, DeliverableReport};
 use crate::scenarios::{
     CapturedDeliverable, CapturedDeliverableContent, ProvenanceEvidence, ScenarioCase,
 };
@@ -91,7 +87,7 @@ pub struct AssetCaptureManifest {
 #[derive(Debug)]
 pub struct AssetCaptureEvaluation {
     pub deliverables: Vec<DeliverableReport>,
-    pub assessments: Vec<AssetAssessmentResult>,
+    pub assessments: Vec<AssetValidationResult>,
     pub redaction: RedactionReport,
     inventory: Vec<PendingAssetEvidence>,
     limits: AssetCaptureLimits,
@@ -577,12 +573,12 @@ pub fn persist_before_cleanup(
                 evaluation
                     .deliverables
                     .iter()
-                    .find(|report| report.id == assessment.validation.asset_id)
+                    .find(|report| report.id == assessment.asset_id)
             })
             .flatten()
             .and_then(|report| report.artifact.as_ref())
         {
-            assessment.validation.evidence = vec![EvidenceReference {
+            assessment.evidence = vec![EvidenceReference {
                 artifact_id: reference.id.clone(),
                 artifact_sha256: reference.sha256.clone(),
                 locator: None,
@@ -618,7 +614,7 @@ pub fn persist_before_cleanup(
                 provenance: pending.provenance.clone(),
                 preview: pending.preview.clone(),
                 preview_truncated: pending.preview_truncated,
-                validation: validation.validation.clone(),
+                validation: validation.clone(),
             })
         })
         .collect::<Result<Vec<_>>>()?;
@@ -647,7 +643,7 @@ pub fn persist_before_cleanup(
 pub fn reconcile_after_cleanup(
     output: &Path,
     deliverables: &[DeliverableReport],
-    assessments: &mut [AssetAssessmentResult],
+    assessments: &mut [AssetValidationResult],
 ) {
     for deliverable in deliverables {
         let Some(reference) = &deliverable.artifact else {
@@ -658,10 +654,10 @@ pub fn reconcile_after_cleanup(
         }
         if let Some(assessment) = assessments
             .iter_mut()
-            .find(|assessment| assessment.validation.asset_id == deliverable.id)
+            .find(|assessment| assessment.asset_id == deliverable.id)
         {
-            assessment.validation.outcome = AssetValidationOutcome::RemovedDuringCleanup;
-            assessment.validation.summary =
+            assessment.outcome = AssetValidationOutcome::RemovedDuringCleanup;
+            assessment.summary =
                 "Captured evidence was removed during cleanup and will be restored from bounded in-memory content."
                     .into();
         }
@@ -671,7 +667,7 @@ pub fn reconcile_after_cleanup(
 pub fn persist_after_cleanup(
     output: &Path,
     capture_manifest: &ArtifactReference,
-    assessments: &[AssetAssessmentResult],
+    assessments: &[AssetValidationResult],
 ) -> Result<ArtifactReference> {
     capture_manifest.verify(output)?;
     let bytes = fs::read(output.join(&capture_manifest.path)).with_context(|| {
@@ -690,14 +686,14 @@ pub fn persist_after_cleanup(
         );
     }
     for (asset, assessment) in manifest.assets.iter_mut().zip(assessments) {
-        if asset.asset_id != assessment.validation.asset_id {
+        if asset.asset_id != assessment.asset_id {
             bail!(
                 "asset reconciliation order differs at '{}' != '{}'",
                 asset.asset_id,
-                assessment.validation.asset_id
+                assessment.asset_id
             );
         }
-        asset.validation = assessment.validation.clone();
+        asset.validation = assessment.clone();
     }
     manifest.reconciled_after_cleanup = true;
     manifest.prior_capture = Some(capture_manifest.clone());
@@ -716,7 +712,7 @@ pub fn persist_after_cleanup(
 fn push_simple_validation(
     policy: &RedactionPolicy,
     redaction: &mut RedactionReport,
-    assessments: &mut Vec<AssetAssessmentResult>,
+    assessments: &mut Vec<AssetValidationResult>,
     inventory: &mut Vec<PendingAssetEvidence>,
     pending: PendingAssetEvidence,
     outcome: AssetValidationOutcome,
@@ -759,39 +755,13 @@ impl PendingAssetEvidence {
 }
 
 fn push_validation(
-    assessments: &mut Vec<AssetAssessmentResult>,
+    assessments: &mut Vec<AssetValidationResult>,
     inventory: &mut Vec<PendingAssetEvidence>,
     validation: AssetValidationResult,
     pending: PendingAssetEvidence,
 ) {
-    assessments.push(asset_assessment(validation));
+    assessments.push(validation);
     inventory.push(pending);
-}
-
-fn asset_assessment(validation: AssetValidationResult) -> AssetAssessmentResult {
-    let asset_id = validation.asset_id.clone();
-    AssetAssessmentResult {
-        validation,
-        qualitative_assessment: AssessmentResult {
-            criterion_id: "asset_quality".into(),
-            target: AssessmentTarget {
-                kind: AssessmentTargetKind::Asset,
-                id: asset_id,
-            },
-            kind: AssessmentKind::AssetQuality,
-            policy: AssessmentPolicy::Advisory,
-            dimension: EvaluationDimension::Deliverable,
-            source: AssessmentSource::AssetAnalyzer,
-            outcome: AssessmentOutcome::NotEvaluated,
-            score: None,
-            confidence: None,
-            summary: "Qualitative asset assessment is not evaluated by deterministic capture."
-                .into(),
-            evidence: Vec::new(),
-            analyzer: None,
-            analyzer_usage: None,
-        },
-    }
 }
 
 fn sanitized_summary(
@@ -960,7 +930,7 @@ mod tests {
     fn inventory_distinguishes_missing_unexpected_unsafe_and_oversized_assets() {
         let missing = evaluate_assets(&case(100), vec![], AssetCaptureLimits::default()).unwrap();
         assert_eq!(
-            missing.assessments[0].validation.outcome,
+            missing.assessments[0].outcome,
             AssetValidationOutcome::NotProduced
         );
 
@@ -973,11 +943,11 @@ mod tests {
         assert!(unexpected
             .assessments
             .iter()
-            .any(|asset| asset.validation.outcome == AssetValidationOutcome::Unexpected));
+            .any(|asset| asset.outcome == AssetValidationOutcome::Unexpected));
         assert!(unexpected
             .assessments
             .iter()
-            .any(|asset| asset.validation.outcome == AssetValidationOutcome::NotProduced));
+            .any(|asset| asset.outcome == AssetValidationOutcome::NotProduced));
 
         let unsafe_path = evaluate_assets(
             &case(100),
@@ -986,7 +956,7 @@ mod tests {
         )
         .unwrap();
         assert_eq!(
-            unsafe_path.assessments[0].validation.outcome,
+            unsafe_path.assessments[0].outcome,
             AssetValidationOutcome::UnsafePath
         );
         assert!(unsafe_path.deliverables.is_empty());
@@ -1001,7 +971,7 @@ mod tests {
         )
         .unwrap();
         assert_eq!(
-            oversized.assessments[0].validation.outcome,
+            oversized.assessments[0].outcome,
             AssetValidationOutcome::Oversized
         );
         assert!(oversized.deliverables.is_empty());
@@ -1016,7 +986,7 @@ mod tests {
         )
         .unwrap();
         assert_eq!(
-            malformed.assessments[0].validation.outcome,
+            malformed.assessments[0].outcome,
             AssetValidationOutcome::Malformed
         );
 
@@ -1026,11 +996,10 @@ mod tests {
         let invalid =
             evaluate_assets(&case(4_096), vec![invalid], AssetCaptureLimits::default()).unwrap();
         assert_eq!(
-            invalid.assessments[0].validation.outcome,
+            invalid.assessments[0].outcome,
             AssetValidationOutcome::Invalid
         );
         assert!(invalid.assessments[0]
-            .validation
             .summary
             .contains("invariant 'correct' failed"));
     }
@@ -1050,7 +1019,7 @@ mod tests {
         .unwrap();
 
         assert_eq!(
-            evaluation.assessments[0].validation.outcome,
+            evaluation.assessments[0].outcome,
             AssetValidationOutcome::Valid
         );
         assert_eq!(
@@ -1074,7 +1043,7 @@ mod tests {
         )
         .unwrap();
         assert_eq!(
-            malformed.assessments[0].validation.outcome,
+            malformed.assessments[0].outcome,
             AssetValidationOutcome::Malformed
         );
     }
@@ -1089,9 +1058,9 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(evaluation.assessments[0].validation.asset_id, "[REDACTED]");
+        assert_eq!(evaluation.assessments[0].asset_id, "[REDACTED]");
         assert_eq!(
-            evaluation.assessments[0].validation.outcome,
+            evaluation.assessments[0].outcome,
             AssetValidationOutcome::UnsafePath
         );
         assert!(evaluation.deliverables.is_empty());
@@ -1116,7 +1085,7 @@ mod tests {
         )
         .unwrap();
         assert_eq!(
-            evaluation.assessments[0].validation.outcome,
+            evaluation.assessments[0].outcome,
             AssetValidationOutcome::Valid
         );
 
@@ -1175,7 +1144,7 @@ mod tests {
         let asset = evaluation.deliverables[0].artifact.as_ref().unwrap();
         let bytes = std::fs::read(output.path().join(&asset.path)).unwrap();
         assert!(!String::from_utf8_lossy(&bytes).contains("do-not-persist"));
-        assert_eq!(evaluation.assessments[0].validation.evidence.len(), 1);
+        assert_eq!(evaluation.assessments[0].evidence.len(), 1);
         let manifest: AssetCaptureManifest =
             serde_json::from_slice(&std::fs::read(output.path().join(manifest.path)).unwrap())
                 .unwrap();

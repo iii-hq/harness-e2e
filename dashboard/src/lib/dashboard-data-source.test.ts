@@ -111,15 +111,11 @@ describe('live dashboard transport', () => {
   })
 })
 
-function side(
-  assessment = 'assessment-a',
-  analyzer: string | null = 'analyzer-a',
-): StaticVersionSide {
+function side(assessment: string | null = 'assessment-a'): StaticVersionSide {
   return {
     summary: {} as StaticVersionSide['summary'],
     contracts: { case: 'contract-a' },
     assessment_profiles: { case: assessment },
-    analyzer_profiles: { case: analyzer },
   }
 }
 
@@ -128,7 +124,7 @@ describe('static dashboard assessment parity', () => {
     expect(staticSideKey('cohort-a', 'version-a')).toBe('cohort-a::version-a')
   })
 
-  it('keeps assessment and analyzer incompatibilities distinct', () => {
+  it('keeps contract and assessment incompatibilities distinct', () => {
     expect(staticCompatibility(side(), side())).toEqual({
       compatibility: 'compatible',
       reasons: [],
@@ -137,9 +133,9 @@ describe('static dashboard assessment parity', () => {
       compatibility: 'assessment_changed',
       reasons: ['assessment_profile_changed'],
     })
-    expect(staticCompatibility(side(), side('assessment-a', null))).toEqual({
-      compatibility: 'analyzer_conflict',
-      reasons: ['analyzer_profile_conflict'],
+    expect(staticCompatibility(side(), side(null))).toEqual({
+      compatibility: 'assessment_conflict',
+      reasons: ['assessment_profile_conflict'],
     })
   })
 })

@@ -27,8 +27,6 @@ export type MetricFormat =
 export type PlanMetricId =
   | 'coverage'
   | 'technical_failures'
-  | 'quality'
-  | 'confidence'
   | 'tokens'
   | 'tokens_per_completion'
   | 'failed_attempt_tokens'
@@ -179,7 +177,6 @@ export function executionMetricValue(
 ): number | null {
   if (!execution) return null
   const executionTotals = totals(execution)
-  const assessment = objectValue(execution.assessment_summary)
   switch (id) {
     case 'coverage':
       return percentPoints(finite(executionTotals.report_coverage))
@@ -188,10 +185,6 @@ export function executionMetricValue(
         finite(executionTotals.technical_failures) ??
         finite(executionTotals.infra_failures)
       )
-    case 'quality':
-      return finite(assessment.median_quality_score)
-    case 'confidence':
-      return percentPoints(finite(assessment.median_confidence))
     case 'tokens':
       return finite(executionTotals.total_tokens)
     case 'tokens_per_completion':
@@ -246,8 +239,6 @@ function allMetrics(
   return [
     build('coverage', 'Coverage', 'percent_points'),
     build('technical_failures', 'Technical failures', 'count'),
-    build('quality', 'Advisory quality', 'score'),
-    build('confidence', 'Confidence', 'percent_points'),
     build('tokens', 'Total tokens', 'tokens'),
     build('tokens_per_completion', 'Tokens per completion', 'tokens'),
     build('failed_attempt_tokens', 'Failed attempt tokens', 'tokens'),
@@ -460,7 +451,6 @@ function criterionPoints(
           subject.provider,
           judge.model,
           judge.provider,
-          report.judge_protocol,
         ]
         return scenario.runs.flatMap((run, index) => {
           const round =
@@ -636,13 +626,6 @@ export function buildScenarioComparisons(
           : null,
       metrics: [
         ...criterionComparisons(baseline, candidate, id, compatible),
-        metric(
-          'quality',
-          'Advisory quality',
-          finite(left?.assessment_summary?.median_quality_score),
-          finite(right?.assessment_summary?.median_quality_score),
-          'score',
-        ),
         metric(
           'tokens',
           'Tokens',

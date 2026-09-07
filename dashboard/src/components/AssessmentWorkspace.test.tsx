@@ -31,8 +31,6 @@ const model: AssessmentWorkspaceModel = {
       },
       transcript: { messages: [] },
       systemStatus: 'hard_gate_failed',
-      effectiveStatus: 'hard_gate_failed',
-      hasAiDisagreement: true,
       assessments: [
         {
           id: 'assessment:durable_result',
@@ -41,7 +39,6 @@ const model: AssessmentWorkspaceModel = {
           kind: 'required_check',
           policy: 'hard_gate',
           dimension: 'structural_integrity',
-          source: 'deterministic',
           outcome: 'failed',
           score: { awarded: 0, possible: 70 },
           summary: 'The durable result was not observed.',
@@ -54,29 +51,6 @@ const model: AssessmentWorkspaceModel = {
           ],
         },
       ],
-      finalAssessment: {
-        availability: 'available',
-        result: {
-          verdict: 'pass',
-          quality_score: 90,
-          confidence: 0.8,
-          summary: 'The response reads well.',
-          facts: ['A response was produced.'],
-          strengths: ['Clear wording'],
-          concerns: ['The required durable result is missing.'],
-          diagnosis:
-            'The durable-result hard gate failed because no value was persisted.',
-          recommendation: 'Fix the objective gate before release.',
-          limitations: ['One sample'],
-          evidence: [
-            {
-              artifact_id: 'transcript',
-              artifact_sha256: `sha256:${'a'.repeat(64)}`,
-              locator: '/messages/4',
-            },
-          ],
-        },
-      },
       evidence: [
         {
           artifact_id: 'transcript',
@@ -89,7 +63,7 @@ const model: AssessmentWorkspaceModel = {
 }
 
 describe('assessment workspace component', () => {
-  it('renders separated outcome boundaries, rubric identity, disagreement, and evidence links', () => {
+  it('renders the system outcome, the assessment matrix and its evidence links', () => {
     const html = renderToStaticMarkup(
       <AssessmentPanel
         model={model}
@@ -105,17 +79,17 @@ describe('assessment workspace component', () => {
       />,
     )
     const rendered = `${html}${detailHtml}`
-    // One derivation, named by role — the same shape the execution page uses.
-    expect(rendered).toContain('data-outcome-derivation')
+    // One status, in the same shape the execution page uses.
+    expect(rendered).toContain('data-system-outcome')
     expect(rendered).toContain('system · deterministic gates')
-    expect(rendered).toContain('advisory · separate qualitative conclusion')
-    expect(rendered).toContain('effective · the status the result contract')
+    expect(rendered).not.toContain('advisory ·')
+    expect(rendered).not.toContain('effective ·')
     expect(rendered).toContain('run run-1')
     expect(rendered).not.toContain('attempt attempt-1')
     expect(rendered).toContain('data-primary-run-metrics')
     expect(rendered).toContain('Objective hard gates')
     expect(rendered).toContain('Assessment outcomes')
-    expect(rendered).toContain('AI quality')
+    expect(rendered).toContain('Subject tokens')
     expect(rendered).toContain('Tokens')
     expect(rendered).toContain('22,668')
     expect(rendered).toContain('Function calls')
@@ -131,44 +105,24 @@ describe('assessment workspace component', () => {
     expect(rendered).toContain('Cache read')
     expect(rendered).toContain('161,280')
     expect(rendered).toContain('durable_result')
-    expect(rendered).toContain('objective system outcome disagree')
     expect(rendered).not.toContain('Evidence register')
     expect(rendered).toContain('data-evidence-target="technical"')
     expect(rendered).not.toContain('href="#technical"')
-    expect(rendered).toContain('90/100')
-    expect(rendered).toContain('Diagnostic narrative')
-    expect(rendered).toContain('Facts shown first')
-    expect(rendered).toContain('role="tablist"')
-    expect(rendered).toContain('aria-label="Diagnostic narrative sections"')
-    expect(rendered).toContain('aria-label="AI-reported facts, 1 reported"')
-    expect(rendered).toContain('title="1 reported"')
-    expect(rendered).toContain(
-      'border-2 border-brand bg-panel px-1.5 text-[0.7rem] font-bold leading-none tabular-nums text-ink',
-    )
-    expect(rendered).not.toContain('text-bg')
-    expect(rendered.match(/role="tab"/g)).toHaveLength(4)
-    expect(rendered).toContain('role="tabpanel"')
-    expect(detailHtml).toContain('AI advisory')
-    expect(detailHtml).toContain('Advisory guidance from the AI assessment')
-    expect(detailHtml).toContain('What happened')
-    expect(detailHtml).toContain(
-      'The durable-result hard gate failed because no value was persisted.',
-    )
-    expect(detailHtml).toContain('Suggested correction or improvement')
-    expect(detailHtml).toContain('Fix the objective gate before release.')
-    expect(
-      detailHtml.indexOf(
-        'The durable-result hard gate failed because no value was persisted.',
-      ),
-    ).toBeLessThan(detailHtml.indexOf('Fix the objective gate before release.'))
+    // Nothing is left of the advisory AI conclusion or its narrative.
+    expect(rendered).not.toContain('Advisory AI conclusion')
+    expect(rendered).not.toContain('Diagnostic narrative')
+    expect(rendered).not.toContain('AI-reported facts')
+    expect(rendered).not.toContain('role="tablist"')
+    expect(rendered).not.toContain('Analyzer provenance')
+    expect(rendered).not.toContain('confidence')
+    expect(detailHtml).toContain('Suggested next step')
+    // The guidance is deterministic, derived from the system status alone.
+    expect(detailHtml).toContain('violates the hard gate')
     expect(detailHtml.indexOf('Objective hard gates')).toBeLessThan(
-      detailHtml.indexOf('Outcome boundaries'),
+      detailHtml.indexOf('System outcome'),
     )
-    expect(detailHtml.indexOf('Outcome boundaries')).toBeLessThan(
-      detailHtml.indexOf('Advisory AI conclusion'),
-    )
-    expect(detailHtml.indexOf('Advisory AI conclusion')).toBeLessThan(
-      detailHtml.indexOf('AI advisory'),
+    expect(detailHtml.indexOf('System outcome')).toBeLessThan(
+      detailHtml.indexOf('Suggested next step'),
     )
     expect(rendered).toContain('Transcript')
     expect(rendered).toContain('data-transcript-action=')
@@ -190,8 +144,6 @@ describe('assessment workspace component', () => {
   })
 
   it('surfaces security review capability metrics before evidence', () => {
-    const originalResult = model.runs[0].finalAssessment.result
-    if (!originalResult) throw new Error('expected final assessment fixture')
     const securityModel: AssessmentWorkspaceModel = {
       availability: 'available',
       runs: [
@@ -200,8 +152,6 @@ describe('assessment workspace component', () => {
           key: 'security-review',
           scenarioId: 'security_review',
           systemStatus: 'passed',
-          effectiveStatus: 'passed_with_concerns',
-          hasAiDisagreement: false,
           assessments: [
             {
               ...model.runs[0].assessments[0],
@@ -236,15 +186,6 @@ describe('assessment workspace component', () => {
                 '0 of 4 optional suggested patches passed git apply --check.',
             },
           ],
-          finalAssessment: {
-            availability: 'available',
-            result: {
-              ...originalResult,
-              verdict: 'pass_with_concerns',
-              quality_score: 75,
-              confidence: 0.82,
-            },
-          },
         },
       ],
     }
@@ -263,19 +204,15 @@ describe('assessment workspace component', () => {
     expect(html).toContain('1/1')
     expect(html).toContain('Seeded detection')
     expect(html).toContain('3/4')
-    expect(html).toContain('75% advisory coverage')
+    expect(html).toContain('75% of the possible score')
     expect(html).toContain('Optional patch checks')
     expect(html).toContain('0/4')
     expect(html).toContain('0% applied cleanly')
-    expect(html).toContain('82% confidence')
-    // A run that passed with concerns reads as a concern, never as a failure.
-    const effectiveIndex = detailHtml.indexOf('effective · the status')
-    const effectiveBoundary = detailHtml.slice(
-      effectiveIndex - 400,
-      effectiveIndex + 100,
-    )
-    expect(effectiveBoundary).toContain('ds-status-inconclusive')
-    expect(effectiveBoundary).not.toContain('ds-status-failed')
+    // A passing run reads as passed, with no second, softer verdict beside it.
+    const outcomeIndex = detailHtml.indexOf('system · deterministic gates')
+    const outcome = detailHtml.slice(outcomeIndex - 400, outcomeIndex + 100)
+    expect(outcome).toContain('ds-status-passed')
+    expect(outcome).not.toContain('ds-status-failed')
   })
 
   // Audit AW-03 / AW-04: a run that retained no assessments gets neither a
@@ -285,10 +222,7 @@ describe('assessment workspace component', () => {
       ...model.runs[0],
       key: 'judge-error',
       systemStatus: 'judge_error' as const,
-      effectiveStatus: 'judge_error' as const,
-      hasAiDisagreement: false,
       assessments: [],
-      finalAssessment: { availability: 'unavailable' as const },
     }
     const html = renderToStaticMarkup(
       <AssessmentPanel
@@ -323,8 +257,6 @@ describe('assessment workspace component', () => {
       ...model.runs[0],
       key: 'infrastructure-error',
       systemStatus: 'infrastructure_error' as const,
-      effectiveStatus: 'infrastructure_error' as const,
-      hasAiDisagreement: false,
       metrics: { ...model.runs[0].metrics, durationMs: 100 },
       assessments: model.runs[0].assessments.map((entry) => ({
         ...entry,
@@ -361,7 +293,6 @@ describe('assessment workspace component', () => {
           kind: 'required_check' as const,
           policy: 'hard_gate' as const,
           dimension: 'structural_integrity' as const,
-          source: 'deterministic' as const,
         },
         {
           id: 'never_reported',
@@ -370,7 +301,6 @@ describe('assessment workspace component', () => {
           kind: 'signal' as const,
           policy: 'advisory' as const,
           dimension: 'efficiency' as const,
-          source: 'deterministic' as const,
         },
       ],
       execution: { max_turns: 12, stuck_timeout_seconds: 300 },
@@ -402,8 +332,6 @@ describe('assessment workspace component', () => {
       />,
     )
     expect(unavailable).toContain('Assessment data is unavailable')
-    expect(unavailable).toContain(
-      'No status or AI conclusion has been inferred',
-    )
+    expect(unavailable).toContain('No status has been inferred')
   })
 })

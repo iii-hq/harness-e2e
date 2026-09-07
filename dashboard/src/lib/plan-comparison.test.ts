@@ -22,21 +22,14 @@ function assessment(
     system_statuses: {
       unavailable: 0,
       passed: 2,
-      passed_with_concerns: 0,
       hard_gate_failed: 0,
       subject_error: 0,
       judge_error: 0,
       resource_limit: 0,
       infrastructure_error: 0,
     },
-    effective_statuses: {} as never,
     assessment_outcomes: {} as never,
-    asset_qualitative_outcomes: {} as never,
     asset_validation_outcomes: {} as never,
-    ai_availability: {} as never,
-    ai_verdicts: {} as never,
-    median_quality_score: 98,
-    median_confidence: 0.97,
     ...overrides,
   }
 }
@@ -365,8 +358,8 @@ describe('local plan comparison view model', () => {
     expect(row.metrics.every((metric) => metric.delta === null)).toBe(true)
   })
 
-  it('does not invent security-review consumption from evaluator usage', () => {
-    const detail = (id: string, outputTokens: number) =>
+  it('does not invent security-review consumption from step diagnostics', () => {
+    const detail = (id: string) =>
       ({
         ...execution(id),
         reports: [
@@ -383,10 +376,6 @@ describe('local plan comparison view model', () => {
                     {
                       run_id: `${id}-run`,
                       attempt_id: `${id}-attempt`,
-                      judge_usage: {
-                        input_tokens: 3_000,
-                        output_tokens: outputTokens,
-                      },
                       semantic_tests: [
                         {
                           node_id: 'scan_commit_a',
@@ -435,8 +424,8 @@ describe('local plan comparison view model', () => {
         ],
       }) as unknown as DashboardExecutionDetail
     const [row] = buildScenarioComparisons(
-      detail('baseline', 500),
-      detail('candidate', 400),
+      detail('baseline'),
+      detail('candidate'),
     )
 
     for (const metric of row.execution_metrics) {
@@ -558,7 +547,6 @@ describe('retained criterion points', () => {
             scoring_profile_sha256: 'scoring-contract',
             subject: { model: 'subject', provider: 'provider' },
             judge: { model: 'judge', provider: 'provider' },
-            judge_protocol: 'assessment-json',
             scenarios: [
               {
                 scenario_id: 'test',

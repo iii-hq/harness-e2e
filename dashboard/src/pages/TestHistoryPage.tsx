@@ -924,11 +924,6 @@ function ExecutionDetailsDialog({
             <dt className="ds-label">judge</dt>
             <dd className="m-0 font-mono text-ink">
               {modelLabel(observation.judge_provider, observation.judge_model)}
-              {observation.judge_protocol ? (
-                <span className="block text-label text-ink-muted">
-                  judge protocol: {observation.judge_protocol}
-                </span>
-              ) : null}
             </dd>
           </div>
           <div className="grid gap-1">
@@ -1463,7 +1458,7 @@ export function TestHistoryPage({ testId }: { testId: string }) {
                   <MetricCard
                     label="median score"
                     value={formatScore(median(scores))}
-                    detail={`judge quality · /100 · ${metricCaption(knownMetricCount(scores), allObservations.length)}`}
+                    detail={`scored contract · /100 · ${metricCaption(knownMetricCount(scores), allObservations.length)}`}
                   />
                 ) : null}
                 {knownMetricCount(durations) > 0 ? (
@@ -1480,7 +1475,7 @@ export function TestHistoryPage({ testId }: { testId: string }) {
                   <MetricCard
                     label="median tokens"
                     value={formatTokens(median(tokens))}
-                    detail={`subject + judge · ${metricCaption(knownMetricCount(tokens), allObservations.length)}`}
+                    detail={`subject execution · ${metricCaption(knownMetricCount(tokens), allObservations.length)}`}
                   />
                 ) : null}
                 {knownCosts > 0 ? (

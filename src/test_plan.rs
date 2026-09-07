@@ -433,7 +433,7 @@ fn measurement_cohorts(paths: &[std::path::PathBuf]) -> Result<(MeasurementCohor
             }
             let identity = json!({"case": case, "execution_policy": scenario.execution_policy,
                 "system_under_test": report.system_under_test, "subject": report.subject,
-                "judge": report.judge, "judge_protocol": report.judge_protocol});
+                "judge": report.judge});
             let digest = artifact::sha256_value(&identity)?;
             if let Some((_, accumulated)) = cohorts.get_mut(&digest) {
                 let planned = accumulated

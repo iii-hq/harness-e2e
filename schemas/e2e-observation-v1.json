@@ -414,7 +414,6 @@
       "type": "string",
       "enum": [
         "passed",
-        "quality_advisory",
         "hard_gate_failed",
         "technical_failed",
         "infrastructure_failed",

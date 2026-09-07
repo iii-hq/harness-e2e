@@ -12,7 +12,7 @@ import {
   buildSummaryExecutionMetrics,
   CountsSection,
   countsScent,
-  executionBoundaries,
+  executionOutcome,
   NarrativeSection,
   narrativeScent,
   provenanceEntries,
@@ -61,22 +61,8 @@ const run: AssessmentRunView = {
     turns: null,
   },
   systemStatus: 'passed',
-  effectiveStatus: 'passed_with_concerns',
   assessments: [],
   evidence: [],
-  hasAiDisagreement: false,
-  finalAssessment: {
-    availability: 'available',
-    result: {
-      verdict: 'pass_with_concerns',
-      quality_score: 75,
-      confidence: 0.82,
-      summary: 'Objective checks passed, but detection evidence is incomplete.',
-      facts: [],
-      concerns: ['Only three of four seeded paths were detected.'],
-      recommendation: 'Emit a complete per-path detection manifest and rerun.',
-    },
-  },
 }
 
 function scenarioSummary(overrides: Partial<ScenarioMatrixSummary> = {}) {
@@ -101,11 +87,10 @@ describe('execution verdict', () => {
       buildExecutionPresentation(detail),
       scenarioSummary({ hardGate: 1, failed: 1, passed: 3, total: 5 }),
       [],
-      run,
     )
     expect(verdict.headline).toBe('1 failure · 1 hard gate failed · 3 passed')
     expect(verdict.nextStep).toBe(
-      'Emit a complete per-path detection manifest and rerun.',
+      'Inspect the retained evidence of the failing scenario before deciding whether to re-run.',
     )
   })
 
@@ -117,10 +102,10 @@ describe('execution verdict', () => {
       assessment_summary: undefined,
       totals: undefined,
     } as unknown as DashboardExecutionDetail)
-    const verdict = executionVerdict(cancelled, null, [], null)
+    const verdict = executionVerdict(cancelled, null, [])
     expect(verdict.headline).toBe('cancelled · no scenario report retained')
     expect(verdict.nextStep).toBe('Re-run the same scope to obtain a report.')
-    expect(verdict.diagnosis).toBeNull()
+    expect(verdict).not.toHaveProperty('diagnosis')
   })
 
   it('has nothing to act on when every scenario passed', () => {
@@ -128,7 +113,6 @@ describe('execution verdict', () => {
       buildExecutionPresentation(detail),
       scenarioSummary({ total: 2, passed: 2, failed: 0 }),
       [],
-      null,
     )
     expect(verdict.headline).toBe('2 passed')
     expect(verdict.nextStep).toBe('Nothing to act on: every scenario passed.')
@@ -136,63 +120,37 @@ describe('execution verdict', () => {
 })
 
 describe('execution layers', () => {
-  // Audit ED-05: two inputs and, only when it differs, the published status.
-  it('derives the outcome once and adds the effective status only when it differs', () => {
+  // Audit ED-05: the system status is the only outcome the contract publishes.
+  it('publishes the system status as the single execution outcome', () => {
     const presentation = buildExecutionPresentation(detail)
-    expect(executionBoundaries(presentation, [run])).toEqual([
-      { role: 'system', value: 'passed' },
-      { role: 'advisory', value: 'pass_with_concerns' },
-      { role: 'effective', value: 'passed_with_concerns' },
-    ])
-    expect(
-      executionBoundaries(presentation, [
-        {
-          ...run,
-          effectiveStatus: 'passed',
-          systemStatus: 'passed',
-        },
-      ]).map((row) => row.role),
-    ).toEqual(['system', 'advisory'])
+    expect(executionOutcome(presentation, [run])).toEqual({ value: 'passed' })
+    expect(executionOutcome(presentation, [])).toEqual({ value: 'passed' })
   })
 
   it('includes later failures in the aggregate outcome instead of reporting only the first run', () => {
-    const rows = executionBoundaries(buildExecutionPresentation(detail), [
-      { ...run, systemStatus: 'passed', effectiveStatus: 'passed' },
-      {
-        ...run,
-        systemStatus: 'hard_gate_failed',
-        effectiveStatus: 'hard_gate_failed',
-      },
-    ])
-    expect(rows[0]).toEqual({
-      role: 'system',
+    expect(
+      executionOutcome(buildExecutionPresentation(detail), [
+        { ...run, systemStatus: 'passed' },
+        { ...run, systemStatus: 'hard_gate_failed' },
+      ]),
+    ).toEqual({
       value: 'partial',
       label: '1 passed · 1 hard gate failed',
     })
-    expect(rows.map((row) => row.role)).toEqual(['system', 'advisory'])
   })
 
   // Audit ED-26: the words live in a layer; its closed row says what they say.
-  it('tells what happened and what to do, and scents the closed row with both', () => {
+  it('tells what to do next, and scents the closed row with it', () => {
     const presentation = buildExecutionPresentation(detail)
-    const verdict = executionVerdict(presentation, scenarioSummary(), [], run)
+    const verdict = executionVerdict(presentation, scenarioSummary(), [])
     const html = renderToStaticMarkup(<NarrativeSection verdict={verdict} />)
     expect(html).toContain('next step')
-    expect(html).toContain(
-      'Emit a complete per-path detection manifest and rerun.',
-    )
+    expect(html).toContain('Inspect the retained evidence')
+    expect(html).not.toContain('what happened')
     expect(html).not.toContain('System: Passed')
     expect(html).not.toContain('AI: Pass With Concerns')
     expect(narrativeScent(verdict)).toBe(
-      'Emit a complete per-path detection manifest and rerun',
-    )
-    expect(
-      narrativeScent({
-        ...verdict,
-        diagnosis: 'Only three of four seeded paths were detected. More text.',
-      }),
-    ).toBe(
-      'Only three of four seeded paths were detected · Emit a complete per-path detection manifest and rerun',
+      'Inspect the retained evidence of the failing scenario before deciding whether to re-run',
     )
   })
 
@@ -224,14 +182,12 @@ describe('execution layers', () => {
         scenarioId: 'minimal_path',
         scenarioVersion: 2,
         objective: { label: 'Passed', status: 'passed', raw: 'passed' },
-        advisory: { label: 'AI passed', status: 'passed' },
         durationMs: 167_000,
       },
       {
         scenarioId: 'persistent_state',
         scenarioVersion: 1,
         objective: { label: 'Passed', status: 'passed', raw: 'passed' },
-        advisory: { label: 'AI concerns', status: 'recommendation' },
         durationMs: 128_000,
       },
       {
@@ -242,7 +198,6 @@ describe('execution layers', () => {
           status: 'unavailable',
           raw: 'unavailable',
         },
-        advisory: { label: 'No report', status: 'unavailable' },
         durationMs: null,
       },
     ] as unknown as ScenarioMatrixItem[]
@@ -251,7 +206,7 @@ describe('execution layers', () => {
     expect(resultsScent(items)).toBe(
       [
         'minimal path v2 passed · 2m 47s',
-        'persistent state v1 passed, ai concerns · 2m 08s',
+        'persistent state v1 passed · 2m 08s',
         'research pipeline unavailable',
       ].join(' \u00a0·\u00a0 '),
     )

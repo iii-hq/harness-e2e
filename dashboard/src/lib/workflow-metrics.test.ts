@@ -202,7 +202,6 @@ describe('workflow metrics', () => {
               {
                 runs: [
                   {
-                    judge_usage: { input_tokens: 3_325, output_tokens: 1_311 },
                     semantic_tests: [
                       {
                         node_id: 'scan_commit_a',

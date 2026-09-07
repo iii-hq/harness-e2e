@@ -1,14 +1,13 @@
 import {
   AlertTriangle,
-  BrainCircuit,
   CheckCircle2,
   MessageCircle,
   ShieldCheck,
 } from 'lucide-react'
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { TestCriteriaList } from '@/components/AboutTestPanel'
-import { OutcomeDerivation } from '@/components/OutcomeDerivation'
 import { ScenarioChatAction } from '@/components/ScenarioChatAction'
+import { SystemOutcomeBadge } from '@/components/SystemOutcome'
 import {
   buttonClassName,
   Callout,
@@ -16,8 +15,6 @@ import {
   type OperationalStatus,
 } from '@/design-system'
 import type {
-  AnalyzerIdentity,
-  AnalyzerUsage,
   AssessmentOutcome,
   EvidenceReference,
 } from '@/lib/assessment-contract'
@@ -29,7 +26,6 @@ import {
   assessmentFilterCounts,
   buildAssessmentWorkspace,
   buildHarnessRecommendation,
-  LOW_CONFIDENCE_THRESHOLD,
   matchesAssessmentFilter,
 } from '@/lib/assessment-view'
 import type { DashboardExecutionDetail } from '@/lib/dashboard-data-source'
@@ -39,10 +35,8 @@ import type { TestCriterion, TestSpec } from '@/lib/test-catalog'
 const FILTERS: Array<{ id: AssessmentFilter; label: string }> = [
   { id: 'all', label: 'All' },
   { id: 'failed', label: 'Failed' },
-  { id: 'low_confidence', label: 'Low confidence' },
   { id: 'unavailable', label: 'Unavailable' },
   { id: 'asset', label: 'Asset-related' },
-  { id: 'ai', label: 'AI-evaluated' },
 ]
 
 function titleCase(value: string) {
@@ -50,11 +44,6 @@ function titleCase(value: string) {
     .replaceAll('_', ' ')
     .replaceAll('-', ' ')
     .replace(/\b\w/g, (letter) => letter.toUpperCase())
-}
-
-function formatConfidence(value: number | undefined) {
-  if (value == null || !Number.isFinite(value)) return 'Not reported'
-  return `${Math.round(value * 100)}%`
 }
 
 function formatMetricCount(value: number | null) {
@@ -91,7 +80,7 @@ type PrimaryMetric = {
   label: string
   value: string
   detail: string
-  context: 'Objective' | 'Advisory' | 'Observed'
+  context: 'Objective' | 'Signal' | 'Observed'
   tone: PrimaryMetricTone
 }
 
@@ -175,7 +164,6 @@ function primaryRunMetrics(run: AssessmentRunView): PrimaryMetric[] {
   const passedAssessments = run.assessments.filter(
     (entry) => entry.outcome === 'passed',
   ).length
-  const aiResult = run.finalAssessment.result
   const hardGateTone: PrimaryMetricTone =
     hardGates.length === 0 || evaluatedHardGates === 0
       ? 'unavailable'
@@ -190,14 +178,6 @@ function primaryRunMetrics(run: AssessmentRunView): PrimaryMetric[] {
       : passedAssessments === run.assessments.length
         ? 'positive'
         : 'warning'
-  const aiTone: PrimaryMetricTone = !aiResult
-    ? 'unavailable'
-    : aiResult.verdict === 'pass'
-      ? 'positive'
-      : aiResult.verdict === 'pass_with_concerns' ||
-          aiResult.verdict === 'inconclusive'
-        ? 'warning'
-        : 'negative'
 
   const objectiveMetric: PrimaryMetric =
     hardGates.length === 0 && run.systemStatus !== 'passed'
@@ -235,8 +215,8 @@ function primaryRunMetrics(run: AssessmentRunView): PrimaryMetric[] {
       ? {
           label: 'Seeded detection',
           value: metricRatio(detection),
-          detail: `${scorePercent(detection) ?? '—'}% advisory coverage`,
-          context: 'Advisory',
+          detail: `${scorePercent(detection) ?? '—'}% of the possible score`,
+          context: 'Signal',
           tone: metricToneForEntry(detection),
         }
       : {
@@ -261,7 +241,7 @@ function primaryRunMetrics(run: AssessmentRunView): PrimaryMetric[] {
           label: 'Optional patch checks',
           value: metricRatio(patchApplicability),
           detail: `${scorePercent(patchApplicability) ?? '—'}% applied cleanly`,
-          context: 'Advisory',
+          context: 'Signal',
           tone: metricToneForEntry(patchApplicability),
         }
       : {
@@ -272,16 +252,11 @@ function primaryRunMetrics(run: AssessmentRunView): PrimaryMetric[] {
           tone: run.metrics.durationMs == null ? 'unavailable' : 'neutral',
         },
     {
-      label: 'AI quality',
-      value:
-        aiResult?.quality_score != null
-          ? `${aiResult.quality_score}/100`
-          : 'Not reported',
-      detail: aiResult
-        ? `${formatConfidence(aiResult.confidence)} confidence`
-        : 'No advisory conclusion',
-      context: 'Advisory',
-      tone: aiTone,
+      label: 'Subject tokens',
+      value: formatMetricCount(run.metrics.totalTokens),
+      detail: 'Total tokens the subject consumed',
+      context: 'Observed',
+      tone: run.metrics.totalTokens == null ? 'unavailable' : 'neutral',
     },
   ]
 }
@@ -340,12 +315,11 @@ function safeId(value: string) {
 }
 
 function toneForOutcome(outcome: string) {
-  if (outcome === 'passed' || outcome === 'pass' || outcome === 'valid') {
+  if (outcome === 'passed' || outcome === 'valid') {
     return 'border-success/30 bg-success/5 text-success'
   }
   if (
     outcome === 'failed' ||
-    outcome === 'fail' ||
     outcome === 'error' ||
     outcome === 'resource_limit' ||
     outcome.endsWith('_failed') ||
@@ -353,50 +327,10 @@ function toneForOutcome(outcome: string) {
   ) {
     return 'border-danger/30 bg-danger/5 text-danger'
   }
-  if (
-    outcome === 'partial' ||
-    outcome === 'pass_with_concerns' ||
-    outcome === 'passed_with_concerns'
-  ) {
+  if (outcome === 'partial') {
     return 'border-warning/30 bg-warning/5 text-warning'
   }
   return 'border-line bg-panel-subtle text-ink-muted'
-}
-
-function AnalyzerProvenance({
-  analyzer,
-  usage,
-}: {
-  analyzer?: AnalyzerIdentity
-  usage?: AnalyzerUsage
-}) {
-  if (!analyzer) {
-    return (
-      <span className="text-xs text-ink-muted">
-        No analyzer provenance was recorded.
-      </span>
-    )
-  }
-  const usageParts = [
-    usage?.latency_ms != null ? `${usage.latency_ms} ms` : '',
-    usage?.input_tokens != null ? `${usage.input_tokens} input tokens` : '',
-    usage?.output_tokens != null ? `${usage.output_tokens} output tokens` : '',
-    usage?.cost_usd != null ? `$${usage.cost_usd.toFixed(4)}` : '',
-  ].filter(Boolean)
-  return (
-    <div className="grid gap-1 text-xs text-ink-muted">
-      <span>
-        <strong className="text-ink-soft">{analyzer.analyzer}</strong>
-        {analyzer.provider || analyzer.model
-          ? ` · ${[analyzer.provider, analyzer.model].filter(Boolean).join('/')}`
-          : ''}
-      </span>
-      <code className="break-all text-label" title={analyzer.input_sha256}>
-        input {shortHash(analyzer.input_sha256)}
-      </code>
-      {usageParts.length > 0 && <span>{usageParts.join(' · ')}</span>}
-    </div>
-  )
 }
 
 function EvidenceLinks({
@@ -443,9 +377,9 @@ function AssessmentMatrix({ entries }: { entries: AssessmentEntry[] }) {
           <thead className="bg-panel-subtle text-label uppercase tracking-[0.06em] text-ink-muted">
             <tr>
               <th className="px-3 py-2.5 font-semibold">Assessment</th>
-              <th className="px-3 py-2.5 font-semibold">Policy / source</th>
+              <th className="px-3 py-2.5 font-semibold">Policy</th>
               <th className="px-3 py-2.5 font-semibold">Outcome</th>
-              <th className="px-3 py-2.5 font-semibold">Score / confidence</th>
+              <th className="px-3 py-2.5 font-semibold">Score</th>
               <th className="px-3 py-2.5 font-semibold">Conclusion</th>
             </tr>
           </thead>
@@ -491,16 +425,6 @@ function AssessmentScore({ entry }: { entry: AssessmentEntry }) {
           ? `${entry.score.awarded} / ${entry.score.possible}`
           : 'No score'}
       </strong>
-      <span
-        className={
-          entry.confidence != null &&
-          entry.confidence < LOW_CONFIDENCE_THRESHOLD
-            ? 'text-warning'
-            : 'text-ink-muted'
-        }
-      >
-        {formatConfidence(entry.confidence)} confidence
-      </span>
     </span>
   )
 }
@@ -510,19 +434,6 @@ function AssessmentConclusion({ entry }: { entry: AssessmentEntry }) {
     <span className="grid min-w-[220px] gap-2">
       <span className="text-sm leading-5 text-ink-soft">{entry.summary}</span>
       <EvidenceLinks references={entry.evidence} />
-      {entry.analyzer && (
-        <details className="text-xs text-ink-muted">
-          <summary className="cursor-pointer font-semibold text-ink-soft">
-            Analyzer provenance
-          </summary>
-          <div className="mt-2">
-            <AnalyzerProvenance
-              analyzer={entry.analyzer}
-              usage={entry.analyzerUsage}
-            />
-          </div>
-        </details>
-      )}
     </span>
   )
 }
@@ -536,11 +447,8 @@ function AssessmentRow({ entry }: { entry: AssessmentEntry }) {
       <th className="px-3 py-3 font-normal" scope="row">
         <AssessmentIdentity entry={entry} />
       </th>
-      <td className="px-3 py-3 text-xs text-ink-muted">
-        <strong className="block text-ink-soft">
-          {titleCase(entry.policy)}
-        </strong>
-        {titleCase(entry.source)}
+      <td className="px-3 py-3 text-xs text-ink-soft">
+        <strong>{titleCase(entry.policy)}</strong>
       </td>
       <td className="px-3 py-3">
         <span
@@ -574,280 +482,12 @@ function AssessmentCard({ entry }: { entry: AssessmentEntry }) {
         </span>
       </div>
       <div className="grid grid-cols-2 gap-3 border-y border-line py-2">
-        <span className="text-xs text-ink-muted">
-          <strong className="block text-ink-soft">
-            {titleCase(entry.policy)}
-          </strong>
-          {titleCase(entry.source)}
+        <span className="text-xs text-ink-soft">
+          <strong>{titleCase(entry.policy)}</strong>
         </span>
         <AssessmentScore entry={entry} />
       </div>
       <AssessmentConclusion entry={entry} />
-    </article>
-  )
-}
-
-type AiSectionId = 'facts' | 'strengths' | 'concerns' | 'limitations'
-
-const AI_SECTION_LABELS: ReadonlyArray<{
-  id: AiSectionId
-  label: string
-}> = [
-  { id: 'facts', label: 'AI-reported facts' },
-  { id: 'strengths', label: 'Strengths' },
-  { id: 'concerns', label: 'Concerns' },
-  { id: 'limitations', label: 'Limitations' },
-]
-
-function AiNarrativeTabs({
-  narrativeId,
-  result,
-}: {
-  narrativeId: string
-  result: NonNullable<AssessmentRunView['finalAssessment']['result']>
-}) {
-  const [activeSection, setActiveSection] = useState<AiSectionId>('facts')
-  const tabRefs = useRef(new Map<AiSectionId, HTMLButtonElement>())
-  const activeIndex = AI_SECTION_LABELS.findIndex(
-    (section) => section.id === activeSection,
-  )
-  const activeLabel =
-    AI_SECTION_LABELS[activeIndex < 0 ? 0 : activeIndex] ?? AI_SECTION_LABELS[0]
-  const items = result[activeLabel.id]
-
-  const selectSection = (id: AiSectionId, focus = false) => {
-    setActiveSection(id)
-    if (focus) {
-      window.requestAnimationFrame(() => tabRefs.current.get(id)?.focus())
-    }
-  }
-
-  const onTabKeyDown = (
-    event: React.KeyboardEvent<HTMLButtonElement>,
-    id: AiSectionId,
-  ) => {
-    const index = AI_SECTION_LABELS.findIndex((section) => section.id === id)
-    let nextIndex: number | null = null
-    if (event.key === 'ArrowRight')
-      nextIndex = (index + 1) % AI_SECTION_LABELS.length
-    if (event.key === 'ArrowLeft')
-      nextIndex =
-        (index - 1 + AI_SECTION_LABELS.length) % AI_SECTION_LABELS.length
-    if (event.key === 'Home') nextIndex = 0
-    if (event.key === 'End') nextIndex = AI_SECTION_LABELS.length - 1
-    if (nextIndex == null) return
-    event.preventDefault()
-    selectSection(AI_SECTION_LABELS[nextIndex].id, true)
-  }
-
-  return (
-    <div className="grid w-full gap-2">
-      <div
-        className="flex w-full min-w-0 overflow-x-auto rounded-lg border border-line bg-panel-subtle p-1"
-        role="tablist"
-        aria-label="Diagnostic narrative sections"
-      >
-        {AI_SECTION_LABELS.map((section) => {
-          const selected = section.id === activeSection
-          const count = result[section.id]?.length ?? 0
-          return (
-            <button
-              key={section.id}
-              ref={(node) => {
-                if (node) tabRefs.current.set(section.id, node)
-                else tabRefs.current.delete(section.id)
-              }}
-              id={`${narrativeId}-tab-${section.id}`}
-              className={`flex min-h-11 min-w-max flex-1 items-center justify-between gap-2 rounded-md px-3 py-2 text-left text-label font-semibold uppercase tracking-[0.05em] transition sm:min-w-0 ${
-                selected
-                  ? 'bg-brand-soft text-ink'
-                  : 'text-ink-muted hover:bg-panel/60 hover:text-ink'
-              }`}
-              type="button"
-              role="tab"
-              aria-label={`${section.label}, ${count} reported`}
-              aria-selected={selected}
-              aria-controls={`${narrativeId}-panel-${section.id}`}
-              tabIndex={selected ? 0 : -1}
-              onClick={() => selectSection(section.id)}
-              onKeyDown={(event) => onTabKeyDown(event, section.id)}
-            >
-              <span>{section.label}</span>
-              <span
-                className={
-                  selected
-                    ? 'inline-flex h-7 min-w-7 shrink-0 items-center justify-center rounded-full border-2 border-brand bg-panel px-1.5 text-[0.7rem] font-bold leading-none tabular-nums text-ink'
-                    : 'inline-flex h-6 min-w-6 shrink-0 items-center justify-center rounded-full border border-line-strong bg-panel px-1.5 text-label font-bold leading-none tabular-nums text-ink-soft'
-                }
-                title={`${count} reported`}
-              >
-                {count}
-              </span>
-            </button>
-          )
-        })}
-      </div>
-      <section
-        id={`${narrativeId}-panel-${activeLabel.id}`}
-        className="w-full rounded-lg border border-line bg-panel-subtle px-3 py-3"
-        role="tabpanel"
-        aria-labelledby={`${narrativeId}-tab-${activeLabel.id}`}
-      >
-        {items?.length ? (
-          <ul className="m-0 grid gap-1.5 pl-4 text-sm leading-5 text-ink-soft">
-            {items.map((item) => (
-              <li key={item}>{item}</li>
-            ))}
-          </ul>
-        ) : (
-          <p className="m-0 text-sm leading-5 text-ink-muted">
-            No {activeLabel.label.toLowerCase()} were retained for this run.
-          </p>
-        )}
-      </section>
-    </div>
-  )
-}
-
-function FinalAiCard({ run }: { run: AssessmentRunView }) {
-  const assessment = run.finalAssessment
-  const result = assessment.result
-  const narrativeId = `${safeId(run.key)}-ai-narrative`
-  if (!result) {
-    return (
-      <article className="rounded-lg border border-line bg-panel-subtle p-4">
-        <div className="flex items-start gap-3">
-          <BrainCircuit
-            className="mt-0.5 shrink-0 text-ink-muted"
-            size={18}
-            aria-hidden="true"
-          />
-          <div className="grid min-w-0 gap-2">
-            <div>
-              <span className="section-kicker">Advisory AI conclusion</span>
-              <h4 className="m-0 text-base text-ink">
-                {titleCase(assessment.availability)}
-              </h4>
-            </div>
-            <p className="m-0 text-sm leading-5 text-ink-muted">
-              {assessment.reason ||
-                'No final AI conclusion was recorded for this run.'}
-            </p>
-            <AnalyzerProvenance
-              analyzer={assessment.analyzer}
-              usage={assessment.analyzer_usage}
-            />
-          </div>
-        </div>
-      </article>
-    )
-  }
-
-  return (
-    <article
-      className={`w-full overflow-hidden rounded-lg border ${
-        run.hasAiDisagreement
-          ? 'border-warning/50 bg-warning/5'
-          : 'border-line bg-panel'
-      }`}
-    >
-      <header className="border-b border-line p-4">
-        <div className="flex min-w-0 items-start gap-3">
-          <BrainCircuit
-            className="mt-0.5 shrink-0 text-brand"
-            size={19}
-            aria-hidden="true"
-          />
-          <div className="min-w-0">
-            <span className="section-kicker">Advisory AI conclusion</span>
-            <h4 className="m-0 text-lg text-ink">
-              {titleCase(result.verdict)}
-            </h4>
-            <p className="mt-1 mb-0 text-sm leading-5 text-ink-soft">
-              {result.summary}
-            </p>
-          </div>
-        </div>
-      </header>
-      {run.hasAiDisagreement && (
-        <div
-          className="flex items-start gap-2 border-b border-warning/30 px-4 py-3 text-sm text-warning"
-          role="alert"
-        >
-          <AlertTriangle
-            className="mt-0.5 shrink-0"
-            size={16}
-            aria-hidden="true"
-          />
-          <strong>
-            Advisory AI and the objective system outcome disagree. The objective
-            outcome remains authoritative.
-          </strong>
-        </div>
-      )}
-      <div className="grid w-full gap-5 p-4">
-        <section className="grid gap-2 lg:col-span-2">
-          <h5 className="m-0 text-label font-semibold uppercase tracking-[0.06em] text-ink-muted">
-            AI advisory
-          </h5>
-          <p className="m-0 text-xs text-ink-muted">
-            Advisory guidance from the AI assessment. The objective system
-            outcome remains authoritative.
-          </p>
-          {result.diagnosis ? (
-            <div className="grid gap-1">
-              <p className="m-0 text-label font-semibold uppercase tracking-[0.06em] text-ink-muted">
-                What happened
-              </p>
-              {/* Audit DS-13: an accent bar down the left of a paragraph is
-                  decoration this design system does not use anywhere else. */}
-              <p className="m-0 text-sm leading-5 text-pretty text-ink-soft">
-                {result.diagnosis}
-              </p>
-            </div>
-          ) : null}
-          <div className="grid gap-1">
-            <p className="m-0 text-label font-semibold uppercase tracking-[0.06em] text-ink-muted">
-              Suggested correction or improvement
-            </p>
-            <p className="m-0 text-sm leading-5 text-pretty text-ink-soft">
-              {result.recommendation || buildHarnessRecommendation(run)}
-            </p>
-          </div>
-        </section>
-        <section
-          className="grid w-full gap-2 lg:col-span-2"
-          aria-labelledby={narrativeId}
-        >
-          <div>
-            <h5
-              id={narrativeId}
-              className="m-0 text-label font-semibold uppercase tracking-[0.06em] text-ink-muted"
-            >
-              Diagnostic narrative
-            </h5>
-            <p className="m-0 mt-1 text-xs text-ink-muted">
-              Facts shown first; choose another tab to inspect the rest.
-            </p>
-          </div>
-          <AiNarrativeTabs narrativeId={narrativeId} result={result} />
-        </section>
-        <section className="grid gap-2 lg:col-span-2">
-          <h5 className="m-0 text-label font-semibold uppercase tracking-[0.06em] text-ink-muted">
-            Evidence supporting this AI conclusion
-          </h5>
-          <EvidenceLinks references={result.evidence ?? []} label="Reference" />
-        </section>
-        <section className="grid gap-2 border-t border-line pt-3 lg:col-span-2">
-          <h5 className="m-0 text-label font-semibold uppercase tracking-[0.06em] text-ink-muted">
-            Analyzer provenance
-          </h5>
-          <AnalyzerProvenance
-            analyzer={assessment.analyzer}
-            usage={assessment.analyzer_usage}
-          />
-        </section>
-      </div>
     </article>
   )
 }
@@ -859,8 +499,6 @@ function AssessmentDetailContent({
   run: AssessmentRunView
   entries: AssessmentEntry[]
 }) {
-  const ai = run.finalAssessment
-  const aiLabel = ai.result?.verdict ?? ai.availability
   const objectiveFailure = run.systemStatus !== 'passed'
 
   // Audit ED-25: a run that retained no assessments passed on infrastructure
@@ -901,21 +539,26 @@ function AssessmentDetailContent({
             id={`${safeId(run.key)}-outcome`}
             className="m-0 text-sm text-ink"
           >
-            Outcome boundaries
+            System outcome
           </h4>
         </div>
-        {/* Audit ED-21: three tinted cards read as three findings. They are one
-            derivation, and the execution page states it the same way now. */}
-        <OutcomeDerivation
-          rows={[
-            { role: 'system', value: run.systemStatus },
-            { role: 'advisory', value: aiLabel },
-            { role: 'effective', value: run.effectiveStatus },
-          ]}
-        />
+        <SystemOutcomeBadge outcome={{ value: run.systemStatus }} />
       </section>
 
-      <FinalAiCard run={run} />
+      <section
+        className="grid gap-2"
+        aria-labelledby={`${safeId(run.key)}-next`}
+      >
+        <h4
+          id={`${safeId(run.key)}-next`}
+          className="m-0 text-label font-semibold uppercase tracking-[0.06em] text-ink-muted"
+        >
+          Suggested next step
+        </h4>
+        <p className="m-0 text-sm leading-5 text-pretty text-ink-soft">
+          {buildHarnessRecommendation(run)}
+        </p>
+      </section>
 
       <details className="rounded-lg border border-line bg-panel-subtle">
         <summary
@@ -981,8 +624,8 @@ function AssessmentDetailContent({
               Assessment matrix
             </h4>
             <p className="m-0 text-xs text-ink-muted">
-              Required checks, advisory signals, dimensions, and asset checks
-              retain their own policy and provenance.
+              Required checks, advisory signals and asset validations, each with
+              the policy and evidence the run retained.
             </p>
           </div>
         </div>
@@ -992,24 +635,13 @@ function AssessmentDetailContent({
   )
 }
 
-function RunStatusBadges({
-  run,
-  aiLabel,
-}: {
-  run: AssessmentRunView
-  aiLabel: string
-}) {
+function RunStatusBadges({ run }: { run: AssessmentRunView }) {
   return (
     <span className="flex flex-wrap items-start justify-end gap-1.5">
       <span
         className={`rounded-full border px-2 py-1 text-label font-semibold ${toneForOutcome(run.systemStatus)}`}
       >
         System: {titleCase(run.systemStatus)}
-      </span>
-      <span
-        className={`rounded-full border px-2 py-1 text-label font-semibold ${toneForOutcome(aiLabel)}`}
-      >
-        AI: {titleCase(aiLabel)}
       </span>
     </span>
   )
@@ -1050,9 +682,6 @@ export function AssessmentDetailDialog({
   onClose: () => void
   onTranscript?: (run: AssessmentRunView, title: string) => void
 }) {
-  const aiLabel =
-    run.finalAssessment.result?.verdict ?? run.finalAssessment.availability
-
   // Audit AW-06: the design-system Dialog opens as a modal and moves focus
   // to the title, so keyboard and screen-reader users land on the record.
   return (
@@ -1073,7 +702,7 @@ export function AssessmentDetailDialog({
       bodyPadding
       actions={
         <>
-          <RunStatusBadges run={run} aiLabel={aiLabel} />
+          <RunStatusBadges run={run} />
           <ScenarioChatAction
             compact
             detail={detail}
@@ -1131,8 +760,6 @@ function RunAssessment({
   onOpen: () => void
   onTranscript?: (run: AssessmentRunView, title: string) => void
 }) {
-  const aiLabel =
-    run.finalAssessment.result?.verdict ?? run.finalAssessment.availability
   const criteria = spec?.criteria ?? []
   const nothingEvaluated =
     run.assessments.length > 0 &&
@@ -1155,7 +782,7 @@ function RunAssessment({
             v{run.scenarioVersion} · {run.subjectId} · run {run.runId}
           </p>
         </div>
-        <RunStatusBadges run={run} aiLabel={aiLabel} />
+        <RunStatusBadges run={run} />
       </header>
 
       <PrimaryMetricBoard run={run} />
@@ -1255,8 +882,7 @@ export function AssessmentPanel({
           Assessment data is unavailable
         </strong>
         <p className="mt-2 mb-0 text-sm leading-5 text-ink-muted">
-          No assessment contract is available. No status or AI conclusion has
-          been inferred.
+          No assessment contract is available. No status has been inferred.
         </p>
       </div>
     )
@@ -1295,9 +921,8 @@ export function AssessmentPanel({
               ))}
             </fieldset>
             <p className="mt-3 mb-0 text-xs text-ink-muted" role="status">
-              {filter === 'low_confidence'
-                ? `Low confidence means below ${Math.round(LOW_CONFIDENCE_THRESHOLD * 100)}%.`
-                : `${counts[filter]} assessment${counts[filter] === 1 ? '' : 's'} match this view.`}
+              {counts[filter]} assessment
+              {counts[filter] === 1 ? '' : 's'} match this view.
             </p>
           </div>
         </details>

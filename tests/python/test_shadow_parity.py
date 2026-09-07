@@ -26,7 +26,6 @@ def report(execution_id: str, e2e_revision: str = "1" * 40) -> dict:
         },
         "subject": {"provider": "provider", "model": "model"},
         "judge": None,
-        "judge_protocol": None,
         "scenarios": [
             {
                 "scenario_id": "todo_worker_simple",

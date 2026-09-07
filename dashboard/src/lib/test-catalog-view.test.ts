@@ -37,17 +37,6 @@ function side(issue = false): TestSideSummary {
       system_statuses: {
         unavailable: 0,
         passed: 1,
-        passed_with_concerns: 0,
-        hard_gate_failed: 0,
-        subject_error: 0,
-        judge_error: 0,
-        resource_limit: 0,
-        infrastructure_error: 0,
-      },
-      effective_statuses: {
-        unavailable: 0,
-        passed: 1,
-        passed_with_concerns: 0,
         hard_gate_failed: 0,
         subject_error: 0,
         judge_error: 0,
@@ -55,14 +44,6 @@ function side(issue = false): TestSideSummary {
         infrastructure_error: 0,
       },
       assessment_outcomes: {
-        passed: 0,
-        failed: 0,
-        partial: 0,
-        not_evaluated: 0,
-        unavailable: 0,
-        error: 0,
-      },
-      asset_qualitative_outcomes: {
         passed: 0,
         failed: 0,
         partial: 0,
@@ -82,22 +63,6 @@ function side(issue = false): TestSideSummary {
         unexpected: 0,
         not_evaluated: 0,
       },
-      ai_availability: {
-        not_requested: 0,
-        not_evaluated: 1,
-        available: 0,
-        unavailable: 0,
-        malformed: 0,
-        failed: 0,
-      },
-      ai_verdicts: {
-        pass: 0,
-        pass_with_concerns: 0,
-        fail: 0,
-        inconclusive: 0,
-      },
-      median_quality_score: null,
-      median_confidence: null,
     },
   }
 }
@@ -168,14 +133,14 @@ describe('versioned test catalog view', () => {
     expect(isMoreUsefulComparison(weak, useful)).toBe(false)
   })
 
-  it('explains assessment and analyzer incompatibilities without a score delta', () => {
+  it('explains contract and assessment incompatibilities without a score delta', () => {
     if (!comparable.result) throw new Error('missing fixture result')
     const result = {
       ...comparable.result,
       compatibility: 'assessment_changed' as const,
       compatibility_reasons: [
         'assessment_profile_changed',
-        'analyzer_profile_changed',
+        'scenario_contract_changed',
       ],
     }
     expect(comparisonWarnings(result)).toEqual([
@@ -184,8 +149,8 @@ describe('versioned test catalog view', () => {
         detail: expect.stringContaining('prompt and rubric'),
       }),
       expect.objectContaining({
-        title: 'Analyzer profile changed',
-        detail: expect.stringContaining('provider, or model'),
+        title: 'Scenario contract changed',
+        detail: expect.stringContaining('canonical cases'),
       }),
     ])
   })

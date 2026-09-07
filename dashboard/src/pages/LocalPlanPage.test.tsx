@@ -93,8 +93,6 @@ function execution(
     },
     assessment_summary: {
       system_statuses: { passed: 1 },
-      median_quality_score: 90,
-      median_confidence: 0.9,
     } as never,
     ...overrides,
   }
@@ -613,9 +611,6 @@ describe('local plan execution comparison', () => {
                 id: 'security_review',
                 scenario_version: 3,
                 pass_rate: 100,
-                assessment_summary: {
-                  median_quality_score: 92,
-                },
               },
             ],
           },
@@ -687,7 +682,7 @@ describe('local plan execution comparison', () => {
     expect(scenarioHtml).toContain('Candidate #1')
     expect(scenarioHtml).toContain('Candidate #2')
     expect(scenarioHtml).toContain('2 candidates')
-    expect(scenarioHtml.match(/data-scenario-metric-id=/g)).toHaveLength(10)
+    expect(scenarioHtml.match(/data-scenario-metric-id=/g)).toHaveLength(9)
     expect(scenarioHtml).toContain(
       'data-scenario-metric-id="criterion:delivery:40"',
     )
@@ -695,7 +690,6 @@ describe('local plan execution comparison', () => {
     expect(scenarioHtml).toContain('1 matched repetitions')
     expect(scenarioHtml).toContain('paired means 15 → 30')
     for (const metricId of [
-      'quality',
       'cost',
       'turns',
       'duration',

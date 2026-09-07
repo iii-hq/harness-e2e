@@ -1,13 +1,9 @@
 import type {
-  AiFinalAssessment,
-  AnalyzerIdentity,
-  AnalyzerUsage,
   AssessmentKind,
   AssessmentOutcome,
   AssessmentPolicy,
   AssessmentResult,
-  AssessmentSource,
-  EffectiveStatus,
+  AssetValidationOutcome,
   EvidenceReference,
   RunAssessmentContract,
   SystemStatus,
@@ -17,30 +13,22 @@ import type {
   DashboardRunProjection,
 } from '@/lib/dashboard-data-source'
 
-export type AssessmentFilter =
-  | 'all'
-  | 'failed'
-  | 'low_confidence'
-  | 'unavailable'
-  | 'asset'
-  | 'ai'
+export type AssessmentFilter = 'all' | 'failed' | 'unavailable' | 'asset'
 
 export type AssessmentEntry = {
   id: string
   criterionId: string
   targetId: string
   kind: AssessmentKind
+  /** `objective` marks the deterministic asset validations, which carry no
+   *  scoring policy of their own. */
   policy: AssessmentPolicy | 'objective'
   dimension: AssessmentResult['dimension']
-  source: AssessmentSource | 'deterministic_asset_validation'
   outcome: AssessmentOutcome
-  validationOutcome?: string
+  validationOutcome?: AssetValidationOutcome
   score?: AssessmentResult['score']
-  confidence?: number
   summary: string
   evidence: EvidenceReference[]
-  analyzer?: AnalyzerIdentity
-  analyzerUsage?: AnalyzerUsage
 }
 
 export type AssessmentRunView = {
@@ -53,11 +41,8 @@ export type AssessmentRunView = {
   metrics: AssessmentRunMetrics
   transcript?: { messages?: unknown }
   systemStatus: SystemStatus
-  effectiveStatus: EffectiveStatus
   assessments: AssessmentEntry[]
-  finalAssessment: AiFinalAssessment
   evidence: EvidenceReference[]
-  hasAiDisagreement: boolean
 }
 
 export type AssessmentRunMetrics = {
@@ -125,8 +110,6 @@ const FAILED_ASSET_OUTCOMES = new Set([
   'unexpected',
 ])
 
-export const LOW_CONFIDENCE_THRESHOLD = 0.75
-
 export function buildAssessmentWorkspace(
   detail: DashboardExecutionDetail | null | undefined,
 ): AssessmentWorkspaceModel {
@@ -172,15 +155,13 @@ function assessmentRunPriority(run: AssessmentRunView) {
   )
     return 1
   if (run.systemStatus === 'hard_gate_failed') return 2
-  if (run.hasAiDisagreement) return 3
   if (run.systemStatus === 'unavailable') return 3
   return 4
 }
 
 /**
- * Keep the visible next-step guidance scoped to the harness and the scenario.
- * The persisted AI recommendation remains raw evidence; this presentation
- * model prevents it from becoming a release or product-quality instruction.
+ * The visible next-step guidance, scoped to the harness and the scenario: it
+ * names the boundary that broke, never the product quality of the subject.
  */
 export function buildHarnessRecommendation(run: AssessmentRunView): string {
   const failedAsset = run.assessments.some(
@@ -195,19 +176,16 @@ export function buildHarnessRecommendation(run: AssessmentRunView): string {
     return 'Reduce the scenario resource footprint or adjust its execution budget, verify collection completes within the limit, and rerun the scenario.'
   }
   if (run.systemStatus === 'subject_error') {
-    return 'Fix the subject execution or transport path, confirm a complete response is captured, and rerun the scenario before judging quality.'
+    return 'Fix the subject execution or transport path, confirm a complete response is captured, and rerun the scenario.'
   }
   if (run.systemStatus === 'judge_error') {
-    return 'Fix the judge invocation or assessment-schema path, validate the JSON contract, and rerun the scenario.'
+    return 'Fix the Markdown validator invocation or its schema path, validate the JSON contract, and rerun the scenario.'
   }
   if (run.systemStatus === 'hard_gate_failed') {
     return 'Fix the scenario or fixture that violates the hard gate, add a regression assertion for that condition, and rerun the scenario.'
   }
   if (run.systemStatus === 'unavailable') {
     return 'Restore the missing report or assessment contract, add a readiness check, and rerun the scenario.'
-  }
-  if (run.hasAiDisagreement) {
-    return 'Keep objective gates as the authority, review the assessment input if the disagreement persists, and rerun a comparable scenario.'
   }
   return 'Repeat a comparable scenario to confirm harness stability before expanding test coverage.'
 }
@@ -224,37 +202,28 @@ function assessmentRunView(
     assessmentEntry(assessment),
   )
   for (const asset of contract.assets ?? []) {
-    const validationOutcome = asset.validation.outcome
     assessments.push({
-      id: `asset-validation:${asset.validation.asset_id}`,
-      criterionId: `asset:${asset.validation.asset_id}`,
-      targetId: asset.validation.asset_id,
+      id: `asset-validation:${asset.asset_id}`,
+      criterionId: `asset:${asset.asset_id}`,
+      targetId: asset.asset_id,
       kind: 'asset_validation',
       policy: 'objective',
       dimension: 'structural_integrity',
-      source: 'deterministic_asset_validation',
       outcome:
-        validationOutcome === 'valid'
+        asset.outcome === 'valid'
           ? 'passed'
-          : validationOutcome === 'not_evaluated'
+          : asset.outcome === 'not_evaluated'
             ? 'not_evaluated'
             : 'failed',
-      validationOutcome,
-      summary: asset.validation.summary,
-      evidence: asset.validation.evidence ?? [],
+      validationOutcome: asset.outcome,
+      summary: asset.summary,
+      evidence: asset.evidence ?? [],
     })
-    assessments.push(
-      assessmentEntry(asset.qualitative_assessment, 'asset-quality'),
-    )
   }
 
-  const evidence = uniqueEvidence([
-    ...assessments.flatMap((assessment) => assessment.evidence),
-    ...(contract.ai_final_assessment.result?.evidence ?? []),
-  ])
-  const verdict = contract.ai_final_assessment.result?.verdict
-  const objectiveFailure = contract.system_status !== 'passed'
-  const positiveAi = verdict === 'pass' || verdict === 'pass_with_concerns'
+  const evidence = uniqueEvidence(
+    assessments.flatMap((assessment) => assessment.evidence),
+  )
 
   return {
     key: `${subjectId}:${scenarioId}:${contract.run_id}:${contract.attempt_id}`,
@@ -266,13 +235,8 @@ function assessmentRunView(
     metrics: assessmentRunMetrics(projectedRun),
     ...(transcript ? { transcript } : {}),
     systemStatus: contract.system_status,
-    effectiveStatus: contract.effective_status,
     assessments,
-    finalAssessment: contract.ai_final_assessment,
     evidence,
-    hasAiDisagreement:
-      (objectiveFailure && positiveAi) ||
-      (!objectiveFailure && verdict === 'fail'),
   }
 }
 
@@ -313,25 +277,18 @@ function assessmentRunMetrics(
   }
 }
 
-function assessmentEntry(
-  assessment: AssessmentResult,
-  prefix = 'assessment',
-): AssessmentEntry {
+function assessmentEntry(assessment: AssessmentResult): AssessmentEntry {
   return {
-    id: `${prefix}:${assessment.criterion_id}:${assessment.target.kind}:${assessment.target.id}`,
+    id: `assessment:${assessment.criterion_id}:${assessment.target.kind}:${assessment.target.id}`,
     criterionId: assessment.criterion_id,
     targetId: assessment.target.id,
     kind: assessment.kind,
     policy: assessment.policy,
     dimension: assessment.dimension,
-    source: assessment.source,
     outcome: assessment.outcome,
     score: assessment.score,
-    confidence: assessment.confidence,
     summary: assessment.summary,
     evidence: assessment.evidence ?? [],
-    analyzer: assessment.analyzer,
-    analyzerUsage: assessment.analyzer_usage,
   }
 }
 
@@ -357,11 +314,6 @@ export function matchesAssessmentFilter(
         FAILED_ASSET_OUTCOMES.has(entry.validationOutcome))
     )
   }
-  if (filter === 'low_confidence') {
-    return (
-      entry.confidence != null && entry.confidence < LOW_CONFIDENCE_THRESHOLD
-    )
-  }
   if (filter === 'unavailable') {
     return (
       entry.outcome === 'unavailable' ||
@@ -369,10 +321,7 @@ export function matchesAssessmentFilter(
       entry.outcome === 'error'
     )
   }
-  if (filter === 'asset') {
-    return entry.kind === 'asset_validation' || entry.kind === 'asset_quality'
-  }
-  return entry.source === 'judge' || entry.source === 'asset_analyzer'
+  return entry.kind === 'asset_validation'
 }
 
 export function assessmentFilterCounts(runs: AssessmentRunView[]) {
@@ -381,14 +330,10 @@ export function assessmentFilterCounts(runs: AssessmentRunView[]) {
     all: entries.length,
     failed: entries.filter((entry) => matchesAssessmentFilter(entry, 'failed'))
       .length,
-    low_confidence: entries.filter((entry) =>
-      matchesAssessmentFilter(entry, 'low_confidence'),
-    ).length,
     unavailable: entries.filter((entry) =>
       matchesAssessmentFilter(entry, 'unavailable'),
     ).length,
     asset: entries.filter((entry) => matchesAssessmentFilter(entry, 'asset'))
       .length,
-    ai: entries.filter((entry) => matchesAssessmentFilter(entry, 'ai')).length,
   } satisfies Record<AssessmentFilter, number>
 }

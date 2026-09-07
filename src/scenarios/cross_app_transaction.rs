@@ -757,7 +757,6 @@ Finish with a short PASS/FAIL report containing the exact receipt returned by ea
         },
         denied_functions: &["state::*", "database::*", "http::*", "shell::*", "coder::*"],
         criteria: assessment::criteria(ASSESSMENTS),
-        judge_reference: None,
         setup: Some(setup),
         evaluate,
         cleanup: Some(cleanup),

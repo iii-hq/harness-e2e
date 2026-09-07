@@ -39,12 +39,6 @@
         }
       ]
     },
-    "judge_protocol": {
-      "type": [
-        "string",
-        "null"
-      ]
-    },
     "manifest": {
       "anyOf": [
         {
@@ -105,7 +99,7 @@
       "type": "integer",
       "format": "uint32",
       "enum": [
-        4
+        5
       ],
       "minimum": 0.0
     },
@@ -231,74 +225,6 @@
           "type": "string"
         }
       }
-    },
-    "AiAssessmentAvailability": {
-      "type": "string",
-      "enum": [
-        "not_requested",
-        "not_evaluated",
-        "available",
-        "unavailable",
-        "malformed",
-        "failed"
-      ]
-    },
-    "AiFinalAssessment": {
-      "type": "object",
-      "required": [
-        "availability"
-      ],
-      "properties": {
-        "analyzer": {
-          "anyOf": [
-            {
-              "$ref": "#/definitions/AnalyzerIdentity"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "analyzer_usage": {
-          "anyOf": [
-            {
-              "$ref": "#/definitions/AnalyzerUsage"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "availability": {
-          "$ref": "#/definitions/AiAssessmentAvailability"
-        },
-        "reason": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "result": {
-          "anyOf": [
-            {
-              "$ref": "#/definitions/FinalAssessmentResult"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        }
-      },
-      "additionalProperties": false
-    },
-    "AiVerdict": {
-      "type": "string",
-      "enum": [
-        "pass",
-        "pass_with_concerns",
-        "fail",
-        "inconclusive"
-      ]
     },
     "AnalyzerIdentity": {
       "type": "object",
@@ -444,8 +370,7 @@
       "enum": [
         "required_check",
         "signal",
-        "asset_validation",
-        "asset_quality"
+        "asset_validation"
       ]
     },
     "AssessmentOutcome": {
@@ -474,38 +399,10 @@
         "kind",
         "outcome",
         "policy",
-        "source",
         "summary",
         "target"
       ],
       "properties": {
-        "analyzer": {
-          "anyOf": [
-            {
-              "$ref": "#/definitions/AnalyzerIdentity"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "analyzer_usage": {
-          "anyOf": [
-            {
-              "$ref": "#/definitions/AnalyzerUsage"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "confidence": {
-          "type": [
-            "number",
-            "null"
-          ],
-          "format": "double"
-        },
         "criterion_id": {
           "type": "string"
         },
@@ -537,9 +434,6 @@
             }
           ]
         },
-        "source": {
-          "$ref": "#/definitions/AssessmentSource"
-        },
         "summary": {
           "type": "string"
         },
@@ -567,14 +461,6 @@
         }
       }
     },
-    "AssessmentSource": {
-      "type": "string",
-      "enum": [
-        "deterministic",
-        "judge",
-        "asset_analyzer"
-      ]
-    },
     "AssessmentTarget": {
       "type": "object",
       "required": [
@@ -593,24 +479,8 @@
     "AssessmentTargetKind": {
       "type": "string",
       "enum": [
-        "criterion",
-        "asset"
+        "criterion"
       ]
-    },
-    "AssetAssessmentResult": {
-      "type": "object",
-      "required": [
-        "qualitative_assessment",
-        "validation"
-      ],
-      "properties": {
-        "qualitative_assessment": {
-          "$ref": "#/definitions/AssessmentResult"
-        },
-        "validation": {
-          "$ref": "#/definitions/AssetValidationResult"
-        }
-      }
     },
     "AssetValidationOutcome": {
       "type": "string",
@@ -1031,13 +901,6 @@
     "CostReport": {
       "type": "object",
       "properties": {
-        "judge_usd": {
-          "type": [
-            "number",
-            "null"
-          ],
-          "format": "double"
-        },
         "subject_usd": {
           "type": [
             "number",
@@ -1314,24 +1177,6 @@
             }
           ]
         },
-        "judge_attempts": {
-          "type": [
-            "integer",
-            "null"
-          ],
-          "format": "uint8",
-          "minimum": 0.0
-        },
-        "judge_usage": {
-          "anyOf": [
-            {
-              "$ref": "#/definitions/ModelUsageReport"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
         "markdown_execution": {
           "anyOf": [
             {
@@ -1500,19 +1345,6 @@
           "minimum": 0.0
         }
       }
-    },
-    "EffectiveStatus": {
-      "type": "string",
-      "enum": [
-        "unavailable",
-        "passed",
-        "passed_with_concerns",
-        "hard_gate_failed",
-        "subject_error",
-        "judge_error",
-        "resource_limit",
-        "infrastructure_error"
-      ]
     },
     "EfficiencyReport": {
       "type": "object",
@@ -1698,14 +1530,10 @@
       "type": "object",
       "required": [
         "completion",
-        "final_advisory",
         "quality"
       ],
       "properties": {
         "completion": {
-          "$ref": "#/definitions/EvaluatorAvailability"
-        },
-        "final_advisory": {
           "$ref": "#/definitions/EvaluatorAvailability"
         },
         "quality": {
@@ -1877,76 +1705,6 @@
           ]
         }
       }
-    },
-    "FinalAssessmentResult": {
-      "type": "object",
-      "required": [
-        "concerns",
-        "confidence",
-        "evidence",
-        "facts",
-        "limitations",
-        "quality_score",
-        "recommendation",
-        "strengths",
-        "summary",
-        "verdict"
-      ],
-      "properties": {
-        "concerns": {
-          "type": "array",
-          "items": {
-            "type": "string"
-          }
-        },
-        "confidence": {
-          "type": "number",
-          "format": "double"
-        },
-        "diagnosis": {
-          "description": "What actually occurred in this execution — the decisive outcome and its proximate cause. Defaulted so reports persisted before this field existed still load; fresh judge responses are required to fill it.",
-          "type": "string"
-        },
-        "evidence": {
-          "type": "array",
-          "items": {
-            "$ref": "#/definitions/EvidenceReference"
-          }
-        },
-        "facts": {
-          "type": "array",
-          "items": {
-            "type": "string"
-          }
-        },
-        "limitations": {
-          "type": "array",
-          "items": {
-            "type": "string"
-          }
-        },
-        "quality_score": {
-          "type": "integer",
-          "format": "uint8",
-          "minimum": 0.0
-        },
-        "recommendation": {
-          "type": "string"
-        },
-        "strengths": {
-          "type": "array",
-          "items": {
-            "type": "string"
-          }
-        },
-        "summary": {
-          "type": "string"
-        },
-        "verdict": {
-          "$ref": "#/definitions/AiVerdict"
-        }
-      },
-      "additionalProperties": false
     },
     "HardGateReport": {
       "type": "object",
@@ -2195,58 +1953,6 @@
             "boolean",
             "null"
           ]
-        }
-      }
-    },
-    "ModelUsageReport": {
-      "type": "object",
-      "properties": {
-        "cache_read_tokens": {
-          "type": [
-            "integer",
-            "null"
-          ],
-          "format": "uint64",
-          "minimum": 0.0
-        },
-        "cache_write_tokens": {
-          "type": [
-            "integer",
-            "null"
-          ],
-          "format": "uint64",
-          "minimum": 0.0
-        },
-        "cost_usd": {
-          "type": [
-            "number",
-            "null"
-          ],
-          "format": "double"
-        },
-        "input_tokens": {
-          "type": [
-            "integer",
-            "null"
-          ],
-          "format": "uint64",
-          "minimum": 0.0
-        },
-        "output_tokens": {
-          "type": [
-            "integer",
-            "null"
-          ],
-          "format": "uint64",
-          "minimum": 0.0
-        },
-        "reasoning_tokens": {
-          "type": [
-            "integer",
-            "null"
-          ],
-          "format": "uint64",
-          "minimum": 0.0
         }
       }
     },
@@ -2684,16 +2390,6 @@
             }
           ]
         },
-        "judge_usage": {
-          "anyOf": [
-            {
-              "$ref": "#/definitions/ModelUsageReport"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
         "markdown_execution": {
           "anyOf": [
             {
@@ -2876,16 +2572,11 @@
     "RunAssessmentContract": {
       "type": "object",
       "required": [
-        "ai_final_assessment",
         "attempt_id",
-        "effective_status",
         "run_id",
         "system_status"
       ],
       "properties": {
-        "ai_final_assessment": {
-          "$ref": "#/definitions/AiFinalAssessment"
-        },
         "assessments": {
           "type": "array",
           "items": {
@@ -2895,14 +2586,11 @@
         "assets": {
           "type": "array",
           "items": {
-            "$ref": "#/definitions/AssetAssessmentResult"
+            "$ref": "#/definitions/AssetValidationResult"
           }
         },
         "attempt_id": {
           "type": "string"
-        },
-        "effective_status": {
-          "$ref": "#/definitions/EffectiveStatus"
         },
         "run_id": {
           "type": "string"
@@ -3012,14 +2700,6 @@
         "hard_gate_failures": {
           "type": "integer",
           "format": "uint32",
-          "minimum": 0.0
-        },
-        "judge_tokens_consumed": {
-          "type": [
-            "integer",
-            "null"
-          ],
-          "format": "uint64",
           "minimum": 0.0
         },
         "median_score": {

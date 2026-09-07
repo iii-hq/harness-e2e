@@ -2,7 +2,6 @@ use schemars::gen::SchemaSettings;
 use schemars::schema::{RootSchema, Schema};
 use schemars::JsonSchema;
 
-use crate::assessment::{AnalysisBundle, AnalysisResponse};
 use crate::asset::AssetCaptureManifest;
 use crate::control::ScenariosListResponse;
 use crate::durable::{DurableArchiveManifest, HistoryRecord};
@@ -42,14 +41,6 @@ pub fn results() -> RootSchema {
         .title
         .replace("E2eResults".to_string());
     root
-}
-
-pub fn analysis_bundle() -> RootSchema {
-    root_schema_for::<AnalysisBundle>()
-}
-
-pub fn analysis_response() -> RootSchema {
-    root_schema_for::<AnalysisResponse>()
 }
 
 pub fn asset_capture() -> RootSchema {
@@ -114,12 +105,6 @@ mod tests {
     #[test]
     fn results_schema_matches_snapshot() {
         assert_snapshot("results.json", &results());
-    }
-
-    #[test]
-    fn analysis_schemas_match_snapshots() {
-        assert_snapshot("analysis-bundle.json", &analysis_bundle());
-        assert_snapshot("analysis-response.json", &analysis_response());
     }
 
     #[test]
