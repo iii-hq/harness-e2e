@@ -154,6 +154,31 @@ class ValidationTests(unittest.TestCase):
         self.assertEqual(found["implementation.same_version"]["value"], 1)
         self.assertEqual(found["implementation.function_removal"]["value"], 0)
 
+    def test_patch_checkout_failure_is_not_scored_as_a_bad_patch(self):
+        task = self.root / "test-2"
+        (task / "workspace" / "output").mkdir(parents=True)
+        (task / "validation").mkdir()
+        (task / "source.patch").write_text("patch")
+        (task / "validation" / "feature.json").write_text("{}")
+        state = {"container": "unused"}
+        with patch.object(module, "feature_probe", return_value=(self.feature(), None)):
+            with patch.object(module, "controller_command", return_value={"exit_code": 128, "stdout": "", "stderr": "dubious ownership"}) as execute:
+                found = {item["id"]: item for item in module.implementation_observations(task, ASSETS, state, 2)}
+            self.assertEqual(found["implementation.patch_application"], {
+                "id": "implementation.patch_application", "status": "unavailable",
+                "reason": "patch_replay_checkout_failed",
+            })
+            self.assertEqual(execute.call_count, 1)
+            self.assertIn("safe.directory /workspace/registry/.git", execute.call_args.args[1])
+
+            with patch.object(module, "controller_command", side_effect=[
+                {"exit_code": 0, "stdout": "", "stderr": ""},
+                {"exit_code": 1, "stdout": "", "stderr": "patch does not apply"},
+            ]):
+                found = {item["id"]: item for item in module.implementation_observations(task, ASSETS, state, 2)}
+            self.assertEqual(found["implementation.patch_application"]["status"], "measured")
+            self.assertEqual(found["implementation.patch_application"]["value"], 0)
+
     def test_environment_uses_restart_and_exact_project_cleanup(self):
         task = self.root / "test-3"
         (task / "workspace" / "output").mkdir(parents=True)

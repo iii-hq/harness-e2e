@@ -195,12 +195,21 @@ def implementation_observations(task_root, assets, state, test):
             # A fresh detached base is made inside the DIND workspace.  The
             # temporary index/object paths avoid changing the subject checkout.
             shutil.copyfile(patch, task_root / "workspace" / "output" / "validator.patch")
-            command = ("set -eu; d=$(mktemp -d); git clone --quiet --no-checkout /workspace/registry \"$d/repo\"; "
-                       f"git -C \"$d/repo\" checkout --quiet --detach {REGISTRY_SHA}; "
-                       "git -C \"$d/repo\" apply --check /workspace/output/validator.patch")
-            result = controller_command(state, command, 120)
-            evidence = [relative_evidence(run_root, patch), save_command(task_root, "patch-application", result)]
-            observations.append(binary(metric, result.get("exit_code") == 0, [item for item in evidence if item]))
+            checkout = controller_command(state,
+                "set -eu; rm -rf -- /tmp/registry-patch-validation; "
+                "git config --global --add safe.directory /workspace/registry/.git; "
+                "git clone --quiet --no-checkout "
+                "/workspace/registry /tmp/registry-patch-validation; "
+                f"git -C /tmp/registry-patch-validation checkout --quiet --detach {REGISTRY_SHA}", 120)
+            evidence = [relative_evidence(run_root, patch),
+                        save_command(task_root, "patch-checkout", checkout)]
+            if checkout.get("exit_code") != 0:
+                observations.append(unavailable(metric, "patch_replay_checkout_failed"))
+                continue
+            result = controller_command(state,
+                "git -C /tmp/registry-patch-validation apply --check /workspace/output/validator.patch", 120)
+            evidence.append(save_command(task_root, "patch-application", result))
+            observations.append(command_binary(metric, result, [item for item in evidence if item]))
             continue
         if error:
             observations.append(unavailable(metric, error))
