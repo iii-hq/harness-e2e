@@ -225,6 +225,14 @@ export type DashboardSubjectSummary = JsonObject & {
   scenarios: DashboardScenarioSummary[]
 }
 
+export type ReleaseControlIdentity = {
+  execution_id: string
+  attempt: number | null
+  profile: string | null
+  campaign_id: string | null
+  group_id: string | null
+}
+
 export type DashboardExecutionSummary = JsonObject & {
   id: string
   label?: string
@@ -243,6 +251,8 @@ export type DashboardExecutionSummary = JsonObject & {
   source?: JsonObject
   release?: JsonObject
   lane?: string
+  /** Set when Release Control dispatched the run; groups the ledger by plan. */
+  release_control?: ReleaseControlIdentity | null
   subjects: DashboardSubjectSummary[]
   scenario_metrics?: DashboardScenarioMetricSummary[]
   workflow_metrics?: DashboardWorkflowMetricSummary | null
@@ -550,6 +560,7 @@ export type RuntimeConfig = {
     test_history_get: string
     catalog_get: string
     local_scenario_create: string
+    release_control_pull?: string
     run_status: string
     run_start: string
     run_cancel: string
@@ -571,6 +582,55 @@ export type ExecutionListInput = {
   event?: string
   ids?: string[]
 }
+
+export type ReleaseControlPullRequest = {
+  limit?: number
+  execution_id?: string
+}
+
+export type ReleaseControlOutcome =
+  | 'imported'
+  | 'exists'
+  | 'unreadable'
+  | 'not_importable'
+  | 'expired'
+  | 'failed'
+
+export type ReleaseControlPulledGroup = {
+  campaign_id: string | null
+  group_id: string | null
+  native_execution_id: string | null
+  outcome: ReleaseControlOutcome
+  reason: string | null
+  runner_version: string | null
+  runner_revision: string | null
+  schema_version: number | null
+}
+
+export type ReleaseControlPulledExecution = {
+  execution_id: string
+  run_id: number
+  run_attempt: number
+  url: string
+  created_at: string
+  pulled_at: string
+  groups: ReleaseControlPulledGroup[]
+  /** The local plan (mirror of the Release Control profile) it was filed under. */
+  plan_id?: string | null
+  plan_execution_id?: string | null
+  plan_error?: string | null
+}
+
+export type ReleaseControlPullResponse = {
+  runs_dir: string
+  repository: string
+  workflow: string
+  executions: ReleaseControlPulledExecution[]
+  /** Selected runs not downloaded within this click's time budget. */
+  remaining_runs: number
+}
+
+const RELEASE_CONTROL_PULL = 'e2e::dashboard::release-control-pull'
 
 export type DashboardDataBridge = {
   mode: 'local' | 'observed' | 'published'
@@ -594,6 +654,9 @@ export type DashboardDataBridge = {
     file_name: string
     source: string
   }): Promise<JsonObject>
+  pullReleaseControl(
+    request?: ReleaseControlPullRequest,
+  ): Promise<ReleaseControlPullResponse>
   getRunSnapshot(after?: number): Promise<JsonObject>
   startRun(request: JsonObject): Promise<JsonObject>
   cancelRun(): Promise<JsonObject>
@@ -755,6 +818,16 @@ function makeBridge(runtime: RuntimeConfig): DashboardDataBridge {
           method: 'POST',
           body: JSON.stringify(request),
         }),
+      ),
+    pullReleaseControl: (request = {}) =>
+      call<ReleaseControlPullResponse>(
+        runtime.functions.release_control_pull ?? RELEASE_CONTROL_PULL,
+        request,
+        () =>
+          httpJson<ReleaseControlPullResponse>(
+            './api/dashboard/release-control/pull',
+            { method: 'POST', body: JSON.stringify(request) },
+          ),
       ),
     getRunSnapshot: (after) =>
       call(
@@ -927,6 +1000,12 @@ function makeStaticBridge(): DashboardDataBridge {
     getCatalog: () => Promise.reject(new Error('Catalog unavailable')),
     createLocalScenario: () =>
       Promise.reject(new Error('Local scenario authoring unavailable')),
+    pullReleaseControl: () =>
+      Promise.reject(
+        new Error(
+          'Release Control sync is available only in the local dashboard',
+        ),
+      ),
     getRunSnapshot: () => Promise.reject(new Error('Runner unavailable')),
     startRun: () => Promise.reject(new Error('Runner unavailable')),
     cancelRun: () => Promise.reject(new Error('Runner unavailable')),

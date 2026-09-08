@@ -3,6 +3,7 @@ use crate::dashboard::{presenter, store, JobStatus, RunMetadata};
 use crate::journal::{
     ExecutionJournalHeader, JournalSlot, JournalTerminalState, EXECUTION_JOURNAL_SCHEMA,
 };
+use crate::report::RESULT_CONTRACT_SHA256;
 use serde_json::json;
 use tempfile::TempDir;
 

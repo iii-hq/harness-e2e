@@ -23,6 +23,7 @@ use super::read_model::{
     EvaluatedVersionsRequest, EvaluatedVersionsResponse, TestHistoryRequest, TestHistoryResponse,
     TestVersionGetRequest, TestVersionResult, TestsListRequest, TestsListResponse,
 };
+use super::release_control::{PullRequest, PullResponse};
 use super::store::read_stored_run;
 use super::{ApiError, DashboardArgs, RunRequest, RunSnapshot};
 use crate::control::{ControlPlane, LocalScenarioCreateRequest, LocalScenarioCreateResponse};
@@ -94,6 +95,10 @@ pub(super) async fn serve(args: DashboardArgs) -> Result<()> {
                 axum::routing::post(local_scenario_create),
             )
             .route(
+                "/api/dashboard/release-control/pull",
+                axum::routing::post(release_control_pull),
+            )
+            .route(
                 "/api/dashboard/plans/control",
                 axum::routing::post(plan_control),
             )
@@ -154,6 +159,7 @@ async fn dashboard_config(State(state): State<AppState>) -> Json<Value> {
             "test_history_get": bus::TEST_HISTORY_GET,
             "catalog_get": bus::CATALOG_GET,
             "local_scenario_create": bus::LOCAL_SCENARIO_CREATE,
+            "release_control_pull": bus::RELEASE_CONTROL_PULL,
             "run_status": bus::RUN_STATUS,
             "run_start": bus::RUN_START,
             "run_cancel": bus::RUN_CANCEL,
@@ -385,6 +391,16 @@ async fn local_scenario_create(
         .await
         .map_err(|error| ApiError::bad_request(format!("{error:#}")))?;
     Ok((StatusCode::CREATED, Json(response)))
+}
+
+async fn release_control_pull(
+    State(state): State<AppState>,
+    Json(request): Json<PullRequest>,
+) -> Result<Json<PullResponse>, ApiError> {
+    bus::release_control_pull(&state.controller, request)
+        .await
+        .map(Json)
+        .map_err(|error| ApiError::bad_request(format!("{error:#}")))
 }
 
 async fn benchmark_data() -> Response {

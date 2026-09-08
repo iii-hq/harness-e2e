@@ -29,6 +29,7 @@ const runtimeConfig: RuntimeConfig = {
     test_history_get: 'e2e::dashboard::test-history-get',
     catalog_get: 'e2e::dashboard::catalog-get',
     local_scenario_create: 'e2e::dashboard::local-scenario-create',
+    release_control_pull: 'e2e::dashboard::release-control-pull',
     run_status: 'e2e::dashboard::run-status',
     run_start: 'e2e::dashboard::run-start',
     run_cancel: 'e2e::dashboard::run-cancel',

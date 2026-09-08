@@ -2258,18 +2258,12 @@ impl E2eReport {
         let bytes = fs::read(&path).with_context(|| format!("read {}", path.display()))?;
         let value: Value = serde_json::from_slice(&bytes)
             .with_context(|| format!("decode E2E report {}", path.display()))?;
-        let version = value.get("schema_version").and_then(Value::as_u64);
-        if version != Some(u64::from(RESULTS_SCHEMA_VERSION)) {
-            bail!(
-                "unsupported results schema_version {}; expected {} with result contract {}",
-                version.map_or_else(|| "missing".into(), |value| value.to_string()),
-                RESULTS_SCHEMA_VERSION,
-                RESULT_CONTRACT_SHA256
-            );
-        }
+        // For now neither the version label, the contract fingerprint nor the
+        // published JSON schema gate a read: a report is read when it decodes
+        // into the current typed shape, whatever version wrote it. Evidence
+        // digests, identities and the scoring profile are still verified below.
         let report: Self = serde_json::from_value(value)
             .with_context(|| format!("decode typed E2E report {}", path.display()))?;
-        validate_against_schema(&schema::results(), &report, "results")?;
         report.assessment_contract.validate(&report)?;
         let output = path
             .parent()
@@ -2280,19 +2274,12 @@ impl E2eReport {
                 .with_context(|| format!("read {}", manifest_path.display()))?,
         )
         .with_context(|| format!("decode {}", manifest_path.display()))?;
-        validate_against_schema(&schema::manifest(), &manifest, "manifest")?;
         manifest.validate()?;
         report.validate(&manifest, output)?;
         Ok((report, path))
     }
 
     fn validate(&self, manifest: &E2eManifest, output: &Path) -> Result<()> {
-        if self.schema_version != RESULTS_SCHEMA_VERSION {
-            bail!("results schema_version must be {RESULTS_SCHEMA_VERSION}");
-        }
-        if self.result_contract_sha256 != RESULT_CONTRACT_SHA256 {
-            bail!("results contract fingerprint is unsupported");
-        }
         if self.scoring_profile_sha256 != SCORING_PROFILE_SHA256 {
             bail!("results scoring profile fingerprint is unsupported");
         }
@@ -2411,23 +2398,28 @@ impl E2eReport {
                     )?;
                 }
             }
-            let expected = E2eScenarioReport::aggregate_with_planned(
-                scenario.scenario_id.clone(),
-                scenario.case_id.clone(),
-                scenario.scenario_version,
-                scenario.case.clone(),
-                scenario.execution_policy,
-                scenario.aggregate.planned_runs,
-                scenario.runs.clone(),
-            );
-            if serde_json::to_value(&scenario.aggregate)?
-                != serde_json::to_value(&expected.aggregate)?
-                || scenario.passed != expected.passed
-            {
-                bail!(
-                    "scenario '{}' aggregate differs from its run evidence",
-                    scenario.scenario_id
+            // The aggregate is recomputed with this version's rules only for
+            // reports this version wrote; an earlier version aggregated by its
+            // own rules and is read as written.
+            if self.schema_version == RESULTS_SCHEMA_VERSION {
+                let expected = E2eScenarioReport::aggregate_with_planned(
+                    scenario.scenario_id.clone(),
+                    scenario.case_id.clone(),
+                    scenario.scenario_version,
+                    scenario.case.clone(),
+                    scenario.execution_policy,
+                    scenario.aggregate.planned_runs,
+                    scenario.runs.clone(),
                 );
+                if serde_json::to_value(&scenario.aggregate)?
+                    != serde_json::to_value(&expected.aggregate)?
+                    || scenario.passed != expected.passed
+                {
+                    bail!(
+                        "scenario '{}' aggregate differs from its run evidence",
+                        scenario.scenario_id
+                    );
+                }
             }
         }
         let scenario_partial = self
@@ -4209,24 +4201,32 @@ mod tests {
     }
 
     #[test]
-    fn read_rejects_legacy_and_unknown_versions() {
+    fn read_ignores_the_version_label_but_not_the_shape() {
         let output = tempfile::tempdir().unwrap();
         let mut report = report(vec![aggregate(vec![run(100, true)])]);
         let path = report.write_to(output.path(), &manifest()).unwrap();
         let mut value: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
-        value["schema_version"] = serde_json::json!(2);
+
+        // An earlier or later label with the current shape is read as written.
+        for version in [RESULTS_SCHEMA_VERSION - 1, RESULTS_SCHEMA_VERSION + 1] {
+            value["schema_version"] = serde_json::json!(version);
+            value["result_contract_sha256"] =
+                serde_json::json!(format!("sha256:{}", "0".repeat(64)));
+            std::fs::write(&path, serde_json::to_vec_pretty(&value).unwrap()).unwrap();
+            let (decoded, _) =
+                E2eReport::read_from(&path).expect("the version label is not a gate");
+            assert_eq!(decoded.schema_version, version);
+            assert!(decoded.result_contract_sha256.starts_with("sha256:000"));
+        }
+
+        // A field the current shape does not know is still a different contract.
+        value["judge_protocol"] = serde_json::json!({"kind": "legacy"});
         std::fs::write(&path, serde_json::to_vec_pretty(&value).unwrap()).unwrap();
         let error = E2eReport::read_from(&path).unwrap_err();
-        assert!(format!("{error:#}").contains("unsupported results schema_version 2"));
-
-        value["schema_version"] = serde_json::json!(RESULTS_SCHEMA_VERSION + 1);
-        std::fs::write(&path, serde_json::to_vec_pretty(&value).unwrap()).unwrap();
-
-        let error = E2eReport::read_from(&path).unwrap_err();
-        assert!(format!("{error:#}").contains(&format!(
-            "unsupported results schema_version {}",
-            RESULTS_SCHEMA_VERSION + 1
-        )));
+        assert!(
+            format!("{error:#}").contains("decode typed E2E report"),
+            "{error:#}"
+        );
     }
 
     #[test]

@@ -90,6 +90,16 @@ target/debug/harness-e2e dashboard \
 runner, and does not register its run, cancel, or catalog HTTP endpoints. This
 is the presentation mode for executions submitted through `e2e::*`.
 
+In local and worker mode the Executions page offers **sync release control**:
+it downloads the newest Release Control executions from their GitHub Actions
+artifacts and installs each group's native run into the runs directory, so
+Release Control results are browsed offline exactly like local ones. It needs
+`HARNESS_E2E_GITHUB_TOKEN` (or `GITHUB_TOKEN` / `GH_TOKEN`, or a logged-in
+`gh`); the root README lists the outcomes it reports. The ledger keeps the 100
+most recent executions and a Release Control execution contributes one run per
+group, so point a dedicated `--runs-dir` at synced history when local runs must
+stay visible.
+
 The dashboard executes itself as an isolated child process, so changing and
 restarting the Harness never recompiles the E2E client. `serve` is an alias for
 `dashboard`; neither command has a Cargo fallback.

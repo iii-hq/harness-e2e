@@ -95,6 +95,32 @@ impl PlanExecution {
     }
 }
 
+/// One group of a Release Control execution as the sync saw it: which native
+/// run it produced, or why it produced none.
+#[derive(Debug, Clone)]
+pub(super) struct AdoptedGroup {
+    pub round: u32,
+    pub group_id: String,
+    pub native_execution_id: Option<String>,
+    pub note: Option<String>,
+}
+
+/// One Release Control execution to mirror as an execution of the local plan
+/// that stands for its profile.
+#[derive(Debug, Clone)]
+pub(super) struct ReleaseControlAdoption {
+    pub execution_id: String,
+    pub run_attempt: u32,
+    pub run_url: String,
+    pub groups: Vec<AdoptedGroup>,
+}
+
+#[derive(Debug, Clone)]
+pub(super) struct Adopted {
+    pub plan_id: String,
+    pub plan_execution_id: String,
+}
+
 #[async_trait]
 trait Runner: Send + Sync {
     async fn requirements(&self, config: &LocalPlan) -> Result<Vec<Check>>;
@@ -533,6 +559,248 @@ impl PlanStore {
         self.get_local(id)
     }
 
+    /// Mirror a Release Control execution as an execution of the local plan
+    /// that stands for its profile and subject, creating that plan from the
+    /// same template the first time. Every group is verified exactly like a
+    /// local child, so the execution counts as baseline or candidate only when
+    /// each group matches the pinned template; anything else stays incomplete
+    /// with its reason on the slot.
+    pub(super) async fn adopt_release_control(
+        &self,
+        adoption: ReleaseControlAdoption,
+    ) -> Result<Option<Adopted>> {
+        let _guard = self.lock.lock().await;
+        let key = format!(
+            "release-control:{}:gh-{}",
+            adoption.execution_id, adoption.run_attempt
+        );
+        let execution_id = format!("plan-{}", &artifact::sha256_bytes(key.as_bytes())[7..39]);
+        // The first readable group names the profile (its lane) and, through
+        // the request Release Control dispatched it with, the subject and the
+        // evaluator; the report itself carries the evaluator only when the
+        // scenario used it.
+        let mut sample = None;
+        for native in adoption
+            .groups
+            .iter()
+            .filter_map(|group| group.native_execution_id.as_deref())
+        {
+            let directory = self.root.join(native);
+            let Ok((report, _)) = E2eReport::read_from(&directory) else {
+                continue;
+            };
+            if sample.is_none() {
+                let metadata = super::store::read_metadata(&directory).ok().flatten();
+                sample = Some((report, metadata));
+            }
+        }
+        let Some((sample, metadata)) = sample else {
+            return Ok(None);
+        };
+        let request = metadata.as_ref().map(|metadata| &metadata.request);
+        let subject_model = request
+            .map(|request| request.model.clone())
+            .unwrap_or_else(|| sample.subject.model.clone());
+        let subject_provider = request
+            .map(|request| request.provider.clone())
+            .unwrap_or_else(|| sample.subject.provider.clone());
+        let judge_model = request
+            .map(|request| request.judge_model.clone())
+            .unwrap_or_else(|| {
+                sample
+                    .judge
+                    .as_ref()
+                    .map(|judge| judge.model.clone())
+                    .unwrap_or_default()
+            });
+        let judge_provider = request
+            .map(|request| request.judge_provider.clone())
+            .unwrap_or_else(|| {
+                sample
+                    .judge
+                    .as_ref()
+                    .map(|judge| judge.provider.clone())
+                    .unwrap_or_default()
+            });
+        let lane = sample.execution.lane.clone();
+        let profile_id = lane
+            .strip_prefix("local-")
+            .filter(|value| !value.is_empty())
+            .with_context(|| format!("lane '{lane}' does not name a Release Control profile"))?;
+        let master = test_plan::embedded()?;
+        let template = master
+            .profiles
+            .iter()
+            .find(|profile| profile.id == profile_id)
+            .with_context(|| format!("profile '{profile_id}' is not a template of this runner"))?;
+        let plan_id = mirror_plan_id(profile_id, &subject_provider, &subject_model);
+        let mut plan = if self.plan_path(&plan_id)?.exists() {
+            self.read_plan(&plan_id)?
+        } else {
+            let request: super::plans::PlanCreateRequest = serde_json::from_value(json!({
+                "label": format!("Release Control · {}", template.label),
+                "purpose": format!(
+                    "Mirror of the Release Control profile '{profile_id}': its executions are synced \
+                     from GitHub Actions artifacts, and running it here compares this stack with what \
+                     Release Control measured."
+                ),
+                "url": self.url,
+                "model": subject_model,
+                "provider": subject_provider,
+                "judge_model": judge_model,
+                "judge_provider": judge_provider,
+                "scenarios": master.materialize(profile_id)?.scenario_ids,
+                "template_id": profile_id,
+                "runs": template.repetitions,
+                "technical_retries": template.technical_retries,
+            }))?;
+            let created = super::plans::new_plan(&request, plan_id.clone())?;
+            let prepared = prepared_plan(created, None)?;
+            validate_config(&prepared.plan, &prepared.snapshot, &self.url)?;
+            self.write_plan(&prepared)?;
+            prepared
+        };
+        let existing = self
+            .execution_path(&execution_id)?
+            .exists()
+            .then(|| self.read_execution(&execution_id))
+            .transpose()?;
+        if let Some(existing) = &existing {
+            // Mirrored already with every native run the sync knows: keep it.
+            let known: std::collections::BTreeSet<&str> = existing
+                .slots
+                .iter()
+                .filter(|slot| slot.state == "finished")
+                .map(|slot| slot.execution_id.as_str())
+                .collect();
+            let wanted: std::collections::BTreeSet<&str> = adoption
+                .groups
+                .iter()
+                .filter_map(|group| group.native_execution_id.as_deref())
+                .collect();
+            if wanted.is_subset(&known) {
+                return Ok(Some(Adopted {
+                    plan_id,
+                    plan_execution_id: execution_id,
+                }));
+            }
+        }
+        let role = match &existing {
+            Some(existing) => existing.role,
+            None if self.canonical(&plan)?.baseline_execution_id.is_some() => Role::Candidate,
+            None => Role::Baseline,
+        };
+        let mut system = None;
+        let mut slots = Vec::new();
+        let mut started_at: Option<String> = None;
+        let mut finished_at: Option<String> = None;
+        for (index, campaign) in plan.snapshot.campaigns.iter().enumerate() {
+            let round = index as u32 + 1;
+            for group in campaign["groups"]
+                .as_array()
+                .context("Missing campaign groups")?
+            {
+                let group_id = group["id"].as_str().context("Missing group identity")?;
+                let scenario_id = group["scenarios"]
+                    .get(0)
+                    .and_then(Value::as_str)
+                    .unwrap_or_default();
+                let adopted = adoption
+                    .groups
+                    .iter()
+                    .find(|candidate| candidate.round == round && candidate.group_id == group_id);
+                let native = adopted.and_then(|group| group.native_execution_id.clone());
+                let mut slot = Slot {
+                    round,
+                    group_id: group_id.into(),
+                    scenario_id: scenario_id.into(),
+                    execution_id: native.clone().unwrap_or_default(),
+                    request: json!({
+                        "idempotency_key": format!("{key}:round-{round}:{group_id}"),
+                        "label": format!("{} · round {round} · {scenario_id}", plan.plan.label),
+                        "lane": campaign["lane"], "model": plan.plan.model, "provider": plan.plan.provider,
+                        "judge_model": plan.plan.judge_model, "judge_provider": plan.plan.judge_provider,
+                        "scenarios": [scenario_id], "runs": 1, "technical_retries": group["technical_retries"],
+                        "release_control": {"execution_id": adoption.execution_id, "run_url": adoption.run_url},
+                    }),
+                    state: "not_run".into(),
+                    result_path: None,
+                    error: adopted
+                        .and_then(|group| group.note.clone())
+                        .or_else(|| Some("no native run was synced for this group".into())),
+                    observed: 0,
+                    completed: 0,
+                    passed: 0,
+                    technical_valid: 0,
+                    eligible: false,
+                };
+                if let Some(native) = native {
+                    let path = format!("{native}/results.json");
+                    match E2eReport::read_from(&self.root.join(&path)) {
+                        Ok((report, _)) => {
+                            slot.state = "finished".into();
+                            slot.result_path = Some(path);
+                            slot.error = None;
+                            if let Err(error) = verify_adopted_slot(&mut slot, &report) {
+                                slot.error = Some(format!("{error:#}"));
+                                slot.eligible = false;
+                            }
+                            if let Err(error) = verify_system_identity(&mut system, &report) {
+                                slot.error.get_or_insert_with(|| format!("{error:#}"));
+                                slot.eligible = false;
+                            }
+                            let started = report.execution.started_at.clone();
+                            started_at =
+                                Some(started_at.map_or(started.clone(), |s| s.min(started)));
+                            let completed = report.execution.completed_at.clone();
+                            finished_at =
+                                Some(finished_at.map_or(completed.clone(), |f| f.max(completed)));
+                        }
+                        Err(error) => slot.error = Some(format!("{error:#}")),
+                    }
+                }
+                slots.push(slot);
+            }
+        }
+        let missing = slots.iter().filter(|slot| slot.state != "finished").count();
+        let error = (missing > 0).then(|| {
+            format!(
+                "{missing} of {} groups have no readable native run in the synced artifacts",
+                slots.len()
+            )
+        });
+        let mut execution = PlanExecution {
+            schema: "harness-e2e-plan-execution/v1".into(),
+            id: execution_id.clone(),
+            plan_id: plan_id.clone(),
+            idempotency_key: key,
+            configuration_sha256: plan.configuration_sha256.clone(),
+            role,
+            state: "running".into(),
+            started_at: started_at.unwrap_or_else(now),
+            updated_at: now(),
+            finished_at: None,
+            cancel_requested: false,
+            error: None,
+            baseline_eligible: false,
+            slots,
+            measurements: None,
+            system_under_test: system,
+        };
+        finish(&mut execution, error, &self.root)?;
+        if finished_at.is_some() {
+            execution.finished_at = finished_at;
+        }
+        plan.plan.locked = true;
+        plan.plan.updated_at = now();
+        self.write_plan(&plan)?;
+        self.write_execution(&execution)?;
+        Ok(Some(Adopted {
+            plan_id,
+            plan_execution_id: execution_id,
+        }))
+    }
+
     pub(super) async fn handle(self: &Arc<Self>, request: Request) -> Result<Value> {
         match request {
             Request::Requirements { plan_id } => {
@@ -902,6 +1170,31 @@ impl PlanStore {
     }
 }
 
+/// One local plan stands for one Release Control profile run with one subject.
+fn mirror_plan_id(profile: &str, provider: &str, model: &str) -> String {
+    let slug = |value: &str| {
+        value
+            .chars()
+            .map(|character| {
+                if character.is_ascii_alphanumeric() {
+                    character.to_ascii_lowercase()
+                } else {
+                    '-'
+                }
+            })
+            .collect::<String>()
+    };
+    format!(
+        "plan-release-control-{}-{}-{}",
+        slug(profile),
+        slug(provider),
+        slug(model)
+    )
+    .chars()
+    .take(100)
+    .collect()
+}
+
 fn safe_id(id: &str) -> Result<()> {
     ensure!(
         !id.is_empty()
@@ -1115,6 +1408,42 @@ fn update_slot(
     );
     slot.result_path = Some(path.clone());
     let (report, _) = E2eReport::read_from(&root.join(path))?;
+    verify_slot_report(slot, &report, plan)
+}
+
+/// A mirrored group is matched by scenario name only: Release Control ran it
+/// with its own runner, whose case identity may lag or lead this binary's.
+fn verify_adopted_slot(slot: &mut Slot, report: &E2eReport) -> Result<()> {
+    ensure!(
+        report.execution.execution_id == slot.execution_id,
+        "Native artifact belongs to a different execution"
+    );
+    ensure!(
+        report.scenarios.len() == 1,
+        "A child must contain exactly one scenario"
+    );
+    let scenario = &report.scenarios[0];
+    ensure!(
+        scenario.scenario_id.as_str() == slot.scenario_id,
+        "Native scenario differs from the group's scenario"
+    );
+    let aggregate = &scenario.aggregate;
+    slot.observed = aggregate.observed_runs;
+    slot.completed = aggregate.completed_runs;
+    slot.passed = aggregate.completed_runs;
+    slot.technical_valid = aggregate.technical_valid_runs;
+    slot.eligible = report.report_state == ReportState::Complete
+        && aggregate.planned_runs == 1
+        && aggregate.observed_runs == 1
+        && aggregate.technical_invalid_runs == 0
+        && aggregate.undetermined_runs == 0;
+    Ok(())
+}
+
+/// The identity and coverage checks a child's report must pass before its
+/// counts enter the plan: the same execution, model and evaluator, one
+/// scenario, the pinned case (seed, inputs, contract) and one planned run.
+fn verify_slot_report(slot: &mut Slot, report: &E2eReport, plan: &SavedPlan) -> Result<()> {
     ensure!(
         report.execution.execution_id == slot.execution_id,
         "Native artifact belongs to a different execution"
@@ -1647,6 +1976,141 @@ mod tests {
         let response = manager.start(&id, key, Role::Baseline).await.unwrap();
         (id, response["execution_id"].as_str().unwrap().into())
     }
+    fn release_control_adoption(
+        runner: &FakeRunner,
+        execution_id: &str,
+        skip_group: Option<&str>,
+    ) -> ReleaseControlAdoption {
+        let snapshot = test_plan::embedded().unwrap().materialize("smoke").unwrap();
+        let mut groups = Vec::new();
+        for group in snapshot.campaigns[0]["groups"].as_array().unwrap() {
+            let group_id = group["id"].as_str().unwrap();
+            let scenario = group["scenarios"][0].as_str().unwrap();
+            if Some(group_id) == skip_group {
+                groups.push(AdoptedGroup {
+                    round: 1,
+                    group_id: group_id.into(),
+                    native_execution_id: None,
+                    note: Some("discarded: infrastructure failure without metrics".into()),
+                });
+                continue;
+            }
+            // What Release Control's worker writes for one group: lane
+            // `local-<profile>` and the request label it was dispatched with.
+            let request: RunRequest = serde_json::from_value(json!({
+                "idempotency_key": format!("rc:{execution_id}:{group_id}"),
+                "label": format!("Smoke · smoke-r01 · {group_id} · Harness 1.8.18"),
+                "lane": "local-smoke", "model": "model", "provider": "provider",
+                "judge_model": "judge", "judge_provider": "provider",
+                "scenarios": [scenario], "runs": 1, "technical_retries": 1,
+            }))
+            .unwrap();
+            let record = runner.native_record(request).unwrap();
+            groups.push(AdoptedGroup {
+                round: 1,
+                group_id: group_id.into(),
+                native_execution_id: Some(record.execution_id),
+                note: None,
+            });
+        }
+        ReleaseControlAdoption {
+            execution_id: execution_id.into(),
+            run_attempt: 1,
+            run_url: "https://github.com/iii-hq/harness-e2e/actions/runs/1".into(),
+            groups,
+        }
+    }
+
+    #[tokio::test]
+    async fn release_control_executions_are_mirrored_into_a_template_plan() {
+        use super::super::plans::PlanState;
+        let root = tempfile::tempdir().unwrap();
+        let runner = Arc::new(FakeRunner::new(root.path().into()));
+        let manager = manager(root.path(), runner.clone());
+
+        let first = manager
+            .adopt_release_control(release_control_adoption(&runner, "1111", None))
+            .await
+            .unwrap()
+            .expect("native runs were present");
+        assert_eq!(first.plan_id, "plan-release-control-smoke-provider-model");
+        let plan = manager.get_local(&first.plan_id).unwrap();
+        assert_eq!(plan.template_id.as_deref(), Some("smoke"));
+        assert_eq!(plan.label, "Release Control · Smoke");
+        assert_eq!(
+            plan.baseline_execution_id.as_deref(),
+            Some(first.plan_execution_id.as_str())
+        );
+        assert_eq!(plan.state, PlanState::BaselineReady);
+        let execution = manager.read_execution(&first.plan_execution_id).unwrap();
+        assert_eq!(execution.state, "completed");
+        assert!(execution.baseline_eligible);
+        assert!(execution.measurements.is_some());
+        assert!(execution
+            .slots
+            .iter()
+            .all(|slot| slot.state == "finished" && slot.eligible));
+        assert!(execution.system_under_test.is_some());
+
+        // The same execution again is recognised, not duplicated.
+        let again = manager
+            .adopt_release_control(release_control_adoption(&runner, "1111", None))
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(again.plan_execution_id, first.plan_execution_id);
+        assert_eq!(manager.executions().unwrap().len(), 1);
+
+        // The next execution of the same profile becomes the candidate...
+        let second = manager
+            .adopt_release_control(release_control_adoption(&runner, "2222", None))
+            .await
+            .unwrap()
+            .unwrap();
+        let plan = manager.get_local(&first.plan_id).unwrap();
+        assert_eq!(
+            plan.candidate_execution_ids,
+            vec![second.plan_execution_id.clone()]
+        );
+        assert_eq!(plan.state, PlanState::ComparisonReady);
+        assert_eq!(
+            manager
+                .read_execution(&second.plan_execution_id)
+                .unwrap()
+                .role,
+            Role::Candidate
+        );
+
+        // ...and one with a discarded group stays incomplete, with the reason on its slot.
+        let third = manager
+            .adopt_release_control(release_control_adoption(
+                &runner,
+                "3333",
+                Some("case-minimal-path"),
+            ))
+            .await
+            .unwrap()
+            .unwrap();
+        let plan = manager.get_local(&first.plan_id).unwrap();
+        assert!(plan
+            .incomplete_execution_ids
+            .contains(&third.plan_execution_id));
+        let execution = manager.read_execution(&third.plan_execution_id).unwrap();
+        assert_eq!(execution.state, "interrupted");
+        assert!(!execution.baseline_eligible);
+        let skipped = execution
+            .slots
+            .iter()
+            .find(|slot| slot.group_id == "case-minimal-path")
+            .unwrap();
+        assert_eq!(skipped.state, "not_run");
+        assert!(skipped
+            .error
+            .as_deref()
+            .unwrap_or_default()
+            .starts_with("discarded"));
+    }
+
     #[test]
     fn native_measurements_count_retry_consumption_once_and_reject_reused_attempts() {
         let root = tempfile::tempdir().unwrap();

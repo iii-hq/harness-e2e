@@ -12,8 +12,8 @@ use tokio_tungstenite::tungstenite::Message as TungMessage;
 use super::bus::{
     BROWSER_FUNCTION_PREFIX, CATALOG_GET, CHANGED_TRIGGER, EVALUATED_VERSIONS_LIST,
     EXECUTIONS_LIST, EXECUTION_GET, LOCAL_SCENARIO_CREATE, PLANS_LIST, PLAN_CONTROL, PLAN_CREATE,
-    PLAN_GET, PLAN_RUN_START, PLAN_UPDATE, RUN_CANCEL, RUN_START, RUN_STATUS, TESTS_LIST,
-    TEST_HISTORY_GET, TEST_VERSION_GET,
+    PLAN_GET, PLAN_RUN_START, PLAN_UPDATE, RELEASE_CONTROL_PULL, RUN_CANCEL, RUN_START, RUN_STATUS,
+    TESTS_LIST, TEST_HISTORY_GET, TEST_VERSION_GET,
 };
 
 #[derive(Default)]
@@ -168,6 +168,7 @@ fn allowed_invocation(id: &str) -> bool {
             | TEST_HISTORY_GET
             | CATALOG_GET
             | LOCAL_SCENARIO_CREATE
+            | RELEASE_CONTROL_PULL
             | PLANS_LIST
             | PLAN_GET
             | PLAN_CREATE
@@ -242,6 +243,7 @@ mod tests {
             PLAN_RUN_START,
             PLAN_CONTROL,
             LOCAL_SCENARIO_CREATE,
+            RELEASE_CONTROL_PULL,
         ] {
             let allowed =
                 format!(r#"{{"type":"invokefunction","function_id":"{function_id}","data":{{}}}}"#);

@@ -100,6 +100,7 @@ pub(super) fn execution_summary(
             "detail_path": null,
             "generated_at": generated_at,
             "lane": "local",
+            "release_control": Value::Null,
             "execution": execution,
             "release": release_identity(None),
             "source": source_identity(None),
@@ -247,6 +248,7 @@ pub(super) fn execution_summary(
         "detail_path": format!("runs/{}.json", metadata.id),
         "generated_at": generated_at,
         "lane": execution_identity.lane,
+        "release_control": release_control_identity(metadata, report),
         "execution": execution,
         "release": release_identity(Some(system)),
         "source": source_identity(Some(system)),
@@ -789,6 +791,36 @@ fn execution_identity(metadata: &RunMetadata, report: Option<&E2eReport>) -> Val
         "head_sha": head_sha,
         "head_branch": null,
         "repository": repository,
+    })
+}
+
+/// Release Control provenance read from the report itself: the runner records
+/// the dispatching system and its execution id in the observation contract,
+/// and the request label Release Control sent carries the profile, campaign
+/// and group (`Regression · regression-r01 · case-minimal-path · Harness …`).
+fn release_control_identity(metadata: &RunMetadata, report: &E2eReport) -> Value {
+    let Some(contract) = report.observation_contract.as_ref() else {
+        return Value::Null;
+    };
+    if contract.correlation.system != "release-control" {
+        return Value::Null;
+    }
+    let parts: Vec<&str> = metadata.label.split(" · ").map(str::trim).collect();
+    let campaign_id = (parts.len() >= 3).then(|| parts[1]);
+    let group_id = (parts.len() >= 3).then(|| parts[2]);
+    let profile = report
+        .execution
+        .lane
+        .strip_prefix("local-")
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+        .or_else(|| parts.first().map(|value| value.to_lowercase()));
+    json!({
+        "execution_id": contract.plan.id,
+        "attempt": contract.attempt,
+        "profile": profile,
+        "campaign_id": campaign_id,
+        "group_id": group_id,
     })
 }
 

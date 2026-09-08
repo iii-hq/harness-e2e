@@ -2,6 +2,11 @@ import { ArrowRight, Search, X } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { DashboardPageActions } from '@/components/DashboardPageActions'
 import {
+  ReleaseControlSyncButton,
+  ReleaseControlSyncResult,
+  useReleaseControlSync,
+} from '@/components/ReleaseControlSync'
+import {
   buttonClassName,
   Callout,
   DataTable,
@@ -25,6 +30,7 @@ import {
   type DashboardDataBridge,
   type DashboardExecutionSummary,
   getDashboardDataBridge,
+  type ReleaseControlIdentity,
 } from '@/lib/dashboard-data-source'
 import {
   buildExecutionPresentation,
@@ -119,6 +125,9 @@ export function buildLedgerRows(
         execution.run_id,
         formatDate(presentation.completedAt),
         execution.source?.sha,
+        execution.release_control?.execution_id,
+        execution.release_control?.profile,
+        execution.release_control?.campaign_id,
         ...presentation.subjects.flatMap((model) => [
           model.model,
           `${model.provider}/${model.model}`,
@@ -202,24 +211,95 @@ export function dayLabel(value: string, now = Date.now()) {
   return day
 }
 
-/** Audit E-12: a running execution is pinned above the day groups. */
+export type LedgerGroup = {
+  key: string
+  label: string
+  rows: LedgerRow[]
+  /** Present when the group is one Release Control execution (its plan). */
+  plan?: ReleaseControlIdentity
+}
+
+/** One Release Control execution reads as its plan: profile · campaign · id. */
+export function planGroupLabel(plan: ReleaseControlIdentity): string {
+  const head = [plan.profile, plan.campaign_id].filter(Boolean).join(' · ')
+  return `${head || 'release control'} · release control ${plan.execution_id.slice(0, 8)}`
+}
+
+/** Additive figures over a group's rows; absence stays absent, never zero. */
+export function groupStats(rows: LedgerRow[]) {
+  const passed = rows.filter((row) => row.status.status === 'passed').length
+  const tokens = rows.map(tokensOf).filter((value) => value !== null)
+  const seconds = rows
+    .map((row) => row.presentation.modelRuntimeSeconds)
+    .filter((value): value is number => value !== null)
+  return {
+    runs: rows.length,
+    passed,
+    passRate: rows.length > 0 ? passed / rows.length : null,
+    tokens: tokens.length > 0 ? tokens.reduce((sum, v) => sum + v, 0) : null,
+    seconds: seconds.length > 0 ? seconds.reduce((sum, v) => sum + v, 0) : null,
+  }
+}
+
+export function groupHeading(group: LedgerGroup): string {
+  if (!group.plan) return `${group.label} · ${group.rows.length}`
+  const stats = groupStats(group.rows)
+  const parts = [
+    group.label,
+    `${stats.runs} run${stats.runs === 1 ? '' : 's'}`,
+    stats.passRate === null
+      ? null
+      : `${formatPercent(percentPoints(stats.passRate), false)} pass`,
+    stats.tokens === null ? null : `${stats.tokens.toLocaleString()} tokens`,
+    stats.seconds === null ? null : formatDuration(stats.seconds),
+  ]
+  return parts.filter(Boolean).join(' · ')
+}
+
+/**
+ * Audit E-12: a running execution is pinned above the groups. Runs that
+ * Release Control dispatched are grouped by their execution (the plan they
+ * belong to); everything else keeps its day group.
+ */
 export function groupLedgerRows(rows: LedgerRow[], now = Date.now()) {
   const running = rows.filter(
     (row) =>
       row.status.status === 'running' || row.status.status === 'cancelling',
   )
   const settled = rows.filter((row) => !running.includes(row))
-  const groups: Array<{ key: string; label: string; rows: LedgerRow[] }> = []
+  const groups: LedgerGroup[] = []
+  const byKey = new Map<string, LedgerGroup>()
+  const push = (group: LedgerGroup, row: LedgerRow) => {
+    const existing = byKey.get(group.key)
+    if (existing) existing.rows.push(row)
+    else {
+      group.rows.push(row)
+      byKey.set(group.key, group)
+      groups.push(group)
+    }
+  }
   for (const row of settled) {
-    const key = dayKey(row.presentation.completedAt)
-    const last = groups.at(-1)
-    if (last?.key === key) last.rows.push(row)
-    else
-      groups.push({
-        key,
+    const plan = row.execution.release_control
+    if (plan?.execution_id) {
+      push(
+        {
+          key: `plan:${plan.execution_id}`,
+          label: planGroupLabel(plan),
+          rows: [],
+          plan,
+        },
+        row,
+      )
+      continue
+    }
+    push(
+      {
+        key: dayKey(row.presentation.completedAt),
         label: dayLabel(row.presentation.completedAt, now),
-        rows: [row],
-      })
+        rows: [],
+      },
+      row,
+    )
   }
   return { running, groups }
 }
@@ -325,7 +405,7 @@ function LedgerTable({
   groups,
 }: {
   caption: string
-  groups: Array<{ key: string; label: string; rows: LedgerRow[] }>
+  groups: LedgerGroup[]
 }) {
   return (
     <DataTable
@@ -360,9 +440,9 @@ function LedgerTable({
       </thead>
       {groups.map((group) => (
         <tbody key={group.key} data-ledger-group={group.key}>
-          <tr data-ledger-day>
+          <tr data-ledger-day data-ledger-plan={group.plan?.execution_id}>
             <th className="ds-label" colSpan={8} scope="colgroup">
-              {group.label} · {group.rows.length}
+              {groupHeading(group)}
             </th>
           </tr>
           {group.rows.map((row) => (
@@ -420,6 +500,8 @@ export function ExecutionsPage() {
   useEffect(() => {
     void load()
   }, [load])
+
+  const sync = useReleaseControlSync(bridge, load)
 
   // Audit E-12: the ledger follows run changes instead of waiting for F5.
   useEffect(() => {
@@ -511,6 +593,11 @@ export function ExecutionsPage() {
       <DashboardPageActions
         active="executions"
         actionsLabel="Execution actions"
+        actions={
+          bridge?.mode === 'local' ? (
+            <ReleaseControlSyncButton sync={sync} />
+          ) : null
+        }
       />
       <div className="page-shell w-[calc(100%_-_1.5rem)] max-w-[1420px] pt-5 pb-16 md:w-[calc(100%_-_3rem)]">
         <PageHeader
@@ -521,6 +608,8 @@ export function ExecutionsPage() {
           headingId="executions-title"
           context="immutable run ledger"
         />
+
+        <ReleaseControlSyncResult sync={sync} />
 
         {error ? (
           <Callout

@@ -391,11 +391,10 @@ describe('scenario matrix presentation model', () => {
     })
   })
 
-  it('keeps legacy schema and unknown fingerprints unavailable for comparison', () => {
+  it('reads other version labels and fingerprints but not another scoring profile', () => {
     for (const [key, value] of [
       ['schema_version', 3],
       ['result_contract_sha256', `sha256:${'0'.repeat(64)}`],
-      ['scoring_profile_sha256', `sha256:${'0'.repeat(64)}`],
     ] as const) {
       const detail = executionDetail()
       const report = detail.reports[0].report as unknown as Record<
@@ -404,9 +403,19 @@ describe('scenario matrix presentation model', () => {
       >
       report[key] = value
       const model = buildScenarioMatrix(detail)
-      expect(model.contracts[0]).toMatchObject({ valid: false })
-      expect(model.items[0].objective.status).toBe('unavailable')
+      expect(model.contracts[0]).toMatchObject({ valid: true })
+      expect(model.items[0].objective.status).not.toBe('unavailable')
     }
+
+    const detail = executionDetail()
+    const report = detail.reports[0].report as unknown as Record<
+      string,
+      unknown
+    >
+    report.scoring_profile_sha256 = `sha256:${'0'.repeat(64)}`
+    const model = buildScenarioMatrix(detail)
+    expect(model.contracts[0]).toMatchObject({ valid: false })
+    expect(model.items[0].objective.status).toBe('unavailable')
   })
 
   it('shows the explicit deferral reason without inventing a physical run', () => {

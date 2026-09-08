@@ -193,6 +193,56 @@ port only on a trusted network. Use `--listen 127.0.0.1:4173` when access should
 remain local. See [dashboard/README.md](dashboard/README.md) for view-only mode
 and the complete dashboard behavior.
 
+### Release Control executions
+
+Executions dispatched by Release Control run in GitHub Actions, and their
+complete evidence survives only in the run's artifacts (kept for 90 days). The
+Executions page offers **sync release control** in local and worker mode: the
+server lists the ten most recent completed `exact-stack-e2e.yml` runs, downloads
+each root observation bundle, and installs every group's native run directory
+into the runs directory unchanged, validated by the same reader the dashboard
+uses. Groups are reported one by one: `imported`, `already present`,
+`unreadable` (the reader rejected the report; the reason and the runner version
+are shown), `not importable` (fault-injection groups have no native run, and a
+group that failed for infrastructure reasons without leaving metrics — no
+`results.json`, or no tokens, cost or session metrics in any run — is discarded
+rather than shown empty), `expired`, or `failed` (a download or install error;
+retried on the next click). In the Executions ledger the runs of one Release
+Control execution are grouped under their plan (profile · campaign · execution
+id) with additive figures, so a dispatch reads as one block.
+
+Each synced execution is also filed under a local plan that mirrors its
+Release Control profile — `Release Control · Regression`, created from the same
+template the first time, one per profile and subject model. The execution's
+groups become the plan's slots and are verified exactly like local children
+(same model and evaluator, the pinned case, seed and scenario contract), so
+Plans shows the first complete execution as the baseline and later ones as
+candidates, and the comparison page pairs them; an execution with a discarded or
+mismatching group stays listed as incomplete with the reason on that slot.
+Running the mirror plan locally (Save and run) adds a candidate measured on
+your own stack next to what Release Control measured. One click downloads for about 90 seconds and reports how many older
+executions are still pending; `release-control-pulls.json` in the runs directory
+remembers which runs were already pulled, so the next click continues where the
+previous one stopped. Delete a run directory and the next click pulls it again.
+
+Downloading artifacts needs a GitHub token that can read Actions on the
+repository, even though the repository is public: set
+`HARNESS_E2E_GITHUB_TOKEN` (or `GITHUB_TOKEN` / `GH_TOKEN`) in the dashboard's
+environment. The standalone dashboard also accepts a logged-in `gh`; in worker
+mode the token goes into the worker's Compose environment. The function is
+`e2e::dashboard::release-control-pull` (`POST /api/dashboard/release-control/pull`
+in the standalone server) and takes `{"limit": 10}` or
+`{"execution_id": "<uuid>"}`.
+
+The results of a Release Control execution are written by the released
+`harness-e2e` worker pinned in its stack lock, which may trail this
+repository's result contract. For now the reader does not gate on
+`schema_version` or on the result-contract fingerprint: a report is read when
+it decodes into the current shape and validates structurally, and the version
+it carries stays visible in the execution's identity band. A report with fields
+the current shape does not know (schema 4 and earlier) is still reported as
+`unreadable`.
+
 ## Compose lifecycle
 
 Release Control names the exact project roots. This repository writes only the
