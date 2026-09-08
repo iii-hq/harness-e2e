@@ -17,6 +17,7 @@ pub mod manifest;
 pub mod markdown;
 mod observe;
 pub mod redaction;
+pub mod registry_tasks;
 pub mod report;
 pub mod result_contract;
 pub mod scenarios;

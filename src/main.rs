@@ -8,6 +8,7 @@ use harness_e2e::fault::{FaultEvaluation, FaultJournal, FaultPlan, FaultProfile}
 use harness_e2e::judge::JudgeConfig;
 use harness_e2e::manifest;
 use harness_e2e::markdown::{self, ScenarioKey};
+use harness_e2e::registry_tasks::{run_registry_tests, RegistryTestsArgs};
 use harness_e2e::report::E2eReport;
 #[cfg(test)]
 use harness_e2e::scenarios::ScenarioId;
@@ -61,6 +62,8 @@ enum Command {
     FaultPlan(FaultPlanArgs),
     /// Classify observed recovery from a protected supervisor's fault journal.
     FaultEvaluate(FaultEvaluateArgs),
+    /// Run evidence-only Registry development tasks outside the scored scenario catalog.
+    RegistryTests(RegistryTestsArgs),
 }
 
 #[derive(Debug, Subcommand)]
@@ -303,6 +306,7 @@ async fn main() -> Result<()> {
         Some(Command::Dashboard(args)) => dashboard::serve(args).await,
         Some(Command::FaultPlan(args)) => fault_plan(args),
         Some(Command::FaultEvaluate(args)) => fault_evaluate(args),
+        Some(Command::RegistryTests(args)) => run_registry_tests(args).await,
     }
 }
 

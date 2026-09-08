@@ -52,6 +52,8 @@ cargo run --locked --bin harness-e2e -- catalog
 cargo run --locked --bin harness-e2e -- validate-scenarios
 ```
 
+The [Registry development tasks](repository-tasks/registry-version-comparison/README.md) run with `registry-tests`: planning, implementation, environment setup, and real feature verification. They produce evidence without scoring and are separate from this scored catalog.
+
 New declarative scenarios are authored only as `scenarios/*.md`. The compiler
 embeds the exact source, validates the canonical English section structure,
 and exposes the resulting file-stem id through the CLI, worker catalog,
