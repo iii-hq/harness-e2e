@@ -9,8 +9,8 @@ Status: draft v1 for human review. Input artifact for **Test 2 — Implementatio
 - Source request: [Registry #17](https://github.com/iii-hq/registry/issues/17).
 - Scenario: help users understand the differences between two versions before updating a worker.
 - The executor must record the starting SHA, this plan's hash, the environment/fixture identity, and the final patch. Do not resolve `main` or `latest` to select the starting code.
-- Environment fixture: `iii-hq/e2e-fixture` at commit `ebda951098dae2969a8705c465a3feda3d695740`, directory `registry-version-comparison/`. Its Dockerfile and Compose file pin base images by digest; iii 0.22.1 is verified by archive checksum. Built image identities are recorded with execution evidence.
-- [Fixture setup and smoke check](https://github.com/iii-hq/e2e-fixture/tree/ebda951098dae2969a8705c465a3feda3d695740/registry-version-comparison): API, PostgreSQL/pgvector, Next.js, public seed, local artifacts, and baseline browser screenshots are implemented. Pass `FIXTURE_REVISION=ebda951098dae2969a8705c465a3feda3d695740` when collecting evidence from a copied fixture directory.
+- Environment fixture: `iii-hq/e2e-fixture` at commit `185943954429542785895f9c68d05f14dfb145e9`, directory `registry-version-comparison/`. Its Dockerfile and Compose file pin base images by digest; iii 0.22.1 is verified by archive checksum. Built image identities are recorded with execution evidence.
+- [Fixture setup and smoke check](https://github.com/iii-hq/e2e-fixture/tree/185943954429542785895f9c68d05f14dfb145e9/registry-version-comparison): API, PostgreSQL/pgvector, Next.js, public seed, local artifacts, and baseline browser screenshots are implemented. Pass `FIXTURE_REVISION=185943954429542785895f9c68d05f14dfb145e9` when collecting evidence from a copied fixture directory.
 - Provide this plan only to Test 2. Test 1 receives requirements without this plan or documents that reveal the solution. Test 3 prepares the environment; Test 4 tests the patch from Test 2 without modifying it.
 - At this stage, present artifacts, command results, and screenshots; do not calculate scores, rankings, or automated visual assessments.
 
