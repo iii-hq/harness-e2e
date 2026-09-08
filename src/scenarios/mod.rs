@@ -942,7 +942,7 @@ mod tests {
             (ScenarioId::ChessEngineBuild, 3),
             (ScenarioId::ChessPlayLadder, 4),
             (ScenarioId::TrendBlog, 4),
-            (ScenarioId::ToolContractRecovery, 3),
+            (ScenarioId::ToolContractRecovery, 4),
             (ScenarioId::PolicyBoundAction, 3),
             (ScenarioId::CrossAppTransaction, 3),
             (ScenarioId::PerformanceRegression, 3),
