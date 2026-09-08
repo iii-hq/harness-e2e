@@ -33,7 +33,7 @@ use super::{
 };
 
 pub const ID: &str = "quorum_fan_in";
-const VERSION: u32 = 2;
+const VERSION: u32 = 3;
 const DELIVERABLE_ID: &str = "quorum_record";
 
 const MEMBER_COUNT: u8 = 3;
@@ -50,23 +50,23 @@ const STRAGGLE_DELAY: Duration = Duration::from_secs(25);
 /// (plus an optional `turn_id`) and answers `{ "stopping": bool }`.
 const STOP_FUNCTION_ID: &str = "harness::stop";
 
-const QUORUM_REPORT: AssessmentSpec = AssessmentSpec::hard_gated_in(
+const QUORUM_REPORT: AssessmentSpec = AssessmentSpec::scored_in(
     "quorum_report",
     30,
     "The barrier-woken reply starts with the quorum marker and carries both quorum tokens verbatim while omitting the straggler token.",
     EvaluationDimension::Deliverable,
 );
-const QUORUM_WAKE: AssessmentSpec = AssessmentSpec::hard_gated(
+const QUORUM_WAKE: AssessmentSpec = AssessmentSpec::scored(
     "quorum_wake",
     25,
     "Exactly one named-set barrier wake is armed before any spawn, expects exactly the two quorum keys, and retires on the second row.",
 );
-const STRAGGLER_STOPPED: AssessmentSpec = AssessmentSpec::hard_gated(
+const STRAGGLER_STOPPED: AssessmentSpec = AssessmentSpec::scored(
     "straggler_stopped",
     30,
     "After the barrier retires the coordinator stops a direct child session, and the straggler key is never written.",
 );
-const FAN_OUT_DISCIPLINE: AssessmentSpec = AssessmentSpec::score_only(
+const FAN_OUT_DISCIPLINE: AssessmentSpec = AssessmentSpec::scored(
     "fan_out_discipline",
     15,
     "All three members are spawned in one coordinator response as direct children, with no function-call errors.",

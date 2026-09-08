@@ -30,7 +30,7 @@ use super::{
 };
 
 pub const ID: &str = "depth_ladder";
-const VERSION: u32 = 3;
+const VERSION: u32 = 4;
 const ROWS_DELIVERABLE_ID: &str = "relay_rows";
 const MAX_REPORT_CHARS: usize = 300;
 
@@ -42,27 +42,27 @@ struct Rung {
 pub const CANONICAL_SEED: u64 = 4003;
 const RUNG: Rung = Rung { depth: 6 };
 
-const RELAY_DELIVERED: AssessmentSpec = AssessmentSpec::hard_gated_in(
+const RELAY_DELIVERED: AssessmentSpec = AssessmentSpec::scored_in(
     "relay_delivered",
     35,
     "Every relay level row is exact in state and the woken report carries the completion marker \
      and the terminal token.",
     EvaluationDimension::Deliverable,
 );
-const DEPTH_PROVENANCE: AssessmentSpec = AssessmentSpec::hard_gated(
+const DEPTH_PROVENANCE: AssessmentSpec = AssessmentSpec::scored(
     "depth_provenance",
     30,
     "Exactly one session sits at each depth in one unbroken parent chain, each writing its own \
      row with a single state write; non-terminal levels spawn exactly once and the terminal \
      level spawns nothing.",
 );
-const SINGLE_LANE: AssessmentSpec = AssessmentSpec::hard_gated(
+const SINGLE_LANE: AssessmentSpec = AssessmentSpec::scored(
     "single_lane",
     20,
     "The run stays one lane wide: N+1 sessions in total, exactly one root spawn armed after the \
      single wake registration, and zero function-call errors.",
 );
-const DISPATCH_REPORT: AssessmentSpec = AssessmentSpec::score_only(
+const DISPATCH_REPORT: AssessmentSpec = AssessmentSpec::scored(
     "dispatch_report",
     15,
     "The final report stays a single compact line of at most 300 characters.",

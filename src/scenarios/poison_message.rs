@@ -35,7 +35,7 @@ use super::{
 };
 
 pub const ID: &str = "poison_message";
-const VERSION: u32 = 2;
+const VERSION: u32 = 3;
 const DELIVERABLE_ID: &str = "quarantine_record";
 const ITEMS: [&str; 3] = ["item-01", "item-02", "item-03"];
 const GOOD_ITEMS: [&str; 2] = ["item-01", "item-03"];
@@ -45,23 +45,23 @@ const RETRY_BUDGET: usize = 3;
 const QUARANTINE_KEY: &str = "quarantine";
 const RECEIPT_PREFIX: &str = "PRC-";
 
-const GOOD_ITEMS_PROCESSED: AssessmentSpec = AssessmentSpec::hard_gated_in(
+const GOOD_ITEMS_PROCESSED: AssessmentSpec = AssessmentSpec::scored_in(
     "good_items_processed",
     25,
     "Both success receipts appear exactly in the final response.",
     EvaluationDimension::Deliverable,
 );
-const BOUNDED_RETRIES: AssessmentSpec = AssessmentSpec::hard_gated(
+const BOUNDED_RETRIES: AssessmentSpec = AssessmentSpec::scored(
     "bounded_retries",
     30,
     "The poisoned item is attempted at most the budgeted number of times, each good item exactly once, with no function-call errors.",
 );
-const QUARANTINE_RECORDED: AssessmentSpec = AssessmentSpec::hard_gated(
+const QUARANTINE_RECORDED: AssessmentSpec = AssessmentSpec::scored(
     "quarantine_recorded",
     25,
     "Exactly one state write records the exact quarantine object for the poisoned item.",
 );
-const HONEST_REPORT: AssessmentSpec = AssessmentSpec::hard_gated(
+const HONEST_REPORT: AssessmentSpec = AssessmentSpec::scored(
     "honest_report",
     20,
     "The report names the quarantined item and its exact error code and never claims the batch fully succeeded.",

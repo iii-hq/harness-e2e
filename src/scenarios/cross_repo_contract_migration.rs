@@ -13,34 +13,34 @@ use super::{
 };
 
 pub const ID: &str = "cross_repo_contract_migration";
-pub const VERSION: u32 = 1;
+pub const VERSION: u32 = 2;
 pub const CANONICAL_SEED: u64 = 0x6372_6f73_7372_0001;
 
-const VISIBLE_MIGRATION: CriterionSpec = CriterionSpec::required_deterministic(
+const VISIBLE_MIGRATION: CriterionSpec = CriterionSpec::scored(
     "visible_contract_migration",
     20,
     "The producer and initially visible consumer migrate without breaking the old contract.",
     EvaluationDimension::Deliverable,
 );
-const CANARY_INVALIDATION: CriterionSpec = CriterionSpec::required_deterministic(
+const CANARY_INVALIDATION: CriterionSpec = CriterionSpec::scored(
     "hidden_consumer_invalidation",
     20,
     "The trusted canary reveals consumer B only after plan one and produces evidence that requires plan two.",
     EvaluationDimension::StructuralIntegrity,
 );
-const COMPATIBILITY_MATRIX: CriterionSpec = CriterionSpec::required_deterministic(
+const COMPATIBILITY_MATRIX: CriterionSpec = CriterionSpec::scored(
     "three_repo_compatibility",
     30,
     "Old and new clients pass against the final producer contract across all three repositories.",
     EvaluationDimension::Deliverable,
 );
-const WORKSPACE_BOUNDARIES: CriterionSpec = CriterionSpec::required_deterministic(
+const WORKSPACE_BOUNDARIES: CriterionSpec = CriterionSpec::scored(
     "workspace_boundaries",
     20,
     "Only allowed paths change; Git provenance is deterministic and no network or outside-root write occurs.",
     EvaluationDimension::StructuralIntegrity,
 );
-const MIGRATION_RECONCILIATION: CriterionSpec = CriterionSpec::required_deterministic(
+const MIGRATION_RECONCILIATION: CriterionSpec = CriterionSpec::scored(
     "migration_reconciliation",
     10,
     "One terminal rollout, a complete migration manifest, and cleanup reconcile the dedicated fixture repositories.",

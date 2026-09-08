@@ -30,18 +30,19 @@ const model: AssessmentWorkspaceModel = {
         turns: 16,
       },
       transcript: { messages: [] },
-      systemStatus: 'hard_gate_failed',
+      systemStatus: 'passed',
+      objectiveScore: 35,
       assessments: [
         {
           id: 'assessment:durable_result',
           criterionId: 'durable_result',
           targetId: 'durable_result',
-          kind: 'required_check',
-          policy: 'hard_gate',
+          kind: 'signal',
+          policy: 'advisory',
           dimension: 'structural_integrity',
           outcome: 'failed',
-          score: { awarded: 0, possible: 70 },
-          summary: 'The durable result was not observed.',
+          score: { awarded: 35, possible: 70 },
+          summary: 'The durable result was partially observed.',
           evidence: [
             {
               artifact_id: 'transcript',
@@ -81,13 +82,16 @@ describe('assessment workspace component', () => {
     const rendered = `${html}${detailHtml}`
     // One status, in the same shape the execution page uses.
     expect(rendered).toContain('data-system-outcome')
-    expect(rendered).toContain('system · deterministic gates')
+    expect(rendered).toContain(
+      'system · completion, execution and infrastructure',
+    )
     expect(rendered).not.toContain('advisory ·')
     expect(rendered).not.toContain('effective ·')
     expect(rendered).toContain('run run-1')
     expect(rendered).not.toContain('attempt attempt-1')
     expect(rendered).toContain('data-primary-run-metrics')
-    expect(rendered).toContain('Objective hard gates')
+    expect(rendered).toContain('Objective score')
+    expect(rendered).toContain('35/100')
     expect(rendered).toContain('Assessment outcomes')
     expect(rendered).toContain('Subject tokens')
     expect(rendered).toContain('Tokens')
@@ -116,9 +120,8 @@ describe('assessment workspace component', () => {
     expect(rendered).not.toContain('Analyzer provenance')
     expect(rendered).not.toContain('confidence')
     expect(detailHtml).toContain('Suggested next step')
-    // The guidance is deterministic, derived from the system status alone.
-    expect(detailHtml).toContain('violates the hard gate')
-    expect(detailHtml.indexOf('Objective hard gates')).toBeLessThan(
+    expect(detailHtml).not.toContain('hard gate')
+    expect(detailHtml.indexOf('Objective score')).toBeLessThan(
       detailHtml.indexOf('System outcome'),
     )
     expect(detailHtml.indexOf('System outcome')).toBeLessThan(
@@ -152,6 +155,7 @@ describe('assessment workspace component', () => {
           key: 'security-review',
           scenarioId: 'security_review',
           systemStatus: 'passed',
+          objectiveScore: 38,
           assessments: [
             {
               ...model.runs[0].assessments[0],
@@ -200,8 +204,9 @@ describe('assessment workspace component', () => {
     )
 
     expect(html).toContain('Security Review')
-    expect(html).toContain('Objective hard gates')
-    expect(html).toContain('1/1')
+    expect(html).toContain('Objective score')
+    expect(html).toContain('38/100')
+    expect(html).not.toContain('75/200')
     expect(html).toContain('Seeded detection')
     expect(html).toContain('3/4')
     expect(html).toContain('75% of the possible score')
@@ -209,7 +214,9 @@ describe('assessment workspace component', () => {
     expect(html).toContain('0/4')
     expect(html).toContain('0% applied cleanly')
     // A passing run reads as passed, with no second, softer verdict beside it.
-    const outcomeIndex = detailHtml.indexOf('system · deterministic gates')
+    const outcomeIndex = detailHtml.indexOf(
+      'system · completion, execution and infrastructure',
+    )
     const outcome = detailHtml.slice(outcomeIndex - 400, outcomeIndex + 100)
     expect(outcome).toContain('ds-status-passed')
     expect(outcome).not.toContain('ds-status-failed')
@@ -222,6 +229,7 @@ describe('assessment workspace component', () => {
       ...model.runs[0],
       key: 'judge-error',
       systemStatus: 'judge_error' as const,
+      objectiveScore: null,
       assessments: [],
     }
     const html = renderToStaticMarkup(
@@ -231,8 +239,8 @@ describe('assessment workspace component', () => {
       />,
     )
     expect(html).not.toContain('Filter scenario runs by assessment signal')
-    expect(html).toContain('Objective result')
-    expect(html).toContain('Judge Error')
+    expect(html).toContain('Objective score')
+    expect(html).toContain('Not reported')
     expect(html).toContain('Assessment outcomes')
     expect(html).toContain('No assessments retained')
     expect(html).not.toContain('0/0')
@@ -250,13 +258,14 @@ describe('assessment workspace component', () => {
     expect(detailHtml).toContain('tabindex="-1"')
   })
 
-  it('does not blame the subject for gates an infrastructure failure never reached', () => {
+  it('does not blame the subject for criteria an infrastructure failure never reached', () => {
     // The real shape of a technical failure: the assessments exist, but the run
     // died before any of them ran.
     const abortedRun = {
       ...model.runs[0],
       key: 'infrastructure-error',
       systemStatus: 'infrastructure_error' as const,
+      objectiveScore: null,
       metrics: { ...model.runs[0].metrics, durationMs: 100 },
       assessments: model.runs[0].assessments.map((entry) => ({
         ...entry,
@@ -270,8 +279,7 @@ describe('assessment workspace component', () => {
         filter="all"
       />,
     )
-    expect(html).toContain('Not evaluated')
-    expect(html).toContain('gate, none reached')
+    expect(html).toContain('No objective score retained')
     expect(html).toContain('1 not evaluated')
     // The old projection counted not_evaluated as a failure on the subject.
     expect(html).not.toContain('1 failed')

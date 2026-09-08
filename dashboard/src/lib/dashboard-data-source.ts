@@ -119,7 +119,6 @@ export type ExecutionTotals = JsonObject & {
   received_reports?: number | null
   missing_reports?: number | null
   passed_scenarios?: number | null
-  hard_gate_failures?: number | null
   technical_failures?: number | null
   infra_failures?: number | null
   resource_limit_failures?: number | null
@@ -153,7 +152,6 @@ export type DashboardScenarioSummary = JsonObject & {
   passed?: boolean
   pass_rate?: number | null
   median_score?: number | null
-  hard_gate_failures?: number | null
   technical_failures?: number | null
   wall_time_seconds?: number | null
   total_cost_usd?: number | null
@@ -197,15 +195,12 @@ export type DashboardWorkflowMetricSummary = JsonObject & {
   step_count?: number
   succeeded_steps?: number
   failed_steps?: number
-  hard_gate_failed_steps?: number
   skipped_steps?: number
   cancelled_steps?: number
   running_steps?: number
   pending_steps?: number
   duration_ms?: number
   asset_count?: number
-  hard_gate_count?: number
-  passed_hard_gate_count?: number
   evaluation_count?: number
   failure_count?: number
   input_tokens?: number | null
@@ -359,7 +354,6 @@ export type DashboardScenarioAggregate = JsonObject & {
   tokens_completed_p50: number | null
   failed_attempt_tokens: number | null
   tokens_per_completion: number | null
-  hard_gate_failures: number
   technical_failures: number
 }
 
@@ -510,7 +504,6 @@ export type DashboardReportProjection = JsonObject & {
       passed?: boolean
       pass_rate?: number | null
       median_score?: number | null
-      hard_gate_failures?: number
       technical_failures?: number
       aggregate: DashboardScenarioAggregate
       runs: DashboardRunProjection[]

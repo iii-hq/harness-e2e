@@ -12,8 +12,10 @@ sys.path.insert(0, str(ROOT / "scripts"))
 from publish_harness_e2e_dashboard import (
     _assessment_profile_sha256,
     _assessment_summary,
+    _scenario_status,
     build_static_test_catalog,
     complete_public_detail,
+    execution_status,
     publish,
 )
 
@@ -297,6 +299,22 @@ class PublishDashboardTests(unittest.TestCase):
             "judge_protocol",
         ):
             self.assertFalse(contains_key(public, forbidden), forbidden)
+
+    def test_partial_points_preserve_incomplete_scenario_status(self) -> None:
+        scenario = {
+            "runs": [{"completion": "task_incomplete", "objective_score": 65}],
+            "aggregate": {"planned_runs": 1, "completed_runs": 0, "task_incomplete_runs": 1, "technical_failures": 0},
+        }
+        self.assertEqual(_scenario_status(scenario), "incomplete")
+        scenario["aggregate"]["completed_runs"] = 1
+        scenario["aggregate"]["task_incomplete_runs"] = 0
+        self.assertEqual(_scenario_status(scenario), "passed")
+
+    def test_numeric_result_does_not_become_an_infrastructure_failure(self) -> None:
+        subjects = [{"passed": False, "objective_score": 65}]
+        self.assertEqual(execution_status("success", subjects, 1, 1, 0), "passed")
+        self.assertEqual(execution_status("success", subjects, 1, 1, 1), "technical_failed")
+        self.assertEqual(execution_status("success", subjects, 2, 1, 0), "incomplete")
 
     def test_legacy_detail_without_contract_is_explicitly_unavailable(self) -> None:
         legacy = report("a" * 40, [100])

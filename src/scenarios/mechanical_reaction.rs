@@ -11,27 +11,27 @@ use super::{
 };
 
 pub const ID: &str = "mechanical_reaction";
-const VERSION: u32 = 5;
+const VERSION: u32 = 6;
 const DELIVERABLE_ID: &str = "mechanical_mirror";
 
 const SOURCE_KEY: &str = "source";
 const MIRROR_KEY: &str = "mirror";
-const REACTIONS_ARMED: AssessmentSpec = AssessmentSpec::hard_gated(
+const REACTIONS_ARMED: AssessmentSpec = AssessmentSpec::scored(
     "reactions_armed",
     30,
     "The wake and mechanical call are registered before the source write.",
 );
-const MECHANICAL_MIRROR: AssessmentSpec = AssessmentSpec::hard_gated(
+const MECHANICAL_MIRROR: AssessmentSpec = AssessmentSpec::scored(
     "mechanical_mirror",
     35,
     "The call binding mirrors the complete source event without a root write.",
 );
-const PARENT_WOKEN: AssessmentSpec = AssessmentSpec::hard_gated(
+const PARENT_WOKEN: AssessmentSpec = AssessmentSpec::scored(
     "parent_woken",
     20,
     "The mirror state event wakes only the original session.",
 );
-const CLEAN_COMPLETION: AssessmentSpec = AssessmentSpec::hard_gated(
+const CLEAN_COMPLETION: AssessmentSpec = AssessmentSpec::scored(
     "clean_completion",
     15,
     "The run finishes without children, errors, or surviving bindings.",

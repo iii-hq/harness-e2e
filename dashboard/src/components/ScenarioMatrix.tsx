@@ -228,7 +228,6 @@ function ScenarioSummary({
     label: string
   }> = [
     { status: 'passed', count: summary.passed, label: 'passed' },
-    { status: 'hard_gate', count: summary.hardGate, label: 'hard gate' },
     { status: 'failed', count: summary.failed, label: 'failed' },
     {
       status: 'inconclusive',
@@ -897,7 +896,7 @@ function WorkflowStepRow({
   const barTone =
     status.status === 'passed'
       ? 'bg-success'
-      : status.status === 'hard_gate' || status.status === 'failed'
+      : status.status === 'failed'
         ? 'bg-danger'
         : 'bg-warning'
 
@@ -983,7 +982,7 @@ function workflowStepStatus(statusValue: string): {
   const status = statusValue.toLowerCase()
   if (status === 'succeeded') return { status: 'passed', label: 'Succeeded' }
   if (status === 'hard_gate_failed') {
-    return { status: 'hard_gate', label: 'Hard gate failed' }
+    return { status: 'failed', label: 'Runtime check failed' }
   }
   if (status === 'failed') return { status: 'failed', label: 'Failed' }
   if (status === 'running') return { status: 'running', label: 'Running' }

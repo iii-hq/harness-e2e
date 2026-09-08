@@ -104,7 +104,6 @@ export type OperationalStatus =
   | 'failed'
   | 'inconclusive'
   | 'unavailable'
-  | 'hard_gate'
   | 'recommendation'
   | 'running'
   | 'cancelling'
@@ -116,7 +115,6 @@ const statusLabels: Record<OperationalStatus, string> = {
   failed: 'Failed',
   inconclusive: 'Inconclusive',
   unavailable: 'Unavailable',
-  hard_gate: 'Hard gate',
   recommendation: 'Recommendation',
   running: 'Running',
   cancelling: 'Cancelling',

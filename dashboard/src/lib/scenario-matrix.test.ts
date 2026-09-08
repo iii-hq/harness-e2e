@@ -42,7 +42,6 @@ function aggregate(overrides: Record<string, unknown> = {}) {
     tokens_completed_p50: 1200,
     failed_attempt_tokens: 0,
     tokens_per_completion: 1200,
-    hard_gate_failures: 0,
     technical_failures: 0,
     ...overrides,
   }
@@ -159,19 +158,19 @@ function executionDetail() {
         available: true,
         report: {
           ...resultContract,
-          objective_outcome: 'failed',
+          objective_outcome: 'passed',
           assessment_contract: { runs: [] },
           assessment_summary: {},
           scenarios: [
             {
               scenario_id: 'persistent_state',
               scenario_version: 1,
-              passed: false,
+              passed: true,
               aggregate: aggregate({
                 completed_runs: 0,
                 task_incomplete_runs: 1,
                 completion_rate: 0,
-                objective_median_score: 0,
+                objective_median_score: 65,
                 quality_scored_completed_runs: 0,
                 quality_score_completed: null,
                 quality_coverage: null,
@@ -179,24 +178,23 @@ function executionDetail() {
                 tokens_completed_p50: null,
                 failed_attempt_tokens: null,
                 tokens_per_completion: null,
-                hard_gate_failures: 1,
               }),
               runs: [
                 {
                   run_id: 'run-state',
                   attempt_id: 'attempt-state',
-                  status: 'hard_gate_failed',
+                  status: 'passed',
                   completion: 'task_incomplete',
                   technical: 'valid',
                   evaluators: {
                     completion: 'available',
                     quality: 'not_required',
                   },
-                  objective_score: 0,
+                  objective_score: 65,
                   quality_score_completed: null,
                   wall_time_ms: 1_500,
                   assessment: {
-                    system_status: 'hard_gate_failed',
+                    system_status: 'passed',
                     assessments: [],
                   },
                 },
@@ -306,8 +304,8 @@ describe('scenario matrix presentation model', () => {
     expect(model.summary).toMatchObject({
       total: 4,
       passed: 1,
-      hardGate: 1,
       failed: 0,
+      incomplete: 1,
       inconclusive: 1,
       unavailable: 1,
     })
@@ -320,6 +318,11 @@ describe('scenario matrix presentation model', () => {
     expect(security.durationMs).toBe(3_000)
     expect(security.durationKind).toBe('average')
     expect(security.workflowSteps).toHaveLength(2)
+    expect(model.items[1]?.objective).toMatchObject({
+      status: 'incomplete',
+      label: 'Incomplete',
+    })
+    expect(model.items[1]?.aggregate?.objective_median_score).toBe(65)
     expect(model.contracts).toEqual(
       expect.arrayContaining([
         expect.objectContaining({

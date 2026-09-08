@@ -76,14 +76,6 @@ pub struct FailureRecord {
     pub message: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
-pub struct HardGateReport {
-    pub id: String,
-    pub dimension: EvaluationDimension,
-    pub passed: bool,
-    pub reason: String,
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum EvaluationDimension {
@@ -492,7 +484,6 @@ pub struct E2eRunReport {
     pub objective_score: Option<u8>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub quality_score_completed: Option<u8>,
-    pub hard_gates: Vec<HardGateReport>,
     pub criteria: Vec<CriterionReport>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub transcript: Option<Value>,
@@ -574,7 +565,6 @@ impl E2eRunReport {
             evaluators: EvaluatorStates::default(),
             objective_score: None,
             quality_score_completed: None,
-            hard_gates: Vec::new(),
             criteria: Vec::new(),
             transcript: None,
             metrics: None,
@@ -666,11 +656,7 @@ impl E2eRunReport {
                     self.completion = CompletionState::Completed;
                     self.evaluators.completion = EvaluatorAvailability::Available;
                 }
-                self.objective_score = if self.completion == CompletionState::TaskIncomplete {
-                    Some(0)
-                } else {
-                    self.score
-                };
+                self.objective_score = self.score;
                 self.quality_score_completed = (self.completion == CompletionState::Completed)
                     .then_some(self.score)
                     .flatten();
@@ -683,7 +669,7 @@ impl E2eRunReport {
             }
             RunStatus::HardGateFailed => {
                 self.technical = TechnicalState::Valid;
-                self.objective_score = Some(0);
+                self.objective_score = self.score;
                 self.quality_score_completed = None;
                 self.evaluators.quality = EvaluatorAvailability::NotRequired;
             }
@@ -693,7 +679,7 @@ impl E2eRunReport {
                     self.completion = CompletionState::TaskIncomplete;
                     self.evaluators.completion = EvaluatorAvailability::Available;
                 }
-                self.objective_score = Some(0);
+                self.objective_score = self.score;
                 self.quality_score_completed = None;
                 self.evaluators.quality = EvaluatorAvailability::NotRequired;
             }
@@ -1030,13 +1016,6 @@ impl E2eRunReport {
         let deliverable_passed = expects_deliverables.then(|| {
             !self.deliverables.is_empty() && self.deliverables.iter().all(|item| item.passed())
         });
-        let structural_gates = self
-            .hard_gates
-            .iter()
-            .filter(|gate| gate.dimension == EvaluationDimension::StructuralIntegrity)
-            .collect::<Vec<_>>();
-        let structural_passed =
-            (!structural_gates.is_empty()).then(|| structural_gates.iter().all(|gate| gate.passed));
         let efficiency = self.efficiency.as_ref().map_or_else(
             || serde_json::json!({ "available": false, "wall_time_ms": self.wall_time_ms }),
             |efficiency| serde_json::to_value(efficiency).unwrap_or(Value::Null),
@@ -1058,10 +1037,9 @@ impl E2eRunReport {
             },
             DimensionReport {
                 dimension: EvaluationDimension::StructuralIntegrity,
-                passed: structural_passed,
+                passed: None,
                 signals: serde_json::json!({
-                    "gates": structural_gates.len(),
-                    "failed_gates": structural_gates.iter().filter(|gate| !gate.passed).count(),
+                    "criteria": self.criteria.iter().filter(|criterion| criterion.awarded.is_some()).count(),
                 }),
             },
             DimensionReport {
@@ -1312,7 +1290,6 @@ pub struct ScenarioAggregate {
     pub pass_rate: f64,
     /// Compatibility alias for `objective_median_score`.
     pub median_score: Option<f64>,
-    pub hard_gate_failures: u32,
     pub technical_failures: u32,
     pub cost: CostReport,
     pub robustness: RobustnessReport,
@@ -1569,10 +1546,6 @@ impl E2eScenarioReport {
             .iter()
             .filter(|run| run.status == RunStatus::Passed)
             .count() as u32;
-        let hard_gate_failures = runs
-            .iter()
-            .filter(|run| run.status == RunStatus::HardGateFailed)
-            .count() as u32;
         let technical_failures = technical_invalid_runs;
         let required_passes = required_passes(planned_runs);
         let cost = CostReport {
@@ -1624,7 +1597,6 @@ impl E2eScenarioReport {
                     f64::from(passed_runs) / f64::from(run_count)
                 },
                 median_score: objective_median_score,
-                hard_gate_failures,
                 technical_failures,
                 cost,
                 robustness,
@@ -2178,6 +2150,20 @@ pub struct E2eReport {
 }
 
 impl E2eReport {
+    pub fn execution_succeeded(&self) -> bool {
+        self.report_state == ReportState::Complete
+            && self.persistence_errors.is_empty()
+            && !self.scenarios.is_empty()
+            && self.scenarios.iter().all(|scenario| {
+                scenario.aggregate.planned_runs > 0
+                    && scenario.aggregate.technical_valid_runs == scenario.aggregate.planned_runs
+                    && scenario.aggregate.observed_runs == scenario.aggregate.planned_runs
+                    && scenario.runs.iter().all(|run| {
+                        matches!(run.status, RunStatus::Passed | RunStatus::HardGateFailed)
+                    })
+            })
+    }
+
     pub fn new(
         execution: ExecutionIdentity,
         system_under_test: SystemUnderTestIdentity,
@@ -2360,15 +2346,6 @@ impl E2eReport {
                         run.run_id
                     );
                 }
-                if run.completion == CompletionState::TaskIncomplete
-                    && run.technical == TechnicalState::Valid
-                    && run.objective_score != Some(0)
-                {
-                    bail!(
-                        "run '{}' task_incomplete objective score must be zero",
-                        run.run_id
-                    );
-                }
                 if run.completion != CompletionState::Completed
                     && run.quality_score_completed.is_some()
                 {
@@ -2507,7 +2484,6 @@ impl E2eReport {
                     &policy,
                     &mut redaction,
                     &mut run.failures,
-                    &mut run.hard_gates,
                     &mut run.criteria,
                     &mut run.dimensions,
                     &mut run.deliverables,
@@ -2546,7 +2522,6 @@ impl E2eReport {
                         &policy,
                         &mut redaction,
                         &mut retry.failures,
-                        &mut [],
                         &mut [],
                         &mut retry.dimensions,
                         &mut retry.deliverables,
@@ -2831,16 +2806,12 @@ fn redact_attempt_annotations(
     policy: &crate::redaction::RedactionPolicy,
     redaction: &mut crate::redaction::RedactionReport,
     failures: &mut [FailureRecord],
-    hard_gates: &mut [HardGateReport],
     criteria: &mut [CriterionReport],
     dimensions: &mut [DimensionReport],
     deliverables: &mut [DeliverableReport],
 ) {
     for failure in failures {
         redact_string(policy, redaction, &mut failure.message);
-    }
-    for gate in hard_gates {
-        redact_string(policy, redaction, &mut gate.reason);
     }
     for criterion in criteria {
         redact_string(policy, redaction, &mut criterion.reason);
@@ -3417,6 +3388,37 @@ mod tests {
     }
 
     #[test]
+    fn partial_scores_round_trip_independently_of_completion_and_limits() {
+        for status in [RunStatus::Passed, RunStatus::ResourceLimit] {
+            let output = tempfile::tempdir().unwrap();
+            let mut measured = run(65, true);
+            measured.set_completion(
+                CompletionState::TaskIncomplete,
+                EvaluatorAvailability::Available,
+            );
+            measured.finish(status);
+            assert_eq!(measured.objective_score, Some(65));
+            assert_eq!(measured.quality_score_completed, None);
+            let mut result = report(vec![aggregate(vec![measured])]);
+            assert_eq!(result.execution_succeeded(), status == RunStatus::Passed);
+            let path = result.write_to(output.path(), &manifest()).unwrap();
+            let (restored, _) = E2eReport::read_from(&path).unwrap();
+            assert_eq!(restored.scenarios[0].runs[0].objective_score, Some(65));
+            assert_eq!(
+                restored.scenarios[0].runs[0].completion,
+                CompletionState::TaskIncomplete
+            );
+        }
+        let mut unavailable = run(0, true);
+        unavailable.score = None;
+        unavailable.finish(RunStatus::ResourceLimit);
+        assert_eq!(unavailable.objective_score, None);
+        let mut evaluator_error = run(65, true);
+        evaluator_error.finish(RunStatus::JudgeError);
+        assert!(!report(vec![aggregate(vec![evaluator_error])]).execution_succeeded());
+    }
+
+    #[test]
     fn one_run_requires_that_run_to_pass() {
         assert!(aggregate(vec![run(80, true)]).passed);
         assert!(!aggregate(vec![run(100, false)]).passed);
@@ -3505,7 +3507,7 @@ mod tests {
         assert_eq!(report.aggregate.deferred_runs, 1);
         assert_eq!(report.aggregate.completed_runs, 1);
         assert_eq!(report.aggregate.task_incomplete_runs, 1);
-        assert_eq!(report.aggregate.objective_median_score, Some(45.0));
+        assert_eq!(report.aggregate.objective_median_score, Some(65.0));
         assert_eq!(report.aggregate.quality_score_completed, Some(90.0));
         assert_eq!(report.aggregate.completion_rate, Some(0.5));
         assert_eq!(
@@ -3861,19 +3863,18 @@ mod tests {
     }
 
     #[test]
-    fn hard_gate_failures_count_as_scored_failed_runs() {
+    fn numeric_scores_do_not_change_run_outcomes() {
         let mut outvoted = run(45, false);
-        outvoted.status = RunStatus::HardGateFailed;
+        outvoted.status = RunStatus::Passed;
         let report = aggregate(vec![outvoted, run(90, true), run(90, true)]);
         assert!(report.passed);
-        assert_eq!(report.aggregate.hard_gate_failures, 1);
         assert_eq!(report.aggregate.median_score, Some(90.0));
 
         let mut decisive = run(45, false);
-        decisive.status = RunStatus::HardGateFailed;
+        decisive.status = RunStatus::Passed;
         let report = aggregate(vec![decisive, run(90, true)]);
-        assert!(!report.passed);
-        assert_eq!(report.aggregate.median_score, Some(45.0));
+        assert!(report.passed);
+        assert_eq!(report.aggregate.median_score, Some(67.5));
     }
 
     #[test]
@@ -4032,13 +4033,6 @@ mod tests {
     #[test]
     fn summary_surfaces_the_actionable_failure_details() {
         let mut failed = run(50, false);
-        failed.status = RunStatus::HardGateFailed;
-        failed.hard_gates.push(HardGateReport {
-            id: "durable_effect".into(),
-            dimension: EvaluationDimension::StructuralIntegrity,
-            passed: false,
-            reason: "expected row was missing".into(),
-        });
         failed.criteria.push(CriterionReport {
             id: "correctness".into(),
             possible: 100,
@@ -4048,8 +4042,7 @@ mod tests {
         let report = report(vec![aggregate(vec![failed])]);
 
         let summary = report.summary(false);
-        assert!(summary.contains("Harness E2E: FAIL"));
-        assert!(summary.contains("gate durable_effect: FAIL - expected row was missing"));
+        assert!(summary.contains("Harness E2E: subject="));
         assert!(summary.contains("criterion correctness: 50/100"));
     }
 
@@ -4217,7 +4210,7 @@ mod tests {
     }
 
     #[test]
-    fn native_workflow_gates_and_evaluations_are_aggregated_into_the_assessment_contract() {
+    fn workflow_runtime_checks_do_not_become_objective_approvals() {
         let step = WorkflowStepReport {
             node_id: "assess".into(),
             step_type: "test.assess".into(),
@@ -4263,9 +4256,9 @@ mod tests {
         contract.validate(&report).unwrap();
         assert_eq!(contract.runs.len(), 1);
         assert_eq!(contract.runs[0].system_status, SystemStatus::HardGateFailed);
-        assert_eq!(contract.runs[0].assessments.len(), 2);
+        assert_eq!(contract.runs[0].assessments.len(), 1);
         assert_eq!(
-            contract.runs[0].assessments[1].outcome,
+            contract.runs[0].assessments[0].outcome,
             AssessmentOutcome::Partial
         );
     }

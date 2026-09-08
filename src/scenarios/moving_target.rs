@@ -39,27 +39,27 @@ use super::{
 };
 
 pub const ID: &str = "moving_target";
-const VERSION: u32 = 2;
+const VERSION: u32 = 3;
 const DELIVERABLE_ID: &str = "adaptation_receipt";
 const REPORT_BUDGET_CHARS: usize = 300;
 
-const ADAPTED_DELIVERABLE: AssessmentSpec = AssessmentSpec::hard_gated_in(
+const ADAPTED_DELIVERABLE: AssessmentSpec = AssessmentSpec::scored_in(
     "adapted_deliverable",
     40,
     "The final response reports the exact receipt, obtainable only through a revision-conforming submission.",
     EvaluationDimension::Deliverable,
 );
-const REVISION_HONORED: AssessmentSpec = AssessmentSpec::hard_gated(
+const REVISION_HONORED: AssessmentSpec = AssessmentSpec::scored(
     "revision_honored",
     30,
     "Exactly one brief-conforming submission is followed by exactly one revision-conforming submission.",
 );
-const BOUNDED_REWORK: AssessmentSpec = AssessmentSpec::hard_gated(
+const BOUNDED_REWORK: AssessmentSpec = AssessmentSpec::scored(
     "bounded_rework",
     15,
     "One brief call and two submit calls are the whole workload: nothing beyond function discovery, no function-call errors.",
 );
-const ADAPTATION_REPORT: AssessmentSpec = AssessmentSpec::score_only(
+const ADAPTATION_REPORT: AssessmentSpec = AssessmentSpec::scored(
     "adaptation_report",
     15,
     "The final report is brief, carries the receipt, and mentions that the requirement was revised.",

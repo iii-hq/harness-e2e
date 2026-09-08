@@ -31,7 +31,7 @@ use super::{
 
 pub const SIMPLE_ID: &str = "todo_worker_simple";
 pub const PLANNED_ID: &str = "todo_worker_planned";
-pub const VERSION: u32 = 3;
+pub const VERSION: u32 = 4;
 pub const VALIDATION_ASSET_ID: &str = "todo_validation_evidence";
 pub const RAW_PLAN_FILE: &str = "validation-plan.json";
 pub const OWNER_MARKER: &str = ".harness-e2e-owner";
@@ -45,17 +45,17 @@ pub const REQUIRED_PROBES: [&str; 5] = [
 pub const OPTIONAL_PROBES: [&str; 2] = ["todo_repeatability", "todo_concurrent_create"];
 
 const SIMPLE_ASSESSMENTS: &[AssessmentSpec] = &[
-    AssessmentSpec::hard_gated_in(
+    AssessmentSpec::scored_in(
         "compose_valid",
         15,
         "The generated worker-compose.yaml is valid, run-scoped, has an explicit runtime, and exposes a matching stack.",
         EvaluationDimension::Deliverable,
     ),
-    AssessmentSpec::hard_gated("worker_live", 15, "The expected local worker is installed and running."),
-    AssessmentSpec::hard_gated("function_surface", 15, "All four Todo functions expose the exact descriptions and schemas."),
-    AssessmentSpec::hard_gated("todo_crud_isolated", 30, "Create, list, update, and delete preserve identity and unrelated items."),
-    AssessmentSpec::hard_gated("todo_invalid_contracts", 15, "Empty titles and unknown IDs are rejected."),
-    AssessmentSpec::hard_gated_in(
+    AssessmentSpec::scored("worker_live", 15, "The expected local worker is installed and running."),
+    AssessmentSpec::scored("function_surface", 15, "All four Todo functions expose the exact descriptions and schemas."),
+    AssessmentSpec::scored("todo_crud_isolated", 30, "Create, list, update, and delete preserve identity and unrelated items."),
+    AssessmentSpec::scored("todo_invalid_contracts", 15, "Empty titles and unknown IDs are rejected."),
+    AssessmentSpec::scored_in(
         "evidence_complete",
         10,
         "The validation bundle is complete, bounded, and bound to the observed candidate.",
@@ -64,25 +64,25 @@ const SIMPLE_ASSESSMENTS: &[AssessmentSpec] = &[
 ];
 
 pub const PLANNED_CRITERIA: [CriterionSpec; 4] = [
-    CriterionSpec::required_deterministic(
+    CriterionSpec::scored(
         "planning_contract",
         25,
         "The planner emits a bounded, compilable plan with complete mandatory validation coverage.",
         EvaluationDimension::StructuralIntegrity,
     ),
-    CriterionSpec::required_deterministic(
+    CriterionSpec::scored(
         "worker_construction",
         25,
         "The separate builder materializes the exact run-scoped worker contract and brings it live.",
         EvaluationDimension::Deliverable,
     ),
-    CriterionSpec::required_deterministic(
+    CriterionSpec::scored(
         "validation_coverage",
         25,
         "Every planned check is executed by the independent runner with immutable evidence.",
         EvaluationDimension::StructuralIntegrity,
     ),
-    CriterionSpec::required_deterministic(
+    CriterionSpec::scored(
         "functional_correctness",
         25,
         "The compiled hard gates prove lifecycle, function contracts, CRUD isolation, and invalid-input behavior.",

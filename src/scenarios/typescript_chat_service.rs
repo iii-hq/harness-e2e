@@ -43,7 +43,7 @@ use super::{
 };
 
 pub const ID: &str = "typescript_chat_service";
-pub const VERSION: u32 = 1;
+pub const VERSION: u32 = 2;
 pub const CANONICAL_SEED: u64 = 7_311;
 
 /// One-paragraph editorial description shown above the prompt on the dashboard.
@@ -124,37 +124,37 @@ const SHAPE_CHECKS: &[&str] = &[
     "readme_documents_service",
 ];
 
-const SERVICE_CONTRACT: AssessmentSpec = AssessmentSpec::hard_gated_in(
+const SERVICE_CONTRACT: AssessmentSpec = AssessmentSpec::scored_in(
     "service_contract",
     15,
     "The application boots, serves the documented endpoints with the documented status codes, authenticates against the provider, and refuses to start without its credentials.",
     EvaluationDimension::Deliverable,
 );
-const STREAMING_FIDELITY: AssessmentSpec = AssessmentSpec::hard_gated_in(
+const STREAMING_FIDELITY: AssessmentSpec = AssessmentSpec::scored_in(
     "streaming_fidelity",
     20,
     "Provider fragments reach the client as individual delta events while the provider is still sending, and the turn closes with accurate usage.",
     EvaluationDimension::Deliverable,
 );
-const CONVERSATION_STATE: AssessmentSpec = AssessmentSpec::hard_gated_in(
+const CONVERSATION_STATE: AssessmentSpec = AssessmentSpec::scored_in(
     "conversation_state",
     20,
     "Provider payloads are byte-exact across turns, history is bounded to the configured window, and concurrent conversations stay isolated.",
     EvaluationDimension::StructuralIntegrity,
 );
-const TOOLS_AND_STRUCTURED_OUTPUT: AssessmentSpec = AssessmentSpec::hard_gated_in(
+const TOOLS_AND_STRUCTURED_OUTPUT: AssessmentSpec = AssessmentSpec::scored_in(
     "tools_and_structured_output",
     20,
     "Both tools are advertised, executed locally with correct results, returned to the provider, and the conversation title is produced through a structured-output request.",
     EvaluationDimension::Deliverable,
 );
-const BUDGET_AND_RESILIENCE: AssessmentSpec = AssessmentSpec::hard_gated_in(
+const BUDGET_AND_RESILIENCE: AssessmentSpec = AssessmentSpec::scored_in(
     "budget_and_resilience",
     15,
     "The token budget refuses a turn without calling the provider, and a provider failure ends the turn without storing or replaying it.",
     EvaluationDimension::Robustness,
 );
-const SUITE_AND_SCOPE: AssessmentSpec = AssessmentSpec::hard_gated_in(
+const SUITE_AND_SCOPE: AssessmentSpec = AssessmentSpec::scored_in(
     "public_suite_and_scope",
     10,
     "The public suite is green under the runner, the protected fixture is byte-exact, the workspace stays dependency-free, and the service is documented.",

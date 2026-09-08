@@ -32,22 +32,22 @@ use super::{
 };
 
 pub const ID: &str = "validation_self_repair";
-const VERSION: u32 = 5;
+const VERSION: u32 = 6;
 const DELIVERABLE_ID: &str = "repaired_dataset";
 
 const HOOK_TYPE: &str = "harness::hook::post-turn";
 const REQUIRED_NAMES: [&str; 4] = ["alpha", "beta", "gamma", "delta"];
-const DATA_REPAIRED: AssessmentSpec = AssessmentSpec::hard_gated(
+const DATA_REPAIRED: AssessmentSpec = AssessmentSpec::scored(
     "data_repaired",
     40,
     "All invariants hold at the end and every required name survived the repair.",
 );
-const DIAGNOSIS_DRIVEN: AssessmentSpec = AssessmentSpec::hard_gated(
+const DIAGNOSIS_DRIVEN: AssessmentSpec = AssessmentSpec::scored(
     "diagnosis_driven",
     30,
     "The auditor rejected the flawed seed with a factual defect list (no prescribed fix), via one envelope-mode registration.",
 );
-const DECISIVE_REPAIR: AssessmentSpec = AssessmentSpec::hard_gated(
+const DECISIVE_REPAIR: AssessmentSpec = AssessmentSpec::scored(
     "decisive_repair",
     30,
     "The model's own repair converged within two rounds (full credit for one, half for two).",
@@ -264,8 +264,6 @@ fn capture<'a>(
             .unwrap_or_default();
         let remaining = violations(&rows);
         let nudges = nudge_texts(&observation.transcript);
-        let invariants =
-            super::captured_gate_invariants(evaluate(context, observation, run_id).await?);
         Ok(vec![CapturedDeliverable {
             id: DELIVERABLE_ID.to_string(),
             kind: "database_rows".to_string(),
@@ -279,7 +277,7 @@ fn capture<'a>(
                 "response": observation.response,
             })
             .into(),
-            invariants,
+            invariants: Vec::new(),
             provenance: vec![
                 ProvenanceEvidence {
                     kind: "database_relation".to_string(),
@@ -311,7 +309,6 @@ fn deliverable_contract() -> super::DeliverableContract {
             },
             "additionalProperties": false
         }),
-        ASSESSMENTS,
     )
 }
 
@@ -376,8 +373,7 @@ fn evaluate<'a>(
                         registrations.len()
                     ),
                 ),
-                DECISIVE_REPAIR.gate_and_points(
-                    matches!(nudges.len(), 1 | 2),
+                DECISIVE_REPAIR.award(
                     match nudges.len() {
                         1 => DECISIVE_REPAIR.weight(),
                         2 => 15,

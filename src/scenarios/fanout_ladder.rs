@@ -28,7 +28,7 @@ use super::{
 };
 
 pub const ID: &str = "fanout_ladder";
-const VERSION: u32 = 3;
+const VERSION: u32 = 4;
 const ROWS_DELIVERABLE_ID: &str = "worker_rows";
 const REPORT_DELIVERABLE_ID: &str = "fanout_report";
 
@@ -40,23 +40,23 @@ struct Rung {
 pub const CANONICAL_SEED: u64 = 2004;
 const RUNG: Rung = Rung { fan_out: 16 };
 
-const PARALLEL_FAN_OUT: AssessmentSpec = AssessmentSpec::hard_gated(
+const PARALLEL_FAN_OUT: AssessmentSpec = AssessmentSpec::scored(
     "parallel_fan_out",
     30,
     "All N workers are spawned directly, in one coordinator response, as N distinct leaf sessions.",
 );
-const WORKER_DELIVERABLES: AssessmentSpec = AssessmentSpec::hard_gated_in(
+const WORKER_DELIVERABLES: AssessmentSpec = AssessmentSpec::scored_in(
     "worker_deliverables",
     30,
     "Every worker row is exact and was written by its own direct leaf session with a single state write.",
     EvaluationDimension::Deliverable,
 );
-const BARRIER_FAN_IN: AssessmentSpec = AssessmentSpec::hard_gated(
+const BARRIER_FAN_IN: AssessmentSpec = AssessmentSpec::scored(
     "barrier_fan_in",
     25,
     "One named-set barrier wake is armed before any spawn, expects exactly the N worker keys, and retires on the N-th row.",
 );
-const AGGREGATED_REPORT: AssessmentSpec = AssessmentSpec::hard_gated(
+const AGGREGATED_REPORT: AssessmentSpec = AssessmentSpec::scored(
     "aggregated_report",
     15,
     "The barrier-woken report carries the rung marker and every worker token verbatim, with no binding left armed.",

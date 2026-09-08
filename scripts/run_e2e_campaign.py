@@ -532,7 +532,6 @@ def _regular_group_measurement(
             "objective_score_coverage": 0.0,
             "quality_score_completed": None,
             "quality_coverage": None,
-            "product_passed": None,
             "infrastructure_valid": False,
             "report_state": "partial",
             "objective_outcome": "inconclusive",
@@ -692,7 +691,6 @@ def _regular_group_measurement(
         "objective_score_coverage": objective_score_coverage,
         "quality_score_completed": quality_score_completed,
         "quality_coverage": quality_coverage,
-        "product_passed": {"passed": True, "failed": False}.get(objective_outcome),
         "infrastructure_valid": totals["technical_invalid_runs"] == 0 and not persistence_errors,
         "report_state": report_state,
         "objective_outcome": objective_outcome,
@@ -715,7 +713,6 @@ def _fault_group_measurement(
             "objective_score_coverage": 0.0,
             "quality_score_completed": None,
             "quality_coverage": None,
-            "product_passed": None,
             "infrastructure_valid": False,
             "report_state": "partial",
             "objective_outcome": "inconclusive",
@@ -724,7 +721,6 @@ def _fault_group_measurement(
         }
     scores: list[float] = []
     infrastructure_valid = True
-    product_passed = True
     for path in evaluations:
         evaluation = _load_json(path)
         classification = evaluation.get("classification")
@@ -733,7 +729,6 @@ def _fault_group_measurement(
             continue
         score = 100.0 if classification == "correct_recovery" else 0.0
         scores.append(score)
-        product_passed = product_passed and score == 100.0
     coverage = min(1.0, len(scores) / group.runs)
     objective_score = sum(scores) / len(scores) if scores else None
     availability = (
@@ -756,16 +751,13 @@ def _fault_group_measurement(
         "objective_score_coverage": coverage,
         "quality_score_completed": None,
         "quality_coverage": None,
-        "product_passed": (
-            product_passed if len(scores) == group.runs else False if not product_passed else None
-        ),
         "infrastructure_valid": infrastructure_valid,
         "report_state": "complete" if len(evaluations) == group.runs else "partial",
         "objective_outcome": (
             "passed"
-            if len(scores) == group.runs and product_passed
+            if len(scores) == group.runs and all(score == 100.0 for score in scores)
             else "failed"
-            if not product_passed
+            if any(score < 100.0 for score in scores)
             else "inconclusive"
         ),
         "result_contract_sha256": None,
@@ -786,7 +778,6 @@ def score_campaign(
         "objective_score_coverage",
     )
     metric_totals = {field: 0.0 for field in metric_fields}
-    product_values: list[bool] = []
     infrastructure_valid = True
     all_group_scores_complete = True
     result_contracts: set[str] = set()
@@ -815,8 +806,6 @@ def score_campaign(
             result_contracts.add(measurement["result_contract_sha256"])
         if measurement["scoring_profile_sha256"] is not None:
             scoring_profiles.add(measurement["scoring_profile_sha256"])
-        if isinstance(measurement["product_passed"], bool):
-            product_values.append(measurement["product_passed"])
         infrastructure_valid = (
             infrastructure_valid and measurement["infrastructure_valid"]
         )
@@ -855,9 +844,6 @@ def score_campaign(
             field: total / len(campaign.groups)
             for field, total in metric_totals.items()
         },
-        "product_passed": all(product_values)
-        if len(product_values) == len(campaign.groups)
-        else None,
         "infrastructure_valid": infrastructure_valid,
         "result_contract_sha256": next(iter(result_contracts), None),
         "scoring_profile_sha256": next(iter(scoring_profiles), local_scoring_profile),
@@ -1030,13 +1016,12 @@ def execute_campaign(
         group_results.append(result)
 
     scoring = score_campaign(campaign, group_results)
-    # A successful process is not proof that the product passed. Missing or
-    # inconclusive product evidence remains None and fails closed in enforcing
-    # mode while advisory mode still preserves the complete observation.
-    objective_passed = scoring["product_passed"]
     process_exit_code = (
         0
-        if dry_run or advisory or objective_passed is True
+        if dry_run or advisory or (
+            scoring["infrastructure_valid"]
+            and all(group["exit_code"] == 0 for group in group_results)
+        )
         else 1
     )
     return {
@@ -1049,7 +1034,6 @@ def execute_campaign(
         "dry_run": dry_run,
         "started_at": started_at,
         "completed_at": _utc_now(),
-        "objective_passed": objective_passed,
         "scoring": scoring,
         "process_exit_code": process_exit_code,
         "groups": group_results,
@@ -1103,7 +1087,6 @@ def aggregate_existing_campaign(
         "dry_run": False,
         "started_at": None,
         "completed_at": _utc_now(),
-        "objective_passed": scoring["product_passed"],
         "scoring": scoring,
         "process_exit_code": 0,
         "groups": group_results,
@@ -1259,12 +1242,12 @@ def build_parser() -> argparse.ArgumentParser:
     mode.add_argument(
         "--advisory",
         action="store_true",
-        help="run every group and return zero even if objective groups fail",
+        help="run every group and return zero despite execution or infrastructure failures",
     )
     mode.add_argument(
         "--enforcing",
         action="store_true",
-        help="return non-zero when one or more objective groups fail",
+        help="return non-zero on child execution or infrastructure failure",
     )
     parser.add_argument(
         "--e2e-bin",

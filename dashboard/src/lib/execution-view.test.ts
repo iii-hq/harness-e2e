@@ -53,15 +53,14 @@ function execution(
 }
 
 describe('execution presentation view model', () => {
-  it('keeps mixed objective statuses visible instead of collapsing them to technical failure', () => {
+  it('ignores legacy gate outcomes when classifying operational failures', () => {
     const value = failureBreakdown(execution())
     expect(value).toMatchObject({
       passed: 5,
-      hard_gate: 3,
       infrastructure: 1,
       resource_limit: 1,
-      total: 10,
-      issues: 5,
+      total: 7,
+      issues: 2,
     })
     expect(primaryIssue(value)).toEqual({
       category: 'infrastructure',

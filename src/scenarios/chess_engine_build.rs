@@ -46,7 +46,7 @@ use super::{
 };
 
 pub const ID: &str = "chess_engine_build";
-const VERSION: u32 = 2;
+const VERSION: u32 = 3;
 
 /// One-paragraph editorial description of what this test asks for, shown above
 /// the prompt on the dashboard's test page. Written by hand: the prompt states
@@ -141,23 +141,23 @@ fn legalmoves_fens() -> [&'static str; 4] {
 
 // --- Assessments (weights total exactly 100) --------------------------------
 
-const PERFT_EXACT: AssessmentSpec = AssessmentSpec::hard_gated_in(
+const PERFT_EXACT: AssessmentSpec = AssessmentSpec::scored_in(
     "perft_exact",
     40,
     "Every perft position in the battery — STARTPOS depths 1-4, Kiwipete depths 1-2, an en-passant position, and a promotion position — reports a node count exactly equal to the shared chess kernel oracle. Any wrong count fails the gate.",
     EvaluationDimension::Deliverable,
 );
-const LEGAL_MOVES_CORRECT: AssessmentSpec = AssessmentSpec::hard_gated(
+const LEGAL_MOVES_CORRECT: AssessmentSpec = AssessmentSpec::scored(
     "legal_moves_correct",
     30,
     "For every battery FEN the engine's ascending UCI legal-move line equals the kernel oracle's sorted legal-move set exactly.",
 );
-const INTERFACE_CONTRACT: AssessmentSpec = AssessmentSpec::hard_gated(
+const INTERFACE_CONTRACT: AssessmentSpec = AssessmentSpec::scored(
     "interface_contract",
     20,
     "For every invocation the engine exits zero, writes empty stderr, and prints stdout that parses to the expected shape (a single integer for perft, space-separated UCI tokens for legalmoves): the engine actually runs and obeys the protocol.",
 );
-const BUILD_DISCIPLINE: AssessmentSpec = AssessmentSpec::score_only(
+const BUILD_DISCIPLINE: AssessmentSpec = AssessmentSpec::scored(
     "build_discipline",
     10,
     "Every engine invocation finished within the per-invocation time budget with no crash or timeout.",

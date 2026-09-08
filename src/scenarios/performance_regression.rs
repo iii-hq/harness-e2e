@@ -30,7 +30,7 @@ use super::{
 };
 
 pub const ID: &str = "performance_regression";
-pub const VERSION: u32 = 2;
+pub const VERSION: u32 = 3;
 pub const CANONICAL_SEED: u64 = 1041;
 
 const DELIVERABLE_ID: &str = "performance_audit";
@@ -49,25 +49,25 @@ const PUBLIC_TESTS: &str =
     include_str!("../../tests/fixtures/performance-regression/tests/test_deduplicate.py");
 const TASK_MANIFEST: &str = include_str!("../../tests/fixtures/performance-regression/task.json");
 
-const FUNCTIONAL_CORRECTNESS: AssessmentSpec = AssessmentSpec::hard_gated_in(
+const FUNCTIONAL_CORRECTNESS: AssessmentSpec = AssessmentSpec::scored_in(
     "functional_correctness",
     40,
     "The complete public suite and runner-owned hidden semantic probes accept the optimized implementation.",
     EvaluationDimension::Deliverable,
 );
-const DETERMINISTIC_IMPROVEMENT: AssessmentSpec = AssessmentSpec::hard_gated_in(
+const DETERMINISTIC_IMPROVEMENT: AssessmentSpec = AssessmentSpec::scored_in(
     "deterministic_improvement",
     35,
     "Instrumented equality/hash work is bounded, scales near-linearly, and improves by at least the declared factor.",
     EvaluationDimension::StructuralIntegrity,
 );
-const PATCH_SCOPE: AssessmentSpec = AssessmentSpec::hard_gated_in(
+const PATCH_SCOPE: AssessmentSpec = AssessmentSpec::scored_in(
     "patch_scope",
     15,
     "Only the allowed production file changed; public tests, task manifest, and fixture topology remain exact.",
     EvaluationDimension::StructuralIntegrity,
 );
-const WALL_CLOCK_SIGNAL: AssessmentSpec = AssessmentSpec::score_only(
+const WALL_CLOCK_SIGNAL: AssessmentSpec = AssessmentSpec::scored(
     "wall_clock_signal",
     10,
     "The candidate median wall-clock measurement improves over the run-local baseline; this host-dependent signal is advisory.",

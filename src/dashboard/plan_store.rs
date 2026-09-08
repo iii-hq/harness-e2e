@@ -286,9 +286,23 @@ impl PlanStore {
                 children.insert(slot.execution_id.clone(), execution.id.clone());
             }
             let status = match execution.state.as_str() {
-                "completed" if execution.slots.iter().all(|s| s.passed == 1) => "passed",
-                "completed" => "failed",
-                "interrupted" => "incomplete",
+                "completed"
+                    if execution
+                        .slots
+                        .iter()
+                        .all(|slot| slot.completed == 1 && slot.technical_valid == 1) =>
+                {
+                    "passed"
+                }
+                "completed"
+                    if execution
+                        .slots
+                        .iter()
+                        .any(|slot| slot.observed == 1 && slot.technical_valid == 0) =>
+                {
+                    "technical_failed"
+                }
+                "completed" | "interrupted" => "incomplete",
                 other => other,
             };
             values.push(json!({"id": execution.id, "label": plan.plan.label, "run_id": execution.id,
@@ -1115,7 +1129,7 @@ fn update_slot(
     );
     slot.observed = aggregate.observed_runs;
     slot.completed = aggregate.completed_runs;
-    slot.passed = aggregate.passed_runs;
+    slot.passed = aggregate.completed_runs;
     slot.technical_valid = aggregate.technical_valid_runs;
     slot.eligible = report.report_state == ReportState::Complete
         && aggregate.observed_runs == 1
@@ -1172,9 +1186,7 @@ fn project_measurements(value: &mut Value, execution: &PlanExecution, root: &Pat
         .filter(|(_, n)| *n > 0.0)
         .map(|(tokens, n)| tokens / n));
     value["totals"]["scenario_pass_rate"] =
-        json!(sum("/aggregate/passed_runs")
-            .map(|passed| passed / execution.slots.len().max(1) as f64));
-    value["totals"]["hard_gate_failures"] = json!(sum("/aggregate/hard_gate_failures"));
+        json!(completed.map(|completed| completed / execution.slots.len().max(1) as f64));
     value["totals"]["technical_failures"] = json!(sum("/aggregate/technical_failures"));
     // Reuse the native presenter for additive metrics; never derive totals from medians.
     let native = execution
@@ -1204,10 +1216,20 @@ fn project_measurements(value: &mut Value, execution: &PlanExecution, root: &Pat
         let aggregate = &cohort["aggregate"];
         let id = &cohort["scenario_id"];
         let count = aggregate["observed_runs"].as_f64().unwrap_or(0.0);
+        let completed = aggregate["completed_runs"].as_u64().unwrap_or(0);
+        let planned = aggregate["planned_runs"].as_u64().unwrap_or(0);
+        let technical_failures = aggregate["technical_failures"].as_u64().unwrap_or(0);
+        let status = if technical_failures > 0 {
+            "technical_failed"
+        } else if planned > 0 && completed == planned {
+            "passed"
+        } else {
+            "incomplete"
+        };
         scenarios.push(json!({"id": id, "case_id": cohort["identity"]["case"]["case_id"], "runs": count,
-            "status": if aggregate["passed_runs"] == aggregate["planned_runs"] { "passed" } else { "failed" },
-            "passed": aggregate["passed_runs"] == aggregate["planned_runs"], "pass_rate": aggregate["pass_rate"],
-            "hard_gate_failures": aggregate["hard_gate_failures"], "technical_failures": aggregate["technical_failures"],
+            "status": status,
+            "passed": status == "passed", "pass_rate": if planned == 0 { 0.0 } else { completed as f64 / planned as f64 },
+            "technical_failures": aggregate["technical_failures"],
             "median_score": aggregate["median_score"], "total_cost_usd": aggregate["cost"]["total_usd"]}));
         let contract = json!({"case_id": cohort["identity"]["case"]["case_id"], "case": cohort["identity"]["case"],
             "scenario_id": id, "scenario_version": cohort["identity"]["case"]["scenario_version"], "execution_policy": cohort["identity"]["execution_policy"]});
@@ -1794,7 +1816,7 @@ mod tests {
             assert!(execution.baseline_eligible); // Objective failure is independent from validity.
             assert_eq!(
                 execution.slots.iter().map(|s| s.passed).sum::<u32>(),
-                expected as u32 - 1
+                expected as u32
             );
             let cohorts = execution.measurements.as_ref().unwrap()["cohorts"]
                 .as_array()

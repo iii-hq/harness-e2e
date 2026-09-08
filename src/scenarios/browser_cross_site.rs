@@ -30,7 +30,7 @@ use super::{
 };
 
 pub const ID: &str = "browser_cross_site";
-const VERSION: u32 = 2;
+const VERSION: u32 = 3;
 pub const CANONICAL_SEED: u64 = 0x6272_6f77_7365_0001;
 const DELIVERABLE_ID: &str = "browser_cross_site_evidence";
 const TARGET_TICKET: &str = "TCK-42";
@@ -40,22 +40,22 @@ const CURRENT_POLICY: &str = "KB-CURRENT-2026";
 const SUPERSEDED_POLICY: &str = "KB-OLD-2024";
 const REQUIRED_ACTION: &str = "hold_for_review";
 
-const CROSS_SITE_NAVIGATION: AssessmentSpec = AssessmentSpec::hard_gated(
+const CROSS_SITE_NAVIGATION: AssessmentSpec = AssessmentSpec::scored(
     "cross_site_navigation",
     25,
     "The browser visits support, the current knowledge-base policy, and order admin through their distinct origins.",
 );
-const CURRENT_POLICY_APPLIED: AssessmentSpec = AssessmentSpec::hard_gated(
+const CURRENT_POLICY_APPLIED: AssessmentSpec = AssessmentSpec::scored(
     "current_policy_applied",
     25,
     "The current policy, rather than the superseded policy linked by the ticket, determines the order action.",
 );
-const EXACT_BACKEND_DELTA: AssessmentSpec = AssessmentSpec::hard_gated(
+const EXACT_BACKEND_DELTA: AssessmentSpec = AssessmentSpec::scored(
     "exact_backend_delta",
     35,
     "Exactly the target order and ticket change, with one UI submission per mutation and no collateral state changes.",
 );
-const BOUNDED_BROWSER_HANDOFF: AssessmentSpec = AssessmentSpec::hard_gated_in(
+const BOUNDED_BROWSER_HANDOFF: AssessmentSpec = AssessmentSpec::scored_in(
     "bounded_browser_handoff",
     15,
     "One browser session is explicitly stopped and the final report contains the genuine receipt.",

@@ -19,29 +19,28 @@ use super::common;
 use super::{
     ArtifactExpectation, CapturedDeliverable, CleanupFuture, ComplexityProfile,
     DeliverableCaptureFuture, DeliverableContract, EvaluationFuture, ExecutionPolicy,
-    InvariantSpec, MaterializedScenario, ProvenanceEvidence, ScenarioCase, ScenarioObservation,
-    ScenarioSpec,
+    MaterializedScenario, ProvenanceEvidence, ScenarioCase, ScenarioObservation, ScenarioSpec,
 };
 
 pub const ID: &str = "validation_loop";
-const VERSION: u32 = 5;
+const VERSION: u32 = 6;
 const DELIVERABLE_ID: &str = "validation_result";
 
 const HOOK_TYPE: &str = "harness::hook::post-turn";
 /// Goal: more than 6 rows; 4-row batches → exactly one denial, pass at 8.
 const THRESHOLD: u64 = 6;
 const EXPECTED_ROWS: u64 = 8;
-const GOAL_REACHED: AssessmentSpec = AssessmentSpec::hard_gated(
+const GOAL_REACHED: AssessmentSpec = AssessmentSpec::scored(
     "goal_reached",
     40,
     "The goal table ends with more rows than the validator threshold.",
 );
-const VALIDATOR_DISCIPLINE: AssessmentSpec = AssessmentSpec::hard_gated(
+const VALIDATOR_DISCIPLINE: AssessmentSpec = AssessmentSpec::scored(
     "validator_discipline",
     30,
     "Exactly one post-turn validator registration carries the custom retry_prompt without function-call errors.",
 );
-const LOOP_EVIDENCE: AssessmentSpec = AssessmentSpec::hard_gated(
+const LOOP_EVIDENCE: AssessmentSpec = AssessmentSpec::scored(
     "loop_evidence",
     30,
     "At least one harness validation nudge was delivered and the loop converged at exactly the expected row count.",
@@ -148,8 +147,6 @@ fn evaluate<'a>(
         let no_errors = observation.metrics.totals.function_call_errors == 0;
         let loop_points = loop_evidence_points(nudges, converged_exactly);
         let validator_passed = single_registration && carries_retry_prompt && no_errors;
-        let loop_passed = nudges >= 1 && converged_exactly;
-
         Ok(assessment::build_evaluation(
             if goal_reached {
                 crate::report::CompletionState::Completed
@@ -170,8 +167,7 @@ fn evaluate<'a>(
                         observation.metrics.totals.function_call_errors
                     ),
                 ),
-                LOOP_EVIDENCE.gate_and_points(
-                    loop_passed,
+                LOOP_EVIDENCE.award(
                     loop_points,
                     format!("nudges={nudges}, rows={rows} (full marks at exactly {EXPECTED_ROWS})"),
                 )?,
@@ -189,8 +185,6 @@ fn capture<'a>(
         let table = table(run_id);
         let rows = row_count(context, &table).await?;
         let nudges = common::validation_nudges(&observation.transcript);
-        let invariants =
-            super::captured_gate_invariants(evaluate(context, observation, run_id).await?);
         Ok(vec![CapturedDeliverable {
             id: DELIVERABLE_ID.to_string(),
             kind: "validation_result".to_string(),
@@ -201,7 +195,7 @@ fn capture<'a>(
                 "response": observation.response,
             })
             .into(),
-            invariants,
+            invariants: Vec::new(),
             provenance: vec![
                 ProvenanceEvidence {
                     kind: "database_relation".to_string(),
@@ -227,7 +221,6 @@ fn deliverable_contract() -> DeliverableContract {
             "required": ["rows", "threshold", "validation_nudges", "response"],
             "additionalProperties": true
         }),
-        ASSESSMENTS,
     )
 }
 
@@ -259,7 +252,6 @@ pub(super) fn validation_contract(
     artifact_id: &str,
     kind: &str,
     schema: Value,
-    assessments: &[AssessmentSpec],
 ) -> DeliverableContract {
     DeliverableContract {
         artifacts: vec![ArtifactExpectation {
@@ -269,13 +261,7 @@ pub(super) fn validation_contract(
             schema,
             max_size_bytes: 65_536,
         }],
-        invariants: assessments
-            .iter()
-            .map(|assessment| InvariantSpec {
-                id: assessment.id().to_string(),
-                description: assessment.description().to_string(),
-            })
-            .collect(),
+        invariants: Vec::new(),
         provenance_required: true,
         capture_before_cleanup: true,
     }

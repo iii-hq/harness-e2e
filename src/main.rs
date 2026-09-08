@@ -343,11 +343,10 @@ fn fault_evaluate(args: FaultEvaluateArgs) -> Result<()> {
     let evaluation = FaultEvaluation::evaluate(&profile, &plan, &journal, report.as_ref())?;
     evaluation.write(&args.output)?;
     println!("{}", args.output.display());
-    if !evaluation.passed() {
-        bail!(
-            "fault recovery classified as {:?}",
-            evaluation.classification
-        );
+    if evaluation.classification
+        == harness_e2e::fault::RecoveryClassification::InfrastructureFailure
+    {
+        bail!("fault execution infrastructure failure");
     }
     Ok(())
 }
@@ -453,10 +452,10 @@ async fn run(args: RunArgs) -> Result<()> {
             outcome.report.persistence_errors.join("; ")
         );
     }
-    if !outcome.report.passed {
-        bail!("E2E suite failed");
+    if outcome.report_path.is_none() || !outcome.report.execution_succeeded() {
+        bail!("E2E execution failed");
     }
-    tracing::info!(path = ?outcome.report_path, "E2E quality suite passed");
+    tracing::info!(path = ?outcome.report_path, "E2E execution completed");
     Ok(())
 }
 
@@ -520,7 +519,7 @@ async fn replay_materialized(args: ReplayMaterializedArgs) -> Result<()> {
             outcome.report.persistence_errors.join("; ")
         );
     }
-    if !outcome.report.passed {
+    if outcome.report_path.is_none() || !outcome.report.execution_succeeded() {
         bail!("materialized Markdown replay failed");
     }
     Ok(())

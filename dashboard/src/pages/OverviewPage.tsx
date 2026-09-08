@@ -58,8 +58,6 @@ export function statusCopy(presentation: ExecutionPresentation) {
     return { label: 'incomplete', status: 'incomplete' as const }
   if (presentation.attention === 'unavailable')
     return { label: 'no report', status: 'unavailable' as const }
-  if (presentation.breakdown.hard_gate > 0)
-    return { label: 'hard gate', status: 'hard_gate' as const }
   if (
     presentation.breakdown.inconclusive > 0 &&
     presentation.breakdown.issues === presentation.breakdown.inconclusive
@@ -126,10 +124,7 @@ export function workflowProgress(presentation: ExecutionPresentation) {
     (finiteNumber(workflow?.pending_steps) ?? 0)
   const attention =
     (finiteNumber(workflow?.failed_steps) ?? 0) +
-    (finiteNumber(workflow?.hard_gate_failed_steps) ?? 0) +
     (finiteNumber(workflow?.cancelled_steps) ?? 0)
-  const gates = finiteNumber(workflow?.hard_gate_count) ?? 0
-  const passedGates = finiteNumber(workflow?.passed_hard_gate_count) ?? 0
   const assets = finiteNumber(workflow?.asset_count) ?? 0
   const evaluations = finiteNumber(workflow?.evaluation_count) ?? 0
   const durationMs = finiteNumber(workflow?.duration_ms)
@@ -138,10 +133,7 @@ export function workflowProgress(presentation: ExecutionPresentation) {
     steps,
     succeeded,
     value: `${succeeded}/${steps}`,
-    detail:
-      gates > 0
-        ? `${passedGates}/${gates} hard gates passed`
-        : `${assets} assets · ${evaluations} evaluations`,
+    detail: `${assets} assets · ${evaluations} evaluations`,
     delta:
       attention > 0
         ? 'needs review'

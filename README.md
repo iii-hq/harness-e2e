@@ -4,6 +4,11 @@
 with correct deliverables, structural integrity, bounded work, and repeatable
 outcomes.
 
+Objective scores preserve measured criterion points independently of completion
+or resource limits. Criteria do not veto the score or approve a run. Completion,
+technical validity, artifact evidence, and runtime controls are reported
+separately; infrastructure and execution failures still fail the CLI.
+
 The repository is intentionally independent from the `workers` source tree.
 Runtime discovery, execution, observation, state access, and cleanup all happen
 through functions registered in iii. The only product input is an immutable

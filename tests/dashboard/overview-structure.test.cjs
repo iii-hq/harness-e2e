@@ -102,7 +102,7 @@ test('adapts overview metrics when persisted workflow evidence is available', ()
   assert.match(overviewPage, /execution\.workflow_metrics/)
   assert.match(overviewPage, /semantic steps/)
   assert.match(overviewPage, /workflow runtime/)
-  assert.match(overviewPage, /hard gates passed/)
+  assert.match(overviewPage, /assets.*evaluations/)
   assert.match(overviewPage, /workflowProgress/)
 })
 

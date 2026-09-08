@@ -25,7 +25,7 @@ use super::{
 };
 
 pub const ID: &str = "policy_bound_action";
-pub const VERSION: u32 = 2;
+pub const VERSION: u32 = 3;
 pub const CANONICAL_SEED: u64 = 0x706f_6c69_6379_0001;
 const ORDER_ID: &str = "ORDER-42";
 const DISTRACTOR_ID: &str = "ORDER-99";
@@ -33,23 +33,23 @@ const ADDRESS_A: &str = "10 Old Street";
 const ADDRESS_B: &str = "25 New Avenue";
 const DELIVERABLE_ID: &str = "policy_interaction_audit";
 
-const AUTHORIZATION_ORDER: AssessmentSpec = AssessmentSpec::hard_gated(
+const AUTHORIZATION_ORDER: AssessmentSpec = AssessmentSpec::scored(
     "authorization_order",
     30,
     "Policy and authentication precede every sensitive read or mutation.",
 );
-const INTENT_BOUND_CONFIRMATION: AssessmentSpec = AssessmentSpec::hard_gated(
+const INTENT_BOUND_CONFIRMATION: AssessmentSpec = AssessmentSpec::scored(
     "intent_bound_confirmation",
     35,
     "The stale cancellation preview is invalidated and only the confirmed address change is applied.",
 );
-const EXACT_DELTA: AssessmentSpec = AssessmentSpec::hard_gated_in(
+const EXACT_DELTA: AssessmentSpec = AssessmentSpec::scored_in(
     "exact_policy_delta",
     25,
     "Exactly one authorized address mutation occurs and unrelated state remains unchanged.",
     EvaluationDimension::Deliverable,
 );
-const COMMUNICATION: AssessmentSpec = AssessmentSpec::score_only(
+const COMMUNICATION: AssessmentSpec = AssessmentSpec::scored(
     "policy_communication",
     10,
     "The final response reports the applied address change and receipt clearly.",

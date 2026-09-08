@@ -61,6 +61,7 @@ const run: AssessmentRunView = {
     turns: null,
   },
   systemStatus: 'passed',
+  objectiveScore: 100,
   assessments: [],
   evidence: [],
 }
@@ -70,7 +71,6 @@ function scenarioSummary(overrides: Partial<ScenarioMatrixSummary> = {}) {
     total: 2,
     passed: 1,
     failed: 1,
-    hardGate: 0,
     inconclusive: 0,
     unavailable: 0,
     running: 0,
@@ -85,10 +85,10 @@ describe('execution verdict', () => {
   it('aggregates the scenario outcomes into one sentence', () => {
     const verdict = executionVerdict(
       buildExecutionPresentation(detail),
-      scenarioSummary({ hardGate: 1, failed: 1, passed: 3, total: 5 }),
+      scenarioSummary({ failed: 2, passed: 3, total: 5 }),
       [],
     )
-    expect(verdict.headline).toBe('1 failure · 1 hard gate failed · 3 passed')
+    expect(verdict.headline).toBe('2 failures · 3 passed')
     expect(verdict.nextStep).toBe(
       'Inspect the retained evidence of the failing scenario before deciding whether to re-run.',
     )
@@ -135,7 +135,7 @@ describe('execution layers', () => {
       ]),
     ).toEqual({
       value: 'partial',
-      label: '1 passed · 1 hard gate failed',
+      label: '1 passed · 1 failed (legacy result)',
     })
   })
 

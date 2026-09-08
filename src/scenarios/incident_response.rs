@@ -20,7 +20,7 @@ use super::{
 };
 
 pub const ID: &str = "incident_response";
-pub const VERSION: u32 = 3;
+pub const VERSION: u32 = 4;
 pub const FIXTURE_PATH_ENV: &str = "HARNESS_E2E_INCIDENT_FIXTURE_PATH";
 pub const KNOWN_GOOD_REF: &str = "refs/tags/known_good";
 pub const INCIDENT_REF: &str = "refs/tags/incident";
@@ -122,31 +122,31 @@ pub const ASSETS: [IncidentAssetSpec; 11] = [
     },
 ];
 
-const INCIDENT_REPRODUCTION: CriterionSpec = CriterionSpec::required_deterministic(
+const INCIDENT_REPRODUCTION: CriterionSpec = CriterionSpec::scored(
     "incident_reproduction",
     15,
     "The seeded timeout and redelivery deterministically reproduce two settlements for one event before remediation.",
     EvaluationDimension::Deliverable,
 );
-const EVIDENCE_GROUNDED_DIAGNOSIS: CriterionSpec = CriterionSpec::required_deterministic(
+const EVIDENCE_GROUNDED_DIAGNOSIS: CriterionSpec = CriterionSpec::scored(
     "evidence_grounded_diagnosis",
     20,
     "Independent read-only analyses fan in to a diagnosis grounded in valid evidence and an executed falsification probe.",
     EvaluationDimension::StructuralIntegrity,
 );
-const REMEDIATION_INTEGRITY: CriterionSpec = CriterionSpec::required_deterministic(
+const REMEDIATION_INTEGRITY: CriterionSpec = CriterionSpec::scored(
     "remediation_integrity",
     25,
     "Any candidate changes only allowed production paths, preserves protected inputs, and passes every deterministic safety probe.",
     EvaluationDimension::Deliverable,
 );
-const SAFE_TERMINAL_ACTION: CriterionSpec = CriterionSpec::required_deterministic(
+const SAFE_TERMINAL_ACTION: CriterionSpec = CriterionSpec::scored(
     "safe_terminal_action",
     25,
     "Exactly one terminal action occurs: promote the exact validated candidate or restore the exact known-good revision.",
     EvaluationDimension::StructuralIntegrity,
 );
-const FINAL_RECONCILIATION: CriterionSpec = CriterionSpec::required_deterministic(
+const FINAL_RECONCILIATION: CriterionSpec = CriterionSpec::scored(
     "final_reconciliation",
     15,
     "Deploy, ledger, audit, incident, active-resource, evidence, and cleanup state reconcile to the selected terminal action.",
@@ -376,7 +376,7 @@ mod tests {
     }
 
     #[test]
-    fn assessment_contract_is_deterministic_hard_gated_and_totals_one_hundred() {
+    fn assessment_contract_is_numeric_and_totals_one_hundred() {
         let spec = scenario("attempt");
         spec.validate().unwrap();
 
@@ -388,8 +388,8 @@ mod tests {
             100
         );
         assert!(spec.criteria.iter().all(|criterion| {
-            criterion.kind == AssessmentKind::RequiredCheck
-                && criterion.policy == AssessmentPolicy::HardGate
+            criterion.kind == AssessmentKind::Signal
+                && criterion.policy == AssessmentPolicy::Advisory
         }));
         assert_eq!(
             spec.criteria

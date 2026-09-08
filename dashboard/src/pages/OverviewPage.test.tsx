@@ -108,9 +108,9 @@ function workflowExecution(): DashboardExecutionSummary {
   return summary({
     id: 'security-review-1',
     label: 'Security review',
-    status: 'hard_gate_failed',
+    status: 'technical_failed',
     assessment_summary: {
-      system_statuses: { hard_gate_failed: 1 },
+      system_statuses: { infrastructure_error: 1 },
     } as never,
     totals: {
       expected_reports: 1,
@@ -124,16 +124,13 @@ function workflowExecution(): DashboardExecutionSummary {
     workflow_metrics: {
       step_count: 5,
       succeeded_steps: 4,
-      failed_steps: 0,
-      hard_gate_failed_steps: 1,
+      failed_steps: 1,
       skipped_steps: 0,
       cancelled_steps: 0,
       running_steps: 0,
       pending_steps: 0,
       duration_ms: 65_000,
       asset_count: 8,
-      hard_gate_count: 4,
-      passed_hard_gate_count: 3,
       evaluation_count: 9,
       failure_count: 1,
       total_tokens: 10_250,
@@ -193,20 +190,20 @@ describe('overview signal', () => {
   it('queues failures and never running or cancelled runs', () => {
     const presentations = [
       summary({
-        id: 'gated',
-        status: 'hard_gate_failed',
+        id: 'failed',
+        status: 'technical_failed',
         assessment_summary: {
-          system_statuses: { hard_gate_failed: 1, passed: 1 },
+          system_statuses: { infrastructure_error: 1, passed: 1 },
         } as never,
       }),
       summary({ id: 'running', status: 'running' }),
       summary({ id: 'cancelled', status: 'cancelled' }),
       summary({
         id: 'older',
-        status: 'hard_gate_failed',
+        status: 'technical_failed',
         completed_at: '2026-07-01T10:00:00Z',
         assessment_summary: {
-          system_statuses: { hard_gate_failed: 1 },
+          system_statuses: { infrastructure_error: 1 },
         } as never,
       }),
       summary({ id: 'passed' }),
@@ -217,8 +214,8 @@ describe('overview signal', () => {
         entry.category,
       ]),
     ).toEqual([
-      ['gated', 'hard_gate'],
-      ['older', 'hard_gate'],
+      ['failed', 'infrastructure'],
+      ['older', 'infrastructure'],
     ])
     expect(attentionQueue(presentations, 1)).toHaveLength(1)
   })
@@ -240,7 +237,7 @@ describe('overview signal', () => {
     )
     expect(workflow).toMatchObject({
       value: '4/5',
-      detail: '3/4 hard gates passed',
+      detail: '8 assets · 9 evaluations',
       delta: 'needs review',
       tone: 'negative',
       runtimeSeconds: 65,

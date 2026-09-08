@@ -12,8 +12,7 @@ impl E2eReport {
         );
         let _ = writeln!(
             output,
-            "Harness E2E: {}  subject={}/{}  cost={}",
-            if self.passed { "PASS" } else { "FAIL" },
+            "Harness E2E: subject={}/{}  cost={}",
             self.subject.provider,
             self.subject.model,
             format_cost(total_cost),
@@ -36,12 +35,11 @@ impl E2eReport {
                 .unwrap_or_else(|| "unclassified".to_string());
             let _ = writeln!(
                 output,
-                "{} {}  tier={}  score={}  passed={}/{}  time={}  cost={}",
-                if scenario.passed { "PASS" } else { "FAIL" },
+                "{}  tier={}  score={}  completed={}/{}  time={}  cost={}",
                 scenario.scenario_id,
                 tier,
                 score,
-                scenario.aggregate.passed_runs,
+                scenario.aggregate.completed_runs,
                 scenario.aggregate.runs,
                 format_duration(duration_ms),
                 format_cost(scenario.aggregate.cost.total_usd),
@@ -59,9 +57,10 @@ impl E2eReport {
                 };
                 let _ = writeln!(
                     output,
-                    "  run {}: {}  score={}  time={}  cost={}{}",
+                    "  run {}: {}  completion={:?}  score={}  time={}  cost={}{}",
                     index + 1,
                     run.status.label(),
+                    run.completion,
                     score,
                     format_duration(run.wall_time_ms),
                     format_cost(run.cost.total_usd),
@@ -87,15 +86,6 @@ impl E2eReport {
                         "    {:?}: {}",
                         failure.phase,
                         single_line(&failure.message),
-                    );
-                }
-                for gate in run.hard_gates.iter().filter(|gate| verbose || !gate.passed) {
-                    let _ = writeln!(
-                        output,
-                        "    gate {}: {} - {}",
-                        gate.id,
-                        if gate.passed { "pass" } else { "FAIL" },
-                        single_line(&gate.reason),
                     );
                 }
                 for deliverable in run

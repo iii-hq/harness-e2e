@@ -40,10 +40,10 @@ use super::{
 };
 
 pub const ID: &str = "engineering_ticket";
-pub const VERSION: u32 = 3;
+pub const VERSION: u32 = 4;
 pub const CANONICAL_SEED: u64 = 1005;
 pub const GIT_HANDOFF_ID: &str = "engineering_ticket_git_handoff";
-pub const GIT_HANDOFF_VERSION: u32 = 3;
+pub const GIT_HANDOFF_VERSION: u32 = 4;
 const GIT_HANDOFF_DIFFICULTY_PROFILE: &str = "code-hard-2026-08";
 
 const FIXTURE_PATH_ENV: &str = "HARNESS_E2E_ENGINEERING_TICKET_FIXTURE_PATH";
@@ -57,25 +57,25 @@ const IMPLEMENTATION_PLAN_PATH: &str = "IMPLEMENTATION_PLAN.md";
 const MAX_IMPLEMENTATION_PLAN_BYTES: usize = 32 * 1024;
 const GIT_HANDOFF_WAKE_TIMEOUT_MS: u64 = 10 * 60 * 1_000;
 
-const ENGINEERING_DISCIPLINE: AssessmentSpec = AssessmentSpec::hard_gated_in(
+const ENGINEERING_DISCIPLINE: AssessmentSpec = AssessmentSpec::scored_in(
     "engineering_discipline",
     25,
     "Relevant source and tests were inspected and a real red baseline was reproduced before the first production edit.",
     EvaluationDimension::StructuralIntegrity,
 );
-const TICKET_ACCEPTANCE: AssessmentSpec = AssessmentSpec::hard_gated_in(
+const TICKET_ACCEPTANCE: AssessmentSpec = AssessmentSpec::scored_in(
     "ticket_acceptance",
     40,
     "The focused, hidden semantic, and complete public probes independently accept the final production patch.",
     EvaluationDimension::Deliverable,
 );
-const VALIDATION_CONVERGENCE: AssessmentSpec = AssessmentSpec::hard_gated_in(
+const VALIDATION_CONVERGENCE: AssessmentSpec = AssessmentSpec::scored_in(
     "validation_convergence",
     20,
     "Completion attempts were durably audited and the latest patch converged within the factual-feedback budget.",
     EvaluationDimension::StructuralIntegrity,
 );
-const SCOPE_AND_LIFECYCLE: AssessmentSpec = AssessmentSpec::hard_gated_in(
+const SCOPE_AND_LIFECYCLE: AssessmentSpec = AssessmentSpec::scored_in(
     "scope_and_lifecycle",
     15,
     "Only allowed production paths changed, protected content remained exact, and the terminal session left cleanup-owned resources bounded.",
@@ -88,48 +88,42 @@ const ASSESSMENTS: &[AssessmentSpec] = &[
     SCOPE_AND_LIFECYCLE,
 ];
 
-const HANDOFF_ORCHESTRATION: AssessmentSpec = AssessmentSpec::hard_gated_in(
+const HANDOFF_ORCHESTRATION: AssessmentSpec = AssessmentSpec::scored_in(
     "orchestration_discipline",
     15,
     "The Harness root registered phase-scoped validators and wakes before spawning exactly one planner and one implementer in order.",
     EvaluationDimension::StructuralIntegrity,
 );
-const HANDOFF_GIT_INTEGRITY: AssessmentSpec = AssessmentSpec::hard_gated_in(
+const HANDOFF_GIT_INTEGRITY: AssessmentSpec = AssessmentSpec::scored_in(
     "git_handoff_integrity",
     20,
     "The accepted plan and implementation are clean, linear Git checkpoints on the original branch, and the plan is the only cross-session work product.",
     EvaluationDimension::StructuralIntegrity,
 );
-const HANDOFF_TICKET_ACCEPTANCE: AssessmentSpec = AssessmentSpec::hard_gated_in(
+const HANDOFF_TICKET_ACCEPTANCE: AssessmentSpec = AssessmentSpec::scored_in(
     "ticket_acceptance",
     35,
     "The focused, hidden semantic, and complete public probes independently accept the committed implementation checkpoint.",
     EvaluationDimension::Deliverable,
 );
-const HANDOFF_SCOPE_AND_LIFECYCLE: AssessmentSpec = AssessmentSpec::hard_gated_in(
+const HANDOFF_SCOPE_AND_LIFECYCLE: AssessmentSpec = AssessmentSpec::scored_in(
     "scope_and_lifecycle",
     10,
     "The root did not edit, child effects remained in scope, protected content stayed exact, and the complete three-session tree terminated cleanly.",
     EvaluationDimension::StructuralIntegrity,
 );
-const HANDOFF_EXECUTION_EFFICIENCY: AssessmentSpec = AssessmentSpec::score_only_in(
+const HANDOFF_EXECUTION_EFFICIENCY: AssessmentSpec = AssessmentSpec::scored_in(
     "execution_efficiency",
     15,
     "Execution efficiency against stable absolute budgets, weighted toward tokens and observed work rather than wall-clock noise.",
     EvaluationDimension::Efficiency,
 );
-const HANDOFF_CONVERGENCE: AssessmentSpec = AssessmentSpec::score_only_in(
+const HANDOFF_CONVERGENCE: AssessmentSpec = AssessmentSpec::scored_in(
     "handoff_convergence",
     5,
     "The planner and implementer checkpoints converged on their first attempts without auditor nudges.",
     EvaluationDimension::StructuralIntegrity,
 );
-const GIT_HANDOFF_REQUIRED_ASSESSMENTS: &[AssessmentSpec] = &[
-    HANDOFF_ORCHESTRATION,
-    HANDOFF_GIT_INTEGRITY,
-    HANDOFF_TICKET_ACCEPTANCE,
-    HANDOFF_SCOPE_AND_LIFECYCLE,
-];
 const GIT_HANDOFF_ASSESSMENTS: &[AssessmentSpec] = &[
     HANDOFF_ORCHESTRATION,
     HANDOFF_GIT_INTEGRITY,
@@ -1128,8 +1122,7 @@ fn capture<'a>(
 ) -> DeliverableCaptureFuture<'a> {
     Box::pin(async move {
         let evidence = collect_evidence(observation, run_id).await?;
-        let evaluation = evaluate_evidence(&evidence, observation)?;
-        let invariants = super::captured_gate_invariants(evaluation);
+        let (_, invariants) = assess_evidence(&evidence, observation)?;
         let session_provenance = ProvenanceEvidence {
             kind: "session".into(),
             source_id: observation.metrics.root_session_id.clone(),
@@ -1431,6 +1424,13 @@ fn evaluate_evidence(
     evidence: &EngineeringEvidence,
     observation: &ScenarioObservation,
 ) -> Result<super::ObjectiveEvaluation> {
+    Ok(assess_evidence(evidence, observation)?.0)
+}
+
+fn assess_evidence(
+    evidence: &EngineeringEvidence,
+    observation: &ScenarioObservation,
+) -> Result<(super::ObjectiveEvaluation, Vec<CapturedInvariant>)> {
     let inspection = &evidence.inspection;
     let first_edit = inspection.first_edit_call;
     let relevant_source_before_edit = before(inspection.relevant_source_read_call, first_edit);
@@ -1480,7 +1480,7 @@ fn evaluate_evidence(
         && !evidence.prohibited_effect_observed
         && observation.metrics.complete;
 
-    let mut evaluation = assessment::build_evaluation(
+    let evaluation = assessment::build_evaluation(
         if patch_present {
             crate::report::CompletionState::Completed
         } else {
@@ -1575,14 +1575,15 @@ fn evaluate_evidence(
         ("root_session_terminal", observation.metrics.complete),
         ("child_sessions_terminal", observation.metrics.complete),
     ];
-    for (id, passed) in granular {
-        evaluation.hard_gates.push(common::gate(
-            id,
+    let invariants = granular
+        .into_iter()
+        .map(|(id, passed)| CapturedInvariant {
+            id: id.into(),
             passed,
-            format!("deterministic engineering evidence: {id}={passed}"),
-        ));
-    }
-    Ok(evaluation)
+            reason: format!("deterministic engineering evidence: {id}={passed}"),
+        })
+        .collect();
+    Ok((evaluation, invariants))
 }
 
 fn before(left: Option<u64>, right: Option<u64>) -> bool {
@@ -1823,20 +1824,12 @@ fn deliverable_contract() -> DeliverableContract {
             artifact_expectation("repair_timeline", "repair_timeline", object_schema.clone()),
             artifact_expectation("engineering_report", "engineering_report", object_schema),
         ],
-        invariants: ASSESSMENTS
+        invariants: GRANULAR_GATES
             .iter()
-            .map(|assessment| InvariantSpec {
-                id: assessment.id().into(),
-                description: assessment.description().into(),
+            .map(|(id, description)| InvariantSpec {
+                id: (*id).into(),
+                description: (*description).into(),
             })
-            .chain(
-                GRANULAR_GATES
-                    .iter()
-                    .map(|(id, description)| InvariantSpec {
-                        id: (*id).into(),
-                        description: (*description).into(),
-                    }),
-            )
             .collect(),
         provenance_required: true,
         capture_before_cleanup: true,
@@ -3597,8 +3590,15 @@ fn git_handoff_evaluate<'a>(
 
 async fn evaluate_git_handoff_evidence(
     evidence: &GitHandoffEvidence,
-    _observation: &ScenarioObservation,
+    observation: &ScenarioObservation,
 ) -> Result<super::ObjectiveEvaluation> {
+    Ok(assess_git_handoff_evidence(evidence, observation).await?.0)
+}
+
+async fn assess_git_handoff_evidence(
+    evidence: &GitHandoffEvidence,
+    _observation: &ScenarioObservation,
+) -> Result<(super::ObjectiveEvaluation, Vec<CapturedInvariant>)> {
     let accepted_plan = evidence
         .attempts
         .iter()
@@ -3679,7 +3679,7 @@ async fn evaluate_git_handoff_evidence(
         && attempts_persisted
         && same_session_repairs;
 
-    let mut evaluation = assessment::build_evaluation(
+    let evaluation = assessment::build_evaluation(
         if accepted_implementation.is_some() {
             crate::report::CompletionState::Completed
         } else {
@@ -3748,7 +3748,7 @@ async fn evaluate_git_handoff_evidence(
     let allowed_paths = latest.is_some_and(|record| record.allowed_paths_only);
     let protected = latest.is_some_and(|record| record.protected_paths_exact);
     let patch_budget = latest.is_some_and(|record| record.within_budget);
-    for (id, passed) in [
+    let invariants = [
         (
             "fixture_identity_exact",
             evidence.baseline.fixture_head == evidence.task.fixture_revision
@@ -3790,14 +3790,15 @@ async fn evaluate_git_handoff_evidence(
             !evidence.prohibited_effect_observed,
         ),
         ("three_session_tree_terminal", evidence.session_tree_exact),
-    ] {
-        evaluation.hard_gates.push(common::gate(
-            id,
-            passed,
-            format!("deterministic Git handoff evidence: {id}={passed}"),
-        ));
-    }
-    Ok(evaluation)
+    ]
+    .into_iter()
+    .map(|(id, passed)| CapturedInvariant {
+        id: id.into(),
+        passed,
+        reason: format!("deterministic Git handoff evidence: {id}={passed}"),
+    })
+    .collect();
+    Ok((evaluation, invariants))
 }
 
 #[derive(Debug)]
@@ -3970,8 +3971,7 @@ fn git_handoff_capture<'a>(
 ) -> DeliverableCaptureFuture<'a> {
     Box::pin(async move {
         let evidence = collect_git_handoff_evidence(context, observation, run_id).await?;
-        let evaluation = evaluate_git_handoff_evidence(&evidence, observation).await?;
-        let invariants = super::captured_gate_invariants(evaluation);
+        let (_, invariants) = assess_git_handoff_evidence(&evidence, observation).await?;
         let root_provenance = ProvenanceEvidence {
             kind: "session".into(),
             source_id: observation.metrics.root_session_id.clone(),
@@ -4208,20 +4208,12 @@ fn git_handoff_deliverable_contract() -> DeliverableContract {
             artifact_expectation("repair_timeline", "repair_timeline", object_schema.clone()),
             artifact_expectation("engineering_report", "engineering_report", object_schema),
         ],
-        invariants: GIT_HANDOFF_REQUIRED_ASSESSMENTS
+        invariants: GIT_HANDOFF_GRANULAR_GATES
             .iter()
-            .map(|assessment| InvariantSpec {
-                id: assessment.id().into(),
-                description: assessment.description().into(),
+            .map(|(id, description)| InvariantSpec {
+                id: (*id).into(),
+                description: (*description).into(),
             })
-            .chain(
-                GIT_HANDOFF_GRANULAR_GATES
-                    .iter()
-                    .map(|(id, description)| InvariantSpec {
-                        id: (*id).into(),
-                        description: (*description).into(),
-                    }),
-            )
             .collect(),
         provenance_required: true,
         capture_before_cleanup: true,
@@ -4358,12 +4350,12 @@ mod tests {
     }
 
     #[test]
-    fn engineering_ticket_v3_remains_the_single_session_baseline() {
+    fn engineering_ticket_v4_remains_the_single_session_baseline() {
         let baseline = scenario("regression");
         let materialized = materialize("regression", CANONICAL_SEED).unwrap();
         assert_eq!(baseline.id, ID);
         assert_eq!(baseline.version, VERSION);
-        assert_eq!(VERSION, 3);
+        assert_eq!(VERSION, 4);
         assert!(!baseline.prompt.contains("harness::spawn"));
         assert!(!materialized
             .case
@@ -4373,11 +4365,11 @@ mod tests {
     }
 
     #[test]
-    fn git_handoff_v3_materializes_a_distinct_ten_asset_contract() {
+    fn git_handoff_v4_materializes_a_distinct_ten_asset_contract() {
         let materialized = git_handoff_materialize("catalog", 42).unwrap();
         assert_eq!(materialized.spec.id, GIT_HANDOFF_ID);
         assert_eq!(materialized.spec.version, GIT_HANDOFF_VERSION);
-        assert_eq!(GIT_HANDOFF_VERSION, 3);
+        assert_eq!(GIT_HANDOFF_VERSION, 4);
         assert_eq!(
             materialized.case.inputs["difficulty_profile"],
             GIT_HANDOFF_DIFFICULTY_PROFILE
@@ -4403,7 +4395,7 @@ mod tests {
     }
 
     #[test]
-    fn git_handoff_v3_separates_hard_gates_from_graded_signals() {
+    fn git_handoff_v4_uses_numeric_criteria() {
         let spec = git_handoff_scenario("rubric");
         let rubric = spec
             .criteria
@@ -4423,25 +4415,25 @@ mod tests {
                 (
                     "orchestration_discipline",
                     15,
-                    crate::assessment::AssessmentPolicy::HardGate,
+                    crate::assessment::AssessmentPolicy::Advisory,
                     EvaluationDimension::StructuralIntegrity,
                 ),
                 (
                     "git_handoff_integrity",
                     20,
-                    crate::assessment::AssessmentPolicy::HardGate,
+                    crate::assessment::AssessmentPolicy::Advisory,
                     EvaluationDimension::StructuralIntegrity,
                 ),
                 (
                     "ticket_acceptance",
                     35,
-                    crate::assessment::AssessmentPolicy::HardGate,
+                    crate::assessment::AssessmentPolicy::Advisory,
                     EvaluationDimension::Deliverable,
                 ),
                 (
                     "scope_and_lifecycle",
                     10,
-                    crate::assessment::AssessmentPolicy::HardGate,
+                    crate::assessment::AssessmentPolicy::Advisory,
                     EvaluationDimension::StructuralIntegrity,
                 ),
                 (
@@ -4470,8 +4462,9 @@ mod tests {
             .into_iter()
             .map(|invariant| invariant.id)
             .collect::<HashSet<_>>();
-        assert!(invariant_ids.contains("orchestration_discipline"));
-        assert!(invariant_ids.contains("git_handoff_integrity"));
+        assert!(!invariant_ids.contains("orchestration_discipline"));
+        assert!(!invariant_ids.contains("git_handoff_integrity"));
+        assert!(invariant_ids.contains("fixture_identity_exact"));
         assert!(!invariant_ids.contains("execution_efficiency"));
         assert!(!invariant_ids.contains("handoff_convergence"));
     }
@@ -5460,7 +5453,7 @@ mod tests {
             .map(|invariant| invariant.id.as_str())
             .collect::<HashSet<_>>();
         assert_eq!(ids.len(), contract.invariants.len());
-        assert_eq!(ids.len(), ASSESSMENTS.len() + GRANULAR_GATES.len());
+        assert_eq!(ids.len(), GRANULAR_GATES.len());
     }
 
     fn copy_tree(source: &Path, destination: &Path) -> Result<()> {

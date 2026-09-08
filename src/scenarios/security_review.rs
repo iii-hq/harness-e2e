@@ -10,7 +10,7 @@ use super::{
 };
 
 pub const ID: &str = "security_review";
-pub const VERSION: u32 = 4;
+pub const VERSION: u32 = 5;
 
 pub fn scenario(_run_id: &str) -> ScenarioSpec {
     ScenarioSpec {
@@ -29,19 +29,19 @@ pub fn scenario(_run_id: &str) -> ScenarioSpec {
         },
         denied_functions: &[],
         criteria: vec![
-            CriterionSpec::advisory_deterministic(
+            CriterionSpec::scored(
                 "scan_a_detection",
                 60,
                 "The commit A scan identifies the seeded security capabilities while preserving every operational hard gate.",
                 EvaluationDimension::Deliverable,
             ),
-            CriterionSpec::advisory_deterministic(
+            CriterionSpec::scored(
                 "suggest_a_quality",
                 20,
                 "When findings deterministically enable suggestions, the textual patches are useful and applicable without mutating the fixture.",
                 EvaluationDimension::Deliverable,
             ),
-            CriterionSpec::advisory_deterministic(
+            CriterionSpec::scored(
                 "scan_b_detection",
                 20,
                 "An explicit request immediately creates and completes the commit B scan with coherent report evidence.",

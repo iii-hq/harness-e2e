@@ -4,7 +4,6 @@ import {
   ABOUT_PANEL_STORAGE_KEY,
   AboutTestPanel,
   criteriaCaption,
-  hardGateCount,
   storedAboutPanelOpen,
   TestCriteriaList,
   totalWeight,
@@ -56,8 +55,8 @@ describe('about test panel', () => {
     expect(html).toContain('perft_exact')
     // The requirement, not an observed conclusion.
     expect(html).toContain('exactly equal to the kernel oracle')
-    expect(html).toContain('hard gate')
-    expect(html).toContain('score only')
+    expect(html).not.toContain('hard gate')
+    expect(html).not.toContain('score only')
     // Budgets read as numbers a person can compare, not raw tokens.
     expect(html).toContain('48 turns')
     expect(html).toContain('65,536 output')
@@ -114,15 +113,10 @@ describe('about test panel', () => {
     expect(ABOUT_PANEL_STORAGE_KEY).toBe('harness-e2e:about-test-open')
   })
 
-  it('summarises the contract as the deterministic scoring it is', () => {
+  it('summarises the numeric scoring contract', () => {
     expect(totalWeight(spec.criteria)).toBe(50)
-    expect(hardGateCount(spec.criteria)).toBe(1)
-    expect(criteriaCaption(spec.criteria)).toBe(
-      '2 criteria · 1 hard gate · deterministic',
-    )
-    expect(criteriaCaption([spec.criteria[1]])).toBe(
-      '1 criterion · deterministic',
-    )
+    expect(criteriaCaption(spec.criteria)).toBe('2 criteria · 50 points')
+    expect(criteriaCaption([spec.criteria[1]])).toBe('1 criterion · 10 points')
   })
 
   it('pairs each criterion with its outcome when a run supplies one', () => {

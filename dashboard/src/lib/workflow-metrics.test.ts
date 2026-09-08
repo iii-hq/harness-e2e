@@ -69,8 +69,8 @@ describe('workflow metrics', () => {
       skippedSteps: 1,
       durationMs: 50,
       assetCount: 1,
-      hardGateCount: 2,
-      passedHardGateCount: 1,
+      runtimeCheckCount: 2,
+      passedRuntimeCheckCount: 1,
       evaluationCount: 1,
       failureCount: 1,
     })

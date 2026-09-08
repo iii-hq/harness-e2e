@@ -113,7 +113,6 @@ function detail(run: RunAssessmentContract): DashboardExecutionDetail {
                 tokens_completed_p50: 1200,
                 failed_attempt_tokens: 0,
                 tokens_per_completion: 1200,
-                hard_gate_failures: 0,
                 technical_failures: 0,
               },
               runs: [
@@ -215,7 +214,7 @@ describe('assessment presentation model', () => {
     })
   })
 
-  it('orders a hard-gate failure ahead of a passing run', () => {
+  it('does not prioritize a legacy gate outcome over a passing run', () => {
     const failing = contract({
       run_id: 'run-2',
       system_status: 'hard_gate_failed',
@@ -230,8 +229,8 @@ describe('assessment presentation model', () => {
     })
     const model = buildAssessmentWorkspace(input)
     expect(model.runs.map((run) => run.systemStatus)).toEqual([
-      'hard_gate_failed',
       'passed',
+      'hard_gate_failed',
     ])
   })
 

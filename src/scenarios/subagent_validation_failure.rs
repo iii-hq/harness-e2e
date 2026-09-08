@@ -26,7 +26,7 @@ use super::{
 };
 
 pub const ID: &str = "subagent_validation_failure";
-const VERSION: u32 = 5;
+const VERSION: u32 = 6;
 const DELIVERABLE_ID: &str = "bounded_failure_record";
 
 const HOOK_TYPE: &str = "harness::hook::post-turn";
@@ -38,17 +38,17 @@ const EXPECTED_NUDGES: usize = 2;
 /// Wake deadline: comfortably after the child fails (~1 min), well inside
 /// the stuck timeout.
 const EXPIRY_DELAY_MS: u64 = 150_000;
-const BOUNDED_FAILURE: AssessmentSpec = AssessmentSpec::hard_gated(
+const BOUNDED_FAILURE: AssessmentSpec = AssessmentSpec::scored(
     "bounded_failure",
     40,
     "The child fails after exactly the budgeted denials; the verdict key is never written.",
 );
-const ORCHESTRATION_DISCIPLINE: AssessmentSpec = AssessmentSpec::hard_gated(
+const ORCHESTRATION_DISCIPLINE: AssessmentSpec = AssessmentSpec::scored(
     "orchestration_discipline",
     30,
     "Validator scoped to the child and the deadline wake armed before the spawn.",
 );
-const EXPIRY_REPORT: AssessmentSpec = AssessmentSpec::hard_gated(
+const EXPIRY_REPORT: AssessmentSpec = AssessmentSpec::scored(
     "expiry_report",
     30,
     "The parent is woken by the expiry notice and reports the give-up with the exact line.",

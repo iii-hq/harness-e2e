@@ -176,8 +176,8 @@ describe('test history page state', () => {
       label: 'passed',
     })
     expect(statusPresentation('hard_gate_failed')).toEqual({
-      status: 'hard_gate',
-      label: 'hard gate failed',
+      status: 'failed',
+      label: 'failed (legacy result)',
     })
     expect(statusPresentation('technical_failed').status).toBe('failed')
   })

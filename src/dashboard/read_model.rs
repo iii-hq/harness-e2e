@@ -14,7 +14,9 @@ use super::store::{load_runs, StoredRun};
 use crate::artifact;
 use crate::assessment::{AssessmentKind, AssessmentPolicy, RunAssessmentContract};
 use crate::identity::StackIdentity;
-use crate::report::{E2eRunReport, E2eScenarioReport, EvaluationDimension, RunStatus};
+use crate::report::{
+    CompletionState, E2eRunReport, E2eScenarioReport, EvaluationDimension, RunStatus,
+};
 use crate::scenarios::{
     stable_seed, ComplexityClassification, ExecutionPolicy, ScenarioCharacterization, ScenarioId,
     ScenarioSpec,
@@ -334,6 +336,7 @@ struct RunMetrics {
     function_calls: Option<f64>,
     function_call_errors: Option<f64>,
     turns: Option<f64>,
+    completion: CompletionState,
     status: RunStatus,
     assessment: RunAssessmentContract,
 }
@@ -1136,6 +1139,7 @@ fn run_metrics(run: &E2eRunReport, assessment: &RunAssessmentContract) -> RunMet
                         .then_some(metrics.totals.turns as f64)
                 })
             }),
+        completion: run.completion,
         status: run.status,
         assessment: assessment.clone(),
     }
@@ -1144,12 +1148,12 @@ fn run_metrics(run: &E2eRunReport, assessment: &RunAssessmentContract) -> RunMet
 fn scenario_status(scenario: &E2eScenarioReport) -> &'static str {
     if scenario.aggregate.technical_failures > 0 {
         "technical_failed"
-    } else if scenario.aggregate.hard_gate_failures > 0 {
-        "hard_gate_failed"
-    } else if scenario.passed {
+    } else if scenario.aggregate.planned_runs > 0
+        && scenario.aggregate.completed_runs == scenario.aggregate.planned_runs
+    {
         "passed"
     } else {
-        "infra_failed"
+        "incomplete"
     }
 }
 
@@ -1245,7 +1249,10 @@ fn side_summary(
     let outcomes = OutcomeCounts {
         passed: runs
             .iter()
-            .filter(|run| run.status == RunStatus::Passed)
+            .filter(|run| {
+                matches!(run.status, RunStatus::Passed | RunStatus::HardGateFailed)
+                    && run.completion == CompletionState::Completed
+            })
             .count(),
         hard_gate_failed: runs
             .iter()
@@ -1727,9 +1734,9 @@ mod tests {
         assert_eq!(
             weights,
             vec![
-                ("perft_exact", 40, AssessmentPolicy::HardGate),
-                ("legal_moves_correct", 30, AssessmentPolicy::HardGate),
-                ("interface_contract", 20, AssessmentPolicy::HardGate),
+                ("perft_exact", 40, AssessmentPolicy::Advisory),
+                ("legal_moves_correct", 30, AssessmentPolicy::Advisory),
+                ("interface_contract", 20, AssessmentPolicy::Advisory),
                 ("build_discipline", 10, AssessmentPolicy::Advisory),
             ]
         );

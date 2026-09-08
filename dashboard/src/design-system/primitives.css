@@ -165,10 +165,6 @@
   --ds-status-color: var(--text-muted, #a3a09c);
 }
 
-.ds-status-hard_gate {
-  --ds-status-color: var(--danger, #d81b3c);
-}
-
 .ds-status-recommendation {
   --ds-status-color: var(--warning, #a87a00);
 }

@@ -47,7 +47,6 @@ function execution(id: string, passRate: number): DashboardExecutionSummary {
       scenario_pass_rate: passRate,
       report_coverage: 100,
       passed_scenarios: passRate === 100 ? 2 : 1,
-      hard_gate_failures: passRate === 100 ? 0 : 1,
       technical_failures: 0,
       total_tokens: id === 'baseline-1' ? 1_000 : 900,
       wall_time_seconds: id === 'baseline-1' ? 12 : 10,
@@ -55,8 +54,7 @@ function execution(id: string, passRate: number): DashboardExecutionSummary {
       turns: id === 'baseline-1' ? 4 : 3,
     },
     assessment_summary: {
-      system_statuses:
-        passRate === 100 ? { passed: 2 } : { passed: 1, hard_gate_failed: 1 },
+      system_statuses: { passed: 2 },
     } as never,
   }
 }

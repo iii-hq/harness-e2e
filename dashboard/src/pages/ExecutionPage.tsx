@@ -127,8 +127,6 @@ function executionStatus(presentation: ExecutionPresentation): {
     return { status: 'incomplete', label: 'Incomplete' }
   if (presentation.attention === 'unavailable')
     return { status: 'unavailable', label: 'Unavailable' }
-  if (presentation.breakdown.hard_gate > 0)
-    return { status: 'hard_gate', label: 'Hard gate failed' }
   if (
     presentation.breakdown.inconclusive > 0 &&
     presentation.breakdown.inconclusive === presentation.breakdown.issues
@@ -226,7 +224,10 @@ export function executionOutcome(
   return {
     value: 'partial',
     label: [...counts]
-      .map(([value, count]) => `${count} ${value.replaceAll('_', ' ')}`)
+      .map(
+        ([value, count]) =>
+          `${count} ${value === 'hard_gate_failed' ? 'failed (legacy result)' : value.replaceAll('_', ' ')}`,
+      )
       .join(' · '),
   }
 }
@@ -341,7 +342,7 @@ export function CountsSection({
           }
           detail={
             scenarioCount
-              ? `${scenarioSummary?.hardGate ?? 0} hard gate · ${scenarioSummary?.failed ?? 0} failed`
+              ? `${scenarioSummary?.failed ?? 0} failed · ${scenarioSummary?.inconclusive ?? 0} inconclusive`
               : 'no scenario report retained'
           }
           tone={

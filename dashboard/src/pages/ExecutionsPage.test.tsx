@@ -48,11 +48,11 @@ function summary(
 const executions = [
   summary({ id: 'passed-1' }),
   summary({
-    id: 'gated-1',
-    status: 'hard_gate_failed',
+    id: 'failed-1',
+    status: 'technical_failed',
     completed_at: '2026-08-25T11:33:00Z',
     assessment_summary: {
-      system_statuses: { hard_gate_failed: 1, passed: 1 },
+      system_statuses: { infrastructure_error: 1, passed: 1 },
     } as never,
     totals: {
       expected_reports: 2,
@@ -83,16 +83,16 @@ describe('executions ledger', () => {
   // Audit E-04: filters round-trip through the hash.
   it('reads and writes only the non-default filters', () => {
     const filters = ledgerFiltersFromParams(
-      new URLSearchParams('q=terra&status=hard_gate&sort=tokens&event=local'),
+      new URLSearchParams('q=terra&status=failed&sort=tokens&event=local'),
     )
     expect(filters).toEqual({
       query: 'terra',
-      status: 'hard_gate',
+      status: 'failed',
       event: 'local',
       sort: 'tokens',
     })
     expect(ledgerFiltersToParams(filters).toString()).toBe(
-      'q=terra&status=hard_gate&event=local&sort=tokens',
+      'q=terra&status=failed&event=local&sort=tokens',
     )
     expect(ledgerFiltersToParams(LEDGER_DEFAULT_FILTERS).toString()).toBe('')
   })
@@ -101,9 +101,9 @@ describe('executions ledger', () => {
     expect(
       filterLedgerRows(rows, {
         ...LEDGER_DEFAULT_FILTERS,
-        status: 'hard_gate',
+        status: 'failed',
       }).map((row) => row.execution.id),
-    ).toEqual(['gated-1'])
+    ).toEqual(['failed-1'])
     expect(
       filterLedgerRows(rows, {
         ...LEDGER_DEFAULT_FILTERS,
@@ -129,15 +129,15 @@ describe('executions ledger', () => {
     expect(
       filterLedgerRows(rows, { ...LEDGER_DEFAULT_FILTERS, sort: 'runtime' })[0]
         .execution.id,
-    ).toBe('gated-1')
+    ).toBe('failed-1')
     expect(
       filterLedgerRows(rows, { ...LEDGER_DEFAULT_FILTERS, sort: 'tokens' })[0]
         .execution.id,
-    ).toBe('gated-1')
+    ).toBe('failed-1')
     expect(
       filterLedgerRows(rows, { ...LEDGER_DEFAULT_FILTERS, sort: 'result' })[0]
         .execution.id,
-    ).toBe('gated-1')
+    ).toBe('failed-1')
   })
 
   // Audit E-12: running is pinned, the rest is grouped by day.
@@ -171,7 +171,7 @@ describe('executions ledger', () => {
     expect(html).toContain('<table>')
     const grouped = groupLedgerRows(rows, NOW)
     expect(grouped.groups[1].rows.map((row) => row.status.label)).toEqual([
-      'hard gate',
+      'failed',
       'cancelled',
     ])
   })

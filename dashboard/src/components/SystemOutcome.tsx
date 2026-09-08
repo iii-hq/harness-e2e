@@ -37,19 +37,21 @@ export function SystemOutcomeBadge({
   outcome: SystemOutcome
   className?: string
 }) {
+  const label =
+    outcome.label ??
+    (outcome.value === 'hard_gate_failed'
+      ? 'failed (legacy result)'
+      : titleCase(outcome.value).toLowerCase())
   return (
     <div
       className={`grid items-baseline gap-x-4 gap-y-0.5 ${className ?? ''}`}
       data-system-outcome
     >
       <span className="min-w-0 [&_.ds-status-badge]:whitespace-normal">
-        <StatusBadge
-          label={outcome.label ?? titleCase(outcome.value).toLowerCase()}
-          status={outcomeStatus(outcome.value)}
-        />
+        <StatusBadge label={label} status={outcomeStatus(outcome.value)} />
       </span>
       <span className="font-mono text-label text-ink-muted">
-        system · deterministic gates, execution and infrastructure
+        system · completion, execution and infrastructure
       </span>
     </div>
   )

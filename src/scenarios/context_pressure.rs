@@ -38,7 +38,7 @@ use super::{
 };
 
 pub const ID: &str = "context_pressure";
-const VERSION: u32 = 4;
+const VERSION: u32 = 5;
 const DELIVERABLE_ID: &str = "context_report";
 const SEGMENT_CHARS: usize = 8_192;
 
@@ -51,23 +51,23 @@ pub const CANONICAL_SEED: u64 = 3003;
 const RUNG: Rung = Rung { segments: 48 };
 const MAX_SEGMENTS: u32 = 48;
 
-const CHARTER_PRESERVED: AssessmentSpec = AssessmentSpec::hard_gated_in(
+const CHARTER_PRESERVED: AssessmentSpec = AssessmentSpec::scored_in(
     "charter_preserved",
     40,
     "The final report reproduces every planted charter fact verbatim after the full distractor load.",
     EvaluationDimension::Deliverable,
 );
-const NEEDLES_RECOVERED: AssessmentSpec = AssessmentSpec::hard_gated(
+const NEEDLES_RECOVERED: AssessmentSpec = AssessmentSpec::scored(
     "needles_recovered",
     30,
     "Every segment needle appears in the report exactly once each, in ascending segment order.",
 );
-const INGESTION_DISCIPLINE: AssessmentSpec = AssessmentSpec::hard_gated(
+const INGESTION_DISCIPLINE: AssessmentSpec = AssessmentSpec::scored(
     "ingestion_discipline",
     20,
     "The charter is read first and each segment exactly once in ascending order, with nothing beyond function discovery and no errors.",
 );
-const CONCISE_REPORT: AssessmentSpec = AssessmentSpec::score_only(
+const CONCISE_REPORT: AssessmentSpec = AssessmentSpec::scored(
     "concise_report",
     10,
     "The report carries the facts and needles without echoing document text.",

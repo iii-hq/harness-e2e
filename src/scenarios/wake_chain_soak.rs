@@ -42,7 +42,7 @@ use super::{
 };
 
 pub const ID: &str = "wake_chain_soak";
-const VERSION: u32 = 3;
+const VERSION: u32 = 4;
 const DELIVERABLE_ID: &str = "soak_trace";
 
 const COUNTER_KEY: &str = "chain-counter";
@@ -62,23 +62,23 @@ struct Rung {
 pub const CANONICAL_SEED: u64 = 5003;
 const RUNG: Rung = Rung { ticks: 50 };
 
-const CHAIN_COMPLETED: AssessmentSpec = AssessmentSpec::hard_gated_in(
+const CHAIN_COMPLETED: AssessmentSpec = AssessmentSpec::scored_in(
     "chain_completed",
     35,
     "The durable counter reaches exactly the rung's tick count and the completion marker is reported.",
     EvaluationDimension::Deliverable,
 );
-const WAKE_INTEGRITY: AssessmentSpec = AssessmentSpec::hard_gated(
+const WAKE_INTEGRITY: AssessmentSpec = AssessmentSpec::scored(
     "wake_integrity",
     30,
     "Every tick is one one-shot wake-only timer with the tick label that fires once, retires, and leaves no binding armed.",
 );
-const MONOTONIC_PROGRESS: AssessmentSpec = AssessmentSpec::hard_gated(
+const MONOTONIC_PROGRESS: AssessmentSpec = AssessmentSpec::scored(
     "monotonic_progress",
     20,
     "The counter advances 0..=N in order with no skips or repeats, and each next timer is armed only after the previous wake.",
 );
-const QUIET_CHAIN: AssessmentSpec = AssessmentSpec::score_only(
+const QUIET_CHAIN: AssessmentSpec = AssessmentSpec::scored(
     "quiet_chain",
     15,
     "The chain runs without function errors or stray calls and reports in a single short line.",

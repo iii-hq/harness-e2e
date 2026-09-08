@@ -11,7 +11,7 @@ use serde_json::Value;
 
 use crate::assessment::{AssessmentKind, AssessmentPolicy};
 use crate::context::E2eContext;
-use crate::report::{CompletionState, HardGateReport};
+use crate::report::CompletionState;
 use crate::wire::SessionMetricsResponse;
 
 mod assessment;
@@ -93,23 +93,7 @@ pub struct CriterionSpec {
 }
 
 impl CriterionSpec {
-    pub const fn required_deterministic(
-        id: &'static str,
-        weight: u8,
-        description: &'static str,
-        dimension: crate::report::EvaluationDimension,
-    ) -> Self {
-        Self {
-            id,
-            weight,
-            description,
-            kind: AssessmentKind::RequiredCheck,
-            policy: AssessmentPolicy::HardGate,
-            dimension,
-        }
-    }
-
-    pub const fn advisory_deterministic(
+    pub const fn scored(
         id: &'static str,
         weight: u8,
         description: &'static str,
@@ -326,10 +310,9 @@ pub struct ScenarioObservation {
 
 pub struct ObjectiveEvaluation {
     /// Whether the subject reached the task's terminal state. This is
-    /// deliberately independent from hard gates and score: a completed task
-    /// may still be objectively wrong or low quality.
+    /// deliberately independent from score: a completed task may still be
+    /// objectively wrong or low quality.
     pub completion: CompletionState,
-    pub hard_gates: Vec<HardGateReport>,
     pub awards: Vec<CriterionAward>,
 }
 
@@ -351,18 +334,6 @@ pub struct CriterionAward {
     pub id: String,
     pub awarded: u8,
     pub reason: String,
-}
-
-fn captured_gate_invariants(objective: ObjectiveEvaluation) -> Vec<CapturedInvariant> {
-    objective
-        .hard_gates
-        .into_iter()
-        .map(|gate| CapturedInvariant {
-            id: gate.id,
-            passed: gate.passed,
-            reason: gate.reason,
-        })
-        .collect()
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema, ValueEnum)]
@@ -938,44 +909,44 @@ mod tests {
         // The two AdaptiveFlow scenarios added by the following delivery stages
         // started independently at v1 and brought that catalog generation to 40 entries.
         let expected = [
-            (ScenarioId::ContextPressure, 4),
-            (ScenarioId::ShellCoderSandbox, 6),
-            (ScenarioId::ResearchPipeline, 6),
-            (ScenarioId::FanoutLadder, 3),
-            (ScenarioId::SecurityReview, 4),
-            (ScenarioId::IncidentResponse, 3),
-            (ScenarioId::TodoWorkerSimple, 3),
-            (ScenarioId::TodoWorkerPlanned, 3),
-            (ScenarioId::EngineeringTicket, 3),
-            (ScenarioId::EngineeringTicketGitHandoff, 3),
-            (ScenarioId::EngineeringEnduranceLadder, 2),
-            (ScenarioId::GitRegressionForensics, 2),
-            (ScenarioId::MechanicalReaction, 5),
-            (ScenarioId::TimerWake, 6),
-            (ScenarioId::ReceivingOperation, 6),
-            (ScenarioId::ValidationLoop, 5),
-            (ScenarioId::SubagentValidation, 5),
-            (ScenarioId::SubagentValidationFailure, 5),
-            (ScenarioId::ValidationSelfRepair, 5),
-            (ScenarioId::ValidationScopeEnforcement, 5),
-            (ScenarioId::ValidationChain, 5),
-            (ScenarioId::SecretHygiene, 2),
-            (ScenarioId::PromptInjectionResilience, 2),
-            (ScenarioId::MovingTarget, 2),
-            (ScenarioId::PoisonMessage, 2),
-            (ScenarioId::CleanupUnderFailure, 2),
-            (ScenarioId::DepthLadder, 3),
-            (ScenarioId::QuorumFanIn, 2),
-            (ScenarioId::ContentionLedger, 2),
-            (ScenarioId::WakeChainSoak, 3),
-            (ScenarioId::ChessEngineBuild, 2),
-            (ScenarioId::ChessPlayLadder, 3),
-            (ScenarioId::TrendBlog, 3),
-            (ScenarioId::ToolContractRecovery, 2),
-            (ScenarioId::PolicyBoundAction, 2),
-            (ScenarioId::CrossAppTransaction, 2),
-            (ScenarioId::PerformanceRegression, 2),
-            (ScenarioId::BrowserCrossSite, 2),
+            (ScenarioId::ContextPressure, 5),
+            (ScenarioId::ShellCoderSandbox, 7),
+            (ScenarioId::ResearchPipeline, 7),
+            (ScenarioId::FanoutLadder, 4),
+            (ScenarioId::SecurityReview, 5),
+            (ScenarioId::IncidentResponse, 4),
+            (ScenarioId::TodoWorkerSimple, 4),
+            (ScenarioId::TodoWorkerPlanned, 4),
+            (ScenarioId::EngineeringTicket, 4),
+            (ScenarioId::EngineeringTicketGitHandoff, 4),
+            (ScenarioId::EngineeringEnduranceLadder, 3),
+            (ScenarioId::GitRegressionForensics, 3),
+            (ScenarioId::MechanicalReaction, 6),
+            (ScenarioId::TimerWake, 7),
+            (ScenarioId::ReceivingOperation, 7),
+            (ScenarioId::ValidationLoop, 6),
+            (ScenarioId::SubagentValidation, 6),
+            (ScenarioId::SubagentValidationFailure, 6),
+            (ScenarioId::ValidationSelfRepair, 6),
+            (ScenarioId::ValidationScopeEnforcement, 6),
+            (ScenarioId::ValidationChain, 6),
+            (ScenarioId::SecretHygiene, 3),
+            (ScenarioId::PromptInjectionResilience, 3),
+            (ScenarioId::MovingTarget, 3),
+            (ScenarioId::PoisonMessage, 3),
+            (ScenarioId::CleanupUnderFailure, 3),
+            (ScenarioId::DepthLadder, 4),
+            (ScenarioId::QuorumFanIn, 3),
+            (ScenarioId::ContentionLedger, 3),
+            (ScenarioId::WakeChainSoak, 4),
+            (ScenarioId::ChessEngineBuild, 3),
+            (ScenarioId::ChessPlayLadder, 4),
+            (ScenarioId::TrendBlog, 4),
+            (ScenarioId::ToolContractRecovery, 3),
+            (ScenarioId::PolicyBoundAction, 3),
+            (ScenarioId::CrossAppTransaction, 3),
+            (ScenarioId::PerformanceRegression, 3),
+            (ScenarioId::BrowserCrossSite, 3),
         ];
         assert_eq!(expected.len(), 38);
         for (scenario, version) in expected {
@@ -1029,7 +1000,7 @@ mod tests {
         assert_ne!(first.spec.prompt, retry.spec.prompt);
         assert_ne!(first.case.case_id, other_seed.case.case_id);
         assert_ne!(first.case.inputs, other_seed.case.inputs);
-        assert_eq!(first.case.scenario_version, 5);
+        assert_eq!(first.case.scenario_version, 6);
     }
 
     #[test]
@@ -1237,7 +1208,7 @@ mod tests {
     #[test]
     fn validation_reports_criterion_values_before_weight_total() {
         let mut spec = ScenarioId::ContextPressure.spec("run");
-        spec.criteria = vec![CriterionSpec::advisory_deterministic(
+        spec.criteria = vec![CriterionSpec::scored(
             "durable_result",
             0,
             "invalid",
@@ -1254,13 +1225,13 @@ mod tests {
     fn validation_reports_duplicate_criterion_indexes() {
         let mut spec = ScenarioId::ContextPressure.spec("run");
         spec.criteria = vec![
-            CriterionSpec::advisory_deterministic(
+            CriterionSpec::scored(
                 "duplicate",
                 50,
                 "first",
                 crate::report::EvaluationDimension::StructuralIntegrity,
             ),
-            CriterionSpec::advisory_deterministic(
+            CriterionSpec::scored(
                 "duplicate",
                 50,
                 "second",

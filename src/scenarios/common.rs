@@ -1,9 +1,6 @@
 use serde_json::{json, Value};
 
 use crate::context::E2eContext;
-use crate::report::{EvaluationDimension, HardGateReport};
-
-use super::{EvaluationFuture, ObjectiveEvaluation, ScenarioObservation};
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct ObservedFunctionCall {
@@ -179,15 +176,6 @@ pub fn function_outcomes(transcript: &Value) -> Vec<ObservedFunctionOutcome> {
         .collect()
 }
 
-pub fn gate(id: &str, passed: bool, reason: impl Into<String>) -> HardGateReport {
-    HardGateReport {
-        id: id.to_string(),
-        dimension: EvaluationDimension::StructuralIntegrity,
-        passed,
-        reason: reason.into(),
-    }
-}
-
 pub fn state_value(response: Value) -> Value {
     match response {
         Value::Object(mut object)
@@ -276,49 +264,6 @@ pub async fn active_binding_count(context: &E2eContext, session_id: &str) -> any
         .and_then(Value::as_array)
         .map(Vec::len)
         .unwrap_or(usize::MAX))
-}
-
-pub fn evaluate_text_response<'a>(
-    _context: &'a E2eContext,
-    observation: &'a ScenarioObservation,
-    _run_id: &'a str,
-) -> EvaluationFuture<'a> {
-    Box::pin(async move {
-        let calls = function_calls(&observation.transcript);
-        let response = observation.response.as_str();
-        Ok(ObjectiveEvaluation {
-            completion: if response.trim().is_empty() {
-                crate::report::CompletionState::TaskIncomplete
-            } else {
-                crate::report::CompletionState::Completed
-            },
-            hard_gates: vec![
-                gate(
-                    "response_present",
-                    !response.trim().is_empty(),
-                    if response.trim().is_empty() {
-                        "the assistant returned no text"
-                    } else {
-                        "the assistant returned a textual response"
-                    },
-                ),
-                gate(
-                    "no_function_calls",
-                    calls.is_empty() && observation.metrics.totals.function_calls == 0,
-                    format!("observed {} function call(s)", calls.len()),
-                ),
-                gate(
-                    "single_turn",
-                    observation.metrics.totals.turns == 1,
-                    format!(
-                        "observed {} turn(s), expected exactly one",
-                        observation.metrics.totals.turns
-                    ),
-                ),
-            ],
-            awards: Vec::new(),
-        })
-    })
 }
 
 #[cfg(test)]
