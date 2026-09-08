@@ -30,7 +30,7 @@ use super::{
 };
 
 pub const ID: &str = "git_regression_forensics";
-const VERSION: u32 = 3;
+const VERSION: u32 = 4;
 
 const ACQUISITION_ID: &str = "repository_acquisition";
 const TRACE_ID: &str = "investigation_trace";
@@ -739,12 +739,13 @@ async fn collect_snapshot(root: &Path, observation: &ScenarioObservation) -> Sna
     });
     let clone_observed = calls
         .iter()
-        .any(|call| exact_bundle_clone(call, &bundle_path, &checkout));
+        .any(|call| exact_bundle_clone(call, root, &bundle_path, &checkout));
     let direct_probe_calls = calls
         .iter()
         .filter(|call| {
             exact_probe_call(
                 call,
+                root,
                 &probe_path,
                 &checkout,
                 &root.join(TRACE_RELATIVE_PATH),
@@ -1085,7 +1086,12 @@ async fn validate_report_evidence(checkout: &Path, report: &ForensicsReport) -> 
     true
 }
 
-fn exact_bundle_clone(call: &common::ObservedFunctionCall, bundle: &Path, checkout: &Path) -> bool {
+fn exact_bundle_clone(
+    call: &common::ObservedFunctionCall,
+    root: &Path,
+    bundle: &Path,
+    checkout: &Path,
+) -> bool {
     if call.function_id != "shell::exec"
         || call.arguments.get("command").and_then(Value::as_str) != Some("git")
     {
@@ -1095,15 +1101,22 @@ fn exact_bundle_clone(call: &common::ObservedFunctionCall, bundle: &Path, checko
         return false;
     };
     let args = args.iter().filter_map(Value::as_str).collect::<Vec<_>>();
+    let cwd = root.join(
+        call.arguments
+            .get("cwd")
+            .and_then(Value::as_str)
+            .unwrap_or("."),
+    );
     args.len() == 4
         && args[0] == "clone"
         && args[1] == "--no-hardlinks"
-        && normalize_path(Path::new(args[2])) == normalize_path(bundle)
-        && normalize_path(Path::new(args[3])) == normalize_path(checkout)
+        && normalize_path(&cwd.join(args[2])) == normalize_path(bundle)
+        && normalize_path(&cwd.join(args[3])) == normalize_path(checkout)
 }
 
 fn exact_probe_call(
     call: &common::ObservedFunctionCall,
+    root: &Path,
     probe: &Path,
     checkout: &Path,
     trace: &Path,
@@ -1117,11 +1130,17 @@ fn exact_probe_call(
         return false;
     };
     let args = args.iter().filter_map(Value::as_str).collect::<Vec<_>>();
+    let cwd = root.join(
+        call.arguments
+            .get("cwd")
+            .and_then(Value::as_str)
+            .unwrap_or("."),
+    );
     args.len() == 4
-        && normalize_path(Path::new(args[0])) == normalize_path(probe)
-        && normalize_path(Path::new(args[1])) == normalize_path(checkout)
+        && normalize_path(&cwd.join(args[0])) == normalize_path(probe)
+        && normalize_path(&cwd.join(args[1])) == normalize_path(checkout)
         && args[2] == "--trace"
-        && normalize_path(Path::new(args[3])) == normalize_path(trace)
+        && normalize_path(&cwd.join(args[3])) == normalize_path(trace)
 }
 
 fn tested_commits_match_trace(report: &ForensicsReport, records: &[ProbeRecord]) -> bool {
@@ -1334,6 +1353,56 @@ mod tests {
                 path: CHANGED_PATH.to_string(),
                 observation: "The t7 term changes sign and magnitude.".to_string(),
             }],
+        }
+    }
+
+    #[test]
+    fn command_evidence_accepts_workspace_relative_paths_without_accepting_other_targets() {
+        let root = Path::new("/attempt/git-forensics");
+        let bundle = root.join(BUNDLE_RELATIVE_PATH);
+        let checkout = root.join(CHECKOUT_RELATIVE_PATH);
+        let probe = root.join(PROBE_RELATIVE_PATH);
+        let trace = root.join(TRACE_RELATIVE_PATH);
+        for absolute in [false, true] {
+            let path = |relative: &str| {
+                if absolute {
+                    root.join(relative)
+                } else {
+                    PathBuf::from(relative)
+                }
+            };
+            let mut clone = common::ObservedFunctionCall {
+                function_id: "shell::exec".into(),
+                arguments: json!({"command": "git", "args": ["clone", "--no-hardlinks", path(BUNDLE_RELATIVE_PATH), path(CHECKOUT_RELATIVE_PATH)]}),
+            };
+            assert!(exact_bundle_clone(&clone, root, &bundle, &checkout));
+            clone.arguments["cwd"] = json!("/another-attempt");
+            assert_eq!(
+                exact_bundle_clone(&clone, root, &bundle, &checkout),
+                absolute
+            );
+            clone.arguments["cwd"] = json!(root);
+            clone.arguments["args"][2] = json!("/another-attempt/input/repository.bundle");
+            assert!(!exact_bundle_clone(&clone, root, &bundle, &checkout));
+            clone.arguments["args"][2] = json!("../git-forensics/input/repository.bundle");
+            assert!(!exact_bundle_clone(&clone, root, &bundle, &checkout));
+
+            let mut call = common::ObservedFunctionCall {
+                function_id: "shell::exec".into(),
+                arguments: json!({"command": "python3", "args": [path(PROBE_RELATIVE_PATH), path(CHECKOUT_RELATIVE_PATH), "--trace", path(TRACE_RELATIVE_PATH)]}),
+            };
+            assert!(exact_probe_call(&call, root, &probe, &checkout, &trace));
+            call.arguments["cwd"] = json!("/another-attempt");
+            assert_eq!(
+                exact_probe_call(&call, root, &probe, &checkout, &trace),
+                absolute
+            );
+            call.arguments["cwd"] = json!(root);
+            call.arguments["args"][3] = json!("other-trace.jsonl");
+            assert!(!exact_probe_call(&call, root, &probe, &checkout, &trace));
+            call.arguments["args"][3] = json!(path(TRACE_RELATIVE_PATH));
+            call.arguments["command"] = json!("bash");
+            assert!(!exact_probe_call(&call, root, &probe, &checkout, &trace));
         }
     }
 

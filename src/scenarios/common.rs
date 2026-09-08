@@ -176,6 +176,27 @@ pub fn function_outcomes(transcript: &Value) -> Vec<ObservedFunctionOutcome> {
         .collect()
 }
 
+/// Failed trigger-info probes against the fallback namespace are discovery,
+/// not failed product work. Only correlated, fully identified failures count.
+pub fn identified_discovery_errors(transcript: &Value) -> u64 {
+    function_outcomes(transcript)
+        .iter()
+        .filter(|outcome| {
+            outcome.function_id == "engine::triggers::info"
+                && outcome
+                    .arguments
+                    .get("namespace")
+                    .is_none_or(|namespace| namespace.as_str() == Some("default"))
+                && outcome.is_error == Some(true)
+                && outcome.error_code.as_deref() == Some("NOT_FOUND")
+        })
+        .count() as u64
+}
+
+pub fn operational_function_errors(total: u64, identified_discovery: u64) -> u64 {
+    total.checked_sub(identified_discovery).unwrap_or(total)
+}
+
 pub fn state_value(response: Value) -> Value {
     match response {
         Value::Object(mut object)
@@ -359,6 +380,42 @@ mod tests {
         assert_eq!(outcomes[0].is_error, Some(false));
         assert_eq!(outcomes[1].error_code.as_deref(), Some("version_conflict"));
         assert_eq!(outcomes[2].is_error, None);
+    }
+
+    #[test]
+    fn excludes_only_identified_default_namespace_trigger_discovery_errors() {
+        let transcript = json!({"messages": [
+            {"message": {"role": "assistant", "content": [
+                {"type": "function_call", "id": "discovery", "function_id": "engine::triggers::info", "arguments": {"id": "timer"}},
+                {"type": "function_call", "id": "write", "function_id": "state::set", "arguments": {"scope": "s", "key": "k", "value": 1}},
+                {"type": "function_call", "id": "registration", "function_id": "engine::register_trigger", "arguments": {"namespace": "default"}}
+            ]}},
+            {"message": {"role": "function_result", "function_call_id": "discovery", "function_id": "engine::triggers::info", "is_error": true, "details": {"error": {"code": "NOT_FOUND"}}}},
+            {"message": {"role": "function_result", "function_call_id": "write", "function_id": "state::set", "is_error": true, "error_code": "WRITE_FAILED"}},
+            {"message": {"role": "function_result", "function_call_id": "registration", "function_id": "engine::register_trigger", "is_error": true, "error_code": "NOT_FOUND"}}
+        ]});
+
+        let discovery = identified_discovery_errors(&transcript);
+        assert_eq!(discovery, 1);
+        assert_eq!(operational_function_errors(1, discovery), 0);
+        assert_eq!(operational_function_errors(3, discovery), 2);
+    }
+
+    #[test]
+    fn malformed_or_uncorrelated_discovery_evidence_does_not_hide_errors() {
+        let transcript = json!({"messages": [
+            {"message": {"role": "assistant", "content": [
+                {"type": "function_call", "id": "missing", "function_id": "engine::triggers::info", "arguments": {"id": "timer", "namespace": "default"}},
+                {"type": "function_call", "id": "wrong-namespace", "function_id": "engine::triggers::info", "arguments": {"id": "timer", "namespace": "other"}},
+                {"type": "function_call", "id": "missing-code", "function_id": "engine::triggers::info", "arguments": {"id": "timer", "namespace": "default"}}
+            ]}},
+            {"message": {"role": "function_result", "function_call_id": "wrong-namespace", "function_id": "engine::triggers::info", "is_error": true, "error_code": "NOT_FOUND"}},
+            {"message": {"role": "function_result", "function_call_id": "missing-code", "function_id": "engine::triggers::info", "is_error": true}}
+        ]});
+
+        assert_eq!(identified_discovery_errors(&transcript), 0);
+        assert_eq!(operational_function_errors(3, 0), 3);
+        assert_eq!(operational_function_errors(1, 2), 1);
     }
 
     #[test]
