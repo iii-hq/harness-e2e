@@ -16,7 +16,7 @@ use super::{
 };
 
 pub const ID: &str = "timer_wake";
-const VERSION: u32 = 7;
+const VERSION: u32 = 8;
 const DELIVERABLE_ID: &str = "timer_result";
 
 const RESULT_KEY: &str = "result";
@@ -368,7 +368,11 @@ fn evaluate<'a>(
                 .iter()
                 .all(|call| call.function_id != "harness::spawn");
         let active_bindings = common::active_binding_count(context, &names.root_session).await?;
-        let no_errors = observation.metrics.totals.function_call_errors == 0;
+        let discovery_errors = common::identified_discovery_errors(&observation.transcript);
+        let operational_errors = common::operational_function_errors(
+            observation.metrics.totals.function_call_errors,
+            discovery_errors,
+        );
         let response = observation.response.to_ascii_lowercase();
         let signal_reported = observation.response.contains(&token);
         let confirmed = response.contains("timer") && response.contains("fired") && signal_reported;
@@ -376,7 +380,7 @@ fn evaluate<'a>(
         let parent_woken = timer_fired && root_only;
         let wake_action = exact_write && observed == expected;
         let no_polling = audit.disciplined();
-        let clean_completion = active_bindings == 0 && no_errors && confirmed;
+        let clean_completion = active_bindings == 0 && operational_errors == 0 && confirmed;
 
         Ok(assessment::build_evaluation(
             if confirmed {
@@ -416,8 +420,8 @@ fn evaluate<'a>(
             CLEAN_COMPLETION.full_or_zero(
                 clean_completion,
                 format!(
-                    "active_bindings={active_bindings}, function_errors={}, confirmed={confirmed}",
-                    observation.metrics.totals.function_call_errors
+                    "active_bindings={active_bindings}, function_errors={}, discovery_errors={discovery_errors}, operational_errors={operational_errors}, confirmed={confirmed}",
+                    observation.metrics.totals.function_call_errors,
                 ),
             ),
             ],

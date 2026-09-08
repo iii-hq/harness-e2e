@@ -27,7 +27,7 @@ use super::{
 };
 
 pub const ID: &str = "contention_ledger";
-const VERSION: u32 = 3;
+const VERSION: u32 = 4;
 const DELIVERABLE_ID: &str = "ledger_totals";
 
 const DATABASE: &str = "primary";
@@ -311,7 +311,12 @@ fn evaluate<'a>(
             && barrier_woke;
 
         let report_verified = report_is_verified(&observation.response);
-        let no_errors = observation.metrics.totals.function_call_errors == 0;
+        let discovery_errors =
+            common::identified_discovery_errors(&observation.transcript) + audit.discovery_errors;
+        let operational_errors = common::operational_function_errors(
+            observation.metrics.totals.function_call_errors,
+            discovery_errors,
+        );
 
         Ok(assessment::build_evaluation(
             if report_verified {
@@ -350,9 +355,9 @@ fn evaluate<'a>(
                     ),
                 ),
                 VERIFIED_REPORT.full_or_zero(
-                    report_verified && no_errors,
+                    report_verified && operational_errors == 0,
                     format!(
-                        "report_verified={report_verified}, response_chars={}, function_errors={}",
+                        "report_verified={report_verified}, response_chars={}, function_errors={}, discovery_errors={discovery_errors}, operational_errors={operational_errors}",
                         observation.response.chars().count(),
                         observation.metrics.totals.function_call_errors,
                     ),
@@ -644,6 +649,7 @@ struct ContentionAudit {
     contended_children: usize,
     all_children_contended: bool,
     no_extra_sessions: bool,
+    discovery_errors: u64,
 }
 
 /// Audit each prescribed writer child through its own transcript: the child
@@ -657,6 +663,7 @@ async fn writer_audit(
 ) -> anyhow::Result<ContentionAudit> {
     let mut children_in_tree = 0usize;
     let mut contended_children = 0usize;
+    let mut discovery_errors = 0;
     for (writer, session_id) in (0..WRITERS).zip(names.writer_sessions.iter()) {
         let in_tree = observation.metrics.by_session.iter().any(|session| {
             session.session_id == *session_id
@@ -668,6 +675,7 @@ async fn writer_audit(
         }
         children_in_tree += 1;
         let transcript = context.transcript(session_id).await?;
+        discovery_errors += common::identified_discovery_errors(&transcript);
         let calls = common::function_calls(&transcript);
         if writer_calls_contended(&calls, names, writer) {
             contended_children += 1;
@@ -677,6 +685,7 @@ async fn writer_audit(
         all_children_contended: children_in_tree == usize::from(WRITERS)
             && contended_children == usize::from(WRITERS),
         no_extra_sessions: observation.metrics.by_session.len() == usize::from(WRITERS) + 1,
+        discovery_errors,
         children_in_tree,
         contended_children,
     })
