@@ -244,10 +244,8 @@ export function LocalRunnerDialog({
   }))
   const runsPerScenario = Math.max(1, Number(form.runs) || 1)
   const technicalRetries = Math.max(0, Number(form.technicalRetries) || 0)
-  // Only Markdown scenarios run a judge, and the worker refuses a local
-  // Markdown scenario without one.
   const needsJudge = form.scenarios.some((id) =>
-    (catalog?.localScenarios ?? []).some((scenario) => scenario.id === id),
+    id === 'registry_planning' || (catalog?.localScenarios ?? []).some((scenario) => scenario.id === id),
   )
   const showJobStatus = Boolean(job?.status) && (ownJob || active)
   const testCount = form.scenarios.length
@@ -306,8 +304,6 @@ export function LocalRunnerDialog({
     setSubmitting(true)
     setError(null)
     try {
-      // Only Markdown scenarios travel with a judge, and validation refuses
-      // to submit without one, so nothing is inferred here.
       const judge = needsJudge ? selectedJudge : null
       const response = await bridge.startRun({
         // RunRequest.label is intentionally a string: empty labels remain

@@ -311,7 +311,7 @@ impl MasterPlan {
                 "resource_envelope": envelope, "required_capabilities": case.required_capabilities,
                 "requirements": self.requirements.get(id).cloned().unwrap_or_default(),
                 "module": self.modules.iter().find(|m| m.scenarios.contains(id)).map(|m| &m.id),
-                "judge_required": key.built_in().is_none(),
+                "judge_required": key.built_in().is_none() || key.built_in() == Some(crate::scenarios::ScenarioId::RegistryPlanning),
             }));
             // Every repetition is a fresh invocation. This also obeys the
             // campaign parser's one-case, runs=1 adaptive-flow contract.
@@ -534,6 +534,21 @@ mod tests {
         let mut changed = plan.clone();
         changed.profiles[0].scenarios[0] = "local_invented".into();
         assert!(changed.validate().is_err());
+    }
+
+    #[test]
+    fn registry_planning_requires_a_judge_in_console_catalog() {
+        let plan = embedded().unwrap();
+        let mut profile = plan.profiles[0].clone();
+        profile.modules.clear();
+        profile.scenarios = vec!["registry_planning".into(), "registry_implementation".into()];
+        let snapshot = plan.materialize_scope(profile, None).unwrap();
+        for case in snapshot.cases {
+            assert_eq!(
+                case["judge_required"],
+                case["scenario_id"] == "registry_planning"
+            );
+        }
     }
 
     #[test]
