@@ -187,7 +187,7 @@
       "Node 22.6+ on the runner host for direct TypeScript execution"
     ],
     "registry_planning": [
-      "Linux amd64 with Docker and the latest e2e-fixture Registry assets",
+      "Linux amd64 with Docker and access to the pinned Registry source",
       "Explicit auxiliary model for plan assessment"
     ],
     "registry_implementation": [

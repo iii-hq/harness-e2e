@@ -15,7 +15,7 @@ Only implementation receives the reference plan. Environment receives no prepare
 
 Use a Linux amd64 executor with Python 3, Git, Docker Engine, outbound dependency access, and a running Harness/iii stack. Implementation, environment, and verification use private privileged Docker-in-Docker containers. Each has its own daemon and data volume. Use a dedicated executor for these containers.
 
-Every scenario clones the newest default branch of `iii-hq/e2e-fixture`. There is no fixture commit option or branch fallback. Its `registry-version-comparison` directory must exist on that branch before execution; the original fixture work is in [fixture PR #3](https://github.com/iii-hq/e2e-fixture/pull/3).
+Planning needs only the pinned source and requirements. The other three scenarios clone the newest default branch of `iii-hq/e2e-fixture`. There is no fixture commit option or branch fallback. Its `registry-version-comparison` directory must exist on that branch before execution; the original fixture work is in [fixture PR #3](https://github.com/iii-hq/e2e-fixture/pull/3).
 
 Registry starts at `662eb87c1bdbb395f36264d5d26bf823e2ace783`. Dependency installation and image building occur inside each private daemon.
 

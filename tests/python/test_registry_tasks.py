@@ -132,7 +132,11 @@ class RegistryDeliveryTests(unittest.TestCase):
             inputs = root / "workspace/inputs"
             self.assertEqual((inputs / "reference-plan.md").exists(), test == 2)
             self.assertFalse((inputs / "Dockerfile").exists())
-            self.assertIn(["git", "clone", "--depth", "1", module.FIXTURE_URL, str(root / "fixture-checkout")], calls)
+            self.assertEqual(["git", "clone", "--depth", "1", module.FIXTURE_URL, str(root / "fixture-checkout")] in calls, test != 1)
+            self.assertEqual((inputs / "seed.sql").exists(), test != 1)
+            if test == 1:
+                environment = json.loads((inputs / "environment.json").read_text())
+                self.assertIn("Planning only", environment["runtime_requirements"])
             launch = next(c for c in calls if c[:3] == ["docker", "run", "-d"])
             self.assertFalse(any("/var/run/docker.sock" in c and "src=" in c for c in launch))
             self.assertEqual("--privileged" in launch, test != 1)

@@ -93,12 +93,14 @@ def prepare(args):
              "web_port": args.web_port, "api_port": args.api_port,
              "base_registry_sha": REGISTRY_SHA, "runner_image": RUNNER_IMAGE}
     write_json(root / "state.json", state)
-    # Always clone the default branch afresh; there is intentionally no fixture revision option.
-    run(["git", "clone", "--depth", "1", FIXTURE_URL, root / "fixture-checkout"])
-    fixture = root / "fixture-checkout" / "registry-version-comparison"
-    if not fixture.is_dir():
-        raise RuntimeError("Latest e2e-fixture default branch lacks registry-version-comparison; merge the fixture PR first")
-    state["fixture_files"] = fixture_hashes(fixture)
+    state["fixture_files"] = {}
+    if args.test != 1:
+        # Always use the newest default branch when an application environment is needed.
+        run(["git", "clone", "--depth", "1", FIXTURE_URL, root / "fixture-checkout"])
+        fixture = root / "fixture-checkout" / "registry-version-comparison"
+        if not fixture.is_dir():
+            raise RuntimeError("Latest e2e-fixture default branch lacks registry-version-comparison; merge the fixture PR first")
+        state["fixture_files"] = fixture_hashes(fixture)
     write_json(root / "state.json", state)
     run(["git", "clone", "--no-checkout", REGISTRY_URL, workspace / "registry"])
     run(["git", "checkout", "--detach", REGISTRY_SHA], cwd=workspace / "registry")
@@ -108,8 +110,9 @@ def prepare(args):
     shutil.copyfile(args.assets / "requirements.md", inputs / "requirements.md")
     if args.test == 2:
         shutil.copyfile(args.assets / "reference-plan.md", inputs / "reference-plan.md")
-    shutil.copyfile(fixture / "seed.sql", inputs / "seed.sql")
-    shutil.copytree(fixture / "artifacts", inputs / "artifacts")
+    if args.test != 1:
+        shutil.copyfile(fixture / "seed.sql", inputs / "seed.sql")
+        shutil.copytree(fixture / "artifacts", inputs / "artifacts")
     state["input_files"] = fixture_hashes(inputs)
     state["initial_patch_sha256"] = hashlib.sha256(git_patch(workspace / "registry")).hexdigest()
     write_json(root / "state.json", state)
@@ -121,6 +124,8 @@ def prepare(args):
         "runtime_requirements": "Linux amd64; Node >=22; pnpm 10.19.0; Bun; iii 0.22.1; PostgreSQL 17 with pgvector; Playwright Chromium. Install from Registry's lockfile. Seed with psql -v artifact_origin=http://127.0.0.1:<web_port> -v ON_ERROR_STOP=1 -f /workspace/inputs/seed.sql. Serve inputs/artifacts at /fixture-artifacts/ on the web origin.",
         "scope": "Only this private container and workspace. No host Docker socket, credentials, or other task workspaces are mounted. Public network access is available. Never contact production services.",
     }
+    if args.test == 1:
+        environment["runtime_requirements"] = "Planning only: no application runtime, seed.sql, or artifact files are supplied. Use the public fixture data described in requirements.md when planning tests. The implementation scenario receives the prepared runtime and seed assets."
     if args.test in (2, 4):
         environment["commands"] = {
             "start_or_rebuild": "/fixture/fixture.sh up",
