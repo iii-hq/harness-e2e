@@ -139,6 +139,8 @@ pub fn evaluate_deliverables(
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct CriterionReport {
     pub id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
     pub possible: u8,
     pub awarded: Option<u8>,
     pub reason: String,
@@ -3888,6 +3890,23 @@ mod tests {
     }
 
     #[test]
+    fn criterion_description_is_optional_for_existing_reports() {
+        let criterion: CriterionReport = serde_json::from_value(serde_json::json!({
+            "id": "legacy",
+            "possible": 20,
+            "awarded": 0,
+            "reason": "measured evidence"
+        }))
+        .unwrap();
+
+        assert!(criterion.description.is_none());
+        assert!(serde_json::to_value(criterion)
+            .unwrap()
+            .get("description")
+            .is_none());
+    }
+
+    #[test]
     fn retry_attempts_preserve_failures_time_and_cost() {
         let mut failed = E2eRunReport::new(
             "run".into(),
@@ -4035,6 +4054,7 @@ mod tests {
         let mut failed = run(50, false);
         failed.criteria.push(CriterionReport {
             id: "correctness".into(),
+            description: None,
             possible: 100,
             awarded: Some(50),
             reason: "only half of the expected result was present".into(),

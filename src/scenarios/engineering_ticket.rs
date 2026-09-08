@@ -4581,6 +4581,7 @@ mod tests {
             .iter()
             .map(|criterion| crate::report::CriterionReport {
                 id: criterion.id.into(),
+                description: None,
                 possible: criterion.weight,
                 awarded: Some(criterion.weight),
                 reason: "test evidence passed".into(),

@@ -2197,6 +2197,7 @@ pub(crate) fn populate_composite_report_with_terminal(
         .iter()
         .map(|criterion| CriterionReport {
             id: criterion.id.clone(),
+            description: None,
             possible: criterion.weight,
             awarded: criterion.score.and_then(|score| {
                 score
@@ -3142,6 +3143,7 @@ async fn evaluate_markdown_validations(
                         score = score.saturating_add(criterion.weight);
                         report.criteria.push(CriterionReport {
                             id: criterion.id.clone(),
+                            description: Some(criterion.title.clone()),
                             possible: criterion.weight,
                             awarded: Some(criterion.weight),
                             reason: validation_reason(&decision),
@@ -3150,6 +3152,7 @@ async fn evaluate_markdown_validations(
                     Ok(decision) if decision.verdict == "failed" => {
                         report.criteria.push(CriterionReport {
                             id: criterion.id.clone(),
+                            description: Some(criterion.title.clone()),
                             possible: criterion.weight,
                             awarded: Some(0),
                             reason: validation_reason(&decision),
@@ -3159,6 +3162,7 @@ async fn evaluate_markdown_validations(
                         available = false;
                         report.criteria.push(CriterionReport {
                             id: criterion.id.clone(),
+                            description: Some(criterion.title.clone()),
                             possible: criterion.weight,
                             awarded: None,
                             reason: validation_reason(&decision),
@@ -3173,6 +3177,7 @@ async fn evaluate_markdown_validations(
                         available = false;
                         report.criteria.push(CriterionReport {
                             id: criterion.id.clone(),
+                            description: Some(criterion.title.clone()),
                             possible: criterion.weight,
                             awarded: None,
                             reason: format!("validator output was invalid: {error:#}"),
@@ -3189,6 +3194,7 @@ async fn evaluate_markdown_validations(
                 available = false;
                 report.criteria.push(CriterionReport {
                     id: criterion.id.clone(),
+                    description: Some(criterion.title.clone()),
                     possible: criterion.weight,
                     awarded: None,
                     reason: format!("validator session failed: {error:#}"),
@@ -4823,6 +4829,7 @@ fn criterion_reports(spec: &ScenarioSpec, awards: Vec<CriterionAward>) -> Vec<Cr
             let award = awards.remove(criterion.id);
             CriterionReport {
                 id: criterion.id.to_string(),
+                description: Some(criterion.description.to_string()),
                 possible: criterion.weight,
                 awarded: award.as_ref().map(|(awarded, _)| *awarded),
                 reason: award
@@ -5389,12 +5396,14 @@ mod tests {
         let criteria = vec![
             CriterionReport {
                 id: "required".into(),
+                description: None,
                 possible: 70,
                 awarded: Some(35),
                 reason: "required behavior was incomplete".into(),
             },
             CriterionReport {
                 id: "signal".into(),
+                description: None,
                 possible: 30,
                 awarded: Some(12),
                 reason: "partial efficiency evidence".into(),
@@ -5521,6 +5530,21 @@ mod tests {
             error.to_string(),
             "scenario 'case': evaluation contract violation: criterion 'objective' awarded 101; expected awarded in 0..=100; action: reduce the award or change the configured weight"
         );
+    }
+
+    #[test]
+    fn criterion_reports_reuse_the_declared_description() {
+        let reports = criterion_reports(
+            &spec(),
+            vec![CriterionAward {
+                id: "objective".into(),
+                awarded: 100,
+                reason: "measured evidence".into(),
+            }],
+        );
+
+        assert_eq!(reports[0].description.as_deref(), Some("objective"));
+        assert_eq!(reports[0].reason, "measured evidence");
     }
 
     #[test]
@@ -5884,6 +5908,7 @@ mod tests {
         }}]}));
         report.criteria.push(CriterionReport {
             id: "01_record_created".into(),
+            description: None,
             possible: 80,
             awarded: Some(80),
             reason: "Read-only query found exactly one matching row".into(),

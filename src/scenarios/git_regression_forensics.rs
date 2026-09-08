@@ -62,28 +62,25 @@ const BUNDLE_BYTES: &[u8] =
 const REPOSITORY_ACQUIRED: AssessmentSpec = AssessmentSpec::scored(
     "repository_acquired",
     20,
-    "The immutable bundle was cloned through the shell worker and the resulting repository has the exact expected history and origin.",
+    "Was the supplied repository acquired as required?",
 );
 const ENDPOINTS_REPRODUCED: AssessmentSpec = AssessmentSpec::scored(
     "endpoints_reproduced",
     20,
-    "The supplied probe classified the known-good endpoint as passing and the known-bad endpoint as failing before the search.",
+    "Were the known-good and known-bad revisions reproduced as required?",
 );
 const FIRST_BAD_IDENTIFIED: AssessmentSpec = AssessmentSpec::scored(
     "first_bad_identified",
     40,
-    "The report names the exact first bad commit and the runner independently verifies its pass/fail boundary.",
+    "Was the first bad commit correctly identified?",
 );
 const EVIDENCE_GROUNDED: AssessmentSpec = AssessmentSpec::scored(
     "evidence_grounded",
     10,
-    "The structured report cites resolvable commits and changed paths in the immutable repository.",
+    "Is the report supported by repository evidence?",
 );
-const SEARCH_EFFICIENCY: AssessmentSpec = AssessmentSpec::scored(
-    "search_efficiency",
-    10,
-    "The investigation approaches binary-search efficiency without redundant probe executions or tool errors.",
-);
+const SEARCH_EFFICIENCY: AssessmentSpec =
+    AssessmentSpec::scored("search_efficiency", 10, "Was the search efficient?");
 const ASSESSMENTS: &[AssessmentSpec] = &[
     REPOSITORY_ACQUIRED,
     ENDPOINTS_REPRODUCED,
