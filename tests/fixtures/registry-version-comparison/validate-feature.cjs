@@ -147,30 +147,37 @@ async function browserProbes(apiHealthy) {
     const selects = page.locator('select');
     let keyboard = false;
     let staleCleared = false;
-    let failedRequests = 0;
     if (await selects.count() >= 2) {
       const originalValue = await selects.nth(1).inputValue();
+      const selectedIndex = await selects.nth(1).evaluate(node => node.selectedIndex);
+      const optionCount = await selects.nth(1).locator('option').count();
       await selects.nth(1).focus();
-      await page.keyboard.press('Home');
+      await page.keyboard.press(selectedIndex < optionCount - 1 ? 'ArrowDown' : 'ArrowUp');
       await page.keyboard.press('Enter');
       keyboard = (await selects.nth(1).inputValue()) !== originalValue;
       // Restore a successful pair before inducing a failure in the same document.
       await selects.nth(1).selectOption('2.0.0');
       await page.waitForLoadState('networkidle');
       const beforeFailure = await page.locator('body').innerText();
-      await page.route('**/w/orders-worker/compare/**', route => {
-        failedRequests++;
-        return route.fulfill({ status: 503, contentType: 'application/json', body: '{"error":"probe failure"}' });
-      });
-      await selects.nth(1).selectOption('1.1.0');
-      await page.waitForLoadState('networkidle');
-      const afterFailure = await page.locator('body').innerText();
-      staleCleared = failedRequests > 0 && beforeFailure.includes('orders::get')
-        && !afterFailure.includes('orders::get') && /error|failed|unable|unavailable|retry/i.test(afterFailure);
+      const sql = postgres(process.env.DATABASE_URL, { max: 1 });
+      try {
+        const renamed = await sql`update worker_version set version = '9.90.9'
+          where worker_id = '10000000-0000-4000-8000-000000000001' and version = '0.9.0'`;
+        if (renamed.count !== 1) throw new Error('Expected one temporary stale-state probe version');
+        await selects.nth(1).selectOption('0.9.0');
+        await page.waitForLoadState('networkidle');
+        const afterFailure = await page.locator('body').innerText();
+        staleCleared = beforeFailure.includes('orders::get') && !afterFailure.includes('orders::get')
+          && /error|failed|unable|unavailable|not[ _]found|retry/i.test(afterFailure);
+      } finally {
+        try {
+          await sql`update worker_version set version = '0.9.0'
+            where worker_id = '10000000-0000-4000-8000-000000000001' and version = '9.90.9'`;
+        } finally { await sql.end({ timeout: 5 }); }
+      }
     }
     observe('implementation.keyboard_selectors', keyboard, 'Keyboard input changes the selected version', { selectCount: await selects.count(), keyboard });
-    observe('implementation.stale_results', staleCleared, 'Successful comparison is cleared after changing the pair to a failing request', { failedRequests, staleCleared });
-    await page.unroute('**/w/orders-worker/compare/**');
+    observe('implementation.stale_results', staleCleared, 'Successful comparison is cleared after changing the pair to a missing version', { staleCleared });
 
     await page.goto(`${app}/workers/orders-worker?tab=versions`, { waitUntil: 'networkidle', timeout });
     const versionsText = await page.locator('body').innerText();
