@@ -404,13 +404,21 @@ while true; do
   sleep "$delay"
 done
 
+terminal_phase=$(jq -r '.phase' "$artifact_dir/status.json")
+terminal_failure=""
+if [[ "$terminal_phase" != completed ]]; then
+  terminal_failure=$(jq -r '.error // empty' "$artifact_dir/status.json")
+  [[ -n "$terminal_failure" ]] || terminal_failure="E2E execution ended in $terminal_phase"
+fi
+
 failure_phase=results
 results_response="$artifact_dir/results-get.json"
 project_trigger e2e::results-get \
   "$(jq -cn --arg execution_id "$remote_execution_id" '{execution_id:$execution_id}')" 120000 \
   >"$results_response"
 jq -e --arg id "$remote_execution_id" '.execution_id == $id' "$results_response" >/dev/null
-native_result_path=$(jq -er '.result_path | select(type == "string" and length > 0)' "$results_response")
+native_result_path=$(jq -r '.result_path | select(type == "string" and length > 0)' "$results_response")
+[[ -n "$native_result_path" ]] || fail "${terminal_failure:-E2E execution produced no result artifact}"
 case "$native_result_path" in
   /*|*".."*) fail "unsafe native result path: $native_result_path" ;;
 esac
@@ -436,6 +444,7 @@ if project_trigger e2e::archive \
     "$(jq -cn --arg execution_id "$remote_execution_id" '{execution_id:$execution_id}')" 120000 \
     >"$artifact_dir/archive-head.json" 2>>"$artifact_dir/logs/archive.log" || true
 fi
+[[ -z "$terminal_failure" ]] || fail "$terminal_failure"
 
 failure_phase=compose_down
 compose_trigger compose::down "file=$compose_file" >"$artifact_dir/stack/down.json"

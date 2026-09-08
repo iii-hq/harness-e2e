@@ -4310,7 +4310,10 @@ async fn execute(
     }
     let metrics = metrics.expect("every scenario has at least one scripted message");
     let terminal_status = match context
-        .trigger::<_, Option<StatusReport>>("harness::status", json!({ "session_id": session_id }))
+        .trigger::<_, Option<StatusReport>>(
+            "harness::status",
+            json!({ "session_id": session_id, "verbose": true }),
+        )
         .await
     {
         Ok(Some(status)) => status,
