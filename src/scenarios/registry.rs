@@ -96,7 +96,7 @@ fn spec<const N: u8>(run_id: &str) -> ScenarioSpec {
     let id = IDS[usize::from(N - 1)];
     ScenarioSpec {
         id, version: 1,
-        prompt: format!("{}\n\nUse `{}` for every workspace read, edit and command. Commands start at /workspace inside your private container. Supply command and timeout_ms (1..=120000). Use function discovery only to find this exact tool.", PROMPTS[usize::from(N - 1)], function_id(id, run_id)),
+        prompt: format!("{}\n\nUse `{}` for every workspace read, edit and command. Commands start at /workspace inside your private container. The registry/, inputs/, and output/ directories are siblings under /workspace; write deliverables to /workspace/output/, not inside the repository. Supply command and timeout_ms (1..=120000). Use function discovery only to find this exact tool.", PROMPTS[usize::from(N - 1)], function_id(id, run_id)),
         filesystem_root: None,
         execution: ExecutionPolicy { max_turns: 128, max_output_tokens: Some(32_768), max_total_tokens: Some(600_000), stuck_timeout_seconds: 900, max_validation_retries: None },
         denied_functions: &[],
