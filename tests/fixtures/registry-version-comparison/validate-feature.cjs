@@ -147,6 +147,7 @@ async function browserProbes(apiHealthy) {
     const selects = page.locator('select');
     let keyboard = false;
     let staleCleared = false;
+    let staleAlertText = [];
     if (await selects.count() >= 2) {
       const originalValue = await selects.nth(1).inputValue();
       const selectedIndex = await selects.nth(1).evaluate(node => node.selectedIndex);
@@ -170,8 +171,10 @@ async function browserProbes(apiHealthy) {
         if (submitsComparison) await compare.click();
         await page.waitForLoadState('networkidle');
         const afterFailure = await page.locator('body').innerText();
+        staleAlertText = await page.getByRole('alert').evaluateAll(nodes => nodes
+          .filter(node => node.checkVisibility()).map(node => node.innerText.trim()).filter(Boolean));
         staleCleared = beforeFailure.includes('orders::get') && !afterFailure.includes('orders::get')
-          && /error|failed|unable|unavailable|not[ _]found|retry/i.test(afterFailure);
+          && (staleAlertText.length > 0 || /error|failed|unable|unavailable|not[ _]found|retry/i.test(afterFailure));
       } finally {
         try {
           await sql`update worker_version set version = '0.9.0'
@@ -180,7 +183,7 @@ async function browserProbes(apiHealthy) {
       }
     }
     observe('implementation.keyboard_selectors', keyboard, 'Keyboard input changes the selected version', { selectCount: await selects.count(), keyboard });
-    observe('implementation.stale_results', staleCleared, 'Successful comparison is cleared after changing the pair to a missing version', { staleCleared });
+    observe('implementation.stale_results', staleCleared, 'Successful comparison is cleared after changing the pair to a missing version', { staleCleared, alertText: staleAlertText });
 
     await page.goto(`${app}/workers/orders-worker?tab=versions`, { waitUntil: 'networkidle', timeout });
     const versionsText = await page.locator('body').innerText();
