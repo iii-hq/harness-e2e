@@ -362,7 +362,25 @@ def environment_observations(task_root, assets, state):
     health_assertion = "import json,sys; d=json.load(sys.stdin); assert any(x.get('name') == 'database' and x.get('status') == 'ok' for x in d.get('results', []))"
     api, api_evidence = checked("environment-api-health", f"curl -fsS http://127.0.0.1:{state['api_port']}/health | python3 -c {shlex.quote(health_assertion)}", 60)
     browser_script = "const{chromium}=require('@playwright/test');(async()=>{const b=await chromium.launch({headless:true});try{const p=await b.newPage();await p.goto(process.env.E2E_APP_URL+'/workers/orders-worker',{waitUntil:'networkidle'});if(!(await p.locator('body').innerText()).includes('orders-worker'))process.exitCode=1}finally{await b.close()}})().catch(()=>process.exitCode=1)"
-    web, web_evidence = checked("environment-web-browser", scoped(f"docker run --rm --network host -e E2E_APP_URL=http://127.0.0.1:{state['web_port']} --entrypoint node $(docker compose -f {compose_arg} images -q web | head -n 1) -e {shlex.quote(browser_script)}"), 120)
+    web_config, web_evidence = checked("environment-web-config", scoped(f"docker compose -f {compose_arg} config --format json"), 60)
+    web, web_error = None, None
+    if web_config.get("exit_code") != 0:
+        web_error = "compose_config_unavailable"
+    else:
+        try:
+            config = json.loads(web_config.get("stdout", ""))
+            mappings = [item["target"] for item in config["services"]["web"]["ports"]
+                        if str(item.get("published")) == str(state["web_port"])]
+            if len(mappings) != 1 or not 0 < int(mappings[0]) < 65536:
+                raise ValueError
+            target_port = int(mappings[0])
+        except (json.JSONDecodeError, AttributeError, KeyError, TypeError, ValueError):
+            web_error = "web_port_mapping_unavailable"
+        else:
+            web, browser_evidence = checked("environment-web-browser", scoped(
+                f"docker compose -f {compose_arg} exec -T -e E2E_APP_URL=http://127.0.0.1:{target_port} "
+                f"web node -e {shlex.quote(browser_script)}"), 120)
+            web_evidence += browser_evidence
     psql = f"psql -U {shlex.quote(db_user)} -d {shlex.quote(db_name)}"
     seed_query = (f"docker compose -f {compose_arg} exec -T {db_service} {psql} -Atc "
                   "\"select version from worker_version where worker_id='10000000-0000-4000-8000-000000000001' order by version\"")
@@ -435,6 +453,9 @@ def environment_observations(task_root, assets, state):
     observations = []
     for metric in metric_ids:
         value, evidence = values[metric]
+        if metric == "environment.frontend_reachability" and web_error:
+            observations.append(unavailable(metric, web_error))
+            continue
         if any(infrastructure_failure(result) for result in combined_results.get(metric, [])):
             observations.append(unavailable(metric, "validator_infrastructure_unavailable"))
             continue

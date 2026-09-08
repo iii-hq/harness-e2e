@@ -192,7 +192,11 @@ class ValidationTests(unittest.TestCase):
         def execute(_state, command, timeout=120):
             commands.append(command)
             stdout = ""
-            if "select version" in command:
+            if "config --format json" in command:
+                stdout = json.dumps({"services": {"web": {"ports": [
+                    {"published": "65000", "target": 3000},
+                ]}}})
+            elif "select version" in command:
                 stdout = "0.9.0\n1.0.0\n1.1.0\n2.0.0\n"
             elif "select (select count" in command or "to_regclass" in command:
                 stdout = "t\n"
@@ -209,6 +213,10 @@ class ValidationTests(unittest.TestCase):
         self.assertTrue(any("docker compose -f /workspace/registry/compose.yaml restart" in command for command in commands))
         self.assertTrue(any("--filter label=com.docker.compose.project=validator-123456789012" in command for command in commands))
         self.assertTrue(any("WEB_PORT=41000 API_PORT=41001" in command for command in commands))
+        browser = next(command for command in commands if "environment-web" not in command and "E2E_APP_URL=" in command)
+        self.assertIn("compose -f /workspace/registry/compose.yaml exec -T", browser)
+        self.assertIn("E2E_APP_URL=http://127.0.0.1:3000", browser)
+        self.assertNotIn("docker run", browser)
 
 
 if __name__ == "__main__":
