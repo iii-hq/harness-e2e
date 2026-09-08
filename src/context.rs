@@ -585,7 +585,10 @@ impl TreeObserver for ContextTreeObserver<'_> {
 
     async fn pull_root_status(&self, root_session_id: &str) -> Result<Option<StatusReport>> {
         self.context
-            .trigger("harness::status", json!({ "session_id": root_session_id }))
+            .trigger(
+                "harness::status",
+                json!({ "session_id": root_session_id, "verbose": true }),
+            )
             .await
     }
 

@@ -226,6 +226,120 @@ class ReleaseControlCampaignTest(unittest.TestCase):
         self.assertIn("compose::operation", runner)
         self.assertNotIn('e2e_data="$run_root/e2e-data"', runner)
 
+    def test_common_runner_reports_terminal_failure_and_keeps_partial_results(self):
+        runner = RUNNER_SCRIPT.read_text()
+        results_block = runner.split("terminal_phase=$(", 1)[1].split(
+            "\nfailure_phase=compose_down", 1
+        )[0]
+        results_block = "terminal_phase=$(" + results_block
+        shell = """set -Eeuo pipefail
+artifact_dir=$1
+e2e_data="$artifact_dir/native"
+repo_root=$2
+remote_execution_id=execution-1
+project_trigger() {
+  if [[ "$1" == "e2e::results-get" ]]; then
+    printf '%s\n' "$RESULTS_RESPONSE"
+  else
+    return 1
+  fi
+}
+fail() {
+  printf '[FAIL] %s\n' "$1" >&2
+  return 1
+}
+""" + results_block
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            artifacts = root / "artifacts"
+            native = artifacts / "native/execution-1"
+            native.mkdir(parents=True)
+            (artifacts / "logs").mkdir()
+            (artifacts / "status.json").write_text(
+                json.dumps(
+                    {
+                        "execution_id": "execution-1",
+                        "phase": "failed",
+                        "terminal": True,
+                        "error": "shell preflight failed",
+                    }
+                )
+            )
+            journal = native / "journal/events/00000001.json"
+            journal.parent.mkdir(parents=True)
+            journal.write_text('{"event":"RunFailed"}\n')
+
+            fake_repo = root / "repo/scripts"
+            fake_repo.mkdir(parents=True)
+            (fake_repo / "extract_swe_reports.py").write_text(
+                "import pathlib, sys\n"
+                "pathlib.Path(sys.argv[sys.argv.index('--output-dir') + 1]).mkdir(parents=True, exist_ok=True)\n"
+                "print('{}')\n"
+            )
+
+            for invalid_path in (None, 7, {}):
+                with self.subTest(result_path=invalid_path):
+                    missing = subprocess.run(
+                        ["bash", "-c", shell, "runner", str(artifacts), str(fake_repo.parent)],
+                        env={
+                            **os.environ,
+                            "RESULTS_RESPONSE": json.dumps(
+                                {
+                                    "execution_id": "execution-1",
+                                    "phase": "failed",
+                                    "result_path": invalid_path,
+                                    "observation": {"outcome": {"error": "shell preflight failed"}},
+                                }
+                            ),
+                        },
+                        capture_output=True,
+                        text=True,
+                        check=False,
+                    )
+                    self.assertNotEqual(missing.returncode, 0)
+                    self.assertIn("[FAIL] shell preflight failed", missing.stderr)
+            self.assertTrue(journal.is_file())
+
+            payloads = {
+                "results.json": b'{"result":"partial"}\n',
+                "manifest.json": b'{"manifest":"partial"}\n',
+                "observation.json": b'{"outcome":{"error":"shell preflight failed"}}\n',
+            }
+            for name, payload in payloads.items():
+                (native / name).write_bytes(payload)
+            partial_response = {
+                "execution_id": "execution-1",
+                "phase": "failed",
+                "result_path": "execution-1/results.json",
+                "observation": {
+                    "evidence": {
+                        "results_sha256": f"sha256:{hashlib.sha256(payloads['results.json']).hexdigest()}",
+                        "manifest_sha256": f"sha256:{hashlib.sha256(payloads['manifest.json']).hexdigest()}",
+                    }
+                },
+            }
+            partial = subprocess.run(
+                ["bash", "-c", shell, "runner", str(artifacts), str(fake_repo.parent)],
+                env={**os.environ, "RESULTS_RESPONSE": json.dumps(partial_response)},
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            self.assertNotEqual(partial.returncode, 0)
+            self.assertIn("[FAIL] shell preflight failed", partial.stderr)
+            for name, payload in payloads.items():
+                self.assertEqual((artifacts / name).read_bytes(), payload)
+
+            (artifacts / "status.json").write_text(json.dumps({"phase": "completed"}))
+            completed = subprocess.run(
+                ["bash", "-c", shell, "runner", str(artifacts), str(fake_repo.parent)],
+                env={**os.environ, "RESULTS_RESPONSE": json.dumps(partial_response)},
+                capture_output=True,
+                text=True,
+            )
+            self.assertEqual(completed.returncode, 0, completed.stderr)
+
     def test_finalizer_uploads_root_evidence_even_after_aggregate_failure(self):
         workflow = WORKFLOW.read_text()
         root_upload = workflow.split("- name: Upload root observation bundle", 1)[1]

@@ -471,11 +471,20 @@ const SEND_RESPONSE: &[SchemaField] = &[
     },
 ];
 
-const STATUS_REQUEST: &[SchemaField] = &[SchemaField {
+const SESSION_REQUEST: &[SchemaField] = &[SchemaField {
     path: "session_id",
     kind: JsonType::String,
     required: true,
 }];
+
+const STATUS_REQUEST: &[SchemaField] = &[
+    SESSION_REQUEST[0],
+    SchemaField {
+        path: "verbose",
+        kind: JsonType::Boolean,
+        required: false,
+    },
+];
 
 const STATUS_RESPONSE: &[SchemaField] = &[
     SchemaField {
@@ -506,12 +515,12 @@ const STATUS_RESPONSE: &[SchemaField] = &[
     SchemaField {
         path: "max_turns",
         kind: JsonType::Integer,
-        required: true,
+        required: false,
     },
     SchemaField {
         path: "pending_function_calls",
         kind: JsonType::Array,
-        required: true,
+        required: false,
     },
     SchemaField {
         path: "children",
@@ -642,7 +651,7 @@ const CONTROL_PLANE: &[FunctionRequirement] = &[
     },
     FunctionRequirement {
         function_id: "harness::stop",
-        request: STATUS_REQUEST,
+        request: SESSION_REQUEST,
         response: STOP_RESPONSE,
     },
     FunctionRequirement {
@@ -842,6 +851,65 @@ mod tests {
             ]
         });
         validate_control_plane(&raw).unwrap();
+    }
+
+    #[test]
+    fn status_contract_requires_verbose_support_and_typed_fields() {
+        let status = schema_fixture(include_str!("../tests/golden/schemas/harness.status.json"));
+        validate_schema(&status, "request_schema", STATUS_REQUEST).unwrap();
+        validate_schema(&status, "response_schema", STATUS_RESPONSE).unwrap();
+
+        let mut invalid = status.clone();
+        invalid["request_schema"]["properties"]["verbose"]["type"] = "string".into();
+        assert!(validate_schema(&invalid, "request_schema", STATUS_REQUEST)
+            .unwrap_err()
+            .to_string()
+            .contains("verbose"));
+
+        let mut invalid = status.clone();
+        invalid["response_schema"]["definitions"]["StatusReport"]["properties"]
+            .as_object_mut()
+            .unwrap()
+            .remove("max_turns");
+        assert!(
+            validate_schema(&invalid, "response_schema", STATUS_RESPONSE)
+                .unwrap_err()
+                .to_string()
+                .contains("max_turns")
+        );
+
+        let mut invalid = status;
+        invalid["response_schema"]["definitions"]["StatusReport"]["required"]
+            .as_array_mut()
+            .unwrap()
+            .retain(|field| field != "step");
+        assert!(
+            validate_schema(&invalid, "response_schema", STATUS_RESPONSE)
+                .unwrap_err()
+                .to_string()
+                .contains("step")
+        );
+    }
+
+    #[test]
+    fn status_report_keeps_verbose_counters_and_rejects_lean_payloads() {
+        let mut fixtures: Value = serde_json::from_str(include_str!(
+            "../tests/fixtures/contracts/valid-responses.json"
+        ))
+        .unwrap();
+        let status = &mut fixtures["status"];
+        status["validation_retries"] = 2.into();
+        status["transient_resumes"] = 3.into();
+        let report: StatusReport = serde_json::from_value(status.clone()).unwrap();
+        assert_eq!(report.validation_retries, 2);
+        assert_eq!(report.transient_resumes, 3);
+        assert_eq!(serde_json::to_value(report).unwrap(), *status);
+
+        status.as_object_mut().unwrap().remove("max_turns");
+        assert!(serde_json::from_value::<StatusReport>(status.clone())
+            .unwrap_err()
+            .to_string()
+            .contains("max_turns"));
     }
 
     #[test]
