@@ -52,7 +52,10 @@ cargo run --locked --bin harness-e2e -- catalog
 cargo run --locked --bin harness-e2e -- validate-scenarios
 ```
 
-The [Registry development tasks](repository-tasks/registry-version-comparison/README.md) run with `registry-tests`: planning, implementation, environment setup, and real feature verification. They collect evidence for [independent atomic scoring](repository-tasks/registry-version-comparison/scoring.md) and remain separate from this scenario catalog.
+The four [Registry scenarios](repository-tasks/registry-version-comparison/README.md)
+use the regular scenario catalog, execution flow, and scores: `registry_planning`,
+`registry_implementation`, `registry_environment`, and `registry_verification`.
+Each has its own [atomic validations](repository-tasks/registry-version-comparison/scoring.md).
 
 New declarative scenarios are authored only as `scenarios/*.md`. The compiler
 embeds the exact source, validates the canonical English section structure,

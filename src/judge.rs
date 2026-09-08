@@ -1,8 +1,7 @@
 //! Invocation of the auxiliary ("judge") model.
 //!
-//! Built-in scenarios are assessed deterministically and never call a model
-//! here. The auxiliary model is used only by Markdown scenarios (validators,
-//! instruction adherence) and by the opt-in transcript audit; this module owns
+//! The auxiliary model is used by Markdown scenarios, Registry planning,
+//! and the opt-in transcript audit; this module owns
 //! the one provider round trip they share and the usage bookkeeping around it.
 
 use anyhow::Result;

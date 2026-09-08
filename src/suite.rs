@@ -220,11 +220,11 @@ pub async fn run_suite(config: SuiteRunConfig) -> Result<SuiteRunOutcome> {
         .or_else(|| config.execution_id.clone())
         .unwrap_or_else(|| Uuid::new_v4().simple().to_string());
     let started_at = Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true);
-    let context = Arc::new(
-        E2eContext::connect(&config.url)
-            .await
-            .context("connect E2E runner")?,
-    );
+    let mut context = E2eContext::connect(&config.url)
+        .await
+        .context("connect E2E runner")?;
+    context.auxiliary_model = config.judge.clone();
+    let context = Arc::new(context);
     let control_plane = context
         .preflight_control_plane()
         .await
@@ -247,21 +247,21 @@ pub async fn run_suite(config: SuiteRunConfig) -> Result<SuiteRunOutcome> {
         .scenarios
         .iter()
         .any(|scenario| scenario.built_in().is_none());
-    // The judge is the auxiliary model Markdown scenarios use for their
-    // validators and instruction adherence. Built-in scenarios are assessed
-    // deterministically, so without a Markdown scenario it is never resolved
-    // and never enters the report identity.
+    let has_planning = config
+        .scenarios
+        .iter()
+        .any(|scenario| scenario.built_in() == Some(ScenarioId::RegistryPlanning));
     let judge_model = match config.judge.as_ref() {
-        Some(judge) if has_markdown => Some(
+        Some(judge) if has_markdown || has_planning => Some(
             resolve_model(&context, &judge.model, &judge.provider)
                 .await
-                .context("resolve the explicit auxiliary model required by Markdown scenarios")?,
+                .context("resolve the explicit auxiliary model")?,
         ),
         Some(judge) => {
             tracing::info!(
                 provider = judge.provider,
                 model = judge.model,
-                "judge model is configured but no Markdown scenario is selected; it will not be used"
+                "judge model is configured but no scenario uses it"
             );
             None
         }
@@ -1156,13 +1156,11 @@ fn validate_config(config: &SuiteRunConfig) -> Result<()> {
     // Scenario materialization and local Markdown validation are slot-scoped.
     // Keeping them out of request validation lets one broken definition become
     // an explicit deferred slot instead of erasing the whole execution.
-    if config
-        .scenarios
-        .iter()
-        .any(|scenario| scenario.built_in().is_none())
-        && config.judge.is_none()
+    if config.scenarios.iter().any(|scenario| {
+        scenario.built_in().is_none() || scenario.built_in() == Some(ScenarioId::RegistryPlanning)
+    }) && config.judge.is_none()
     {
-        bail!("Markdown scenarios require an explicit auxiliary model and provider");
+        bail!("Markdown scenarios and Registry planning require an explicit auxiliary model and provider");
     }
     if config.materialized_markdown_plan.is_some()
         && (config.scenarios.len() != 1 || config.scenarios[0].built_in().is_some())

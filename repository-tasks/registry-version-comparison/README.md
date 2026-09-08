@@ -1,70 +1,69 @@
-# Registry development tasks
+# Registry development scenarios
 
-Four native Harness tasks produce plans, source patches, command logs, runtime reports, and screenshots. Execution collects evidence without invoking an evaluator. The [atomic metric scorer](scoring.md) calculates scores separately from independent, evidence-backed observations. The `registry-tests` command is separate from the scored scenario catalog and dashboard execution history.
+Four independent scenarios use the regular Harness catalog, execution, reports, and scoring. There is no Registry-specific CLI or multi-test coordinator.
 
-| Test | Input | Work | Main output |
+| Scenario | Input | Work | Main output |
 | --- | --- | --- | --- |
-| 1 — Planning | Pinned Registry, public requirements | Inspect the application and write an implementation plan | `workspace/output/plan.md` |
-| 2 — Implementation | Same base, requirements, reference plan, prepared environment | Implement the feature, add and run tests, exercise the real application | `delivery/implementation.patch`, report, screenshots |
-| 3 — Environment | Same base, runtime requirements, seed and artifact payloads | Create Dockerfile/Compose/scripts, migrate, seed, start, and verify the baseline application | Environment source patch and reproduction report |
-| 4 — Verification | Test 2's patch applied to a clean base, requirements, fresh environment | Test the actual feature through API and browser, report expected/observed behavior, preserve product source | Verification report and screenshots |
+| `registry_planning` | Pinned Registry and public requirements | Inspect the application and plan the feature | `workspace/output/plan.md` |
+| `registry_implementation` | Same base, requirements, reference plan, prepared environment | Implement the feature, run tests, exercise the application | `delivery/implementation.patch`, report, screenshots |
+| `registry_environment` | Same base, runtime requirements, seed and artifacts | Create Dockerfile/Compose/scripts and run the baseline application | Environment patch and reproduction report |
+| `registry_verification` | Explicitly supplied delivery, requirements, fresh environment | Test the feature through API and browser, preserving source | Verification report, check results, screenshots |
 
-The reference plan reaches only Test 2. Test 3 does not receive the prepared Dockerfile, Compose file, or smoke script. Test 4 receives the implementation even if a nonempty partial patch was captured after an interrupted subject session; its manifest records that session status. Without a delivered patch or a normally finished Test 2 session, Test 4 is blocked.
+Only implementation receives the reference plan. Environment receives no prepared Dockerfile, Compose file, or smoke script. Verification has an explicit delivery input; it does not automatically depend on another scheduled scenario.
 
 ## Prerequisites
 
-Use a dedicated Linux amd64 executor with Python 3, Git, Docker Engine, outbound dependency-download access, and a running Harness/iii stack with the requested model/provider. Tests 2–4 run privileged Docker-in-Docker containers, each with its own daemon and data volume; the host Docker socket, controller assets, credentials, and other task workspaces are not mounted. Privileged containers require a dedicated executor rather than being treated as a hostile-code security boundary.
+Use a Linux amd64 executor with Python 3, Git, Docker Engine, outbound dependency access, and a running Harness/iii stack. Implementation, environment, and verification use private privileged Docker-in-Docker containers. Each has its own daemon and data volume. Use a dedicated executor for these containers.
 
-The [Registry fixture PR](https://github.com/iii-hq/e2e-fixture/pull/3) must be merged before normal execution. Every test fetches the latest default branch of `iii-hq/e2e-fixture` anew. There is no fixture revision argument or branch fallback. If the fixture directory is absent, preparation fails before a model session starts. The chosen fixture copy remains fixed for that test and its file checksums are saved.
+Every scenario clones the newest default branch of `iii-hq/e2e-fixture`. There is no fixture commit option or branch fallback. Its `registry-version-comparison` directory must exist on that branch before execution; the original fixture work is in [fixture PR #3](https://github.com/iii-hq/e2e-fixture/pull/3).
 
-Registry always starts at `662eb87c1bdbb395f36264d5d26bf823e2ace783`. The runner image is pinned by digest. Dependency installation and image building happen within each private daemon; allow disk space and time for independent builds.
+Registry starts at `662eb87c1bdbb395f36264d5d26bf823e2ace783`. Dependency installation and image building occur inside each private daemon.
 
 ## Run
 
-From the Harness E2E checkout:
+Use the regular command, selecting one scenario:
 
 ```bash
-cargo run --locked -- registry-tests \
+cargo run --locked -- run \
   --url ws://127.0.0.1:49134 \
   --model "$HARNESS_E2E_MODEL" \
   --provider "$HARNESS_E2E_PROVIDER" \
-  --output /absolute/new/registry-run
+  --scenario registry_implementation
 ```
 
-Tests 1, 2, and 3 execute concurrently. Test 4 follows the captured Test 2 delivery. Each task uses a fresh Harness session; the Test 1 plan does not affect Test 2. Ports are allocated deterministically from `--base-port` (default 45000); use a different base for simultaneous executions. No existing output directory is overwritten.
+Planning uses a separate model call to assess the plan against the atomic questions. Use the regular `--judge-model` and `--judge-provider` options (or `HARNESS_E2E_JUDGE_MODEL` and `HARNESS_E2E_JUDGE_PROVIDER`). If the judge cannot run, its measurements are unavailable.
 
-Run one task with `--test 1`, `--test 2`, or `--test 3`. To verify a previously captured implementation:
+To test a previously delivered implementation:
 
 ```bash
-cargo run --locked -- registry-tests \
+export HARNESS_E2E_REGISTRY_IMPLEMENTATION=/absolute/previous-attempt/delivery
+cargo run --locked -- run \
   --model "$HARNESS_E2E_MODEL" --provider "$HARNESS_E2E_PROVIDER" \
-  --test 4 --implementation /absolute/previous-run/test-2/delivery \
-  --output /absolute/new/registry-verification --base-port 45100
+  --scenario registry_verification
 ```
 
-`--timeout-seconds` bounds each subject session (default 3600). Each subject command has a maximum 120-second timeout. Preparation and final capture have their own bounded subprocess commands. A command exit code and a subject session finishing are execution facts, not evidence that the feature is correct.
+Select and schedule each scenario through the normal Harness flow. No automatic sequence or combined four-test score is added.
 
-Subjects access only their task's command function. Commands start at `/workspace`, containing `registry/`, `inputs/`, and `output/`. `inputs/environment.json` records URLs, runtime requirements, and commands. In Tests 2 and 4, application containers use a built snapshot: rebuild after source edits with `/fixture/fixture.sh up`. Run project tooling inside the API/web containers; the outer container supplies shell, Git, curl, and Docker.
+Subject commands start in `/workspace`, containing `registry/`, `inputs/`, and `output/`. The scenario provides a scoped execution tool. `inputs/environment.json` records URLs, requirements, and commands. Implementation and verification use built application snapshots: rebuild after edits with `/fixture/fixture.sh up` and run project tooling inside the API/web containers.
 
-## Inspect evidence
+## Results
 
-`report.json` records task execution statuses, errors, transcripts, and metrics. Task directories retain source patches, fixture/input checksums, preparation logs, and `workspace/output/` reports. `delivery-status.json` records source changes, scope deviations, and capture failures without grading them.
+The regular Harness report contains each scenario's criterion scores and captured evidence. Its JSON deliverable embeds evidence files (text or base64 for images), so archived results do not depend on the executor workspace. The existing capture size limit applies; omitted files are listed explicitly. [Validation details](scoring.md) explain how observations become scores.
 
-Tests 2 and 4 also produce `screenshots/captures.json` and `screenshots/index.html`. Open the HTML file to view actual browser captures with captions. Each capture manifest records the URL, viewport, Registry base, patch hash, and fixture checksums. Missing UI or failed startup is recorded as unavailable; baseline screenshots never stand in for an implemented Changelog. Test 3 screenshots are explicitly subject-produced evidence in `workspace/output/`; the executor does not assess their contents.
+The attempt workspace retains source patches, preparation and command logs, `validation/observations.json`, and `workspace/output/` reports. Implementation and verification also retain `screenshots/captures.json` and `screenshots/index.html`; open the HTML to see actual browser captures. Missing UI is recorded as unavailable. Environment screenshots are produced by the subject.
 
-All private runtime containers and their daemon volumes are removed after the task. Source, reports, and screenshots remain. To clean up after an interrupted controller process, use its materialized lifecycle script for each task directory:
+Cleanup removes the attempt's private runtime and daemon volume, preserving files. After an interrupted controller, run the materialized lifecycle helper against that attempt:
 
 ```bash
-python3 /absolute/run/controller-assets/lifecycle.py cleanup \
-  --root /absolute/run/test-2
+python3 /absolute/attempt-assets/lifecycle.py cleanup --root /absolute/attempt
 ```
 
-## Validate the runner without a model
+## Local checks
 
 ```bash
-python3 -m unittest discover -s tests/python -p test_registry_tasks.py -v
-node --check repository-tasks/registry-version-comparison/capture.cjs
-cargo test --locked registry_tasks
+python3 -m unittest discover -s tests/python -p 'test_registry_*.py' -v
+node --check repository-tasks/registry-version-comparison/validate-feature.cjs
+cargo test --locked registry
 ```
 
-The local checks cover patch replay, new/binary/deleted/committed files, preservation of the subject's Git index, rejection of mismatched or dirty replay targets, and per-test input/mount boundaries. They do not demonstrate that a model has implemented the Registry comparison feature.
+These checks exercise contracts, patch replay, observation arithmetic, and probe behavior. A model-driven implementation run is separate evidence.

@@ -1,5 +1,4 @@
 {
-  "schema_version": 1,
   "tests": [
     {
       "id": 1,
@@ -489,8 +488,8 @@
         },
         {
           "id": "environment.seed",
-          "question": "Does the resulting database match the specified seed?",
-          "expected": "Independent database inspection matches the canonical public seed values.",
+          "question": "Does the database contain the required seed checkpoints?",
+          "expected": "The orders-worker version set is exactly 0.9.0, 1.0.0, 1.1.0, and 2.0.0; timeoutMs is 3000 in 1.0.0 and 5000 in 2.0.0; route/name is orders in 1.0.0; function counts are two in 1.0.0 and three in 1.1.0.",
           "measurement": "binary",
           "evidence": [
             "Independent clean-executor record for this check."
@@ -510,7 +509,7 @@
         {
           "id": "environment.frontend_reachability",
           "question": "Is the frontend reachable from the executor?",
-          "expected": "The host browser loads the seeded worker page through the published web endpoint.",
+          "expected": "An independent browser loads the seeded worker page through the published web endpoint.",
           "measurement": "binary",
           "evidence": [
             "Independent clean-executor record for this check."
@@ -589,8 +588,8 @@
         },
         {
           "id": "environment.runtime_identity",
-          "question": "Are runtime dependencies identified immutably?",
-          "expected": "Delivered image digests and downloadable runtime checksums identify the installed runtime artifacts.",
+          "question": "Are the installed runtime binaries identified by hash?",
+          "expected": "The executor records actual container image identities and SHA-256 values for the installed Node, pnpm, and iii binaries.",
           "measurement": "binary",
           "evidence": [
             "Independent clean-executor record for this check."
@@ -615,12 +614,12 @@
       "metrics": [
         {
           "id": "verification.recall",
-          "question": "What proportion of known defects did the tester identify?",
-          "expected": "Count each independently established defect once. If the defect inventory is unknown, the result is unavailable.",
+          "question": "What proportion of independently failing contract checks did the tester identify?",
+          "expected": "Compare reported failing check IDs with the independently executed contract probes. This measures check detection, not unique root causes.",
           "measurement": "ratio",
           "weight": 35,
-          "numerator": "Unique known defects accurately identified by the tester.",
-          "denominator": "Unique defects in the independently established defect inventory.",
+          "numerator": "Required check IDs reported as failing and independently reproduced.",
+          "denominator": "Required check IDs independently observed to fail.",
           "evidence": [
             "Independent item-level inventory with stable IDs and classifications.",
             "Raw artifacts supporting the item-level observations."
@@ -628,12 +627,12 @@
         },
         {
           "id": "verification.precision",
-          "question": "What proportion of reported defects are confirmed defects?",
-          "expected": "Confirm the reported defects independently, deduplicating repeated reports of the same defect.",
+          "question": "What proportion of reported failing checks fail independently?",
+          "expected": "Execute the contract probes independently and match each reported failure by check ID.",
           "measurement": "ratio",
           "weight": 20,
-          "numerator": "Unique reported defects confirmed by independent review.",
-          "denominator": "Unique defects reported by the tester.",
+          "numerator": "Reported failing check IDs independently reproduced.",
+          "denominator": "Distinct check IDs reported as failing.",
           "evidence": [
             "Independent item-level inventory with stable IDs and classifications.",
             "Raw artifacts supporting the item-level observations."
@@ -641,12 +640,12 @@
         },
         {
           "id": "verification.execution_coverage",
-          "question": "What proportion of required checks were actually executed?",
-          "expected": "Match execution evidence to the frozen required-check inventory.",
+          "question": "What proportion of required check IDs cite a recorded execution command?",
+          "expected": "A non-blocked report entry cites an exact command present in the executor log and an existing evidence file.",
           "measurement": "ratio",
           "weight": 20,
-          "numerator": "Required check IDs with evidence of actual execution.",
-          "denominator": "Check IDs in the frozen required-check inventory.",
+          "numerator": "Required check IDs with a recorded command and an existing evidence file.",
+          "denominator": "Required public check IDs, excluding controller-owned patch replay.",
           "evidence": [
             "Independent item-level inventory with stable IDs and classifications.",
             "Raw artifacts supporting the item-level observations."
@@ -654,25 +653,12 @@
         },
         {
           "id": "verification.evidence_coverage",
-          "question": "What proportion of reported outcomes include the required evidence?",
-          "expected": "Check each reported outcome against its declared evidence requirements.",
+          "question": "What proportion of reported outcomes cite an existing evidence file?",
+          "expected": "Resolve each reported outcome evidence path to a file in the attempt workspace.",
           "measurement": "ratio",
-          "weight": 10,
-          "numerator": "Reported outcomes with the required attributable evidence.",
+          "weight": 20,
+          "numerator": "Reported outcomes citing an existing evidence file.",
           "denominator": "Outcomes reported by the tester.",
-          "evidence": [
-            "Independent item-level inventory with stable IDs and classifications.",
-            "Raw artifacts supporting the item-level observations."
-          ]
-        },
-        {
-          "id": "verification.reproducibility",
-          "question": "What proportion of reported defects can an independent executor reproduce?",
-          "expected": "Count successful independent reproductions, not the mere presence of reproduction instructions.",
-          "measurement": "ratio",
-          "weight": 10,
-          "numerator": "Unique reported defects successfully reproduced by an independent executor.",
-          "denominator": "Unique defects reported by the tester.",
           "evidence": [
             "Independent item-level inventory with stable IDs and classifications.",
             "Raw artifacts supporting the item-level observations."

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Trusted lifecycle for the Registry evidence-only tasks. No model or scoring logic."""
+"""Fixture lifecycle for the four Registry scenarios."""
 import argparse
 import hashlib
 import html
@@ -78,7 +78,7 @@ def container_exec(state, command, timeout=900):
 
 
 def fixture_action(state, action):
-    # The frozen fixture is inside the private daemon's namespace, never the host Docker socket.
+    # The fixture is inside the private daemon's namespace, never the host Docker socket.
     return container_exec(state, f"/fixture/fixture.sh {action}", timeout=1800)
 
 
@@ -155,7 +155,7 @@ def prepare(args):
     run(argv)
     state["runner_image_id"] = run(["docker", "inspect", "--format", "{{.Image}}", state["container"]]).decode().strip()
     write_json(root / "state.json", state)
-    container_exec(state, "apk add --no-cache git bash curl coreutils socat && git config --global --add safe.directory /workspace/registry")
+    container_exec(state, "apk add --no-cache git bash curl coreutils socat python3 && git config --global --add safe.directory /workspace/registry")
     if args.test != 1:
         container_exec(state, "for i in $(seq 1 60); do docker info >/dev/null 2>&1 && exit 0; sleep 1; done; exit 1", timeout=90)
     if args.test != 1:
@@ -221,12 +221,15 @@ def finish(args):
             shutil.copyfile(report, delivery / "implementation-report.md")
     if state["test"] in (1, 4) and result["source_changed"]:
         result["scope_deviation"] = "Registry source changed in a planning or verification task"
+    if state["test"] in (2, 4):
+        result["runtime_ready"] = False
     if state["test"] in (2, 4) and "scope_deviation" not in result:
         evidence = root / "screenshots"
         evidence.mkdir(exist_ok=True)
         try:
             # Rebuild from the captured delivery before trusted screenshots.
             (root / "final-start.log").write_bytes(fixture_action(state, "up"))
+            result["runtime_ready"] = True
             script = (args.assets / "capture.cjs").read_bytes()
             command = ["docker", "exec", "-i", state["container"], "docker", "compose", "-f", "/fixture/compose.yaml", "exec", "-T", "web", "node", "-"]
             (root / "capture.log").write_bytes(run(command, data=script, timeout=180))

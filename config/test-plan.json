@@ -113,7 +113,11 @@
     "trend_blog",
     "todo_worker_simple",
     "todo_worker_planned",
-    "chess_play_ladder"
+    "chess_play_ladder",
+    "registry_planning",
+    "registry_implementation",
+    "registry_environment",
+    "registry_verification"
   ],
   "requirements": {
     "swe_config_isolation": [
@@ -181,6 +185,20 @@
     ],
     "typescript_chat_service": [
       "Node 22.6+ on the runner host for direct TypeScript execution"
+    ],
+    "registry_planning": [
+      "Linux amd64 with Docker and the latest e2e-fixture Registry assets",
+      "Explicit auxiliary model for plan assessment"
+    ],
+    "registry_implementation": [
+      "Linux amd64 with Docker and the latest e2e-fixture Registry assets"
+    ],
+    "registry_environment": [
+      "Linux amd64 with Docker and the latest e2e-fixture Registry assets"
+    ],
+    "registry_verification": [
+      "Linux amd64 with Docker and the latest e2e-fixture Registry assets",
+      "HARNESS_E2E_REGISTRY_IMPLEMENTATION delivery directory"
     ]
   },
   "profiles": [

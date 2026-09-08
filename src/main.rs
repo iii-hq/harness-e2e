@@ -8,7 +8,6 @@ use harness_e2e::fault::{FaultEvaluation, FaultJournal, FaultPlan, FaultProfile}
 use harness_e2e::judge::JudgeConfig;
 use harness_e2e::manifest;
 use harness_e2e::markdown::{self, ScenarioKey};
-use harness_e2e::registry_tasks::{run_registry_tests, RegistryTestsArgs};
 use harness_e2e::report::E2eReport;
 #[cfg(test)]
 use harness_e2e::scenarios::ScenarioId;
@@ -62,8 +61,6 @@ enum Command {
     FaultPlan(FaultPlanArgs),
     /// Classify observed recovery from a protected supervisor's fault journal.
     FaultEvaluate(FaultEvaluateArgs),
-    /// Run evidence-only Registry development tasks outside the scored scenario catalog.
-    RegistryTests(RegistryTestsArgs),
 }
 
 #[derive(Debug, Subcommand)]
@@ -117,10 +114,8 @@ struct RunArgs {
     #[arg(long, env = "HARNESS_E2E_PROVIDER")]
     provider: String,
 
-    /// Auxiliary model for Markdown scenarios (validators, instruction
-    /// adherence, setup and cleanup sessions). Required together with
-    /// --judge-provider whenever a Markdown scenario is selected; built-in
-    /// scenarios are assessed deterministically and never use it.
+    /// Auxiliary model for Markdown scenarios and Registry planning.
+    /// Supply together with --judge-provider.
     #[arg(long, env = "HARNESS_E2E_JUDGE_MODEL")]
     judge_model: Option<String>,
 
@@ -306,7 +301,6 @@ async fn main() -> Result<()> {
         Some(Command::Dashboard(args)) => dashboard::serve(args).await,
         Some(Command::FaultPlan(args)) => fault_plan(args),
         Some(Command::FaultEvaluate(args)) => fault_evaluate(args),
-        Some(Command::RegistryTests(args)) => run_registry_tests(args).await,
     }
 }
 
@@ -413,8 +407,13 @@ async fn run(args: RunArgs) -> Result<()> {
     let has_markdown = selected_scenarios
         .iter()
         .any(|scenario| scenario.built_in().is_none());
-    if has_markdown && (args.judge_model.is_none() || args.judge_provider.is_none()) {
-        bail!("Markdown scenarios require explicit --judge-model and --judge-provider values");
+    let has_planning = selected_scenarios
+        .iter()
+        .any(|s| s.as_str() == "registry_planning");
+    if (has_markdown || has_planning)
+        && (args.judge_model.is_none() || args.judge_provider.is_none())
+    {
+        bail!("Markdown scenarios and Registry planning require explicit --judge-model and --judge-provider values");
     }
     let judge = args
         .judge_model
