@@ -6,7 +6,7 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-ASSETS = Path(__file__).resolve().parents[2] / "repository-tasks/registry-version-comparison"
+ASSETS = Path(__file__).resolve().parents[2] / "tests/fixtures/registry-version-comparison"
 spec = importlib.util.spec_from_file_location("registry_lifecycle", ASSETS / "lifecycle.py")
 module = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(module)

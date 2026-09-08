@@ -4,8 +4,8 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[2]
-SCRIPT = ROOT / "repository-tasks/registry-version-comparison/validate-feature.cjs"
-METRICS = ROOT / "repository-tasks/registry-version-comparison/metrics.json"
+SCRIPT = ROOT / "tests/fixtures/registry-version-comparison/validate-feature.cjs"
+METRICS = ROOT / "tests/fixtures/registry-version-comparison/metrics.json"
 
 
 class RegistryFeatureProbeTests(unittest.TestCase):

@@ -26,21 +26,21 @@ const IDS: [&str; 4] = [
     VERIFICATION_ID,
 ];
 const REQUIREMENTS: &str =
-    include_str!("../../repository-tasks/registry-version-comparison/requirements.md");
+    include_str!("../../tests/fixtures/registry-version-comparison/requirements.md");
 const REFERENCE: &str =
-    include_str!("../../repository-tasks/registry-version-comparison/reference-plan.md");
+    include_str!("../../tests/fixtures/registry-version-comparison/reference-plan.md");
 const PROMPTS: [&str; 4] = [
-    include_str!("../../repository-tasks/registry-version-comparison/test-1-planning.md"),
-    include_str!("../../repository-tasks/registry-version-comparison/test-2-implementation.md"),
-    include_str!("../../repository-tasks/registry-version-comparison/test-3-environment.md"),
-    include_str!("../../repository-tasks/registry-version-comparison/test-4-verification.md"),
+    include_str!("../../tests/fixtures/registry-version-comparison/test-1-planning.md"),
+    include_str!("../../tests/fixtures/registry-version-comparison/test-2-implementation.md"),
+    include_str!("../../tests/fixtures/registry-version-comparison/test-3-environment.md"),
+    include_str!("../../tests/fixtures/registry-version-comparison/test-4-verification.md"),
 ];
 
 fn metrics(test: u8) -> &'static [Value] {
     static CATALOG: OnceLock<Value> = OnceLock::new();
     CATALOG.get_or_init(|| {
         serde_json::from_str(include_str!(
-            "../../repository-tasks/registry-version-comparison/metrics.json"
+            "../../tests/fixtures/registry-version-comparison/metrics.json"
         ))
         .expect("Registry metrics JSON")
     })["tests"][usize::from(test - 1)]["metrics"]
@@ -183,20 +183,20 @@ fn setup<'a, const N: u8>(context: &'a E2eContext, run_id: &'a str) -> CleanupFu
         for (name, data) in [
             (
                 "lifecycle.py",
-                include_str!("../../repository-tasks/registry-version-comparison/lifecycle.py"),
+                include_str!("../../tests/fixtures/registry-version-comparison/lifecycle.py"),
             ),
             (
                 "capture.cjs",
-                include_str!("../../repository-tasks/registry-version-comparison/capture.cjs"),
+                include_str!("../../tests/fixtures/registry-version-comparison/capture.cjs"),
             ),
             (
                 "validate.py",
-                include_str!("../../repository-tasks/registry-version-comparison/validate.py"),
+                include_str!("../../tests/fixtures/registry-version-comparison/validate.py"),
             ),
             (
                 "validate-feature.cjs",
                 include_str!(
-                    "../../repository-tasks/registry-version-comparison/validate-feature.cjs"
+                    "../../tests/fixtures/registry-version-comparison/validate-feature.cjs"
                 ),
             ),
             ("requirements.md", REQUIREMENTS),

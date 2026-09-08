@@ -62,7 +62,7 @@ python3 /absolute/attempt-assets/lifecycle.py cleanup --root /absolute/attempt
 
 ```bash
 python3 -m unittest discover -s tests/python -p 'test_registry_*.py' -v
-node --check repository-tasks/registry-version-comparison/validate-feature.cjs
+node --check tests/fixtures/registry-version-comparison/validate-feature.cjs
 cargo test --locked registry
 ```
 
