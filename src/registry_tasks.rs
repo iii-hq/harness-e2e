@@ -24,6 +24,8 @@ const REQUIREMENTS: &str =
     include_str!("../repository-tasks/registry-version-comparison/requirements.md");
 const REFERENCE: &str =
     include_str!("../repository-tasks/registry-version-comparison/reference-plan.md");
+const METRICS: &str = include_str!("../repository-tasks/registry-version-comparison/metrics.json");
+const SCORER: &str = include_str!("../repository-tasks/registry-version-comparison/score.py");
 const PROMPTS: [&str; 4] = [
     include_str!("../repository-tasks/registry-version-comparison/test-1-planning.md"),
     include_str!("../repository-tasks/registry-version-comparison/test-2-implementation.md"),
@@ -45,6 +47,9 @@ pub struct RegistryTestsArgs {
     pub test: Option<u8>,
     #[arg(long)]
     pub implementation: Option<PathBuf>,
+    /// Metric definitions and weights to freeze before any subject session starts.
+    #[arg(long)]
+    pub metrics_config: Option<PathBuf>,
     #[arg(long, default_value_t = 45000)]
     pub base_port: u16,
     #[arg(long, default_value_t = 3600)]
@@ -96,6 +101,18 @@ pub async fn run_registry_tests(mut args: RegistryTestsArgs) -> Result<()> {
     args.output = args.output.canonicalize()?;
     let assets = args.output.join("controller-assets");
     materialize_assets(&assets)?;
+    if let Some(path) = &args.metrics_config {
+        std::fs::copy(path, assets.join("metrics.json"))?;
+    }
+    checked_json(
+        Command::new("python3")
+            .arg(assets.join("score.py"))
+            .arg("template")
+            .arg("--output")
+            .arg(args.output.join("validation-observations.json")),
+        "initialize metric observations",
+    )
+    .await?;
     let context = Arc::new(E2eContext::connect(&args.url).await?);
     context.bind_turn_completed().await?;
     let mut reports = if let Some(test) = args.test {
@@ -151,6 +168,8 @@ fn materialize_assets(assets: &Path) -> Result<()> {
     std::fs::create_dir(assets)?;
     std::fs::write(assets.join("lifecycle.py"), LIFECYCLE)?;
     std::fs::write(assets.join("capture.cjs"), CAPTURE)?;
+    std::fs::write(assets.join("metrics.json"), METRICS)?;
+    std::fs::write(assets.join("score.py"), SCORER)?;
     std::fs::write(assets.join("requirements.md"), REQUIREMENTS)?;
     std::fs::write(assets.join("reference-plan.md"), REFERENCE)?;
     for (index, (name, prompt)) in ["planning", "implementation", "environment", "verification"]
@@ -469,6 +488,7 @@ mod tests {
             output: PathBuf::from("definitely-fresh-registry-output"),
             test: None,
             implementation: None,
+            metrics_config: None,
             base_port: 45000,
             timeout_seconds: 3600,
         }
@@ -482,6 +502,8 @@ mod tests {
         for name in [
             "lifecycle.py",
             "capture.cjs",
+            "metrics.json",
+            "score.py",
             "requirements.md",
             "reference-plan.md",
             "test-1-planning.md",

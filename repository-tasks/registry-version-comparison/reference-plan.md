@@ -12,7 +12,7 @@ Status: draft v1 for human review. Input artifact for **Test 2 — Implementatio
 - Environment fixture: the latest default-branch content of `iii-hq/e2e-fixture`, directory `registry-version-comparison/`, fetched at the start of each execution. Do not pin a fixture commit or reuse a stale checkout; keep the fetched copy unchanged during that execution. Its Dockerfile and Compose file pin base images by digest; iii 0.22.1 is verified by archive checksum. Built image identities are recorded with execution evidence.
 - [Fixture setup and smoke check](https://github.com/iii-hq/e2e-fixture): API, PostgreSQL/pgvector, Next.js, public seed, local artifacts, and baseline browser screenshots are implemented. Record checksums of the copied fixture files as evidence; no fixture commit is required.
 - Provide this plan only to Test 2. Test 1 receives requirements without this plan or documents that reveal the solution. Test 3 prepares the environment; Test 4 tests the patch from Test 2 without modifying it.
-- At this stage, present artifacts, command results, and screenshots; do not calculate scores, rankings, or automated visual assessments.
+- Subjects deliver artifacts, command results, and screenshots without scoring themselves. Independent assessment uses the [atomic metrics and scoring rules](scoring.md); automated visual assessment remains outside this scope.
 
 ## 2. Product deliverable
 

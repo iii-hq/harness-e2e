@@ -1,6 +1,6 @@
 # Registry development tasks
 
-Four native Harness tasks produce plans, source patches, command logs, runtime reports, and screenshots. They do not calculate scores or invoke an evaluator. The `registry-tests` command is separate from the scored scenario catalog and dashboard execution history.
+Four native Harness tasks produce plans, source patches, command logs, runtime reports, and screenshots. Execution collects evidence without invoking an evaluator. The [atomic metric scorer](scoring.md) calculates scores separately from independent, evidence-backed observations. The `registry-tests` command is separate from the scored scenario catalog and dashboard execution history.
 
 | Test | Input | Work | Main output |
 | --- | --- | --- | --- |
