@@ -30,21 +30,21 @@ use super::{
 };
 
 pub const ID: &str = "validation_chain";
-const VERSION: u32 = 5;
+const VERSION: u32 = 6;
 const DELIVERABLE_ID: &str = "validation_chain_result";
 
 const HOOK_TYPE: &str = "harness::hook::post-turn";
-const BROKEN_VALIDATOR_SKIPPED: AssessmentSpec = AssessmentSpec::hard_gated(
+const BROKEN_VALIDATOR_SKIPPED: AssessmentSpec = AssessmentSpec::scored(
     "broken_validator_skipped",
     30,
     "The fail_open validator errored invisibly: registered, never a nudge of its own, never blocking.",
 );
-const CHAIN_ORDER: AssessmentSpec = AssessmentSpec::hard_gated(
+const CHAIN_ORDER: AssessmentSpec = AssessmentSpec::scored(
     "chain_order",
     40,
     "Exactly two denials, CHAIN-A then CHAIN-B — ascending priority, first deny wins each attempt.",
 );
-const ALL_GATES_SATISFIED: AssessmentSpec = AssessmentSpec::hard_gated(
+const ALL_GATES_SATISFIED: AssessmentSpec = AssessmentSpec::scored(
     "all_gates_satisfied",
     30,
     "Rows AND marker both end satisfied — one passing validator never completes the turn alone.",
@@ -177,8 +177,6 @@ fn capture<'a>(
                 )
                 .await?,
         );
-        let invariants =
-            super::captured_gate_invariants(evaluate(context, observation, run_id).await?);
         Ok(vec![CapturedDeliverable {
             id: DELIVERABLE_ID.to_string(),
             kind: "validation_chain_result".to_string(),
@@ -189,7 +187,7 @@ fn capture<'a>(
                 "response": observation.response,
             })
             .into(),
-            invariants,
+            invariants: Vec::new(),
             provenance: vec![
                 ProvenanceEvidence {
                     kind: "database_relation".to_string(),
@@ -215,7 +213,6 @@ fn deliverable_contract() -> super::DeliverableContract {
             "required": ["rows", "marker", "validation_nudges", "response"],
             "additionalProperties": true
         }),
-        ASSESSMENTS,
     )
 }
 
@@ -270,7 +267,6 @@ fn evaluate<'a>(
             && nudges[1].contains("CHAIN-B")
             && !nudges[1].contains("CHAIN-A");
         let satisfied = rows == 3 && marker == 1;
-        let three_registrations = hook_registrations.len() == 3 && broken_registered;
         let broken_validator_points = if broken_registered && ordered {
             BROKEN_VALIDATOR_SKIPPED.weight()
         } else {
@@ -292,8 +288,7 @@ fn evaluate<'a>(
                     satisfied,
                     format!("rows={rows} (need 3), marker={marker} (need 1)"),
                 ),
-                BROKEN_VALIDATOR_SKIPPED.gate_and_points(
-                    three_registrations,
+                BROKEN_VALIDATOR_SKIPPED.award(
                     broken_validator_points,
                     format!(
                     "observed {} post-turn registration(s); broken_registered={broken_registered}; \

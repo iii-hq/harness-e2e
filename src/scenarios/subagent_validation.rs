@@ -28,24 +28,24 @@ use super::{
 };
 
 pub const ID: &str = "subagent_validation";
-const VERSION: u32 = 5;
+const VERSION: u32 = 6;
 const DELIVERABLE_ID: &str = "validated_child_result";
 
 const HOOK_TYPE: &str = "harness::hook::post-turn";
 const THRESHOLD: u64 = 6;
 const EXPECTED_ROWS: u64 = 8;
-const CHILD_GOAL: AssessmentSpec = AssessmentSpec::hard_gated_in(
+const CHILD_GOAL: AssessmentSpec = AssessmentSpec::scored_in(
     "child_goal",
     35,
     "The child's table work reaches the exact expected count and the verdict key carries the accepted count.",
     EvaluationDimension::Deliverable,
 );
-const ORCHESTRATION_DISCIPLINE: AssessmentSpec = AssessmentSpec::hard_gated(
+const ORCHESTRATION_DISCIPLINE: AssessmentSpec = AssessmentSpec::scored(
     "orchestration_discipline",
     35,
     "Validator scoped to the child, wake armed before the spawn, and the child spawned with the named session.",
 );
-const WAKE_REPORT: AssessmentSpec = AssessmentSpec::score_only(
+const WAKE_REPORT: AssessmentSpec = AssessmentSpec::scored(
     "wake_report",
     30,
     "The parent finishes from the verdict wake with a completion report.",
@@ -215,9 +215,7 @@ fn evaluate<'a>(
 
         let goal = rows > THRESHOLD && verdict > THRESHOLD;
         let reported = !observation.response.trim().is_empty();
-        let (orchestration_passed, orchestration_points) =
-            orchestration_outcome(ordered, child_nudges);
-        let child_goal_passed = goal && rows == EXPECTED_ROWS;
+        let (_, orchestration_points) = orchestration_outcome(ordered, child_nudges);
 
         Ok(assessment::build_evaluation(
             if reported {
@@ -226,16 +224,14 @@ fn evaluate<'a>(
                 crate::report::CompletionState::TaskIncomplete
             },
             [
-                CHILD_GOAL.gate_and_points(
-                    child_goal_passed,
+                CHILD_GOAL.award(
                     child_goal_points(goal, rows),
                     format!(
                     "rows={rows}, verdict={verdict}, need both above {THRESHOLD}; full marks at \
                      exactly {EXPECTED_ROWS} rows"
                 ),
                 )?,
-                ORCHESTRATION_DISCIPLINE.gate_and_points(
-                    orchestration_passed,
+                ORCHESTRATION_DISCIPLINE.award(
                     orchestration_points,
                     format!(
                     "validator@{validator_index:?} wake@{wake_index:?} spawn@{spawn_index:?} — \

@@ -40,23 +40,8 @@ export function totalWeight(criteria: TestCriterion[]): number {
   return criteria.reduce((total, criterion) => total + criterion.weight, 0)
 }
 
-export function hardGateCount(criteria: TestCriterion[]): number {
-  return criteria.filter((criterion) => criterion.policy === 'hard_gate').length
-}
-
 export function criteriaCaption(criteria: TestCriterion[]): string {
-  const gates = hardGateCount(criteria)
-  return [
-    `${criteria.length} ${criteria.length === 1 ? 'criterion' : 'criteria'}`,
-    gates > 0 ? `${gates} hard ${gates === 1 ? 'gate' : 'gates'}` : null,
-    'deterministic',
-  ]
-    .filter(Boolean)
-    .join(' · ')
-}
-
-function policyLabel(criterion: TestCriterion): string {
-  return criterion.policy === 'hard_gate' ? 'hard gate' : 'score only'
+  return `${criteria.length} ${criteria.length === 1 ? 'criterion' : 'criteria'} · ${totalWeight(criteria)} points`
 }
 
 /** Scenario prose marks identifiers with backticks, the way the Rust doc
@@ -114,34 +99,22 @@ export function TestCriteriaList({
       <ul className="m-0 grid list-none gap-3.5 p-0 pt-3.5">
         {criteria.map((criterion) => {
           const outcome = outcomes?.get(criterion.id)
-          const advisory = criterion.policy !== 'hard_gate'
           return (
             <li
               className="grid grid-cols-[2.5rem_minmax(0,1fr)] items-start gap-x-3.5 gap-y-1 @[720px]:grid-cols-[2.5rem_minmax(0,1fr)_auto]"
               data-criterion={criterion.id}
               key={criterion.id}
             >
-              <span
-                className={`text-right font-mono text-[0.9375rem] font-semibold tabular-nums ${advisory ? 'text-ink-soft' : 'text-ink'}`}
-              >
+              <span className="text-right font-mono text-[0.9375rem] font-semibold tabular-nums text-ink">
                 {criterion.weight}
               </span>
               <div className="min-w-0">
-                <div
-                  className={`font-mono text-xs ${advisory ? 'text-ink-soft' : 'text-ink'}`}
-                >
-                  {criterion.id}
-                </div>
+                <div className="font-mono text-xs text-ink">{criterion.id}</div>
                 <p className="m-0 mt-0.5 text-xs leading-5 text-ink-soft">
                   {withInlineCode(criterion.description)}
                 </p>
               </div>
               <span className="col-start-2 flex flex-wrap items-center gap-2 @[720px]:col-start-3 @[720px]:justify-end">
-                <span
-                  className={`font-mono text-label ${advisory ? 'text-ink-muted' : 'text-ink'}`}
-                >
-                  {policyLabel(criterion)}
-                </span>
                 {outcome ? (
                   <StatusBadge label={outcome.label} status={outcome.status} />
                 ) : null}

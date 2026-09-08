@@ -140,7 +140,7 @@ Metric names are stable identifiers:
 
 The execution index retains 100 workflow attempts. The latest 30 also retain the
 complete execution report: per-run prompts, transcripts, criteria, metrics,
-costs, retries, hard gates, traces, and failure evidence. Each publish updates
+costs, retries, runtime checks, traces, and failure evidence. Each publish updates
 the retained report metadata and removes unreferenced run files before deploying
 Pages. It also emits `tests/index.json` for compact version/test metadata and one
 `tests/data/<digest>.json` evidence shard per retained test version.

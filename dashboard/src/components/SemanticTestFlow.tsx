@@ -117,8 +117,7 @@ function WorkflowMetricsOverview({
 }: {
   metrics: WorkflowMetricsSummary
 }) {
-  const attentionSteps =
-    metrics.failedSteps + metrics.hardGateFailedSteps + metrics.cancelledSteps
+  const attentionSteps = metrics.failedSteps + metrics.cancelledSteps
   const numericMetrics = workflowMetricEntries(metrics)
   return (
     <section
@@ -178,23 +177,23 @@ function WorkflowMetricsOverview({
           )}
         />
         <WorkflowMetric
-          label="Hard gates"
+          label="Runtime checks"
           value={
-            metrics.hardGateCount
-              ? `${metrics.passedHardGateCount}/${metrics.hardGateCount}`
+            metrics.runtimeCheckCount
+              ? `${metrics.passedRuntimeCheckCount}/${metrics.runtimeCheckCount}`
               : '—'
           }
           caption={
-            metrics.hardGateCount === 0
-              ? 'no hard gates reported'
-              : metrics.passedHardGateCount === metrics.hardGateCount
-                ? 'all objective checks passed'
-                : `${metrics.hardGateCount - metrics.passedHardGateCount} failed`
+            metrics.runtimeCheckCount === 0
+              ? 'no runtime checks reported'
+              : metrics.passedRuntimeCheckCount === metrics.runtimeCheckCount
+                ? 'all runtime checks passed'
+                : `${metrics.runtimeCheckCount - metrics.passedRuntimeCheckCount} failed`
           }
           tone={
-            metrics.hardGateCount === 0
+            metrics.runtimeCheckCount === 0
               ? 'neutral'
-              : metrics.passedHardGateCount === metrics.hardGateCount
+              : metrics.passedRuntimeCheckCount === metrics.runtimeCheckCount
                 ? 'positive'
                 : 'negative'
           }
@@ -271,15 +270,17 @@ function SemanticTestCard({
   number: number
 }) {
   const assets = test.assets ?? []
-  const gates = test.hard_gates ?? []
+  const checks = test.hard_gates ?? []
   const evaluations = test.evaluations ?? []
   const failures = test.failures ?? []
-  const failedGates = gates.filter((gate) => !gate.passed)
+  const failedChecks = checks.filter((check) => !check.passed)
   const outcome = summarizeTestOutcome(test)
   const status = semanticTestStatus(test.status)
   const facts = primaryStepFacts(test)
   const needsAttention =
-    failures.length > 0 || failedGates.length > 0 || test.status !== 'succeeded'
+    failures.length > 0 ||
+    failedChecks.length > 0 ||
+    test.status !== 'succeeded'
 
   return (
     <li className="min-w-0 overflow-hidden rounded-[var(--ds-radius-sm)] border border-line bg-panel shadow-sm">
@@ -345,29 +346,32 @@ function SemanticTestCard({
             Decision evidence
           </span>
           <span className="font-mono text-label text-ink-muted">
-            {gates.length} gates · {evaluations.length} evaluations ·{' '}
+            {checks.length} runtime checks · {evaluations.length} evaluations ·{' '}
             {failures.length} failures
           </span>
         </summary>
         <div className="grid gap-5 border-t border-line px-4 py-4 sm:px-5 lg:grid-cols-2">
-          <EvidenceGroup title="Hard gates" empty="No hard gates reported.">
-            {gates.map((gate) => (
+          <EvidenceGroup
+            title="Runtime checks"
+            empty="No runtime checks reported."
+          >
+            {checks.map((check) => (
               <li
-                key={gate.id}
+                key={check.id}
                 className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-3 gap-y-1 border-t border-line/70 pt-2 first:border-t-0 first:pt-0"
               >
                 <span
-                  className={`mt-1 size-2 rounded-full ${gate.passed ? 'bg-success' : 'bg-danger'}`}
+                  className={`mt-1 size-2 rounded-full ${check.passed ? 'bg-success' : 'bg-danger'}`}
                   aria-hidden="true"
                 />
                 <div className="min-w-0">
                   <strong
-                    className={`block break-words text-xs ${gate.passed ? 'text-ink' : 'text-danger'}`}
+                    className={`block break-words text-xs ${check.passed ? 'text-ink' : 'text-danger'}`}
                   >
-                    {humanize(gate.id)}
+                    {humanize(check.id)}
                   </strong>
                   <span className="mt-0.5 block text-xs leading-5 text-ink-muted">
-                    {gate.reason}
+                    {check.reason}
                   </span>
                 </div>
               </li>
@@ -514,7 +518,6 @@ function EvidenceGroup({
 
 function workflowStatus(metrics: WorkflowMetricsSummary): OperationalStatus {
   if (metrics.failedSteps > 0 || metrics.failureCount > 0) return 'failed'
-  if (metrics.hardGateFailedSteps > 0) return 'hard_gate'
   if (metrics.cancelledSteps > 0) return 'cancelled'
   if (metrics.runningSteps > 0) return 'running'
   if (metrics.pendingSteps > 0 || metrics.skippedSteps > 0) return 'incomplete'
@@ -543,7 +546,7 @@ function semanticTestStatus(status: string): {
     case 'failed':
       return { status: 'failed', label: 'Failed' }
     case 'hard_gate_failed':
-      return { status: 'hard_gate', label: 'Hard gate failed' }
+      return { status: 'failed', label: 'Runtime check failed' }
     case 'running':
       return { status: 'running', label: 'Running' }
     case 'cancelled':
@@ -562,8 +565,8 @@ function summarizeTestOutcome(test: SemanticTestReport): {
   detail: string
   tone: string
 } {
-  const gates = test.hard_gates ?? []
-  const failedGates = gates.filter((gate) => !gate.passed)
+  const checks = test.hard_gates ?? []
+  const failedChecks = checks.filter((check) => !check.passed)
   const failures = test.failures ?? []
 
   if (failures.length > 0) {
@@ -573,12 +576,11 @@ function summarizeTestOutcome(test: SemanticTestReport): {
       tone: 'text-danger',
     }
   }
-  if (failedGates.length > 0 || test.status === 'hard_gate_failed') {
+  if (failedChecks.length > 0 || test.status === 'hard_gate_failed') {
     return {
-      title: `${failedGates.length || 1} hard ${pluralize(failedGates.length || 1, 'gate')} failed`,
+      title: `${failedChecks.length || 1} runtime ${pluralize(failedChecks.length || 1, 'check')} failed`,
       detail:
-        failedGates[0]?.reason ??
-        'The step completed, but objective acceptance evidence did not pass.',
+        failedChecks[0]?.reason ?? 'A required workflow runtime check failed.',
       tone: 'text-danger',
     }
   }
@@ -603,16 +605,16 @@ function summarizeTestOutcome(test: SemanticTestReport): {
       tone: 'text-info',
     }
   }
-  if (gates.length > 0) {
+  if (checks.length > 0) {
     return {
-      title: `All ${gates.length} hard ${pluralize(gates.length, 'gate')} passed`,
-      detail: `${test.evaluations?.length ?? 0} step ${pluralize(test.evaluations?.length ?? 0, 'evaluation')} recorded without overriding the objective result.`,
+      title: `All ${checks.length} runtime ${pluralize(checks.length, 'check')} passed`,
+      detail: `${test.evaluations?.length ?? 0} step ${pluralize(test.evaluations?.length ?? 0, 'evaluation')} recorded.`,
       tone: 'text-success',
     }
   }
   return {
     title: 'Step completed successfully',
-    detail: 'No hard gates or technical failures were reported for this step.',
+    detail: 'No runtime check or technical failure was reported for this step.',
     tone: 'text-success',
   }
 }

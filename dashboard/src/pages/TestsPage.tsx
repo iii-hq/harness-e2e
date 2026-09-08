@@ -133,8 +133,8 @@ export function summaryStatus(summary: TestSideSummary | null): {
     return { status: 'failed', label: 'infrastructure failure' }
   if (summary.outcomes.technical_failed > 0)
     return { status: 'failed', label: 'technical failure' }
-  if (summary.outcomes.hard_gate_failed > 0)
-    return { status: 'hard_gate', label: 'hard gate failed' }
+  if (summary.outcomes.passed < summary.total_runs)
+    return { status: 'incomplete', label: 'incomplete' }
   return { status: 'passed', label: 'passed' }
 }
 
@@ -187,12 +187,7 @@ export type RowState =
 function hasIssuesInB(result: TestVersionResult) {
   const to = result.to
   if (!to) return false
-  return (
-    to.outcomes.hard_gate_failed +
-      to.outcomes.technical_failed +
-      to.outcomes.infra_failed >
-    0
-  )
+  return to.outcomes.technical_failed + to.outcomes.infra_failed > 0
 }
 
 /** Audit CP-01: every row has exactly one state that decides its group. */
@@ -203,9 +198,7 @@ export function rowState(row: TestCatalogRow): RowState {
   if (result.compatibility !== 'compatible') return 'changed'
   const score = result.delta.score
   const fromIssues =
-    result.from.outcomes.hard_gate_failed +
-      result.from.outcomes.technical_failed +
-      result.from.outcomes.infra_failed >
+    result.from.outcomes.technical_failed + result.from.outcomes.infra_failed >
     0
   const toIssues = hasIssuesInB(result)
   if ((toIssues && !fromIssues) || (score !== null && score < 0))
@@ -405,7 +398,7 @@ function summaryStatusFromObservation(status: string): {
 } {
   if (status === 'passed') return { status: 'passed', label: 'passed' }
   if (status === 'hard_gate_failed')
-    return { status: 'hard_gate', label: 'hard gate failed' }
+    return { status: 'failed', label: 'failed (legacy result)' }
   return { status: 'failed', label: status.replace(/[_-]+/g, ' ') }
 }
 

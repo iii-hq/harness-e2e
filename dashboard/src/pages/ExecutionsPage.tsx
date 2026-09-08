@@ -138,7 +138,6 @@ function tokensOf(row: LedgerRow) {
 
 const RESULT_ORDER = [
   'failed',
-  'hard_gate',
   'inconclusive',
   'incomplete',
   'running',

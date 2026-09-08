@@ -82,7 +82,6 @@ function execution(
     totals: {
       scenario_pass_rate: 100,
       report_coverage: 100,
-      hard_gate_failures: 0,
       technical_failures: 0,
       total_tokens: 1_000,
       wall_time_seconds: 12,

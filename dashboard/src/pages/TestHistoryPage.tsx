@@ -201,7 +201,7 @@ export function statusPresentation(status: string): {
 } {
   if (status === 'passed') return { status: 'passed', label: 'passed' }
   if (status === 'hard_gate_failed')
-    return { status: 'hard_gate', label: 'hard gate failed' }
+    return { status: 'failed', label: 'failed (legacy result)' }
   if (status === 'technical_failed')
     return { status: 'failed', label: 'technical failure' }
   if (status === 'infra_failed')

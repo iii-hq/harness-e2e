@@ -16,33 +16,33 @@ use super::{
 };
 
 pub const ID: &str = "timer_wake";
-const VERSION: u32 = 6;
+const VERSION: u32 = 7;
 const DELIVERABLE_ID: &str = "timer_result";
 
 const RESULT_KEY: &str = "result";
 const DELAY_MS: u64 = 6_000;
 const READY_AFTER_SECONDS: u64 = 4;
-const TIMER_ARMED: AssessmentSpec = AssessmentSpec::hard_gated(
+const TIMER_ARMED: AssessmentSpec = AssessmentSpec::scored(
     "timer_armed",
     20,
     "One wake-only relative timer is armed before any result write.",
 );
-const PARENT_WOKEN: AssessmentSpec = AssessmentSpec::hard_gated(
+const PARENT_WOKEN: AssessmentSpec = AssessmentSpec::scored(
     "parent_woken",
     20,
     "The timer retires after waking the original session exactly once.",
 );
-const WAKE_ACTION: AssessmentSpec = AssessmentSpec::hard_gated(
+const WAKE_ACTION: AssessmentSpec = AssessmentSpec::scored(
     "wake_action",
     25,
     "The timer-woken turn persists the requested result.",
 );
-const NO_POLLING: AssessmentSpec = AssessmentSpec::hard_gated(
+const NO_POLLING: AssessmentSpec = AssessmentSpec::scored(
     "no_polling",
     20,
     "The gated status function is called exactly once after the timer wake, never before it.",
 );
-const CLEAN_COMPLETION: AssessmentSpec = AssessmentSpec::hard_gated(
+const CLEAN_COMPLETION: AssessmentSpec = AssessmentSpec::scored(
     "clean_completion",
     15,
     "The root completes without children, errors, or surviving bindings.",

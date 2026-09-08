@@ -20,7 +20,6 @@ export type FailureCategory =
   | 'resource_limit'
   | 'subject'
   | 'judge'
-  | 'hard_gate'
   | 'inconclusive'
 
 export type FailureBreakdown = Record<FailureCategory, number> & {
@@ -58,13 +57,11 @@ const CATEGORY_ORDER: FailureCategory[] = [
   'resource_limit',
   'subject',
   'judge',
-  'hard_gate',
   'inconclusive',
 ]
 
 const STATUS_KEYS = [
   'passed',
-  'hard_gate_failed',
   'infrastructure_error',
   'resource_limit',
   'subject_error',
@@ -119,7 +116,6 @@ function fallbackStatusCounts(
       : 0)
   return {
     passed: numberValue(totals.passed_scenarios) ?? 0,
-    hard_gate_failed: numberValue(totals.hard_gate_failures) ?? 0,
     infrastructure_error:
       numberValue(totals.infra_failures) ??
       numberValue(totals.technical_failures) ??
@@ -140,7 +136,6 @@ export function failureBreakdown(
     resource_limit: countStatus(counts, 'resource_limit'),
     subject: countStatus(counts, 'subject_error'),
     judge: countStatus(counts, 'judge_error'),
-    hard_gate: countStatus(counts, 'hard_gate_failed'),
     inconclusive: countStatus(counts, 'unavailable'),
     passed: countStatus(counts, 'passed'),
     total: 0,
@@ -153,7 +148,6 @@ export function failureBreakdown(
   if (breakdown.total === 0) {
     breakdown.total =
       breakdown.passed +
-      breakdown.hard_gate +
       breakdown.infrastructure +
       breakdown.resource_limit +
       breakdown.subject +
@@ -165,7 +159,6 @@ export function failureBreakdown(
     breakdown.resource_limit +
     breakdown.subject +
     breakdown.judge +
-    breakdown.hard_gate +
     breakdown.inconclusive
   return breakdown
 }
@@ -304,7 +297,6 @@ export function categoryLabel(category: FailureCategory): string {
     resource_limit: 'Resource limit',
     subject: 'Subject model',
     judge: 'Markdown judge',
-    hard_gate: 'Hard gate',
     inconclusive: 'Inconclusive',
   }[category]
 }

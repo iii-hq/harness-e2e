@@ -2609,9 +2609,8 @@ fn terminal_observation(
     let samples = report.map(observation_samples).unwrap_or_default();
     let data_availability = observation_data_availability(&samples);
     let objective = observation_objective(phase, report);
-    let passed = (phase == ExecutionPhase::Completed)
-        .then(|| report.map(|report| report.passed))
-        .flatten();
+    let passed =
+        (phase == ExecutionPhase::Completed).then_some(objective == ObservationObjective::Passed);
     let result_sha256 = result_path
         .map(|path| output_root.join(path))
         .filter(|path| path.is_file())
@@ -2909,9 +2908,6 @@ fn observation_objective(
             let Some(report) = report else {
                 return ObservationObjective::InfrastructureFailed;
             };
-            if report.passed {
-                return ObservationObjective::Passed;
-            }
             let statuses = report
                 .scenarios
                 .iter()
@@ -2922,7 +2918,7 @@ fn observation_objective(
             } else if statuses.iter().any(|status| status.is_technical_failure()) {
                 ObservationObjective::TechnicalFailed
             } else {
-                ObservationObjective::HardGateFailed
+                ObservationObjective::Passed
             }
         }
         _ => ObservationObjective::InfrastructureFailed,
@@ -3566,6 +3562,24 @@ mod tests {
                 vec![run],
             )],
         )
+    }
+
+    #[test]
+    fn observation_does_not_reintroduce_objective_approval_gates() {
+        let mut report = retained_report(&observation_record());
+        report.passed = false;
+        let run = &mut report.scenarios[0].runs[0];
+        run.completion = crate::report::CompletionState::TaskIncomplete;
+        run.score = Some(65);
+        assert_eq!(
+            observation_objective(ExecutionPhase::Completed, Some(&report)),
+            ObservationObjective::Passed
+        );
+        report.scenarios[0].runs[0].status = crate::report::RunStatus::InfrastructureError;
+        assert_eq!(
+            observation_objective(ExecutionPhase::Completed, Some(&report)),
+            ObservationObjective::InfrastructureFailed
+        );
     }
 
     #[test]

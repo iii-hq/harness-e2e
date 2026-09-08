@@ -143,15 +143,6 @@ export function isEvaluated(outcome: AssessmentOutcome): boolean {
 }
 
 function primaryRunMetrics(run: AssessmentRunView): PrimaryMetric[] {
-  const hardGates = run.assessments.filter(
-    (entry) => entry.policy === 'hard_gate',
-  )
-  const passedHardGates = hardGates.filter(
-    (entry) => entry.outcome === 'passed',
-  ).length
-  const evaluatedHardGates = hardGates.filter((entry) =>
-    isEvaluated(entry.outcome),
-  ).length
   const evaluatedAssessments = run.assessments.filter((entry) =>
     isEvaluated(entry.outcome),
   ).length
@@ -164,12 +155,6 @@ function primaryRunMetrics(run: AssessmentRunView): PrimaryMetric[] {
   const passedAssessments = run.assessments.filter(
     (entry) => entry.outcome === 'passed',
   ).length
-  const hardGateTone: PrimaryMetricTone =
-    hardGates.length === 0 || evaluatedHardGates === 0
-      ? 'unavailable'
-      : passedHardGates === hardGates.length
-        ? 'positive'
-        : 'negative'
   // Audit AW-04: a run with no retained assessments is unavailable, not
   // "0/0 passed".
   const assessmentTone: PrimaryMetricTone =
@@ -179,38 +164,25 @@ function primaryRunMetrics(run: AssessmentRunView): PrimaryMetric[] {
         ? 'positive'
         : 'warning'
 
-  const objectiveMetric: PrimaryMetric =
-    hardGates.length === 0 && run.systemStatus !== 'passed'
-      ? {
-          label: 'Objective result',
-          value: titleCase(run.systemStatus),
-          detail: 'Authoritative system result',
-          context: 'Objective',
-          tone: 'negative',
-        }
-      : {
-          label: 'Objective hard gates',
-          value:
-            hardGates.length === 0
-              ? 'Not reported'
-              : evaluatedHardGates === 0
-                ? 'Not evaluated'
-                : `${passedHardGates}/${hardGates.length}`,
-          // Audit AW-11: a gate that was never reached did not fail. Counting
-          // not_evaluated as "failed" blamed the subject for an infrastructure
-          // error that stopped the run before any gate ran.
-          detail:
-            hardGates.length === 0
-              ? 'No deterministic gates retained'
-              : evaluatedHardGates === 0
-                ? `${hardGates.length} ${hardGates.length === 1 ? 'gate' : 'gates'}, none reached`
-                : `${evaluatedHardGates - passedHardGates} failed`,
-          context: 'Objective',
-          tone: hardGateTone,
-        }
-
   return [
-    objectiveMetric,
+    {
+      label: 'Objective score',
+      value:
+        run.objectiveScore === null
+          ? 'Not reported'
+          : `${run.objectiveScore}/100`,
+      detail:
+        run.objectiveScore === null
+          ? 'No objective score retained'
+          : 'Official score from measured criteria',
+      context: 'Objective',
+      tone:
+        run.objectiveScore === null
+          ? 'unavailable'
+          : run.objectiveScore === 100
+            ? 'positive'
+            : 'warning',
+    },
     detection
       ? {
           label: 'Seeded detection',
@@ -377,7 +349,6 @@ function AssessmentMatrix({ entries }: { entries: AssessmentEntry[] }) {
           <thead className="bg-panel-subtle text-label uppercase tracking-[0.06em] text-ink-muted">
             <tr>
               <th className="px-3 py-2.5 font-semibold">Assessment</th>
-              <th className="px-3 py-2.5 font-semibold">Policy</th>
               <th className="px-3 py-2.5 font-semibold">Outcome</th>
               <th className="px-3 py-2.5 font-semibold">Score</th>
               <th className="px-3 py-2.5 font-semibold">Conclusion</th>
@@ -447,9 +418,6 @@ function AssessmentRow({ entry }: { entry: AssessmentEntry }) {
       <th className="px-3 py-3 font-normal" scope="row">
         <AssessmentIdentity entry={entry} />
       </th>
-      <td className="px-3 py-3 text-xs text-ink-soft">
-        <strong>{titleCase(entry.policy)}</strong>
-      </td>
       <td className="px-3 py-3">
         <span
           className={`inline-flex rounded-full border px-2 py-1 text-label font-semibold ${toneForOutcome(entry.outcome)}`}
@@ -481,10 +449,7 @@ function AssessmentCard({ entry }: { entry: AssessmentEntry }) {
           {titleCase(entry.validationOutcome ?? entry.outcome)}
         </span>
       </div>
-      <div className="grid grid-cols-2 gap-3 border-y border-line py-2">
-        <span className="text-xs text-ink-soft">
-          <strong>{titleCase(entry.policy)}</strong>
-        </span>
+      <div className="grid grid-cols-1 gap-3 border-y border-line py-2">
         <AssessmentScore entry={entry} />
       </div>
       <AssessmentConclusion entry={entry} />
@@ -624,8 +589,8 @@ function AssessmentDetailContent({
               Assessment matrix
             </h4>
             <p className="m-0 text-xs text-ink-muted">
-              Required checks, advisory signals and asset validations, each with
-              the policy and evidence the run retained.
+              Scored criteria and asset validations, each with the outcome and
+              evidence the run retained.
             </p>
           </div>
         </div>
@@ -641,7 +606,10 @@ function RunStatusBadges({ run }: { run: AssessmentRunView }) {
       <span
         className={`rounded-full border px-2 py-1 text-label font-semibold ${toneForOutcome(run.systemStatus)}`}
       >
-        System: {titleCase(run.systemStatus)}
+        System:{' '}
+        {run.systemStatus === 'hard_gate_failed'
+          ? 'Failed (legacy result)'
+          : titleCase(run.systemStatus)}
       </span>
     </span>
   )

@@ -29,7 +29,7 @@ use super::{
 };
 
 pub const ID: &str = "shell_coder_sandbox";
-const VERSION: u32 = 6;
+const VERSION: u32 = 7;
 pub const CANONICAL_SEED: u64 = 2_051;
 const DIFFICULTY_PROFILE: &str = "code-hard-2026-08";
 
@@ -180,37 +180,37 @@ if __name__ == "__main__":
     print(json.dumps({"accounts": reconcile(demo_events())}, sort_keys=True, separators=(",", ":")))
 "#;
 
-const WORKER_SETUP: AssessmentSpec = AssessmentSpec::hard_gated(
+const WORKER_SETUP: AssessmentSpec = AssessmentSpec::scored(
     "worker_setup",
     5,
     "The assembled project exposes the required shell and coder surfaces.",
 );
-const INVESTIGATION: AssessmentSpec = AssessmentSpec::hard_gated(
+const INVESTIGATION: AssessmentSpec = AssessmentSpec::scored(
     "investigation_and_red_baseline",
     20,
     "Source and tests are inspected and the public failure is reproduced before the first production edit.",
 );
-const DIAGNOSIS: AssessmentSpec = AssessmentSpec::score_only(
+const DIAGNOSIS: AssessmentSpec = AssessmentSpec::scored(
     "evidence_grounded_diagnosis",
     5,
     "A durable diagnosis is created and retained as the only additional workspace artifact.",
 );
-const PUBLIC_CORRECTNESS: AssessmentSpec = AssessmentSpec::hard_gated(
+const PUBLIC_CORRECTNESS: AssessmentSpec = AssessmentSpec::scored(
     "public_correctness",
     25,
     "The subject reruns the public suite after editing and the runner independently observes it green.",
 );
-const HIDDEN_CORRECTNESS: AssessmentSpec = AssessmentSpec::hard_gated(
+const HIDDEN_CORRECTNESS: AssessmentSpec = AssessmentSpec::scored(
     "hidden_correctness",
     30,
     "Runner-owned probes accept generators, out-of-order revisions, account migration, conflicts, validation, idempotency, and input immutability.",
 );
-const HOST_EXECUTION: AssessmentSpec = AssessmentSpec::hard_gated(
+const HOST_EXECUTION: AssessmentSpec = AssessmentSpec::scored(
     "host_execution",
     10,
     "The repaired CLI runs in the host workspace and emits the exact compact JSON contract.",
 );
-const SCOPE_AND_LIFECYCLE: AssessmentSpec = AssessmentSpec::hard_gated(
+const SCOPE_AND_LIFECYCLE: AssessmentSpec = AssessmentSpec::scored(
     "scope_and_lifecycle",
     5,
     "Protected files remain exact and only the source and retained diagnosis differ.",
@@ -561,7 +561,6 @@ struct WorkflowAudit {
     diagnosis_create: Option<usize>,
     diagnosis_move: Option<usize>,
     host_demo: Option<usize>,
-    reads_before_edit: bool,
     red_before_edit: bool,
     evidence_ordered: bool,
 }
@@ -579,10 +578,6 @@ impl WorkflowAudit {
             points += 8;
         }
         points
-    }
-
-    fn investigation_complete(&self) -> bool {
-        self.reads_before_edit && self.red_before_edit
     }
 
     fn diagnosis_complete(&self) -> bool {
@@ -633,11 +628,6 @@ fn workflow_audit(observation: &ScenarioObservation, root: &Path) -> WorkflowAud
             host_demo.get_or_insert(index);
         }
     }
-    let reads_before_edit = matches!(
-        (coder_info, source_read, tests_read, task_read, first_source_edit),
-        (Some(info), Some(source), Some(tests), Some(task), Some(edit))
-            if info < source && source < edit && tests < edit && task < edit
-    );
     let red_before_edit =
         matches!((red_baseline, first_source_edit), (Some(red), Some(edit)) if red < edit);
     let evidence_ordered = matches!(
@@ -656,7 +646,6 @@ fn workflow_audit(observation: &ScenarioObservation, root: &Path) -> WorkflowAud
         diagnosis_create,
         diagnosis_move,
         host_demo,
-        reads_before_edit,
         red_before_edit,
         evidence_ordered,
     }
@@ -693,8 +682,7 @@ fn evaluate<'a>(
                     worker_setup,
                     format!("shell={shell_ready}, coder={coder_ready}"),
                 ),
-                INVESTIGATION.gate_and_points(
-                    workflow.investigation_complete(),
+                INVESTIGATION.award(
                     workflow.investigation_points(),
                     format!(
                         "info={:?}, source={:?}, tests={:?}, task={:?}, red={:?}, edit={:?}",
@@ -1256,7 +1244,7 @@ mod tests {
     fn host_only_case_has_a_distinct_version_and_cohort() {
         let materialized = materialize("catalog", CANONICAL_SEED).unwrap();
         let rotated = materialize("catalog", 7).unwrap();
-        assert_eq!(materialized.case.scenario_version, 6);
+        assert_eq!(materialized.case.scenario_version, 7);
         assert_eq!(materialized.case.seed, CANONICAL_SEED);
         assert_eq!(rotated.case.case_id, materialized.case.case_id);
         assert_eq!(

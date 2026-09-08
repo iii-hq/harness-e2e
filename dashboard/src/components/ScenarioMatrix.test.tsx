@@ -40,7 +40,6 @@ function aggregate(overrides: Record<string, unknown> = {}) {
     tokens_completed_p50: 1200,
     failed_attempt_tokens: 0,
     tokens_per_completion: 1200,
-    hard_gate_failures: 0,
     technical_failures: 0,
     ...overrides,
   }
@@ -130,19 +129,19 @@ const detail = {
       available: true,
       report: {
         ...resultContract,
-        objective_outcome: 'failed',
+        objective_outcome: 'passed',
         assessment_contract: { runs: [] },
         assessment_summary: {},
         scenarios: [
           {
             scenario_id: 'persistent_state',
             scenario_version: 1,
-            passed: false,
+            passed: true,
             aggregate: aggregate({
               completed_runs: 0,
               task_incomplete_runs: 1,
               completion_rate: 0,
-              objective_median_score: 0,
+              objective_median_score: 65,
               quality_scored_completed_runs: 0,
               quality_score_completed: null,
               quality_coverage: null,
@@ -150,23 +149,22 @@ const detail = {
               tokens_completed_p50: null,
               failed_attempt_tokens: null,
               tokens_per_completion: null,
-              hard_gate_failures: 1,
             }),
             runs: [
               {
                 run_id: 'run-state',
                 attempt_id: 'attempt-state',
-                status: 'hard_gate_failed',
+                status: 'passed',
                 completion: 'task_incomplete',
                 technical: 'valid',
                 evaluators: {
                   completion: 'available',
                   quality: 'not_required',
                 },
-                objective_score: 0,
+                objective_score: 65,
                 quality_score_completed: null,
                 assessment: {
-                  system_status: 'hard_gate_failed',
+                  system_status: 'passed',
                   assessments: [],
                 },
               },
@@ -239,7 +237,8 @@ describe('ScenarioMatrix', () => {
     expect(html).toContain('Physical attempt outcomes')
     expect(html).not.toContain('Technical Invalid')
     expect(html).toContain('1 passed')
-    expect(html).toContain('1 hard gate')
+    expect(html).toContain('1 incomplete')
+    expect(html).not.toContain('hard gate')
     expect(html).toContain('1 inconclusive')
     expect(html).toContain('1 unavailable')
     expect(html).toContain('Security Review v2')
@@ -273,8 +272,8 @@ describe('ScenarioMatrix', () => {
   })
 
   // Audit SM-07 / SM-12: without any persisted workflow the Structure column
-  // only repeats "Standard", and a failed scenario opens its evidence at once.
-  it('hides the structure column and opens evidence for a failed standard scenario', () => {
+  // only repeats "Standard", and an incomplete scenario opens its evidence.
+  it('hides the structure column and opens evidence for an incomplete standard scenario', () => {
     const failedOnly = {
       ...detail,
       reports: detail.reports.filter(

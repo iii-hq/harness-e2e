@@ -767,10 +767,6 @@ impl FaultEvaluation {
         })
     }
 
-    pub fn passed(&self) -> bool {
-        self.classification == RecoveryClassification::CorrectRecovery
-    }
-
     pub fn write(&self, path: &Path) -> Result<PathBuf> {
         write_json(path, self, "fault evaluation")
     }
@@ -1221,7 +1217,6 @@ mod tests {
             },
             objective_score: Some(10),
             quality_score_completed: Some(10),
-            hard_gates: Vec::new(),
             criteria: Vec::new(),
             transcript: None,
             metrics: None,
@@ -1317,7 +1312,6 @@ mod tests {
                 required_passes: 1,
                 pass_rate: 1.0,
                 median_score: Some(10.0),
-                hard_gate_failures: 0,
                 technical_failures: 0,
                 cost: CostReport::default(),
                 robustness: RobustnessReport {

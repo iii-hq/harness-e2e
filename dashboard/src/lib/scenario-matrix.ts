@@ -69,7 +69,6 @@ export type ScenarioMatrixSummary = {
   total: number
   passed: number
   failed: number
-  hardGate: number
   inconclusive: number
   unavailable: number
   running: number
@@ -108,7 +107,6 @@ export function buildScenarioMatrix(
     total: items.length,
     passed: 0,
     failed: 0,
-    hardGate: 0,
     inconclusive: 0,
     unavailable: 0,
     running: 0,
@@ -116,7 +114,6 @@ export function buildScenarioMatrix(
   }
   for (const item of items) {
     if (item.objective.status === 'passed') summary.passed += 1
-    else if (item.objective.status === 'hard_gate') summary.hardGate += 1
     else if (item.objective.status === 'inconclusive') summary.inconclusive += 1
     else if (item.objective.status === 'unavailable') summary.unavailable += 1
     else if (item.objective.status === 'running') summary.running += 1
@@ -311,10 +308,10 @@ function scenarioObjective(
   ) {
     return objectiveStatus('inconclusive')
   }
-  if (passed === true) return objectiveStatus('passed')
-  if (passed === false && aggregate.hard_gate_failures > 0) {
-    return objectiveStatus('hard_gate_failed')
+  if (aggregate.completed_runs < aggregate.planned_runs) {
+    return objectiveStatus('incomplete')
   }
+  if (passed === true) return objectiveStatus('passed')
   if (passed === false) return objectiveStatus('failed')
   return objectiveStatus('unavailable')
 }
@@ -333,7 +330,6 @@ function validAggregate(value: unknown): DashboardScenarioAggregate | null {
     'technical_invalid_runs',
     'objective_scored_runs',
     'quality_scored_completed_runs',
-    'hard_gate_failures',
     'technical_failures',
   ]
   if (requiredNumbers.some((key) => finiteNumber(aggregate[key]) === null)) {
@@ -388,7 +384,7 @@ function objectiveStatus(rawValue: string): ScenarioMatrixItem['objective'] {
     return { status: 'passed', label: 'Passed', raw }
   }
   if (raw === 'hard_gate_failed') {
-    return { status: 'hard_gate', label: 'Hard gate failed', raw }
+    return { status: 'failed', label: 'Failed', raw }
   }
   if (raw === 'inconclusive') {
     return { status: 'inconclusive', label: 'Inconclusive', raw }

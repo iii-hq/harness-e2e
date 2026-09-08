@@ -25,11 +25,6 @@ export type ExecutionVerdict = {
 const SEVERITY: Array<{ status: string; label: string; plural: string }> = [
   { status: 'failed', label: 'failure', plural: 'failures' },
   {
-    status: 'hard_gate',
-    label: 'hard gate failed',
-    plural: 'hard gates failed',
-  },
-  {
     status: 'unavailable',
     label: 'without evidence',
     plural: 'without evidence',
@@ -41,7 +36,6 @@ const SEVERITY: Array<{ status: string; label: string; plural: string }> = [
 
 function countFor(summary: ScenarioMatrixSummary, status: string) {
   if (status === 'failed') return summary.failed
-  if (status === 'hard_gate') return summary.hardGate
   if (status === 'unavailable') return summary.unavailable
   if (status === 'inconclusive') return summary.inconclusive
   if (status === 'incomplete') return summary.incomplete

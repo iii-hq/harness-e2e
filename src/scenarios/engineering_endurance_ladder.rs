@@ -32,7 +32,7 @@ use super::{
 };
 
 pub const ID: &str = "engineering_endurance_ladder";
-const VERSION: u32 = 2;
+const VERSION: u32 = 3;
 pub const CANONICAL_SEED: u64 = 0x656e_6475_7261_0001;
 const DELIVERABLE_ID: &str = "engineering_endurance_report";
 const BRANCH: &str = "endurance-run";
@@ -55,33 +55,33 @@ const CASE_MANIFEST: &str = include_str!(
 const GITIGNORE: &str =
     include_str!("../../tests/fixtures/engineering-endurance-ladder/.gitignore");
 
-const CAPABILITY_DEPTH: AssessmentSpec = AssessmentSpec::score_only_in(
+const CAPABILITY_DEPTH: AssessmentSpec = AssessmentSpec::scored_in(
     "capability_depth",
     65,
     "Points scale with the longest cumulative prefix of independently accepted tickets.",
     EvaluationDimension::Deliverable,
 );
-const TERMINAL_PROTOCOL: AssessmentSpec = AssessmentSpec::hard_gated(
+const TERMINAL_PROTOCOL: AssessmentSpec = AssessmentSpec::scored(
     "terminal_protocol",
     5,
     "The session reaches either all-rungs-complete or an evidence-backed first capability failure.",
 );
-const GIT_INTEGRITY: AssessmentSpec = AssessmentSpec::hard_gated(
+const GIT_INTEGRITY: AssessmentSpec = AssessmentSpec::scored(
     "git_checkpoint_integrity",
     10,
     "Every accepted checkpoint is an immutable, clean, non-merge descendant touching production only.",
 );
-const REGRESSION_INTEGRITY: AssessmentSpec = AssessmentSpec::hard_gated(
+const REGRESSION_INTEGRITY: AssessmentSpec = AssessmentSpec::scored(
     "regression_integrity",
     10,
     "Every accepted checkpoint passed the public suite and all hidden probes through its rung.",
 );
-const CONVERGENCE: AssessmentSpec = AssessmentSpec::score_only(
+const CONVERGENCE: AssessmentSpec = AssessmentSpec::scored(
     "repair_convergence",
     5,
     "Accepted tickets converge with few rejected checkpoint rounds.",
 );
-const EFFICIENCY: AssessmentSpec = AssessmentSpec::score_only(
+const EFFICIENCY: AssessmentSpec = AssessmentSpec::scored(
     "change_efficiency",
     5,
     "The accepted implementation remains within a compact cumulative change budget.",

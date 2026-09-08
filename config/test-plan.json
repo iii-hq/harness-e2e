@@ -263,7 +263,6 @@
       "purpose": "Compare quality and resource use across fixed Harness versions.",
       "metrics": [
         "completion_rate",
-        "tokens_per_verified_success",
         "tokens_per_completion",
         "p50_total_tokens",
         "p50_function_calls"

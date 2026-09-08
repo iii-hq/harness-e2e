@@ -38,7 +38,7 @@ use super::{
 };
 
 pub const ID: &str = "chess_play_ladder";
-const VERSION: u32 = 3;
+const VERSION: u32 = 4;
 const GAME_RECORD_ID: &str = "game_record";
 
 /// The line the subject must end on: `CHESS-RESULT <win|draw|loss>`.
@@ -63,23 +63,23 @@ struct Rung {
 pub const CANONICAL_SEED: u64 = 6003;
 const RUNG: Rung = Rung { depth: 3 };
 
-const ZERO_ILLEGAL_MOVES: AssessmentSpec = AssessmentSpec::hard_gated(
+const ZERO_ILLEGAL_MOVES: AssessmentSpec = AssessmentSpec::scored(
     "zero_illegal_moves",
     30,
     "The subject attempted no illegal move and the move channel reported no function-call errors.",
 );
-const GAME_COMPLETED: AssessmentSpec = AssessmentSpec::hard_gated_in(
+const GAME_COMPLETED: AssessmentSpec = AssessmentSpec::scored_in(
     "game_completed",
     25,
     "The game reached a terminal result within the move cap rather than running out of moves unfinished.",
     EvaluationDimension::Deliverable,
 );
-const RESULT_REPORTED: AssessmentSpec = AssessmentSpec::hard_gated(
+const RESULT_REPORTED: AssessmentSpec = AssessmentSpec::scored(
     "result_reported",
     20,
     "The final response reports `CHESS-RESULT <r>` matching the game's recorded outcome.",
 );
-const STRENGTH_SCORE: AssessmentSpec = AssessmentSpec::score_only(
+const STRENGTH_SCORE: AssessmentSpec = AssessmentSpec::scored(
     "strength_score",
     25,
     "Competitive result against the negamax opponent, banded win/draw/loss (centipawn nuance deferred).",

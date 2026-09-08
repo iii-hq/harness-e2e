@@ -108,7 +108,7 @@ describe('versioned test catalog view', () => {
     expect(matchesResultFilter(changed, 'changed')).toBe(true)
     expect(matchesResultFilter(oneSided, 'changed')).toBe(false)
     expect(matchesResultFilter(oneSided, 'missing')).toBe(true)
-    expect(matchesResultFilter(oneSided, 'issues')).toBe(true)
+    expect(matchesResultFilter(oneSided, 'issues')).toBe(false)
   })
 
   it('puts useful comparable evidence before empty catalog entries', () => {

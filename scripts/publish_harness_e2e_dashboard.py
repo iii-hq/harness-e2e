@@ -307,16 +307,6 @@ def _public_failures(value: Any) -> list[dict[str, Any]]:
     ]
 
 
-def _public_gates(value: Any) -> list[dict[str, Any]]:
-    if not isinstance(value, list):
-        return []
-    return [
-        _pick(gate, ("id", "dimension", "passed", "reason"))
-        for gate in value[:MAX_PUBLIC_LIST_ITEMS]
-        if isinstance(gate, dict)
-    ]
-
-
 def _public_deliverables(value: Any) -> list[dict[str, Any]]:
     if not isinstance(value, list):
         return []
@@ -524,7 +514,6 @@ def _public_run(
         run["metrics"] = metrics
     run["cost"] = _pick(value.get("cost"), ("subject_usd", "total_usd"))
     run["criteria"] = _bounded_json(value.get("criteria", []))
-    run["hard_gates"] = _public_gates(value.get("hard_gates"))
     run["failures"] = _public_failures(value.get("failures"))
     run["deliverables"] = _public_deliverables(value.get("deliverables"))
     run["dimensions"] = _public_dimensions(value.get("dimensions"))
@@ -562,7 +551,6 @@ def _public_scenario(
             "required_passes",
             "pass_rate",
             "median_score",
-            "hard_gate_failures",
             "technical_failures",
         ),
     )
@@ -599,7 +587,6 @@ def _public_subject_summary(value: Any) -> dict[str, Any] | None:
             "received_reports",
             "scenario_pass_rate",
             "report_coverage",
-            "hard_gate_failures",
             "technical_failures",
             "retry_attempts",
             "total_cost_usd",
@@ -617,7 +604,6 @@ def _public_subject_summary(value: Any) -> dict[str, Any] | None:
                 "runs",
                 "median_score",
                 "pass_rate",
-                "hard_gate_failures",
                 "technical_failures",
                 "retries",
                 "total_cost_usd",
@@ -815,7 +801,6 @@ def execution_status(
     subjects: list[dict[str, Any]],
     expected_reports: int,
     received_reports: int,
-    hard_gate_failures: int,
     technical_failures: int,
     *,
     has_failed_job: bool = False,
@@ -832,11 +817,7 @@ def execution_status(
         return "incomplete"
     if technical_failures:
         return "technical_failed"
-    if hard_gate_failures:
-        return "hard_gate_failed"
     if conclusion != "success" or has_failed_job:
-        return "infra_failed"
-    if not all(bool(subject.get("passed")) for subject in subjects):
         return "infra_failed"
     return "passed"
 
@@ -951,31 +932,6 @@ def report_diagnostic(
                         ),
                     }
 
-    if status == "hard_gate_failed":
-        for subject_id, scenario_id, scenario in _report_scenarios(detail):
-            runs = scenario.get("runs", [])
-            if not isinstance(runs, list):
-                continue
-            for run in runs:
-                gates = run.get("hard_gates", []) if isinstance(run, dict) else []
-                if not isinstance(gates, list):
-                    continue
-                gate = next(
-                    (
-                        item
-                        for item in gates
-                        if isinstance(item, dict) and not item.get("passed", False)
-                    ),
-                    None,
-                )
-                if gate:
-                    return {
-                        "kind": "hard_gate",
-                        "subject_id": subject_id,
-                        "scenario_id": scenario_id,
-                        "id": str(gate.get("id") or ""),
-                        "message": _compact_message(gate.get("reason"), "Hard gate failed"),
-                    }
 
     return None
 
@@ -1077,7 +1033,6 @@ def build_summary(
     subject_wall_times = [
         optional_number(subject.get("wall_time_seconds")) for subject in valid_subjects
     ]
-    hard_gate_failures = sum_subject_counts(valid_subjects, "hard_gate_failures")
     technical_failures = sum_subject_counts(valid_subjects, "technical_failures")
     retries = sum_subject_counts(valid_subjects, "retry_attempts")
     missing_reports = (
@@ -1092,7 +1047,6 @@ def build_summary(
         valid_subjects,
         expected_reports or 0,
         received_reports or 0,
-        hard_gate_failures or 0,
         technical_failures or 0,
         has_failed_job=job_failure is not None,
     )
@@ -1160,7 +1114,6 @@ def build_summary(
             ),
             "total_cost_usd": sum_complete(subject_costs),
             "wall_time_seconds": sum_complete(subject_wall_times),
-            "hard_gate_failures": hard_gate_failures,
             "technical_failures": technical_failures,
             "missing_reports": missing_reports,
             "retries": retries,
@@ -1354,9 +1307,9 @@ def _scenario_status(scenario: dict[str, Any]) -> str:
         aggregate = {}
     if int(optional_number(aggregate.get("technical_failures")) or 0) > 0:
         return "technical_failed"
-    if int(optional_number(aggregate.get("hard_gate_failures")) or 0) > 0:
-        return "hard_gate_failed"
-    return "passed" if scenario.get("passed") else "infra_failed"
+    planned = optional_number(aggregate.get("planned_runs"))
+    completed = optional_number(aggregate.get("completed_runs"))
+    return "passed" if planned and completed == planned else "incomplete"
 
 
 def _static_run_metrics(run: dict[str, Any]) -> dict[str, Any]:

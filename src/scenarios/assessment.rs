@@ -1,41 +1,29 @@
 use anyhow::{bail, Result};
 
 use crate::assessment::{AssessmentKind, AssessmentPolicy, DeclaredAssessment};
-use crate::report::{CompletionState, EvaluationDimension, HardGateReport};
+use crate::report::{CompletionState, EvaluationDimension};
 
 use super::{CriterionAward, CriterionSpec, ObjectiveEvaluation, ScenarioSpec};
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum GatePolicy {
-    HardGated,
-    ScoreOnly,
-}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) struct AssessmentSpec {
     id: &'static str,
     weight: u8,
     description: &'static str,
-    gate_policy: GatePolicy,
     dimension: EvaluationDimension,
 }
 
 impl AssessmentSpec {
-    pub(super) const fn hard_gated(
-        id: &'static str,
-        weight: u8,
-        description: &'static str,
-    ) -> Self {
+    pub(super) const fn scored(id: &'static str, weight: u8, description: &'static str) -> Self {
         Self {
             id,
             weight,
             description,
-            gate_policy: GatePolicy::HardGated,
             dimension: EvaluationDimension::StructuralIntegrity,
         }
     }
 
-    pub(super) const fn hard_gated_in(
+    pub(super) const fn scored_in(
         id: &'static str,
         weight: u8,
         description: &'static str,
@@ -45,35 +33,6 @@ impl AssessmentSpec {
             id,
             weight,
             description,
-            gate_policy: GatePolicy::HardGated,
-            dimension,
-        }
-    }
-
-    pub(super) const fn score_only(
-        id: &'static str,
-        weight: u8,
-        description: &'static str,
-    ) -> Self {
-        Self::score_only_in(
-            id,
-            weight,
-            description,
-            EvaluationDimension::StructuralIntegrity,
-        )
-    }
-
-    pub(super) const fn score_only_in(
-        id: &'static str,
-        weight: u8,
-        description: &'static str,
-        dimension: EvaluationDimension,
-    ) -> Self {
-        Self {
-            id,
-            weight,
-            description,
-            gate_policy: GatePolicy::ScoreOnly,
             dimension,
         }
     }
@@ -98,7 +57,6 @@ impl AssessmentSpec {
         AssessmentOutcome {
             spec: self,
             awarded: if satisfied { self.weight } else { 0 },
-            gate_passed: matches!(self.gate_policy, GatePolicy::HardGated).then_some(satisfied),
             details: details.into(),
         }
     }
@@ -109,7 +67,6 @@ impl AssessmentSpec {
         AssessmentOutcome {
             spec: self,
             awarded: 0,
-            gate_passed: None,
             details: details.into(),
         }
     }
@@ -119,38 +76,10 @@ impl AssessmentSpec {
         awarded: u8,
         details: impl Into<String>,
     ) -> Result<AssessmentOutcome> {
-        if self.gate_policy == GatePolicy::HardGated {
-            bail!(
-                "assessment '{}': award(awarded={awarded}) cannot emit a hard gate for a hard-gated assessment; use full_or_zero(...) or gate_and_points(...)",
-                self.id,
-            );
-        }
         self.validate_award("award", awarded)?;
         Ok(AssessmentOutcome {
             spec: self,
             awarded,
-            gate_passed: None,
-            details: details.into(),
-        })
-    }
-
-    pub(super) fn gate_and_points(
-        self,
-        gate_passed: bool,
-        awarded: u8,
-        details: impl Into<String>,
-    ) -> Result<AssessmentOutcome> {
-        if self.gate_policy == GatePolicy::ScoreOnly {
-            bail!(
-                "assessment '{}': gate_and_points(gate_passed={gate_passed}, awarded={awarded}) cannot emit a hard gate for a score-only assessment; use full_or_zero(...) or award(...)",
-                self.id,
-            );
-        }
-        self.validate_award("gate_and_points", awarded)?;
-        Ok(AssessmentOutcome {
-            spec: self,
-            awarded,
-            gate_passed: Some(gate_passed),
             details: details.into(),
         })
     }
@@ -180,16 +109,12 @@ impl AssessmentSpec {
     }
 
     fn declaration(self) -> DeclaredAssessment {
-        let (kind, policy) = match self.gate_policy {
-            GatePolicy::HardGated => (AssessmentKind::RequiredCheck, AssessmentPolicy::HardGate),
-            GatePolicy::ScoreOnly => (AssessmentKind::Signal, AssessmentPolicy::Advisory),
-        };
         DeclaredAssessment {
             criterion_id: self.id.to_string(),
             possible: self.weight,
             description: self.description.to_string(),
-            kind,
-            policy,
+            kind: AssessmentKind::Signal,
+            policy: AssessmentPolicy::Advisory,
             dimension: self.dimension,
         }
     }
@@ -215,7 +140,6 @@ impl ScenarioSpec {
 pub(super) struct AssessmentOutcome {
     spec: AssessmentSpec,
     awarded: u8,
-    gate_passed: Option<bool>,
     details: String,
 }
 
@@ -231,18 +155,9 @@ pub(super) fn build_evaluation(
     completion: CompletionState,
     results: impl IntoIterator<Item = AssessmentOutcome>,
 ) -> ObjectiveEvaluation {
-    let mut hard_gates = Vec::new();
     let mut awards = Vec::new();
 
     for result in results {
-        if let Some(passed) = result.gate_passed {
-            hard_gates.push(HardGateReport {
-                id: result.spec.id.to_string(),
-                dimension: result.spec.dimension,
-                passed,
-                reason: result.details.clone(),
-            });
-        }
         awards.push(CriterionAward {
             id: result.spec.id.to_string(),
             awarded: result.awarded,
@@ -250,11 +165,7 @@ pub(super) fn build_evaluation(
         });
     }
 
-    ObjectiveEvaluation {
-        completion,
-        hard_gates,
-        awards,
-    }
+    ObjectiveEvaluation { completion, awards }
 }
 
 pub(super) fn prerequisite_failure(
@@ -296,47 +207,31 @@ fn failed_evaluation(
     details: impl Into<String>,
 ) -> ObjectiveEvaluation {
     let gate_id = gate_id.into();
-    let reason = format!("{gate_kind} gate '{gate_id}' failed: {}", details.into());
-    let mut evaluation = build_evaluation(
+    let reason = format!("{gate_kind} '{gate_id}' failed: {}", details.into());
+    build_evaluation(
         completion,
         specs
             .iter()
             .copied()
             .map(|spec| spec.skipped_due_to_prerequisite(reason.clone())),
-    );
-    evaluation.hard_gates.push(HardGateReport {
-        id: gate_id,
-        dimension: EvaluationDimension::StructuralIntegrity,
-        passed: false,
-        reason,
-    });
-    evaluation
+    )
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    const HARD_GATED: AssessmentSpec =
-        AssessmentSpec::hard_gated("required", 70, "A required outcome.");
-    const SCORE_ONLY: AssessmentSpec =
-        AssessmentSpec::score_only("signal", 30, "A quality signal.");
+    const REQUIRED: AssessmentSpec = AssessmentSpec::scored("required", 70, "A required outcome.");
+    const SIGNAL: AssessmentSpec = AssessmentSpec::scored("signal", 30, "A quality signal.");
 
     #[test]
-    fn criteria_preserve_assessment_definitions() {
-        let criteria = criteria(&[HARD_GATED, SCORE_ONLY]);
+    fn criteria_are_numeric_advisory_signals() {
+        let criteria = criteria(&[REQUIRED, SIGNAL]);
 
-        assert_eq!(criteria.len(), 2);
-        assert_eq!(criteria[0].id, "required");
-        assert_eq!(criteria[0].weight, 70);
-        assert_eq!(criteria[0].description, "A required outcome.");
-        assert_eq!(criteria[0].kind, AssessmentKind::RequiredCheck);
-        assert_eq!(criteria[0].policy, AssessmentPolicy::HardGate);
-        assert_eq!(criteria[1].id, "signal");
-        assert_eq!(criteria[1].weight, 30);
-        assert_eq!(criteria[1].description, "A quality signal.");
-        assert_eq!(criteria[1].kind, AssessmentKind::Signal);
-        assert_eq!(criteria[1].policy, AssessmentPolicy::Advisory);
+        assert!(criteria.iter().all(|criterion| {
+            criterion.kind == AssessmentKind::Signal
+                && criterion.policy == AssessmentPolicy::Advisory
+        }));
         assert_eq!(
             criteria
                 .iter()
@@ -347,165 +242,43 @@ mod tests {
     }
 
     #[test]
-    fn hard_gated_pass_produces_a_passing_gate_and_full_award() {
+    fn criteria_preserve_full_zero_and_partial_scores() {
         let evaluation = build_evaluation(
             CompletionState::Completed,
-            [HARD_GATED.full_or_zero(true, "satisfied")],
+            [
+                REQUIRED.full_or_zero(true, "satisfied"),
+                SIGNAL.award(12, "partial").unwrap(),
+            ],
         );
 
-        assert_eq!(evaluation.hard_gates.len(), 1);
-        assert_eq!(evaluation.hard_gates[0].id, "required");
-        assert!(evaluation.hard_gates[0].passed);
-        assert_eq!(evaluation.hard_gates[0].reason, "satisfied");
-        assert_eq!(evaluation.awards.len(), 1);
-        assert_eq!(evaluation.awards[0].id, "required");
         assert_eq!(evaluation.awards[0].awarded, 70);
-        assert_eq!(evaluation.awards[0].reason, "satisfied");
+        assert_eq!(evaluation.awards[1].awarded, 12);
     }
 
     #[test]
-    fn hard_gated_failure_produces_a_failed_gate_and_zero_award() {
-        let evaluation = build_evaluation(
-            CompletionState::TaskIncomplete,
-            [HARD_GATED.full_or_zero(false, "missing")],
-        );
-
-        assert_eq!(evaluation.completion, CompletionState::TaskIncomplete);
-        assert!(!evaluation.hard_gates[0].passed);
-        assert_eq!(evaluation.awards[0].awarded, 0);
-    }
-
-    #[test]
-    fn score_only_produces_an_award_without_a_gate() {
-        let passed = build_evaluation(
-            CompletionState::Completed,
-            [SCORE_ONLY.full_or_zero(true, "observed")],
-        );
-        let failed = build_evaluation(
-            CompletionState::Completed,
-            [SCORE_ONLY.full_or_zero(false, "missing")],
-        );
-
-        assert!(passed.hard_gates.is_empty());
-        assert_eq!(passed.awards[0].id, "signal");
-        assert_eq!(passed.awards[0].awarded, 30);
-        assert!(failed.hard_gates.is_empty());
-        assert_eq!(failed.awards[0].awarded, 0);
-    }
-
-    #[test]
-    fn score_only_accepts_partial_awards_within_its_weight() {
-        let evaluation = build_evaluation(
-            CompletionState::Completed,
-            [SCORE_ONLY.award(12, "partial").unwrap()],
-        );
-
-        assert!(evaluation.hard_gates.is_empty());
-        assert_eq!(evaluation.awards[0].awarded, 12);
-    }
-
-    #[test]
-    fn score_only_rejects_awards_above_its_weight() {
+    fn awards_above_the_criterion_weight_are_rejected() {
         assert_eq!(
-            SCORE_ONLY.award(31, "too many").unwrap_err().to_string(),
+            SIGNAL.award(31, "too many").unwrap_err().to_string(),
             "assessment 'signal': award(awarded=31) exceeds max_points=30; expected awarded in 0..=30"
         );
     }
 
     #[test]
-    fn hard_gated_assessments_reject_the_score_only_award_api() {
-        assert_eq!(
-            HARD_GATED.award(35, "partial").unwrap_err().to_string(),
-            "assessment 'required': award(awarded=35) cannot emit a hard gate for a hard-gated assessment; use full_or_zero(...) or gate_and_points(...)"
-        );
-    }
-
-    #[test]
-    fn hard_gated_assessment_can_award_partial_points_after_passing() {
-        let evaluation = build_evaluation(
-            CompletionState::Completed,
-            [HARD_GATED
-                .gate_and_points(true, 35, "passed with partial quality")
-                .unwrap()],
-        );
-
-        assert!(evaluation.hard_gates[0].passed);
-        assert_eq!(evaluation.awards[0].awarded, 35);
-    }
-
-    #[test]
-    fn failed_hard_gate_can_retain_independent_quality_points() {
-        let evaluation = build_evaluation(
-            CompletionState::Completed,
-            [HARD_GATED
-                .gate_and_points(false, 35, "failed with partial quality")
-                .unwrap()],
-        );
-
-        assert_eq!(evaluation.completion, CompletionState::Completed);
-        assert!(!evaluation.hard_gates[0].passed);
-        assert_eq!(evaluation.awards[0].awarded, 35);
-    }
-
-    #[test]
-    fn hard_gated_assessment_rejects_awards_above_its_weight() {
-        assert_eq!(
-            HARD_GATED
-                .gate_and_points(true, 71, "too many")
-                .unwrap_err()
-                .to_string(),
-            "assessment 'required': gate_and_points(awarded=71) exceeds max_points=70; expected awarded in 0..=70"
-        );
-    }
-
-    #[test]
-    fn score_only_rejects_the_hard_gate_api() {
-        assert_eq!(
-            SCORE_ONLY
-                .gate_and_points(true, 30, "wrong kind")
-                .unwrap_err()
-                .to_string(),
-            "assessment 'signal': gate_and_points(gate_passed=true, awarded=30) cannot emit a hard gate for a score-only assessment; use full_or_zero(...) or award(...)"
-        );
-    }
-
-    #[test]
-    fn prerequisite_skips_preserve_order_without_duplicate_gates() {
-        let evaluation = prerequisite_failure(
-            &[HARD_GATED, SCORE_ONLY],
+    fn prerequisite_and_missing_output_preserve_completion_without_gates() {
+        let unavailable = prerequisite_failure(
+            &[REQUIRED, SIGNAL],
             "database_available",
             "database capability is unavailable",
         );
-
-        assert_eq!(evaluation.completion, CompletionState::Undetermined);
-        assert_eq!(evaluation.hard_gates.len(), 1);
-        assert!(!evaluation.hard_gates[0].passed);
-        assert_eq!(evaluation.hard_gates[0].id, "database_available");
-        assert_eq!(evaluation.awards.len(), 2);
-        assert_eq!(evaluation.awards[0].id, "required");
-        assert_eq!(evaluation.awards[0].awarded, 0);
-        assert_eq!(
-            evaluation.awards[0].reason,
-            "prerequisite gate 'database_available' failed: database capability is unavailable"
-        );
-        assert_eq!(evaluation.awards[1].id, "signal");
-        assert_eq!(evaluation.awards[1].awarded, 0);
-        assert_eq!(
-            evaluation.awards[1].reason,
-            "prerequisite gate 'database_available' failed: database capability is unavailable"
-        );
-    }
-
-    #[test]
-    fn missing_subject_output_is_task_incomplete_not_undetermined() {
-        let evaluation = task_incomplete(
-            &[HARD_GATED, SCORE_ONLY],
+        let incomplete = task_incomplete(
+            &[REQUIRED, SIGNAL],
             "output_present",
             "the subject produced no output",
         );
 
-        assert_eq!(evaluation.completion, CompletionState::TaskIncomplete);
-        assert_eq!(evaluation.hard_gates.len(), 1);
-        assert!(!evaluation.hard_gates[0].passed);
+        assert_eq!(unavailable.completion, CompletionState::Undetermined);
+        assert_eq!(incomplete.completion, CompletionState::TaskIncomplete);
+        assert!(unavailable.awards.iter().all(|award| award.awarded == 0));
+        assert!(incomplete.awards.iter().all(|award| award.awarded == 0));
     }
 }

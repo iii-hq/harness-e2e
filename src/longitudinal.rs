@@ -8,9 +8,11 @@ use serde::{Deserialize, Serialize};
 
 use crate::artifact::{self, ArtifactReference};
 use crate::identity::{StackIdentity, SystemUnderTestIdentity};
+#[cfg(test)]
+use crate::report::TechnicalState;
 use crate::report::{
     CompletionState, DimensionReport, E2eReport, E2eRunReport, E2eScenarioReport,
-    EvaluationDimension, RunStatus, TechnicalState,
+    EvaluationDimension, RunStatus,
 };
 use crate::scenarios::ComplexityTier;
 
@@ -292,16 +294,13 @@ pub struct RateEstimate {
     pub ci95_upper: f64,
 }
 
-/// Subject-side usage across all observed attempts. Success-conditioned values
-/// are descriptive and must be read with completion, correctness and coverage.
+/// Subject-side usage across all observed attempts.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct ConsumptionMetrics {
     pub observed_runs: u32,
     pub completed_runs: u32,
-    pub verified_successes: u32,
     pub total_tokens_consumed: Option<u64>,
     pub tokens_per_completion: Option<f64>,
-    pub tokens_per_verified_success: Option<f64>,
     pub p50_total_tokens: Option<f64>,
     pub p95_total_tokens: Option<f64>,
     pub p50_function_calls: Option<f64>,
@@ -322,20 +321,6 @@ pub fn consumption_metrics(runs: &[E2eRunReport]) -> ConsumptionMetrics {
         completed_runs: runs
             .iter()
             .filter(|r| r.completion == CompletionState::Completed)
-            .count()
-            .try_into()
-            .unwrap_or(u32::MAX),
-        verified_successes: runs
-            .iter()
-            .filter(|r| {
-                r.completion == CompletionState::Completed
-                    && r.technical == TechnicalState::Valid
-                    && r.status == RunStatus::Passed
-                    && r.objective_score.is_some()
-                    && !r.hard_gates.is_empty()
-                    && r.hard_gates.iter().all(|g| g.passed)
-                    && r.deliverables.iter().all(|d| d.passed())
-            })
             .count()
             .try_into()
             .unwrap_or(u32::MAX),
@@ -371,10 +356,6 @@ pub fn consumption_metrics(runs: &[E2eRunReport]) -> ConsumptionMetrics {
         .total_tokens_consumed
         .zip((result.completed_runs > 0).then_some(result.completed_runs))
         .map(|(n, d)| n as f64 / f64::from(d));
-    result.tokens_per_verified_success = result
-        .total_tokens_consumed
-        .zip((result.verified_successes > 0).then_some(result.verified_successes))
-        .map(|(n, d)| n as f64 / f64::from(d));
     if result.total_tokens_consumed.is_none() {
         result.unavailable.insert(
             "total_tokens_consumed".into(),
@@ -391,12 +372,6 @@ pub fn consumption_metrics(runs: &[E2eRunReport]) -> ConsumptionMetrics {
         result
             .unavailable
             .insert("tokens_per_completion".into(), "no completed runs".into());
-    }
-    if result.verified_successes == 0 {
-        result.unavailable.insert(
-            "tokens_per_verified_success".into(),
-            "no technically valid, objectively verified successes".into(),
-        );
     }
     result
 }
@@ -415,11 +390,6 @@ fn consumption_delta(
             "tokens_per_completion",
             from.tokens_per_completion,
             to.tokens_per_completion,
-        ),
-        (
-            "tokens_per_verified_success",
-            from.tokens_per_verified_success,
-            to.tokens_per_verified_success,
         ),
         (
             "p50_total_tokens",
@@ -1867,12 +1837,6 @@ mod tests {
         run.completion = CompletionState::Completed;
         run.technical = TechnicalState::Valid;
         run.objective_score = Some(100);
-        run.hard_gates = vec![crate::report::HardGateReport {
-            id: "verified".into(),
-            dimension: EvaluationDimension::Deliverable,
-            passed: true,
-            reason: "independent probe".into(),
-        }];
         run.efficiency = Some(
             serde_json::from_value(serde_json::json!({
                 "wall_time_ms": 100, "root_turns": 2, "child_turns": 0, "child_sessions": 0,
@@ -1893,8 +1857,7 @@ mod tests {
         let first = usage_run(1, 100);
         let mut failed = usage_run(2, 20);
         failed.completion = CompletionState::TaskIncomplete;
-        failed.status = RunStatus::HardGateFailed;
-        failed.hard_gates[0].passed = false;
+        failed.status = RunStatus::Passed;
         let mut infra = usage_run(3, 10);
         infra.completion = CompletionState::Undetermined;
         infra.technical = TechnicalState::TechnicalInvalid;
@@ -1904,8 +1867,6 @@ mod tests {
         let metrics = case_metrics(&eligible, &raw);
         assert_eq!(metrics.excluded_infrastructure_runs, 1);
         assert_eq!(metrics.consumption.total_tokens_consumed, Some(130));
-        assert_eq!(metrics.consumption.tokens_per_verified_success, Some(130.0));
-        assert_eq!(metrics.consumption.verified_successes, 1);
         assert_eq!(metrics.consumption.p95_total_tokens, None);
         assert_eq!(metrics.consumption.p50_function_calls, Some(0.0));
     }
@@ -1948,12 +1909,6 @@ mod tests {
         let candidate = consumption_metrics(&[usage_run(101, 5)]);
         assert_eq!(
             consumption_delta(&zero, &candidate)["p50_total_tokens"].relative_ratio,
-            None
-        );
-        let mut not_verified = usage_run(200, 5);
-        not_verified.technical = TechnicalState::TechnicalInvalid;
-        assert_eq!(
-            consumption_metrics(&[not_verified]).tokens_per_verified_success,
             None
         );
     }

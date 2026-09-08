@@ -30,7 +30,7 @@ use super::{
 };
 
 pub const ID: &str = "git_regression_forensics";
-const VERSION: u32 = 2;
+const VERSION: u32 = 3;
 
 const ACQUISITION_ID: &str = "repository_acquisition";
 const TRACE_ID: &str = "investigation_trace";
@@ -59,27 +59,27 @@ const PROBE_BYTES: &[u8] = include_bytes!("../../tests/fixtures/git-regression-f
 const BUNDLE_BYTES: &[u8] =
     include_bytes!("../../tests/fixtures/git-regression-forensics/repository.bundle");
 
-const REPOSITORY_ACQUIRED: AssessmentSpec = AssessmentSpec::hard_gated(
+const REPOSITORY_ACQUIRED: AssessmentSpec = AssessmentSpec::scored(
     "repository_acquired",
     20,
     "The immutable bundle was cloned through the shell worker and the resulting repository has the exact expected history and origin.",
 );
-const ENDPOINTS_REPRODUCED: AssessmentSpec = AssessmentSpec::hard_gated(
+const ENDPOINTS_REPRODUCED: AssessmentSpec = AssessmentSpec::scored(
     "endpoints_reproduced",
     20,
     "The supplied probe classified the known-good endpoint as passing and the known-bad endpoint as failing before the search.",
 );
-const FIRST_BAD_IDENTIFIED: AssessmentSpec = AssessmentSpec::hard_gated(
+const FIRST_BAD_IDENTIFIED: AssessmentSpec = AssessmentSpec::scored(
     "first_bad_identified",
     40,
     "The report names the exact first bad commit and the runner independently verifies its pass/fail boundary.",
 );
-const EVIDENCE_GROUNDED: AssessmentSpec = AssessmentSpec::hard_gated(
+const EVIDENCE_GROUNDED: AssessmentSpec = AssessmentSpec::scored(
     "evidence_grounded",
     10,
     "The structured report cites resolvable commits and changed paths in the immutable repository.",
 );
-const SEARCH_EFFICIENCY: AssessmentSpec = AssessmentSpec::score_only(
+const SEARCH_EFFICIENCY: AssessmentSpec = AssessmentSpec::scored(
     "search_efficiency",
     10,
     "The investigation approaches binary-search efficiency without redundant probe executions or tool errors.",

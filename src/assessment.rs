@@ -472,24 +472,6 @@ pub(crate) fn semantic_test_assessments(
     };
     let mut assessments = Vec::new();
     for step in tests {
-        assessments.extend(step.hard_gates.iter().map(|gate| AssessmentResult {
-            criterion_id: format!("{}.{}", step.node_id, gate.id),
-            target: AssessmentTarget {
-                kind: AssessmentTargetKind::Criterion,
-                id: step.node_id.clone(),
-            },
-            kind: AssessmentKind::RequiredCheck,
-            policy: AssessmentPolicy::HardGate,
-            dimension: crate::report::EvaluationDimension::StructuralIntegrity,
-            outcome: if gate.passed {
-                AssessmentOutcome::Passed
-            } else {
-                AssessmentOutcome::Failed
-            },
-            score: None,
-            summary: gate.reason.clone(),
-            evidence: references(&gate.evidence_ids),
-        }));
         assessments.extend(step.evaluations.iter().map(|evaluation| {
             let score = evaluation.score.and_then(|value| {
                 value.is_finite().then(|| AssessmentScore {
@@ -539,16 +521,8 @@ pub(crate) fn semantic_test_assessments(
                 kind: AssessmentTargetKind::Criterion,
                 id: criterion.producer_node_id.clone(),
             },
-            kind: if criterion.advisory {
-                AssessmentKind::Signal
-            } else {
-                AssessmentKind::RequiredCheck
-            },
-            policy: if criterion.advisory {
-                AssessmentPolicy::Advisory
-            } else {
-                AssessmentPolicy::HardGate
-            },
+            kind: AssessmentKind::Signal,
+            policy: AssessmentPolicy::Advisory,
             dimension: crate::report::EvaluationDimension::Deliverable,
             outcome: match criterion.outcome {
                 crate::workflow::WorkflowEvaluationOutcome::Passed => AssessmentOutcome::Passed,
@@ -614,6 +588,26 @@ mod tests {
             summary: "The expected durable result was not observed.".into(),
             evidence: Vec::new(),
         }
+    }
+
+    #[test]
+    fn workflow_criteria_preserve_points_without_approval_gates() {
+        let criteria = [crate::workflow::WorkflowCriterionResult {
+            id: "quality".into(),
+            weight: 100,
+            producer_node_id: "assess".into(),
+            output_port: "quality".into(),
+            advisory: false,
+            outcome: crate::workflow::WorkflowEvaluationOutcome::Failed,
+            summary: "Partial credit".into(),
+            score: Some(0.65),
+            evidence_ids: Vec::new(),
+        }];
+        let results = semantic_test_assessments(&[], &criteria);
+        assert_eq!(results[0].kind, AssessmentKind::Signal);
+        assert_eq!(results[0].policy, AssessmentPolicy::Advisory);
+        assert_eq!(results[0].score.as_ref().unwrap().awarded, 65);
+        assert_eq!(results[0].outcome, AssessmentOutcome::Failed);
     }
 
     #[test]

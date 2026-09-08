@@ -9,15 +9,14 @@ export type WorkflowMetricsSummary = {
   stepCount: number
   succeededSteps: number
   failedSteps: number
-  hardGateFailedSteps: number
   skippedSteps: number
   cancelledSteps: number
   runningSteps: number
   pendingSteps: number
   durationMs: number
   assetCount: number
-  hardGateCount: number
-  passedHardGateCount: number
+  runtimeCheckCount: number
+  passedRuntimeCheckCount: number
   evaluationCount: number
   failureCount: number
   inputTokens: number
@@ -104,15 +103,14 @@ export const emptyWorkflowMetrics = (): WorkflowMetricsSummary => ({
   stepCount: 0,
   succeededSteps: 0,
   failedSteps: 0,
-  hardGateFailedSteps: 0,
   skippedSteps: 0,
   cancelledSteps: 0,
   runningSteps: 0,
   pendingSteps: 0,
   durationMs: 0,
   assetCount: 0,
-  hardGateCount: 0,
-  passedHardGateCount: 0,
+  runtimeCheckCount: 0,
+  passedRuntimeCheckCount: 0,
   evaluationCount: 0,
   failureCount: 0,
   inputTokens: 0,
@@ -148,7 +146,7 @@ export function aggregateWorkflowMetrics(
     const status = test.status.toLowerCase()
     if (status === 'succeeded') summary.succeededSteps += 1
     else if (status === 'failed') summary.failedSteps += 1
-    else if (status === 'hard_gate_failed') summary.hardGateFailedSteps += 1
+    else if (status === 'hard_gate_failed') summary.failedSteps += 1
     else if (status === 'skipped') summary.skippedSteps += 1
     else if (status === 'cancelled') summary.cancelledSteps += 1
     else if (status === 'running') summary.runningSteps += 1
@@ -156,9 +154,9 @@ export function aggregateWorkflowMetrics(
 
     summary.durationMs += finiteNumber(test.duration_ms)
     summary.assetCount += test.assets?.length ?? 0
-    summary.hardGateCount += test.hard_gates?.length ?? 0
-    summary.passedHardGateCount +=
-      test.hard_gates?.filter((gate) => gate.passed).length ?? 0
+    summary.runtimeCheckCount += test.hard_gates?.length ?? 0
+    summary.passedRuntimeCheckCount +=
+      test.hard_gates?.filter((check) => check.passed).length ?? 0
     summary.evaluationCount += test.evaluations?.length ?? 0
     summary.failureCount += test.failures?.length ?? 0
     const usage = workflowStepUsage(test.metrics)

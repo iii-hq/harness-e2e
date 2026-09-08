@@ -124,11 +124,6 @@ pub(super) fn execution_summary(
         .iter()
         .map(|scenario| scenario_summary(report, scenario))
         .collect();
-    let hard_gate_failures: u32 = report
-        .scenarios
-        .iter()
-        .map(|value| value.aggregate.hard_gate_failures)
-        .sum();
     let technical_failures: u32 = report
         .scenarios
         .iter()
@@ -156,10 +151,26 @@ pub(super) fn execution_summary(
     let passed = report
         .scenarios
         .iter()
-        .filter(|scenario| scenario.passed)
+        .filter(|scenario| {
+            scenario.aggregate.technical_failures == 0
+                && scenario.aggregate.planned_runs > 0
+                && scenario.aggregate.completed_runs == scenario.aggregate.planned_runs
+        })
         .count();
     let status = if report.persistence_errors.is_empty() {
-        semantic_status(report.passed, hard_gate_failures, technical_failures)
+        semantic_status(
+            report
+                .scenarios
+                .iter()
+                .map(|scenario| scenario.aggregate.completed_runs)
+                .sum(),
+            report
+                .scenarios
+                .iter()
+                .map(|scenario| scenario.aggregate.planned_runs)
+                .sum(),
+            technical_failures,
+        )
     } else {
         "incomplete"
     };
@@ -179,7 +190,6 @@ pub(super) fn execution_summary(
         "scenario_pass_rate": if expected == 0 { 0.0 } else { passed as f64 / expected as f64 * 100.0 },
         "total_cost_usd": total_cost_usd,
         "wall_time_seconds": wall_time_seconds,
-        "hard_gate_failures": hard_gate_failures,
         "technical_failures": technical_failures,
         "missing_reports": 0,
         "retries": retries,
@@ -201,12 +211,11 @@ pub(super) fn execution_summary(
         "provider": report.subject.provider,
         "judge": report.judge,
         "engine_revision": engine_revision,
-        "passed": report.passed,
+        "passed": status == "passed",
         "expected_reports": expected,
         "received_reports": expected,
         "scenario_pass_rate": if expected == 0 { 0.0 } else { passed as f64 / expected as f64 },
         "report_coverage": 1.0,
-        "hard_gate_failures": hard_gate_failures,
         "technical_failures": technical_failures,
         "infra_failures": 0,
         "retry_attempts": retries,
@@ -226,7 +235,13 @@ pub(super) fn execution_summary(
         "actor": actor(),
         "started_at": execution_identity.started_at,
         "completed_at": execution_identity.completed_at,
-        "conclusion": if !report.persistence_errors.is_empty() || hard_gate_failures > 0 || technical_failures > 0 { "failure" } else { "success" },
+        "conclusion": if !report.persistence_errors.is_empty() || technical_failures > 0 {
+            "failure"
+        } else if status == "passed" {
+            "success"
+        } else {
+            ""
+        },
         "status": status,
         "availability": "full",
         "detail_path": format!("runs/{}.json", metadata.id),
@@ -299,17 +314,25 @@ fn scenario_summary(report: &E2eReport, scenario: &E2eScenarioReport) -> Value {
         .iter()
         .map(|run| run.retry_attempts.len())
         .sum();
+    let status = semantic_status(
+        scenario.aggregate.completed_runs,
+        scenario.aggregate.planned_runs,
+        scenario.aggregate.technical_failures,
+    );
     json!({
         "id": scenario.scenario_id,
         "case_id": scenario.case_id,
         "complexity_tier": scenario.case.as_ref().map(|case| case.complexity.tier),
         "seed": scenario.case.as_ref().map(|case| case.seed),
-        "status": semantic_status(scenario.passed, scenario.aggregate.hard_gate_failures, scenario.aggregate.technical_failures),
-        "passed": scenario.passed,
+        "status": status,
+        "passed": status == "passed",
         "runs": scenario.aggregate.runs,
         "median_score": scenario.aggregate.median_score,
-        "pass_rate": scenario.aggregate.pass_rate,
-        "hard_gate_failures": scenario.aggregate.hard_gate_failures,
+        "pass_rate": if scenario.aggregate.planned_runs == 0 {
+            0.0
+        } else {
+            scenario.aggregate.completed_runs as f64 / scenario.aggregate.planned_runs as f64
+        },
         "technical_failures": scenario.aggregate.technical_failures,
         "infra_failures": 0,
         "retries": retries,
@@ -343,15 +366,13 @@ fn scenario_efficiency(scenario: &E2eScenarioReport) -> Value {
     })
 }
 
-fn semantic_status(passed: bool, hard_gates: u32, technical: u32) -> &'static str {
+fn semantic_status(completed: u32, planned: u32, technical: u32) -> &'static str {
     if technical > 0 {
         "technical_failed"
-    } else if hard_gates > 0 {
-        "hard_gate_failed"
-    } else if passed {
+    } else if planned > 0 && completed == planned {
         "passed"
     } else {
-        "infra_failed"
+        "incomplete"
     }
 }
 
@@ -482,15 +503,12 @@ fn workflow_metric_summary(tests: &[&WorkflowStepReport]) -> Value {
     let mut numeric_metrics = BTreeMap::<String, f64>::new();
     let mut succeeded_steps = 0_u64;
     let mut failed_steps = 0_u64;
-    let mut hard_gate_failed_steps = 0_u64;
     let mut skipped_steps = 0_u64;
     let mut cancelled_steps = 0_u64;
     let mut running_steps = 0_u64;
     let mut pending_steps = 0_u64;
     let mut duration_ms = 0_u64;
     let mut asset_count = 0_u64;
-    let mut hard_gate_count = 0_u64;
-    let mut passed_hard_gate_count = 0_u64;
     let mut evaluation_count = 0_u64;
     let mut failure_count = 0_u64;
     let mut input_tokens = 0_u64;
@@ -508,7 +526,7 @@ fn workflow_metric_summary(tests: &[&WorkflowStepReport]) -> Value {
         match test.status {
             WorkflowStepStatus::Succeeded => succeeded_steps += 1,
             WorkflowStepStatus::Failed => failed_steps += 1,
-            WorkflowStepStatus::HardGateFailed => hard_gate_failed_steps += 1,
+            WorkflowStepStatus::HardGateFailed => failed_steps += 1,
             WorkflowStepStatus::Skipped => skipped_steps += 1,
             WorkflowStepStatus::Cancelled => cancelled_steps += 1,
             WorkflowStepStatus::Running => running_steps += 1,
@@ -516,9 +534,6 @@ fn workflow_metric_summary(tests: &[&WorkflowStepReport]) -> Value {
         }
         duration_ms = duration_ms.saturating_add(test.duration_ms);
         asset_count = asset_count.saturating_add(test.assets.len() as u64);
-        hard_gate_count = hard_gate_count.saturating_add(test.hard_gates.len() as u64);
-        passed_hard_gate_count = passed_hard_gate_count
-            .saturating_add(test.hard_gates.iter().filter(|gate| gate.passed).count() as u64);
         evaluation_count = evaluation_count.saturating_add(test.evaluations.len() as u64);
         failure_count = failure_count.saturating_add(test.failures.len() as u64);
         if let Some(metrics) = &test.metrics {
@@ -551,15 +566,12 @@ fn workflow_metric_summary(tests: &[&WorkflowStepReport]) -> Value {
         "step_count": tests.len(),
         "succeeded_steps": succeeded_steps,
         "failed_steps": failed_steps,
-        "hard_gate_failed_steps": hard_gate_failed_steps,
         "skipped_steps": skipped_steps,
         "cancelled_steps": cancelled_steps,
         "running_steps": running_steps,
         "pending_steps": pending_steps,
         "duration_ms": duration_ms,
         "asset_count": asset_count,
-        "hard_gate_count": hard_gate_count,
-        "passed_hard_gate_count": passed_hard_gate_count,
         "evaluation_count": evaluation_count,
         "failure_count": failure_count,
         "input_tokens": (input_token_metric_steps > 0).then_some(input_tokens),
@@ -742,13 +754,6 @@ fn first_failure(report: &E2eReport) -> Value {
                     "domain": failure.domain,
                     "phase": failure.phase,
                     "message": failure.message,
-                });
-            }
-            if let Some(gate) = run.hard_gates.iter().find(|gate| !gate.passed) {
-                return json!({
-                    "kind": "hard_gate",
-                    "scenario_id": scenario.scenario_id,
-                    "message": format!("{}: {}", gate.id, gate.reason),
                 });
             }
         }
@@ -956,6 +961,13 @@ pub(super) fn repository_url() -> String {
 #[cfg(test)]
 mod workflow_usage_tests {
     use super::*;
+
+    #[test]
+    fn completion_status_is_independent_from_numeric_score() {
+        assert_eq!(semantic_status(2, 5, 0), "incomplete");
+        assert_eq!(semantic_status(5, 5, 0), "passed");
+        assert_eq!(semantic_status(5, 5, 1), "technical_failed");
+    }
 
     #[test]
     fn reads_canonical_step_usage_and_derives_total_tokens() {

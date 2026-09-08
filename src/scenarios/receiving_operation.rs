@@ -14,7 +14,7 @@ use super::{
 };
 
 pub const ID: &str = "receiving_operation";
-const VERSION: u32 = 6;
+const VERSION: u32 = 7;
 const DATABASE_DELIVERABLE_ID: &str = "receiving_database";
 const COORDINATION_DELIVERABLE_ID: &str = "receiving_coordination";
 
@@ -39,22 +39,22 @@ const COURIER_FUNCTIONS: [&str; 6] = [
     "engine::functions::info",
     "engine::functions::list",
 ];
-const COURIER_WORKLOAD: AssessmentSpec = AssessmentSpec::hard_gated(
+const COURIER_WORKLOAD: AssessmentSpec = AssessmentSpec::scored(
     "courier_workload",
     30,
     "Three least-privilege couriers produce the exact shipments, corrections, and completion rows.",
 );
-const LIVE_LEDGER: AssessmentSpec = AssessmentSpec::hard_gated(
+const LIVE_LEDGER: AssessmentSpec = AssessmentSpec::scored(
     "live_ledger",
     25,
     "A database-native or mechanical reaction keeps the ledger current without model turns.",
 );
-const DATABASE_FAN_IN: AssessmentSpec = AssessmentSpec::hard_gated(
+const DATABASE_FAN_IN: AssessmentSpec = AssessmentSpec::scored(
     "database_fan_in",
     25,
     "The root learns completion from one database wake without polling.",
 );
-const VERIFICATION_CLEANUP: AssessmentSpec = AssessmentSpec::hard_gated(
+const VERIFICATION_CLEANUP: AssessmentSpec = AssessmentSpec::scored(
     "verification_cleanup",
     20,
     "The root reports verified evidence and removes all standing machinery.",

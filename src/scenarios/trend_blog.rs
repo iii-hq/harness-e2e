@@ -38,7 +38,7 @@ use super::{
 };
 
 pub const ID: &str = "trend_blog";
-const VERSION: u32 = 3;
+const VERSION: u32 = 4;
 const DELIVERABLE_ID: &str = "blog_site";
 const TOP_K: usize = 3;
 const MIN_QUOTE_CHARS: usize = 20;
@@ -61,29 +61,29 @@ const OUTPUT_FEED: &str = "site/feed.xml";
 const OUTPUT_MANIFEST: &str = "site/blog.json";
 const SOURCE_RELATIVE: &str = "sources/feed.json";
 
-const FACTUAL_ANCHORING: AssessmentSpec = AssessmentSpec::hard_gated_in(
+const FACTUAL_ANCHORING: AssessmentSpec = AssessmentSpec::scored_in(
     "factual_anchoring",
     30,
     "Every post quotes its source verbatim and links only URLs present in the feed.",
     EvaluationDimension::Deliverable,
 );
-const NO_FABRICATION: AssessmentSpec = AssessmentSpec::hard_gated_in(
+const NO_FABRICATION: AssessmentSpec = AssessmentSpec::scored_in(
     "no_fabrication",
     25,
     "No editorial summary introduces a currency amount or calendar year the sources never state (the planted-gap anti-hallucination gate).",
     EvaluationDimension::Deliverable,
 );
-const SITE_STRUCTURE: AssessmentSpec = AssessmentSpec::hard_gated(
+const SITE_STRUCTURE: AssessmentSpec = AssessmentSpec::scored(
     "site_structure",
     20,
     "The site is well-formed: an HTML index, an RSS feed with one item per post, and a parseable manifest.",
 );
-const EDITORIAL_COVERAGE: AssessmentSpec = AssessmentSpec::hard_gated(
+const EDITORIAL_COVERAGE: AssessmentSpec = AssessmentSpec::scored(
     "editorial_coverage",
     15,
     "Exactly the top-ranked topics are covered, once each, with no duplicates or off-brief picks.",
 );
-const PRESENTATION_QUALITY: AssessmentSpec = AssessmentSpec::score_only(
+const PRESENTATION_QUALITY: AssessmentSpec = AssessmentSpec::scored(
     "presentation_quality",
     10,
     "Each post renders its quote, summary, and source link in the HTML index.",

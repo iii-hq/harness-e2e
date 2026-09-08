@@ -96,7 +96,6 @@ export function executionMetricsFixture(
                 tokens_completed_p50: null,
                 failed_attempt_tokens: null,
                 tokens_per_completion: null,
-                hard_gate_failures: 0,
                 technical_failures: runs.length - valid,
               },
             },

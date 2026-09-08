@@ -32,7 +32,6 @@ describe('design system primitives', () => {
       'failed',
       'inconclusive',
       'unavailable',
-      'hard_gate',
       'recommendation',
       'running',
       'cancelling',
@@ -51,7 +50,6 @@ describe('design system primitives', () => {
       expect(html).toContain(`data-status="${status}"`)
       expect(html).toContain(`ds-status-${status}`)
     }
-    expect(html).toContain('Hard gate')
     expect(html).toContain('Recommendation')
   })
 

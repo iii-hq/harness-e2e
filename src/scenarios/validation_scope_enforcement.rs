@@ -30,21 +30,21 @@ use super::{
 };
 
 pub const ID: &str = "validation_scope_enforcement";
-const VERSION: u32 = 5;
+const VERSION: u32 = 6;
 const DELIVERABLE_ID: &str = "scope_enforcement_record";
 
 const HOOK_TYPE: &str = "harness::hook::post-turn";
-const FOREIGN_SCOPE_REFUSED: AssessmentSpec = AssessmentSpec::hard_gated(
+const FOREIGN_SCOPE_REFUSED: AssessmentSpec = AssessmentSpec::scored(
     "foreign_scope_refused",
     35,
     "The forbidden registration failed with the out-of-scope error and the agent continued.",
 );
-const SELF_GATE_ENGAGED: AssessmentSpec = AssessmentSpec::hard_gated(
+const SELF_GATE_ENGAGED: AssessmentSpec = AssessmentSpec::scored(
     "self_gate_engaged",
     30,
     "The self-registration gated the session: exactly one denial with the marker unset.",
 );
-const TEARDOWN_UNGATED: AssessmentSpec = AssessmentSpec::hard_gated(
+const TEARDOWN_UNGATED: AssessmentSpec = AssessmentSpec::scored(
     "teardown_ungated",
     35,
     "Owner unregistration removed the gate mid-loop: the turn completed with the marker still absent.",
@@ -146,8 +146,6 @@ fn capture<'a>(
                 )
                 .await?,
         );
-        let invariants =
-            super::captured_gate_invariants(evaluate(context, observation, run_id).await?);
         Ok(vec![CapturedDeliverable {
             id: DELIVERABLE_ID.to_string(),
             kind: "security_validation_record".to_string(),
@@ -161,7 +159,7 @@ fn capture<'a>(
                 "response": observation.response,
             })
             .into(),
-            invariants,
+            invariants: Vec::new(),
             provenance: vec![
                 ProvenanceEvidence {
                     kind: "state_location".to_string(),
@@ -187,7 +185,6 @@ fn deliverable_contract() -> super::DeliverableContract {
             "required": ["marker", "validation_nudges", "out_of_scope_error_observed", "response"],
             "additionalProperties": true
         }),
-        ASSESSMENTS,
     )
 }
 

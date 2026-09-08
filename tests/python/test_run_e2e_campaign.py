@@ -306,7 +306,7 @@ class CampaignRunnerTests(unittest.TestCase):
                 run_process=fake_run,
             )
         self.assertEqual(len(calls), 2, "advisory mode must execute every group")
-        self.assertIsNone(summary["objective_passed"])
+        self.assertNotIn("objective_passed", summary)
         self.assertEqual(summary["process_exit_code"], 0)
         self.assertEqual([group["exit_code"] for group in summary["groups"]], [9, 0])
         for _, environment, check in calls:
@@ -335,8 +335,38 @@ class CampaignRunnerTests(unittest.TestCase):
                 run_process=fake_run,
             )
         self.assertEqual(len(calls), 2)
-        self.assertIsNone(summary["objective_passed"])
+        self.assertNotIn("objective_passed", summary)
         self.assertEqual(summary["process_exit_code"], 1)
+
+    def test_enforcing_exit_depends_on_execution_not_objective_approval(self):
+        for return_code in (0, 5):
+            with self.subTest(return_code=return_code), tempfile.TemporaryDirectory() as directory:
+                def fake_run(command, *, env, check):
+                    output = pathlib.Path(command[command.index("--output") + 1])
+                    output.mkdir(parents=True, exist_ok=True)
+                    scenario = native_scenario(command[command.index("--scenario") + 1])
+                    scenario["aggregate"]["objective_median_score"] = 65
+                    report = native_report([scenario])
+                    report["objective_outcome"] = "failed"
+                    (output / "results.json").write_text(json.dumps(report), encoding="utf-8")
+                    return types.SimpleNamespace(returncode=return_code)
+
+                summary = execute_campaign(
+                    self.campaign,
+                    e2e_bin=pathlib.Path("bin/harness-e2e"),
+                    output_root=pathlib.Path(directory),
+                    execution_id="numeric-score",
+                    dry_run=False,
+                    advisory=False,
+                    model="model",
+                    provider="provider",
+                    environ={},
+                    run_process=fake_run,
+                )
+                self.assertEqual(summary["scoring"]["harness_score"], 65)
+                self.assertEqual(summary["process_exit_code"], 0 if return_code == 0 else 1)
+                self.assertNotIn("product_passed", summary["scoring"])
+                self.assertNotIn("objective_passed", summary)
 
     def test_dry_run_builds_every_command_without_starting_a_process(self):
         def should_not_run(*_args, **_kwargs):
@@ -406,7 +436,7 @@ class CampaignRunnerTests(unittest.TestCase):
                 / "campaign-summary.json"
             )
             summary = json.loads(summary_path.read_text(encoding="utf-8"))
-            self.assertIsNone(summary["objective_passed"])
+            self.assertNotIn("objective_passed", summary)
             self.assertEqual(summary["process_exit_code"], 0)
             self.assertEqual(
                 [group["exit_code"] for group in summary["groups"]], [7, 0]

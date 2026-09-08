@@ -27,7 +27,7 @@ use super::{
 };
 
 pub const ID: &str = "contention_ledger";
-const VERSION: u32 = 2;
+const VERSION: u32 = 3;
 const DELIVERABLE_ID: &str = "ledger_totals";
 
 const DATABASE: &str = "primary";
@@ -42,23 +42,23 @@ const DATABASE_WRITES: [&str; 3] = [
     "database::transaction",
 ];
 
-const BALANCED_LEDGER: AssessmentSpec = AssessmentSpec::hard_gated_in(
+const BALANCED_LEDGER: AssessmentSpec = AssessmentSpec::scored_in(
     "balanced_ledger",
     35,
     "The accumulator reads exactly 15 and the audit holds exactly the fifteen per-writer sequence rows.",
     EvaluationDimension::Deliverable,
 );
-const CONTENDED_WRITES: AssessmentSpec = AssessmentSpec::hard_gated(
+const CONTENDED_WRITES: AssessmentSpec = AssessmentSpec::scored(
     "contended_writes",
     25,
     "Three direct writer children each perform their own five atomic increments and done-key write; the root increments nothing.",
 );
-const QUORUM_FREE_FAN_IN: AssessmentSpec = AssessmentSpec::hard_gated(
+const QUORUM_FREE_FAN_IN: AssessmentSpec = AssessmentSpec::scored(
     "quorum_free_fan_in",
     20,
     "One barrier-gated wake over the three done keys is armed before the writers are spawned in a single response, and it retires on the third key.",
 );
-const VERIFIED_REPORT: AssessmentSpec = AssessmentSpec::score_only(
+const VERIFIED_REPORT: AssessmentSpec = AssessmentSpec::scored(
     "verified_report",
     20,
     "The final answer is one short LEDGER-BALANCED 15/15 line backed by an error-free run.",

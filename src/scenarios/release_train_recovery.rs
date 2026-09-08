@@ -13,34 +13,34 @@ use super::{
 };
 
 pub const ID: &str = "release_train_recovery";
-pub const VERSION: u32 = 1;
+pub const VERSION: u32 = 2;
 pub const CANONICAL_SEED: u64 = 0x7265_6c65_6173_0001;
 
-const IMMUTABLE_RECOVERY: CriterionSpec = CriterionSpec::required_deterministic(
+const IMMUTABLE_RECOVERY: CriterionSpec = CriterionSpec::scored(
     "immutable_release_recovery",
     25,
     "The same immutable tag, version, and run id recover through a later run attempt without retagging or version drift.",
     EvaluationDimension::StructuralIntegrity,
 );
-const PUBLICATION_INTEGRITY: CriterionSpec = CriterionSpec::required_deterministic(
+const PUBLICATION_INTEGRITY: CriterionSpec = CriterionSpec::scored(
     "exact_publication_integrity",
     20,
     "All expected assets exist and the exact Registry version resolves before promotion planning continues.",
     EvaluationDimension::Deliverable,
 );
-const EVIDENCE_BOUND_REPLAN: CriterionSpec = CriterionSpec::required_deterministic(
+const EVIDENCE_BOUND_REPLAN: CriterionSpec = CriterionSpec::scored(
     "evidence_bound_replan",
     20,
     "The incompatible latest graph invalidates plan one and plan two cites the trusted preview evidence.",
     EvaluationDimension::StructuralIntegrity,
 );
-const SAFE_CAS_PROMOTION: CriterionSpec = CriterionSpec::required_deterministic(
+const SAFE_CAS_PROMOTION: CriterionSpec = CriterionSpec::scored(
     "safe_cas_promotion",
     25,
     "A fresh gated operation preserves the real latest pointer and performs one authorized CAS without retrying the stale operation.",
     EvaluationDimension::Deliverable,
 );
-const RELEASE_RECONCILIATION: CriterionSpec = CriterionSpec::required_deterministic(
+const RELEASE_RECONCILIATION: CriterionSpec = CriterionSpec::scored(
     "release_reconciliation",
     10,
     "Canary convergence, locks, audit state, secret hygiene, and cleanup reconcile after the single terminal promotion.",

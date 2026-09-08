@@ -10,6 +10,7 @@ import {
   rowState,
   SideResult,
   sortCompareRows,
+  summaryStatus,
 } from '@/pages/TestsPage'
 
 function side(overrides: Partial<TestSideSummary> = {}): TestSideSummary {
@@ -98,6 +99,25 @@ describe('versioned test side presentation', () => {
     expect(renderToStaticMarkup(<SideResult summary={null} />)).toContain(
       'no evidence',
     )
+  })
+
+  it('keeps a measured score when no run completed', () => {
+    const incomplete = side({
+      median_score: 65,
+      outcomes: {
+        passed: 0,
+        hard_gate_failed: 0,
+        technical_failed: 0,
+        infra_failed: 0,
+      },
+    })
+    expect(summaryStatus(incomplete)).toEqual({
+      status: 'incomplete',
+      label: 'incomplete',
+    })
+    const html = renderToStaticMarkup(<SideResult summary={incomplete} />)
+    expect(html).toContain('ds-status-incomplete')
+    expect(html).toContain('65')
   })
 })
 

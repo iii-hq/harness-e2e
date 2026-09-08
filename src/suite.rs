@@ -25,9 +25,9 @@ use crate::markdown::{
 };
 use crate::report::{
     AdherenceAvailability, AdherenceRequirement, CostReport, CriterionReport, E2eManifest,
-    E2eReport, E2eRunReport, E2eScenarioReport, EvaluationDimension, FailurePhase, HardGateReport,
-    InstructionAdherenceReport, MarkdownExecutionReport, MarkdownPhaseReport, MarkdownPhaseStatus,
-    ModelArtifact, ObservationMetricOrigin, ObservationRunContract, RetryAttemptReport, RunStatus,
+    E2eReport, E2eRunReport, E2eScenarioReport, FailurePhase, InstructionAdherenceReport,
+    MarkdownExecutionReport, MarkdownPhaseReport, MarkdownPhaseStatus, ModelArtifact,
+    ObservationMetricOrigin, ObservationRunContract, RetryAttemptReport, RunStatus,
     ScenarioFlowEvidence, ScenarioMeasurement,
 };
 use crate::scenarios::common;
@@ -46,7 +46,7 @@ use crate::workflow::{
     AdaptivePlannerInvalidationV1, AdaptivePlannerMetadataV1, AdaptivePlannerReferenceCheckV1,
     AgentPlannerRequest, ResumableWorkflowExecutionRequest, ResumableWorkflowOutcome,
     WorkflowCleanupContext, WorkflowCleanupStatus, WorkflowExecutionRequest, WorkflowFailurePhase,
-    WorkflowResumeIdentityV1, WorkflowResumeStore, WorkflowStepStatus,
+    WorkflowResumeIdentityV1, WorkflowResumeStore,
 };
 
 const MAX_RUNS: u32 = 20;
@@ -1467,35 +1467,10 @@ async fn run_once(context: &Arc<E2eContext>, request: AttemptRequest<'_>) -> E2e
             ),
         }
     }
-    if report
-        .asset_assessments
-        .iter()
-        .any(|asset| asset.outcome != crate::assessment::AssetValidationOutcome::Valid)
-    {
-        if let Some(gate) = report
-            .hard_gates
-            .iter_mut()
-            .find(|gate| gate.id == "deliverable_contract")
-        {
-            gate.passed = false;
-            gate.reason =
-                "captured asset evidence did not survive deterministic validation and cleanup"
-                    .into();
-        }
-    }
     report.wall_time_ms = started.elapsed().as_millis().min(u64::MAX as u128) as u64;
     ensure_assessment_results(&spec, &mut report);
     if report.failures.is_empty() {
-        if report.hard_gates.iter().any(|gate| !gate.passed) {
-            // A gate failure can leave no criterion awards; the run must still
-            // enter the aggregate as a score.
-            report.score.get_or_insert(0);
-            report.finish(RunStatus::HardGateFailed);
-        } else if report.score.is_some()
-            || report.assessment_results.iter().all(|assessment| {
-                assessment.policy == crate::assessment::AssessmentPolicy::Advisory
-            })
-        {
+        if report.score.is_some() || report.assessment_results.is_empty() {
             report.finish(RunStatus::Passed);
         } else {
             report.push_failure(
@@ -2217,30 +2192,6 @@ pub(crate) fn populate_composite_report_with_terminal(
         .find_map(|step| step.harness_session_id.clone())
         .unwrap_or_else(|| format!("scenario_{}", workflow.attempt_id));
     report.wall_time_ms = workflow.duration_ms;
-    report.hard_gates = workflow
-        .steps
-        .iter()
-        .flat_map(|step| {
-            let required_completion = step.required.then(|| HardGateReport {
-                id: format!("{}.required_test_completion", step.node_id),
-                dimension: EvaluationDimension::StructuralIntegrity,
-                passed: step.status == WorkflowStepStatus::Succeeded,
-                reason: if step.status == WorkflowStepStatus::Succeeded {
-                    "required semantic test completed successfully".into()
-                } else {
-                    format!("required semantic test ended with status {:?}", step.status)
-                },
-            });
-            required_completion
-                .into_iter()
-                .chain(step.hard_gates.iter().map(|gate| HardGateReport {
-                    id: format!("{}.{}", step.node_id, gate.id),
-                    dimension: EvaluationDimension::StructuralIntegrity,
-                    passed: gate.passed,
-                    reason: gate.reason.clone(),
-                }))
-        })
-        .collect();
     report.criteria = workflow
         .criteria
         .iter()
@@ -2338,11 +2289,7 @@ pub(crate) fn populate_composite_report_with_terminal(
     });
     report.semantic_tests = workflow.steps;
     if report.failures.is_empty() {
-        report.finish(if workflow.passed {
-            RunStatus::Passed
-        } else {
-            RunStatus::HardGateFailed
-        });
+        report.finish(RunStatus::Passed);
     }
 }
 
@@ -4501,7 +4448,7 @@ async fn execute(
         report,
     )
     .await;
-    let mut objective = (spec.evaluate)(context, &observation, run_id)
+    let objective = (spec.evaluate)(context, &observation, run_id)
         .await
         .map_err(|error| {
             RunFailure::new(
@@ -4510,22 +4457,6 @@ async fn execute(
                 format!("scenario '{}' evaluator failed: {error:#}", spec.id),
             )
         })?;
-    if !case.deliverable_contract.artifacts.is_empty() {
-        let passed = !report.asset_assessments.is_empty()
-            && report
-                .asset_assessments
-                .iter()
-                .all(|asset| asset.outcome == crate::assessment::AssetValidationOutcome::Valid);
-        objective.hard_gates.push(HardGateReport {
-            id: "deliverable_contract".to_string(),
-            dimension: EvaluationDimension::Deliverable,
-            passed,
-            reason: format!(
-                "captured {} asset validation result(s); deterministic contract valid={passed}",
-                report.asset_assessments.len()
-            ),
-        });
-    }
     validate_objective_evaluation(spec, &objective).map_err(|error| {
         RunFailure::new(
             RunStatus::InfrastructureError,
@@ -4537,10 +4468,8 @@ async fn execute(
         objective.completion,
         crate::report::EvaluatorAvailability::Available,
     );
-    report.hard_gates = objective.hard_gates;
     report.criteria = criterion_reports(spec, objective.awards);
-    report.assessment_results =
-        materialize_assessment_results(spec, &report.criteria, &report.hard_gates);
+    report.assessment_results = materialize_assessment_results(spec, &report.criteria);
     update_score(report);
     Ok(())
 }
@@ -4609,8 +4538,7 @@ fn ensure_assessment_results(spec: &ScenarioSpec, report: &mut E2eRunReport) {
         .unwrap_or_else(|| {
             "assessment_not_evaluated: execution did not reach assessment materialization".into()
         });
-    report.assessment_results =
-        materialize_assessment_results(spec, &report.criteria, &report.hard_gates);
+    report.assessment_results = materialize_assessment_results(spec, &report.criteria);
     for result in &mut report.assessment_results {
         result.outcome = AssessmentOutcome::NotEvaluated;
         result.score = None;
@@ -4621,7 +4549,6 @@ fn ensure_assessment_results(spec: &ScenarioSpec, report: &mut E2eRunReport) {
 fn materialize_assessment_results(
     spec: &ScenarioSpec,
     criteria: &[CriterionReport],
-    hard_gates: &[HardGateReport],
 ) -> Vec<AssessmentResult> {
     spec.declared_assessments()
         .into_iter()
@@ -4629,9 +4556,6 @@ fn materialize_assessment_results(
             let criterion = criteria
                 .iter()
                 .find(|criterion| criterion.id == declaration.criterion_id);
-            let hard_gate_failed = hard_gates
-                .iter()
-                .any(|gate| gate.id == declaration.criterion_id && !gate.passed);
             let awarded = criterion.and_then(|criterion| criterion.awarded);
             AssessmentResult {
                 criterion_id: declaration.criterion_id.clone(),
@@ -4642,7 +4566,7 @@ fn materialize_assessment_results(
                 kind: declaration.kind,
                 policy: declaration.policy,
                 dimension: declaration.dimension,
-                outcome: score_assessment_outcome(awarded, declaration.possible, hard_gate_failed),
+                outcome: score_assessment_outcome(awarded, declaration.possible),
                 score: awarded.map(|awarded| AssessmentScore {
                     awarded,
                     possible: declaration.possible,
@@ -4656,14 +4580,9 @@ fn materialize_assessment_results(
         .collect()
 }
 
-fn score_assessment_outcome(
-    awarded: Option<u8>,
-    possible: u8,
-    hard_gate_failed: bool,
-) -> AssessmentOutcome {
+fn score_assessment_outcome(awarded: Option<u8>, possible: u8) -> AssessmentOutcome {
     match awarded {
         None => AssessmentOutcome::NotEvaluated,
-        Some(_) if hard_gate_failed => AssessmentOutcome::Failed,
         Some(awarded) if awarded == possible => AssessmentOutcome::Passed,
         Some(0) => AssessmentOutcome::Failed,
         Some(_) => AssessmentOutcome::Partial,
@@ -4822,28 +4741,6 @@ fn validate_objective_evaluation(
     spec: &ScenarioSpec,
     evaluation: &ObjectiveEvaluation,
 ) -> Result<()> {
-    let mut gate_ids = HashSet::new();
-    for gate in &evaluation.hard_gates {
-        if gate.id.trim().is_empty() {
-            bail!(
-                "scenario '{}': evaluation contract violation: hard gate id is empty; expected a stable non-empty identifier",
-                spec.id
-            );
-        }
-        if gate.reason.trim().is_empty() {
-            bail!(
-                "scenario '{}': evaluation contract violation: hard gate '{}' has an empty reason; include the observed evidence",
-                spec.id, gate.id
-            );
-        }
-        if !gate_ids.insert(gate.id.as_str()) {
-            bail!(
-                "scenario '{}': evaluation contract violation: hard gate '{}' was returned more than once; expected unique gate ids",
-                spec.id, gate.id
-            );
-        }
-    }
-
     let criteria: HashMap<_, _> = spec
         .criteria
         .iter()
@@ -4939,6 +4836,7 @@ fn criterion_reports(spec: &ScenarioSpec, awards: Vec<CriterionAward>) -> Vec<Cr
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::report::EvaluationDimension;
     use crate::scenarios::CapturedDeliverableContent;
 
     fn checkpoint_deliverable() -> crate::report::DeliverableReport {
@@ -5202,7 +5100,7 @@ mod tests {
         let saved: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
         assert_eq!(saved["run"]["transcript"]["text"], "retained evidence");
         assert_ne!(saved["run"]["transcript"]["api_key"], "private-secret");
-        assert!(saved["run"]["hard_gates"].is_array());
+        assert!(saved["run"].get("hard_gates").is_none());
         assert!(saved["run"]["criteria"].is_array());
         assert_eq!(saved["run"]["status"], "passed");
         for content in [
@@ -5416,7 +5314,6 @@ mod tests {
             .to_string()
             .contains("fingerprint changed"));
     }
-    use crate::report::HardGateReport;
     use crate::scenarios::{CriterionSpec, ExecutionPolicy, ScenarioEvaluator};
 
     fn evaluator<'a>(
@@ -5441,7 +5338,7 @@ mod tests {
                 max_validation_retries: None,
             },
             denied_functions: &[],
-            criteria: vec![CriterionSpec::required_deterministic(
+            criteria: vec![CriterionSpec::scored(
                 "objective",
                 100,
                 "objective",
@@ -5456,13 +5353,13 @@ mod tests {
     fn mixed_assessment_spec() -> ScenarioSpec {
         let mut spec = spec();
         spec.criteria = vec![
-            CriterionSpec::required_deterministic(
+            CriterionSpec::scored(
                 "required",
                 70,
                 "Required deterministic behavior.",
                 EvaluationDimension::StructuralIntegrity,
             ),
-            CriterionSpec::advisory_deterministic(
+            CriterionSpec::scored(
                 "quality",
                 30,
                 "Advisory deterministic quality signal.",
@@ -5473,16 +5370,16 @@ mod tests {
     }
 
     #[test]
-    fn materializes_one_result_per_declaration_without_losing_gate_or_partial_score() {
+    fn materializes_one_result_per_numeric_criterion() {
         let mut spec = spec();
         spec.criteria = vec![
-            CriterionSpec::required_deterministic(
+            CriterionSpec::scored(
                 "required",
                 70,
                 "Required deterministic behavior.",
                 EvaluationDimension::StructuralIntegrity,
             ),
-            CriterionSpec::advisory_deterministic(
+            CriterionSpec::scored(
                 "signal",
                 30,
                 "Advisory deterministic signal.",
@@ -5503,22 +5400,15 @@ mod tests {
                 reason: "partial efficiency evidence".into(),
             },
         ];
-        let gates = vec![HardGateReport {
-            id: "required".into(),
-            dimension: EvaluationDimension::StructuralIntegrity,
-            passed: false,
-            reason: "required behavior was incomplete".into(),
-        }];
-
-        let results = materialize_assessment_results(&spec, &criteria, &gates);
+        let results = materialize_assessment_results(&spec, &criteria);
 
         assert_eq!(results.len(), 2);
         assert_eq!(results[0].criterion_id, "required");
         assert_eq!(
             results[0].policy,
-            crate::assessment::AssessmentPolicy::HardGate
+            crate::assessment::AssessmentPolicy::Advisory
         );
-        assert_eq!(results[0].outcome, AssessmentOutcome::Failed);
+        assert_eq!(results[0].outcome, AssessmentOutcome::Partial);
         assert_eq!(results[0].score.as_ref().unwrap().awarded, 35);
         assert_eq!(
             results[1].policy,
@@ -5599,7 +5489,6 @@ mod tests {
             &spec,
             &ObjectiveEvaluation {
                 completion: crate::report::CompletionState::Completed,
-                hard_gates: Vec::new(),
                 awards: vec![CriterionAward {
                     id: "objective".into(),
                     awarded: 100,
@@ -5612,7 +5501,6 @@ mod tests {
             &spec,
             &ObjectiveEvaluation {
                 completion: crate::report::CompletionState::Completed,
-                hard_gates: Vec::new(),
                 awards: Vec::new(),
             }
         )
@@ -5621,7 +5509,6 @@ mod tests {
             &spec,
             &ObjectiveEvaluation {
                 completion: crate::report::CompletionState::Completed,
-                hard_gates: Vec::new(),
                 awards: vec![CriterionAward {
                     id: "objective".into(),
                     awarded: 101,
@@ -5643,7 +5530,6 @@ mod tests {
             &spec,
             &ObjectiveEvaluation {
                 completion: crate::report::CompletionState::Completed,
-                hard_gates: Vec::new(),
                 awards: vec![CriterionAward {
                     id: "unknown".into(),
                     awarded: 1,
@@ -5661,7 +5547,6 @@ mod tests {
             &spec,
             &ObjectiveEvaluation {
                 completion: crate::report::CompletionState::Completed,
-                hard_gates: Vec::new(),
                 awards: vec![
                     CriterionAward {
                         id: "objective".into(),
@@ -5681,55 +5566,6 @@ mod tests {
             duplicate.to_string(),
             "scenario 'case': evaluation contract violation: criterion 'objective' was returned more than once; expected exactly one award per configured criterion"
         );
-
-        let empty_gate = validate_objective_evaluation(
-            &spec,
-            &ObjectiveEvaluation {
-                completion: crate::report::CompletionState::Completed,
-                hard_gates: vec![HardGateReport {
-                    id: String::new(),
-                    dimension: EvaluationDimension::StructuralIntegrity,
-                    passed: false,
-                    reason: "observed".into(),
-                }],
-                awards: vec![CriterionAward {
-                    id: "objective".into(),
-                    awarded: 1,
-                    reason: "observed".into(),
-                }],
-            },
-        )
-        .unwrap_err();
-        assert_eq!(
-            empty_gate.to_string(),
-            "scenario 'case': evaluation contract violation: hard gate id is empty; expected a stable non-empty identifier"
-        );
-    }
-
-    #[test]
-    fn hard_gate_failure_prevents_a_passing_run() {
-        let mut report = test_run_report();
-        report.hard_gates = vec![HardGateReport {
-            id: "gate".into(),
-            dimension: EvaluationDimension::StructuralIntegrity,
-            passed: false,
-            reason: "failed".into(),
-        }];
-        report.criteria = criterion_reports(
-            &spec(),
-            vec![CriterionAward {
-                id: "objective".into(),
-                awarded: 100,
-                reason: "ok".into(),
-            }],
-        );
-        update_score(&mut report);
-        report.finish(if report.hard_gates.iter().all(|gate| gate.passed) {
-            RunStatus::Passed
-        } else {
-            RunStatus::HardGateFailed
-        });
-        assert_eq!(report.status, RunStatus::HardGateFailed);
     }
 
     #[test]

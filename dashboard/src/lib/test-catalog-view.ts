@@ -115,12 +115,7 @@ export function catalogExecutionSummary(row: TestCatalogRow) {
 function hasIssuesInB(row: TestCatalogRow) {
   const to = row.result?.to
   if (!to) return false
-  return (
-    to.outcomes.hard_gate_failed +
-      to.outcomes.technical_failed +
-      to.outcomes.infra_failed >
-    0
-  )
+  return to.outcomes.technical_failed + to.outcomes.infra_failed > 0
 }
 
 export function hasRetainedEvidence(row: TestCatalogRow) {

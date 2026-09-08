@@ -41,6 +41,7 @@ export type AssessmentRunView = {
   metrics: AssessmentRunMetrics
   transcript?: { messages?: unknown }
   systemStatus: SystemStatus
+  objectiveScore: number | null
   assessments: AssessmentEntry[]
   evidence: EvidenceReference[]
 }
@@ -154,7 +155,6 @@ function assessmentRunPriority(run: AssessmentRunView) {
     run.systemStatus === 'judge_error'
   )
     return 1
-  if (run.systemStatus === 'hard_gate_failed') return 2
   if (run.systemStatus === 'unavailable') return 3
   return 4
 }
@@ -180,9 +180,6 @@ export function buildHarnessRecommendation(run: AssessmentRunView): string {
   }
   if (run.systemStatus === 'judge_error') {
     return 'Fix the Markdown validator invocation or its schema path, validate the JSON contract, and rerun the scenario.'
-  }
-  if (run.systemStatus === 'hard_gate_failed') {
-    return 'Fix the scenario or fixture that violates the hard gate, add a regression assertion for that condition, and rerun the scenario.'
   }
   if (run.systemStatus === 'unavailable') {
     return 'Restore the missing report or assessment contract, add a readiness check, and rerun the scenario.'
@@ -235,6 +232,7 @@ function assessmentRunView(
     metrics: assessmentRunMetrics(projectedRun),
     ...(transcript ? { transcript } : {}),
     systemStatus: contract.system_status,
+    objectiveScore: finiteNumber(projectedRun.objective_score),
     assessments,
     evidence,
   }

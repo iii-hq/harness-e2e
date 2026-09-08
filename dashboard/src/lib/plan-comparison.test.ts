@@ -557,8 +557,8 @@ describe('retained criterion points', () => {
                 runs: awards.map((awarded, index) => ({
                   run_id: `run-${index}`,
                   technical: 'valid',
-                  status: 'hard_gate_failed',
-                  objective_score: 0,
+                  status: 'passed',
+                  objective_score: awarded,
                   criteria: [{ id: 'delivery', possible, awarded }],
                 })),
               },
@@ -569,7 +569,7 @@ describe('retained criterion points', () => {
     } as unknown as DashboardExecutionDetail
   }
 
-  it('shows partial progress across repetitions without replacing the hard-gate result or global score', () => {
+  it('shows partial criterion points and preserves them in each run score', () => {
     const left = scored([10, 20])
     const right = scored([20, 40])
     const comparison = buildPlanComparison(left, right)
@@ -586,7 +586,7 @@ describe('retained criterion points', () => {
       comparison.metrics.some((metric) => metric.id.startsWith('criterion:')),
     ).toBe(false)
     expect(right.reports[0].report?.scenarios[0].runs[0].objective_score).toBe(
-      0,
+      20,
     )
   })
 
