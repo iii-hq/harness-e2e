@@ -62,28 +62,25 @@ const BUNDLE_BYTES: &[u8] =
 const REPOSITORY_ACQUIRED: AssessmentSpec = AssessmentSpec::scored(
     "repository_acquired",
     20,
-    "The immutable bundle was cloned through the shell worker and the resulting repository has the exact expected history and origin.",
+    "Was the supplied repository acquired as required?",
 );
 const ENDPOINTS_REPRODUCED: AssessmentSpec = AssessmentSpec::scored(
     "endpoints_reproduced",
     20,
-    "The supplied probe classified the known-good endpoint as passing and the known-bad endpoint as failing before the search.",
+    "Were the known-good and known-bad revisions reproduced as required?",
 );
 const FIRST_BAD_IDENTIFIED: AssessmentSpec = AssessmentSpec::scored(
     "first_bad_identified",
     40,
-    "The report names the exact first bad commit and the runner independently verifies its pass/fail boundary.",
+    "Was the first bad commit correctly identified?",
 );
 const EVIDENCE_GROUNDED: AssessmentSpec = AssessmentSpec::scored(
     "evidence_grounded",
     10,
-    "The structured report cites resolvable commits and changed paths in the immutable repository.",
+    "Is the report supported by repository evidence?",
 );
-const SEARCH_EFFICIENCY: AssessmentSpec = AssessmentSpec::scored(
-    "search_efficiency",
-    10,
-    "The investigation approaches binary-search efficiency without redundant probe executions or tool errors.",
-);
+const SEARCH_EFFICIENCY: AssessmentSpec =
+    AssessmentSpec::scored("search_efficiency", 10, "Was the search efficient?");
 const ASSESSMENTS: &[AssessmentSpec] = &[
     REPOSITORY_ACQUIRED,
     ENDPOINTS_REPRODUCED,
@@ -687,19 +684,40 @@ fn evaluate<'a>(
                 crate::report::CompletionState::TaskIncomplete
             },
             [
-                REPOSITORY_ACQUIRED.full_or_zero(acquisition, acquisition_reason(&snapshot)),
-                ENDPOINTS_REPRODUCED.full_or_zero(endpoints, endpoint_reason(&snapshot)),
-                FIRST_BAD_IDENTIFIED.full_or_zero(culprit, culprit_reason(&snapshot)),
-                EVIDENCE_GROUNDED.full_or_zero(evidence, evidence_reason(&snapshot)),
+                REPOSITORY_ACQUIRED.full_or_zero(
+                    acquisition,
+                    criterion_reason(
+                        acquisition_observed(&snapshot),
+                        acquisition_scoring_reason(&snapshot),
+                    ),
+                ),
+                ENDPOINTS_REPRODUCED.full_or_zero(
+                    endpoints,
+                    criterion_reason(
+                        endpoints_observed(&snapshot),
+                        endpoints_scoring_reason(&snapshot),
+                    ),
+                ),
+                FIRST_BAD_IDENTIFIED.full_or_zero(
+                    culprit,
+                    criterion_reason(
+                        culprit_observed(&snapshot),
+                        culprit_scoring_reason(&snapshot),
+                    ),
+                ),
+                EVIDENCE_GROUNDED.full_or_zero(
+                    evidence,
+                    criterion_reason(
+                        evidence_observed(&snapshot),
+                        evidence_scoring_reason(&snapshot),
+                    ),
+                ),
                 SEARCH_EFFICIENCY.award(
                     efficiency_points,
-                    format!(
-                    "unique search revisions={}, ideal={}, duplicates={}, function-call errors={}",
-                    snapshot.trace_metrics.unique_search_revisions,
-                    snapshot.trace_metrics.ideal_search_revisions,
-                    snapshot.trace_metrics.duplicate_probe_runs,
-                    observation.metrics.totals.function_call_errors,
-                ),
+                    criterion_reason(
+                        efficiency_observed(&snapshot, observation),
+                        efficiency_scoring_reason(&snapshot, observation, efficiency_points),
+                    ),
                 )?,
             ],
         ))
@@ -939,6 +957,333 @@ fn evidence_reason(snapshot: &Snapshot) -> String {
         snapshot.report_evidence_resolves,
         snapshot.evidence_passed(),
     )
+}
+
+fn acquisition_observed(snapshot: &Snapshot) -> String {
+    let fixtures = if snapshot.manifest_valid && snapshot.bundle_valid && snapshot.probe_valid {
+        "The manifest, bundle, and probe match the supplied fixture."
+    } else {
+        "One or more supplied fixture files could not be verified."
+    };
+    let repository = if snapshot.checkout_is_repository
+        && snapshot.checkout_status.as_deref() == Some("")
+        && snapshot.checkout_fsck
+        && snapshot.checkout_head.as_deref() == Some(BAD_SHA)
+        && snapshot.good_tree.as_deref() == Some(GOOD_TREE)
+        && snapshot.bad_tree.as_deref() == Some(BAD_TREE)
+        && snapshot.observed_range_commit_count == Some(RANGE_COMMIT_COUNT)
+    {
+        "Repository integrity, history, and clean working tree were verified."
+    } else {
+        "Repository integrity, exact history, or clean working tree could not be fully verified."
+    };
+    let clone = if snapshot.clone_observed {
+        "The required direct clone call was recognized in the transcript."
+    } else {
+        "The required direct clone call was not recognized in the transcript."
+    };
+    format!("{fixtures} {repository} {clone}")
+}
+
+fn acquisition_scoring_reason(snapshot: &Snapshot) -> String {
+    unmet_conditions(&[
+        ("the public manifest is invalid", snapshot.manifest_valid),
+        (
+            "the bundle does not match the manifest",
+            snapshot.bundle_valid,
+        ),
+        (
+            "the probe does not match the manifest",
+            snapshot.probe_valid,
+        ),
+        (
+            "the required direct clone call was not recognized in the transcript",
+            snapshot.clone_observed,
+        ),
+        (
+            "the checkout is not a Git repository",
+            snapshot.checkout_is_repository,
+        ),
+        (
+            "the checkout is not at the expected known-bad revision",
+            snapshot.checkout_head.as_deref() == Some(BAD_SHA),
+        ),
+        (
+            "a clean working tree was not verified",
+            snapshot.checkout_status.as_deref() == Some(""),
+        ),
+        ("Git integrity validation failed", snapshot.checkout_fsck),
+        (
+            "the known-good tree does not match the fixture",
+            snapshot.good_tree.as_deref() == Some(GOOD_TREE),
+        ),
+        (
+            "the known-bad tree does not match the fixture",
+            snapshot.bad_tree.as_deref() == Some(BAD_TREE),
+        ),
+        (
+            "the revision range does not contain the expected commits",
+            snapshot.observed_range_commit_count == Some(RANGE_COMMIT_COUNT),
+        ),
+        (
+            "the checkout origin does not resolve to the supplied bundle",
+            snapshot.checkout_origin.as_deref().is_some_and(|origin| {
+                normalize_path(Path::new(origin))
+                    == normalize_path(Path::new(&snapshot.expected_checkout_origin))
+            }),
+        ),
+    ])
+}
+
+fn endpoints_observed(snapshot: &Snapshot) -> String {
+    let good = snapshot.trace.records.first().is_some_and(|record| {
+        record.revision == GOOD_SHA && record.passed && record.observed_stdout == "3.14"
+    });
+    let bad = snapshot.trace.records.get(1).is_some_and(|record| {
+        record.revision == BAD_SHA && !record.passed && record.observed_stdout != "3.14"
+    });
+    let endpoints = if good && bad {
+        "The first two trace records reproduced the known-good and known-bad revisions."
+    } else {
+        "The first two trace records did not establish the expected good/bad endpoints."
+    };
+    let runner = if snapshot.runner_good_passed && snapshot.runner_bad_failed {
+        "Independent runner checks agreed with both classifications."
+    } else {
+        "Independent runner checks did not verify both classifications."
+    };
+    format!(
+        "{endpoints} The trace contains {} valid records and {} invalid lines. {} exact direct probe calls were recognized in the transcript. {runner}",
+        snapshot.trace.records.len(),
+        snapshot.trace.invalid_lines.len(),
+        snapshot.direct_probe_calls,
+    )
+}
+
+fn endpoints_scoring_reason(snapshot: &Snapshot) -> String {
+    unmet_conditions(&[
+        (
+            "the trace contains invalid records",
+            snapshot.trace.invalid_lines.is_empty(),
+        ),
+        (
+            "the first trace record does not reproduce the known-good revision",
+            snapshot.trace.records.first().is_some_and(|record| {
+                record.revision == GOOD_SHA && record.passed && record.observed_stdout == "3.14"
+            }),
+        ),
+        (
+            "the second trace record does not reproduce the known-bad revision",
+            snapshot.trace.records.get(1).is_some_and(|record| {
+                record.revision == BAD_SHA && !record.passed && record.observed_stdout != "3.14"
+            }),
+        ),
+        (
+            "fewer than two exact direct probe calls were recognized in the transcript",
+            snapshot.direct_probe_calls >= 2,
+        ),
+        (
+            "the independent runner did not verify the known-good revision",
+            snapshot.runner_good_passed,
+        ),
+        (
+            "the independent runner did not verify the known-bad revision",
+            snapshot.runner_bad_failed,
+        ),
+    ])
+}
+
+fn culprit_observed(snapshot: &Snapshot) -> String {
+    let reported = snapshot.report.as_ref().map_or_else(
+        || "No valid structured report was available.".to_string(),
+        |report| {
+            format!(
+                "The report names {} as the culprit and {} as its parent.",
+                report.culprit_sha.chars().take(12).collect::<String>(),
+                report
+                    .culprit_parent_sha
+                    .chars()
+                    .take(12)
+                    .collect::<String>()
+            )
+        },
+    );
+    let trace_verified = snapshot
+        .trace
+        .records
+        .iter()
+        .any(|record| record.revision == CULPRIT_SHA && !record.passed);
+    let boundary =
+        if trace_verified && snapshot.runner_parent_passed && snapshot.runner_culprit_failed {
+            "The probe trace and independent runner verified the pass/fail boundary."
+        } else {
+            "The probe trace and independent runner did not fully verify the pass/fail boundary."
+        };
+    format!("{reported} {boundary}")
+}
+
+fn culprit_scoring_reason(snapshot: &Snapshot) -> String {
+    let report = snapshot.report.as_ref();
+    unmet_conditions(&[
+        (
+            "the report does not name the expected first bad commit",
+            report.is_some_and(|report| report.culprit_sha == CULPRIT_SHA),
+        ),
+        (
+            "the report does not name the expected parent commit",
+            report.is_some_and(|report| report.culprit_parent_sha == CULPRIT_PARENT_SHA),
+        ),
+        (
+            "the report does not include the culprit among tested commits",
+            report.is_some_and(|report| {
+                report
+                    .tested_commits
+                    .iter()
+                    .any(|revision| revision == CULPRIT_SHA)
+            }),
+        ),
+        (
+            "the report's tested commits do not match the probe trace",
+            report
+                .is_some_and(|report| tested_commits_match_trace(report, &snapshot.trace.records)),
+        ),
+        (
+            "the probe trace does not record the culprit as bad",
+            snapshot
+                .trace
+                .records
+                .iter()
+                .any(|record| record.revision == CULPRIT_SHA && !record.passed),
+        ),
+        (
+            "the independent runner did not verify the parent as good",
+            snapshot.runner_parent_passed,
+        ),
+        (
+            "the independent runner did not verify the culprit as bad",
+            snapshot.runner_culprit_failed,
+        ),
+    ])
+}
+
+fn evidence_observed(snapshot: &Snapshot) -> String {
+    if snapshot.evidence_passed() {
+        "The structured report was parsed, its cited commits and paths resolved, and its summary and evidence matched the expected change.".to_string()
+    } else if let Some(error) = &snapshot.report_parse_error {
+        format!("The structured report could not be used: {error}.")
+    } else if snapshot.report.is_some() {
+        "The structured report was available, but its repository references or required evidence could not be fully verified.".to_string()
+    } else {
+        "No structured report was available, so repository references and required evidence could not be verified.".to_string()
+    }
+}
+
+fn evidence_scoring_reason(snapshot: &Snapshot) -> String {
+    let report = snapshot.report.as_ref();
+    unmet_conditions(&[
+        (
+            "the structured report is missing or invalid",
+            snapshot.report_parse_error.is_none() && report.is_some(),
+        ),
+        (
+            "one or more cited commits or paths do not resolve in the repository",
+            snapshot.report_evidence_resolves,
+        ),
+        (
+            "the report summary is empty",
+            report.is_some_and(|report| !report.summary.trim().is_empty()),
+        ),
+        (
+            "the changed paths do not exactly identify get_pi.py",
+            report.is_some_and(|report| report.changed_paths == [CHANGED_PATH]),
+        ),
+        (
+            "the report lacks a non-empty observation for the culprit and get_pi.py",
+            report.is_some_and(|report| {
+                report.evidence.iter().any(|evidence| {
+                    evidence.commit == CULPRIT_SHA
+                        && evidence.path == CHANGED_PATH
+                        && !evidence.observation.trim().is_empty()
+                })
+            }),
+        ),
+    ])
+}
+
+fn efficiency_observed(snapshot: &Snapshot, observation: &ScenarioObservation) -> String {
+    format!(
+        "The trace contains {} unique search revisions; the binary-search target is {}. Duplicate probe runs={}, invalid trace lines={}, function-call errors={}.",
+        snapshot.trace_metrics.unique_search_revisions,
+        snapshot.trace_metrics.ideal_search_revisions,
+        snapshot.trace_metrics.duplicate_probe_runs,
+        snapshot.trace.invalid_lines.len(),
+        observation.metrics.totals.function_call_errors,
+    )
+}
+
+fn efficiency_scoring_reason(
+    snapshot: &Snapshot,
+    observation: &ScenarioObservation,
+    awarded: u8,
+) -> String {
+    if awarded == SEARCH_EFFICIENCY.weight() {
+        return "Full points awarded because the search used no more than the binary-search target plus two revisions, with no duplicate probes, invalid trace records, or function-call errors.".to_string();
+    }
+    if awarded > 0 {
+        return unmet_conditions(&[
+            (
+                "the search used more than two revisions beyond the binary-search target",
+                snapshot.trace_metrics.unique_search_revisions
+                    <= snapshot
+                        .trace_metrics
+                        .ideal_search_revisions
+                        .saturating_add(2),
+            ),
+            (
+                "the trace contains duplicate probe runs",
+                snapshot.trace_metrics.duplicate_probe_runs == 0,
+            ),
+        ])
+        .replace("Points were withheld", "Partial points were awarded");
+    }
+    unmet_conditions(&[
+        (
+            "one or more function calls failed",
+            observation.metrics.totals.function_call_errors == 0,
+        ),
+        (
+            "the trace contains invalid records",
+            snapshot.trace.invalid_lines.is_empty(),
+        ),
+        (
+            "no search revision was recorded",
+            snapshot.trace_metrics.unique_search_revisions > 0,
+        ),
+        (
+            "the search used more than twice the binary-search target",
+            snapshot.trace_metrics.unique_search_revisions
+                <= snapshot
+                    .trace_metrics
+                    .ideal_search_revisions
+                    .saturating_mul(2),
+        ),
+    ])
+}
+
+fn unmet_conditions(checks: &[(&str, bool)]) -> String {
+    let unmet = checks
+        .iter()
+        .filter_map(|(description, met)| (!met).then_some(*description))
+        .collect::<Vec<_>>();
+    if unmet.is_empty() {
+        "All required conditions were met.".to_string()
+    } else {
+        format!("Points were withheld because: {}.", unmet.join("; "))
+    }
+}
+
+fn criterion_reason(observed: String, scoring_reason: String) -> String {
+    format!("{observed} {scoring_reason}")
 }
 
 fn efficiency_points(snapshot: &Snapshot, observation: &ScenarioObservation) -> u8 {
@@ -1337,6 +1682,65 @@ fn full_sha(value: &str) -> bool {
 mod tests {
     use super::*;
 
+    fn valid_snapshot() -> Snapshot {
+        let records = vec![
+            ProbeRecord {
+                revision: GOOD_SHA.to_string(),
+                passed: true,
+                program_exit_code: 0,
+                observed_stdout: "3.14".to_string(),
+                duration_ms: 1,
+            },
+            ProbeRecord {
+                revision: BAD_SHA.to_string(),
+                passed: false,
+                program_exit_code: 0,
+                observed_stdout: "3.57".to_string(),
+                duration_ms: 1,
+            },
+            ProbeRecord {
+                revision: CULPRIT_SHA.to_string(),
+                passed: false,
+                program_exit_code: 0,
+                observed_stdout: "3.57".to_string(),
+                duration_ms: 1,
+            },
+        ];
+        Snapshot {
+            public_manifest: Value::Null,
+            bundle_sha256: String::new(),
+            bundle_size_bytes: 0,
+            probe_sha256: String::new(),
+            manifest_valid: true,
+            bundle_valid: true,
+            probe_valid: true,
+            shell_install_observed: false,
+            clone_observed: true,
+            direct_probe_calls: 2,
+            checkout_is_repository: true,
+            checkout_head: Some(BAD_SHA.to_string()),
+            checkout_origin: Some("/fixture/repository.bundle".to_string()),
+            expected_checkout_origin: "/fixture/repository.bundle".to_string(),
+            checkout_status: Some(String::new()),
+            checkout_fsck: true,
+            good_tree: Some(GOOD_TREE.to_string()),
+            bad_tree: Some(BAD_TREE.to_string()),
+            observed_range_commit_count: Some(RANGE_COMMIT_COUNT),
+            trace_metrics: trace_metrics(&records),
+            trace: TraceCapture {
+                records,
+                invalid_lines: Vec::new(),
+            },
+            report: Some(valid_report()),
+            report_parse_error: None,
+            runner_good_passed: true,
+            runner_bad_failed: true,
+            runner_parent_passed: true,
+            runner_culprit_failed: true,
+            report_evidence_resolves: true,
+        }
+    }
+
     fn valid_report() -> ForensicsReport {
         ForensicsReport {
             culprit_sha: CULPRIT_SHA.to_string(),
@@ -1421,6 +1825,56 @@ mod tests {
         assert_eq!(
             Some(probe_sha256.as_str()),
             manifest["probe"]["sha256"].as_str()
+        );
+    }
+
+    #[test]
+    fn explanations_distinguish_verified_repository_from_unrecognized_clone_call() {
+        let mut snapshot = valid_snapshot();
+        snapshot.clone_observed = false;
+
+        assert!(!snapshot.acquisition_passed());
+        assert_eq!(REPOSITORY_ACQUIRED.weight(), 20);
+        let reason = criterion_reason(
+            acquisition_observed(&snapshot),
+            acquisition_scoring_reason(&snapshot),
+        );
+        assert!(
+            reason.contains("Repository integrity, history, and clean working tree were verified")
+        );
+        assert!(reason.contains("direct clone call was not recognized in the transcript"));
+        assert!(!reason.contains("checkout is not a Git repository"));
+    }
+
+    #[test]
+    fn explanations_distinguish_reproduced_endpoints_from_unrecognized_probe_calls() {
+        let mut snapshot = valid_snapshot();
+        snapshot.direct_probe_calls = 0;
+
+        assert!(!snapshot.endpoints_passed());
+        let reason = criterion_reason(
+            endpoints_observed(&snapshot),
+            endpoints_scoring_reason(&snapshot),
+        );
+        assert!(reason.contains("reproduced the known-good and known-bad revisions"));
+        assert!(reason.contains("0 exact direct probe calls were recognized"));
+        assert!(reason.contains("fewer than two exact direct probe calls were recognized"));
+        assert!(!reason.contains("first trace record does not reproduce"));
+    }
+
+    #[test]
+    fn explanations_do_not_fabricate_evidence_when_report_is_unavailable() {
+        let mut snapshot = valid_snapshot();
+        snapshot.report = None;
+        snapshot.report_parse_error = Some("read report: not found".to_string());
+        snapshot.report_evidence_resolves = false;
+
+        assert!(!snapshot.culprit_passed());
+        assert!(!snapshot.evidence_passed());
+        assert!(culprit_observed(&snapshot).contains("No valid structured report was available"));
+        assert!(evidence_observed(&snapshot).contains("could not be used"));
+        assert!(
+            evidence_scoring_reason(&snapshot).contains("structured report is missing or invalid")
         );
     }
 
