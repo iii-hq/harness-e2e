@@ -314,7 +314,10 @@ export function LocalPlanCreatePage({
     Boolean(
       templates.find((template) => template.id === templateId)
         ?.protected_supervisor_required,
-    ) || scenarios.some((id) => id === 'registry_planning' || requiredJudges.includes(id))
+    ) ||
+    scenarios.some(
+      (id) => id === 'registry_planning' || requiredJudges.includes(id),
+    )
   // Audit PN-05 / PN-15: the primary stays enabled; after a submit attempt
   // the pending items show inline and next to the button.
   const errors = attempted

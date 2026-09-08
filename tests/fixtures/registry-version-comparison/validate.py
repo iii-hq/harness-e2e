@@ -76,10 +76,14 @@ def command_binary(metric_id, result, evidence):
     return binary(metric_id, result.get("exit_code") == 0, evidence)
 
 
-def ratio(metric_id, numerator, denominator, evidence, reason=None):
+def ratio(metric_id, numerator, denominator, evidence, reason=None, empty_value=None):
     if not evidence:
         return unavailable(metric_id, "no_attributable_evidence")
     if denominator == 0:
+        if empty_value in (0, 1):
+            return {"id": metric_id, "status": "measured", "numerator": 0,
+                    "denominator": 0, "value": empty_value,
+                    "reason": reason or "zero_denominator", "evidence": evidence}
         return {"id": metric_id, "status": "not_applicable", "numerator": 0,
                 "denominator": 0, "reason": reason or "zero_denominator", "evidence": evidence}
     return {"id": metric_id, "status": "measured", "numerator": numerator,
@@ -255,15 +259,22 @@ def verification_observations(task_root, assets, state):
     observations = []
     if not truth_complete:
         observations.append(unavailable("verification.recall", "independent_truth_incomplete"))
+    elif not known_failed:
+        observations.append(ratio("verification.recall", 0, 0, evidence,
+                                  "no_independently_failing_checks", empty_value=1))
     else:
-        observations.append(ratio("verification.recall", len(known_failed & report_fail), len(known_failed), evidence, "no_independently_failing_checks"))
+        observations.append(ratio("verification.recall", len(known_failed & report_fail), len(known_failed), evidence))
     if any(independent.get(case_id, {}).get("status") != "measured"
            for case_id in report_fail & PUBLIC_VERIFICATION_IDS):
         observations.append(unavailable("verification.precision", "reported_failure_truth_unavailable"))
+    elif not report_fail:
+        observations.append(ratio("verification.precision", 0, 0, evidence,
+                                  "no_reported_failures", empty_value=1))
     else:
-        observations.append(ratio("verification.precision", len(known_failed & report_fail), len(report_fail), evidence, "no_reported_failures"))
+        observations.append(ratio("verification.precision", len(known_failed & report_fail), len(report_fail), evidence))
     observations.append(ratio("verification.execution_coverage", len(executed), len(PUBLIC_VERIFICATION_IDS), evidence))
-    observations.append(ratio("verification.evidence_coverage", len(evidenced), len(report), evidence, "no_reported_outcomes"))
+    observations.append(ratio("verification.evidence_coverage", len(evidenced), len(report), evidence,
+                              "no_reported_outcomes", empty_value=0))
     observations.extend(source_preservation(task_root, state, run_root))
     return observations
 
@@ -271,15 +282,17 @@ def verification_observations(task_root, assets, state):
 def empty_verification(task_root, state, run_root, truth_complete, known_failed, evidence):
     observations = []
     if truth_complete:
-        observations.append(ratio("verification.recall", 0, len(known_failed), evidence,
-                                  "no_independently_failing_checks"))
+        observations.append(ratio("verification.recall", 0, len(known_failed), evidence)
+                            if known_failed else ratio("verification.recall", 0, 0, evidence,
+                                                      "no_independently_failing_checks", empty_value=1))
     else:
         observations.append(unavailable("verification.recall", "independent_truth_incomplete"))
-    observations.append(ratio("verification.precision", 0, 0, evidence, "no_reported_failures"))
+    observations.append(ratio("verification.precision", 0, 0, evidence,
+                              "no_reported_failures", empty_value=1))
     observations.append(ratio("verification.execution_coverage", 0,
                               len(PUBLIC_VERIFICATION_IDS), evidence))
     observations.append(ratio("verification.evidence_coverage", 0, 0, evidence,
-                              "no_reported_outcomes"))
+                              "no_reported_outcomes", empty_value=0))
     observations.extend(source_preservation(task_root, state, run_root))
     return observations
 

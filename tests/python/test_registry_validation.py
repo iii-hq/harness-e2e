@@ -26,6 +26,9 @@ class ValidationTests(unittest.TestCase):
         na = module.ratio("verification.precision", 0, 0, evidence)
         self.assertEqual(na["status"], "not_applicable")
         self.assertEqual(na["denominator"], 0)
+        empty = module.ratio("verification.precision", 0, 0, evidence, empty_value=1)
+        self.assertEqual((empty["status"], empty["numerator"], empty["denominator"], empty["value"]),
+                         ("measured", 0, 0, 1))
         self.assertEqual(module.binary("implementation.same_version", True, [] )["status"], "unavailable")
 
     def test_controller_timeout_is_factual_result(self):
@@ -91,7 +94,45 @@ class ValidationTests(unittest.TestCase):
             found = {item["id"]: item for item in module.verification_observations(task, ASSETS, state)}
         self.assertEqual((found["verification.recall"]["numerator"], found["verification.recall"]["denominator"]), (0, 1))
         self.assertEqual((found["verification.execution_coverage"]["numerator"], found["verification.execution_coverage"]["denominator"]), (0, 24))
-        self.assertEqual(found["verification.precision"]["status"], "not_applicable")
+        self.assertEqual((found["verification.precision"]["numerator"], found["verification.precision"]["denominator"], found["verification.precision"]["value"]), (0, 0, 1))
+        self.assertEqual((found["verification.evidence_coverage"]["numerator"], found["verification.evidence_coverage"]["denominator"], found["verification.evidence_coverage"]["value"]), (0, 0, 0))
+
+    def test_all_passing_implementation_has_full_recall_and_precision(self):
+        task, state = self.verification_task()
+        command = "curl -fsS http://api/check"
+        evidence = task / "workspace" / "output" / "evidence.json"
+        evidence.write_text("{}")
+        (task / "workspace" / "output" / "checks.json").write_text(json.dumps({"checks": [
+            {"id": metric, "status": "pass", "command": command, "evidence": ["output/evidence.json"]}
+            for metric in module.PUBLIC_VERIFICATION_IDS
+        ]}))
+        (task / "commands" / "one.json").write_text(json.dumps({"command": command, "exit_code": 0}))
+        with patch.object(module, "feature_probe", return_value=(self.feature(), None)):
+            found = {item["id"]: item for item in module.verification_observations(task, ASSETS, state)}
+        self.assertEqual((found["verification.recall"]["numerator"], found["verification.recall"]["denominator"], found["verification.recall"]["value"]), (0, 0, 1))
+        self.assertEqual((found["verification.precision"]["numerator"], found["verification.precision"]["denominator"], found["verification.precision"]["value"]), (0, 0, 1))
+
+    def test_false_positive_and_missed_failure_are_scored_independently(self):
+        task, state = self.verification_task()
+        command = "curl -fsS http://api/check"
+        (task / "workspace" / "output" / "evidence.json").write_text("{}")
+        (task / "commands" / "one.json").write_text(json.dumps({"command": command, "exit_code": 0}))
+        case_id = "implementation.function_removal"
+        for name, actual_failures, reported_status, expected_recall, expected_precision in (
+            ("false positive", set(), "fail", (0, 0, 1), (0, 1, None)),
+            ("missed failure", {case_id}, "pass", (0, 1, None), (0, 0, 1)),
+        ):
+            with self.subTest(name):
+                (task / "workspace" / "output" / "checks.json").write_text(json.dumps({"checks": [
+                    {"id": case_id, "status": reported_status, "command": command,
+                     "evidence": ["output/evidence.json"]},
+                ]}))
+                with patch.object(module, "feature_probe", return_value=(self.feature(failed=actual_failures), None)):
+                    found = {item["id"]: item for item in module.verification_observations(task, ASSETS, state)}
+                recall = found["verification.recall"]
+                precision = found["verification.precision"]
+                self.assertEqual((recall["numerator"], recall["denominator"], recall.get("value")), expected_recall)
+                self.assertEqual((precision["numerator"], precision["denominator"], precision.get("value")), expected_precision)
 
     def test_blocked_independent_probe_keeps_truth_unavailable(self):
         task, state = self.verification_task()

@@ -309,7 +309,7 @@ fn evidence_files(directory: &std::path::Path) -> Result<Value> {
             let relative = path.strip_prefix(directory)?;
             if kind.is_dir() {
                 if folder != directory
-                    || ["validation", "commands", "screenshots"]
+                    || ["validation", "commands", "screenshots", "delivery"]
                         .iter()
                         .any(|name| relative == std::path::Path::new(name))
                 {
@@ -429,12 +429,19 @@ fn awards(test: u8, validation: &Value) -> Result<Vec<CriterionAward>> {
                     .context("ratio numerator missing")?;
                 let denominator = item["denominator"]
                     .as_u64()
-                    .filter(|v| *v > 0)
-                    .context("ratio denominator must be positive")?;
+                    .context("ratio denominator missing")?;
                 if numerator > denominator {
                     bail!("ratio numerator exceeds denominator");
                 }
-                numerator as f64 / denominator as f64
+                if denominator == 0 {
+                    item["value"]
+                        .as_u64()
+                        .filter(|v| *v <= 1)
+                        .context("zero-denominator ratio value must be 0 or 1")?
+                        as f64
+                } else {
+                    numerator as f64 / denominator as f64
+                }
             };
             Ok(CriterionAward {
                 id: metric["id"].as_str().unwrap().into(),
@@ -523,6 +530,34 @@ mod tests {
             let observations:Vec<_>=metrics(4).iter().map(|m|json!({"id":m["id"],"status":status,"numerator":numerator,"denominator":denominator,"value":1})).collect();
             assert!(awards(4, &json!({"observations":observations})).is_err());
         }
+        let observations: Vec<_> = metrics(4)
+            .iter()
+            .map(|m| json!({"id":m["id"],"status":"measured","numerator":0,"denominator":0}))
+            .collect();
+        assert!(awards(4, &json!({"observations":observations})).is_err());
+    }
+    #[test]
+    fn explicit_zero_denominator_values_are_scored() {
+        let observations: Vec<_> = metrics(4)
+            .iter()
+            .map(|metric| match metric["id"].as_str().unwrap() {
+                "verification.recall" | "verification.precision" =>
+                    json!({"id":metric["id"],"status":"measured","numerator":0,"denominator":0,"value":1}),
+                "verification.evidence_coverage" =>
+                    json!({"id":metric["id"],"status":"measured","numerator":0,"denominator":0,"value":0}),
+                "verification.source_preservation" =>
+                    json!({"id":metric["id"],"status":"measured","value":1}),
+                _ => json!({"id":metric["id"],"status":"measured","numerator":1,"denominator":1}),
+            })
+            .collect();
+        assert_eq!(
+            awards(4, &json!({"observations":observations}))
+                .unwrap()
+                .iter()
+                .map(|award| u16::from(award.awarded))
+                .sum::<u16>(),
+            80
+        );
     }
     #[test]
     fn captured_evidence_survives_workspace_removal() {
@@ -530,9 +565,12 @@ mod tests {
         let task = temp.path().join("attempt");
         std::fs::create_dir_all(task.join("workspace/output")).unwrap();
         std::fs::create_dir_all(task.join("screenshots")).unwrap();
+        std::fs::create_dir_all(task.join("delivery")).unwrap();
         std::fs::create_dir_all(task.join("fixture-checkout")).unwrap();
         std::fs::write(task.join("workspace/output/report.md"), "observed result").unwrap();
         std::fs::write(task.join("screenshots/test.png"), [137, 80, 78, 71]).unwrap();
+        std::fs::write(task.join("delivery/implementation.patch"), "patch").unwrap();
+        std::fs::write(task.join("delivery/manifest.json"), "{}").unwrap();
         std::fs::write(task.join("fixture-checkout/not-evidence"), "exclude").unwrap();
         let captured = evidence_files(&task).unwrap();
         std::fs::remove_dir_all(task).unwrap();
@@ -544,7 +582,15 @@ mod tests {
             captured["files"]["attempt/screenshots/test.png"]["encoding"],
             "base64"
         );
-        assert_eq!(captured["files"].as_object().unwrap().len(), 2);
+        assert_eq!(
+            captured["files"]["attempt/delivery/implementation.patch"]["content"],
+            "patch"
+        );
+        assert_eq!(
+            captured["files"]["attempt/delivery/manifest.json"]["content"],
+            "{}"
+        );
+        assert_eq!(captured["files"].as_object().unwrap().len(), 4);
     }
 
     #[test]

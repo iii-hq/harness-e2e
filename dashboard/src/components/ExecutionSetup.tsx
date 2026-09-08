@@ -472,7 +472,11 @@ export function ExecutionSetup({
             label="Judge model"
             htmlFor={`${idPrefix}-judge`}
             meta={judgeRequired ? 'required' : 'not used'}
-            hint={judgeRequired ? undefined : 'The selected tests do not use a judge'}
+            hint={
+              judgeRequired
+                ? undefined
+                : 'The selected tests do not use a judge'
+            }
             error={errors.judge}
           >
             <ProviderModelDropdown

@@ -615,7 +615,7 @@
         {
           "id": "verification.recall",
           "question": "What proportion of independently failing contract checks did the tester identify?",
-          "expected": "Compare reported failing check IDs with the independently executed contract probes. This measures check detection, not unique root causes.",
+          "expected": "Compare reported failing check IDs with the independently executed contract probes. This measures check detection, not unique root causes. If no checks fail independently, retain 0/0 and score the empty set as value 1.",
           "measurement": "ratio",
           "weight": 35,
           "numerator": "Required check IDs reported as failing and independently reproduced.",
@@ -628,7 +628,7 @@
         {
           "id": "verification.precision",
           "question": "What proportion of reported failing checks fail independently?",
-          "expected": "Execute the contract probes independently and match each reported failure by check ID.",
+          "expected": "Execute the contract probes independently and match each reported failure by check ID. If no failures are reported, retain 0/0 and score the empty set as value 1.",
           "measurement": "ratio",
           "weight": 20,
           "numerator": "Reported failing check IDs independently reproduced.",
@@ -654,7 +654,7 @@
         {
           "id": "verification.evidence_coverage",
           "question": "What proportion of reported outcomes cite an existing evidence file?",
-          "expected": "Resolve each reported outcome evidence path to a file in the attempt workspace.",
+          "expected": "Resolve each reported outcome evidence path to a file in the attempt workspace. If no outcomes are reported, retain 0/0 and score coverage as value 0.",
           "measurement": "ratio",
           "weight": 20,
           "numerator": "Reported outcomes citing an existing evidence file.",

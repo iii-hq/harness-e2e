@@ -244,8 +244,10 @@ export function LocalRunnerDialog({
   }))
   const runsPerScenario = Math.max(1, Number(form.runs) || 1)
   const technicalRetries = Math.max(0, Number(form.technicalRetries) || 0)
-  const needsJudge = form.scenarios.some((id) =>
-    id === 'registry_planning' || (catalog?.localScenarios ?? []).some((scenario) => scenario.id === id),
+  const needsJudge = form.scenarios.some(
+    (id) =>
+      id === 'registry_planning' ||
+      (catalog?.localScenarios ?? []).some((scenario) => scenario.id === id),
   )
   const showJobStatus = Boolean(job?.status) && (ownJob || active)
   const testCount = form.scenarios.length

@@ -19,6 +19,16 @@ Planning needs only the pinned source and requirements. The other three scenario
 
 Registry starts at `662eb87c1bdbb395f36264d5d26bf823e2ace783`. Dependency installation and image building occur inside each private daemon.
 
+## Console execution and CI preparation
+
+In the E2E extension, create a plan with one scenario and an execution model. Select an explicit judge for `registry_planning`; the other three scenarios use runtime validators. Use one run and zero technical retries for initial validation so failures remain visible.
+
+Configure `HARNESS_E2E_RUN_DIR` on the E2E worker to a writable directory on the executor workspace disk. Set `TMPDIR` there as well when the host temporary filesystem has a separate quota. The worker process must receive these variables before the run starts; setting them in the browser does not configure the worker.
+
+Before selecting `registry_verification`, configure `HARNESS_E2E_REGISTRY_IMPLEMENTATION` on that worker with the explicit Test 2 `delivery/` directory containing `implementation.patch` and `manifest.json`. Reconcile the worker while it has no active executions. In CI, transfer this directory as an artifact to the verification job and set the variable to its downloaded path. The delivery is also retained in the normal captured evidence. Verification replays it onto a fresh pinned Registry checkout; it does not reuse a running Test 2 application.
+
+Validate planning, implementation, and environment as separate runs. Verification needs the selected implementation delivery. On a disk-constrained executor, run the Docker builds sequentially. These scenarios are diagnostics and are not silently added to existing CI profiles; enable them only after the fixture and runtime prerequisites are available in the CI stack.
+
 ## Run
 
 Use the regular command, selecting one scenario:
