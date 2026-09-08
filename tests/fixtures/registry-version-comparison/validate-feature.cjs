@@ -154,17 +154,20 @@ async function browserProbes(apiHealthy) {
       await selects.nth(1).focus();
       await page.keyboard.press(selectedIndex < optionCount - 1 ? 'ArrowDown' : 'ArrowUp');
       await page.keyboard.press('Enter');
+      await page.waitForLoadState('networkidle');
       keyboard = (await selects.nth(1).inputValue()) !== originalValue;
       // Restore a successful pair before inducing a failure in the same document.
-      await selects.nth(1).selectOption('2.0.0');
-      await page.waitForLoadState('networkidle');
+      await page.goto(comparisonUrl, { waitUntil: 'networkidle', timeout });
       const beforeFailure = await page.locator('body').innerText();
+      const compare = page.getByRole('button', { name: /compare/i }).first();
+      const submitsComparison = await compare.count() > 0 && await compare.isVisible();
       const sql = postgres(process.env.DATABASE_URL, { max: 1 });
       try {
         const renamed = await sql`update worker_version set version = '9.90.9'
           where worker_id = '10000000-0000-4000-8000-000000000001' and version = '0.9.0'`;
         if (renamed.count !== 1) throw new Error('Expected one temporary stale-state probe version');
         await selects.nth(1).selectOption('0.9.0');
+        if (submitsComparison) await compare.click();
         await page.waitForLoadState('networkidle');
         const afterFailure = await page.locator('body').innerText();
         staleCleared = beforeFailure.includes('orders::get') && !afterFailure.includes('orders::get')
