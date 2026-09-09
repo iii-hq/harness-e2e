@@ -13,14 +13,13 @@ use crate::markdown::ScenarioKey;
 use crate::scenarios::{ComplexityTier, ScenarioExecutionKind};
 
 const SOURCE: &str = include_str!("../config/test-plan.json");
-pub const PROFILE_IDS: [&str; 7] = [
+pub const PROFILE_IDS: [&str; 6] = [
     "smoke",
     "regression",
     "capability",
     "evolution",
     "resilience",
     "endurance",
-    "registry",
 ];
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -523,10 +522,9 @@ mod tests {
             ("smoke", 5, 5),
             ("regression", 9, 9),
             ("capability", 48, 48),
-            ("evolution", 18, 90),
+            ("evolution", 22, 66),
             ("resilience", 4, 13),
             ("endurance", 5, 5),
-            ("registry", 4, 4),
         ] {
             let snapshot = plan.materialize(id).unwrap();
             assert_eq!(snapshot.scenario_ids.len(), cases);
@@ -562,11 +560,11 @@ mod tests {
     }
 
     #[test]
-    fn registry_profile_orders_delivery_and_verification_in_one_group() {
+    fn evolution_profile_orders_registry_delivery_and_verification_in_one_group() {
         let plan = embedded().unwrap();
-        let snapshot = plan.materialize("registry").unwrap();
+        let snapshot = plan.materialize("evolution").unwrap();
         let groups = snapshot.campaigns[0]["groups"].as_array().unwrap();
-        assert_eq!(groups.len(), 3);
+        assert_eq!(groups.len(), 21);
         let delivery = groups
             .iter()
             .find(|g| g["id"] == "case-registry-implementation")
@@ -575,8 +573,8 @@ mod tests {
             delivery["scenarios"],
             json!(["registry_implementation", "registry_verification"])
         );
-        assert_eq!(snapshot.cases.len(), 4);
-        assert_eq!(snapshot.budget["planned_runs"], 4);
+        assert_eq!(snapshot.cases.len(), 22);
+        assert_eq!(snapshot.budget["planned_runs"], 66);
 
         let mut profile = snapshot.profile;
         profile.scenario_groups[0].push("registry_verification".into());

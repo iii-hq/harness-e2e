@@ -1854,12 +1854,12 @@ mod tests {
     }
     #[tokio::test]
     async fn native_coordination_covers_all_slots_including_capability_and_evolution() {
-        for (profile, expected) in [
-            ("smoke", 5),
-            ("regression", 9),
-            ("capability", 48),
-            ("evolution", 90),
-            ("endurance", 5),
+        for (profile, expected_slots, expected_submissions) in [
+            ("smoke", 5, 5),
+            ("regression", 9, 9),
+            ("capability", 48, 48),
+            ("evolution", 66, 63),
+            ("endurance", 5, 5),
         ] {
             let root = tempfile::tempdir().unwrap();
             let runner = Arc::new(FakeRunner::new(root.path().into()));
@@ -1872,12 +1872,15 @@ mod tests {
                 "{profile}: {:?}",
                 execution.error
             );
-            assert_eq!(execution.slots.len(), expected);
-            assert_eq!(runner.submitted.load(Ordering::SeqCst), expected);
+            assert_eq!(execution.slots.len(), expected_slots);
+            assert_eq!(
+                runner.submitted.load(Ordering::SeqCst),
+                expected_submissions
+            );
             assert!(execution.baseline_eligible); // Objective failure is independent from validity.
             assert_eq!(
                 execution.slots.iter().map(|s| s.passed).sum::<u32>(),
-                expected as u32
+                expected_slots as u32
             );
             let cohorts = execution.measurements.as_ref().unwrap()["cohorts"]
                 .as_array()
@@ -1893,7 +1896,7 @@ mod tests {
                     .len()
             );
             if profile == "evolution" {
-                assert!(cohorts.iter().all(|c| c["aggregate"]["observed_runs"] == 5));
+                assert!(cohorts.iter().all(|c| c["aggregate"]["observed_runs"] == 3));
                 let paths = result_paths(&execution, root.path());
                 assert!(test_plan::measure(&[paths[0].clone(), paths[0].clone()]).is_err());
             }
@@ -1916,7 +1919,24 @@ mod tests {
         let root = tempfile::tempdir().unwrap();
         let runner = Arc::new(FakeRunner::new(root.path().into()));
         let manager = manager(root.path(), runner.clone());
-        let (plan_id, id) = admitted(&manager, "registry", "registry-group").await;
+        let registry_request = || {
+            let mut request = request("evolution");
+            request.scenarios = vec![
+                "registry_planning".into(),
+                "registry_implementation".into(),
+                "registry_environment".into(),
+                "registry_verification".into(),
+            ];
+            request.runs = 1;
+            request
+        };
+        let plan = manager.create_local(registry_request()).await.unwrap();
+        let plan_id = plan.id;
+        let response = manager
+            .start(&plan_id, "registry-group", Role::Baseline)
+            .await
+            .unwrap();
+        let id = response["execution_id"].as_str().unwrap().to_string();
         let execution = terminal(&manager, &id).await;
 
         assert_eq!(execution.slots.len(), 4);
@@ -1962,7 +1982,7 @@ mod tests {
             assert_eq!(scenario.case.as_ref().unwrap().seed, expected["seed"]);
         }
 
-        let mut partial = request("registry");
+        let mut partial = registry_request();
         partial.scenarios = vec!["registry_implementation".into()];
         partial.judge_model.clear();
         partial.judge_provider.clear();
@@ -1972,7 +1992,7 @@ mod tests {
         assert_eq!(groups.len(), 1);
         assert_eq!(groups[0]["scenarios"], json!(["registry_implementation"]));
 
-        let mut seeded = request("registry");
+        let mut seeded = registry_request();
         seeded.seed = Some(7);
         let seeded = manager.create_local(seeded).await.unwrap();
         let seeded = manager.read_plan(&seeded.id).unwrap();
@@ -2032,7 +2052,7 @@ mod tests {
             assert_eq!(runner.submitted.load(Ordering::SeqCst), 1);
             let detail = manager.execution_detail(&id).unwrap().unwrap();
             let reports = detail["reports"].as_array().unwrap();
-            assert_eq!(reports.len(), 90);
+            assert_eq!(reports.len(), 66);
             // Reconciliation retains evidence from the persisted child even
             // when admission returned a different identity; remaining slots stay explicit.
             assert_eq!(reports[0]["available"], wrong_identity);
