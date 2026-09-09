@@ -1,23 +1,27 @@
 # Kanban local control runner (experimental)
 
-This is an offline control-runner prototype, **not** a registered Harness
-`ScenarioId` or a model campaign. It runs a catalog's base or reference revision;
-it does not yet execute a subject model or collect model tokens/costs.
+This is a local control runner with an opt-in, single-model smoke path, **not**
+a registered Harness `ScenarioId` or a campaign. By default it runs only the
+catalog's base or reference revision and never invokes a model.
 
 `snapshot.py` validates exact commits and parentage, exports the selected tree,
 and initializes a fresh one-commit repository without source remotes or future
 objects. Archive links are rejected. Catalog metadata and the public prompt are returned to the controller,
 not written into the subject workspace.
 
-`run.py` uses an outer Bubblewrap network namespace and a nested candidate
-mount/PID namespace. The candidate sees its workspace, runtime and dependencies,
-but not the trusted probe, evidence, browser dependencies or host network.
-Isolation failure aborts execution; there is no unsandboxed fallback.
+`run.py` uses two Docker containers with separate mount/PID namespaces. The
+candidate has no external network; the evaluator shares only its network namespace
+to reach the app over loopback. The candidate sees its dedicated workspace, data,
+runtime and dependencies, but not the trusted probe, evidence, browser dependencies
+or host network. Both run as the current UID with capabilities dropped, read-only
+roots, no-new-privileges and CPU/memory/PID limits. No ports or Docker socket are
+exposed. Isolation failure aborts execution; there is no unsandboxed fallback.
 
 Supply administrator-selected local runtime binaries and dependency caches:
 
 ```sh
 python3 scripts/kanban_eval/run.py \
+  --image ubuntu:24.04 \
   --fixture /absolute/path/to/iii-kanban-e2e-fixture \
   --catalog /absolute/path/to/iii-kanban-e2e-fixture/scenarios/catalog.json \
   --case kanban_c2_persistence --revision reference \
@@ -28,6 +32,11 @@ python3 scripts/kanban_eval/run.py \
   --browser-dependencies /absolute/path/to/workers/node_modules \
   --browsers /absolute/path/to/ms-playwright
 ```
+
+The Docker image must already exist locally; its immutable ID is recorded and
+used for execution. Runtime directories and binaries are mounted read-only.
+Docker's default seccomp/AppArmor protections remain enabled. This uses standard
+container isolation, not a VM boundary against hostile-kernel exploits.
 
 The browser cache must match Playwright 1.61.1 (or provide
 `--playwright-module` relative to browser dependencies). No dependency download
@@ -40,11 +49,11 @@ control fails functionality; an infrastructure/evaluator failure is **not** a
 negative control success. Exit 0 means functional probes passed, not full
 acceptance. Do not interpret this prototype as a calibrated benchmark.
 
-Validation on 2026-09-09: snapshot/CLI contract unit tests pass. A real C2 reference
-attempt stops at isolation preflight: this host allows one Bubblewrap sandbox,
-but denies nested namespace creation. No reference/base functional controls or
-browser validations have therefore been established for this runner. No host
-security settings were changed.
+Validation on 2026-09-09: the original Bubblewrap runner stopped at nested namespace
+creation. Docker-native separation subsequently passed private-file, parent-PID,
+shared-loopback and denied-external-network checks; trusted Chromium also launched
+successfully with default container protections. Functional control results must
+be recorded separately; these infrastructure checks do not validate the app.
 
 The broader Python suite subsequently passed 198 tests with `HARNESS_E2E_BIN`
 pointing to the existing local Harness executable. The initial errors were due
@@ -53,16 +62,36 @@ validates the Python suite, not a fresh Rust build or functional Kanban controls
 Additional runner regressions reject interrupted probes, missing coverage,
 case mismatches and contradictory verdicts, while accepting valid negative controls.
 
-DeepSeek Flash was confirmed in the local router as `deepseek/deepseek-v4-flash`
-on 2026-09-09. No model request was made: the runner still has no subject-execution
-integration and isolation must pass before running model-generated code. The
-default local Docker sandbox also denied user namespace creation. Do not disable
-host or container protections to get a functional result; use a compatible worker.
+The [control validation report](VALIDATION.md) records all 14 functional controls
+and the visual checks. Default Docker protections remain enabled.
 
-Before enabling model execution: prove isolation on the target worker, pass all
-seven reference controls and fail their bases for the intended feature, complete
-criterion coverage, add resource quotas, and wire the runner into Harness's
-subject-execution lifecycle. Current timeouts are not disk/memory/process quotas.
+## Opt-in DeepSeek Flash smoke
+
+After validating controls, add the following flags to a **base** invocation:
+
+```sh
+--subject-model deepseek-v4-flash \
+--subject-url ws://127.0.0.1:49134 \
+--subject-namespace my-project
+```
+
+The endpoint/namespace are local deployment choices. The bridge verifies model
+pricing before sending, with a hard US$1 cap, 50,000 total tokens, 12 turns and
+a 600-second deadline. The only exposed model tool executes shell commands in
+the fixed candidate container, with 30-second/16-KiB limits; nonzero test exits
+are returned as feedback. No host shell, discovery tools or child agents are
+granted. A failed tool bound removes the candidate container.
+
+Unlike control runs, model runs use tmpfs for workspace (256 MiB), data and
+runtime state (64 MiB each); no candidate-writable host volume is mounted.
+The trusted controller imports only the base snapshot, then captures a diff,
+transcript and `subject.json` with observed model/provider, separate usage/cost
+fields and duration. Evaluation still runs from the private evaluator container.
+Never substitute requested model identity for missing observed identity.
+
+This smoke path is not yet the native Harness scenario lifecycle. Complete
+criterion coverage and native scenario integration remain necessary before
+claiming a calibrated, complete benchmark. Functional success is not full coverage.
 
 ```sh
 python3 -m unittest discover -s tests/python -p 'test_kanban*.py'

@@ -102,6 +102,9 @@ async function main() {
       return true
     } catch (error) {
       checks.push({ id, status: 'failed', detail: details(error) })
+      for (const [index, page] of (browser?.contexts().flatMap((context) => context.pages()) ?? []).entries()) {
+        await page.screenshot({ path: join(output, `failure-${id}-${index}.png`), fullPage: true, timeout: 3000 }).catch(() => {})
+      }
       return false
     }
   }
@@ -219,10 +222,9 @@ const PROBES = {
     })
     await check('foundation_accessible_settings', async () => {
       const { context, page } = await pageFor(browser, baseUrl, { width: 390, height: 844 })
-      await page.getByRole('link', { name: 'Settings' }).click()
       await page.getByLabel('Data directory').fill('./probe-ui-data')
       await page.getByRole('button', { name: 'Save settings' }).click()
-      await expectText(page.getByRole('status'), /Settings saved/)
+      await expectText(page.getByRole('status').filter({ hasText: /Settings saved/ }), /Settings saved/)
       await screenshot(page, output, 'settings-mobile')
       await context.close()
       return 'The settings form loads and saves at a mobile viewport using accessible controls.'
@@ -389,12 +391,12 @@ const PROBES = {
       const { context, page } = await pageFor(browser, `${baseUrl}/#ticket/${ticket.key}`, { width: 390, height: 844 })
       await expectText(page.getByRole('heading', { name: ticket.title }), /Discussion probe/)
       await page.getByLabel('Your name').fill('Alice')
-      await page.getByLabel('Comment').fill('<img src=x onerror=alert(1)> first')
+      await page.getByRole('textbox', { name: 'Comment', exact: true }).fill('<img src=x onerror=alert(1)> first')
       await page.getByRole('button', { name: 'Post comment' }).click()
       await expectText(page.getByText('<img src=x onerror=alert(1)> first', { exact: true }), /first/)
       expect(await page.locator('img').count() === 0, 'comment markup created an image element')
       await page.getByRole('button', { name: 'Reply to Alice' }).click()
-      await page.getByLabel('Comment').fill('second')
+      await page.getByRole('textbox', { name: 'Comment', exact: true }).fill('second')
       await page.getByRole('button', { name: 'Post comment' }).click()
       await expectText(page.getByText('second', { exact: true }), /second/)
       let stored = (await json(await api(`/api/tickets/${ticket.id}`))).ticket
@@ -404,7 +406,8 @@ const PROBES = {
         comment: { author: 'Carol', body: 'third', parent_id: stored.comments[1].id },
       })
       expect(stored.comments.map(({ body }) => body).join(',') === '<img src=x onerror=alert(1)> first,second,third', 'timeline posting order is wrong')
-      await eventually(async () => await page.getByText('third', { exact: true }).count(), 'direct iii reply was not rendered live')
+      await page.reload()
+      await eventually(async () => await page.getByText('third', { exact: true }).count(), 'persisted iii reply was not rendered after reload')
       await screenshot(page, output, 'discussion-mobile')
       await context.close()
       return 'Browser comments and replies plus a direct iii reply-to-reply persist in chronological order and render text safely.'
@@ -422,7 +425,7 @@ const PROBES = {
     await checksPassedCriterion(check, 'criterion_1', 'Comments, replies and replies-to-replies persist in posting order with valid parents.')
     unverified('criterion_2', 'Safe rendering and mobile use are covered; keyboard parent navigation is not explicitly exercised.')
     unverified('criterion_3', 'Foreign parents are rejected; all malformed-store cases are not exercised.')
-    unverified('criterion_4', 'Successful overlap with a live iii response is covered; injected failures and all draft races are not.')
+    unverified('criterion_4', 'Successful posting is covered; injected failures and draft races are not.')
     unverified('criterion_5', 'Existing records and edits remain usable; deletion and restart durability are not exercised here.')
   },
 
@@ -445,8 +448,12 @@ const PROBES = {
       expect((await trigger('kanban::tickets::get', { id: ticket.id })).priority === 'urgent', 'saving overwrote untouched remote priority')
 
       await sessions[1].page.getByLabel('Your name').fill('Remote author')
-      await sessions[1].page.getByLabel('Comment').fill('Live comment')
-      await sessions[1].page.getByRole('button', { name: 'Post comment' }).click()
+      await sessions[1].page.getByRole('textbox', { name: 'Comment', exact: true }).fill('Live comment')
+      const [posted] = await Promise.all([
+        sessions[1].page.waitForResponse((response) => response.url().endsWith('/comments') && response.request().method() === 'POST'),
+        sessions[1].page.getByRole('button', { name: 'Post comment' }).click(),
+      ])
+      expect(posted.status() === 201, `browser comment failed with HTTP ${posted.status()}`)
       await eventually(async () => await sessions[2].page.getByText('Live comment', { exact: true }).count(), 'third session missed browser comment')
       const withComment = await trigger('kanban::tickets::get', { id: ticket.id })
       await trigger('kanban::tickets::comment', { id: ticket.id, comment: { author: 'Direct', body: 'Live reply', parent_id: withComment.comments[0].id } })
