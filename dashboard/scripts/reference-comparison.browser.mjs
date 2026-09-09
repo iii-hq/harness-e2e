@@ -1,5 +1,6 @@
 // No models run. Exercise the Console RPC boundary in the real page.
 import assert from 'node:assert/strict'
+import { readFile } from 'node:fs/promises'
 import { chromium } from 'playwright'
 import { createServer } from 'vite'
 
@@ -12,7 +13,12 @@ page.on('pageerror', (error) => {
   errors.push(error.message)
   console.error(error.message)
 })
-const html = `<!doctype html><div id="root"></div><script type="module">
+const builtIndex = await readFile(
+  new URL('../dist/index.html', import.meta.url),
+  'utf8',
+)
+const css = builtIndex.match(/href="([^"]+\.css)"/)[1].replace(/^\.\//, '')
+const html = `<!doctype html><html lang="en" data-harness-e2e="standalone" data-theme="light"><head><meta name="viewport" content="width=device-width, initial-scale=1.0"><link rel="stylesheet" href="/dist/${css}"></head><body><div id="root"></div><script type="module">
 import React from 'react';
 import {createRoot} from 'react-dom/client';
 import {ExecutionsPage} from '/src/pages/ExecutionsPage.tsx';
@@ -34,7 +40,7 @@ installDashboardIiiClient({browserId:'personal',on:()=>()=>{},registerTrigger:()
 }});
 installDashboardRuntimeConfig({mode:'local',transport:'iii',http_fallback:false,functions:Object.fromEntries(['executions_list','execution_get','plan_control','plan_run_start','changed_trigger'].map(id=>[id,id]))});
 createRoot(document.getElementById('root')).render(React.createElement(ExecutionsPage));
-</script>`
+</script></body></html>`
 try {
   await page.route('**/__reference-test', async (route) =>
     route.fulfill({

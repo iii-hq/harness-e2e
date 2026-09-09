@@ -566,6 +566,13 @@ export function ExecutionsPage() {
         .then((value) => {
           if (current) {
             setReference(value)
+            setReferences((items) =>
+              items.map((item) =>
+                item.id === `rc:${value.execution.id}`
+                  ? referenceSummary(value)
+                  : item,
+              ),
+            )
             setReferenceError(null)
           }
         })

@@ -219,30 +219,21 @@ export function referenceSummary(view: {
   }
 }
 
-export function referenceDetail(view: RcReference): DashboardExecutionDetail {
-  return { ...referenceSummary(view), reports: [] }
-}
-
 /** Mean objective score over the runs RC actually measured; absent remains absent. */
 function finiteMean(scores: Array<number | null | undefined>) {
   const measured = scores.filter(
     (score): score is number =>
       typeof score === 'number' && Number.isFinite(score),
   )
-  return {
-    objective_score_mean:
-      measured.length === 0
-        ? null
-        : measured.reduce((sum, score) => sum + score, 0) / measured.length,
-    score_measured_runs: measured.length,
-  }
+  return measured.length === 0
+    ? null
+    : measured.reduce((sum, score) => sum + score, 0) / measured.length
 }
 
 export function objectiveScore(view: RcReference | DashboardExecutionDetail) {
   if ('aggregate' in view) {
     const reference = view as RcReference
     return finiteMean(reference.runs.map((run) => run.objectiveScore))
-      .objective_score_mean
   }
   return finiteMean(
     view.reports.flatMap(
@@ -251,7 +242,7 @@ export function objectiveScore(view: RcReference | DashboardExecutionDetail) {
           scenario.runs.map((run) => run.objective_score),
         ) ?? [],
     ),
-  ).objective_score_mean
+  )
 }
 
 function localAttemptsComplete(run: DashboardRunProjection) {

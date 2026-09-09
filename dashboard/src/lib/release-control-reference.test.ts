@@ -6,7 +6,6 @@ import {
   listReleaseControlExecutions,
   objectiveScore,
   type RcReference,
-  referenceDetail,
   referenceSummary,
 } from '@/lib/release-control-reference'
 
@@ -98,10 +97,6 @@ describe('Release Control reference adapter', () => {
       runs: [{ ...reference.runs[0], totalTokens: null }],
     })
     expect(summary.totals?.total_tokens).toBeNull()
-  })
-
-  it('exposes no invented native report for a remote reference', () => {
-    expect(referenceDetail(reference).reports).toEqual([])
   })
 
   it('reads recent executions from the plans wrapper without inventing coverage', async () => {
