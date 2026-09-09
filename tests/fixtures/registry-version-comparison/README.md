@@ -66,7 +66,9 @@ Subject commands start in `/workspace`, containing `registry/`, `inputs/`, and `
 
 The regular Harness report contains each scenario's criterion scores and captured evidence. Its JSON deliverable embeds evidence files (text or base64 for images), so archived results do not depend on the executor workspace. The existing capture size limit applies; omitted files are listed explicitly. [Validation details](scoring.md) explain how observations become scores.
 
-The attempt workspace retains source patches, preparation and command logs, `validation/observations.json`, and `workspace/output/` reports. Implementation and verification also retain `screenshots/captures.json` and `screenshots/index.html`; open the HTML to see actual browser captures. Missing UI is recorded as unavailable. Environment screenshots are produced by the subject.
+The attempt workspace retains source patches, preparation and command logs, `validation/observations.json`, and `workspace/output/` reports. Implementation and verification also retain `screenshots/captures.json`, JPEG files, and `screenshots/index.html`; open the HTML to see actual captures made through the `browser` worker. Each attempt uses a fresh private browser session. Missing or unexpected UI is recorded with its observed state and does not change objective scoring. Environment screenshots are produced by the subject.
+
+The browser worker needs a usable Chromium executable on its host. Configure its `executable` setting when automatic discovery cannot find Chrome. The existing per-attempt loopback port mapping exposes the private application to this worker; browser sessions are stopped before application cleanup.
 
 Cleanup removes the attempt's private runtime and daemon volume, preserving files. After an interrupted controller, run the materialized lifecycle helper against that attempt:
 

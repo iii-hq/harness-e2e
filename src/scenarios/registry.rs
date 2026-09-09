@@ -29,11 +29,72 @@ const REQUIREMENTS: &str =
     include_str!("../../tests/fixtures/registry-version-comparison/requirements.md");
 const REFERENCE: &str =
     include_str!("../../tests/fixtures/registry-version-comparison/reference-plan.md");
+const CAPTURE_SCRIPT: &str =
+    include_str!("../../tests/fixtures/registry-version-comparison/capture.cjs");
 const PROMPTS: [&str; 4] = [
     include_str!("../../tests/fixtures/registry-version-comparison/test-1-planning.md"),
     include_str!("../../tests/fixtures/registry-version-comparison/test-2-implementation.md"),
     include_str!("../../tests/fixtures/registry-version-comparison/test-3-environment.md"),
     include_str!("../../tests/fixtures/registry-version-comparison/test-4-verification.md"),
+];
+
+#[derive(Clone, Copy)]
+struct BrowserCapture {
+    id: &'static str,
+    caption: &'static str,
+    query: &'static str,
+    kind: &'static str,
+    from: Option<&'static str>,
+    to: Option<&'static str>,
+    expected: &'static [&'static str],
+}
+
+const BROWSER_CAPTURES: [BrowserCapture; 5] = [
+    BrowserCapture {
+        id: "01-history",
+        caption: "Changelog history for orders-worker",
+        query: "?tab=changelog",
+        kind: "history",
+        from: None,
+        to: None,
+        expected: &[],
+    },
+    BrowserCapture {
+        id: "02-1.0.0-to-1.1.0",
+        caption: "Comparison from 1.0.0 to 1.1.0",
+        query: "?tab=changelog&from=1.0.0&to=1.1.0",
+        kind: "comparison",
+        from: Some("1.0.0"),
+        to: Some("1.1.0"),
+        expected: &["orders::list", "reference"],
+    },
+    BrowserCapture {
+        id: "03-1.0.0-to-2.0.0",
+        caption: "Comparison from 1.0.0 to 2.0.0",
+        query: "?tab=changelog&from=1.0.0&to=2.0.0",
+        kind: "comparison",
+        from: Some("1.0.0"),
+        to: Some("2.0.0"),
+        expected: &["orders::get", "currency", "timeout"],
+    },
+    BrowserCapture {
+        id: "04-timeout-detail",
+        caption: "Expanded timeout change detail from 1.0.0 to 2.0.0",
+        query: "?tab=changelog&from=1.0.0&to=2.0.0",
+        kind: "detail",
+        from: Some("1.0.0"),
+        to: Some("2.0.0"),
+        expected: &[],
+    },
+    BrowserCapture {
+        id: "05-missing-version",
+        caption: "Missing source version failure",
+        query: "?tab=changelog&from=8.8.8&to=7.7.7",
+        kind: "missing",
+        from: Some("8.8.8"),
+        to: Some("7.7.7"),
+        expected: &[],
+    },
 ];
 
 fn metrics(test: u8) -> &'static [Value] {
@@ -194,10 +255,7 @@ fn setup<'a, const N: u8>(context: &'a E2eContext, run_id: &'a str) -> CleanupFu
                 "lifecycle.py",
                 include_str!("../../tests/fixtures/registry-version-comparison/lifecycle.py"),
             ),
-            (
-                "capture.cjs",
-                include_str!("../../tests/fixtures/registry-version-comparison/capture.cjs"),
-            ),
+            ("capture.cjs", CAPTURE_SCRIPT),
             (
                 "validate.py",
                 include_str!("../../tests/fixtures/registry-version-comparison/validate.py"),
@@ -365,6 +423,237 @@ fn evidence_files(directory: &std::path::Path) -> Result<Value> {
     Ok(json!({"files":files,"omitted_files":omitted}))
 }
 
+fn screenshot_jpeg(value: &Value, session_id: &str) -> Result<(Vec<u8>, Value)> {
+    let details = value["details"].clone();
+    if details["session_id"] != session_id {
+        bail!("browser screenshot identity does not match the capture request");
+    }
+    let image = value["content"]
+        .as_array()
+        .and_then(|blocks| {
+            blocks
+                .iter()
+                .find(|block| block["type"] == "image" && block["mime"] == "image/jpeg")
+        })
+        .context("browser screenshot omitted its JPEG image block")?;
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(
+            image["data"]
+                .as_str()
+                .context("browser JPEG data missing")?,
+        )
+        .context("decode browser JPEG")?;
+    Ok((bytes, details))
+}
+
+fn unavailable_captures(app_url: &str, identity: &Value, reason: &str) -> Vec<Value> {
+    BROWSER_CAPTURES
+        .iter()
+        .map(|capture| {
+            json!({
+                "id": capture.id,
+                "caption": capture.caption,
+                "url": format!("{app_url}/workers/orders-worker{}", capture.query),
+                "status": "unavailable",
+                "reason": reason,
+                "state": Value::Null,
+                "identity": identity,
+            })
+        })
+        .collect()
+}
+
+async fn capture_browser_session(
+    context: &E2eContext,
+    session_id: &str,
+    app_url: &str,
+    screenshots: &std::path::Path,
+    identity: &Value,
+) -> Result<Vec<Value>> {
+    let resized = context
+        .trigger_value(
+            "browser::resize",
+            json!({"session_id":session_id,"width":1440,"height":1000}),
+        )
+        .await?;
+    if resized["ok"] != true || resized["width"] != 1440 || resized["height"] != 1000 {
+        bail!("browser did not apply the 1440x1000 viewport: {resized}");
+    }
+
+    let mut captures = Vec::with_capacity(BROWSER_CAPTURES.len());
+    for capture in BROWSER_CAPTURES {
+        let url = format!("{app_url}/workers/orders-worker{}", capture.query);
+        let mut reasons = Vec::new();
+        let navigation = match context
+            .trigger_value(
+                "browser::navigate",
+                json!({"session_id":session_id,"url":&url,"timeout_ms":30000}),
+            )
+            .await
+        {
+            Ok(value) => {
+                if value["ok"] != true || value["timed_out"] == true {
+                    reasons.push(format!("navigation: {value}"));
+                }
+                value
+            }
+            Err(error) => {
+                reasons.push(format!("navigation: {error:#}"));
+                Value::Null
+            }
+        };
+        let capture_input = json!({
+            "kind": capture.kind,
+            "from": capture.from,
+            "to": capture.to,
+            "expected": capture.expected,
+        });
+        let code = format!(
+            "const capture = {};\n{CAPTURE_SCRIPT}",
+            serde_json::to_string(&capture_input)?
+        );
+        let execution = match context
+            .trigger_value(
+                "browser::execute",
+                json!({"session_id":session_id,"code":code,"timeout_ms":30000}),
+            )
+            .await
+        {
+            Ok(value) => {
+                if value["ok"] != true {
+                    reasons.push(format!("UI inspection: {}", value["error"]));
+                } else if value["result"]["status"] != "passed" {
+                    reasons.push(format!("UI assertion: {}", value["result"]["reason"]));
+                }
+                value
+            }
+            Err(error) => {
+                reasons.push(format!("UI inspection: {error:#}"));
+                Value::Null
+            }
+        };
+        let screenshot = context
+            .trigger_value(
+                "browser::screenshot",
+                json!({"session_id":session_id,"full_page":true}),
+            )
+            .await;
+        let mut record = json!({
+            "id": capture.id,
+            "caption": capture.caption,
+            "url": url,
+            "status": "unavailable",
+            "navigation": navigation,
+            "assertion": execution["result"],
+            "state": execution["result"]["state"],
+            "identity": identity,
+        });
+        match screenshot.and_then(|value| screenshot_jpeg(&value, session_id)) {
+            Ok((bytes, details)) => {
+                let filename = format!("{}.jpg", capture.id);
+                std::fs::write(screenshots.join(&filename), bytes)?;
+                record["status"] = json!("captured");
+                record["screenshot"] = json!(filename);
+                record["details"] = details;
+            }
+            Err(error) => reasons.push(format!("screenshot: {error:#}")),
+        }
+        if !reasons.is_empty() {
+            record["reason"] = json!(reasons.join("; "));
+        }
+        captures.push(record);
+    }
+    Ok(captures)
+}
+
+async fn capture_browser_evidence(context: &E2eContext, directory: &std::path::Path) -> Result<()> {
+    let state: Value = serde_json::from_slice(&std::fs::read(directory.join("state.json"))?)?;
+    let app_url = format!("http://127.0.0.1:{}", state["web_port"]);
+    let screenshots = directory.join("screenshots");
+    std::fs::create_dir_all(&screenshots)?;
+    let identity = json!({
+        "registry_sha": state["base_registry_sha"],
+        "patch_sha256": crate::artifact::sha256_bytes(&std::fs::read(directory.join("source.patch"))?).replace("sha256:", ""),
+        "fixture_files": state["fixture_files"],
+    });
+    let started = context
+        .trigger_value(
+            "browser::sessions::start",
+            json!({"incognito":true,"ttl_ms":600000}),
+        )
+        .await;
+    let (captures, infrastructure_error) = match started {
+        Ok(value) => {
+            let session_id = value["session_id"]
+                .as_str()
+                .context("browser start omitted session_id")?;
+            let captured = if value["incognito"] == true {
+                capture_browser_session(context, session_id, &app_url, &screenshots, &identity)
+                    .await
+            } else {
+                Err(anyhow::anyhow!(
+                    "browser did not create an incognito session: {value}"
+                ))
+            };
+            let stopped = context
+                .trigger_value("browser::sessions::stop", json!({"session_id":session_id}))
+                .await;
+            let (captures, error) = match captured {
+                Ok(captures) => (captures, None),
+                Err(error) => (
+                    unavailable_captures(&app_url, &identity, &format!("{error:#}")),
+                    Some(format!("{error:#}")),
+                ),
+            };
+            let stop_error = match stopped {
+                Ok(value) if value["ok"] == true => None,
+                Ok(value) => Some(format!("stop browser session: {value}")),
+                Err(error) => Some(format!("stop browser session: {error:#}")),
+            };
+            let errors = [error, stop_error]
+                .into_iter()
+                .flatten()
+                .collect::<Vec<_>>()
+                .join("; ");
+            (captures, (!errors.is_empty()).then_some(errors))
+        }
+        Err(error) => {
+            let reason = format!("start browser session: {error:#}");
+            (
+                unavailable_captures(&app_url, &identity, &reason),
+                Some(reason),
+            )
+        }
+    };
+    let mut envelope = json!({
+        "app_url": app_url,
+        "viewport": {"width":1440,"height":1000},
+        "identity": identity,
+        "captures": captures,
+    });
+    if let Some(error) = infrastructure_error {
+        envelope["infrastructure_error"] = json!(error);
+    }
+    std::fs::write(
+        screenshots.join("captures.json"),
+        serde_json::to_vec_pretty(&envelope)?,
+    )?;
+    let cards = BROWSER_CAPTURES
+        .iter()
+        .map(|capture| {
+            let filename = format!("{}.jpg", capture.id);
+            if screenshots.join(&filename).is_file() {
+                format!("<figure><img style=\"max-width:100%\" src=\"{filename}\"><figcaption>{}</figcaption></figure>", capture.caption)
+            } else {
+                format!("<p>{}: unavailable; see captures.json</p>", capture.caption)
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    std::fs::write(screenshots.join("index.html"), format!("<!doctype html><meta charset=\"utf-8\"><title>Registry evidence</title><h1>Registry screenshots</h1>{cards}"))?;
+    Ok(())
+}
+
 fn capture<'a, const N: u8>(
     context: &'a E2eContext,
     observation: &'a ScenarioObservation,
@@ -385,6 +674,14 @@ fn capture<'a, const N: u8>(
         let delivery = checked(&mut finish).await?;
         if N == 2 {
             publish_implementation(context, run_id, &directory.join("delivery"));
+        }
+        if matches!(N, 2 | 4) && delivery["runtime_ready"] == true {
+            if let Err(error) = capture_browser_evidence(context, &directory).await {
+                std::fs::write(
+                    directory.join("browser-capture-error.txt"),
+                    format!("{error:#}"),
+                )?;
+            }
         }
         let result = if N == 1 {
             judge_plan(context, run_id).await
@@ -531,6 +828,38 @@ mod tests {
             .unwrap();
         assert_eq!(output.attempt_id, "incomplete");
         assert_eq!(output.directory, temp.path());
+    }
+
+    #[test]
+    fn browser_jpeg_is_bound_to_the_requested_session() {
+        let screenshot = json!({
+            "content": [{
+                "type": "image",
+                "mime": "image/jpeg",
+                "data": base64::engine::general_purpose::STANDARD.encode([0xff, 0xd8, 0xff]),
+            }],
+            "details": {"session_id":"private-1","url":"http://127.0.0.1:43000","width":1280,"height":1800},
+        });
+        let (jpeg, details) = screenshot_jpeg(&screenshot, "private-1").unwrap();
+        assert_eq!(jpeg, [0xff, 0xd8, 0xff]);
+        assert_eq!(details["width"], 1280);
+        assert_eq!(details["height"], 1800);
+        assert!(screenshot_jpeg(&screenshot, "another-session").is_err());
+    }
+
+    #[test]
+    fn unavailable_browser_envelope_includes_the_real_missing_version_route() {
+        let identity = json!({"registry_sha":"base","patch_sha256":"patch"});
+        let captures =
+            unavailable_captures("http://127.0.0.1:43000", &identity, "browser unavailable");
+        assert_eq!(captures.len(), 5);
+        assert_eq!(captures[4]["id"], "05-missing-version");
+        assert_eq!(
+            captures[4]["url"],
+            "http://127.0.0.1:43000/workers/orders-worker?tab=changelog&from=8.8.8&to=7.7.7"
+        );
+        assert_eq!(captures[4]["identity"], identity);
+        assert_eq!(captures[4]["status"], "unavailable");
     }
 
     #[test]
