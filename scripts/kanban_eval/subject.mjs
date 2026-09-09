@@ -6,7 +6,7 @@ import { isAbsolute, join } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { randomUUID } from 'node:crypto'
 
-const MAX_BYTES = 16 * 1024
+const MAX_BYTES = 256 * 1024
 const TERMINAL = new Set(['completed', 'cancelled', 'failed'])
 let failureOutput
 let evidence
@@ -187,15 +187,19 @@ async function main() {
   let status
   let metrics
   let sent
+  let commandFailure
   try {
     registration = iii.registerFunction(functionId, async (payload) => {
       const { _caller_worker_id: _callerWorkerId, ...request } = payload ?? {}
       if (Object.keys(request).length !== 1 || typeof request.command !== 'string') throw new Error('command must be the only request field')
       if (Buffer.byteLength(request.command) > MAX_BYTES) throw new Error(`command exceeds ${MAX_BYTES} bytes`)
       try {
-        return await run('docker', ['exec', '-w', '/workspace', args.container, '/bin/sh', '-c', request.command], 30_000)
+        return await run('docker', ['exec', '-w', '/workspace', args.container, '/bin/sh', '-c', request.command], 120_000)
       } catch (error) {
-        if (error?.bounded) await run('docker', ['rm', '-f', args.container], 10_000, 64 * 1024).catch(() => {})
+        if (error?.bounded) {
+          commandFailure = error
+          await run('docker', ['rm', '-f', args.container], 10_000, 64 * 1024).catch(() => {})
+        }
         throw error
       }
     }, {
@@ -211,20 +215,20 @@ async function main() {
     const pricing = catalog?.model?.pricing
     const priced = Number.isFinite(pricing?.input) && pricing.input >= 0 && Number.isFinite(pricing?.output) && pricing.output >= 0
     if (!priced) throw new Error(`model ${args.provider}/${args.model} has no enforceable input/output pricing`)
-    evidence.cost_cap_usd = 1
+    evidence.cost_cap_usd = 5
     const request = {
       session_id: sessionId,
-      message: `${prompt}\n\nExecution environment: your repository is /workspace. Dependencies are installed; external networking is disabled. Execute shell commands through agent_trigger with {"function":"${functionId}","description":"Inspect repository","payload":{"command":"pwd"}}. This function executes commands, it does not delegate tasks. Each command is limited to 30 seconds and 16 KiB of output. Inspect, edit and test the repository using this tool; describing a tool call does not execute it.`,
+      message: `${prompt}\n\nExecution environment: your repository is /workspace. Dependencies are installed; external networking is disabled. Execute shell commands through agent_trigger with {"function":"${functionId}","description":"Inspect repository","payload":{"command":"pwd"}}. This function executes commands, it does not delegate tasks. Each command is limited to 120 seconds and 256 KiB of output. Inspect, edit and test the repository using this tool; describing a tool call does not execute it.`,
       model: args.model,
       provider: args.provider,
       idempotency_key: `kanban-eval:${nonce}`,
       session: { title: `Kanban isolated smoke ${nonce.slice(0, 8)}` },
       options: {
-        max_turns: 12,
-        max_output_tokens: 8192,
-        max_total_tokens: 50000,
+        max_turns: 100,
+        max_output_tokens: 65536,
+        max_total_tokens: 1000000,
         max_validation_retries: 0,
-        max_cost_usd: 1,
+        max_cost_usd: 5,
         functions: {
           expose: 'agent_trigger',
           allow: [functionId],
@@ -239,12 +243,13 @@ async function main() {
     if (!sent?.accepted || !sent.session_id || !sent.turn_id) throw new Error('harness::send did not accept a new turn')
     if (sent.session_id !== sessionId) throw new Error('harness::send returned a different session_id')
     evidence.model_invoked = true
-    const deadline = Date.now() + 600_000
+    const deadline = Date.now() + 1_800_000
     do {
       status = await trigger(iii, args.namespace, 'harness::status', { session_id: sessionId }, 15_000)
+      if (commandFailure) throw commandFailure
       if (!status) throw new Error('harness::status returned no session')
       if (TERMINAL.has(status.status) && !status.expects_wake) break
-      if (Date.now() >= deadline) throw new Error('subject timed out after 600 seconds')
+      if (Date.now() >= deadline) throw new Error('subject timed out after 1800 seconds')
       await new Promise((resolve) => setTimeout(resolve, 1_000))
     } while (true)
     metrics = await completeMetrics(iii, args.namespace, sessionId)
@@ -271,7 +276,7 @@ async function main() {
       reasoning_tokens: totals.reasoning_tokens ?? null,
       cost_usd: totals.cost_usd ?? null,
       metrics_complete: metrics?.complete ?? false,
-      cost_cap_usd: 1,
+      cost_cap_usd: 5,
     }
     await writeFile(join(args.output, 'transcript.json'), `${JSON.stringify(capturedTranscript, null, 2)}\n`, { mode: 0o600 })
     await writeFile(join(args.output, 'subject.json'), `${JSON.stringify(evidence, null, 2)}\n`, { mode: 0o600 })

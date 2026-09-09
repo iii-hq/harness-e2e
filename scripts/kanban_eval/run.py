@@ -264,7 +264,7 @@ print('workspace readable; trusted files, evaluator process and external network
                        '--container', candidate, '--prompt-file', str(prompt_file), '--output', str(evidence),
                        '--engine-url', args.subject_url, '--namespace', args.subject_namespace,
                        '--provider', 'deepseek', '--model', args.subject_model]
-            code = bounded(command, evidence / 'subject.log', 850, candidate)
+            code = bounded(command, evidence / 'subject.log', 2050, candidate)
             if (evidence / 'subject.json').is_file():
                 subject = json.loads((evidence / 'subject.json').read_text())
                 metadata['model_execution'] = subject.get('model_invoked', False)

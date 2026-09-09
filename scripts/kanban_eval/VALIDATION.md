@@ -62,3 +62,31 @@ invoking any model. Neither attempt is counted as a subject capability failure.
 Final local regression validation: 206 Python tests passed using the existing
 Harness release binary; no Rust source changed. Subject syntax and diff checks
 also passed. Full criterion coverage and native Harness integration remain open.
+
+## Higher-budget C2 attempts
+
+Budgets were raised on request to 100 turns, 1,000,000 total tokens, US$5 and
+1,800 seconds. The controller allows another 250 seconds for harvesting and
+cleanup. Commands retain isolation and use 120-second/256-KiB limits.
+
+- `deepseek-c2-high-budget-1`: evaluation-invalid after a command exceeded the
+  original 16-KiB output bound and removed the candidate. Cost US$0.0070302848.
+  The bridge now terminates the session on a fatal command bound, preserving its
+  actual cause. Regression coverage exercises output overflow and cleanup.
+- `deepseek-c2-high-budget-2`: private functional probes failed with an empty diff;
+  duration 208,348 ms, cost US$0.0121278192. The final assistant entry used exactly
+  the 16,384-output-token ceiling, with no final text or tool call. The runtime
+  reported `stop_reason: end` and session `completed`, not a successful task.
+  The next attempt raises per-response output to 65,536 tokens, below the live
+  catalog's reported 384,000-token maximum. No reference implementation changed.
+- `deepseek-c2-high-budget-3`: model completed 43 turns with implementation and
+  test commands; duration 531,080 ms, cost US$0.0348094376. Evaluation failed before
+  private probes: `git add --all` with excluded ignored directories reported
+  `kanban/dist` as ignored and returned nonzero. This was reproduced read-only
+  using `git add --dry-run` on the fixture. The candidate was cleaned up; its
+  transcript and usage survive, but no complete diff or functional verdict does.
+  Fix and regression-test change capture before another model run. Do not count
+  this attempt as a functional pass or a model implementation failure.
+
+Final higher-budget runner checks: all 206 Python tests passed, including fatal
+output-bound handling; JavaScript syntax and whitespace validation passed.

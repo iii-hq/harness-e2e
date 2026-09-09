@@ -76,9 +76,9 @@ After validating controls, add the following flags to a **base** invocation:
 ```
 
 The endpoint/namespace are local deployment choices. The bridge verifies model
-pricing before sending, with a hard US$1 cap, 50,000 total tokens, 12 turns and
-a 600-second deadline. The only exposed model tool executes shell commands in
-the fixed candidate container, with 30-second/16-KiB limits; nonzero test exits
+pricing before sending, with a hard US$5 cap, 1,000,000 total tokens, 100 turns,
+65,536 output tokens per response and a 1,800-second deadline. The only exposed model tool executes shell commands in
+the fixed candidate container, with 120-second/256-KiB limits; nonzero test exits
 are returned as feedback. No host shell, discovery tools or child agents are
 granted. A failed tool bound removes the candidate container.
 The standard `agent_trigger` dispatcher is restricted to that single function;

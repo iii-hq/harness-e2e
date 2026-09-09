@@ -48,6 +48,10 @@ if [ \"$1\" = inspect ]; then
 elif [ \"$7\" = pwd ]; then
   printf '/workspace\\n'
 elif [ \"$7\" = false ]; then
+  if [ -n \"$OVERFLOW\" ]; then
+    head -c 262145 /dev/zero
+    exit 0
+  fi
   printf 'expected test failure\\n' >&2
   exit 1
 else
@@ -72,7 +76,7 @@ export function registerWorker(...worker) {
       if (request.function_id === custom?.id) return custom.handler({...request.payload, _caller_worker_id: 'mock-engine'})
       if (request.function_id === 'router::models::get') return {model: {pricing: {input: 0.1, output: 0.2}}}
       if (request.function_id === 'harness::send') {
-        const result = await custom.handler({command: 'false', _caller_worker_id: 'mock-engine'})
+        const result = await custom.handler({command: 'false', _caller_worker_id: 'mock-engine'}).catch(error => ({error: error.message}))
         appendFileSync(process.env.CALLS, JSON.stringify({commandResult: result}) + '\\n')
         return {accepted: true, session_id: request.payload.session_id, turn_id: 'turn-1'}
       }
@@ -102,7 +106,11 @@ export function registerWorker(...worker) {
             self.assertIn(functions["allow"][0], send["payload"]["message"])
             self.assertEqual(len(functions["allow"]), 1)
             self.assertNotIn("engine::functions::list", functions["allow"])
-            self.assertEqual(send["payload"]["options"]["max_cost_usd"], 1)
+            self.assertEqual(send["payload"]["options"]["max_cost_usd"], 5)
+            self.assertEqual(send["payload"]["options"]["max_turns"], 100)
+            self.assertEqual(send["payload"]["options"]["max_total_tokens"], 1000000)
+            self.assertEqual(send["payload"]["options"]["max_output_tokens"], 65536)
+            self.assertEqual(result["cost_cap_usd"], 5)
             self.assertEqual(send["payload"]["session_id"], result["session_id"])
             self.assertTrue(result["send_attempted"])
             self.assertTrue(result["model_invoked"])
@@ -116,7 +124,7 @@ export function registerWorker(...worker) {
             self.assertTrue(any(isinstance(row, str) and row.startswith(f"exec -w /workspace {CONTAINER} /bin/sh -c pwd") for row in records))
             self.assertEqual((output.stat().st_mode & 0o777), 0o700)
 
-            for name in ("NO_CACHE", "WRONG_MODEL", "BAD_METRICS"):
+            for name in ("NO_CACHE", "WRONG_MODEL", "BAD_METRICS", "OVERFLOW"):
                 failed_output = root / name.lower()
                 failed = self.run_subject(
                     "--container", CONTAINER, "--prompt-file", str(prompt), "--output", str(failed_output),
@@ -128,6 +136,9 @@ export function registerWorker(...worker) {
                 self.assertEqual(failure["status"], "completed" if name == "NO_CACHE" else "evaluation_failed")
                 if name == "NO_CACHE":
                     self.assertIsNone(failure["cache_write_tokens"])
+                if name == "OVERFLOW":
+                    self.assertIn("command output exceeded 262144 bytes", failure["result_error"])
+                    self.assertIn(f"rm -f {CONTAINER}", calls.read_text())
                 self.assertTrue(failure["model_invoked"])
 
     def test_isolation_failure_precedes_sdk_import(self):
