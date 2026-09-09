@@ -1971,6 +1971,15 @@ mod tests {
         let groups = snapshot.campaigns[0]["groups"].as_array().unwrap();
         assert_eq!(groups.len(), 1);
         assert_eq!(groups[0]["scenarios"], json!(["registry_implementation"]));
+
+        let mut seeded = request("registry");
+        seeded.seed = Some(7);
+        let seeded = manager.create_local(seeded).await.unwrap();
+        let seeded = manager.read_plan(&seeded.id).unwrap();
+        assert!(materialize_slots(&seeded, "seeded")
+            .unwrap()
+            .iter()
+            .all(|slot| slot.request["seed"] == 7));
     }
     #[tokio::test]
     async fn cancellation_reserves_admission_and_prevents_next_groups() {
