@@ -25,6 +25,8 @@ Also write `output/checks.json` with one entry per required check ID:
 
 Use `pass`, `fail`, or `blocked` for status. Evidence paths must name real files under `output/`, relative to `/workspace`. The `command` must exactly match a command you executed through the scenario tool; record expected/observed results in `steps`. A blocked check is not an executed check. Report each ID once; multiple symptoms of the same check belong in that entry.
 
+If a tool call runs a shell batch, copy its entire `command` argument verbatim, including setup lines, newlines, and redirects. A subcommand or script filename alone does not identify that recorded call. Several checks may reference the same complete command when its evidence covers each check.
+
 Required check IDs and questions:
 
 - `implementation.same_version`: Does comparing a version with itself return no changes?
