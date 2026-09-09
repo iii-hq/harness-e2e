@@ -21,7 +21,7 @@ const css = builtIndex.match(/href="([^"]+\.css)"/)[1].replace(/^\.\//, '')
 const html = `<!doctype html><html lang="en" data-harness-e2e="standalone" data-theme="light"><head><meta name="viewport" content="width=device-width, initial-scale=1.0"><link rel="stylesheet" href="/dist/${css}"></head><body><div id="root"></div><script type="module">
 import React from 'react';
 import {createRoot} from 'react-dom/client';
-import {ExecutionsPage} from '/src/pages/ExecutionsPage.tsx';
+import {App} from '/src/App.tsx';
 import {installDashboardIiiClient} from '/src/lib/iii-client.ts';
 import {installDashboardRuntimeConfig} from '/src/lib/dashboard-data-source.ts';
 const reference={execution:{id:'remote-1',campaignId:'campaign',planKey:'smoke',attempt:1,trigger:'manual',label:'RC Smoke',phase:'complete',terminal:true,resultState:'complete',requestedAt:'2026-09-08T12:00:00Z',completedAt:'2026-09-08T12:01:00Z',runCount:1,reportCount:1,plan:{subject:{model:'test',provider:'test'}},request:{}},aggregate:{planned_runs:1,observed_runs:1,completion_rate:1,execution_reliability:1},runs:[{attemptsComplete:true,scenarioId:'alpha',scenarioVersion:1,caseId:'alpha',technical:'valid',completion:'completed',objectiveScore:80,wallTimeMs:1000,totalTokens:100,costSubjectUsd:null,turns:1,functionCalls:1}],materialized:{profile:{id:'smoke',repetitions:1}},shards:[{runs:[{scenario_id:'alpha',seed:'42'}]}]};
@@ -39,7 +39,8 @@ installDashboardIiiClient({browserId:'personal',on:()=>()=>{},registerTrigger:()
  throw new Error('Unexpected RPC '+id);
 }});
 installDashboardRuntimeConfig({mode:'local',transport:'iii',http_fallback:false,functions:Object.fromEntries(['executions_list','execution_get','plan_control','plan_run_start','changed_trigger'].map(id=>[id,id]))});
-createRoot(document.getElementById('root')).render(React.createElement(ExecutionsPage));
+location.hash = '#/executions';
+createRoot(document.getElementById('root')).render(React.createElement(App));
 </script></body></html>`
 try {
   await page.route('**/__reference-test', async (route) =>
