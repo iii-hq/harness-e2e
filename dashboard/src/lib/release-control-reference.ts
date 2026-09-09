@@ -587,7 +587,7 @@ function referenceError(cause: unknown): never {
   const error = record(cause)
   if (error?.code === 'function_not_found') {
     throw new Error(
-      'Release Control is not connected to this Engine namespace with E2E history support. Open a Release Control instance with the E2E bridge, connect it to the same Engine and namespace as this Console, and keep that tab open.',
+      'Release Control is not connected to this Engine namespace with E2E history support. Open a Release Control instance with the E2E bridge, connect it to the same Engine as this Console, and keep that tab open.',
     )
   }
   throw cause instanceof Error
@@ -599,7 +599,13 @@ export async function listReleaseControlExecutions(): Promise<
   DashboardExecutionSummary[]
 > {
   const { plans } = await getDashboardIiiClient()
-    .then((client) => client.trigger<{ plans: RcPlan[] }>(PLANS_LIST, {}))
+    .then((client) =>
+      client.trigger<{ plans: RcPlan[] }>(
+        PLANS_LIST,
+        {},
+        { namespace: 'default' },
+      ),
+    )
     .catch(referenceError)
   return plans
     .flatMap((plan) => plan.recentExecutions)
@@ -617,9 +623,13 @@ export async function getReleaseControlReference(
 ): Promise<RcReference> {
   return getDashboardIiiClient()
     .then((client) =>
-      client.trigger<RcReference>(EXECUTION_REFERENCE, {
-        executionId: id.replace(/^rc:/, ''),
-      }),
+      client.trigger<RcReference>(
+        EXECUTION_REFERENCE,
+        {
+          executionId: id.replace(/^rc:/, ''),
+        },
+        { namespace: 'default' },
+      ),
     )
     .catch(referenceError)
 }

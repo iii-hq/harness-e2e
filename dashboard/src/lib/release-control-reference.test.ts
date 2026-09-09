@@ -118,6 +118,7 @@ describe('Release Control reference adapter', () => {
     expect(trigger).toHaveBeenCalledWith(
       'release-control::test-plans::list',
       {},
+      { namespace: 'default' },
     )
   })
 
@@ -334,26 +335,27 @@ it('normalizes local objective, cache-inclusive tokens and subject cost once', (
 })
 
 it('explains an absent RC bridge and preserves structured RPC error messages', async () => {
-  const trigger = vi
-    .fn()
-    .mockRejectedValue({
-      code: 'function_not_found',
-      message: 'Missing function',
-    })
+  const trigger = vi.fn().mockRejectedValue({
+    code: 'function_not_found',
+    message: 'Missing function',
+  })
   installDashboardIiiClient({
     browserId: 'test',
     trigger,
     on: () => () => {},
     registerTrigger: () => () => {},
   })
-  await expect(listReleaseControlExecutions()).rejects.toThrow(
-    'same Engine and namespace',
-  )
+  await expect(listReleaseControlExecutions()).rejects.toThrow('same Engine')
   trigger.mockRejectedValue({
     code: 'unauthorized',
     message: 'Session expired',
   })
   await expect(getReleaseControlReference('rc:one')).rejects.toThrow(
     'Session expired',
+  )
+  expect(trigger).toHaveBeenLastCalledWith(
+    'release-control::test-executions::reference',
+    { executionId: 'one' },
+    { namespace: 'default' },
   )
 })
