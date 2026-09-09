@@ -128,6 +128,9 @@ export type TestHistoryResponse = {
 }
 
 export type TestObservation = {
+  observation_id?: string
+  source?: 'release-control' | 'local'
+  source_url?: string | null
   execution_id: string
   evaluated_version_id: string | null
   cohort_id: string

@@ -25,6 +25,7 @@ import {
   type DashboardDataBridge,
   type DashboardExecutionSummary,
   getDashboardDataBridge,
+  type ReleaseControlIdentity,
 } from '@/lib/dashboard-data-source'
 import {
   buildExecutionPresentation,
@@ -109,7 +110,17 @@ export function buildLedgerRows(
     return {
       execution,
       presentation,
-      status: statusCopy(presentation),
+      status: execution.id.startsWith('rc:')
+        ? {
+            label: execution.status.replaceAll('_', ' '),
+            status:
+              execution.status === 'running'
+                ? ('running' as const)
+                : execution.status === 'cancelled'
+                  ? ('cancelled' as const)
+                  : ('inconclusive' as const),
+          }
+        : statusCopy(presentation),
       searchText: [
         title,
         detail,
@@ -119,6 +130,9 @@ export function buildLedgerRows(
         execution.run_id,
         formatDate(presentation.completedAt),
         execution.source?.sha,
+        execution.release_control?.execution_id,
+        execution.release_control?.profile,
+        execution.release_control?.campaign_id,
         ...presentation.subjects.flatMap((model) => [
           model.model,
           `${model.provider}/${model.model}`,
@@ -202,24 +216,99 @@ export function dayLabel(value: string, now = Date.now()) {
   return day
 }
 
-/** Audit E-12: a running execution is pinned above the day groups. */
+export type LedgerGroup = {
+  key: string
+  label: string
+  rows: LedgerRow[]
+  /** Present when the group is one Release Control execution (its plan). */
+  plan?: ReleaseControlIdentity
+}
+
+/** One Release Control execution reads as its plan: profile · campaign · id. */
+export function planGroupLabel(plan: ReleaseControlIdentity): string {
+  const head = [plan.profile, plan.campaign_id].filter(Boolean).join(' · ')
+  return `${head || 'release control'} · release control ${plan.execution_id.slice(0, 8)}`
+}
+
+/** Additive figures over a group's rows; absence stays absent, never zero. */
+export function groupStats(rows: LedgerRow[]) {
+  const passed = rows.filter((row) => row.status.status === 'passed').length
+  const tokens = rows.map(tokensOf).filter((value) => value !== null)
+  const seconds = rows
+    .map((row) => row.presentation.modelRuntimeSeconds)
+    .filter((value): value is number => value !== null)
+  return {
+    runs: rows.length,
+    passed,
+    passRate: rows.length > 0 ? passed / rows.length : null,
+    tokens: tokens.length > 0 ? tokens.reduce((sum, v) => sum + v, 0) : null,
+    seconds: seconds.length > 0 ? seconds.reduce((sum, v) => sum + v, 0) : null,
+  }
+}
+
+export function groupHeading(group: LedgerGroup): string {
+  if (
+    !group.plan ||
+    group.rows.some((row) => row.execution.id.startsWith('rc:'))
+  )
+    return `${group.label} · ${group.rows.length}`
+  const stats = groupStats(group.rows)
+  const parts = [
+    group.label,
+    `${stats.runs} run${stats.runs === 1 ? '' : 's'}`,
+    stats.passRate === null
+      ? null
+      : `${formatPercent(percentPoints(stats.passRate), false)} pass`,
+    stats.tokens === null ? null : `${stats.tokens.toLocaleString()} tokens`,
+    stats.seconds === null ? null : formatDuration(stats.seconds),
+  ]
+  return parts.filter(Boolean).join(' · ')
+}
+
+/**
+ * Audit E-12: a running execution is pinned above the groups. Runs that
+ * Release Control dispatched are grouped by their execution (the plan they
+ * belong to); everything else keeps its day group.
+ */
 export function groupLedgerRows(rows: LedgerRow[], now = Date.now()) {
   const running = rows.filter(
     (row) =>
       row.status.status === 'running' || row.status.status === 'cancelling',
   )
   const settled = rows.filter((row) => !running.includes(row))
-  const groups: Array<{ key: string; label: string; rows: LedgerRow[] }> = []
+  const groups: LedgerGroup[] = []
+  const byKey = new Map<string, LedgerGroup>()
+  const push = (group: LedgerGroup, row: LedgerRow) => {
+    const existing = byKey.get(group.key)
+    if (existing) existing.rows.push(row)
+    else {
+      group.rows.push(row)
+      byKey.set(group.key, group)
+      groups.push(group)
+    }
+  }
   for (const row of settled) {
-    const key = dayKey(row.presentation.completedAt)
-    const last = groups.at(-1)
-    if (last?.key === key) last.rows.push(row)
-    else
-      groups.push({
-        key,
+    const plan = row.execution.release_control
+    if (plan?.execution_id) {
+      push(
+        {
+          key: `plan:${plan.execution_id}`,
+          label: planGroupLabel(plan),
+          rows: [],
+          plan,
+        },
+        row,
+      )
+      continue
+    }
+    push(
+      {
+        key: dayKey(row.presentation.completedAt),
         label: dayLabel(row.presentation.completedAt, now),
-        rows: [row],
-      })
+        rows: [],
+      },
+      row,
+    )
   }
   return { running, groups }
 }
@@ -244,6 +333,9 @@ function LedgerRowCells({ row }: { row: LedgerRow }) {
         >
           {title}
         </a>
+        <span className="font-mono text-label text-ink-muted">
+          {execution.id.startsWith('rc:') ? 'team · RC' : 'my Harness · local'}
+        </span>
         <span className="block truncate font-mono text-label text-ink-muted">
           {formatDate(presentation.completedAt)}
           {detail ? ` · ${detail}` : ''}
@@ -325,7 +417,7 @@ function LedgerTable({
   groups,
 }: {
   caption: string
-  groups: Array<{ key: string; label: string; rows: LedgerRow[] }>
+  groups: LedgerGroup[]
 }) {
   return (
     <DataTable
@@ -360,9 +452,9 @@ function LedgerTable({
       </thead>
       {groups.map((group) => (
         <tbody key={group.key} data-ledger-group={group.key}>
-          <tr data-ledger-day>
+          <tr data-ledger-day data-ledger-plan={group.plan?.execution_id}>
             <th className="ds-label" colSpan={8} scope="colgroup">
-              {group.label} · {group.rows.length}
+              {groupHeading(group)}
             </th>
           </tr>
           {group.rows.map((row) => (
@@ -502,7 +594,7 @@ export function ExecutionsPage() {
 
   // Audit E-07: the page says what the ledger holds, in the column vocabulary.
   const summary = [
-    `${total || rows.length} execution${(total || rows.length) === 1 ? '' : 's'}`,
+    `${total} executions`,
     ...statusCounts.map(([, entry]) => `${entry.count} ${entry.label}`),
   ].join(' · ')
 
@@ -511,6 +603,7 @@ export function ExecutionsPage() {
       <DashboardPageActions
         active="executions"
         actionsLabel="Execution actions"
+        actions={null}
       />
       <div className="page-shell w-[calc(100%_-_1.5rem)] max-w-[1420px] pt-5 pb-16 md:w-[calc(100%_-_3rem)]">
         <PageHeader

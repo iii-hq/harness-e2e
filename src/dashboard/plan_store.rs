@@ -1,6 +1,6 @@
 //! One saved-plan lifecycle with durable orchestration receipts and native Results.
 //! Every planned child and its idempotency key is durable before admission.
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -32,10 +32,36 @@ pub(super) struct SavedPlan {
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
 #[serde(tag = "action", rename_all = "snake_case")]
 pub(super) enum Request {
-    Requirements { plan_id: String },
-    Export { plan_id: String },
-    Execution { execution_id: String },
-    Cancel { execution_id: String },
+    ImportReference {
+        reference_execution_id: String,
+        #[serde(default)]
+        label: String,
+        subject: ReferenceModel,
+        #[serde(default)]
+        judge: Option<ReferenceModel>,
+        materialized: Value,
+        #[serde(default)]
+        shards: Vec<Value>,
+    },
+    Requirements {
+        plan_id: String,
+    },
+    Export {
+        plan_id: String,
+    },
+    Execution {
+        execution_id: String,
+    },
+    Cancel {
+        execution_id: String,
+    },
+}
+
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub(super) struct ReferenceModel {
+    model: String,
+    provider: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -500,6 +526,258 @@ impl PlanStore {
         self.write_plan(&prepared)?;
         self.canonical(&prepared)
     }
+    async fn import_reference(
+        &self,
+        reference_execution_id: String,
+        label: String,
+        subject: ReferenceModel,
+        judge: Option<ReferenceModel>,
+        materialized: Value,
+        shards: Vec<Value>,
+    ) -> Result<LocalPlan> {
+        ensure!(
+            !reference_execution_id.trim().is_empty()
+                && reference_execution_id.len() <= 200
+                && !reference_execution_id.chars().any(char::is_control),
+            "A bounded Release Control execution id is required."
+        );
+        let _guard = self.lock.lock().await;
+        let id = format!("plan-rc-{}", uuid::Uuid::new_v4().simple());
+
+        let profile = materialized["profile"]
+            .as_object()
+            .context("Release Control materialization is missing its profile")?;
+        let profile_id = profile
+            .get("id")
+            .and_then(Value::as_str)
+            .context("Release Control materialization is missing its profile id")?;
+        let repetitions = profile
+            .get("repetitions")
+            .and_then(Value::as_u64)
+            .context("Release Control materialization is missing repetitions")?;
+        let technical_retries = profile
+            .get("technical_retries")
+            .and_then(Value::as_u64)
+            .context("Release Control materialization is missing technical retries")?;
+        ensure!(
+            (1..=20).contains(&repetitions) && technical_retries <= 3,
+            "Release Control materialization has an unsupported execution policy."
+        );
+        let campaigns = materialized["campaigns"]
+            .as_array()
+            .filter(|campaigns| !campaigns.is_empty())
+            .context("Release Control materialization has no campaigns")?
+            .clone();
+        ensure!(
+            campaigns.len() as u64 == repetitions,
+            "Release Control campaign count differs from its repetitions."
+        );
+
+        let mut scenario_ids = Vec::new();
+        let mut expected_scope = None;
+        for campaign in &campaigns {
+            let groups = campaign["groups"]
+                .as_array()
+                .filter(|groups| !groups.is_empty())
+                .context("Release Control campaign has no groups")?;
+            let mut campaign_scope = BTreeSet::new();
+            let mut group_ids = BTreeSet::new();
+            for group in groups {
+                ensure!(
+                    group["execution_kind"] != "fault_injection",
+                    "This reference requires the protected executor and cannot run in the local dashboard."
+                );
+                let group_id = group["id"]
+                    .as_str()
+                    .context("Release Control group is missing its id")?;
+                ensure!(
+                    group_ids.insert(group_id),
+                    "Release Control campaign repeats a group id."
+                );
+                let scenarios = group["scenarios"]
+                    .as_array()
+                    .filter(|scenarios| scenarios.len() == 1)
+                    .context("Local plan execution requires one scenario per group")?;
+                let scenario_id = scenarios[0]
+                    .as_str()
+                    .context("Release Control group has an invalid scenario")?;
+                ensure!(
+                    group["runs"].as_u64() == Some(1)
+                        && group["technical_retries"]
+                            .as_u64()
+                            .is_some_and(|value| value <= 3),
+                    "Release Control group has an unsupported local execution policy."
+                );
+                let first_in_campaign = campaign_scope.insert(scenario_id.to_owned());
+                ensure!(
+                    first_in_campaign,
+                    "Release Control campaign repeats a scenario."
+                );
+                if expected_scope.is_none() {
+                    scenario_ids.push(scenario_id.to_owned());
+                }
+            }
+            if let Some(expected) = &expected_scope {
+                ensure!(
+                    expected == &campaign_scope,
+                    "Release Control campaigns do not repeat the same scenario scope."
+                );
+            } else {
+                expected_scope = Some(campaign_scope);
+            }
+        }
+        let mut reference_cases: BTreeMap<String, (u64, Option<u64>, Option<String>)> =
+            BTreeMap::new();
+        for run in shards
+            .iter()
+            .filter_map(|shard| shard["runs"].as_array())
+            .flatten()
+        {
+            let Some(scenario_id) = run["scenario_id"].as_str() else {
+                continue;
+            };
+            let seed = run["seed"]
+                .as_u64()
+                .or_else(|| run["seed"].as_str().and_then(|seed| seed.parse().ok()))
+                .with_context(|| {
+                    format!("Release Control run for '{scenario_id}' is missing its seed")
+                })?;
+            let observed = (
+                seed,
+                run["scenario_version"].as_u64(),
+                run["case_id"].as_str().map(str::to_owned),
+            );
+            if let Some(previous) = reference_cases.insert(scenario_id.to_owned(), observed.clone())
+            {
+                ensure!(
+                    previous == observed,
+                    "Release Control reports multiple case identities for '{scenario_id}'."
+                );
+            }
+        }
+        ensure!(
+            scenario_ids
+                .iter()
+                .all(|scenario_id| reference_cases.contains_key(scenario_id)),
+            "Release Control shards do not contain a seed for every materialized scenario."
+        );
+
+        let judge_model = judge
+            .as_ref()
+            .map(|judge| judge.model.as_str())
+            .unwrap_or("");
+        let judge_provider = judge
+            .as_ref()
+            .map(|judge| judge.provider.as_str())
+            .unwrap_or("");
+        let request: super::plans::PlanCreateRequest = serde_json::from_value(json!({
+            "label": if label.trim().is_empty() { format!("RC · {}", profile.get("label").and_then(Value::as_str).unwrap_or(profile_id)) } else { label },
+            "purpose": format!("Local reproduction of Release Control execution {reference_execution_id}."),
+            "url": self.url,
+            "model": subject.model,
+            "provider": subject.provider,
+            "judge_model": judge_model,
+            "judge_provider": judge_provider,
+            "scenarios": scenario_ids,
+            "runs": repetitions,
+            "technical_retries": technical_retries,
+        }))?;
+        let mut plan = super::plans::new_plan(&request, id)?;
+        for scenario in &mut plan.scenarios {
+            let (seed, reference_version, reference_case_id) =
+                &reference_cases[&scenario.scenario_id];
+            *scenario = super::plans::resolve_scope(
+                std::slice::from_ref(&scenario.scenario_id),
+                Some(*seed),
+            )?
+            .remove(0);
+            if reference_version
+                .is_some_and(|version| version != u64::from(scenario.scenario_version))
+            {
+                plan.reference_differences.push(format!(
+                    "{}: scenario version differs from the Release Control reference",
+                    scenario.scenario_id
+                ));
+            }
+            if reference_case_id
+                .as_ref()
+                .is_some_and(|case_id| case_id != &scenario.case_id)
+            {
+                plan.reference_differences.push(format!(
+                    "{}: case identity differs from the Release Control reference",
+                    scenario.scenario_id
+                ));
+            }
+        }
+        plan.scope_hash = super::plans::scope_hash(&request, &plan.scenarios)?;
+        plan.locked = true;
+        plan.reference_execution_id = Some(reference_execution_id);
+        let profile = crate::test_plan::Profile {
+            id: profile_id.to_owned(),
+            label: profile
+                .get("label")
+                .and_then(Value::as_str)
+                .unwrap_or(profile_id)
+                .to_owned(),
+            purpose: plan.purpose.clone(),
+            metrics: Vec::new(),
+            modules: Vec::new(),
+            scenarios: plan.scenario_ids.clone(),
+            scenario_groups: Vec::new(),
+            repetitions: repetitions as u32,
+            technical_retries: technical_retries as u8,
+            lane: campaigns[0]["lane"]
+                .as_str()
+                .context("Release Control campaign is missing its lane")?
+                .to_owned(),
+            fault_groups: Vec::new(),
+        };
+        let cases = plan
+            .scenarios
+            .iter()
+            .map(|scenario| {
+                let mut value = serde_json::to_value(scenario)?;
+                let built_in = scenario
+                    .scenario_id
+                    .parse::<crate::markdown::ScenarioKey>()?
+                    .built_in();
+                value["judge_required"] = json!(
+                    built_in.is_none()
+                        || built_in == Some(crate::scenarios::ScenarioId::RegistryPlanning)
+                );
+                value["requirements"] = json!([]);
+                Ok(value)
+            })
+            .collect::<Result<Vec<_>>>()?;
+        let definition_sha256 = test_plan::embedded()?.digest()?;
+        let profile_sha256 = artifact::sha256_value(&json!({
+            "definition_sha256": definition_sha256,
+            "profile": profile,
+            "cases": cases,
+        }))?;
+        let snapshot = ProfileSnapshot {
+            schema: "harness-e2e-profile-snapshot/v1".into(),
+            plan_id: "release-control-reference".into(),
+            version: 1,
+            definition_sha256,
+            profile_sha256,
+            profile,
+            scenario_ids: plan.scenario_ids.clone(),
+            cases,
+            campaigns,
+            budget: materialized
+                .get("budget")
+                .cloned()
+                .context("Release Control materialization is missing its budget")?,
+            interpretation: "descriptive_only".into(),
+            protected_supervisor_required: false,
+        };
+        let prepared = prepared_plan(plan, Some(snapshot))?;
+        validate_config(&prepared.plan, &prepared.snapshot, &self.url)?;
+        materialize_slots(&prepared, "reference-validation")?;
+        self.write_plan(&prepared)?;
+        self.canonical(&prepared)
+    }
     pub(super) async fn update_local(
         &self,
         id: &str,
@@ -535,6 +813,24 @@ impl PlanStore {
 
     pub(super) async fn handle(self: &Arc<Self>, request: Request) -> Result<Value> {
         match request {
+            Request::ImportReference {
+                reference_execution_id,
+                label,
+                subject,
+                judge,
+                materialized,
+                shards,
+            } => Ok(serde_json::to_value(
+                self.import_reference(
+                    reference_execution_id,
+                    label,
+                    subject,
+                    judge,
+                    materialized,
+                    shards,
+                )
+                .await?,
+            )?),
             Request::Requirements { plan_id } => {
                 self.requirements(&self.read_plan(&plan_id)?).await
             }
@@ -977,6 +1273,8 @@ fn configuration_digest(config: &LocalPlan, snapshot_digest: &str) -> Result<Str
         "scenarios": config.scenarios, "scenario_ids": config.scenario_ids,
         "runs": config.runs, "technical_retries": config.technical_retries, "seed": config.seed,
         "template_id": config.template_id, "scope_hash": config.scope_hash,
+        "reference_execution_id": config.reference_execution_id,
+        "reference_differences": config.reference_differences,
         "snapshot_sha256": snapshot_digest,
     }))
 }
@@ -1647,6 +1945,192 @@ mod tests {
         let response = manager.start(&id, key, Role::Baseline).await.unwrap();
         (id, response["execution_id"].as_str().unwrap().into())
     }
+    fn reference_import(execution_kind: &str) -> Value {
+        let scenario_id = crate::scenarios::ScenarioId::ContextPressure.as_str();
+        let seed = crate::scenarios::ScenarioId::ContextPressure.canonical_seed();
+        let group = json!({
+            "id": "remote-context",
+            "execution_kind": execution_kind,
+            "runs": 1,
+            "technical_retries": 0,
+            "scenarios": [scenario_id],
+        });
+        json!({
+            "action": "import_reference",
+            "reference_execution_id": "1b8e60cc-7818-4dcb-8cbc-c76790c271af",
+            "label": "RC smoke reference",
+            "subject": {"model": "model", "provider": "provider"},
+            "judge": {"model": "judge", "provider": "provider"},
+            "materialized": {
+                "profile": {
+                    "id": "smoke",
+                    "label": "Smoke",
+                    "repetitions": 2,
+                    "technical_retries": 1,
+                    "profile_sha256": "remote-profile",
+                    "definition_sha256": "remote-definition"
+                },
+                "campaigns": [
+                    {"campaign_id": "smoke-r01", "lane": "local-smoke", "groups": [group.clone()]},
+                    {"campaign_id": "smoke-r02", "lane": "local-smoke", "groups": [group]}
+                ],
+                "budget": {"planned_runs": 2},
+                "identity": {"runner_revision": "reference-only"}
+            },
+            "shards": [{"runs": [{
+                "scenario_id": scenario_id,
+                "scenario_version": 0,
+                "case_id": "remote-case",
+                "seed": seed.to_string()
+            }]}]
+        })
+    }
+
+    #[tokio::test]
+    async fn imports_a_fresh_frozen_reference_for_each_reproduction() {
+        let root = tempfile::tempdir().unwrap();
+        let runner = Arc::new(FakeRunner::new(root.path().into()));
+        let manager = manager(root.path(), runner.clone());
+        let request: Request = serde_json::from_value(reference_import("harness_turn")).unwrap();
+        let plan: LocalPlan =
+            serde_json::from_value(manager.handle(request).await.unwrap()).unwrap();
+
+        assert!(plan.locked);
+        assert_eq!(
+            plan.reference_execution_id.as_deref(),
+            Some("1b8e60cc-7818-4dcb-8cbc-c76790c271af")
+        );
+        assert_eq!(plan.scenario_ids, vec!["context_pressure"]);
+        assert_eq!(plan.runs, 2);
+        assert_eq!(plan.technical_retries, 1);
+        assert_eq!(
+            plan.scenarios[0].seed,
+            crate::scenarios::ScenarioId::ContextPressure.canonical_seed()
+        );
+        let saved = manager.read_plan(&plan.id).unwrap();
+        assert_eq!(
+            saved.snapshot.campaigns[0]["groups"][0]["id"],
+            "remote-context"
+        );
+        assert_eq!(
+            saved.snapshot.campaigns[0]["groups"][0]["technical_retries"],
+            0
+        );
+        assert_ne!(saved.snapshot.profile_sha256, "remote-profile");
+        assert_ne!(saved.snapshot.definition_sha256, "remote-definition");
+        assert!(plan
+            .reference_differences
+            .iter()
+            .any(|difference| difference.contains("scenario version")));
+        assert!(plan
+            .reference_differences
+            .iter()
+            .any(|difference| difference.contains("case identity")));
+
+        let repeated: LocalPlan = serde_json::from_value(
+            manager
+                .handle(serde_json::from_value(reference_import("harness_turn")).unwrap())
+                .await
+                .unwrap(),
+        )
+        .unwrap();
+        assert_ne!(repeated.id, plan.id);
+        assert_eq!(manager.list_local().unwrap().len(), 2);
+
+        let started = manager
+            .start_local(&plan.id, "reference-baseline", Role::Baseline)
+            .await
+            .unwrap();
+        let baseline = terminal(&manager, started.last_attempt_id.as_deref().unwrap()).await;
+        assert!(baseline.baseline_eligible);
+        assert_eq!(baseline.slots.len(), 2);
+        assert_eq!(runner.submitted.load(Ordering::SeqCst), 2);
+    }
+
+    #[tokio::test]
+    async fn reimport_preserves_an_incompatible_historical_snapshot() {
+        let root = tempfile::tempdir().unwrap();
+        let runner = Arc::new(FakeRunner::new(root.path().into()));
+        let manager = manager(root.path(), runner.clone());
+        let request = || serde_json::from_value(reference_import("harness_turn")).unwrap();
+        let original: LocalPlan =
+            serde_json::from_value(manager.handle(request()).await.unwrap()).unwrap();
+        let mut historical = manager.read_plan(&original.id).unwrap();
+        historical.snapshot.cases[0]["scenario_version"] = json!(
+            historical.snapshot.cases[0]["scenario_version"]
+                .as_u64()
+                .unwrap()
+                + 1
+        );
+        historical.snapshot.cases[0]["contract_sha256"] = json!("historical-contract");
+        historical.snapshot_sha256 = artifact::sha256_value(&historical.snapshot).unwrap();
+        historical.configuration_sha256 =
+            configuration_digest(&historical.plan, &historical.snapshot_sha256).unwrap();
+        let historical_snapshot = serde_json::to_value(&historical.snapshot).unwrap();
+        manager.write_plan(&historical).unwrap();
+
+        assert!(!manager.get_local(&original.id).unwrap().compatible);
+        let refreshed: LocalPlan =
+            serde_json::from_value(manager.handle(request()).await.unwrap()).unwrap();
+        assert_ne!(refreshed.id, original.id);
+        assert!(refreshed.compatible);
+        let preserved = manager.read_plan(&original.id).unwrap();
+        assert_eq!(
+            serde_json::to_value(&preserved.snapshot).unwrap(),
+            historical_snapshot
+        );
+        assert_eq!(preserved.snapshot_sha256, historical.snapshot_sha256);
+        assert_eq!(
+            preserved.configuration_sha256,
+            historical.configuration_sha256
+        );
+
+        let started = manager
+            .start_local(&refreshed.id, "refreshed-reference", Role::Baseline)
+            .await
+            .unwrap();
+        let execution = terminal(&manager, started.last_attempt_id.as_deref().unwrap()).await;
+        assert!(execution.baseline_eligible);
+        assert_eq!(runner.submitted.load(Ordering::SeqCst), 2);
+    }
+
+    #[tokio::test]
+    async fn imported_registry_planning_preserves_its_evaluator() {
+        let root = tempfile::tempdir().unwrap();
+        let runner = Arc::new(FakeRunner::new(root.path().into()));
+        let manager = manager(root.path(), runner);
+        let mut request = reference_import("harness_turn");
+        for campaign in request["materialized"]["campaigns"].as_array_mut().unwrap() {
+            campaign["groups"][0]["scenarios"] = json!(["registry_planning"]);
+        }
+        request["shards"][0]["runs"][0]["scenario_id"] = json!("registry_planning");
+        let plan: LocalPlan = serde_json::from_value(
+            manager
+                .handle(serde_json::from_value(request).unwrap())
+                .await
+                .unwrap(),
+        )
+        .unwrap();
+        let saved = manager.read_plan(&plan.id).unwrap();
+        let slots = materialize_slots(&saved, "reference-evaluator").unwrap();
+        assert!(slots
+            .iter()
+            .all(|slot| slot.request["judge_model"] == "judge"));
+    }
+
+    #[tokio::test]
+    async fn rejects_references_that_need_the_protected_executor() {
+        let root = tempfile::tempdir().unwrap();
+        let runner = Arc::new(FakeRunner::new(root.path().into()));
+        let manager = manager(root.path(), runner);
+        let error = manager
+            .handle(serde_json::from_value(reference_import("fault_injection")).unwrap())
+            .await
+            .unwrap_err();
+        assert!(format!("{error:#}").contains("protected executor"));
+        assert!(manager.list_local().unwrap().is_empty());
+    }
+
     #[test]
     fn native_measurements_count_retry_consumption_once_and_reject_reused_attempts() {
         let root = tempfile::tempdir().unwrap();

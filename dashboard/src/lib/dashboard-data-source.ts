@@ -38,6 +38,8 @@ export type LocalPlanState =
   | 'comparison_ready'
 
 export type LocalPlan = {
+  reference_execution_id?: string
+  reference_differences?: string[]
   schema_version: number
   id: string
   label: string
@@ -225,6 +227,14 @@ export type DashboardSubjectSummary = JsonObject & {
   scenarios: DashboardScenarioSummary[]
 }
 
+export type ReleaseControlIdentity = {
+  execution_id: string
+  attempt: number | null
+  profile: string | null
+  campaign_id: string | null
+  group_id: string | null
+}
+
 export type DashboardExecutionSummary = JsonObject & {
   id: string
   label?: string
@@ -243,6 +253,8 @@ export type DashboardExecutionSummary = JsonObject & {
   source?: JsonObject
   release?: JsonObject
   lane?: string
+  /** Set when Release Control dispatched the run; groups the ledger by plan. */
+  release_control?: ReleaseControlIdentity | null
   subjects: DashboardSubjectSummary[]
   scenario_metrics?: DashboardScenarioMetricSummary[]
   workflow_metrics?: DashboardWorkflowMetricSummary | null
@@ -312,10 +324,12 @@ export type DashboardRunMetricTotals = JsonObject & {
 }
 
 export type DashboardRunMetrics = JsonObject & {
+  complete?: boolean
   totals?: DashboardRunMetricTotals | null
 }
 
 export type DashboardRunCost = JsonObject & {
+  subject_usd?: number | null
   total_usd?: number | null
 }
 
@@ -473,6 +487,7 @@ export type DashboardRunProjection = JsonObject & {
 }
 
 export type DashboardRetryAttemptProjection = JsonObject & {
+  metrics?: DashboardRunMetrics | null
   run_id: string
   attempt_id: string
   attempt_number: number

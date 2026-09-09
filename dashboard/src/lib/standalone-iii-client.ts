@@ -24,11 +24,12 @@ function wrapSdk(sdk: ISdk, browserId: string): DashboardIiiClient {
   const trigger = <T>(
     functionId: string,
     payload: Record<string, unknown> = {},
-    options?: { timeoutMs?: number },
+    options?: { timeoutMs?: number; namespace?: string },
   ) =>
     sdk.trigger<unknown, T>({
       function_id: functionId,
       payload,
+      namespace: options?.namespace,
       timeoutMs: options?.timeoutMs ?? 15_000,
     })
 

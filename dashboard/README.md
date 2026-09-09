@@ -90,6 +90,24 @@ target/debug/harness-e2e dashboard \
 runner, and does not register its run, cancel, or catalog HTTP endpoints. This
 is the presentation mode for executions submitted through `e2e::*`.
 
+In the Console, Plans offers **Reference: Release Control** through the RC browser
+bridge. Each reference plan combines remote and local execution history and uses
+the same comparison cards as scenario history. Scenario links preserve the selected
+reference and candidate in the existing A → B comparison. Keep the authenticated
+RC tab connected to the same personal Engine. Remote results are fetched on
+demand; they are not installed into the native runs directory and no GitHub
+token is needed. Origin labels distinguish Release Control results from local experiments.
+
+Selecting **run locally** imports the selected execution's materialized test
+parameters only when requested and starts a new local plan using the current
+scenario contracts. Earlier plans and results are preserved. The local Harness
+and scenario implementations may differ from the remote
+reference; the comparison is descriptive. No local execution is posted to RC.
+The comparison offers the same opt-in filter as RC: **Exclude tests with a zero
+or missing result in A or B**. It removes matching test slots from both sides
+and recalculates metrics; original executions remain unchanged.
+A disconnected RC bridge leaves the existing local execution tools available.
+
 The dashboard executes itself as an isolated child process, so changing and
 restarting the Harness never recompiles the E2E client. `serve` is an alias for
 `dashboard`; neither command has a Cargo fallback.
@@ -228,7 +246,7 @@ common detail page.
 
 Creation, reading, updates and starts use the `plan-*` HTTP/iii APIs. Starting a
 plan requires a caller idempotency key. `POST /api/dashboard/plans/control` and
-`e2e::dashboard::plan-control` provide requirements, export, execution lookup and
+`e2e::dashboard::plan-control` provide requirements, explicit reference import, export, execution lookup and
 cancellation. The former profile-plan endpoint, duplicate creation/start actions,
 native plan-context tracking and manual-route alias have been removed.
 

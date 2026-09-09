@@ -6,7 +6,7 @@ declare module '@iii-dev/console-ui' {
     trigger<T = unknown>(
       functionId: string,
       payload?: Record<string, unknown>,
-      options?: { timeoutMs?: number },
+      options?: { timeoutMs?: number; namespace?: string },
     ): Promise<T>
     on<P = unknown>(
       functionId: string,

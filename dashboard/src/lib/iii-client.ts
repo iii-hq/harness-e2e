@@ -3,7 +3,7 @@ export type DashboardIiiClient = {
   trigger<T>(
     functionId: string,
     payload?: Record<string, unknown>,
-    options?: { timeoutMs?: number },
+    options?: { timeoutMs?: number; namespace?: string },
   ): Promise<T>
   on<T>(functionId: string, handler: (payload: T) => void): () => void
   registerTrigger(input: {

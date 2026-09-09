@@ -6,11 +6,7 @@ import type {
   DashboardScenarioAggregate,
   SemanticTestReport,
 } from '@/lib/dashboard-data-source'
-import {
-  RESULT_CONTRACT_SHA256,
-  RESULTS_SCHEMA_VERSION,
-  SCORING_PROFILE_SHA256,
-} from '@/lib/result-contract.generated'
+import { SCORING_PROFILE_SHA256 } from '@/lib/result-contract.generated'
 import {
   aggregateWorkflowMetrics,
   generalRunMetrics,
@@ -358,14 +354,17 @@ function validAggregate(value: unknown): DashboardScenarioAggregate | null {
   return value as DashboardScenarioAggregate
 }
 
+// The version label and the contract fingerprint are not gates for now, in
+// step with the Rust reader: a report the server accepted is shown, and the
+// contract it carries stays visible in the identity band.
 function validResultContract(report: DashboardReportProjection): boolean {
   return (
-    finiteNumber(report.schema_version) === RESULTS_SCHEMA_VERSION &&
+    finiteNumber(report.schema_version) !== null &&
     (report.report_state === 'complete' || report.report_state === 'partial') &&
     (report.objective_outcome === 'passed' ||
       report.objective_outcome === 'failed' ||
       report.objective_outcome === 'inconclusive') &&
-    report.result_contract_sha256 === RESULT_CONTRACT_SHA256 &&
+    nonEmptyString(report.result_contract_sha256) !== null &&
     report.scoring_profile_sha256 === SCORING_PROFILE_SHA256
   )
 }

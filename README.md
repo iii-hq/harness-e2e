@@ -193,6 +193,39 @@ port only on a trusted network. Use `--listen 127.0.0.1:4173` when access should
 remain local. See [dashboard/README.md](dashboard/README.md) for view-only mode
 and the complete dashboard behavior.
 
+### Compare a local change with Release Control
+
+The Console's Plans page offers **Reference: Release Control** to browse RC history
+through the authenticated Release Control browser bridge. Keep the RC tab open,
+enable its local Harness connection, and connect it to the same personal Engine
+as the Console. The bridge needs the E2E read functions from the companion
+Release Control change. No GitHub token or artifact synchronization is needed.
+
+Open a plan to see remote and local executions together with their origin. Select
+a reference and a local result to compare their measurements. The scenario links
+open the existing A → B comparison with both executions selected. Missing reports and
+metrics remain visible as unavailable; reading history creates no local plan.
+The comparison runs locally and sends no local results to Release Control.
+
+Choose **run locally** on a remote reference to save its materialized test
+parameters as a local plan and run them against your current Harness. Repeating
+that action creates a new local plan using the current scenario contracts,
+while preserving earlier plans and results. The
+reference's scenarios, rounds, repetitions and retry settings come from the
+execution's materialization, not from the current profile with the same name.
+The current local scenario implementations and Harness are used deliberately:
+this is a personal experiment, not an exact-stack certification. No build/Git
+tracking or matching remote stack is required. Fault-injection groups still
+require the protected executor; they are not silently omitted. References without
+shard seeds for every scenario cannot be reproduced. Differences in local
+scenario version or case identity are shown as advisory information.
+
+Results stay in the local plan store. The RC execution remains a reference,
+never a locally recreated official execution. Native result validation remains
+strict; the remote data is read through the RC API rather than installed as a
+native report. Full remote evidence is available through the execution's GitHub
+link, subject to its retention; this flow does not download an evidence archive.
+
 ## Compose lifecycle
 
 Release Control names the exact project roots. This repository writes only the

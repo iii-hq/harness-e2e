@@ -1,0 +1,808 @@
+import type {
+  DashboardExecutionDetail,
+  DashboardExecutionSummary,
+  DashboardRunProjection,
+  DashboardScenarioMetricSummary,
+} from '@/lib/dashboard-data-source'
+import { getDashboardIiiClient } from '@/lib/iii-client'
+import type { TestObservation } from '@/lib/test-catalog'
+
+const PLANS_LIST = 'release-control::test-plans::list'
+const EXECUTION_REFERENCE = 'release-control::test-executions::reference'
+
+export type RcExecutionSummary = {
+  id: string
+  campaignId: string
+  planKey: string
+  attempt: number
+  trigger: string
+  requestedBy: string | null
+  label: string | null
+  phase: string
+  terminal: boolean
+  resultState: string
+  requestedAt: string
+  completedAt: string | null
+  error: string | null
+  runCount: number
+  ghRunUrl?: string | null
+  reportCount: number
+}
+
+export type RcRun = {
+  id?: string
+  attemptsComplete: boolean
+  scenarioId: string
+  scenarioVersion: number | null
+  caseId?: string | null
+  seed?: string | null
+  repetition?: number | null
+  status: string | null
+  completion: string | null
+  technical: string | null
+  objectiveScore: number | null
+  wallTimeMs: number | null
+  totalTokens: number | null
+  costSubjectUsd: number | null
+  turns: number | null
+  functionCalls: number | null
+  functionCallErrors?: number | null
+  cohortSha256?: string
+  capturedAt?: string
+  identity?: {
+    harnessVersion?: string | null
+    subjectProvider?: string | null
+    subjectModel?: string | null
+    judgeProvider?: string | null
+    judgeModel?: string | null
+  }
+}
+
+export type RcReference = {
+  execution: RcExecutionSummary & {
+    plan: Record<string, unknown>
+    request: Record<string, unknown>
+  }
+  runs: RcRun[]
+  aggregate: {
+    planned_runs: number
+    observed_runs: number
+    completion_rate: number | null
+    execution_reliability: number | null
+  }
+  materialized: Record<string, unknown> | null
+  shards: Record<string, unknown>[]
+}
+
+type RcPlan = { recentExecutions: RcExecutionSummary[] }
+
+function completeSum(values: Array<number | null | undefined>) {
+  return values.length > 0 &&
+    values.every((value) => typeof value === 'number' && Number.isFinite(value))
+    ? values.reduce<number>((sum, value) => sum + (value ?? 0), 0)
+    : undefined
+}
+
+function completeMean(
+  values: Array<number | null | undefined>,
+  divisor: number,
+) {
+  const sum = completeSum(values)
+  return sum === undefined ? null : sum / divisor
+}
+
+function status(execution: RcExecutionSummary) {
+  if (!execution.terminal)
+    return execution.phase === 'cancel_requested' ? 'cancelling' : 'running'
+  return execution.phase || 'unavailable'
+}
+
+function metrics(runs: RcRun[]): DashboardScenarioMetricSummary[] {
+  const groups = new Map<string, RcRun[]>()
+  for (const run of runs)
+    groups.set(run.scenarioId, [...(groups.get(run.scenarioId) ?? []), run])
+  return [...groups].map(([scenario_id, values]) => ({
+    scenario_id,
+    scenario_version: values[0]?.scenarioVersion ?? undefined,
+    run_count: values.length,
+    averages: {
+      tokens: completeMean(
+        values.map((run) => run.totalTokens),
+        values.length,
+      ),
+      duration_seconds: (() => {
+        const mean = completeMean(
+          values.map((run) => run.wallTimeMs),
+          values.length,
+        )
+        return mean === null ? null : mean / 1000
+      })(),
+      cost_usd: completeMean(
+        values.map((run) => run.costSubjectUsd),
+        values.length,
+      ),
+      function_calls: completeMean(
+        values.map((run) => run.functionCalls),
+        values.length,
+      ),
+      turns: completeMean(
+        values.map((run) => run.turns),
+        values.length,
+      ),
+    },
+    samples: {
+      tokens: values.filter((run) => run.totalTokens !== null).length,
+      duration_seconds: values.filter((run) => run.wallTimeMs !== null).length,
+      cost_usd: values.filter((run) => run.costSubjectUsd !== null).length,
+      turns: values.filter((run) => run.turns !== null).length,
+      function_calls: values.filter((run) => run.functionCalls !== null).length,
+    },
+  }))
+}
+
+export function referenceSummary(view: {
+  execution: RcExecutionSummary
+  runs: RcRun[]
+  aggregate: RcReference['aggregate'] | null
+}): DashboardExecutionSummary {
+  const { execution, aggregate } = view
+  const runs = view.runs.map((run) =>
+    run.attemptsComplete
+      ? run
+      : {
+          ...run,
+          totalTokens: null,
+          costSubjectUsd: null,
+          functionCalls: null,
+          functionCallErrors: null,
+          turns: null,
+        },
+  )
+  const total_tokens = completeSum(runs.map((run) => run.totalTokens))
+  const wall_time_seconds = completeSum(runs.map((run) => run.wallTimeMs))
+  const total_cost_usd = completeSum(runs.map((run) => run.costSubjectUsd))
+  const function_calls = completeSum(runs.map((run) => run.functionCalls))
+  const turns = completeSum(runs.map((run) => run.turns))
+  const plan = ('plan' in execution ? execution.plan : {}) as Record<
+    string,
+    unknown
+  >
+  const subject = plan.subject as
+    | { model?: string; provider?: string }
+    | undefined
+  return {
+    id: `rc:${execution.id}`,
+    label: execution.label ?? execution.planKey,
+    run_id: execution.id,
+    attempt: execution.attempt,
+    event: execution.trigger,
+    actor: execution.requestedBy ?? undefined,
+    status: status(execution),
+    workflow_url: execution.ghRunUrl,
+    started_at: execution.requestedAt,
+    completed_at: execution.completedAt ?? undefined,
+    availability: execution.reportCount > 0 ? 'aggregate' : 'unavailable',
+    source: { provenance: 'release-control', execution_id: execution.id },
+    release_control: {
+      execution_id: execution.id,
+      attempt: execution.attempt,
+      profile: execution.planKey,
+      campaign_id: execution.campaignId,
+      group_id: null,
+    },
+    subjects:
+      subject?.model && subject.provider
+        ? [
+            {
+              id: subject.model,
+              model: subject.model,
+              provider: subject.provider,
+              scenarios: metrics(runs).map((metric) => ({
+                id: metric.scenario_id,
+                scenario_version: metric.scenario_version,
+                case_id:
+                  runs.find((run) => run.scenarioId === metric.scenario_id)
+                    ?.caseId ?? undefined,
+              })),
+            },
+          ]
+        : [],
+    scenario_metrics: metrics(runs),
+    totals: {
+      expected_reports: aggregate?.planned_runs ?? null,
+      received_reports: aggregate?.observed_runs ?? null,
+      total_tokens: total_tokens ?? null,
+      wall_time_seconds:
+        wall_time_seconds === undefined ? null : wall_time_seconds / 1000,
+      total_cost_usd: total_cost_usd ?? null,
+      technical_failures:
+        runs.length > 0
+          ? runs.filter((run) => run.technical === 'technical_invalid').length
+          : null,
+      scenario_pass_rate: aggregate?.completion_rate ?? null,
+      report_coverage:
+        aggregate && aggregate.planned_runs > 0
+          ? aggregate.observed_runs / aggregate.planned_runs
+          : null,
+      function_calls: function_calls ?? null,
+      turns: turns ?? null,
+      function_call_errors:
+        completeSum(runs.map((run) => run.functionCallErrors)) ?? null,
+    },
+  }
+}
+
+/** Mean objective score over the runs RC actually measured; absent remains absent. */
+function finiteMean(scores: Array<number | null | undefined>) {
+  const measured = scores.filter(
+    (score): score is number =>
+      typeof score === 'number' && Number.isFinite(score),
+  )
+  return measured.length === 0
+    ? null
+    : measured.reduce((sum, score) => sum + score, 0) / measured.length
+}
+
+function median(values: Array<number | null | undefined>) {
+  const measured = values
+    .filter(
+      (value): value is number =>
+        typeof value === 'number' && Number.isFinite(value),
+    )
+    .sort((left, right) => left - right)
+  if (measured.length === 0) return null
+  return (
+    (measured[Math.floor((measured.length - 1) / 2)] +
+      measured[Math.floor(measured.length / 2)]) /
+    2
+  )
+}
+
+function record(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === 'object' && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : null
+}
+
+function text(value: unknown) {
+  return typeof value === 'string' && value.length > 0 ? value : null
+}
+
+function seedNumber(value: string | number | null | undefined) {
+  if (value === null || value === undefined || value === '') return null
+  const number = Number(value)
+  return Number.isSafeInteger(number) && number >= 0 ? number : null
+}
+
+function seedString(
+  value: string | number | null | undefined,
+  caseId?: string | null,
+) {
+  const hex = caseId?.match(/:seed-([0-9a-f]{16})$/i)?.[1]
+  if (hex) return BigInt(`0x${hex}`).toString()
+  if (
+    (typeof value === 'string' && /^\d+$/.test(value)) ||
+    (typeof value === 'number' && Number.isSafeInteger(value) && value >= 0)
+  )
+    return BigInt(value).toString()
+  return null
+}
+
+function slotKey(
+  scenarioId: string,
+  seed: string | number | null | undefined,
+  repetition: number | null | undefined,
+  caseId?: string | null,
+) {
+  const normalizedSeed = seedString(seed, caseId)
+  return normalizedSeed === null || !Number.isInteger(repetition)
+    ? null
+    : JSON.stringify([scenarioId, normalizedSeed, repetition])
+}
+
+function localRepetition(
+  entry: Record<string, unknown>,
+  run: DashboardRunProjection,
+  index: number,
+) {
+  if (
+    typeof entry.round === 'number' &&
+    Number.isInteger(entry.round) &&
+    entry.round > 0
+  )
+    return entry.round - 1
+  return typeof run.repetition === 'number' &&
+    Number.isInteger(run.repetition) &&
+    run.repetition >= 0
+    ? run.repetition
+    : index
+}
+
+function aggregateStatus(runs: RcRun[]) {
+  if (runs.length === 0) return 'unavailable'
+  if (runs.every((run) => run.status === 'passed')) return 'passed'
+  if (runs.some((run) => run.technical === 'technical_invalid'))
+    return 'technical_failed'
+  return (
+    runs.find((run) => run.status && run.status !== 'passed')?.status ??
+    'incomplete'
+  )
+}
+
+function localRuns(detail: DashboardExecutionDetail): RcRun[] {
+  const seen = new Set<string>()
+  return detail.reports.flatMap(
+    (entry, entryIndex) =>
+      entry.report?.scenarios.flatMap((scenario, scenarioIndex) => {
+        const scenarioCase = record(scenario.case)
+        const caseId = text(scenario.case_id)
+        const seed = scenarioCase?.seed
+        return scenario.runs.flatMap((run, runIndex) => {
+          const executionId =
+            entry.native_execution_id ?? `report:${entryIndex}`
+          const id = `${executionId}:${scenarioIndex}:${run.run_id}`
+          if (seen.has(id)) return []
+          seen.add(id)
+          const attemptsComplete = localAttemptsComplete(run)
+          return [
+            {
+              id,
+              attemptsComplete,
+              scenarioId: scenario.scenario_id,
+              scenarioVersion: scenario.scenario_version,
+              caseId,
+              seed:
+                typeof seed === 'string' || typeof seed === 'number'
+                  ? String(seed)
+                  : null,
+              repetition: localRepetition(entry, run, runIndex),
+              status: run.status,
+              completion: run.completion,
+              technical: run.technical,
+              objectiveScore: run.objective_score,
+              wallTimeMs: run.wall_time_ms ?? null,
+              totalTokens: inclusiveTokens(run),
+              costSubjectUsd: attemptsComplete
+                ? (run.cost?.subject_usd ?? null)
+                : null,
+              turns:
+                attemptsComplete &&
+                typeof run.efficiency?.root_turns === 'number'
+                  ? run.efficiency.root_turns +
+                    (typeof run.efficiency.child_turns === 'number'
+                      ? run.efficiency.child_turns
+                      : 0)
+                  : null,
+              functionCalls: attemptsComplete
+                ? (run.efficiency?.function_calls ?? null)
+                : null,
+              functionCallErrors: attemptsComplete
+                ? (run.efficiency?.function_call_errors ?? null)
+                : null,
+            },
+          ]
+        })
+      }) ?? [],
+  )
+}
+
+function observation(
+  runs: RcRun[],
+  context: {
+    observationId: string
+    executionId: string
+    completedAt: string
+    source: TestObservation['source']
+    sourceUrl: string | null
+    subjectProvider: string
+    subjectModel: string
+    judgeProvider: string | null
+    judgeModel: string | null
+    contractSha256?: string
+  },
+): TestObservation {
+  const complete = runs.map((run) =>
+    run.attemptsComplete
+      ? run
+      : {
+          ...run,
+          totalTokens: null,
+          costSubjectUsd: null,
+          functionCalls: null,
+          functionCallErrors: null,
+          turns: null,
+        },
+  )
+  const scores = complete.map((run) => run.objectiveScore)
+  const cohorts = new Set(
+    complete.map((run) => run.cohortSha256).filter(Boolean),
+  )
+  const harnesses = new Set(
+    complete.map((run) => run.identity?.harnessVersion).filter(Boolean),
+  )
+  return {
+    observation_id: context.observationId,
+    source: context.source,
+    source_url: context.sourceUrl,
+    execution_id: context.executionId,
+    evaluated_version_id: null,
+    cohort_id: cohorts.size === 1 ? ([...cohorts][0] ?? '') : '',
+    completed_at: context.completedAt,
+    case_id: complete[0]?.caseId ?? '',
+    contract_sha256: context.contractSha256 ?? '',
+    assessment_profile_sha256: '',
+    status: aggregateStatus(complete),
+    median_score: median(scores),
+    run_count: complete.length,
+    scored_runs: scores.filter(
+      (score) => typeof score === 'number' && Number.isFinite(score),
+    ).length,
+    scenario_version: complete[0]?.scenarioVersion ?? undefined,
+    seed: seedNumber(complete[0]?.seed),
+    system_version_id: null,
+    system_label:
+      harnesses.size === 1 ? `Harness ${[...harnesses][0]}` : 'Unknown system',
+    stack_mode: '',
+    harness_revision: null,
+    system_revision: null,
+    engine_revision: null,
+    subject_provider: context.subjectProvider,
+    subject_model: context.subjectModel,
+    judge_provider: context.judgeProvider,
+    judge_model: context.judgeModel,
+    median_cost_usd: median(complete.map((run) => run.costSubjectUsd)),
+    median_tokens: median(complete.map((run) => run.totalTokens)),
+    median_duration_seconds: median(
+      complete.map((run) =>
+        run.wallTimeMs === null ? null : run.wallTimeMs / 1000,
+      ),
+    ),
+    median_function_calls: median(complete.map((run) => run.functionCalls)),
+    median_function_call_errors: median(
+      complete.map((run) => run.functionCallErrors),
+    ),
+    median_turns: median(complete.map((run) => run.turns)),
+  }
+}
+
+/** Project one RC execution into per-case observations for a single test. */
+export function referenceScenarioObservations(
+  reference: RcReference,
+  scenarioId: string,
+): TestObservation[] {
+  const groups = new Map<string, RcRun[]>()
+  reference.runs
+    .filter((run) => run.scenarioId === scenarioId)
+    .forEach((run, index) => {
+      const identified =
+        run.caseId != null && run.scenarioVersion != null && run.seed != null
+      const key = identified
+        ? JSON.stringify([run.caseId, run.scenarioVersion, run.seed])
+        : `unknown:${run.id ?? index}`
+      groups.set(key, [...(groups.get(key) ?? []), run])
+    })
+  const plan = reference.execution.plan
+  const subject = record(plan.subject)
+  const judge = record(plan.judge)
+  return [...groups.entries()].map(([observationId, runs]) =>
+    observation(runs, {
+      observationId,
+      executionId: `rc:${reference.execution.id}`,
+      completedAt:
+        reference.execution.completedAt ?? reference.execution.requestedAt,
+      source: 'release-control',
+      sourceUrl: reference.execution.ghRunUrl ?? null,
+      subjectProvider:
+        text(subject?.provider) ??
+        text(runs[0]?.identity?.subjectProvider) ??
+        '',
+      subjectModel:
+        text(subject?.model) ?? text(runs[0]?.identity?.subjectModel) ?? '',
+      judgeProvider:
+        text(judge?.provider) ?? text(runs[0]?.identity?.judgeProvider),
+      judgeModel: text(judge?.model) ?? text(runs[0]?.identity?.judgeModel),
+    }),
+  )
+}
+
+/** Project local Results with the same score, token and subject-cost semantics as RC. */
+export function localScenarioObservations(
+  detail: DashboardExecutionDetail,
+  scenarioId: string,
+): TestObservation[] {
+  const groups = new Map<string, RcRun[]>()
+  for (const run of localRuns(detail).filter(
+    (candidate) => candidate.scenarioId === scenarioId,
+  )) {
+    const identified =
+      run.caseId != null && run.scenarioVersion != null && run.seed != null
+    const identity = identified
+      ? JSON.stringify([run.caseId, run.scenarioVersion, run.seed])
+      : `unknown:${run.id}`
+    groups.set(identity, [...(groups.get(identity) ?? []), run])
+  }
+  const subject = detail.subjects[0]
+  const judge = record(subject?.judge)
+  const metric = detail.scenario_metrics?.find(
+    (candidate) => candidate.scenario_id === scenarioId,
+  )
+  return [...groups.entries()].map(([observationId, runs]) =>
+    observation(runs, {
+      observationId,
+      executionId: detail.id,
+      completedAt: detail.completed_at ?? detail.started_at ?? '',
+      source: 'local',
+      sourceUrl: null,
+      subjectProvider: subject?.provider ?? '',
+      subjectModel: subject?.model ?? '',
+      judgeProvider: text(judge?.provider),
+      judgeModel: text(judge?.model),
+      contractSha256: text(metric?.contract_fingerprint) ?? '',
+    }),
+  )
+}
+
+export function objectiveScore(view: RcReference | DashboardExecutionDetail) {
+  if ('aggregate' in view) {
+    const reference = view as RcReference
+    return finiteMean(reference.runs.map((run) => run.objectiveScore))
+  }
+  return finiteMean(
+    view.reports.flatMap(
+      (entry) =>
+        entry.report?.scenarios.flatMap((scenario) =>
+          scenario.runs.map((run) => run.objective_score),
+        ) ?? [],
+    ),
+  )
+}
+
+function localAttemptsComplete(run: DashboardRunProjection) {
+  const unavailable = run.efficiency?.unavailable
+  return (
+    run.efficiency != null &&
+    !(
+      unavailable &&
+      typeof unavailable === 'object' &&
+      'retry_efficiency' in unavailable
+    ) &&
+    (run.efficiency.technical_attempts == null ||
+      run.efficiency.technical_attempts ===
+        (run.retry_attempts?.length ?? 0) + 1)
+  )
+}
+
+// RC counts cache tokens across every retained technical attempt too.
+function inclusiveTokens(run: DashboardRunProjection): number | null {
+  if (!localAttemptsComplete(run)) return null
+  const attempts = [run, ...(run.retry_attempts ?? [])]
+  const cache = completeSum(
+    attempts.map((attempt) => {
+      const metrics = attempt.metrics
+      if (metrics?.complete !== true || !metrics.totals) return null
+      return (
+        completeSum([
+          metrics.totals.cache_read_tokens ?? 0,
+          metrics.totals.cache_write_tokens ?? 0,
+        ]) ?? null
+      )
+    }),
+  )
+  const nonCache = run.efficiency?.total_tokens
+  return typeof nonCache === 'number' && cache !== undefined
+    ? nonCache + cache
+    : null
+}
+
+export function comparisonSummary(
+  view: DashboardExecutionDetail,
+): DashboardExecutionSummary {
+  const runs = localRuns(view)
+  if (runs.length === 0)
+    return {
+      ...view,
+      scenario_metrics: [],
+      totals: {
+        ...view.totals,
+        total_tokens: null,
+        tokens_per_completion: null,
+        failed_attempt_tokens: null,
+        total_cost_usd: null,
+        wall_time_seconds: null,
+        function_calls: null,
+        function_call_errors: null,
+        turns: null,
+        technical_failures: null,
+      },
+    }
+  return {
+    ...view,
+    scenario_metrics: metrics(runs),
+    totals: {
+      ...view.totals,
+      total_tokens: completeSum(runs.map((run) => run.totalTokens)) ?? null,
+      tokens_per_completion: null,
+      failed_attempt_tokens: null,
+      total_cost_usd:
+        completeSum(runs.map((run) => run.costSubjectUsd)) ?? null,
+      wall_time_seconds: completeMean(
+        runs.map((run) => run.wallTimeMs),
+        1000,
+      ),
+      function_calls: completeSum(runs.map((run) => run.functionCalls)) ?? null,
+      function_call_errors:
+        completeSum(runs.map((run) => run.functionCallErrors)) ?? null,
+      turns: completeSum(runs.map((run) => run.turns)) ?? null,
+      technical_failures: runs.filter(
+        (run) => run.technical === 'technical_invalid',
+      ).length,
+    },
+  }
+}
+
+/** Apply RC's "remove incomplete tests" rule to an RC/local comparison. */
+export function filterReferenceComparison(
+  reference: RcReference,
+  candidate: DashboardExecutionDetail,
+) {
+  const referenceSlots = reference.runs.flatMap((run) => {
+    const key = slotKey(run.scenarioId, run.seed, run.repetition, run.caseId)
+    return key ? [{ key, run }] : []
+  })
+  const candidateSlots = localRuns(candidate).flatMap((run) => {
+    const key = slotKey(run.scenarioId, run.seed, run.repetition, run.caseId)
+    return key ? [{ key, run }] : []
+  })
+  const referenceKeys = new Set(referenceSlots.map(({ key }) => key))
+  const candidateKeys = new Set(candidateSlots.map(({ key }) => key))
+  const excluded = new Set(
+    [...referenceSlots, ...candidateSlots]
+      .filter(
+        ({ run }) =>
+          typeof run.objectiveScore !== 'number' ||
+          !Number.isFinite(run.objectiveScore) ||
+          run.objectiveScore === 0,
+      )
+      .map(({ key }) => key),
+  )
+  const retained = new Set(
+    [...referenceKeys].filter(
+      (key) => candidateKeys.has(key) && !excluded.has(key),
+    ),
+  )
+  const referenceRuns = reference.runs.filter((run) => {
+    const key = slotKey(run.scenarioId, run.seed, run.repetition, run.caseId)
+    return key !== null && retained.has(key)
+  })
+  const filteredReference: RcReference = {
+    ...reference,
+    execution: {
+      ...reference.execution,
+      runCount: referenceRuns.length,
+      reportCount: referenceRuns.length,
+    },
+    runs: referenceRuns,
+    aggregate: {
+      planned_runs: referenceRuns.length,
+      observed_runs: referenceRuns.length,
+      completion_rate:
+        referenceRuns.length === 0
+          ? null
+          : referenceRuns.filter((run) => run.completion === 'completed')
+              .length / referenceRuns.length,
+      execution_reliability:
+        referenceRuns.length === 0
+          ? null
+          : referenceRuns.filter((run) => run.technical !== 'technical_invalid')
+              .length / referenceRuns.length,
+    },
+  }
+  const reports = candidate.reports.flatMap((entry) => {
+    if (!entry.report) return []
+    const scenarios = entry.report.scenarios.flatMap((scenario) => {
+      const scenarioCase = record(scenario.case)
+      const caseId = text(scenario.case_id)
+      const runs = scenario.runs.flatMap((run, runIndex) => {
+        const repetition = localRepetition(entry, run, runIndex)
+        const key = slotKey(
+          scenario.scenario_id,
+          scenarioCase?.seed as string | number | null | undefined,
+          repetition,
+          caseId,
+        )
+        return key !== null && retained.has(key) ? [{ ...run, repetition }] : []
+      })
+      return runs.length > 0 ? [{ ...scenario, runs }] : []
+    })
+    return scenarios.length > 0
+      ? [{ ...entry, report: { ...entry.report, scenarios } }]
+      : []
+  })
+  const retainedScenarios = new Set(referenceRuns.map((run) => run.scenarioId))
+  const candidateRunCount = reports.reduce(
+    (total, entry) =>
+      total +
+      (entry.report?.scenarios.reduce(
+        (scenarioTotal, scenario) => scenarioTotal + scenario.runs.length,
+        0,
+      ) ?? 0),
+    0,
+  )
+  const filteredCandidate: DashboardExecutionDetail = {
+    ...candidate,
+    subjects: candidate.subjects.map((subject) => ({
+      ...subject,
+      scenarios: subject.scenarios.filter((scenario) =>
+        retainedScenarios.has(scenario.id),
+      ),
+    })),
+    reports,
+    scenario_metrics: [],
+    totals: {
+      missing_reports: 0,
+      expected_reports: candidateRunCount,
+      received_reports: candidateRunCount,
+      report_coverage: candidateRunCount > 0 ? 1 : null,
+    },
+  }
+  const summary = comparisonSummary(filteredCandidate)
+  return {
+    reference: filteredReference,
+    candidate: {
+      ...filteredCandidate,
+      scenario_metrics: summary.scenario_metrics,
+      totals: summary.totals,
+    },
+  }
+}
+
+function referenceError(cause: unknown): never {
+  const error = record(cause)
+  if (error?.code === 'function_not_found') {
+    throw new Error(
+      'Release Control is not connected to this Engine namespace with E2E history support. Open a Release Control instance with the E2E bridge, connect it to the same Engine as this Console, and keep that tab open.',
+    )
+  }
+  throw cause instanceof Error
+    ? cause
+    : new Error(text(error?.message) ?? String(cause))
+}
+
+export async function listReleaseControlExecutions(): Promise<
+  DashboardExecutionSummary[]
+> {
+  const { plans } = await getDashboardIiiClient()
+    .then((client) =>
+      client.trigger<{ plans: RcPlan[] }>(
+        PLANS_LIST,
+        {},
+        { namespace: 'default' },
+      ),
+    )
+    .catch(referenceError)
+  return plans
+    .flatMap((plan) => plan.recentExecutions)
+    .map((execution) =>
+      referenceSummary({
+        execution,
+        runs: [],
+        aggregate: null,
+      }),
+    )
+}
+
+export async function getReleaseControlReference(
+  id: string,
+): Promise<RcReference> {
+  return getDashboardIiiClient()
+    .then((client) =>
+      client.trigger<RcReference>(
+        EXECUTION_REFERENCE,
+        {
+          executionId: id.replace(/^rc:/, ''),
+        },
+        { namespace: 'default' },
+      ),
+    )
+    .catch(referenceError)
+}
