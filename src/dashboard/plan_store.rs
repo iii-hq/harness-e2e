@@ -2052,7 +2052,7 @@ mod tests {
             assert_eq!(runner.submitted.load(Ordering::SeqCst), 1);
             let detail = manager.execution_detail(&id).unwrap().unwrap();
             let reports = detail["reports"].as_array().unwrap();
-            assert_eq!(reports.len(), 90);
+            assert_eq!(reports.len(), 110);
             // Reconciliation retains evidence from the persisted child even
             // when admission returned a different identity; remaining slots stay explicit.
             assert_eq!(reports[0]["available"], wrong_identity);
