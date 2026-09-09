@@ -42,7 +42,7 @@ use super::{
 };
 
 pub const ID: &str = "wake_chain_soak";
-const VERSION: u32 = 4;
+const VERSION: u32 = 5;
 const DELIVERABLE_ID: &str = "soak_trace";
 
 const COUNTER_KEY: &str = "chain-counter";
@@ -53,6 +53,9 @@ const MIN_TICK_INTERVAL_MS: u64 = 3_000;
 const MAX_TICK_INTERVAL_MS: u64 = 10_000;
 /// The completion reply is one marker line; anything long is chain noise.
 const MAX_REPORT_CHARS: usize = 200;
+/// Evaluated per-generation output budget. Provider `output` already includes
+/// reasoning tokens, so reasoning must not be added again.
+const MAX_EVALUATED_OUTPUT_TOKENS: u64 = 4_096;
 
 #[derive(Debug, Clone, Copy)]
 struct Rung {
@@ -80,14 +83,21 @@ const MONOTONIC_PROGRESS: AssessmentSpec = AssessmentSpec::scored(
 );
 const QUIET_CHAIN: AssessmentSpec = AssessmentSpec::scored(
     "quiet_chain",
-    15,
+    10,
     "The chain runs without function errors or stray calls and reports in a single short line.",
+);
+const OUTPUT_BUDGET: AssessmentSpec = AssessmentSpec::scored_in(
+    "output_budget",
+    5,
+    "Every generation reports no more than 4,096 output tokens, including reasoning tokens.",
+    EvaluationDimension::Efficiency,
 );
 const ASSESSMENTS: &[AssessmentSpec] = &[
     CHAIN_COMPLETED,
     WAKE_INTEGRITY,
     MONOTONIC_PROGRESS,
     QUIET_CHAIN,
+    OUTPUT_BUDGET,
 ];
 
 fn report_marker(ticks: u8) -> String {
@@ -169,7 +179,7 @@ fn scenario_for_case(run_id: &str, rung: Rung) -> ScenarioSpec {
             // One live turn plus one woken turn per tick, with slack for
             // discovery and the odd re-prompt.
             max_turns: 8 + 2 * u32::from(rung.ticks),
-            max_output_tokens: Some(4_096),
+            max_output_tokens: Some(32_768),
             // Unbounded on purpose: a soak run is long because the subject
             // waits, not because it spends. Capping total tokens would turn
             // scheduler endurance into a token-budget test; spend still shows
@@ -450,6 +460,36 @@ struct WakeAudit {
     fired_exact: bool,
 }
 
+struct OutputBudgetAudit {
+    generations: usize,
+    measured: usize,
+    peak: Option<u64>,
+    passed: bool,
+}
+
+fn output_budget_audit(transcript: &Value) -> OutputBudgetAudit {
+    let outputs = transcript
+        .get("messages")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|entry| entry.get("message"))
+        .filter(|message| message.get("role").and_then(Value::as_str) == Some("assistant"))
+        .map(|message| message.pointer("/usage/output").and_then(Value::as_u64))
+        .collect::<Vec<_>>();
+    let generations = outputs.len();
+    let measured = outputs.iter().flatten().count();
+    let peak = outputs.into_iter().flatten().max();
+    OutputBudgetAudit {
+        generations,
+        measured,
+        peak,
+        passed: generations > 0
+            && measured == generations
+            && peak.is_some_and(|peak| peak <= MAX_EVALUATED_OUTPUT_TOKENS),
+    }
+}
+
 fn wake_audit(transcript: &Value, names: &Names, ticks: u8) -> WakeAudit {
     let calls = common::function_calls(transcript);
     let registration_calls = calls
@@ -514,6 +554,10 @@ async fn evaluate_chain(
     let errors = observation.metrics.totals.function_call_errors;
     let response_chars = observation.response.chars().count();
     let quiet = errors == 0 && disciplined && response_chars <= MAX_REPORT_CHARS;
+    let output_budget = output_budget_audit(&observation.transcript);
+    let peak = output_budget
+        .peak
+        .map_or_else(|| "unavailable".to_string(), |value| value.to_string());
 
     Ok(assessment::build_evaluation(
         if counter_final {
@@ -558,6 +602,16 @@ async fn evaluate_chain(
                 format!(
                     "function_errors={errors}, disciplined={disciplined}, \
                  response_chars={response_chars}/{MAX_REPORT_CHARS}"
+                ),
+            ),
+            OUTPUT_BUDGET.full_or_zero(
+                output_budget.passed,
+                format!(
+                    "peak_output_tokens={peak}, limit={MAX_EVALUATED_OUTPUT_TOKENS}, \
+                     coverage={}/{}, missing_usage={} (provider output includes reasoning)",
+                    output_budget.measured,
+                    output_budget.generations,
+                    output_budget.generations - output_budget.measured
                 ),
             ),
         ],
@@ -985,6 +1039,7 @@ mod tests {
             first.spec.execution.max_turns,
             8 + 2 * u32::from(RUNG.ticks)
         );
+        assert_eq!(first.spec.execution.max_output_tokens, Some(32_768));
         assert_eq!(
             first.case.inputs.get("ticks").and_then(Value::as_u64),
             Some(50)
@@ -994,6 +1049,62 @@ mod tests {
         assert_eq!(
             usize::from(first.case.complexity.profile.artifact_count),
             first.case.deliverable_contract.artifacts.len()
+        );
+    }
+
+    #[test]
+    fn output_budget_requires_complete_usage_with_each_generation_at_or_below_limit() {
+        let transcript = |messages: Vec<Value>| json!({ "messages": messages });
+        let assistant = |output: Option<u64>, reasoning: Option<u64>| {
+            let mut message = json!({
+                "message": {
+                    "role": "assistant",
+                    "content": [],
+                    "usage": {}
+                }
+            });
+            if let Some(output) = output {
+                message["message"]["usage"]["output"] = json!(output);
+            }
+            if let Some(reasoning) = reasoning {
+                message["message"]["usage"]["reasoning"] = json!(reasoning);
+            }
+            message
+        };
+
+        let at_limit = output_budget_audit(&transcript(vec![
+            assistant(
+                Some(MAX_EVALUATED_OUTPUT_TOKENS),
+                Some(MAX_EVALUATED_OUTPUT_TOKENS),
+            ),
+            assistant(
+                Some(MAX_EVALUATED_OUTPUT_TOKENS),
+                Some(MAX_EVALUATED_OUTPUT_TOKENS),
+            ),
+        ]));
+        assert!(at_limit.passed);
+        assert_eq!(at_limit.peak, Some(MAX_EVALUATED_OUTPUT_TOKENS));
+        assert_eq!((at_limit.measured, at_limit.generations), (2, 2));
+
+        let over_limit = output_budget_audit(&transcript(vec![assistant(
+            Some(MAX_EVALUATED_OUTPUT_TOKENS + 1),
+            Some(MAX_EVALUATED_OUTPUT_TOKENS),
+        )]));
+        assert!(!over_limit.passed);
+        assert_eq!(over_limit.peak, Some(MAX_EVALUATED_OUTPUT_TOKENS + 1));
+
+        let missing = output_budget_audit(&transcript(vec![
+            assistant(Some(1), Some(1)),
+            assistant(None, None),
+        ]));
+        assert!(!missing.passed);
+        assert_eq!((missing.measured, missing.generations), (1, 2));
+
+        let empty = output_budget_audit(&transcript(Vec::new()));
+        assert!(!empty.passed);
+        assert_eq!(
+            (empty.measured, empty.generations, empty.peak),
+            (0, 0, None)
         );
     }
 }

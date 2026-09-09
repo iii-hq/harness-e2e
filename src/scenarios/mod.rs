@@ -975,7 +975,7 @@ mod tests {
             (ScenarioId::DepthLadder, 4),
             (ScenarioId::QuorumFanIn, 3),
             (ScenarioId::ContentionLedger, 4),
-            (ScenarioId::WakeChainSoak, 4),
+            (ScenarioId::WakeChainSoak, 5),
             (ScenarioId::ChessEngineBuild, 3),
             (ScenarioId::ChessPlayLadder, 4),
             (ScenarioId::TrendBlog, 4),
