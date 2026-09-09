@@ -13,13 +13,14 @@ use crate::markdown::ScenarioKey;
 use crate::scenarios::{ComplexityTier, ScenarioExecutionKind};
 
 const SOURCE: &str = include_str!("../config/test-plan.json");
-pub const PROFILE_IDS: [&str; 6] = [
+pub const PROFILE_IDS: [&str; 7] = [
     "smoke",
     "regression",
     "capability",
     "evolution",
     "resilience",
     "endurance",
+    "software-engineering",
 ];
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -525,6 +526,7 @@ mod tests {
             ("evolution", 22, 66),
             ("resilience", 4, 13),
             ("endurance", 5, 5),
+            ("software-engineering", 11, 11),
         ] {
             let snapshot = plan.materialize(id).unwrap();
             assert_eq!(snapshot.scenario_ids.len(), cases);
@@ -557,6 +559,45 @@ mod tests {
                 assert_eq!(selected.len(), cases);
             }
         }
+    }
+
+    #[test]
+    fn software_engineering_profile_selects_only_kanban_and_registry() {
+        let snapshot = embedded()
+            .unwrap()
+            .materialize("software-engineering")
+            .unwrap();
+        let expected = crate::scenarios::kanban::IDS
+            .into_iter()
+            .chain([
+                "registry_planning",
+                "registry_implementation",
+                "registry_environment",
+                "registry_verification",
+            ])
+            .collect::<Vec<_>>();
+        assert_eq!(snapshot.scenario_ids, expected);
+        let groups = snapshot.campaigns[0]["groups"].as_array().unwrap();
+        assert_eq!(groups.len(), 10);
+        let delivery = groups
+            .iter()
+            .find(|g| g["id"] == "case-registry-implementation")
+            .unwrap();
+        assert_eq!(
+            delivery["scenarios"],
+            json!(["registry_implementation", "registry_verification"])
+        );
+        assert_eq!(snapshot.profile.repetitions, 1);
+        assert_eq!(snapshot.profile.technical_retries, 0);
+        assert_eq!(
+            snapshot
+                .cases
+                .iter()
+                .filter(|case| case["judge_required"] == true)
+                .map(|case| &case["scenario_id"])
+                .collect::<Vec<_>>(),
+            vec![&json!("registry_planning")]
+        );
     }
 
     #[test]

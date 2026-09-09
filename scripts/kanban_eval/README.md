@@ -1,8 +1,9 @@
 # Incremental Kanban evaluation
 
 Seven native Harness scenarios reproduce the fixture's C1–C7 increments from
-their pinned base commits. The `capability` test-plan profile includes them;
-`smoke` and `regression` do not. The local controller also runs base/reference
+their pinned base commits. The `software-engineering` profile combines them with
+the four Registry cases; `capability` also includes Kanban, while `smoke` and
+`regression` do not. The local controller also runs base/reference
 controls without invoking a model, and supports a standalone DeepSeek smoke.
 See [VALIDATION.md](VALIDATION.md) for observed results and remaining gates.
 
@@ -126,9 +127,10 @@ To enable this in Release Control's exact-stack workflow:
 2. Merge the native scenarios and publish a compatible immutable `harness-e2e`
    worker release. Select that release in the Release Control stack; changing
    `runner_sha` alone does not replace the Registry-resolved worker binary.
-3. Materialize the `capability` profile from that runner revision. Its seven
-   `case-kanban-*` groups provision the fixture/runtime and pass the runtime JSON
-   to the worker before calling native `e2e::run`.
+3. Materialize the `software-engineering` profile from that runner revision
+   (or `capability` for broader coverage). Its seven `case-kanban-*` groups
+   provision the fixture/runtime and pass the runtime JSON to the worker before
+   calling native `e2e::run`.
 
 Do not declare CI readiness from unit tests alone: complete reference/base
 controls, a native real-model attempt, compatible catalog/worker identity and

@@ -1875,6 +1875,7 @@ mod tests {
             ("capability", 55, 55),
             ("evolution", 66, 63),
             ("endurance", 5, 5),
+            ("software-engineering", 11, 10),
         ] {
             let root = tempfile::tempdir().unwrap();
             let runner = Arc::new(FakeRunner::new(root.path().into()));
