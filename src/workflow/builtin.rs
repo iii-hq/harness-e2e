@@ -394,6 +394,7 @@ impl StepExecutor for HarnessStepExecutor {
                     }),
                     options: Some(SendOptions {
                         max_turns: Some(config.max_turns),
+                        max_cost_usd: None,
                         max_output_tokens: config.max_output_tokens,
                         max_total_tokens: config.max_total_tokens,
                         max_validation_retries: None,
@@ -550,6 +551,7 @@ impl StepExecutor for HarnessStepExecutorV2 {
                     }),
                     options: Some(SendOptions {
                         max_turns: Some(config.max_turns),
+                        max_cost_usd: None,
                         max_output_tokens: config.max_output_tokens,
                         max_total_tokens: config.max_total_tokens,
                         max_validation_retries: None,

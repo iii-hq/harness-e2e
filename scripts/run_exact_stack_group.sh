@@ -15,6 +15,7 @@ compose_add_timeout_seconds=${HARNESS_E2E_COMPOSE_ADD_TIMEOUT_SECONDS:-600}
 run_timeout_seconds=${HARNESS_E2E_RUN_TIMEOUT_SECONDS:-10800}
 fixture_launcher=${HARNESS_E2E_FIXTURE_LAUNCHER:-"$repo_root/scripts/engineering_ticket_fixture.py"}
 fixture_source_root=${HARNESS_E2E_FIXTURE_SOURCE_ROOT:-"$repo_root/tests/fixtures/campaign"}
+kanban_bootstrap=${HARNESS_E2E_KANBAN_BOOTSTRAP:-"$repo_root/scripts/kanban_eval/bootstrap.py"}
 engineering_fixture_revision=7a6b25b3cd12d66af74a358ae86e0d2b846bd384
 shared_fixture_revision=16f6b9e05e34e09c824191eed0631d77f85be6a9
 
@@ -314,6 +315,21 @@ if find "$tools_dir" -type f -name "$forbidden_name" -print -quit | grep -q .; t
   fail "forbidden lifecycle helper was installed"
 fi
 
+if [[ "$campaign_group_id" == case-kanban-* ]]; then
+  fixture_root=${HARNESS_E2E_KANBAN_FIXTURE_ROOT:-"$repo_root/target/kanban-fixture"}
+  [[ -f "$kanban_bootstrap" ]] || fail "Kanban bootstrap is unavailable: $kanban_bootstrap"
+  [[ -d "$fixture_root/.git" ]] || fail "Kanban fixture checkout is unavailable: $fixture_root"
+  kanban_runtime="$run_root/kanban-runtime.json"
+  failure_phase=kanban_bootstrap
+  python3 "$kanban_bootstrap" \
+    --fixture "$fixture_root" --iii "$iii_bin" --runtime-root "$run_root/kanban-runtime" \
+    --output "$kanban_runtime" --node "$(realpath "$(command -v node)")" \
+    --npm "$(realpath "$(command -v npm)")"
+  jq -e 'keys == ["browser-dependencies","browsers","dependencies","fixture","iii","image","node","playwright-module","pnpm"]' \
+    "$kanban_runtime" >/dev/null
+  export HARNESS_E2E_KANBAN_RUNTIME="$kanban_runtime"
+fi
+
 project_args=(
   --contract "$contract_path"
   --namespace "$namespace"
@@ -337,6 +353,9 @@ fi
 if [[ -n "${HARNESS_E2E_SWE_WORKSPACE_ROOT:-}" ]]; then
   project_args+=(--environment \
     "harness-e2e.HARNESS_E2E_SWE_WORKSPACE_ROOT=$HARNESS_E2E_SWE_WORKSPACE_ROOT")
+fi
+if [[ -n "${HARNESS_E2E_KANBAN_RUNTIME:-}" ]]; then
+  project_args+=(--environment "harness-e2e.HARNESS_E2E_KANBAN_RUNTIME=$HARNESS_E2E_KANBAN_RUNTIME")
 fi
 python3 "$contract_tool" project "${project_args[@]}"
 

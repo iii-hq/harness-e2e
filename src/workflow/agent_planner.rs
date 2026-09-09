@@ -415,6 +415,7 @@ async fn run_fresh_planner(
                 }),
                 options: Some(SendOptions {
                     max_turns: Some(1),
+                    max_cost_usd: None,
                     max_output_tokens: Some(PLANNER_MAX_OUTPUT_TOKENS),
                     max_total_tokens: Some(PLANNER_MAX_TOTAL_TOKENS),
                     max_validation_retries: Some(0),

@@ -1,0 +1,97 @@
+{
+  "schema": "kanban-scenarios/v1",
+  "status": "specification-only",
+  "shared_prompt": "Work in the supplied repository snapshot. Implement only the requested increment as a standalone browser application with a Node backend using iii and Compose. Do not add a Console dependency or iii.worker.yaml. Preserve existing behavior and data. First record a short implementation plan, then implement, add meaningful tests, run the available checks, and report results and any unverified behavior. Use the existing application conventions. Do not inspect other repositories or attempt to obtain later versions of this repository. No tasklist comparison or skill modification is in scope.",
+  "reference_checks": ["pnpm --dir kanban install --frozen-lockfile", "pnpm --dir kanban typecheck", "pnpm --dir kanban test", "pnpm --dir kanban build"],
+  "cases": [
+    {
+      "id": "kanban_c1_foundation",
+      "base_commit": "3d5091081f88bcdd16b8d1c06c984a4100a32197",
+      "reference_commit": "6bfb939f19cdf3ab6f81b2ce9ad007e085c5b00b",
+      "prompt": "Create kanban/ with a Node/TypeScript backend using iii and a standalone browser settings page. Add worker-compose.yaml with a local application entry and a working development command with reload. Serve the UI on loopback, port 3000 by default with PORT override. Register configuration id kanban using the iii configuration service; data_dir defaults to ./data resolved relative to the repository root. Preserve pre-existing configuration and unrelated settings. GET /api/config returns data_dir and resolved_data_dir; PUT /api/config persists a non-empty data_dir. The form must load, save and report errors, and external iii configuration changes must update the effective backend path. Provide install, typecheck, test and build commands. Do not implement tickets yet.",
+      "criteria": [
+        "Compose starts the standalone app without Console or undeclared dependencies; browser assets load.",
+        "Missing configuration is initialized; existing data_dir and unrelated settings survive startup and saving.",
+        "Browser save and direct iii configuration updates select the effective directory; relative paths resolve from repository root.",
+        "Invalid config returns 400; asset paths such as constructor, toString and __proto__ return 404.",
+        "A development source change is reflected without manually rebuilding; desktop and mobile settings remain usable."
+      ]
+    },
+    {
+      "id": "kanban_c2_persistence",
+      "base_commit": "6bfb939f19cdf3ab6f81b2ce9ad007e085c5b00b",
+      "reference_commit": "4540366cc0760629c69b2d649b0c9ef2976e7b60",
+      "prompt": "Add persistent tickets to the configured data directory. Expose iii functions kanban::tickets::create, ::list and ::get. Each ticket has id (UUID), key (KAN-N), title, description, status, priority, assignee, created_at and updated_at. Create accepts title plus optional editable fields; defaults are backlog, medium, empty description and null assignee. Statuses: backlog, todo, in_progress, in_review, done. Priorities: low, medium, high, urgent. List returns {tickets:[...]} in creation order; get accepts {id: UUID or readable key}; create/get return a ticket. Persist tickets in tickets.json with atomic replacement and reject invalid input or corrupt stores without data loss. Keep stores isolated when data_dir changes. One application process per store is sufficient. No board UI yet.",
+      "criteria": [
+        "Real iii create/list/get calls work, including lookup by both identifiers and SDK caller metadata.",
+        "Defaults, title normalization, timestamps and unique increasing readable keys are correct.",
+        "Tickets survive process restart and configured directories retain independent data.",
+        "Invalid fields, values and corrupt/duplicate stored records fail without replacing existing data."
+      ]
+    },
+    {
+      "id": "kanban_c3_board",
+      "base_commit": "4540366cc0760629c69b2d649b0c9ef2976e7b60",
+      "reference_commit": "10ff36524b4f6096fb212a6cd239185172a992d7",
+      "prompt": "Make the home page a read-only Kanban board with five columns: Backlog, To do, In progress, In review and Done. Show per-column counts, total count and cards with readable key, title, priority and assignee. GET /api/tickets must invoke the existing iii list function and return {tickets:[...]}. Include a refresh action, loading, empty and recoverable error states. Preserve settings navigation; returning from settings reloads the selected store. Keep the board usable on desktop and mobile, with horizontal scrolling confined to the board. Render user text safely. Do not add ticket creation, detail views, editing or live synchronization yet.",
+      "criteria": [
+        "Tickets created through iii appear in the correct five columns with accurate counts and metadata.",
+        "Empty stores, loading and failed reads are distinguished; retry recovers without fabricated zero counts.",
+        "Refresh and returning from settings load the selected store.",
+        "Markup in titles is literal text; desktop and mobile have no document-wide horizontal overflow."
+      ]
+    },
+    {
+      "id": "kanban_c4_ticket_flow",
+      "base_commit": "10ff36524b4f6096fb212a6cd239185172a992d7",
+      "reference_commit": "adb10c27ec017c8acb6faeaa8bbcfb3ffd739f22",
+      "prompt": "Add ticket creation in a modal with title, description, status, priority and assignee. On success close the modal and open the ticket in its own non-modal detail panel in the same browser tab. Cards must open details by keyboard or pointer. Support direct links, reload and browser history. Details show all editable fields and a delete action that hides the ticket but preserves its record on disk using deleted_at; deleted tickets are not returned by list/get and keys are never reused. Add iii kanban::tickets::delete accepting {id}. HTTP POST /api/tickets returns 201 {ticket}; GET and DELETE /api/tickets/:id return 200 {ticket}, accepting UUID or readable key. Invalid input returns 400, absent/deleted tickets 404, persistence failures 500; creation requires JSON. Preserve existing records without migration. Editing is not in scope yet.",
+      "criteria": [
+        "Creation closes the modal and opens same-tab non-modal details; cards, keyboard, history and reload work.",
+        "Both identifiers work through HTTP and iii; all detail fields reflect persisted values.",
+        "Deletion removes the board card, retains its record after restart and never reuses its key.",
+        "Failed create/delete retains recoverable UI state; navigating during deletion does not leave a stale card.",
+        "UTF-8 request chunks preserve text; non-JSON creation is rejected; layout and focus remain usable on mobile."
+      ]
+    },
+    {
+      "id": "kanban_c5_edit_move",
+      "base_commit": "adb10c27ec017c8acb6faeaa8bbcfb3ffd739f22",
+      "reference_commit": "13058b04a9a471454d3a3e6ee9ec9a98b0a1633b",
+      "prompt": "Add editing in the existing ticket detail panel, with save/cancel for title, description, status, priority and assignee. PATCH /api/tickets/:id accepts a partial JSON object and returns {ticket}; expose iii kanban::tickets::update with {id,changes}. Preserve omitted fields and immutable identifiers/creation metadata, update updated_at, and reject updates to deleted tickets. Add drag-and-drop between board columns to persist a status-only change and update counts. A failed move must leave the card in its original column. Preserve draft inputs on failed saves and refresh the relevant view when a pending operation completes after navigation. Provide a keyboard/mobile alternative through the detail status selector. No comments or multi-user synchronization yet.",
+      "criteria": [
+        "Save updates all supported fields; cancel changes nothing; partial updates preserve unrelated fields.",
+        "Invalid, immutable or empty changes are rejected without writes; deleted tickets cannot be restored by update.",
+        "Real pointer drag changes only status and counts; failure leaves original placement and retry works.",
+        "Pending save/move completion updates the relevant board or details after navigation; drafts survive failures.",
+        "Keyboard/mobile status editing works and all changes survive restart."
+      ]
+    },
+    {
+      "id": "kanban_c6_discussion",
+      "base_commit": "13058b04a9a471454d3a3e6ee9ec9a98b0a1633b",
+      "reference_commit": "f7fc4f0216434906306b3c0de42c32222e18cd5f",
+      "prompt": "Add comments and replies in a chronological activity timeline on ticket details. Store optional comments on the ticket, each with generated UUID id, author, body, created_at and optional parent_id. Author and body must be non-empty trimmed text; names are user-entered labels, not authenticated identity. Replies may target existing comments or replies on the same ticket, never another ticket. Add iii kanban::tickets::comment with {id,comment:{author,body,parent_id?}} and POST /api/tickets/:id/comments returning 201 {ticket}. Existing GET includes comments. Keep parent references understandable and keyboard accessible without unlimited visual nesting. Preserve drafts on failure and during ticket editing; late responses must not erase a newer draft or newly posted activity. Keep comments on edit and soft deletion. No comment editing/deletion, field-change history, authentication or multi-user synchronization.",
+      "criteria": [
+        "Comments, replies and replies to replies persist with valid same-ticket parents in posting order.",
+        "Timeline safely renders text, author and time; parent navigation works by keyboard and on mobile.",
+        "Invalid inputs and foreign parents fail without writes; malformed stored discussions fail closed.",
+        "Failures preserve drafts; navigation and overlapping edit/post responses do not erase new activity or another ticket's draft.",
+        "Existing records remain usable; discussions survive edits, deletion and restart."
+      ]
+    },
+    {
+      "id": "kanban_c7_live",
+      "base_commit": "f7fc4f0216434906306b3c0de42c32222e18cd5f",
+      "reference_commit": "573f523d818e0ef53838c278394af0b7e3b02ca0",
+      "prompt": "Synchronize open browser sessions automatically after ticket creation, edits, moves, deletion, comments and replies, including mutations made directly through iii functions. Implement GET /api/events using SSE with named change events carrying {store: resolved data directory}, an initial notification on each connection and notifications only after successful persistence or effective store changes. Reconnect and refresh current state after missed events. Preserve focus, edit/comment drafts and active dragging during ordinary live updates. Saving an edit must not overwrite remote changes to fields the user did not edit; simultaneous writes to the same field may use last successful write. Clear old-store drafts when storage changes; remote deletion must make stale actions unavailable. Avoid stale responses overwriting newer state. Clean up disconnected SSE clients and allow process shutdown/restart with connections open. No external file watching or shared-store multi-process support is required.",
+      "criteria": [
+        "Three real browser sessions see all mutations without page reload, including direct iii updates.",
+        "Focus, comment/reply drafts and dirty edit fields survive updates; saving preserves untouched remote fields.",
+        "Offline/reconnect and Compose restart recover current state without losing same-store drafts.",
+        "Remote deletion disables stale actions; store switches clear old drafts, including during dragging.",
+        "Late GET/mutation responses do not replace newer state; SSE disconnects release listeners and shutdown finishes."
+      ]
+    }
+  ]
+}

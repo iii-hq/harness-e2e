@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""Run trusted Kanban control probes in Docker-native isolation.
+"""Run trusted Kanban probes in Docker-native isolation.
 
-This is a local control runner, not a model campaign or a registered ScenarioId.
+Supports controls, standalone model smoke tests, and an external Harness subject.
 All runtime inputs are administrator-selected, never supplied by candidate code.
 """
 import argparse
@@ -19,6 +19,26 @@ ENV = {'PATH': '/runtime:/usr/bin:/bin', 'HOME': '/tmp', 'LANG': 'C.UTF-8',
        'LC_ALL': 'C.UTF-8', 'III_TELEMETRY_ENABLED': 'false', 'OTEL_ENABLED': 'false',
        'GIT_CONFIG_NOSYSTEM': '1', 'GIT_CONFIG_GLOBAL': '/dev/null',
        'GIT_TERMINAL_PROMPT': '0', 'CI': 'true'}
+
+RUNTIME_ENGINE = '''set -eu
+iii --no-update-check --config /runtime-state/config.json &
+sleep 1
+'''
+RUNTIME_REGISTER = '''
+iii trigger configuration::register --address 127.0.0.1 --port 50179 --namespace default --json '{"id":"kanban","name":"Kanban","description":"Evaluation data","schema":{"type":"object","properties":{"data_dir":{"type":"string"}},"required":["data_dir"]},"initial_value":{"data_dir":"/data","preserve_me":true}}'
+'''
+RUNTIME_COMPOSE = '''
+exec iii compose --up --engine ws://127.0.0.1:50179 --file /workspace/worker-compose.yaml
+'''
+
+STOP_RUNTIME = '''import os,signal
+for name in os.listdir('/proc'):
+ if name.isdigit() and int(name) not in (1,os.getpid()):
+  try: os.kill(int(name),signal.SIGKILL)
+  except ProcessLookupError: pass
+'''
+
+READY_CHECK = "import urllib.request; assert urllib.request.urlopen('http://127.0.0.1:3000/api/config',timeout=.3).status == 200"
 
 
 class InfrastructureError(RuntimeError):
@@ -59,26 +79,62 @@ def container_command(image, network, role, mounts, environment=ENV, bounded_wor
     return command + [image, '-c', 'exec sleep infinity']
 
 
+def runtime_mounts(args):
+    return [(str(getattr(args, name)), '/runtime/' + name, False)
+            for name in ('node', 'iii', 'pnpm')]
+
+
 def docker_exec(container, command):
     return ['docker', 'exec', container, *command]
 
 
+def stage_changes_command(workspace):
+    return ['/bin/sh', '-c', '''set -eu
+git -C "$1" add --all --force -- .
+git -C "$1" reset --quiet HEAD -- kanban/node_modules kanban/dist data
+''', 'stage-changes', str(workspace)]
+
+
+def capture_candidate_diff(candidate, evidence, name, cancel=None):
+    if bounded(docker_exec(candidate, stage_changes_command('/workspace')),
+               evidence / f'{name}-stage.log', 10, candidate, cancel):
+        raise EvaluationError('candidate change capture failed')
+    if bounded(docker_exec(candidate, ['git', '-C', '/workspace', 'diff', '--cached',
+                                       '--no-ext-diff', 'HEAD']),
+               evidence / f'{name}.diff', 10, candidate, cancel):
+        raise EvaluationError('candidate diff capture failed')
+
+
 def remove_container(container):
-    subprocess.run(['docker', 'rm', '-f', container], stdin=subprocess.DEVNULL,
-                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False)
+    try:
+        subprocess.run(['docker', 'rm', '-f', container], stdin=subprocess.DEVNULL,
+                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                       check=False, timeout=15)
+    except (OSError, subprocess.TimeoutExpired):
+        pass
 
 
-def bounded(command, log, timeout, container=None):
+def bounded(command, log, timeout, container=None, cancel=None, poll=None):
     with open(log, 'wb') as output:
         proc = subprocess.Popen(command, stdin=subprocess.DEVNULL, stdout=output,
                                 stderr=subprocess.STDOUT, start_new_session=True,
                                 preexec_fn=limit_log_size)
+        deadline = time.monotonic() + timeout
         try:
-            return proc.wait(timeout=timeout)
-        except subprocess.TimeoutExpired:
-            if container:
-                remove_container(container)
-            raise
+            while True:
+                if cancel and cancel.is_file():
+                    raise KeyboardInterrupt('external subject cancelled')
+                if poll:
+                    poll()
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    if container:
+                        remove_container(container)
+                    raise subprocess.TimeoutExpired(command, timeout)
+                try:
+                    return proc.wait(timeout=min(remaining, .25 if cancel or poll else remaining))
+                except subprocess.TimeoutExpired:
+                    pass
         finally:
             try:
                 os.killpg(proc.pid, signal.SIGKILL)
@@ -94,6 +150,263 @@ def start_container(command):
     if completed.returncode or not container:
         raise InfrastructureError(completed.stderr.strip() or 'Docker did not return a container ID')
     return container
+
+
+def atomic_json(path, value):
+    temporary = path.with_name(path.name + '.tmp')
+    temporary.write_text(json.dumps(value, indent=2))
+    os.replace(temporary, path)
+
+
+def wait_for_external_subject(output, ready, timeout=1800):
+    atomic_json(output / 'ready.json', ready)
+    deadline = time.monotonic() + timeout
+    while True:
+        if (output / 'cancel').is_file():
+            raise KeyboardInterrupt('external subject cancelled')
+        if (output / 'subject-complete').is_file():
+            try:
+                complete = json.loads((output / 'subject-complete').read_text())
+            except (OSError, json.JSONDecodeError) as error:
+                raise EvaluationError('external subject completion marker is invalid') from error
+            if not isinstance(complete, dict) or type(complete.get('model_invoked')) is not bool:
+                raise EvaluationError('external subject completion marker is invalid')
+            return complete
+        if time.monotonic() >= deadline:
+            raise EvaluationError(f'external subject did not complete within {timeout:g} seconds')
+        time.sleep(.25)
+
+
+def start_runtime(candidate, runtime_log, register_configuration=True):
+    command = RUNTIME_ENGINE + (RUNTIME_REGISTER if register_configuration else '') + RUNTIME_COMPOSE
+    with runtime_log.open('ab') as output:
+        return subprocess.Popen(docker_exec(candidate, ['/bin/sh', '-c', command]),
+                                stdin=subprocess.DEVNULL, stdout=output,
+                                stderr=subprocess.STDOUT, start_new_session=True,
+                                preexec_fn=limit_log_size)
+
+
+def wait_runtime_ready(process, evaluator, cancel=None, timeout=30):
+    healthy = 0
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if cancel and cancel.is_file():
+            raise KeyboardInterrupt('external subject cancelled')
+        if process.poll() is not None:
+            break
+        ready = subprocess.run(docker_exec(evaluator, ['/usr/bin/python3', '-I', '-c', READY_CHECK]),
+                               stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                               stderr=subprocess.DEVNULL, check=False, timeout=2).returncode == 0
+        healthy = healthy + 1 if ready else 0
+        if healthy >= 12:
+            return True
+        time.sleep(.25)
+    return False
+
+
+def restart_runtime(candidate, evaluator, evidence, runtime, cancel=None,
+                    register_configuration=True, reset_configuration=False):
+    number = runtime[1] + 1
+    if bounded(docker_exec(candidate, ['/usr/bin/python3', '-I', '-c', STOP_RUNTIME]),
+               evidence / f'control-restart-{number}.log', 10, candidate, cancel):
+        raise RuntimeError('runtime shutdown failed')
+    try:
+        runtime[0].wait(timeout=5)
+    except subprocess.TimeoutExpired:
+        runtime[0].kill()
+        runtime[0].wait()
+    if reset_configuration:
+        reset = """import pathlib,shutil
+p=pathlib.Path('/runtime-state/configuration')
+if p.is_symlink() or p.is_file(): p.unlink()
+elif p.exists(): shutil.rmtree(p)
+p.mkdir(parents=True)
+"""
+        if bounded(docker_exec(candidate, ['/usr/bin/python3', '-I', '-c', reset]),
+                   evidence / f'control-reset-{number}.log', 10, candidate, cancel):
+            raise RuntimeError('configuration reset failed')
+    runtime[0] = start_runtime(candidate, evidence / 'runtime.log', register_configuration)
+    runtime[1] = number
+    if not wait_runtime_ready(runtime[0], evaluator, cancel, timeout=60):
+        raise RuntimeError('runtime did not become ready after restart')
+    return {'ready': True}
+
+
+def hot_reload(candidate, evidence, runtime, cancel=None):
+    token = os.urandom(16).hex()
+    marker = f'KANBAN_HOT_RELOAD_{token}'
+    backup = f'/tmp/kanban-hot-reload-{token}'
+    source = '/workspace/kanban/src/index.ts'
+    prepare = """import json,pathlib,sys
+p=pathlib.Path(sys.argv[1]);b=pathlib.Path(sys.argv[2]);marker=sys.argv[3]
+assert p.is_file() and not p.is_symlink()
+data=p.read_bytes();assert len(data)<=1048576
+b.write_bytes(data)
+p.write_bytes(data+b'\\nconsole.log('+json.dumps(marker).encode()+b');\\n')
+"""
+    restore = """import pathlib,sys
+p=pathlib.Path(sys.argv[1]);b=pathlib.Path(sys.argv[2])
+assert p.is_file() and not p.is_symlink() and b.is_file()
+p.write_bytes(b.read_bytes());b.unlink()
+"""
+    offset = (evidence / 'runtime.log').stat().st_size
+    completed = subprocess.run(docker_exec(candidate, ['/usr/bin/python3', '-I', '-c', prepare,
+                                                       source, backup, marker]),
+                               stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                               check=False, timeout=10)
+    if completed.returncode:
+        raise RuntimeError(completed.stderr.decode(errors='replace')[-4096:])
+    observed = False
+    try:
+        deadline = time.monotonic() + 65
+        while time.monotonic() < deadline:
+            if cancel and cancel.is_file():
+                raise KeyboardInterrupt('external subject cancelled')
+            if runtime[0].poll() is not None:
+                break
+            with (evidence / 'runtime.log').open('rb') as log:
+                log.seek(offset)
+                if marker.encode() in log.read(16 * 1024 ** 2):
+                    observed = True
+                    break
+            time.sleep(.25)
+    finally:
+        restored = subprocess.run(docker_exec(candidate, ['/usr/bin/python3', '-I', '-c', restore,
+                                                          source, backup]),
+                                  stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                  check=False, timeout=10)
+        if restored.returncode:
+            raise RuntimeError('hot reload source restoration failed: '
+                               + restored.stderr.decode(errors='replace')[-4096:])
+    if not observed:
+        raise RuntimeError('automatic hot reload marker was not observed')
+    return {'observed': True, 'source_restored': True}
+
+
+def inspect_runtime(candidate, evaluator, cancel=None):
+    signal_server = """import os,pathlib,signal
+inodes=set()
+for table in ('/proc/net/tcp','/proc/net/tcp6'):
+ for line in pathlib.Path(table).read_text().splitlines()[1:]:
+  fields=line.split()
+  if len(fields)>9 and fields[3]=='0A' and int(fields[1].split(':')[1],16)==3000:
+   inodes.add(fields[9])
+owners=[]
+for process in pathlib.Path('/proc').iterdir():
+ if not process.name.isdigit(): continue
+ try:
+  if process.stat().st_uid!=os.getuid() or pathlib.Path(os.readlink(process/'exe')).name!='node': continue
+  sockets={os.readlink(fd) for fd in (process/'fd').iterdir()}
+ except (FileNotFoundError,PermissionError): continue
+ if any(f'socket:[{inode}]' in sockets for inode in inodes): owners.append(int(process.name))
+assert len(owners)==1,owners
+os.kill(owners[0],signal.SIGUSR1)
+"""
+    signalled = subprocess.run(docker_exec(candidate, ['/usr/bin/python3', '-I', '-c', signal_server]),
+                               stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                               check=False, timeout=10)
+    if signalled.returncode:
+        raise InfrastructureError('cannot identify the Node process listening on port 3000: '
+                                  + signalled.stderr.decode(errors='replace')[-4096:])
+    read_targets = """import sys,urllib.request
+r=urllib.request.urlopen('http://127.0.0.1:9229/json/list',timeout=1)
+b=r.read(65537);assert len(b)<=65536;sys.stdout.buffer.write(b)
+"""
+    deadline = time.monotonic() + 30
+    while time.monotonic() < deadline:
+        if cancel and cancel.is_file():
+            raise KeyboardInterrupt('external subject cancelled')
+        targets = subprocess.run(docker_exec(evaluator, ['/usr/bin/python3', '-I', '-c', read_targets]),
+                                 stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                 check=False, timeout=3)
+        if targets.returncode == 0:
+            try:
+                values = json.loads(targets.stdout)
+                urls = [value['webSocketDebuggerUrl'] for value in values
+                        if isinstance(value, dict) and isinstance(value.get('webSocketDebuggerUrl'), str)]
+            except (TypeError, ValueError, json.JSONDecodeError) as error:
+                raise InfrastructureError('Node inspector returned invalid JSON') from error
+            if len(urls) != 1 or not urls[0].startswith('ws://127.0.0.1:9229/') or '\n' in urls[0]:
+                raise InfrastructureError('Node inspector returned an invalid debugger target')
+            return {'websocket_url': urls[0]}
+        time.sleep(.25)
+    raise InfrastructureError('Node inspector did not become ready')
+
+
+def control_callback(evidence, candidate, evaluator, runtime, cancel=None):
+    responses = {}
+
+    def poll():
+        request_path = evidence / 'control-request.json'
+        if not request_path.is_file():
+            return
+        try:
+            raw = request_path.read_text()
+            if len(raw.encode()) > 1024 * 1024:
+                raise ValueError('request exceeds 1 MiB')
+            request = json.loads(raw)
+            if not isinstance(request, dict):
+                raise ValueError('control request must be an object')
+            request_id = request.get('id')
+            if not isinstance(request_id, str) or not request_id or len(request_id) > 128:
+                raise ValueError('invalid control id')
+        except (OSError, ValueError, json.JSONDecodeError) as error:
+            atomic_json(evidence / 'control-response.json',
+                        {'id': None, 'ok': False, 'error': str(error)})
+            return
+        if request_id in responses:
+            atomic_json(evidence / 'control-response.json', responses[request_id])
+            return
+        try:
+            operation = request.get('operation')
+            payload = request.get('payload')
+            if not isinstance(payload, dict):
+                raise ValueError('control payload must be an object')
+            if operation == 'read_store' and not payload:
+                script = "import pathlib,sys;p=pathlib.Path('/data/tickets.json');b=p.read_bytes();assert len(b)<=1048576;sys.stdout.buffer.write(b)"
+                completed = subprocess.run(docker_exec(candidate, ['/usr/bin/python3', '-I', '-c', script]),
+                                           stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                                           stderr=subprocess.PIPE, check=False, timeout=90)
+                if completed.returncode:
+                    raise RuntimeError(completed.stderr.decode(errors='replace')[-4096:])
+                value = completed.stdout.decode(errors='replace')
+            elif operation == 'write_store' and set(payload) == {'value'} and isinstance(payload['value'], str):
+                value_bytes = payload['value'].encode()
+                if len(value_bytes) > 1024 * 1024:
+                    raise ValueError('store value exceeds 1 MiB')
+                script = "import pathlib,sys;pathlib.Path('/data/tickets.json').write_bytes(sys.stdin.buffer.read(1048577))"
+                completed = subprocess.run(['docker', 'exec', '-i', candidate, '/usr/bin/python3', '-I', '-c', script],
+                                           input=value_bytes, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                           check=False, timeout=90)
+                if completed.returncode:
+                    raise RuntimeError(completed.stderr.decode(errors='replace')[-4096:])
+                value = {'bytes': len(value_bytes)}
+            elif operation == 'restart' and not payload:
+                value = restart_runtime(candidate, evaluator, evidence, runtime, cancel)
+            elif operation == 'restart' and payload == {
+                    'register_configuration': False, 'reset_configuration': True}:
+                value = restart_runtime(candidate, evaluator, evidence, runtime, cancel,
+                                        register_configuration=False, reset_configuration=True)
+            elif operation == 'hot_reload' and not payload:
+                value = hot_reload(candidate, evidence, runtime, cancel)
+            elif operation == 'inspect_runtime' and not payload:
+                value = inspect_runtime(candidate, evaluator, cancel)
+            else:
+                raise ValueError(f'unsupported control operation: {operation}')
+            response = {'id': request_id, 'ok': True, 'value': value}
+        except InfrastructureError:
+            raise
+        except Exception as error:
+            response = {'id': request_id, 'ok': False,
+                        'error': str(error) or type(error).__name__}
+        responses[request_id] = response
+        atomic_json(evidence / 'control-response.json', response)
+
+    return poll
+
+
+def interrupted(_signum, _frame):
+    raise KeyboardInterrupt('SIGTERM')
 
 
 def probe_result(evidence, case_id, returncode):
@@ -154,25 +467,40 @@ def main():
     parser.add_argument('--revision', choices=['base', 'reference'], required=True)
     parser.add_argument('--output', type=Path, required=True)
     parser.add_argument('--image', required=True)
-    parser.add_argument('--subject-model', choices=['deepseek-v4-flash'])
+    subject = parser.add_mutually_exclusive_group()
+    subject.add_argument('--subject-model', choices=['deepseek-v4-flash'])
+    subject.add_argument('--external-subject', action='store_true')
     parser.add_argument('--subject-url')
     parser.add_argument('--subject-namespace')
-    for name in ('node', 'iii', 'pnpm', 'dependencies', 'browser-dependencies', 'browsers'):
+    for name in ('node', 'iii', 'pnpm', 'dependencies', 'browser-dependencies'):
         parser.add_argument('--' + name, type=Path, required=True)
+    parser.add_argument('--browsers', required=True)
     parser.add_argument('--playwright-module', default='.pnpm/playwright@1.61.1/node_modules/playwright/index.mjs')
     args = parser.parse_args()
     if args.subject_model and (args.revision != 'base' or not args.subject_url or not args.subject_namespace):
         parser.error('subject execution requires --revision base, --subject-url and --subject-namespace')
+    if args.external_subject and args.revision != 'base':
+        parser.error('external subject execution requires --revision base')
+    if not args.browsers.startswith('/'):
+        parser.error('--browsers must be an absolute path inside the pinned image')
+    isolated_subject = bool(args.subject_model or args.external_subject)
     args.output = args.output.resolve()
     if args.output.exists():
         parser.error('--output must be new; never reuse or overwrite an execution')
-    for name in ('fixture', 'catalog', 'node', 'iii', 'pnpm', 'dependencies', 'browser_dependencies', 'browsers'):
+    for name in ('fixture', 'catalog', 'node', 'iii', 'pnpm', 'dependencies', 'browser_dependencies'):
         setattr(args, name, getattr(args, name).resolve(strict=True))
     args.output.mkdir(parents=True, mode=0o700)
     evidence = args.output / 'evidence'
     evidence.mkdir(mode=0o700)
     containers = []
+    candidate = None
+    delivered_diff_captured = False
+    evaluated_diff_captured = False
+    cancel = args.output / 'cancel' if args.external_subject else None
+    previous_sigterm = signal.signal(signal.SIGTERM, interrupted)
     try:
+        if os.getuid() == 0:
+            raise InfrastructureError('Kanban isolation requires a non-root host user')
         from snapshot import prepare
         metadata = prepare(args.fixture, args.catalog, args.case, args.revision, args.output / 'workspace')
         for name in ('data', 'runtime-state'):
@@ -184,22 +512,20 @@ def main():
         if inspected.returncode or not image.startswith('sha256:') or '\n' in image:
             raise InfrastructureError(inspected.stderr.strip() or 'image must resolve to one existing local Docker image')
 
-        runtime_mounts = [(root, root, False) for root in ('/usr', '/bin', '/lib', '/lib64')
-                          if Path(root).exists()]
-        runtime_mounts += [(str(getattr(args, name)), '/runtime/' + name, False)
-                          for name in ('node', 'iii', 'pnpm')]
-        candidate_mounts = ([] if args.subject_model else [
+        runtime_binary_mounts = runtime_mounts(args)
+        candidate_mounts = ([] if isolated_subject else [
             (str(args.output / 'workspace'), '/workspace', True),
             (str(args.output / 'data'), '/data', True),
             (str(args.output / 'runtime-state'), '/runtime-state', True),
         ]) + [
-            (str(args.dependencies), '/dependencies' if args.subject_model else '/workspace/kanban/node_modules', False),
-            *runtime_mounts,
+            (str(args.dependencies), '/dependencies' if isolated_subject else '/workspace/kanban/node_modules', False),
+            *runtime_binary_mounts,
         ]
         candidate = start_container(container_command(image, 'none', 'candidate', candidate_mounts,
-                                                      bounded_workspace=bool(args.subject_model)))
+                                                      bounded_workspace=isolated_subject))
         containers.append(candidate)
-        if args.subject_model:
+        atomic_json(args.output / 'containers.json', {'containers': containers})
+        if isolated_subject:
             archive = subprocess.check_output(['git', '-C', str(args.output / 'workspace'), 'archive', 'HEAD'])
             subprocess.run(['docker', 'exec', '-i', candidate, 'tar', '--no-same-owner', '-xf', '-', '-C', '/workspace'],
                            input=archive, check=True, timeout=30)
@@ -218,25 +544,23 @@ git -C /workspace rev-parse HEAD
 
         probe_env = {**ENV, 'III_SDK_MODULE': '/dependencies/iii-sdk/dist/index.mjs',
                      'PLAYWRIGHT_MODULE': '/browser-deps/' + args.playwright_module,
-                     'PLAYWRIGHT_BROWSERS_PATH': '/browsers'}
+                     'PLAYWRIGHT_BROWSERS_PATH': args.browsers}
         evaluator_mounts = [
             (str(Path(__file__).resolve().parent), '/trusted', False),
             (str(evidence), '/evidence', True),
             (str(args.dependencies), '/dependencies', False),
             (str(args.browser_dependencies), '/browser-deps', False),
-            (str(args.browsers), '/browsers', False),
-            *runtime_mounts,
+            *runtime_binary_mounts,
         ]
-        for path in ('/etc/fonts', '/etc/ld.so.cache'):
-            if Path(path).exists():
-                evaluator_mounts.append((path, path, False))
         evaluator = start_container(container_command(image, f'container:{candidate}', 'evaluator', evaluator_mounts, probe_env))
         containers.append(evaluator)
+        atomic_json(args.output / 'containers.json', {'containers': containers})
 
         metadata['container_image_id'] = image
         metadata['runtime_sha256'] = {name: file_digest(getattr(args, name)) for name in ('node', 'iii', 'pnpm')}
         metadata['dependency_lock_sha256'] = file_digest(args.dependencies / '.pnpm/lock.yaml')
-        metadata['runtime_trees_sha256'] = {name: tree_digest(getattr(args, name)) for name in ('dependencies', 'browser_dependencies', 'browsers')}
+        metadata['runtime_trees_sha256'] = {name: tree_digest(getattr(args, name)) for name in ('dependencies', 'browser_dependencies')}
+        metadata['browser_path'] = args.browsers
         metadata['controller_sha256'] = {path.name: file_digest(path) for path in Path(__file__).parent.glob('*') if path.is_file()}
         metadata['model_execution'] = False
         (evidence / 'provenance.json').write_text(json.dumps(metadata, indent=2))
@@ -252,7 +576,7 @@ assert s.connect_ex(('1.1.1.1',443)) != 0
 print('workspace readable; trusted files, evaluator process and external network inaccessible')
 """
         if bounded(docker_exec(candidate, ['/usr/bin/python3', '-I', '-c', check]),
-                   evidence / 'isolation.log', 10, candidate):
+                   evidence / 'isolation.log', 10, candidate, cancel):
             raise InfrastructureError('candidate isolation preflight failed; see isolation.log')
 
         if args.subject_model:
@@ -264,29 +588,29 @@ print('workspace readable; trusted files, evaluator process and external network
                        '--container', candidate, '--prompt-file', str(prompt_file), '--output', str(evidence),
                        '--engine-url', args.subject_url, '--namespace', args.subject_namespace,
                        '--provider', 'deepseek', '--model', args.subject_model]
-            code = bounded(command, evidence / 'subject.log', 2050, candidate)
+            code = bounded(command, evidence / 'subject.log', 2050, candidate, cancel)
             if (evidence / 'subject.json').is_file():
                 subject = json.loads((evidence / 'subject.json').read_text())
                 metadata['model_execution'] = subject.get('model_invoked', False)
                 (evidence / 'provenance.json').write_text(json.dumps(metadata, indent=2))
             if code or not (evidence / 'subject.json').is_file():
                 raise EvaluationError('subject execution did not complete; see subject.log and subject.json')
-            stop_children = """import os,signal
-for name in os.listdir('/proc'):
- if name.isdigit() and int(name) not in (1,os.getpid()):
-  try: os.kill(int(name),signal.SIGKILL)
-  except ProcessLookupError: pass
-"""
-            if bounded(docker_exec(candidate, ['/usr/bin/python3', '-I', '-c', stop_children]),
-                       evidence / 'subject-cleanup.log', 10, candidate):
+        elif args.external_subject:
+            complete = wait_for_external_subject(args.output, {
+                'candidate': candidate,
+                'evaluator': evaluator,
+                'prompt': metadata['prompt'],
+                'snapshot_git_head': metadata['snapshot_git_head'],
+            })
+            metadata['model_execution'] = complete['model_invoked']
+            (evidence / 'provenance.json').write_text(json.dumps(metadata, indent=2))
+
+        if isolated_subject:
+            if bounded(docker_exec(candidate, ['/usr/bin/python3', '-I', '-c', STOP_RUNTIME]),
+                       evidence / 'subject-cleanup.log', 10, candidate, cancel):
                 raise EvaluationError('candidate background process cleanup failed')
-            if bounded(docker_exec(candidate, ['git', '-C', '/workspace', 'add', '--all', '--', '.',
-                                            ':!kanban/node_modules', ':!kanban/dist', ':!data']),
-                       evidence / 'subject-stage.log', 10, candidate):
-                raise EvaluationError('candidate change capture failed')
-            if bounded(docker_exec(candidate, ['git', '-C', '/workspace', 'diff', '--cached', '--no-ext-diff', 'HEAD']),
-                       evidence / 'subject.diff', 10, candidate):
-                raise EvaluationError('candidate diff capture failed')
+            capture_candidate_diff(candidate, evidence, 'subject', cancel)
+            delivered_diff_captured = True
 
         build_checks = []
         result = {'schema': 'kanban-evaluation/v1', 'case_id': args.case,
@@ -298,7 +622,7 @@ for name in os.listdir('/proc'):
         else:
             for step in ('typecheck', 'test', 'build'):
                 code = bounded(docker_exec(candidate, ['pnpm', '--dir', 'kanban', step]),
-                               evidence / f'{step}.log', 90, candidate)
+                               evidence / f'{step}.log', 90, candidate, cancel)
                 build_checks.append({'id': step, 'status': 'passed' if code == 0 else 'failed',
                                      'detail': f'isolated command exit {code}'})
                 if code:
@@ -310,51 +634,37 @@ for name in os.listdir('/proc'):
                     {'name': 'configuration', 'config': {'adapter': {'name': 'fs', 'config': {'directory': '/runtime-state/configuration'}}}},
                 ]}
                 (args.output / 'runtime-state/config.json').write_text(json.dumps(config))
-                if args.subject_model:
+                if isolated_subject:
                     subprocess.run(['docker', 'exec', '-i', candidate, '/usr/bin/tee', '/runtime-state/config.json'],
                                    input=json.dumps(config).encode(), stdout=subprocess.DEVNULL, check=True, timeout=10)
-                start = '''set -eu
-iii --no-update-check --config /runtime-state/config.json &
-sleep 1
-iii trigger configuration::register --address 127.0.0.1 --port 50179 --namespace default --json '{"id":"kanban","name":"Kanban","description":"Evaluation data","schema":{"type":"object","properties":{"data_dir":{"type":"string"}},"required":["data_dir"]},"initial_value":{"data_dir":"/data","preserve_me":true}}'
-exec iii compose --up --engine ws://127.0.0.1:50179 --file /workspace/worker-compose.yaml
-'''
-                with (evidence / 'runtime.log').open('wb') as runtime_log:
-                    process = subprocess.Popen(docker_exec(candidate, ['/bin/sh', '-c', start]),
-                                               stdin=subprocess.DEVNULL, stdout=runtime_log,
-                                               stderr=subprocess.STDOUT, start_new_session=True,
-                                               preexec_fn=limit_log_size)
-                    started = time.monotonic()
-                    ready_check = "import urllib.request; assert urllib.request.urlopen('http://127.0.0.1:3000/api/config',timeout=.3).status == 200"
-                    ready = False
-                    healthy_samples = 0
-                    for _ in range(120):
-                        if process.poll() is not None:
-                            break
-                        ready = subprocess.run(docker_exec(evaluator, ['/usr/bin/python3', '-I', '-c', ready_check]),
-                                               stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
-                                               stderr=subprocess.DEVNULL, check=False).returncode == 0
-                        healthy_samples = healthy_samples + 1 if ready else 0
-                        if healthy_samples >= 12:
-                            break
-                        time.sleep(.25)
-                    ready = healthy_samples >= 12
-                    if not ready:
-                        build_checks.append({'id': 'application_startup', 'status': 'failed',
-                                             'detail': 'Compose application did not become ready; see runtime.log.'})
-                        (evidence / 'result.json').write_text(json.dumps(result))
-                    else:
-                        probe = docker_exec(evaluator, ['/runtime/node', '/trusted/probe.mjs', '--case', args.case,
-                                            '--base-url', 'http://127.0.0.1:3000', '--engine-url', 'ws://127.0.0.1:50179',
-                                            '--output', '/evidence'])
-                        try:
-                            code = bounded(probe, evidence / 'probe.log', 120, evaluator)
-                            result = probe_result(evidence, args.case, code)
-                        except (RuntimeError, subprocess.TimeoutExpired) as error:
-                            raise EvaluationError(str(error)) from error
-                        result['build_checks'] = build_checks
-                        result['duration_ms'] = round((time.monotonic() - started) * 1000)
-                        (evidence / 'result.json').write_text(json.dumps(result, indent=2))
+                process = start_runtime(candidate, evidence / 'runtime.log')
+                runtime = [process, 0]
+                started = time.monotonic()
+                if not wait_runtime_ready(process, evaluator, cancel):
+                    build_checks.append({'id': 'application_startup', 'status': 'failed',
+                                         'detail': 'Compose application did not become ready; see runtime.log.'})
+                    (evidence / 'result.json').write_text(json.dumps(result))
+                else:
+                    probe = docker_exec(evaluator, ['/runtime/node', '/trusted/probe.mjs', '--case', args.case,
+                                        '--base-url', 'http://127.0.0.1:3000', '--engine-url', 'ws://127.0.0.1:50179',
+                                        '--output', '/evidence'])
+                    try:
+                        code = bounded(probe, evidence / 'probe.log', 600, evaluator, cancel,
+                                       control_callback(evidence, candidate, evaluator, runtime, cancel))
+                        result = probe_result(evidence, args.case, code)
+                    except InfrastructureError:
+                        raise
+                    except (RuntimeError, subprocess.TimeoutExpired) as error:
+                        raise EvaluationError(str(error)) from error
+                    result['build_checks'] = build_checks
+                    result['duration_ms'] = round((time.monotonic() - started) * 1000)
+                    (evidence / 'result.json').write_text(json.dumps(result, indent=2))
+
+        if isolated_subject:
+            capture_candidate_diff(candidate, evidence, 'evaluated', cancel)
+            evaluated_diff_captured = True
+            if (evidence / 'subject.diff').read_bytes() != (evidence / 'evaluated.diff').read_bytes():
+                raise EvaluationError('candidate source changed during evaluation')
 
         result = json.loads((evidence / 'result.json').read_text())
         print(json.dumps({'output': str(args.output), 'result': result}))
@@ -362,6 +672,17 @@ exec iii compose --up --engine ws://127.0.0.1:50179 --file /workspace/worker-com
             return 2
         return 0 if result.get('functional_status') == 'passed' else 1
     except (Exception, KeyboardInterrupt) as error:
+        if (delivered_diff_captured and not evaluated_diff_captured
+                and not isinstance(error, KeyboardInterrupt)):
+            try:
+                capture_candidate_diff(candidate, evidence, 'evaluated', cancel)
+                evaluated_diff_captured = True
+            except (Exception, KeyboardInterrupt):
+                pass
+            else:
+                if (evidence / 'subject.diff').read_bytes() != (evidence / 'evaluated.diff').read_bytes():
+                    error = EvaluationError(
+                        f'candidate source changed during evaluation; prior error: {error}')
         result = {'schema': 'kanban-evaluation/v1', 'case_id': args.case,
                   'status': 'evaluation_failed' if isinstance(error, EvaluationError) else 'infrastructure_failed',
                   'functional_status': None,
@@ -370,8 +691,10 @@ exec iii compose --up --engine ws://127.0.0.1:50179 --file /workspace/worker-com
         print(json.dumps(result))
         return 2
     finally:
+        signal.signal(signal.SIGTERM, signal.SIG_IGN)
         for container in reversed(containers):
             remove_container(container)
+        signal.signal(signal.SIGTERM, previous_sigterm)
 
 
 if __name__ == '__main__':

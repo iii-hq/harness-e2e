@@ -521,7 +521,7 @@ mod tests {
         for (id, cases, runs) in [
             ("smoke", 5, 5),
             ("regression", 9, 9),
-            ("capability", 48, 48),
+            ("capability", 55, 55),
             ("evolution", 22, 66),
             ("resilience", 4, 13),
             ("endurance", 5, 5),

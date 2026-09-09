@@ -2,6 +2,8 @@ import json
 import os
 import subprocess
 import tempfile
+import threading
+import time
 import unittest
 from pathlib import Path
 
@@ -72,6 +74,43 @@ class KanbanProbeContractTest(unittest.TestCase):
             self.assertEqual(result["status"], "evaluation_failed")
             self.assertIsNone(result["functional_status"])
             self.assertFalse(coverage["complete"])
+
+    def test_control_request_is_atomic_correlated_and_has_object_payload(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            failures = []
+
+            def respond():
+                try:
+                    request_path = root / "control-request.json"
+                    for _ in range(100):
+                        if request_path.exists():
+                            request = json.loads(request_path.read_text())
+                            break
+                        time.sleep(.01)
+                    else:
+                        raise AssertionError("control request was not published")
+                    self.assertEqual(request["operation"], "restart")
+                    self.assertEqual(request["payload"], {})
+                    (root / "control-response.json").write_text(json.dumps({"id": "stale", "ok": True, "value": "wrong"}))
+                    time.sleep(.05)
+                    temporary = root / "response.tmp"
+                    temporary.write_text(json.dumps({"id": request["id"], "ok": True, "value": {"ready": True}}))
+                    temporary.replace(root / "control-response.json")
+                except Exception as error:
+                    failures.append(error)
+
+            thread = threading.Thread(target=respond)
+            thread.start()
+            script = f"import {{control}} from {json.dumps(PROBE.as_uri())}; console.log(JSON.stringify(await control({json.dumps(directory)}, 'restart')))"
+            completed = subprocess.run(
+                ["node", "--input-type=module", "--eval", script],
+                cwd=ROOT, text=True, capture_output=True, check=False, timeout=5,
+            )
+            thread.join()
+            self.assertFalse(failures, failures)
+            self.assertEqual(completed.returncode, 0, completed.stderr)
+            self.assertEqual(json.loads(completed.stdout), {"ready": True})
 
 
 if __name__ == "__main__":

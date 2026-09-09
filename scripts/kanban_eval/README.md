@@ -1,8 +1,10 @@
-# Kanban local control runner (experimental)
+# Incremental Kanban evaluation
 
-This is a local control runner with an opt-in, single-model smoke path, **not**
-a registered Harness `ScenarioId` or a campaign. By default it runs only the
-catalog's base or reference revision and never invokes a model.
+Seven native Harness scenarios reproduce the fixture's C1–C7 increments from
+their pinned base commits. The `capability` test-plan profile includes them;
+`smoke` and `regression` do not. The local controller also runs base/reference
+controls without invoking a model, and supports a standalone DeepSeek smoke.
+See [VALIDATION.md](VALIDATION.md) for observed results and remaining gates.
 
 `snapshot.py` validates exact commits and parentage, exports the selected tree,
 and initializes a fresh one-commit repository without source remotes or future
@@ -21,7 +23,7 @@ Supply administrator-selected local runtime binaries and dependency caches:
 
 ```sh
 python3 scripts/kanban_eval/run.py \
-  --image ubuntu:24.04 \
+  --image mcr.microsoft.com/playwright@sha256:cf0daee9b994042e011bc29f20cdff1a9f682a039b43fcd738f7d8a9d3bcd9d6 \
   --fixture /absolute/path/to/iii-kanban-e2e-fixture \
   --catalog /absolute/path/to/iii-kanban-e2e-fixture/scenarios/catalog.json \
   --case kanban_c2_persistence --revision reference \
@@ -30,15 +32,17 @@ python3 scripts/kanban_eval/run.py \
   --pnpm /absolute/path/to/pnpm-10.18.2 \
   --dependencies /absolute/path/to/kanban/node_modules \
   --browser-dependencies /absolute/path/to/workers/node_modules \
-  --browsers /absolute/path/to/ms-playwright
+  --browsers /ms-playwright
 ```
 
 The Docker image must already exist locally; its immutable ID is recorded and
-used for execution. Runtime directories and binaries are mounted read-only.
+used for execution. System libraries and browsers come from the pinned image,
+not host `/usr` or `/lib` mounts. `/ms-playwright` is an image-internal path.
+Selected Node, iii, pnpm and JavaScript dependencies are mounted read-only.
 Docker's default seccomp/AppArmor protections remain enabled. This uses standard
 container isolation, not a VM boundary against hostile-kernel exploits.
 
-The browser cache must match Playwright 1.61.1 (or provide
+The image browsers must match Playwright 1.61.1 (or provide
 `--playwright-module` relative to browser dependencies). No dependency download
 is attempted. Output must be new. `evidence/` contains provenance, logs and, when
 the probe runs, coverage, verdicts and browser screenshots.
@@ -55,15 +59,8 @@ shared-loopback and denied-external-network checks; trusted Chromium also launch
 successfully with default container protections. Functional control results must
 be recorded separately; these infrastructure checks do not validate the app.
 
-The broader Python suite subsequently passed 198 tests with `HARNESS_E2E_BIN`
-pointing to the existing local Harness executable. The initial errors were due
-to the absent default `target/release/harness-e2e` path in this worktree. This
-validates the Python suite, not a fresh Rust build or functional Kanban controls.
-Additional runner regressions reject interrupted probes, missing coverage,
-case mismatches and contradictory verdicts, while accepting valid negative controls.
-
-The [control validation report](VALIDATION.md) records all 14 functional controls
-and the visual checks. Default Docker protections remain enabled.
+Runner regressions reject interrupted probes, missing coverage, case mismatches
+and contradictory verdicts, while accepting valid negative controls.
 
 ## Opt-in DeepSeek Flash smoke
 
@@ -92,9 +89,45 @@ fields and duration. Evaluation still runs from the private evaluator container.
 Never substitute requested model identity for missing observed identity.
 Optional cache counters remain `null` when the provider does not report them.
 
-This smoke path is not yet the native Harness scenario lifecycle. Complete
-criterion coverage and native scenario integration remain necessary before
-claiming a calibrated, complete benchmark. Functional success is not full coverage.
+## Native Harness and Release Control
+
+`HARNESS_E2E_KANBAN_RUNTIME` names the administrator-provisioned runtime JSON.
+`bootstrap.py` creates it after validating the fixture checkout/catalog, pulling
+the pinned image and installing locked JavaScript dependencies without lifecycle
+scripts. It does not install system packages on the host. Docker must be usable
+by a non-root runner user.
+
+```sh
+HARNESS_E2E_KANBAN_RUNTIME=/absolute/path/to/runtime.json \
+  harness-e2e run --provider deepseek --model deepseek-v4-flash \
+  --scenario kanban_c2_persistence --output /absolute/path/to/new-report
+```
+
+The native setup creates isolated containers and one attempt-scoped command
+function. The regular Harness lifecycle collects the model transcript, usage and
+cost; the private controller checks the delivered application. The captured
+`kanban_evaluation` JSON includes verdict, coverage, runtime provenance, delivered
+diff, bounded log tails and PNG screenshots encoded as base64. A second diff
+detects source mutation during evaluation. Raw runtime files are private; they
+are not subject filesystem artifacts.
+
+To enable this in Release Control's exact-stack workflow:
+
+1. Publish the fixture history through commit
+   `0471257a95095da7c5e9d366e26636976472e90d`. Set the repository variable
+   `KANBAN_FIXTURE_REPOSITORY` to its GitHub `owner/repository` and grant read
+   access through `E2E_FIXTURE_GITHUB_TOKEN`. Checkout never persists credentials.
+2. Merge the native scenarios and publish a compatible immutable `harness-e2e`
+   worker release. Select that release in the Release Control stack; changing
+   `runner_sha` alone does not replace the Registry-resolved worker binary.
+3. Materialize the `capability` profile from that runner revision. Its seven
+   `case-kanban-*` groups provision the fixture/runtime and pass the runtime JSON
+   to the worker before calling native `e2e::run`.
+
+Do not declare CI readiness from unit tests alone: complete reference/base
+controls, a native real-model attempt, compatible catalog/worker identity and
+remote fixture access must all be verified. Evaluator unavailability is not a
+candidate zero score; an application that fails build/startup is a task failure.
 
 ```sh
 python3 -m unittest discover -s tests/python -p 'test_kanban*.py'

@@ -4,6 +4,11 @@
   "version": 1,
   "modules": [
     {
+      "id": "m10",
+      "label": "Incremental Kanban application",
+      "scenarios": ["kanban_c1_foundation", "kanban_c2_persistence", "kanban_c3_board", "kanban_c4_ticket_flow", "kanban_c5_edit_move", "kanban_c6_discussion", "kanban_c7_live"]
+    },
+    {
       "id": "m1",
       "label": "State and basic execution",
       "scenarios": [
@@ -267,7 +272,8 @@
         "m5",
         "m6",
         "m7",
-        "m8"
+        "m8",
+        "m10"
       ],
       "scenarios": [],
       "repetitions": 1,

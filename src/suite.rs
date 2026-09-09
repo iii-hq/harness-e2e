@@ -3050,6 +3050,7 @@ async fn run_markdown_session(
                 }),
                 options: Some(SendOptions {
                     max_turns: Some(request.max_turns),
+                    max_cost_usd: None,
                     max_output_tokens: request.max_output_tokens,
                     max_total_tokens: request.max_total_tokens,
                     max_validation_retries: request.max_validation_retries,
@@ -4295,6 +4296,7 @@ async fn execute(
                     }),
                     options: Some(SendOptions {
                         max_turns: Some(spec.execution.max_turns),
+                        max_cost_usd: crate::scenarios::kanban::IDS.contains(&spec.id).then_some(5.0),
                         max_output_tokens: spec.execution.max_output_tokens,
                         max_total_tokens: spec.execution.max_total_tokens,
                         max_validation_retries: spec.execution.max_validation_retries,
