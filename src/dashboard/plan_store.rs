@@ -735,6 +735,7 @@ impl PlanStore {
             metrics: Vec::new(),
             modules: Vec::new(),
             scenarios: plan.scenario_ids.clone(),
+            scenario_groups: Vec::new(),
             repetitions: repetitions as u32,
             technical_retries: technical_retries as u8,
             lane: campaigns[0]["lane"]
@@ -748,11 +749,14 @@ impl PlanStore {
             .iter()
             .map(|scenario| {
                 let mut value = serde_json::to_value(scenario)?;
-                value["judge_required"] = json!(scenario
+                let built_in = scenario
                     .scenario_id
                     .parse::<crate::markdown::ScenarioKey>()?
-                    .built_in()
-                    .is_none());
+                    .built_in();
+                value["judge_required"] = json!(
+                    built_in.is_none()
+                        || built_in == Some(crate::scenarios::ScenarioId::RegistryPlanning)
+                );
                 value["requirements"] = json!([]);
                 Ok(value)
             })
@@ -2053,6 +2057,30 @@ mod tests {
         assert!(baseline.baseline_eligible);
         assert_eq!(baseline.slots.len(), 2);
         assert_eq!(runner.submitted.load(Ordering::SeqCst), 2);
+    }
+
+    #[tokio::test]
+    async fn imported_registry_planning_preserves_its_evaluator() {
+        let root = tempfile::tempdir().unwrap();
+        let runner = Arc::new(FakeRunner::new(root.path().into()));
+        let manager = manager(root.path(), runner);
+        let mut request = reference_import("harness_turn");
+        for campaign in request["materialized"]["campaigns"].as_array_mut().unwrap() {
+            campaign["groups"][0]["scenarios"] = json!(["registry_planning"]);
+        }
+        request["shards"][0]["runs"][0]["scenario_id"] = json!("registry_planning");
+        let plan: LocalPlan = serde_json::from_value(
+            manager
+                .handle(serde_json::from_value(request).unwrap())
+                .await
+                .unwrap(),
+        )
+        .unwrap();
+        let saved = manager.read_plan(&plan.id).unwrap();
+        let slots = materialize_slots(&saved, "reference-evaluator").unwrap();
+        assert!(slots
+            .iter()
+            .all(|slot| slot.request["judge_model"] == "judge"));
     }
 
     #[tokio::test]
