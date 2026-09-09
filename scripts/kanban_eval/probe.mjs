@@ -15,6 +15,56 @@ const CASES = [
   'kanban_c7_live',
 ]
 
+const CRITERION_DEPENDENCIES = {
+  kanban_c1_foundation: {
+    criterion_1: ['foundation_assets_and_safe_routes'],
+    criterion_2: ['foundation_configuration_contract'],
+    criterion_3: ['foundation_configuration_contract', 'foundation_accessible_settings'],
+    criterion_4: ['foundation_assets_and_safe_routes', 'foundation_configuration_contract'],
+    criterion_5: ['foundation_development_hot_reload', 'foundation_accessible_settings'],
+  },
+  kanban_c2_persistence: {
+    criterion_1: ['persistence_iii_crud'],
+    criterion_2: ['persistence_iii_crud'],
+    criterion_3: ['persistence_directory_isolation_and_restart'],
+    criterion_4: ['persistence_invalid_input_no_write', 'persistence_corrupt_and_duplicate_store_fail_closed'],
+  },
+  kanban_c3_board: {
+    criterion_1: ['board_lanes_counts_and_metadata'],
+    criterion_2: ['board_loading_empty_error_and_retry'],
+    criterion_3: ['board_refresh_and_settings_reload'],
+    criterion_4: ['board_safe_text_and_responsive_layout'],
+  },
+  kanban_c4_ticket_flow: {
+    criterion_1: ['ticket_flow_create_detail_and_delete'],
+    criterion_2: ['ticket_flow_create_detail_and_delete'],
+    criterion_3: ['ticket_flow_delete_failure_navigation_and_restart'],
+    criterion_4: ['ticket_flow_create_detail_and_delete', 'ticket_flow_delete_failure_navigation_and_restart'],
+    criterion_5: ['ticket_flow_create_detail_and_delete', 'ticket_flow_utf8_chunks_and_json_boundary'],
+  },
+  kanban_c5_edit_move: {
+    criterion_1: ['edit_save_cancel_and_partial_update'],
+    criterion_2: ['edit_rejects_invalid_immutable_and_deleted_updates'],
+    criterion_3: ['drag_persists_status_only'],
+    criterion_4: ['edit_save_cancel_and_partial_update', 'drag_persists_status_only'],
+    criterion_5: ['edit_save_cancel_and_partial_update', 'edit_move_survives_restart'],
+  },
+  kanban_c6_discussion: {
+    criterion_1: ['discussion_comments_replies_timeline'],
+    criterion_2: ['discussion_comments_replies_timeline'],
+    criterion_3: ['discussion_invalid_input_and_corrupt_store_fail_closed'],
+    criterion_4: ['discussion_failure_and_overlap_preserve_drafts'],
+    criterion_5: ['discussion_survives_edit_delete_and_restart'],
+  },
+  kanban_c7_live: {
+    criterion_1: ['live_sse_protocol_contract', 'live_three_sessions_and_direct_iii'],
+    criterion_2: ['live_three_sessions_and_direct_iii'],
+    criterion_3: ['live_three_sessions_and_direct_iii'],
+    criterion_4: ['live_three_sessions_and_direct_iii'],
+    criterion_5: ['live_sse_protocol_contract', 'live_late_responses_disconnect_and_shutdown'],
+  },
+}
+
 const usage = `Usage: probe.mjs --case <id> --base-url <url> --engine-url <ws-url> --output <directory>
 
 Environment:
@@ -180,10 +230,6 @@ async function main() {
   let iii
   let infrastructureError
   const check = async (id, action) => {
-    if (id.startsWith('criterion_') && checks.some(({ id, status }) => !id.startsWith('criterion_') && status === 'failed')) {
-      checks.push({ id, status: 'failed', detail: 'Associated functional evidence failed.' })
-      return false
-    }
     try {
       const detail = await action()
       checks.push({ id, status: 'passed', detail: detail || 'Observed through the running application.' })
@@ -198,6 +244,22 @@ async function main() {
     }
   }
   const unverified = (id, detail) => checks.push({ id, status: 'unverified', detail })
+  const criterion = async (id, detail) => {
+    const dependencies = CRITERION_DEPENDENCIES[caseId]?.[id]
+    if (!dependencies?.length) {
+      unverified(id, `Missing dependency mapping for ${caseId}/${id}`)
+      return false
+    }
+    const status = criterionDependencyStatus(checks, dependencies)
+    if (status === 'unverified') {
+      unverified(id, `Required functional evidence is unavailable: ${dependencies.join(', ')}`)
+      return false
+    }
+    return check(id, async () => {
+      expect(status === 'passed', `Required functional evidence failed: ${dependencies.join(', ')}`)
+      return detail
+    })
+  }
 
   try {
     const sdk = await import(moduleUrl('III_SDK_MODULE'))
@@ -227,6 +289,7 @@ async function main() {
       }),
       control: (operation, payload) => control(output, operation, payload),
       check,
+      criterion,
       unverified,
     }
     await PROBES[caseId](context)
@@ -285,13 +348,55 @@ async function screenshot(page, output, name) {
   await page.screenshot({ path: join(output, `${name}.png`), fullPage: true })
 }
 
+export function boardLane(page, label) {
+  return page.getByRole('heading', { name: new RegExp(`^${label}(?:\\s*\\d+)?$`, 'i') }).locator('xpath=ancestor::section[1]')
+}
+
+export async function boardLaneWithCount(page, label, count) {
+  const lane = boardLane(page, label)
+  await eventually(async () => await lane.count() === 1
+    && await lane.getByText(new RegExp(`^${count}$`)).filter({ visible: true }).count() === 1,
+  `${label} lane count did not become ${count}`)
+  return lane
+}
+
+export function boardTicketTotal(page, count) {
+  return page.getByText(new RegExp(`^${count}\\s+tickets?$`, 'i')).filter({ visible: true })
+}
+
+export function boardRefreshButton(page) {
+  return page.getByRole('button', { name: /refresh/i })
+}
+
+export function duplicateStoredTicket(value, id) {
+  if (Array.isArray(value)) {
+    const ticket = value.find((item) => item?.id === id)
+    if (ticket) { value.push(ticket); return true }
+  }
+  return value !== null && typeof value === 'object'
+    && Object.values(value).some((item) => duplicateStoredTicket(item, id))
+}
+
+export function standaloneCompose(status) {
+  if (!Array.isArray(status?.containers)) throw new ControlError('Compose status omitted declared containers')
+  return status.containers.length > 0 && status.containers.every(({ container }) => !/console/i.test(container))
+}
+
+export function reachedCommentParent({ parent, link }) {
+  const insideParent = (element) => element !== link && (element === parent
+    || element?.closest('li, article, [role="listitem"]') === parent)
+  return insideParent(document.activeElement)
+    || insideParent(document.getElementById(decodeURIComponent(location.hash.slice(1))))
+}
+
 async function create(trigger, fields = {}) {
   return trigger('kanban::tickets::create', { title: `Probe ${Date.now()}-${Math.random()}`, ...fields })
 }
 
 const PROBES = {
-  async kanban_c1_foundation({ api, trigger, control, browser, baseUrl, output, check, unverified }) {
+  async kanban_c1_foundation({ api, trigger, control, browser, baseUrl, output, check, criterion, unverified }) {
     await check('foundation_assets_and_safe_routes', async () => {
+      expect(standaloneCompose(await trigger('compose::status', { file: '/workspace/worker-compose.yaml' })), 'Compose declares Console or no application')
       const home = await api('/')
       expect(home.ok && home.headers.get('content-type')?.startsWith('text/html'), 'standalone HTML did not load')
       for (const path of ['/constructor', '/toString', '/__proto__']) expect((await api(path)).status === 404, `${path} was not 404`)
@@ -318,9 +423,9 @@ const PROBES = {
         const response = await api('/api/config')
         if (!response.ok) return false
         const value = await response.json()
-        return value.data_dir === './direct-probe-data' ? value : false
+        return value.data_dir === './direct-probe-data'
+          && value.resolved_data_dir.endsWith('/direct-probe-data') ? value : false
       }, 'direct configuration update did not select the effective directory')
-      expect(direct.resolved_data_dir.endsWith('/direct-probe-data'), 'relative direct configuration did not resolve from the project root')
       await json(await api('/api/config', {
         method: 'PUT', headers: { 'content-type': 'application/json' }, body: '{"data_dir":"./probe-browser-data"}',
       }))
@@ -336,10 +441,17 @@ const PROBES = {
     })
     await check('foundation_accessible_settings', async () => {
       const { context, page } = await pageFor(browser, baseUrl, { width: 390, height: 844 })
-      await page.getByLabel('Data directory').fill('./probe-ui-data')
-      await page.getByRole('button', { name: 'Save settings' }).click()
-      await expectText(page.getByRole('status').filter({ hasText: /Settings saved/ }), /Settings saved/)
+      const input = page.getByRole('textbox')
+      await eventually(async () => await input.inputValue() === (await json(await api('/api/config'))).data_dir, 'settings form did not load the current directory')
+      await input.fill('./probe-ui-data')
+      await page.getByRole('button', { name: /save|apply|update/i }).click()
+      await eventually(async () => (await json(await api('/api/config'))).data_dir === './probe-ui-data', 'settings form did not persist the directory')
+      expect(await input.inputValue() === './probe-ui-data', 'saving replaced the selected directory')
+      expect(!await page.evaluate(() => document.documentElement.scrollWidth > document.documentElement.clientWidth), 'mobile settings have document-wide overflow')
       await screenshot(page, output, 'settings-mobile')
+      await page.setViewportSize({ width: 1280, height: 900 })
+      expect(await input.isVisible() && !await page.evaluate(() => document.documentElement.scrollWidth > document.documentElement.clientWidth), 'desktop settings are not usable')
+      await screenshot(page, output, 'settings-desktop')
       await context.close()
       return 'The settings form loads and saves at a mobile viewport using accessible controls.'
     })
@@ -349,21 +461,25 @@ const PROBES = {
       expect((await api('/')).ok, 'application stopped serving after the source was restored')
       return 'A trusted temporary TypeScript source marker is observed without a manual build and the original bytes are restored.'
     })
-    await checksPassedCriterion(check, 'criterion_1', 'Compose starts against an isolated engine with no Console service and standalone browser assets load.')
-    await checksPassedCriterion(check, 'criterion_2', 'Missing configuration initializes and existing unrelated data survives saving and restart.')
-    await checksPassedCriterion(check, 'criterion_3', 'Browser and direct iii changes select the effective directory and relative paths resolve from the project root.')
-    await checksPassedCriterion(check, 'criterion_4', 'Invalid config and prototype-like asset paths are rejected by the live server.')
-    await checksPassedCriterion(check, 'criterion_5', 'Trusted source mutation proves development hot reload and the mobile settings form remains usable.')
+    await criterion('criterion_1', 'Compose starts against an isolated engine with no Console service and standalone browser assets load.')
+    await criterion('criterion_2', 'Missing configuration initializes and existing unrelated data survives saving and restart.')
+    await criterion('criterion_3', 'Browser and direct iii changes select the effective directory and relative paths resolve from the project root.')
+    await criterion('criterion_4', 'Invalid config and prototype-like asset paths are rejected by the live server.')
+    await criterion('criterion_5', 'Trusted source mutation proves development hot reload and the mobile settings form remains usable.')
   },
 
-  async kanban_c2_persistence({ api, trigger, control, check }) {
+  async kanban_c2_persistence({ api, trigger, control, check, criterion }) {
     let first
-    await check('persistence_iii_crud', async () => {
+    const crudAvailable = await check('persistence_iii_crud', async () => {
       first = await trigger('kanban::tickets::create', { title: '  Defaults ticket  ' })
       expect(first.title === 'Defaults ticket' && first.status === 'backlog' && first.priority === 'medium', 'defaults or title normalization are wrong')
       expect(first.description === '' && first.assignee === null, 'nullable defaults are wrong')
       expect(/^KAN-[1-9]\d*$/.test(first.key) && !Number.isNaN(Date.parse(first.created_at)), 'identity or timestamps are invalid')
+      expect(/^[\da-f]{8}(?:-[\da-f]{4}){3}-[\da-f]{12}$/i.test(first.id)
+        && Date.parse(first.updated_at) >= Date.parse(first.created_at), 'UUID or updated timestamp is invalid')
       const second = await create(trigger, { status: 'done', priority: 'urgent', assignee: 'Ada' })
+      expect(second.id !== first.id && /^KAN-[1-9]\d*$/.test(second.key)
+        && Number(second.key.slice(4)) > Number(first.key.slice(4)), 'ticket identifiers are not unique and increasing')
       const listed = await trigger('kanban::tickets::list')
       expect(listed.tickets.at(-2).id === first.id && listed.tickets.at(-1).id === second.id, 'list is not in creation order')
       expect((await trigger('kanban::tickets::get', { id: first.id })).key === first.key, 'UUID lookup failed')
@@ -403,6 +519,7 @@ const PROBES = {
       return 'Configured directories keep independent tickets and key sequences; primary tickets survive a full runtime restart.'
     })
     await check('persistence_corrupt_and_duplicate_store_fail_closed', async () => {
+      expect(crudAvailable, 'Ticket persistence is unavailable; corrupt-store checks require working create/list/get functions.')
       const original = await control('read_store')
       const rejectsWithoutRewrite = async (content, label) => {
         await control('write_store', { value: content })
@@ -414,7 +531,8 @@ const PROBES = {
       try {
         await rejectsWithoutRewrite('{broken json', 'corrupt')
         const records = JSON.parse(original)
-        const duplicate = `${JSON.stringify([...records, records[0]], null, 2)}\n`
+        if (!duplicateStoredTicket(records, first.id)) throw new ControlError('Cannot locate the ticket collection for a duplicate-store probe')
+        const duplicate = `${JSON.stringify(records, null, 2)}\n`
         await rejectsWithoutRewrite(duplicate, 'duplicate')
       } finally {
         await control('write_store', { value: original })
@@ -422,74 +540,112 @@ const PROBES = {
       expect((await trigger('kanban::tickets::get', { id: first.id })).id === first.id, 'restored valid store is unusable')
       return 'Corrupt JSON and duplicate records fail closed without byte changes; the original store is restored afterward.'
     })
-    await checksPassedCriterion(check, 'criterion_1', 'Both identifiers and real SDK caller metadata work through iii.')
-    await checksPassedCriterion(check, 'criterion_2', 'Defaults, normalization, timestamps and increasing readable keys are observed.')
-    await checksPassedCriterion(check, 'criterion_3', 'Configured directories remain isolated and tickets survive runtime restart.')
-    await checksPassedCriterion(check, 'criterion_4', 'Invalid inputs and corrupt or duplicate stores fail without replacing existing bytes.')
+    await criterion('criterion_1', 'Both identifiers and real SDK caller metadata work through iii.')
+    await criterion('criterion_2', 'Defaults, normalization, timestamps and increasing readable keys are observed.')
+    await criterion('criterion_3', 'Configured directories remain isolated and tickets survive runtime restart.')
+    await criterion('criterion_4', 'Invalid inputs and corrupt or duplicate stores fail without replacing existing bytes.')
   },
 
-  async kanban_c3_board({ api, trigger, browser, baseUrl, output, check }) {
+  async kanban_c3_board({ api, trigger, browser, baseUrl, output, check, criterion }) {
     const statuses = [['backlog', 'Backlog'], ['todo', 'To do'], ['in_progress', 'In progress'], ['in_review', 'In review'], ['done', 'Done']]
-    await check('board_empty_loading_error_retry', async () => {
+
+    await check('board_loading_empty_error_and_retry', async () => {
       const context = await browser.newContext({ viewport: { width: 1280, height: 900 } })
       const page = await context.newPage()
       let release
       const held = new Promise((resolve) => { release = resolve })
       let mode = 'hold'
-      await page.route('**/api/tickets', async (route) => {
-        if (mode === 'hold') { await held; await route.continue(); return }
-        if (mode === 'fail') { await route.fulfill({ status: 500, contentType: 'application/json', body: '{"error":"probe failure"}' }); return }
-        await route.continue()
-      })
-      await page.goto(baseUrl)
-      await expectText(page.getByRole('status').filter({ hasText: /Loading tickets/ }), /Loading tickets/)
-      expect(await page.getByText('— tickets', { exact: true }).count() === 1, 'loading fabricated a zero total')
-      release()
-      await expectText(page.getByRole('status').filter({ hasText: /No tickets yet/ }), /No tickets yet/)
-      expect(await page.getByText('No tickets', { exact: true }).count() === 5, 'empty lanes are not distinguished')
-      mode = 'fail'
-      await page.getByRole('button', { name: 'Refresh board' }).click()
-      await expectText(page.getByRole('status').filter({ hasText: /Unable to load tickets/ }), /Unable to load tickets/)
-      expect(await page.getByText('— tickets', { exact: true }).count() === 1, 'failed read fabricated a zero total')
-      mode = 'pass'
-      await page.getByRole('button', { name: 'Retry' }).click()
-      await expectText(page.getByRole('status').filter({ hasText: /No tickets yet/ }), /No tickets yet/)
-      await context.close()
+      try {
+        await context.route('**/api/tickets', async (route) => {
+          if (mode === 'hold') { await held; await route.continue(); return }
+          if (mode === 'fail') { await route.fulfill({ status: 500, contentType: 'application/json', body: '{"error":"probe failure"}' }); return }
+          await route.continue()
+        })
+        await page.goto(baseUrl)
+        await expectText(page.getByRole('status').filter({ hasText: /load/i }), /load/i)
+        expect(await boardTicketTotal(page, 0).count() === 0, 'loading fabricated a zero total')
+        expect(await page.getByText(/^0$/).filter({ visible: true }).count() === 0, 'loading fabricated zero lane counts')
+        release()
+        await expectText(page.getByRole('status').filter({ hasText: /no tickets|empty/i }), /no tickets|empty/i)
+        expect(await boardTicketTotal(page, 0).count() === 1, 'empty store total is wrong')
+        for (const [, label] of statuses) await boardLaneWithCount(page, label, 0)
+        mode = 'fail'
+        const failurePage = await context.newPage()
+        await failurePage.goto(baseUrl)
+        await expectText(failurePage.locator('[role="alert"], [role="status"]').filter({ hasText: /unable|error|failed/i }), /unable|error|failed/i)
+        expect(await boardTicketTotal(failurePage, 0).count() === 0, 'failed first read fabricated a zero total')
+        expect(await failurePage.getByText(/^0$/).filter({ visible: true }).count() === 0, 'failed first read fabricated zero lane counts')
+        mode = 'pass'
+        await failurePage.getByRole('button', { name: /retry|try again/i }).click()
+        await expectText(failurePage.getByRole('status').filter({ hasText: /no tickets|empty/i }), /no tickets|empty/i)
+        for (const [, label] of statuses) await boardLaneWithCount(failurePage, label, 0)
+      } finally {
+        mode = 'pass'
+        release?.()
+        await context.unroute('**/api/tickets').catch(() => {})
+        await context.close().catch(() => {})
+      }
       return 'Loading, empty and failed reads are distinct; retry recovers and unavailable counts remain unknown.'
     })
-    await check('board_five_lanes_refresh_safe_text_and_settings', async () => {
-      const initialConfig = await json(await api('/api/config'))
+
+    await check('board_lanes_counts_and_metadata', async () => {
       const seeded = []
       for (const [status, label] of statuses) seeded.push(await create(trigger, { title: `${label} probe`, status, priority: 'high', assignee: 'Grace' }))
       const { context, page } = await pageFor(browser, baseUrl)
-      await eventually(async () => (await page.getByText(`${seeded.length} tickets`, { exact: true }).count()) === 1, 'board total did not load')
+      await eventually(async () => (await boardTicketTotal(page, seeded.length).count()) === 1, 'board total did not load')
       for (let index = 0; index < statuses.length; index++) {
         const [, label] = statuses[index]
-        const heading = page.getByRole('heading', { name: new RegExp(`^${label}\\s*1$`, 'i') })
-        expect(await heading.count() === 1, `${label} lane count is wrong`)
-        const lane = heading.locator('xpath=ancestor::section[1]')
+        const lane = await boardLaneWithCount(page, label, 1)
+        expect(await lane.getByText(seeded[index].key, { exact: true }).count() === 1, `${label} readable key is missing`)
         expect(await lane.getByRole('heading', { name: seeded[index].title }).count() === 1, `${label} card is missing`)
+        expect(await lane.getByText(/^high$/i).count() === 1, `${label} priority is missing`)
         expect(await lane.getByText('Grace', { exact: true }).count() === 1, `${label} assignee is missing`)
       }
+      await context.close()
+      return 'Five lanes contain the correct cards, counts, priorities and assignees.'
+    })
+
+    await check('board_refresh_and_settings_reload', async () => {
+      const initialConfig = await json(await api('/api/config'))
+      const { context, page } = await pageFor(browser, baseUrl)
+      const initialTickets = (await json(await api('/api/tickets'))).tickets
+      await eventually(async () => await boardTicketTotal(page, initialTickets.length).count(), 'initial board total did not load')
+      let ticketReads = 0
+      page.on('request', (request) => { if (new URL(request.url()).pathname === '/api/tickets') ticketReads++ })
+      const refreshed = await create(trigger, { title: 'Explicit refresh probe' })
+      const readsBeforeRefresh = ticketReads
+      await boardRefreshButton(page).click()
+      await eventually(async () => ticketReads > readsBeforeRefresh, 'refresh did not request current tickets')
+      await eventually(async () => await page.getByRole('heading', { name: refreshed.title }).count(), 'refresh did not load the new ticket')
+      try {
+        await page.getByRole('link', { name: 'Settings' }).click()
+        await page.getByLabel('Data directory').fill('./board-probe-empty')
+        await page.getByRole('button', { name: 'Save settings' }).click()
+        await expectText(page.getByRole('status').filter({ hasText: /saved/i }), /saved/i)
+        await page.getByRole('link', { name: /Board/ }).click()
+        await expectText(page.getByRole('status').filter({ hasText: /no tickets|empty/i }), /no tickets|empty/i)
+        await eventually(async () => await boardTicketTotal(page, 0).count() === 1, 'selected empty store total is wrong')
+        await page.getByRole('link', { name: 'Settings' }).click()
+        await page.getByLabel('Data directory').fill(initialConfig.data_dir)
+        await page.getByRole('button', { name: 'Save settings' }).click()
+        await expectText(page.getByRole('status').filter({ hasText: /saved/i }), /saved/i)
+        await page.getByRole('link', { name: /Board/ }).click()
+        await eventually(async () => await page.getByRole('heading', { name: refreshed.title }).count(), 'returning from settings did not reload the restored store')
+      } finally {
+        await json(await api('/api/config', {
+          method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ data_dir: initialConfig.data_dir }),
+        }))
+      }
+      await context.close()
+      return 'Refresh requests current data and navigation reloads each selected store.'
+    })
+
+    await check('board_safe_text_and_responsive_layout', async () => {
       const markup = '<img src=x onerror=alert(1)> literal title'
       await create(trigger, { title: markup })
-      await page.getByRole('button', { name: 'Refresh board' }).click()
-      await eventually(async () => await page.getByRole('heading', { name: markup }).count(), 'refresh did not load the new ticket')
-      expect(await page.locator('img').count() === 0, 'ticket markup created an image element')
-
-      await page.getByRole('link', { name: 'Settings' }).click()
-      await page.getByLabel('Data directory').fill('./board-probe-empty')
-      await page.getByRole('button', { name: 'Save settings' }).click()
-      await expectText(page.getByRole('status').filter({ hasText: /Settings saved/ }), /Settings saved/)
-      await page.getByRole('link', { name: /Board/ }).click()
-      await expectText(page.getByRole('status').filter({ hasText: /No tickets yet/ }), /No tickets yet/)
-      await page.getByRole('link', { name: 'Settings' }).click()
-      await page.getByLabel('Data directory').fill(initialConfig.data_dir)
-      await page.getByRole('button', { name: 'Save settings' }).click()
-      await expectText(page.getByRole('status').filter({ hasText: /Settings saved/ }), /Settings saved/)
-      await page.getByRole('link', { name: /Board/ }).click()
-      await eventually(async () => await page.getByRole('heading', { name: markup }).count(), 'returning from settings did not reload the restored store')
-
+      const { context, page } = await pageFor(browser, baseUrl)
+      await eventually(async () => await page.getByRole('heading', { name: markup }).count(), 'literal ticket title did not load')
+      expect(await page.locator('img[src="x"]').count() === 0, 'ticket markup created an image element')
       expect(!await page.evaluate(() => document.documentElement.scrollWidth > document.documentElement.clientWidth), 'desktop page has document-wide horizontal overflow')
       await screenshot(page, output, 'board-desktop')
       await page.setViewportSize({ width: 390, height: 844 })
@@ -497,15 +653,15 @@ const PROBES = {
       expect(!overflow, 'mobile page has document-wide horizontal overflow')
       await screenshot(page, output, 'board-mobile')
       await context.close()
-      return 'Five lanes, refresh, store navigation, safe user text and responsive overflow behavior work.'
+      return 'User markup stays literal and desktop and mobile avoid document-wide overflow.'
     })
-    await checksPassedCriterion(check, 'criterion_1', 'Tickets created through iii appear in all five lanes with counts and metadata.')
-    await checksPassedCriterion(check, 'criterion_2', 'Loading, empty, failed and recovered states are distinguished without fabricated counts.')
-    await checksPassedCriterion(check, 'criterion_3', 'Refresh and returning from settings reload the selected store.')
-    await checksPassedCriterion(check, 'criterion_4', 'Markup remains literal and neither desktop nor mobile has document-wide overflow.')
+    await criterion('criterion_1', 'Tickets created through iii appear in all five lanes with counts and metadata.')
+    await criterion('criterion_2', 'Loading, empty, failed and recovered states are distinguished without fabricated counts.')
+    await criterion('criterion_3', 'Refresh and returning from settings reload the selected store.')
+    await criterion('criterion_4', 'Markup remains literal and neither desktop nor mobile has document-wide overflow.')
   },
 
-  async kanban_c4_ticket_flow({ api, trigger, control, browser, baseUrl, output, check }) {
+  async kanban_c4_ticket_flow({ api, trigger, control, browser, baseUrl, output, check, criterion }) {
     let created
     await check('ticket_flow_create_detail_and_delete', async () => {
       const keyboardTicket = await create(trigger, { title: 'Keyboard card probe' })
@@ -543,6 +699,8 @@ const PROBES = {
       await dialog.getByRole('button', { name: 'Create ticket' }).click()
       await expectText(page.getByRole('heading', { name: 'Browser-created ticket' }), /Browser-created ticket/)
       expect(await dialog.isVisible() === false, 'create dialog stayed open')
+      expect(await page.getByRole('heading', { name: 'Browser-created ticket' }).locator('xpath=ancestor::*[self::dialog or @role="dialog" or @aria-modal="true"]').count() === 0, 'ticket details opened in a modal')
+      expect(context.pages().length === 1, 'ticket creation opened another tab')
       created = (await json(await api('/api/tickets'))).tickets.find(({ title }) => title === 'Browser-created ticket')
       expect(created, 'created ticket is absent from API list')
       expect((await json(await api(`/api/tickets/${created.id}`))).ticket.key === created.key, 'HTTP UUID lookup failed')
@@ -550,7 +708,7 @@ const PROBES = {
       expect((await trigger('kanban::tickets::get', { id: created.id })).key === created.key, 'iii UUID lookup failed')
       expect((await trigger('kanban::tickets::get', { id: created.key })).id === created.id, 'iii key lookup failed')
       for (const value of ['UTF-8: ação e café', 'In review', 'urgent', 'Lin']) {
-        expect(await page.getByText(value, { exact: true }).count() === 1, `detail omitted persisted value: ${value}`)
+        expect(await page.getByText(value, { exact: true }).filter({ visible: true }).count() === 1, `detail omitted persisted value: ${value}`)
       }
       await page.reload()
       await expectText(page.getByRole('heading', { name: 'Browser-created ticket' }), /Browser-created ticket/)
@@ -595,6 +753,8 @@ const PROBES = {
       release()
       await delivered
       await eventually(async () => !(await json(await api('/api/tickets'))).tickets.some(({ id }) => id === created.id), 'deleted card remained listed')
+      await eventually(async () => await page.getByRole('heading', { name: 'Keyboard card probe' }).count(), 'board did not load after navigating during deletion')
+      await eventually(async () => await page.getByRole('heading', { name: created.title, exact: true }).count() === 0, 'deleted card remained visible after the late response')
       expect((await api(`/api/tickets/${created.id}`)).status === 404, 'deleted ticket is still retrievable')
       let deleted = JSON.parse(await control('read_store')).find(({ id }) => id === created.id)
       expect(deleted.deleted_at, 'soft-deleted ticket is absent from disk')
@@ -607,7 +767,7 @@ const PROBES = {
       return 'Failed deletion is recoverable; late deletion cannot leave a stale card, and disk retention plus key retirement survive restart.'
     })
     await check('ticket_flow_utf8_chunks_and_json_boundary', async () => {
-      expect((await api('/api/tickets', { method: 'POST', body: 'not json' })).status === 415, 'non-JSON creation was not rejected')
+      expect([400, 415].includes((await api('/api/tickets', { method: 'POST', body: 'not json' })).status), 'non-JSON creation was not rejected')
       const title = 'Chunked ação café'
       const encoded = new TextEncoder().encode(JSON.stringify({ title }))
       const split = encoded.indexOf(0xc3) + 1
@@ -624,14 +784,14 @@ const PROBES = {
       expect(chunked.ticket.title === title, 'UTF-8 split across request chunks was corrupted')
       return 'Non-JSON creation is rejected and a multibyte character split across request chunks is preserved.'
     })
-    await checksPassedCriterion(check, 'criterion_1', 'Modal creation, same-tab details, keyboard and pointer cards, history and reload work.')
-    await checksPassedCriterion(check, 'criterion_2', 'HTTP accepts both identifiers and details reflect persisted values.')
-    await checksPassedCriterion(check, 'criterion_3', 'Deletion removes the card while preserving disk state across restart and never reuses the key.')
-    await checksPassedCriterion(check, 'criterion_4', 'Failed creation and deletion preserve recoverable UI; late deletion does not leave a stale card.')
-    await checksPassedCriterion(check, 'criterion_5', 'Chunked UTF-8, JSON enforcement, focus and mobile layout are directly exercised.')
+    await criterion('criterion_1', 'Modal creation, same-tab details, keyboard and pointer cards, history and reload work.')
+    await criterion('criterion_2', 'HTTP accepts both identifiers and details reflect persisted values.')
+    await criterion('criterion_3', 'Deletion removes the card while preserving disk state across restart and never reuses the key.')
+    await criterion('criterion_4', 'Failed creation and deletion preserve recoverable UI; late deletion does not leave a stale card.')
+    await criterion('criterion_5', 'Chunked UTF-8, JSON enforcement, focus and mobile layout are directly exercised.')
   },
 
-  async kanban_c5_edit_move({ api, trigger, control, browser, baseUrl, output, check }) {
+  async kanban_c5_edit_move({ api, trigger, control, browser, baseUrl, output, check, criterion }) {
     let ticket
     await check('edit_fixture_creation', async () => {
       ticket = await create(trigger, { title: 'Editable probe', description: 'Keep me', assignee: 'Initial' })
@@ -671,6 +831,7 @@ const PROBES = {
       await expectText(page.getByRole('heading', { name: 'Edited probe' }), /Edited probe/)
       const saved = (await json(await api(`/api/tickets/${ticket.id}`))).ticket
       expect(saved.description === 'Edited description' && saved.status === 'todo' && saved.priority === 'urgent' && saved.assignee === 'Updated', 'UI edit was not persisted')
+      await screenshot(page, output, 'ticket-edited-mobile')
 
       await page.getByRole('button', { name: 'Edit ticket' }).click()
       edit = page.getByRole('heading', { name: 'Edit ticket' }).locator('xpath=ancestor::form[1]')
@@ -692,7 +853,6 @@ const PROBES = {
       release()
       await eventually(async () => (await json(await api(`/api/tickets/${ticket.id}`))).ticket.title === 'Late saved probe', 'late save did not persist after navigation')
       await eventually(async () => await page.getByRole('heading', { name: 'Late saved probe' }).count(), 'board did not refresh after the late save')
-      await screenshot(page, output, 'ticket-edited-mobile')
       await context.close()
       return 'Cancel is inert, failed-save drafts survive, retry persists edits, and a save finishing after navigation refreshes the board.'
     })
@@ -713,10 +873,11 @@ const PROBES = {
       return 'Empty, immutable and invalid updates are rejected without writes; deleted tickets cannot be restored.'
     })
     await check('drag_persists_status_only', async () => {
+      const beforeMove = (await json(await api(`/api/tickets/${ticket.id}`))).ticket
       const { context, page } = await pageFor(browser, baseUrl)
       await eventually(async () => await page.getByRole('heading', { name: 'Late saved probe' }).count(), 'edited card did not appear')
       const card = page.getByRole('heading', { name: 'Late saved probe' }).locator('xpath=ancestor::a[1]')
-      const target = page.getByRole('heading', { name: /^Done\s*0$/i }).locator('xpath=ancestor::section[1]')
+      const target = await boardLaneWithCount(page, 'Done', 0)
       let failMove = true
       await page.route('**/api/tickets/**', async (route) => {
         if (failMove && route.request().method() === 'PATCH') {
@@ -729,12 +890,14 @@ const PROBES = {
       await card.dragTo(target)
       await expectText(page.getByRole('status').filter({ hasText: /Unable to move ticket/ }), /Unable to move ticket/)
       expect((await json(await api(`/api/tickets/${ticket.id}`))).ticket.status === 'todo', 'failed drag changed persisted status')
-      const todo = page.getByRole('heading', { name: /^To do\s*1$/i }).locator('xpath=ancestor::section[1]')
+      const todo = await boardLaneWithCount(page, 'To do', 1)
       expect(await todo.getByRole('heading', { name: 'Late saved probe' }).count() === 1, 'failed drag moved the visible card')
       await card.dragTo(target)
       await eventually(async () => (await json(await api(`/api/tickets/${ticket.id}`))).ticket.status === 'done', 'drag did not persist done status')
       const moved = (await json(await api(`/api/tickets/${ticket.id}`))).ticket
-      expect(moved.priority === 'urgent' && moved.assignee === 'Updated', 'drag changed fields besides status')
+      expect(Object.entries(beforeMove).every(([field, value]) => ['status', 'updated_at'].includes(field)
+        || JSON.stringify(moved[field]) === JSON.stringify(value)), 'drag changed fields besides status')
+      expect(Date.parse(moved.updated_at) > Date.parse(beforeMove.updated_at), 'drag did not advance updated_at')
 
       await page.unroute('**/api/tickets/**')
       let release
@@ -747,14 +910,14 @@ const PROBES = {
         await held
         await route.continue()
       })
-      const review = page.getByRole('heading', { name: /^In review\s*0$/i }).locator('xpath=ancestor::section[1]')
+      const review = await boardLaneWithCount(page, 'In review', 0)
       await card.dragTo(review)
       await reached
       await page.getByRole('link', { name: 'Settings' }).click()
       release()
       await eventually(async () => (await json(await api(`/api/tickets/${ticket.id}`))).ticket.status === 'in_review', 'late move did not persist after navigation')
       await page.getByRole('link', { name: /Board/ }).click()
-      const restoredReview = page.getByRole('heading', { name: /^In review\s*1$/i }).locator('xpath=ancestor::section[1]')
+      const restoredReview = await boardLaneWithCount(page, 'In review', 1)
       await eventually(async () => await restoredReview.getByRole('heading', { name: 'Late saved probe' }).count(), 'late move is absent from the relevant board')
       await screenshot(page, output, 'board-after-drag')
       await context.close()
@@ -778,14 +941,14 @@ const PROBES = {
       await context.close()
       return 'All edited fields and the mobile status alternative retain the moved state after runtime restart.'
     })
-    await checksPassedCriterion(check, 'criterion_1', 'Save, cancel and partial update behavior are exercised.')
-    await checksPassedCriterion(check, 'criterion_2', 'Invalid, immutable, empty and deleted-ticket updates fail without writes.')
-    await checksPassedCriterion(check, 'criterion_3', 'Real drag persists only status; injected failure stays put and retry succeeds.')
-    await checksPassedCriterion(check, 'criterion_4', 'Failed-save drafts survive and pending save/move completion updates the relevant board after navigation.')
-    await checksPassedCriterion(check, 'criterion_5', 'The mobile status selector and all edited fields retain their state after restart.')
+    await criterion('criterion_1', 'Save, cancel and partial update behavior are exercised.')
+    await criterion('criterion_2', 'Invalid, immutable, empty and deleted-ticket updates fail without writes.')
+    await criterion('criterion_3', 'Real drag persists only status; injected failure stays put and retry succeeds.')
+    await criterion('criterion_4', 'Failed-save drafts survive and pending save/move completion updates the relevant board after navigation.')
+    await criterion('criterion_5', 'The mobile status selector and all edited fields retain their state after restart.')
   },
 
-  async kanban_c6_discussion({ api, trigger, control, browser, baseUrl, output, check }) {
+  async kanban_c6_discussion({ api, trigger, control, browser, baseUrl, output, check, criterion }) {
     let ticket
     let other
     await check('discussion_fixture_creation', async () => {
@@ -798,9 +961,12 @@ const PROBES = {
       await page.getByLabel('Your name').fill('Alice')
       await page.getByRole('textbox', { name: 'Comment', exact: true }).fill('<img src=x onerror=alert(1)> first')
       await page.getByRole('button', { name: 'Post comment' }).click()
-      await expectText(page.getByText('<img src=x onerror=alert(1)> first', { exact: true }), /first/)
-      expect(await page.locator('img').count() === 0, 'comment markup created an image element')
-      await page.getByRole('button', { name: 'Reply to Alice' }).click()
+      const safeComment = page.getByText('<img src=x onerror=alert(1)> first', { exact: true })
+      await expectText(safeComment, /first/)
+      expect(await safeComment.isVisible() && await page.locator('img[src="x"]').count() === 0, 'comment body did not render markup as visible literal text')
+      const entry = (body) => page.getByText(body, { exact: true }).locator('xpath=ancestor::*[self::li or self::article or @role="listitem"][1]')
+      await entry('<img src=x onerror=alert(1)> first').getByRole('button', { name: /^reply/i }).click()
+      await page.getByLabel('Your name').fill('Bob')
       await page.getByRole('textbox', { name: 'Comment', exact: true }).fill('second')
       await page.getByRole('button', { name: 'Post comment' }).click()
       await expectText(page.getByText('second', { exact: true }), /second/)
@@ -808,17 +974,35 @@ const PROBES = {
       expect(stored.comments.length === 2 && stored.comments[1].parent_id === stored.comments[0].id, 'browser reply did not persist its parent')
       stored = await trigger('kanban::tickets::comment', {
         id: ticket.key,
-        comment: { author: 'Carol', body: 'third', parent_id: stored.comments[1].id },
+        comment: { author: '  Carol  ', body: '  third  ', parent_id: stored.comments[1].id },
       })
+      expect(stored.comments[2].author === 'Carol', 'comment author was not trimmed')
       expect(stored.comments.map(({ body }) => body).join(',') === '<img src=x onerror=alert(1)> first,second,third', 'timeline posting order is wrong')
+      expect(stored.comments.every(({ id, created_at }) => /^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/i.test(id)
+        && !Number.isNaN(Date.parse(created_at))), 'comment identity or timestamp is invalid')
       await page.reload()
       await eventually(async () => await page.getByText('third', { exact: true }).count(), 'persisted iii reply was not rendered after reload')
-      expect(await page.locator('time').count() === 3, 'timeline does not render a time for every comment')
-      expect(await page.locator('time').evaluateAll((items) => items.every((item) => !Number.isNaN(Date.parse(item.dateTime)))), 'timeline contains an invalid machine-readable time')
-      const parentLink = page.getByRole('button', { name: /Reply to Alice:/ }).first()
+      const entries = []
+      for (const { body, author } of stored.comments) {
+        const item = entry(body)
+        expect(await item.count() === 1, `timeline has no semantic entry for ${body}`)
+        const visible = await item.innerText()
+        expect(visible.includes(author), `timeline omitted the author for ${body}`)
+        entries.push(await item.elementHandle())
+        expect((await item.locator('time').filter({ visible: true }).allTextContents()).some((text) => text.trim())
+          || /\b(?:\d{1,2}:\d{2}|\d{1,4}[/-]\d{1,2}|jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:tember)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?|just now|seconds?|minutes?|hours?|today|yesterday)\b/i.test(visible), `timeline entry has no visible time for ${body}`)
+      }
+      expect(await page.evaluate((items) => items.slice(1).every((item, index) =>
+        items[index].compareDocumentPosition(item) & Node.DOCUMENT_POSITION_FOLLOWING), entries), 'timeline is not in posting order')
+      const replyItem = entry('second')
+      const parentLink = replyItem.getByRole('button', { name: /first|parent|reference|in reply/i })
+        .or(replyItem.getByRole('link', { name: /first|parent|reference|in reply/i })).first()
+      expect(await parentLink.count() === 1, 'reply has no accessible parent navigation action')
+      const parent = await entry('<img src=x onerror=alert(1)> first').elementHandle()
+      const link = await parentLink.elementHandle()
       await parentLink.focus()
       await parentLink.press('Enter')
-      expect(await page.evaluate(() => document.activeElement?.textContent?.includes('first')), 'keyboard parent navigation did not focus the referenced comment')
+      await eventually(() => page.evaluate(reachedCommentParent, { parent, link }), 'keyboard parent navigation did not reach the referenced comment')
       await screenshot(page, output, 'discussion-mobile')
       await context.close()
       return 'Comments and nested replies retain order; safe text, times and keyboard parent navigation work on mobile.'
@@ -826,7 +1010,8 @@ const PROBES = {
     await check('discussion_invalid_input_and_corrupt_store_fail_closed', async () => {
       other = await create(trigger, { title: 'Other discussion' })
       const foreign = await trigger('kanban::tickets::comment', { id: other.id, comment: { author: 'X', body: 'foreign root' } })
-      for (const comment of [{ author: '', body: 'body' }, { author: 'A', body: '' }]) {
+      for (const comment of [{ author: '', body: 'body' }, { author: 'A', body: '' },
+        { author: '   ', body: 'body' }, { author: 'A', body: '  \t ' }]) {
         expect((await api(`/api/tickets/${ticket.id}/comments`, {
           method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(comment),
         })).status === 400, `invalid comment was accepted: ${JSON.stringify(comment)}`)
@@ -924,14 +1109,51 @@ const PROBES = {
       await eventually(async () => (await trigger('kanban::tickets::get', { id: other.id })).id === other.id, 'existing ticket was unusable after restart', 15_000)
       return 'Comments survive ticket editing, soft deletion and runtime restart while remaining records stay usable.'
     })
-    await checksPassedCriterion(check, 'criterion_1', 'Comments, replies and replies-to-replies persist in posting order with valid parents.')
-    await checksPassedCriterion(check, 'criterion_2', 'Timeline text, authors, times and keyboard parent navigation work on mobile.')
-    await checksPassedCriterion(check, 'criterion_3', 'Invalid inputs, foreign parents and malformed stored discussions fail closed.')
-    await checksPassedCriterion(check, 'criterion_4', 'Failures and overlapping responses preserve drafts and newer activity.')
-    await checksPassedCriterion(check, 'criterion_5', 'Discussions survive edits, soft deletion and runtime restart.')
+    await criterion('criterion_1', 'Comments, replies and replies-to-replies persist in posting order with valid parents.')
+    await criterion('criterion_2', 'Timeline text, authors, times and keyboard parent navigation work on mobile.')
+    await criterion('criterion_3', 'Invalid inputs, foreign parents and malformed stored discussions fail closed.')
+    await criterion('criterion_4', 'Failures and overlapping responses preserve drafts and newer activity.')
+    await criterion('criterion_5', 'Discussions survive edits, soft deletion and runtime restart.')
   },
 
-  async kanban_c7_live({ trigger, control, browser, baseUrl, output, check, unverified }) {
+  async kanban_c7_live({ api, trigger, control, browser, baseUrl, output, check, criterion, unverified }) {
+    await check('live_sse_protocol_contract', async () => {
+      const configuration = await json(await api('/api/config'))
+      let original
+      const { context, page } = await pageFor(browser, baseUrl)
+      try {
+        await page.evaluate(() => {
+          globalThis.__kanbanProbeEvents = []
+          globalThis.__kanbanProbeSource = new EventSource('/api/events')
+          globalThis.__kanbanProbeSource.addEventListener('change', (event) => {
+            try { globalThis.__kanbanProbeEvents.push(JSON.parse(event.data)) }
+            catch { globalThis.__kanbanProbeEvents.push({ parse_error: true }) }
+          })
+        })
+        const eventAt = (index) => eventually(async () => page.evaluate(
+          (position) => globalThis.__kanbanProbeEvents[position] ?? false, index,
+        ), `SSE change event ${index + 1} was not received`)
+        const exactStore = (event) => event?.store === configuration.resolved_data_dir
+        expect(exactStore(await eventAt(0)), 'initial SSE event has the wrong name or store payload')
+        await create(trigger, { title: 'SSE protocol probe' })
+        expect(exactStore(await eventAt(1)), 'persisted mutation SSE event has the wrong name or store payload')
+        await new Promise((resolve) => setTimeout(resolve, 250))
+        const count = await page.evaluate(() => globalThis.__kanbanProbeEvents.length)
+        original = await control('read_store')
+        await control('write_store', { value: '{broken json' })
+        let rejected = false
+        try { await create(trigger, { title: 'Rejected SSE mutation' }) } catch { rejected = true }
+        expect(rejected, 'mutation unexpectedly succeeded against a corrupt store')
+        await new Promise((resolve) => setTimeout(resolve, 750))
+        expect(await page.evaluate(() => globalThis.__kanbanProbeEvents.length) === count, 'failed persistence emitted a change event')
+      } finally {
+        try { if (original !== undefined) await control('write_store', { value: original }) } finally {
+          await page.evaluate(() => globalThis.__kanbanProbeSource?.close()).catch(() => {})
+          await context.close().catch(() => {})
+        }
+      }
+      return 'Named SSE change events carry the exact store, start with an initial event and exclude failed persistence.'
+    })
     await check('live_three_sessions_and_direct_iii', async () => {
       const sessions = await Promise.all([0, 1, 2].map(() => pageFor(browser, baseUrl)))
       const configuration = await trigger('configuration::get', { id: 'kanban', raw: true })
@@ -977,22 +1199,53 @@ const PROBES = {
       expect(await preservedDraft.inputValue() === 'Reply draft survives', 'live reply erased a newer reply draft')
 
       await control('restart')
-      await Promise.all(sessions.map(({ page }) => eventually(async () => /connected/i.test(await page.getByRole('status').filter({ hasText: /Live updates/ }).first().textContent() ?? ''), 'SSE did not reconnect after restart', 20_000)))
       await eventually(async () => (await trigger('kanban::tickets::get', { id: ticket.id })).id === ticket.id, 'iii did not reconnect after restart', 15_000)
+      await trigger('kanban::tickets::update', { id: ticket.id, changes: { description: 'Reconnected live description' } })
+      await Promise.all(sessions.map(({ page }) => eventually(async () => await page.getByText('Reconnected live description', { exact: true }).count(), 'browser session did not reconnect after restart', 20_000)))
       expect(await preservedDraft.inputValue() === 'Reply draft survives', 'restart erased same-store reply draft')
 
       await sessions[2].page.evaluate(() => { location.hash = '#board' })
       await eventually(async () => await sessions[2].page.getByRole('heading', { name: 'Dirty local title' }).count(), 'board did not recover after restart')
+      await trigger('kanban::tickets::update', { id: ticket.id, changes: { status: 'done' } })
+      await Promise.all(sessions.slice(0, 2).map(({ page }) => eventually(async () =>
+        await page.getByText('Done', { exact: true }).filter({ visible: true }).count(), 'remote move did not update detail status')))
+      await eventually(async () => await boardLane(sessions[2].page, 'Done').getByRole('heading', { name: 'Dirty local title' }).count(), 'remote move did not update the board lane')
       const dragging = sessions[2].page.getByRole('heading', { name: 'Dirty local title' }).locator('xpath=ancestor::a[1]')
-      await dragging.evaluate((element) => element.dispatchEvent(new DragEvent('dragstart', { bubbles: true, dataTransfer: new DataTransfer() })))
-      await trigger('configuration::set', { id: 'kanban', value: { ...configuration.value, data_dir: '/data/live-alternate' } })
-      await eventually(async () => await sessions[2].page.getByText('No tickets yet.', { exact: true }).count(), 'store switch during drag did not load the empty store')
-      expect(await preservedDraft.inputValue() === '', 'store switch retained an old-store draft')
+      const dragged = await dragging.elementHandle()
+      await dragging.evaluate((element) => {
+        globalThis.__kanbanDragStarted = false
+        globalThis.__kanbanDragEnded = false
+        element.addEventListener('dragstart', () => { globalThis.__kanbanDragStarted = true }, { once: true })
+        element.addEventListener('dragend', () => { globalThis.__kanbanDragEnded = true }, { once: true })
+      })
+      const box = await dragging.boundingBox()
+      expect(box, 'live drag source is not visible')
+      const mouse = sessions[2].page.mouse
+      try {
+        await mouse.move(box.x + box.width / 2, box.y + box.height / 2)
+        await mouse.down()
+        await mouse.move(box.x + box.width / 2 - 30, box.y + box.height / 2 + 15, { steps: 5 })
+        await eventually(() => sessions[2].page.evaluate(() => globalThis.__kanbanDragStarted), 'real pointer drag did not start')
+        await trigger('kanban::tickets::update', { id: ticket.id, changes: { description: 'Updated during drag' } })
+        await Promise.all(sessions.slice(0, 2).map(({ page }) => eventually(async () =>
+          await page.getByText('Updated during drag', { exact: true }).count(), 'ordinary update did not reach the other sessions during drag')))
+        expect(await dragged.evaluate((element) => element.isConnected && !globalThis.__kanbanDragEnded), 'ordinary live update replaced or ended the active drag')
+        await trigger('configuration::set', { id: 'kanban', value: { ...configuration.value, data_dir: '/data/live-alternate' } })
+        await eventually(async () => await sessions[2].page.getByText('No tickets yet.', { exact: true }).count(), 'store switch during drag did not load the empty store')
+      } finally {
+        await mouse.up()
+      }
       await trigger('configuration::set', { id: 'kanban', value: configuration.value })
       await Promise.all(sessions.slice(0, 2).map(({ page }) => eventually(async () => await page.getByRole('heading', { name: 'Dirty local title' }).count(), 'detail did not recover after restoring the store')))
+      expect(await preservedDraft.inputValue() === '', 'store switch retained an old-store draft')
 
       await trigger('kanban::tickets::delete', { id: ticket.id })
-      await Promise.all(sessions.slice(0, 2).map(({ page }) => eventually(async () => await page.getByText('Ticket not found.', { exact: true }).count(), 'session retained stale deleted details')))
+      await Promise.all(sessions.slice(0, 2).map(({ page }) => eventually(async () => {
+        const actions = page.getByRole('button', { name: /^(?:Edit ticket|Delete ticket)$/ })
+        return await actions.count() === 0 || await actions.evaluateAll(
+          (items) => items.every((item) => item.disabled || item.getAttribute('aria-disabled') === 'true'),
+        )
+      }, 'session retained enabled actions for a remotely deleted ticket')))
       await eventually(async () => !(await sessions[2].page.getByRole('heading', { name: 'Dirty local title' }).count()), 'board retained a remotely deleted card')
       await screenshot(sessions[2].page, output, 'live-third-session')
       await Promise.all(sessions.map(({ context }) => context.close()))
@@ -1057,8 +1310,10 @@ const PROBES = {
       try {
         const baseline = await countSseServerResponses(inspector)
         const transient = await Promise.all(Array.from({ length: 6 }, () => pageFor(browser, baseUrl)))
-        await Promise.all(transient.map(({ page }) => expectText(page.getByRole('status').filter({ hasText: /Live updates connected/ }), /Live updates connected/)))
-        const active = await countSseServerResponses(inspector)
+        const active = await eventually(async () => {
+          const count = await countSseServerResponses(inspector)
+          return count >= baseline + transient.length ? count : false
+        }, 'inspector did not observe all active SSE responses')
         expect(active >= baseline + transient.length, `inspector did not observe active SSE responses: baseline=${baseline}, active=${active}`)
         await Promise.all(transient.map(({ context }) => context.close()))
         let returned = false
@@ -1075,20 +1330,23 @@ const PROBES = {
       }
       await control('restart')
       await eventually(async () => (await trigger('kanban::tickets::get', { id: ticket.id })).title === 'Post-cleanup state', 'runtime did not shut down and recover with an SSE client', 15_000)
-      await expectText(page.getByRole('status').filter({ hasText: /Live updates connected/ }), /Live updates connected/)
+      await trigger('kanban::tickets::update', { id: ticket.id, changes: { title: 'Restarted stream state' } })
+      await expectText(page.getByRole('heading', { name: 'Restarted stream state' }), /Restarted stream state/)
       await context.close()
       return 'Late responses stay stale; inspector proves closed SSE responses are collectible, the surviving stream works, and shutdown remains bounded.'
     })
-    await checksPassedCriterion(check, 'criterion_1', 'Three browser sessions observe creation, edits, comments, replies and deletion without reload.')
-    await checksPassedCriterion(check, 'criterion_2', 'Focus, comment/reply drafts and dirty edits survive updates; saving preserves untouched remote fields.')
-    await checksPassedCriterion(check, 'criterion_3', 'Compose restart reconnects open sessions and preserves same-store drafts.')
-    await checksPassedCriterion(check, 'criterion_4', 'Remote deletion disables stale details and a store switch during dragging clears old drafts.')
-    await checksPassedCriterion(check, 'criterion_5', 'Late responses stay stale; private heap instrumentation proves SSE cleanup and bounded shutdown with a connection open.')
+    await criterion('criterion_1', 'Three browser sessions observe creation, edits, comments, replies and deletion without reload.')
+    await criterion('criterion_2', 'Focus, comment/reply drafts and dirty edits survive updates; saving preserves untouched remote fields.')
+    await criterion('criterion_3', 'Compose restart reconnects open sessions and preserves same-store drafts.')
+    await criterion('criterion_4', 'Remote deletion disables stale details and a store switch during dragging clears old drafts.')
+    await criterion('criterion_5', 'Late responses stay stale; private heap instrumentation proves SSE cleanup and bounded shutdown with a connection open.')
   },
 }
 
-function checksPassedCriterion(check, id, detail) {
-  return check(id, async () => detail)
+export function criterionDependencyStatus(checks, dependencies) {
+  const statuses = dependencies.map((dependency) => checks.find(({ id }) => id === dependency)?.status)
+  if (statuses.some((status) => status === 'failed')) return 'failed'
+  return statuses.every((status) => status === 'passed') ? 'passed' : 'unverified'
 }
 
 async function expectText(locator, pattern) {

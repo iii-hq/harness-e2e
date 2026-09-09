@@ -3,15 +3,16 @@
 import { spawn } from 'node:child_process'
 import { chmod, mkdir, readFile, writeFile } from 'node:fs/promises'
 import { isAbsolute, join } from 'node:path'
-import { pathToFileURL } from 'node:url'
+import { fileURLToPath, pathToFileURL } from 'node:url'
 import { randomUUID } from 'node:crypto'
 
 const MAX_BYTES = 256 * 1024
+const MAX_COMMAND_BYTES = 64 * 1024
 const TERMINAL = new Set(['completed', 'cancelled', 'failed'])
 let failureOutput
 let evidence
 let capturedTranscript
-const usage = `Usage: subject.mjs --container <64-hex-id> --prompt-file <trusted-file> --output <private-directory> --engine-url <ws-url> --namespace <namespace> --model <model> --provider <provider>
+const usage = `Usage: subject.mjs --container <64-hex-id> --keeper <pid> --prompt-file <trusted-file> --output <private-directory> --engine-url <ws-url> --namespace <namespace> --model <model> --provider <provider>
 
 Environment:
   III_SDK_MODULE  Absolute path to the trusted iii-sdk module
@@ -28,9 +29,9 @@ function argumentsOf(argv) {
   return values
 }
 
-function run(command, args, timeoutMs, cap = MAX_BYTES) {
+function run(command, args, timeoutMs, cap = MAX_BYTES, input) {
   return new Promise((resolve, reject) => {
-    const child = spawn(command, args, { stdio: ['ignore', 'pipe', 'pipe'] })
+    const child = spawn(command, args, { stdio: [input === undefined ? 'ignore' : 'pipe', 'pipe', 'pipe'] })
     const chunks = { stdout: [], stderr: [] }
     let bytes = 0
     let settled = false
@@ -51,6 +52,7 @@ function run(command, args, timeoutMs, cap = MAX_BYTES) {
       chunks[name].push(chunk)
     })
     child.on('error', fail)
+    if (input !== undefined) child.stdin.end(input)
     child.on('close', (code, signal) => {
       if (settled) return
       settled = true
@@ -132,10 +134,11 @@ async function main() {
   if (process.argv.includes('--help')) { console.log(usage); return }
   const started = Date.now()
   const args = argumentsOf(process.argv.slice(2))
-  for (const name of ['container', 'prompt-file', 'output', 'engine-url', 'namespace', 'model', 'provider']) {
+  for (const name of ['container', 'keeper', 'prompt-file', 'output', 'engine-url', 'namespace', 'model', 'provider']) {
     if (!args[name]) throw new Error(`Missing --${name}`)
   }
   if (!/^[0-9a-f]{64}$/.test(args.container)) throw new Error('--container must be an exact 64-hex Docker ID')
+  if (!/^\d+$/.test(args.keeper) || Number(args.keeper) <= 1) throw new Error('--keeper must be a process ID greater than one')
   if (!isAbsolute(args['prompt-file']) || !isAbsolute(args.output)) throw new Error('--prompt-file and --output must be absolute paths')
   if (!args['engine-url'].startsWith('ws://') && !args['engine-url'].startsWith('wss://')) throw new Error('--engine-url must be a WebSocket URL')
   const sdkPath = process.env.III_SDK_MODULE
@@ -182,6 +185,7 @@ async function main() {
   })
   const nonce = randomUUID().replaceAll('-', '')
   const functionId = `kanban_eval_${process.pid}_${nonce}::exec`
+  const execPath = fileURLToPath(new URL('./exec.py', import.meta.url))
   let registration
   let sessionId = `kanban-eval-${nonce}`
   let status
@@ -192,11 +196,14 @@ async function main() {
     registration = iii.registerFunction(functionId, async (payload) => {
       const { _caller_worker_id: _callerWorkerId, ...request } = payload ?? {}
       if (Object.keys(request).length !== 1 || typeof request.command !== 'string') throw new Error('command must be the only request field')
-      if (Buffer.byteLength(request.command) > MAX_BYTES) throw new Error(`command exceeds ${MAX_BYTES} bytes`)
+      if (Buffer.byteLength(request.command) > MAX_COMMAND_BYTES) throw new Error(`command exceeds ${MAX_COMMAND_BYTES} bytes`)
       try {
-        return await run('docker', ['exec', '-w', '/workspace', args.container, '/bin/sh', '-c', request.command], 120_000)
+        const execution = await run('/usr/bin/python3', [execPath, args.container, args.keeper],
+          140_000, MAX_BYTES * 6 + 4096, request.command)
+        if (execution.exit_code !== 0) throw new Error(`isolated command boundary failed: ${execution.stderr.trim()}`)
+        return JSON.parse(execution.stdout)
       } catch (error) {
-        if (error?.bounded) {
+        if (error?.bounded || error instanceof SyntaxError || error?.message?.startsWith('isolated command boundary failed:')) {
           commandFailure = error
           await run('docker', ['rm', '-f', args.container], 10_000, 64 * 1024).catch(() => {})
         }
@@ -204,7 +211,7 @@ async function main() {
       }
     }, {
       description: 'Run one bounded shell command inside the fixed isolated candidate container.',
-      request_format: { type: 'object', additionalProperties: false, required: ['command'], properties: { command: { type: 'string', maxLength: MAX_BYTES } } },
+      request_format: { type: 'object', additionalProperties: false, required: ['command'], properties: { command: { type: 'string', maxLength: MAX_COMMAND_BYTES } } },
       response_format: { type: 'object' },
     })
 
@@ -218,7 +225,7 @@ async function main() {
     evidence.cost_cap_usd = 5
     const request = {
       session_id: sessionId,
-      message: `${prompt}\n\nExecution environment: your repository is /workspace. Dependencies are installed; external networking is disabled. Execute shell commands through agent_trigger with {"function":"${functionId}","description":"Inspect repository","payload":{"command":"pwd"}}. This function executes commands, it does not delegate tasks. Each command is limited to 120 seconds and 256 KiB of output. Inspect, edit and test the repository using this tool; describing a tool call does not execute it.`,
+      message: `${prompt}\n\nExecution environment: your repository is /workspace. Dependencies are installed; external networking is disabled. Execute shell commands through agent_trigger with {"function":"${functionId}","description":"Inspect repository","payload":{"command":"pwd"}}. This function executes commands, it does not delegate tasks. Each command is limited to 120 seconds and 256 KiB of output. A command that reaches either limit returns nonzero feedback after its background processes are stopped; use a narrower command and continue. Inspect, edit and test the repository using this tool; describing a tool call does not execute it.`,
       model: args.model,
       provider: args.provider,
       idempotency_key: `kanban-eval:${nonce}`,

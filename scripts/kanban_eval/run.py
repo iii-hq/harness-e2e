@@ -31,11 +31,19 @@ RUNTIME_COMPOSE = '''
 exec iii compose --up --engine ws://127.0.0.1:50179 --file /workspace/worker-compose.yaml
 '''
 
-STOP_RUNTIME = '''import os,signal
-for name in os.listdir('/proc'):
- if name.isdigit() and int(name) not in (1,os.getpid()):
-  try: os.kill(int(name),signal.SIGKILL)
+STOP_RUNTIME = '''import os,signal,sys,time
+keeper=int(sys.argv[1])
+try: assert open(f'/proc/{keeper}/cmdline','rb').read()==b'sleep\\0infinity\\0'
+except (FileNotFoundError,ProcessLookupError): raise RuntimeError('container keeper process is unavailable')
+keep={1,os.getpid(),keeper}
+for _ in range(100):
+ targets=[int(name) for name in os.listdir('/proc') if name.isdigit() and int(name) not in keep]
+ if not targets: break
+ for pid in targets:
+  try: os.kill(pid,signal.SIGKILL)
   except ProcessLookupError: pass
+ time.sleep(.01)
+else: raise RuntimeError('candidate processes did not stop')
 '''
 
 READY_CHECK = "import urllib.request; assert urllib.request.urlopen('http://127.0.0.1:3000/api/config',timeout=.3).status == 200"
@@ -103,7 +111,7 @@ def mount(source, target, writable=False):
 
 def container_command(image, network, role, mounts, environment=ENV, bounded_workspace=False):
     command = [
-        'docker', 'run', '--detach', '--pull', 'never', '--network', network,
+        'docker', 'run', '--detach', '--init', '--pull', 'never', '--network', network,
         '--label', f'kanban-eval.role={role}',
         '--workdir', '/workspace' if role == 'candidate' else '/tmp',
         '--entrypoint', '/bin/sh',
@@ -195,6 +203,23 @@ def start_container(command):
     return container
 
 
+def container_keeper(container):
+    script = """import pathlib
+children=pathlib.Path('/proc/1/task/1/children').read_text().split()
+assert len(children)==1,children
+assert pathlib.Path(f'/proc/{children[0]}/cmdline').read_bytes()==b'sleep\\0infinity\\0'
+print(children[0])
+"""
+    completed = subprocess.run(docker_exec(container, ['/usr/bin/python3', '-I', '-c', script]),
+                               stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                               stderr=subprocess.PIPE, check=False, text=True, timeout=10)
+    keeper = completed.stdout.strip()
+    if completed.returncode or not keeper.isdigit() or int(keeper) <= 1:
+        raise InfrastructureError('cannot identify container keeper process: '
+                                  + completed.stderr.strip()[-4096:])
+    return keeper
+
+
 def atomic_json(path, value):
     temporary = path.with_name(path.name + '.tmp')
     temporary.write_text(json.dumps(value, indent=2))
@@ -248,9 +273,9 @@ def wait_runtime_ready(process, evaluator, cancel=None, timeout=30):
 
 
 def restart_runtime(candidate, evaluator, evidence, runtime, cancel=None,
-                    register_configuration=True, reset_configuration=False):
+                    register_configuration=False, reset_configuration=False):
     number = runtime[1] + 1
-    if bounded(docker_exec(candidate, ['/usr/bin/python3', '-I', '-c', STOP_RUNTIME]),
+    if bounded(docker_exec(candidate, ['/usr/bin/python3', '-I', '-c', STOP_RUNTIME, runtime[2]]),
                evidence / f'control-restart-{number}.log', 10, candidate, cancel):
         raise RuntimeError('runtime shutdown failed')
     try:
@@ -280,7 +305,11 @@ def hot_reload(candidate, evaluator, evidence, runtime, cancel=None):
     marker = f'KANBAN_HOT_RELOAD_{token}'
     root = '/workspace/kanban'
     backup = f'/tmp/kanban-hot-reload-{token}'
-    offset = (evidence / 'runtime.log').stat().st_size
+    logs = docker_exec(candidate, ['/runtime/iii', 'trigger', 'compose::logs',
+                       '--address', '127.0.0.1', '--port', '50179', '--namespace', 'default',
+                       '--json', json.dumps({'file': '/workspace/worker-compose.yaml', 'tail': 1000})])
+    logs_path = evidence / 'hot-reload-compose.log'
+    successful_log_queries = 0
     observed = False
     try:
         try:
@@ -307,9 +336,13 @@ def hot_reload(candidate, evaluator, evidence, runtime, cancel=None):
                 raise KeyboardInterrupt('external subject cancelled')
             if runtime[0].poll() is not None:
                 break
-            with (evidence / 'runtime.log').open('rb') as log:
-                log.seek(offset)
-                if marker.encode() in log.read(16 * 1024 ** 2):
+            try:
+                code = bounded(logs, logs_path, 5, cancel=cancel)
+            except subprocess.TimeoutExpired:
+                code = None
+            if code == 0:
+                successful_log_queries += 1
+                if marker.encode() in logs_path.read_bytes():
                     observed = True
                     break
             time.sleep(.25)
@@ -324,6 +357,8 @@ def hot_reload(candidate, evaluator, evidence, runtime, cancel=None):
         if restored.returncode:
             raise InfrastructureError('hot reload source restoration failed: '
                                       + restored.stderr.decode(errors='replace')[-4096:])
+    if not successful_log_queries:
+        raise InfrastructureError('Compose worker logs were unavailable during hot reload')
     recovered = wait_runtime_ready(runtime[0], evaluator, cancel, timeout=10)
     return {'observed': observed and recovered, 'source_restored': True}
 
@@ -573,6 +608,7 @@ def main():
         candidate = start_container(container_command(image, 'none', 'candidate', candidate_mounts,
                                                       bounded_workspace=isolated_subject))
         containers.append(candidate)
+        keeper = container_keeper(candidate)
         atomic_json(args.output / 'containers.json', {'containers': containers})
         if isolated_subject:
             archive = subprocess.check_output(['git', '-C', str(args.output / 'workspace'), 'archive', 'HEAD'])
@@ -592,13 +628,13 @@ git -C /workspace rev-parse HEAD
                 raise InfrastructureError('candidate baseline commit differs from exported snapshot')
 
         probe_env = {**ENV, 'III_SDK_MODULE': '/dependencies/iii-sdk/dist/index.mjs',
-                     'PLAYWRIGHT_MODULE': '/browser-deps/' + args.playwright_module,
+                     'PLAYWRIGHT_MODULE': '/browser-deps/node_modules/' + args.playwright_module,
                      'PLAYWRIGHT_BROWSERS_PATH': args.browsers}
         evaluator_mounts = [
             (str(Path(__file__).resolve().parent), '/trusted', False),
             (str(evidence), '/evidence', True),
             (str(args.dependencies), '/dependencies', False),
-            (str(args.browser_dependencies), '/browser-deps', False),
+            (str(args.browser_dependencies), '/browser-deps/node_modules', False),
             *runtime_binary_mounts,
         ]
         evaluator = start_container(container_command(image, f'container:{candidate}', 'evaluator', evaluator_mounts, probe_env))
@@ -634,7 +670,8 @@ print('workspace readable; trusted files, evaluator process and external network
             subject_env = {'III_SDK_MODULE': str(args.dependencies / 'iii-sdk/dist/index.mjs')}
             command = ['/usr/bin/env', *(f'{key}={value}' for key, value in subject_env.items()),
                        str(args.node), str(Path(__file__).with_name('subject.mjs')),
-                       '--container', candidate, '--prompt-file', str(prompt_file), '--output', str(evidence),
+                       '--container', candidate, '--keeper', keeper,
+                       '--prompt-file', str(prompt_file), '--output', str(evidence),
                        '--engine-url', args.subject_url, '--namespace', args.subject_namespace,
                        '--provider', 'deepseek', '--model', args.subject_model]
             code = bounded(command, evidence / 'subject.log', 2050, candidate, cancel)
@@ -648,6 +685,7 @@ print('workspace readable; trusted files, evaluator process and external network
             complete = wait_for_external_subject(args.output, {
                 'candidate': candidate,
                 'evaluator': evaluator,
+                'keeper': keeper,
                 'prompt': metadata['prompt'],
                 'snapshot_git_head': metadata['snapshot_git_head'],
             })
@@ -655,7 +693,7 @@ print('workspace readable; trusted files, evaluator process and external network
             (evidence / 'provenance.json').write_text(json.dumps(metadata, indent=2))
 
         if isolated_subject:
-            if bounded(docker_exec(candidate, ['/usr/bin/python3', '-I', '-c', STOP_RUNTIME]),
+            if bounded(docker_exec(candidate, ['/usr/bin/python3', '-I', '-c', STOP_RUNTIME, keeper]),
                        evidence / 'subject-cleanup.log', 10, candidate, cancel):
                 raise EvaluationError('candidate background process cleanup failed')
             capture_candidate_diff(candidate, evidence, 'subject', cancel)
@@ -687,7 +725,7 @@ print('workspace readable; trusted files, evaluator process and external network
                     subprocess.run(['docker', 'exec', '-i', candidate, '/usr/bin/tee', '/runtime-state/config.json'],
                                    input=json.dumps(config).encode(), stdout=subprocess.DEVNULL, check=True, timeout=10)
                 process = start_runtime(candidate, evidence / 'runtime.log')
-                runtime = [process, 0]
+                runtime = [process, 0, keeper]
                 started = time.monotonic()
                 if not wait_runtime_ready(process, evaluator, cancel):
                     build_checks.append({'id': 'application_startup', 'status': 'failed',

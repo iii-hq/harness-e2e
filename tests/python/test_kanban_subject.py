@@ -21,12 +21,12 @@ class KanbanSubjectTest(unittest.TestCase):
     def test_help_needs_no_runtime_dependency(self):
         completed = self.run_subject("--help")
         self.assertEqual(completed.returncode, 0, completed.stderr)
-        for value in ("--container", "--prompt-file", "--output", "--engine-url", "--namespace", "--model", "--provider", "III_SDK_MODULE"):
+        for value in ("--container", "--keeper", "--prompt-file", "--output", "--engine-url", "--namespace", "--model", "--provider", "III_SDK_MODULE"):
             self.assertIn(value, completed.stdout)
 
     def test_rejects_non_exact_container_before_loading_sdk(self):
         completed = self.run_subject(
-            "--container", "candidate", "--prompt-file", "/prompt", "--output", "/output",
+            "--container", "candidate", "--keeper", "7", "--prompt-file", "/prompt", "--output", "/output",
             "--engine-url", "ws://127.0.0.1:1", "--namespace", "my-project",
             "--model", "deepseek-v4-flash", "--provider", "deepseek",
         )
@@ -91,7 +91,7 @@ export function registerWorker(...worker) {
 """)
             env = {**os.environ, "PATH": f"{root}:{os.environ['PATH']}", "CALLS": str(calls), "III_SDK_MODULE": str(sdk)}
             completed = self.run_subject(
-                "--container", CONTAINER, "--prompt-file", str(prompt), "--output", str(output),
+                "--container", CONTAINER, "--keeper", "7", "--prompt-file", str(prompt), "--output", str(output),
                 "--engine-url", "ws://127.0.0.1:49134", "--namespace", "my-project",
                 "--model", "deepseek-v4-flash", "--provider", "deepseek", env=env,
             )
@@ -116,29 +116,33 @@ export function registerWorker(...worker) {
             self.assertTrue(result["model_invoked"])
             worker = next(row["worker"] for row in records if isinstance(row, dict) and "worker" in row)
             self.assertEqual(worker[1]["namespace"], "my-project")
+            registered = next(row["register"] for row in records if isinstance(row, dict) and "register" in row)
+            self.assertEqual(registered["options"]["request_format"]["properties"]["command"]["maxLength"], 65536)
             preflight = next(row for row in records if isinstance(row, dict) and row.get("function_id") == functions["allow"][0])
             self.assertEqual((preflight["namespace"], preflight["payload"]), ("my-project", {"command": "pwd"}))
             command_result = next(row["commandResult"] for row in records if isinstance(row, dict) and "commandResult" in row)
             self.assertEqual(command_result["exit_code"], 1)
-            self.assertIn("expected test failure", command_result["stderr"])
+            self.assertIn("expected test failure", command_result["stdout"])
             self.assertTrue(any(isinstance(row, str) and row.startswith(f"exec -w /workspace {CONTAINER} /bin/sh -c pwd") for row in records))
             self.assertEqual((output.stat().st_mode & 0o777), 0o700)
 
             for name in ("NO_CACHE", "WRONG_MODEL", "BAD_METRICS", "OVERFLOW"):
                 failed_output = root / name.lower()
                 failed = self.run_subject(
-                    "--container", CONTAINER, "--prompt-file", str(prompt), "--output", str(failed_output),
+                    "--container", CONTAINER, "--keeper", "7", "--prompt-file", str(prompt), "--output", str(failed_output),
                     "--engine-url", "ws://127.0.0.1:49134", "--namespace", "my-project",
                     "--model", "deepseek-v4-flash", "--provider", "deepseek", env={**env, name: "1"},
                 )
-                self.assertEqual(failed.returncode, 0 if name == "NO_CACHE" else 2, failed.stderr)
+                self.assertEqual(failed.returncode, 0 if name in ("NO_CACHE", "OVERFLOW") else 2, failed.stderr)
                 failure = json.loads((failed_output / "subject.json").read_text())
-                self.assertEqual(failure["status"], "completed" if name == "NO_CACHE" else "evaluation_failed")
+                self.assertEqual(failure["status"], "completed" if name in ("NO_CACHE", "OVERFLOW") else "evaluation_failed")
                 if name == "NO_CACHE":
                     self.assertIsNone(failure["cache_write_tokens"])
                 if name == "OVERFLOW":
-                    self.assertIn("command output exceeded 262144 bytes", failure["result_error"])
-                    self.assertIn(f"rm -f {CONTAINER}", calls.read_text())
+                    records = [json.loads(line) if line.startswith("{") else line.strip() for line in calls.read_text().splitlines()]
+                    self.assertEqual([row["commandResult"]["exit_code"] for row in records
+                                      if isinstance(row, dict) and "commandResult" in row][-1], 125)
+                    self.assertIsNone(failure["result_error"])
                 self.assertTrue(failure["model_invoked"])
 
     def test_isolation_failure_precedes_sdk_import(self):
@@ -151,7 +155,7 @@ export function registerWorker(...worker) {
             docker.chmod(0o755)
             env = {**os.environ, "PATH": f"{root}:{os.environ['PATH']}", "III_SDK_MODULE": str(root / "missing.mjs")}
             completed = self.run_subject(
-                "--container", CONTAINER, "--prompt-file", str(prompt), "--output", str(root / "out"),
+                "--container", CONTAINER, "--keeper", "7", "--prompt-file", str(prompt), "--output", str(root / "out"),
                 "--engine-url", "ws://127.0.0.1:1", "--namespace", "my-project",
                 "--model", "deepseek-v4-flash", "--provider", "deepseek", env=env,
             )

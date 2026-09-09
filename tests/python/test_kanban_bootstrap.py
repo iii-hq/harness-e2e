@@ -32,11 +32,16 @@ class KanbanBootstrapTest(unittest.TestCase):
         workflow = (ROOT / '.github/workflows/exact-stack-e2e.yml').read_text()
         group = (ROOT / 'scripts/run_exact_stack_group.sh').read_text()
         self.assertIn("startsWith(matrix.group_id, 'case-kanban-')", workflow)
-        self.assertIn('KANBAN_FIXTURE_REPOSITORY', workflow)
+        self.assertIn('repository: iii-hq/kanban-e2e-fixture', workflow)
+        self.assertNotIn('KANBAN_FIXTURE_REPOSITORY', workflow)
         self.assertIn('0471257a95095da7c5e9d366e26636976472e90d', workflow)
         self.assertIn('fetch-depth: 0', workflow)
         self.assertIn('node-version: 24.18.0', workflow)
-        self.assertIn('E2E_FIXTURE_GITHUB_TOKEN', workflow)
+        kanban_checkout = next(
+            step for step in workflow.split('\n      - ')
+            if 'name: Checkout pinned Kanban fixture' in step
+        )
+        self.assertNotIn('token:', kanban_checkout)
         for step in workflow.split('\n      - '):
             if 'uses: actions/checkout@' in step:
                 self.assertIn('persist-credentials: false', step)

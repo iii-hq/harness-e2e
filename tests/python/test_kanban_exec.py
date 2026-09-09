@@ -14,22 +14,51 @@ CONTAINER = 'a' * 64
 
 class KanbanExecTest(unittest.TestCase):
     def test_rejects_untrusted_container_and_oversized_commands(self):
-        for container, command in [('short', 'pwd'), (CONTAINER, 'x' * 65537)]:
+        for container, keeper, command in [
+                ('short', '7', 'pwd'), (CONTAINER, '1', 'pwd'),
+                (CONTAINER, '7', 'x' * 65537)]:
             with self.assertRaises(ValueError):
-                EXEC.execute(container, command)
+                EXEC.execute(container, keeper, command)
 
     def test_real_output_bound_and_nonzero_command_feedback(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             docker = root / 'docker'
-            docker.write_text('#!/bin/sh\nif [ "$1" = rm ]; then touch "$REMOVED"; exit; fi\nif [ "$7" = overflow ]; then head -c 262145 /dev/zero; else echo test-failed; exit 1; fi\n')
+            docker.write_text('''#!/bin/sh
+if [ "$1" = rm ]; then touch "$REMOVED"; exit; fi
+if [ "$1" = exec ] && [ "$3" = /usr/bin/python3 ]; then
+  touch "$CLEANED"
+  [ -z "$CLEANUP_FAIL" ]
+  exit
+fi
+if [ "$7" = overflow ]; then head -c 262145 /dev/zero
+elif [ "$7" = timeout ]; then while :; do :; done
+else echo test-failed; exit 1
+fi
+''')
             docker.chmod(0o755)
             removed = root / 'removed'
-            with patch.dict(os.environ, {'PATH': f'{root}:{os.environ["PATH"]}', 'REMOVED': str(removed)}):
-                result = EXEC.execute(CONTAINER, 'false')
+            cleaned = root / 'cleaned'
+            environment = {'PATH': f'{root}:{os.environ["PATH"]}',
+                           'REMOVED': str(removed), 'CLEANED': str(cleaned),
+                           'CLEANUP_FAIL': ''}
+            with patch.dict(os.environ, environment):
+                result = EXEC.execute(CONTAINER, '7', 'false')
                 self.assertEqual(result['exit_code'], 1)
                 self.assertIn('test-failed', result['stdout'])
                 self.assertFalse(removed.exists())
-                with self.assertRaisesRegex(RuntimeError, 'output exceeded'):
-                    EXEC.execute(CONTAINER, 'overflow')
+                result = EXEC.execute(CONTAINER, '7', 'overflow')
+                self.assertEqual(result['exit_code'], 125)
+                self.assertIn('output exceeded', result['stderr'])
+                self.assertTrue(cleaned.exists())
+                cleaned.unlink()
+                with patch.object(EXEC, 'COMMAND_TIMEOUT', .01):
+                    result = EXEC.execute(CONTAINER, '7', 'timeout')
+                self.assertEqual(result['exit_code'], 124)
+                self.assertIn('timed out after 120 seconds', result['stderr'])
+                self.assertTrue(cleaned.exists())
+                cleaned.unlink()
+                with patch.dict(os.environ, {'CLEANUP_FAIL': '1'}), \
+                        self.assertRaisesRegex(RuntimeError, 'candidate cleanup failed'):
+                    EXEC.execute(CONTAINER, '7', 'overflow')
                 self.assertTrue(removed.exists())

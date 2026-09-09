@@ -56,7 +56,7 @@ class KanbanRunnerTest(unittest.TestCase):
             ('/host/workspace', '/workspace', True),
             ('/host/dependencies', '/workspace/kanban/node_modules', False),
         ])
-        for item in ('--pull', 'never', '--read-only', '--cap-drop', 'ALL',
+        for item in ('--pull', 'never', '--init', '--read-only', '--cap-drop', 'ALL',
                      'no-new-privileges=true', '--pids-limit', '256', '--memory',
                      '2g', '--cpus', '2', 'kanban-eval.role=candidate'):
             self.assertIn(item, command)
@@ -66,7 +66,28 @@ class KanbanRunnerTest(unittest.TestCase):
         for private in ('/trusted', '/evidence', '/browser-deps', '/browsers', '/var/run/docker.sock'):
             self.assertNotIn(private, command)
 
+    def test_restart_preserves_only_the_fixed_init_keeper(self):
+        keeper = subprocess.CompletedProcess([], 0, stdout='7\n', stderr='')
+        with mock.patch.object(runner.subprocess, 'run', return_value=keeper):
+            self.assertEqual(runner.container_keeper('candidate-id'), '7')
+
+        with tempfile.TemporaryDirectory() as directory:
+            runtime = [mock.Mock(), 0, '7']
+            replacement = mock.Mock()
+            with mock.patch.object(runner, 'bounded', return_value=0) as bounded, \
+                    mock.patch.object(runner, 'start_runtime', return_value=replacement) as start, \
+                    mock.patch.object(runner, 'wait_runtime_ready', return_value=True):
+                self.assertEqual(runner.restart_runtime(
+                    'candidate-id', 'evaluator-id', Path(directory), runtime), {'ready': True})
+            self.assertEqual(bounded.call_args_list[0].args[0][-1], '7')
+            self.assertFalse(start.call_args.args[2])
+            self.assertIs(runtime[0], replacement)
+        self.assertIn('except (FileNotFoundError,ProcessLookupError)', runner.STOP_RUNTIME)
+
     def test_evaluator_shares_only_candidate_network(self):
+        source = Path(runner.__file__).read_text()
+        self.assertIn("'PLAYWRIGHT_MODULE': '/browser-deps/node_modules/'", source)
+        self.assertIn("(str(args.browser_dependencies), '/browser-deps/node_modules', False)", source)
         command = runner.container_command('sha256:image', 'container:candidate-id', 'evaluator', [
             ('/trusted', '/trusted', False), ('/evidence', '/evidence', True),
         ])
@@ -225,15 +246,18 @@ class KanbanRunnerTest(unittest.TestCase):
             def docker(command, **_kwargs):
                 calls.append(command)
                 if marker in command:
-                    with runtime_log.open('ab') as log:
-                        log.write((marker + '\n').encode())
                     return subprocess.CompletedProcess(command, 0, stdout=b'{"count":1}', stderr=b'')
                 return subprocess.CompletedProcess(command, 0, stdout=b'', stderr=b'')
+
+            def logs(_command, path, *_args, **_kwargs):
+                path.write_text(marker)
+                return 0
 
             process = mock.Mock()
             process.poll.return_value = None
             with mock.patch.object(runner.os, 'urandom', return_value=b'\x01' * 16), \
                     mock.patch.object(runner.subprocess, 'run', side_effect=docker), \
+                    mock.patch.object(runner, 'bounded', side_effect=logs), \
                     mock.patch.object(runner, 'wait_runtime_ready', return_value=True):
                 result = runner.hot_reload('candidate', 'evaluator', evidence, [process, 0])
             self.assertEqual(result, {'observed': True, 'source_restored': True})
@@ -241,12 +265,24 @@ class KanbanRunnerTest(unittest.TestCase):
             self.assertTrue(any('shutil.rmtree' in part for part in calls[1]))
 
             calls.clear()
+            def empty_logs(_command, path, *_args, **_kwargs):
+                path.write_bytes(b'')
+                return 0
+
             with mock.patch.object(runner.os, 'urandom', return_value=b'\x01' * 16), \
                     mock.patch.object(runner.subprocess, 'run', side_effect=docker), \
-                    mock.patch.object(runner.time, 'monotonic', side_effect=[0, 56]), \
+                    mock.patch.object(runner, 'bounded', side_effect=empty_logs), \
+                    mock.patch.object(runner.time, 'monotonic', side_effect=[0, 1, 56]), \
                     mock.patch.object(runner, 'wait_runtime_ready', return_value=True):
                 result = runner.hot_reload('candidate', 'evaluator', evidence, [process, 0])
             self.assertEqual(result, {'observed': False, 'source_restored': True})
+
+            with mock.patch.object(runner.os, 'urandom', return_value=b'\x01' * 16), \
+                    mock.patch.object(runner.subprocess, 'run', side_effect=docker), \
+                    mock.patch.object(runner, 'bounded', return_value=1), \
+                    mock.patch.object(runner.time, 'monotonic', side_effect=[0, 1, 56]):
+                with self.assertRaisesRegex(runner.InfrastructureError, 'logs were unavailable'):
+                    runner.hot_reload('candidate', 'evaluator', evidence, [process, 0])
 
     def test_hot_reload_instruments_non_index_sources_and_excludes_generated_or_linked_trees(self):
         with tempfile.TemporaryDirectory() as directory:

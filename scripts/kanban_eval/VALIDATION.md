@@ -1,6 +1,6 @@
 # Kanban validation — 2026-09-09
 
-## Native CI integration: not yet end-to-end approved
+## Native CI integration: local acceptance passed; publication pending
 
 The seven cases are native `ScenarioId`s and materialize through the existing
 `capability` profile (55 planned runs, seven Kanban cases). The implementation is
@@ -29,30 +29,113 @@ Corrections since the historical controls below:
 
 Current validation:
 
-- Rust library: 667 passed, one external-fixture test ignored; fresh binary build
-  passed. Rust formatting, JavaScript syntax and shell syntax passed.
-- Full Python suite: 251 passed using the freshly built native binary, including
-  the real Node inspector/SSE instrument and the output-symlink regression.
-- `ci-c3-reference-1` passed complete functional/criterion coverage and
-  `ci-c3-base-1` failed the missing board as expected, before the runtime-image
-  change. Expanded C2/C5/C6 references exposed a private-control payload mismatch;
-  those calibration errors were fixed and are not model failures.
-- `native-c3-preflight-5` reached native setup against `my-project` with requested
-  `deepseek/deepseek-v4-flash`. It failed closed because the pinned image is not
-  installed. `results.json` records infrastructure error, null score and no model
-  usage; the hashed controller diagnostic and its exact error survived cleanup
-  and extraction into CI artifacts. No model was invoked in this attempt.
+- Rust library: 667 passed, one external-fixture test ignored; fresh binary build,
+  Rust formatting, JavaScript syntax and shell syntax passed.
+- Full Python suite: 258 passed using the fresh native binary. Focused command,
+  standalone subject and controller regressions also passed after integration.
+- The same bootstrap used by CI installed locked tooling and pulled/verified the
+  pinned Playwright image. Its browsers and system libraries run without host
+  library mounts. Only unused Docker build cache was removed with user approval
+  (8.996 GB reclaimed); images, containers and volumes were preserved.
+- Final controls under `/tmp/kanban-ci-runtime-pxVNnP/acceptance-controls/`: all seven
+  references passed with complete criterion coverage; all seven bases failed
+  for missing functionality, with no infrastructure/evaluator errors. C1/base
+  stops at the explicit missing-application prerequisite, not browser coverage.
+  Every control records probe SHA-256
+  `0b58f77e919e327453bbdb753a0fde69fee11f44104b9a829ea67dde0a0e96d1`.
+- Desktop/mobile board, settings, non-modal details, editing, real pointer drag,
+  discussion and third-session deletion screenshots were visually inspected.
+  C7 also passed real SSE heap collection, reconnect and restart checks.
 
-Outstanding gates: pull/smoke the new image, repeat all seven reference/base
-pairs with the expanded probes, visually inspect the new artifacts, and run a
-native DeepSeek Flash attempt. The old controls below do not validate the new
-image or newly added assertions. The host root filesystem has no free space;
-shared Docker images, containers, volumes and cache were not removed.
+Calibration fixes from real runs:
 
-Remote prerequisites remain unconfigured: publish the fixture to a user-selected
-GitHub repository, grant CI read access, and publish/select a compatible immutable
-`harness-e2e` worker release after merge. Merely selecting a new `runner_sha` does
-not replace the Registry-resolved worker binary.
+- Keep the browser dependency mount under `node_modules` for npm package lookup.
+- Use Docker init and preserve its fixed keeper PID while terminating/reaping
+  other candidate processes. A real Compose proof observed a new server PID,
+  no stale adoption and no zombies after restart. Do not re-seed configuration
+  on restart: this previously overwrote the selected directory and unrelated keys.
+- Read hot-reload markers from native `compose::logs`, where managed worker
+  stdout lives; restore the original source and require readiness afterward.
+- Wait for raw/effective configuration to converge, ignore hidden-dialog text
+  duplicates, inspect cleared drafts after restoring the original store, and
+  capture mobile edited details before navigating away.
+- Missing CRUD no longer turns a dependent store probe into evaluator failure.
+  Each criterion has explicit functional dependencies; unrelated failures retain
+  partial credit, while missing/unverified evidence remains unavailable.
+
+`native-c3-1` invoked DeepSeek Flash through the native lifecycle but a subject
+test command reached 120 seconds. The old executor deleted the candidate and
+cancelled the session before diff capture. Official usage/cost were unavailable;
+they are not replaced by transcript sums. Its hashed diagnostic was exported by
+the real CI extractor. This attempt is not full native acceptance.
+
+Command limits are now recoverable: timeout/output overflow stops all candidate
+processes except init and the pre-recorded keeper, returns bounded partial output
+with exit 124/125, and keeps the workspace for correction. Cleanup failure still
+removes the exact container and aborts. A real 120-second Docker proof observed
+no runaway process/zombies and a successful next command in the same container.
+
+`native-c3-2` completed the native lifecycle in 478,375 ms, preserving an identical
+delivered/evaluated diff and exporting the application audit with the real CI
+extractor. Official metrics are complete: 27 turns, 26 function calls, 26,845
+input tokens, 62,234 output tokens, 1,594,240 cache-read tokens and US$0.025647692.
+One truncated tool call was rejected and recovered; this is not a command-timeout
+proof. Typecheck, all 15 candidate tests and build passed.
+The recorded final context reports an effective output ceiling of 32,000 tokens,
+despite the requested 65,536; preserve that distinction when comparing runs.
+
+Its initial zero score is **evaluation-invalid**, not a model capability failure:
+the probe required the reference's exact unknown-count text and a count inside
+the lane heading. The captured candidate correctly displayed an ellipsis while
+loading and a separate count badge next to each lane title. Correction and exact
+candidate replay are recorded separately; the original report is not rewritten.
+`native-c3-2-replay-1` passed all four criteria with complete coverage after the
+semantic fix (probe `23f75aad09d85e11cb98d308732c32e2322930986bbf7c73ad4b8f5973d3c80e`).
+It reconstructed the exact base in a fresh isolated workspace and reapplied the
+captured diff; delivered and evaluated diffs match the original byte for byte.
+This is re-evaluation, not a new model run; it incurs no new model usage/cost.
+Desktop/mobile captures were inspected and preserve literal malicious-looking
+text while confining horizontal scrolling to the board.
+
+The final exact replay, `native-c3-2-acceptance-replay`, also passed all four
+criteria with complete coverage and unchanged delivered/evaluated bytes using
+the final probe hash above. The native binary was rebuilt with this probe;
+Rust tests/formatting, Python tests, JavaScript/shell syntax and diff checks pass.
+
+The semantic audit corrections are included in the final controls:
+
+- C1 inspects declared Compose containers and saves through the form without
+  requiring reference copy; mobile and desktop settings are inspected.
+- C2 verifies UUIDs, increasing keys and timestamps, and duplicates a ticket
+  collection inside either a root array or an object envelope. An unsupported
+  store representation remains evaluator-unavailable, not a model zero.
+- C3/C5 accept sibling count badges and wait for asynchronous board counts.
+  C3's four criteria are independent; C5 checks status-only changes and advancing
+  timestamps. Earlier rounds exposed navigation races and remain calibration
+  evidence rather than candidate failures.
+- C4 rejects non-JSON with 400/415, verifies same-tab non-modal details and checks
+  that late deletion removes the visible board card, not only the API record.
+- C6 checks visible authors/times, DOM posting order, trimmed input and whitespace
+  rejection. Parent navigation must reach the actual parent via focus or anchor;
+  focusing the back-reference label alone no longer passes.
+- C7 checks native named SSE events/payloads and no event after failed persistence,
+  uses observable state instead of connection/error copy, verifies remote moves,
+  and preserves a real pointer drag through an ordinary remote update before
+  switching stores. Disconnect collection and runtime restart also pass.
+
+Real Chromium regressions cover equivalent board DOMs, incorrect counts and
+parent navigation. A separate synthetic-server EventSource proof accepted named
+events and rejected wrong names/invalid payloads; failed persistence emitted no
+event. Passing the earlier reference/base controls alone did not expose these
+semantic gaps, so those runs are not the final acceptance evidence.
+
+The public repository `iii-hq/kanban-e2e-fixture` was created; history is not yet
+pushed pending confirmation about existing author metadata. CI checkout now uses
+this fixed public source without a dedicated variable or secret. Remaining remote
+gates: publish the exact fixture history and publish/select a compatible immutable
+`harness-e2e` worker release after merge. Selecting a new `runner_sha` alone does
+not replace the Registry-resolved worker binary. No Release Control CI execution
+or worker release has been performed for this change.
 
 ## Historical local controls
 

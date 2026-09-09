@@ -87,7 +87,7 @@ pub fn spec(index: usize, run_id: &str) -> ScenarioSpec {
     ];
     ScenarioSpec {
         id: case.id.as_str(), version: 1,
-        prompt: format!("{}\n\n{}\n\nAcceptance criteria:\n{}\n\nThe repository is /workspace inside an isolated container. Dependencies are installed; external networking is disabled. Use agent_trigger with {{\"function\":\"{}\",\"description\":\"Inspect repository\",\"payload\":{{\"command\":\"pwd\"}}}} to inspect, edit and test. This is a shell executor, not delegation. Commands have a 120-second and 256-KiB output limit. Do not inspect the host working directory.",
+        prompt: format!("{}\n\n{}\n\nAcceptance criteria:\n{}\n\nThe repository is /workspace inside an isolated container. Dependencies are installed; external networking is disabled. Use agent_trigger with {{\"function\":\"{}\",\"description\":\"Inspect repository\",\"payload\":{{\"command\":\"pwd\"}}}} to inspect, edit and test. This is a shell executor, not delegation. Commands have a 120-second and 256-KiB output limit. Reaching either limit returns nonzero feedback after candidate processes are stopped; use a narrower command and continue. Do not inspect the host working directory.",
             catalog().shared_prompt, case.prompt, case.criteria.iter().map(|c| format!("- {c}")).collect::<Vec<_>>().join("\n"), function_id(run_id)),
         filesystem_root: None,
         execution: ExecutionPolicy { max_turns: 100, max_output_tokens: Some(65_536),
@@ -301,6 +301,14 @@ async fn setup(context: &E2eContext, run_id: &str, index: usize) -> Result<()> {
     if candidate.len() != 64 || !candidate.bytes().all(|b| b.is_ascii_hexdigit()) {
         bail!("invalid candidate identity");
     }
+    let keeper: u32 = ready["keeper"]
+        .as_str()
+        .context("missing candidate keeper")?
+        .parse()
+        .context("invalid candidate keeper")?;
+    if keeper <= 1 {
+        bail!("invalid candidate keeper");
+    }
     let command_script = scripts.join("exec.py");
     let cancel_path = path.join("run/cancel");
     let command_lock = Arc::new(tokio::sync::Mutex::new(()));
@@ -320,6 +328,7 @@ async fn setup(context: &E2eContext, run_id: &str, index: usize) -> Result<()> {
                     let mut child = Command::new("python3")
                         .arg(command_script)
                         .arg(candidate)
+                        .arg(keeper.to_string())
                         .stdin(Stdio::piped())
                         .stdout(Stdio::piped())
                         .stderr(Stdio::piped())

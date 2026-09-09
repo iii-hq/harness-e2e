@@ -237,19 +237,12 @@ jobs:
             "$(python3 scripts/exact_stack_campaign.py digest --contract "$contract")" >>"$GITHUB_OUTPUT"
           printf 'stack_lock<<CONTRACT\n%s\nCONTRACT\n' "$(cat "$contract")" >>"$GITHUB_ENV"
 
-      - name: Require Kanban fixture source
-        if: startsWith(matrix.group_id, 'case-kanban-')
-        env:
-          KANBAN_FIXTURE_REPOSITORY: ${{ vars.KANBAN_FIXTURE_REPOSITORY }}
-        run: test -n "$KANBAN_FIXTURE_REPOSITORY"
-
       - name: Checkout pinned Kanban fixture
         if: startsWith(matrix.group_id, 'case-kanban-')
         uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
-          repository: ${{ vars.KANBAN_FIXTURE_REPOSITORY }}
+          repository: iii-hq/kanban-e2e-fixture
           ref: 0471257a95095da7c5e9d366e26636976472e90d
-          token: ${{ secrets.E2E_FIXTURE_GITHUB_TOKEN }}
           path: target/kanban-fixture
           fetch-depth: 0
           persist-credentials: false

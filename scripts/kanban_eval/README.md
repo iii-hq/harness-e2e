@@ -51,7 +51,10 @@ the probe runs, coverage, verdicts and browser screenshots.
 remains `incomplete` when required criteria are unverified. A valid negative
 control fails functionality; an infrastructure/evaluator failure is **not** a
 negative control success. Exit 0 means functional probes passed, not full
-acceptance. Do not interpret this prototype as a calibrated benchmark.
+acceptance. Each criterion depends on explicit functional checks: unrelated
+failures do not erase partial credit, and missing/unverified evidence stays
+unavailable instead of becoming a candidate zero. A model smoke is not a
+comparative benchmark.
 
 Validation on 2026-09-09: the original Bubblewrap runner stopped at nested namespace
 creation. Docker-native separation subsequently passed private-file, parent-PID,
@@ -76,8 +79,11 @@ The endpoint/namespace are local deployment choices. The bridge verifies model
 pricing before sending, with a hard US$5 cap, 1,000,000 total tokens, 100 turns,
 65,536 output tokens per response and a 1,800-second deadline. The only exposed model tool executes shell commands in
 the fixed candidate container, with 120-second/256-KiB limits; nonzero test exits
-are returned as feedback. No host shell, discovery tools or child agents are
-granted. A failed tool bound removes the candidate container.
+are returned as feedback. A command timeout or output overflow stops candidate
+processes and returns bounded partial output with exit 124 or 125, preserving the
+workspace for a corrected command. Failed cleanup removes the exact container
+and aborts; there is no unbounded or host fallback. No host shell, discovery tools
+or child agents are granted.
 The standard `agent_trigger` dispatcher is restricted to that single function;
 its command contract is supplied explicitly, without namespace discovery.
 
@@ -114,9 +120,9 @@ are not subject filesystem artifacts.
 To enable this in Release Control's exact-stack workflow:
 
 1. Publish the fixture history through commit
-   `0471257a95095da7c5e9d366e26636976472e90d`. Set the repository variable
-   `KANBAN_FIXTURE_REPOSITORY` to its GitHub `owner/repository` and grant read
-   access through `E2E_FIXTURE_GITHUB_TOKEN`. Checkout never persists credentials.
+   `0471257a95095da7c5e9d366e26636976472e90d` in the public
+   `iii-hq/kanban-e2e-fixture` repository. Checkout uses the workflow's default
+   token and never persists credentials.
 2. Merge the native scenarios and publish a compatible immutable `harness-e2e`
    worker release. Select that release in the Release Control stack; changing
    `runner_sha` alone does not replace the Registry-resolved worker binary.
