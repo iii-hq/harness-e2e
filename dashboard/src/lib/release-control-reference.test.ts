@@ -3,6 +3,7 @@ import type { DashboardExecutionDetail } from '@/lib/dashboard-data-source'
 import { installDashboardIiiClient } from '@/lib/iii-client'
 import {
   comparisonSummary,
+  getReleaseControlReference,
   listReleaseControlExecutions,
   localScenarioObservations,
   objectiveScore,
@@ -330,4 +331,29 @@ it('normalizes local objective, cache-inclusive tokens and subject cost once', (
   expect(localScenarioObservations(withoutChildIds, 'alpha')).toEqual([
     expect.objectContaining({ run_count: 4 }),
   ])
+})
+
+it('explains an absent RC bridge and preserves structured RPC error messages', async () => {
+  const trigger = vi
+    .fn()
+    .mockRejectedValue({
+      code: 'function_not_found',
+      message: 'Missing function',
+    })
+  installDashboardIiiClient({
+    browserId: 'test',
+    trigger,
+    on: () => () => {},
+    registerTrigger: () => () => {},
+  })
+  await expect(listReleaseControlExecutions()).rejects.toThrow(
+    'same Engine and namespace',
+  )
+  trigger.mockRejectedValue({
+    code: 'unauthorized',
+    message: 'Session expired',
+  })
+  await expect(getReleaseControlReference('rc:one')).rejects.toThrow(
+    'Session expired',
+  )
 })
