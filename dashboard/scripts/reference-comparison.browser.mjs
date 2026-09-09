@@ -8,6 +8,7 @@ const server = await createServer({ server: { host: '127.0.0.1', port: 0 } })
 await server.listen()
 const browser = await chromium.launch()
 const page = await browser.newPage()
+page.setDefaultTimeout(5_000)
 const errors = []
 page.on('pageerror', (error) => {
   errors.push(error.message)
@@ -24,22 +25,27 @@ import {createRoot} from 'react-dom/client';
 import {App} from '/src/App.tsx';
 import {installDashboardIiiClient} from '/src/lib/iii-client.ts';
 import {installDashboardRuntimeConfig} from '/src/lib/dashboard-data-source.ts';
-const reference={execution:{id:'remote-1',campaignId:'campaign',planKey:'smoke',attempt:1,trigger:'manual',label:'RC Smoke',phase:'complete',terminal:true,resultState:'complete',requestedAt:'2026-09-08T12:00:00Z',completedAt:'2026-09-08T12:01:00Z',runCount:1,reportCount:1,plan:{subject:{model:'test',provider:'test'}},request:{}},aggregate:{planned_runs:1,observed_runs:1,completion_rate:1,execution_reliability:1},runs:[{attemptsComplete:true,scenarioId:'alpha',scenarioVersion:1,caseId:'alpha',technical:'valid',completion:'completed',objectiveScore:80,wallTimeMs:1000,totalTokens:100,costSubjectUsd:null,turns:1,functionCalls:1}],materialized:{profile:{id:'smoke',repetitions:1}},shards:[{runs:[{scenario_id:'alpha',seed:'42'}]}]};
+const reference={execution:{id:'remote-1',campaignId:'campaign',planKey:'smoke',attempt:1,trigger:'manual',requestedBy:null,label:'RC Smoke',phase:'complete',terminal:true,resultState:'complete',requestedAt:'2026-09-08T12:00:00Z',completedAt:'2026-09-08T12:01:00Z',error:null,runCount:1,reportCount:1,plan:{name:'Smoke',subject:{model:'test',provider:'test'},judge:{model:'judge',provider:'test'}},request:{}},aggregate:{planned_runs:1,observed_runs:1,completion_rate:1,execution_reliability:1},runs:[{attemptsComplete:true,scenarioId:'alpha',scenarioVersion:1,caseId:'case-a',seed:'42',technical:'valid',completion:'completed',objectiveScore:80,wallTimeMs:1000,totalTokens:100,costSubjectUsd:0.1,turns:1,functionCalls:1,functionCallErrors:0}],materialized:{profile:{id:'smoke',repetitions:1,technical_retries:0},campaigns:[{groups:[{scenarios:['alpha']}]}]},shards:[{runs:[{scenario_id:'alpha',case_id:'case-a',seed:'42'}]}]};
 const detail=id=>({id,label:id,status:'passed',subjects:[],totals:{total_tokens:80,report_coverage:1},reports:[{subject_id:'test',scenario_id:'alpha',available:true,report:{scenarios:[{scenario_id:'alpha',runs:[{run_id:'r1',technical:'valid',completion:'completed',objective_score:90,efficiency:{total_tokens:70},metrics:{complete:true,totals:{cache_read_tokens:10}}}]}]}}]});
-const locals=[detail('local-existing')];let starts=0;window.calls=[];window.disconnected=false;
+const makePlan=(attempt=null)=>({schema_version:1,id:'imported-reference',label:'RC Smoke local',purpose:'reference',created_at:'2026-09-08T12:02:00Z',updated_at:'2026-09-08T12:02:00Z',state:attempt?'baseline_ready':'draft',locked:Boolean(attempt),scope_hash:'scope',url:'http://local',model:'test',provider:'test',judge_model:'judge',judge_provider:'test',scenarios:[{scenario_id:'alpha',scenario_version:1,case_id:'case-a',seed:42,inputs_sha256:'inputs',contract_sha256:'contract',complexity_tier:'l1_sequential'}],scenario_ids:['alpha'],runs:1,technical_retries:0,seed:null,baseline_execution_id:attempt,candidate_execution_ids:[],incomplete_execution_ids:[],last_attempt_id:attempt,reference_execution_id:'remote-1'}); const locals=[];let imported=null,starts=0;window.calls=[];window.disconnected=false;
 installDashboardIiiClient({browserId:'personal',on:()=>()=>{},registerTrigger:()=>()=>{},async trigger(id,payload){window.calls.push({id,payload});
  if(id.startsWith('release-control::')&&window.disconnected)throw new Error('RC tab disconnected');
- if(id==='release-control::test-plans::list')return {plans:[{recentExecutions:[reference.execution]}]};
+ if(id==='release-control::test-plans::list')return {plans:[{key:'smoke',recentExecutions:[reference.execution]}]};
  if(id==='release-control::test-executions::reference')return reference;
+ if(id==='plans_list')return {mode:'local',plans:imported?[structuredClone(imported)]:[]};
+ if(id==='plan_get')return structuredClone(imported);
  if(id==='executions_list')return {executions:structuredClone(locals),total:locals.length};
  if(id==='execution_get')return {detail:structuredClone(locals.find(item=>item.id===payload.execution_id))};
- if(id==='plan_control'&&payload.action==='import_reference')return {id:'imported-reference',baseline_execution_id:starts?'local-1':null};
- if(id==='plan_run_start'){starts++;const next=detail('local-'+starts);next.status='running';locals.unshift(next);return {id:'imported-reference',last_attempt_id:next.id}};
- if(id==='plan_control'&&payload.action==='cancel'){locals.find(item=>item.id===payload.execution_id).status='cancelled';return {}};
+ if(id==='catalog_get')return {url:'http://local',models:[{provider:'test',model:'test'}],scenarios:['alpha'],local_scenarios:[]};
+ if(id==='plan_control'&&payload.action==='import_reference'){imported=makePlan(starts?'local-1':null);return structuredClone(imported)};
+ if(id==='plan_run_start'){starts++;const next=detail('local-'+starts);next.status='running';locals.unshift(next);imported={...imported,state:payload.role==='baseline'?'baseline_running':'candidate_running',locked:true,baseline_execution_id:payload.role==='baseline'?next.id:imported.baseline_execution_id,candidate_execution_ids:payload.role==='candidate'?[next.id]:[],last_attempt_id:next.id};return structuredClone(imported)};
+ if(id==='plan_control'&&payload.action==='cancel'){locals.find(item=>item.id===payload.execution_id).status='cancelled';imported={...imported,state:'baseline_ready',last_attempt_id:'local-1'};return {}};
+ if(id==='test_history_get')return {test_id:'alpha',test_version:1,available_versions:[],cases:['case-a'],subjects:[],subject_models:[],judge_models:[],systems:[],series:[],observations:[],total:0,next_cursor:null};
+ if(id==='tests_list')return {rows:[{test_id:'alpha',lifecycle:'active',current_version:1,available_versions:[]}],total:1,next_cursor:null};
  throw new Error('Unexpected RPC '+id);
 }});
-installDashboardRuntimeConfig({mode:'local',transport:'iii',http_fallback:false,functions:Object.fromEntries(['executions_list','execution_get','plan_control','plan_run_start','changed_trigger'].map(id=>[id,id]))});
-location.hash = '#/executions';
+installDashboardRuntimeConfig({mode:'local',transport:'iii',http_fallback:false,page_size:50,functions:Object.fromEntries(['executions_list','execution_get','evaluated_versions_list','tests_list','test_version_get','test_history_get','catalog_get','local_scenario_create','run_status','run_start','run_cancel','plan_control','plans_list','plan_get','plan_create','plan_update','plan_run_start','changed_trigger'].map(id=>[id,id]))});
+location.hash = '#/plans';
 createRoot(document.getElementById('root')).render(React.createElement(App));
 </script></body></html>`
 try {
@@ -50,39 +56,33 @@ try {
     }),
   )
   await page.goto(`${server.resolvedUrls.local[0]}__reference-test`)
+  await page.getByRole('button', { name: 'Reference: Release Control' }).click()
   await page
-    .getByRole('button', { name: 'load Release Control history' })
-    .click()
-  await page.locator('[data-execution-id="rc:remote-1"]').waitFor()
-  await page.locator('[data-execution-id="local-existing"]').waitFor()
+    .getByRole('table', { name: 'Reference plans from Release Control' })
+    .waitFor()
+  await page.getByRole('link', { name: 'open' }).click()
+  await page.getByRole('heading', { name: 'Smoke' }).waitFor()
   assert.equal(
     await page.evaluate(() =>
       window.calls.some((c) => c.id === 'plan_control'),
     ),
     false,
   )
-  await page.getByLabel('Release Control reference').selectOption('rc:remote-1')
-  await page
-    .getByLabel('Local execution for comparison')
-    .selectOption('local-existing')
-  const table = page.getByRole('table', {
-    name: 'Reference and local candidate measurements',
-  })
-  await table.waitFor()
-  assert.match(
-    await table.getByRole('row', { name: /Mean objective score/ }).innerText(),
-    /80.0\s+90.0\s+10.0/,
-  )
   await page.getByRole('button', { name: 'run reference locally' }).click()
-  await page.locator('option[value="local-1"]').waitFor({ state: 'attached' })
+  await page
+    .getByRole('heading', { name: 'Run this reference locally' })
+    .waitFor()
+  await page.getByRole('button', { name: 'run on current Harness' }).click()
+  await page.getByRole('button', { name: 'Candidate B' }).waitFor()
   const first = await page.evaluate(() =>
     window.calls.find((c) => c.id === 'plan_control'),
   )
   assert.equal(first.payload.reference_execution_id, 'remote-1')
   assert.deepEqual(first.payload.shards, [
-    { runs: [{ scenario_id: 'alpha', seed: '42' }] },
+    { runs: [{ scenario_id: 'alpha', case_id: 'case-a', seed: '42' }] },
   ])
-  await page.getByRole('button', { name: 'cancel local execution' }).click()
+  assert.equal(first.payload.materialized.profile.repetitions, 1)
+  await page.getByRole('button', { name: 'cancel' }).last().click()
   assert.ok(
     await page.evaluate(() =>
       window.calls.some(
@@ -93,7 +93,8 @@ try {
     ),
   )
   await page.getByRole('button', { name: 'run reference locally' }).click()
-  await page.locator('option[value="local-2"]').waitFor({ state: 'attached' })
+  await page.getByRole('button', { name: 'run on current Harness' }).click()
+  await page.getByRole('button', { name: 'Candidate B' }).waitFor()
   const starts = await page.evaluate(() =>
     window.calls.filter((c) => c.id === 'plan_run_start'),
   )
@@ -105,14 +106,79 @@ try {
     starts[0].payload.idempotency_key,
     starts[1].payload.idempotency_key,
   )
+  await page.getByRole('button', { name: 'Candidate B' }).click()
+  await page.locator('[data-comparison-metric="tokens"]').waitFor()
+  assert.match(
+    await page.locator('[data-comparison-metric="tokens"]').innerText(),
+    /100[\s\S]*80/,
+  )
+  const scenario = page.getByRole('link', { name: 'alpha' })
+  assert.equal(
+    await scenario.getAttribute('href'),
+    '#/tests/alpha?reference=remote-1&candidate=local-2',
+  )
+  await page.screenshot({ path: '/tmp/e2e-reference-plan.png', fullPage: true })
+  await page.evaluate(() => {
+    location.hash = '#/tests/alpha?reference=remote-1&candidate=local-2'
+  })
+  await page.getByRole('heading', { name: /alpha/ }).waitFor()
+  await page.locator('[data-test-comparison]').waitFor()
+  assert.match(
+    await page.locator('[data-test-comparison]').innerText(),
+    /remote-1[\s\S]*local-2/,
+  )
+  assert.match(
+    await page.locator('[data-comparison-metric="tokens"]').innerText(),
+    /100[\s\S]*80/,
+  )
+  assert.equal(
+    await page
+      .getByRole('link', { name: 'back to reference plan' })
+      .getAttribute('href'),
+    '#/plans/rc%3Asmoke',
+  )
+  await page.screenshot({
+    path: '/tmp/e2e-reference-scenario.png',
+    fullPage: true,
+  })
+  assert.ok(
+    await page.evaluate(
+      () =>
+        window.calls.some((call) => call.id === 'test_history_get') &&
+        window.calls.some((call) => call.id === 'tests_list'),
+    ),
+  )
   await page.evaluate(() => {
     window.disconnected = true
+    location.hash = '#/plans/imported-reference'
   })
+  await page.getByRole('heading', { name: 'RC Smoke local' }).waitFor()
+  await page.setViewportSize({ width: 390, height: 844 })
+  await page.evaluate(() => {
+    window.disconnected = false
+    location.hash = '#/plans/rc:smoke'
+  })
+  await page.getByRole('heading', { name: 'Smoke' }).waitFor()
   await page
-    .getByRole('button', { name: 'load Release Control history' })
-    .click()
-  await page.getByText('RC tab disconnected', { exact: true }).waitFor()
-  await page.locator('[data-execution-id="local-existing"]').waitFor()
+    .getByRole('table', { name: 'Smoke shared and local history' })
+    .waitFor()
+  await page.locator('[data-comparison-metric="tokens"]').waitFor()
+  assert.equal(
+    await page.evaluate(
+      () => document.documentElement.scrollWidth <= window.innerWidth,
+    ),
+    true,
+  )
+  await page.evaluate(() => {
+    location.hash = '#/executions'
+  })
+  await page.getByRole('heading', { name: /executions/i }).waitFor()
+  assert.equal(
+    await page
+      .getByRole('button', { name: 'Reference: Release Control' })
+      .count(),
+    0,
+  )
   assert.ok(
     await page.evaluate(() =>
       window.calls

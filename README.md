@@ -195,14 +195,15 @@ and the complete dashboard behavior.
 
 ### Compare a local change with Release Control
 
-The Console's Executions page can read the team's Release Control history
+The Console's Plans page offers **Reference: Release Control** to browse RC history
 through the authenticated Release Control browser bridge. Keep the RC tab open,
 enable its local Harness connection, and connect it to the same personal Engine
 as the Console. The bridge needs the E2E read functions from the companion
 Release Control change. No GitHub token or artifact synchronization is needed.
 
-Remote and local executions are shown together with their origin. Select a
-reference and a local result to compare their measurements. Missing reports and
+Open a plan to see remote and local executions together with their origin. Select
+a reference and a local result to compare their measurements. The scenario links
+open the existing A → B comparison with both executions selected. Missing reports and
 metrics remain visible as unavailable; reading history creates no local plan.
 The comparison runs locally and sends no local results to Release Control.
 

@@ -90,11 +90,13 @@ target/debug/harness-e2e dashboard \
 runner, and does not register its run, cancel, or catalog HTTP endpoints. This
 is the presentation mode for executions submitted through `e2e::*`.
 
-In the Console, the Executions page combines local results with read-only
-Release Control history through the RC browser bridge. Keep the authenticated
+In the Console, Plans offers **Reference: Release Control** through the RC browser
+bridge. Each reference plan combines remote and local execution history and uses
+the same comparison cards as scenario history. Scenario links preserve the selected
+reference and candidate in the existing A → B comparison. Keep the authenticated
 RC tab connected to the same personal Engine. Remote results are fetched on
 demand; they are not installed into the native runs directory and no GitHub
-token is needed. Origin labels distinguish team results from local experiments.
+token is needed. Origin labels distinguish Release Control results from local experiments.
 
 Selecting **run locally** imports the selected execution's materialized test
 parameters only when requested and starts a local plan. Later runs reuse that

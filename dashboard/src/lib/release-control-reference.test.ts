@@ -4,8 +4,10 @@ import { installDashboardIiiClient } from '@/lib/iii-client'
 import {
   comparisonSummary,
   listReleaseControlExecutions,
+  localScenarioObservations,
   objectiveScore,
   type RcReference,
+  referenceScenarioObservations,
   referenceSummary,
 } from '@/lib/release-control-reference'
 
@@ -206,4 +208,126 @@ it('does not compare consumption whose technical attempts are incomplete', () =>
       runs: [{ ...reference.runs[0], attemptsComplete: false }],
     }).totals,
   ).toMatchObject({ total_tokens: null, total_cost_usd: null })
+})
+
+it('groups RC repetitions by frozen case identity and uses true medians', () => {
+  const run = {
+    ...reference.runs[0],
+    caseId: 'case-a',
+    seed: '7',
+    cohortSha256: 'cohort-a',
+  }
+  const observations = referenceScenarioObservations(
+    {
+      ...reference,
+      execution: {
+        ...reference.execution,
+        plan: {
+          subject: { provider: 'openai', model: 'subject' },
+          judge: { provider: 'openai', model: 'judge' },
+        },
+      },
+      runs: [
+        { ...run, id: 'a-1', objectiveScore: 10, totalTokens: 10 },
+        { ...run, id: 'a-2', objectiveScore: 100, totalTokens: 30 },
+        { ...run, id: 'a-3', objectiveScore: 30, totalTokens: 20 },
+        { ...run, id: 'b-1', caseId: 'case-b', seed: '8' },
+        { ...run, id: 'unknown-1', caseId: null, seed: null },
+        { ...run, id: 'unknown-2', caseId: null, seed: null },
+        { ...run, id: 'large-seed', seed: '18446744073709551615' },
+      ],
+    },
+    'alpha',
+  )
+
+  expect(observations).toHaveLength(5)
+  expect(observations[0]).toMatchObject({
+    execution_id: 'rc:e-1',
+    source: 'release-control',
+    case_id: 'case-a',
+    scenario_version: 2,
+    seed: 7,
+    run_count: 3,
+    median_score: 30,
+    median_tokens: 20,
+    subject_provider: 'openai',
+    subject_model: 'subject',
+  })
+  expect(observations.slice(2, 4).map((item) => item.run_count)).toEqual([1, 1])
+  expect(new Set(observations.map((item) => item.observation_id)).size).toBe(5)
+  expect(observations[4]?.seed).toBeNull()
+})
+
+it('normalizes local objective, cache-inclusive tokens and subject cost once', () => {
+  const scenario = {
+    scenario_id: 'alpha',
+    scenario_version: 2,
+    case_id: 'case-a',
+    case: { seed: 7 },
+    runs: [
+      {
+        run_id: 'run-1',
+        status: 'passed',
+        completion: 'completed',
+        technical: 'valid',
+        objective_score: 90,
+        wall_time_ms: 2000,
+        efficiency: { total_tokens: 100, function_calls: 3, root_turns: 2 },
+        metrics: { complete: true, totals: { cache_read_tokens: 20 } },
+        cost: { subject_usd: 0.2, total_usd: 0.7 },
+      },
+      {
+        run_id: 'run-2',
+        status: 'passed',
+        completion: 'completed',
+        technical: 'valid',
+        objective_score: 70,
+        wall_time_ms: 1000,
+        efficiency: { total_tokens: 50, function_calls: 1, root_turns: 1 },
+        metrics: { complete: true, totals: { cache_read_tokens: 10 } },
+        cost: { subject_usd: 0.4, total_usd: 1.1 },
+      },
+    ],
+  }
+  const report = {
+    scenario_id: 'alpha',
+    native_execution_id: 'child-1',
+    available: true,
+    report: { scenarios: [scenario] },
+  }
+  const detail = {
+    id: 'local-parent',
+    status: 'passed',
+    completed_at: '2026-09-08T12:00:00Z',
+    subjects: [{ provider: 'openai', model: 'subject' }],
+    scenario_metrics: [
+      { scenario_id: 'alpha', contract_fingerprint: 'contract-a' },
+    ],
+    totals: {},
+    reports: [report, report],
+  } as unknown as DashboardExecutionDetail
+
+  expect(localScenarioObservations(detail, 'alpha')).toEqual([
+    expect.objectContaining({
+      execution_id: 'local-parent',
+      source: 'local',
+      run_count: 2,
+      scored_runs: 2,
+      median_score: 80,
+      median_tokens: 90,
+      median_cost_usd: 0.30000000000000004,
+      contract_sha256: 'contract-a',
+    }),
+  ])
+
+  const withoutChildIds = {
+    ...detail,
+    reports: [
+      { ...report, native_execution_id: undefined },
+      { ...report, native_execution_id: undefined },
+    ],
+  } as unknown as DashboardExecutionDetail
+  expect(localScenarioObservations(withoutChildIds, 'alpha')).toEqual([
+    expect.objectContaining({ run_count: 4 }),
+  ])
 })

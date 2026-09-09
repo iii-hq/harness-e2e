@@ -5,6 +5,7 @@ import type {
   DashboardScenarioMetricSummary,
 } from '@/lib/dashboard-data-source'
 import { getDashboardIiiClient } from '@/lib/iii-client'
+import type { TestObservation } from '@/lib/test-catalog'
 
 const PLANS_LIST = 'release-control::test-plans::list'
 const EXECUTION_REFERENCE = 'release-control::test-executions::reference'
@@ -29,10 +30,13 @@ export type RcExecutionSummary = {
 }
 
 export type RcRun = {
+  id?: string
   attemptsComplete: boolean
   scenarioId: string
   scenarioVersion: number | null
   caseId?: string | null
+  seed?: string | null
+  repetition?: number | null
   status: string | null
   completion: string | null
   technical: string | null
@@ -43,6 +47,15 @@ export type RcRun = {
   turns: number | null
   functionCalls: number | null
   functionCallErrors?: number | null
+  cohortSha256?: string
+  capturedAt?: string
+  identity?: {
+    harnessVersion?: string | null
+    subjectProvider?: string | null
+    subjectModel?: string | null
+    judgeProvider?: string | null
+    judgeModel?: string | null
+  }
 }
 
 export type RcReference = {
@@ -230,6 +243,260 @@ function finiteMean(scores: Array<number | null | undefined>) {
     : measured.reduce((sum, score) => sum + score, 0) / measured.length
 }
 
+function median(values: Array<number | null | undefined>) {
+  const measured = values
+    .filter(
+      (value): value is number =>
+        typeof value === 'number' && Number.isFinite(value),
+    )
+    .sort((left, right) => left - right)
+  if (measured.length === 0) return null
+  return (
+    (measured[Math.floor((measured.length - 1) / 2)] +
+      measured[Math.floor(measured.length / 2)]) /
+    2
+  )
+}
+
+function record(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === 'object' && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : null
+}
+
+function text(value: unknown) {
+  return typeof value === 'string' && value.length > 0 ? value : null
+}
+
+function seedNumber(value: string | number | null | undefined) {
+  if (value === null || value === undefined || value === '') return null
+  const number = Number(value)
+  return Number.isSafeInteger(number) && number >= 0 ? number : null
+}
+
+function aggregateStatus(runs: RcRun[]) {
+  if (runs.length === 0) return 'unavailable'
+  if (runs.every((run) => run.status === 'passed')) return 'passed'
+  if (runs.some((run) => run.technical === 'technical_invalid'))
+    return 'technical_failed'
+  return (
+    runs.find((run) => run.status && run.status !== 'passed')?.status ??
+    'incomplete'
+  )
+}
+
+function localRuns(detail: DashboardExecutionDetail): RcRun[] {
+  const seen = new Set<string>()
+  return detail.reports.flatMap(
+    (entry, entryIndex) =>
+      entry.report?.scenarios.flatMap((scenario, scenarioIndex) => {
+        const scenarioCase = record(scenario.case)
+        const caseId = text(scenario.case_id)
+        const seed = scenarioCase?.seed
+        return scenario.runs.flatMap((run) => {
+          const executionId =
+            entry.native_execution_id ?? `report:${entryIndex}`
+          const id = `${executionId}:${scenarioIndex}:${run.run_id}`
+          if (seen.has(id)) return []
+          seen.add(id)
+          const attemptsComplete = localAttemptsComplete(run)
+          return [
+            {
+              id,
+              attemptsComplete,
+              scenarioId: scenario.scenario_id,
+              scenarioVersion: scenario.scenario_version,
+              caseId,
+              seed:
+                typeof seed === 'string' || typeof seed === 'number'
+                  ? String(seed)
+                  : null,
+              status: run.status,
+              completion: run.completion,
+              technical: run.technical,
+              objectiveScore: run.objective_score,
+              wallTimeMs: run.wall_time_ms ?? null,
+              totalTokens: inclusiveTokens(run),
+              costSubjectUsd: attemptsComplete
+                ? (run.cost?.subject_usd ?? null)
+                : null,
+              turns:
+                attemptsComplete &&
+                typeof run.efficiency?.root_turns === 'number'
+                  ? run.efficiency.root_turns +
+                    (typeof run.efficiency.child_turns === 'number'
+                      ? run.efficiency.child_turns
+                      : 0)
+                  : null,
+              functionCalls: attemptsComplete
+                ? (run.efficiency?.function_calls ?? null)
+                : null,
+              functionCallErrors: attemptsComplete
+                ? (run.efficiency?.function_call_errors ?? null)
+                : null,
+            },
+          ]
+        })
+      }) ?? [],
+  )
+}
+
+function observation(
+  runs: RcRun[],
+  context: {
+    observationId: string
+    executionId: string
+    completedAt: string
+    source: TestObservation['source']
+    sourceUrl: string | null
+    subjectProvider: string
+    subjectModel: string
+    judgeProvider: string | null
+    judgeModel: string | null
+    contractSha256?: string
+  },
+): TestObservation {
+  const complete = runs.map((run) =>
+    run.attemptsComplete
+      ? run
+      : {
+          ...run,
+          totalTokens: null,
+          costSubjectUsd: null,
+          functionCalls: null,
+          functionCallErrors: null,
+          turns: null,
+        },
+  )
+  const scores = complete.map((run) => run.objectiveScore)
+  const cohorts = new Set(
+    complete.map((run) => run.cohortSha256).filter(Boolean),
+  )
+  const harnesses = new Set(
+    complete.map((run) => run.identity?.harnessVersion).filter(Boolean),
+  )
+  return {
+    observation_id: context.observationId,
+    source: context.source,
+    source_url: context.sourceUrl,
+    execution_id: context.executionId,
+    evaluated_version_id: null,
+    cohort_id: cohorts.size === 1 ? ([...cohorts][0] ?? '') : '',
+    completed_at: context.completedAt,
+    case_id: complete[0]?.caseId ?? '',
+    contract_sha256: context.contractSha256 ?? '',
+    assessment_profile_sha256: '',
+    status: aggregateStatus(complete),
+    median_score: median(scores),
+    run_count: complete.length,
+    scored_runs: scores.filter(
+      (score) => typeof score === 'number' && Number.isFinite(score),
+    ).length,
+    scenario_version: complete[0]?.scenarioVersion ?? undefined,
+    seed: seedNumber(complete[0]?.seed),
+    system_version_id: null,
+    system_label:
+      harnesses.size === 1 ? `Harness ${[...harnesses][0]}` : 'Unknown system',
+    stack_mode: '',
+    harness_revision: null,
+    system_revision: null,
+    engine_revision: null,
+    subject_provider: context.subjectProvider,
+    subject_model: context.subjectModel,
+    judge_provider: context.judgeProvider,
+    judge_model: context.judgeModel,
+    median_cost_usd: median(complete.map((run) => run.costSubjectUsd)),
+    median_tokens: median(complete.map((run) => run.totalTokens)),
+    median_duration_seconds: median(
+      complete.map((run) =>
+        run.wallTimeMs === null ? null : run.wallTimeMs / 1000,
+      ),
+    ),
+    median_function_calls: median(complete.map((run) => run.functionCalls)),
+    median_function_call_errors: median(
+      complete.map((run) => run.functionCallErrors),
+    ),
+    median_turns: median(complete.map((run) => run.turns)),
+  }
+}
+
+/** Project one RC execution into per-case observations for a single test. */
+export function referenceScenarioObservations(
+  reference: RcReference,
+  scenarioId: string,
+): TestObservation[] {
+  const groups = new Map<string, RcRun[]>()
+  reference.runs
+    .filter((run) => run.scenarioId === scenarioId)
+    .forEach((run, index) => {
+      const identified =
+        run.caseId != null && run.scenarioVersion != null && run.seed != null
+      const key = identified
+        ? JSON.stringify([run.caseId, run.scenarioVersion, run.seed])
+        : `unknown:${run.id ?? index}`
+      groups.set(key, [...(groups.get(key) ?? []), run])
+    })
+  const plan = reference.execution.plan
+  const subject = record(plan.subject)
+  const judge = record(plan.judge)
+  return [...groups.entries()].map(([observationId, runs]) =>
+    observation(runs, {
+      observationId,
+      executionId: `rc:${reference.execution.id}`,
+      completedAt:
+        reference.execution.completedAt ?? reference.execution.requestedAt,
+      source: 'release-control',
+      sourceUrl: reference.execution.ghRunUrl ?? null,
+      subjectProvider:
+        text(subject?.provider) ??
+        text(runs[0]?.identity?.subjectProvider) ??
+        '',
+      subjectModel:
+        text(subject?.model) ?? text(runs[0]?.identity?.subjectModel) ?? '',
+      judgeProvider:
+        text(judge?.provider) ?? text(runs[0]?.identity?.judgeProvider),
+      judgeModel: text(judge?.model) ?? text(runs[0]?.identity?.judgeModel),
+    }),
+  )
+}
+
+/** Project local Results with the same score, token and subject-cost semantics as RC. */
+export function localScenarioObservations(
+  detail: DashboardExecutionDetail,
+  scenarioId: string,
+): TestObservation[] {
+  const groups = new Map<string, RcRun[]>()
+  for (const run of localRuns(detail).filter(
+    (candidate) => candidate.scenarioId === scenarioId,
+  )) {
+    const identified =
+      run.caseId != null && run.scenarioVersion != null && run.seed != null
+    const identity = identified
+      ? JSON.stringify([run.caseId, run.scenarioVersion, run.seed])
+      : `unknown:${run.id}`
+    groups.set(identity, [...(groups.get(identity) ?? []), run])
+  }
+  const subject = detail.subjects[0]
+  const judge = record(subject?.judge)
+  const metric = detail.scenario_metrics?.find(
+    (candidate) => candidate.scenario_id === scenarioId,
+  )
+  return [...groups.entries()].map(([observationId, runs]) =>
+    observation(runs, {
+      observationId,
+      executionId: detail.id,
+      completedAt: detail.completed_at ?? detail.started_at ?? '',
+      source: 'local',
+      sourceUrl: null,
+      subjectProvider: subject?.provider ?? '',
+      subjectModel: subject?.model ?? '',
+      judgeProvider: text(judge?.provider),
+      judgeModel: text(judge?.model),
+      contractSha256: text(metric?.contract_fingerprint) ?? '',
+    }),
+  )
+}
+
 export function objectiveScore(view: RcReference | DashboardExecutionDetail) {
   if ('aggregate' in view) {
     const reference = view as RcReference
@@ -285,44 +552,7 @@ function inclusiveTokens(run: DashboardRunProjection): number | null {
 export function comparisonSummary(
   view: DashboardExecutionDetail,
 ): DashboardExecutionSummary {
-  const runs = view.reports.flatMap(
-    (entry) =>
-      entry.report?.scenarios.flatMap((scenario) =>
-        scenario.runs.map((run) => ({
-          attemptsComplete: localAttemptsComplete(run),
-          scenarioId: entry.scenario_id,
-          scenarioVersion:
-            typeof scenario.scenario_version === 'number'
-              ? scenario.scenario_version
-              : null,
-          caseId:
-            typeof scenario.case_id === 'string' ? scenario.case_id : null,
-          status: run.status,
-          technical: run.technical,
-          completion: run.completion,
-          objectiveScore: run.objective_score,
-          wallTimeMs: run.wall_time_ms ?? null,
-          totalTokens: inclusiveTokens(run),
-          costSubjectUsd: localAttemptsComplete(run)
-            ? (run.cost?.subject_usd ?? null)
-            : null,
-          functionCalls: localAttemptsComplete(run)
-            ? (run.efficiency?.function_calls ?? null)
-            : null,
-          functionCallErrors: localAttemptsComplete(run)
-            ? (run.efficiency?.function_call_errors ?? null)
-            : null,
-          turns:
-            localAttemptsComplete(run) &&
-            typeof run.efficiency?.root_turns === 'number'
-              ? run.efficiency.root_turns +
-                (typeof run.efficiency.child_turns === 'number'
-                  ? run.efficiency.child_turns
-                  : 0)
-              : null,
-        })),
-      ) ?? [],
-  )
+  const runs = localRuns(view)
   if (runs.length === 0)
     return {
       ...view,

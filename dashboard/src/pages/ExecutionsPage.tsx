@@ -21,10 +21,6 @@ import {
   routeParams,
 } from '@/hooks/use-hash-route'
 import { useLatestRequest } from '@/hooks/use-latest-request'
-import type {
-  DashboardExecutionDetail,
-  LocalPlan,
-} from '@/lib/dashboard-data-source'
 import {
   type DashboardDataBridge,
   type DashboardExecutionSummary,
@@ -40,22 +36,7 @@ import {
   formatPercent,
 } from '@/lib/execution-view'
 import { executionTitle, percentPoints } from '@/lib/overview-signal'
-import {
-  buildPlanComparison,
-  formatPlanMetricDelta,
-  formatPlanMetricValue,
-} from '@/lib/plan-comparison'
-import {
-  comparisonSummary,
-  getReleaseControlReference,
-  listReleaseControlExecutions,
-  objectiveScore,
-  type RcReference,
-  referenceSummary,
-} from '@/lib/release-control-reference'
-import { watchExecution } from '@/lib/watch-execution'
 import { modelNames, statusCopy } from '@/pages/OverviewPage'
-import { PlanDumbbells } from '@/pages/PlanDetailPage'
 import '@/design-system/styles.css'
 
 const PAGE_SIZE = 50
@@ -332,20 +313,10 @@ export function groupLedgerRows(rows: LedgerRow[], now = Date.now()) {
   return { running, groups }
 }
 
-function LedgerRowCells({
-  row,
-  onReference,
-}: {
-  row: LedgerRow
-  onReference: (id: string) => void
-}) {
+function LedgerRowCells({ row }: { row: LedgerRow }) {
   const { presentation, execution, status } = row
   const { title, detail } = executionTitle(presentation)
   const tokens = tokensOf(row)
-  const Action = execution.id.startsWith('rc:') ? 'button' : 'a'
-  const actionProps = execution.id.startsWith('rc:')
-    ? { type: 'button' as const, onClick: () => onReference(execution.id) }
-    : { href: hashForExecution(execution.id) }
   const evidenceNote =
     execution.availability === 'aggregate'
       ? 'aggregate report'
@@ -355,13 +326,13 @@ function LedgerRowCells({
   return (
     <>
       <td data-label="Execution" className="ds-table-sticky-col">
-        <Action
+        <a
           className="block truncate font-mono text-xs font-medium text-ink no-underline hover:underline"
-          {...actionProps}
+          href={hashForExecution(execution.id)}
           title={title}
         >
           {title}
-        </Action>
+        </a>
         <span className="font-mono text-label text-ink-muted">
           {execution.id.startsWith('rc:') ? 'team · RC' : 'my Harness · local'}
         </span>
@@ -420,18 +391,18 @@ function LedgerRowCells({
         {tokens === null ? '—' : tokens.toLocaleString()}
       </td>
       <td data-label="Open" className="text-right">
-        <Action
+        <a
           className={buttonClassName({
             variant: 'quiet',
             size: 'compact',
             className: 'no-underline',
           })}
-          {...actionProps}
+          href={hashForExecution(execution.id)}
           aria-label={`Open ${title}`}
         >
           open
           <ArrowRight size={13} aria-hidden="true" />
-        </Action>
+        </a>
       </td>
     </>
   )
@@ -444,11 +415,9 @@ function LedgerRowCells({
 function LedgerTable({
   caption,
   groups,
-  onReference,
 }: {
   caption: string
   groups: LedgerGroup[]
-  onReference: (id: string) => void
 }) {
   return (
     <DataTable
@@ -491,15 +460,11 @@ function LedgerTable({
           {group.rows.map((row) => (
             <DataTableRow
               key={row.execution.id}
-              href={
-                row.execution.id.startsWith('rc:')
-                  ? undefined
-                  : hashForExecution(row.execution.id)
-              }
+              href={hashForExecution(row.execution.id)}
               data-execution-id={row.execution.id}
               data-result={row.status.status}
             >
-              <LedgerRowCells row={row} onReference={onReference} />
+              <LedgerRowCells row={row} />
             </DataTableRow>
           ))}
         </tbody>
@@ -521,16 +486,6 @@ export function ExecutionsPage() {
   const [loading, setLoading] = useState(true)
   const [loadingMore, setLoadingMore] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  const [references, setReferences] = useState<DashboardExecutionSummary[]>([])
-  const [reference, setReference] = useState<RcReference | null>(null)
-  const [localDetail, setLocalDetail] =
-    useState<DashboardExecutionDetail | null>(null)
-  const [referenceError, setReferenceError] = useState<string | null>(null)
-  const [loadingReferences, setLoadingReferences] = useState(false)
-  const [activePlan, setActivePlan] = useState<LocalPlan | null>(null)
-  const [referenceId, setReferenceId] = useState<string | null>(null)
-  const [localId, setLocalId] = useState<string | null>(null)
-  const [importing, setImporting] = useState(false)
   const beginRequest = useLatestRequest()
   const loaded = useRef(false)
 
@@ -557,50 +512,6 @@ export function ExecutionsPage() {
   useEffect(() => {
     void load()
   }, [load])
-
-  useEffect(() => {
-    let current = true
-    setReference(null)
-    if (referenceId)
-      void getReleaseControlReference(referenceId.replace(/^rc:/, ''))
-        .then((value) => {
-          if (current) {
-            setReference(value)
-            setReferences((items) =>
-              items.map((item) =>
-                item.id === `rc:${value.execution.id}`
-                  ? referenceSummary(value)
-                  : item,
-              ),
-            )
-            setReferenceError(null)
-          }
-        })
-        .catch((cause) => {
-          if (current) setReferenceError(String(cause))
-        })
-    return () => {
-      current = false
-    }
-  }, [referenceId])
-
-  useEffect(() => {
-    let current = true
-    setLocalDetail(null)
-    if (!bridge || !localId) return
-    const refresh = async () => {
-      const detail = await bridge.getExecution(localId)
-      if (current) setLocalDetail(detail)
-    }
-    void refresh().catch((cause) => {
-      if (current) setError(String(cause))
-    })
-    const stop = watchExecution(bridge, localId, refresh)
-    return () => {
-      current = false
-      stop()
-    }
-  }, [bridge, localId])
 
   // Audit E-12: the ledger follows run changes instead of waiting for F5.
   useEffect(() => {
@@ -645,11 +556,7 @@ export function ExecutionsPage() {
     }
   }
 
-  const allExecutions = useMemo(
-    () => [...executions, ...references],
-    [executions, references],
-  )
-  const rows = useMemo(() => buildLedgerRows(allExecutions), [allExecutions])
+  const rows = useMemo(() => buildLedgerRows(executions), [executions])
   const visible = useMemo(
     () => filterLedgerRows(rows, filters),
     [rows, filters],
@@ -687,7 +594,7 @@ export function ExecutionsPage() {
 
   // Audit E-07: the page says what the ledger holds, in the column vocabulary.
   const summary = [
-    `${total + references.length} executions`,
+    `${total} executions`,
     ...statusCounts.map(([, entry]) => `${entry.count} ${entry.label}`),
   ].join(' · ')
 
@@ -707,147 +614,6 @@ export function ExecutionsPage() {
           headingId="executions-title"
           context="immutable run ledger"
         />
-
-        {bridge?.mode === 'local' ? (
-          <section
-            className="mt-5 grid gap-3"
-            aria-label="Reference and candidate"
-          >
-            <div className="flex flex-wrap items-center gap-3">
-              <button
-                type="button"
-                className={buttonClassName({ variant: 'secondary' })}
-                onClick={() => void loadReferences()}
-                disabled={loadingReferences}
-              >
-                {loadingReferences
-                  ? 'loading team history…'
-                  : 'load Release Control history'}
-              </button>
-              <span className="font-mono text-label text-ink-muted">
-                Keep the authenticated RC tab connected to your personal Engine.
-              </span>
-            </div>
-            {referenceError ? (
-              <Callout tone="warning" title="Release Control unavailable">
-                {referenceError}
-              </Callout>
-            ) : null}
-            {references.length > 0 ? (
-              <div className="flex flex-wrap items-end gap-3">
-                <label
-                  htmlFor="rc-reference"
-                  className="grid min-w-0 gap-1 font-mono text-label"
-                >
-                  Reference · team / RC
-                  <Select
-                    id="rc-reference"
-                    aria-label="Release Control reference"
-                    value={referenceId ?? ''}
-                    onChange={(event) =>
-                      setReferenceId(event.target.value || null)
-                    }
-                  >
-                    <option value="">select reference</option>
-                    {references.map((item) => (
-                      <option key={item.id} value={item.id}>
-                        {item.label || item.id} · {item.id.slice(-8)}
-                      </option>
-                    ))}
-                  </Select>
-                </label>
-                <label
-                  htmlFor="local-candidate"
-                  className="grid min-w-0 gap-1 font-mono text-label"
-                >
-                  Candidate · my Harness
-                  <Select
-                    id="local-candidate"
-                    aria-label="Local execution for comparison"
-                    value={localId ?? ''}
-                    onChange={(event) => setLocalId(event.target.value || null)}
-                  >
-                    <option value="">select local result</option>
-                    {executions.map((item) => (
-                      <option key={item.id} value={item.id}>
-                        {item.label || item.id} · {item.id.slice(-8)}
-                      </option>
-                    ))}
-                  </Select>
-                </label>
-                <button
-                  type="button"
-                  className={buttonClassName({ variant: 'primary' })}
-                  disabled={!reference || importing}
-                  onClick={() => void runReference()}
-                >
-                  {importing ? 'starting locally…' : 'run reference locally'}
-                </button>
-              </div>
-            ) : null}
-            {reference?.execution.ghRunUrl ? (
-              <a
-                href={reference.execution.ghRunUrl}
-                target="_blank"
-                rel="noreferrer"
-                className={buttonClassName({ variant: 'quiet' })}
-              >
-                open RC evidence in GitHub
-              </a>
-            ) : null}
-            {reference ? (
-              <span className="font-mono text-label text-ink-muted">
-                {reference.execution.label || reference.execution.id} · test
-                parameters from RC, current local Harness. Results stay on this
-                computer.
-              </span>
-            ) : null}
-            {activePlan?.reference_differences?.length ? (
-              <Callout tone="warning" title="Local scenario differences">
-                <ul>
-                  {activePlan.reference_differences.map((difference) => (
-                    <li key={difference}>{difference}</li>
-                  ))}
-                </ul>
-              </Callout>
-            ) : null}
-            {activePlan?.last_attempt_id &&
-            localDetail &&
-            ['running', 'queued', 'cancelling'].includes(localDetail.status) ? (
-              <div className="flex flex-wrap items-center gap-3">
-                <a
-                  href={hashForExecution(activePlan.last_attempt_id)}
-                  className={buttonClassName({ variant: 'quiet' })}
-                >
-                  open local execution
-                </a>
-                <button
-                  type="button"
-                  className={buttonClassName({ variant: 'quiet' })}
-                  onClick={() =>
-                    void bridge
-                      .planControl({
-                        action: 'cancel',
-                        execution_id: activePlan.last_attempt_id,
-                      })
-                      .then(load)
-                      .catch((cause) => setError(String(cause)))
-                  }
-                >
-                  cancel local execution
-                </button>
-              </div>
-            ) : null}
-          </section>
-        ) : null}
-        {reference && localDetail ? (
-          <ReferenceComparison
-            reference={referenceSummary(reference)}
-            local={comparisonSummary(localDetail)}
-            referenceScore={objectiveScore(reference)}
-            localScore={objectiveScore(localDetail)}
-          />
-        ) : null}
 
         {error ? (
           <Callout
@@ -998,7 +764,6 @@ export function ExecutionsPage() {
         ) : (
           <div className="mt-4 grid min-w-0 gap-6" data-ledger>
             <LedgerTable
-              onReference={setReferenceId}
               caption={`Executions, ${visible.length} of ${rows.length} loaded`}
               groups={
                 running.length > 0
@@ -1029,117 +794,5 @@ export function ExecutionsPage() {
         )}
       </div>
     </div>
-  )
-
-  async function loadReferences() {
-    setLoadingReferences(true)
-    setReferenceError(null)
-    try {
-      setReferences(await listReleaseControlExecutions())
-    } catch (cause) {
-      setReferences([])
-      setReference(null)
-      setReferenceId(null)
-      setReferenceError(cause instanceof Error ? cause.message : String(cause))
-    } finally {
-      setLoadingReferences(false)
-    }
-  }
-
-  async function runReference() {
-    if (!bridge || !reference) return
-    setImporting(true)
-    setError(null)
-    try {
-      const plan = (await bridge.planControl({
-        action: 'import_reference',
-        reference_execution_id: reference.execution.id,
-        label: reference.execution.label || 'Local experiment',
-        subject: reference.execution.plan.subject,
-        judge: reference.execution.plan.judge,
-        materialized: reference.materialized,
-        shards: reference.shards,
-      })) as LocalPlan
-      const started = await bridge.startPlan(
-        plan.id,
-        plan.baseline_execution_id ? 'candidate' : 'baseline',
-      )
-      setActivePlan(started)
-      setLocalId(started.last_attempt_id)
-      await load()
-    } catch (cause) {
-      setError(cause instanceof Error ? cause.message : String(cause))
-    } finally {
-      setImporting(false)
-    }
-  }
-}
-
-function ReferenceComparison({
-  reference,
-  local,
-  referenceScore,
-  localScore,
-}: {
-  reference: DashboardExecutionSummary | null
-  local: DashboardExecutionSummary | null
-  referenceScore: number | null
-  localScore: number | null
-}) {
-  if (!reference || !local) return null
-  const comparison = buildPlanComparison(reference, local)
-  return (
-    <section className="mt-5 grid gap-3">
-      <Callout tone="info" title="reference against local candidate">
-        Descriptive comparison for your local experiment. Positive or negative
-        deltas describe changes; differences in scope and measured coverage
-        affect interpretation.
-      </Callout>
-      <DataTable
-        caption="Reference and local candidate measurements"
-        minWidth="32rem"
-        collapse
-      >
-        <thead>
-          <tr>
-            <th>Metric</th>
-            <th>Reference · RC</th>
-            <th>Candidate · local</th>
-            <th>Difference</th>
-          </tr>
-        </thead>
-        <tbody>
-          <tr>
-            <th scope="row">Mean objective score</th>
-            <td data-label="Reference · RC">
-              {referenceScore?.toFixed(1) ?? '—'}
-            </td>
-            <td data-label="Candidate · local">
-              {localScore?.toFixed(1) ?? '—'}
-            </td>
-            <td data-label="Difference">
-              {referenceScore === null || localScore === null
-                ? '—'
-                : (localScore - referenceScore).toFixed(1)}
-            </td>
-          </tr>
-          {comparison.metrics.map((metric) => (
-            <tr key={metric.id}>
-              <th scope="row">
-                {metric.id === 'cost' ? 'Subject cost' : metric.label}
-              </th>
-              <td data-label="Reference · RC">
-                {formatPlanMetricValue(metric, 'baseline')}
-              </td>
-              <td data-label="Candidate · local">
-                {formatPlanMetricValue(metric, 'candidate')}
-              </td>
-              <td data-label="Difference">{formatPlanMetricDelta(metric)}</td>
-            </tr>
-          ))}
-        </tbody>
-      </DataTable>
-      <PlanDumbbells comparison={comparison} />
-    </section>
   )
 }
