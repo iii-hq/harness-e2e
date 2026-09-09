@@ -2,7 +2,6 @@
 """Fixture lifecycle for the four Registry scenarios."""
 import argparse
 import hashlib
-import html
 import json
 import os
 from pathlib import Path
@@ -190,21 +189,6 @@ def execute(args):
             "stderr": evidence["stderr"][-20000:]}
 
 
-def gallery(root, records):
-    cards = []
-    for item in records.get("captures", []):
-        label = html.escape(item["caption"])
-        if item.get("status") == "captured":
-            name = item["screenshot"]
-            # Only local basenames emitted by the trusted capture script are rendered.
-            if Path(name).name != name:
-                raise ValueError("Invalid screenshot path")
-            cards.append(f'<figure><img style="max-width:100%" src="{html.escape(name)}"><figcaption>{label}</figcaption></figure>')
-        else:
-            cards.append(f'<p>{label}: unavailable — {html.escape(item.get("reason", "unknown"))}</p>')
-    (root / "index.html").write_text('<!doctype html><meta charset="utf-8"><title>Registry evidence</title><h1>Registry screenshots</h1>' + "\n".join(cards))
-
-
 def finish(args):
     root = args.root
     state = json.loads((root / "state.json").read_text())
@@ -229,23 +213,12 @@ def finish(args):
     if state["test"] in (2, 4):
         result["runtime_ready"] = False
     if state["test"] in (2, 4) and "scope_deviation" not in result:
-        evidence = root / "screenshots"
-        evidence.mkdir(exist_ok=True)
         try:
-            # Rebuild from the captured delivery before trusted screenshots.
+            # Rebuild before the controller captures the host-mapped application.
             (root / "final-start.log").write_bytes(fixture_action(state, "up"))
             result["runtime_ready"] = True
-            script = (args.assets / "capture.cjs").read_bytes()
-            command = ["docker", "exec", "-i", state["container"], "docker", "compose", "-f", "/fixture/compose.yaml", "exec", "-T", "web", "node", "-"]
-            (root / "capture.log").write_bytes(run(command, data=script, timeout=180))
-            container_exec(state, "mkdir -p /workspace/output/executor-capture && docker compose -f /fixture/compose.yaml cp web:/tmp/registry-comparison-evidence/. /workspace/output/executor-capture/")
-            shutil.copytree(root / "workspace" / "output" / "executor-capture", evidence, dirs_exist_ok=True)
-            records = json.loads((evidence / "captures.json").read_text())
-            records["identity"] = {"registry_sha": REGISTRY_SHA, "patch_sha256": hashlib.sha256(patch).hexdigest(), "fixture_files": state["fixture_files"]}
-            write_json(evidence / "captures.json", records)
-            gallery(evidence, records)
         except (RuntimeError, subprocess.TimeoutExpired) as error:
-            result["capture_error"] = str(error)
+            result["runtime_error"] = str(error)
     write_json(root / "delivery-status.json", result)
     return result
 
