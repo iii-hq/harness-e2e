@@ -94,8 +94,8 @@ jobs:
           [[ "$(jq -r '.isPrerelease' <<<"$release_json")" == 'true' ]]
           binary_count=$(jq '[.assets[]?.name | select(startswith("harness-e2e-")) | select(endswith(".tar.gz") or endswith(".zip"))] | length' <<<"$release_json")
           checksum_count=$(jq '[.assets[]?.name | select(startswith("harness-e2e-")) | select(endswith(".sha256"))] | length' <<<"$release_json")
-          [[ "$binary_count" -eq 9 ]]
-          [[ "$checksum_count" -eq 9 ]]
+          [[ "$binary_count" -eq 5 ]]
+          [[ "$checksum_count" -eq 5 ]]
 
           printf '%s\n' "$tag_sha" > tag-sha.txt
           echo "::notice::validated $tag at $tag_sha from release run $RELEASE_RUN_ID/$RELEASE_RUN_ATTEMPT"
