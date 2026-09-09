@@ -1,0 +1,2 @@
+# Side-effect-minimal configuration used only by Registry interface collection.
+data_dir: target/interface-collection
