@@ -99,8 +99,9 @@ demand; they are not installed into the native runs directory and no GitHub
 token is needed. Origin labels distinguish Release Control results from local experiments.
 
 Selecting **run locally** imports the selected execution's materialized test
-parameters only when requested and starts a local plan. Later runs reuse that
-plan. The local Harness and scenario implementations may differ from the remote
+parameters only when requested and starts a new local plan using the current
+scenario contracts. Earlier plans and results are preserved. The local Harness
+and scenario implementations may differ from the remote
 reference; the comparison is descriptive. No local execution is posted to RC.
 A disconnected RC bridge leaves the existing local execution tools available.
 

@@ -542,19 +542,7 @@ impl PlanStore {
             "A bounded Release Control execution id is required."
         );
         let _guard = self.lock.lock().await;
-        let id = format!(
-            "plan-rc-{}",
-            &artifact::sha256_bytes(reference_execution_id.as_bytes())[7..31]
-        );
-        if self.plan_path(&id)?.exists() {
-            let existing = self.read_plan(&id)?;
-            ensure!(
-                existing.plan.reference_execution_id.as_deref()
-                    == Some(reference_execution_id.as_str()),
-                "The imported reference belongs to another Release Control execution."
-            );
-            return self.canonical(&existing);
-        }
+        let id = format!("plan-rc-{}", uuid::Uuid::new_v4().simple());
 
         let profile = materialized["profile"]
             .as_object()
@@ -1999,7 +1987,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn imports_one_frozen_reference_once_and_runs_it_locally() {
+    async fn imports_a_fresh_frozen_reference_for_each_reproduction() {
         let root = tempfile::tempdir().unwrap();
         let runner = Arc::new(FakeRunner::new(root.path().into()));
         let manager = manager(root.path(), runner.clone());
@@ -2046,8 +2034,8 @@ mod tests {
                 .unwrap(),
         )
         .unwrap();
-        assert_eq!(repeated.id, plan.id);
-        assert_eq!(manager.list_local().unwrap().len(), 1);
+        assert_ne!(repeated.id, plan.id);
+        assert_eq!(manager.list_local().unwrap().len(), 2);
 
         let started = manager
             .start_local(&plan.id, "reference-baseline", Role::Baseline)
@@ -2056,6 +2044,53 @@ mod tests {
         let baseline = terminal(&manager, started.last_attempt_id.as_deref().unwrap()).await;
         assert!(baseline.baseline_eligible);
         assert_eq!(baseline.slots.len(), 2);
+        assert_eq!(runner.submitted.load(Ordering::SeqCst), 2);
+    }
+
+    #[tokio::test]
+    async fn reimport_preserves_an_incompatible_historical_snapshot() {
+        let root = tempfile::tempdir().unwrap();
+        let runner = Arc::new(FakeRunner::new(root.path().into()));
+        let manager = manager(root.path(), runner.clone());
+        let request = || serde_json::from_value(reference_import("harness_turn")).unwrap();
+        let original: LocalPlan =
+            serde_json::from_value(manager.handle(request()).await.unwrap()).unwrap();
+        let mut historical = manager.read_plan(&original.id).unwrap();
+        historical.snapshot.cases[0]["scenario_version"] = json!(
+            historical.snapshot.cases[0]["scenario_version"]
+                .as_u64()
+                .unwrap()
+                + 1
+        );
+        historical.snapshot.cases[0]["contract_sha256"] = json!("historical-contract");
+        historical.snapshot_sha256 = artifact::sha256_value(&historical.snapshot).unwrap();
+        historical.configuration_sha256 =
+            configuration_digest(&historical.plan, &historical.snapshot_sha256).unwrap();
+        let historical_snapshot = serde_json::to_value(&historical.snapshot).unwrap();
+        manager.write_plan(&historical).unwrap();
+
+        assert!(!manager.get_local(&original.id).unwrap().compatible);
+        let refreshed: LocalPlan =
+            serde_json::from_value(manager.handle(request()).await.unwrap()).unwrap();
+        assert_ne!(refreshed.id, original.id);
+        assert!(refreshed.compatible);
+        let preserved = manager.read_plan(&original.id).unwrap();
+        assert_eq!(
+            serde_json::to_value(&preserved.snapshot).unwrap(),
+            historical_snapshot
+        );
+        assert_eq!(preserved.snapshot_sha256, historical.snapshot_sha256);
+        assert_eq!(
+            preserved.configuration_sha256,
+            historical.configuration_sha256
+        );
+
+        let started = manager
+            .start_local(&refreshed.id, "refreshed-reference", Role::Baseline)
+            .await
+            .unwrap();
+        let execution = terminal(&manager, started.last_attempt_id.as_deref().unwrap()).await;
+        assert!(execution.baseline_eligible);
         assert_eq!(runner.submitted.load(Ordering::SeqCst), 2);
     }
 

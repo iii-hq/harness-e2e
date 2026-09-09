@@ -209,7 +209,8 @@ The comparison runs locally and sends no local results to Release Control.
 
 Choose **run locally** on a remote reference to save its materialized test
 parameters as a local plan and run them against your current Harness. Repeating
-that action reuses the saved plan and creates another local execution. The
+that action creates a new local plan using the current scenario contracts,
+while preserving earlier plans and results. The
 reference's scenarios, rounds, repetitions and retry settings come from the
 execution's materialization, not from the current profile with the same name.
 The current local scenario implementations and Harness are used deliberately:
