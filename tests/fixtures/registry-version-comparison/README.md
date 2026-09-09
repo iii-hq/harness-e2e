@@ -1,6 +1,6 @@
 # Registry development scenarios
 
-Four independent scenarios use the regular Harness catalog, execution, reports, and scoring. There is no Registry-specific CLI or multi-test coordinator.
+Four ordinary scenarios use the regular Harness catalog, execution, reports, and scoring. There is no Registry-specific CLI or multi-test coordinator.
 
 | Scenario | Input | Work | Main output |
 | --- | --- | --- | --- |
@@ -9,25 +9,31 @@ Four independent scenarios use the regular Harness catalog, execution, reports, 
 | `registry_environment` | Same base, runtime requirements, seed and artifacts | Create Dockerfile/Compose/scripts and run the baseline application | Environment patch and reproduction report |
 | `registry_verification` | Explicitly supplied delivery, requirements, fresh environment | Test the feature through API and browser, preserving source | Verification report, check results, screenshots |
 
-Only implementation receives the reference plan. Environment receives no prepared Dockerfile, Compose file, or smoke script. Verification has an explicit delivery input; it does not automatically depend on another scheduled scenario.
+Only implementation receives the reference plan. Environment receives no prepared Dockerfile, Compose file, or smoke script. Verification consumes a specific implementation delivery.
 
 ## Prerequisites
 
 Use a Linux amd64 executor with Python 3, Git, Docker Engine, outbound dependency access, and a running Harness/iii stack. Implementation, environment, and verification use private privileged Docker-in-Docker containers. Each has its own daemon and data volume. Use a dedicated executor for these containers.
 
-Planning needs only the pinned source and requirements. The other three scenarios clone the newest default branch of `iii-hq/e2e-fixture`. There is no fixture commit option or branch fallback. Its `registry-version-comparison` directory must exist on that branch before execution; the original fixture work is in [fixture PR #3](https://github.com/iii-hq/e2e-fixture/pull/3).
+Planning needs only the pinned source and requirements. The other three scenarios clone the newest default branch of `iii-hq/e2e-fixture`. There is no fixture commit option or branch fallback. Its `registry-version-comparison` directory supplies the prepared environment and public seed assets.
 
 Registry starts at `662eb87c1bdbb395f36264d5d26bf823e2ace783`. Dependency installation and image building occur inside each private daemon.
 
-## Console execution and CI preparation
+## Release Control and Console plans
+
+The `registry` profile selects all four cases. Planning and environment construction have separate groups. Implementation and verification run sequentially in one ordinary group, with four individual scenario results retained. The existing plan summary weights groups; use each scenario's criteria to assess its specific task.
+
+Release Control's `harness-registry` plan selects this profile through the existing executor. Deploy that plan only after the runner exposes the `registry` profile. No additional workflow or scheduler is required.
+
+Within the shared execution, implementation publishes its delivery for verification. A new repetition clears that input, and a missing delivery fails verification rather than selecting an older file. Concurrent executions cannot exchange deliveries. Verification applies the patch to a fresh pinned Registry checkout and starts a fresh environment.
 
 In the E2E extension, create a plan with one scenario and an execution model. Select an explicit judge for `registry_planning`; the other three scenarios use runtime validators. Use one run and zero technical retries for initial validation so failures remain visible.
 
 Configure `HARNESS_E2E_RUN_DIR` on the E2E worker to a writable directory on the executor workspace disk. Set `TMPDIR` there as well when the host temporary filesystem has a separate quota. The worker process must receive these variables before the run starts; setting them in the browser does not configure the worker.
 
-Before selecting `registry_verification`, configure `HARNESS_E2E_REGISTRY_IMPLEMENTATION` on that worker with the explicit Test 2 `delivery/` directory containing `implementation.patch` and `manifest.json`. Reconcile the worker while it has no active executions. In CI, transfer this directory as an artifact to the verification job and set the variable to its downloaded path. The delivery is also retained in the normal captured evidence. Verification replays it onto a fresh pinned Registry checkout; it does not reuse a running Test 2 application.
+For standalone verification of a previously delivered implementation, configure `HARNESS_E2E_REGISTRY_IMPLEMENTATION` on the worker with the explicit `delivery/` directory containing `implementation.patch` and `manifest.json`. Reconcile the worker while it has no active executions. The paired profile does not use this external input. Delivery files also remain in normal captured evidence after cleanup.
 
-Validate planning, implementation, and environment as separate runs. Verification needs the selected implementation delivery. On a disk-constrained executor, run the Docker builds sequentially. These scenarios are diagnostics and are not silently added to existing CI profiles; enable them only after the fixture and runtime prerequisites are available in the CI stack.
+Use the Registry profile template in the Console to exercise the same grouping locally. On a disk-constrained executor, run the Docker builds sequentially. The profile is explicit; existing plan scopes and schedules remain unchanged.
 
 ## Run
 
@@ -52,7 +58,7 @@ cargo run --locked -- run \
   --scenario registry_verification
 ```
 
-Select and schedule each scenario through the normal Harness flow. No automatic sequence or combined four-test score is added.
+Select and schedule scenarios through the normal Harness flow. The Registry profile uses the existing group execution and scoring contracts.
 
 Subject commands start in `/workspace`, containing `registry/`, `inputs/`, and `output/`. The scenario provides a scoped execution tool. `inputs/environment.json` records URLs, requirements, and commands. Implementation and verification use built application snapshots: rebuild after edits with `/fixture/fixture.sh up` and run project tooling inside the API/web containers.
 
