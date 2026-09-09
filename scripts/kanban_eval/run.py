@@ -40,6 +40,49 @@ for name in os.listdir('/proc'):
 
 READY_CHECK = "import urllib.request; assert urllib.request.urlopen('http://127.0.0.1:3000/api/config',timeout=.3).status == 200"
 
+HOT_RELOAD_PREPARE = r'''import json,pathlib,sys
+root=pathlib.Path(sys.argv[1]);backup=pathlib.Path(sys.argv[2]);marker=sys.argv[3]
+excluded={'.git','dist','node_modules'};candidates=[]
+for path in root.rglob('*'):
+ try: relative=path.relative_to(root)
+ except ValueError: continue
+ if path.suffix not in ('.ts','.mts','.cts') or path.name.endswith('.d.ts'): continue
+ if any(part in excluded for part in relative.parts): continue
+ current=root
+ if any((current:=current/part).is_symlink() for part in relative.parts): continue
+ if path.is_file(): candidates.append((relative,path))
+candidates.sort(key=lambda item:(item[0].parts[:1]!=('src',),str(item[0])))
+selected=[];total=0
+for relative,path in candidates:
+ data=path.read_bytes()
+ if len(selected)>=100 or total+len(data)>4*1024*1024: break
+ selected.append((relative,path,data));total+=len(data)
+backup.mkdir()
+manifest=[]
+for number,(relative,path,data) in enumerate(selected):
+ name=str(number);(backup/name).write_bytes(data);manifest.append({'path':str(relative),'backup':name})
+(backup/'manifest.json').write_text(json.dumps(manifest))
+line=b'\nconsole.log('+json.dumps(marker).encode()+b');\n'
+for _relative,path,data in selected:path.write_bytes(data+line)
+print(json.dumps({'count':len(selected)}))
+'''
+
+HOT_RELOAD_RESTORE = r'''import json,pathlib,shutil,sys
+root=pathlib.Path(sys.argv[1]);backup=pathlib.Path(sys.argv[2]);excluded={'.git','dist','node_modules'}
+if backup.is_dir():
+ manifest=json.loads((backup/'manifest.json').read_text())
+ for item in manifest:
+  relative=pathlib.PurePosixPath(item['path']);path=root.joinpath(*relative.parts)
+  assert not relative.is_absolute() and '..' not in relative.parts
+  assert isinstance(item['backup'],str) and item['backup'].isdigit()
+  assert not any(part in excluded for part in relative.parts)
+  current=root
+  assert not any((current:=current/part).is_symlink() for part in relative.parts)
+  assert path.is_file()
+  path.write_bytes((backup/item['backup']).read_bytes())
+ shutil.rmtree(backup)
+'''
+
 
 class InfrastructureError(RuntimeError):
     pass
@@ -232,33 +275,33 @@ p.mkdir(parents=True)
     return {'ready': True}
 
 
-def hot_reload(candidate, evidence, runtime, cancel=None):
+def hot_reload(candidate, evaluator, evidence, runtime, cancel=None):
     token = os.urandom(16).hex()
     marker = f'KANBAN_HOT_RELOAD_{token}'
+    root = '/workspace/kanban'
     backup = f'/tmp/kanban-hot-reload-{token}'
-    source = '/workspace/kanban/src/index.ts'
-    prepare = """import json,pathlib,sys
-p=pathlib.Path(sys.argv[1]);b=pathlib.Path(sys.argv[2]);marker=sys.argv[3]
-assert p.is_file() and not p.is_symlink()
-data=p.read_bytes();assert len(data)<=1048576
-b.write_bytes(data)
-p.write_bytes(data+b'\\nconsole.log('+json.dumps(marker).encode()+b');\\n')
-"""
-    restore = """import pathlib,sys
-p=pathlib.Path(sys.argv[1]);b=pathlib.Path(sys.argv[2])
-assert p.is_file() and not p.is_symlink() and b.is_file()
-p.write_bytes(b.read_bytes());b.unlink()
-"""
     offset = (evidence / 'runtime.log').stat().st_size
-    completed = subprocess.run(docker_exec(candidate, ['/usr/bin/python3', '-I', '-c', prepare,
-                                                       source, backup, marker]),
-                               stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                               check=False, timeout=10)
-    if completed.returncode:
-        raise RuntimeError(completed.stderr.decode(errors='replace')[-4096:])
     observed = False
     try:
-        deadline = time.monotonic() + 65
+        try:
+            completed = subprocess.run(docker_exec(candidate, ['/usr/bin/python3', '-I', '-c',
+                                                               HOT_RELOAD_PREPARE, root, backup, marker]),
+                                       stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                                       stderr=subprocess.PIPE, check=False, timeout=10)
+        except subprocess.TimeoutExpired as error:
+            raise InfrastructureError('hot reload instrumentation timed out') from error
+        if completed.returncode:
+            raise InfrastructureError('hot reload instrumentation failed: '
+                                      + completed.stderr.decode(errors='replace')[-4096:])
+        try:
+            prepared = json.loads(completed.stdout)
+        except (TypeError, ValueError, json.JSONDecodeError) as error:
+            raise InfrastructureError('hot reload instrumentation returned invalid output') from error
+        if prepared == {'count': 0}:
+            return {'observed': False, 'source_restored': True}
+        if not isinstance(prepared, dict) or not isinstance(prepared.get('count'), int):
+            raise InfrastructureError('hot reload instrumentation returned invalid output')
+        deadline = time.monotonic() + 55
         while time.monotonic() < deadline:
             if cancel and cancel.is_file():
                 raise KeyboardInterrupt('external subject cancelled')
@@ -271,16 +314,18 @@ p.write_bytes(b.read_bytes());b.unlink()
                     break
             time.sleep(.25)
     finally:
-        restored = subprocess.run(docker_exec(candidate, ['/usr/bin/python3', '-I', '-c', restore,
-                                                          source, backup]),
-                                  stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                                  check=False, timeout=10)
+        try:
+            restored = subprocess.run(docker_exec(candidate, ['/usr/bin/python3', '-I', '-c',
+                                                              HOT_RELOAD_RESTORE, root, backup]),
+                                      stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                                      stderr=subprocess.PIPE, check=False, timeout=10)
+        except subprocess.TimeoutExpired as error:
+            raise InfrastructureError('hot reload source restoration timed out') from error
         if restored.returncode:
-            raise RuntimeError('hot reload source restoration failed: '
-                               + restored.stderr.decode(errors='replace')[-4096:])
-    if not observed:
-        raise RuntimeError('automatic hot reload marker was not observed')
-    return {'observed': True, 'source_restored': True}
+            raise InfrastructureError('hot reload source restoration failed: '
+                                      + restored.stderr.decode(errors='replace')[-4096:])
+    recovered = wait_runtime_ready(runtime[0], evaluator, cancel, timeout=10)
+    return {'observed': observed and recovered, 'source_restored': True}
 
 
 def inspect_runtime(candidate, evaluator, cancel=None):
@@ -388,7 +433,7 @@ def control_callback(evidence, candidate, evaluator, runtime, cancel=None):
                 value = restart_runtime(candidate, evaluator, evidence, runtime, cancel,
                                         register_configuration=False, reset_configuration=True)
             elif operation == 'hot_reload' and not payload:
-                value = hot_reload(candidate, evidence, runtime, cancel)
+                value = hot_reload(candidate, evaluator, evidence, runtime, cancel)
             elif operation == 'inspect_runtime' and not payload:
                 value = inspect_runtime(candidate, evaluator, cancel)
             else:
@@ -396,6 +441,10 @@ def control_callback(evidence, candidate, evaluator, runtime, cancel=None):
             response = {'id': request_id, 'ok': True, 'value': value}
         except InfrastructureError:
             raise
+        except subprocess.TimeoutExpired as error:
+            if operation == 'inspect_runtime':
+                raise InfrastructureError('Node inspector control timed out') from error
+            response = {'id': request_id, 'ok': False, 'error': str(error)}
         except Exception as error:
             response = {'id': request_id, 'ok': False,
                         'error': str(error) or type(error).__name__}

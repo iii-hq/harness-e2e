@@ -189,6 +189,21 @@ class KanbanRunnerTest(unittest.TestCase):
             self.assertEqual(restart.call_args.kwargs,
                              {'register_configuration': False, 'reset_configuration': True})
 
+            with mock.patch.object(runner, 'inspect_runtime',
+                                   return_value={'websocket_url': 'ws://127.0.0.1:9229/id'}):
+                runner.atomic_json(evidence / 'control-request.json',
+                                   {'id': 'inspect', 'operation': 'inspect_runtime', 'payload': {}})
+                poll()
+            response = json.loads((evidence / 'control-response.json').read_text())
+            self.assertEqual(response['value'], {'websocket_url': 'ws://127.0.0.1:9229/id'})
+
+            with mock.patch.object(runner, 'inspect_runtime',
+                                   side_effect=runner.InfrastructureError('invalid inspector')):
+                runner.atomic_json(evidence / 'control-request.json',
+                                   {'id': 'inspect-failed', 'operation': 'inspect_runtime', 'payload': {}})
+                with self.assertRaisesRegex(runner.InfrastructureError, 'invalid inspector'):
+                    poll()
+
     def test_runtime_can_start_without_grader_configuration_registration(self):
         with tempfile.TemporaryDirectory() as directory:
             process = mock.Mock()
@@ -212,16 +227,69 @@ class KanbanRunnerTest(unittest.TestCase):
                 if marker in command:
                     with runtime_log.open('ab') as log:
                         log.write((marker + '\n').encode())
+                    return subprocess.CompletedProcess(command, 0, stdout=b'{"count":1}', stderr=b'')
                 return subprocess.CompletedProcess(command, 0, stdout=b'', stderr=b'')
 
             process = mock.Mock()
             process.poll.return_value = None
             with mock.patch.object(runner.os, 'urandom', return_value=b'\x01' * 16), \
-                    mock.patch.object(runner.subprocess, 'run', side_effect=docker):
-                result = runner.hot_reload('candidate', evidence, [process, 0])
+                    mock.patch.object(runner.subprocess, 'run', side_effect=docker), \
+                    mock.patch.object(runner, 'wait_runtime_ready', return_value=True):
+                result = runner.hot_reload('candidate', 'evaluator', evidence, [process, 0])
             self.assertEqual(result, {'observed': True, 'source_restored': True})
             self.assertEqual(len(calls), 2)
-            self.assertTrue(any('b.unlink()' in part for part in calls[1]))
+            self.assertTrue(any('shutil.rmtree' in part for part in calls[1]))
+
+            calls.clear()
+            with mock.patch.object(runner.os, 'urandom', return_value=b'\x01' * 16), \
+                    mock.patch.object(runner.subprocess, 'run', side_effect=docker), \
+                    mock.patch.object(runner.time, 'monotonic', side_effect=[0, 56]), \
+                    mock.patch.object(runner, 'wait_runtime_ready', return_value=True):
+                result = runner.hot_reload('candidate', 'evaluator', evidence, [process, 0])
+            self.assertEqual(result, {'observed': False, 'source_restored': True})
+
+    def test_hot_reload_instruments_non_index_sources_and_excludes_generated_or_linked_trees(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / 'kanban'
+            source = root / 'src/main.mts'
+            generated = root / 'dist/generated.ts'
+            dependency = root / 'node_modules/dependency.ts'
+            source.parent.mkdir(parents=True)
+            generated.parent.mkdir()
+            dependency.parent.mkdir()
+            source.write_text('export const app = true\n')
+            generated.write_text('generated\n')
+            dependency.write_text('dependency\n')
+            outside = Path(directory) / 'outside'
+            outside.mkdir()
+            (outside / 'linked.ts').write_text('linked\n')
+            (root / 'linked').symlink_to(outside, target_is_directory=True)
+            backup = Path(directory) / 'backup'
+
+            subprocess.run(['/usr/bin/python3', '-I', '-c', runner.HOT_RELOAD_PREPARE,
+                            str(root), str(backup), 'marker'], check=True, stdout=subprocess.PIPE)
+            self.assertIn('marker', source.read_text())
+            self.assertEqual(generated.read_text(), 'generated\n')
+            self.assertEqual(dependency.read_text(), 'dependency\n')
+            self.assertEqual((outside / 'linked.ts').read_text(), 'linked\n')
+            subprocess.run(['/usr/bin/python3', '-I', '-c', runner.HOT_RELOAD_RESTORE,
+                            str(root), str(backup)], check=True)
+            self.assertEqual(source.read_text(), 'export const app = true\n')
+
+    def test_runtime_inspection_returns_only_loopback_node_debugger(self):
+        signal_result = subprocess.CompletedProcess([], 0, stdout=b'', stderr=b'')
+        targets = subprocess.CompletedProcess([], 0, stdout=json.dumps([{
+            'webSocketDebuggerUrl': 'ws://127.0.0.1:9229/node-target'}]).encode(), stderr=b'')
+        with mock.patch.object(runner.subprocess, 'run', side_effect=[signal_result, targets]) as run:
+            result = runner.inspect_runtime('candidate', 'evaluator')
+        self.assertEqual(result, {'websocket_url': 'ws://127.0.0.1:9229/node-target'})
+        self.assertIn("int(fields[1].split(':')[1],16)==3000", run.call_args_list[0].args[0][-1])
+
+        invalid = subprocess.CompletedProcess([], 0, stdout=json.dumps([{
+            'webSocketDebuggerUrl': 'ws://example.com:9229/node-target'}]).encode(), stderr=b'')
+        with mock.patch.object(runner.subprocess, 'run', side_effect=[signal_result, invalid]):
+            with self.assertRaisesRegex(runner.InfrastructureError, 'invalid debugger target'):
+                runner.inspect_runtime('candidate', 'evaluator')
 
     def test_container_cleanup_is_bounded_and_best_effort(self):
         timeout = subprocess.TimeoutExpired(['docker'], 15)

@@ -2573,10 +2573,13 @@ impl E2eReport {
                 for attempt in &run.retry_attempts {
                     validate_retry_identity(run, attempt)?;
                 }
-                let markdown_evidence = if run.markdown_execution.is_some() {
+                let preserved_evidence = if run.markdown_execution.is_some() {
                     std::mem::take(&mut run.evidence)
                 } else {
-                    Vec::new()
+                    run.evidence
+                        .drain(..)
+                        .filter(|reference| reference.kind == "runtime_diagnostics")
+                        .collect()
                 };
                 run.evidence.clear();
                 materialize_attempt_evidence(
@@ -2596,13 +2599,17 @@ impl E2eReport {
                     run.scenario_flow.as_ref(),
                     &run.semantic_tests,
                 );
-                append_verified_references(output, &mut run.evidence, markdown_evidence)?;
+                append_verified_references(output, &mut run.evidence, preserved_evidence)?;
                 bind_assessment_evidence(&mut run.assessment_results, &run.evidence);
                 for attempt in &mut run.retry_attempts {
-                    let markdown_evidence = if attempt.markdown_execution.is_some() {
+                    let preserved_evidence = if attempt.markdown_execution.is_some() {
                         std::mem::take(&mut attempt.evidence)
                     } else {
-                        Vec::new()
+                        attempt
+                            .evidence
+                            .drain(..)
+                            .filter(|reference| reference.kind == "runtime_diagnostics")
+                            .collect()
                     };
                     attempt.evidence.clear();
                     materialize_attempt_evidence(
@@ -2622,7 +2629,7 @@ impl E2eReport {
                         attempt.scenario_flow.as_ref(),
                         &attempt.semantic_tests,
                     );
-                    append_verified_references(output, &mut attempt.evidence, markdown_evidence)?;
+                    append_verified_references(output, &mut attempt.evidence, preserved_evidence)?;
                     bind_assessment_evidence(&mut attempt.assessment_results, &attempt.evidence);
                 }
             }
@@ -4156,6 +4163,31 @@ mod tests {
         );
         assert!(value.get("assessment_contract").is_some());
         assert!(value["scenarios"][0]["runs"][0].get("attempt_id").is_some());
+    }
+
+    #[test]
+    fn write_preserves_verified_runtime_diagnostics_without_a_transcript() {
+        let output = tempfile::tempdir().unwrap();
+        let mut run = run(0, false);
+        let reference = artifact::write_json(
+            output.path(),
+            Path::new("evidence/kanban-controller.json"),
+            "kanban_controller",
+            "runtime_diagnostics",
+            &serde_json::json!({"status":"infrastructure_failed"}),
+        )
+        .unwrap();
+        run.evidence.push(reference.clone());
+        let mut report = report(vec![aggregate(vec![run])]);
+        report.write_to(output.path(), &manifest()).unwrap();
+        let (decoded, _) = E2eReport::read_from(output.path()).unwrap();
+        assert_eq!(
+            decoded.scenarios[0].runs[0].evidence,
+            vec![reference.clone()]
+        );
+        reference.verify(output.path()).unwrap();
+        fs::write(output.path().join(&reference.path), "tampered").unwrap();
+        assert!(report.write_to(output.path(), &manifest()).is_err());
     }
 
     #[test]

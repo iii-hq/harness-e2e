@@ -1,4 +1,60 @@
-# Local control validation — 2026-09-09
+# Kanban validation — 2026-09-09
+
+## Native CI integration: not yet end-to-end approved
+
+The seven cases are native `ScenarioId`s and materialize through the existing
+`capability` profile (55 planned runs, seven Kanban cases). The implementation is
+rebased on `4b31b62`; the fixture catalog still passes its seven exact, linear
+transition checks. No fixture implementation or reference commit was changed.
+
+Corrections since the historical controls below:
+
+- Fixed ignored-file Git staging and capture the evaluated diff again to detect
+  source changes during grading. External-subject lifecycle, command bounds,
+  cancellation and cleanup now have regression coverage.
+- Added private restart, raw-store corruption/restore, generic source hot-reload
+  and Node inspector checks. Control protocol errors stay evaluator failures;
+  missing hot reload is a functional failure. A real, separate Node HTTP/inspector
+  process validates SSE response counting, collection and deliberate retention.
+- Replaced host system-library mounts with the pinned official Playwright image
+  `mcr.microsoft.com/playwright@sha256:cf0daee9b994042e011bc29f20cdff1a9f682a039b43fcd738f7d8a9d3bcd9d6`.
+  CI uses Node 24.18.0, locked JavaScript tooling, no install lifecycle scripts
+  and no persisted checkout credentials.
+- Fixed engine inspection routing for a namespaced stack and selected the Harness
+  version from the matching namespace. Normalized build/startup failure remains
+  task failure; unavailable grading never becomes an invented zero score.
+- Persist bounded logs, screenshots and diffs as native evidence; preserve and
+  hash terminal controller diagnostics even without a subject transcript. The
+  CI extractor now copies the allowlisted Kanban files before removing the stack.
+
+Current validation:
+
+- Rust library: 667 passed, one external-fixture test ignored; fresh binary build
+  passed. Rust formatting, JavaScript syntax and shell syntax passed.
+- Full Python suite: 251 passed using the freshly built native binary, including
+  the real Node inspector/SSE instrument and the output-symlink regression.
+- `ci-c3-reference-1` passed complete functional/criterion coverage and
+  `ci-c3-base-1` failed the missing board as expected, before the runtime-image
+  change. Expanded C2/C5/C6 references exposed a private-control payload mismatch;
+  those calibration errors were fixed and are not model failures.
+- `native-c3-preflight-5` reached native setup against `my-project` with requested
+  `deepseek/deepseek-v4-flash`. It failed closed because the pinned image is not
+  installed. `results.json` records infrastructure error, null score and no model
+  usage; the hashed controller diagnostic and its exact error survived cleanup
+  and extraction into CI artifacts. No model was invoked in this attempt.
+
+Outstanding gates: pull/smoke the new image, repeat all seven reference/base
+pairs with the expanded probes, visually inspect the new artifacts, and run a
+native DeepSeek Flash attempt. The old controls below do not validate the new
+image or newly added assertions. The host root filesystem has no free space;
+shared Docker images, containers, volumes and cache were not removed.
+
+Remote prerequisites remain unconfigured: publish the fixture to a user-selected
+GitHub repository, grant CI read access, and publish/select a compatible immutable
+`harness-e2e` worker release after merge. Merely selecting a new `runner_sha` does
+not replace the Registry-resolved worker binary.
+
+## Historical local controls
 
 Seven reference snapshots passed the implemented functional probes. All seven
 base snapshots failed for the feature intentionally missing at that revision.

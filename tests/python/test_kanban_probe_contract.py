@@ -1,5 +1,7 @@
 import json
+import http.client
 import os
+import re
 import subprocess
 import tempfile
 import threading
@@ -111,6 +113,92 @@ class KanbanProbeContractTest(unittest.TestCase):
             self.assertFalse(failures, failures)
             self.assertEqual(completed.returncode, 0, completed.stderr)
             self.assertEqual(json.loads(completed.stdout), {"ready": True})
+
+    def test_inspector_counts_open_collectible_and_deliberately_leaked_sse_responses(self):
+        server = r"""
+const http = require('node:http')
+global.leakedSseResponses = []
+const server = http.createServer((request, response) => {
+  response.writeHead(200, {'content-type': 'text/event-stream; charset=utf-8', 'cache-control': 'no-cache'})
+  response.write(': open\n\n')
+  if (request.url === '/leak') request.once('close', () => global.leakedSseResponses.push(response))
+})
+server.listen(0, '127.0.0.1', () => console.log(server.address().port))
+setInterval(() => {}, 1000)
+"""
+        child = subprocess.Popen(
+            ["node", "--inspect=127.0.0.1:0", "--expose-gc", "--eval", server],
+            text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+        )
+        connections = []
+        try:
+            websocket_url = None
+            for _ in range(10):
+                match = re.search(r"ws://\S+", child.stderr.readline())
+                if match:
+                    websocket_url = match.group(0)
+                    break
+            self.assertIsNotNone(websocket_url, "Node did not publish an inspector URL")
+            port = int(child.stdout.readline())
+
+            def count():
+                script = (
+                    f"import {{inspectorClient,countSseServerResponses}} from {json.dumps(PROBE.as_uri())};"
+                    f"const client=await inspectorClient({json.dumps(websocket_url)});"
+                    "try{console.log(await countSseServerResponses(client))}finally{client.close()}"
+                    "setTimeout(()=>process.exit(0),20)"
+                )
+                completed = subprocess.run(
+                    ["node", "--input-type=module", "--eval", script],
+                    text=True, capture_output=True, check=False, timeout=8,
+                )
+                self.assertEqual(completed.returncode, 0, completed.stderr)
+                return int(completed.stdout)
+
+            def connect(path):
+                connection = http.client.HTTPConnection("127.0.0.1", port, timeout=2)
+                connection.request("GET", path)
+                response = connection.getresponse()
+                self.assertEqual(response.status, 200)
+                connections.append((connection, response))
+
+            baseline = count()
+            for _ in range(6):
+                connect("/clean")
+            self.assertGreaterEqual(count(), baseline + 6)
+            while connections:
+                connection, response = connections.pop()
+                response.close()
+                connection.close()
+            for _ in range(30):
+                if count() == baseline:
+                    break
+                time.sleep(.05)
+            else:
+                self.fail("closed SSE responses were not collectible")
+
+            connect("/leak")
+            connection, response = connections.pop()
+            response.close()
+            connection.close()
+            for _ in range(30):
+                if count() >= baseline + 1:
+                    break
+                time.sleep(.05)
+            else:
+                self.fail("deliberately retained SSE response was not detected")
+        finally:
+            for connection, response in connections:
+                response.close()
+                connection.close()
+            child.terminate()
+            try:
+                child.wait(timeout=3)
+            except subprocess.TimeoutExpired:
+                child.kill()
+                child.wait(timeout=3)
+            child.stdout.close()
+            child.stderr.close()
 
 
 if __name__ == "__main__":

@@ -87,7 +87,7 @@ export async function control(output, operation, payload = {}) {
   }
 }
 
-async function inspectorClient(websocketUrl) {
+export async function inspectorClient(websocketUrl) {
   try {
     const socket = new WebSocket(websocketUrl)
     await new Promise((resolve, reject) => {
@@ -123,14 +123,13 @@ async function inspectorClient(websocketUrl) {
   }
 }
 
-async function countSseServerResponses(inspector) {
+export async function countSseServerResponses(inspector) {
   const group = `kanban-sse-${randomUUID()}`
   try {
     await inspector.command('HeapProfiler.collectGarbage')
     await inspector.command('HeapProfiler.collectGarbage')
     const evaluated = await inspector.command('Runtime.evaluate', {
-      expression: "(await import('node:http')).ServerResponse.prototype",
-      awaitPromise: true,
+      expression: "process.getBuiltinModule('node:http').ServerResponse.prototype",
       objectGroup: group,
     })
     const prototypeObjectId = evaluated.result?.objectId
@@ -138,7 +137,7 @@ async function countSseServerResponses(inspector) {
     const queried = await inspector.command('Runtime.queryObjects', { prototypeObjectId, objectGroup: group })
     const count = await inspector.command('Runtime.callFunctionOn', {
       objectId: queried.objects.objectId,
-      functionDeclaration: "function () { return this.filter((response) => { try { return String(response.getHeader('content-type')).startsWith('text/event-stream') } catch { return false } }).length }",
+      functionDeclaration: "function () { return this.filter((response) => { try { return String(response.getHeader?.('content-type') ?? response._header).includes('text/event-stream') } catch { return false } }).length }",
       returnByValue: true,
     })
     if (!Number.isInteger(count.result?.value)) throw new Error('SSE response count is not an integer')
@@ -293,9 +292,10 @@ async function create(trigger, fields = {}) {
 const PROBES = {
   async kanban_c1_foundation({ api, trigger, control, browser, baseUrl, output, check, unverified }) {
     await check('foundation_assets_and_safe_routes', async () => {
-      for (const path of ['/', '/page.js', '/styles.css']) expect((await api(path)).ok, `${path} did not load`)
+      const home = await api('/')
+      expect(home.ok && home.headers.get('content-type')?.startsWith('text/html'), 'standalone HTML did not load')
       for (const path of ['/constructor', '/toString', '/__proto__']) expect((await api(path)).status === 404, `${path} was not 404`)
-      return 'Standalone HTML, JavaScript and CSS load; prototype-like asset paths return 404.'
+      return 'Standalone HTML loads and prototype-like asset paths return 404.'
     })
     await check('foundation_configuration_contract', async () => {
       await control('restart', { register_configuration: false, reset_configuration: true })

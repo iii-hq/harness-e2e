@@ -35,8 +35,11 @@ class KanbanBootstrapTest(unittest.TestCase):
         self.assertIn('KANBAN_FIXTURE_REPOSITORY', workflow)
         self.assertIn('0471257a95095da7c5e9d366e26636976472e90d', workflow)
         self.assertIn('fetch-depth: 0', workflow)
+        self.assertIn('node-version: 24.18.0', workflow)
         self.assertIn('E2E_FIXTURE_GITHUB_TOKEN', workflow)
-        self.assertEqual(workflow.count('persist-credentials: false'), 3)
+        for step in workflow.split('\n      - '):
+            if 'uses: actions/checkout@' in step:
+                self.assertIn('persist-credentials: false', step)
         self.assertIn('if [[ "$campaign_group_id" == case-kanban-* ]]', group)
         self.assertIn('HARNESS_E2E_KANBAN_RUNTIME', group)
         self.assertIn('Kanban fixture checkout is unavailable', group)

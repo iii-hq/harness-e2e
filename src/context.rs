@@ -209,7 +209,11 @@ impl E2eContext {
             .and_then(Value::as_array)
             .into_iter()
             .flatten()
-            .find(|worker| worker.get("name").and_then(Value::as_str) == Some("harness"))
+            .find(|worker| {
+                worker["name"] == "harness"
+                    && worker["namespace"]
+                        == self.client.namespace().as_deref().unwrap_or("default")
+            })
             .and_then(|worker| worker.get("version"))
             .and_then(Value::as_str)
             .filter(|value| !value.trim().is_empty())
@@ -532,6 +536,11 @@ fn inspection_routing(
     ) {
         payload["namespace"] = json!(namespace);
         ("default".into(), payload)
+    } else if matches!(
+        function_id,
+        "engine::health::check" | "engine::workers::list" | "engine::triggers::list"
+    ) {
+        ("default".into(), payload)
     } else {
         (namespace, payload)
     }
@@ -763,6 +772,16 @@ mod tests {
 
     #[test]
     fn inspection_runs_in_engine_namespace_but_targets_the_worker_namespace() {
+        for function in [
+            "engine::health::check",
+            "engine::workers::list",
+            "engine::triggers::list",
+        ] {
+            assert_eq!(
+                inspection_routing(function, Some("isolated-test".into()), json!({})),
+                ("default".into(), json!({}))
+            );
+        }
         for function in ["engine::functions::list", "engine::functions::info"] {
             let (route, payload) = inspection_routing(
                 function,

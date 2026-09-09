@@ -420,18 +420,7 @@ fn capture<'a>(
             }
             tokio::time::sleep(Duration::from_millis(250)).await;
         };
-        let evidence = path.join("run/evidence");
-        let mut content = serde_json::Map::new();
-        for (name, key) in [
-            ("result.json", "result"),
-            ("provenance.json", "provenance"),
-            ("coverage.json", "coverage"),
-        ] {
-            let file = evidence.join(name);
-            if file.is_file() {
-                content.insert(key.into(), serde_json::from_slice(&fs::read(file)?)?);
-            }
-        }
+        let content = diagnostics(run_id)?;
         let result = content.get("result").context("missing evaluation result")?;
         let expected_exit = match (
             result["status"].as_str(),
@@ -444,60 +433,10 @@ fn capture<'a>(
         if exit.code() != Some(expected_exit) {
             bail!("controller exit disagrees with evidence: {exit}");
         }
-        let diff = evidence.join("subject.diff");
-        if diff.is_file() && fs::metadata(&diff)?.len() > 8 * 1024 * 1024 {
-            bail!("candidate diff exceeds evidence bound");
-        }
-        content.insert(
-            "diff".into(),
-            if diff.is_file() {
-                fs::read_to_string(diff)?.into()
-            } else {
-                Value::Null
-            },
-        );
-        let mut attachments = serde_json::Map::new();
-        let mut files = fs::read_dir(&evidence)?
-            .map(|entry| entry.map(|entry| entry.path()))
-            .collect::<std::io::Result<Vec<_>>>()?;
-        files.push(path.join("controller.log"));
-        for file in files {
-            let name = file
-                .file_name()
-                .context("evidence filename")?
-                .to_string_lossy()
-                .into_owned();
-            match file.extension().and_then(|extension| extension.to_str()) {
-                Some("log") => {
-                    let bytes = fs::read(&file)?;
-                    let tail = &bytes[bytes.len().saturating_sub(256 * 1024)..];
-                    attachments.insert(
-                        name,
-                        json!({
-                            "media_type":"text/plain", "content":String::from_utf8_lossy(tail),
-                            "size_bytes":bytes.len(), "truncated":tail.len() != bytes.len()
-                        }),
-                    );
-                }
-                Some("png") => {
-                    if fs::metadata(&file)?.len() > 4 * 1024 * 1024 {
-                        bail!("screenshot exceeds evidence bound");
-                    }
-                    attachments.insert(name, json!({
-                        "media_type":"image/png", "encoding":"base64", "content":STANDARD.encode(fs::read(file)?)
-                    }));
-                }
-                _ => {}
-            }
-        }
-        content.insert("attachments".into(), attachments.into());
-        if serde_json::to_vec(&content)?.len() > 16 * 1024 * 1024 {
-            bail!("Kanban evidence exceeds artifact bound");
-        }
         Ok(vec![CapturedDeliverable {
             id: REPORT.into(),
             kind: "application_audit".into(),
-            content: Value::Object(content).into(),
+            content: content.into(),
             invariants: vec![],
             provenance: vec![ProvenanceEvidence {
                 kind: "isolated_runtime".into(),
@@ -506,6 +445,73 @@ fn capture<'a>(
             }],
         }])
     })
+}
+
+pub(crate) fn diagnostics(run_id: &str) -> Result<Value> {
+    let path = root(run_id);
+    let evidence = path.join("run/evidence");
+    let mut content = serde_json::Map::new();
+    for (name, key) in [
+        ("result.json", "result"),
+        ("provenance.json", "provenance"),
+        ("coverage.json", "coverage"),
+    ] {
+        let file = evidence.join(name);
+        if file.is_file() {
+            content.insert(key.into(), serde_json::from_slice(&fs::read(file)?)?);
+        }
+    }
+    let diff = evidence.join("subject.diff");
+    if diff.is_file() && fs::metadata(&diff)?.len() > 8 * 1024 * 1024 {
+        bail!("candidate diff exceeds evidence bound");
+    }
+    content.insert(
+        "diff".into(),
+        if diff.is_file() {
+            fs::read_to_string(diff)?.into()
+        } else {
+            Value::Null
+        },
+    );
+    let mut attachments = serde_json::Map::new();
+    let mut files = fs::read_dir(&evidence)?
+        .map(|entry| entry.map(|entry| entry.path()))
+        .collect::<std::io::Result<Vec<_>>>()?;
+    files.push(path.join("controller.log"));
+    for file in files {
+        let name = file
+            .file_name()
+            .context("evidence filename")?
+            .to_string_lossy()
+            .into_owned();
+        match file.extension().and_then(|extension| extension.to_str()) {
+            Some("log") => {
+                let bytes = fs::read(&file)?;
+                let tail = &bytes[bytes.len().saturating_sub(256 * 1024)..];
+                attachments.insert(
+                    name,
+                    json!({
+                        "media_type":"text/plain", "content":String::from_utf8_lossy(tail),
+                        "size_bytes":bytes.len(), "truncated":tail.len() != bytes.len()
+                    }),
+                );
+            }
+            Some("png") => {
+                if fs::metadata(&file)?.len() > 4 * 1024 * 1024 {
+                    bail!("screenshot exceeds evidence bound");
+                }
+                attachments.insert(name, json!({
+                    "media_type":"image/png", "encoding":"base64", "content":STANDARD.encode(fs::read(file)?)
+                }));
+            }
+            _ => {}
+        }
+    }
+    content.insert("attachments".into(), attachments.into());
+    if serde_json::to_vec(&content)?.len() > 16 * 1024 * 1024 {
+        bail!("Kanban evidence exceeds artifact bound");
+    }
+    Ok(Value::Object(content))
 }
 
 fn evaluate<'a>(
@@ -652,6 +658,36 @@ fn cleanup<'a>(_context: &'a E2eContext, run_id: &'a str) -> CleanupFuture<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn terminal_controller_diagnostics_survive_without_subject_metrics_or_a_diff() {
+        let run_id = format!("kanban-diagnostic-test-{}", uuid::Uuid::new_v4());
+        let path = root(&run_id);
+        fs::create_dir_all(path.join("run/evidence")).unwrap();
+        fs::write(
+            path.join("controller.log"),
+            "controller stopped at command bound",
+        )
+        .unwrap();
+        fs::write(path.join("run/evidence/runtime.log"), "runtime evidence").unwrap();
+        fs::write(
+            path.join("run/evidence/result.json"),
+            br#"{"status":"infrastructure_failed","functional_status":null}"#,
+        )
+        .unwrap();
+        let evidence = diagnostics(&run_id).unwrap();
+        assert_eq!(evidence["result"]["status"], "infrastructure_failed");
+        assert!(evidence["diff"].is_null());
+        assert_eq!(
+            evidence["attachments"]["controller.log"]["content"],
+            "controller stopped at command bound"
+        );
+        assert_eq!(
+            evidence["attachments"]["runtime.log"]["content"],
+            "runtime evidence"
+        );
+        assert!(evidence.get("metrics").is_none());
+        fs::remove_dir_all(path).unwrap();
+    }
     #[test]
     fn candidate_prerequisite_failure_is_not_evaluator_unavailability() {
         for id in [
