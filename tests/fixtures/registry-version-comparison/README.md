@@ -21,9 +21,9 @@ Registry starts at `662eb87c1bdbb395f36264d5d26bf823e2ace783`. Dependency instal
 
 ## Release Control and Console plans
 
-The `registry` profile selects all four cases. Planning and environment construction have separate groups. Implementation and verification run sequentially in one ordinary group, with four individual scenario results retained. The existing plan summary weights groups; use each scenario's criteria to assess its specific task.
+The existing `evolution` profile includes all four Registry cases alongside its other eighteen cases, with five repetitions per case. Planning and environment construction have separate groups. Implementation and verification run sequentially in one ordinary group, with four individual scenario results retained. The existing plan summary weights groups; use each scenario's criteria to assess its specific task.
 
-Release Control's `harness-registry` plan selects this profile through the existing executor. Deploy that plan only after the runner exposes the `registry` profile. No additional workflow or scheduler is required.
+Release Control's existing `harness-evolution` plan selects this profile through the existing executor. Publish the updated runner to include the expanded scope. No additional workflow or scheduler is required.
 
 Within the shared execution, implementation publishes its delivery for verification. A new repetition clears that input, and a missing delivery fails verification rather than selecting an older file. Concurrent executions cannot exchange deliveries. Verification applies the patch to a fresh pinned Registry checkout and starts a fresh environment.
 
@@ -33,7 +33,7 @@ Configure `HARNESS_E2E_RUN_DIR` on the E2E worker to a writable directory on the
 
 For standalone verification of a previously delivered implementation, configure `HARNESS_E2E_REGISTRY_IMPLEMENTATION` on the worker with the explicit `delivery/` directory containing `implementation.patch` and `manifest.json`. Reconcile the worker while it has no active executions. The paired profile does not use this external input. Delivery files also remain in normal captured evidence after cleanup.
 
-Use the Registry profile template in the Console to exercise the same grouping locally. On a disk-constrained executor, run the Docker builds sequentially. The profile is explicit; existing plan scopes and schedules remain unchanged.
+Use the Evolution profile template in the Console and select the four Registry cases with one repetition to exercise the same grouping locally. On a disk-constrained executor, run the Docker builds sequentially. The profile is explicit; existing plan scopes and schedules remain unchanged.
 
 ## Run
 
@@ -58,7 +58,7 @@ cargo run --locked -- run \
   --scenario registry_verification
 ```
 
-Select and schedule scenarios through the normal Harness flow. The Registry profile uses the existing group execution and scoring contracts.
+Select and schedule scenarios through the normal Harness flow. The Evolution profile uses the existing group execution and scoring contracts.
 
 Subject commands start in `/workspace`, containing `registry/`, `inputs/`, and `output/`. The scenario provides a scoped execution tool. `inputs/environment.json` records URLs, requirements, and commands. Implementation and verification use built application snapshots: rebuild after edits with `/fixture/fixture.sh up` and run project tooling inside the API/web containers.
 

@@ -198,7 +198,7 @@
     ],
     "registry_verification": [
       "Linux amd64 with Docker and the latest e2e-fixture Registry assets",
-      "HARNESS_E2E_REGISTRY_IMPLEMENTATION delivery directory"
+      "Implementation delivery from the paired scenario or an explicit standalone directory"
     ]
   },
   "profiles": [
@@ -304,12 +304,22 @@
         "engineering_ticket_git_handoff",
         "cross_app_transaction",
         "prompt_injection_resilience",
-        "incident_response"
+        "incident_response",
+        "registry_planning",
+        "registry_implementation",
+        "registry_environment",
+        "registry_verification"
       ],
       "repetitions": 5,
       "technical_retries": 0,
       "lane": "local-evolution",
-      "fault_groups": []
+      "fault_groups": [],
+      "scenario_groups": [
+        [
+          "registry_implementation",
+          "registry_verification"
+        ]
+      ]
     },
     {
       "id": "resilience",
@@ -383,33 +393,6 @@
       "repetitions": 1,
       "technical_retries": 0,
       "lane": "local-endurance",
-      "fault_groups": []
-    },
-    {
-      "id": "registry",
-      "label": "Registry",
-      "purpose": "Measure planning, implementation, environment construction and verification of the delivered Registry feature.",
-      "metrics": [
-        "execution_reliability",
-        "objective_score_coverage",
-        "quality_score_completed"
-      ],
-      "modules": [],
-      "scenarios": [
-        "registry_planning",
-        "registry_implementation",
-        "registry_environment",
-        "registry_verification"
-      ],
-      "scenario_groups": [
-        [
-          "registry_implementation",
-          "registry_verification"
-        ]
-      ],
-      "repetitions": 1,
-      "technical_retries": 0,
-      "lane": "local-registry",
       "fault_groups": []
     }
   ]
