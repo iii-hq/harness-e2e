@@ -1858,7 +1858,7 @@ mod tests {
             ("smoke", 5, 5),
             ("regression", 9, 9),
             ("capability", 48, 48),
-            ("evolution", 110, 105),
+            ("evolution", 66, 63),
             ("endurance", 5, 5),
         ] {
             let root = tempfile::tempdir().unwrap();
@@ -1896,7 +1896,7 @@ mod tests {
                     .len()
             );
             if profile == "evolution" {
-                assert!(cohorts.iter().all(|c| c["aggregate"]["observed_runs"] == 5));
+                assert!(cohorts.iter().all(|c| c["aggregate"]["observed_runs"] == 3));
                 let paths = result_paths(&execution, root.path());
                 assert!(test_plan::measure(&[paths[0].clone(), paths[0].clone()]).is_err());
             }
@@ -2052,7 +2052,7 @@ mod tests {
             assert_eq!(runner.submitted.load(Ordering::SeqCst), 1);
             let detail = manager.execution_detail(&id).unwrap().unwrap();
             let reports = detail["reports"].as_array().unwrap();
-            assert_eq!(reports.len(), 110);
+            assert_eq!(reports.len(), 66);
             // Reconciliation retains evidence from the persisted child even
             // when admission returned a different identity; remaining slots stay explicit.
             assert_eq!(reports[0]["available"], wrong_identity);

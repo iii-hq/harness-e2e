@@ -522,7 +522,7 @@ mod tests {
             ("smoke", 5, 5),
             ("regression", 9, 9),
             ("capability", 48, 48),
-            ("evolution", 22, 110),
+            ("evolution", 22, 66),
             ("resilience", 4, 13),
             ("endurance", 5, 5),
         ] {
@@ -574,7 +574,7 @@ mod tests {
             json!(["registry_implementation", "registry_verification"])
         );
         assert_eq!(snapshot.cases.len(), 22);
-        assert_eq!(snapshot.budget["planned_runs"], 110);
+        assert_eq!(snapshot.budget["planned_runs"], 66);
 
         let mut profile = snapshot.profile;
         profile.scenario_groups[0].push("registry_verification".into());

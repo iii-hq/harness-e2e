@@ -21,7 +21,7 @@ Registry starts at `662eb87c1bdbb395f36264d5d26bf823e2ace783`. Dependency instal
 
 ## Release Control and Console plans
 
-The existing `evolution` profile includes all four Registry cases alongside its other eighteen cases, with five repetitions per case. Planning and environment construction have separate groups. Implementation and verification run sequentially in one ordinary group, with four individual scenario results retained. The existing plan summary weights groups; use each scenario's criteria to assess its specific task.
+The existing `evolution` profile includes all four Registry cases alongside its other eighteen cases, with three repetitions per case. Planning and environment construction have separate groups. Implementation and verification run sequentially in one ordinary group, with four individual scenario results retained. The existing plan summary weights groups; use each scenario's criteria to assess its specific task.
 
 Release Control's existing `harness-evolution` plan selects this profile through the existing executor. Publish the updated runner to include the expanded scope. No additional workflow or scheduler is required.
 

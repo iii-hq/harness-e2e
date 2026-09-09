@@ -310,7 +310,7 @@
         "registry_environment",
         "registry_verification"
       ],
-      "repetitions": 5,
+      "repetitions": 3,
       "technical_retries": 0,
       "lane": "local-evolution",
       "fault_groups": [],
