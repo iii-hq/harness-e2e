@@ -61,6 +61,15 @@ fn root(test: u8, run_id: &str) -> PathBuf {
 fn assets(test: u8, run_id: &str) -> PathBuf {
     root(test, run_id).with_extension("assets")
 }
+fn publish_implementation(
+    context: &E2eContext,
+    attempt_id: &str,
+    directory: &std::path::Path,
+) -> bool {
+    directory.join("implementation.patch").is_file()
+        && directory.join("manifest.json").is_file()
+        && context.publish_execution_output(IMPLEMENTATION_ID, attempt_id, directory)
+}
 fn function_id(scenario_id: &str, run_id: &str) -> String {
     format!(
         "{}_{}::exec",
@@ -227,7 +236,14 @@ fn setup<'a, const N: u8>(context: &'a E2eContext, run_id: &'a str) -> CleanupFu
             &api_port,
         ]);
         if N == 4 {
-            prepare.arg("--implementation").arg(std::env::var_os("HARNESS_E2E_REGISTRY_IMPLEMENTATION").context("registry_verification requires HARNESS_E2E_REGISTRY_IMPLEMENTATION pointing to a delivery directory")?);
+            let implementation = match context.execution_output(IMPLEMENTATION_ID)? {
+                Some(output) => {
+                    tracing::info!(producer_attempt = output.attempt_id, "using execution-scoped Registry implementation");
+                    output.directory
+                }
+                None => PathBuf::from(std::env::var_os("HARNESS_E2E_REGISTRY_IMPLEMENTATION").context("standalone registry_verification requires HARNESS_E2E_REGISTRY_IMPLEMENTATION pointing to a delivery directory")?),
+            };
+            prepare.arg("--implementation").arg(implementation);
         }
         drop((web, api));
         checked(&mut prepare).await?;
@@ -367,6 +383,9 @@ fn capture<'a, const N: u8>(
             },
         ]);
         let delivery = checked(&mut finish).await?;
+        if N == 2 {
+            publish_implementation(context, run_id, &directory.join("delivery"));
+        }
         let result = if N == 1 {
             judge_plan(context, run_id).await
         } else if matches!(N, 2 | 4) && delivery["runtime_ready"] != true {
@@ -489,6 +508,31 @@ fn cleanup<'a, const N: u8>(_context: &'a E2eContext, run_id: &'a str) -> Cleanu
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn implementation_handoff_requires_both_files_and_accepts_incomplete_delivery() {
+        let temp = tempfile::tempdir().unwrap();
+        let context = E2eContext::from_client(iii_sdk::IIIClient::new("ws://127.0.0.1:1"));
+        context.initialize_execution_outputs([IMPLEMENTATION_ID]);
+
+        assert!(!publish_implementation(&context, "missing", temp.path()));
+        std::fs::write(temp.path().join("implementation.patch"), "").unwrap();
+        assert!(!publish_implementation(&context, "missing", temp.path()));
+        std::fs::write(
+            temp.path().join("manifest.json"),
+            r#"{"subject_status":"incomplete"}"#,
+        )
+        .unwrap();
+
+        assert!(publish_implementation(&context, "incomplete", temp.path()));
+        let output = context
+            .execution_output(IMPLEMENTATION_ID)
+            .unwrap()
+            .unwrap();
+        assert_eq!(output.attempt_id, "incomplete");
+        assert_eq!(output.directory, temp.path());
+    }
+
     #[test]
     fn all_registry_criteria_are_atomic_and_use_catalog_weights() {
         for n in 1..=4 {

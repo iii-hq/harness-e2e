@@ -224,6 +224,13 @@ pub async fn run_suite(config: SuiteRunConfig) -> Result<SuiteRunOutcome> {
         .await
         .context("connect E2E runner")?;
     context.auxiliary_model = config.judge.clone();
+    context.initialize_execution_outputs(
+        config
+            .scenarios
+            .iter()
+            .filter_map(ScenarioKey::built_in)
+            .map(ScenarioId::as_str),
+    );
     let context = Arc::new(context);
     let control_plane = context
         .preflight_control_plane()
@@ -428,7 +435,12 @@ pub async fn run_suite(config: SuiteRunConfig) -> Result<SuiteRunOutcome> {
     // Execute one slot per prepared case before starting the next repetition.
     // A late failure therefore cannot consume the whole suite budget while
     // leaving every later scenario without a single observation.
+    let mut current_repetition = None;
     for (repetition, index) in round_robin_slots(config.runs, prepared_cases.len()) {
+        if current_repetition != Some(repetition) {
+            context.reset_execution_outputs();
+            current_repetition = Some(repetition);
+        }
         let prepared = &mut prepared_cases[index];
         if let Some(reason) = slot_deferral_reason(
             !persistence_errors.is_empty(),
@@ -1140,6 +1152,7 @@ fn validate_config(config: &SuiteRunConfig) -> Result<()> {
     if config.scenarios.is_empty() {
         bail!("at least one scenario is required");
     }
+    validate_registry_handoff_order(&config.scenarios)?;
     if let Some(resume) = config
         .control
         .as_ref()
@@ -1171,6 +1184,20 @@ fn validate_config(config: &SuiteRunConfig) -> Result<()> {
         if judge.model.trim().is_empty() || judge.provider.trim().is_empty() {
             bail!("judge model and provider cannot be empty");
         }
+    }
+    Ok(())
+}
+
+fn validate_registry_handoff_order(scenarios: &[ScenarioKey]) -> Result<()> {
+    let implementation = scenarios
+        .iter()
+        .position(|scenario| scenario.built_in() == Some(ScenarioId::RegistryImplementation));
+    let verification = scenarios
+        .iter()
+        .position(|scenario| scenario.built_in() == Some(ScenarioId::RegistryVerification));
+    if matches!((implementation, verification), (Some(implementation), Some(verification)) if verification < implementation)
+    {
+        bail!("registry_implementation must precede registry_verification in the same execution");
     }
     Ok(())
 }
@@ -1276,6 +1303,7 @@ async fn run_once(context: &Arc<E2eContext>, request: AttemptRequest<'_>) -> E2e
     let attempt_id = existing_attempt_id
         .map(str::to_string)
         .unwrap_or_else(|| Uuid::new_v4().simple().to_string());
+    context.begin_execution_output_attempt(scenario_id.as_str());
     let session_id = format!("e2e_{attempt_id}");
     if scenario_id.execution_kind() == ScenarioExecutionKind::AdaptiveFlow {
         return run_adaptive_once(
@@ -4836,6 +4864,17 @@ mod tests {
     use super::*;
     use crate::report::EvaluationDimension;
     use crate::scenarios::CapturedDeliverableContent;
+
+    #[test]
+    fn registry_verification_cannot_precede_its_implementation() {
+        let implementation = ScenarioKey::BuiltIn(ScenarioId::RegistryImplementation);
+        let verification = ScenarioKey::BuiltIn(ScenarioId::RegistryVerification);
+        assert!(
+            validate_registry_handoff_order(&[implementation.clone(), verification.clone()])
+                .is_ok()
+        );
+        assert!(validate_registry_handoff_order(&[verification, implementation]).is_err());
+    }
 
     fn checkpoint_deliverable() -> crate::report::DeliverableReport {
         crate::report::DeliverableReport {
