@@ -46,9 +46,18 @@ but denies nested namespace creation. No reference/base functional controls or
 browser validations have therefore been established for this runner. No host
 security settings were changed.
 
-The broader Python suite ran 195 tests with 24 errors and two failures caused by
-the missing `target/release/harness-e2e` binary in the isolated worktree; this is
-not a full-suite pass.
+The broader Python suite subsequently passed 198 tests with `HARNESS_E2E_BIN`
+pointing to the existing local Harness executable. The initial errors were due
+to the absent default `target/release/harness-e2e` path in this worktree. This
+validates the Python suite, not a fresh Rust build or functional Kanban controls.
+Additional runner regressions reject interrupted probes, missing coverage,
+case mismatches and contradictory verdicts, while accepting valid negative controls.
+
+DeepSeek Flash was confirmed in the local router as `deepseek/deepseek-v4-flash`
+on 2026-09-09. No model request was made: the runner still has no subject-execution
+integration and isolation must pass before running model-generated code. The
+default local Docker sandbox also denied user namespace creation. Do not disable
+host or container protections to get a functional result; use a compatible worker.
 
 Before enabling model execution: prove isolation on the target worker, pass all
 seven reference controls and fail their bases for the intended feature, complete

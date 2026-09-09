@@ -9,7 +9,6 @@ import hashlib
 import json
 import os
 from pathlib import Path
-import shutil
 import signal
 import subprocess
 import sys
@@ -60,6 +59,34 @@ def bounded(command, log, timeout):
             except ProcessLookupError:
                 pass
             proc.wait()
+
+
+def probe_result(evidence, case_id, returncode):
+    if returncode or not all((evidence / name).is_file() for name in ('result.json', 'coverage.json')):
+        raise RuntimeError('trusted probe failed or returned incomplete evidence')
+    result = json.loads((evidence / 'result.json').read_text())
+    coverage = json.loads((evidence / 'coverage.json').read_text())
+    checks = result.get('checks', [])
+    criteria = [check for check in checks if check['id'].startswith('criterion_')]
+    status = result.get('status')
+    functional = result.get('functional_status')
+    if (result.get('schema') != 'kanban-evaluation/v1'
+            or coverage.get('schema') != 'kanban-evaluation-coverage/v1'
+            or result.get('case_id') != case_id or coverage.get('case_id') != case_id
+            or coverage.get('criteria') != criteria
+            or any(check['status'] not in ('passed', 'failed', 'unverified') for check in checks)
+            or len({check['id'] for check in checks}) != len(checks)):
+        raise RuntimeError('trusted probe returned inconsistent coverage')
+    if status == 'evaluation_failed':
+        valid = functional is None and coverage.get('complete') is False
+    else:
+        expected_functional = 'failed' if any(check['status'] == 'failed' for check in checks) else 'passed'
+        complete = bool(criteria) and not any(check['status'] == 'unverified' for check in checks)
+        expected_status = 'failed' if expected_functional == 'failed' else 'passed' if complete else 'incomplete'
+        valid = bool(checks) and functional == expected_functional and status == expected_status and coverage.get('complete') is complete
+    if not valid:
+        raise RuntimeError('trusted probe returned inconsistent verdict')
+    return result
 
 
 def inside(case_id):
@@ -142,12 +169,7 @@ exec iii compose --up --engine ws://127.0.0.1:50179 --file /workspace/worker-com
                                 '--base-url', 'http://127.0.0.1:3000', '--engine-url', 'ws://127.0.0.1:50179',
                                 '--output', '/evidence'], env=probe_env, stdout=log,
                                stderr=subprocess.STDOUT, timeout=120, check=False)
-            if probe.returncode or not all((evidence / name).is_file() for name in ('result.json', 'coverage.json')):
-                raise RuntimeError('trusted probe failed or returned incomplete evidence')
-            result = json.loads((evidence / 'result.json').read_text())
-            coverage = json.loads((evidence / 'coverage.json').read_text())
-            if result.get('case_id') != case_id or coverage.get('case_id') != case_id or coverage.get('criteria') != [check for check in result['checks'] if check['id'].startswith('criterion_')]:
-                raise RuntimeError('trusted probe returned inconsistent coverage')
+            result = probe_result(evidence, case_id, probe.returncode)
             result['build_checks'] = build_checks
             result['duration_ms'] = round((time.monotonic() - started) * 1000)
             (evidence / 'result.json').write_text(json.dumps(result, indent=2))
@@ -245,6 +267,8 @@ def main():
         if not (evidence / 'result.json').exists():
             raise RuntimeError(f'isolated evaluator exited {code} without a verdict')
         result = json.loads((evidence / 'result.json').read_text())
+        if code and result.get('status') not in ('infrastructure_failed', 'evaluation_failed'):
+            raise RuntimeError(f'isolated evaluator exited {code} after writing a functional verdict')
         print(json.dumps({'output': str(args.output), 'result': result}))
         if result.get('status') in ('infrastructure_failed', 'evaluation_failed'):
             return 2
