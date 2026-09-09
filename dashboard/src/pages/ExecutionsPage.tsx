@@ -1111,9 +1111,13 @@ function ReferenceComparison({
         <tbody>
           <tr>
             <th scope="row">Mean objective score</th>
-            <td>{referenceScore?.toFixed(1) ?? '—'}</td>
-            <td>{localScore?.toFixed(1) ?? '—'}</td>
-            <td>
+            <td data-label="Reference · RC">
+              {referenceScore?.toFixed(1) ?? '—'}
+            </td>
+            <td data-label="Candidate · local">
+              {localScore?.toFixed(1) ?? '—'}
+            </td>
+            <td data-label="Difference">
               {referenceScore === null || localScore === null
                 ? '—'
                 : (localScore - referenceScore).toFixed(1)}
@@ -1124,9 +1128,13 @@ function ReferenceComparison({
               <th scope="row">
                 {metric.id === 'cost' ? 'Subject cost' : metric.label}
               </th>
-              <td>{formatPlanMetricValue(metric, 'baseline')}</td>
-              <td>{formatPlanMetricValue(metric, 'candidate')}</td>
-              <td>{formatPlanMetricDelta(metric)}</td>
+              <td data-label="Reference · RC">
+                {formatPlanMetricValue(metric, 'baseline')}
+              </td>
+              <td data-label="Candidate · local">
+                {formatPlanMetricValue(metric, 'candidate')}
+              </td>
+              <td data-label="Difference">{formatPlanMetricDelta(metric)}</td>
             </tr>
           ))}
         </tbody>
