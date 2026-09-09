@@ -42,3 +42,23 @@ are non-root, read-only, capability-free, bounded in CPU/memory/PIDs, and remove
 after each run. No host security policy was disabled. The optional model path
 also uses bounded tmpfs volumes and an output limit; its snapshot copy was tested
 with no privileged setup or host workspace writes by candidate code.
+
+## DeepSeek Flash C2 smoke
+
+`deepseek-c2-smoke-3` verified actual provider/model `deepseek/deepseek-v4-flash`.
+The model made 12 real command calls, reached `max_turns (12)`, and left an empty
+diff. Private C2 probes failed because create/list functions were absent. Base
+typecheck, tests and build passed; session `completed` is not task success.
+Reported subject duration was 38,182 ms and cost US$0.0034219976, with 15,185 input,
+2,595 output and 203,392 cache-read tokens; cache-write was unreported (`null`).
+This bounded smoke is not a model-quality benchmark or a seven-case campaign.
+
+Attempt 1 was evaluation-invalid: native tool discovery in the live namespace
+returned no contracts, and the bridge incorrectly required an optional cache-write
+counter. The bridge now uses the existing restricted `agent_trigger` dispatcher
+and preserves missing cache counters. Attempt 2 rejected a short case alias before
+invoking any model. Neither attempt is counted as a subject capability failure.
+
+Final local regression validation: 206 Python tests passed using the existing
+Harness release binary; no Rust source changed. Subject syntax and diff checks
+also passed. Full criterion coverage and native Harness integration remain open.

@@ -81,6 +81,8 @@ a 600-second deadline. The only exposed model tool executes shell commands in
 the fixed candidate container, with 30-second/16-KiB limits; nonzero test exits
 are returned as feedback. No host shell, discovery tools or child agents are
 granted. A failed tool bound removes the candidate container.
+The standard `agent_trigger` dispatcher is restricted to that single function;
+its command contract is supplied explicitly, without namespace discovery.
 
 Unlike control runs, model runs use tmpfs for workspace (256 MiB), data and
 runtime state (64 MiB each); no candidate-writable host volume is mounted.
@@ -88,6 +90,7 @@ The trusted controller imports only the base snapshot, then captures a diff,
 transcript and `subject.json` with observed model/provider, separate usage/cost
 fields and duration. Evaluation still runs from the private evaluator container.
 Never substitute requested model identity for missing observed identity.
+Optional cache counters remain `null` when the provider does not report them.
 
 This smoke path is not yet the native Harness scenario lifecycle. Complete
 criterion coverage and native scenario integration remain necessary before

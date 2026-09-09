@@ -77,7 +77,7 @@ export function registerWorker(...worker) {
         return {accepted: true, session_id: request.payload.session_id, turn_id: 'turn-1'}
       }
       if (request.function_id === 'harness::status') return {status: 'completed', expects_wake: false}
-      if (request.function_id === 'harness::metrics') return {complete: true, totals: {input_tokens: 10, output_tokens: 20, cache_read_tokens: 3, cache_write_tokens: 4, reasoning_tokens: 5, cost_usd: process.env.BAD_METRICS ? null : 0.01}}
+      if (request.function_id === 'harness::metrics') return {complete: true, totals: {input_tokens: 10, output_tokens: 20, cache_read_tokens: 3, cache_write_tokens: process.env.NO_CACHE ? null : 4, reasoning_tokens: 5, cost_usd: process.env.BAD_METRICS ? null : 0.01}}
       if (request.function_id === 'session::messages') return {messages: [{message: {role: 'assistant', model: process.env.WRONG_MODEL ? 'other' : 'deepseek-v4-flash', provider: 'deepseek'}}]}
       return {}
     },
@@ -98,7 +98,8 @@ export function registerWorker(...worker) {
             records = [json.loads(line) if line.startswith("{") else line.strip() for line in calls.read_text().splitlines()]
             send = next(row for row in records if isinstance(row, dict) and row.get("function_id") == "harness::send")
             functions = send["payload"]["options"]["functions"]
-            self.assertEqual(functions["expose"], "native")
+            self.assertEqual(functions["expose"], "agent_trigger")
+            self.assertIn(functions["allow"][0], send["payload"]["message"])
             self.assertEqual(len(functions["allow"]), 1)
             self.assertNotIn("engine::functions::list", functions["allow"])
             self.assertEqual(send["payload"]["options"]["max_cost_usd"], 1)
@@ -115,16 +116,18 @@ export function registerWorker(...worker) {
             self.assertTrue(any(isinstance(row, str) and row.startswith(f"exec -w /workspace {CONTAINER} /bin/sh -c pwd") for row in records))
             self.assertEqual((output.stat().st_mode & 0o777), 0o700)
 
-            for name in ("WRONG_MODEL", "BAD_METRICS"):
+            for name in ("NO_CACHE", "WRONG_MODEL", "BAD_METRICS"):
                 failed_output = root / name.lower()
                 failed = self.run_subject(
                     "--container", CONTAINER, "--prompt-file", str(prompt), "--output", str(failed_output),
                     "--engine-url", "ws://127.0.0.1:49134", "--namespace", "my-project",
                     "--model", "deepseek-v4-flash", "--provider", "deepseek", env={**env, name: "1"},
                 )
-                self.assertEqual(failed.returncode, 2, failed.stderr)
+                self.assertEqual(failed.returncode, 0 if name == "NO_CACHE" else 2, failed.stderr)
                 failure = json.loads((failed_output / "subject.json").read_text())
-                self.assertEqual(failure["status"], "evaluation_failed")
+                self.assertEqual(failure["status"], "completed" if name == "NO_CACHE" else "evaluation_failed")
+                if name == "NO_CACHE":
+                    self.assertIsNone(failure["cache_write_tokens"])
                 self.assertTrue(failure["model_invoked"])
 
     def test_isolation_failure_precedes_sdk_import(self):

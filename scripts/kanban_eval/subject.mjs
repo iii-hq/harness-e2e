@@ -119,8 +119,11 @@ async function completeMetrics(iii, namespace, sessionId) {
 
 function requireUsage(metrics) {
   const totals = metrics?.totals ?? {}
-  for (const name of ['input_tokens', 'output_tokens', 'cache_read_tokens', 'cache_write_tokens', 'cost_usd']) {
+  for (const name of ['input_tokens', 'output_tokens', 'cost_usd']) {
     if (!Number.isFinite(totals[name]) || totals[name] < 0) throw new Error(`harness::metrics omitted valid ${name}`)
+  }
+  for (const name of ['cache_read_tokens', 'cache_write_tokens']) {
+    if (totals[name] != null && (!Number.isFinite(totals[name]) || totals[name] < 0)) throw new Error(`harness::metrics returned invalid ${name}`)
   }
   return totals
 }
@@ -211,7 +214,7 @@ async function main() {
     evidence.cost_cap_usd = 1
     const request = {
       session_id: sessionId,
-      message: prompt,
+      message: `${prompt}\n\nExecution environment: your repository is /workspace. Dependencies are installed; external networking is disabled. Execute shell commands through agent_trigger with {"function":"${functionId}","description":"Inspect repository","payload":{"command":"pwd"}}. This function executes commands, it does not delegate tasks. Each command is limited to 30 seconds and 16 KiB of output. Inspect, edit and test the repository using this tool; describing a tool call does not execute it.`,
       model: args.model,
       provider: args.provider,
       idempotency_key: `kanban-eval:${nonce}`,
@@ -223,7 +226,7 @@ async function main() {
         max_validation_retries: 0,
         max_cost_usd: 1,
         functions: {
-          expose: 'native',
+          expose: 'agent_trigger',
           allow: [functionId],
           deny: ['harness::spawn', 'shell::*', 'coder::*', 'compose::*', 'router::*', 'harness::send', 'harness::run'],
         },
