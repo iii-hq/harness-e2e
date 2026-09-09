@@ -9,7 +9,6 @@ mod plans;
 mod presenter;
 mod proxy;
 mod read_model;
-mod release_control;
 mod store;
 
 use std::net::SocketAddr;
@@ -304,7 +303,7 @@ mod tests {
         }
     }
 
-    pub(super) fn write_report(output: &Path) {
+    fn write_report(output: &Path) {
         let mut report = report();
         let manifest = manifest(&report);
         report.write_to(output, &manifest).unwrap();

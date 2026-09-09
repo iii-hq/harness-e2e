@@ -21,7 +21,6 @@ use super::read_model::{
     EvaluatedVersionsRequest, EvaluatedVersionsResponse, TestHistoryRequest, TestHistoryResponse,
     TestVersionGetRequest, TestVersionResult, TestsListRequest, TestsListResponse,
 };
-use super::release_control::{PullRequest, PullResponse};
 use super::store::read_stored_run;
 use super::RunRequest;
 use crate::catalog::CatalogModel;
@@ -36,7 +35,6 @@ pub(super) const TEST_VERSION_GET: &str = "e2e::dashboard::test-version-get";
 pub(super) const TEST_HISTORY_GET: &str = "e2e::dashboard::test-history-get";
 pub(super) const CATALOG_GET: &str = "e2e::dashboard::catalog-get";
 pub(super) const LOCAL_SCENARIO_CREATE: &str = "e2e::dashboard::local-scenario-create";
-pub(super) const RELEASE_CONTROL_PULL: &str = "e2e::dashboard::release-control-pull";
 pub(super) const PLAN_CONTROL: &str = "e2e::dashboard::plan-control";
 pub(super) const PLANS_LIST: &str = "e2e::dashboard::plans-list";
 pub(super) const PLAN_GET: &str = "e2e::dashboard::plan-get";
@@ -274,22 +272,6 @@ pub(super) fn connect(url: &str) -> Arc<IIIClient> {
 }
 
 pub(super) fn register_functions(iii: &IIIClient, controller: Arc<Controller>) {
-    register(
-        iii,
-        RELEASE_CONTROL_PULL,
-        "Pull recent Release Control executions from their GitHub Actions artifacts into the runs directory.",
-        {
-            let controller = controller.clone();
-            RegisterFunction::new_async(move |request: PullRequest| {
-                let controller = controller.clone();
-                async move {
-                    release_control_pull(&controller, request)
-                        .await
-                        .map_err(|error| handler_error(format!("{error:#}")))
-                }
-            })
-        },
-    );
     register(
         iii,
         EXECUTIONS_LIST,
@@ -840,13 +822,6 @@ pub(super) async fn local_scenario_create(
     controller.create_local_scenario(request).await
 }
 
-pub(super) async fn release_control_pull(
-    controller: &Controller,
-    request: PullRequest,
-) -> Result<PullResponse> {
-    controller.pull_release_control(request).await
-}
-
 pub(super) fn function_ids(listed: &Value) -> impl Iterator<Item = &str> {
     listed
         .as_array()
@@ -889,18 +864,6 @@ fn execution_haystack(execution: &Value) -> String {
             .unwrap_or_default(),
         string_field(execution, "completed_at"),
         string_field(execution, "started_at"),
-        execution
-            .pointer("/release_control/execution_id")
-            .and_then(Value::as_str)
-            .unwrap_or_default(),
-        execution
-            .pointer("/release_control/profile")
-            .and_then(Value::as_str)
-            .unwrap_or_default(),
-        execution
-            .pointer("/release_control/campaign_id")
-            .and_then(Value::as_str)
-            .unwrap_or_default(),
     ]
     .join(" ")
     .to_lowercase()

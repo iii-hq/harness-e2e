@@ -193,55 +193,36 @@ port only on a trusted network. Use `--listen 127.0.0.1:4173` when access should
 remain local. See [dashboard/README.md](dashboard/README.md) for view-only mode
 and the complete dashboard behavior.
 
-### Release Control executions
+### Compare a local change with Release Control
 
-Executions dispatched by Release Control run in GitHub Actions, and their
-complete evidence survives only in the run's artifacts (kept for 90 days). The
-Executions page offers **sync release control** in local and worker mode: the
-server lists the ten most recent completed `exact-stack-e2e.yml` runs, downloads
-each root observation bundle, and installs every group's native run directory
-into the runs directory unchanged, validated by the same reader the dashboard
-uses. Groups are reported one by one: `imported`, `already present`,
-`unreadable` (the reader rejected the report; the reason and the runner version
-are shown), `not importable` (fault-injection groups have no native run, and a
-group that failed for infrastructure reasons without leaving metrics — no
-`results.json`, or no tokens, cost or session metrics in any run — is discarded
-rather than shown empty), `expired`, or `failed` (a download or install error;
-retried on the next click). In the Executions ledger the runs of one Release
-Control execution are grouped under their plan (profile · campaign · execution
-id) with additive figures, so a dispatch reads as one block.
+The Console's Executions page can read the team's Release Control history
+through the authenticated Release Control browser bridge. Keep the RC tab open,
+enable its local Harness connection, and connect it to the same personal Engine
+as the Console. The bridge needs the E2E read functions from the companion
+Release Control change. No GitHub token or artifact synchronization is needed.
 
-Each synced execution is also filed under a local plan that mirrors its
-Release Control profile — `Release Control · Regression`, created from the same
-template the first time, one per profile and subject model. The execution's
-groups become the plan's slots and are verified exactly like local children
-(same model and evaluator, the pinned case, seed and scenario contract), so
-Plans shows the first complete execution as the baseline and later ones as
-candidates, and the comparison page pairs them; an execution with a discarded or
-mismatching group stays listed as incomplete with the reason on that slot.
-Running the mirror plan locally (Save and run) adds a candidate measured on
-your own stack next to what Release Control measured. One click downloads for about 90 seconds and reports how many older
-executions are still pending; `release-control-pulls.json` in the runs directory
-remembers which runs were already pulled, so the next click continues where the
-previous one stopped. Delete a run directory and the next click pulls it again.
+Remote and local executions are shown together with their origin. Select a
+reference and a local result to compare their measurements. Missing reports and
+metrics remain visible as unavailable; reading history creates no local plan.
+The comparison runs locally and sends no local results to Release Control.
 
-Downloading artifacts needs a GitHub token that can read Actions on the
-repository, even though the repository is public: set
-`HARNESS_E2E_GITHUB_TOKEN` (or `GITHUB_TOKEN` / `GH_TOKEN`) in the dashboard's
-environment. The standalone dashboard also accepts a logged-in `gh`; in worker
-mode the token goes into the worker's Compose environment. The function is
-`e2e::dashboard::release-control-pull` (`POST /api/dashboard/release-control/pull`
-in the standalone server) and takes `{"limit": 10}` or
-`{"execution_id": "<uuid>"}`.
+Choose **run locally** on a remote reference to save its materialized test
+parameters as a local plan and run them against your current Harness. Repeating
+that action reuses the saved plan and creates another local execution. The
+reference's scenarios, rounds, repetitions and retry settings come from the
+execution's materialization, not from the current profile with the same name.
+The current local scenario implementations and Harness are used deliberately:
+this is a personal experiment, not an exact-stack certification. No build/Git
+tracking or matching remote stack is required. Fault-injection groups still
+require the protected executor; they are not silently omitted. References without
+shard seeds for every scenario cannot be reproduced. Differences in local
+scenario version or case identity are shown as advisory information.
 
-The results of a Release Control execution are written by the released
-`harness-e2e` worker pinned in its stack lock, which may trail this
-repository's result contract. For now the reader does not gate on
-`schema_version` or on the result-contract fingerprint: a report is read when
-it decodes into the current shape and validates structurally, and the version
-it carries stays visible in the execution's identity band. A report with fields
-the current shape does not know (schema 4 and earlier) is still reported as
-`unreadable`.
+Results stay in the local plan store. The RC execution remains a reference,
+never a locally recreated official execution. Native result validation remains
+strict; the remote data is read through the RC API rather than installed as a
+native report. Full remote evidence is available through the execution's GitHub
+link, subject to its retention; this flow does not download an evidence archive.
 
 ## Compose lifecycle
 

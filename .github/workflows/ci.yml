@@ -51,6 +51,7 @@ jobs:
         run: |
           pnpm --dir dashboard exec playwright install --with-deps chromium
           pnpm --dir dashboard test:profiles
+          pnpm --dir dashboard test:references
       - name: Verify repository independence
         run: |
           cargo metadata --locked --format-version 1 --no-deps > metadata.json

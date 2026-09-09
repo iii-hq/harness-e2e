@@ -12,7 +12,9 @@ use crate::artifact::{self, ArtifactReference};
 use crate::journal::{
     ExecutionJournal, ExecutionJournalEvent, ExecutionJournalEventKind, JournalProgress,
 };
-use crate::report::{CompletionState, TechnicalState, SCORING_PROFILE_SHA256};
+use crate::report::{
+    CompletionState, TechnicalState, RESULT_CONTRACT_SHA256, SCORING_PROFILE_SHA256,
+};
 
 #[cfg(test)]
 mod tests;
@@ -80,12 +82,11 @@ pub(super) fn read(root: &Path, execution_id: &str) -> Result<Option<LiveProgres
     }
     let journal = ExecutionJournal::open(root)?;
     let header = journal.read_header()?;
-    // The result-contract fingerprint is not a gate for now (see
-    // `E2eReport::read_from`); identity and scoring profile still are.
     if header.execution_id != execution_id
+        || header.result_contract_sha256 != RESULT_CONTRACT_SHA256
         || header.scoring_profile_sha256 != SCORING_PROFILE_SHA256
     {
-        bail!("live progress identity or scoring profile mismatch");
+        bail!("live progress identity or contract mismatch");
     }
     let verified = journal.replay()?;
     // Read exactly the verified prefix. A writer may append while this read is

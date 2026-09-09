@@ -12,7 +12,6 @@ use url::Url;
 use super::bus::DashboardEvents;
 use super::plans::{LocalPlan, PlanCreateRequest, PlanRunRole, PlanUpdateRequest};
 use super::read_model::DashboardReadModel;
-use super::release_control::{self, PullRequest, PullResponse};
 use super::store::write_metadata;
 use super::{
     ApiError, DashboardArgs, Defaults, JobStatus, JobView, RunMetadata, RunRequest, RunSnapshot,
@@ -39,7 +38,6 @@ pub(super) struct Controller {
     state: Mutex<ControllerState>,
     read_model: RwLock<Option<Arc<DashboardReadModel>>>,
     events: Option<Arc<DashboardEvents>>,
-    pull_lock: Mutex<()>,
 }
 
 impl Controller {
@@ -92,7 +90,6 @@ impl Controller {
             state: Mutex::new(ControllerState { job: None }),
             read_model: RwLock::new(None),
             events,
-            pull_lock: Mutex::new(()),
         });
         if let Some(control) = controller.control.as_ref() {
             for record in control.records().await {
@@ -128,43 +125,6 @@ impl Controller {
             .context("the E2E control plane is not available")?
             .create_local_scenario(request)
             .await
-    }
-
-    /// One sync at a time: the button is idempotent, so a second click while
-    /// one runs is answered, not queued.
-    pub(super) async fn pull_release_control(&self, request: PullRequest) -> Result<PullResponse> {
-        let _guard = self
-            .pull_lock
-            .try_lock()
-            .map_err(|_| anyhow::anyhow!("a Release Control sync is already running"))?;
-        let mut response = release_control::pull(&self.runs_dir, request).await?;
-        // Every pulled execution is mirrored into the local plan that stands
-        // for its profile, so Plans shows it and comparisons can pair it.
-        for execution in &mut response.executions {
-            match self
-                .plan_store
-                .adopt_release_control(release_control::adoption_of(execution))
-                .await
-            {
-                Ok(Some(adopted)) => {
-                    execution.plan_id = Some(adopted.plan_id);
-                    execution.plan_execution_id = Some(adopted.plan_execution_id);
-                }
-                Ok(None) => {}
-                Err(error) => {
-                    tracing::warn!(
-                        execution_id = %execution.execution_id,
-                        error = %format!("{error:#}"),
-                        "cannot mirror a Release Control execution into a local plan"
-                    );
-                    execution.plan_error = Some(format!("{error:#}"));
-                }
-            }
-        }
-        self.invalidate_summaries().await;
-        self.emit_change("release-control-pull", "release-control")
-            .await;
-        Ok(response)
     }
 
     pub(super) async fn snapshot(&self, after: Option<u64>) -> Result<RunSnapshot> {

@@ -90,15 +90,17 @@ target/debug/harness-e2e dashboard \
 runner, and does not register its run, cancel, or catalog HTTP endpoints. This
 is the presentation mode for executions submitted through `e2e::*`.
 
-In local and worker mode the Executions page offers **sync release control**:
-it downloads the newest Release Control executions from their GitHub Actions
-artifacts and installs each group's native run into the runs directory, so
-Release Control results are browsed offline exactly like local ones. It needs
-`HARNESS_E2E_GITHUB_TOKEN` (or `GITHUB_TOKEN` / `GH_TOKEN`, or a logged-in
-`gh`); the root README lists the outcomes it reports. The ledger keeps the 100
-most recent executions and a Release Control execution contributes one run per
-group, so point a dedicated `--runs-dir` at synced history when local runs must
-stay visible.
+In the Console, the Executions page combines local results with read-only
+Release Control history through the RC browser bridge. Keep the authenticated
+RC tab connected to the same personal Engine. Remote results are fetched on
+demand; they are not installed into the native runs directory and no GitHub
+token is needed. Origin labels distinguish team results from local experiments.
+
+Selecting **run locally** imports the selected execution's materialized test
+parameters only when requested and starts a local plan. Later runs reuse that
+plan. The local Harness and scenario implementations may differ from the remote
+reference; the comparison is descriptive. No local execution is posted to RC.
+A disconnected RC bridge leaves the existing local execution tools available.
 
 The dashboard executes itself as an isolated child process, so changing and
 restarting the Harness never recompiles the E2E client. `serve` is an alias for
@@ -238,7 +240,7 @@ common detail page.
 
 Creation, reading, updates and starts use the `plan-*` HTTP/iii APIs. Starting a
 plan requires a caller idempotency key. `POST /api/dashboard/plans/control` and
-`e2e::dashboard::plan-control` provide requirements, export, execution lookup and
+`e2e::dashboard::plan-control` provide requirements, explicit reference import, export, execution lookup and
 cancellation. The former profile-plan endpoint, duplicate creation/start actions,
 native plan-context tracking and manual-route alias have been removed.
 

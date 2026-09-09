@@ -14,6 +14,7 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "screenshots": "node scripts/screenshots.mjs",
+    "test:references": "node scripts/reference-comparison.browser.mjs",
     "test:profiles": "node scripts/profile-plans.browser.mjs"
   },
   "dependencies": {
