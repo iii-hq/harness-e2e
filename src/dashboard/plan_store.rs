@@ -1042,11 +1042,16 @@ fn materialize_slots(plan: &SavedPlan, owner: &str) -> Result<Vec<Slot>> {
             let scenario_ids = group["scenarios"]
                 .as_array()
                 .context("Native scenarios required")?;
+            let group_judge_required = scenario_ids.iter().any(|id| {
+                plan.snapshot.cases.iter().any(|case| {
+                    case["scenario_id"].as_str() == id.as_str() && case["judge_required"] == true
+                })
+            });
             let key = format!("{owner}:round-{}:{group_id}", round + 1);
             let c = &plan.plan;
             let request: RunRequest = serde_json::from_value(
                 json!({"idempotency_key": key, "label": format!("{} · round {} · {}", c.label, round+1, group_id), "lane": campaign["lane"], "model": c.model, "provider": c.provider,
-                "judge_model": if c.judge_model.is_empty() { None } else { Some(&c.judge_model) }, "judge_provider": if c.judge_provider.is_empty() { None } else { Some(&c.judge_provider) },
+                "judge_model": group_judge_required.then_some(&c.judge_model), "judge_provider": group_judge_required.then_some(&c.judge_provider),
                 "scenarios": scenario_ids, "runs": 1, "seed": c.seed, "technical_retries": group["technical_retries"]}),
             )?;
             crate::control::validate_run_request(&request)?;
@@ -1119,15 +1124,13 @@ fn update_slot(
         report.subject.model == config.model && report.subject.provider == config.provider,
         "Execution model identity differs"
     );
-    ensure!(
+    validate_evaluator_identity(
         report
             .judge
             .as_ref()
-            .map(|j| (j.model.as_str(), j.provider.as_str()))
-            == (!config.judge_model.is_empty())
-                .then_some((config.judge_model.as_str(), config.judge_provider.as_str())),
-        "Evaluator identity differs"
-    );
+            .map(|judge| (judge.model.as_str(), judge.provider.as_str())),
+        &slot.request,
+    )?;
     let requested: Vec<_> = slot.request["scenarios"]
         .as_array()
         .context("Native request scenarios are absent")?
@@ -1181,6 +1184,18 @@ fn update_slot(
         && aggregate.observed_runs == 1
         && aggregate.technical_invalid_runs == 0
         && aggregate.undetermined_runs == 0;
+    Ok(())
+}
+
+fn validate_evaluator_identity(actual: Option<(&str, &str)>, admitted: &Value) -> Result<()> {
+    let model = admitted["judge_model"].as_str();
+    let provider = admitted["judge_provider"].as_str();
+    ensure!(
+        model.is_some() == provider.is_some(),
+        "Admitted evaluator identity is incomplete"
+    );
+    let expected = model.zip(provider);
+    ensure!(actual == expected, "Evaluator identity differs");
     Ok(())
 }
 fn verify_system_identity(pinned: &mut Option<Value>, report: &E2eReport) -> Result<()> {
@@ -1954,6 +1969,17 @@ mod tests {
             json!(["registry_implementation", "registry_verification"])
         );
         assert!(grouped[0].request["seed"].is_null());
+        assert!(grouped[0].request["judge_model"].is_null());
+        assert!(grouped[0].request["judge_provider"].is_null());
+        let planning = execution
+            .slots
+            .iter()
+            .find(|slot| slot.scenario_id == "registry_planning")
+            .unwrap();
+        assert_eq!(planning.request["judge_model"], "judge");
+        assert_eq!(planning.request["judge_provider"], "provider");
+        assert!(validate_evaluator_identity(None, &planning.request).is_err());
+        validate_evaluator_identity(None, &grouped[0].request).unwrap();
 
         let detail = manager.execution_detail(&id).unwrap().unwrap();
         assert_eq!(detail["native_execution_ids"].as_array().unwrap().len(), 3);
@@ -1974,6 +2000,10 @@ mod tests {
                 .iter()
                 .find(|scenario| scenario.scenario_id == slot.scenario_id)
                 .unwrap();
+            assert_eq!(
+                report.judge.is_some(),
+                slot.scenario_id == "registry_planning"
+            );
             let expected = snapshot
                 .cases
                 .iter()
