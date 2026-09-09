@@ -38,7 +38,7 @@ use crate::scenarios::{
 };
 use crate::wire::{
     ControlPlaneEvidence, FunctionPolicy, MessageInput, Model, SendOptions, SendRequest,
-    SendResponse, SessionInit, StatusReport,
+    SendResponse, SessionInit, StatusReport, TurnStatus,
 };
 use crate::workflow::{
     adaptive_runtime, composite_definition, composite_descriptor_catalog, composite_runtime,
@@ -4332,8 +4332,13 @@ async fn execute(
             {
                 Ok(metrics) => metrics,
                 Err(error) => {
+                    let failure = subject_failure(FailurePhase::Execute, error.to_string());
                     capture_partial_observation(context, session_id, report).await;
-                    return Err(subject_failure(FailurePhase::Execute, error.to_string()));
+                    capture_failed_subject_assets(
+                        context, capture, case, session_id, output, control, report,
+                    )
+                    .await;
+                    return Err(failure);
                 }
             },
         );
@@ -4388,82 +4393,16 @@ async fn execute(
     report.transcript = Some(observation.transcript.clone());
     report.metrics = Some(observation.metrics.clone());
     if let Some(capture) = capture {
-        let captured = match capture(context, &observation, run_id).await {
-            Ok(captured) => captured,
-            Err(error) => {
-                let mut message = format!(
-                    "scenario '{}' asset capture was unreadable: {error:#}",
-                    spec.id
-                );
-                let mut evaluation = asset::failed_capture_evaluation(
-                    case,
-                    crate::assessment::AssetValidationOutcome::Unreadable,
-                    &message,
-                );
-                match asset::persist_before_cleanup(
-                    output,
-                    &report.run_id,
-                    &report.attempt_id,
-                    &mut evaluation,
-                ) {
-                    Ok(manifest) => {
-                        report.asset_capture_manifest = Some(manifest.clone());
-                        report.evidence.push(manifest);
-                    }
-                    Err(persist_error) => {
-                        message.push_str(&format!(
-                            "; persist unreadable asset inventory: {persist_error:#}"
-                        ));
-                    }
-                }
-                report.asset_assessments = evaluation.assessments;
-                report.asset_redaction.merge(evaluation.redaction);
-                return Err(RunFailure::new(
-                    RunStatus::InfrastructureError,
-                    FailurePhase::Collect,
-                    message,
-                ));
-            }
-        };
-        let mut evaluation =
-            asset::evaluate_assets(case, captured.clone(), AssetCaptureLimits::default()).map_err(
-                |error| {
-                    RunFailure::new(
-                        RunStatus::InfrastructureError,
-                        FailurePhase::Evaluate,
-                        format!(
-                            "scenario '{}' deterministic asset validation failed: {error:#}",
-                            spec.id
-                        ),
-                    )
-                },
-            )?;
-        let manifest = match asset::persist_before_cleanup(
+        let captured = capture_assets_before_cleanup(
+            context,
+            capture,
+            &observation,
+            spec.id,
+            run_id,
             output,
-            &report.run_id,
-            &report.attempt_id,
-            &mut evaluation,
-        ) {
-            Ok(manifest) => manifest,
-            Err(error) => {
-                report.deliverables = evaluation.deliverables;
-                report.asset_assessments = evaluation.assessments;
-                report.asset_redaction.merge(evaluation.redaction);
-                return Err(RunFailure::new(
-                    RunStatus::InfrastructureError,
-                    FailurePhase::Collect,
-                    format!(
-                        "scenario '{}' persist asset evidence before cleanup: {error:#}",
-                        spec.id
-                    ),
-                ));
-            }
-        };
-        report.deliverables = evaluation.deliverables;
-        report.asset_assessments = evaluation.assessments;
-        report.asset_redaction.merge(evaluation.redaction);
-        report.asset_capture_manifest = Some(manifest.clone());
-        report.evidence.push(manifest);
+            report,
+        )
+        .await?;
         report.scenario_measurements = captured_measurements(&captured).map_err(|error| {
             RunFailure::new(
                 RunStatus::InfrastructureError,
@@ -4624,6 +4563,96 @@ fn score_assessment_outcome(awarded: Option<u8>, possible: u8) -> AssessmentOutc
     }
 }
 
+async fn capture_assets_before_cleanup(
+    context: &E2eContext,
+    capture: ScenarioDeliverableCapture,
+    observation: &ScenarioObservation,
+    scenario_id: &str,
+    run_id: &str,
+    output: &Path,
+    report: &mut E2eRunReport,
+) -> Result<Vec<crate::scenarios::CapturedDeliverable>, RunFailure> {
+    let captured = match capture(context, observation, run_id).await {
+        Ok(captured) => captured,
+        Err(error) => {
+            let mut message = format!(
+                "scenario '{}' asset capture was unreadable: {error:#}",
+                scenario_id
+            );
+            let mut evaluation = asset::failed_capture_evaluation(
+                &observation.case,
+                crate::assessment::AssetValidationOutcome::Unreadable,
+                &message,
+            );
+            match asset::persist_before_cleanup(
+                output,
+                &report.run_id,
+                &report.attempt_id,
+                &mut evaluation,
+            ) {
+                Ok(manifest) => {
+                    report.asset_capture_manifest = Some(manifest.clone());
+                    report.evidence.push(manifest);
+                }
+                Err(persist_error) => {
+                    message.push_str(&format!(
+                        "; persist unreadable asset inventory: {persist_error:#}"
+                    ));
+                }
+            }
+            report.asset_assessments = evaluation.assessments;
+            report.asset_redaction.merge(evaluation.redaction);
+            return Err(RunFailure::new(
+                RunStatus::InfrastructureError,
+                FailurePhase::Collect,
+                message,
+            ));
+        }
+    };
+    let mut evaluation = asset::evaluate_assets(
+        &observation.case,
+        captured.clone(),
+        AssetCaptureLimits::default(),
+    )
+    .map_err(|error| {
+        RunFailure::new(
+            RunStatus::InfrastructureError,
+            FailurePhase::Evaluate,
+            format!(
+                "scenario '{}' deterministic asset validation failed: {error:#}",
+                scenario_id
+            ),
+        )
+    })?;
+    let manifest = match asset::persist_before_cleanup(
+        output,
+        &report.run_id,
+        &report.attempt_id,
+        &mut evaluation,
+    ) {
+        Ok(manifest) => manifest,
+        Err(error) => {
+            report.deliverables = evaluation.deliverables;
+            report.asset_assessments = evaluation.assessments;
+            report.asset_redaction.merge(evaluation.redaction);
+            return Err(RunFailure::new(
+                RunStatus::InfrastructureError,
+                FailurePhase::Collect,
+                format!(
+                    "scenario '{}' persist asset evidence before cleanup: {error:#}",
+                    scenario_id
+                ),
+            ));
+        }
+    };
+    report.deliverables = evaluation.deliverables;
+    report.asset_assessments = evaluation.assessments;
+    report.asset_redaction.merge(evaluation.redaction);
+    report.asset_capture_manifest = Some(manifest.clone());
+    report.evidence.push(manifest);
+    Ok(captured)
+}
+
 fn prepare_filesystem_root(spec: &ScenarioSpec) -> Result<Option<serde_json::Value>, RunFailure> {
     let Some(root) = spec.filesystem_root.as_ref() else {
         return Ok(None);
@@ -4685,6 +4714,113 @@ async fn capture_partial_observation(
             "could not capture partial E2E transcript"
         ),
     }
+}
+
+async fn capture_failed_subject_assets(
+    context: &E2eContext,
+    capture: Option<ScenarioDeliverableCapture>,
+    case: &ScenarioCase,
+    session_id: &str,
+    output: &Path,
+    control: Option<&SuiteControl>,
+    report: &mut E2eRunReport,
+) {
+    let Some(capture) = capture else {
+        return;
+    };
+    if control.is_some_and(|control| *control.cancellation.borrow()) {
+        return;
+    }
+    let status = match context
+        .trigger::<_, Option<StatusReport>>(
+            "harness::status",
+            json!({ "session_id": session_id, "verbose": true }),
+        )
+        .await
+    {
+        Ok(Some(status)) => status,
+        Ok(None) => return,
+        Err(error) => {
+            tracing::warn!(
+                session_id,
+                %error,
+                "could not confirm failed E2E subject was quiescent before asset capture"
+            );
+            return;
+        }
+    };
+    capture_confirmed_failed_subject_assets(
+        context,
+        capture,
+        case,
+        &status,
+        control.is_some_and(|control| *control.cancellation.borrow()),
+        output,
+        report,
+    )
+    .await;
+}
+
+async fn capture_confirmed_failed_subject_assets(
+    context: &E2eContext,
+    capture: ScenarioDeliverableCapture,
+    case: &ScenarioCase,
+    status: &StatusReport,
+    cancelled: bool,
+    output: &Path,
+    report: &mut E2eRunReport,
+) {
+    let Some(observation) = failed_subject_observation(case, report, status, cancelled) else {
+        return;
+    };
+    report.terminal_status = Some(status.clone());
+    let attempt_id = report.attempt_id.clone();
+    if let Err(error) = capture_assets_before_cleanup(
+        context,
+        capture,
+        &observation,
+        case.scenario_id.as_str(),
+        &attempt_id,
+        output,
+        report,
+    )
+    .await
+    {
+        tracing::warn!(
+            scenario = case.scenario_id,
+            session_id = report.session_id,
+            error = %error.message,
+            "could not preserve assets from failed E2E subject"
+        );
+    }
+}
+
+fn failed_subject_observation(
+    case: &ScenarioCase,
+    report: &E2eRunReport,
+    status: &StatusReport,
+    cancelled: bool,
+) -> Option<ScenarioObservation> {
+    let metrics = report.metrics.as_ref()?;
+    let transcript = report.transcript.as_ref()?;
+    if cancelled
+        || !case.deliverable_contract.capture_before_cleanup
+        || !metrics.complete
+        || status.status != TurnStatus::Failed
+        || !status.pending_function_calls.is_empty()
+    {
+        return None;
+    }
+    let mut incomplete_metrics = serde_json::to_value(metrics).ok()?;
+    incomplete_metrics["complete"] = false.into();
+    let metrics = serde_json::from_value(incomplete_metrics).ok()?;
+    Some(ScenarioObservation {
+        case: case.clone(),
+        metrics,
+        transcript: transcript.clone(),
+        response: common::final_response(transcript),
+        deliverables: Vec::new(),
+    })
 }
 
 fn is_resource_limit(message: &str) -> bool {
@@ -4873,7 +5009,265 @@ fn criterion_reports(spec: &ScenarioSpec, awards: Vec<CriterionAward>) -> Vec<Cr
 mod tests {
     use super::*;
     use crate::report::EvaluationDimension;
-    use crate::scenarios::CapturedDeliverableContent;
+    use crate::scenarios::{
+        ArtifactExpectation, CapturedDeliverable, CapturedDeliverableContent, CapturedInvariant,
+        InvariantSpec, ProvenanceEvidence,
+    };
+    use crate::wire::{
+        SessionMetricsPayload, SessionMetricsResponse, SessionUsageTotals, StatusReportPayload,
+    };
+
+    fn terminal_metrics(complete: bool) -> SessionMetricsResponse {
+        SessionMetricsResponse::from_normalized(SessionMetricsPayload {
+            root_session_id: "session".into(),
+            complete,
+            totals: SessionUsageTotals {
+                sessions: 1,
+                turns: 69,
+                function_calls: 82,
+                ..Default::default()
+            },
+            by_session: Vec::new(),
+            traces: None,
+        })
+    }
+
+    fn terminal_status(status: TurnStatus, pending: Vec<String>) -> StatusReport {
+        StatusReport::from_normalized(StatusReportPayload {
+            session_id: "session".into(),
+            turn_id: Some("turn".into()),
+            status,
+            step: 69,
+            turn_count: 69,
+            max_turns: 100,
+            pending_function_calls: pending,
+            children: Vec::new(),
+            queued: Vec::new(),
+            expects_wake: false,
+            result_error: Some("token budget exhausted".into()),
+            validation_retries: 0,
+            transient_resumes: 0,
+        })
+    }
+
+    fn failed_capture_case() -> ScenarioCase {
+        ScenarioCase::new(
+            "failed_capture",
+            1,
+            1,
+            json!({}),
+            ComplexityProfile::default(),
+            vec![],
+            DeliverableContract {
+                artifacts: vec![ArtifactExpectation {
+                    id: "result".into(),
+                    kind: "json".into(),
+                    media_type: "application/json".into(),
+                    schema: json!({"type": "object"}),
+                    max_size_bytes: 1024,
+                }],
+                invariants: vec![InvariantSpec {
+                    id: "preserved".into(),
+                    description: "The partial result is preserved.".into(),
+                }],
+                provenance_required: true,
+                capture_before_cleanup: true,
+            },
+        )
+        .unwrap()
+    }
+
+    fn partial_asset_capture<'a>(
+        _context: &'a E2eContext,
+        observation: &'a ScenarioObservation,
+        attempt_id: &'a str,
+    ) -> crate::scenarios::DeliverableCaptureFuture<'a> {
+        Box::pin(async move {
+            assert!(!observation.metrics.complete);
+            assert_eq!(attempt_id, "attempt");
+            Ok(vec![CapturedDeliverable {
+                id: "result".into(),
+                kind: "json".into(),
+                content: json!({"partial": true}).into(),
+                invariants: vec![CapturedInvariant {
+                    id: "preserved".into(),
+                    passed: true,
+                    reason: "captured before cleanup".into(),
+                }],
+                provenance: vec![ProvenanceEvidence {
+                    kind: "function_call".into(),
+                    source_id: "capture-1".into(),
+                    relation: "created".into(),
+                }],
+            }])
+        })
+    }
+
+    fn failed_asset_capture<'a>(
+        _context: &'a E2eContext,
+        observation: &'a ScenarioObservation,
+        attempt_id: &'a str,
+    ) -> crate::scenarios::DeliverableCaptureFuture<'a> {
+        Box::pin(async move {
+            assert!(!observation.metrics.complete);
+            assert_eq!(attempt_id, "attempt");
+            anyhow::bail!("secondary capture failure")
+        })
+    }
+
+    fn resource_limited_report() -> E2eRunReport {
+        let mut report = test_run_report();
+        report.metrics = Some(terminal_metrics(true));
+        report.transcript = Some(json!([
+            {"role": "assistant", "content": "partial implementation"}
+        ]));
+        report.finish(RunStatus::ResourceLimit);
+        report.score = Some(17);
+        report.objective_score = Some(17);
+        report
+    }
+
+    #[tokio::test]
+    async fn resource_failure_preserves_partial_assets_without_changing_outcome() {
+        let context = E2eContext::from_client(iii_sdk::IIIClient::new("ws://127.0.0.1:1"));
+        let output = tempfile::tempdir().unwrap();
+        let mut report = resource_limited_report();
+
+        capture_confirmed_failed_subject_assets(
+            &context,
+            partial_asset_capture,
+            &failed_capture_case(),
+            &terminal_status(TurnStatus::Failed, Vec::new()),
+            false,
+            output.path(),
+            &mut report,
+        )
+        .await;
+
+        assert_eq!(report.status, RunStatus::ResourceLimit);
+        assert_eq!(
+            report.completion,
+            crate::report::CompletionState::TaskIncomplete
+        );
+        assert_eq!(report.technical, crate::report::TechnicalState::Valid);
+        assert_eq!(report.score, Some(17));
+        assert_eq!(report.objective_score, Some(17));
+        assert_eq!(
+            report.terminal_status.as_ref().map(|status| status.status),
+            Some(TurnStatus::Failed)
+        );
+        assert!(report.scenario_measurements.is_empty());
+        assert_eq!(report.deliverables.len(), 1);
+        assert_eq!(report.evidence.len(), 1);
+        report.evidence[0].verify(output.path()).unwrap();
+    }
+
+    #[tokio::test]
+    async fn capture_failure_remains_secondary_to_resource_failure() {
+        let context = E2eContext::from_client(iii_sdk::IIIClient::new("ws://127.0.0.1:1"));
+        let output = tempfile::tempdir().unwrap();
+        let mut report = resource_limited_report();
+
+        capture_confirmed_failed_subject_assets(
+            &context,
+            failed_asset_capture,
+            &failed_capture_case(),
+            &terminal_status(TurnStatus::Failed, Vec::new()),
+            false,
+            output.path(),
+            &mut report,
+        )
+        .await;
+
+        assert_eq!(report.status, RunStatus::ResourceLimit);
+        assert_eq!(
+            report.completion,
+            crate::report::CompletionState::TaskIncomplete
+        );
+        assert_eq!(report.technical, crate::report::TechnicalState::Valid);
+        assert_eq!(report.score, Some(17));
+        assert_eq!(report.objective_score, Some(17));
+        assert_eq!(
+            report.terminal_status.as_ref().map(|status| status.status),
+            Some(TurnStatus::Failed)
+        );
+        assert!(report.scenario_measurements.is_empty());
+        assert!(report.deliverables.is_empty());
+        assert_eq!(report.evidence.len(), 1);
+        report.evidence[0].verify(output.path()).unwrap();
+    }
+
+    #[test]
+    fn terminal_failed_subject_is_captured_as_incomplete_without_mutating_report_metrics() {
+        let case = ScenarioId::RegistryImplementation
+            .materialize("failed-capture", 1)
+            .unwrap()
+            .case;
+        let mut report = test_run_report();
+        report.metrics = Some(terminal_metrics(true));
+        report.transcript = Some(json!([
+            {"role": "assistant", "content": "partial implementation"}
+        ]));
+        let status = terminal_status(TurnStatus::Failed, Vec::new());
+
+        let observation = failed_subject_observation(&case, &report, &status, false).unwrap();
+
+        assert!(report.metrics.as_ref().unwrap().complete);
+        assert!(!observation.metrics.complete);
+        assert_eq!(observation.transcript, report.transcript.clone().unwrap());
+        assert!(observation.deliverables.is_empty());
+    }
+
+    #[test]
+    fn failed_subject_capture_requires_complete_observation_and_quiescent_failure() {
+        let case = ScenarioId::RegistryImplementation
+            .materialize("failed-capture-gates", 1)
+            .unwrap()
+            .case;
+        let mut report = test_run_report();
+        report.metrics = Some(terminal_metrics(true));
+        report.transcript = Some(json!([]));
+
+        assert!(failed_subject_observation(
+            &case,
+            &report,
+            &terminal_status(TurnStatus::Failed, Vec::new()),
+            true,
+        )
+        .is_none());
+        assert!(failed_subject_observation(
+            &case,
+            &report,
+            &terminal_status(TurnStatus::Running, Vec::new()),
+            false,
+        )
+        .is_none());
+        assert!(failed_subject_observation(
+            &case,
+            &report,
+            &terminal_status(TurnStatus::Failed, vec!["browser::screenshot".into()]),
+            false,
+        )
+        .is_none());
+
+        report.metrics = Some(terminal_metrics(false));
+        assert!(failed_subject_observation(
+            &case,
+            &report,
+            &terminal_status(TurnStatus::Failed, Vec::new()),
+            false,
+        )
+        .is_none());
+        report.metrics = Some(terminal_metrics(true));
+        report.transcript = None;
+        assert!(failed_subject_observation(
+            &case,
+            &report,
+            &terminal_status(TurnStatus::Failed, Vec::new()),
+            false,
+        )
+        .is_none());
+    }
 
     #[test]
     fn registry_verification_cannot_precede_its_implementation() {
