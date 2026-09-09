@@ -1,0 +1,680 @@
+{
+  "tests": [
+    {
+      "id": 1,
+      "title": "Planning",
+      "metrics": [
+        {
+          "id": "planning.endpoint",
+          "question": "Does the plan specify the comparison route?",
+          "expected": "The planned route is GET /w/:slug/compare/:from...:to.",
+          "measurement": "binary",
+          "evidence": [
+            "Cited plan passage and independent repository or requirements check."
+          ],
+          "weight": 5
+        },
+        {
+          "id": "planning.exact_version",
+          "question": "Does the plan require exact version selection?",
+          "expected": "The plan rejects tags and ranges instead of substituting a version.",
+          "measurement": "binary",
+          "evidence": [
+            "Cited plan passage and independent repository or requirements check."
+          ],
+          "weight": 5
+        },
+        {
+          "id": "planning.invalid_version",
+          "question": "Does the plan specify the invalid-version response?",
+          "expected": "Invalid SemVer produces HTTP 400 with error.code invalid_version.",
+          "measurement": "binary",
+          "evidence": [
+            "Cited plan passage and independent repository or requirements check."
+          ],
+          "weight": 5
+        },
+        {
+          "id": "planning.missing_worker",
+          "question": "Does the plan specify the missing-worker response?",
+          "expected": "Missing workers produce HTTP 404 with error.code worker_not_found.",
+          "measurement": "binary",
+          "evidence": [
+            "Cited plan passage and independent repository or requirements check."
+          ],
+          "weight": 5
+        },
+        {
+          "id": "planning.missing_version",
+          "question": "Does the plan specify the missing-version response?",
+          "expected": "A missing version produces HTTP 404 with error.code version_not_found and the first missing version in error.version.",
+          "measurement": "binary",
+          "evidence": [
+            "Cited plan passage and independent repository or requirements check."
+          ],
+          "weight": 5
+        },
+        {
+          "id": "planning.missing_metadata",
+          "question": "Does the plan distinguish unavailable metadata from known empty data?",
+          "expected": "Absent metadata is marked unavailable rather than interpreted as an empty value.",
+          "measurement": "binary",
+          "evidence": [
+            "Cited plan passage and independent repository or requirements check."
+          ],
+          "weight": 5
+        },
+        {
+          "id": "planning.reverse_kinds",
+          "question": "Does the plan reverse change kinds when the pair is reversed?",
+          "expected": "Reversal swaps added and removed kinds.",
+          "measurement": "binary",
+          "evidence": [
+            "Cited plan passage and independent repository or requirements check."
+          ],
+          "weight": 5
+        },
+        {
+          "id": "planning.reverse_values",
+          "question": "Does the plan reverse change values when the pair is reversed?",
+          "expected": "Reversal swaps before and after values.",
+          "measurement": "binary",
+          "evidence": [
+            "Cited plan passage and independent repository or requirements check."
+          ],
+          "weight": 5
+        },
+        {
+          "id": "planning.reverse_impact",
+          "question": "Does the plan recalculate impact for the reversed direction?",
+          "expected": "Reversal applies the impact policy to the reversed change instead of retaining the original impact.",
+          "measurement": "binary",
+          "evidence": [
+            "Cited plan passage and independent repository or requirements check."
+          ],
+          "weight": 5
+        },
+        {
+          "id": "planning.object_order",
+          "question": "Does the plan ignore object-key order?",
+          "expected": "Object-key permutations do not produce differences.",
+          "measurement": "binary",
+          "evidence": [
+            "Cited plan passage and independent repository or requirements check."
+          ],
+          "weight": 5
+        },
+        {
+          "id": "planning.required_order",
+          "question": "Does the plan treat schema required arrays as sets?",
+          "expected": "Reordering a schema required array does not produce a difference.",
+          "measurement": "binary",
+          "evidence": [
+            "Cited plan passage and independent repository or requirements check."
+          ],
+          "weight": 5
+        },
+        {
+          "id": "planning.enum_order",
+          "question": "Does the plan treat schema enum arrays as sets?",
+          "expected": "Reordering a schema enum array does not produce a difference.",
+          "measurement": "binary",
+          "evidence": [
+            "Cited plan passage and independent repository or requirements check."
+          ],
+          "weight": 5
+        },
+        {
+          "id": "planning.config_array_order",
+          "question": "Does the plan preserve configuration-array order?",
+          "expected": "A configuration-array permutation remains a detectable change.",
+          "measurement": "binary",
+          "evidence": [
+            "Cited plan passage and independent repository or requirements check."
+          ],
+          "weight": 5
+        },
+        {
+          "id": "planning.backend_location",
+          "question": "Does the plan identify a valid backend comparison integration point?",
+          "expected": "The cited backend location exists in the pinned source and can host or call the comparison behavior.",
+          "measurement": "binary",
+          "evidence": [
+            "Cited plan passage and independent repository or requirements check."
+          ],
+          "weight": 5
+        },
+        {
+          "id": "planning.frontend_location",
+          "question": "Does the plan identify a valid frontend Changelog integration point?",
+          "expected": "The cited frontend location exists in the pinned source and participates in the worker page.",
+          "measurement": "binary",
+          "evidence": [
+            "Cited plan passage and independent repository or requirements check."
+          ],
+          "weight": 5
+        },
+        {
+          "id": "planning.dependency_order",
+          "question": "Are the planned steps ordered consistently with their dependencies?",
+          "expected": "No step depends on a deliverable scheduled only after that step; an equivalent parallel ordering is accepted.",
+          "measurement": "binary",
+          "evidence": [
+            "Cited plan passage and independent repository or requirements check."
+          ],
+          "weight": 5
+        },
+        {
+          "id": "planning.test_expectations",
+          "question": "Does each proposed test state an expected result?",
+          "expected": "Every proposed test has an observable expected result rather than only a test name.",
+          "measurement": "binary",
+          "evidence": [
+            "Cited plan passage and independent repository or requirements check."
+          ],
+          "weight": 5
+        },
+        {
+          "id": "planning.shared_url",
+          "question": "Does the plan define how a shared URL restores the pair?",
+          "expected": "The plan restores independent from and to values from the public Changelog URL.",
+          "measurement": "binary",
+          "evidence": [
+            "Cited plan passage and independent repository or requirements check."
+          ],
+          "weight": 5
+        },
+        {
+          "id": "planning.stale_results",
+          "question": "Does the plan address stale comparison results?",
+          "expected": "The plan prevents a previous result being shown as current after a new request fails.",
+          "measurement": "binary",
+          "evidence": [
+            "Cited plan passage and independent repository or requirements check."
+          ],
+          "weight": 5
+        },
+        {
+          "id": "planning.scope",
+          "question": "Does the plan stay within the agreed feature scope?",
+          "expected": "Every proposed product change belongs to the public deliverable; no excluded work is required for completion.",
+          "measurement": "binary",
+          "evidence": [
+            "Cited plan passage and independent repository or requirements check."
+          ],
+          "weight": 5
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "title": "Implementation",
+      "metrics": [
+        {
+          "id": "implementation.same_version",
+          "question": "Does comparing a version with itself return no changes?",
+          "expected": "Comparing orders-worker 1.0.0 to 1.0.0 returns an empty changes array.",
+          "measurement": "binary",
+          "evidence": [
+            "Independent execution record for this check, with its expected and observed result."
+          ],
+          "weight": 4
+        },
+        {
+          "id": "implementation.function_removal",
+          "question": "Does the API identify a removed function?",
+          "expected": "The 1.0.0 to 2.0.0 response contains an orders::get removal.",
+          "measurement": "binary",
+          "evidence": [
+            "Independent execution record for this check, with its expected and observed result."
+          ],
+          "weight": 4
+        },
+        {
+          "id": "implementation.required_impact",
+          "question": "Does a newly required input property receive the prescribed impact?",
+          "expected": "Both currency-related entries in 1.0.0 to 2.0.0 have impact potentially_breaking.",
+          "measurement": "binary",
+          "evidence": [
+            "Independent execution record for this check, with its expected and observed result."
+          ],
+          "weight": 4
+        },
+        {
+          "id": "implementation.object_order",
+          "question": "Does changing only object-key order preserve equality?",
+          "expected": "A pure object-key permutation produces no comparison changes.",
+          "measurement": "binary",
+          "evidence": [
+            "Independent execution record for this check, with its expected and observed result."
+          ],
+          "weight": 4
+        },
+        {
+          "id": "implementation.required_order",
+          "question": "Does changing only schema required-array order preserve equality?",
+          "expected": "A permutation of schema required produces no comparison changes.",
+          "measurement": "binary",
+          "evidence": [
+            "Independent execution record for this check, with its expected and observed result."
+          ],
+          "weight": 4
+        },
+        {
+          "id": "implementation.enum_order",
+          "question": "Does changing only schema enum-array order preserve equality?",
+          "expected": "A permutation of schema enum produces no comparison changes.",
+          "measurement": "binary",
+          "evidence": [
+            "Independent execution record for this check, with its expected and observed result."
+          ],
+          "weight": 4
+        },
+        {
+          "id": "implementation.config_array_order",
+          "question": "Does changing configuration-array order produce a difference?",
+          "expected": "Reversing a configuration array with distinct elements produces a configuration change.",
+          "measurement": "binary",
+          "evidence": [
+            "Independent execution record for this check, with its expected and observed result."
+          ],
+          "weight": 4
+        },
+        {
+          "id": "implementation.missing_metadata",
+          "question": "Does absent metadata produce an unavailable notice?",
+          "expected": "The 0.9.0 configuration is represented as unavailable metadata.",
+          "measurement": "binary",
+          "evidence": [
+            "Independent execution record for this check, with its expected and observed result."
+          ],
+          "weight": 4
+        },
+        {
+          "id": "implementation.worker_lookup",
+          "question": "Is a version resolved only within the requested worker?",
+          "expected": "orders-worker@9.9.9 remains missing even though second-worker@9.9.9 exists.",
+          "measurement": "binary",
+          "evidence": [
+            "Independent execution record for this check, with its expected and observed result."
+          ],
+          "weight": 4
+        },
+        {
+          "id": "implementation.reverse_kinds",
+          "question": "Does reversal swap addition and removal kinds?",
+          "expected": "The forward addition of orders::list becomes a removal for the reversed pair.",
+          "measurement": "binary",
+          "evidence": [
+            "Independent execution record for this check, with its expected and observed result."
+          ],
+          "weight": 4
+        },
+        {
+          "id": "implementation.reverse_values",
+          "question": "Does reversal swap before and after values?",
+          "expected": "The timeout before/after values are exchanged when 1.0.0 to 2.0.0 is reversed.",
+          "measurement": "binary",
+          "evidence": [
+            "Independent execution record for this check, with its expected and observed result."
+          ],
+          "weight": 4
+        },
+        {
+          "id": "implementation.reverse_impact",
+          "question": "Does reversal recalculate impact?",
+          "expected": "The reversed reduction of the create input required set is additive.",
+          "measurement": "binary",
+          "evidence": [
+            "Independent execution record for this check, with its expected and observed result."
+          ],
+          "weight": 4
+        },
+        {
+          "id": "implementation.shared_url",
+          "question": "Does reopening a shared URL restore the selected pair?",
+          "expected": "Reopening the Changelog URL restores its exact from and to selection.",
+          "measurement": "binary",
+          "evidence": [
+            "Independent execution record for this check, with its expected and observed result."
+          ],
+          "weight": 4
+        },
+        {
+          "id": "implementation.stale_results",
+          "question": "Does a failed request avoid displaying the previous result as current?",
+          "expected": "After a pair change followed by a request failure, the old comparison is not presented under the new pair.",
+          "measurement": "binary",
+          "evidence": [
+            "Independent execution record for this check, with its expected and observed result."
+          ],
+          "weight": 4
+        },
+        {
+          "id": "implementation.patch_application",
+          "question": "Does the delivered patch apply to the pinned base?",
+          "expected": "An independent clean checkout of the required Registry SHA accepts the complete delivered patch.",
+          "measurement": "binary",
+          "evidence": [
+            "Independent execution record for this check, with its expected and observed result."
+          ],
+          "weight": 4
+        },
+        {
+          "id": "implementation.invalid_version",
+          "question": "Does invalid SemVer return the prescribed error?",
+          "expected": "Invalid SemVer returns HTTP 400 with error.code invalid_version.",
+          "measurement": "binary",
+          "evidence": [
+            "Independent execution record for this check, with its expected and observed result."
+          ],
+          "weight": 4
+        },
+        {
+          "id": "implementation.missing_worker",
+          "question": "Does a missing worker return the prescribed error?",
+          "expected": "An absent worker returns HTTP 404 with error.code worker_not_found.",
+          "measurement": "binary",
+          "evidence": [
+            "Independent execution record for this check, with its expected and observed result."
+          ],
+          "weight": 4
+        },
+        {
+          "id": "implementation.missing_version",
+          "question": "Does a missing version return the prescribed error?",
+          "expected": "The first missing version yields HTTP 404 with error.code version_not_found and its value in error.version.",
+          "measurement": "binary",
+          "evidence": [
+            "Independent execution record for this check, with its expected and observed result."
+          ],
+          "weight": 4
+        },
+        {
+          "id": "implementation.history",
+          "question": "Does Changelog history show the seeded releases?",
+          "expected": "The history displays the four orders-worker releases from the public seed.",
+          "measurement": "binary",
+          "evidence": [
+            "Independent execution record for this check, with its expected and observed result."
+          ],
+          "weight": 4
+        },
+        {
+          "id": "implementation.expanded_detail",
+          "question": "Can a user expand the timeout change detail?",
+          "expected": "Expanding the timeout change reveals its before and after values.",
+          "measurement": "binary",
+          "evidence": [
+            "Independent execution record for this check, with its expected and observed result."
+          ],
+          "weight": 4
+        },
+        {
+          "id": "implementation.keyboard_selectors",
+          "question": "Can the version selectors be operated using the keyboard?",
+          "expected": "A browser user can select the comparison pair without a pointer.",
+          "measurement": "binary",
+          "evidence": [
+            "Independent execution record for this check, with its expected and observed result."
+          ],
+          "weight": 4
+        },
+        {
+          "id": "implementation.versions_regression",
+          "question": "Does the existing Versions tab retain its baseline behavior?",
+          "expected": "The baseline Versions flow still displays the seeded versions.",
+          "measurement": "binary",
+          "evidence": [
+            "Independent execution record for this check, with its expected and observed result."
+          ],
+          "weight": 4
+        },
+        {
+          "id": "implementation.readme_regression",
+          "question": "Does the existing README view retain its baseline behavior?",
+          "expected": "The baseline README view still displays the seeded worker README.",
+          "measurement": "binary",
+          "evidence": [
+            "Independent execution record for this check, with its expected and observed result."
+          ],
+          "weight": 4
+        },
+        {
+          "id": "implementation.api_reference_regression",
+          "question": "Does the existing API reference retain its baseline behavior?",
+          "expected": "The baseline API-reference flow still displays the selected version contract.",
+          "measurement": "binary",
+          "evidence": [
+            "Independent execution record for this check, with its expected and observed result."
+          ],
+          "weight": 4
+        },
+        {
+          "id": "implementation.download_regression",
+          "question": "Does the existing download flow retain its baseline behavior?",
+          "expected": "The baseline download flow still returns the seeded artifact bytes.",
+          "measurement": "binary",
+          "evidence": [
+            "Independent execution record for this check, with its expected and observed result."
+          ],
+          "weight": 4
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "title": "Environment creation",
+      "metrics": [
+        {
+          "id": "environment.build",
+          "question": "Does the submitted image build successfully?",
+          "expected": "The documented build command completes successfully on a clean executor.",
+          "measurement": "binary",
+          "evidence": [
+            "Independent clean-executor record for this check."
+          ],
+          "weight": 8
+        },
+        {
+          "id": "environment.migration",
+          "question": "Do the Registry migrations complete successfully?",
+          "expected": "All required Registry migrations complete on a fresh database.",
+          "measurement": "binary",
+          "evidence": [
+            "Independent clean-executor record for this check."
+          ],
+          "weight": 8
+        },
+        {
+          "id": "environment.seed",
+          "question": "Does the database contain the required seed checkpoints?",
+          "expected": "The orders-worker version set is exactly 0.9.0, 1.0.0, 1.1.0, and 2.0.0; timeoutMs is 3000 in 1.0.0 and 5000 in 2.0.0; route/name is orders in 1.0.0; function counts are two in 1.0.0 and three in 1.1.0.",
+          "measurement": "binary",
+          "evidence": [
+            "Independent clean-executor record for this check."
+          ],
+          "weight": 8
+        },
+        {
+          "id": "environment.api_readiness",
+          "question": "Does the API readiness check succeed?",
+          "expected": "The real Registry health endpoint reports its database check as ok.",
+          "measurement": "binary",
+          "evidence": [
+            "Independent clean-executor record for this check."
+          ],
+          "weight": 8
+        },
+        {
+          "id": "environment.frontend_reachability",
+          "question": "Is the frontend reachable from the executor?",
+          "expected": "An independent browser loads the seeded worker page through the published web endpoint.",
+          "measurement": "binary",
+          "evidence": [
+            "Independent clean-executor record for this check."
+          ],
+          "weight": 8
+        },
+        {
+          "id": "environment.artifact_integrity",
+          "question": "Do downloaded artifacts match their expected hashes?",
+          "expected": "Every downloaded public artifact has the SHA-256 value declared in the seed.",
+          "measurement": "binary",
+          "evidence": [
+            "Independent clean-executor record for this check."
+          ],
+          "weight": 8
+        },
+        {
+          "id": "environment.clean_reproduction",
+          "question": "Does startup succeed with a fresh data volume?",
+          "expected": "An independent replay of the documented startup command reaches the application on a new volume.",
+          "measurement": "binary",
+          "evidence": [
+            "Independent clean-executor record for this check."
+          ],
+          "weight": 8
+        },
+        {
+          "id": "environment.restart_persistence",
+          "question": "Does a restart preserve the expected persisted data?",
+          "expected": "Independent database inspection after restart matches the pre-restart persisted seed.",
+          "measurement": "binary",
+          "evidence": [
+            "Independent clean-executor record for this check."
+          ],
+          "weight": 8
+        },
+        {
+          "id": "environment.parallel_isolation",
+          "question": "Does operating one instance leave the other instance state unchanged?",
+          "expected": "With two instances running, mutations to one do not alter the other instance database.",
+          "measurement": "binary",
+          "evidence": [
+            "Independent clean-executor record for this check."
+          ],
+          "weight": 8
+        },
+        {
+          "id": "environment.cleanup_completeness",
+          "question": "Does teardown remove the selected instance owned resources?",
+          "expected": "The pre-recorded inventory of selected-instance containers, networks and volumes is absent after teardown.",
+          "measurement": "binary",
+          "evidence": [
+            "Independent clean-executor record for this check."
+          ],
+          "weight": 8
+        },
+        {
+          "id": "environment.cleanup_scope",
+          "question": "Does teardown preserve resources outside the selected instance?",
+          "expected": "The pre-recorded inventory outside the selected instance remains unchanged after teardown.",
+          "measurement": "binary",
+          "evidence": [
+            "Independent clean-executor record for this check."
+          ],
+          "weight": 8
+        },
+        {
+          "id": "environment.registry_base",
+          "question": "Does the environment use the required Registry starting commit?",
+          "expected": "Source identity is 662eb87c1bdbb395f36264d5d26bf823e2ace783 before environment changes.",
+          "measurement": "binary",
+          "evidence": [
+            "Independent clean-executor record for this check."
+          ],
+          "weight": 4
+        },
+        {
+          "id": "environment.runtime_identity",
+          "question": "Are the installed runtime binaries identified by hash?",
+          "expected": "The executor records actual container image identities and SHA-256 values for the installed Node, pnpm, and iii binaries.",
+          "measurement": "binary",
+          "evidence": [
+            "Independent clean-executor record for this check."
+          ],
+          "weight": 4
+        },
+        {
+          "id": "environment.database_readiness",
+          "question": "Does PostgreSQL become ready?",
+          "expected": "An independent connection to the started database succeeds.",
+          "measurement": "binary",
+          "evidence": [
+            "Independent clean-executor record for this check."
+          ],
+          "weight": 4
+        }
+      ]
+    },
+    {
+      "id": 4,
+      "title": "Feature verification",
+      "metrics": [
+        {
+          "id": "verification.recall",
+          "question": "What proportion of independently failing contract checks did the tester identify?",
+          "expected": "Compare reported failing check IDs with the independently executed contract probes. This measures check detection, not unique root causes. If no checks fail independently, retain 0/0 and score the empty set as value 1.",
+          "measurement": "ratio",
+          "weight": 35,
+          "numerator": "Required check IDs reported as failing and independently reproduced.",
+          "denominator": "Required check IDs independently observed to fail.",
+          "evidence": [
+            "Independent item-level inventory with stable IDs and classifications.",
+            "Raw artifacts supporting the item-level observations."
+          ]
+        },
+        {
+          "id": "verification.precision",
+          "question": "What proportion of reported failing checks fail independently?",
+          "expected": "Execute the contract probes independently and match each reported failure by check ID. If no failures are reported, retain 0/0 and score the empty set as value 1.",
+          "measurement": "ratio",
+          "weight": 20,
+          "numerator": "Reported failing check IDs independently reproduced.",
+          "denominator": "Distinct check IDs reported as failing.",
+          "evidence": [
+            "Independent item-level inventory with stable IDs and classifications.",
+            "Raw artifacts supporting the item-level observations."
+          ]
+        },
+        {
+          "id": "verification.execution_coverage",
+          "question": "What proportion of required check IDs cite a recorded execution command?",
+          "expected": "A non-blocked report entry cites an exact command present in the executor log and an existing evidence file.",
+          "measurement": "ratio",
+          "weight": 20,
+          "numerator": "Required check IDs with a recorded command and an existing evidence file.",
+          "denominator": "Required public check IDs, excluding controller-owned patch replay.",
+          "evidence": [
+            "Independent item-level inventory with stable IDs and classifications.",
+            "Raw artifacts supporting the item-level observations."
+          ]
+        },
+        {
+          "id": "verification.evidence_coverage",
+          "question": "What proportion of reported outcomes cite an existing evidence file?",
+          "expected": "Resolve each reported outcome evidence path to a file in the attempt workspace. If no outcomes are reported, retain 0/0 and score coverage as value 0.",
+          "measurement": "ratio",
+          "weight": 20,
+          "numerator": "Reported outcomes citing an existing evidence file.",
+          "denominator": "Outcomes reported by the tester.",
+          "evidence": [
+            "Independent item-level inventory with stable IDs and classifications.",
+            "Raw artifacts supporting the item-level observations."
+          ]
+        },
+        {
+          "id": "verification.source_preservation",
+          "question": "Did verification leave product source unchanged?",
+          "expected": "The final product source equals the delivered implementation snapshot.",
+          "measurement": "binary",
+          "evidence": [
+            "Executor source diff against the delivered snapshot."
+          ],
+          "weight": 5
+        }
+      ]
+    }
+  ]
+}

@@ -13,13 +13,14 @@ use crate::markdown::ScenarioKey;
 use crate::scenarios::{ComplexityTier, ScenarioExecutionKind};
 
 const SOURCE: &str = include_str!("../config/test-plan.json");
-pub const PROFILE_IDS: [&str; 6] = [
+pub const PROFILE_IDS: [&str; 7] = [
     "smoke",
     "regression",
     "capability",
     "evolution",
     "resilience",
     "endurance",
+    "registry",
 ];
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -51,6 +52,8 @@ pub struct Profile {
     pub metrics: Vec<String>,
     pub modules: Vec<String>,
     pub scenarios: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub scenario_groups: Vec<Vec<String>>,
     pub repetitions: u32,
     pub technical_retries: u8,
     pub lane: String,
@@ -225,7 +228,7 @@ impl MasterPlan {
         }
         ensure!(
             profiles == PROFILE_IDS.into_iter().collect(),
-            "master plan must declare the six reviewed profiles"
+            "master plan must declare the reviewed profiles"
         );
         Ok(())
     }
@@ -247,6 +250,24 @@ impl MasterPlan {
         for id in &profile.scenarios {
             ensure!(seen.insert(id.clone()), "duplicate profile scenario {id}");
             selected.push(id.clone());
+        }
+        let mut grouped = BTreeSet::new();
+        for group in &profile.scenario_groups {
+            ensure!(
+                group.len() > 1,
+                "scenario group must contain multiple cases"
+            );
+            for id in group {
+                ensure!(
+                    seen.contains(id) && grouped.insert(id),
+                    "unknown or repeated grouped scenario {id}"
+                );
+                ensure!(
+                    id.parse::<ScenarioKey>()?.execution_kind()
+                        == ScenarioExecutionKind::HarnessTurn,
+                    "sequential profile groups require ordinary harness turns"
+                );
+            }
         }
         Ok(selected)
     }
@@ -311,15 +332,36 @@ impl MasterPlan {
                 "resource_envelope": envelope, "required_capabilities": case.required_capabilities,
                 "requirements": self.requirements.get(id).cloned().unwrap_or_default(),
                 "module": self.modules.iter().find(|m| m.scenarios.contains(id)).map(|m| &m.id),
-                "judge_required": key.built_in().is_none(),
+                "judge_required": key.built_in().is_none() || key.built_in() == Some(crate::scenarios::ScenarioId::RegistryPlanning),
             }));
             // Every repetition is a fresh invocation. This also obeys the
             // campaign parser's one-case, runs=1 adaptive-flow contract.
+            let grouped = profile
+                .scenario_groups
+                .iter()
+                .find(|group| group.contains(id));
+            if grouped.is_some_and(|group| &group[0] != id) {
+                continue;
+            }
+            let group = grouped.cloned().unwrap_or_else(|| vec![id.clone()]);
+            let group_weight = group
+                .iter()
+                .map(|id| weight(native[id].classification.tier))
+                .max()
+                .unwrap();
+            let group_retries = if group
+                .iter()
+                .all(|id| native[id].scenario_id.execution_kind().replay_safe())
+            {
+                profile.technical_retries
+            } else {
+                0
+            };
             ordinary_groups.push(json!({
                 "id": format!("case-{}", id.replace('_', "-")),
                 "execution_kind": execution_kind(key), "runs": 1,
-                "technical_retries": retries, "difficulty_weight": weight(case.classification.tier),
-                "scenarios": [id],
+                "technical_retries": group_retries, "difficulty_weight": group_weight,
+                "scenarios": group,
             }));
         }
         let profile_sha256 = artifact::sha256_value(
@@ -484,6 +526,7 @@ mod tests {
             ("evolution", 18, 90),
             ("resilience", 4, 13),
             ("endurance", 5, 5),
+            ("registry", 4, 4),
         ] {
             let snapshot = plan.materialize(id).unwrap();
             assert_eq!(snapshot.scenario_ids.len(), cases);
@@ -499,21 +542,45 @@ mod tests {
                         assert_eq!(group["soak_minutes"], 60);
                     } else {
                         assert_eq!(group["runs"], 1);
-                        let id = group["scenarios"][0].as_str().unwrap();
-                        assert!(selected.insert(id));
-                        if !id
-                            .parse::<ScenarioKey>()
-                            .unwrap()
-                            .execution_kind()
-                            .replay_safe()
-                        {
-                            assert_eq!(group["technical_retries"], 0);
+                        for id in group["scenarios"].as_array().unwrap() {
+                            let id = id.as_str().unwrap();
+                            assert!(selected.insert(id));
+                            if !id
+                                .parse::<ScenarioKey>()
+                                .unwrap()
+                                .execution_kind()
+                                .replay_safe()
+                            {
+                                assert_eq!(group["technical_retries"], 0);
+                            }
                         }
                     }
                 }
                 assert_eq!(selected.len(), cases);
             }
         }
+    }
+
+    #[test]
+    fn registry_profile_orders_delivery_and_verification_in_one_group() {
+        let plan = embedded().unwrap();
+        let snapshot = plan.materialize("registry").unwrap();
+        let groups = snapshot.campaigns[0]["groups"].as_array().unwrap();
+        assert_eq!(groups.len(), 3);
+        let delivery = groups
+            .iter()
+            .find(|g| g["id"] == "case-registry-implementation")
+            .unwrap();
+        assert_eq!(
+            delivery["scenarios"],
+            json!(["registry_implementation", "registry_verification"])
+        );
+        assert_eq!(snapshot.cases.len(), 4);
+        assert_eq!(snapshot.budget["planned_runs"], 4);
+
+        let mut profile = snapshot.profile;
+        profile.scenario_groups[0].push("registry_verification".into());
+        assert!(plan.materialize_scope(profile, None).is_err());
     }
 
     #[test]
@@ -534,6 +601,21 @@ mod tests {
         let mut changed = plan.clone();
         changed.profiles[0].scenarios[0] = "local_invented".into();
         assert!(changed.validate().is_err());
+    }
+
+    #[test]
+    fn registry_planning_requires_a_judge_in_console_catalog() {
+        let plan = embedded().unwrap();
+        let mut profile = plan.profiles[0].clone();
+        profile.modules.clear();
+        profile.scenarios = vec!["registry_planning".into(), "registry_implementation".into()];
+        let snapshot = plan.materialize_scope(profile, None).unwrap();
+        for case in snapshot.cases {
+            assert_eq!(
+                case["judge_required"],
+                case["scenario_id"] == "registry_planning"
+            );
+        }
     }
 
     #[test]

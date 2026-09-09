@@ -57,9 +57,9 @@ describe('execution setup sheet', () => {
 
     for (const html of [plan, quick]) {
       expect(html).toContain('Choose the model and judge')
-      // Only Markdown tests use a judge, so the field is inert without one.
+      // The selected tests do not use a judge, so the field is inert without one.
       expect(html).toContain('Judge model')
-      expect(html).toContain('Only Markdown tests use a judge')
+      expect(html).toContain('The selected tests do not use a judge')
       expect(html).not.toContain('Default judge (automatic)')
       expect(html).toContain('Pick the tests')
       expect(html).toContain('Advanced · sampling, retries and seed')

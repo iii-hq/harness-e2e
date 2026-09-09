@@ -220,11 +220,18 @@ pub async fn run_suite(config: SuiteRunConfig) -> Result<SuiteRunOutcome> {
         .or_else(|| config.execution_id.clone())
         .unwrap_or_else(|| Uuid::new_v4().simple().to_string());
     let started_at = Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true);
-    let context = Arc::new(
-        E2eContext::connect(&config.url)
-            .await
-            .context("connect E2E runner")?,
+    let mut context = E2eContext::connect(&config.url)
+        .await
+        .context("connect E2E runner")?;
+    context.auxiliary_model = config.judge.clone();
+    context.initialize_execution_outputs(
+        config
+            .scenarios
+            .iter()
+            .filter_map(ScenarioKey::built_in)
+            .map(ScenarioId::as_str),
     );
+    let context = Arc::new(context);
     let control_plane = context
         .preflight_control_plane()
         .await
@@ -247,21 +254,21 @@ pub async fn run_suite(config: SuiteRunConfig) -> Result<SuiteRunOutcome> {
         .scenarios
         .iter()
         .any(|scenario| scenario.built_in().is_none());
-    // The judge is the auxiliary model Markdown scenarios use for their
-    // validators and instruction adherence. Built-in scenarios are assessed
-    // deterministically, so without a Markdown scenario it is never resolved
-    // and never enters the report identity.
+    let has_planning = config
+        .scenarios
+        .iter()
+        .any(|scenario| scenario.built_in() == Some(ScenarioId::RegistryPlanning));
     let judge_model = match config.judge.as_ref() {
-        Some(judge) if has_markdown => Some(
+        Some(judge) if has_markdown || has_planning => Some(
             resolve_model(&context, &judge.model, &judge.provider)
                 .await
-                .context("resolve the explicit auxiliary model required by Markdown scenarios")?,
+                .context("resolve the explicit auxiliary model")?,
         ),
         Some(judge) => {
             tracing::info!(
                 provider = judge.provider,
                 model = judge.model,
-                "judge model is configured but no Markdown scenario is selected; it will not be used"
+                "judge model is configured but no scenario uses it"
             );
             None
         }
@@ -428,7 +435,12 @@ pub async fn run_suite(config: SuiteRunConfig) -> Result<SuiteRunOutcome> {
     // Execute one slot per prepared case before starting the next repetition.
     // A late failure therefore cannot consume the whole suite budget while
     // leaving every later scenario without a single observation.
+    let mut current_repetition = None;
     for (repetition, index) in round_robin_slots(config.runs, prepared_cases.len()) {
+        if current_repetition != Some(repetition) {
+            context.reset_execution_outputs();
+            current_repetition = Some(repetition);
+        }
         let prepared = &mut prepared_cases[index];
         if let Some(reason) = slot_deferral_reason(
             !persistence_errors.is_empty(),
@@ -1140,6 +1152,7 @@ fn validate_config(config: &SuiteRunConfig) -> Result<()> {
     if config.scenarios.is_empty() {
         bail!("at least one scenario is required");
     }
+    validate_registry_handoff_order(&config.scenarios)?;
     if let Some(resume) = config
         .control
         .as_ref()
@@ -1156,13 +1169,11 @@ fn validate_config(config: &SuiteRunConfig) -> Result<()> {
     // Scenario materialization and local Markdown validation are slot-scoped.
     // Keeping them out of request validation lets one broken definition become
     // an explicit deferred slot instead of erasing the whole execution.
-    if config
-        .scenarios
-        .iter()
-        .any(|scenario| scenario.built_in().is_none())
-        && config.judge.is_none()
+    if config.scenarios.iter().any(|scenario| {
+        scenario.built_in().is_none() || scenario.built_in() == Some(ScenarioId::RegistryPlanning)
+    }) && config.judge.is_none()
     {
-        bail!("Markdown scenarios require an explicit auxiliary model and provider");
+        bail!("Markdown scenarios and Registry planning require an explicit auxiliary model and provider");
     }
     if config.materialized_markdown_plan.is_some()
         && (config.scenarios.len() != 1 || config.scenarios[0].built_in().is_some())
@@ -1173,6 +1184,20 @@ fn validate_config(config: &SuiteRunConfig) -> Result<()> {
         if judge.model.trim().is_empty() || judge.provider.trim().is_empty() {
             bail!("judge model and provider cannot be empty");
         }
+    }
+    Ok(())
+}
+
+fn validate_registry_handoff_order(scenarios: &[ScenarioKey]) -> Result<()> {
+    let implementation = scenarios
+        .iter()
+        .position(|scenario| scenario.built_in() == Some(ScenarioId::RegistryImplementation));
+    let verification = scenarios
+        .iter()
+        .position(|scenario| scenario.built_in() == Some(ScenarioId::RegistryVerification));
+    if matches!((implementation, verification), (Some(implementation), Some(verification)) if verification < implementation)
+    {
+        bail!("registry_implementation must precede registry_verification in the same execution");
     }
     Ok(())
 }
@@ -1278,6 +1303,7 @@ async fn run_once(context: &Arc<E2eContext>, request: AttemptRequest<'_>) -> E2e
     let attempt_id = existing_attempt_id
         .map(str::to_string)
         .unwrap_or_else(|| Uuid::new_v4().simple().to_string());
+    context.begin_execution_output_attempt(scenario_id.as_str());
     let session_id = format!("e2e_{attempt_id}");
     if scenario_id.execution_kind() == ScenarioExecutionKind::AdaptiveFlow {
         return run_adaptive_once(
@@ -4848,6 +4874,17 @@ mod tests {
     use super::*;
     use crate::report::EvaluationDimension;
     use crate::scenarios::CapturedDeliverableContent;
+
+    #[test]
+    fn registry_verification_cannot_precede_its_implementation() {
+        let implementation = ScenarioKey::BuiltIn(ScenarioId::RegistryImplementation);
+        let verification = ScenarioKey::BuiltIn(ScenarioId::RegistryVerification);
+        assert!(
+            validate_registry_handoff_order(&[implementation.clone(), verification.clone()])
+                .is_ok()
+        );
+        assert!(validate_registry_handoff_order(&[verification, implementation]).is_err());
+    }
 
     fn checkpoint_deliverable() -> crate::report::DeliverableReport {
         crate::report::DeliverableReport {

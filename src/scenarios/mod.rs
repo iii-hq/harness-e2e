@@ -40,6 +40,7 @@ pub mod policy_bound_action;
 pub mod prompt_injection_resilience;
 pub mod quorum_fan_in;
 pub mod receiving_operation;
+pub mod registry;
 pub mod release_train_recovery;
 pub mod research_pipeline;
 pub mod secret_hygiene;
@@ -339,6 +340,14 @@ pub struct CriterionAward {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema, ValueEnum)]
 #[serde(rename_all = "snake_case")]
 pub enum ScenarioId {
+    #[value(name = "registry_planning")]
+    RegistryPlanning,
+    #[value(name = "registry_implementation")]
+    RegistryImplementation,
+    #[value(name = "registry_environment")]
+    RegistryEnvironment,
+    #[value(name = "registry_verification")]
+    RegistryVerification,
     #[value(name = "context_pressure")]
     ContextPressure,
     #[value(name = "shell_coder_sandbox")]
@@ -442,7 +451,11 @@ pub enum ScenarioId {
 }
 
 impl ScenarioId {
-    pub const ALL: [Self; 50] = [
+    pub const ALL: [Self; 54] = [
+        Self::RegistryPlanning,
+        Self::RegistryImplementation,
+        Self::RegistryEnvironment,
+        Self::RegistryVerification,
         Self::ContextPressure,
         Self::ShellCoderSandbox,
         Self::ResearchPipeline,
@@ -509,6 +522,10 @@ impl ScenarioId {
 
     pub fn as_str(self) -> &'static str {
         match self {
+            Self::RegistryPlanning => registry::PLANNING_ID,
+            Self::RegistryImplementation => registry::IMPLEMENTATION_ID,
+            Self::RegistryEnvironment => registry::ENVIRONMENT_ID,
+            Self::RegistryVerification => registry::VERIFICATION_ID,
             Self::ContextPressure => context_pressure::ID,
             Self::ShellCoderSandbox => shell_coder_sandbox::ID,
             Self::ResearchPipeline => research_pipeline::ID,
@@ -564,6 +581,10 @@ impl ScenarioId {
 
     pub fn spec(self, run_id: &str) -> ScenarioSpec {
         match self {
+            Self::RegistryPlanning => registry::scenario(1, run_id),
+            Self::RegistryImplementation => registry::scenario(2, run_id),
+            Self::RegistryEnvironment => registry::scenario(3, run_id),
+            Self::RegistryVerification => registry::scenario(4, run_id),
             Self::ContextPressure => context_pressure::scenario(run_id),
             Self::ShellCoderSandbox => shell_coder_sandbox::scenario(run_id),
             Self::ResearchPipeline => research_pipeline::scenario(run_id),
@@ -619,6 +640,10 @@ impl ScenarioId {
 
     pub fn materialize(self, namespace: &str, seed: u64) -> Result<MaterializedScenario> {
         let materialized = match self {
+            Self::RegistryPlanning => registry::materialize(1, namespace, seed)?,
+            Self::RegistryImplementation => registry::materialize(2, namespace, seed)?,
+            Self::RegistryEnvironment => registry::materialize(3, namespace, seed)?,
+            Self::RegistryVerification => registry::materialize(4, namespace, seed)?,
             Self::ContextPressure => context_pressure::materialize(namespace, seed)?,
             Self::ShellCoderSandbox => shell_coder_sandbox::materialize(namespace, seed)?,
             Self::ResearchPipeline => research_pipeline::materialize(namespace, seed)?,
@@ -751,7 +776,11 @@ impl ScenarioId {
     pub fn canonical_seed_only(self) -> bool {
         matches!(
             self,
-            Self::ShellCoderSandbox
+            Self::RegistryPlanning
+                | Self::RegistryImplementation
+                | Self::RegistryEnvironment
+                | Self::RegistryVerification
+                | Self::ShellCoderSandbox
                 | Self::EngineeringTicket
                 | Self::EngineeringTicketGitHandoff
                 | Self::EngineeringEnduranceLadder
@@ -805,6 +834,10 @@ impl ScenarioId {
 
 pub fn required_functions(scenario_id: &str, run_id: &str) -> Vec<String> {
     match scenario_id {
+        registry::PLANNING_ID
+        | registry::IMPLEMENTATION_ID
+        | registry::ENVIRONMENT_ID
+        | registry::VERIFICATION_ID => registry::required_functions(scenario_id, run_id),
         engineering_ticket::GIT_HANDOFF_ID => {
             engineering_ticket::git_handoff_required_functions(run_id)
         }
@@ -822,6 +855,10 @@ pub fn required_functions(scenario_id: &str, run_id: &str) -> Vec<String> {
 
 pub fn allowed_functions(scenario_id: &str, run_id: &str) -> Option<Vec<String>> {
     match scenario_id {
+        registry::PLANNING_ID
+        | registry::IMPLEMENTATION_ID
+        | registry::ENVIRONMENT_ID
+        | registry::VERIFICATION_ID => Some(registry::allowed_functions(scenario_id, run_id)),
         engineering_ticket::GIT_HANDOFF_ID => {
             Some(engineering_ticket::git_handoff_allowed_functions(run_id))
         }
@@ -864,7 +901,7 @@ mod tests {
 
     use super::*;
     #[test]
-    fn registry_contains_fifty_unique_valid_scenarios() {
+    fn registry_contains_fifty_four_unique_valid_scenarios() {
         let mut ids = HashSet::new();
         for scenario in ScenarioId::ALL {
             assert!(ids.insert(scenario.as_str()));
@@ -873,7 +910,7 @@ mod tests {
                 .materialize("run", scenario.canonical_seed())
                 .unwrap();
         }
-        assert_eq!(ids.len(), 50);
+        assert_eq!(ids.len(), 54);
     }
 
     #[test]

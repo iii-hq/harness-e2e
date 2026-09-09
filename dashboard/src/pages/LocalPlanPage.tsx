@@ -314,7 +314,10 @@ export function LocalPlanCreatePage({
     Boolean(
       templates.find((template) => template.id === templateId)
         ?.protected_supervisor_required,
-    ) || scenarios.some((id) => requiredJudges.includes(id))
+    ) ||
+    scenarios.some(
+      (id) => id === 'registry_planning' || requiredJudges.includes(id),
+    )
   // Audit PN-05 / PN-15: the primary stays enabled; after a submit attempt
   // the pending items show inline and next to the button.
   const errors = attempted
@@ -499,7 +502,7 @@ export function LocalPlanCreatePage({
             </Select>
             <span className="mt-1 block text-xs text-ink-soft">
               Templates fill the initial scope and policy. Edit them and select
-              the execution model before saving; only Markdown tests also need a
+              the execution model before saving; some tests also require a
               judge.
             </span>
           </label>

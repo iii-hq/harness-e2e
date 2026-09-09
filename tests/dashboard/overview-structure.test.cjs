@@ -428,9 +428,7 @@ test('groups execution and judge models under their providers', () => {
     assert.match(view, /ProviderModelDropdown/)
   }
   assert.match(executionSetup, /Execution model/)
-  // The label stays, but only Markdown tests reach a judge now.
   assert.match(executionSetup, /Judge model/)
-  assert.match(executionSetup, /Only Markdown tests use a judge/)
   assert.doesNotMatch(executionSetup, /Default judge \(automatic\)/)
   assert.match(runner, /judgeRequired=\{needsJudge\}/)
   assert.match(modelDropdown, /collapsedProviders/)

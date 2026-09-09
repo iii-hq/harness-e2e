@@ -444,7 +444,7 @@ export function ExecutionSetup({
       <SetupSection
         id={`${idPrefix}-models`}
         title="Choose the model and judge"
-        description="The model is saved with the result; Markdown tests also save their judge."
+        description="The execution model and any required judge are saved with the result."
       >
         <div className="grid items-start gap-4 sm:grid-cols-2">
           <Field
@@ -468,13 +468,15 @@ export function ExecutionSetup({
               }
             />
           </Field>
-          {/* Only Markdown scenarios run a judge, so the field is required
-              with one selected and inert without any. */}
           <Field
             label="Judge model"
             htmlFor={`${idPrefix}-judge`}
             meta={judgeRequired ? 'required' : 'not used'}
-            hint={judgeRequired ? undefined : 'Only Markdown tests use a judge'}
+            hint={
+              judgeRequired
+                ? undefined
+                : 'The selected tests do not use a judge'
+            }
             error={errors.judge}
           >
             <ProviderModelDropdown

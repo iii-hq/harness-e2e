@@ -2166,13 +2166,13 @@ pub(crate) fn validate_run_request(request: &RunRequest) -> Result<LaneBudget> {
     if request.judge_model.is_some() != request.judge_provider.is_some() {
         bail!("judge_model and judge_provider must be supplied together");
     }
-    if scenarios
-        .iter()
-        .any(|scenario| scenario.built_in().is_none())
-        && (request.judge_model.is_none() || request.judge_provider.is_none())
+    if scenarios.iter().any(|scenario| {
+        scenario.built_in().is_none()
+            || scenario.built_in() == Some(crate::scenarios::ScenarioId::RegistryPlanning)
+    }) && (request.judge_model.is_none() || request.judge_provider.is_none())
     {
         bail!(
-            "Markdown scenarios require an explicit judge_model and judge_provider for setup, validation, adherence, and cleanup"
+            "Markdown and Registry planning scenarios require an explicit judge_model and judge_provider for setup, validation, adherence, and cleanup"
         );
     }
     if request.audit_model.is_some() != request.audit_provider.is_some() {

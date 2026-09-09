@@ -52,6 +52,11 @@ cargo run --locked --bin harness-e2e -- catalog
 cargo run --locked --bin harness-e2e -- validate-scenarios
 ```
 
+The four [Registry scenarios](tests/fixtures/registry-version-comparison/README.md)
+use the regular scenario catalog, execution flow, and scores: `registry_planning`,
+`registry_implementation`, `registry_environment`, and `registry_verification`.
+Each has its own [atomic validations](tests/fixtures/registry-version-comparison/scoring.md).
+
 New declarative scenarios are authored only as `scenarios/*.md`. The compiler
 embeds the exact source, validates the canonical English section structure,
 and exposes the resulting file-stem id through the CLI, worker catalog,
