@@ -425,8 +425,8 @@ fn evidence_files(directory: &std::path::Path) -> Result<Value> {
 
 fn screenshot_jpeg(value: &Value, session_id: &str) -> Result<(Vec<u8>, Value)> {
     let details = value["details"].clone();
-    if details["session_id"] != session_id || details["width"] != 1440 {
-        bail!("browser screenshot identity or width does not match the capture request");
+    if details["session_id"] != session_id {
+        bail!("browser screenshot identity does not match the capture request");
     }
     let image = value["content"]
         .as_array()
@@ -831,17 +831,18 @@ mod tests {
     }
 
     #[test]
-    fn browser_jpeg_is_bound_to_the_requested_session_and_viewport_width() {
+    fn browser_jpeg_is_bound_to_the_requested_session() {
         let screenshot = json!({
             "content": [{
                 "type": "image",
                 "mime": "image/jpeg",
                 "data": base64::engine::general_purpose::STANDARD.encode([0xff, 0xd8, 0xff]),
             }],
-            "details": {"session_id":"private-1","url":"http://127.0.0.1:43000","width":1440,"height":1800},
+            "details": {"session_id":"private-1","url":"http://127.0.0.1:43000","width":1280,"height":1800},
         });
         let (jpeg, details) = screenshot_jpeg(&screenshot, "private-1").unwrap();
         assert_eq!(jpeg, [0xff, 0xd8, 0xff]);
+        assert_eq!(details["width"], 1280);
         assert_eq!(details["height"], 1800);
         assert!(screenshot_jpeg(&screenshot, "another-session").is_err());
     }
