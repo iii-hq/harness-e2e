@@ -335,12 +335,14 @@ impl PlanStore {
         let execution = self.read_execution(id)?;
         let mut reports = Vec::new();
         let mut assessments = Vec::new();
+        let mut assessed = BTreeSet::new();
         for slot in &execution.slots {
             let native = if slot.observed > 0 {
                 super::store::read_stored_run(&self.root.join(&slot.execution_id)).and_then(|run| {
                     run.map(|run| {
                         let detail = super::presenter::stored_execution_detail(&run)?;
-                        if let Some(report) = run.report {
+                        if assessed.insert(slot.execution_id.clone()) {
+                            let report = run.report.context("Native report is unavailable")?;
                             assessments.extend(report.assessment_contract.runs);
                         }
                         Ok(detail)
@@ -352,7 +354,9 @@ impl PlanStore {
             };
             match native {
                 Ok(Some(detail)) if detail["reports"].as_array().is_some_and(|reports| !reports.is_empty()) => {
-                    for mut report in detail["reports"].as_array().unwrap().clone() {
+                    for mut report in detail["reports"].as_array().unwrap().iter()
+                        .filter(|report| report["scenario_id"] == slot.scenario_id)
+                        .cloned() {
                         report["subject_id"] = summary["subjects"][0]["id"].clone();
                         report["native_execution_id"] = json!(slot.execution_id);
                         report["round"] = json!(slot.round);
@@ -375,6 +379,8 @@ impl PlanStore {
             .slots
             .iter()
             .map(|slot| &slot.execution_id)
+            .collect::<BTreeSet<_>>()
+            .into_iter()
             .collect::<Vec<_>>());
         Ok(Some(summary))
     }
@@ -699,6 +705,13 @@ impl PlanStore {
         let runner = self.runner()?;
         let count = self.read_execution(id)?.slots.len();
         for index in 0..count {
+            let execution = self.read_execution(id)?;
+            if execution.slots[..index]
+                .iter()
+                .any(|slot| slot.execution_id == execution.slots[index].execution_id)
+            {
+                continue;
+            }
             let child = {
                 let _guard = self.lock.lock().await;
                 let mut execution = self.read_execution(id)?;
@@ -712,7 +725,14 @@ impl PlanStore {
                     "Plan identity changed during execution."
                 );
                 // This write must succeed before invoking native admission.
-                execution.slots[index].state = "admitting".into();
+                let execution_id = execution.slots[index].execution_id.clone();
+                for slot in execution
+                    .slots
+                    .iter_mut()
+                    .filter(|slot| slot.execution_id == execution_id)
+                {
+                    slot.state = "admitting".into();
+                }
                 execution.updated_at = now();
                 self.write_execution(&execution)?;
                 let slot = &execution.slots[index];
@@ -738,7 +758,13 @@ impl PlanStore {
                     if let Some(report) = record.report.as_ref().filter(|_| terminal) {
                         verify_system_identity(&mut execution.system_under_test, report)?;
                     }
-                    update_slot(&mut execution.slots[index], &record, &plan, &self.root)?;
+                    for slot in execution
+                        .slots
+                        .iter_mut()
+                        .filter(|slot| slot.execution_id == child)
+                    {
+                        update_slot(slot, &record, &plan, &self.root)?;
+                    }
                     execution.updated_at = now();
                     self.write_execution(&execution)?;
                     if execution.cancel_requested && !terminal {
@@ -931,6 +957,9 @@ fn snapshot_for_plan(plan: &super::plans::LocalPlan) -> Result<ProfileSnapshot> 
     profile.purpose = plan.purpose.clone();
     profile.modules.clear();
     profile.scenarios = plan.scenario_ids.clone();
+    profile
+        .scenario_groups
+        .retain(|group| group.iter().all(|id| plan.scenario_ids.contains(id)));
     profile.repetitions = plan.runs;
     profile.technical_retries = plan.technical_retries;
     profile.lane = "local".into();
@@ -1010,34 +1039,37 @@ fn materialize_slots(plan: &SavedPlan, owner: &str) -> Result<Vec<Slot>> {
             .context("Missing campaign groups")?
         {
             let group_id = group["id"].as_str().context("Missing group identity")?;
-            let scenario_id = group["scenarios"][0]
-                .as_str()
-                .context("Native scenario required")?;
+            let scenario_ids = group["scenarios"]
+                .as_array()
+                .context("Native scenarios required")?;
             let key = format!("{owner}:round-{}:{group_id}", round + 1);
             let c = &plan.plan;
-            // Use the saved seed. Native materialization and envelopes are
-            // checked again independently for every invocation.
             let request: RunRequest = serde_json::from_value(
-                json!({"idempotency_key": key, "label": format!("{} · round {} · {}", c.label, round+1, scenario_id), "lane": campaign["lane"], "model": c.model, "provider": c.provider,
+                json!({"idempotency_key": key, "label": format!("{} · round {} · {}", c.label, round+1, group_id), "lane": campaign["lane"], "model": c.model, "provider": c.provider,
                 "judge_model": if c.judge_model.is_empty() { None } else { Some(&c.judge_model) }, "judge_provider": if c.judge_provider.is_empty() { None } else { Some(&c.judge_provider) },
-                "scenarios": [scenario_id], "runs": 1, "seed": plan.snapshot.cases.iter().find(|case| case["scenario_id"] == scenario_id).map(|case| &case["seed"]), "technical_retries": group["technical_retries"]}),
+                "scenarios": scenario_ids, "runs": 1, "seed": c.seed, "technical_retries": group["technical_retries"]}),
             )?;
             crate::control::validate_run_request(&request)?;
-            slots.push(Slot {
-                round: round as u32 + 1,
-                group_id: group_id.into(),
-                scenario_id: scenario_id.into(),
-                execution_id: execution_id_for_key(&key),
-                request: serde_json::to_value(request)?,
-                state: "pending".into(),
-                result_path: None,
-                error: None,
-                observed: 0,
-                completed: 0,
-                passed: 0,
-                technical_valid: 0,
-                eligible: false,
-            });
+            for scenario_id in scenario_ids {
+                slots.push(Slot {
+                    round: round as u32 + 1,
+                    group_id: group_id.into(),
+                    scenario_id: scenario_id
+                        .as_str()
+                        .context("Native scenario required")?
+                        .into(),
+                    execution_id: execution_id_for_key(&key),
+                    request: serde_json::to_value(&request)?,
+                    state: "pending".into(),
+                    result_path: None,
+                    error: None,
+                    observed: 0,
+                    completed: 0,
+                    passed: 0,
+                    technical_valid: 0,
+                    eligible: false,
+                });
+            }
         }
     }
     ensure!(
@@ -1096,11 +1128,25 @@ fn update_slot(
                 .then_some((config.judge_model.as_str(), config.judge_provider.as_str())),
         "Evaluator identity differs"
     );
+    let requested: Vec<_> = slot.request["scenarios"]
+        .as_array()
+        .context("Native request scenarios are absent")?
+        .iter()
+        .map(|id| id.as_str().context("Native request scenario is invalid"))
+        .collect::<Result<_>>()?;
     ensure!(
-        report.scenarios.len() == 1,
-        "A child must contain exactly one scenario"
+        report
+            .scenarios
+            .iter()
+            .map(|scenario| scenario.scenario_id.as_str())
+            .eq(requested.iter().copied()),
+        "Native report group differs from admission"
     );
-    let scenario = &report.scenarios[0];
+    let scenario = report
+        .scenarios
+        .iter()
+        .find(|scenario| scenario.scenario_id == slot.scenario_id)
+        .context("Native report omitted the planned scenario")?;
     let expected = plan
         .snapshot
         .cases
@@ -1192,8 +1238,11 @@ fn project_measurements(value: &mut Value, execution: &PlanExecution, root: &Pat
     let native = execution
         .slots
         .iter()
+        .map(|slot| &slot.execution_id)
+        .collect::<BTreeSet<_>>()
+        .into_iter()
         .filter_map(|slot| {
-            let run = super::store::read_stored_run(&root.join(&slot.execution_id))
+            let run = super::store::read_stored_run(&root.join(slot))
                 .ok()
                 .flatten()?;
             super::presenter::stored_execution_summary(&run).ok()
@@ -1249,6 +1298,8 @@ fn result_paths(execution: &PlanExecution, root: &Path) -> Vec<PathBuf> {
         .slots
         .iter()
         .filter_map(|s| s.result_path.as_ref().map(|path| root.join(path)))
+        .collect::<BTreeSet<_>>()
+        .into_iter()
         .collect()
 }
 fn finish(execution: &mut PlanExecution, error: Option<String>, root: &Path) -> Result<()> {
@@ -1341,42 +1392,53 @@ mod tests {
         }
         fn native_record(&self, request: RunRequest) -> Result<ExecutionRecord> {
             let id = execution_id_for_key(&request.idempotency_key);
-            let scenario = &request.scenarios[0];
-            let (case, policy) = match scenario.built_in() {
-                Some(key) => {
-                    let materialized =
-                        key.materialize("profile-test", scenario.canonical_seed())?;
-                    (materialized.case, materialized.spec.execution)
-                }
-                None => {
-                    let markdown = crate::markdown::embedded_catalog()?
-                        .into_iter()
-                        .find(|c| c.id == scenario.as_str())
-                        .unwrap();
-                    (
-                        crate::suite::markdown_case(&markdown, scenario.canonical_seed())?,
-                        crate::markdown::execution_policy(),
-                    )
-                }
-            };
-            let mut run = E2eRunReport::new(
-                format!("{id}-run"),
-                format!("{id}-attempt"),
-                1,
-                format!("{id}-session"),
-                "prompt".into(),
-            );
-            run.score = Some(80);
-            run.set_completion(
-                crate::report::CompletionState::Completed,
-                crate::report::EvaluatorAvailability::Available,
-            );
-            run.finish(if self.fail_next.swap(false, Ordering::SeqCst) {
-                RunStatus::HardGateFailed
-            } else {
-                RunStatus::Passed
-            });
-            let scenario = E2eScenarioReport::aggregate_case(case, policy, vec![run]);
+            let max_cases = request.scenarios.len() as u16;
+            let scenarios = request
+                .scenarios
+                .iter()
+                .map(|scenario| {
+                    let seed = request.seed.unwrap_or_else(|| scenario.canonical_seed());
+                    let (case, policy) = match scenario.built_in() {
+                        Some(key) => {
+                            let materialized = key.materialize("profile-test", seed)?;
+                            (materialized.case, materialized.spec.execution)
+                        }
+                        None => {
+                            let markdown = crate::markdown::embedded_catalog()?
+                                .into_iter()
+                                .find(|c| c.id == scenario.as_str())
+                                .unwrap();
+                            (
+                                crate::suite::markdown_case(&markdown, seed)?,
+                                crate::markdown::execution_policy(),
+                            )
+                        }
+                    };
+                    let mut run = E2eRunReport::new(
+                        format!("{id}-{scenario}-run"),
+                        format!("{id}-{scenario}-attempt"),
+                        1,
+                        format!("{id}-{scenario}-session"),
+                        "prompt".into(),
+                    );
+                    run.wall_time_ms = 100;
+                    run.cost = crate::report::CostReport {
+                        subject_usd: Some(0.25),
+                        total_usd: Some(0.25),
+                    };
+                    run.score = Some(80);
+                    run.set_completion(
+                        crate::report::CompletionState::Completed,
+                        crate::report::EvaluatorAvailability::Available,
+                    );
+                    run.finish(if self.fail_next.swap(false, Ordering::SeqCst) {
+                        RunStatus::HardGateFailed
+                    } else {
+                        RunStatus::Passed
+                    });
+                    Ok(E2eScenarioReport::aggregate_case(case, policy, vec![run]))
+                })
+                .collect::<Result<Vec<_>>>()?;
             let execution = ExecutionIdentity {
                 execution_id: id.clone(),
                 lane: request.lane.clone(),
@@ -1426,8 +1488,7 @@ mod tests {
                 observation_contract: None,
                 worker_contracts: Vec::new(),
             };
-            let mut report =
-                E2eReport::new(execution, system, subject, judge, None, vec![scenario]);
+            let mut report = E2eReport::new(execution, system, subject, judge, None, scenarios);
             let output = self.root.join(&id);
             fs::create_dir_all(&output)?;
             let path = report.write_to(&output, &manifest)?;
@@ -1448,7 +1509,7 @@ mod tests {
                 request_sha256: String::new(),
                 run_contract_sha256: None,
                 lane_budget: LaneBudget {
-                    max_cases: 1,
+                    max_cases,
                     max_runs_per_case: 1,
                     max_technical_retries: 1,
                     max_declared_turns: 100,
@@ -1849,6 +1910,67 @@ mod tests {
                 .await
                 .is_err());
         }
+    }
+    #[tokio::test]
+    async fn grouped_registry_cases_share_one_child_without_duplicate_measurements() {
+        let root = tempfile::tempdir().unwrap();
+        let runner = Arc::new(FakeRunner::new(root.path().into()));
+        let manager = manager(root.path(), runner.clone());
+        let (plan_id, id) = admitted(&manager, "registry", "registry-group").await;
+        let execution = terminal(&manager, &id).await;
+
+        assert_eq!(execution.slots.len(), 4);
+        assert_eq!(runner.submitted.load(Ordering::SeqCst), 3);
+        assert_eq!(result_paths(&execution, root.path()).len(), 3);
+        let grouped = execution
+            .slots
+            .iter()
+            .filter(|slot| slot.group_id == "case-registry-implementation")
+            .collect::<Vec<_>>();
+        assert_eq!(grouped.len(), 2);
+        assert_eq!(grouped[0].execution_id, grouped[1].execution_id);
+        assert_eq!(
+            grouped[0].request["scenarios"],
+            json!(["registry_implementation", "registry_verification"])
+        );
+        assert!(grouped[0].request["seed"].is_null());
+
+        let detail = manager.execution_detail(&id).unwrap().unwrap();
+        assert_eq!(detail["native_execution_ids"].as_array().unwrap().len(), 3);
+        assert_eq!(detail["reports"].as_array().unwrap().len(), 4);
+        assert_eq!(detail["scenario_metrics"].as_array().unwrap().len(), 4);
+        assert_eq!(detail["totals"]["wall_time_seconds"], json!(0.4));
+        assert_eq!(detail["totals"]["total_cost_usd"], json!(1.0));
+        assert!(execution.baseline_eligible);
+
+        let snapshot = &manager.read_plan(&plan_id).unwrap().snapshot;
+        for slot in &execution.slots {
+            let report =
+                E2eReport::read_from(&root.path().join(slot.result_path.as_ref().unwrap()))
+                    .unwrap()
+                    .0;
+            let scenario = report
+                .scenarios
+                .iter()
+                .find(|scenario| scenario.scenario_id == slot.scenario_id)
+                .unwrap();
+            let expected = snapshot
+                .cases
+                .iter()
+                .find(|case| case["scenario_id"] == slot.scenario_id)
+                .unwrap();
+            assert_eq!(scenario.case.as_ref().unwrap().seed, expected["seed"]);
+        }
+
+        let mut partial = request("registry");
+        partial.scenarios = vec!["registry_implementation".into()];
+        partial.judge_model.clear();
+        partial.judge_provider.clear();
+        let partial = manager.create_local(partial).await.unwrap();
+        let snapshot = &manager.read_plan(&partial.id).unwrap().snapshot;
+        let groups = snapshot.campaigns[0]["groups"].as_array().unwrap();
+        assert_eq!(groups.len(), 1);
+        assert_eq!(groups[0]["scenarios"], json!(["registry_implementation"]));
     }
     #[tokio::test]
     async fn cancellation_reserves_admission_and_prevents_next_groups() {
