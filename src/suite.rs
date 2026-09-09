@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use anyhow::{bail, Context, Result};
+use anyhow::{bail, ensure, Context, Result};
 use chrono::{SecondsFormat, Utc};
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use serde_json::json;
@@ -2756,7 +2756,14 @@ async fn run_markdown_once(
         .await;
     }
 
-    if report.transcript.is_some() {
+    if request.scenario.id == "minimal_path" {
+        let phase = phases
+            .iter_mut()
+            .find(|phase| phase.phase == "adherence")
+            .expect("adherence phase exists");
+        phase.status = MarkdownPhaseStatus::Completed;
+        phase.reason = "covered by deterministic minimal_path criteria".into();
+    } else if report.transcript.is_some() {
         let mut adherence_input = markdown_adherence_input(&rendered.prompt, &report);
         let mut adherence = match redact_markdown_artifact(&mut report, &mut adherence_input) {
             Ok(()) => {
@@ -3092,6 +3099,57 @@ async fn run_markdown_session(
     })
 }
 
+fn minimal_path_criteria(
+    run_id: &str,
+    seed: u64,
+    state: &serde_json::Value,
+    transcript: &serde_json::Value,
+    metrics: &crate::wire::SessionMetricsResponse,
+    validations: &[MarkdownCriterion],
+) -> Result<Vec<CriterionReport>> {
+    ensure!(metrics.complete, "subject metrics are incomplete");
+    let scope = format!("e2emd-minimal-{run_id}");
+    let expected = json!({"owner": "efficiency-suite", "case_seed": seed, "status": "stored"});
+    let calls: Vec<_> = common::function_outcomes(transcript)
+        .into_iter()
+        .filter(|call| !common::is_contract_discovery(&call.function_id))
+        .collect();
+    ensure!(
+        calls.iter().all(|call| call.is_error.is_some()),
+        "subject function results are incomplete"
+    );
+    let writes = calls
+        .iter()
+        .filter(|call| {
+            call.function_id == "state::set"
+                && call.arguments
+                    == json!({"scope": scope, "key": "minimal_result", "value": expected})
+                && call.is_error == Some(false)
+        })
+        .count();
+    let single = calls.len() == 1 && writes == 1;
+    let owned = calls
+        .iter()
+        .all(|call| call.arguments["scope"] == scope && call.arguments["key"] == "minimal_result");
+    let turns = metrics.totals.turns;
+    let errors = metrics.totals.function_call_errors;
+    let reply = common::final_response(transcript);
+    validations.iter().map(|criterion| {
+        let passed = match criterion.id.as_str() {
+            "01_exact_result" => state == &expected && writes == 1,
+            "02_single_task_call" => single,
+            "03_at_most_two_task_calls" => calls.len() <= 2 && owned && writes >= 1,
+            "04_single_turn" => turns == 1,
+            "05_at_most_two_turns" => (1..=2).contains(&turns),
+            "06_zero_friction" => errors == 0 && single && reply.contains("MIN-DONE") && reply.trim().lines().count() == 1,
+            other => bail!("unsupported minimal_path criterion: {other}"),
+        };
+        Ok(CriterionReport { id: criterion.id.clone(), description: Some(criterion.title.clone()),
+            possible: criterion.weight, awarded: Some(if passed { criterion.weight } else { 0 }),
+            reason: format!("Deterministic check: state_matches={}, successful_exact_writes={writes}, task_calls={}, owned_targets={owned}, turns={turns}, errors={errors}, single_line_confirmation={}", state == &expected, calls.len(), reply.contains("MIN-DONE") && reply.trim().lines().count() == 1) })
+    }).collect()
+}
+
 async fn evaluate_markdown_validations(
     context: &E2eContext,
     request: &MarkdownAttemptRequest<'_>,
@@ -3101,6 +3159,63 @@ async fn evaluate_markdown_validations(
     phases: &mut [MarkdownPhaseReport],
     report: &mut E2eRunReport,
 ) {
+    if request.scenario.id == "minimal_path" {
+        let result = async {
+            let state = context.trigger_value("state::get", json!({
+                "scope": format!("e2emd-minimal-{}", request.run_id), "key": "minimal_result"
+            })).await?;
+            let reference = artifact::write_json(
+                request.output,
+                &std::path::PathBuf::from("evidence")
+                    .join(request.run_id)
+                    .join(attempt_id)
+                    .join("deterministic-validation.json"),
+                format!("{attempt_id}-deterministic-validation"),
+                "deterministic-validation",
+                &state,
+            )?;
+            report.evidence.push(reference);
+            minimal_path_criteria(
+                request.run_id,
+                request.seed,
+                &common::state_value(state),
+                report
+                    .transcript
+                    .as_ref()
+                    .context("subject transcript unavailable")?,
+                report
+                    .metrics
+                    .as_ref()
+                    .context("subject metrics unavailable")?,
+                validations,
+            )
+        }
+        .await;
+        let phase = phases
+            .iter_mut()
+            .find(|phase| phase.phase == "validations")
+            .expect("validations phase exists");
+        match result {
+            Ok(criteria) => {
+                let score = criteria.iter().filter_map(|c| c.awarded).sum();
+                report.criteria = criteria;
+                report.validation_score = Some(score);
+                report.score = Some(score);
+                phase.status = MarkdownPhaseStatus::Completed;
+                phase.reason = "6 deterministic validators completed".into();
+            }
+            Err(error) => {
+                phase.status = MarkdownPhaseStatus::Failed;
+                phase.reason = format!("deterministic evidence unavailable: {error:#}");
+                report.push_failure(
+                    RunStatus::InfrastructureError,
+                    FailurePhase::Collect,
+                    phase.reason.clone(),
+                );
+            }
+        }
+        return;
+    }
     let Some(transcript) = report.transcript.as_ref() else {
         return;
     };
@@ -5030,6 +5145,102 @@ mod tests {
             by_session: Vec::new(),
             traces: None,
         })
+    }
+
+    #[test]
+    fn minimal_path_scores_observed_behavior_without_a_judge() {
+        let scenario = crate::markdown::embedded_scenario("minimal_path").unwrap();
+        let state = json!({"owner": "efficiency-suite", "case_seed": 42, "status": "stored"});
+        let mut transcript = json!({"messages": [
+            {"message": {"role": "assistant", "content": [{
+                "type": "function_call", "id": "write", "function_id": "state::set",
+                "arguments": {"scope": "e2emd-minimal-run", "key": "minimal_result", "value": state}
+            }]}},
+            {"message": {"role": "function_result", "function_call_id": "write",
+                "function_id": "state::set", "is_error": false, "details": {"ok": true}}},
+            {"message": {"role": "assistant", "content": [{"type": "text", "text": "MIN-DONE"}]}}
+        ]});
+        let metrics_for = |complete, errors| {
+            SessionMetricsResponse::from_normalized(SessionMetricsPayload {
+                root_session_id: "session".into(),
+                complete,
+                totals: SessionUsageTotals {
+                    sessions: 1,
+                    turns: 2,
+                    function_calls: 1,
+                    function_call_errors: errors,
+                    ..Default::default()
+                },
+                by_session: Vec::new(),
+                traces: None,
+            })
+        };
+        let mut metrics = metrics_for(true, 0);
+        let criteria = minimal_path_criteria(
+            "run",
+            42,
+            &state,
+            &transcript,
+            &metrics,
+            &scenario.validations,
+        )
+        .unwrap();
+        assert_eq!(
+            criteria
+                .iter()
+                .map(|c| c.awarded.unwrap())
+                .collect::<Vec<_>>(),
+            vec![40, 13, 12, 0, 10, 15]
+        );
+
+        let wrong_state = minimal_path_criteria(
+            "run",
+            42,
+            &json!(null),
+            &transcript,
+            &metrics,
+            &scenario.validations,
+        )
+        .unwrap();
+        assert_eq!(wrong_state[0].awarded, Some(0));
+        metrics = metrics_for(false, 0);
+        assert!(minimal_path_criteria(
+            "run",
+            42,
+            &state,
+            &transcript,
+            &metrics,
+            &scenario.validations
+        )
+        .is_err());
+
+        transcript["messages"][1]["message"]["is_error"] = json!(true);
+        metrics = metrics_for(true, 1);
+        let failed = minimal_path_criteria(
+            "run",
+            42,
+            &state,
+            &transcript,
+            &metrics,
+            &scenario.validations,
+        )
+        .unwrap();
+        for index in [0, 1, 2, 5] {
+            assert_eq!(failed[index].awarded, Some(0));
+        }
+        transcript["messages"][1]["message"]
+            .as_object_mut()
+            .unwrap()
+            .remove("is_error");
+        assert!(minimal_path_criteria(
+            "run",
+            42,
+            &state,
+            &transcript,
+            &metrics,
+            &scenario.validations
+        )
+        .is_err());
     }
 
     fn terminal_status(status: TurnStatus, pending: Vec<String>) -> StatusReport {
