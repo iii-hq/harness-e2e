@@ -25,8 +25,8 @@ import {createRoot} from 'react-dom/client';
 import {App} from '/src/App.tsx';
 import {installDashboardIiiClient} from '/src/lib/iii-client.ts';
 import {installDashboardRuntimeConfig} from '/src/lib/dashboard-data-source.ts';
-const reference={execution:{id:'remote-1',campaignId:'campaign',planKey:'smoke',attempt:1,trigger:'manual',requestedBy:null,label:'RC Smoke',phase:'complete',terminal:true,resultState:'complete',requestedAt:'2026-09-08T12:00:00Z',completedAt:'2026-09-08T12:01:00Z',error:null,runCount:1,reportCount:1,plan:{name:'Smoke',subject:{model:'test',provider:'test'},judge:{model:'judge',provider:'test'}},request:{}},aggregate:{planned_runs:1,observed_runs:1,completion_rate:1,execution_reliability:1},runs:[{attemptsComplete:true,scenarioId:'alpha',scenarioVersion:1,caseId:'case-a',seed:'42',technical:'valid',completion:'completed',objectiveScore:80,wallTimeMs:1000,totalTokens:100,costSubjectUsd:0.1,turns:1,functionCalls:1,functionCallErrors:0}],materialized:{profile:{id:'smoke',repetitions:1,technical_retries:0},campaigns:[{groups:[{scenarios:['alpha']}]}]},shards:[{runs:[{scenario_id:'alpha',case_id:'case-a',seed:'42'}]}]};
-const detail=id=>({id,label:id,status:'passed',subjects:[],totals:{total_tokens:80,report_coverage:1},reports:[{subject_id:'test',scenario_id:'alpha',available:true,report:{scenarios:[{scenario_id:'alpha',runs:[{run_id:'r1',technical:'valid',completion:'completed',objective_score:90,efficiency:{total_tokens:70},metrics:{complete:true,totals:{cache_read_tokens:10}}}]}]}}]});
+const reference={execution:{id:'remote-1',campaignId:'campaign',planKey:'smoke',attempt:1,trigger:'manual',requestedBy:null,label:'RC Smoke',phase:'complete',terminal:true,resultState:'complete',requestedAt:'2026-09-08T12:00:00Z',completedAt:'2026-09-08T12:01:00Z',error:null,runCount:1,reportCount:1,plan:{name:'Smoke',subject:{model:'test',provider:'test'},judge:{model:'judge',provider:'test'}},request:{}},aggregate:{planned_runs:1,observed_runs:1,completion_rate:1,execution_reliability:1},runs:[{attemptsComplete:true,scenarioId:'alpha',scenarioVersion:1,caseId:'case-a',seed:'42',repetition:0,technical:'valid',completion:'completed',objectiveScore:80,wallTimeMs:1000,totalTokens:100,costSubjectUsd:0.1,turns:1,functionCalls:1,functionCallErrors:0}],materialized:{profile:{id:'smoke',repetitions:1,technical_retries:0},campaigns:[{groups:[{scenarios:['alpha']}]}]},shards:[{runs:[{scenario_id:'alpha',case_id:'case-a',seed:'42'}]}]};
+const detail=id=>({id,label:id,status:'passed',subjects:[],totals:{total_tokens:80,report_coverage:1},reports:[{subject_id:'test',scenario_id:'alpha',available:true,report:{scenarios:[{scenario_id:'alpha',case_id:'case-a',case:{seed:42},runs:[{run_id:'r1',technical:'valid',completion:'completed',objective_score:90,efficiency:{total_tokens:70},metrics:{complete:true,totals:{cache_read_tokens:10}}}]}]}}]});
 const makePlan=(attempt=null)=>({schema_version:1,id:'imported-reference',label:'RC Smoke local',purpose:'reference',created_at:'2026-09-08T12:02:00Z',updated_at:'2026-09-08T12:02:00Z',state:attempt?'baseline_ready':'draft',locked:Boolean(attempt),scope_hash:'scope',url:'http://local',model:'test',provider:'test',judge_model:'judge',judge_provider:'test',scenarios:[{scenario_id:'alpha',scenario_version:1,case_id:'case-a',seed:42,inputs_sha256:'inputs',contract_sha256:'contract',complexity_tier:'l1_sequential'}],scenario_ids:['alpha'],runs:1,technical_retries:0,seed:null,baseline_execution_id:attempt,candidate_execution_ids:[],incomplete_execution_ids:[],last_attempt_id:attempt,reference_execution_id:'remote-1'}); const locals=[];let imported=null,starts=0;window.calls=[];window.disconnected=false;
 installDashboardIiiClient({browserId:'personal',on:()=>()=>{},registerTrigger:()=>()=>{},async trigger(id,payload){window.calls.push({id,payload});
  if(id.startsWith('release-control::')&&window.disconnected)throw new Error('RC tab disconnected');
@@ -112,6 +112,19 @@ try {
     await page.locator('[data-comparison-metric="tokens"]').innerText(),
     /100[\s\S]*80/,
   )
+  const scoreFilter = page.getByRole('checkbox', {
+    name: 'Exclude tests with a zero or missing result in A or B',
+  })
+  assert.equal(await scoreFilter.isChecked(), false)
+  await scoreFilter.check()
+  await page
+    .getByText('1 test retained on both sides.', { exact: true })
+    .waitFor()
+  assert.match(
+    await page.locator('[data-comparison-metric="tokens"]').innerText(),
+    /100[\s\S]*80/,
+  )
+  await scoreFilter.uncheck()
   const scenario = page.getByRole('link', { name: 'alpha' })
   assert.equal(
     await scenario.getAttribute('href'),

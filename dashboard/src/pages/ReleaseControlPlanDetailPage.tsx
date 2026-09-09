@@ -38,6 +38,7 @@ import {
 } from '@/lib/plan-comparison'
 import {
   comparisonSummary,
+  filterReferenceComparison,
   getReleaseControlReference,
   listReleaseControlExecutions,
   objectiveScore,
@@ -162,6 +163,7 @@ export function ReleaseControlPlanDetailPage({ planKey }: { planKey: string }) {
   const [activePlan, setActivePlan] = useState<LocalPlan | null>(null)
   const [dialogOpen, setDialogOpen] = useState(false)
   const [starting, setStarting] = useState(false)
+  const [excludeZeroScores, setExcludeZeroScores] = useState(false)
   const [localUrl, setLocalUrl] = useState('Current local Harness')
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -333,8 +335,27 @@ export function ReleaseControlPlanDetailPage({ planKey }: { planKey: string }) {
       frozen.technicalRetries !== null &&
       frozen.scenarios.every((scenario) => frozen.seeds.has(scenario)),
   )
-  const referenceResult = reference ? referenceSummary(reference) : null
-  const candidateResult = candidate ? comparisonSummary(candidate) : null
+  const filtered = useMemo(
+    () =>
+      excludeZeroScores && reference && candidate
+        ? filterReferenceComparison(reference, candidate)
+        : null,
+    [excludeZeroScores, reference, candidate],
+  )
+  const comparedReference = filtered?.reference ?? reference
+  const comparedCandidate = filtered?.candidate ?? candidate
+  const comparedScenarios =
+    frozen?.scenarios.filter(
+      (scenario) =>
+        !filtered ||
+        filtered.reference.runs.some((run) => run.scenarioId === scenario),
+    ) ?? []
+  const referenceResult = comparedReference
+    ? referenceSummary(comparedReference)
+    : null
+  const candidateResult = comparedCandidate
+    ? comparisonSummary(comparedCandidate)
+    : null
   const comparison = buildPlanComparison(referenceResult, candidateResult)
   const comparisonMetrics = Object.fromEntries(
     comparison.metrics
@@ -368,10 +389,10 @@ export function ReleaseControlPlanDetailPage({ planKey }: { planKey: string }) {
       ComparedMetric
     >
   >
-  if (reference && candidate)
+  if (comparedReference && comparedCandidate)
     comparisonMetrics.score = metric(
-      objectiveScore(reference),
-      objectiveScore(candidate),
+      objectiveScore(comparedReference),
+      objectiveScore(comparedCandidate),
     )
 
   const openRunDialog = async () => {
@@ -698,6 +719,41 @@ export function ReleaseControlPlanDetailPage({ planKey }: { planKey: string }) {
                 score: 'Mean objective score',
               }}
             >
+              {reference && candidate ? (
+                <label className="flex cursor-pointer items-start gap-3 text-sm">
+                  <input
+                    type="checkbox"
+                    className="mt-1 accent-ink"
+                    checked={excludeZeroScores}
+                    onChange={(event) =>
+                      setExcludeZeroScores(event.target.checked)
+                    }
+                    aria-describedby="plan-comparison-filter-description"
+                  />
+                  <span>
+                    <span>
+                      Exclude tests with a zero or missing result in A or B
+                    </span>
+                    <span
+                      id="plan-comparison-filter-description"
+                      className="mt-1 block text-ink-muted"
+                    >
+                      Keeps only tests with a recorded, non-zero score on both
+                      sides and recalculates totals and averages.
+                    </span>
+                  </span>
+                </label>
+              ) : null}
+              {filtered ? (
+                <p className="text-sm text-ink-muted">
+                  {comparedScenarios.length}{' '}
+                  {comparedScenarios.length === 1 ? 'test' : 'tests'} retained
+                  on both sides.
+                  {comparedScenarios.length === 0
+                    ? ' No matching non-zero results to compare.'
+                    : ''}
+                </p>
+              ) : null}
               {selectedLocalPlan?.reference_execution_id &&
               selectedLocalPlan.reference_execution_id !==
                 reference?.execution.id ? (
@@ -726,7 +782,7 @@ export function ReleaseControlPlanDetailPage({ planKey }: { planKey: string }) {
                   className="flex flex-wrap gap-2"
                   aria-label="Scenario comparisons"
                 >
-                  {frozen.scenarios.map((scenario) => (
+                  {comparedScenarios.map((scenario) => (
                     <a
                       key={scenario}
                       className={buttonClassName({

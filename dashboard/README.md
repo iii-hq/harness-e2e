@@ -103,6 +103,9 @@ parameters only when requested and starts a new local plan using the current
 scenario contracts. Earlier plans and results are preserved. The local Harness
 and scenario implementations may differ from the remote
 reference; the comparison is descriptive. No local execution is posted to RC.
+The comparison offers the same opt-in filter as RC: **Exclude tests with a zero
+or missing result in A or B**. It removes matching test slots from both sides
+and recalculates metrics; original executions remain unchanged.
 A disconnected RC bridge leaves the existing local execution tools available.
 
 The dashboard executes itself as an isolated child process, so changing and

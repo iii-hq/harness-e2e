@@ -274,6 +274,50 @@ function seedNumber(value: string | number | null | undefined) {
   return Number.isSafeInteger(number) && number >= 0 ? number : null
 }
 
+function seedString(
+  value: string | number | null | undefined,
+  caseId?: string | null,
+) {
+  const hex = caseId?.match(/:seed-([0-9a-f]{16})$/i)?.[1]
+  if (hex) return BigInt(`0x${hex}`).toString()
+  if (
+    (typeof value === 'string' && /^\d+$/.test(value)) ||
+    (typeof value === 'number' && Number.isSafeInteger(value) && value >= 0)
+  )
+    return BigInt(value).toString()
+  return null
+}
+
+function slotKey(
+  scenarioId: string,
+  seed: string | number | null | undefined,
+  repetition: number | null | undefined,
+  caseId?: string | null,
+) {
+  const normalizedSeed = seedString(seed, caseId)
+  return normalizedSeed === null || !Number.isInteger(repetition)
+    ? null
+    : JSON.stringify([scenarioId, normalizedSeed, repetition])
+}
+
+function localRepetition(
+  entry: Record<string, unknown>,
+  run: DashboardRunProjection,
+  index: number,
+) {
+  if (
+    typeof entry.round === 'number' &&
+    Number.isInteger(entry.round) &&
+    entry.round > 0
+  )
+    return entry.round - 1
+  return typeof run.repetition === 'number' &&
+    Number.isInteger(run.repetition) &&
+    run.repetition >= 0
+    ? run.repetition
+    : index
+}
+
 function aggregateStatus(runs: RcRun[]) {
   if (runs.length === 0) return 'unavailable'
   if (runs.every((run) => run.status === 'passed')) return 'passed'
@@ -293,7 +337,7 @@ function localRuns(detail: DashboardExecutionDetail): RcRun[] {
         const scenarioCase = record(scenario.case)
         const caseId = text(scenario.case_id)
         const seed = scenarioCase?.seed
-        return scenario.runs.flatMap((run) => {
+        return scenario.runs.flatMap((run, runIndex) => {
           const executionId =
             entry.native_execution_id ?? `report:${entryIndex}`
           const id = `${executionId}:${scenarioIndex}:${run.run_id}`
@@ -311,6 +355,7 @@ function localRuns(detail: DashboardExecutionDetail): RcRun[] {
                 typeof seed === 'string' || typeof seed === 'number'
                   ? String(seed)
                   : null,
+              repetition: localRepetition(entry, run, runIndex),
               status: run.status,
               completion: run.completion,
               technical: run.technical,
@@ -556,7 +601,19 @@ export function comparisonSummary(
   if (runs.length === 0)
     return {
       ...view,
-      totals: { ...view.totals, total_tokens: null, total_cost_usd: null },
+      scenario_metrics: [],
+      totals: {
+        ...view.totals,
+        total_tokens: null,
+        tokens_per_completion: null,
+        failed_attempt_tokens: null,
+        total_cost_usd: null,
+        wall_time_seconds: null,
+        function_calls: null,
+        function_call_errors: null,
+        turns: null,
+        technical_failures: null,
+      },
     }
   return {
     ...view,
@@ -579,6 +636,122 @@ export function comparisonSummary(
       technical_failures: runs.filter(
         (run) => run.technical === 'technical_invalid',
       ).length,
+    },
+  }
+}
+
+/** Apply RC's "remove incomplete tests" rule to an RC/local comparison. */
+export function filterReferenceComparison(
+  reference: RcReference,
+  candidate: DashboardExecutionDetail,
+) {
+  const referenceSlots = reference.runs.flatMap((run) => {
+    const key = slotKey(run.scenarioId, run.seed, run.repetition, run.caseId)
+    return key ? [{ key, run }] : []
+  })
+  const candidateSlots = localRuns(candidate).flatMap((run) => {
+    const key = slotKey(run.scenarioId, run.seed, run.repetition, run.caseId)
+    return key ? [{ key, run }] : []
+  })
+  const referenceKeys = new Set(referenceSlots.map(({ key }) => key))
+  const candidateKeys = new Set(candidateSlots.map(({ key }) => key))
+  const excluded = new Set(
+    [...referenceSlots, ...candidateSlots]
+      .filter(
+        ({ run }) =>
+          typeof run.objectiveScore !== 'number' ||
+          !Number.isFinite(run.objectiveScore) ||
+          run.objectiveScore === 0,
+      )
+      .map(({ key }) => key),
+  )
+  const retained = new Set(
+    [...referenceKeys].filter(
+      (key) => candidateKeys.has(key) && !excluded.has(key),
+    ),
+  )
+  const referenceRuns = reference.runs.filter((run) => {
+    const key = slotKey(run.scenarioId, run.seed, run.repetition, run.caseId)
+    return key !== null && retained.has(key)
+  })
+  const filteredReference: RcReference = {
+    ...reference,
+    execution: {
+      ...reference.execution,
+      runCount: referenceRuns.length,
+      reportCount: referenceRuns.length,
+    },
+    runs: referenceRuns,
+    aggregate: {
+      planned_runs: referenceRuns.length,
+      observed_runs: referenceRuns.length,
+      completion_rate:
+        referenceRuns.length === 0
+          ? null
+          : referenceRuns.filter((run) => run.completion === 'completed')
+              .length / referenceRuns.length,
+      execution_reliability:
+        referenceRuns.length === 0
+          ? null
+          : referenceRuns.filter((run) => run.technical !== 'technical_invalid')
+              .length / referenceRuns.length,
+    },
+  }
+  const reports = candidate.reports.flatMap((entry) => {
+    if (!entry.report) return []
+    const scenarios = entry.report.scenarios.flatMap((scenario) => {
+      const scenarioCase = record(scenario.case)
+      const caseId = text(scenario.case_id)
+      const runs = scenario.runs.flatMap((run, runIndex) => {
+        const repetition = localRepetition(entry, run, runIndex)
+        const key = slotKey(
+          scenario.scenario_id,
+          scenarioCase?.seed as string | number | null | undefined,
+          repetition,
+          caseId,
+        )
+        return key !== null && retained.has(key) ? [{ ...run, repetition }] : []
+      })
+      return runs.length > 0 ? [{ ...scenario, runs }] : []
+    })
+    return scenarios.length > 0
+      ? [{ ...entry, report: { ...entry.report, scenarios } }]
+      : []
+  })
+  const retainedScenarios = new Set(referenceRuns.map((run) => run.scenarioId))
+  const candidateRunCount = reports.reduce(
+    (total, entry) =>
+      total +
+      (entry.report?.scenarios.reduce(
+        (scenarioTotal, scenario) => scenarioTotal + scenario.runs.length,
+        0,
+      ) ?? 0),
+    0,
+  )
+  const filteredCandidate: DashboardExecutionDetail = {
+    ...candidate,
+    subjects: candidate.subjects.map((subject) => ({
+      ...subject,
+      scenarios: subject.scenarios.filter((scenario) =>
+        retainedScenarios.has(scenario.id),
+      ),
+    })),
+    reports,
+    scenario_metrics: [],
+    totals: {
+      missing_reports: 0,
+      expected_reports: candidateRunCount,
+      received_reports: candidateRunCount,
+      report_coverage: candidateRunCount > 0 ? 1 : null,
+    },
+  }
+  const summary = comparisonSummary(filteredCandidate)
+  return {
+    reference: filteredReference,
+    candidate: {
+      ...filteredCandidate,
+      scenario_metrics: summary.scenario_metrics,
+      totals: summary.totals,
     },
   }
 }

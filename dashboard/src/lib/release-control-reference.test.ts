@@ -3,6 +3,7 @@ import type { DashboardExecutionDetail } from '@/lib/dashboard-data-source'
 import { installDashboardIiiClient } from '@/lib/iii-client'
 import {
   comparisonSummary,
+  filterReferenceComparison,
   getReleaseControlReference,
   listReleaseControlExecutions,
   localScenarioObservations,
@@ -11,6 +12,99 @@ import {
   referenceScenarioObservations,
   referenceSummary,
 } from '@/lib/release-control-reference'
+
+function comparisonCandidate(
+  rows: Array<{
+    scenario: string
+    seed: string | number
+    score: number | null
+    repetition?: number
+    caseId?: string
+  }>,
+) {
+  return {
+    id: 'local',
+    status: 'passed',
+    subjects: [
+      {
+        id: 'subject',
+        model: 'model',
+        provider: 'provider',
+        scenarios: rows.map((row) => ({ id: row.scenario })),
+      },
+    ],
+    scenario_metrics: [{ scenario_id: 'legacy' }],
+    totals: {
+      expected_reports: 99,
+      received_reports: 99,
+      missing_reports: 8,
+      total_tokens: 999,
+      wall_time_seconds: 999,
+      total_cost_usd: 999,
+      function_calls: 999,
+      turns: 999,
+    },
+    reports: rows.map((row, index) => ({
+      subject_id: 'subject',
+      scenario_id: row.scenario,
+      available: true,
+      ...(row.repetition === undefined ? {} : { round: row.repetition + 1 }),
+      report: {
+        scenarios: [
+          {
+            scenario_id: row.scenario,
+            scenario_version: 7,
+            case_id:
+              row.caseId ??
+              `${row.scenario}:v7:seed-${BigInt(row.seed).toString(16).padStart(16, '0')}`,
+            case: { seed: row.seed },
+            aggregate: { planned_runs: 1 },
+            runs: [
+              {
+                run_id: `run-${index}`,
+                status: row.score === 0 ? 'failed' : 'passed',
+                completion: row.score === null ? 'undetermined' : 'completed',
+                technical: 'valid',
+                objective_score: row.score,
+                wall_time_ms: 1000,
+                efficiency: {
+                  total_tokens: 10,
+                  function_calls: 1,
+                  root_turns: 1,
+                },
+                metrics: { complete: true, totals: {} },
+                cost: { subject_usd: 0.01 },
+              },
+            ],
+          },
+        ],
+      },
+    })),
+  } as unknown as DashboardExecutionDetail
+}
+
+function comparisonReference(
+  rows: Array<{
+    scenario: string
+    seed: string
+    score: number | null
+    repetition?: number
+  }>,
+): RcReference {
+  return {
+    ...reference,
+    execution: { ...reference.execution },
+    runs: rows.map((row, index) => ({
+      ...reference.runs[0],
+      id: `rc-${index}`,
+      scenarioId: row.scenario,
+      scenarioVersion: 2,
+      seed: row.seed,
+      repetition: row.repetition ?? 0,
+      objectiveScore: row.score,
+    })),
+  }
+}
 
 const reference: RcReference = {
   execution: {
@@ -132,6 +226,141 @@ describe('Release Control reference adapter', () => {
         ],
       }),
     ).toBe(100)
+  })
+})
+
+describe('incomplete comparison filtering', () => {
+  it('keeps only paired non-zero slots from a complete RC plan and a partial local run', () => {
+    const remote = comparisonReference(
+      Array.from({ length: 9 }, (_, index) => ({
+        scenario: `scenario-${index}`,
+        seed: '42',
+        score: 80,
+      })),
+    )
+    const local = comparisonCandidate([
+      { scenario: 'scenario-0', seed: 42, score: 90 },
+    ])
+
+    const filtered = filterReferenceComparison(remote, local)
+
+    expect(filtered.reference.runs.map((run) => run.scenarioId)).toEqual([
+      'scenario-0',
+    ])
+    expect(filtered.candidate.reports).toHaveLength(1)
+    expect(referenceSummary(filtered.reference).totals).toMatchObject({
+      expected_reports: 1,
+      received_reports: 1,
+      total_tokens: 30,
+    })
+    expect(comparisonSummary(filtered.candidate).totals).toMatchObject({
+      expected_reports: 1,
+      received_reports: 1,
+      total_tokens: 10,
+    })
+  })
+
+  it.each([
+    ['remote zero', 0, 80],
+    ['remote missing', null, 80],
+    ['local zero', 80, 0],
+    ['local missing', 80, null],
+  ])('removes a slot with %s from both sides', (_, remoteScore, localScore) => {
+    const filtered = filterReferenceComparison(
+      comparisonReference([
+        { scenario: 'alpha', seed: '7', score: remoteScore },
+      ]),
+      comparisonCandidate([{ scenario: 'alpha', seed: 7, score: localScore }]),
+    )
+    expect(filtered.reference.runs).toEqual([])
+    expect(filtered.candidate.reports).toEqual([])
+  })
+
+  it('removes the whole slot when any observation in it has no positive score', () => {
+    const filtered = filterReferenceComparison(
+      comparisonReference([
+        { scenario: 'alpha', seed: '7', score: 80 },
+        { scenario: 'alpha', seed: '7', score: 0 },
+      ]),
+      comparisonCandidate([{ scenario: 'alpha', seed: 7, score: 90 }]),
+    )
+    expect(filtered.reference.runs).toEqual([])
+    expect(filtered.candidate.reports).toEqual([])
+  })
+
+  it('matches repetitions and full-width seeds without comparing scenario versions', () => {
+    const seed = '18446744073709551615'
+    const remote = comparisonReference([
+      { scenario: 'alpha', seed, score: 70, repetition: 0 },
+      { scenario: 'alpha', seed, score: 75, repetition: 1 },
+    ])
+    const local = comparisonCandidate([
+      {
+        scenario: 'alpha',
+        seed,
+        score: 80,
+        repetition: 0,
+        caseId: 'alpha:v7:seed-ffffffffffffffff',
+      },
+      {
+        scenario: 'alpha',
+        seed,
+        score: 85,
+        repetition: 1,
+        caseId: 'alpha:v7:seed-ffffffffffffffff',
+      },
+    ])
+
+    const filtered = filterReferenceComparison(remote, local)
+
+    expect(filtered.reference.runs).toHaveLength(2)
+    expect(filtered.candidate.reports).toHaveLength(2)
+    expect(objectiveScore(filtered.reference)).toBe(72.5)
+    expect(objectiveScore(filtered.candidate)).toBe(82.5)
+  })
+
+  it('removes slots missing on either side', () => {
+    const filtered = filterReferenceComparison(
+      comparisonReference([{ scenario: 'only-remote', seed: '1', score: 80 }]),
+      comparisonCandidate([{ scenario: 'only-local', seed: 1, score: 90 }]),
+    )
+    expect(filtered.reference.runs).toEqual([])
+    expect(filtered.candidate.reports).toEqual([])
+  })
+
+  it('clears legacy metrics when every slot is removed and leaves its inputs intact', () => {
+    const remote = comparisonReference([
+      { scenario: 'alpha', seed: '1', score: 0 },
+    ])
+    const local = comparisonCandidate([
+      { scenario: 'alpha', seed: 1, score: 90 },
+    ])
+    const beforeRemote = structuredClone(remote)
+    const beforeLocal = structuredClone(local)
+
+    const filtered = filterReferenceComparison(remote, local)
+
+    expect(referenceSummary(filtered.reference).totals).toMatchObject({
+      expected_reports: 0,
+      received_reports: 0,
+      total_tokens: null,
+      wall_time_seconds: null,
+    })
+    expect(comparisonSummary(filtered.candidate)).toMatchObject({
+      scenario_metrics: [],
+      totals: {
+        expected_reports: 0,
+        received_reports: 0,
+        missing_reports: 0,
+        total_tokens: null,
+        wall_time_seconds: null,
+        total_cost_usd: null,
+        function_calls: null,
+        turns: null,
+      },
+    })
+    expect(remote).toEqual(beforeRemote)
+    expect(local).toEqual(beforeLocal)
   })
 })
 
