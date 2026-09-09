@@ -267,6 +267,25 @@ class WorkflowBoundaryTests(unittest.TestCase):
         self.assertIn("cleanup --lease-id", launcher)
         self.assertNotIn("git commit", launcher)
 
+    def test_registry_groups_prepare_private_sources_without_persisting_credentials(self):
+        workflow = (ROOT / ".github/workflows/exact-stack-e2e.yml").read_text()
+        source_block = workflow.split("Mint private Registry source token", 1)[1].split(
+            "- uses: actions/download-artifact", 1
+        )[0]
+        self.assertEqual(source_block.count("startsWith(matrix.group_id, 'case-registry-')"), 4)
+        self.assertIn("repository: iii-hq/registry", source_block)
+        self.assertIn("ref: 662eb87c1bdbb395f36264d5d26bf823e2ace783", source_block)
+        self.assertIn("repository: iii-hq/e2e-fixture", source_block)
+        fixture_checkout = source_block.split("Checkout latest E2E fixture", 1)[1].split(
+            "Route Registry fixture clones", 1
+        )[0]
+        self.assertNotIn("ref:", fixture_checkout)
+        self.assertEqual(source_block.count("persist-credentials: false"), 2)
+        self.assertIn("actions/create-github-app-token@fee1f7d63c2ff003460e3d139729b119787bc349", source_block)
+        self.assertIn("permission-contents: read", source_block)
+        self.assertNotIn("E2E_FIXTURE_GITHUB_TOKEN", source_block)
+        self.assertNotIn("token@github.com", source_block)
+
     def test_endurance_keeps_github_authority_in_the_post_run_publisher(self):
         workflow = (ROOT / ".github/workflows/engineering-endurance.yml").read_text(
             encoding="utf-8"

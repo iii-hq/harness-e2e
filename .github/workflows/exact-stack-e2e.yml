@@ -177,6 +177,46 @@ jobs:
         with:
           ref: ${{ inputs.runner_sha }}
 
+      - name: Mint private Registry source token
+        id: registry_source_token
+        if: startsWith(matrix.group_id, 'case-registry-')
+        uses: actions/create-github-app-token@fee1f7d63c2ff003460e3d139729b119787bc349 # v2
+        with:
+          app-id: ${{ secrets.III_CI_APP_ID }}
+          private-key: ${{ secrets.III_CI_APP_PRIVATE_KEY }}
+          owner: iii-hq
+          repositories: |
+            registry
+            e2e-fixture
+          permission-contents: read
+
+      - name: Checkout pinned Registry source
+        if: startsWith(matrix.group_id, 'case-registry-')
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          repository: iii-hq/registry
+          ref: 662eb87c1bdbb395f36264d5d26bf823e2ace783
+          token: ${{ steps.registry_source_token.outputs.token }}
+          persist-credentials: false
+          path: .registry-sources/registry
+
+      - name: Checkout latest E2E fixture
+        if: startsWith(matrix.group_id, 'case-registry-')
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          repository: iii-hq/e2e-fixture
+          token: ${{ steps.registry_source_token.outputs.token }}
+          persist-credentials: false
+          path: .registry-sources/e2e-fixture
+
+      - name: Route Registry fixture clones to prepared sources
+        if: startsWith(matrix.group_id, 'case-registry-')
+        run: |
+          set -euo pipefail
+          test "$(git -C .registry-sources/registry rev-parse HEAD)" = 662eb87c1bdbb395f36264d5d26bf823e2ace783
+          git config --global url."file://${GITHUB_WORKSPACE}/.registry-sources/registry".insteadOf https://github.com/iii-hq/registry.git
+          git config --global url."file://${GITHUB_WORKSPACE}/.registry-sources/e2e-fixture".insteadOf https://github.com/iii-hq/e2e-fixture.git
+
       - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
         with:
           name: e2e-contract-${{ inputs.execution_id }}-gh-${{ github.run_attempt }}
