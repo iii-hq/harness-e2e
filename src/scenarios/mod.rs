@@ -33,6 +33,7 @@ pub mod fanout_ladder;
 pub mod git_regression_forensics;
 pub mod incident_response;
 pub mod kanban;
+pub mod linkly;
 pub mod mechanical_reaction;
 pub mod moving_target;
 pub mod performance_regression;
@@ -366,6 +367,8 @@ pub enum ScenarioId {
     KanbanC6Discussion,
     #[value(name = "kanban_c7_live")]
     KanbanC7Live,
+    #[value(name = "linkly_tutorial")]
+    LinklyTutorial,
     #[value(name = "context_pressure")]
     ContextPressure,
     #[value(name = "shell_coder_sandbox")]
@@ -471,7 +474,7 @@ pub enum ScenarioId {
 }
 
 impl ScenarioId {
-    pub const ALL: [Self; 62] = [
+    pub const ALL: [Self; 63] = [
         Self::RegistryPlanning,
         Self::RegistryImplementation,
         Self::RegistryEnvironment,
@@ -483,6 +486,7 @@ impl ScenarioId {
         Self::KanbanC5EditMove,
         Self::KanbanC6Discussion,
         Self::KanbanC7Live,
+        Self::LinklyTutorial,
         Self::ContextPressure,
         Self::ShellCoderSandbox,
         Self::ResearchPipeline,
@@ -561,6 +565,7 @@ impl ScenarioId {
             Self::KanbanC5EditMove => kanban::IDS[4],
             Self::KanbanC6Discussion => kanban::IDS[5],
             Self::KanbanC7Live => kanban::IDS[6],
+            Self::LinklyTutorial => linkly::ID,
             Self::ContextPressure => context_pressure::ID,
             Self::ShellCoderSandbox => shell_coder_sandbox::ID,
             Self::ResearchPipeline => research_pipeline::ID,
@@ -628,6 +633,7 @@ impl ScenarioId {
             Self::KanbanC5EditMove => kanban::spec(4, run_id),
             Self::KanbanC6Discussion => kanban::spec(5, run_id),
             Self::KanbanC7Live => kanban::spec(6, run_id),
+            Self::LinklyTutorial => linkly::scenario(run_id),
             Self::ContextPressure => context_pressure::scenario(run_id),
             Self::ShellCoderSandbox => shell_coder_sandbox::scenario(run_id),
             Self::ResearchPipeline => research_pipeline::scenario(run_id),
@@ -695,6 +701,7 @@ impl ScenarioId {
             Self::KanbanC5EditMove => kanban::materialize(4, namespace)?,
             Self::KanbanC6Discussion => kanban::materialize(5, namespace)?,
             Self::KanbanC7Live => kanban::materialize(6, namespace)?,
+            Self::LinklyTutorial => linkly::materialize(namespace, seed)?,
             Self::ContextPressure => context_pressure::materialize(namespace, seed)?,
             Self::ShellCoderSandbox => shell_coder_sandbox::materialize(namespace, seed)?,
             Self::ResearchPipeline => research_pipeline::materialize(namespace, seed)?,
@@ -854,6 +861,7 @@ impl ScenarioId {
                 | Self::CrossRepoContractMigration
                 | Self::TypescriptChatService
                 | Self::TrendingTopicsBuild
+                | Self::LinklyTutorial
                 | Self::SweConfigIsolation
                 | Self::SweCacheInvalidation
                 | Self::SweBatchReplay
@@ -882,7 +890,9 @@ impl ScenarioId {
             Self::IncidentResponse
             | Self::ReleaseTrainRecovery
             | Self::CrossRepoContractMigration => ScenarioExecutionKind::AdaptiveFlow,
-            Self::PolicyBoundAction => ScenarioExecutionKind::ScriptedDialogue,
+            Self::PolicyBoundAction | Self::LinklyTutorial => {
+                ScenarioExecutionKind::ScriptedDialogue
+            }
             _ => ScenarioExecutionKind::HarnessTurn,
         }
     }
@@ -943,6 +953,7 @@ pub fn allowed_functions(scenario_id: &str, run_id: &str) -> Option<Vec<String>>
 pub fn dialogue_followups(scenario_id: &str, run_id: &str) -> Vec<String> {
     match scenario_id {
         policy_bound_action::ID => policy_bound_action::dialogue_followups(run_id),
+        linkly::ID => linkly::dialogue_followups(run_id),
         _ => Vec::new(),
     }
 }
@@ -965,7 +976,7 @@ mod tests {
 
     use super::*;
     #[test]
-    fn registry_contains_sixty_two_unique_valid_scenarios() {
+    fn registry_contains_sixty_three_unique_valid_scenarios() {
         let mut ids = HashSet::new();
         for scenario in ScenarioId::ALL {
             assert!(ids.insert(scenario.as_str()));
@@ -974,7 +985,7 @@ mod tests {
                 .materialize("run", scenario.canonical_seed())
                 .unwrap();
         }
-        assert_eq!(ids.len(), 62);
+        assert_eq!(ids.len(), 63);
     }
 
     #[test]

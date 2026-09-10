@@ -1,5 +1,10 @@
+use std::path::Path;
+
+use anyhow::{bail, Context, Result};
+use base64::Engine as _;
 use serde_json::{json, Value};
 
+use super::CriterionAward;
 use crate::context::E2eContext;
 
 #[derive(Debug, Clone, PartialEq)]
@@ -285,6 +290,130 @@ pub async fn active_binding_count(context: &E2eContext, session_id: &str) -> any
         .and_then(Value::as_array)
         .map(Vec::len)
         .unwrap_or(usize::MAX))
+}
+
+/// Score a fixture-driven scenario from its atomic observations. `metrics`
+/// is the catalog (`id`, `weight`, `measurement`); `validation.observations`
+/// holds one `measured` item per metric with `value` (binary) or
+/// `numerator`/`denominator` (ratio, `value` deciding a zero denominator).
+/// Points are `round(weight × value)`. A missing, duplicate, unavailable or
+/// malformed observation fails the whole evaluation: a validator problem is
+/// unavailability, never a silent zero.
+pub fn atomic_awards(metrics: &[Value], validation: &Value) -> Result<Vec<CriterionAward>> {
+    let items = validation["observations"]
+        .as_array()
+        .context("validation observations missing")?;
+    if items.len() != metrics.len() {
+        bail!("validation incomplete: {}", validation["error"]);
+    }
+    metrics
+        .iter()
+        .map(|metric| {
+            let matches: Vec<_> = items
+                .iter()
+                .filter(|item| item["id"] == metric["id"])
+                .collect();
+            if matches.len() != 1 {
+                bail!("missing or duplicate metric {}", metric["id"]);
+            }
+            let item = matches[0];
+            if item["status"] != "measured" {
+                bail!("{} is {}: {}", metric["id"], item["status"], item["reason"]);
+            }
+            let value = if metric["measurement"] == "binary" {
+                let value = item["value"]
+                    .as_u64()
+                    .filter(|v| *v <= 1)
+                    .context("binary value must be 0 or 1")?;
+                value as f64
+            } else {
+                let numerator = item["numerator"]
+                    .as_u64()
+                    .context("ratio numerator missing")?;
+                let denominator = item["denominator"]
+                    .as_u64()
+                    .context("ratio denominator missing")?;
+                if numerator > denominator {
+                    bail!("ratio numerator exceeds denominator");
+                }
+                if denominator == 0 {
+                    item["value"]
+                        .as_u64()
+                        .filter(|v| *v <= 1)
+                        .context("zero-denominator ratio value must be 0 or 1")?
+                        as f64
+                } else {
+                    numerator as f64 / denominator as f64
+                }
+            };
+            Ok(CriterionAward {
+                id: metric["id"].as_str().unwrap().into(),
+                awarded: Some((metric["weight"].as_u64().unwrap() as f64 * value).round() as u8),
+                reason: item.to_string(),
+            })
+        })
+        .collect()
+}
+
+/// Embed the evidence a scenario left under `directory` so the report does
+/// not depend on the workspace surviving: files directly under `directory`,
+/// plus everything below the top-level entries named in `roots` (a root may
+/// be nested, e.g. `workspace/output`). Text is embedded as UTF-8, anything
+/// else as base64; once half of the capture cap is spent the rest is listed
+/// under `omitted_files` instead of being read.
+pub fn evidence_bundle(directory: &Path, roots: &[&str]) -> Result<Value> {
+    let mut pending = vec![directory.to_path_buf()];
+    let mut files = serde_json::Map::new();
+    let mut omitted = Vec::new();
+    let mut bytes = 0;
+    while let Some(folder) = pending.pop() {
+        for entry in std::fs::read_dir(&folder)? {
+            let entry = entry?;
+            let path = entry.path();
+            let kind = entry.file_type()?;
+            let relative = path.strip_prefix(directory)?;
+            if kind.is_dir() {
+                if folder != directory || roots.iter().any(|root| Path::new(root) == relative) {
+                    pending.push(path);
+                } else {
+                    for root in roots {
+                        let root = Path::new(root);
+                        if root != relative && root.starts_with(relative) {
+                            let nested = directory.join(root);
+                            if nested.is_dir() {
+                                pending.push(nested);
+                            }
+                        }
+                    }
+                }
+            } else if kind.is_file() {
+                let name = path
+                    .strip_prefix(directory.parent().context("evidence parent")?)?
+                    .to_string_lossy()
+                    .into_owned();
+                let size = entry.metadata()?.len();
+                if bytes + size > crate::asset::DEFAULT_MAX_CAPTURE_BYTES / 2 {
+                    omitted.push(json!({"path":name,"reason":"capture_size_limit"}));
+                    continue;
+                }
+                let data = std::fs::read(&path)?;
+                let value = match String::from_utf8(data) {
+                    Ok(text) => json!({"encoding":"utf8","content":text}),
+                    Err(error) => {
+                        json!({"encoding":"base64","content":base64::engine::general_purpose::STANDARD.encode(error.as_bytes())})
+                    }
+                };
+                let encoded_size = serde_json::to_vec(&value)?.len() as u64 + name.len() as u64 + 8;
+                if bytes + encoded_size > crate::asset::DEFAULT_MAX_CAPTURE_BYTES / 2 {
+                    omitted.push(json!({"path":name,"reason":"capture_size_limit"}));
+                    continue;
+                }
+                bytes += encoded_size;
+                files.insert(name, value);
+            }
+        }
+    }
+    Ok(json!({"files":files,"omitted_files":omitted}))
 }
 
 #[cfg(test)]
