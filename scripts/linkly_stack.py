@@ -194,8 +194,16 @@ def run(args: list[str], **kwargs) -> subprocess.CompletedProcess:
     return subprocess.run(args, check=True, text=True, **kwargs)
 
 
-def compose_status(iii: str) -> dict:
-    result = run([iii, "trigger", "compose::status", "--json", "{}"], capture_output=True)
+def project_dir(raw: str) -> Path:
+    project = Path(raw).resolve()
+    if not (project / "worker-compose.yaml").is_file():
+        raise SystemExit(f"{project} has no worker-compose.yaml")
+    return project
+
+
+def compose_status(iii: str, project: Path) -> dict:
+    """`compose::status` of the daemon that owns `project`; iii picks the namespace from the cwd."""
+    result = run([iii, "trigger", "compose::status", "--json", "{}"], capture_output=True, cwd=project)
     return json.loads(result.stdout)
 
 
@@ -206,6 +214,8 @@ def cmd_scaffold(args: argparse.Namespace) -> None:
         raise SystemExit(f"{project} already exists; a run needs a fresh scaffold")
     parent.mkdir(parents=True, exist_ok=True)
     providers = [item.strip() for item in args.provider.split(",") if item.strip()]
+    if not providers:
+        raise SystemExit("--provider must name at least one provider")
     environ = dict(os.environ)
     for provider in providers:
         patch_env("", [provider], environ)  # fail before scaffolding if a key is missing
@@ -224,22 +234,20 @@ def cmd_scaffold(args: argparse.Namespace) -> None:
 
 
 def cmd_up(args: argparse.Namespace) -> None:
-    project = Path(args.dir).resolve()
-    if not (project / "worker-compose.yaml").is_file():
-        raise SystemExit(f"{project} has no worker-compose.yaml")
+    project = project_dir(args.dir)
     os.chdir(project)
     os.execvp(args.iii, [args.iii, "compose", "--up"])
 
 
 def cmd_status(args: argparse.Namespace) -> None:
-    status = compose_status(args.iii)
+    status = compose_status(args.iii, project_dir(args.dir))
     print(f"file: {status.get('file')}  namespace: {status.get('namespace')}  daemon: {status.get('daemon_pid')}")
     for container in status.get("containers", []):
         print(f"  {container.get('state', '?'):10} {container.get('container')}")
 
 
 def cmd_down(args: argparse.Namespace) -> None:
-    status = compose_status(args.iii)
+    status = compose_status(args.iii, project_dir(args.dir))
     pid = status.get("daemon_pid")
     if not pid:
         raise SystemExit("compose::status reports no daemon pid")

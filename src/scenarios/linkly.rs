@@ -590,9 +590,11 @@ fn import_counts(text: &str) -> Option<(u64, u64)> {
     let lower = text.to_ascii_lowercase();
     let number_after = |keyword: &str| {
         let start = lower.rfind(keyword)? + keyword.len();
-        let window = &lower[start..lower.len().min(start + 32)];
-        let digits: String = window
+        // Walk characters, not bytes: the client's output may carry
+        // multi-byte text and a byte slice could split a character.
+        let digits: String = lower[start..]
             .chars()
+            .take(32)
             .skip_while(|c| !c.is_ascii_digit())
             .take_while(|c| c.is_ascii_digit())
             .collect();
@@ -1776,6 +1778,17 @@ mod tests {
         assert_eq!(import_counts(r#"{"imported":2,"skipped":0}"#), Some((2, 0)));
         assert_eq!(import_counts("done: imported=1 skipped=1"), Some((1, 1)));
         assert_eq!(import_counts("nothing here"), None);
+        // Multi-byte characters inside the 32-character window must not panic.
+        assert_eq!(
+            import_counts("✔ imported → 0 links · skipped → 2 ✨✨✨✨✨✨✨✨✨✨"),
+            Some((0, 2))
+        );
+        // The window is 32 characters, counted in characters: a digit beyond it
+        // is not read, one inside it is.
+        let far = format!("imported {} 1 skipped 3", "…".repeat(40));
+        assert_eq!(import_counts(&far), None);
+        let near = format!("imported {} 1 skipped 3", "…".repeat(10));
+        assert_eq!(import_counts(&near), Some((1, 3)));
     }
 
     #[test]

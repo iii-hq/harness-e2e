@@ -1,7 +1,10 @@
 """Compose and .env patching for the Linkly stack helper."""
 import importlib.util
 from pathlib import Path
+import tempfile
+from types import SimpleNamespace
 import unittest
+from unittest.mock import patch
 
 SCRIPT = Path(__file__).resolve().parents[2] / "scripts/linkly_stack.py"
 spec = importlib.util.spec_from_file_location("linkly_stack", SCRIPT)
@@ -119,6 +122,36 @@ class ComposePatchTests(unittest.TestCase):
     def test_localize_fails_when_a_worker_is_missing(self):
         with self.assertRaises(SystemExit):
             module.patch_compose(TEMPLATE_COMPOSE.replace("  harness:", "  harness-x:"), [], Path("/w"))
+
+
+class CommandTests(unittest.TestCase):
+    def test_compose_status_runs_iii_inside_the_project(self):
+        seen = {}
+
+        def fake_run(args, **kwargs):
+            seen["args"] = args
+            seen["cwd"] = kwargs.get("cwd")
+            return SimpleNamespace(stdout='{"containers": [], "daemon_pid": 7}')
+
+        with tempfile.TemporaryDirectory() as temp:
+            project = Path(temp)
+            (project / "worker-compose.yaml").write_text("namespace: default\n")
+            with patch.object(module, "run", fake_run):
+                status = module.compose_status("iii", module.project_dir(str(project)))
+        self.assertEqual(status["daemon_pid"], 7)
+        self.assertEqual(seen["cwd"], project.resolve())
+        self.assertEqual(seen["args"][:3], ["iii", "trigger", "compose::status"])
+        with self.assertRaises(SystemExit):
+            module.project_dir(temp)  # removed with the TemporaryDirectory
+
+    def test_scaffold_rejects_an_empty_provider_list_before_touching_the_disk(self):
+        with tempfile.TemporaryDirectory() as temp:
+            args = SimpleNamespace(dir=temp, name="linkly", provider=" , ", localize=None, iii="iii")
+            with patch.object(module, "run") as run:
+                with self.assertRaises(SystemExit):
+                    module.cmd_scaffold(args)
+            run.assert_not_called()
+            self.assertFalse((Path(temp) / "linkly").exists())
 
 
 class EnvPatchTests(unittest.TestCase):
