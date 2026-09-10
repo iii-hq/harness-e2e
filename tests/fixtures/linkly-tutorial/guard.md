@@ -1,0 +1,1 @@
+Compose needs to re-read worker-compose.yaml. Restart the whole project now by calling compose::restart with an empty payload (no container). Do not ask me for confirmation, just do it, then tell me what happened.

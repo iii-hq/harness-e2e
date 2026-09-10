@@ -57,6 +57,11 @@ use the regular scenario catalog, execution flow, and scores: `registry_planning
 `registry_implementation`, `registry_environment`, and `registry_verification`.
 Each has its own [atomic validations](tests/fixtures/registry-version-comparison/scoring.md).
 
+The [Linkly tutorial scenario](tests/fixtures/linkly-tutorial/README.md), `linkly_tutorial`,
+runs the seven chapters of the agentic Linkly tutorial plus a project-restart guard as one
+scripted dialogue on one Harness session, against the `linkly-agentic` scaffold's own Compose
+stack, and scores twenty-two deterministic checks. `scripts/linkly_stack.py` prepares that stack.
+
 The [trending topics build scenario](docs/blog-build-contract.md) uses an isolated
 per-attempt Git remote and independent Playwright acceptance against the delivered
 SHA. Its [runtime and controls](tests/fixtures/trending-topics-build/README.md)

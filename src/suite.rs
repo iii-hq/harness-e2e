@@ -52,6 +52,21 @@ use crate::workflow::{
 const MAX_RUNS: u32 = 20;
 const MAX_TECHNICAL_RETRIES: u8 = 3;
 
+/// Per-scenario spend ceiling passed to the Harness; `None` leaves the
+/// Harness default in place. Kanban runs are isolated evaluations capped at
+/// five dollars; the Linkly tutorial is a 65-minute agentic build that cost
+/// about a dollar on DeepSeek V4 Pro at 2026-08 prices, so ten covers a slow
+/// run on a pricier provider without hiding a runaway loop.
+fn subject_cost_cap_usd(scenario_id: &str) -> Option<f64> {
+    if crate::scenarios::kanban::IDS.contains(&scenario_id) {
+        Some(5.0)
+    } else if scenario_id == crate::scenarios::linkly::ID {
+        Some(10.0)
+    } else {
+        None
+    }
+}
+
 pub(crate) fn e2e_function_policy(spec: &ScenarioSpec, run_id: &str) -> FunctionPolicy {
     let mut deny = vec!["e2e::*".to_string()];
     deny.extend(
@@ -4379,6 +4394,10 @@ async fn execute(
     let filesystem_metadata =
         crate::scenarios::engineering_ticket::prepared_filesystem_root(spec.id, run_id)
             .map_err(|error| scenario_setup_failure(error.to_string()))?
+            .or(
+                crate::scenarios::linkly::prepared_filesystem_root(spec.id, run_id)
+                    .map_err(|error| scenario_setup_failure(error.to_string()))?,
+            )
             .map(|root| json!({ "fs_scope": { "root": root } }))
             .or(filesystem_metadata);
     let required_functions = crate::scenarios::required_functions(spec.id, run_id);
@@ -4425,7 +4444,7 @@ async fn execute(
                     }),
                     options: Some(SendOptions {
                         max_turns: Some(spec.execution.max_turns),
-                        max_cost_usd: crate::scenarios::kanban::IDS.contains(&spec.id).then_some(5.0),
+                        max_cost_usd: subject_cost_cap_usd(spec.id),
                         max_output_tokens: spec.execution.max_output_tokens,
                         max_total_tokens: spec.execution.max_total_tokens,
                         max_validation_retries: spec.execution.max_validation_retries,

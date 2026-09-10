@@ -123,7 +123,8 @@
     "registry_planning",
     "registry_implementation",
     "registry_environment",
-    "registry_verification"
+    "registry_verification",
+    "linkly_tutorial"
   ],
   "requirements": {
     "swe_config_isolation": [
@@ -208,6 +209,10 @@
     "registry_verification": [
       "Linux amd64 with Docker and the latest e2e-fixture Registry assets",
       "Implementation delivery from the paired scenario or an explicit standalone directory"
+    ],
+    "linkly_tutorial": [
+      "Fresh linkly-agentic scaffold running as the Compose project that hosts the Harness (iii compose --up), with one provider enabled and its key in .env",
+      "Node 22+, npm and curl on the executor; one repetition per scaffold"
     ]
   },
   "profiles": [

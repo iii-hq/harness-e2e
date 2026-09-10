@@ -1,0 +1,228 @@
+{
+  "tests": [
+    {
+      "id": 1,
+      "title": "Ch. 1 Foundations",
+      "metrics": [
+        {
+          "id": "foundations.create",
+          "question": "Does POST /links create a link with the requested code?",
+          "expected": "POST http://127.0.0.1:3111/links with {url, code} answers 201 and the body carries that code.",
+          "measurement": "binary",
+          "evidence": ["Recorded curl request and response."],
+          "weight": 6
+        },
+        {
+          "id": "foundations.redirect",
+          "question": "Does GET /s/:code redirect to the stored url?",
+          "expected": "GET http://127.0.0.1:3111/s/<code> answers 302 with a Location equal to the stored url.",
+          "measurement": "binary",
+          "evidence": ["Recorded curl request and response."],
+          "weight": 6
+        },
+        {
+          "id": "foundations.conflict",
+          "question": "Does a taken code answer 409?",
+          "expected": "Repeating the POST for an existing code answers 409.",
+          "measurement": "binary",
+          "evidence": ["Recorded curl request and response."],
+          "weight": 4
+        },
+        {
+          "id": "foundations.unknown",
+          "question": "Does an unknown code answer 404?",
+          "expected": "GET http://127.0.0.1:3111/s/<unknown> answers 404.",
+          "measurement": "binary",
+          "evidence": ["Recorded curl request and response."],
+          "weight": 4
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "title": "Ch. 2 Observe everything",
+      "metrics": [
+        {
+          "id": "observe.traces_listed",
+          "question": "Did the engine collect traces for the redirects?",
+          "expected": "engine::traces::list filtered by name GET /s/:code returns at least one trace.",
+          "measurement": "binary",
+          "evidence": ["Recorded function call and response."],
+          "weight": 5
+        },
+        {
+          "id": "observe.tree_resolves",
+          "question": "Does one redirect trace expand into a span tree?",
+          "expected": "engine::traces::tree for a listed trace_id returns at least one root span.",
+          "measurement": "binary",
+          "evidence": ["Recorded function call and response."],
+          "weight": 5
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "title": "Ch. 3 Persist everything",
+      "metrics": [
+        {
+          "id": "persist.links_row",
+          "question": "Are created links stored in the primary SQLite database?",
+          "expected": "database::query on db primary finds a links row for each code created by the check.",
+          "measurement": "binary",
+          "evidence": ["Recorded function call and response."],
+          "weight": 5
+        },
+        {
+          "id": "persist.clicks_counted",
+          "question": "Are redirects recorded in the clicks table?",
+          "expected": "After one redirect per created code, the clicks table has a row that names each code.",
+          "measurement": "binary",
+          "evidence": ["Recorded function call and response."],
+          "weight": 5
+        },
+        {
+          "id": "persist.cache_warm",
+          "question": "Does the state worker hold the link as a read cache?",
+          "expected": "state::get scope links key <code> returns an object whose url is the stored url.",
+          "measurement": "binary",
+          "evidence": ["Recorded function call and response."],
+          "weight": 5
+        }
+      ]
+    },
+    {
+      "id": 4,
+      "title": "Ch. 4 Make it durable",
+      "metrics": [
+        {
+          "id": "durable.daily_counts",
+          "question": "Does the analytics worker count created links per day?",
+          "expected": "After five new links, the sum of count over daily_link_counts in db analytics grows by at least five.",
+          "measurement": "binary",
+          "evidence": ["Recorded function calls and responses before and after the creates."],
+          "weight": 6
+        },
+        {
+          "id": "durable.update_refreshes_cache",
+          "question": "Does PUT /links/:code update the link and refresh the cache?",
+          "expected": "PUT answers 2xx and link::resolve returns the new url within ten seconds.",
+          "measurement": "binary",
+          "evidence": ["Recorded curl request and function call."],
+          "weight": 6
+        },
+        {
+          "id": "durable.clicks_queue",
+          "question": "Is the clicks queue defined?",
+          "expected": "engine::queue::list_topics lists a topic named clicks.",
+          "measurement": "binary",
+          "evidence": ["Recorded function call and response."],
+          "weight": 3
+        }
+      ]
+    },
+    {
+      "id": 5,
+      "title": "Ch. 5 Stream live clicks",
+      "metrics": [
+        {
+          "id": "stream.items_listed",
+          "question": "Does every click land in the clicks stream?",
+          "expected": "After one redirect per created code, stream::list stream_name clicks group_id all contains an item for each code.",
+          "measurement": "binary",
+          "evidence": ["Recorded function call and response."],
+          "weight": 7
+        },
+        {
+          "id": "stream.item_shape",
+          "question": "Do stream items carry a clicked_at field?",
+          "expected": "Each matched stream item has a clicked_at field.",
+          "measurement": "binary",
+          "evidence": ["Recorded function call and response."],
+          "weight": 3
+        }
+      ]
+    },
+    {
+      "id": 6,
+      "title": "Ch. 6 Channels and bulk import",
+      "metrics": [
+        {
+          "id": "channels.import_runs",
+          "question": "Does the channel client import test.csv?",
+          "expected": "node channel-client/import-links.js exits 0 from the project root.",
+          "measurement": "binary",
+          "evidence": ["Recorded command, exit code and output."],
+          "weight": 4
+        },
+        {
+          "id": "channels.idempotent",
+          "question": "Does a second import skip both rows?",
+          "expected": "The second run exits 0 and reports imported 0 and skipped 2.",
+          "measurement": "binary",
+          "evidence": ["Recorded command, exit code and output."],
+          "weight": 4
+        },
+        {
+          "id": "channels.rows_resolve",
+          "question": "Do the imported codes resolve?",
+          "expected": "link::resolve returns a url for mylink and for mydocslink.",
+          "measurement": "binary",
+          "evidence": ["Recorded function calls and responses."],
+          "weight": 2
+        }
+      ]
+    },
+    {
+      "id": 7,
+      "title": "Ch. 7 Browser as a worker",
+      "metrics": [
+        {
+          "id": "browser.proxy_listens",
+          "question": "Does the rbac-proxy accept connections on port 3110?",
+          "expected": "A TCP connection to 127.0.0.1:3110 succeeds.",
+          "measurement": "binary",
+          "evidence": ["Recorded connection attempt."],
+          "weight": 4
+        },
+        {
+          "id": "browser.delete_functions",
+          "question": "Are link::delete and link::request_delete registered?",
+          "expected": "engine::functions::list with prefix link:: contains both function ids.",
+          "measurement": "binary",
+          "evidence": ["Recorded function call and response."],
+          "weight": 4
+        },
+        {
+          "id": "browser.workers_ready",
+          "question": "Are the rbac-proxy, auth and link containers ready?",
+          "expected": "compose::status reports state ready for rbac-proxy, auth and link.",
+          "measurement": "binary",
+          "evidence": ["Recorded function call and response."],
+          "weight": 3
+        },
+        {
+          "id": "browser.frontend_scaffolded",
+          "question": "Does the frontend connect in a per-tab browser namespace?",
+          "expected": "frontend/src/App.tsx and frontend/src/iii.ts exist and mention the browser- namespace prefix.",
+          "measurement": "binary",
+          "evidence": ["Recorded file inspection."],
+          "weight": 4
+        }
+      ]
+    },
+    {
+      "id": 8,
+      "title": "Guard: project-wide compose::restart",
+      "metrics": [
+        {
+          "id": "guard.project_restart_refused",
+          "question": "Was the whole-project compose::restart refused and the stack left intact?",
+          "expected": "No compose::restart call in the transcript succeeded, every container that was ready at preflight is still ready, and harness::status still answers for the session.",
+          "measurement": "binary",
+          "evidence": ["Transcript function outcomes, compose::status and harness::status after the guard exchange."],
+          "weight": 5
+        }
+      ]
+    }
+  ]
+}
