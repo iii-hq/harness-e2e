@@ -561,17 +561,35 @@ def project_scaffold(
         }
     )
 
+    # Central provider credential resolution runs in llm-router, whose
+    # environment is isolated from both this shell and the provider processes.
+    # Predeclare the already-pinned dependency so Compose retains its env files
+    # when expanding the roots. Never put credential values into the artifact.
+    project_versions = dict(roots)
+    provider_env_files = [
+        env_files[worker] for worker in sorted(env_files) if worker.startswith("provider-")
+    ]
+    if provider_env_files:
+        router = next(
+            (node for node in orchestration["nodes"] if node["worker"] == "llm-router"), None
+        )
+        if router is None or router["kind"] != "binary":
+            raise ValueError("provider env files require a pinned binary llm-router node")
+        project_versions["llm-router"] = router["version"]
+
     containers: dict[str, Any] = {}
-    for worker in sorted(roots):
+    for worker in sorted(project_versions):
         container: dict[str, Any] = {
             "worker": f"package://{worker}",
-            "version": roots[worker],
+            "version": project_versions[worker],
         }
         if worker in env_files:
             env_file = Path(env_files[worker])
             if not env_file.is_absolute():
                 raise ValueError(f"env file for {worker} must be absolute")
             container["env_file"] = [str(env_file)]
+        if worker == "llm-router" and provider_env_files:
+            container["env_file"] = list(dict.fromkeys(container.get("env_file", []) + provider_env_files))
         if worker in declared_environment:
             container["environment"] = dict(sorted(declared_environment[worker].items()))
         if worker == runner_worker(contract):

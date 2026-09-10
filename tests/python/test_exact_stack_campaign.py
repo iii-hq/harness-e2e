@@ -226,6 +226,73 @@ class ReleaseControlCampaignTest(unittest.TestCase):
         self.assertIn("compose::operation", runner)
         self.assertNotIn('e2e_data="$run_root/e2e-data"', runner)
 
+    def run_subject_readiness(self, directory, ready_after=2, returned_model="deepseek-v4-flash"):
+        runner = RUNNER_SCRIPT.read_text()
+        helpers = runner[runner.index("await_compose_add() {"):runner.index("\ncleanup() {")]
+        startup = runner[runner.index("failure_phase=project_start"):runner.index("failure_phase=materialization")]
+        artifacts = Path(directory)
+        (artifacts / "stack").mkdir()
+        (artifacts / "stack-lock.json").write_text(json.dumps(campaign_contract()))
+        shell = r'''set -Eeuo pipefail
+artifact_dir=$1
+contract_path="$artifact_dir/stack-lock.json"
+engine_port=49134
+engine_url=ws://127.0.0.1:49134
+namespace=fixture
+compose_file="$artifact_dir/stack/worker-compose.yaml"
+iii_bin=engine_cli
+model_wait_seconds=3
+engine_cli() { printf '{"workers":[]}'; }
+compose_trigger() { printf '{"status":"ok"}'; }
+capture_processes() { printf '[]' > "$1"; }
+log() { printf '%s\n' "$*" >&2; }
+fail() { printf '[FAIL] %s\n' "$*" >&2; return 1; }
+sleep() { SECONDS=$((SECONDS + 1)); }
+project_trigger() {
+  case "$1" in
+    router::models::get)
+      jq -e '.id == "deepseek-v4-flash" and .provider == "deepseek"' <<<"$2" >/dev/null
+      count=0
+      if [[ -f "$artifact_dir/polls" ]]; then read -r count < "$artifact_dir/polls"; fi
+      count=$((count + 1))
+      printf '%s\n' "$count" > "$artifact_dir/polls"
+      if ((count >= READY_AFTER)); then
+        jq -nc --arg model "$RETURNED_MODEL" '{model:{id:$model,provider:"deepseek"}}'
+      else
+        printf 'null'
+      fi ;;
+    router::provider::list) printf '{"providers":[{"id":"deepseek","available":true,"configured":true}]}' ;;
+    *) printf 'unexpected RPC: %s\n' "$1" >&2; return 1 ;;
+  esac
+}
+'''
+        return subprocess.run(
+            ["bash", "-c", shell + helpers + startup, "readiness", str(artifacts)],
+            env={**os.environ, "READY_AFTER": str(ready_after), "RETURNED_MODEL": returned_model},
+            capture_output=True, text=True, timeout=15,
+        )
+
+    def test_subject_waits_for_asynchronous_model_discovery_before_materialization(self):
+        with tempfile.TemporaryDirectory() as directory:
+            result = self.run_subject_readiness(directory)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            model_path = Path(directory) / "stack/subject-model.json"
+            self.assertTrue(model_path.is_file(), "startup must wait for the subject's catalog record")
+            self.assertEqual(json.loads(model_path.read_text())["model"]["id"], "deepseek-v4-flash")
+            self.assertEqual((Path(directory) / "polls").read_text().strip(), "2")
+
+    def test_subject_readiness_timeout_is_bounded_and_keeps_provider_diagnostic(self):
+        with tempfile.TemporaryDirectory() as directory:
+            result = self.run_subject_readiness(directory, ready_after=999)
+            self.assertNotEqual(result.returncode, 0, "an unavailable model must not reach materialization")
+            self.assertIn("deepseek/deepseek-v4-flash", result.stderr)
+            self.assertTrue((Path(directory) / "stack/model-readiness.json").is_file())
+
+    def test_subject_readiness_rejects_a_different_model(self):
+        with tempfile.TemporaryDirectory() as directory:
+            result = self.run_subject_readiness(directory, ready_after=1, returned_model="different-model")
+            self.assertNotEqual(result.returncode, 0, "the requested model must not be substituted")
+
     def test_common_runner_reports_terminal_failure_and_keeps_partial_results(self):
         runner = RUNNER_SCRIPT.read_text()
         results_block = runner.split("terminal_phase=$(", 1)[1].split(
@@ -511,6 +578,50 @@ fail() {
                 harness = scaffold["containers"]["harness"]
                 self.assertEqual(harness["config_override"], expected)
                 self.assertEqual(harness["config_name"], "project-one-harness")
+
+    def test_scaffold_routes_provider_env_files_to_the_pinned_router(self):
+        # Compose isolates process environments. Keys on a provider alone
+        # leave the router's central credential resolver unconfigured.
+        contract = campaign_contract({
+            "harness": "1.9.0", "state": "0.22.1", "llm-router": "1.4.20",
+            "provider-deepseek": "0.1.12", "provider-zai": "0.5.10",
+        })
+        contract["orchestration"]["roots"].extend([
+            {"worker": "provider-deepseek", "version": "0.1.12", "role": "runtime"},
+            {"worker": "provider-zai", "version": "0.5.10", "role": "runtime"},
+        ])
+        original = json.loads(json.dumps(contract))
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            env_files = {}
+            for provider, variable in (("deepseek", "DEEPSEEK_API_KEY"), ("zai", "ZAI_API_KEY")):
+                path = root / f"provider-{provider}.env"
+                path.write_text(f"{variable}=fake-secret-{provider}\n")
+                env_files[f"provider-{provider}"] = str(path)
+            # Other roots' env files must not be passed into the router.
+            env_files["harness-e2e"] = str(root / "runner.env")
+            scaffold = MODULE.project_scaffold(contract, "project-one", root / "runs", env_files, {})
+            containers = scaffold["containers"]
+            self.assertIn("llm-router", containers, "credential resolution runs in the router process")
+            router = containers["llm-router"]
+            self.assertEqual(router["worker"], "package://llm-router")
+            self.assertEqual(router["version"], "1.4.20")
+            self.assertEqual(router["env_file"], [env_files["provider-deepseek"], env_files["provider-zai"]])
+            for provider in ("deepseek", "zai"):
+                self.assertEqual(containers[f"provider-{provider}"]["env_file"], [env_files[f"provider-{provider}"]])
+            for worker in ("harness", "fp"):
+                self.assertNotIn("env_file", containers[worker])
+            self.assertNotIn("fake-secret-", json.dumps(scaffold))
+        self.assertEqual(contract, original, "the measured stack contract must stay unchanged")
+
+    def test_scaffold_does_not_invent_a_router_version_for_credentials(self):
+        contract = campaign_contract({"harness": "1.9.0", "state": "0.22.1", "provider-deepseek": "0.1.12"})
+        contract["orchestration"]["roots"].append(
+            {"worker": "provider-deepseek", "version": "0.1.12", "role": "runtime"}
+        )
+        with self.assertRaisesRegex(ValueError, "llm-router"):
+            MODULE.project_scaffold(contract, "project-one", Path("/tmp/runs"),
+                                    {"provider-deepseek": "/tmp/provider.env"}, {})
 
     def test_rejects_forbidden_artifacts_and_version_conflicts(self):
         forbidden = campaign_contract()
