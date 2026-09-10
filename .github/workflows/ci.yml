@@ -67,6 +67,10 @@ jobs:
       - run: cargo test --locked --all-targets
       - run: cargo clippy --locked --all-targets -- -D warnings
       - run: node --test tests/dashboard/*.test.cjs
+      - name: Verify trending topics evaluator and delivery contracts
+        run: |
+          node --test tests/fixtures/trending-topics-build/evaluator.test.mjs
+          python3 -m unittest -v tests/fixtures/trending-topics-build/test_lifecycle.py
       - name: Prepare the isolated SWE verifier runtime
         run: docker pull python@sha256:1042b61448fef4ba92d16a8c7eb4996d027568ce64792a7877fd88511e0af7c6
       - name: Verify Python contracts and OS isolation

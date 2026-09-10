@@ -1,0 +1,97 @@
+:root {
+  color: #25211c;
+  background: #fffdf8;
+  font: 18px/1.65 Georgia, serif;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+}
+
+main {
+  width: min(44rem, 100%);
+  margin: auto;
+  padding: clamp(2rem, 8vw, 5rem) clamp(1.25rem, 5vw, 3rem);
+}
+
+h1 {
+  margin: 0 0 1rem;
+  font: 800 clamp(2.5rem, 10vw, 5rem)/1 system-ui, sans-serif;
+  letter-spacing: -0.05em;
+  overflow-wrap: anywhere;
+}
+
+.eyebrow {
+  color: #7b2d26;
+  font: 700 0.8rem/1.4 system-ui, sans-serif;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.intro,
+.body {
+  max-width: 65ch;
+}
+
+ol {
+  margin: 3rem 0 0;
+  padding-left: 2.25rem;
+}
+
+li {
+  padding: 1.25rem 0 1.5rem 0.5rem;
+  border-top: 1px solid #c9c1b6;
+}
+
+li::marker {
+  color: #7b2d26;
+  font: 700 1rem system-ui, sans-serif;
+}
+
+.rank {
+  display: none;
+}
+
+a {
+  color: #174f78;
+  font-weight: 700;
+  text-underline-offset: 0.22em;
+  overflow-wrap: anywhere;
+}
+
+article a {
+  color: inherit;
+  font: 700 clamp(1.25rem, 5vw, 1.8rem)/1.25 system-ui, sans-serif;
+}
+
+a:focus-visible {
+  outline: 3px solid #d76b32;
+  outline-offset: 5px;
+}
+
+.article .eyebrow {
+  margin-top: 3rem;
+}
+
+.article h1 {
+  font-size: clamp(2.25rem, 8vw, 4.25rem);
+}
+
+.body {
+  margin: 2.5rem 0;
+  font-size: 1.15rem;
+}
+
+@media (max-width: 30rem) {
+  :root {
+    font-size: 16px;
+  }
+
+  ol {
+    padding-left: 1.75rem;
+  }
+}

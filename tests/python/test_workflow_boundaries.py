@@ -270,7 +270,7 @@ class WorkflowBoundaryTests(unittest.TestCase):
     def test_registry_groups_prepare_private_sources_without_persisting_credentials(self):
         workflow = (ROOT / ".github/workflows/exact-stack-e2e.yml").read_text()
         source_block = workflow.split("Mint private Registry source token", 1)[1].split(
-            "- uses: actions/download-artifact", 1
+            "Mint private trending topics fixture token", 1
         )[0]
         self.assertEqual(source_block.count("startsWith(matrix.group_id, 'case-registry-')"), 4)
         self.assertIn("repository: iii-hq/registry", source_block)
@@ -284,6 +284,21 @@ class WorkflowBoundaryTests(unittest.TestCase):
         self.assertIn("actions/create-github-app-token@fee1f7d63c2ff003460e3d139729b119787bc349", source_block)
         self.assertIn("permission-contents: read", source_block)
         self.assertNotIn("E2E_FIXTURE_GITHUB_TOKEN", source_block)
+        self.assertNotIn("token@github.com", source_block)
+
+    def test_trending_topics_group_fetches_only_the_pinned_fixture_without_credentials(self):
+        workflow = (ROOT / ".github/workflows/exact-stack-e2e.yml").read_text()
+        source_block = workflow.split("Mint private trending topics fixture token", 1)[1].split(
+            "- uses: actions/download-artifact", 1
+        )[0]
+        self.assertEqual(source_block.count("matrix.group_id == 'case-trending-topics-build'"), 3)
+        self.assertIn("repositories: e2e-fixture", source_block)
+        self.assertIn("permission-contents: read", source_block)
+        self.assertIn("persist-credentials: false", source_block)
+        lifecycle = (ROOT / "tests/fixtures/trending-topics-build/lifecycle.py").read_text()
+        revision = lifecycle.split('FIXTURE_SHA = "', 1)[1].split('"', 1)[0]
+        self.assertIn(f"ref: {revision}", source_block)
+        self.assertIn(".insteadOf git@github.com:iii-hq/e2e-fixture.git", source_block)
         self.assertNotIn("token@github.com", source_block)
 
     def test_endurance_keeps_github_authority_in_the_post_run_publisher(self):

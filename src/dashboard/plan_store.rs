@@ -2357,7 +2357,7 @@ mod tests {
             ("smoke", 5, 5),
             ("regression", 9, 9),
             ("capability", 48, 48),
-            ("evolution", 66, 63),
+            ("evolution", 69, 66),
             ("endurance", 5, 5),
         ] {
             let root = tempfile::tempdir().unwrap();
@@ -2566,7 +2566,7 @@ mod tests {
             assert_eq!(runner.submitted.load(Ordering::SeqCst), 1);
             let detail = manager.execution_detail(&id).unwrap().unwrap();
             let reports = detail["reports"].as_array().unwrap();
-            assert_eq!(reports.len(), 66);
+            assert_eq!(reports.len(), 69);
             // Reconciliation retains evidence from the persisted child even
             // when admission returned a different identity; remaining slots stay explicit.
             assert_eq!(reports[0]["available"], wrong_identity);

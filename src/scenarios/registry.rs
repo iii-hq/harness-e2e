@@ -761,7 +761,7 @@ fn awards(test: u8, validation: &Value) -> Result<Vec<CriterionAward>> {
             };
             Ok(CriterionAward {
                 id: metric["id"].as_str().unwrap().into(),
-                awarded: (metric["weight"].as_u64().unwrap() as f64 * value).round() as u8,
+                awarded: Some((metric["weight"].as_u64().unwrap() as f64 * value).round() as u8),
                 reason: item.to_string(),
             })
         })
@@ -783,6 +783,7 @@ fn evaluate<'a, const N: u8>(
                 CompletionState::TaskIncomplete
             },
             awards: awards(N, &validation)?,
+            infrastructure_error: None,
         })
     })
 }
@@ -886,7 +887,7 @@ mod tests {
                 awards(n, &json!({"observations":observations}))
                     .unwrap()
                     .iter()
-                    .map(|a| u16::from(a.awarded))
+                    .map(|a| u16::from(a.awarded.unwrap()))
                     .sum::<u16>(),
                 100
             );
@@ -927,7 +928,7 @@ mod tests {
             awards(4, &json!({"observations":observations}))
                 .unwrap()
                 .iter()
-                .map(|award| u16::from(award.awarded))
+                .map(|award| u16::from(award.awarded.unwrap()))
                 .sum::<u16>(),
             80
         );
