@@ -1,6 +1,6 @@
 # `trending_topics_build` v1 contract
 
-Status: functional contract defined; stage-3 acceptance checks are implemented.
+Status: functional contract defined; stage-3 acceptance controls are validated.
 The product is a blog about trending topics, as confirmed by the user.
 The task brief, application labels and documentation are in English.
 
@@ -245,6 +245,11 @@ The placeholder intentionally passes two smoke tests and fails four public
 product tests. The reference passes all six public checks. Preparation tests
 pass 2/2 after the new fixture commit. Final private-control validation is
 recorded in the trusted package's validation notes.
+
+All five positive controls passed 410 private checks, and all 21 deliberate
+defects were detected. The trusted implementation is published for review in
+[Harness PR #126](https://github.com/iii-hq/harness-e2e/pull/126). Both PRs remain
+drafts; these are local validation results, not a claim of CI or model success.
 
 This stage does not register a runnable Harness scenario, run a model, grade
 B01/B02, establish production isolation or publish a blog post. Those boundaries
