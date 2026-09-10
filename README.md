@@ -57,9 +57,16 @@ use the regular scenario catalog, execution flow, and scores: `registry_planning
 `registry_implementation`, `registry_environment`, and `registry_verification`.
 Each has its own [atomic validations](tests/fixtures/registry-version-comparison/scoring.md).
 
-The proposed [trending topics build contract](docs/blog-build-contract.md) has
-[standalone acceptance controls](tests/fixtures/trending-topics-build/README.md).
-It is not yet registered for Harness execution; delivery integration is the next stage.
+The [trending topics build scenario](docs/blog-build-contract.md) uses an isolated
+per-attempt Git remote and independent Playwright acceptance against the delivered
+SHA. Its [runtime and controls](tests/fixtures/trending-topics-build/README.md)
+require Linux amd64, Docker, Git, Python 3, Node and access to the pinned fixture.
+Design is free; screenshots are evidence, not an aesthetic score.
+
+Native criteria preserve known awards when dependent checks cannot run. Those
+checks have no award and remain `not_evaluated`; an incomplete criterion set has
+no total score. Product failures stay technically valid, while infrastructure
+failures invalidate the run without erasing prior criterion observations.
 
 New declarative scenarios are authored only as `scenarios/*.md`. The compiler
 embeds the exact source, validates the canonical English section structure,

@@ -1494,21 +1494,7 @@ async fn run_once(context: &Arc<E2eContext>, request: AttemptRequest<'_>) -> E2e
         }
     }
     report.wall_time_ms = started.elapsed().as_millis().min(u64::MAX as u128) as u64;
-    ensure_assessment_results(&spec, &mut report);
-    if report.failures.is_empty() {
-        if report.score.is_some() || report.assessment_results.is_empty() {
-            report.finish(RunStatus::Passed);
-        } else {
-            report.push_failure(
-                RunStatus::InfrastructureError,
-                FailurePhase::Evaluate,
-                format!(
-                    "scenario '{}': evaluation completed without a score; expected criterion awards",
-                    spec.id
-                ),
-            );
-        }
-    }
+    finish_native_assessment(&spec, &mut report);
     report.update_cost();
     report.update_efficiency(case.work);
     report.refresh_dimensions(expects_deliverables);
@@ -4546,6 +4532,14 @@ async fn execute(
                 format!("scenario '{}' evaluator failed: {error:#}", spec.id),
             )
         })?;
+    apply_objective_evaluation(spec, report, objective)
+}
+
+fn apply_objective_evaluation(
+    spec: &ScenarioSpec,
+    report: &mut E2eRunReport,
+    objective: ObjectiveEvaluation,
+) -> Result<(), RunFailure> {
     validate_objective_evaluation(spec, &objective).map_err(|error| {
         RunFailure::new(
             RunStatus::InfrastructureError,
@@ -4560,6 +4554,9 @@ async fn execute(
     report.criteria = criterion_reports(spec, objective.awards);
     report.assessment_results = materialize_assessment_results(spec, &report.criteria);
     update_score(report);
+    if let Some(error) = objective.infrastructure_error {
+        return Err(infrastructure_failure(FailurePhase::Evaluate, error));
+    }
     Ok(())
 }
 
@@ -4607,6 +4604,26 @@ fn captured_measurements(
     }
     measurements.sort_by(|left, right| left.id.cmp(&right.id));
     Ok(measurements)
+}
+
+fn finish_native_assessment(spec: &ScenarioSpec, report: &mut E2eRunReport) {
+    ensure_assessment_results(spec, report);
+    if report.failures.is_empty() {
+        if report.evaluators.completion == crate::report::EvaluatorAvailability::Available
+            || report.assessment_results.is_empty()
+        {
+            report.finish(RunStatus::Passed);
+        } else {
+            report.push_failure(
+                RunStatus::InfrastructureError,
+                FailurePhase::Evaluate,
+                format!(
+                    "scenario '{}': evaluation completed without criterion observations",
+                    spec.id
+                ),
+            );
+        }
+    }
 }
 
 fn ensure_assessment_results(spec: &ScenarioSpec, report: &mut E2eRunReport) {
@@ -5060,11 +5077,11 @@ fn validate_objective_evaluation(
                         .join(", ")
                 )
             })?;
-        if award.awarded > criterion.weight {
+        if let Some(awarded) = award.awarded.filter(|awarded| *awarded > criterion.weight) {
             bail!(
                 "scenario '{}': evaluation contract violation: criterion '{}' awarded {}; expected awarded in 0..={}; action: reduce the award or change the configured weight",
                 spec.id, award.id,
-                award.awarded,
+                awarded,
                 criterion.weight
             );
         }
@@ -5111,7 +5128,7 @@ fn criterion_reports(spec: &ScenarioSpec, awards: Vec<CriterionAward>) -> Vec<Cr
                 id: criterion.id.to_string(),
                 description: Some(criterion.description.to_string()),
                 possible: criterion.weight,
-                awarded: award.as_ref().map(|(awarded, _)| *awarded),
+                awarded: award.as_ref().and_then(|(awarded, _)| *awarded),
                 reason: award
                     .map(|(_, reason)| reason)
                     .unwrap_or_else(|| "not evaluated".into()),
@@ -5123,7 +5140,7 @@ fn criterion_reports(spec: &ScenarioSpec, awards: Vec<CriterionAward>) -> Vec<Cr
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::report::EvaluationDimension;
+    use crate::report::{CompletionState, EvaluationDimension};
     use crate::scenarios::{
         ArtifactExpectation, CapturedDeliverable, CapturedDeliverableContent, CapturedInvariant,
         InvariantSpec, ProvenanceEvidence,
@@ -6099,6 +6116,102 @@ mod tests {
     }
 
     #[test]
+    fn partial_native_assessment_preserves_observed_points_without_inventing_a_total() {
+        let spec = mixed_assessment_spec();
+        let mut report = test_run_report();
+        apply_objective_evaluation(
+            &spec,
+            &mut report,
+            ObjectiveEvaluation {
+                completion: CompletionState::TaskIncomplete,
+                awards: vec![
+                    CriterionAward {
+                        id: "required".into(),
+                        awarded: Some(0),
+                        reason: "Build failed".into(),
+                    },
+                    CriterionAward {
+                        id: "quality".into(),
+                        awarded: None,
+                        reason: "Build prerequisite failed; browser checks were not run".into(),
+                    },
+                ],
+                infrastructure_error: None,
+            },
+        )
+        .unwrap_or_else(|error| panic!("{}", error.message));
+        finish_native_assessment(&spec, &mut report);
+        assert_eq!(report.technical, crate::report::TechnicalState::Valid);
+        assert_eq!(report.completion, CompletionState::TaskIncomplete);
+        assert_eq!(report.criteria[0].awarded, Some(0));
+        assert_eq!(report.criteria[1].awarded, None);
+        assert_eq!(
+            report.assessment_results[0].outcome,
+            AssessmentOutcome::Failed
+        );
+        assert_eq!(
+            report.assessment_results[1].outcome,
+            AssessmentOutcome::NotEvaluated
+        );
+        assert_eq!(report.score, None);
+        assert_eq!(report.objective_score, None);
+    }
+
+    #[test]
+    fn native_finalizer_rejects_absent_evaluation() {
+        let spec = mixed_assessment_spec();
+        let mut report = test_run_report();
+        finish_native_assessment(&spec, &mut report);
+        assert_eq!(report.status, RunStatus::InfrastructureError);
+        assert!(report.failures[0]
+            .message
+            .contains("without criterion observations"));
+    }
+
+    #[test]
+    fn native_infrastructure_failure_preserves_prior_criterion_observations() {
+        let spec = mixed_assessment_spec();
+        let mut report = test_run_report();
+        let error = apply_objective_evaluation(
+            &spec,
+            &mut report,
+            ObjectiveEvaluation {
+                completion: CompletionState::Undetermined,
+                awards: vec![
+                    CriterionAward {
+                        id: "required".into(),
+                        awarded: Some(70),
+                        reason: "Delivery verified".into(),
+                    },
+                    CriterionAward {
+                        id: "quality".into(),
+                        awarded: None,
+                        reason: "Browser failed to launch".into(),
+                    },
+                ],
+                infrastructure_error: Some("Browser executable unavailable".into()),
+            },
+        )
+        .unwrap_err();
+        assert_eq!(error.status, RunStatus::InfrastructureError);
+        report.push_failure(error.status, error.phase, error.message);
+        ensure_assessment_results(&spec, &mut report);
+        assert_eq!(
+            report.technical,
+            crate::report::TechnicalState::TechnicalInvalid
+        );
+        assert_eq!(
+            report.assessment_results[0].score.as_ref().unwrap().awarded,
+            70
+        );
+        assert_eq!(
+            report.assessment_results[1].outcome,
+            AssessmentOutcome::NotEvaluated
+        );
+        assert_eq!(report.objective_score, None);
+    }
+
+    #[test]
     fn e2e_policy_denies_the_control_plane_without_scenario_overrides() {
         let policy = e2e_function_policy(&spec(), "test-run");
         assert_eq!(policy.allow, ["*"]);
@@ -6143,9 +6256,10 @@ mod tests {
             &spec,
             &ObjectiveEvaluation {
                 completion: crate::report::CompletionState::Completed,
+                infrastructure_error: None,
                 awards: vec![CriterionAward {
                     id: "objective".into(),
-                    awarded: 100,
+                    awarded: Some(100),
                     reason: "ok".into(),
                 }],
             }
@@ -6155,6 +6269,7 @@ mod tests {
             &spec,
             &ObjectiveEvaluation {
                 completion: crate::report::CompletionState::Completed,
+                infrastructure_error: None,
                 awards: Vec::new(),
             }
         )
@@ -6163,9 +6278,10 @@ mod tests {
             &spec,
             &ObjectiveEvaluation {
                 completion: crate::report::CompletionState::Completed,
+                infrastructure_error: None,
                 awards: vec![CriterionAward {
                     id: "objective".into(),
-                    awarded: 101,
+                    awarded: Some(101),
                     reason: "too high".into(),
                 }],
             },
@@ -6183,7 +6299,7 @@ mod tests {
             &spec(),
             vec![CriterionAward {
                 id: "objective".into(),
-                awarded: 100,
+                awarded: Some(100),
                 reason: "measured evidence".into(),
             }],
         );
@@ -6199,9 +6315,10 @@ mod tests {
             &spec,
             &ObjectiveEvaluation {
                 completion: crate::report::CompletionState::Completed,
+                infrastructure_error: None,
                 awards: vec![CriterionAward {
                     id: "unknown".into(),
-                    awarded: 1,
+                    awarded: Some(1),
                     reason: "observed".into(),
                 }],
             },
@@ -6216,15 +6333,16 @@ mod tests {
             &spec,
             &ObjectiveEvaluation {
                 completion: crate::report::CompletionState::Completed,
+                infrastructure_error: None,
                 awards: vec![
                     CriterionAward {
                         id: "objective".into(),
-                        awarded: 1,
+                        awarded: Some(1),
                         reason: "first".into(),
                     },
                     CriterionAward {
                         id: "objective".into(),
-                        awarded: 1,
+                        awarded: Some(1),
                         reason: "second".into(),
                     },
                 ],

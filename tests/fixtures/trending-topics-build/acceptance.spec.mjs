@@ -63,6 +63,14 @@ async function focusStyle(link) {
 async function keyboardFocus(page, link, name) {
   await expect(link).toHaveCount(1);
   await visibleLabel(link, name);
+  await page.evaluate(async () => {
+    const animations = document.getAnimations();
+    for (const animation of animations) {
+      animation[Symbol.for('harness.focus-check')] = animation.playState !== 'paused';
+      animation.pause();
+    }
+    await Promise.all(animations.map(animation => animation.ready));
+  });
   const before = await focusStyle(link);
   const limit = await page.locator('a[href],button,input,select,textarea,[tabindex],[contenteditable]').count() + 2;
   for (let step = 0; step < limit; step++) {
@@ -72,6 +80,10 @@ async function keyboardFocus(page, link, name) {
   await expect(link).toBeFocused();
   // ponytail: recognizes common CSS focus indicators, not contrast or arbitrary visual effects.
   await expect.poll(() => focusStyle(link)).not.toEqual(before);
+  await page.evaluate(() => {
+    const marker = Symbol.for('harness.focus-check');
+    for (const animation of document.getAnimations()) if (animation[marker]) animation.play();
+  });
 }
 
 async function layout(page, links) {

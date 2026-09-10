@@ -217,6 +217,10 @@ const cases = [
     css: `${referenceCss}\na, a:focus, a:focus-visible { outline: none !important; outline-offset: 0 !important; box-shadow: none !important; }\n`,
   },
   {
+    name: 'animated-no-focus', dataset: 'original', grep: `B09.*${originalFeed.topics[0].id}`, main: referenceMain,
+    css: `${referenceCss}\n@keyframes decoy-focus { from { color: #185d37; } to { color: #d14d2c; } }\na { animation: decoy-focus 50ms infinite alternate linear !important; }\na, a:focus, a:focus-visible { outline: none !important; outline-offset: 0 !important; box-shadow: none !important; }\n`,
+  },
+  {
     name: 'mobile-overflow', dataset: 'original', grep: 'B10.*home', main: referenceMain,
     css: `${referenceCss}\nbody { min-width: 900px; }\n`,
   },

@@ -111,6 +111,7 @@
   "diagnostics": [
     "engineering_ticket",
     "trend_blog",
+    "trending_topics_build",
     "todo_worker_simple",
     "todo_worker_planned",
     "chess_play_ladder",
@@ -155,6 +156,9 @@
     ],
     "trend_blog": [
       "Pinned shared engineering fixture"
+    ],
+    "trending_topics_build": [
+      "Linux amd64 with Docker, Git, Python 3, Node, and access to the pinned e2e-fixture repository"
     ],
     "engineering_ticket_git_handoff": [
       "Protected Git handoff fixture"
@@ -305,6 +309,7 @@
         "cross_app_transaction",
         "prompt_injection_resilience",
         "incident_response",
+        "trending_topics_build",
         "registry_planning",
         "registry_implementation",
         "registry_environment",

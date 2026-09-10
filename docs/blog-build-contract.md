@@ -1,6 +1,7 @@
 # `trending_topics_build` v1 contract
 
-Status: functional contract defined; stage-3 acceptance controls are validated.
+Status: stages 1–3 delivered; stage-4 runtime positive path validated locally,
+with evaluator readiness work remaining before Release Control admission.
 The product is a blog about trending topics, as confirmed by the user.
 The task brief, application labels and documentation are in English.
 
@@ -204,7 +205,7 @@ defects. This document itself is not an executable scenario.
 The fixture is published in [e2e-fixture PR #6](https://github.com/iii-hq/e2e-fixture/pull/6)
 at commit `723aeceaa4ac7f4ebcf85a808a61fa0749e4125e`, under
 [`trending-topics-build/`](https://github.com/iii-hq/e2e-fixture/tree/723aeceaa4ac7f4ebcf85a808a61fa0749e4125e/trending-topics-build).
-The PR is a draft; it has not been merged into the default branch.
+At stage 2, the PR was a draft and had not been merged into the default branch.
 
 The implementation provides the English task brief and placeholder, the frozen
 feed, Vite/JavaScript tooling, public browser smoke checks and a preparer that
@@ -248,9 +249,99 @@ recorded in the trusted package's validation notes.
 
 All five positive controls passed 410 private checks, and all 21 deliberate
 defects were detected. The trusted implementation is published for review in
-[Harness PR #126](https://github.com/iii-hq/harness-e2e/pull/126). Both PRs remain
-drafts; these are local validation results, not a claim of CI or model success.
+[Harness PR #126](https://github.com/iii-hq/harness-e2e/pull/126). Both PRs were
+drafts at stage 3; these are local results, not a claim of CI or model success.
 
 This stage does not register a runnable Harness scenario, run a model, grade
 B01/B02, establish production isolation or publish a blog post. Those boundaries
 remain assigned to stages 4–6 and the separate future editorial scenario.
+
+## Stage 4 delivery
+
+The native `trending_topics_build` v1 scenario is registered in the diagnostic
+catalog, with an attempt-specific execution tool and trusted setup, capture,
+evaluation and cleanup hooks. It keeps `trend_blog` unchanged. Its case identity
+includes the fixture revision, baseline and embedded runtime/evaluator hashes.
+
+The [runtime package](../tests/fixtures/trending-topics-build/README.md) creates a
+private per-attempt Git service and restricted application containers. Only the
+public app tree reaches the subject. Finalization stops subject writes, resolves
+the pushed SHA once, validates commit history and workspace cleanliness, then
+builds and tests independent checkouts against original and varied inputs.
+
+A local trusted-reference control completed on 2026-09-10 UTC at
+`/home/layon/workspaces/trending-topics-stage4-validation-trUv1e/attempt/`:
+
+- Delivered commit: `81ec4b5168bce3817d42062a3db7fb8ad342f44c`; clean local
+  `build` branch and matching remote SHA, descended from the pinned baseline.
+- Frozen offline install/build and public tests: 6/6 passed.
+- Independent private tests: 82/82 per dataset, 164/164 total, with B01–B10
+  reported passed and no infrastructure errors.
+- All eight screenshot hashes, feed hashes and delivered-SHA associations
+  were independently checked. Original desktop/mobile home captures were inspected.
+- Runtime image: `sha256:3ec84aeb7c19f7168d21a7eee967aecc1cdfc1674242aee399fe71eebb28a10e`.
+- No external route, controller workspace, evaluator, remote filesystem or
+  Docker socket was visible in the subject container. Attempt containers were
+  removed after capture; the remote and evidence were retained.
+
+This was a lifecycle control using the reference implementation, not a model or
+iii execution, and not a remotely published CI artifact. Portable capture, partial
+native assessment and model-driven qualification were deferred to stages 5–6.
+
+## Stage 5 delivery
+
+The native Harness assessment now preserves each known pass/failure and leaves
+unverified criteria without invented points. A product build failure or protected
+input violation remains a product failure even if dependent tests cannot run.
+Incomplete scored coverage has no aggregate total; genuine infrastructure failures
+invalidate the run without discarding prior criterion observations.
+
+The captured deliverable is a portable, bounded JSON file bundle using the
+existing Harness asset contract. Screenshot bytes and metadata are checked for
+matching delivery SHA, frozen input, route, viewport and hashes. The four original
+screenshots have priority; varied screenshots and supporting files use the remaining
+16 MiB capture budget, with explicit omission reasons. Required evidence that is
+missing or corrupt fails closed.
+
+Readiness fixes reconcile Playwright process exits with report contents, reject
+animated links without focus indicators, and stop timed-out build/evaluator
+containers before evidence finalization. Regression tests cover these paths and
+the actual native finalizer's partial-assessment behavior. The full expanded
+control run passed 27/27 expected outcomes, including 22 deliberate defects;
+final animation-restoration checks passed all 14 positive B09 observations and
+rejected both animated-no-focus observations. These remain local trusted controls,
+separate from the model execution recorded below.
+
+## Stage 6 qualification and Release Control integration
+
+One real `deepseek/deepseek-v4-flash` execution completed on 2026-09-10 UTC
+against the existing iii stack in namespace `my-project`. It used the PR's local
+runtime/evaluator sources, whose hashes are recorded in the materialized case.
+The model received only the public task and isolated execution tool; it did not
+receive the reference implementation, hidden tests or varied feed.
+
+- Harness run `77abfae7ca9445c8b1cff06095f670a3`, attempt
+  `3fbbf61fad22479cb93f1e4335f6d0b9`: technically valid, completed, **100/100**.
+- Delivered SHA: `752158867fdaf2dcb9703bfece6f3d85a0230c26`; clean matching
+  local and remote `build` branch, with B01–B10 passed.
+- Independent original and varied builds/startups succeeded; private Playwright
+  checks passed **82/82 per dataset**, **164/164 total**.
+- The archived deliverable contains **88 files**, including **eight PNGs**,
+  without omissions or capture-verification errors. All bundled file hashes were
+  independently rechecked after cleanup; desktop/mobile home screenshots were inspected.
+- Archived artifact: **923,794 bytes**, SHA-256
+  `049408984617c630dd26da5dec91e854189d0eff4644c73925a500977bff1dc8`.
+- Attempt containers were removed; remote, logs, reports and portable capture remain
+  under `/home/layon/workspaces/trending-topics-model-validation-gnp5Qu/`.
+
+The scenario is included as standalone group `case-trending-topics-build` in the
+Evolution profile: three repetitions, no technical retries. Evolution now has
+23 cases and 69 planned runs. The exact-stack workflow checks out the immutable
+private fixture using a read-only GitHub App token without persisting credentials,
+then routes the controller fetch to that local checkout.
+
+This qualification is a local model run, not a comparative benchmark or a Release
+Control campaign. Remote CI validates the implementation; enabling execution in
+Release Control still requires merging the changes and publishing/selecting a
+runner containing them. This work does not merge PRs, release a runner, dispatch
+a campaign or publish a blog post.
