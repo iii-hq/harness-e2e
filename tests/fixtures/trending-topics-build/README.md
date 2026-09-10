@@ -108,3 +108,27 @@ are **not assessed by this suite**. The controls' successful builds do not prove
 B02 for any model attempt. Harness execution, isolation, criterion aggregation,
 technical validity/completion reporting, remote identities and missing-evidence
 handling remain stages 4–5. Do not report a 100-point score from these checks.
+
+## Validated control run
+
+Local validation completed on 2026-09-10 UTC with acceptance code at
+`ba868a5bffa63b7f068c2281384a3887bd562cb8` and public fixture commit
+`3ee24f7ace3c014db35423f14939ad3f6ce0c3d2`:
+
+- All 26 controls had their expected outcome: five positive cases passed
+  **410/410** private checks; all **21** deliberate defects were detected.
+- The evaluator files remained unchanged throughout the run; their hashes and
+  individual observations are retained in `summary.json`.
+- The reference passed **6/6** public checks. The placeholder passed the two
+  smoke checks and failed the four product checks as intended.
+- Fresh-remote preparation tests passed **2/2** after the fixture update.
+- All **20** positive-control PNG hashes and associated feed hashes were
+  independently verified (eight original-feed and twelve varied-feed captures).
+  Both designs were visually inspected at desktop and mobile widths.
+- Runtime: Node 24.18.0, npm 11.6.2, Chromium 151.0.7922.34, Playwright 1.62.1.
+
+Full local evidence is retained at
+`/home/layon/workspaces/trending-topics-stage3-controls-final/`, including
+`summary.json` and per-case reports under `results/`. This machine-local output
+is not a remotely published CI artifact; use the command above to reproduce it.
+No model run, production sandbox or full Harness score is claimed.
