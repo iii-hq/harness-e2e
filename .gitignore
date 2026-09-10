@@ -14,3 +14,4 @@ dashboard/node_modules/
 dashboard/*.tsbuildinfo
 dashboard/public/prototype/
 dashboard/.screenshots/
+scripts/kanban_eval/tools/node_modules/

@@ -1,0 +1,9 @@
+{
+  "name": "kanban-eval-tools",
+  "private": true,
+  "version": "1.0.0",
+  "dependencies": {
+    "@pnpm/linux-x64": "10.18.2",
+    "playwright": "1.61.1"
+  }
+}

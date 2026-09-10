@@ -117,6 +117,8 @@ pub enum MessageInput {
 #[derive(Debug, Clone, Default, Serialize, JsonSchema)]
 pub struct SendOptions {
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub max_cost_usd: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub max_turns: Option<u32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub max_output_tokens: Option<u64>,
@@ -916,13 +918,16 @@ mod tests {
     fn send_options_encode_the_validation_retry_cap_only_when_configured() {
         let configured = serde_json::to_value(SendOptions {
             max_validation_retries: Some(2),
+            max_cost_usd: Some(5.0),
             ..SendOptions::default()
         })
         .unwrap();
         assert_eq!(configured["max_validation_retries"], 2);
+        assert_eq!(configured["max_cost_usd"], 5.0);
 
         let defaulted = serde_json::to_value(SendOptions::default()).unwrap();
         assert!(defaulted.get("max_validation_retries").is_none());
+        assert!(defaulted.get("max_cost_usd").is_none());
     }
 
     #[test]

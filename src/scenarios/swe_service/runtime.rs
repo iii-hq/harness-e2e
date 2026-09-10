@@ -505,6 +505,7 @@ impl Shared {
                 }),
                 options: Some(SendOptions {
                     max_turns: Some(self.case.generations()),
+                    max_cost_usd: None,
                     max_output_tokens: Some(32_768),
                     max_total_tokens: Some(self.case.tokens()),
                     max_validation_retries: None,

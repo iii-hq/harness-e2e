@@ -214,7 +214,7 @@ Captures and a typography census (`census.json`) land in
 The dashboard has one kind of plan and one baseline/candidate lifecycle. Plan executions use the shared execution detail page, with aggregate metrics, scenario results and native evidence. **My
 plans** uses the existing plan table and detail visualization for every plan.
 **New plan** opens the same form for a blank scope, a starting profile or a copy.
-The six profiles are templates: they populate coverage, purpose, repetitions and
+The profiles are templates: they populate coverage, purpose, repetitions and
 retry policy. Users may edit the scope and explicitly select the execution model,
 plus the judge model when the scope includes a Markdown test. The saved plan owns
 that configuration; later template changes do not change it or prevent execution.

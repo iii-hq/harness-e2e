@@ -119,8 +119,8 @@ launcher enforces the fixture and cleanup boundary.
 needs no checkout, but it does require Node 22.6 or newer on the runner host: the
 subject's TypeScript application is executed directly through Node type
 stripping, both by the public suite and by the runner-owned behavioral probe.
-[config/test-plan.json](config/test-plan.json) defines the six executable profiles: smoke, regression, capability, evolution,
-resilience, and endurance. In the dashboard these profiles are starting templates
+[config/test-plan.json](config/test-plan.json) defines the executable profiles: smoke, regression, capability, evolution,
+resilience, endurance, and software-engineering. In the dashboard these profiles are starting templates
 for the same plan form and baseline/candidate visualization used by existing plans.
 Choose **New plan**, optionally select a template, edit the scope, and select the
 execution model, plus the judge model when the scope includes a Markdown test.
@@ -130,6 +130,16 @@ to the protected executor. See [executable profile plans](dashboard/README.md#ex
 
 ```bash
 cargo run --locked -- test-plan list
+```
+
+The `software-engineering` profile selects only the seven incremental Kanban
+cases and four Registry cases, once each with no technical retries. Its ten
+execution groups keep Registry implementation and verification together, in
+that order, so verification receives the implementation delivery. Registry
+planning requires an explicit auxiliary judge model.
+
+```bash
+cargo run --locked -- test-plan materialize --profile software-engineering
 ```
 
 Templates and execution rules are materialized directly by Rust from the source

@@ -32,6 +32,7 @@ pub mod engineering_ticket;
 pub mod fanout_ladder;
 pub mod git_regression_forensics;
 pub mod incident_response;
+pub mod kanban;
 pub mod mechanical_reaction;
 pub mod moving_target;
 pub mod performance_regression;
@@ -351,6 +352,20 @@ pub enum ScenarioId {
     RegistryEnvironment,
     #[value(name = "registry_verification")]
     RegistryVerification,
+    #[value(name = "kanban_c1_foundation")]
+    KanbanC1Foundation,
+    #[value(name = "kanban_c2_persistence")]
+    KanbanC2Persistence,
+    #[value(name = "kanban_c3_board")]
+    KanbanC3Board,
+    #[value(name = "kanban_c4_ticket_flow")]
+    KanbanC4TicketFlow,
+    #[value(name = "kanban_c5_edit_move")]
+    KanbanC5EditMove,
+    #[value(name = "kanban_c6_discussion")]
+    KanbanC6Discussion,
+    #[value(name = "kanban_c7_live")]
+    KanbanC7Live,
     #[value(name = "context_pressure")]
     ContextPressure,
     #[value(name = "shell_coder_sandbox")]
@@ -456,11 +471,18 @@ pub enum ScenarioId {
 }
 
 impl ScenarioId {
-    pub const ALL: [Self; 55] = [
+    pub const ALL: [Self; 62] = [
         Self::RegistryPlanning,
         Self::RegistryImplementation,
         Self::RegistryEnvironment,
         Self::RegistryVerification,
+        Self::KanbanC1Foundation,
+        Self::KanbanC2Persistence,
+        Self::KanbanC3Board,
+        Self::KanbanC4TicketFlow,
+        Self::KanbanC5EditMove,
+        Self::KanbanC6Discussion,
+        Self::KanbanC7Live,
         Self::ContextPressure,
         Self::ShellCoderSandbox,
         Self::ResearchPipeline,
@@ -532,6 +554,13 @@ impl ScenarioId {
             Self::RegistryImplementation => registry::IMPLEMENTATION_ID,
             Self::RegistryEnvironment => registry::ENVIRONMENT_ID,
             Self::RegistryVerification => registry::VERIFICATION_ID,
+            Self::KanbanC1Foundation => kanban::IDS[0],
+            Self::KanbanC2Persistence => kanban::IDS[1],
+            Self::KanbanC3Board => kanban::IDS[2],
+            Self::KanbanC4TicketFlow => kanban::IDS[3],
+            Self::KanbanC5EditMove => kanban::IDS[4],
+            Self::KanbanC6Discussion => kanban::IDS[5],
+            Self::KanbanC7Live => kanban::IDS[6],
             Self::ContextPressure => context_pressure::ID,
             Self::ShellCoderSandbox => shell_coder_sandbox::ID,
             Self::ResearchPipeline => research_pipeline::ID,
@@ -592,6 +621,13 @@ impl ScenarioId {
             Self::RegistryImplementation => registry::scenario(2, run_id),
             Self::RegistryEnvironment => registry::scenario(3, run_id),
             Self::RegistryVerification => registry::scenario(4, run_id),
+            Self::KanbanC1Foundation => kanban::spec(0, run_id),
+            Self::KanbanC2Persistence => kanban::spec(1, run_id),
+            Self::KanbanC3Board => kanban::spec(2, run_id),
+            Self::KanbanC4TicketFlow => kanban::spec(3, run_id),
+            Self::KanbanC5EditMove => kanban::spec(4, run_id),
+            Self::KanbanC6Discussion => kanban::spec(5, run_id),
+            Self::KanbanC7Live => kanban::spec(6, run_id),
             Self::ContextPressure => context_pressure::scenario(run_id),
             Self::ShellCoderSandbox => shell_coder_sandbox::scenario(run_id),
             Self::ResearchPipeline => research_pipeline::scenario(run_id),
@@ -652,6 +688,13 @@ impl ScenarioId {
             Self::RegistryImplementation => registry::materialize(2, namespace, seed)?,
             Self::RegistryEnvironment => registry::materialize(3, namespace, seed)?,
             Self::RegistryVerification => registry::materialize(4, namespace, seed)?,
+            Self::KanbanC1Foundation => kanban::materialize(0, namespace)?,
+            Self::KanbanC2Persistence => kanban::materialize(1, namespace)?,
+            Self::KanbanC3Board => kanban::materialize(2, namespace)?,
+            Self::KanbanC4TicketFlow => kanban::materialize(3, namespace)?,
+            Self::KanbanC5EditMove => kanban::materialize(4, namespace)?,
+            Self::KanbanC6Discussion => kanban::materialize(5, namespace)?,
+            Self::KanbanC7Live => kanban::materialize(6, namespace)?,
             Self::ContextPressure => context_pressure::materialize(namespace, seed)?,
             Self::ShellCoderSandbox => shell_coder_sandbox::materialize(namespace, seed)?,
             Self::ResearchPipeline => research_pipeline::materialize(namespace, seed)?,
@@ -783,6 +826,9 @@ impl ScenarioId {
     /// Scenarios with one retained canonical cohort do not participate in
     /// rotating-seed runs.
     pub fn canonical_seed_only(self) -> bool {
+        if kanban::IDS.contains(&self.as_str()) {
+            return true;
+        }
         matches!(
             self,
             Self::RegistryPlanning
@@ -843,6 +889,9 @@ impl ScenarioId {
 }
 
 pub fn required_functions(scenario_id: &str, run_id: &str) -> Vec<String> {
+    if kanban::IDS.contains(&scenario_id) {
+        return vec![kanban::function_id(run_id)];
+    }
     match scenario_id {
         registry::PLANNING_ID
         | registry::IMPLEMENTATION_ID
@@ -865,6 +914,9 @@ pub fn required_functions(scenario_id: &str, run_id: &str) -> Vec<String> {
 }
 
 pub fn allowed_functions(scenario_id: &str, run_id: &str) -> Option<Vec<String>> {
+    if kanban::IDS.contains(&scenario_id) {
+        return Some(vec![kanban::function_id(run_id)]);
+    }
     match scenario_id {
         registry::PLANNING_ID
         | registry::IMPLEMENTATION_ID
@@ -913,7 +965,7 @@ mod tests {
 
     use super::*;
     #[test]
-    fn registry_contains_fifty_five_unique_valid_scenarios() {
+    fn registry_contains_sixty_two_unique_valid_scenarios() {
         let mut ids = HashSet::new();
         for scenario in ScenarioId::ALL {
             assert!(ids.insert(scenario.as_str()));
@@ -922,7 +974,7 @@ mod tests {
                 .materialize("run", scenario.canonical_seed())
                 .unwrap();
         }
-        assert_eq!(ids.len(), 55);
+        assert_eq!(ids.len(), 62);
     }
 
     #[test]

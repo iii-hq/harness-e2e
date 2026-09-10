@@ -2356,9 +2356,10 @@ mod tests {
         for (profile, expected_slots, expected_submissions) in [
             ("smoke", 5, 5),
             ("regression", 9, 9),
-            ("capability", 48, 48),
+            ("capability", 55, 55),
             ("evolution", 69, 66),
             ("endurance", 5, 5),
+            ("software-engineering", 11, 10),
         ] {
             let root = tempfile::tempdir().unwrap();
             let runner = Arc::new(FakeRunner::new(root.path().into()));

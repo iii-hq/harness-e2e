@@ -4,6 +4,11 @@
   "version": 1,
   "modules": [
     {
+      "id": "m10",
+      "label": "Incremental Kanban application",
+      "scenarios": ["kanban_c1_foundation", "kanban_c2_persistence", "kanban_c3_board", "kanban_c4_ticket_flow", "kanban_c5_edit_move", "kanban_c6_discussion", "kanban_c7_live"]
+    },
+    {
       "id": "m1",
       "label": "State and basic execution",
       "scenarios": [
@@ -271,7 +276,8 @@
         "m5",
         "m6",
         "m7",
-        "m8"
+        "m8",
+        "m10"
       ],
       "scenarios": [],
       "repetitions": 1,
@@ -399,6 +405,30 @@
       "technical_retries": 0,
       "lane": "local-endurance",
       "fault_groups": []
+    },
+    {
+      "id": "software-engineering",
+      "label": "Software engineering",
+      "purpose": "Evaluate real application engineering through incremental Kanban tasks and Registry planning, implementation, environment and verification.",
+      "metrics": [
+        "deliverable_success",
+        "completion_evidence_coverage",
+        "tokens_per_completion"
+      ],
+      "modules": ["m10"],
+      "scenarios": [
+        "registry_planning",
+        "registry_implementation",
+        "registry_environment",
+        "registry_verification"
+      ],
+      "repetitions": 1,
+      "technical_retries": 0,
+      "lane": "local-software-engineering",
+      "fault_groups": [],
+      "scenario_groups": [
+        ["registry_implementation", "registry_verification"]
+      ]
     }
   ]
 }

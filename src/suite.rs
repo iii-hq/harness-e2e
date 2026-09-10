@@ -1479,6 +1479,34 @@ async fn run_once(context: &Arc<E2eContext>, request: AttemptRequest<'_>) -> E2e
             );
         }
     }
+    if crate::scenarios::kanban::IDS.contains(&spec.id) && report.deliverables.is_empty() {
+        let diagnostic =
+            crate::scenarios::kanban::diagnostics(&attempt_id).and_then(|mut value| {
+                let policy = crate::redaction::RedactionPolicy::from_environment();
+                report
+                    .asset_redaction
+                    .merge(policy.redact_value(&mut value));
+                policy.assert_clean(&serde_json::to_vec(&value)?)?;
+                artifact::write_json(
+                    output,
+                    &PathBuf::from("evidence")
+                        .join(run_id)
+                        .join(&attempt_id)
+                        .join("kanban-controller.json"),
+                    "kanban_controller",
+                    "runtime_diagnostics",
+                    &value,
+                )
+            });
+        match diagnostic {
+            Ok(reference) => report.evidence.push(reference),
+            Err(error) => report.push_failure(
+                RunStatus::InfrastructureError,
+                FailurePhase::Collect,
+                format!("preserve Kanban controller diagnostics: {error:#}"),
+            ),
+        }
+    }
     asset::reconcile_after_cleanup(output, &report.deliverables, &mut report.asset_assessments);
     if let Some(capture_manifest) = report.asset_capture_manifest.clone() {
         match asset::persist_after_cleanup(output, &capture_manifest, &report.asset_assessments) {
@@ -3043,6 +3071,7 @@ async fn run_markdown_session(
                 }),
                 options: Some(SendOptions {
                     max_turns: Some(request.max_turns),
+                    max_cost_usd: None,
                     max_output_tokens: request.max_output_tokens,
                     max_total_tokens: request.max_total_tokens,
                     max_validation_retries: request.max_validation_retries,
@@ -4396,6 +4425,7 @@ async fn execute(
                     }),
                     options: Some(SendOptions {
                         max_turns: Some(spec.execution.max_turns),
+                        max_cost_usd: crate::scenarios::kanban::IDS.contains(&spec.id).then_some(5.0),
                         max_output_tokens: spec.execution.max_output_tokens,
                         max_total_tokens: spec.execution.max_total_tokens,
                         max_validation_retries: spec.execution.max_validation_retries,

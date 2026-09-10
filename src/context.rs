@@ -209,7 +209,11 @@ impl E2eContext {
             .and_then(Value::as_array)
             .into_iter()
             .flatten()
-            .find(|worker| worker.get("name").and_then(Value::as_str) == Some("harness"))
+            .find(|worker| {
+                worker["name"] == "harness"
+                    && worker["namespace"]
+                        == self.client.namespace().as_deref().unwrap_or("default")
+            })
             .and_then(|worker| worker.get("version"))
             .and_then(Value::as_str)
             .filter(|value| !value.trim().is_empty())
@@ -416,15 +420,20 @@ impl E2eContext {
     ) -> Result<Value> {
         let timeout_ms = timeout.as_millis().min(u64::MAX as u128) as u64;
         let outer = timeout + Duration::from_secs(5);
+        let (namespace, payload) =
+            inspection_routing(function_id, self.client.namespace(), payload);
         invoke_with_transport_retries(function_id, outer, || async {
             ensure_connected_before_dispatch(self.client.get_connection_state())?;
             self.client
-                .trigger(TriggerRequest {
-                    function_id: function_id.to_string(),
-                    payload: payload.clone(),
-                    action: None,
-                    timeout_ms: Some(timeout_ms),
-                })
+                .trigger(
+                    TriggerRequest {
+                        function_id: function_id.to_string(),
+                        payload: payload.clone(),
+                        action: None,
+                        timeout_ms: Some(timeout_ms),
+                    }
+                    .namespace(namespace.clone()),
+                )
                 .await
                 .with_context(|| format!("invoke {function_id}"))
         })
@@ -512,6 +521,28 @@ impl E2eContext {
             Some(Some(output)) => Ok(Some(output.clone())),
             Some(None) => bail!("execution produced no output for {producer}"),
         }
+    }
+}
+
+fn inspection_routing(
+    function_id: &str,
+    namespace: Option<String>,
+    mut payload: Value,
+) -> (String, Value) {
+    let namespace = namespace.unwrap_or_else(|| "default".into());
+    if matches!(
+        function_id,
+        "engine::functions::list" | "engine::functions::info"
+    ) {
+        payload["namespace"] = json!(namespace);
+        ("default".into(), payload)
+    } else if matches!(
+        function_id,
+        "engine::health::check" | "engine::workers::list" | "engine::triggers::list"
+    ) {
+        ("default".into(), payload)
+    } else {
+        (namespace, payload)
     }
 }
 
@@ -737,6 +768,38 @@ mod tests {
         let output = context.execution_output("producer").unwrap().unwrap();
         assert_eq!(output.attempt_id, "attempt-2");
         assert_eq!(output.directory, incomplete);
+    }
+
+    #[test]
+    fn inspection_runs_in_engine_namespace_but_targets_the_worker_namespace() {
+        for function in [
+            "engine::health::check",
+            "engine::workers::list",
+            "engine::triggers::list",
+        ] {
+            assert_eq!(
+                inspection_routing(function, Some("isolated-test".into()), json!({})),
+                ("default".into(), json!({}))
+            );
+        }
+        for function in ["engine::functions::list", "engine::functions::info"] {
+            let (route, payload) = inspection_routing(
+                function,
+                Some("isolated-test".into()),
+                json!({"function_ids":["task::exec"]}),
+            );
+            assert_eq!(route, "default");
+            assert_eq!(payload["namespace"], "isolated-test");
+            assert_eq!(payload["function_ids"], json!(["task::exec"]));
+        }
+        assert_eq!(
+            inspection_routing("harness::send", Some("isolated-test".into()), json!({})),
+            ("isolated-test".into(), json!({}))
+        );
+        assert_eq!(
+            inspection_routing("harness::send", None, json!({})),
+            ("default".into(), json!({}))
+        );
     }
 
     #[test]

@@ -51,6 +51,7 @@ jobs:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
           ref: ${{ inputs.runner_sha }}
+          persist-credentials: false
 
       - name: Validate Release Control dispatch
         env:
@@ -176,6 +177,7 @@ jobs:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
           ref: ${{ inputs.runner_sha }}
+          persist-credentials: false
 
       - name: Mint private Registry source token
         id: registry_source_token
@@ -262,6 +264,21 @@ jobs:
           printf 'sha256=%s\n' \
             "$(python3 scripts/exact_stack_campaign.py digest --contract "$contract")" >>"$GITHUB_OUTPUT"
           printf 'stack_lock<<CONTRACT\n%s\nCONTRACT\n' "$(cat "$contract")" >>"$GITHUB_ENV"
+
+      - name: Checkout pinned Kanban fixture
+        if: startsWith(matrix.group_id, 'case-kanban-')
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          repository: iii-hq/kanban-e2e-fixture
+          ref: 0471257a95095da7c5e9d366e26636976472e90d
+          path: target/kanban-fixture
+          fetch-depth: 0
+          persist-credentials: false
+
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
+        if: startsWith(matrix.group_id, 'case-kanban-')
+        with:
+          node-version: 24.18.0
 
       - uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # 1.97.1
         if: matrix.execution_kind == 'fault_injection'
@@ -388,6 +405,7 @@ jobs:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
           ref: ${{ inputs.runner_sha }}
+          persist-credentials: false
 
       - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
         with:
