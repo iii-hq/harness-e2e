@@ -12,6 +12,7 @@ engine_port=${HARNESS_E2E_ENGINE_PORT:-49134}
 wait_seconds=${HARNESS_E2E_WAIT_SECONDS:-300}
 admission_timeout_seconds=${HARNESS_E2E_ADMISSION_TIMEOUT_SECONDS:-180}
 compose_add_timeout_seconds=${HARNESS_E2E_COMPOSE_ADD_TIMEOUT_SECONDS:-600}
+model_wait_seconds=${HARNESS_E2E_MODEL_WAIT_SECONDS:-180}
 run_timeout_seconds=${HARNESS_E2E_RUN_TIMEOUT_SECONDS:-10800}
 fixture_launcher=${HARNESS_E2E_FIXTURE_LAUNCHER:-"$repo_root/scripts/engineering_ticket_fixture.py"}
 fixture_source_root=${HARNESS_E2E_FIXTURE_SOURCE_ROOT:-"$repo_root/tests/fixtures/campaign"}
@@ -151,6 +152,36 @@ await_compose_add() {
   done
 
   fail "compose::add did not settle within ${compose_add_timeout_seconds}s"
+}
+
+await_subject_model() {
+  local provider model payload deadline remaining response
+  provider=$(jq -er '.suite.subject.provider' "$contract_path")
+  model=$(jq -er '.suite.subject.model' "$contract_path")
+  payload=$(jq -cn --arg provider "$provider" --arg id "$model" '{provider:$provider,id:$id}')
+  [[ "$model_wait_seconds" =~ ^[1-9][0-9]*$ ]] || fail "HARNESS_E2E_MODEL_WAIT_SECONDS must be a positive integer"
+  deadline=$((SECONDS + model_wait_seconds))
+  response="$artifact_dir/stack/subject-model.json"
+  log "Waiting for router catalog model $provider/$model"
+  while ((SECONDS < deadline)); do
+    remaining=$((deadline - SECONDS))
+    ((remaining <= 10)) || remaining=10
+    if project_trigger router::models::get "$payload" "$((remaining * 1000))" \
+      >"$response" 2>"$artifact_dir/stack/model-catalog-query.log"; then
+      if [[ -s "$response" ]] && jq -e '. != null' "$response" >/dev/null; then
+        jq -e --arg id "$model" --arg provider "$provider" \
+          '.model.id == $id and .model.provider == $provider' "$response" >/dev/null \
+          || fail "router catalog returned a different or invalid model for $provider/$model"
+        return 0
+      fi
+    fi
+    ((SECONDS < deadline)) && sleep 1
+  done
+  # Provider status contains no credentials; it distinguishes a missing worker
+  # from an empty catalog without archiving router::provider::resolve secrets.
+  project_trigger router::provider::list '{}' 5000 \
+    >"$artifact_dir/stack/model-readiness.json" 2>/dev/null || true
+  fail "model $provider/$model is not registered after ${model_wait_seconds}s; see stack/model-readiness.json"
 }
 
 cleanup() {
@@ -391,6 +422,11 @@ compose_trigger compose::status "file=$compose_file" >"$artifact_dir/stack/statu
 "$iii_bin" trigger engine::workers::list --address 127.0.0.1 --port "$engine_port" --json '{}' \
   >"$artifact_dir/stack/workers.json"
 capture_processes "$artifact_dir/stack/processes-during.json"
+
+# A worker's engine registration precedes provider declaration and upstream
+# model discovery. Start the suite only after its exact subject is in the catalog.
+failure_phase=model_readiness
+await_subject_model
 
 failure_phase=materialization
 project_trigger e2e::scenarios-list "$(jq -cn --argjson seed "$seed" '{seed:$seed}')" 120000 \

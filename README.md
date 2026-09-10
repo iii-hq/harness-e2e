@@ -254,7 +254,7 @@ link, subject to its retention; this flow does not download an evidence archive.
 
 ## Compose lifecycle
 
-Release Control names the exact project roots. This repository writes only the
+Release Control names the exact project roots. This repository writes the
 root configuration and passes those `worker@version` references to
 `compose::add`; iii resolves the Registry graph, writes the project topology,
 and reconciles its containers. Every execution starts an empty Engine and a
@@ -271,7 +271,18 @@ Publication validates the locally built binary through a `path://` Compose
 container before the package is uploaded. Published campaigns use only exact
 Registry package versions. Provider secrets are written to temporary
 permission-restricted `env_file` files and are never included in contract,
-Compose, evidence, or archive artifacts.
+Compose, evidence, or archive artifacts. Those files are attached to the
+providers and to the exact `llm-router` dependency pinned in the contract:
+the router resolves provider credentials and needs them in its own isolated
+environment to report the providers as configured. The scaffold predeclares that
+dependency's configuration without changing the contract's roots or versions.
+
+Engine registration is not model readiness: provider registration and model
+discovery continue asynchronously after Compose reports a worker ready. Before
+materializing a group, the runner waits up to 180 seconds for the exact subject
+in `router::models::get` (`HARNESS_E2E_MODEL_WAIT_SECONDS` overrides this bound).
+An unavailable model fails in `model_readiness`, preserves the last catalog
+response and provider status under `stack/`, and never falls back to another model.
 
 The worker exposes `e2e::run`, `e2e::status`, `e2e::cancel`,
 `e2e::results-get`, `e2e::results-list`, `e2e::compare`,
