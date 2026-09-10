@@ -57,6 +57,10 @@ use the regular scenario catalog, execution flow, and scores: `registry_planning
 `registry_implementation`, `registry_environment`, and `registry_verification`.
 Each has its own [atomic validations](tests/fixtures/registry-version-comparison/scoring.md).
 
+The proposed [trending topics build contract](docs/blog-build-contract.md) has
+[standalone acceptance controls](tests/fixtures/trending-topics-build/README.md).
+It is not yet registered for Harness execution; delivery integration is the next stage.
+
 New declarative scenarios are authored only as `scenarios/*.md`. The compiler
 embeds the exact source, validates the canonical English section structure,
 and exposes the resulting file-stem id through the CLI, worker catalog,
