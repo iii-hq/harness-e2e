@@ -5,6 +5,7 @@ import {
   buildLedgerRows,
   dayLabel,
   filterLedgerRows,
+  groupHeading,
   groupLedgerRows,
   LEDGER_DEFAULT_FILTERS,
   ledgerFiltersFromParams,
@@ -156,6 +157,77 @@ describe('executions ledger', () => {
       ['yesterday · Aug 25', 2],
     ])
     expect(dayLabel('2026-08-25T11:13:00Z', NOW)).toBe('yesterday · Aug 25')
+  })
+
+  it('groups the runs of one Release Control execution as its plan, with additive figures', () => {
+    const plan = {
+      execution_id: '4096c79e-c273-4495-ab8f-4b2741750197',
+      attempt: 1,
+      profile: 'regression',
+      campaign_id: 'regression-r01',
+      group_id: 'case-minimal-path',
+    }
+    const rcRows = buildLedgerRows([
+      summary({
+        id: 'rc-a',
+        label:
+          'Regression · regression-r01 · case-minimal-path · Harness 1.8.17',
+        lane: 'local-regression',
+        release_control: plan,
+        completed_at: '2026-08-26T20:30:00Z',
+        totals: {
+          expected_reports: 1,
+          received_reports: 1,
+          scenario_pass_rate: 1,
+          report_coverage: 1,
+          total_tokens: 4_000,
+          wall_time_seconds: 100,
+        },
+      }),
+      summary({ id: 'local-between', completed_at: '2026-08-26T20:20:00Z' }),
+      summary({
+        id: 'rc-b',
+        label: 'Regression · regression-r01 · case-timer-wake · Harness 1.8.17',
+        lane: 'local-regression',
+        status: 'technical_failed',
+        release_control: { ...plan, group_id: 'case-timer-wake' },
+        completed_at: '2026-08-26T20:10:00Z',
+        assessment_summary: {
+          system_statuses: { infrastructure_error: 1 },
+        } as never,
+        totals: {
+          expected_reports: 1,
+          received_reports: 1,
+          scenario_pass_rate: 0,
+          report_coverage: 1,
+          total_tokens: 6_000,
+          wall_time_seconds: 50,
+        },
+      }),
+    ])
+    const grouped = groupLedgerRows(
+      filterLedgerRows(rcRows, LEDGER_DEFAULT_FILTERS),
+      NOW,
+    )
+    expect(
+      grouped.groups.map((group) => [
+        group.key,
+        group.rows.map((row) => row.execution.id),
+      ]),
+    ).toEqual([
+      ['plan:4096c79e-c273-4495-ab8f-4b2741750197', ['rc-a', 'rc-b']],
+      ['2026-7-26', ['local-between']],
+    ])
+    expect(groupHeading(grouped.groups[0])).toBe(
+      'regression · regression-r01 · release control 4096c79e · 2 runs · 50% pass · 10,000 tokens · 2m 30s',
+    )
+    expect(groupHeading(grouped.groups[1])).toBe('today · Aug 26 · 1')
+    expect(
+      filterLedgerRows(rcRows, {
+        ...LEDGER_DEFAULT_FILTERS,
+        query: '4096c79e',
+      }).map((row) => row.execution.id),
+    ).toEqual(['rc-a', 'rc-b'])
   })
 
   // Audit O-03 / E-11: the row carries every column with a label, and a

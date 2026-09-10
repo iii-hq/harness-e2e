@@ -146,6 +146,7 @@ pub fn spec(scenario: ScenarioId) -> ScenarioSpec {
             Ok(ObjectiveEvaluation {
                 completion: crate::report::CompletionState::Undetermined,
                 awards: Vec::new(),
+                infrastructure_error: None,
             })
         }),
         cleanup: None,

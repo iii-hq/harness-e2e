@@ -160,12 +160,16 @@ pub(super) fn build_evaluation(
     for result in results {
         awards.push(CriterionAward {
             id: result.spec.id.to_string(),
-            awarded: result.awarded,
+            awarded: Some(result.awarded),
             reason: result.details,
         });
     }
 
-    ObjectiveEvaluation { completion, awards }
+    ObjectiveEvaluation {
+        completion,
+        awards,
+        infrastructure_error: None,
+    }
 }
 
 pub(super) fn prerequisite_failure(
@@ -251,8 +255,8 @@ mod tests {
             ],
         );
 
-        assert_eq!(evaluation.awards[0].awarded, 70);
-        assert_eq!(evaluation.awards[1].awarded, 12);
+        assert_eq!(evaluation.awards[0].awarded, Some(70));
+        assert_eq!(evaluation.awards[1].awarded, Some(12));
     }
 
     #[test]
@@ -278,7 +282,13 @@ mod tests {
 
         assert_eq!(unavailable.completion, CompletionState::Undetermined);
         assert_eq!(incomplete.completion, CompletionState::TaskIncomplete);
-        assert!(unavailable.awards.iter().all(|award| award.awarded == 0));
-        assert!(incomplete.awards.iter().all(|award| award.awarded == 0));
+        assert!(unavailable
+            .awards
+            .iter()
+            .all(|award| award.awarded == Some(0)));
+        assert!(incomplete
+            .awards
+            .iter()
+            .all(|award| award.awarded == Some(0)));
     }
 }

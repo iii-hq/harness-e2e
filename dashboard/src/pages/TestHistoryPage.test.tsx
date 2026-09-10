@@ -203,3 +203,36 @@ describe('test history page state', () => {
     ).toBe('version=2&result=failed&a=k1&b=k2&open=k1')
   })
 })
+
+it('shows descriptive RC deltas without requiring the same stack or exposing RC as local evidence', () => {
+  const html = renderToStaticMarkup(
+    <ObservationComparisonPanel
+      baseline={observation({
+        execution_id: 'rc:reference',
+        source: 'release-control',
+        source_url: 'https://github.com/iii-hq/harness-e2e/actions/runs/123',
+        stack_mode: 'published',
+        cohort_id: '',
+        median_score: 70,
+      })}
+      candidate={observation({
+        execution_id: 'local-candidate',
+        source: 'local',
+        stack_mode: 'source',
+        median_score: 90,
+      })}
+      testId="direct_answer"
+      onClear={() => {}}
+      onSwap={() => {}}
+    />,
+  )
+  expect(html).toContain('Reference: Release Control')
+  expect(html).toContain('20 pts')
+  expect(html).not.toContain('ds-delta-positive')
+  expect(html).not.toContain('ds-delta-negative')
+  expect(html).toContain(
+    'https://github.com/iii-hq/harness-e2e/actions/runs/123',
+  )
+  expect(html).not.toContain('execution/rc:')
+  expect(html).not.toContain('team')
+})

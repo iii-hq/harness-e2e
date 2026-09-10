@@ -31,7 +31,7 @@ import {
   type LocalPlan,
   type MasterTestPlan,
 } from '@/lib/dashboard-data-source'
-import { formatDate } from '@/lib/execution-view'
+import { buildExecutionPresentation, formatDate } from '@/lib/execution-view'
 import {
   buildPlanComparison,
   formatPlanMetricValue,
@@ -40,8 +40,151 @@ import {
   type PlanMetricComparison,
   type PlanMetricId,
 } from '@/lib/plan-comparison'
+import { listReleaseControlExecutions } from '@/lib/release-control-reference'
+import { statusCopy } from '@/pages/OverviewPage'
 
 type PlanFilter = 'all' | 'needs_action' | 'running' | 'compared'
+
+type ReleaseControlPlan = {
+  key: string
+  executions: DashboardExecutionSummary[]
+}
+
+function releaseControlPlans(executions: DashboardExecutionSummary[]) {
+  const plans = new Map<string, DashboardExecutionSummary[]>()
+  for (const execution of executions) {
+    const key = execution.release_control?.profile
+    if (!key) continue
+    plans.set(key, [...(plans.get(key) ?? []), execution])
+  }
+  return [...plans]
+    .map(([key, history]) => ({
+      key,
+      executions: history.sort((left, right) =>
+        (right.started_at ?? '').localeCompare(left.started_at ?? ''),
+      ),
+    }))
+    .sort((left, right) =>
+      (right.executions[0]?.started_at ?? '').localeCompare(
+        left.executions[0]?.started_at ?? '',
+      ),
+    )
+}
+
+function ReleaseControlPlans({
+  plans,
+  loading,
+  error,
+  reload,
+}: {
+  plans: ReleaseControlPlan[]
+  loading: boolean
+  error: string | null
+  reload: () => void
+}) {
+  if (error)
+    return (
+      <EmptyState
+        className="mt-5"
+        tone="error"
+        title="Release Control history is unavailable"
+        description={error}
+        actions={
+          <button
+            type="button"
+            className={buttonClassName({ variant: 'secondary' })}
+            onClick={reload}
+          >
+            try again
+          </button>
+        }
+      />
+    )
+  if (loading)
+    return (
+      <p className="mt-5 font-mono text-xs text-ink-muted" role="status">
+        loading Release Control history…
+      </p>
+    )
+  if (plans.length === 0)
+    return (
+      <EmptyState
+        className="mt-5"
+        title="No Release Control history found"
+        description="Keep an authenticated Release Control tab connected to this personal Engine, then try again."
+      />
+    )
+  return (
+    <DataTable
+      className="mt-5"
+      caption="Reference plans from Release Control"
+      collapse
+      minWidth="44rem"
+    >
+      <thead>
+        <tr>
+          <th scope="col">Plan</th>
+          <th scope="col">Latest result</th>
+          <th scope="col">History</th>
+          <th scope="col">Last run</th>
+          <th scope="col">
+            <span className="ds-visually-hidden">Open</span>
+          </th>
+        </tr>
+      </thead>
+      <tbody>
+        {plans.map((plan) => {
+          const latest = plan.executions[0]
+          return (
+            <DataTableRow key={plan.key} href={hashForPlan(`rc:${plan.key}`)}>
+              <td data-label="Plan" className="ds-table-sticky-col">
+                <span className="block font-mono text-xs font-medium text-ink">
+                  {plan.key}
+                </span>
+                <span className="font-mono text-label text-ink-muted">
+                  Reference: Release Control
+                </span>
+              </td>
+              <td data-label="Latest result">
+                {latest ? (
+                  <StatusBadge
+                    {...statusCopy(buildExecutionPresentation(latest))}
+                    label={latest.status.replaceAll('_', ' ')}
+                  />
+                ) : (
+                  '—'
+                )}
+              </td>
+              <td data-label="History" className="font-mono text-xs">
+                {plan.executions.length} execution
+                {plan.executions.length === 1 ? '' : 's'}
+              </td>
+              <td
+                data-label="Last run"
+                className="font-mono text-xs text-ink-muted"
+              >
+                {latest
+                  ? formatDate(latest.completed_at ?? latest.started_at ?? '')
+                  : '—'}
+              </td>
+              <td className="text-right">
+                <a
+                  className={buttonClassName({
+                    variant: 'quiet',
+                    size: 'compact',
+                  })}
+                  href={hashForPlan(`rc:${plan.key}`)}
+                >
+                  open
+                </a>
+              </td>
+            </DataTableRow>
+          )
+        })}
+      </tbody>
+    </DataTable>
+  )
+}
 
 export type PlanStatePresentation = {
   status: OperationalStatus
@@ -402,7 +545,9 @@ function PlanRow({
 
 export function PlansPage() {
   const [bridge, setBridge] = useState<DashboardDataBridge | null>(null)
-  const [tab, setTab] = useState<'mine' | 'profiles'>('mine')
+  const [tab, setTab] = useState<'mine' | 'release-control' | 'profiles'>(
+    'mine',
+  )
   const [plans, setPlans] = useState<LocalPlan[]>([])
   const [masterPlan, setMasterPlan] = useState<MasterTestPlan | null>(null)
   const [executionSummaries, setExecutionSummaries] = useState<
@@ -413,6 +558,28 @@ export function PlansPage() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [comparisonError, setComparisonError] = useState<string | null>(null)
+  const [releaseControl, setReleaseControl] = useState<ReleaseControlPlan[]>([])
+  const [releaseControlLoading, setReleaseControlLoading] = useState(false)
+  const [releaseControlError, setReleaseControlError] = useState<string | null>(
+    null,
+  )
+
+  const loadReleaseControl = useCallback(async () => {
+    setReleaseControlLoading(true)
+    setReleaseControlError(null)
+    try {
+      setReleaseControl(
+        releaseControlPlans(await listReleaseControlExecutions()),
+      )
+    } catch (cause) {
+      setReleaseControl([])
+      setReleaseControlError(
+        cause instanceof Error ? cause.message : String(cause),
+      )
+    } finally {
+      setReleaseControlLoading(false)
+    }
+  }, [])
 
   const load = useCallback(async ({ silent = false } = {}) => {
     if (!silent) setLoading(true)
@@ -457,6 +624,10 @@ export function PlansPage() {
   useEffect(() => {
     void load()
   }, [load])
+
+  useEffect(() => {
+    if (bridge?.mode === 'local') void loadReleaseControl()
+  }, [bridge, loadReleaseControl])
 
   const counts = useMemo(() => {
     const count = (candidate: PlanFilter) =>
@@ -554,6 +725,16 @@ export function PlansPage() {
             </button>
             <button
               type="button"
+              aria-pressed={tab === 'release-control'}
+              className={buttonClassName({
+                variant: tab === 'release-control' ? 'primary' : 'secondary',
+              })}
+              onClick={() => setTab('release-control')}
+            >
+              Reference: Release Control
+            </button>
+            <button
+              type="button"
               aria-pressed={tab === 'profiles'}
               className={buttonClassName({
                 variant: tab === 'profiles' ? 'primary' : 'secondary',
@@ -576,7 +757,14 @@ export function PlansPage() {
           </>
         ) : null}
 
-        {tab === 'profiles' ? null : !local && !loading ? (
+        {tab === 'release-control' ? (
+          <ReleaseControlPlans
+            plans={releaseControl}
+            loading={releaseControlLoading}
+            error={releaseControlError}
+            reload={() => void loadReleaseControl()}
+          />
+        ) : tab === 'profiles' ? null : !local && !loading ? (
           <div className="mt-6">
             <EmptyState
               title="Available only in the local dashboard"

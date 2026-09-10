@@ -551,11 +551,11 @@ fn evaluate<'a>(
                     .and_then(|checks| checks.iter().find(|check| check["id"] == criterion.id));
                 CriterionAward {
                     id: criterion.id.into(),
-                    awarded: if check.is_some_and(|c| c["status"] == "passed") {
+                    awarded: Some(if check.is_some_and(|c| c["status"] == "passed") {
                         criterion.weight
                     } else {
                         0
-                    },
+                    }),
                     reason: check
                         .map(|c| c["detail"].to_string())
                         .unwrap_or_else(|| "Required check missing".into()),
@@ -569,6 +569,7 @@ fn evaluate<'a>(
                 CompletionState::TaskIncomplete
             },
             awards,
+            infrastructure_error: None,
         })
     })
 }

@@ -1,0 +1,16 @@
+{
+  "name": "trending-topics-build-acceptance",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "playwright test",
+    "validate": "node validate-controls.mjs"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.62.1"
+  },
+  "engines": {
+    "node": "24.18.0",
+    "npm": "11.6.2"
+  }
+}

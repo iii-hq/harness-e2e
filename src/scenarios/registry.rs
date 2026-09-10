@@ -168,7 +168,7 @@ fn spec<const N: u8>(run_id: &str) -> ScenarioSpec {
         id, version: 1,
         prompt: format!("{}\n\nUse `{}` for every workspace read, edit and command. Commands start at /workspace inside your private container. The registry/, inputs/, and output/ directories are siblings under /workspace; write deliverables to /workspace/output/, not inside the repository. Supply command and timeout_ms (1..=120000). Use function discovery only to find this exact tool.", PROMPTS[usize::from(N - 1)], function_id(id, run_id)),
         filesystem_root: None,
-        execution: ExecutionPolicy { max_turns: 128, max_output_tokens: Some(32_768), max_total_tokens: Some(600_000), stuck_timeout_seconds: 900, max_validation_retries: None },
+        execution: ExecutionPolicy { max_turns: 128, max_output_tokens: Some(32_768), max_total_tokens: Some(if N == 2 { 1_200_000 } else { 600_000 }), stuck_timeout_seconds: 900, max_validation_retries: None },
         denied_functions: &[],
         criteria: metrics(N).iter().map(|m| CriterionSpec::scored(m["id"].as_str().unwrap(), m["weight"].as_u64().unwrap() as u8, m["question"].as_str().unwrap(), EvaluationDimension::Deliverable)).collect(),
         setup: Some(setup::<N>), evaluate: evaluate::<N>, cleanup: Some(cleanup::<N>),
@@ -761,7 +761,7 @@ fn awards(test: u8, validation: &Value) -> Result<Vec<CriterionAward>> {
             };
             Ok(CriterionAward {
                 id: metric["id"].as_str().unwrap().into(),
-                awarded: (metric["weight"].as_u64().unwrap() as f64 * value).round() as u8,
+                awarded: Some((metric["weight"].as_u64().unwrap() as f64 * value).round() as u8),
                 reason: item.to_string(),
             })
         })
@@ -783,6 +783,7 @@ fn evaluate<'a, const N: u8>(
                 CompletionState::TaskIncomplete
             },
             awards: awards(N, &validation)?,
+            infrastructure_error: None,
         })
     })
 }
@@ -886,7 +887,7 @@ mod tests {
                 awards(n, &json!({"observations":observations}))
                     .unwrap()
                     .iter()
-                    .map(|a| u16::from(a.awarded))
+                    .map(|a| u16::from(a.awarded.unwrap()))
                     .sum::<u16>(),
                 100
             );
@@ -927,7 +928,7 @@ mod tests {
             awards(4, &json!({"observations":observations}))
                 .unwrap()
                 .iter()
-                .map(|award| u16::from(award.awarded))
+                .map(|award| u16::from(award.awarded.unwrap()))
                 .sum::<u16>(),
             80
         );

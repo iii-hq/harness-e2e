@@ -69,6 +69,10 @@ pub(super) struct LocalPlan {
     pub last_attempt_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub template_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reference_execution_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub reference_differences: Vec<String>,
     pub protected_executor_required: bool,
     pub compatible: bool,
 }
@@ -176,6 +180,8 @@ pub(super) fn new_plan(request: &PlanCreateRequest, id: String) -> Result<LocalP
         incomplete_execution_ids: Vec::new(),
         last_attempt_id: None,
         template_id: request.template_id.clone(),
+        reference_execution_id: None,
+        reference_differences: Vec::new(),
         protected_executor_required: false,
         compatible: true,
     })
@@ -379,7 +385,10 @@ pub(super) fn resolve_scope(
         .collect()
 }
 
-fn scope_hash(request: &PlanCreateRequest, scenarios: &[PlanScopeItem]) -> Result<String> {
+pub(super) fn scope_hash(
+    request: &PlanCreateRequest,
+    scenarios: &[PlanScopeItem],
+) -> Result<String> {
     artifact::sha256_value(&json!({
         "url": request.url.trim(),
         "model": request.model.trim(),

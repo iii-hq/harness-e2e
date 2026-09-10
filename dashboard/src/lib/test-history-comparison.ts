@@ -74,13 +74,16 @@ function compareMetric(
 }
 
 export function testObservationKey(observation: TestObservation) {
-  return [
+  const key = [
     observation.execution_id,
     observation.case_id,
     observation.contract_sha256,
     observation.scenario_version ?? 'unknown-version',
     observation.seed ?? 'unknown-seed',
   ].join('::')
+  return observation.observation_id
+    ? `${key}::${observation.observation_id}`
+    : key
 }
 
 /**

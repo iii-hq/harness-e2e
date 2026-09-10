@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use anyhow::{bail, Context, Result};
+use anyhow::{bail, ensure, Context, Result};
 use chrono::{SecondsFormat, Utc};
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use serde_json::json;
@@ -1522,21 +1522,7 @@ async fn run_once(context: &Arc<E2eContext>, request: AttemptRequest<'_>) -> E2e
         }
     }
     report.wall_time_ms = started.elapsed().as_millis().min(u64::MAX as u128) as u64;
-    ensure_assessment_results(&spec, &mut report);
-    if report.failures.is_empty() {
-        if report.score.is_some() || report.assessment_results.is_empty() {
-            report.finish(RunStatus::Passed);
-        } else {
-            report.push_failure(
-                RunStatus::InfrastructureError,
-                FailurePhase::Evaluate,
-                format!(
-                    "scenario '{}': evaluation completed without a score; expected criterion awards",
-                    spec.id
-                ),
-            );
-        }
-    }
+    finish_native_assessment(&spec, &mut report);
     report.update_cost();
     report.update_efficiency(case.work);
     report.refresh_dimensions(expects_deliverables);
@@ -2784,7 +2770,14 @@ async fn run_markdown_once(
         .await;
     }
 
-    if report.transcript.is_some() {
+    if request.scenario.id == "minimal_path" {
+        let phase = phases
+            .iter_mut()
+            .find(|phase| phase.phase == "adherence")
+            .expect("adherence phase exists");
+        phase.status = MarkdownPhaseStatus::Completed;
+        phase.reason = "covered by deterministic minimal_path criteria".into();
+    } else if report.transcript.is_some() {
         let mut adherence_input = markdown_adherence_input(&rendered.prompt, &report);
         let mut adherence = match redact_markdown_artifact(&mut report, &mut adherence_input) {
             Ok(()) => {
@@ -3121,6 +3114,57 @@ async fn run_markdown_session(
     })
 }
 
+fn minimal_path_criteria(
+    run_id: &str,
+    seed: u64,
+    state: &serde_json::Value,
+    transcript: &serde_json::Value,
+    metrics: &crate::wire::SessionMetricsResponse,
+    validations: &[MarkdownCriterion],
+) -> Result<Vec<CriterionReport>> {
+    ensure!(metrics.complete, "subject metrics are incomplete");
+    let scope = format!("e2emd-minimal-{run_id}");
+    let expected = json!({"owner": "efficiency-suite", "case_seed": seed, "status": "stored"});
+    let calls: Vec<_> = common::function_outcomes(transcript)
+        .into_iter()
+        .filter(|call| !common::is_contract_discovery(&call.function_id))
+        .collect();
+    ensure!(
+        calls.iter().all(|call| call.is_error.is_some()),
+        "subject function results are incomplete"
+    );
+    let writes = calls
+        .iter()
+        .filter(|call| {
+            call.function_id == "state::set"
+                && call.arguments
+                    == json!({"scope": scope, "key": "minimal_result", "value": expected})
+                && call.is_error == Some(false)
+        })
+        .count();
+    let single = calls.len() == 1 && writes == 1;
+    let owned = calls
+        .iter()
+        .all(|call| call.arguments["scope"] == scope && call.arguments["key"] == "minimal_result");
+    let turns = metrics.totals.turns;
+    let errors = metrics.totals.function_call_errors;
+    let reply = common::final_response(transcript);
+    validations.iter().map(|criterion| {
+        let passed = match criterion.id.as_str() {
+            "01_exact_result" => state == &expected && writes == 1,
+            "02_single_task_call" => single,
+            "03_at_most_two_task_calls" => calls.len() <= 2 && owned && writes >= 1,
+            "04_single_turn" => turns == 1,
+            "05_at_most_two_turns" => (1..=2).contains(&turns),
+            "06_zero_friction" => errors == 0 && single && reply.contains("MIN-DONE") && reply.trim().lines().count() == 1,
+            other => bail!("unsupported minimal_path criterion: {other}"),
+        };
+        Ok(CriterionReport { id: criterion.id.clone(), description: Some(criterion.title.clone()),
+            possible: criterion.weight, awarded: Some(if passed { criterion.weight } else { 0 }),
+            reason: format!("Deterministic check: state_matches={}, successful_exact_writes={writes}, task_calls={}, owned_targets={owned}, turns={turns}, errors={errors}, single_line_confirmation={}", state == &expected, calls.len(), reply.contains("MIN-DONE") && reply.trim().lines().count() == 1) })
+    }).collect()
+}
+
 async fn evaluate_markdown_validations(
     context: &E2eContext,
     request: &MarkdownAttemptRequest<'_>,
@@ -3130,6 +3174,63 @@ async fn evaluate_markdown_validations(
     phases: &mut [MarkdownPhaseReport],
     report: &mut E2eRunReport,
 ) {
+    if request.scenario.id == "minimal_path" {
+        let result = async {
+            let state = context.trigger_value("state::get", json!({
+                "scope": format!("e2emd-minimal-{}", request.run_id), "key": "minimal_result"
+            })).await?;
+            let reference = artifact::write_json(
+                request.output,
+                &std::path::PathBuf::from("evidence")
+                    .join(request.run_id)
+                    .join(attempt_id)
+                    .join("deterministic-validation.json"),
+                format!("{attempt_id}-deterministic-validation"),
+                "deterministic-validation",
+                &state,
+            )?;
+            report.evidence.push(reference);
+            minimal_path_criteria(
+                request.run_id,
+                request.seed,
+                &common::state_value(state),
+                report
+                    .transcript
+                    .as_ref()
+                    .context("subject transcript unavailable")?,
+                report
+                    .metrics
+                    .as_ref()
+                    .context("subject metrics unavailable")?,
+                validations,
+            )
+        }
+        .await;
+        let phase = phases
+            .iter_mut()
+            .find(|phase| phase.phase == "validations")
+            .expect("validations phase exists");
+        match result {
+            Ok(criteria) => {
+                let score = criteria.iter().filter_map(|c| c.awarded).sum();
+                report.criteria = criteria;
+                report.validation_score = Some(score);
+                report.score = Some(score);
+                phase.status = MarkdownPhaseStatus::Completed;
+                phase.reason = "6 deterministic validators completed".into();
+            }
+            Err(error) => {
+                phase.status = MarkdownPhaseStatus::Failed;
+                phase.reason = format!("deterministic evidence unavailable: {error:#}");
+                report.push_failure(
+                    RunStatus::InfrastructureError,
+                    FailurePhase::Collect,
+                    phase.reason.clone(),
+                );
+            }
+        }
+        return;
+    }
     let Some(transcript) = report.transcript.as_ref() else {
         return;
     };
@@ -4461,6 +4562,14 @@ async fn execute(
                 format!("scenario '{}' evaluator failed: {error:#}", spec.id),
             )
         })?;
+    apply_objective_evaluation(spec, report, objective)
+}
+
+fn apply_objective_evaluation(
+    spec: &ScenarioSpec,
+    report: &mut E2eRunReport,
+    objective: ObjectiveEvaluation,
+) -> Result<(), RunFailure> {
     validate_objective_evaluation(spec, &objective).map_err(|error| {
         RunFailure::new(
             RunStatus::InfrastructureError,
@@ -4475,6 +4584,9 @@ async fn execute(
     report.criteria = criterion_reports(spec, objective.awards);
     report.assessment_results = materialize_assessment_results(spec, &report.criteria);
     update_score(report);
+    if let Some(error) = objective.infrastructure_error {
+        return Err(infrastructure_failure(FailurePhase::Evaluate, error));
+    }
     Ok(())
 }
 
@@ -4522,6 +4634,26 @@ fn captured_measurements(
     }
     measurements.sort_by(|left, right| left.id.cmp(&right.id));
     Ok(measurements)
+}
+
+fn finish_native_assessment(spec: &ScenarioSpec, report: &mut E2eRunReport) {
+    ensure_assessment_results(spec, report);
+    if report.failures.is_empty() {
+        if report.evaluators.completion == crate::report::EvaluatorAvailability::Available
+            || report.assessment_results.is_empty()
+        {
+            report.finish(RunStatus::Passed);
+        } else {
+            report.push_failure(
+                RunStatus::InfrastructureError,
+                FailurePhase::Evaluate,
+                format!(
+                    "scenario '{}': evaluation completed without criterion observations",
+                    spec.id
+                ),
+            );
+        }
+    }
 }
 
 fn ensure_assessment_results(spec: &ScenarioSpec, report: &mut E2eRunReport) {
@@ -4975,11 +5107,11 @@ fn validate_objective_evaluation(
                         .join(", ")
                 )
             })?;
-        if award.awarded > criterion.weight {
+        if let Some(awarded) = award.awarded.filter(|awarded| *awarded > criterion.weight) {
             bail!(
                 "scenario '{}': evaluation contract violation: criterion '{}' awarded {}; expected awarded in 0..={}; action: reduce the award or change the configured weight",
                 spec.id, award.id,
-                award.awarded,
+                awarded,
                 criterion.weight
             );
         }
@@ -5026,7 +5158,7 @@ fn criterion_reports(spec: &ScenarioSpec, awards: Vec<CriterionAward>) -> Vec<Cr
                 id: criterion.id.to_string(),
                 description: Some(criterion.description.to_string()),
                 possible: criterion.weight,
-                awarded: award.as_ref().map(|(awarded, _)| *awarded),
+                awarded: award.as_ref().and_then(|(awarded, _)| *awarded),
                 reason: award
                     .map(|(_, reason)| reason)
                     .unwrap_or_else(|| "not evaluated".into()),
@@ -5038,7 +5170,7 @@ fn criterion_reports(spec: &ScenarioSpec, awards: Vec<CriterionAward>) -> Vec<Cr
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::report::EvaluationDimension;
+    use crate::report::{CompletionState, EvaluationDimension};
     use crate::scenarios::{
         ArtifactExpectation, CapturedDeliverable, CapturedDeliverableContent, CapturedInvariant,
         InvariantSpec, ProvenanceEvidence,
@@ -5060,6 +5192,102 @@ mod tests {
             by_session: Vec::new(),
             traces: None,
         })
+    }
+
+    #[test]
+    fn minimal_path_scores_observed_behavior_without_a_judge() {
+        let scenario = crate::markdown::embedded_scenario("minimal_path").unwrap();
+        let state = json!({"owner": "efficiency-suite", "case_seed": 42, "status": "stored"});
+        let mut transcript = json!({"messages": [
+            {"message": {"role": "assistant", "content": [{
+                "type": "function_call", "id": "write", "function_id": "state::set",
+                "arguments": {"scope": "e2emd-minimal-run", "key": "minimal_result", "value": state}
+            }]}},
+            {"message": {"role": "function_result", "function_call_id": "write",
+                "function_id": "state::set", "is_error": false, "details": {"ok": true}}},
+            {"message": {"role": "assistant", "content": [{"type": "text", "text": "MIN-DONE"}]}}
+        ]});
+        let metrics_for = |complete, errors| {
+            SessionMetricsResponse::from_normalized(SessionMetricsPayload {
+                root_session_id: "session".into(),
+                complete,
+                totals: SessionUsageTotals {
+                    sessions: 1,
+                    turns: 2,
+                    function_calls: 1,
+                    function_call_errors: errors,
+                    ..Default::default()
+                },
+                by_session: Vec::new(),
+                traces: None,
+            })
+        };
+        let mut metrics = metrics_for(true, 0);
+        let criteria = minimal_path_criteria(
+            "run",
+            42,
+            &state,
+            &transcript,
+            &metrics,
+            &scenario.validations,
+        )
+        .unwrap();
+        assert_eq!(
+            criteria
+                .iter()
+                .map(|c| c.awarded.unwrap())
+                .collect::<Vec<_>>(),
+            vec![40, 13, 12, 0, 10, 15]
+        );
+
+        let wrong_state = minimal_path_criteria(
+            "run",
+            42,
+            &json!(null),
+            &transcript,
+            &metrics,
+            &scenario.validations,
+        )
+        .unwrap();
+        assert_eq!(wrong_state[0].awarded, Some(0));
+        metrics = metrics_for(false, 0);
+        assert!(minimal_path_criteria(
+            "run",
+            42,
+            &state,
+            &transcript,
+            &metrics,
+            &scenario.validations
+        )
+        .is_err());
+
+        transcript["messages"][1]["message"]["is_error"] = json!(true);
+        metrics = metrics_for(true, 1);
+        let failed = minimal_path_criteria(
+            "run",
+            42,
+            &state,
+            &transcript,
+            &metrics,
+            &scenario.validations,
+        )
+        .unwrap();
+        for index in [0, 1, 2, 5] {
+            assert_eq!(failed[index].awarded, Some(0));
+        }
+        transcript["messages"][1]["message"]
+            .as_object_mut()
+            .unwrap()
+            .remove("is_error");
+        assert!(minimal_path_criteria(
+            "run",
+            42,
+            &state,
+            &transcript,
+            &metrics,
+            &scenario.validations
+        )
+        .is_err());
     }
 
     fn terminal_status(status: TurnStatus, pending: Vec<String>) -> StatusReport {
@@ -5918,6 +6146,102 @@ mod tests {
     }
 
     #[test]
+    fn partial_native_assessment_preserves_observed_points_without_inventing_a_total() {
+        let spec = mixed_assessment_spec();
+        let mut report = test_run_report();
+        apply_objective_evaluation(
+            &spec,
+            &mut report,
+            ObjectiveEvaluation {
+                completion: CompletionState::TaskIncomplete,
+                awards: vec![
+                    CriterionAward {
+                        id: "required".into(),
+                        awarded: Some(0),
+                        reason: "Build failed".into(),
+                    },
+                    CriterionAward {
+                        id: "quality".into(),
+                        awarded: None,
+                        reason: "Build prerequisite failed; browser checks were not run".into(),
+                    },
+                ],
+                infrastructure_error: None,
+            },
+        )
+        .unwrap_or_else(|error| panic!("{}", error.message));
+        finish_native_assessment(&spec, &mut report);
+        assert_eq!(report.technical, crate::report::TechnicalState::Valid);
+        assert_eq!(report.completion, CompletionState::TaskIncomplete);
+        assert_eq!(report.criteria[0].awarded, Some(0));
+        assert_eq!(report.criteria[1].awarded, None);
+        assert_eq!(
+            report.assessment_results[0].outcome,
+            AssessmentOutcome::Failed
+        );
+        assert_eq!(
+            report.assessment_results[1].outcome,
+            AssessmentOutcome::NotEvaluated
+        );
+        assert_eq!(report.score, None);
+        assert_eq!(report.objective_score, None);
+    }
+
+    #[test]
+    fn native_finalizer_rejects_absent_evaluation() {
+        let spec = mixed_assessment_spec();
+        let mut report = test_run_report();
+        finish_native_assessment(&spec, &mut report);
+        assert_eq!(report.status, RunStatus::InfrastructureError);
+        assert!(report.failures[0]
+            .message
+            .contains("without criterion observations"));
+    }
+
+    #[test]
+    fn native_infrastructure_failure_preserves_prior_criterion_observations() {
+        let spec = mixed_assessment_spec();
+        let mut report = test_run_report();
+        let error = apply_objective_evaluation(
+            &spec,
+            &mut report,
+            ObjectiveEvaluation {
+                completion: CompletionState::Undetermined,
+                awards: vec![
+                    CriterionAward {
+                        id: "required".into(),
+                        awarded: Some(70),
+                        reason: "Delivery verified".into(),
+                    },
+                    CriterionAward {
+                        id: "quality".into(),
+                        awarded: None,
+                        reason: "Browser failed to launch".into(),
+                    },
+                ],
+                infrastructure_error: Some("Browser executable unavailable".into()),
+            },
+        )
+        .unwrap_err();
+        assert_eq!(error.status, RunStatus::InfrastructureError);
+        report.push_failure(error.status, error.phase, error.message);
+        ensure_assessment_results(&spec, &mut report);
+        assert_eq!(
+            report.technical,
+            crate::report::TechnicalState::TechnicalInvalid
+        );
+        assert_eq!(
+            report.assessment_results[0].score.as_ref().unwrap().awarded,
+            70
+        );
+        assert_eq!(
+            report.assessment_results[1].outcome,
+            AssessmentOutcome::NotEvaluated
+        );
+        assert_eq!(report.objective_score, None);
+    }
+
+    #[test]
     fn e2e_policy_denies_the_control_plane_without_scenario_overrides() {
         let policy = e2e_function_policy(&spec(), "test-run");
         assert_eq!(policy.allow, ["*"]);
@@ -5962,9 +6286,10 @@ mod tests {
             &spec,
             &ObjectiveEvaluation {
                 completion: crate::report::CompletionState::Completed,
+                infrastructure_error: None,
                 awards: vec![CriterionAward {
                     id: "objective".into(),
-                    awarded: 100,
+                    awarded: Some(100),
                     reason: "ok".into(),
                 }],
             }
@@ -5974,6 +6299,7 @@ mod tests {
             &spec,
             &ObjectiveEvaluation {
                 completion: crate::report::CompletionState::Completed,
+                infrastructure_error: None,
                 awards: Vec::new(),
             }
         )
@@ -5982,9 +6308,10 @@ mod tests {
             &spec,
             &ObjectiveEvaluation {
                 completion: crate::report::CompletionState::Completed,
+                infrastructure_error: None,
                 awards: vec![CriterionAward {
                     id: "objective".into(),
-                    awarded: 101,
+                    awarded: Some(101),
                     reason: "too high".into(),
                 }],
             },
@@ -6002,7 +6329,7 @@ mod tests {
             &spec(),
             vec![CriterionAward {
                 id: "objective".into(),
-                awarded: 100,
+                awarded: Some(100),
                 reason: "measured evidence".into(),
             }],
         );
@@ -6018,9 +6345,10 @@ mod tests {
             &spec,
             &ObjectiveEvaluation {
                 completion: crate::report::CompletionState::Completed,
+                infrastructure_error: None,
                 awards: vec![CriterionAward {
                     id: "unknown".into(),
-                    awarded: 1,
+                    awarded: Some(1),
                     reason: "observed".into(),
                 }],
             },
@@ -6035,15 +6363,16 @@ mod tests {
             &spec,
             &ObjectiveEvaluation {
                 completion: crate::report::CompletionState::Completed,
+                infrastructure_error: None,
                 awards: vec![
                     CriterionAward {
                         id: "objective".into(),
-                        awarded: 1,
+                        awarded: Some(1),
                         reason: "first".into(),
                     },
                     CriterionAward {
                         id: "objective".into(),
-                        awarded: 1,
+                        awarded: Some(1),
                         reason: "second".into(),
                     },
                 ],

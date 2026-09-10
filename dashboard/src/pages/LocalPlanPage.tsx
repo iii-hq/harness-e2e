@@ -25,6 +25,8 @@ import {
   type MasterTestProfile,
 } from '@/lib/dashboard-data-source'
 import { type PlanRequirements, planAction } from '@/lib/plan-execution'
+import { LocalPlanDetailPage as LocalPlanDetail } from '@/pages/PlanDetailPage'
+import { ReleaseControlPlanDetailPage } from '@/pages/ReleaseControlPlanDetailPage'
 
 type Model = { provider: string; model: string }
 type Catalog = {
@@ -615,12 +617,19 @@ export function LocalPlanCreatePage({
   )
 }
 
-// The plan detail lives in PlanDetailPage.tsx; these names stay importable
-// from here for the router and the tests.
+export function LocalPlanDetailPage({ planId }: { planId: string }) {
+  return planId.startsWith('rc:') ? (
+    <ReleaseControlPlanDetailPage planKey={planId.slice(3)} />
+  ) : (
+    <LocalPlanDetail planId={planId} />
+  )
+}
+
+// The local plan detail lives in PlanDetailPage.tsx; these names stay
+// importable from here for the router and tests.
 export {
   executionHistoryRows,
   executionsScent,
-  LocalPlanDetailPage,
   PLAN_COMPARISON_TABLE_METRICS,
   PLAN_TREND_BANDS,
   PlanComparisonLayers,

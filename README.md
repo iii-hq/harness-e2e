@@ -57,6 +57,17 @@ use the regular scenario catalog, execution flow, and scores: `registry_planning
 `registry_implementation`, `registry_environment`, and `registry_verification`.
 Each has its own [atomic validations](tests/fixtures/registry-version-comparison/scoring.md).
 
+The [trending topics build scenario](docs/blog-build-contract.md) uses an isolated
+per-attempt Git remote and independent Playwright acceptance against the delivered
+SHA. Its [runtime and controls](tests/fixtures/trending-topics-build/README.md)
+require Linux amd64, Docker, Git, Python 3, Node and access to the pinned fixture.
+Design is free; screenshots are evidence, not an aesthetic score.
+
+Native criteria preserve known awards when dependent checks cannot run. Those
+checks have no award and remain `not_evaluated`; an incomplete criterion set has
+no total score. Product failures stay technically valid, while infrastructure
+failures invalidate the run without erasing prior criterion observations.
+
 New declarative scenarios are authored only as `scenarios/*.md`. The compiler
 embeds the exact source, validates the canonical English section structure,
 and exposes the resulting file-stem id through the CLI, worker catalog,
@@ -202,6 +213,39 @@ Local mode exposes controls that can start and cancel E2E runs, so expose the
 port only on a trusted network. Use `--listen 127.0.0.1:4173` when access should
 remain local. See [dashboard/README.md](dashboard/README.md) for view-only mode
 and the complete dashboard behavior.
+
+### Compare a local change with Release Control
+
+The Console's Plans page offers **Reference: Release Control** to browse RC history
+through the authenticated Release Control browser bridge. Keep the RC tab open,
+enable its local Harness connection, and connect it to the same personal Engine
+as the Console. The bridge needs the E2E read functions from the companion
+Release Control change. No GitHub token or artifact synchronization is needed.
+
+Open a plan to see remote and local executions together with their origin. Select
+a reference and a local result to compare their measurements. The scenario links
+open the existing A → B comparison with both executions selected. Missing reports and
+metrics remain visible as unavailable; reading history creates no local plan.
+The comparison runs locally and sends no local results to Release Control.
+
+Choose **run locally** on a remote reference to save its materialized test
+parameters as a local plan and run them against your current Harness. Repeating
+that action creates a new local plan using the current scenario contracts,
+while preserving earlier plans and results. The
+reference's scenarios, rounds, repetitions and retry settings come from the
+execution's materialization, not from the current profile with the same name.
+The current local scenario implementations and Harness are used deliberately:
+this is a personal experiment, not an exact-stack certification. No build/Git
+tracking or matching remote stack is required. Fault-injection groups still
+require the protected executor; they are not silently omitted. References without
+shard seeds for every scenario cannot be reproduced. Differences in local
+scenario version or case identity are shown as advisory information.
+
+Results stay in the local plan store. The RC execution remains a reference,
+never a locally recreated official execution. Native result validation remains
+strict; the remote data is read through the RC API rather than installed as a
+native report. Full remote evidence is available through the execution's GitHub
+link, subject to its retention; this flow does not download an evidence archive.
 
 ## Compose lifecycle
 

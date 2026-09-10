@@ -219,6 +219,34 @@ jobs:
           git config --global url."file://${GITHUB_WORKSPACE}/.registry-sources/registry".insteadOf https://github.com/iii-hq/registry.git
           git config --global url."file://${GITHUB_WORKSPACE}/.registry-sources/e2e-fixture".insteadOf https://github.com/iii-hq/e2e-fixture.git
 
+      - name: Mint private trending topics fixture token
+        id: trending_fixture_token
+        if: matrix.group_id == 'case-trending-topics-build'
+        uses: actions/create-github-app-token@fee1f7d63c2ff003460e3d139729b119787bc349 # v2
+        with:
+          app-id: ${{ secrets.III_CI_APP_ID }}
+          private-key: ${{ secrets.III_CI_APP_PRIVATE_KEY }}
+          owner: iii-hq
+          repositories: e2e-fixture
+          permission-contents: read
+
+      - name: Checkout pinned trending topics fixture
+        if: matrix.group_id == 'case-trending-topics-build'
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          repository: iii-hq/e2e-fixture
+          ref: 3ee24f7ace3c014db35423f14939ad3f6ce0c3d2
+          token: ${{ steps.trending_fixture_token.outputs.token }}
+          persist-credentials: false
+          path: .trending-topics-fixture
+
+      - name: Route trending topics fixture fetch to the pinned checkout
+        if: matrix.group_id == 'case-trending-topics-build'
+        run: |
+          set -euo pipefail
+          test "$(git -C .trending-topics-fixture rev-parse HEAD)" = 3ee24f7ace3c014db35423f14939ad3f6ce0c3d2
+          git config --global url."file://${GITHUB_WORKSPACE}/.trending-topics-fixture".insteadOf git@github.com:iii-hq/e2e-fixture.git
+
       - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
         with:
           name: e2e-contract-${{ inputs.execution_id }}-gh-${{ github.run_attempt }}
