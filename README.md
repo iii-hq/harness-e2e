@@ -137,8 +137,9 @@ to the protected executor. See [executable profile plans](dashboard/README.md#ex
 cargo run --locked -- test-plan list
 ```
 
-The `software-engineering` profile selects the seven incremental Kanban cases,
-four Registry cases, the trending-topics blog build and the Linkly tutorial,
+The `software-engineering` profile selects the
+[seven incremental Kanban cases](scripts/kanban_eval/README.md), four Registry
+cases, the trending-topics blog build and the Linkly tutorial,
 once each with no technical retries: 13 cases and 13 planned runs. Its twelve
 execution groups keep Registry implementation and verification together, in
 that order, so verification receives the implementation delivery. Registry

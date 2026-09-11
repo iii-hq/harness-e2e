@@ -164,8 +164,9 @@ node --check scripts/kanban_eval/probe.mjs
 
 ## Scoring revision 2
 
-The seven native cases now use scenario version 2. `rubric.json` declares stable,
-weighted criterion IDs and their evidence checks, totaling 100 points per case.
+The seven native cases now use scenario version 2. `rubric.json` declares 74
+stable, weighted criterion IDs and their evidence checks. Each case totals 100
+points.
 The frozen inputs include the rubric and its digest; existing execution reports
 and fixture revisions are unchanged. Scores from revisions 1 and 2 must not be
 compared as though they use an identical acceptance contract.

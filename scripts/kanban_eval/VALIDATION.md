@@ -1,5 +1,10 @@
 # Kanban validation — 2026-09-11
 
+The recorded criterion counts and results below use the scenario version 1
+grouping. The current version 2 contract splits those checks into 74 weighted
+criteria in [`rubric.json`](rubric.json); these historical results are not
+recalculated.
+
 ## Evaluation integrity and original-candidate replays
 
 Investigated [Actions run 34596086686](https://github.com/iii-hq/harness-e2e/actions/runs/34596086686).
