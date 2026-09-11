@@ -227,6 +227,7 @@ struct ExecOutput {
 }
 async fn checked(command: &mut Command) -> Result<Value> {
     command.kill_on_drop(true);
+    command.env("III_TELEMETRY_ENABLED", "false");
     let out = command.output().await?;
     if !out.status.success() {
         bail!(
@@ -714,6 +715,20 @@ fn cleanup<'a, const N: u8>(_context: &'a E2eContext, run_id: &'a str) -> Cleanu
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn checked_command_pins_analytics_after_caller_environment() {
+        let mut command = Command::new("python3");
+        command.env_clear().envs([
+            ("III_TELEMETRY_ENABLED", "true"),
+            ("OTEL_ENABLED", "true"),
+            ("PROVIDER_TEST_KEY", "test-sentinel"),
+        ]).args(["-c", "import json,os,subprocess,sys; print(subprocess.check_output([sys.executable,'-c',\"import json,os; print(json.dumps({k:os.environ.get(k) for k in ['III_TELEMETRY_ENABLED','OTEL_ENABLED','PROVIDER_TEST_KEY']}))\"],text=True))"]);
+        let environment = checked(&mut command).await.unwrap();
+        assert_eq!(environment["III_TELEMETRY_ENABLED"], "false");
+        assert_eq!(environment["OTEL_ENABLED"], "true");
+        assert_eq!(environment["PROVIDER_TEST_KEY"], "test-sentinel");
+    }
 
     #[test]
     fn implementation_handoff_requires_both_files_and_accepts_incomplete_delivery() {

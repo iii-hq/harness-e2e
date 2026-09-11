@@ -28,6 +28,9 @@ on:
       eligible:
         value: ${{ jobs.validate.outputs.eligible }}
 
+env:
+  III_TELEMETRY_ENABLED: "false"
+
 permissions:
   contents: read
 

@@ -106,7 +106,10 @@ DEFAULT_E2E_BIN = pathlib.Path(os.environ.get("HARNESS_E2E_BIN", "target/release
 def scenario_catalog(binary: pathlib.Path = DEFAULT_E2E_BIN) -> dict:
     """Read admission rules from the same native runner that executes the suite."""
     try:
-        result = subprocess.check_output([str(binary), "test-plan", "catalog"], text=True)
+        result = subprocess.check_output(
+            [str(binary), "test-plan", "catalog"], text=True,
+            env={**os.environ, "III_TELEMETRY_ENABLED": "false"},
+        )
         return json.loads(result)["scenarios"]
     except (OSError, subprocess.CalledProcessError, ValueError, KeyError) as error:
         raise CampaignError(f"cannot read native campaign catalog from {binary}: {error}") from error
@@ -870,7 +873,9 @@ def _run_process(
     run_process: Callable[..., Any],
 ) -> tuple[int, str | None]:
     try:
-        completed = run_process(list(command), env=dict(environment), check=False)
+        completed = run_process(
+            list(command), env={**environment, "III_TELEMETRY_ENABLED": "false"}, check=False
+        )
         return int(completed.returncode), None
     except OSError as error:
         return 127, str(error)

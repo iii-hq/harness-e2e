@@ -1,5 +1,6 @@
 FROM node:24.18.0-bookworm-slim@sha256:d45d78e7929b46875bbd4e29bea672d5bc48186c6c3588306521c815e78352d6 AS node
 FROM mcr.microsoft.com/playwright:v1.62.1-noble@sha256:c091b21d9fae78c76e85cd4356431e9b018402f172a214fc7d7a5e9a7e29d8ac
+ENV III_TELEMETRY_ENABLED=false
 
 COPY --from=node /usr/local/ /usr/local/
 RUN apt-get update && apt-get install -y --no-install-recommends git coreutils python3 \

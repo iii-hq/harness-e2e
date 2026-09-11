@@ -118,6 +118,8 @@ pub async fn command(program: &str, args: &[String], timeout: Duration) -> Resul
     #[cfg(unix)]
     command.process_group(0);
     let child = command
+        // Test-owned commands must opt out even after clearing/merging environment.
+        .env("III_TELEMETRY_ENABLED", "false")
         .spawn()
         .with_context(|| format!("execute trusted SWE {program}"))?;
     let pid = child
@@ -224,6 +226,16 @@ fn signal_group(_pid: u32, _signal: i32) {}
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn trusted_command_restores_analytics_opt_out_after_env_clear() {
+        let output = command(
+            "python3",
+            &["-c".into(), "import os,subprocess,sys; assert os.environ['III_TELEMETRY_ENABLED']=='false'; print(subprocess.check_output([sys.executable,'-c',\"import os; print(os.environ['III_TELEMETRY_ENABLED'])\"],text=True).strip())".into()],
+            Duration::from_secs(10),
+        ).await.unwrap();
+        assert_eq!(String::from_utf8(output).unwrap().trim(), "false");
+    }
 
     #[tokio::test]
     async fn embedded_bundle_unpacks_exact_pin() {

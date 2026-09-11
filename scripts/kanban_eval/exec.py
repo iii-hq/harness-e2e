@@ -26,7 +26,8 @@ def execute(container, keeper, command):
         resource.setrlimit(resource.RLIMIT_FSIZE, (limit, limit))
 
     with tempfile.TemporaryFile() as log:
-        proc = subprocess.Popen(['docker', 'exec', '-w', '/workspace', container,
+        proc = subprocess.Popen(['docker', 'exec', '--env', 'III_TELEMETRY_ENABLED=false',
+                                 '-w', '/workspace', container,
                                  '/bin/sh', '-c', command], stdin=subprocess.DEVNULL,
                                 stdout=log, stderr=subprocess.STDOUT, preexec_fn=limits)
         try:

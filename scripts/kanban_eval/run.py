@@ -123,7 +123,7 @@ def container_command(image, network, role, mounts, environment=ENV, bounded_wor
     if bounded_workspace:
         for path, size in (('/workspace', '256m'), ('/data', '64m'), ('/runtime-state', '64m')):
             command += ['--tmpfs', f'{path}:rw,nosuid,nodev,size={size},uid={os.getuid()},gid={os.getgid()}']
-    for key, value in environment.items():
+    for key, value in {**environment, 'III_TELEMETRY_ENABLED': 'false'}.items():
         command += ['--env', f'{key}={value}']
     for source, target, writable in mounts:
         command += mount(source, target, writable)
@@ -136,7 +136,7 @@ def runtime_mounts(args):
 
 
 def docker_exec(container, command):
-    return ['docker', 'exec', container, *command]
+    return ['docker', 'exec', '--env', 'III_TELEMETRY_ENABLED=false', container, *command]
 
 
 def stage_changes_command(workspace):
@@ -169,6 +169,7 @@ def bounded(command, log, timeout, container=None, cancel=None, poll=None):
     with open(log, 'wb') as output:
         proc = subprocess.Popen(command, stdin=subprocess.DEVNULL, stdout=output,
                                 stderr=subprocess.STDOUT, start_new_session=True,
+                                env={**os.environ, 'III_TELEMETRY_ENABLED': 'false'},
                                 preexec_fn=limit_log_size)
         deadline = time.monotonic() + timeout
         try:

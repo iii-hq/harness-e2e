@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
+export III_TELEMETRY_ENABLED=false
 
 : "${HARNESS_E2E_STACK_LOCK:?HARNESS_E2E_STACK_LOCK is required}"
 : "${HARNESS_E2E_CAMPAIGN_GROUP_ID:?HARNESS_E2E_CAMPAIGN_GROUP_ID is required}"

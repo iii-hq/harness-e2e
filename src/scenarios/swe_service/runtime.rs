@@ -1008,6 +1008,9 @@ fn isolated_argv(workspace: &Path, command: String, args: Vec<String>) -> Vec<St
         "--setenv".into(),
         "LANG".into(),
         "C.UTF-8".into(),
+        "--setenv".into(),
+        "III_TELEMETRY_ENABLED".into(),
+        "false".into(),
         "--".into(),
         command,
     ]);

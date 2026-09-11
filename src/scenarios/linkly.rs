@@ -883,6 +883,7 @@ impl Probe<'_> {
     ) -> Result<(i32, String, String)> {
         let started = Instant::now();
         let mut command = Command::new(program);
+        command.env("III_TELEMETRY_ENABLED", "false");
         command
             .args(args)
             .current_dir(&self.project)

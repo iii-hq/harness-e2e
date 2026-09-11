@@ -46,7 +46,8 @@ def run(args, cwd=None, timeout=120, allowed_codes=(0,)):
         timeout = min(timeout, max(0.001, OPERATION_DEADLINE - time.monotonic()))
     env = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
     env.update(GIT_CONFIG_NOSYSTEM="1", GIT_CONFIG_GLOBAL=os.devnull,
-               GIT_TERMINAL_PROMPT="0", GIT_NO_REPLACE_OBJECTS="1")
+               GIT_TERMINAL_PROMPT="0", GIT_NO_REPLACE_OBJECTS="1",
+               III_TELEMETRY_ENABLED="false")
     process = subprocess.Popen(args, cwd=cwd, env=env, stdout=subprocess.PIPE,
                                stderr=subprocess.PIPE, start_new_session=True)
     try:

@@ -25,6 +25,11 @@ class KanbanExecTest(unittest.TestCase):
             root = Path(directory)
             docker = root / 'docker'
             docker.write_text('''#!/bin/sh
+if [ "$2" = --env ]; then
+  [ "$3" = III_TELEMETRY_ENABLED=false ] || exit 99
+  shift 3
+  set -- exec "$@"
+fi
 if [ "$1" = rm ]; then touch "$REMOVED"; exit; fi
 if [ "$1" = exec ] && [ "$3" = /usr/bin/python3 ]; then
   touch "$CLEANED"

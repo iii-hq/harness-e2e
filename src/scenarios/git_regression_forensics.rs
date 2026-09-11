@@ -1517,6 +1517,7 @@ async fn runner_classify(root: &Path, checkout: &Path, revision: &str) -> Option
         return None;
     }
     let output = Command::new("python3")
+        .env("III_TELEMETRY_ENABLED", "false")
         .arg(&path)
         .stdin(Stdio::null())
         .output()
@@ -1532,6 +1533,7 @@ async fn runner_classify(root: &Path, checkout: &Path, revision: &str) -> Option
 
 async fn execute_probe(probe: &Path, repository: &Path, trace: &Path) -> Result<bool> {
     let output = Command::new("python3")
+        .env("III_TELEMETRY_ENABLED", "false")
         .arg(probe)
         .arg(repository)
         .arg("--trace")

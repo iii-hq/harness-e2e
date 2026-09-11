@@ -35,6 +35,7 @@ def run(argv, *, cwd=None, timeout=120, check=True, log=None):
         with stdout_path.open("wb") as stdout, stderr_path.open("wb") as stderr:
             result = subprocess.run([str(arg) for arg in argv], cwd=cwd, stdout=stdout,
                                     stderr=stderr, timeout=timeout,
+                                    env={**os.environ, "III_TELEMETRY_ENABLED": "false"},
                                     preexec_fn=lambda: resource.setrlimit(resource.RLIMIT_FSIZE, (OUTPUT_LIMIT, OUTPUT_LIMIT)))
         result.stdout = stdout_path.read_bytes()
         result.stderr = stderr_path.read_bytes()
@@ -56,6 +57,7 @@ def mount(source, target, readonly=False):
 
 def container_args(state, role, network="none"):
     return ["docker", "run", "--pull=never", "--init", "--name", f"ttb-{state['token']}-{role}",
+            "--env", "III_TELEMETRY_ENABLED=false",
             "--label", f"harness.trending-topics.run={state['token']}",
             "--network", network, "--read-only", "--cap-drop=ALL",
             "--security-opt", "no-new-privileges", "--user", f"{os.getuid()}:{os.getgid()}",

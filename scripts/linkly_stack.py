@@ -166,7 +166,38 @@ def patch_compose(text: str, providers: list[str], workers: Path | None = None) 
         lines = extend_harness_start_after(lines, provider)
     if workers is not None:
         lines = localize(lines, workers)
-    return "\n".join(lines)
+    return "\n".join(disable_analytics(lines))
+
+
+def disable_analytics(lines: list[str]) -> list[str]:
+    """Pin every active template worker, preserving provider env_file assignments."""
+    out: list[str] = []
+    i = 0
+    while i < len(lines):
+        line = lines[i]
+        out.append(line)
+        i += 1
+        if not CONTAINER.match(line):
+            continue
+        block: list[str] = []
+        while i < len(lines) and (lines[i].startswith("    ") or not lines[i].strip()):
+            block.append(lines[i])
+            i += 1
+        for index, item in enumerate(block):
+            if item.startswith("    environment:"):
+                if item.split(":", 1)[1].strip().split("#", 1)[0].strip():
+                    raise SystemExit("template environment must use a block mapping")
+                end = index + 1
+                while end < len(block) and (block[end].startswith("      ") or not block[end].strip()):
+                    end += 1
+                entries = [entry for entry in block[index + 1:end]
+                           if not re.match(r"^      ['\"]?III_TELEMETRY_ENABLED['\"]?:", entry)]
+                block[index + 1:end] = ['      III_TELEMETRY_ENABLED: "false"', *entries]
+                break
+        else:
+            block.extend(["    environment:", '      III_TELEMETRY_ENABLED: "false"'])
+        out.extend(block)
+    return out
 
 
 def patch_env(text: str, providers: list[str], environ: dict[str, str]) -> str:
@@ -191,6 +222,8 @@ def patch_env(text: str, providers: list[str], environ: dict[str, str]) -> str:
 
 
 def run(args: list[str], **kwargs) -> subprocess.CompletedProcess:
+    kwargs["env"] = {**(os.environ if kwargs.get("env") is None else kwargs["env"]),
+                     "III_TELEMETRY_ENABLED": "false"}
     return subprocess.run(args, check=True, text=True, **kwargs)
 
 
@@ -235,8 +268,11 @@ def cmd_scaffold(args: argparse.Namespace) -> None:
 
 def cmd_up(args: argparse.Namespace) -> None:
     project = project_dir(args.dir)
+    compose = project / "worker-compose.yaml"
+    compose.write_text("\n".join(disable_analytics(compose.read_text().split("\n"))))
     os.chdir(project)
-    os.execvp(args.iii, [args.iii, "compose", "--up"])
+    os.execvpe(args.iii, [args.iii, "compose", "--up"],
+               {**os.environ, "III_TELEMETRY_ENABLED": "false"})
 
 
 def cmd_status(args: argparse.Namespace) -> None:

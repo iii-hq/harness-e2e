@@ -192,6 +192,7 @@ struct ExecOutput {
 
 fn lifecycle(run_id: &str, action: &str) -> Command {
     let mut command = Command::new("python3");
+    command.env("III_TELEMETRY_ENABLED", "false");
     command
         .arg(assets(run_id).join("lifecycle.py"))
         .arg(action)
@@ -241,6 +242,7 @@ fn setup<'a>(context: &'a E2eContext, run_id: &'a str) -> CleanupFuture<'a> {
                         ));
                     }
                     let mut command = Command::new("python3");
+                    command.env("III_TELEMETRY_ENABLED", "false");
                     command
                         .arg(directory.join("lifecycle.py"))
                         .args(["exec", "--root"])

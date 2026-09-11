@@ -680,6 +680,7 @@ async fn public_test_passes(root: &Path) -> bool {
 
 async fn run_python(root: &Path, source: &str) -> bool {
     let mut command = Command::new("python3");
+    command.env("III_TELEMETRY_ENABLED", "false");
     command
         .args(["-E", "-s", "-c", source])
         .current_dir(root)

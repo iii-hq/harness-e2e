@@ -37,6 +37,15 @@ class IsolationTest(unittest.TestCase):
             self.skipTest('OS integration requires Linux bubblewrap or cached Python Docker image')
         return result
 
+    def test_real_boundary_pins_analytics_for_probe_and_grandchild(self):
+        result = self.invoke('''import json,os,subprocess,sys
+assert os.environ['III_TELEMETRY_ENABLED']=='false'
+child=subprocess.check_output([sys.executable,'-c',"import os; print(os.environ['III_TELEMETRY_ENABLED'])"],text=True)
+assert child.strip()=='false'
+print(json.dumps({'passed':True,'checks':[]}))
+''', env={**os.environ, 'III_TELEMETRY_ENABLED': 'true'})
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
     def test_real_private_reads_denied_public_reads_tmp_and_loopback_work(self):
         result = self.invoke('''import argparse,json,os,pathlib,socket,tempfile
 p=argparse.ArgumentParser();p.add_argument('--workspace');p.add_argument('--through');a=p.parse_args()

@@ -21,7 +21,8 @@ TASKS = {1: "planning", 2: "implementation", 3: "environment", 4: "verification"
 def run(argv, *, cwd=None, data=None, env=None, timeout=900):
     result = subprocess.run([str(x) for x in argv], cwd=cwd, input=data,
                             stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                            env=env, timeout=timeout)
+                            env={**(os.environ if env is None else env),
+                                 "III_TELEMETRY_ENABLED": "false"}, timeout=timeout)
     if result.returncode:
         raise RuntimeError(f"{argv[0]} failed ({result.returncode}): "
                            + result.stderr.decode(errors="replace")[-12000:]
@@ -81,6 +82,34 @@ def fixture_action(state, action):
     return container_exec(state, f"/fixture/fixture.sh {action}", timeout=1800)
 
 
+def disable_fixture_build_analytics(dockerfile):
+    # The downloaded fixture installs/probes iii inside its build stages. A host
+    # export or runtime Compose environment does not reach Docker RUN commands.
+    lines = []
+    for line in dockerfile.read_text().splitlines():
+        if line.lstrip().upper().startswith("RUN "):
+            lines.append("ENV III_TELEMETRY_ENABLED=false")
+        lines.append(line)
+    lines.append("ENV III_TELEMETRY_ENABLED=false")
+    dockerfile.write_text("\n".join(lines) + "\n")
+
+
+def disable_fixture_compose_analytics(fixture, state):
+    # Resolve YAML merges/interpolation through the private daemon's Compose CLI,
+    # then pin every service after its env_file and environment have been merged.
+    compose = json.loads(container_exec(
+        state, "docker compose -f /fixture/compose.yaml config --format json"
+    ))
+    services = compose.get("services")
+    if not isinstance(services, dict) or not services:
+        raise ValueError("Registry fixture has no Compose services")
+    for service in services.values():
+        service["environment"] = {**(service.get("environment") or {}),
+                                  "III_TELEMETRY_ENABLED": "false"}
+    # JSON is YAML-compatible; fixture.sh and validator retain their usual -f path.
+    write_json(fixture / "compose.yaml", compose)
+
+
 def prepare(args):
     root = args.root
     root.mkdir(parents=True, exist_ok=False)
@@ -99,6 +128,8 @@ def prepare(args):
         fixture = root / "fixture-checkout" / "registry-version-comparison"
         if not fixture.is_dir():
             raise RuntimeError("Latest e2e-fixture default branch lacks registry-version-comparison; merge the fixture PR first")
+        state["fixture_source_files"] = fixture_hashes(fixture)
+        disable_fixture_build_analytics(fixture / "Dockerfile")
         state["fixture_files"] = fixture_hashes(fixture)
     write_json(root / "state.json", state)
     run(["git", "clone", "--no-checkout", REGISTRY_URL, workspace / "registry"])
@@ -141,6 +172,7 @@ def prepare(args):
     (root / "prompt.md").write_text(prompt)
     run(["docker", "pull", RUNNER_IMAGE])
     argv = ["docker", "run", "-d", "--name", state["container"],
+            "-e", "III_TELEMETRY_ENABLED=false",
             "--mount", f"type=bind,src={workspace},dst=/workspace",
             "-e", "DOCKER_TLS_CERTDIR=", "-e", "DOCKER_HOST=unix:///var/run/docker.sock",
             "-e", f"WEB_PORT={args.web_port}", "-e", f"API_PORT={args.api_port}",
@@ -167,6 +199,9 @@ def prepare(args):
             run(["docker", "exec", "-d", state["container"], "socat",
                  f"TCP-LISTEN:{exposed},fork,reuseaddr", f"TCP:127.0.0.1:{target}"])
     if args.test in (2, 4):
+        disable_fixture_compose_analytics(fixture, state)
+        state["fixture_files"] = fixture_hashes(fixture)
+        write_json(root / "state.json", state)
         (root / "baseline-start.log").write_bytes(fixture_action(state, "up"))
         (root / "baseline-check.log").write_bytes(fixture_action(state, "check /workspace/output/baseline"))
     return state

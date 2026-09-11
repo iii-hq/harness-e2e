@@ -416,6 +416,7 @@ async fn run_node(
     label: &str,
 ) -> Result<CommandOutcome> {
     let mut command = Command::new("node");
+    command.env("III_TELEMETRY_ENABLED", "false");
     command
         .args(args)
         .current_dir(directory)
