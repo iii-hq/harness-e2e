@@ -57,6 +57,25 @@ failures do not erase partial credit, and missing/unverified evidence stays
 unavailable instead of becoming a candidate zero. A model smoke is not a
 comparative benchmark.
 
+Controls and model deliveries use the same source-integrity check. Compose state
+and logs live under `/runtime-state/compose`, outside the source workspace. A
+new `worker-compose.lock` containing only Compose's canonical empty local-project
+lock is recorded as generated output; changes to an existing lock or a lock with
+dependencies are still rejected. Git tree IDs compare source contents and modes,
+including binary files. Build output and data remain excluded from source capture.
+
+The evaluator records `source-integrity.json` with both tree IDs, changed paths,
+generated paths and whether the delivered diff was empty. It preserves
+`subject.diff` and `evaluated.diff`. If evaluation is invalidated after functional
+checks ran, `functional-result.json` keeps their provisional result without
+turning it into an official score. Empty deliveries and broken application
+behavior remain functional failures when the evaluator completed successfully.
+
+`instructions.md` supplies the shared native/standalone runtime contract. It
+documents iii's injected `_caller_worker_id` metadata and requires changes to be
+applied to workspace files. Its digest is part of the native case inputs; the
+fixture catalog and historical base/reference commits are not rewritten.
+
 Validation on 2026-09-09: the original Bubblewrap runner stopped at nested namespace
 creation. Docker-native separation subsequently passed private-file, parent-PID,
 shared-loopback and denied-external-network checks; trusted Chromium also launched
@@ -114,8 +133,8 @@ The native setup creates isolated containers and one attempt-scoped command
 function. The regular Harness lifecycle collects the model transcript, usage and
 cost; the private controller checks the delivered application. The captured
 `kanban_evaluation` JSON includes verdict, coverage, runtime provenance, delivered
-diff, bounded log tails and PNG screenshots encoded as base64. A second diff
-detects source mutation during evaluation. Raw runtime files are private; they
+and evaluated diffs, source-integrity diagnostics, any provisional functional
+result, bounded log tails and PNG screenshots encoded as base64. Raw runtime files are private; they
 are not subject filesystem artifacts.
 
 To enable this in Release Control's exact-stack workflow:

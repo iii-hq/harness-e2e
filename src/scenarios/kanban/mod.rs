@@ -24,6 +24,7 @@ use crate::context::E2eContext;
 use crate::report::{CompletionState, EvaluationDimension};
 
 const CATALOG: &str = include_str!("catalog.json");
+const INSTRUCTIONS: &str = include_str!("../../../scripts/kanban_eval/instructions.md");
 const REPORT: &str = "kanban_evaluation";
 pub const IDS: [&str; 7] = [
     "kanban_c1_foundation",
@@ -87,8 +88,8 @@ pub fn spec(index: usize, run_id: &str) -> ScenarioSpec {
     ];
     ScenarioSpec {
         id: case.id.as_str(), version: 1,
-        prompt: format!("{}\n\n{}\n\nAcceptance criteria:\n{}\n\nThe repository is /workspace inside an isolated container. Dependencies are installed; external networking is disabled. Use agent_trigger with {{\"function\":\"{}\",\"description\":\"Inspect repository\",\"payload\":{{\"command\":\"pwd\"}}}} to inspect, edit and test. This is a shell executor, not delegation. Commands have a 120-second and 256-KiB output limit. Reaching either limit returns nonzero feedback after candidate processes are stopped; use a narrower command and continue. Do not inspect the host working directory.",
-            catalog().shared_prompt, case.prompt, case.criteria.iter().map(|c| format!("- {c}")).collect::<Vec<_>>().join("\n"), function_id(run_id)),
+        prompt: format!("{}\n\n{}\n\nAcceptance criteria:\n{}\n\n{}\n\nThe repository is /workspace inside an isolated container. Dependencies are installed; external networking is disabled. Use agent_trigger with {{\"function\":\"{}\",\"description\":\"Inspect repository\",\"payload\":{{\"command\":\"pwd\"}}}} to inspect, edit and test. This is a shell executor, not delegation. Commands have a 120-second and 256-KiB output limit. Reaching either limit returns nonzero feedback after candidate processes are stopped; use a narrower command and continue. Do not inspect the host working directory.",
+            catalog().shared_prompt, case.prompt, case.criteria.iter().map(|c| format!("- {c}")).collect::<Vec<_>>().join("\n"), INSTRUCTIONS.trim(), function_id(run_id)),
         filesystem_root: None,
         execution: ExecutionPolicy { max_turns: 100, max_output_tokens: Some(65_536),
             max_total_tokens: Some(1_000_000), stuck_timeout_seconds: 1_800, max_validation_retries: Some(0) },
@@ -140,6 +141,7 @@ pub fn materialize(index: usize, run_id: &str) -> Result<MaterializedScenario> {
         super::stable_seed(IDS[index]),
         json!({"base_commit":item.base_commit,"reference_commit":item.reference_commit,
             "prompt":item.prompt,"criteria":item.criteria,"catalog_sha256":format!("{:x}", Sha256::digest(CATALOG.as_bytes())),
+            "runtime_instructions_sha256":format!("{:x}", Sha256::digest(INSTRUCTIONS.as_bytes())),
             "isolation":"docker-none-nonroot-readonly", "max_cost_usd":5, "subject_deadline_seconds":1800}),
         ComplexityProfile {
             planning_depth: 4,
@@ -214,6 +216,7 @@ async fn setup(context: &E2eContext, run_id: &str, index: usize) -> Result<()> {
             include_str!("../../../scripts/kanban_eval/probe.mjs"),
         ),
         ("catalog.json", CATALOG),
+        ("instructions.md", INSTRUCTIONS),
     ] {
         fs::write(scripts.join(name), source)?;
     }
@@ -464,24 +467,31 @@ pub(crate) fn diagnostics(run_id: &str) -> Result<Value> {
         ("result.json", "result"),
         ("provenance.json", "provenance"),
         ("coverage.json", "coverage"),
+        ("functional-result.json", "functional_result"),
+        ("source-integrity.json", "source_integrity"),
     ] {
         let file = evidence.join(name);
         if file.is_file() {
             content.insert(key.into(), serde_json::from_slice(&fs::read(file)?)?);
         }
     }
-    let diff = evidence.join("subject.diff");
-    if diff.is_file() && fs::metadata(&diff)?.len() > 8 * 1024 * 1024 {
-        bail!("candidate diff exceeds evidence bound");
+    for (name, key) in [
+        ("subject.diff", "diff"),
+        ("evaluated.diff", "evaluated_diff"),
+    ] {
+        let diff = evidence.join(name);
+        if diff.is_file() && fs::metadata(&diff)?.len() > 8 * 1024 * 1024 {
+            bail!("candidate diff exceeds evidence bound: {name}");
+        }
+        content.insert(
+            key.into(),
+            if diff.is_file() {
+                fs::read_to_string(diff)?.into()
+            } else {
+                Value::Null
+            },
+        );
     }
-    content.insert(
-        "diff".into(),
-        if diff.is_file() {
-            fs::read_to_string(diff)?.into()
-        } else {
-            Value::Null
-        },
-    );
     let mut attachments = serde_json::Map::new();
     let mut files = fs::read_dir(&evidence)?
         .map(|entry| entry.map(|entry| entry.path()))
@@ -597,8 +607,11 @@ fn validate_evaluation(value: &Value) -> Result<()> {
         && (result["functional_status"].is_null() || value["coverage"]["complete"] != true)
     {
         bail!(
-            "Kanban evaluator is unavailable or incomplete: {}",
-            result["status"]
+            "Kanban evaluator is unavailable or incomplete: {}; {}",
+            result["status"],
+            result["error"]
+                .as_str()
+                .unwrap_or("required functional evidence is unavailable")
         );
     }
     Ok(())
@@ -669,6 +682,49 @@ fn cleanup<'a>(_context: &'a E2eContext, run_id: &'a str) -> CleanupFuture<'a> {
 mod tests {
     use super::*;
     #[test]
+    fn integrity_diagnostics_keep_both_diffs_and_the_provisional_verdict() {
+        let run_id = format!("kanban-integrity-test-{}", uuid::Uuid::new_v4());
+        let path = root(&run_id).join("run/evidence");
+        fs::create_dir_all(&path).unwrap();
+        fs::write(root(&run_id).join("controller.log"), "evaluation finished").unwrap();
+        fs::write(path.join("subject.diff"), "delivered source").unwrap();
+        fs::write(path.join("evaluated.diff"), "evaluated source").unwrap();
+        fs::write(
+            path.join("source-integrity.json"),
+            br#"{"changed":true,"changed_paths":["app.ts"]}"#,
+        )
+        .unwrap();
+        fs::write(
+            path.join("functional-result.json"),
+            br#"{"status":"failed","functional_status":"failed"}"#,
+        )
+        .unwrap();
+        fs::write(
+            path.join("result.json"),
+            br#"{"status":"evaluation_failed","error":"candidate source changed: app.ts"}"#,
+        )
+        .unwrap();
+        let value = diagnostics(&run_id).unwrap();
+        assert_eq!(value["diff"], "delivered source");
+        assert_eq!(value["evaluated_diff"], "evaluated source");
+        assert_eq!(value["source_integrity"]["changed_paths"][0], "app.ts");
+        assert_eq!(value["functional_result"]["status"], "failed");
+        let error = validate_evaluation(&value).unwrap_err().to_string();
+        assert!(error.contains("app.ts"), "{error}");
+        fs::remove_dir_all(root(&run_id)).unwrap();
+    }
+
+    #[test]
+    fn empty_delivery_with_failed_live_probes_remains_a_functional_failure() {
+        validate_evaluation(&json!({
+            "diff": "", "source_integrity": {"changed": false},
+            "result": {"status": "failed", "functional_status": "failed",
+                       "checks": [{"id": "live_sse_protocol_contract", "status": "failed"}]},
+            "coverage": {"complete": true}
+        }))
+        .unwrap();
+    }
+    #[test]
     fn terminal_controller_diagnostics_survive_without_subject_metrics_or_a_diff() {
         let run_id = format!("kanban-diagnostic-test-{}", uuid::Uuid::new_v4());
         let path = root(&run_id);
@@ -735,6 +791,8 @@ mod tests {
                 .spec
                 .prompt
                 .contains(&function_id("contract-test")));
+            assert!(materialized.spec.prompt.contains("_caller_worker_id"));
+            assert!(materialized.spec.prompt.contains("final response"));
         }
     }
 }

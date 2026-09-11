@@ -15,6 +15,97 @@ SPEC.loader.exec_module(runner)
 
 
 class KanbanRunnerTest(unittest.TestCase):
+    def test_integrity_failure_retains_provisional_functional_result(self):
+        with tempfile.TemporaryDirectory() as directory:
+            evidence = Path(directory)
+            functional = {'status': 'failed', 'functional_status': 'failed',
+                          'checks': [{'id': 'live_sse_protocol_contract', 'status': 'failed'}]}
+            (evidence / 'result.json').write_text(json.dumps(functional))
+            result = runner.write_failure(evidence, 'kanban_c7_live',
+                                          runner.EvaluationError('candidate source changed during evaluation'))
+            self.assertEqual(json.loads((evidence / 'functional-result.json').read_text()), functional)
+            self.assertEqual(result['status'], 'evaluation_failed')
+            self.assertIsNone(result['functional_status'])
+            self.assertEqual(result['checks'], [])
+
+    def test_compose_state_is_relocated_for_controls_and_model_candidates(self):
+        for isolated in (False, True):
+            command = runner.container_command('sha256:image', 'none', 'candidate', [],
+                                               bounded_workspace=isolated)
+            environment = dict(command[index + 1].split('=', 1)
+                               for index, value in enumerate(command) if value == '--env')
+            self.assertEqual(environment.get('III_COMPOSE_STATE_DIR'), '/runtime-state/compose')
+
+    def test_integrity_ignores_relocated_state_but_detects_binary_source_changes(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            repo = root / 'workspace'
+            repo.mkdir()
+            evidence = root / 'evidence'
+            evidence.mkdir()
+            subprocess.run(['git', 'init', '--quiet', str(repo)], check=True)
+            (repo / 'app.bin').write_bytes(b'\0baseline')
+            subprocess.run(['git', '-C', str(repo), 'add', '.'], check=True)
+            subprocess.run(['git', '-C', str(repo), '-c', 'user.name=Test',
+                            '-c', 'user.email=test@example.invalid', '-c', 'commit.gpgsign=false',
+                            'commit', '--quiet', '-m', 'baseline'], check=True)
+
+            def local_exec(_candidate, command):
+                return [str(repo) if arg == '/workspace' else arg for arg in command]
+
+            with mock.patch.object(runner, 'docker_exec', side_effect=local_exec):
+                (repo / 'app.bin').write_bytes(b'\0delivered')
+                runner.capture_candidate_diff('candidate', evidence, 'subject')
+                state = root / 'runtime-state/compose/default'
+                state.mkdir(parents=True)
+                (state / 'state.json').write_text('{"pid":1234}')
+                runner.capture_candidate_diff('candidate', evidence, 'evaluated')
+                runner.verify_candidate_source('candidate', evidence)
+                self.assertFalse(json.loads((evidence / 'source-integrity.json').read_text())['changed'])
+
+                (repo / 'app.bin').write_bytes(b'\0mutated')
+                runner.capture_candidate_diff('candidate', evidence, 'evaluated')
+                with self.assertRaisesRegex(runner.EvaluationError, 'candidate source changed.*app.bin'):
+                    runner.verify_candidate_source('candidate', evidence)
+                integrity = json.loads((evidence / 'source-integrity.json').read_text())
+                self.assertTrue(integrity['changed'])
+                self.assertEqual(integrity['changed_paths'], ['app.bin'])
+                self.assertNotEqual(integrity['subject_tree'], integrity['evaluated_tree'])
+
+    def test_only_new_canonical_empty_compose_lock_is_runtime_generated(self):
+        with tempfile.TemporaryDirectory() as directory:
+            repo = Path(directory) / 'workspace'
+            repo.mkdir()
+            evidence = Path(directory) / 'evidence'
+            evidence.mkdir()
+            def git(*args):
+                return subprocess.check_output(['git', '-C', str(repo), *args])
+            git('init', '--quiet')
+            (repo / 'worker-compose.yaml').write_text('containers: {}\n')
+            git('add', '.')
+            git('-c', 'user.name=Test', '-c', 'user.email=test@example.invalid',
+                '-c', 'commit.gpgsign=false', 'commit', '--quiet', '-m', 'baseline')
+            def local_exec(_candidate, command):
+                return [str(repo) if arg == '/workspace' else arg for arg in command]
+            with mock.patch.object(runner, 'docker_exec', side_effect=local_exec):
+                runner.capture_candidate_diff('candidate', evidence, 'subject')
+                lock = repo / 'worker-compose.lock'
+                lock.write_text('version: 1\ncontainers: {}\n')
+                runner.capture_candidate_diff('candidate', evidence, 'evaluated')
+                runner.verify_candidate_source('candidate', evidence)
+                integrity = json.loads((evidence / 'source-integrity.json').read_text())
+                self.assertFalse(integrity['changed'])
+                self.assertEqual(integrity['generated_paths'], ['worker-compose.lock'])
+                lock.write_text('version: 1\ncontainers: {dependency: altered}\n')
+                runner.capture_candidate_diff('candidate', evidence, 'evaluated')
+                with self.assertRaises(runner.EvaluationError):
+                    runner.verify_candidate_source('candidate', evidence)
+                runner.capture_candidate_diff('candidate', evidence, 'subject')
+                lock.write_text('version: 1\ncontainers: {}\n')
+                runner.capture_candidate_diff('candidate', evidence, 'evaluated')
+                with self.assertRaises(runner.EvaluationError):
+                    runner.verify_candidate_source('candidate', evidence)
+
     def test_probe_requires_complete_consistent_evidence_and_normal_exit(self):
         with tempfile.TemporaryDirectory() as directory:
             evidence = Path(directory)

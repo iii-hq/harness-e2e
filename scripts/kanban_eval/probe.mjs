@@ -361,7 +361,46 @@ export async function boardLaneWithCount(page, label, count) {
 }
 
 export function boardTicketTotal(page, count) {
-  return page.getByText(new RegExp(`^${count}\\s+tickets?$`, 'i')).filter({ visible: true })
+  return page.getByText(new RegExp(`^(?:${count}\\s+tickets?|total\\s+tickets?\\s*:?\\s*${count})$`, 'i')).filter({ visible: true })
+}
+
+export async function ticketEditor(page, expectedTitle) {
+  const forms = page.locator('form')
+    .filter({ has: page.getByRole('textbox', { name: 'Title', exact: true }) })
+    .filter({ has: page.getByRole('button', { name: 'Save changes', exact: true }) })
+    .filter({ visible: true })
+  const open = page.getByRole('button', { name: /^(?:edit|edit ticket)$/i }).filter({ visible: true })
+  await eventually(async () => await forms.count() === 1 || await open.count() === 1,
+    'ticket edit form or edit action is unavailable')
+  if (await forms.count() !== 1) await open.click()
+  await eventually(async () => await forms.count() === 1, 'ticket edit action did not open one edit form')
+  if (expectedTitle !== undefined) {
+    expect(await forms.getByLabel('Title', { exact: true }).inputValue() === expectedTitle,
+      'Cancel did not restore the persisted title in the edit form')
+  }
+  return forms
+}
+
+export function commentParentAction(entry) {
+  const name = /first|parent|reference|in reply|show.*comment|comment.*reply answers/i
+  return entry.getByRole('button', { name }).or(entry.getByRole('link', { name })).first()
+}
+
+export async function assertAccessibleFormControls(form) {
+  const invalid = await form.evaluate(element => [...element.querySelectorAll('label[for]')]
+    .filter(label => !label.control || [...document.querySelectorAll('[id]')]
+      .filter(target => target.id === label.htmlFor).length !== 1)
+    .map(label => label.htmlFor))
+  expect(invalid.length === 0, `Form controls have duplicate or unresolved label targets: ${invalid.join(', ')}`)
+}
+
+export async function rejectCommentWithoutWrite(api, control, path, comment, label) {
+  const before = await control('read_store')
+  const response = await api(path, {
+    method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(comment),
+  })
+  expect([400, 404].includes(response.status), `${label}: expected rejection (HTTP 400 or 404), received HTTP ${response.status}`)
+  expect(await control('read_store') === before, `${label}: rejected comment changed the store`)
 }
 
 export function boardRefreshButton(page) {
@@ -678,6 +717,7 @@ const PROBES = {
       await page.goBack()
       await page.getByRole('button', { name: 'New ticket' }).click()
       const dialog = page.getByRole('dialog', { name: 'New ticket' })
+      await assertAccessibleFormControls(dialog)
       expect(await dialog.getByLabel('Title').evaluate((element) => element === document.activeElement), 'modal did not focus the title field')
       await dialog.getByLabel('Title').fill('Browser-created ticket')
       await dialog.getByLabel('Description').fill('UTF-8: ação e café')
@@ -802,13 +842,11 @@ const PROBES = {
       expect(partial.description === 'Keep me' && partial.title === ticket.title, 'partial update erased unrelated fields')
       const { context, page } = await pageFor(browser, `${baseUrl}/#ticket/${ticket.id}`, { width: 390, height: 844 })
       await expectText(page.getByRole('heading', { name: ticket.title }), /Editable probe/)
-      await page.getByRole('button', { name: 'Edit ticket' }).click()
-      let edit = page.getByRole('heading', { name: 'Edit ticket' }).locator('xpath=ancestor::form[1]')
+      let edit = await ticketEditor(page)
       await edit.getByLabel('Title').fill('Discard this')
       await edit.getByRole('button', { name: 'Cancel' }).click()
       await expectText(page.getByRole('heading', { name: ticket.title }), /Editable probe/)
-      await page.getByRole('button', { name: 'Edit ticket' }).click()
-      edit = page.getByRole('heading', { name: 'Edit ticket' }).locator('xpath=ancestor::form[1]')
+      edit = await ticketEditor(page, ticket.title)
       await edit.getByLabel('Title').fill('Edited probe')
       await edit.getByLabel('Description').fill('Edited description')
       await edit.getByLabel('Status').selectOption('todo')
@@ -833,8 +871,7 @@ const PROBES = {
       expect(saved.description === 'Edited description' && saved.status === 'todo' && saved.priority === 'urgent' && saved.assignee === 'Updated', 'UI edit was not persisted')
       await screenshot(page, output, 'ticket-edited-mobile')
 
-      await page.getByRole('button', { name: 'Edit ticket' }).click()
-      edit = page.getByRole('heading', { name: 'Edit ticket' }).locator('xpath=ancestor::form[1]')
+      edit = await ticketEditor(page)
       await edit.getByLabel('Title').fill('Late saved probe')
       let release
       let intercepted
@@ -935,8 +972,7 @@ const PROBES = {
         && persisted.priority === 'urgent'
         && persisted.assignee === 'Updated', 'restart lost an edited or moved field')
       const { context, page } = await pageFor(browser, `${baseUrl}/#ticket/${ticket.id}`, { width: 390, height: 844 })
-      await page.getByRole('button', { name: 'Edit ticket' }).click()
-      const edit = page.getByRole('heading', { name: 'Edit ticket' }).locator('xpath=ancestor::form[1]')
+      const edit = await ticketEditor(page)
       expect(await edit.getByLabel('Status').inputValue() === 'in_review', 'mobile status selector did not reflect the persisted move')
       await context.close()
       return 'All edited fields and the mobile status alternative retain the moved state after runtime restart.'
@@ -995,8 +1031,7 @@ const PROBES = {
       expect(await page.evaluate((items) => items.slice(1).every((item, index) =>
         items[index].compareDocumentPosition(item) & Node.DOCUMENT_POSITION_FOLLOWING), entries), 'timeline is not in posting order')
       const replyItem = entry('second')
-      const parentLink = replyItem.getByRole('button', { name: /first|parent|reference|in reply/i })
-        .or(replyItem.getByRole('link', { name: /first|parent|reference|in reply/i })).first()
+      const parentLink = commentParentAction(replyItem)
       expect(await parentLink.count() === 1, 'reply has no accessible parent navigation action')
       const parent = await entry('<img src=x onerror=alert(1)> first').elementHandle()
       const link = await parentLink.elementHandle()
@@ -1016,10 +1051,8 @@ const PROBES = {
           method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(comment),
         })).status === 400, `invalid comment was accepted: ${JSON.stringify(comment)}`)
       }
-      expect((await api(`/api/tickets/${ticket.id}/comments`, {
-        method: 'POST', headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ author: 'A', body: 'body', parent_id: foreign.comments[0].id }),
-      })).status === 404, 'a foreign comment parent was accepted')
+      await rejectCommentWithoutWrite(api, control, `/api/tickets/${ticket.id}/comments`,
+        { author: 'A', body: 'body', parent_id: foreign.comments[0].id }, 'foreign comment parent')
       const original = await control('read_store')
       const rejectsWithoutRewrite = async (mutate, label) => {
         const records = JSON.parse(original)
@@ -1044,8 +1077,7 @@ const PROBES = {
       const body = page.getByRole('textbox', { name: 'Comment', exact: true })
       await author.fill('Draft author')
       await body.fill('Draft during edit')
-      await page.getByRole('button', { name: 'Edit ticket' }).click()
-      await page.getByRole('button', { name: 'Cancel' }).click()
+      await (await ticketEditor(page)).getByRole('button', { name: 'Cancel' }).click()
       expect(await author.inputValue() === 'Draft author' && await body.inputValue() === 'Draft during edit', 'ticket editing erased the comment draft')
 
       let failPost = true
@@ -1083,6 +1115,8 @@ const PROBES = {
       await reached
       await page.evaluate((id) => { location.hash = `#ticket/${id}` }, other.id)
       await expectText(page.getByRole('heading', { name: other.title }), /Other discussion/)
+      await eventually(() => page.getByLabel('Your name').isEnabled(),
+        'another ticket comment form stayed disabled while the previous ticket POST was pending')
       await page.getByLabel('Your name').fill('Other author')
       await page.getByRole('textbox', { name: 'Comment', exact: true }).fill('Other ticket draft')
       await trigger('kanban::tickets::comment', { id: ticket.id, comment: { author: 'Concurrent', body: 'Newer activity' } })
@@ -1167,8 +1201,7 @@ const PROBES = {
       await sessions[0].page.getByRole('heading', { name: 'Live probe' }).click()
       await sessions[1].page.getByRole('heading', { name: 'Live probe' }).click()
       await sessions[2].page.getByRole('heading', { name: 'Live probe' }).click()
-      await sessions[0].page.getByRole('button', { name: 'Edit ticket' }).click()
-      const edit = sessions[0].page.getByRole('heading', { name: 'Edit ticket' }).locator('xpath=ancestor::form[1]')
+      const edit = await ticketEditor(sessions[0].page)
       await edit.getByLabel('Title').fill('Dirty local title')
       await trigger('kanban::tickets::update', { id: ticket.id, changes: { priority: 'urgent', status: 'in_progress' } })
       await eventually(async () => (await edit.getByLabel('Title').inputValue()) === 'Dirty local title', 'dirty edit draft was lost')
@@ -1280,8 +1313,7 @@ const PROBES = {
       expect(await page.getByRole('heading', { name: 'Newer GET state' }).count() === 1, 'late GET replaced newer state')
 
       await page.unroute(`**/api/tickets/${ticket.id}`)
-      await page.getByRole('button', { name: 'Edit ticket' }).click()
-      const edit = page.getByRole('heading', { name: 'Edit ticket' }).locator('xpath=ancestor::form[1]')
+      const edit = await ticketEditor(page)
       await edit.getByLabel('Title').fill('Delayed mutation state')
       let releaseMutation
       let interceptedMutation

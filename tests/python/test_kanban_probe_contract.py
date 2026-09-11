@@ -26,6 +26,89 @@ CASE_IDS = [
 
 
 class KanbanProbeContractTest(unittest.TestCase):
+    def test_run_34596086686_equivalent_controls_and_real_accessibility_failure(self):
+        if not PLAYWRIGHT.exists():
+            self.skipTest("dashboard Playwright is not installed")
+        script = f"""
+import {{ chromium }} from {json.dumps(PLAYWRIGHT.as_uri())}
+import {{ boardTicketTotal, ticketEditor, commentParentAction, reachedCommentParent,
+  assertAccessibleFormControls }} from {json.dumps(PROBE.as_uri())}
+const browser = await chromium.launch({{headless:true}})
+try {{
+  const page = await browser.newPage()
+  const totals = []
+  for (const markup of ['5 tickets', 'Total tickets <output>5</output>', 'Total tickets: 5']) {{
+    await page.setContent(`<p>${{markup}}</p><h2>Backlog <span>5</span></h2>`)
+    totals.push([await boardTicketTotal(page, 5).count(), await boardTicketTotal(page, 0).count()])
+  }}
+  const form = '<form><label for="title">Title</label><input id="title" value="Before"><button>Save changes</button><button type="button">Cancel</button></form>'
+  await page.setContent(form)
+  let edit = await ticketEditor(page)
+  await edit.getByLabel('Title').fill('Direct editor')
+  const direct = await edit.getByLabel('Title').inputValue()
+  await edit.getByRole('button', {{name:'Cancel'}}).click()
+  let inertCancelRejected = false
+  try {{ await ticketEditor(page, 'Before') }} catch {{ inertCancelRejected = true }}
+  await edit.getByRole('button', {{name:'Cancel'}}).evaluate(button => button.onclick = () => document.querySelector('#title').value = 'Before')
+  await edit.getByRole('button', {{name:'Cancel'}}).click()
+  await ticketEditor(page, 'Before')
+  await page.setContent('<button id="open">Edit ticket</button>'+form.replace('<form>', '<form hidden>'))
+  await page.locator('#open').evaluate(button => button.onclick = () => document.querySelector('form').hidden = false)
+  edit = await ticketEditor(page)
+  await edit.getByLabel('Title').fill('Explicit editor')
+  const explicit = await edit.getByLabel('Title').inputValue()
+  await page.setContent('<ul><li id="parent" tabindex="-1">Alice: first</li><li id="reply"><button aria-label="Show the comment from Alice that this reply answers">↳ Reply to Alice</button>second</li></ul>')
+  const action = commentParentAction(page.locator('#reply'))
+  await action.evaluate(button => button.onclick = () => document.querySelector('#parent').focus())
+  const parent = await page.locator('#parent').elementHandle()
+  const link = await action.elementHandle()
+  await action.focus()
+  await action.press('Enter')
+  const navigated = await page.evaluate(reachedCommentParent, {{parent,link}})
+  await page.setContent('<p id="status">Settings</p><form><label for="status">Status</label><select id="status"><option>Todo</option></select></form>')
+  let duplicate = ''
+  try {{ await assertAccessibleFormControls(page.locator('form')) }} catch (error) {{ duplicate = error.message }}
+  await page.setContent('<p id="settings-status">Settings</p><form><label for="status">Status</label><select id="status"><option>Todo</option></select></form>')
+  await assertAccessibleFormControls(page.locator('form'))
+  console.log(JSON.stringify({{totals,direct,explicit,navigated,duplicate,inertCancelRejected}}))
+}} finally {{ await browser.close() }}
+"""
+        completed = subprocess.run(["node", "--input-type=module", "--eval", script],
+                                   cwd=ROOT, text=True, capture_output=True, timeout=25)
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        result = json.loads(completed.stdout)
+        self.assertEqual(result['totals'], [[1, 0], [1, 0], [1, 0]])
+        self.assertEqual(result['direct'], 'Direct editor')
+        self.assertTrue(result['inertCancelRejected'])
+        self.assertEqual(result['explicit'], 'Explicit editor')
+        self.assertTrue(result['navigated'])
+        self.assertIn('status', result['duplicate'])
+        self.assertIn('duplicate', result['duplicate'])
+
+    def test_rejected_foreign_parent_accepts_400_or_404_but_requires_no_write(self):
+        script = f"""
+import {{ rejectCommentWithoutWrite }} from {json.dumps(PROBE.as_uri())}
+const observed = []
+for (const [status, changed] of [[400,false],[404,false],[201,false],[400,true],[500,false]]) {{
+  let reads = 0
+  const control = async () => ++reads === 1 || !changed ? 'original' : 'modified'
+  const api = async () => ({{status}})
+  try {{
+    await rejectCommentWithoutWrite(api, control, '/api/tickets/id/comments', {{parent_id:'foreign'}}, 'foreign parent')
+    observed.push('passed')
+  }} catch(error) {{ observed.push(error.message) }}
+}}
+console.log(JSON.stringify(observed))
+"""
+        completed = subprocess.run(["node", "--input-type=module", "--eval", script],
+                                   cwd=ROOT, text=True, capture_output=True)
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        result = json.loads(completed.stdout)
+        self.assertEqual(result[:2], ['passed', 'passed'])
+        self.assertIn('201', result[2])
+        self.assertIn('store', result[3])
+        self.assertIn('500', result[4])
+
     def run_probe(self, *args, env=None):
         return subprocess.run(
             ["node", str(PROBE), *args],
