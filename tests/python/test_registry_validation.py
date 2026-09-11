@@ -263,6 +263,60 @@ class ValidationTests(unittest.TestCase):
             found = {item["id"]: item for item in module.verification_observations(task, ASSETS, state)}
         self.assertEqual(found["verification.evidence_coverage"]["numerator"], 0)
 
+    def structured_evidence_result(self, evidence_record):
+        sequence = getattr(self, "structured_sequence", 0) + 1
+        self.structured_sequence = sequence
+        task = self.root / f"structured-{sequence}"
+        (task / "workspace" / "output").mkdir(parents=True)
+        (task / "validation").mkdir()
+        (task / "commands").mkdir()
+        (task / "validation" / "feature.json").write_text("{}")
+        (task / "source.patch").write_bytes(b"")
+        state = {"initial_patch_sha256": module.hashlib.sha256(b"").hexdigest()}
+        check_id = "implementation.function_removal"
+        artifact = task / "workspace" / "output" / "result.json"
+        artifact.write_text('{"status":200}\n')
+        self.record_command(task, "stable-id", "curl http://api/check > output/result.json")
+        command_path = task / "commands" / "stable-id.json"
+        command_record = json.loads(command_path.read_text())
+        command_record["output_artifacts"] = {"output/result.json": {
+            "sha256": module.hashlib.sha256(artifact.read_bytes()).hexdigest(),
+            "size": artifact.stat().st_size,
+        }}
+        command_path.write_text(json.dumps(command_record))
+        record_path = task / "workspace" / "output" / "evidence-record.json"
+        if isinstance(evidence_record, bytes):
+            record_path.write_bytes(evidence_record)
+        else:
+            record_path.write_text(json.dumps(evidence_record))
+        self.write_check(task, {"id": check_id, "status": "pass", "command_id": "stable-id",
+                                "evidence_record": "output/evidence-record.json",
+                                "evidence": ["output/result.json"]})
+        with patch.object(module, "feature_probe", return_value=(self.feature(), None)):
+            return {item["id"]: item for item in module.verification_observations(
+                task, ASSETS, state
+            )}
+
+    def test_non_object_or_invalid_text_evidence_record_receives_no_credit(self):
+        for record in ([], None, "scalar", 42, b"\xff\xfe"):
+            with self.subTest(record=record):
+                found = self.structured_evidence_result(record)
+                self.assertEqual(found["verification.evidence_coverage"]["numerator"], 0)
+
+    def test_short_factual_evidence_text_is_accepted_but_blank_text_is_not(self):
+        base = {
+            "check_id": "implementation.function_removal", "status": "pass",
+            "command_id": "stable-id", "expected": "200 OK", "observed": "HTTP200",
+            "artifacts": ["output/result.json"],
+        }
+        found = self.structured_evidence_result(base)
+        self.assertEqual(found["verification.evidence_coverage"]["numerator"], 1)
+        for field in ("expected", "observed"):
+            with self.subTest(field=field):
+                invalid = {**base, field: "   "}
+                found = self.structured_evidence_result(invalid)
+                self.assertEqual(found["verification.evidence_coverage"]["numerator"], 0)
+
     def test_implementation_consumes_real_probe_observation_shape(self):
         task = self.root / "test-2"
         (task / "validation").mkdir(parents=True)

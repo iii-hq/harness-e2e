@@ -132,8 +132,7 @@ def actual_evidence(run_root, task_root, references):
 
 
 def substantive_text(value):
-    return (isinstance(value, str) and len(value.strip()) >= 8
-            and any(character.isalnum() for character in value))
+    return isinstance(value, str) and bool(value.strip())
 
 
 def evidence_for_check(run_root, task_root, case, command_record):
@@ -149,7 +148,9 @@ def evidence_for_check(run_root, task_root, case, command_record):
         return []
     try:
         record = json.loads(record_path.read_text())
-    except (json.JSONDecodeError, OSError):
+    except (json.JSONDecodeError, OSError, UnicodeError):
+        return []
+    if not isinstance(record, dict):
         return []
     check_id = case.get("id")
     if record.get("check_id", record.get("id")) != check_id:

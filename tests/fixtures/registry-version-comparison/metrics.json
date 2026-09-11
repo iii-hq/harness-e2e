@@ -641,7 +641,7 @@
         {
           "id": "verification.evidence_coverage",
           "question": "What proportion of reported outcomes cite an existing evidence file?",
-          "expected": "Each required pass or fail supplies a matching structured evidence record with substantive expected and observed text, plus non-empty raw artifacts whose recorded execution-time digests match. The schema establishes attribution; independent probes establish truth.",
+          "expected": "Each required pass or fail supplies a matching structured evidence record with non-empty factual expected and observed text, plus non-empty raw artifacts whose recorded execution-time digests match. The schema establishes attribution; independent probes establish truth.",
           "measurement": "ratio",
           "weight": 20,
           "numerator": "Reported outcomes citing an existing evidence file.",

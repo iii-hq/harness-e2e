@@ -5,7 +5,7 @@ globalThis.registryDetailProbe = (() => {
   }
 
   function visible(element) {
-    return element?.checkVisibility?.() !== false;
+    return Boolean(element) && element.checkVisibility?.() !== false;
   }
 
   function disclosure(element, document) {
@@ -35,8 +35,19 @@ globalThis.registryDetailProbe = (() => {
       .filter(element => visible(element) && boundedTimeoutRow(element, document));
   }
 
+  function expandedContent(element, document) {
+    const controlled = disclosure(element, document);
+    if (controlled) return controlled;
+    if (element.tagName !== 'BUTTON' || element.getAttribute?.('aria-expanded') !== 'true') {
+      return null;
+    }
+    const row = boundedTimeoutRow(element, document);
+    const adjacent = element.nextElementSibling;
+    return row?.contains?.(adjacent) && visible(adjacent) ? adjacent : null;
+  }
+
   function state(element, document) {
-    const content = disclosure(element, document);
+    const content = expandedContent(element, document);
     let expanded = false;
     if (element.tagName === 'SUMMARY') expanded = content?.open === true;
     else if (element.getAttribute?.('aria-expanded') === 'true') expanded = visible(content);

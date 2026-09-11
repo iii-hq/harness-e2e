@@ -72,6 +72,7 @@ const { chromium } = require('./dashboard/node_modules/playwright');
         fixtures = {
             "before_after": "<main><div><header>/timeoutMs</header><details><summary>before / after</summary><pre>3000 5000</pre></details></div></main>",
             "timeout_label": "<main><details><summary>timeout</summary><pre>3000 5000</pre></details></main>",
+            "button_local": "<main><article><h2>timeout</h2><button aria-expanded='false' onclick=\"this.setAttribute('aria-expanded','true');this.nextElementSibling.hidden=false\">show values</button><div hidden>3000 5000</div></article></main>",
             "sibling": "<main><article><details><summary>before / after</summary><pre>unrelated 10 20</pre></details></article><article><h2>timeout</h2><p>3000 5000</p></article></main>",
             "inert": "<main><article><h2>timeout</h2><button aria-expanded='false'>before / after</button><div>3000 5000</div></article></main>",
         }
@@ -84,6 +85,7 @@ const { chromium } = require('./dashboard/node_modules/playwright');
         observed = json.loads(completed.stdout)
         self.assertEqual(observed["before_after"]["status"], "passed")
         self.assertEqual(observed["timeout_label"]["status"], "passed")
+        self.assertEqual(observed["button_local"]["status"], "passed")
         self.assertEqual(observed["sibling"]["status"], "failed")
         self.assertEqual(observed["inert"]["status"], "failed")
 
