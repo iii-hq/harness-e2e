@@ -49,6 +49,26 @@ use one repetition per scaffold and `down` + a new `scaffold` between runs.
 Requirements on the executor: the `iii` CLI (for the helper), `curl`, Node 22+ and `npm` (the
 Ch. 6 client), network access to the workers registry when the stack starts.
 
+### Software engineering plan
+
+The `software-engineering` profile includes `linkly_tutorial` once, in its own
+`case-linkly-tutorial` group, without technical retries. All eight exchanges stay
+in the same Harness session. The exact-stack workflow checks out `iii-hq/templates`
+at `ba1dfd95d4f4120705c8b0cc95d9a2ef86a0290d` and scaffolds `linkly-agentic` with
+the campaign's exact CLI. The scaffold hosts both Harness and the E2E runner.
+
+Baseline package versions are replaced with the campaign's resolved versions;
+`http` joins the runtime graph before it is frozen. The template's `shell` and
+`console` containers use the exact `ide` and `ade` packages from the target graph,
+so mutable legacy aliases cannot introduce a second package version. Template
+configuration and engine workers are retained. Provider secrets stay in private
+executor files outside the project and uploaded evidence. The ordinary Compose
+startup, status collection and cleanup apply to this group too. The artifact's
+`stack/template.json` records the template revision, and `stack/worker-compose.yaml`
+and `stack/worker-compose-final.yaml` preserve the assembled and delivered stacks.
+Mixed groups, repeated runs and technical retries are rejected because they
+would reuse a consumed scaffold.
+
 ## Checks
 
 All checks run in `capture`, after the eighth exchange, against the finished project. Codes created

@@ -120,6 +120,54 @@ def catalog():
 
 
 class ReleaseControlCampaignTest(unittest.TestCase):
+    def test_linkly_requires_a_fresh_group_for_its_whole_dialogue(self):
+        contract = campaign_contract()
+        group = contract['suite']['groups'][0]
+        group.update(scenarios=['linkly_tutorial'], execution_kind='scripted_dialogue', technical_retries=0)
+        self.assertEqual(MODULE.group_template(contract, group['id']), 'linkly-agentic')
+        for overrides in ({'runs': 2}, {'technical_retries': 1}, {'scenarios': ['linkly_tutorial', 'direct_answer']}):
+            with self.subTest(overrides=overrides), self.assertRaisesRegex(ValueError, 'fresh'):
+                changed = json.loads(json.dumps(contract))
+                changed['suite']['groups'][0].update(overrides)
+                MODULE.group_template(changed, group['id'])
+        self.assertEqual(MODULE.group_template(campaign_contract(), 'daily-core'), '')
+
+    def test_template_keeps_runtime_settings_but_uses_only_contract_versions(self):
+        contract = campaign_contract()
+        template = {'engine': {'workers': {'iii-stream': {}}}, 'containers': {
+            'state': {'worker': 'package://state', 'version': '0.1.0', 'config_override': {'adapter': {'name': 'kv'}}},
+            'harness': {'worker': 'package://harness', 'version': '0.1.0', 'working_dir': '.', 'start_after': ['state'], 'env_file': ['./.env']},
+        }}
+        original = json.loads(json.dumps(template))
+        project = MODULE.project_scaffold(contract, 'project-one', Path('/data'), {}, {}, template)
+        self.assertEqual(template, original)
+        self.assertEqual(project['containers']['state']['version'], '0.22.1')
+        self.assertEqual(project['containers']['state']['config_override'], {'adapter': {'name': 'kv'}})
+        self.assertEqual(project['containers']['harness']['version'], '1.9.0')
+        self.assertEqual(project['containers']['harness']['working_dir'], '.')
+        self.assertNotIn('env_file', project['containers']['harness'])
+        self.assertIn('harness-e2e', project['containers'])
+        self.assertEqual(project['engine'], template['engine'])
+        engine = MODULE.project_engine_config(project, 49999)
+        self.assertEqual(engine['workers'][0]['config']['port'], 49999)
+        self.assertIn({'name': 'iii-stream', 'config': {}}, engine['workers'])
+
+    def test_template_cannot_introduce_an_unresolved_worker(self):
+        with self.assertRaisesRegex(ValueError, 'not in the exact stack'):
+            MODULE.project_scaffold(campaign_contract(), 'project-one', Path('/data'), {}, {}, {
+                'containers': {'http': {'worker': 'package://http', 'version': 'latest'}}
+            })
+
+    def test_template_legacy_container_uses_the_targets_canonical_package_pin(self):
+        contract = campaign_contract({'harness': '1.9.0', 'state': '0.22.1', 'ide': '0.11.14'})
+        project = MODULE.project_scaffold(contract, 'project-one', Path('/data'), {}, {}, {
+            'containers': {'shell': {'worker': 'package://shell', 'version': '0.12.8', 'working_dir': '.'}}
+        }, {'shell': 'ide'})
+        self.assertEqual(project['containers']['shell'], {
+            'worker': 'package://ide', 'version': '0.11.14', 'working_dir': '.'
+        })
+        self.assertNotIn('ide', project['containers'])
+
     def test_common_runner_contains_only_the_compose_path(self):
         runner = RUNNER_SCRIPT.read_text()
         self.assertIn("compose::add", runner)
@@ -134,6 +182,12 @@ class ReleaseControlCampaignTest(unittest.TestCase):
         runner = RUNNER_SCRIPT.read_text()
         self.assertIn("chmod 600", runner)
         self.assertLess(runner.index("validate-layout"), runner.index('secrets_dir="$run_root/secrets"'))
+
+    def test_common_runner_keeps_grading_files_outside_the_subject_project(self):
+        runner = RUNNER_SCRIPT.read_text()
+        self.assertIn('evaluation_dir="$run_root/evaluation"', runner)
+        self.assertIn('harness-e2e.HARNESS_E2E_RUN_DIR=$evaluation_dir', runner)
+        self.assertNotIn('harness-e2e.HARNESS_E2E_RUN_DIR=$project_dir', runner)
 
     def test_runtime_layout_requires_canonical_disjoint_roots(self):
         with tempfile.TemporaryDirectory() as directory:
