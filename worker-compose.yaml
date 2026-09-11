@@ -3,8 +3,6 @@ namespace: harness-e2e
 containers:
   harness-e2e:
     worker: path://.
-    environment:
-      III_TELEMETRY_ENABLED: "false"
     config_override:
       data_dir: ~/.iii/data/harness-e2e
     scripts:

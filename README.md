@@ -377,3 +377,9 @@ The root `iii.worker.yaml` remains the public manifest for local `iii worker`
 development and package compatibility. The root `worker-compose.yaml` remains
 a normal public Compose document. Release Control and post-prepare workflow
 phases deliberately read neither source contract.
+
+Local development keeps product telemetry enabled by default. Team members
+must explicitly export `III_TELEMETRY_ENABLED=false` before starting the CLI or
+the local Compose stack. CI, campaign runners, and isolated scenario/test
+environments retain their explicit opt-out; the public Compose document does
+not force a setting on developers.
