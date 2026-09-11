@@ -9,6 +9,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import re
 import resource
 import signal
 import subprocess
@@ -17,6 +18,7 @@ import time
 
 ENV = {'PATH': '/runtime:/usr/bin:/bin', 'HOME': '/tmp', 'LANG': 'C.UTF-8',
        'LC_ALL': 'C.UTF-8', 'III_TELEMETRY_ENABLED': 'false', 'OTEL_ENABLED': 'false',
+       'III_COMPOSE_STATE_DIR': '/runtime-state/compose',
        'GIT_CONFIG_NOSYSTEM': '1', 'GIT_CONFIG_GLOBAL': '/dev/null',
        'GIT_TERMINAL_PROMPT': '0', 'CI': 'true'}
 
@@ -141,7 +143,7 @@ def docker_exec(container, command):
 
 def stage_changes_command(workspace):
     return ['/bin/sh', '-c', '''set -eu
-git -C "$1" add --all --force -- .
+git -C "$1" add --all --force -- . ':!kanban/node_modules' ':!kanban/dist' ':!data'
 git -C "$1" reset --quiet HEAD -- kanban/node_modules kanban/dist data
 ''', 'stage-changes', str(workspace)]
 
@@ -151,9 +153,74 @@ def capture_candidate_diff(candidate, evidence, name, cancel=None):
                evidence / f'{name}-stage.log', 10, candidate, cancel):
         raise EvaluationError('candidate change capture failed')
     if bounded(docker_exec(candidate, ['git', '-C', '/workspace', 'diff', '--cached',
-                                       '--no-ext-diff', 'HEAD']),
+                                       '--no-ext-diff', '--binary', 'HEAD']),
                evidence / f'{name}.diff', 10, candidate, cancel):
         raise EvaluationError('candidate diff capture failed')
+    if bounded(docker_exec(candidate, ['git', '-C', '/workspace', 'write-tree']),
+               evidence / f'{name}.tree', 10, candidate, cancel):
+        raise EvaluationError('candidate source tree capture failed')
+
+
+def verify_candidate_source(candidate, evidence, cancel=None):
+    trees = [(evidence / f'{name}.tree').read_text().strip() for name in ('subject', 'evaluated')]
+    if not all(re.fullmatch(r'(?:[0-9a-f]{40}|[0-9a-f]{64})', tree) for tree in trees):
+        raise EvaluationError('candidate source tree capture is invalid')
+    different_trees = trees[0] != trees[1]
+    paths = []
+    generated = []
+    if different_trees:
+        listing = evidence / 'source-changes.paths'
+        if bounded(docker_exec(candidate, ['git', '-C', '/workspace', 'diff', '--name-only',
+                                           '--no-renames', '-z', *trees]),
+                   listing, 10, candidate, cancel):
+            raise EvaluationError('candidate changed-path capture failed')
+        paths = listing.read_bytes().decode(errors='replace').rstrip('\0').split('\0')
+        # Compose writes this canonical empty lock even for path-only projects.
+        # Existing locks and locks recording dependencies remain source inputs.
+        if 'worker-compose.lock' in paths and new_empty_compose_lock(candidate, evidence, trees, cancel):
+            paths.remove('worker-compose.lock')
+            generated.append('worker-compose.lock')
+    changed = bool(paths)
+    atomic_json(evidence / 'source-integrity.json', {
+        'subject_tree': trees[0], 'evaluated_tree': trees[1], 'changed': changed,
+        'changed_paths': paths, 'generated_paths': generated,
+        'subject_diff_empty': not (evidence / 'subject.diff').stat().st_size,
+    })
+    if changed:
+        raise EvaluationError('candidate source changed during evaluation: ' + ', '.join(paths[:10]))
+
+
+def new_empty_compose_lock(candidate, evidence, trees, cancel=None):
+    entries = []
+    for name, tree in zip(('subject', 'evaluated'), trees):
+        listing = evidence / f'{name}-compose-lock.tree'
+        if bounded(docker_exec(candidate, ['git', '-C', '/workspace', 'ls-tree', tree, '--', 'worker-compose.lock']),
+                   listing, 10, candidate, cancel):
+            raise EvaluationError('Compose lock provenance capture failed')
+        entries.append(listing.read_text().strip())
+    if entries[0] or not entries[1].startswith('100644 blob '):
+        return False
+    content = evidence / 'generated-compose-lock.txt'
+    if bounded(docker_exec(candidate, ['git', '-C', '/workspace', 'show', f'{trees[1]}:worker-compose.lock']),
+               content, 10, candidate, cancel):
+        raise EvaluationError('Compose lock content capture failed')
+    return content.read_bytes() == b'version: 1\ncontainers: {}\n'
+
+
+def write_failure(evidence, case, error):
+    result_path = evidence / 'result.json'
+    if result_path.is_file():
+        try:
+            provisional = json.loads(result_path.read_text())
+        except (ValueError, OSError):
+            provisional = {}
+        if isinstance(provisional, dict) and provisional.get('functional_status') in ('passed', 'failed'):
+            atomic_json(evidence / 'functional-result.json', provisional)
+    result = {'schema': 'kanban-evaluation/v1', 'case_id': case,
+              'status': 'evaluation_failed' if isinstance(error, EvaluationError) else 'infrastructure_failed',
+              'functional_status': None, 'error': str(error) or type(error).__name__, 'checks': []}
+    atomic_json(result_path, result)
+    return result
 
 
 def remove_container(container):
@@ -696,8 +763,8 @@ print('workspace readable; trusted files, evaluator process and external network
             if bounded(docker_exec(candidate, ['/usr/bin/python3', '-I', '-c', STOP_RUNTIME, keeper]),
                        evidence / 'subject-cleanup.log', 10, candidate, cancel):
                 raise EvaluationError('candidate background process cleanup failed')
-            capture_candidate_diff(candidate, evidence, 'subject', cancel)
-            delivered_diff_captured = True
+        capture_candidate_diff(candidate, evidence, 'subject', cancel)
+        delivered_diff_captured = True
 
         build_checks = []
         result = {'schema': 'kanban-evaluation/v1', 'case_id': args.case,
@@ -747,11 +814,9 @@ print('workspace readable; trusted files, evaluator process and external network
                     result['duration_ms'] = round((time.monotonic() - started) * 1000)
                     (evidence / 'result.json').write_text(json.dumps(result, indent=2))
 
-        if isolated_subject:
-            capture_candidate_diff(candidate, evidence, 'evaluated', cancel)
-            evaluated_diff_captured = True
-            if (evidence / 'subject.diff').read_bytes() != (evidence / 'evaluated.diff').read_bytes():
-                raise EvaluationError('candidate source changed during evaluation')
+        capture_candidate_diff(candidate, evidence, 'evaluated', cancel)
+        evaluated_diff_captured = True
+        verify_candidate_source(candidate, evidence, cancel)
 
         result = json.loads((evidence / 'result.json').read_text())
         print(json.dumps({'output': str(args.output), 'result': result}))
@@ -767,14 +832,11 @@ print('workspace readable; trusted files, evaluator process and external network
             except (Exception, KeyboardInterrupt):
                 pass
             else:
-                if (evidence / 'subject.diff').read_bytes() != (evidence / 'evaluated.diff').read_bytes():
-                    error = EvaluationError(
-                        f'candidate source changed during evaluation; prior error: {error}')
-        result = {'schema': 'kanban-evaluation/v1', 'case_id': args.case,
-                  'status': 'evaluation_failed' if isinstance(error, EvaluationError) else 'infrastructure_failed',
-                  'functional_status': None,
-                  'error': str(error) or type(error).__name__, 'checks': []}
-        (evidence / 'result.json').write_text(json.dumps(result, indent=2))
+                try:
+                    verify_candidate_source(candidate, evidence, cancel)
+                except Exception as integrity_error:
+                    error = EvaluationError(f'{integrity_error}; prior error: {error}')
+        result = write_failure(evidence, args.case, error)
         print(json.dumps(result))
         return 2
     finally:

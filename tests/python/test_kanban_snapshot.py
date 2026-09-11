@@ -16,6 +16,14 @@ import snapshot
 
 
 class KanbanSnapshotTests(unittest.TestCase):
+    def test_prompt_explains_engine_metadata_and_requires_workspace_edits(self):
+        prompt = snapshot._prompt({'shared_prompt': 'Implement the increment.'},
+                                  {'prompt': 'Add tickets.', 'criteria': ['Persistence works.']})
+        self.assertIn('_caller_worker_id', prompt)
+        self.assertIn('runtime metadata', prompt)
+        self.assertIn('workspace', prompt)
+        self.assertIn('final response', prompt)
+
     def setUp(self) -> None:
         self.temporary = tempfile.TemporaryDirectory()
         self.root = Path(self.temporary.name)
