@@ -142,38 +142,27 @@ async function browserProbes(apiHealthy) {
   try {
     const comparisonUrl = `${app}/workers/orders-worker?tab=changelog&from=1.0.0&to=2.0.0`;
     await page.goto(comparisonUrl, { waitUntil: 'networkidle', timeout });
+    await page.addScriptTag({ content: registryDetailProbeSource });
     const selected = await page.locator('select').evaluateAll(nodes => nodes.map(n => n.value));
     const historyText = await page.locator('body').innerText();
     const hasChangelog = /changelog/i.test(historyText);
     observe('implementation.shared_url', hasChangelog && selected.includes('1.0.0') && selected.includes('2.0.0'), 'Selected pair restored', { url: page.url(), selected, hasChangelog });
     observe('implementation.history', hasChangelog && ['0.9.0','1.0.0','1.1.0','2.0.0'].every(v => historyText.includes(v)), 'Four seeded releases visible in Changelog', historyText.slice(0,2000));
-    const detailCandidates = page.getByRole('button', { name: /before\s*\/\s*after/i })
-      .or(page.locator('summary').filter({ hasText: /before\s*\/\s*after/i }));
+    const detailCandidates = page.locator('summary, button[aria-expanded], button[aria-controls]');
     let detailState = { controlFound: false, expanded: false, localText: '' };
     for (let index = 0; index < await detailCandidates.count(); index += 1) {
       const candidate = detailCandidates.nth(index);
-      const belongsToTimeout = await candidate.evaluate(element => {
-        for (let row = element; row && row !== document.body; row = row.parentElement) {
-          if (/timeout/i.test(row.innerText || row.textContent || '')) return true;
-        }
-        return false;
-      });
+      const belongsToTimeout = await candidate.evaluate(element =>
+        globalThis.registryDetailProbe.candidates(document).includes(element));
       if (!belongsToTimeout) continue;
       await candidate.click();
-      detailState = await candidate.evaluate(element => {
-        let row = element;
-        while (row && row !== document.body && !/timeout/i.test(row.innerText || row.textContent || '')) row = row.parentElement;
-        const controlled = element.getAttribute('aria-controls');
-        const expanded = element.tagName === 'SUMMARY'
-          ? element.parentElement?.open === true
-          : element.getAttribute('aria-expanded') === 'true'
-            || (controlled && document.getElementById(controlled)?.checkVisibility() === true);
-        return { controlFound: true, expanded, localText: row?.innerText || '' };
-      });
-      break;
+      detailState = await candidate.evaluate(element => ({
+        controlFound: true,
+        ...globalThis.registryDetailProbe.state(element, document),
+      }));
+      if (detailState.expanded && detailState.beforePresent && detailState.afterPresent) break;
     }
-    const expanded = detailState.expanded && /3000|3,000/.test(detailState.localText)
-      && /5000|5,000/.test(detailState.localText);
+    const expanded = detailState.expanded && detailState.beforePresent && detailState.afterPresent;
     observe('implementation.expanded_detail', expanded, 'Expanded timeout row shows 3000 and 5000', detailState);
     const selects = page.locator('select');
     let keyboard = false;

@@ -19,6 +19,7 @@ pub const PLANNING_ID: &str = "registry_planning";
 pub const IMPLEMENTATION_ID: &str = "registry_implementation";
 pub const ENVIRONMENT_ID: &str = "registry_environment";
 pub const VERIFICATION_ID: &str = "registry_verification";
+const REGISTRY_SHA: &str = "662eb87c1bdbb395f36264d5d26bf823e2ace783";
 const IDS: [&str; 4] = [
     PLANNING_ID,
     IMPLEMENTATION_ID,
@@ -31,6 +32,8 @@ const REFERENCE: &str =
     include_str!("../../tests/fixtures/registry-version-comparison/reference-plan.md");
 const CAPTURE_SCRIPT: &str =
     include_str!("../../tests/fixtures/registry-version-comparison/capture.cjs");
+const DETAIL_PROBE_SCRIPT: &str =
+    include_str!("../../tests/fixtures/registry-version-comparison/detail-probe.cjs");
 const PROMPTS: [&str; 4] = [
     include_str!("../../tests/fixtures/registry-version-comparison/test-1-planning.md"),
     include_str!("../../tests/fixtures/registry-version-comparison/test-2-implementation.md"),
@@ -257,6 +260,7 @@ fn setup<'a, const N: u8>(context: &'a E2eContext, run_id: &'a str) -> CleanupFu
                 include_str!("../../tests/fixtures/registry-version-comparison/lifecycle.py"),
             ),
             ("capture.cjs", CAPTURE_SCRIPT),
+            ("detail-probe.cjs", DETAIL_PROBE_SCRIPT),
             (
                 "validate.py",
                 include_str!("../../tests/fixtures/registry-version-comparison/validate.py"),
@@ -348,33 +352,27 @@ fn setup<'a, const N: u8>(context: &'a E2eContext, run_id: &'a str) -> CleanupFu
     })
 }
 
-fn collect_repository_paths(directory: &std::path::Path) -> Result<Vec<String>> {
-    fn visit(
-        root: &std::path::Path,
-        directory: &std::path::Path,
-        paths: &mut Vec<String>,
-    ) -> Result<()> {
-        for entry in std::fs::read_dir(directory)? {
-            let entry = entry?;
-            let path = entry.path();
-            if entry.file_name() == ".git" {
-                continue;
-            }
-            if path.is_dir() {
-                visit(root, &path, paths)?;
-            } else if path.is_file() {
-                paths.push(
-                    path.strip_prefix(root)?
-                        .to_string_lossy()
-                        .replace('\\', "/"),
-                );
-            }
-        }
-        Ok(())
+fn collect_repository_paths(directory: &std::path::Path, revision: &str) -> Result<Vec<String>> {
+    let canonical = directory.canonicalize()?;
+    let output = std::process::Command::new("git")
+        .arg("-c")
+        .arg(format!("safe.directory={}", canonical.display()))
+        .arg("-C")
+        .arg(&canonical)
+        .args(["ls-tree", "-rz", "--name-only", revision])
+        .output()?;
+    if !output.status.success() {
+        bail!(
+            "Registry pinned-tree inventory failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
     }
-
-    let mut paths = Vec::new();
-    visit(directory, directory, &mut paths)?;
+    let mut paths = output
+        .stdout
+        .split(|byte| *byte == 0)
+        .filter(|path| !path.is_empty())
+        .map(|path| String::from_utf8(path.to_vec()).context("Registry tree path is not UTF-8"))
+        .collect::<Result<Vec<_>>>()?;
     paths.sort();
     Ok(paths)
 }
@@ -421,7 +419,8 @@ async fn judge_plan(context: &E2eContext, run_id: &str) -> Result<Value> {
         .auxiliary_model
         .as_ref()
         .context("registry_planning requires the regular judge model/provider configuration")?;
-    let repository_paths = collect_repository_paths(&root(1, run_id).join("workspace/registry"))?;
+    let repository_paths =
+        collect_repository_paths(&root(1, run_id).join("workspace/registry"), REGISTRY_SHA)?;
     std::fs::create_dir_all(root(1, run_id).join("validation"))?;
     std::fs::write(
         root(1, run_id).join("validation/repository-paths.json"),
@@ -540,7 +539,7 @@ async fn capture_browser_session(
             "expected": capture.expected,
         });
         let code = format!(
-            "const capture = {};\n{CAPTURE_SCRIPT}",
+            "const capture = {};\n{DETAIL_PROBE_SCRIPT}\n{CAPTURE_SCRIPT}",
             serde_json::to_string(&capture_input)?
         );
         let execution = match context
@@ -943,13 +942,51 @@ mod tests {
     }
 
     #[test]
-    fn repository_context_contains_only_existing_relative_files() {
+    fn repository_context_comes_from_immutable_git_tree() {
         let temp = tempfile::tempdir().unwrap();
-        std::fs::create_dir_all(temp.path().join("apps/api")).unwrap();
-        std::fs::write(temp.path().join("apps/api/route.ts"), "route").unwrap();
+        let git = |args: &[&str]| {
+            let status = std::process::Command::new("git")
+                .args(args)
+                .current_dir(temp.path())
+                .status()
+                .unwrap();
+            assert!(status.success());
+        };
+        git(&["init", "--quiet"]);
+        git(&["config", "user.name", "Registry test"]);
+        git(&["config", "user.email", "registry-test@example.test"]);
+        std::fs::create_dir_all(temp.path().join("api/src")).unwrap();
+        std::fs::create_dir_all(temp.path().join("app/src")).unwrap();
+        std::fs::write(temp.path().join("api/src/route.ts"), "route").unwrap();
+        std::fs::write(temp.path().join("app/src/page.tsx"), "page").unwrap();
         std::fs::write(temp.path().join("README.md"), "readme").unwrap();
-        let paths = collect_repository_paths(temp.path()).unwrap();
-        assert_eq!(paths, vec!["README.md", "apps/api/route.ts"]);
+        std::os::unix::fs::symlink(".", temp.path().join("loop")).unwrap();
+        git(&["add", "--all"]);
+        git(&["commit", "--quiet", "-m", "fixture"]);
+        let revision = String::from_utf8(
+            std::process::Command::new("git")
+                .args(["rev-parse", "HEAD"])
+                .current_dir(temp.path())
+                .output()
+                .unwrap()
+                .stdout,
+        )
+        .unwrap();
+
+        std::fs::remove_file(temp.path().join("api/src/route.ts")).unwrap();
+        std::fs::write(temp.path().join("api/src/untracked.ts"), "untracked").unwrap();
+        std::fs::create_dir_all(temp.path().join("node_modules/generated")).unwrap();
+        std::fs::write(
+            temp.path().join("node_modules/generated/index.js"),
+            "generated",
+        )
+        .unwrap();
+
+        let paths = collect_repository_paths(temp.path(), revision.trim()).unwrap();
+        assert_eq!(
+            paths,
+            vec!["README.md", "api/src/route.ts", "app/src/page.tsx", "loop"]
+        );
     }
     #[test]
     fn captured_evidence_survives_workspace_removal() {

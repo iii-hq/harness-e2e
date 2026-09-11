@@ -6,6 +6,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 SCRIPT = ROOT / "tests/fixtures/registry-version-comparison/validate-feature.cjs"
+DETAIL_PROBE = ROOT / "tests/fixtures/registry-version-comparison/detail-probe.cjs"
 METRICS = ROOT / "tests/fixtures/registry-version-comparison/metrics.json"
 
 
@@ -39,79 +40,52 @@ class RegistryFeatureProbeTests(unittest.TestCase):
         self.assertIn("status: 'measured'", source)
         self.assertIn("/tmp/registry-validation", source)
 
-    def run_capture(self, timeout_row_text):
-        harness = r"""
-const fs = require('node:fs');
-const AsyncFunction = Object.getPrototypeOf(async function(){}).constructor;
-const source = fs.readFileSync(process.argv[1], 'utf8');
-let open = false;
-const row = {
-  innerText: process.argv[2], textContent: process.argv[2], parentElement: null,
-  checkVisibility: () => true,
-};
-const details = {
-  tagName: 'DETAILS', get open() { return open; }, innerText: process.argv[2],
-  textContent: process.argv[2], parentElement: row, checkVisibility: () => true,
-};
-const summary = {
-  tagName: 'SUMMARY', textContent: 'before / after', innerText: 'before / after',
-  parentElement: details, checkVisibility: () => true, click: () => { open = true; },
-  getAttribute: () => null,
-};
-const body = { get innerText() { return `unrelated timeout 3000 5000\n${process.argv[2]}`; } };
-const document = {
-  body,
-  querySelectorAll: selector => selector === 'button, summary' ? [summary] : [],
-};
-let now = 0;
-const Date = { now: () => (now += 1000) };
-const run = new AsyncFunction('capture', 'sleep', 'document', 'location', 'Date', source);
-run({kind:'detail'}, async () => {}, document, {href:'http://fixture'}, Date)
-  .then(result => process.stdout.write(JSON.stringify(result)));
-"""
-        result = subprocess.run(
-            ["node", "-e", harness, str(ROOT / "tests/fixtures/registry-version-comparison/capture.cjs"), timeout_row_text],
-            text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True, timeout=5,
-        )
-        return json.loads(result.stdout)
-
-    def test_timeout_detail_accepts_before_after_summary_and_checks_local_values(self):
-        passed = self.run_capture("timeout before / after 3000 5000")
-        self.assertEqual(passed["status"], "passed")
-        self.assertTrue(passed["state"]["detail_expanded"])
-        unrelated = self.run_capture("timeout before / after no values here")
-        self.assertEqual(unrelated["status"], "failed")
-
     @unittest.skipUnless((ROOT / "dashboard/node_modules/playwright").exists(),
                          "dashboard Playwright dependencies are not installed")
-    def test_timeout_detail_opens_real_html_details_with_playwright(self):
+    def test_timeout_detail_uses_semantic_control_and_bounded_row_in_real_chromium(self):
         harness = r"""
 const fs = require('node:fs');
 const { chromium } = require('./dashboard/node_modules/playwright');
 (async () => {
   const browser = await chromium.launch({headless:true});
   try {
-    const page = await browser.newPage();
-    await page.setContent('<main><p>unrelated 3000 5000</p><article><h2>timeout</h2><details><summary>before / after</summary><pre>3000 5000</pre></details></article></main>');
-    const source = fs.readFileSync(process.argv[1], 'utf8');
-    const result = await page.evaluate(async source => {
-      const AsyncFunction = Object.getPrototypeOf(async function(){}).constructor;
-      return new AsyncFunction('capture', 'sleep', 'document', 'location', 'Date', source)(
-        {kind:'detail'}, ms => new Promise(resolve => setTimeout(resolve, ms)), document, location, Date
-      );
-    }, source);
-    process.stdout.write(JSON.stringify({result, open: await page.locator('details').getAttribute('open')}));
+    const source = fs.readFileSync(process.argv[1], 'utf8') + '\n' + fs.readFileSync(process.argv[2], 'utf8');
+    const fixtures = JSON.parse(process.argv[3]);
+    const results = {};
+    for (const [name, html] of Object.entries(fixtures)) {
+      const page = await browser.newPage();
+      await page.setContent(html);
+      results[name] = await page.evaluate(async source => {
+        const AsyncFunction = Object.getPrototypeOf(async function(){}).constructor;
+        let now = 0;
+        const fakeDate = {now: () => (now += 1000)};
+        return new AsyncFunction('capture', 'sleep', 'document', 'location', 'Date', source)(
+          {kind:'detail'}, async () => {}, document, location, fakeDate
+        );
+      }, source);
+      await page.close();
+    }
+    process.stdout.write(JSON.stringify(results));
   } finally { await browser.close(); }
 })().catch(error => { console.error(error); process.exit(1); });
 """
+        fixtures = {
+            "before_after": "<main><div><header>/timeoutMs</header><details><summary>before / after</summary><pre>3000 5000</pre></details></div></main>",
+            "timeout_label": "<main><details><summary>timeout</summary><pre>3000 5000</pre></details></main>",
+            "sibling": "<main><article><details><summary>before / after</summary><pre>unrelated 10 20</pre></details></article><article><h2>timeout</h2><p>3000 5000</p></article></main>",
+            "inert": "<main><article><h2>timeout</h2><button aria-expanded='false'>before / after</button><div>3000 5000</div></article></main>",
+        }
         completed = subprocess.run(
-            ["node", "-e", harness, str(ROOT / "tests/fixtures/registry-version-comparison/capture.cjs")],
+            ["node", "-e", harness, str(DETAIL_PROBE),
+             str(ROOT / "tests/fixtures/registry-version-comparison/capture.cjs"), json.dumps(fixtures)],
             cwd=ROOT, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-            check=True, timeout=15,
+            check=True, timeout=30,
         )
         observed = json.loads(completed.stdout)
-        self.assertEqual(observed["result"]["status"], "passed")
-        self.assertEqual(observed["open"], "")
+        self.assertEqual(observed["before_after"]["status"], "passed")
+        self.assertEqual(observed["timeout_label"]["status"], "passed")
+        self.assertEqual(observed["sibling"]["status"], "failed")
+        self.assertEqual(observed["inert"]["status"], "failed")
 
 
 if __name__ == "__main__":

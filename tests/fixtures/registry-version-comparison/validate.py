@@ -131,32 +131,77 @@ def actual_evidence(run_root, task_root, references):
     return sorted(set(evidence))
 
 
-def evidence_for_check(run_root, task_root, references, check_id, command_record):
-    """Return non-empty evidence that is attributable to this check execution."""
-    evidence = []
-    command = command_record.get("command", "") if command_record else ""
-    for item in actual_evidence(run_root, task_root, references):
-        candidate = run_root / item
-        if candidate.stat().st_size == 0:
-            continue
-        reference = str(candidate.relative_to(task_root / "workspace"))
-        workspace_reference = f"/workspace/{reference}"
-        content = candidate.read_bytes()[:1_000_000].decode(errors="replace")
-        if (check_id in content or reference in command or workspace_reference in command
-                or candidate.name in command or candidate.stem in command):
-            evidence.append(item)
-    return evidence
+def substantive_text(value):
+    return (isinstance(value, str) and len(value.strip()) >= 8
+            and any(character.isalnum() for character in value))
+
+
+def evidence_for_check(run_root, task_root, case, command_record):
+    """Validate v2 structural attribution without claiming the observation is true."""
+    record_reference = case.get("evidence_record")
+    if not isinstance(record_reference, str):
+        return []
+    record_paths = actual_evidence(run_root, task_root, [record_reference])
+    if len(record_paths) != 1:
+        return []
+    record_path = run_root / record_paths[0]
+    if not 0 < record_path.stat().st_size <= 64 * 1024:
+        return []
+    try:
+        record = json.loads(record_path.read_text())
+    except (json.JSONDecodeError, OSError):
+        return []
+    check_id = case.get("id")
+    if record.get("check_id", record.get("id")) != check_id:
+        return []
+    if record.get("status") != case.get("status") or case.get("status") not in ("pass", "fail"):
+        return []
+    if record.get("command_id") != command_record.get("_record_id"):
+        return []
+    if not substantive_text(record.get("expected")) or not substantive_text(record.get("observed")):
+        return []
+    artifacts = record.get("artifacts")
+    cited = case.get("evidence")
+    if not isinstance(artifacts, list) or not artifacts or not isinstance(cited, list):
+        return []
+    if any(not isinstance(reference, str) or reference not in cited for reference in artifacts):
+        return []
+    recorded_artifacts = command_record.get("output_artifacts")
+    if not isinstance(recorded_artifacts, dict):
+        return []
+    validated = []
+    for reference in artifacts:
+        paths = actual_evidence(run_root, task_root, [reference])
+        if len(paths) != 1:
+            return []
+        path = run_root / paths[0]
+        try:
+            workspace_reference = path.relative_to(task_root / "workspace").as_posix()
+        except ValueError:
+            return []
+        metadata = recorded_artifacts.get(workspace_reference)
+        if not isinstance(metadata, dict) or not 0 < path.stat().st_size <= 16 * 1024 * 1024:
+            return []
+        if metadata.get("size") != path.stat().st_size:
+            return []
+        if metadata.get("sha256") != hashlib.sha256(path.read_bytes()).hexdigest():
+            return []
+        validated.extend(paths)
+    return record_paths + validated
 
 
 def feature_probe(task_root, assets, state):
     """Run the independent probe in the real web container and collect its JSON."""
     script = assets / "validate-feature.cjs"
-    if not script.is_file():
+    detail_probe = assets / "detail-probe.cjs"
+    if not script.is_file() or not detail_probe.is_file():
         return None, "feature_probe_not_supplied"
+    source = (f"const registryDetailProbeSource = {json.dumps(detail_probe.read_text())};\n"
+              + detail_probe.read_text() + "\n" + script.read_text()).encode()
     command = ["docker", "exec", "-i", state["container"], "docker", "compose", "-f",
                "/fixture/compose.yaml", "exec", "-T", "web", "node", "-"]
     try:
-        result = subprocess.run(command, input=script.read_bytes(), stdout=subprocess.PIPE,
+        result = subprocess.run(command, input=source, stdout=subprocess.PIPE,
                                 stderr=subprocess.PIPE, timeout=180, check=False)
     except subprocess.TimeoutExpired:
         return None, "feature_probe_timeout"
@@ -197,7 +242,7 @@ def recorded_commands(task_root):
         if (isinstance(command_id, str) and command_id == path.stem
                 and isinstance(item.get("command"), str)
                 and isinstance(exit_code, int) and not isinstance(exit_code, bool)):
-            commands[command_id] = item
+            commands[command_id] = {**item, "_record_id": command_id}
     return commands
 
 
@@ -293,8 +338,7 @@ def verification_observations(task_root, assets, state):
                          for case_id, case in report.items()
                          if case.get("status") in ("pass", "fail")}
     pertinent_evidence = {
-        case_id: evidence_for_check(run_root, task_root, report[case_id].get("evidence"),
-                                    case_id, record)
+        case_id: evidence_for_check(run_root, task_root, report[case_id], record)
         for case_id, record in execution_records.items() if record
     }
     executed = {case_id for case_id, record in execution_records.items()
@@ -501,6 +545,8 @@ def environment_observations(task_root, assets, state):
     replay_identity, replay_identity_evidence = checked(
         "environment-clean-replay-identity", replay_identity_command, 60
     )
+    replay_preparation_ready = (replay.get("exit_code") == 0
+                                and replay_identity.get("exit_code") == 0)
     replay_health, replay_health_evidence = checked("environment-clean-replay-health", f"curl -fsS http://127.0.0.1:{alternate_api_port}/health | python3 -c {shlex.quote(health_assertion)}", 60)
     sentinel_create = (f"docker compose -f {compose_arg} exec -T {db_service} {psql} -v ON_ERROR_STOP=1 -Atc "
                        "\"create table validator_isolation_sentinel(id integer); insert into validator_isolation_sentinel values (1);\"")
@@ -549,12 +595,20 @@ def environment_observations(task_root, assets, state):
         "environment.migration", "environment.seed", "environment.api_readiness",
         "environment.frontend_reachability", "environment.artifact_integrity",
         "environment.restart_persistence", "environment.parallel_isolation",
-        "environment.runtime_identity", "environment.database_readiness",
+        "environment.cleanup_scope", "environment.runtime_identity",
+        "environment.database_readiness",
+    }
+    replay_dependent = {
+        "environment.clean_reproduction", "environment.parallel_isolation",
+        "environment.cleanup_scope",
     }
     for metric in metric_ids:
         value, evidence = values[metric]
         if not preparation_ready and metric in preparation_dependent:
             observations.append(unavailable(metric, "validator_preparation_failed"))
+            continue
+        if not replay_preparation_ready and metric in replay_dependent:
+            observations.append(unavailable(metric, "validator_replay_preparation_failed"))
             continue
         if metric == "environment.frontend_reachability" and web_error:
             observations.append(unavailable(metric, web_error))

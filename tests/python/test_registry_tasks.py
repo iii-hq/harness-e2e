@@ -149,10 +149,16 @@ class RegistryDeliveryTests(unittest.TestCase):
         root.mkdir()
         module.write_json(root / "state.json", {"container": "registry-task-test"})
         args = argparse.Namespace(root=root, command="printf observed", timeout_ms=1000)
-        completed = module.subprocess.CompletedProcess(
-            args=["docker"], returncode=0, stdout=b"observed", stderr=b""
-        )
-        with patch.object(module.subprocess, "run", return_value=completed):
+        output = root / "workspace" / "output"
+        output.mkdir(parents=True)
+
+        def execute(_argv, **_kwargs):
+            (output / "result.json").write_text('{"observed":true}\n')
+            return module.subprocess.CompletedProcess(
+                args=["docker"], returncode=0, stdout=b"observed", stderr=b""
+            )
+
+        with patch.object(module.subprocess, "run", side_effect=execute):
             result = module.execute(args)
         self.assertRegex(result["command_id"], r"^[0-9a-f]{32}$")
         records = list((root / "commands").glob("*.json"))
@@ -160,6 +166,43 @@ class RegistryDeliveryTests(unittest.TestCase):
         record = json.loads(records[0].read_text())
         self.assertEqual(record["command_id"], result["command_id"])
         self.assertEqual(record["command"], "printf observed")
+        artifact = record["output_artifacts"]["output/result.json"]
+        self.assertEqual(artifact["size"], (output / "result.json").stat().st_size)
+        self.assertEqual(artifact["sha256"], module.digest(output / "result.json"))
+
+    def test_execution_does_not_claim_unchanged_preexisting_output(self):
+        import argparse
+        root = self.root / "unchanged-execution"
+        output = root / "workspace" / "output"
+        output.mkdir(parents=True)
+        (output / "old.txt").write_text("old\n")
+        module.write_json(root / "state.json", {"container": "registry-task-test"})
+        args = argparse.Namespace(root=root, command="true", timeout_ms=1000)
+        completed = module.subprocess.CompletedProcess(
+            args=["docker"], returncode=0, stdout=b"", stderr=b""
+        )
+        with patch.object(module.subprocess, "run", return_value=completed):
+            result = module.execute(args)
+        record = json.loads((root / "commands" / f"{result['command_id']}.json").read_text())
+        self.assertEqual(record["output_artifacts"], {})
+
+    def test_output_snapshot_is_bounded_and_skips_symlinks(self):
+        output = self.root / "snapshot" / "output"
+        output.mkdir(parents=True)
+        (output / "a.txt").write_text("first")
+        (output / "b.txt").write_text("second")
+        (self.root / "outside.txt").write_text("outside")
+        (output / "outside-link").symlink_to(self.root / "outside.txt")
+        snapshot = module.output_snapshot(
+            output, max_files=1, max_total_bytes=1024, max_file_bytes=1024
+        )
+        self.assertEqual(list(snapshot), ["output/a.txt"])
+        self.assertNotIn("output/outside-link", snapshot)
+
+        oversized = module.output_snapshot(
+            output, max_files=10, max_total_bytes=1024, max_file_bytes=3
+        )
+        self.assertEqual(oversized, {})
 
 
 if __name__ == "__main__":

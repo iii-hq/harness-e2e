@@ -42,6 +42,51 @@ def fixture_hashes(directory):
             for p in sorted(directory.rglob("*")) if p.is_file() and ".git" not in p.parts}
 
 
+def output_snapshot(directory, *, max_files=256, max_total_bytes=64 * 1024 * 1024,
+                    max_file_bytes=16 * 1024 * 1024, max_entries=4096):
+    """Hash a bounded set of regular output files without following symlinks."""
+    if not directory.is_dir():
+        return {}
+    root = directory.resolve()
+    snapshot = {}
+    total_bytes = 0
+    regular_files = 0
+    entries_seen = 0
+    pending = [directory]
+    while pending and regular_files < max_files:
+        current = pending.pop()
+        with os.scandir(current) as entries:
+            for entry in sorted(entries, key=lambda item: item.name):
+                entries_seen += 1
+                if entries_seen > max_entries:
+                    return dict(sorted(snapshot.items()))
+                if entry.is_symlink():
+                    continue
+                path = Path(entry.path)
+                if entry.is_dir(follow_symlinks=False):
+                    pending.append(path)
+                    continue
+                if not entry.is_file(follow_symlinks=False):
+                    continue
+                regular_files += 1
+                if regular_files > max_files:
+                    break
+                stat = entry.stat(follow_symlinks=False)
+                if stat.st_size > max_file_bytes or total_bytes + stat.st_size > max_total_bytes:
+                    continue
+                resolved = path.resolve(strict=True)
+                if not resolved.is_relative_to(root):
+                    continue
+                digest_value = hashlib.sha256()
+                with path.open("rb") as handle:
+                    for block in iter(lambda: handle.read(1024 * 1024), b""):
+                        digest_value.update(block)
+                total_bytes += stat.st_size
+                relative = path.relative_to(directory.parent).as_posix()
+                snapshot[relative] = {"sha256": digest_value.hexdigest(), "size": stat.st_size}
+    return dict(sorted(snapshot.items()))
+
+
 def git_patch(source, base=REGISTRY_SHA):
     # A temporary index includes new and committed files without altering the subject's index.
     with tempfile.TemporaryDirectory() as temp:
@@ -174,15 +219,20 @@ def prepare(args):
 
 def execute(args):
     state = json.loads((args.root / "state.json").read_text())
+    output = args.root / "workspace" / "output"
+    before = output_snapshot(output)
     # coreutils timeout kills the command inside the container, including on transport timeout.
     result = subprocess.run(["docker", "exec", "-i", "-w", "/workspace", state["container"],
                              "timeout", "--signal=KILL", str(args.timeout_ms / 1000),
                              "sh", "-lc", args.command], stdout=subprocess.PIPE,
                             stderr=subprocess.PIPE, timeout=args.timeout_ms / 1000 + 15)
     command_id = uuid.uuid4().hex
+    after = output_snapshot(output)
+    changed = {path: metadata for path, metadata in after.items()
+               if before.get(path) != metadata}
     evidence = {"command_id": command_id, "command": args.command, "timeout_ms": args.timeout_ms,
                 "exit_code": result.returncode, "stdout": result.stdout.decode(errors="replace"),
-                "stderr": result.stderr.decode(errors="replace")}
+                "stderr": result.stderr.decode(errors="replace"), "output_artifacts": changed}
     commands = args.root / "commands"
     commands.mkdir(exist_ok=True)
     write_json(commands / (command_id + ".json"), evidence)

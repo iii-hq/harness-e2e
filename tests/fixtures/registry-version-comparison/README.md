@@ -49,7 +49,7 @@ cargo run --locked -- run \
   --scenario registry_implementation
 ```
 
-Planning uses a separate model call to assess the plan against the atomic questions. The validator supplies a captured inventory of paths from the pinned checkout and independently rejects backend/frontend location credit when no cited path exists. Use the regular `--judge-model` and `--judge-provider` options (or `HARNESS_E2E_JUDGE_MODEL` and `HARNESS_E2E_JUDGE_PROVIDER`). If the judge cannot run, its measurements are unavailable.
+Planning uses a separate model call to assess the plan against the atomic questions. The validator supplies the NUL-delimited tracked-file inventory from the immutable pinned Git tree and independently rejects backend/frontend location credit when no cited path exists. Working-tree edits, generated dependencies, deletions, and symlink traversal cannot change that inventory. Use the regular `--judge-model` and `--judge-provider` options (or `HARNESS_E2E_JUDGE_MODEL` and `HARNESS_E2E_JUDGE_PROVIDER`). If the judge cannot run, its measurements are unavailable.
 
 To test a previously delivered implementation:
 
@@ -62,7 +62,7 @@ cargo run --locked -- run \
 
 Select and schedule scenarios through the normal Harness flow. The Evolution profile uses the existing group execution and scoring contracts.
 
-Subject commands start in `/workspace`, containing `registry/`, `inputs/`, and `output/`. The scenario provides a scoped execution tool and returns a stable `command_id` for every call. `inputs/environment.json` records URLs, requirements, and commands. Implementation and verification use built application snapshots: rebuild after edits with `/fixture/fixture.sh up` and run project tooling inside the API/web containers.
+Subject commands start in `/workspace`, containing `registry/`, `inputs/`, and `output/`. The scenario provides a scoped execution tool and returns a stable `command_id` for every call. Each command record also retains bounded hashes and sizes for regular files created or changed under `output/`; symlinks and out-of-root or oversized files are excluded. Verification writes its per-check evidence summaries after receiving the original producing command IDs. `inputs/environment.json` records URLs, requirements, and commands. Implementation and verification use built application snapshots: rebuild after edits with `/fixture/fixture.sh up` and run project tooling inside the API/web containers.
 
 ## Results
 

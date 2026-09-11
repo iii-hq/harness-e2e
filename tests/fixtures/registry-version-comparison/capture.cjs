@@ -11,28 +11,6 @@ return await (async () => {
     return [...document.querySelectorAll('select')].map(select => select.value);
   }
 
-  function closestTimeoutRow(element) {
-    for (let candidate = element; candidate && candidate !== document.body; candidate = candidate.parentElement) {
-      if (/timeout/i.test(candidate.innerText || candidate.textContent || '')) return candidate;
-    }
-    return null;
-  }
-
-  function detailControl() {
-    return [...document.querySelectorAll('button, summary')].find(element =>
-      element.checkVisibility()
-      && /before\s*\/\s*after/i.test(element.innerText || element.textContent || '')
-      && closestTimeoutRow(element)
-    );
-  }
-
-  function isExpanded(element) {
-    if (element.tagName === 'SUMMARY') return element.parentElement?.open === true;
-    if (element.getAttribute?.('aria-expanded') === 'true') return true;
-    const controlled = element.getAttribute?.('aria-controls');
-    return controlled ? document.getElementById(controlled)?.checkVisibility() === true : false;
-  }
-
   let detailClicked = false;
   let detailExpanded = false;
   let detailValues = [];
@@ -49,17 +27,17 @@ return await (async () => {
       const expectedContent = capture.expected.some(value => text.includes(value));
       if (hasChangelog && pairSelected && expectedContent) reason = null;
     } else if (capture.kind === 'detail') {
-      const control = detailControl();
-      if (control && !detailClicked) {
+      for (const control of registryDetailProbe.candidates(document)) {
         control.click();
         detailClicked = true;
         await sleep(250);
-      }
-      if (control && detailClicked) {
-        const localText = closestTimeoutRow(control)?.innerText || '';
-        detailExpanded = isExpanded(control);
-        detailValues = [/3[,.]?000/.test(localText), /5[,.]?000/.test(localText)];
-        if (detailExpanded && detailValues.every(Boolean)) reason = null;
+        const detail = registryDetailProbe.state(control, document);
+        detailExpanded = detail.expanded;
+        detailValues = [detail.beforePresent, detail.afterPresent];
+        if (detailExpanded && detailValues.every(Boolean)) {
+          reason = null;
+          break;
+        }
       }
     } else if (capture.kind === 'missing') {
       const failed = /not[ _-]?found|missing|unavailable|unable|error|failed/i.test(text);
