@@ -1,0 +1,3 @@
+Runtime and delivery contract:
+- iii injects `_caller_worker_id` into object payloads for worker-to-worker calls. This is runtime metadata, not a user-supplied business field. At the iii function boundary, separate this metadata before strict business-field validation; keep rejecting unknown business fields. Test the functions through the real SDK, including this injected field.
+- Apply the implementation to files in the supplied workspace using the shell executor. Plans and code blocks in the final response do not modify the workspace and are not an implementation deliverable. Run the available checks against the files you actually changed.
