@@ -695,7 +695,7 @@ impl TreeObserver for ContextTreeObserver<'_> {
     }
 }
 
-fn function_ids(listed: &Value) -> impl Iterator<Item = &str> {
+pub(crate) fn function_ids(listed: &Value) -> impl Iterator<Item = &str> {
     listed
         .as_array()
         .or_else(|| listed.as_object()?.values().find_map(Value::as_array))

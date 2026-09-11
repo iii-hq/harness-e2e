@@ -34,6 +34,7 @@ use crate::markdown::{
     MarkdownScenarioSource, ScenarioKey, LOCAL_SCENARIO_DIRECTORY, LOCAL_SCENARIO_MAX_BYTES,
     LOCAL_SCENARIO_REQUIRED_SECTIONS, LOCAL_SCENARIO_TEMPLATE,
 };
+use crate::persistence::Persistence;
 use crate::report::{
     E2eManifest, E2eObservationEnvelope, E2eReport, ObservationDataAvailability,
     ObservationEvidence, ObservationExecutionIdentity, ObservationIdentity, ObservationMetric,
@@ -65,7 +66,6 @@ pub const SCENARIOS_AUTHORING_GUIDE_ID: &str = "e2e::scenarios-authoring-guide";
 pub const FAULT_PLAN_ID: &str = "e2e::fault-plan";
 pub const FAULT_EVALUATE_ID: &str = "e2e::fault-evaluate";
 
-const RECORD_SCOPE: &str = "harness_e2e_execution";
 const MAX_IDEMPOTENCY_KEY_BYTES: usize = 256;
 const MAX_CONCURRENT_EXECUTIONS: usize = 4;
 
@@ -169,6 +169,8 @@ pub struct ExecutionRecord {
     pub result_path: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub report: Option<E2eReport>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dashboard_projection: Option<Value>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub manifest: Option<E2eManifest>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -488,6 +490,7 @@ pub struct ControlPlane {
 
 struct ControlPlaneInner {
     iii: IIIClient,
+    persistence: Persistence,
     url: String,
     output_root: PathBuf,
     admission: Mutex<()>,
@@ -521,10 +524,25 @@ const fn default_results_limit() -> u16 {
 
 impl ControlPlane {
     pub async fn new(iii: IIIClient, url: String, output_root: PathBuf) -> Result<Self> {
+        let persistence = Persistence::from_client(iii.clone());
+        Self::new_with_persistence(iii, url, output_root, persistence).await
+    }
+
+    pub async fn new_with_persistence(
+        iii: IIIClient,
+        url: String,
+        output_root: PathBuf,
+        persistence: Persistence,
+    ) -> Result<Self> {
         let (updates, _) = broadcast::channel(256);
+        persistence
+            .initialize()
+            .await
+            .context("initialize Harness E2E persistence")?;
         let control = Self {
             inner: Arc::new(ControlPlaneInner {
                 durable: DurableHistory::from_client(iii.clone()),
+                persistence,
                 iii,
                 url,
                 output_root,
@@ -792,6 +810,10 @@ impl ControlPlane {
         &self.inner.iii
     }
 
+    pub(crate) fn persistence(&self) -> Persistence {
+        self.inner.persistence.clone()
+    }
+
     /// Uses the native admission lock, so HTTP, iii and composed runs obey the
     /// same reservation even between children of a plan execution.
     pub(crate) async fn reserve_plan(&self, owner: &str) -> Result<()> {
@@ -801,14 +823,7 @@ impl ControlPlane {
             anyhow::ensure!(active == owner, "plan execution {active} is active");
             return Ok(());
         }
-        if let Some(active) = self
-            .inner
-            .records
-            .read()
-            .await
-            .values()
-            .find(|r| !r.phase.terminal())
-        {
+        if let Some(active) = self.inner.persistence.active_executions().await?.first() {
             bail!("execution {} is active", active.execution_id);
         }
         *reservation = Some(owner.to_owned());
@@ -835,17 +850,12 @@ impl ControlPlane {
         self.inner.updates.subscribe()
     }
 
-    pub async fn records(&self) -> Vec<ExecutionRecord> {
-        let mut records = self
-            .inner
-            .records
-            .read()
+    pub async fn records(&self) -> Result<Vec<ExecutionRecord>> {
+        self.inner
+            .persistence
+            .executions()
             .await
-            .values()
-            .cloned()
-            .collect::<Vec<_>>();
-        records.sort_by(|left, right| right.requested_at.cmp(&left.requested_at));
-        records
+            .context("list persisted E2E executions")
     }
 
     pub async fn scenario_catalog(
@@ -874,6 +884,18 @@ impl ControlPlane {
         })
         .await
         .context("create local scenario task")??;
+        let persisted = json!({
+            "scenario": definition.scenario,
+            "source": definition.source,
+            "source_path": definition.scenario.source_path,
+            "source_sha256": definition.scenario.source_sha256,
+            "created_at": now(),
+        });
+        self.inner
+            .persistence
+            .save_local_scenario(&definition.scenario.id, &persisted)
+            .await
+            .context("persist local Markdown scenario")?;
         let seed = ScenarioKey::Markdown(definition.scenario.id.clone()).canonical_seed();
         Ok(LocalScenarioCreateResponse {
             scenario: materialize_markdown_descriptor(
@@ -933,7 +955,7 @@ impl ControlPlane {
         );
         drop(reservation);
         let execution_id = execution_id_for_key(&request.idempotency_key);
-        if let Some(record) = self.inner.records.read().await.get(&execution_id).cloned() {
+        if let Some(record) = self.inner.persistence.execution(&execution_id).await? {
             if record.request != request {
                 bail!(
                     "idempotency key '{}' already belongs to execution {} with a different request",
@@ -954,15 +976,8 @@ impl ControlPlane {
             });
         }
 
-        let active = self
-            .inner
-            .records
-            .read()
-            .await
-            .values()
-            .filter(|record| !record.phase.terminal())
-            .count();
-        if active >= MAX_CONCURRENT_EXECUTIONS {
+        let active = self.inner.persistence.active_count().await?;
+        if active >= MAX_CONCURRENT_EXECUTIONS as u64 {
             bail!("E2E concurrency limit of {MAX_CONCURRENT_EXECUTIONS} is reached");
         }
 
@@ -1006,6 +1021,7 @@ impl ControlPlane {
             error: String::new(),
             result_path: None,
             report: None,
+            dashboard_projection: None,
             manifest: None,
             observation: None,
             observation_artifact: None,
@@ -1358,6 +1374,53 @@ impl ControlPlane {
         })
     }
 
+    /// Delete terminal control-plane state and its local native bundle. Remote
+    /// archive objects remain governed by their existing storage retention.
+    pub async fn delete(&self, execution_id: &str) -> Result<()> {
+        if execution_id.len() != 32 || !execution_id.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+            bail!("invalid E2E execution id");
+        }
+        let _admission = self.inner.admission.lock().await;
+        let memory_record = self.inner.records.read().await.get(execution_id).cloned();
+        let record = memory_record
+            .or(self.inner.persistence.execution(execution_id).await?)
+            .with_context(|| format!("unknown E2E execution {execution_id}"))?;
+        if !record.phase.terminal() {
+            bail!("only terminal E2E executions can be deleted");
+        }
+
+        let evidence = self.inner.output_root.join(execution_id);
+        let staged = self.inner.output_root.join(".deleting").join(execution_id);
+        let moved_evidence = if evidence.exists() {
+            if !evidence.is_dir() {
+                bail!("execution evidence path is not a directory");
+            }
+            std::fs::create_dir_all(staged.parent().expect("staging parent"))?;
+            if staged.exists() {
+                bail!("stale deletion staging directory for {execution_id}");
+            }
+            std::fs::rename(&evidence, &staged)
+                .with_context(|| format!("stage local evidence for {execution_id}"))?;
+            true
+        } else {
+            false
+        };
+
+        if let Err(error) = self.inner.persistence.delete_execution(execution_id).await {
+            if moved_evidence {
+                let _ = std::fs::rename(&staged, &evidence);
+            }
+            return Err(error).context("delete persisted E2E execution");
+        }
+        self.inner.records.write().await.remove(execution_id);
+        self.inner.cancellations.lock().await.remove(execution_id);
+        if moved_evidence {
+            std::fs::remove_dir_all(&staged)
+                .with_context(|| format!("remove local evidence for {execution_id}"))?;
+        }
+        Ok(())
+    }
+
     pub async fn results_get(&self, execution_id: &str) -> Result<ResultsGetResponse> {
         let record = self.record(execution_id).await?;
         Ok(ResultsGetResponse {
@@ -1453,11 +1516,9 @@ impl ControlPlane {
             bail!("results list limit must be between 1 and 500");
         }
         let mut records = self
-            .inner
-            .records
-            .read()
-            .await
-            .values()
+            .records()
+            .await?
+            .into_iter()
             .filter(|record| {
                 request
                     .lane
@@ -1468,7 +1529,6 @@ impl ControlPlane {
                             || record.request.scenarios.contains(scenario)
                     })
             })
-            .cloned()
             .collect::<Vec<_>>();
         records.sort_by(|left, right| right.requested_at.cmp(&left.requested_at));
         records.truncate(usize::from(request.limit));
@@ -1504,21 +1564,7 @@ impl ControlPlane {
     }
 
     async fn restore(&self) -> Result<()> {
-        // Fetch records separately: the accumulated reports can exceed a WebSocket frame.
-        let listed = self
-            .trigger("state::list_keys", json!({ "scope": RECORD_SCOPE }))
-            .await
-            .context("list persisted E2E execution keys")?;
-        let keys: Vec<String> = serde_json::from_value(listed["keys"].clone())
-            .context("decode persisted E2E execution keys")?;
-        for key in keys {
-            let value = self
-                .trigger("state::get", json!({ "scope": RECORD_SCOPE, "key": key }))
-                .await
-                .context("read persisted E2E execution")?;
-            let Ok(mut record) = serde_json::from_value::<ExecutionRecord>(value) else {
-                continue;
-            };
+        for mut record in self.inner.persistence.active_executions().await? {
             let execution_id = record.execution_id.clone();
             if !record.phase.terminal() {
                 let journal = match self.initialize_or_open_journal(&record) {
@@ -1738,37 +1784,99 @@ impl ControlPlane {
     }
 
     pub async fn record(&self, execution_id: &str) -> Result<ExecutionRecord> {
+        self.hydrate_native_evidence(self.stored_record(execution_id).await?)
+    }
+
+    pub(crate) async fn stored_record(&self, execution_id: &str) -> Result<ExecutionRecord> {
+        if let Some(record) = self.inner.records.read().await.get(execution_id).cloned() {
+            return Ok(record);
+        }
         self.inner
-            .records
-            .read()
-            .await
-            .get(execution_id)
-            .cloned()
+            .persistence
+            .execution(execution_id)
+            .await?
             .with_context(|| format!("unknown E2E execution {execution_id}"))
     }
 
-    async fn persist_record(&self, record: ExecutionRecord) -> Result<()> {
-        self.trigger(
-            "state::set",
-            json!({
-                "scope": RECORD_SCOPE,
-                "key": record.execution_id,
-                "value": record,
-            }),
-        )
-        .await
-        .context("persist E2E execution record")?;
+    pub(crate) fn hydrate_native_evidence(
+        &self,
+        mut record: ExecutionRecord,
+    ) -> Result<ExecutionRecord> {
+        if record.report.is_some() || !record.phase.terminal() || record.result_path.is_none() {
+            return Ok(record);
+        }
+        let result_root = self
+            .inner
+            .output_root
+            .join(record.result_path.as_deref().unwrap());
+        let (report, result_path) = E2eReport::read_from(&result_root)
+            .with_context(|| format!("read native results for {}", record.execution_id))?;
+        let evidence_root = result_path
+            .parent()
+            .context("native results path has no parent directory")?;
+        let manifest = serde_json::from_slice(&std::fs::read(evidence_root.join("manifest.json"))?)
+            .context("decode native manifest")?;
+        let observation_path = self
+            .inner
+            .output_root
+            .join(&record.execution_id)
+            .join("observation.json");
+        let observation = observation_path
+            .is_file()
+            .then(|| E2eObservationEnvelope::read_from(&observation_path))
+            .transpose()?;
+        record.report = Some(report);
+        record.manifest = Some(manifest);
+        record.observation = observation;
+        Ok(record)
+    }
+
+    pub async fn attempt_get(
+        &self,
+        execution_id: &str,
+        run_id: &str,
+        attempt_id: &str,
+    ) -> Result<Value> {
         self.inner
-            .records
-            .write()
-            .await
-            .insert(record.execution_id.clone(), record.clone());
+            .persistence
+            .attempt(execution_id, run_id, attempt_id)
+            .await?
+            .with_context(|| {
+                format!("unknown attempt {attempt_id} for execution {execution_id}, run {run_id}")
+            })
+    }
+
+    async fn persist_record(&self, record: ExecutionRecord) -> Result<()> {
+        if record.phase.terminal() {
+            self.inner
+                .persistence
+                .save_terminal_projection(&record)
+                .await
+                .context("persist terminal E2E execution projection")?;
+        } else {
+            self.inner
+                .persistence
+                .save_execution(&record)
+                .await
+                .context("persist E2E execution record")?;
+        }
+        let mut records = self.inner.records.write().await;
+        if record.phase.terminal() {
+            records.remove(&record.execution_id);
+        } else {
+            records.insert(record.execution_id.clone(), record.clone());
+        }
         let _ = self.inner.updates.send(ControlPlaneUpdate { record });
         Ok(())
     }
 
     async fn persist_terminal_record(&self, mut record: ExecutionRecord) -> Result<()> {
-        if let Err(error) = self.persist_record(record.clone()).await {
+        if let Err(error) = self
+            .inner
+            .persistence
+            .save_terminal_projection(&record)
+            .await
+        {
             mark_terminal_persistence_error(
                 &mut record,
                 format!("persist terminal execution record: {error:#}"),
@@ -1782,6 +1890,12 @@ impl ControlPlane {
             let _ = self.inner.updates.send(ControlPlaneUpdate { record });
             return Err(error);
         }
+        self.inner
+            .records
+            .write()
+            .await
+            .remove(&record.execution_id);
+        let _ = self.inner.updates.send(ControlPlaneUpdate { record });
         Ok(())
     }
 
@@ -3432,6 +3546,7 @@ mod tests {
             error: String::new(),
             result_path: None,
             report: None,
+            dashboard_projection: None,
             manifest: None,
             observation: None,
             observation_artifact: None,
@@ -3440,21 +3555,18 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn restore_fetches_records_separately_when_history_exceeds_a_websocket_frame() {
+    async fn restore_queries_only_pending_executions() {
         use futures_util::{SinkExt, StreamExt};
         use tokio_tungstenite::tungstenite::Message;
 
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let url = format!("ws://{}", listener.local_addr().unwrap());
-        let mut record = observation_record();
-        record.phase = ExecutionPhase::Completed;
-        record.request.run_contract = None;
-        record.error = "x".repeat(9 * 1024 * 1024);
         let server =
             tokio::spawn(async move {
                 let (socket, _) = listener.accept().await.unwrap();
                 let mut socket = tokio_tungstenite::accept_async(socket).await.unwrap();
-                let mut reads = 0;
+                let mut queries = 0;
+                let mut transactions = 0;
                 while let Some(Ok(frame)) = socket.next().await {
                     let Message::Text(message) = frame else {
                         continue;
@@ -3464,11 +3576,23 @@ mod tests {
                         continue;
                     }
                     let result = match message["function_id"].as_str().unwrap() {
-                        "state::list_keys" => json!({"keys": ["first", "second"]}),
-                        "state::get" => {
-                            reads += 1;
-                            record.execution_id = message["data"]["key"].as_str().unwrap().into();
-                            serde_json::to_value(&record).unwrap()
+                        "database::transaction" => {
+                            transactions += 1;
+                            json!({"committed": true})
+                        }
+                        "database::query" => {
+                            queries += 1;
+                            let sql = message["data"]["sql"].as_str().unwrap();
+                            if sql.contains("sqlite_master") {
+                                json!({"rows": []})
+                            } else if sql.contains("SELECT version") {
+                                json!({"rows": [{"version": 3}]})
+                            } else if sql.contains("terminal = 0") {
+                                json!({"rows": []})
+                            } else {
+                                assert!(sql.contains("ORDER BY requested_at DESC"));
+                                json!({"rows": []})
+                            }
                         }
                         other => panic!("unexpected bulk restore call: {other}"),
                     };
@@ -3476,11 +3600,12 @@ mod tests {
                     "type": "invocationresult", "invocation_id": message["invocation_id"],
                     "function_id": message["function_id"], "result": result,
                 }).to_string())).await.unwrap();
-                    if reads == 2 {
+                    if transactions == 1 && queries == 4 {
                         break;
                     }
                 }
-                assert_eq!(reads, 2);
+                assert_eq!(transactions, 1);
+                assert_eq!(queries, 4);
             });
         let client = iii_sdk::register_worker(&url, iii_sdk::InitOptions::default());
         tokio::time::timeout(Duration::from_secs(5), async {
@@ -3498,7 +3623,7 @@ mod tests {
         .await
         .unwrap()
         .unwrap();
-        assert_eq!(control.records().await.len(), 2);
+        assert!(control.records().await.unwrap().is_empty());
         client.shutdown_async().await;
         server.await.unwrap();
     }

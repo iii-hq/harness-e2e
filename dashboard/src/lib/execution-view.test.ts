@@ -3,6 +3,7 @@ import type { DashboardExecutionSummary } from '@/lib/dashboard-data-source'
 import {
   attentionState,
   buildExecutionPresentation,
+  executionTitle,
   failureBreakdown,
   primaryIssue,
 } from '@/lib/execution-view'
@@ -91,5 +92,30 @@ describe('execution presentation view model', () => {
       } as never,
     })
     expect(buildExecutionPresentation(passed).attention).toBe('passed')
+  })
+})
+
+describe('execution identity', () => {
+  it('titles an unlabelled execution by its subject and date', () => {
+    const labelled = buildExecutionPresentation(
+      execution({
+        id: 'a',
+        label: 'e2e::* control-plane run',
+        workflow_name: 'e2e::* control-plane run',
+      }),
+    )
+    expect(executionTitle(labelled)).toEqual({
+      title: 'e2e::* control-plane run',
+      detail: 'e2e::* control-plane run',
+    })
+    const unlabelled = buildExecutionPresentation(
+      execution({
+        id: 'b',
+        label: undefined,
+        workflow_name: 'e2e::* control-plane run',
+      }),
+    )
+    expect(executionTitle(unlabelled).title).toMatch(/^gpt-5\.6-terra · /)
+    expect(executionTitle(unlabelled).detail).toBe('e2e::* control-plane run')
   })
 })

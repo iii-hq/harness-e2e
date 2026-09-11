@@ -1,0 +1,526 @@
+pub(crate) mod store;
+
+use std::collections::BTreeMap;
+
+use anyhow::{bail, Result};
+use chrono::{SecondsFormat, Utc};
+use schemars::JsonSchema;
+use serde::{Deserialize, Serialize};
+use serde_json::json;
+
+use crate::artifact;
+use crate::markdown::ScenarioKey;
+#[cfg(test)]
+use crate::scenarios::ScenarioId;
+
+pub(crate) const PLAN_SCHEMA_VERSION: u32 = 3;
+
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, JsonSchema, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum PlanState {
+    Draft,
+    BaselineRunning,
+    BaselineReady,
+    CandidateRunning,
+    ComparisonReady,
+}
+
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, JsonSchema, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum PlanRunRole {
+    Baseline,
+    Candidate,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, PartialEq)]
+pub(crate) struct PlanScopeItem {
+    pub scenario_id: String,
+    pub scenario_version: u32,
+    pub case_id: String,
+    pub seed: u64,
+    pub inputs_sha256: String,
+    pub contract_sha256: String,
+    pub complexity_tier: String,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, PartialEq)]
+pub(crate) struct LocalPlan {
+    pub schema_version: u32,
+    pub id: String,
+    pub label: String,
+    pub purpose: String,
+    pub created_at: String,
+    pub updated_at: String,
+    pub state: PlanState,
+    pub locked: bool,
+    pub scope_hash: String,
+    pub url: String,
+    pub model: String,
+    pub provider: String,
+    pub judge_model: String,
+    pub judge_provider: String,
+    pub scenarios: Vec<PlanScopeItem>,
+    pub scenario_ids: Vec<String>,
+    pub runs: u32,
+    pub technical_retries: u8,
+    pub seed: Option<u64>,
+    pub baseline_execution_id: Option<String>,
+    pub candidate_execution_ids: Vec<String>,
+    pub candidate_labels: BTreeMap<String, String>,
+    pub incomplete_execution_ids: Vec<String>,
+    pub last_attempt_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub template_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reference_execution_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub reference_differences: Vec<String>,
+    pub protected_executor_required: bool,
+    pub compatible: bool,
+}
+
+#[derive(Debug, Clone, Default, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct PlanCreateRequest {
+    // iii adds this routing metadata when a browser/worker invokes the
+    // function. It is accepted at the boundary but never enters the plan.
+    #[serde(rename = "_caller_worker_id", default, skip_serializing)]
+    #[schemars(skip)]
+    _caller_worker_id: Option<String>,
+    #[serde(default)]
+    pub label: String,
+    #[serde(default)]
+    pub purpose: String,
+    pub url: String,
+    pub model: String,
+    pub provider: String,
+    #[serde(default)]
+    pub judge_model: String,
+    #[serde(default)]
+    pub judge_provider: String,
+    pub scenarios: Vec<String>,
+    #[serde(default)]
+    pub template_id: Option<String>,
+    #[serde(default)]
+    pub duplicate_of: Option<String>,
+    #[serde(default = "default_runs")]
+    pub runs: u32,
+    #[serde(default = "default_retries")]
+    pub technical_retries: u8,
+    #[serde(default)]
+    pub seed: Option<u64>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct PlanUpdateRequest {
+    // See PlanCreateRequest::_caller_worker_id. Keep the update DTO strict for
+    // user fields while allowing the engine's internal invocation metadata.
+    #[serde(rename = "_caller_worker_id", default, skip_serializing)]
+    #[schemars(skip)]
+    _caller_worker_id: Option<String>,
+    #[serde(default)]
+    pub plan_id: Option<String>,
+    pub label: Option<String>,
+    pub purpose: Option<String>,
+    pub url: Option<String>,
+    pub model: Option<String>,
+    pub provider: Option<String>,
+    pub judge_model: Option<String>,
+    pub judge_provider: Option<String>,
+    pub scenarios: Option<Vec<String>>,
+    pub runs: Option<u32>,
+    pub technical_retries: Option<u8>,
+    pub seed: Option<u64>,
+    pub candidate_labels: Option<BTreeMap<String, String>>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
+pub(crate) struct PlanRunRequest {
+    #[serde(default)]
+    pub plan_id: Option<String>,
+    pub role: PlanRunRole,
+    pub idempotency_key: String,
+}
+
+fn default_runs() -> u32 {
+    1
+}
+
+fn default_retries() -> u8 {
+    1
+}
+
+pub(crate) fn new_plan(request: &PlanCreateRequest, id: String) -> Result<LocalPlan> {
+    validate_values(request)?;
+    let scenarios = resolve_scope(&request.scenarios, request.seed)?;
+    let scope_hash = scope_hash(request, &scenarios)?;
+    let now = Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true);
+    Ok(LocalPlan {
+        schema_version: PLAN_SCHEMA_VERSION,
+        id,
+        label: request.label.trim().to_string(),
+        purpose: request.purpose.trim().to_string(),
+        created_at: now.clone(),
+        updated_at: now,
+        state: PlanState::Draft,
+        locked: false,
+        scope_hash,
+        url: request.url.trim().to_string(),
+        model: request.model.trim().to_string(),
+        provider: request.provider.trim().to_string(),
+        judge_model: request.judge_model.trim().to_string(),
+        judge_provider: request.judge_provider.trim().to_string(),
+        scenario_ids: request.scenarios.clone(),
+        scenarios,
+        runs: request.runs,
+        technical_retries: request.technical_retries,
+        seed: request.seed,
+        baseline_execution_id: None,
+        candidate_execution_ids: Vec::new(),
+        candidate_labels: BTreeMap::new(),
+        incomplete_execution_ids: Vec::new(),
+        last_attempt_id: None,
+        template_id: request.template_id.clone(),
+        reference_execution_id: None,
+        reference_differences: Vec::new(),
+        protected_executor_required: false,
+        compatible: true,
+    })
+}
+
+pub(crate) fn apply_update(plan: &mut LocalPlan, update: &PlanUpdateRequest) -> Result<()> {
+    if let Some(labels) = &update.candidate_labels {
+        plan.candidate_labels = validate_candidate_labels(plan, labels)?;
+    }
+    let mut request = plan_request(plan);
+    if let Some(value) = &update.label {
+        request.label = value.clone();
+    }
+    if let Some(value) = &update.purpose {
+        request.purpose = value.clone();
+    }
+    if let Some(value) = &update.url {
+        request.url = value.clone();
+    }
+    if let Some(value) = &update.model {
+        request.model = value.clone();
+    }
+    if let Some(value) = &update.provider {
+        request.provider = value.clone();
+    }
+    if let Some(value) = &update.judge_model {
+        request.judge_model = value.clone();
+    }
+    if let Some(value) = &update.judge_provider {
+        request.judge_provider = value.clone();
+    }
+    if let Some(value) = &update.scenarios {
+        request.scenarios = value.clone();
+    }
+    if let Some(value) = update.runs {
+        request.runs = value;
+    }
+    if let Some(value) = update.technical_retries {
+        request.technical_retries = value;
+    }
+    if let Some(value) = update.seed {
+        request.seed = Some(value);
+    }
+    validate_values(&request)?;
+    let scenarios = resolve_scope(&request.scenarios, request.seed)?;
+    plan.label = request.label.trim().to_string();
+    plan.purpose = request.purpose.trim().to_string();
+    plan.url = request.url.trim().to_string();
+    plan.model = request.model.trim().to_string();
+    plan.provider = request.provider.trim().to_string();
+    plan.judge_model = request.judge_model.trim().to_string();
+    plan.judge_provider = request.judge_provider.trim().to_string();
+    plan.scenario_ids = request.scenarios.clone();
+    plan.scenarios = scenarios;
+    plan.runs = request.runs;
+    plan.technical_retries = request.technical_retries;
+    plan.seed = request.seed;
+    plan.scope_hash = scope_hash(&request, &plan.scenarios)?;
+    plan.updated_at = Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true);
+    Ok(())
+}
+
+fn validate_candidate_labels(
+    plan: &LocalPlan,
+    labels: &BTreeMap<String, String>,
+) -> Result<BTreeMap<String, String>> {
+    let mut validated = BTreeMap::new();
+    for (execution_id, label) in labels {
+        if !plan
+            .candidate_execution_ids
+            .iter()
+            .any(|candidate_id| candidate_id == execution_id)
+        {
+            bail!("candidate label references unknown execution '{execution_id}'");
+        }
+        let label = label.trim();
+        if label.is_empty() {
+            continue;
+        }
+        if label.chars().count() > 80 {
+            bail!("candidate label must be at most 80 characters");
+        }
+        if label.chars().any(char::is_control) {
+            bail!("candidate label must not contain control characters");
+        }
+        validated.insert(execution_id.clone(), label.to_string());
+    }
+    Ok(validated)
+}
+
+pub(crate) fn plan_request(plan: &LocalPlan) -> PlanCreateRequest {
+    PlanCreateRequest {
+        _caller_worker_id: None,
+        label: plan.label.clone(),
+        purpose: plan.purpose.clone(),
+        url: plan.url.clone(),
+        model: plan.model.clone(),
+        provider: plan.provider.clone(),
+        judge_model: plan.judge_model.clone(),
+        judge_provider: plan.judge_provider.clone(),
+        scenarios: plan.scenario_ids.clone(),
+        template_id: plan.template_id.clone(),
+        duplicate_of: None,
+        runs: plan.runs,
+        technical_retries: plan.technical_retries,
+        seed: plan.seed,
+    }
+}
+
+fn validate_values(request: &PlanCreateRequest) -> Result<()> {
+    if request.scenarios.is_empty() {
+        bail!("select at least one test for the local plan");
+    }
+    if request.runs == 0 || request.runs > 20 {
+        bail!("runs must be between 1 and 20");
+    }
+    if request.technical_retries > 3 {
+        bail!("technical_retries must be between 0 and 3");
+    }
+    if request.url.trim().is_empty()
+        || request.model.trim().is_empty()
+        || request.provider.trim().is_empty()
+    {
+        bail!("url, model, and provider are required");
+    }
+    let ids = request
+        .scenarios
+        .iter()
+        .map(|value| value.trim())
+        .collect::<std::collections::BTreeSet<_>>();
+    if ids.len() != request.scenarios.len() {
+        bail!("plan scenarios must be unique");
+    }
+    let selected = ids
+        .into_iter()
+        .map(|value| value.parse::<ScenarioKey>())
+        .collect::<Result<Vec<_>>>()?;
+    if selected
+        .iter()
+        .any(|scenario| scenario.built_in().is_none())
+        && (request.judge_model.trim().is_empty() || request.judge_provider.trim().is_empty())
+    {
+        bail!("Markdown scenarios require an explicit judge model and provider");
+    }
+    Ok(())
+}
+
+pub(crate) fn resolve_scope(
+    scenario_ids: &[String],
+    seed: Option<u64>,
+) -> Result<Vec<PlanScopeItem>> {
+    scenario_ids
+        .iter()
+        .map(|value| {
+            let id = value.parse::<ScenarioKey>()?;
+            let case_seed = seed.unwrap_or_else(|| id.canonical_seed());
+            let (case, execution) = if let Some(built_in) = id.built_in() {
+                let materialized = built_in.materialize("local-plan", case_seed)?;
+                (materialized.case, materialized.spec.execution)
+            } else {
+                let scenario = crate::markdown::embedded_scenario(id.as_str())?;
+                (
+                    crate::suite::markdown_case(&scenario, case_seed)?,
+                    crate::markdown::execution_policy(),
+                )
+            };
+            let contract_sha256 = artifact::sha256_value(&json!({
+                "scenario_id": case.scenario_id,
+                "scenario_version": case.scenario_version,
+                "case": case,
+                "execution_policy": execution,
+            }))?;
+            Ok(PlanScopeItem {
+                scenario_id: id.as_str().into(),
+                scenario_version: case.scenario_version,
+                case_id: case.case_id,
+                seed: case.seed,
+                inputs_sha256: case.inputs_sha256,
+                contract_sha256,
+                complexity_tier: format!("{:?}", case.complexity.tier),
+            })
+        })
+        .collect()
+}
+
+pub(crate) fn scope_hash(
+    request: &PlanCreateRequest,
+    scenarios: &[PlanScopeItem],
+) -> Result<String> {
+    artifact::sha256_value(&json!({
+        "url": request.url.trim(),
+        "model": request.model.trim(),
+        "provider": request.provider.trim(),
+        "judge_model": request.judge_model.trim(),
+        "judge_provider": request.judge_provider.trim(),
+        "scenarios": scenarios,
+        "runs": request.runs,
+        "technical_retries": request.technical_retries,
+    }))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn request() -> PlanCreateRequest {
+        PlanCreateRequest {
+            _caller_worker_id: None,
+            label: "local plan".into(),
+            purpose: "exercise the dashboard workflow".into(),
+            url: "ws://127.0.0.1:49134".into(),
+            model: "model".into(),
+            provider: "provider".into(),
+            judge_model: "judge".into(),
+            judge_provider: "judge-provider".into(),
+            scenarios: vec![ScenarioId::ContextPressure.as_str().into()],
+            template_id: None,
+            duplicate_of: None,
+            runs: 1,
+            technical_retries: 1,
+            seed: None,
+        }
+    }
+
+    #[test]
+    fn creates_a_small_unlocked_scope_by_default() {
+        let plan = new_plan(&request(), "plan-test".into()).expect("plan should materialize");
+        assert_eq!(plan.state, PlanState::Draft);
+        assert!(!plan.locked);
+        assert_eq!(plan.runs, 1);
+        assert_eq!(plan.scenarios.len(), 1);
+        assert_eq!(
+            plan.scenarios[0].scenario_version,
+            ScenarioId::ContextPressure.spec("version-check").version
+        );
+        assert_eq!(
+            plan.scenarios[0].seed,
+            ScenarioId::ContextPressure.canonical_seed()
+        );
+        assert!(plan.baseline_execution_id.is_none());
+    }
+
+    #[test]
+    fn security_review_plan_leaves_retry_eligibility_to_each_slot() {
+        let mut request = request();
+        request.scenarios = vec![ScenarioId::SecurityReview.as_str().into()];
+        new_plan(&request, "security-with-retry".into())
+            .expect("security review plan should use the shared control plane");
+    }
+
+    #[test]
+    fn todo_worker_plans_are_admitted_by_the_dashboard() {
+        for scenario in [ScenarioId::TodoWorkerSimple, ScenarioId::TodoWorkerPlanned] {
+            let mut request = request();
+            request.scenarios = vec![scenario.as_str().into()];
+            request.technical_retries = 0;
+            new_plan(&request, format!("{scenario:?}-plan")).unwrap_or_else(|error| {
+                panic!("{scenario:?} should be dashboard-admitted: {error:#}")
+            });
+        }
+    }
+
+    #[test]
+    fn accepts_engine_caller_metadata_without_persisting_it() {
+        let mut value = serde_json::to_value(request()).expect("request should serialize");
+        value["_caller_worker_id"] = serde_json::json!("browser-worker");
+        let decoded: PlanCreateRequest =
+            serde_json::from_value(value).expect("engine metadata should be accepted");
+        assert_eq!(decoded._caller_worker_id.as_deref(), Some("browser-worker"));
+
+        let serialized = serde_json::to_value(decoded).expect("request should serialize");
+        assert!(serialized.get("_caller_worker_id").is_none());
+    }
+
+    #[test]
+    fn locked_plans_accept_scope_changes() {
+        let mut plan = new_plan(&request(), "plan-locked".into()).expect("plan should materialize");
+        plan.locked = true;
+        let update = PlanUpdateRequest {
+            runs: Some(2),
+            ..PlanUpdateRequest::default()
+        };
+        apply_update(&mut plan, &update).expect("locked plan should remain editable");
+        assert_eq!(plan.runs, 2);
+    }
+
+    #[test]
+    fn locked_plans_allow_candidate_names_to_be_changed_and_cleared() {
+        let mut plan = new_plan(&request(), "plan-names".into()).expect("plan should materialize");
+        plan.locked = true;
+        plan.candidate_execution_ids = vec!["candidate-1".into()];
+        let original_scope_hash = plan.scope_hash.clone();
+
+        apply_update(
+            &mut plan,
+            &PlanUpdateRequest {
+                candidate_labels: Some(BTreeMap::from([(
+                    "candidate-1".into(),
+                    "  Harness Next  ".into(),
+                )])),
+                ..PlanUpdateRequest::default()
+            },
+        )
+        .expect("candidate metadata should remain editable");
+        assert_eq!(
+            plan.candidate_labels.get("candidate-1").map(String::as_str),
+            Some("Harness Next")
+        );
+        assert_eq!(plan.scope_hash, original_scope_hash);
+
+        apply_update(
+            &mut plan,
+            &PlanUpdateRequest {
+                candidate_labels: Some(BTreeMap::from([("candidate-1".into(), "  ".into())])),
+                ..PlanUpdateRequest::default()
+            },
+        )
+        .expect("an empty name should restore the generated label");
+        assert!(plan.candidate_labels.is_empty());
+    }
+
+    #[test]
+    fn candidate_names_only_accept_retained_candidate_executions() {
+        let mut plan =
+            new_plan(&request(), "plan-name-validation".into()).expect("plan should materialize");
+        plan.locked = true;
+        let error = apply_update(
+            &mut plan,
+            &PlanUpdateRequest {
+                candidate_labels: Some(BTreeMap::from([(
+                    "unknown-execution".into(),
+                    "Mystery candidate".into(),
+                )])),
+                ..PlanUpdateRequest::default()
+            },
+        )
+        .expect_err("unknown executions must be rejected");
+        assert!(error.to_string().contains("unknown execution"));
+    }
+}

@@ -38,7 +38,11 @@ mod tests {
         assert!(!manifest.description.is_empty());
         assert_eq!(
             manifest.default_config,
-            serde_json::json!({ "data_dir": "~/.iii/data/harness-e2e" })
+            serde_json::json!({
+                "data_dir": "~/.iii/data/harness-e2e",
+                "control_database": "harness_e2e",
+                "control_namespace": "harness-e2e-control",
+            })
         );
         assert_eq!(manifest.supported_targets, [env!("TARGET")]);
     }

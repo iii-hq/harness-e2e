@@ -1,14 +1,13 @@
-import { describe, expect, it, vi } from 'vitest'
+import { describe, expect, it } from 'vitest'
 import type { DashboardExecutionDetail } from '@/lib/dashboard-data-source'
-import { installDashboardIiiClient } from '@/lib/iii-client'
+import { comparePrimaryMetrics } from '@/lib/primary-metrics'
 import {
-  comparisonSummary,
-  filterReferenceComparison,
-  getReleaseControlReference,
-  listReleaseControlExecutions,
+  getImportedReference,
+  listImportedExecutions,
+  localReferencePrimaryMetrics,
   localScenarioObservations,
-  objectiveScore,
   type RcReference,
+  referencePrimaryMetrics,
   referenceScenarioObservations,
   referenceSummary,
 } from '@/lib/release-control-reference'
@@ -50,15 +49,24 @@ function comparisonCandidate(
       available: true,
       ...(row.repetition === undefined ? {} : { round: row.repetition + 1 }),
       report: {
+        result_contract_sha256: 'result-contract',
+        scoring_profile_sha256: 'scoring-profile',
         scenarios: [
           {
             scenario_id: row.scenario,
-            scenario_version: 7,
+            scenario_version: 2,
             case_id:
               row.caseId ??
-              `${row.scenario}:v7:seed-${BigInt(row.seed).toString(16).padStart(16, '0')}`,
-            case: { seed: row.seed },
-            aggregate: { planned_runs: 1 },
+              `${row.scenario}:v2:seed-${BigInt(row.seed).toString(16).padStart(16, '0')}`,
+            case: {
+              seed: row.seed,
+              inputs_sha256: `definition-${row.scenario}`,
+            },
+            aggregate: {
+              planned_runs: 1,
+              observed_runs: 1,
+              deferred_runs: 0,
+            },
             runs: [
               {
                 run_id: `run-${index}`,
@@ -72,8 +80,19 @@ function comparisonCandidate(
                   function_calls: 1,
                   root_turns: 1,
                 },
-                metrics: { complete: true, totals: {} },
-                cost: { subject_usd: 0.01 },
+                metrics: {
+                  complete: true,
+                  totals: {
+                    input_tokens: 7,
+                    output_tokens: 3,
+                    cache_read_tokens: 0,
+                    cache_write_tokens: 0,
+                    turns: 1,
+                    function_calls: 1,
+                    function_call_errors: 0,
+                  },
+                },
+                cost: { subject_usd: 0.01, total_usd: 0.02 },
               },
             ],
           },
@@ -91,9 +110,17 @@ function comparisonReference(
     repetition?: number
   }>,
 ): RcReference {
+  const repetitions = rows.filter(
+    (row) => row.scenario === rows[0]?.scenario,
+  ).length
   return {
     ...reference,
-    execution: { ...reference.execution },
+    execution: {
+      ...reference.execution,
+      plan: {
+        subject: { provider: 'provider', model: 'model' },
+      },
+    },
     runs: rows.map((row, index) => ({
       ...reference.runs[0],
       id: `rc-${index}`,
@@ -102,7 +129,20 @@ function comparisonReference(
       seed: row.seed,
       repetition: row.repetition ?? 0,
       objectiveScore: row.score,
+      caseId: `${row.scenario}:v2:seed-${BigInt(row.seed).toString(16).padStart(16, '0')}`,
+      identity: {
+        definitionSha256: `definition-${row.scenario}`,
+        resultContractSha256: 'result-contract',
+        scoringProfileSha256: 'scoring-profile',
+      },
     })),
+    aggregate: {
+      planned_runs: rows.length,
+      observed_runs: rows.length,
+      completion_rate: 1,
+      execution_reliability: 1,
+    },
+    materialized: { profile: { repetitions } },
   }
 }
 
@@ -196,226 +236,193 @@ describe('Release Control reference adapter', () => {
     expect(summary.totals?.total_tokens).toBeNull()
   })
 
-  it('reads recent executions from the plans wrapper without inventing coverage', async () => {
-    const trigger = vi.fn().mockResolvedValue({
-      plans: [{ recentExecutions: [reference.execution] }],
-    })
-    installDashboardIiiClient({
-      browserId: 'browser',
-      trigger,
-      on: () => () => undefined,
-      registerTrigger: () => () => undefined,
-    })
-    const [summary] = await listReleaseControlExecutions()
-    expect(summary.id).toBe('rc:e-1')
-    expect(summary.totals?.expected_reports).toBeNull()
-    expect(trigger).toHaveBeenCalledWith(
-      'release-control::test-plans::list',
-      {},
-      { namespace: 'default' },
-    )
+  it('requires the local Harness bridge for imported history', async () => {
+    await expect(listImportedExecutions()).rejects.toThrow('initialized')
+  })
+})
+
+describe('shared primary metrics projection', () => {
+  it('weights every RC test equally after averaging its repetitions', () => {
+    const remote = comparisonReference([
+      { scenario: 'alpha', seed: '1', score: 100, repetition: 0 },
+      { scenario: 'alpha', seed: '1', score: 0, repetition: 1 },
+      { scenario: 'beta', seed: '2', score: 100, repetition: 0 },
+      { scenario: 'beta', seed: '2', score: 100, repetition: 1 },
+    ])
+
+    const metrics = referencePrimaryMetrics(remote)
+
+    expect(metrics.tests.map((test) => test.metrics.score.value)).toEqual([
+      50, 100,
+    ])
+    expect(metrics.metrics.score.value).toBe(75)
   })
 
-  it('averages only finite objective scores', () => {
+  it('keeps the RC token total and leaves unavailable breakdowns and total spend absent', () => {
+    const metrics = referencePrimaryMetrics(
+      comparisonReference([{ scenario: 'alpha', seed: '1', score: 80 }]),
+    )
+
+    expect(metrics.metrics.totalTokens.value).toBe(30)
+    expect(metrics.metrics.inputTokens.value).toBeNull()
+    expect(metrics.metrics.outputTokens.value).toBeNull()
+    expect(metrics.metrics.cacheRead.value).toBeNull()
+    expect(metrics.metrics.costUsd.value).toBe(0.01)
+  })
+
+  it('allows matched case and contracts but blocks incompatible contracts or repetitions', () => {
+    const remote = referencePrimaryMetrics(
+      comparisonReference([{ scenario: 'alpha', seed: '7', score: 80 }]),
+    )
+    const localDetail = comparisonCandidate([
+      { scenario: 'alpha', seed: 7, score: 90 },
+    ])
+    const local = localReferencePrimaryMetrics(localDetail, true)
+
+    expect(comparePrimaryMetrics(remote, local, false).deltas.score).toBe(10)
     expect(
-      objectiveScore({
-        ...reference,
-        runs: [
-          { ...reference.runs[0], objectiveScore: 100 },
-          { ...reference.runs[1], objectiveScore: null },
-        ],
-      }),
-    ).toBe(100)
-  })
-})
+      comparePrimaryMetrics(
+        remote,
+        localReferencePrimaryMetrics(localDetail, false),
+        false,
+      ).deltas.score,
+    ).toBeNull()
 
-describe('incomplete comparison filtering', () => {
-  it('keeps only paired non-zero slots from a complete RC plan and a partial local run', () => {
-    const remote = comparisonReference(
-      Array.from({ length: 9 }, (_, index) => ({
-        scenario: `scenario-${index}`,
-        seed: '42',
-        score: 80,
-      })),
-    )
-    const local = comparisonCandidate([
-      { scenario: 'scenario-0', seed: 42, score: 90 },
+    const changedCase = structuredClone(localDetail)
+    const changedScenario = changedCase.reports[0]?.report?.scenarios[0]
+    if (!changedScenario) throw new Error('fixture must contain a scenario')
+    changedScenario.case_id = 'another-case'
+    expect(
+      comparePrimaryMetrics(
+        remote,
+        localReferencePrimaryMetrics(changedCase, true),
+        false,
+      ).deltas.score,
+    ).toBeNull()
+
+    const changedVersion = structuredClone(localDetail)
+    const versionedScenario = changedVersion.reports[0]?.report?.scenarios[0]
+    if (!versionedScenario) throw new Error('fixture must contain a scenario')
+    versionedScenario.scenario_version = 3
+    expect(
+      comparePrimaryMetrics(
+        remote,
+        localReferencePrimaryMetrics(changedVersion, true),
+        false,
+      ),
+    ).toMatchObject({ totalTests: 2, deltas: { score: null } })
+
+    const report = localDetail.reports[0]?.report
+    if (!report) throw new Error('fixture must contain a report')
+    report.result_contract_sha256 = 'changed-contract'
+    expect(
+      comparePrimaryMetrics(
+        remote,
+        localReferencePrimaryMetrics(localDetail, true),
+        false,
+      ).deltas.score,
+    ).toBeNull()
+
+    const repeated = comparisonCandidate([
+      { scenario: 'alpha', seed: 7, score: 90, repetition: 0 },
+      { scenario: 'alpha', seed: 7, score: 95, repetition: 1 },
+    ])
+    expect(
+      comparePrimaryMetrics(
+        remote,
+        localReferencePrimaryMetrics(repeated, true),
+        false,
+      ).deltas.score,
+    ).toBeNull()
+  })
+
+  it('blocks shifted repetition slots and changed model cohorts before aggregating', () => {
+    const remoteReference = comparisonReference([
+      { scenario: 'alpha', seed: '7', score: 80, repetition: 0 },
+      { scenario: 'alpha', seed: '7', score: 90, repetition: 1 },
+    ])
+    const shifted = comparisonCandidate([
+      { scenario: 'alpha', seed: 7, score: 90, repetition: 1 },
+      { scenario: 'alpha', seed: 7, score: 95, repetition: 2 },
     ])
 
-    const filtered = filterReferenceComparison(remote, local)
+    expect(
+      comparePrimaryMetrics(
+        referencePrimaryMetrics(remoteReference),
+        localReferencePrimaryMetrics(shifted, true),
+        false,
+      ).deltas.score,
+    ).toBeNull()
 
-    expect(filtered.reference.runs.map((run) => run.scenarioId)).toEqual([
-      'scenario-0',
-    ])
-    expect(filtered.candidate.reports).toHaveLength(1)
-    expect(referenceSummary(filtered.reference).totals).toMatchObject({
-      expected_reports: 1,
-      received_reports: 1,
-      total_tokens: 30,
-    })
-    expect(comparisonSummary(filtered.candidate).totals).toMatchObject({
-      expected_reports: 1,
-      received_reports: 1,
-      total_tokens: 10,
-    })
+    const changedCohort = structuredClone(remoteReference)
+    const first = changedCohort.runs[0]
+    if (!first?.identity) throw new Error('fixture must contain run identity')
+    first.identity.subjectModel = 'other-model'
+    expect(
+      comparePrimaryMetrics(
+        referencePrimaryMetrics(changedCohort),
+        localReferencePrimaryMetrics(
+          comparisonCandidate([
+            { scenario: 'alpha', seed: 7, score: 90, repetition: 0 },
+            { scenario: 'alpha', seed: 7, score: 95, repetition: 1 },
+          ]),
+          true,
+        ),
+        false,
+      ).deltas.score,
+    ).toBeNull()
   })
 
-  it.each([
-    ['remote zero', 0, 80],
-    ['remote missing', null, 80],
-    ['local zero', 80, 0],
-    ['local missing', 80, null],
-  ])('removes a slot with %s from both sides', (_, remoteScore, localScore) => {
-    const filtered = filterReferenceComparison(
-      comparisonReference([
-        { scenario: 'alpha', seed: '7', score: remoteScore },
-      ]),
-      comparisonCandidate([{ scenario: 'alpha', seed: 7, score: localScore }]),
-    )
-    expect(filtered.reference.runs).toEqual([])
-    expect(filtered.candidate.reports).toEqual([])
-  })
-
-  it('removes the whole slot when any observation in it has no positive score', () => {
-    const filtered = filterReferenceComparison(
-      comparisonReference([
-        { scenario: 'alpha', seed: '7', score: 80 },
-        { scenario: 'alpha', seed: '7', score: 0 },
-      ]),
-      comparisonCandidate([{ scenario: 'alpha', seed: 7, score: 90 }]),
-    )
-    expect(filtered.reference.runs).toEqual([])
-    expect(filtered.candidate.reports).toEqual([])
-  })
-
-  it('matches repetitions and full-width seeds without comparing scenario versions', () => {
-    const seed = '18446744073709551615'
+  it('keeps every RC aggregate unavailable when the global planned scope is incomplete', () => {
     const remote = comparisonReference([
-      { scenario: 'alpha', seed, score: 70, repetition: 0 },
-      { scenario: 'alpha', seed, score: 75, repetition: 1 },
+      { scenario: 'alpha', seed: '7', score: 80, repetition: 0 },
     ])
-    const local = comparisonCandidate([
-      {
-        scenario: 'alpha',
-        seed,
-        score: 80,
-        repetition: 0,
-        caseId: 'alpha:v7:seed-ffffffffffffffff',
-      },
-      {
-        scenario: 'alpha',
-        seed,
-        score: 85,
-        repetition: 1,
-        caseId: 'alpha:v7:seed-ffffffffffffffff',
-      },
-    ])
+    remote.aggregate.planned_runs = 2
 
-    const filtered = filterReferenceComparison(remote, local)
+    const metrics = referencePrimaryMetrics(remote)
 
-    expect(filtered.reference.runs).toHaveLength(2)
-    expect(filtered.candidate.reports).toHaveLength(2)
-    expect(objectiveScore(filtered.reference)).toBe(72.5)
-    expect(objectiveScore(filtered.candidate)).toBe(82.5)
+    expect(metrics.tests[0]?.scopeKnown).toBe(false)
+    expect(metrics.metrics.score.value).toBeNull()
+    expect(metrics.metrics.totalTokens.value).toBeNull()
   })
 
-  it('removes slots missing on either side', () => {
-    const filtered = filterReferenceComparison(
-      comparisonReference([{ scenario: 'only-remote', seed: '1', score: 80 }]),
-      comparisonCandidate([{ scenario: 'only-local', seed: 1, score: 90 }]),
-    )
-    expect(filtered.reference.runs).toEqual([])
-    expect(filtered.candidate.reports).toEqual([])
-  })
-
-  it('clears legacy metrics when every slot is removed and leaves its inputs intact', () => {
+  it('rejects a globally complete count distributed into the wrong test slots', () => {
     const remote = comparisonReference([
-      { scenario: 'alpha', seed: '1', score: 0 },
+      { scenario: 'alpha', seed: '7', score: 80, repetition: 0 },
+      { scenario: 'alpha', seed: '7', score: 90, repetition: 1 },
     ])
-    const local = comparisonCandidate([
-      { scenario: 'alpha', seed: 1, score: 90 },
-    ])
-    const beforeRemote = structuredClone(remote)
-    const beforeLocal = structuredClone(local)
+    remote.materialized = { profile: { repetitions: 1 } }
 
-    const filtered = filterReferenceComparison(remote, local)
+    const metrics = referencePrimaryMetrics(remote)
 
-    expect(referenceSummary(filtered.reference).totals).toMatchObject({
-      expected_reports: 0,
-      received_reports: 0,
-      total_tokens: null,
-      wall_time_seconds: null,
-    })
-    expect(comparisonSummary(filtered.candidate)).toMatchObject({
-      scenario_metrics: [],
-      totals: {
-        expected_reports: 0,
-        received_reports: 0,
-        missing_reports: 0,
-        total_tokens: null,
-        wall_time_seconds: null,
-        total_cost_usd: null,
-        function_calls: null,
-        turns: null,
-      },
-    })
-    expect(remote).toEqual(beforeRemote)
-    expect(local).toEqual(beforeLocal)
+    expect(metrics.tests[0]?.scopeKnown).toBe(false)
+    expect(metrics.metrics.score.value).toBeNull()
   })
-})
 
-// Local totals use the same inclusive token and subject-only cost definitions as RC.
-it('compares cache and retry consumption without mixing judge cost or report medians', () => {
-  const retryMetrics = { complete: true, totals: { cache_write_tokens: 5 } }
-  const detail = {
-    id: 'local',
-    status: 'passed',
-    subjects: [],
-    totals: { total_tokens: 999, total_cost_usd: 9 },
-    reports: [
-      {
-        scenario_id: 'alpha',
-        report: {
-          scenarios: [
-            {
-              runs: [
-                {
-                  technical: 'valid',
-                  objective_score: 90,
-                  wall_time_ms: 2000,
-                  efficiency: {
-                    total_tokens: 100,
-                    function_calls: 3,
-                    root_turns: 2,
-                    child_turns: 1,
-                  },
-                  metrics: {
-                    complete: true,
-                    totals: { cache_read_tokens: 20 },
-                  },
-                  cost: { subject_usd: 0.2, total_usd: 0.7 },
-                  retry_attempts: [
-                    {
-                      metrics: retryMetrics,
-                    },
-                  ],
-                },
-              ],
-            },
-          ],
-        },
-      },
-    ],
-  } as unknown as DashboardExecutionDetail
-  expect(comparisonSummary(detail).totals).toMatchObject({
-    total_tokens: 125,
-    total_cost_usd: 0.2,
-    wall_time_seconds: 2,
-    turns: 3,
+  it('uses the shared symmetric zero and missing filter for RC/local rows', () => {
+    const remote = referencePrimaryMetrics(
+      comparisonReference([
+        { scenario: 'kept', seed: '1', score: 80 },
+        { scenario: 'zero', seed: '2', score: 70 },
+        { scenario: 'missing', seed: '3', score: null },
+      ]),
+    )
+    const local = localReferencePrimaryMetrics(
+      comparisonCandidate([
+        { scenario: 'kept', seed: 1, score: 90 },
+        { scenario: 'zero', seed: 2, score: 0 },
+        { scenario: 'missing', seed: 3, score: 90 },
+      ]),
+      true,
+    )
+
+    const filtered = comparePrimaryMetrics(remote, local, true)
+
+    expect(filtered).toMatchObject({ excluded: 2, totalTests: 3 })
+    expect(filtered.tests.map((test) => test.label)).toEqual(['kept'])
+    expect(filtered.baseline.metrics.totalTokens.value).toBe(30)
+    expect(filtered.candidate.metrics.totalTokens.value).toBe(10)
   })
-  expect(objectiveScore(detail)).toBe(90)
-  retryMetrics.complete = false
-  expect(comparisonSummary(detail).totals?.total_tokens).toBeNull()
 })
 
 it('retains zero observed coverage for an empty but materialized reference', () => {
@@ -473,7 +480,7 @@ it('groups RC repetitions by frozen case identity and uses true medians', () => 
 
   expect(observations).toHaveLength(5)
   expect(observations[0]).toMatchObject({
-    execution_id: 'rc:e-1',
+    execution_id: 'e-1',
     source: 'release-control',
     case_id: 'case-a',
     scenario_version: 2,
@@ -563,28 +570,6 @@ it('normalizes local objective, cache-inclusive tokens and subject cost once', (
   ])
 })
 
-it('explains an absent RC bridge and preserves structured RPC error messages', async () => {
-  const trigger = vi.fn().mockRejectedValue({
-    code: 'function_not_found',
-    message: 'Missing function',
-  })
-  installDashboardIiiClient({
-    browserId: 'test',
-    trigger,
-    on: () => () => {},
-    registerTrigger: () => () => {},
-  })
-  await expect(listReleaseControlExecutions()).rejects.toThrow('same Engine')
-  trigger.mockRejectedValue({
-    code: 'unauthorized',
-    message: 'Session expired',
-  })
-  await expect(getReleaseControlReference('rc:one')).rejects.toThrow(
-    'Session expired',
-  )
-  expect(trigger).toHaveBeenLastCalledWith(
-    'release-control::test-executions::reference',
-    { executionId: 'one' },
-    { namespace: 'default' },
-  )
+it('does not query Release Control directly for imported history', async () => {
+  await expect(getImportedReference('remote-execution-one')).rejects.toThrow('initialized')
 })

@@ -5,26 +5,21 @@
    repeats this statement so the order holds whichever file the bundler emits
    first. */
 @layer theme, base, legacy, ds, components, utilities;
-@import "@fontsource/inter/400.css";
-@import "@fontsource/inter/500.css";
-@import "@fontsource/inter/600.css";
-@import "@fontsource/chivo-mono/400.css";
-@import "@fontsource/chivo-mono/500.css";
-@import "@fontsource/chivo-mono/600.css";
-@import "tailwindcss";
+@import "tailwindcss" source(none);
 @import "./legacy.css" layer(legacy);
+@source "./";
+@source not inline("shadow");
 
 @theme inline {
   --color-canvas: var(--bg);
-  --color-panel: var(--surface);
-  --color-panel-raised: var(--surface-raised);
+
   --color-panel-soft: var(--surface-soft);
-  --color-panel-faint: rgba(var(--contrast-rgb), 0.012);
-  --color-panel-quiet: rgba(var(--contrast-rgb), 0.01);
-  --color-panel-subtle: rgba(var(--contrast-rgb), 0.018);
+  --color-panel-faint: color-mix(in srgb, var(--color-ink) 1.2%, transparent);
+  --color-panel-quiet: color-mix(in srgb, var(--color-ink) 1%, transparent);
+  --color-panel-subtle: color-mix(in srgb, var(--color-ink) 1.8%, transparent);
   --color-line: var(--line);
   --color-line-strong: var(--line-strong);
-  --color-ink: var(--text);
+
   --color-ink-soft: var(--text-soft);
   --color-ink-muted: var(--text-muted);
   --color-brand: var(--accent);
@@ -35,12 +30,17 @@
   --color-success: var(--success);
   --color-glass: var(--glass);
   --color-app-backdrop: var(--backdrop);
-  --font-mono:
-    "Chivo Mono", ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas,
-    monospace;
-  --shadow-panel: var(--shadow);
   /* Closed type scale (audit DS-04): label is the smallest size the
      dashboard renders; utilities below it are debt the ratchet counts. */
   --text-label: 0.6875rem;
   --text-label--line-height: 1rem;
+}
+
+/* Utilities reference the Console variables without redeclaring their values. */
+@theme reference {
+  --color-panel: var(--color-panel);
+  --color-panel-raised: var(--color-panel-raised);
+  --color-ink: var(--color-ink);
+  --font-sans: var(--font-sans);
+  --font-mono: var(--font-mono);
 }

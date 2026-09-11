@@ -1,6 +1,4 @@
-/* The Console owns all color and font tokens. Standalone mode supplies the
-   same semantic names from dashboard-shell.css, so injected styles never
-   repaint the host with a private palette. */
+/* Color and font values are supplied by the Console host. */
 .harness-e2e-shell {
   --ds-text-label: 0.6875rem;
   --ds-text-xs: 0.75rem;
@@ -33,9 +31,6 @@
   --ds-radius-md: 6px;
   --ds-radius-lg: 6px;
   --ds-radius-pill: 999px;
-  --shadow-panel: none;
-  --shadow-focus: 0 0 0 3px
-    color-mix(in srgb, var(--color-accent) 22%, transparent);
 
   --ds-duration-instant: 100ms;
   --ds-duration-fast: 160ms;
@@ -61,7 +56,6 @@
 .ds-root :where(button, a, input, select, textarea, summary):focus-visible {
   outline: 2px solid var(--color-rule-focus);
   outline-offset: 3px;
-  box-shadow: var(--shadow-focus);
 }
 
 .ds-display {

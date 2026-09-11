@@ -859,7 +859,7 @@ fn stack_identity(system: Option<&crate::identity::SystemUnderTestIdentity>) -> 
     }
 }
 
-pub(super) fn validate_execution_id(value: &str) -> std::result::Result<(), String> {
+pub(crate) fn validate_execution_id(value: &str) -> std::result::Result<(), String> {
     let local_id = value.starts_with("local-")
         && value.len() <= 80
         && value
@@ -870,7 +870,10 @@ pub(super) fn validate_execution_id(value: &str) -> std::result::Result<(), Stri
         && native_or_plan_id
             .bytes()
             .all(|byte| byte.is_ascii_hexdigit());
-    if local_id || control_plane_id {
+    let imported_id = value
+        .strip_prefix("remote-execution-")
+        .is_some_and(|id| id.len() == 64 && id.bytes().all(|byte| byte.is_ascii_hexdigit()));
+    if local_id || control_plane_id || imported_id {
         Ok(())
     } else {
         Err("invalid execution id".into())

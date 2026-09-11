@@ -1,0 +1,382 @@
+{
+  "date": "2026-09-11",
+  "stage": 5,
+  "status": "validated_locally",
+  "head": "801e7e62e7b509885b133dc50c4cc4777816eb14",
+  "source_branch": "feat/console-metrics-ui",
+  "implementation_branch": "feat/e2e-console-cut",
+  "runtime": {
+    "host": "actual Console SPA served by existing :3113",
+    "transport": "temporary fixture RPC backend and preview :39237",
+    "models_executed": false,
+    "user_runtime_restarted": false,
+    "live_migration_or_deployment": false
+  },
+  "checks": {
+    "rust_all_targets": {
+      "passed": 709,
+      "ignored": 1
+    },
+    "rust_fmt": "passed",
+    "rust_clippy_all_targets_deny_warnings": "passed",
+    "typescript": "passed",
+    "console_build": "passed",
+    "vitest": {
+      "files": 44,
+      "passed": 261
+    },
+    "navigation_after_final_link_fix": {
+      "files": 3,
+      "passed": 26
+    },
+    "biome": {
+      "result": "passed",
+      "warnings": [
+        "existing non-null assertion in scenario-chat.test.tsx fixture"
+      ]
+    },
+    "publisher_python": {
+      "passed": 7
+    },
+    "css_contracts": {
+      "passed": 9
+    },
+    "functional_console_host_flows": [
+      "plan create, evaluator, keyboard search, save, run, duplicate, busy draft, cancel, incompatible, narrow",
+      "RC import, rerun, cancel, metric views, missing deltas, filter, disconnect, no remote writes"
+    ]
+  },
+  "real_console_plan_execution": {
+    "checks": [
+      {
+        "name": "console_extension_full_width",
+        "result": 1320
+      },
+      {
+        "name": "grouped_partial_zero_missing",
+        "result": true
+      },
+      {
+        "name": "keyboard_tabs_and_panel_linkage",
+        "result": true
+      },
+      {
+        "name": "symmetric_filter_4_to_2",
+        "result": true
+      },
+      {
+        "name": "metric_groups_keep_filter",
+        "result": true
+      },
+      {
+        "name": "filtered_equal_weight_means_and_delta",
+        "result": {
+          "a": 86,
+          "b": 93,
+          "delta": 7
+        }
+      },
+      {
+        "name": "current_and_retry_menu",
+        "result": true
+      },
+      {
+        "name": "transcript_menu_keyboard",
+        "result": true
+      },
+      {
+        "name": "focus_after_current_dialog",
+        "result": {
+          "tag": "BUTTON",
+          "label": "Transcript A · 2 for Minimal Path",
+          "text": "Transcript A · 2"
+        }
+      },
+      {
+        "name": "dialog_preserves_comparison_view_and_filter",
+        "result": true
+      },
+      {
+        "name": "retry_transcript",
+        "result": true
+      },
+      {
+        "name": "candidate_transcript_identity",
+        "result": true
+      },
+      {
+        "name": "width_720",
+        "result": {
+          "width": 656,
+          "client": 656,
+          "scroll": 656,
+          "viewport": 720,
+          "document": 720
+        }
+      },
+      {
+        "name": "width_600",
+        "result": {
+          "width": 570,
+          "client": 570,
+          "scroll": 570,
+          "viewport": 600,
+          "document": 600
+        }
+      },
+      {
+        "name": "width_390",
+        "result": {
+          "width": 360,
+          "client": 360,
+          "scroll": 360,
+          "viewport": 390,
+          "document": 390
+        }
+      },
+      {
+        "name": "execution_only_selection",
+        "result": true
+      },
+      {
+        "name": "execution_breadcrumb",
+        "result": "plans\nPlan\nFixture A"
+      },
+      {
+        "name": "no_personal_chat_invocations",
+        "result": []
+      },
+      {
+        "name": "page_errors",
+        "result": []
+      }
+    ],
+    "errors": [],
+    "functions": [
+      "engine::workers::register",
+      "engine::traces::list",
+      "configuration::get",
+      "engine::functions::list",
+      "engine::workers::list",
+      "directory::agents::list",
+      "harness::triggers::list",
+      "harness::projects::list",
+      "console::ui-manifest",
+      "session::list",
+      "session::get",
+      "e2e::dashboard::plan-get",
+      "e2e::dashboard::executions-list",
+      "e2e::dashboard::execution-get",
+      "configuration::set"
+    ]
+  },
+  "real_console_screens": {
+    "checks": [
+      {
+        "name": "executions actions and ledger",
+        "text": "harness e2e\nExecutions\nskip to content\ntests\nexecutions\nplans\nnew plan\nrun tests\n\nRECENT ACTIVITY AND RETAINED EVIDENCE\n\nexecutions\n\nloading the ledger…\n\nnewest first\noldest first\nresult\nlongest runtime\nmost tokens\nResult\nall\n0\nshowing 0 of 0 loaded\nLoading executions"
+      },
+      {
+        "name": "search icon clearance",
+        "padding": 36
+      },
+      {
+        "name": "native select keyboard",
+        "passed": true
+      },
+      {
+        "name": "Console plan tabs keyboard",
+        "passed": true
+      },
+      {
+        "name": "empty templates to editable new plan",
+        "passed": true
+      },
+      {
+        "name": "tests",
+        "text": "harness e2e\nTests\nskip to content\ntests\nexecutions\nplans\nnew test\nnew plan\ncompare versions\ntests\n\n2 catalog rows total · 2 loaded from catalog · 2 available in this view\n\ncatalog\nage5-fixture\nSort tests\nsort: lifecycle, name\nsort: name\nsort: most runs\nsort: last seen\nsort: complexity\nLifecycle\nall\n2\nactive\n0\nnever run\n2\nEvidence\nwith executions\n2 available in this view · 2 of 2 catalog rows loaded\nNEVER RUN · 2\nnever run tests, 2\nTEST\tVERSION\tCOMPLEXITY\tREALISM\tEVIDENCE\tRUNS\tLAST EXECUTION\t\nHISTORY\n\n\nfixture_local_definition\n\tv1\t—\t—\t\nno samples\n\t0\t\nNo retained execution\n\thistory\n\n\nfixture_never_run\n\tv1\t—\t—\t\nno samples\n\t0\t\nNo retained execution\n\thistory"
+      },
+      {
+        "name": "compare",
+        "text": "harness e2e\ncompare\nskip to content\ntests\nexecutions\nplans\nshare link\nnew run on b\ntests\ncompare\n\nRETAINED COHORTS · PER-TEST RUN MEDIANS\n\ncompare system versions\n\ntwo system versions, same model and judge\n\ncatalog age5-fixture\nCOHORT · WHO WAS JUDGED BY WHOM\nEvaluation cohort\nno evaluated cohort yet\nsystem version = the workers under test · cohort = which model ran with which Markdown judge · 0 of 0 cohorts have ≥ 2 versions\nA · BASELINE\nwaiting for history\nchoose a version\nB · CANDIDATE\nno retained version\nchoose a version\n\nDeltas only between runs of the same model, judge and test contract.\n\nComparison state\nwith evidence\n0\none side\n0\nall\n2\n0 of 2 tests · 0 comparable · 0 regressed · 0 improved · 0 on one side · 2 without evidence\nno evidence in this cohort for these two versions\n\nPick another pair of versions, or run tests on both sides.\n\nrun tests"
+      },
+      {
+        "name": "tests/fixture_never_run",
+        "text": "harness e2e\nfixture_never_run\nskip to content\ntests\nexecutions\nplans\ncompare systems\nrun this test\ntests\nfixture_never_run\nfixture_never_run\n\ncontract v1 · 0 executions retained\n\nnever run\nprev\nnext\nreference: release control\nno retained executions yet\n\nThis test has never run on this dashboard. Run it once to start the metric history, or add it to a plan to capture a baseline you can compare against later.\n\nrun this test\nadd to a new plan"
+      },
+      {
+        "name": "plans/new",
+        "text": "harness e2e\nnew plan\nskip to content\ntests\nexecutions\nplans\nplans\nnew plan\nnew plan\n\nSave a focused scope, capture its baseline, then run the same tests after your change to measure the difference.\n\nquick execution instead\nStart from a template\nBlank plan\nTemplates fill the initial scope and policy. Edit them and select the execution model before saving; some tests also require a judge.\ncatalog ready · 1 model · 2 tests\nName the plan\n\nThe label identifies this baseline and candidate workflow in the plans list.\n\nPlan label\nrequired\nPurpose\noptional\nChoose the model and judge\n\nThe execution model and any required judge are saved with the result.\n\nExecution model\nrequired\nChoose a model\nJudge model\nnot used\nNo judge for these tests\n\nThe selected tests do not use a judge\n\nAdvanced · sampling, retries and seed\n1 per test · 0 retries · canonical seed · ws://fixture\nPick the tests\n\nChoose the smallest useful set. The scope freezes when the baseline starts.\n\nselect visible (2)\nclear\nTest filters\nall\n2\nselected\n0\n2 of 2 shown · 0 selected · 0 runs in total\nFIXTURE · 2\nselect group\nfixture_never_run\nfixture_local_definition\n0 tests · 0 runs · no model · no judge\n1 run per test · 0 retries · canonical seed · ws://fixture\n\nCreates a plan. Its configuration stays editable after the baseline starts.\n\ncancel\nsave plan\nsave and run"
+      },
+      {
+        "name": "executions 720",
+        "box": {
+          "x": 17,
+          "y": 101,
+          "width": 686,
+          "height": 792
+        },
+        "overflow": {
+          "scroll": 686,
+          "width": 686
+        }
+      },
+      {
+        "name": "plans 720",
+        "box": {
+          "x": 17,
+          "y": 101,
+          "width": 686,
+          "height": 792
+        },
+        "overflow": {
+          "scroll": 686,
+          "width": 686
+        }
+      },
+      {
+        "name": "tests 720",
+        "box": {
+          "x": 17,
+          "y": 101,
+          "width": 686,
+          "height": 792
+        },
+        "overflow": {
+          "scroll": 686,
+          "width": 686
+        }
+      },
+      {
+        "name": "executions 390",
+        "box": {
+          "x": 0,
+          "y": 121,
+          "width": 390,
+          "height": 778
+        },
+        "overflow": {
+          "scroll": 390,
+          "width": 390
+        }
+      },
+      {
+        "name": "plans 390",
+        "box": {
+          "x": 0,
+          "y": 121,
+          "width": 390,
+          "height": 778
+        },
+        "overflow": {
+          "scroll": 390,
+          "width": 390
+        }
+      },
+      {
+        "name": "tests 390",
+        "box": {
+          "x": 0,
+          "y": 121,
+          "width": 390,
+          "height": 778
+        },
+        "overflow": {
+          "scroll": 390,
+          "width": 390
+        }
+      }
+    ],
+    "errors": []
+  },
+  "theme": [
+    {
+      "theme": "light",
+      "contrasts": {
+        "--text": 15.81444418925148,
+        "--text-muted": 4.767372438565024,
+        "--success": 4.802945964070883,
+        "--warning": 5.225374882257092,
+        "--danger": 4.590835753142959
+      },
+      "inherited": {
+        "--color-panel": {
+          "host": "lab(98.26% 0 0)",
+          "shell": "lab(98.26% 0 0)"
+        },
+        "--color-panel-raised": {
+          "host": "#f7f5f2",
+          "shell": "#f7f5f2"
+        },
+        "--color-ink": {
+          "host": "#0a0a0a",
+          "shell": "#0a0a0a"
+        },
+        "--font-sans": {
+          "host": "\"Inter\", ui-sans-serif, system-ui, sans-serif, \"Apple Color Emoji\", \"Segoe UI Emoji\", \"Segoe UI Symbol\", \"Noto Color Emoji\"",
+          "shell": "\"Inter\", ui-sans-serif, system-ui, sans-serif, \"Apple Color Emoji\", \"Segoe UI Emoji\", \"Segoe UI Symbol\", \"Noto Color Emoji\""
+        },
+        "--font-mono": {
+          "host": "\"Geist Mono\", \"Chivo Mono\", ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, \"Liberation Mono\", \"Courier New\", monospace",
+          "shell": "\"Geist Mono\", \"Chivo Mono\", ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, \"Liberation Mono\", \"Courier New\", monospace"
+        }
+      },
+      "font": "Inter, ui-sans-serif, system-ui, sans-serif, \"Apple Color Emoji\", \"Segoe UI Emoji\", \"Segoe UI Symbol\", \"Noto Color Emoji\""
+    },
+    {
+      "theme": "dark",
+      "contrasts": {
+        "--text": 13.004247968964151,
+        "--text-muted": 6.553469229430506,
+        "--success": 7.183176991717024,
+        "--warning": 8.76350114258667,
+        "--danger": 5.641550509325996
+      },
+      "inherited": {
+        "--color-panel": {
+          "host": "#111",
+          "shell": "#111"
+        },
+        "--color-panel-raised": {
+          "host": "#171717",
+          "shell": "#171717"
+        },
+        "--color-ink": {
+          "host": "#ededed",
+          "shell": "#ededed"
+        },
+        "--font-sans": {
+          "host": "\"Inter\", ui-sans-serif, system-ui, sans-serif, \"Apple Color Emoji\", \"Segoe UI Emoji\", \"Segoe UI Symbol\", \"Noto Color Emoji\"",
+          "shell": "\"Inter\", ui-sans-serif, system-ui, sans-serif, \"Apple Color Emoji\", \"Segoe UI Emoji\", \"Segoe UI Symbol\", \"Noto Color Emoji\""
+        },
+        "--font-mono": {
+          "host": "\"Geist Mono\", \"Chivo Mono\", ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, \"Liberation Mono\", \"Courier New\", monospace",
+          "shell": "\"Geist Mono\", \"Chivo Mono\", ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, \"Liberation Mono\", \"Courier New\", monospace"
+        }
+      },
+      "font": "Inter, ui-sans-serif, system-ui, sans-serif, \"Apple Color Emoji\", \"Segoe UI Emoji\", \"Segoe UI Symbol\", \"Noto Color Emoji\""
+    }
+  ],
+  "review": {
+    "result": "no remaining actionable findings",
+    "scope": "stage 5 delta; RC identity/coverage, Console transport payloads, standalone Rust removal",
+    "method": "independent static review, plus separate browser inspection"
+  },
+  "limitations": [
+    "UI values are fixtures, not benchmark results",
+    "RC positive matched deltas validated in unit tests; browser checks running/unavailable comparison and control flow",
+    "runtime acceptance with user Engine connected remains pending",
+    "session isolation activation requires coordinated migration and deployment",
+    "selection/filter not serialized in shareable comparison URL"
+  ],
+  "captures_sha256": {
+    "comparison-grouped-light.png": "8050a1f493f81f33e585b984789d3124e0676bf92cde3cf917f0ca5ce1d84e2c",
+    "comparison-by-test-dark.png": "ec89df4c8e9bd501293b87a0e09c316531fba8dbe01c550bc842cef8cc1c3259",
+    "transcript-current.png": "77de77ff9933479d794e79288f2ffc4c648b2a7b15907bcee1f543413c142537",
+    "executions-desktop.png": "e6f3002efa704a2def03af783eed73264a229cea91bc951aa0c774f1af2abce0",
+    "plans-desktop.png": "51522ba6d68ed06780b721a502572a7f96e078c69692d74120848c114b9d64d2",
+    "tests-desktop.png": "69e1fba1af7a93728fcf093516c22db6c3a1278f808672bc970ed3ba1aa70663",
+    "tests-390.png": "28e67ac5cb49487d1a0a5d44985fdd397822c08b65348321d27e4d981762fb98",
+    "new-plan-desktop.png": "b4680fe7625c586a71eb8c5f55f3bab6acd3a61e15be5d7a810669255edd8442"
+  }
+}

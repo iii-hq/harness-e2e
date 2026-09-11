@@ -6,12 +6,6 @@ import {
   sectionForRoute,
 } from '@/components/DashboardShell'
 
-// The shell reads the standalone theme from `document`; the embedded shell
-// under test receives its theme as a prop, so the hook can be inert here.
-vi.mock('@/hooks/useTheme', () => ({
-  useTheme: () => ['light', () => {}],
-}))
-
 // Container width is measured with ResizeObserver at runtime; the tests
 // choose the narrow state directly.
 const layout = vi.hoisted(() => ({ narrow: false }))
@@ -23,8 +17,7 @@ function renderShell({ narrow = false } = {}) {
   layout.narrow = narrow
   return renderToStaticMarkup(
     <DashboardShell
-      route={{ page: 'overview', view: 'overview' }}
-      embedded={true}
+      route={{ page: 'workspace', view: 'executions' }}
       tabId="test"
       theme="light"
     >
@@ -62,8 +55,10 @@ describe('section navigation', () => {
     const html = renderShell()
     expect(html).toContain('<nav class="harness-e2e-navigation')
     expect(html).toContain('aria-label="Harness E2E sections"')
-    expect(html).toContain('href="#/overview" aria-current="page"')
-    expect(html).toContain('href="#/tests"')
+    expect(html).toContain(
+      'href="#/ext/harness-e2e/executions" aria-current="page"',
+    )
+    expect(html).toContain('href="#/ext/harness-e2e/tests"')
     expect(html).not.toContain('role="tab"')
     expect(html).toContain('class="skip-link" href="#harness-e2e-main"')
     expect(html).toContain('id="harness-e2e-main" tabindex="-1"')
@@ -85,7 +80,7 @@ describe('section navigation', () => {
 
   it('keeps every section reachable from the narrow select', () => {
     const html = renderShell({ narrow: true })
-    for (const label of ['Overview', 'Tests', 'Executions', 'Plans']) {
+    for (const label of ['Tests', 'Executions', 'Plans']) {
       expect(html).toContain(`>${label}<`)
     }
   })

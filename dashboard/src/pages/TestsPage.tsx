@@ -591,7 +591,6 @@ function CompareRow({
   row,
   aLabel,
   bLabel,
-  local,
   expanded,
   loading,
   error,
@@ -602,7 +601,6 @@ function CompareRow({
   row: TestCatalogRow
   aLabel: string
   bLabel: string
-  local: boolean
   expanded: boolean
   loading: boolean
   error?: string
@@ -694,7 +692,7 @@ function CompareRow({
         ) : null}
         <td data-label="Actions" className="text-right">
           <span className="inline-flex flex-wrap items-center justify-end gap-1">
-            {state === 'one_side' && local ? (
+            {state === 'one_side' ? (
               <a
                 className={buttonClassName({
                   variant: 'quiet',
@@ -825,7 +823,6 @@ export function TestsPage({
   const [filter, setFilter] = useState<CompareFilter>('evidence')
   const [showHidden, setShowHidden] = useState(false)
   const [loading, setLoading] = useState(true)
-  const [local, setLocal] = useState(false)
   const [error, setError] = useState<Error | null>(null)
   const [rowLoading, setRowLoading] = useState<Set<string>>(new Set())
   const [rowErrors, setRowErrors] = useState<Record<string, string>>({})
@@ -914,7 +911,6 @@ export function TestsPage({
     try {
       const bridge = await getDashboardDataBridge()
       bridgeRef.current = bridge
-      setLocal(bridge.mode === 'local')
       const data = await bridge.listEvaluatedVersions()
       if (evaluatedRevision.current !== data.revision) {
         evaluatedRevision.current = data.revision
@@ -1343,23 +1339,22 @@ export function TestsPage({
               <Link2 size={13} aria-hidden="true" />
               {copied ? 'link copied' : 'share link'}
             </button>
-            {local ? (
-              <a
-                className={dashboardHeaderActionClassName({ primary: true })}
-                href={hashForWorkspace()}
-                onClick={() => requestQuickExecution()}
-              >
-                new run on b
-              </a>
-            ) : null}
+            <a
+              className={dashboardHeaderActionClassName({ primary: true })}
+              href={hashForWorkspace()}
+              onClick={() => requestQuickExecution()}
+            >
+              new run on b
+            </a>
           </>
         }
       />
 
       <div className="ds-root page-shell w-[calc(100%_-_1.5rem)] max-w-[1420px] pt-5 pb-16 md:w-[calc(100%_-_3rem)]">
         <PageHeader
-          title="compare"
+          title="Compare system versions"
           summary={headline}
+          context="Retained cohorts · per-test run medians"
           headingId="compare-title"
           breadcrumb={[
             { label: 'tests', href: hashForTests() },
@@ -1552,7 +1547,7 @@ export function TestsPage({
               <span className="flex flex-wrap gap-2">
                 {/* Running the missing side is what makes this page work, so
                     it is the action, not an instruction to go and do it. */}
-                {local && onlyOnA.length > 0 ? (
+                {onlyOnA.length > 0 ? (
                   <a
                     className={buttonClassName({
                       variant: 'secondary',
@@ -1566,7 +1561,7 @@ export function TestsPage({
                     {onlyOnA.length === 1 ? '' : 's'} on b
                   </a>
                 ) : null}
-                {local && onlyOnB.length > 0 ? (
+                {onlyOnB.length > 0 ? (
                   <a
                     className={buttonClassName({
                       variant: 'secondary',
@@ -1703,7 +1698,7 @@ export function TestsPage({
                 aria-hidden="true"
               />
               <Input
-                className="pr-9 pl-9"
+                style={{ paddingInline: '2.25rem' }}
                 type="text"
                 value={query}
                 placeholder="Search test id"
@@ -1772,7 +1767,7 @@ export function TestsPage({
                 >
                   clear filters
                 </button>
-              ) : local ? (
+              ) : (
                 <a
                   className={buttonClassName({
                     variant: 'primary',
@@ -1783,7 +1778,7 @@ export function TestsPage({
                 >
                   run tests
                 </a>
-              ) : null
+              )
             }
           />
         ) : (
@@ -1858,7 +1853,6 @@ export function TestsPage({
                         row={row}
                         aLabel={aLabel}
                         bLabel={bLabel}
-                        local={local}
                         expanded={expanded.has(row.test_id)}
                         loading={rowLoading.has(row.test_id)}
                         error={rowErrors[row.test_id]}

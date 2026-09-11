@@ -6,6 +6,7 @@ import {
   CATALOG_DEFAULT_FILTERS,
   catalogCalibrationPresentation,
   catalogComplexityPresentation,
+  catalogCountLabels,
   catalogFiltersActive,
   catalogFiltersFromParams,
   catalogFiltersToParams,
@@ -65,6 +66,20 @@ function localScenario(
 }
 
 describe('test catalog L5 dimensions', () => {
+  it('keeps catalog total, loaded rows, local definitions and filters distinct', () => {
+    expect(catalogCountLabels(62, 50, 52, 12, 2, true)).toEqual({
+      summary:
+        '62 catalog rows total · 50 loaded from catalog · 52 available in this view · 2 local definitions',
+      visible: '12 of 52 available in this view',
+      catalogProgress: '50 of 62 catalog rows loaded',
+    })
+    expect(catalogCountLabels(null, 0, 2, 2, 2, false)).toEqual({
+      summary: '2 available in this view · 2 local definitions',
+      visible: '2 available in this view',
+      catalogProgress: null,
+    })
+  })
+
   it('places local test creation in the actual Tests catalog actions', () => {
     const html = renderToStaticMarkup(
       <TestsCatalogActions local localReady onNewTest={() => undefined} />,

@@ -25,15 +25,17 @@ describe('executable plan journey', () => {
     ).toEqual({})
   })
   it('routes templates and duplication, and rejects the old manual URL', () => {
-    expect(routeFromHash('#/plans/new/profile/smoke')).toEqual({
+    expect(routeFromHash('#/ext/harness-e2e/plans/new/profile/smoke')).toEqual({
       page: 'plan-create',
       profileId: 'smoke',
     })
-    expect(routeFromHash('#/plans/new/duplicate/profile-example')).toEqual({
+    expect(
+      routeFromHash('#/ext/harness-e2e/plans/new/duplicate/profile-example'),
+    ).toEqual({
       page: 'plan-create',
       duplicateId: 'profile-example',
     })
-    expect(routeFromHash('#/plans/new/manual')).toBeNull()
+    expect(routeFromHash('#/ext/harness-e2e/plans/new/manual')).toBeNull()
   })
   it('uses every planned slot as progress denominator and separates result axes', () => {
     const execution = {
@@ -98,7 +100,7 @@ describe('executable plan journey', () => {
       />,
     )
     expect(html).toContain('Your saved draft is preserved.')
-    expect(html).toContain('#/plans/profile-active')
+    expect(html).toContain('#/ext/harness-e2e/plans/profile-active')
     expect(html).toContain('Pending')
   })
 })

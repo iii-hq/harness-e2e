@@ -1,5 +1,5 @@
 import { PageBody, PageHeader, PageMain, PageShell } from '@iii-dev/console-ui'
-import { FlaskConical, LayoutGrid, ListChecks, Route } from 'lucide-react'
+import { FlaskConical, ListChecks, Route } from 'lucide-react'
 import {
   createContext,
   type ReactNode,
@@ -8,7 +8,6 @@ import {
   useEffect,
   useState,
 } from 'react'
-import { ThemeToggle } from '@/components/ThemeToggle'
 import { useContainerNarrow } from '@/hooks/use-container-narrow'
 import {
   type DashboardRoute,
@@ -17,10 +16,9 @@ import {
   routeRenderIdentity,
   type WorkspaceView,
 } from '@/hooks/use-hash-route'
-import { useTheme } from '@/hooks/useTheme'
 import './dashboard-shell.css'
 
-export type DashboardSection = 'overview' | 'tests' | 'executions' | 'plans'
+export type DashboardSection = 'tests' | 'executions' | 'plans'
 
 export type DashboardHeaderState = {
   key: string
@@ -33,7 +31,6 @@ export type DashboardHeaderState = {
 export const MAIN_ID = 'harness-e2e-main'
 
 export type DashboardChromeContextValue = {
-  embedded: boolean
   tabId: string
   panelSide?: 'left' | 'right'
   narrow: boolean
@@ -59,18 +56,18 @@ export function sectionForRoute(route: DashboardRoute): DashboardSection {
   }
   if (
     route.page === 'execution' ||
-    (route.page === 'overview' && route.view === 'executions')
+    (route.page === 'workspace' && route.view === 'executions')
   ) {
     return 'executions'
   }
   if (
     route.page === 'compare' ||
     route.page === 'test-history' ||
-    (route.page === 'overview' && route.view === 'tests')
+    (route.page === 'workspace' && route.view === 'tests')
   ) {
     return 'tests'
   }
-  return 'overview'
+  return 'executions'
 }
 
 function hashForSection(section: DashboardSection): string {
@@ -79,21 +76,18 @@ function hashForSection(section: DashboardSection): string {
 }
 
 const sectionIcons: Record<DashboardSection, ReactNode> = {
-  overview: <LayoutGrid size={15} aria-hidden="true" />,
   tests: <FlaskConical size={15} aria-hidden="true" />,
   executions: <ListChecks size={15} aria-hidden="true" />,
   plans: <Route size={15} aria-hidden="true" />,
 }
 
 const navigation: Array<{ value: DashboardSection; label: string }> = [
-  { value: 'overview', label: 'Overview' },
   { value: 'tests', label: 'Tests' },
   { value: 'executions', label: 'Executions' },
   { value: 'plans', label: 'Plans' },
 ]
 
 const sectionLabels: Record<DashboardSection, string> = {
-  overview: 'Overview',
   tests: 'Tests',
   executions: 'Executions',
   plans: 'Plans',
@@ -136,7 +130,6 @@ export function PageActionsBar({ actions, label }: PageActionsBarProps) {
 export type DashboardShellProps = {
   children: ReactNode
   route: DashboardRoute
-  embedded: boolean
   tabId?: string
   panelSide?: 'left' | 'right'
   theme?: 'light' | 'dark'
@@ -146,16 +139,11 @@ export type DashboardShellProps = {
 export function DashboardShell({
   children,
   route,
-  embedded,
-  tabId = 'standalone',
+  tabId = 'harness-e2e',
   panelSide,
-  theme: embeddedTheme,
+  theme,
   onRequestClose,
 }: DashboardShellProps) {
-  const [standaloneTheme, setStandaloneTheme] = useTheme({
-    syncDocument: !embedded,
-  })
-  const theme = embeddedTheme ?? standaloneTheme
   const [mainRef, narrow] = useContainerNarrow(720)
   const [header, setHeaderState] = useState<DashboardHeaderState>({ key: '' })
   const setHeader = useCallback((next: DashboardHeaderState) => {
@@ -165,7 +153,6 @@ export function DashboardShell({
   const section = sectionForRoute(route)
   const sectionLabel = sectionLabels[section]
   const contextValue: DashboardChromeContextValue = {
-    embedded,
     tabId,
     panelSide,
     narrow,
@@ -177,15 +164,11 @@ export function DashboardShell({
     window.location.hash = hashForSection(next)
   }
 
-  // Audit S-07: a route change starts at the top, unless the route names an
-  // anchor the page scrolls to itself. Both scrollers are reset because the
-  // console scrolls its main pane and the standalone app scrolls the window.
   const routeIdentity = routeRenderIdentity(route)
   const routeAnchor = route.page === 'execution' ? route.anchor : null
   // biome-ignore lint/correctness/useExhaustiveDependencies: the route identity is the trigger, not a value the effect reads
   useEffect(() => {
     if (routeAnchor) return
-    window.scrollTo(0, 0)
     document.getElementById(MAIN_ID)?.scrollTo(0, 0)
   }, [routeIdentity, routeAnchor])
 
@@ -193,23 +176,14 @@ export function DashboardShell({
     <DashboardChromeContext.Provider value={contextValue}>
       <PageShell
         className="harness-e2e-shell"
-        data-mode={embedded ? 'embedded' : 'standalone'}
         data-theme={theme}
         data-narrow={narrow ? 'true' : 'false'}
       >
         <PageHeader
           icon={<HarnessE2eIcon />}
           title="harness e2e"
-          description={header.context ?? sectionLabel ?? 'Overview'}
-          actions={
-            !embedded ? (
-              <ThemeToggle
-                theme={standaloneTheme}
-                onChange={setStandaloneTheme}
-              />
-            ) : undefined
-          }
-          onClose={embedded ? onRequestClose : undefined}
+          description={header.context ?? sectionLabel}
+          onClose={onRequestClose}
         />
         <PageBody side={panelSide}>
           {/* The console owns the hash router, so the skip link moves focus
@@ -224,9 +198,6 @@ export function DashboardShell({
           >
             Skip to content
           </a>
-          {/* No overflow on the standalone main: the document scrolls, and an
-              overflow: auto here without a fixed height would make every
-              sticky element (section nav, sheet footers) stick to nothing. */}
           <PageMain
             id={MAIN_ID}
             tabIndex={-1}
@@ -264,9 +235,8 @@ export function DashboardShell({
                 </ul>
                 {/* Visibility of the wide links and the narrow select lives in
                     dashboard-shell.css, keyed on data-narrow: a Tailwind
-                    `hidden` here would win over that CSS (Tailwind is
-                    imported with `important`; audit S-01). */}
-                <div className="harness-e2e-navigation-narrow min-w-0 flex-1">
+                    `hidden` here would win over that CSS (audit S-01). */}
+                <div className="harness-e2e-navigation-narrow min-w-32 flex-1">
                   <select
                     className="harness-e2e-nav-select min-h-9 w-full rounded-[6px] border-0 bg-panel-soft px-2.5 font-mono text-[12px] font-medium lowercase leading-none text-ink"
                     value={section}

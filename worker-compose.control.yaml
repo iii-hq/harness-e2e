@@ -1,0 +1,18 @@
+namespace: harness-e2e-control
+
+containers:
+  database:
+    worker: path://../workers/database
+    config_name: harness-e2e-control-database
+    config_override:
+      history_max_entries: 0
+      history_max_bytes: 0
+      databases:
+        harness_e2e:
+          url: "sqlite:/home/layon/.iii/data/harness-e2e-control-plane/harness-e2e.sqlite"
+          pool:
+            max: 1
+            idle_timeout_ms: 30000
+            acquire_timeout_ms: 5000
+    scripts:
+      run: cargo run --locked --bin database -- --config "$III_CONFIG"

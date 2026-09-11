@@ -1,4 +1,5 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { Tabs, TabsList, TabsTrigger } from '@iii-dev/console-ui'
+import { useCallback, useEffect, useId, useMemo, useState } from 'react'
 import {
   DashboardPageActions,
   dashboardHeaderActionClassName,
@@ -9,6 +10,7 @@ import {
   Callout,
   DataTable,
   DataTableRow,
+  Dialog,
   DeltaValue,
   EmptyState,
   FilterChip,
@@ -19,19 +21,18 @@ import {
   PageHeader,
   StatusBadge,
 } from '@/design-system'
+import { hashForNewPlan, hashForPlan } from '@/hooks/use-hash-route'
 import {
-  hashForNewPlan,
-  hashForPlan,
-  hashForWorkspace,
-} from '@/hooks/use-hash-route'
-import {
-  type DashboardDataBridge,
   type DashboardExecutionSummary,
   getDashboardDataBridge,
   type LocalPlan,
   type MasterTestPlan,
 } from '@/lib/dashboard-data-source'
-import { buildExecutionPresentation, formatDate } from '@/lib/execution-view'
+import {
+  buildExecutionPresentation,
+  formatDate,
+  statusCopy,
+} from '@/lib/execution-view'
 import {
   buildPlanComparison,
   formatPlanMetricValue,
@@ -40,8 +41,7 @@ import {
   type PlanMetricComparison,
   type PlanMetricId,
 } from '@/lib/plan-comparison'
-import { listReleaseControlExecutions } from '@/lib/release-control-reference'
-import { statusCopy } from '@/pages/OverviewPage'
+import { discoverReleaseControlHistory, exportReleaseControlHistory, type RcHistoryPlan } from '@/lib/release-control-reference'
 
 type PlanFilter = 'all' | 'needs_action' | 'running' | 'compared'
 
@@ -50,7 +50,7 @@ type ReleaseControlPlan = {
   executions: DashboardExecutionSummary[]
 }
 
-function releaseControlPlans(executions: DashboardExecutionSummary[]) {
+export function releaseControlPlans(executions: DashboardExecutionSummary[]) {
   const plans = new Map<string, DashboardExecutionSummary[]>()
   for (const execution of executions) {
     const key = execution.release_control?.profile
@@ -71,7 +71,7 @@ function releaseControlPlans(executions: DashboardExecutionSummary[]) {
     )
 }
 
-function ReleaseControlPlans({
+export function ReleaseControlPlans({
   plans,
   loading,
   error,
@@ -228,7 +228,7 @@ export function planStatePresentation(plan: LocalPlan): PlanStatePresentation {
       return {
         status: 'running',
         label: 'candidate running',
-        detail: 'Comparing the locked scope against the baseline.',
+        detail: 'Comparing the saved scope against the baseline.',
         action: 'open',
       }
     case 'comparison_ready':
@@ -493,6 +493,7 @@ function PlanRow({
           >
             {title}
           </a>
+          <span className="text-xs text-ink-muted">Local plan</span>
           {plan.purpose ? (
             <span
               className="line-clamp-2 max-w-[28rem] text-xs leading-5 text-ink-soft"
@@ -523,7 +524,7 @@ function PlanRow({
           running={running}
         />
       </td>
-      <td data-label="Updated" className={numericCellClassName}>
+      <td data-label="Last activity" className={numericCellClassName}>
         <span className="whitespace-nowrap text-xs text-ink-muted">
           {shortDate(plan.updated_at)}
         </span>
@@ -543,12 +544,14 @@ function PlanRow({
   )
 }
 
+function isLocalPlan(plan: import('@/lib/dashboard-data-source').Plan): plan is LocalPlan {
+  return plan.origin !== 'remote'
+}
+
 export function PlansPage() {
-  const [bridge, setBridge] = useState<DashboardDataBridge | null>(null)
-  const [tab, setTab] = useState<'mine' | 'release-control' | 'profiles'>(
-    'mine',
-  )
-  const [plans, setPlans] = useState<LocalPlan[]>([])
+  const viewsId = useId()
+  const [tab, setTab] = useState<'mine' | 'profiles'>('mine')
+  const [plans, setPlans] = useState<import('@/lib/dashboard-data-source').Plan[]>([])
   const [masterPlan, setMasterPlan] = useState<MasterTestPlan | null>(null)
   const [executionSummaries, setExecutionSummaries] = useState<
     Record<string, DashboardExecutionSummary>
@@ -558,28 +561,42 @@ export function PlansPage() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [comparisonError, setComparisonError] = useState<string | null>(null)
-  const [releaseControl, setReleaseControl] = useState<ReleaseControlPlan[]>([])
-  const [releaseControlLoading, setReleaseControlLoading] = useState(false)
-  const [releaseControlError, setReleaseControlError] = useState<string | null>(
-    null,
-  )
+  const [importing, setImporting] = useState(false)
+  const [importError, setImportError] = useState<string | null>(null)
+  const [importOpen, setImportOpen] = useState(false)
+  const [remotePlans, setRemotePlans] = useState<RcHistoryPlan[]>([])
+  const [remotePlanKey, setRemotePlanKey] = useState('')
 
-  const loadReleaseControl = useCallback(async () => {
-    setReleaseControlLoading(true)
-    setReleaseControlError(null)
+  const importHistory = async (file: File) => {
+    setImporting(true)
+    setImportError(null)
     try {
-      setReleaseControl(
-        releaseControlPlans(await listReleaseControlExecutions()),
-      )
+      const json = await file.text()
+      const bytes = new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(json)))
+      const sha256 = `sha256:${[...bytes].map((byte) => byte.toString(16).padStart(2, '0')).join('')}`
+      const bridge = await getDashboardDataBridge()
+      await bridge.planControl({ action: 'import_history', history: { json, sha256 } })
+      await load({ silent: true })
     } catch (cause) {
-      setReleaseControl([])
-      setReleaseControlError(
-        cause instanceof Error ? cause.message : String(cause),
-      )
-    } finally {
-      setReleaseControlLoading(false)
-    }
-  }, [])
+      setImportError(cause instanceof Error ? cause.message : String(cause))
+    } finally { setImporting(false) }
+  }
+  const openImport = async () => {
+    setImportOpen(true); setImportError(null); setRemotePlans([])
+    try { setRemotePlans(await discoverReleaseControlHistory()) }
+    catch (cause) { setImportError(cause instanceof Error ? cause.message : String(cause)) }
+  }
+  const importRemote = async () => {
+    if (!remotePlanKey) return
+    setImporting(true); setImportError(null)
+    try {
+      const history = await exportReleaseControlHistory(remotePlanKey)
+      const bridge = await getDashboardDataBridge()
+      await bridge.planControl({ action: 'import_history', history })
+      await load({ silent: true }); setImportOpen(false)
+    } catch (cause) { setImportError(cause instanceof Error ? cause.message : String(cause)) }
+    finally { setImporting(false) }
+  }
 
   const load = useCallback(async ({ silent = false } = {}) => {
     if (!silent) setLoading(true)
@@ -587,19 +604,13 @@ export function PlansPage() {
     setComparisonError(null)
     try {
       const next = await getDashboardDataBridge()
-      setBridge(next)
-      if (next.mode !== 'local') {
-        setPlans([])
-        setMasterPlan(null)
-        return
-      }
       const response = await next.listPlans()
       setMasterPlan(response.master_plan ?? null)
       const orderedPlans = [...response.plans].sort((left, right) =>
         right.updated_at.localeCompare(left.updated_at),
       )
       setPlans(orderedPlans)
-      const executionIds = orderedPlans.flatMap((plan) => [
+      const executionIds = orderedPlans.filter(isLocalPlan).flatMap((plan) => [
         plan.baseline_execution_id ?? '',
         plan.candidate_execution_ids.at(-1) ?? '',
         plan.last_attempt_id ?? '',
@@ -625,13 +636,9 @@ export function PlansPage() {
     void load()
   }, [load])
 
-  useEffect(() => {
-    if (bridge?.mode === 'local') void loadReleaseControl()
-  }, [bridge, loadReleaseControl])
-
   const counts = useMemo(() => {
     const count = (candidate: PlanFilter) =>
-      plans.filter((plan) => matchesFilter(plan, candidate)).length
+      plans.filter((plan) => isLocalPlan(plan) && matchesFilter(plan, candidate)).length
     return {
       all: plans.length,
       needs_action: count('needs_action'),
@@ -650,15 +657,13 @@ export function PlansPage() {
   const filteredPlans = useMemo(() => {
     const normalized = query.trim().toLowerCase()
     return plans.filter((plan) => {
-      if (!matchesFilter(plan, filter)) return false
+      if (isLocalPlan(plan) && !matchesFilter(plan, filter)) return false
       if (!normalized) return true
       return [
         plan.label,
         plan.purpose,
         plan.id,
-        plan.model,
-        plan.provider,
-        ...plan.scenario_ids,
+        ...(isLocalPlan(plan) ? [plan.model, plan.provider, ...plan.scenario_ids] : [plan.source.plan_key, plan.source.instance_id]),
       ]
         .join(' ')
         .toLowerCase()
@@ -668,7 +673,6 @@ export function PlansPage() {
 
   const totalPlans = plans.length
   const totalFiltered = filteredPlans.length
-  const local = bridge?.mode === 'local'
   const filtered = query.trim() !== '' || filter !== 'all'
   const filters: Array<{ id: PlanFilter; label: string }> = [
     { id: 'all', label: 'all' },
@@ -683,14 +687,7 @@ export function PlansPage() {
         active="plans"
         actionsLabel="Local plan actions"
         actions={
-          local ? (
-            <a
-              className={dashboardHeaderActionClassName({ primary: true })}
-              href={hashForNewPlan()}
-            >
-              new plan
-            </a>
-          ) : null
+          <><button type="button" className={dashboardHeaderActionClassName()} onClick={() => void openImport()}>{importing ? 'importing…' : 'import history'}</button><a className={dashboardHeaderActionClassName({ primary: true })} href={hashForNewPlan()}>new plan</a></>
         }
       />
       <div className="ds-root page-shell w-[calc(100%_-_1.5rem)] max-w-[1420px] pt-5 pb-16 md:w-[calc(100%_-_3rem)]">
@@ -698,7 +695,7 @@ export function PlansPage() {
           title="plans"
           summary="Configure one execution model per plan, run its coverage and follow the results."
           actions={
-            local && plans.length > 0 ? (
+            plans.length > 0 ? (
               <details className="group text-xs text-ink-soft">
                 <summary className="cursor-pointer list-none font-mono text-ink-muted marker:hidden hover:text-ink">
                   how plans work
@@ -710,228 +707,227 @@ export function PlansPage() {
             ) : undefined
           }
         />
+        {importError ? <Callout className="mt-4" tone="warning" title="History import failed">{importError}</Callout> : null}
 
-        {local ? (
-          <nav className="mt-5 flex gap-2" aria-label="Plan views">
-            <button
-              type="button"
-              aria-pressed={tab === 'mine'}
-              className={buttonClassName({
-                variant: tab === 'mine' ? 'primary' : 'secondary',
-              })}
-              onClick={() => setTab('mine')}
-            >
-              My plans
-            </button>
-            <button
-              type="button"
-              aria-pressed={tab === 'release-control'}
-              className={buttonClassName({
-                variant: tab === 'release-control' ? 'primary' : 'secondary',
-              })}
-              onClick={() => setTab('release-control')}
-            >
-              Reference: Release Control
-            </button>
-            <button
-              type="button"
-              aria-pressed={tab === 'profiles'}
-              className={buttonClassName({
-                variant: tab === 'profiles' ? 'primary' : 'secondary',
-              })}
-              onClick={() => setTab('profiles')}
-            >
-              Templates
-            </button>
-          </nav>
-        ) : null}
-        {local && masterPlan && tab === 'profiles' ? (
-          <>
-            <MasterTestProfiles plan={masterPlan} />
-            <a
-              className={buttonClassName({ variant: 'secondary' })}
-              href={`${hashForNewPlan()}/manual`}
-            >
-              Create a custom plan manually
-            </a>
-          </>
-        ) : null}
-
-        {tab === 'release-control' ? (
-          <ReleaseControlPlans
-            plans={releaseControl}
-            loading={releaseControlLoading}
-            error={releaseControlError}
-            reload={() => void loadReleaseControl()}
-          />
-        ) : tab === 'profiles' ? null : !local && !loading ? (
-          <div className="mt-6">
-            <EmptyState
-              title="Available only in the local dashboard"
-              description="Published and view-only reports keep historical evidence, but do not expose local plan state or controls."
-              actions={
-                <a
-                  className={buttonClassName({ variant: 'secondary' })}
-                  href={hashForWorkspace()}
-                >
-                  back to overview
-                </a>
-              }
-            />
-          </div>
-        ) : (
-          <>
-            <section
-              className="mt-5 flex flex-wrap items-center gap-3"
-              aria-label="Plan filters"
-            >
-              <div className="w-full max-w-xs">
-                <Input
-                  type="search"
-                  value={query}
-                  placeholder="Search label, purpose or test…"
-                  aria-label="Search plans"
-                  onChange={(event) => setQuery(event.target.value)}
-                />
-              </div>
-              <FilterChipGroup label="Plan state">
-                {filters.map((candidate) => (
-                  <FilterChip
-                    key={candidate.id}
-                    active={filter === candidate.id}
-                    count={counts[candidate.id]}
-                    onClick={() => setFilter(candidate.id)}
-                  >
-                    {candidate.label}
-                  </FilterChip>
-                ))}
-              </FilterChipGroup>
-              <span
-                className="ms-auto font-mono text-xs text-ink-muted"
-                aria-live="polite"
+        <Tabs
+          value={tab}
+          onValueChange={(value) => setTab(value as typeof tab)}
+        >
+          <TabsList className="mt-5 flex-wrap" aria-label="Plan views">
+            {(
+              [
+                ['mine', 'My plans'],
+                ['profiles', 'Templates'],
+              ] as const
+            ).map(([value, label]) => (
+              <TabsTrigger
+                key={value}
+                value={value}
+                id={`${viewsId}-${value}`}
+                aria-controls={`${viewsId}-panel`}
+                icon={false}
               >
-                {loading
-                  ? 'loading…'
-                  : filtered
-                    ? `${totalFiltered} of ${totalPlans} plans`
-                    : `${totalPlans} plan${totalPlans === 1 ? '' : 's'}`}
-              </span>
-            </section>
+                {label}
+              </TabsTrigger>
+            ))}
+          </TabsList>
+        </Tabs>
+        <div
+          id={`${viewsId}-panel`}
+          role="tabpanel"
+          aria-labelledby={`${viewsId}-${tab}`}
+          // biome-ignore lint/a11y/noNoninteractiveTabindex: tab panels must be keyboard-focusable.
+          tabIndex={0}
+        >
+          {masterPlan && tab === 'profiles' ? (
+            <>
+              <MasterTestProfiles plan={masterPlan} />
+              <a
+                className={buttonClassName({ variant: 'secondary' })}
+                href={hashForNewPlan()}
+              >
+                Create a custom plan manually
+              </a>
+            </>
+          ) : null}
 
-            {comparisonError && !error ? (
-              <div className="mt-4">
-                <Callout tone="warning" title="Comparison metrics unavailable">
-                  Execution summaries could not be loaded. Plans remain
-                  available, but comparisons are marked unavailable.{' '}
-                  <span className="font-mono">{comparisonError}</span>
-                </Callout>
-              </div>
-            ) : null}
-
-            <div className="mt-4">
-              {error ? (
-                <EmptyState
-                  tone="error"
-                  title="Plans could not be loaded"
-                  description={error}
-                  actions={
-                    <button
-                      className={buttonClassName({ variant: 'secondary' })}
-                      type="button"
-                      onClick={() => void load()}
-                    >
-                      try again
-                    </button>
-                  }
-                />
-              ) : loading ? (
-                <div className="grid gap-2" aria-busy="true" role="status">
-                  <span className="ds-visually-hidden">
-                    Loading local plans
-                  </span>
-                  {['first', 'second', 'third'].map((placeholder) => (
-                    <div
-                      key={placeholder}
-                      className="h-16 animate-pulse rounded-[6px] bg-[var(--surface-fill)] motion-reduce:animate-none"
-                    />
-                  ))}
+          {tab === 'profiles' ? (
+            !masterPlan ? (
+              <EmptyState
+                className="mt-6"
+                title="No templates available"
+                description="Create a custom plan to choose tests and execution settings."
+                actions={
+                  <a
+                    className={buttonClassName({ variant: 'secondary' })}
+                    href={hashForNewPlan()}
+                  >
+                    Create a custom plan
+                  </a>
+                }
+              />
+            ) : null
+          ) : (
+            <>
+              <section
+                className="mt-5 flex flex-wrap items-center gap-3"
+                aria-label="Plan filters"
+              >
+                <div className="w-full max-w-xs">
+                  <Input
+                    type="search"
+                    value={query}
+                    placeholder="Search label, purpose or test…"
+                    aria-label="Search plans"
+                    onChange={(event) => setQuery(event.target.value)}
+                  />
                 </div>
-              ) : totalPlans === 0 ? (
-                <EmptyState
-                  title="No local plans yet"
-                  description={
-                    <span className="grid gap-4">
-                      <span>
-                        Start with only the tests relevant to the Harness change
-                        in front of you.
-                      </span>
-                      <HowPlansWork />
-                    </span>
-                  }
-                  actions={
-                    <a
-                      className={buttonClassName({ variant: 'primary' })}
-                      href={hashForNewPlan()}
+                <FilterChipGroup label="Plan state">
+                  {filters.map((candidate) => (
+                    <FilterChip
+                      key={candidate.id}
+                      active={filter === candidate.id}
+                      count={counts[candidate.id]}
+                      onClick={() => setFilter(candidate.id)}
                     >
-                      new plan
-                    </a>
-                  }
-                />
-              ) : filteredPlans.length === 0 ? (
-                <EmptyState
-                  title="No plans match these filters"
-                  description="Try another state or search term."
-                  actions={
-                    <button
-                      className={buttonClassName({
-                        variant: 'secondary',
-                        size: 'compact',
-                      })}
-                      type="button"
-                      onClick={() => {
-                        setQuery('')
-                        setFilter('all')
-                      }}
-                    >
-                      clear filters
-                    </button>
-                  }
-                />
-              ) : (
-                <DataTable
-                  caption={`Local plans, ${filteredPlans.length} of ${plans.length}`}
-                  collapse
-                  minWidth="64rem"
+                      {candidate.label}
+                    </FilterChip>
+                  ))}
+                </FilterChipGroup>
+                <span
+                  className="ms-auto font-mono text-xs text-ink-muted"
+                  aria-live="polite"
                 >
-                  <thead>
-                    <tr>
-                      <th scope="col">Plan</th>
-                      <th scope="col">Scope · model</th>
-                      <th scope="col">Baseline</th>
-                      <th scope="col">Latest candidate vs baseline</th>
-                      <th scope="col" className={numericCellClassName}>
-                        Updated
-                      </th>
-                      <th scope="col">
-                        <span className="ds-visually-hidden">Action</span>
-                      </th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {filteredPlans.map((plan) => (
-                      <PlanRow
-                        key={plan.id}
-                        plan={plan}
-                        executionSummaries={executionSummaries}
+                  {loading
+                    ? 'loading…'
+                    : filtered
+                      ? `${totalFiltered} of ${totalPlans} plans`
+                      : `${totalPlans} plan${totalPlans === 1 ? '' : 's'}`}
+                </span>
+              </section>
+
+              {comparisonError && !error ? (
+                <div className="mt-4">
+                  <Callout
+                    tone="warning"
+                    title="Comparison metrics unavailable"
+                  >
+                    Execution summaries could not be loaded. Plans remain
+                    available, but comparisons are marked unavailable.{' '}
+                    <span className="font-mono">{comparisonError}</span>
+                  </Callout>
+                </div>
+              ) : null}
+
+              <div className="mt-4">
+                {error ? (
+                  <EmptyState
+                    tone="error"
+                    title="Plans could not be loaded"
+                    description={error}
+                    actions={
+                      <button
+                        className={buttonClassName({ variant: 'secondary' })}
+                        type="button"
+                        onClick={() => void load()}
+                      >
+                        try again
+                      </button>
+                    }
+                  />
+                ) : loading ? (
+                  <div className="grid gap-2" aria-busy="true" role="status">
+                    <span className="ds-visually-hidden">
+                      Loading local plans
+                    </span>
+                    {['first', 'second', 'third'].map((placeholder) => (
+                      <div
+                        key={placeholder}
+                        className="h-16 animate-pulse rounded-[6px] bg-[var(--surface-fill)] motion-reduce:animate-none"
                       />
                     ))}
-                  </tbody>
-                </DataTable>
-              )}
-            </div>
-          </>
-        )}
+                  </div>
+                ) : totalPlans === 0 ? (
+                  <EmptyState
+                    title="No local plans yet"
+                    description={
+                      <span className="grid gap-4">
+                        <span>
+                          Start with only the tests relevant to the Harness
+                          change in front of you.
+                        </span>
+                        <HowPlansWork />
+                      </span>
+                    }
+                    actions={
+                      <a
+                        className={buttonClassName({ variant: 'primary' })}
+                        href={hashForNewPlan()}
+                      >
+                        new plan
+                      </a>
+                    }
+                  />
+                ) : filteredPlans.length === 0 ? (
+                  <EmptyState
+                    title="No plans match these filters"
+                    description="Try another state or search term."
+                    actions={
+                      <button
+                        className={buttonClassName({
+                          variant: 'secondary',
+                          size: 'compact',
+                        })}
+                        type="button"
+                        onClick={() => {
+                          setQuery('')
+                          setFilter('all')
+                        }}
+                      >
+                        clear filters
+                      </button>
+                    }
+                  />
+                ) : (
+                  <DataTable
+                    caption={`Plans, ${filteredPlans.length} of ${plans.length}`}
+                    collapse
+                    minWidth="64rem"
+                  >
+                    <thead>
+                      <tr>
+                        <th scope="col">Plan</th>
+                        <th scope="col">Scope · model</th>
+                        <th scope="col">Baseline</th>
+                        <th scope="col">Latest candidate vs baseline</th>
+                        <th scope="col" className={numericCellClassName}>
+                          Last activity
+                        </th>
+                        <th scope="col">
+                          <span className="ds-visually-hidden">Action</span>
+                        </th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {filteredPlans.map((plan) => isLocalPlan(plan) ? (
+                        <PlanRow key={plan.id} plan={plan} executionSummaries={executionSummaries} />
+                      ) : (
+                        <DataTableRow key={plan.id} href={hashForPlan(plan.id)}>
+                          <td data-label="Plan" className="ds-table-sticky-col"><span className="font-medium text-ink">{plan.label}</span><span className="ml-2 rounded bg-[var(--surface-fill)] px-1 font-mono text-label text-ink-muted">remote</span><span className="block font-mono text-label text-ink-muted">{plan.source.instance_id} · {plan.source.plan_key}</span></td>
+                          <td data-label="Scope · model">{plan.purpose || '—'}</td><td data-label="Baseline">historical import</td><td data-label="Latest candidate vs baseline">{plan.execution_ids.length} execution{plan.execution_ids.length === 1 ? '' : 's'}</td><td data-label="Last activity" className={numericCellClassName}>{shortDate(plan.updated_at)}</td><td className="text-right"><a className={buttonClassName({variant:'quiet',size:'compact'})} href={hashForPlan(plan.id)}>open</a></td>
+                        </DataTableRow>
+                      ))}
+                    </tbody>
+                  </DataTable>
+                )}
+              </div>
+            </>
+          )}
+        </div>
       </div>
+      <Dialog open={importOpen} onClose={() => !importing && setImportOpen(false)} title="Import Release Control history" description="History is copied into this Harness. Later reading, comparison and reproduction use the local copy.">
+            <div className="grid gap-4"><label className="grid gap-1 text-sm">Release Control plan<select value={remotePlanKey} onChange={(event) => setRemotePlanKey(event.target.value)}><option value="">Select a plan…</option>{remotePlans.map((plan) => <option key={plan.key} value={plan.key}>{plan.key}{plan.active ? '' : ' (inactive)'}</option>)}</select></label><div className="flex gap-2"><button className={buttonClassName({ variant: 'primary' })} type="button" disabled={!remotePlanKey || importing} onClick={() => void importRemote()}>{importing ? 'importing…' : 'import selected history'}</button><label className={buttonClassName({ variant: 'secondary' })}><input className="ds-visually-hidden" type="file" accept="application/json,.json" onChange={(event) => { const file = event.currentTarget.files?.[0]; if (file) void importHistory(file); event.currentTarget.value = '' }} />import JSON file</label></div>{importError ? <Callout tone="warning" title="Import unavailable">{importError}</Callout> : null}</div>
+      </Dialog>
     </>
   )
 }

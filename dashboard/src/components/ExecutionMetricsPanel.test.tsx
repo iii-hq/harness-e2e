@@ -62,7 +62,7 @@ describe('execution summary panel', () => {
     const html = renderToStaticMarkup(<ExecutionMetricsPanel detail={detail} />)
     expect(html).toContain('observed subtotal')
     expect(html).toContain('1/2 runs with telemetry')
-    expect(html).toContain('0/2 runs with telemetry')
+    expect(html).not.toContain('Execution cost')
     expect(html).not.toContain('$0.0000')
     expect(html).toMatch(/Tokens per completion<\/td><td[^>]*>—<\/td>/)
   })
