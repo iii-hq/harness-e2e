@@ -32,7 +32,8 @@ class IsolationError(RuntimeError):
 
 # Deliberately do not inherit HOME, credentials, proxies, Python configuration,
 # Docker remote endpoints, or application settings from the controller.
-ENV = {'PATH': '/usr/local/bin:/usr/bin:/bin', 'LANG': 'C.UTF-8', 'LC_ALL': 'C.UTF-8'}
+ENV = {'PATH': '/usr/local/bin:/usr/bin:/bin', 'LANG': 'C.UTF-8', 'LC_ALL': 'C.UTF-8',
+       'III_TELEMETRY_ENABLED': 'false'}
 OUTPUT_LIMIT = 1024 * 1024
 
 # Executed inside the selected boundary under the same identity as the probe.
@@ -97,7 +98,8 @@ def _docker_command(binary, image, workspace, probes, name):
             '--workdir', '/workspace', '--entrypoint', '/usr/local/bin/python3',
             '--env', 'PATH=/usr/local/bin:/usr/bin:/bin', '--env', 'HOME=/tmp',
             '--env', 'TMPDIR=/tmp', '--env', 'LANG=C.UTF-8',
-            '--env', 'PYTHONDONTWRITEBYTECODE=1', image]
+            '--env', 'PYTHONDONTWRITEBYTECODE=1',
+            '--env', 'III_TELEMETRY_ENABLED=false', image]
 
 
 def select_backend(workspace, probes):

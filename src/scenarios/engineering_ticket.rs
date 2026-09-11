@@ -1067,6 +1067,7 @@ fn persist_attempt(directory: &Path, record: &AttemptRecord) -> Result<()> {
 async fn run_probe(root: &Path, id: &str, spec: CommandSpec) -> Result<ProbeRecord> {
     let started = Instant::now();
     let mut command = Command::new(spec.program);
+    command.env("III_TELEMETRY_ENABLED", "false");
     command
         .args(spec.args)
         .current_dir(root)

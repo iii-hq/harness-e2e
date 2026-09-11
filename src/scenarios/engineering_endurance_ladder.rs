@@ -573,6 +573,7 @@ async fn run_command(root: &Path, program: &str, args: &[&str]) -> Result<Comman
     let output = tokio::time::timeout(
         COMMAND_TIMEOUT,
         Command::new(program)
+            .env("III_TELEMETRY_ENABLED", "false")
             .args(args)
             .current_dir(root)
             .env("PYTHONDONTWRITEBYTECODE", "1")

@@ -121,7 +121,7 @@ async function startProvider(script) {
 async function startSubject(env) {
   const child = spawn(process.execPath, ["src/server.ts"], {
     cwd: workspace,
-    env: { ...process.env, ...env },
+    env: { ...process.env, ...env, III_TELEMETRY_ENABLED: "false" },
     stdio: ["ignore", "pipe", "pipe"],
   });
   let stdout = "";

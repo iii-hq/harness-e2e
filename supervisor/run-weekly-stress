@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
+export III_TELEMETRY_ENABLED=false
 
 install_root=${HARNESS_E2E_PROTECTED_ROOT:-/opt/iii-harness-e2e}
 protected_root="$install_root/compose-supervisor"
@@ -87,6 +88,9 @@ while IFS= read -r worker; do
   [[ "$(stat -c '%a' "$secret_file")" == 600 ]]
   compose_args+=(--env-file "$worker=$secret_file")
 done < <(jq -r '.orchestration.nodes[] | select(.worker == "provider-deepseek" or .worker == "provider-zai") | .worker' "$contract")
+while IFS= read -r worker; do
+  compose_args+=(--environment "$worker.III_TELEMETRY_ENABLED=false")
+done < <(jq -r '.orchestration.roots[].worker' "$contract")
 python3 "$contract_tool" compose "${compose_args[@]}"
 
 engine_pid=""

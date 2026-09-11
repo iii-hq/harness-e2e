@@ -572,8 +572,11 @@ def project_scaffold(
             if not env_file.is_absolute():
                 raise ValueError(f"env file for {worker} must be absolute")
             container["env_file"] = [str(env_file)]
-        if worker in declared_environment:
-            container["environment"] = dict(sorted(declared_environment[worker].items()))
+        # Pin after caller assignments; explicit environment also overrides env_file.
+        container["environment"] = dict(sorted({
+            **declared_environment.get(worker, {}),
+            "III_TELEMETRY_ENABLED": "false",
+        }.items()))
         if worker == runner_worker(contract):
             container["config_name"] = f"{namespace}-harness-e2e"
             container["config_override"] = {"data_dir": str(data_dir)}

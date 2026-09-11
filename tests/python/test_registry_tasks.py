@@ -118,6 +118,9 @@ class RegistryDeliveryTests(unittest.TestCase):
                     return b""
                 if argv[:3] == ["git", "clone", "--no-checkout"]:
                     return real_run(["git", "clone", "-q", self.source, argv[-1]])
+                if argv[-1] == "docker compose -f /fixture/compose.yaml config --format json":
+                    return json.dumps({"services": {"api": {"environment": {"OTEL_ENABLED": "false"}},
+                                                     "web": {"image": "fixture"}}}).encode()
                 if argv[0] == "docker":
                     return b"image-id\n"
                 return real_run(argv, **kwargs)
@@ -138,6 +141,16 @@ class RegistryDeliveryTests(unittest.TestCase):
                 environment = json.loads((inputs / "environment.json").read_text())
                 self.assertIn("Planning only", environment["runtime_requirements"])
             launch = next(c for c in calls if c[:3] == ["docker", "run", "-d"])
+            self.assertIn("III_TELEMETRY_ENABLED=false", launch)
+            if test in (2, 4):
+                fixture_root = root / "fixture-checkout/registry-version-comparison"
+                compose = json.loads((fixture_root / "compose.yaml").read_text())
+                for service in compose["services"].values():
+                    self.assertEqual(service["environment"]["III_TELEMETRY_ENABLED"], "false")
+                self.assertEqual(compose["services"]["api"]["environment"]["OTEL_ENABLED"], "false")
+                state = json.loads((root / "state.json").read_text())
+                self.assertEqual(state["fixture_files"], module.fixture_hashes(fixture_root))
+                self.assertNotEqual(state["fixture_source_files"], state["fixture_files"])
             self.assertFalse(any("/var/run/docker.sock" in c and "src=" in c for c in launch))
             self.assertEqual("--privileged" in launch, test != 1)
             self.assertEqual(any("dst=/fixture," in c for c in launch), test in (2, 4))

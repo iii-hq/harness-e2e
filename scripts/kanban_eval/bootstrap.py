@@ -14,6 +14,8 @@ FIXTURE_REVISION = '0471257a95095da7c5e9d366e26636976472e90d'
 
 
 def run(*command, **kwargs):
+    kwargs['env'] = {**(os.environ if kwargs.get('env') is None else kwargs['env']),
+                     'III_TELEMETRY_ENABLED': 'false'}
     subprocess.run(command, check=True, **kwargs)
 
 

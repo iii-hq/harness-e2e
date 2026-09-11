@@ -530,6 +530,7 @@ impl BatteryReport {
 async fn run_engine(engine_path: &Path, args: &[String]) -> Result<EngineRun> {
     let workspace = engine_path.parent().and_then(Path::parent);
     let mut command = Command::new("python3");
+    command.env("III_TELEMETRY_ENABLED", "false");
     command.arg(engine_path).args(args);
     if let Some(directory) = workspace {
         command.current_dir(directory);

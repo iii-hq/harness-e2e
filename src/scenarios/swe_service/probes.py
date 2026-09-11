@@ -24,6 +24,7 @@ def clean_env(workspace):
     env = {key: value for key, value in os.environ.items() if not key.startswith('PROFILE_')}
     env['PYTHONPATH'] = str(workspace / 'src')
     env['PYTHONDONTWRITEBYTECODE'] = '1'
+    env['III_TELEMETRY_ENABLED'] = 'false'
     return env
 
 
@@ -261,7 +262,7 @@ sys.argv = ['profile_service', 'replay', '--db', db, '--events', events, '--batc
 runpy.run_module('profile_service', run_name='__main__')
 '''
         process = subprocess.Popen([sys.executable, '-I', '-c', instrument, str(workspace), str(db), str(events_path), str(marker)],
-                                   cwd=workspace, stdout=subprocess.PIPE, stderr=subprocess.PIPE, start_new_session=True)
+                                   cwd=workspace, env=clean_env(workspace), stdout=subprocess.PIPE, stderr=subprocess.PIPE, start_new_session=True)
         try:
             deadline = time.monotonic() + 10
             while not marker.exists() and process.poll() is None and time.monotonic() < deadline:
@@ -405,7 +406,7 @@ def main():
             scratch = Path(directory) / name
             scratch.mkdir()
             command = [sys.executable, '-I', str(Path(__file__).resolve()), '--workspace', str(workspace), '--worker', name, '--scratch', str(scratch)]
-            process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, start_new_session=True)
+            process = subprocess.Popen(command, env=clean_env(workspace), stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, start_new_session=True)
             try:
                 stdout, stderr = process.communicate(timeout=25)
                 result = json.loads(stdout)

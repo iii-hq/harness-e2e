@@ -29,6 +29,9 @@ on:
         required: true
         type: string
 
+env:
+  III_TELEMETRY_ENABLED: "false"
+
 permissions:
   actions: read
   contents: read

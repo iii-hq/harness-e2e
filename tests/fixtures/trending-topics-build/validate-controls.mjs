@@ -60,7 +60,10 @@ function replaceOnce(source, before, after) {
 }
 
 async function run(command, args, options = {}) {
-  const child = spawn(command, args, { ...options, stdio: ['ignore', 'pipe', 'pipe'] });
+  const child = spawn(command, args, {
+    ...options, stdio: ['ignore', 'pipe', 'pipe'],
+    env: { ...(options.env ?? process.env), III_TELEMETRY_ENABLED: 'false' },
+  });
   let stdout = '';
   let stderr = '';
   child.stdout.on('data', (chunk) => { stdout += chunk; });
@@ -247,7 +250,7 @@ for (const control of cases) {
     preview = spawn('npm', ['run', 'preview', '--', '--port', '4187'], {
       cwd: app,
       detached: true,
-      env: process.env,
+      env: { ...process.env, III_TELEMETRY_ENABLED: 'false' },
       stdio: ['ignore', 'pipe', 'pipe'],
     });
     preview.stdout.on('data', (chunk) => { previewStdout += chunk; });

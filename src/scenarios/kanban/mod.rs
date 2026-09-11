@@ -226,6 +226,7 @@ async fn setup(context: &E2eContext, run_id: &str, index: usize) -> Result<()> {
         )?,
     )?)?;
     let mut command = Command::new("python3");
+    command.env("III_TELEMETRY_ENABLED", "false");
     command.arg(scripts.join("run.py"));
     for key in [
         "fixture",
@@ -329,6 +330,7 @@ async fn setup(context: &E2eContext, run_id: &str, index: usize) -> Result<()> {
                         bail!("command exceeds 64 KiB");
                     }
                     let mut child = Command::new("python3")
+                        .env("III_TELEMETRY_ENABLED", "false")
                         .arg(command_script)
                         .arg(candidate)
                         .arg(keeper.to_string())

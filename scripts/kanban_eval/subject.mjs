@@ -31,7 +31,10 @@ function argumentsOf(argv) {
 
 function run(command, args, timeoutMs, cap = MAX_BYTES, input) {
   return new Promise((resolve, reject) => {
-    const child = spawn(command, args, { stdio: [input === undefined ? 'ignore' : 'pipe', 'pipe', 'pipe'] })
+    const child = spawn(command, args, {
+      stdio: [input === undefined ? 'ignore' : 'pipe', 'pipe', 'pipe'],
+      env: { ...process.env, III_TELEMETRY_ENABLED: 'false' },
+    })
     const chunks = { stdout: [], stderr: [] }
     let bytes = 0
     let settled = false

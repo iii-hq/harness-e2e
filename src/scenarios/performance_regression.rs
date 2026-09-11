@@ -438,6 +438,7 @@ fn setup<'a>(_context: &'a E2eContext, run_id: &'a str) -> CleanupFuture<'a> {
 
 async fn run_python(root: &Path, args: &[&str]) -> Result<CommandOutcome> {
     let mut command = Command::new("python3");
+    command.env("III_TELEMETRY_ENABLED", "false");
     command
         .args(args)
         .current_dir(root)

@@ -512,6 +512,24 @@ fail() {
                 self.assertEqual(harness["config_override"], expected)
                 self.assertEqual(harness["config_name"], "project-one-harness")
 
+    def test_scaffold_pins_analytics_after_caller_environment_and_secret_files(self):
+        contract = campaign_contract({"harness": "1.9.0", "state": "0.22.1", "provider-deepseek": "1.0.0"})
+        contract["orchestration"]["roots"].append(
+            {"worker": "provider-deepseek", "version": "1.0.0", "role": "runtime"}
+        )
+        roots = [root["worker"] for root in contract["orchestration"]["roots"]]
+        overrides = {f"{worker}.III_TELEMETRY_ENABLED": "true" for worker in roots}
+        overrides["harness.OTEL_ENABLED"] = "true"
+        secret_files = {"provider-deepseek": "/private/provider-deepseek.env"}
+        scaffold = MODULE.project_scaffold(contract, "analytics-test", Path("/tmp/runs"),
+                                          secret_files, overrides)
+        for worker in roots:
+            self.assertEqual(scaffold["containers"][worker]["environment"]["III_TELEMETRY_ENABLED"], "false")
+        self.assertEqual(scaffold["containers"]["harness"]["environment"]["OTEL_ENABLED"], "true")
+        provider = scaffold["containers"]["provider-deepseek"]
+        self.assertEqual(provider["env_file"], [secret_files["provider-deepseek"]])
+        self.assertEqual(provider["environment"], {"III_TELEMETRY_ENABLED": "false"})
+
     def test_rejects_forbidden_artifacts_and_version_conflicts(self):
         forbidden = campaign_contract()
         forbidden["orchestration"]["nodes"][0]["kind"] = "bundle"

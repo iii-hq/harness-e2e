@@ -5,6 +5,9 @@ on:
     - cron: '47 3 * * 6'
   workflow_dispatch:
 
+env:
+  III_TELEMETRY_ENABLED: "false"
+
 permissions:
   contents: read
 

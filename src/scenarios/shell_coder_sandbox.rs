@@ -939,6 +939,7 @@ fn parse_hidden_probe(outcome: &CommandOutcome) -> HiddenProbeOutput {
 
 async fn run_python(root: &Path, args: &[&str]) -> Result<CommandOutcome> {
     let mut command = Command::new("python3");
+    command.env("III_TELEMETRY_ENABLED", "false");
     command
         .args(args)
         .current_dir(root)
