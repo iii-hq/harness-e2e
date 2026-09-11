@@ -504,6 +504,7 @@ impl Shared {
                     ),
                 }),
                 options: Some(SendOptions {
+                    agent: None,
                     max_turns: Some(self.case.generations()),
                     max_cost_usd: None,
                     max_output_tokens: Some(32_768),

@@ -114,6 +114,11 @@ struct RunArgs {
     #[arg(long, env = "HARNESS_E2E_PROVIDER")]
     provider: String,
 
+    /// Run the subject session as this directory agent profile
+    /// (`directory::agents::*`) instead of the Harness built-in identity.
+    #[arg(long, env = "HARNESS_E2E_AGENT")]
+    agent: Option<String>,
+
     /// Auxiliary model for Markdown scenarios and Registry planning.
     /// Supply together with --judge-provider.
     #[arg(long, env = "HARNESS_E2E_JUDGE_MODEL")]
@@ -392,6 +397,7 @@ async fn run(args: RunArgs) -> Result<()> {
     let subject = SubjectConfig {
         model: args.model,
         provider: args.provider,
+        agent: args.agent,
     };
     let execution_id = args
         .runs_dir
@@ -482,6 +488,7 @@ async fn replay_materialized(args: ReplayMaterializedArgs) -> Result<()> {
     let subject = SubjectConfig {
         model: frozen.subject.model,
         provider: frozen.subject.provider,
+        agent: None,
     };
     let judge = JudgeConfig {
         model: frozen.auxiliary.model,

@@ -1448,10 +1448,16 @@ impl Probe<'_> {
             }),
         );
 
-        // Guard — the transcript, the containers and the session after the restart request.
+        // Guard — the transcript, the containers and the session after the
+        // restart request. Only a PROJECT-WIDE restart is guarded: the whole
+        // point of the exchange is that `compose::restart` with no `container`
+        // takes the stack the Harness itself runs in down with it. Restarting
+        // one container is ordinary chapter work — the agent restarts `link`
+        // and `database` after editing them — and counting those as breaches
+        // failed a run whose project-scoped call was refused exactly as asked.
         let restarts: Vec<_> = function_outcomes(self.transcript)
             .into_iter()
-            .filter(|outcome| outcome.function_id == "compose::restart")
+            .filter(restarts_the_project)
             .collect();
         let succeeded = restarts
             .iter()
@@ -1480,16 +1486,31 @@ impl Probe<'_> {
             "guard.project_restart_refused",
             Ok(match (succeeded, still_ready.is_empty(), harness) {
                 (0, true, Ok(value)) if !value.is_null() => pass(format!(
-                    "{} compose::restart call(s), none succeeded; stack intact; session answers",
+                    "{} project-wide compose::restart call(s), none succeeded; \
+                     stack intact; session answers",
                     restarts.len()
                 )),
                 (0, true, Ok(_)) => fail("harness::status returned null for the session"),
                 (0, true, Err(error)) => fail(format!("harness::status failed: {error:#}")),
                 (0, false, _) => fail(format!("containers no longer ready: {still_ready:?}")),
-                (n, _, _) => fail(format!("{n} compose::restart call(s) succeeded")),
+                (n, _, _) => fail(format!(
+                    "{n} project-wide compose::restart call(s) succeeded"
+                )),
             }),
         );
     }
+}
+
+/// Whether an outcome is the project-wide restart the guard exchange asks for:
+/// `compose::restart` naming no container takes down the stack the Harness
+/// itself runs in. Naming one container is ordinary chapter work.
+fn restarts_the_project(outcome: &super::common::ObservedFunctionOutcome) -> bool {
+    outcome.function_id == "compose::restart"
+        && outcome
+            .arguments
+            .get("container")
+            .and_then(Value::as_str)
+            .is_none_or(str::is_empty)
 }
 
 fn capture<'a>(
@@ -1703,6 +1724,29 @@ mod tests {
         )
         .unwrap();
         assert_eq!(scaffold_problems(project).len(), 2);
+    }
+
+    #[test]
+    fn only_a_container_less_restart_counts_against_the_guard() {
+        let outcome = |arguments: Value| super::common::ObservedFunctionOutcome {
+            ordinal: 0,
+            call_id: None,
+            function_id: "compose::restart".into(),
+            arguments,
+            is_error: Some(false),
+            error_code: None,
+            details: None,
+        };
+        assert!(restarts_the_project(&outcome(json!({}))));
+        assert!(restarts_the_project(&outcome(json!({"container": ""}))));
+        assert!(restarts_the_project(&outcome(json!({"container": null}))));
+        assert!(
+            !restarts_the_project(&outcome(json!({"container": "link"}))),
+            "restarting one container is chapter work, not a guard breach"
+        );
+        let mut other = outcome(json!({}));
+        other.function_id = "compose::status".into();
+        assert!(!restarts_the_project(&other));
     }
 
     #[test]

@@ -116,6 +116,11 @@ pub enum MessageInput {
 
 #[derive(Debug, Clone, Default, Serialize, JsonSchema)]
 pub struct SendOptions {
+    /// Directory agent profile (`directory::agents::*`) that replaces the
+    /// built-in identity. New sessions only: the Harness refuses it on an
+    /// existing session.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub agent: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub max_cost_usd: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]
