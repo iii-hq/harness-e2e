@@ -137,11 +137,13 @@ to the protected executor. See [executable profile plans](dashboard/README.md#ex
 cargo run --locked -- test-plan list
 ```
 
-The `software-engineering` profile selects only the seven incremental Kanban
-cases and four Registry cases, once each with no technical retries. Its ten
+The `software-engineering` profile selects the seven incremental Kanban cases,
+four Registry cases and the trending-topics blog build, once each with no
+technical retries: 12 cases and 12 planned runs. Its eleven
 execution groups keep Registry implementation and verification together, in
 that order, so verification receives the implementation delivery. Registry
-planning requires an explicit auxiliary judge model.
+planning requires an explicit auxiliary judge model. Trending topics runs in its
+own `case-trending-topics-build` group using the existing pinned fixture workflow.
 
 ```bash
 cargo run --locked -- test-plan materialize --profile software-engineering

@@ -526,7 +526,7 @@ mod tests {
             ("evolution", 23, 69),
             ("resilience", 4, 13),
             ("endurance", 5, 5),
-            ("software-engineering", 11, 11),
+            ("software-engineering", 12, 12),
         ] {
             let snapshot = plan.materialize(id).unwrap();
             assert_eq!(snapshot.scenario_ids.len(), cases);
@@ -562,7 +562,7 @@ mod tests {
     }
 
     #[test]
-    fn software_engineering_profile_selects_only_kanban_and_registry() {
+    fn software_engineering_profile_includes_trending_topics_as_an_independent_build() {
         let snapshot = embedded()
             .unwrap()
             .materialize("software-engineering")
@@ -574,11 +574,32 @@ mod tests {
                 "registry_implementation",
                 "registry_environment",
                 "registry_verification",
+                "trending_topics_build",
             ])
             .collect::<Vec<_>>();
         assert_eq!(snapshot.scenario_ids, expected);
         let groups = snapshot.campaigns[0]["groups"].as_array().unwrap();
-        assert_eq!(groups.len(), 10);
+        assert_eq!(groups.len(), 11);
+        let build = groups
+            .iter()
+            .find(|g| g["id"] == "case-trending-topics-build")
+            .unwrap();
+        assert_eq!(build["scenarios"], json!(["trending_topics_build"]));
+        assert_eq!(build["runs"], 1);
+        assert_eq!(build["technical_retries"], 0);
+        assert_eq!(
+            snapshot
+                .cases
+                .iter()
+                .find(|case| case["scenario_id"] == "trending_topics_build"),
+            embedded()
+                .unwrap()
+                .materialize("evolution")
+                .unwrap()
+                .cases
+                .iter()
+                .find(|case| case["scenario_id"] == "trending_topics_build")
+        );
         let delivery = groups
             .iter()
             .find(|g| g["id"] == "case-registry-implementation")

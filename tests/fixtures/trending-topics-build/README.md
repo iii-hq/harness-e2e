@@ -228,7 +228,9 @@ The report's deliverable artifact contains the portable evidence bundle; its fil
 entries include `encoding`, `content` and `sha256`. Use `base64` decoding for PNGs
 and traces. The remote SHA and all criterion observations are in the same artifact.
 
-The Evolution profile now includes a standalone trending-topics build group with
-three repetitions and no technical retries. Its workflow prepares the pinned private
+The Evolution profile includes a standalone trending-topics build group with
+three repetitions and no technical retries. Software engineering includes the
+same case and fixture contract once, also with no technical retries. Both profiles
+use `case-trending-topics-build`, so the workflow prepares the pinned private
 fixture before execution. A published runner containing this revision is required
 before Release Control can execute the new profile; no campaign was dispatched here.

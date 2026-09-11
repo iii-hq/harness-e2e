@@ -2,7 +2,7 @@
 
 Seven native Harness scenarios reproduce the fixture's C1–C7 increments from
 their pinned base commits. The `software-engineering` profile combines them with
-the four Registry cases; `capability` also includes Kanban, while `smoke` and
+the four Registry cases and the trending-topics blog build; `capability` also includes Kanban, while `smoke` and
 `regression` do not. The local controller also runs base/reference
 controls without invoking a model, and supports a standalone DeepSeek smoke.
 See [VALIDATION.md](VALIDATION.md) for observed results and remaining gates.
