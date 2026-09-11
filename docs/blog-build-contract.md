@@ -342,7 +342,7 @@ then routes the controller fetch to that local checkout.
 
 The Software engineering profile also selects the same build case as an
 independent group, with one repetition and no technical retries. It contains
-12 cases and 12 planned runs across 11 groups, preserving the ordered Registry
+13 cases and 13 planned runs across 12 groups, including the Linkly tutorial and preserving the ordered Registry
 implementation/verification pair. The fixture and evaluation contract are shared
 with Evolution; no new application benchmark or model qualification is implied.
 

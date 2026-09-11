@@ -526,7 +526,7 @@ mod tests {
             ("evolution", 23, 69),
             ("resilience", 4, 13),
             ("endurance", 5, 5),
-            ("software-engineering", 12, 12),
+            ("software-engineering", 13, 13),
         ] {
             let snapshot = plan.materialize(id).unwrap();
             assert_eq!(snapshot.scenario_ids.len(), cases);
@@ -562,7 +562,7 @@ mod tests {
     }
 
     #[test]
-    fn software_engineering_profile_includes_trending_topics_as_an_independent_build() {
+    fn software_engineering_profile_includes_trending_topics_and_linkly_independently() {
         let snapshot = embedded()
             .unwrap()
             .materialize("software-engineering")
@@ -575,11 +575,20 @@ mod tests {
                 "registry_environment",
                 "registry_verification",
                 "trending_topics_build",
+                "linkly_tutorial",
             ])
             .collect::<Vec<_>>();
         assert_eq!(snapshot.scenario_ids, expected);
         let groups = snapshot.campaigns[0]["groups"].as_array().unwrap();
-        assert_eq!(groups.len(), 11);
+        assert_eq!(groups.len(), 12);
+        let linkly = groups
+            .iter()
+            .find(|g| g["id"] == "case-linkly-tutorial")
+            .unwrap();
+        assert_eq!(linkly["scenarios"], json!(["linkly_tutorial"]));
+        assert_eq!(linkly["execution_kind"], "scripted_dialogue");
+        assert_eq!(linkly["runs"], 1);
+        assert_eq!(linkly["technical_retries"], 0);
         let build = groups
             .iter()
             .find(|g| g["id"] == "case-trending-topics-build")

@@ -414,7 +414,7 @@
     {
       "id": "software-engineering",
       "label": "Software engineering",
-      "purpose": "Evaluate real application engineering through incremental Kanban tasks, Registry planning, implementation, environment and verification, and a trending-topics blog build.",
+      "purpose": "Evaluate real application engineering through incremental Kanban tasks, Registry development, a trending-topics blog build and the Linkly agentic tutorial.",
       "metrics": [
         "deliverable_success",
         "completion_evidence_coverage",
@@ -426,7 +426,8 @@
         "registry_implementation",
         "registry_environment",
         "registry_verification",
-        "trending_topics_build"
+        "trending_topics_build",
+        "linkly_tutorial"
       ],
       "repetitions": 1,
       "technical_retries": 0,

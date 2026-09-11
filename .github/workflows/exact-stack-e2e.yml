@@ -275,8 +275,17 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
+      - name: Checkout pinned Linkly template
+        if: matrix.group_id == 'case-linkly-tutorial'
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          repository: iii-hq/templates
+          ref: ba1dfd95d4f4120705c8b0cc95d9a2ef86a0290d
+          path: target/linkly-templates
+          persist-credentials: false
+
       - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
-        if: startsWith(matrix.group_id, 'case-kanban-')
+        if: startsWith(matrix.group_id, 'case-kanban-') || matrix.group_id == 'case-linkly-tutorial'
         with:
           node-version: 24.18.0
 
