@@ -32,7 +32,7 @@ class KanbanProbeContractTest(unittest.TestCase):
         script = f"""
 import {{ chromium }} from {json.dumps(PLAYWRIGHT.as_uri())}
 import {{ boardTicketTotal, ticketEditor, commentParentAction, reachedCommentParent,
-  assertAccessibleFormControls }} from {json.dumps(PROBE.as_uri())}
+  assertAccessibleFormControls, mutationFailureFeedback }} from {json.dumps(PROBE.as_uri())}
 const browser = await chromium.launch({{headless:true}})
 try {{
   const page = await browser.newPage()
@@ -70,7 +70,14 @@ try {{
   try {{ await assertAccessibleFormControls(page.locator('form')) }} catch (error) {{ duplicate = error.message }}
   await page.setContent('<p id="settings-status">Settings</p><form><label for="status">Status</label><select id="status"><option>Todo</option></select></form>')
   await assertAccessibleFormControls(page.locator('form'))
-  console.log(JSON.stringify({{totals,direct,explicit,navigated,duplicate,inertCancelRejected}}))
+  const saveErrors = []
+  for (const role of ['status', 'alert']) {{
+    for (const message of ['probe failure', 'Unable to save ticket (500)', 'Unable to move ticket (500)', 'Saved', 'Saving…', 'Loading tickets', 'Moving ticket']) {{
+      await page.setContent(`<p role="${{role}}">${{message}}</p>`)
+      saveErrors.push(await mutationFailureFeedback(page).count())
+    }}
+  }}
+  console.log(JSON.stringify({{totals,direct,explicit,navigated,duplicate,inertCancelRejected,saveErrors}}))
 }} finally {{ await browser.close() }}
 """
         completed = subprocess.run(["node", "--input-type=module", "--eval", script],
@@ -80,6 +87,7 @@ try {{
         self.assertEqual(result['totals'], [[1, 0], [1, 0], [1, 0]])
         self.assertEqual(result['direct'], 'Direct editor')
         self.assertTrue(result['inertCancelRejected'])
+        self.assertEqual(result['saveErrors'], [1, 1, 1, 0, 0, 0, 0, 1, 1, 1, 0, 0, 0, 0])
         self.assertEqual(result['explicit'], 'Explicit editor')
         self.assertTrue(result['navigated'])
         self.assertIn('status', result['duplicate'])
@@ -153,7 +161,7 @@ console.log(JSON.stringify(observed))
             self.skipTest("dashboard Playwright is not installed")
         script = f"""
 import {{ chromium }} from {json.dumps(PLAYWRIGHT.as_uri())}
-import {{ boardLaneWithCount, boardRefreshButton, boardTicketTotal }} from {json.dumps(PROBE.as_uri())}
+import {{ boardLaneWithCount, boardRefreshButton, boardTicketTotal, boardTicketTitle, boardNavigation }} from {json.dumps(PROBE.as_uri())}
 const browser = await chromium.launch({{ headless: true }})
 try {{
   const page = await browser.newPage()
@@ -161,8 +169,10 @@ try {{
     <main>
       <p>5 tickets</p>
       <button id="refresh">Refresh</button>
+      <a href="/">Back to board</a>
       <section id="combined"><h2>Backlog <span>1</span></h2><article><h3>Card</h3></article></section>
       <section id="sibling"><header><h2>To do</h2><span aria-label="1 ticket">1</span></header></section>
+      <section><h2><span>In progress</span><span aria-label="1 ticket">1</span></h2><ul><li><p>Paragraph card</p></li></ul></section>
     </main>`)
   await page.locator('#refresh').evaluate((button) => button.addEventListener('click', () => window.refreshed = true))
   await boardRefreshButton(page).click()
@@ -170,6 +180,9 @@ try {{
     combined: await (await boardLaneWithCount(page, 'Backlog', 1)).count(),
     sibling: await (await boardLaneWithCount(page, 'To do', 1)).count(),
     total: await boardTicketTotal(page, 5).count(),
+    accessibleCount: await (await boardLaneWithCount(page, 'In progress', 1)).count(),
+    paragraphTitle: await boardTicketTitle(page, 'Paragraph card').count(),
+    boardLink: await boardNavigation(page).count(),
     refreshed: await page.evaluate(() => window.refreshed === true),
   }}
   await page.locator('#sibling span').evaluate((element) => {{ element.textContent = '2'; element.setAttribute('aria-label', '2 tickets') }})
@@ -200,7 +213,8 @@ try {{
         )
         self.assertEqual(completed.returncode, 0, completed.stderr)
         self.assertEqual(json.loads(completed.stdout), {
-            "valid": {"combined": 1, "sibling": 1, "total": 1, "refreshed": True},
+            "valid": {"combined": 1, "sibling": 1, "total": 1, "refreshed": True,
+                      "accessibleCount": 1, "paragraphTitle": 1, "boardLink": 1},
             "wrongLaneCountRejected": True,
             "loading": {"zero": 0, "refresh": 0},
             "fabricatedZero": 1,

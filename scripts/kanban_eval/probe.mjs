@@ -349,7 +349,7 @@ async function screenshot(page, output, name) {
 }
 
 export function boardLane(page, label) {
-  return page.getByRole('heading', { name: new RegExp(`^${label}(?:\\s*\\d+)?$`, 'i') }).locator('xpath=ancestor::section[1]')
+  return page.getByRole('heading', { name: new RegExp(`^${label}(?:\\s*\\d+(?:\\s+tickets?)?)?$`, 'i') }).locator('xpath=ancestor::section[1]')
 }
 
 export async function boardLaneWithCount(page, label, count) {
@@ -362,6 +362,19 @@ export async function boardLaneWithCount(page, label, count) {
 
 export function boardTicketTotal(page, count) {
   return page.getByText(new RegExp(`^(?:${count}\\s+tickets?|total\\s+tickets?\\s*:?\\s*${count})$`, 'i')).filter({ visible: true })
+}
+
+export function boardTicketTitle(scope, title) {
+  return scope.getByText(title, { exact: true }).filter({ visible: true })
+}
+
+export function boardNavigation(page) {
+  return page.getByRole('link', { name: /board/i }).filter({ visible: true })
+}
+
+export function mutationFailureFeedback(page) {
+  return page.getByRole('alert').or(page.getByRole('status'))
+    .filter({ hasText: /probe failure|unable.*(?:save|move)|failed.*(?:save|move)|error/i }).filter({ visible: true })
 }
 
 export async function ticketEditor(page, expectedTitle) {
@@ -636,7 +649,7 @@ const PROBES = {
         const [, label] = statuses[index]
         const lane = await boardLaneWithCount(page, label, 1)
         expect(await lane.getByText(seeded[index].key, { exact: true }).count() === 1, `${label} readable key is missing`)
-        expect(await lane.getByRole('heading', { name: seeded[index].title }).count() === 1, `${label} card is missing`)
+        expect(await boardTicketTitle(lane, seeded[index].title).count() === 1, `${label} card is missing`)
         expect(await lane.getByText(/^high$/i).count() === 1, `${label} priority is missing`)
         expect(await lane.getByText('Grace', { exact: true }).count() === 1, `${label} assignee is missing`)
       }
@@ -655,21 +668,21 @@ const PROBES = {
       const readsBeforeRefresh = ticketReads
       await boardRefreshButton(page).click()
       await eventually(async () => ticketReads > readsBeforeRefresh, 'refresh did not request current tickets')
-      await eventually(async () => await page.getByRole('heading', { name: refreshed.title }).count(), 'refresh did not load the new ticket')
+      await eventually(async () => await boardTicketTitle(page, refreshed.title).count(), 'refresh did not load the new ticket')
       try {
         await page.getByRole('link', { name: 'Settings' }).click()
         await page.getByLabel('Data directory').fill('./board-probe-empty')
         await page.getByRole('button', { name: 'Save settings' }).click()
         await expectText(page.getByRole('status').filter({ hasText: /saved/i }), /saved/i)
-        await page.getByRole('link', { name: /Board/ }).click()
+        await boardNavigation(page).click()
         await expectText(page.getByRole('status').filter({ hasText: /no tickets|empty/i }), /no tickets|empty/i)
         await eventually(async () => await boardTicketTotal(page, 0).count() === 1, 'selected empty store total is wrong')
         await page.getByRole('link', { name: 'Settings' }).click()
         await page.getByLabel('Data directory').fill(initialConfig.data_dir)
         await page.getByRole('button', { name: 'Save settings' }).click()
         await expectText(page.getByRole('status').filter({ hasText: /saved/i }), /saved/i)
-        await page.getByRole('link', { name: /Board/ }).click()
-        await eventually(async () => await page.getByRole('heading', { name: refreshed.title }).count(), 'returning from settings did not reload the restored store')
+        await boardNavigation(page).click()
+        await eventually(async () => await boardTicketTitle(page, refreshed.title).count(), 'returning from settings did not reload the restored store')
       } finally {
         await json(await api('/api/config', {
           method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ data_dir: initialConfig.data_dir }),
@@ -683,7 +696,7 @@ const PROBES = {
       const markup = '<img src=x onerror=alert(1)> literal title'
       await create(trigger, { title: markup })
       const { context, page } = await pageFor(browser, baseUrl)
-      await eventually(async () => await page.getByRole('heading', { name: markup }).count(), 'literal ticket title did not load')
+      await eventually(async () => await boardTicketTitle(page, markup).count(), 'literal ticket title did not load')
       expect(await page.locator('img[src="x"]').count() === 0, 'ticket markup created an image element')
       expect(!await page.evaluate(() => document.documentElement.scrollWidth > document.documentElement.clientWidth), 'desktop page has document-wide horizontal overflow')
       await screenshot(page, output, 'board-desktop')
@@ -862,7 +875,7 @@ const PROBES = {
         await route.continue()
       })
       await edit.getByRole('button', { name: 'Save changes' }).click()
-      await expectText(page.getByRole('status').filter({ hasText: /Unable to save ticket/ }), /Unable to save ticket/)
+      await expectText(mutationFailureFeedback(page), /\S/)
       expect(await edit.getByLabel('Title').inputValue() === 'Edited probe', 'failed save erased the title draft')
       expect(await edit.getByLabel('Assignee').inputValue() === 'Updated', 'failed save erased another draft field')
       await edit.getByRole('button', { name: 'Save changes' }).click()
@@ -925,7 +938,7 @@ const PROBES = {
         await route.continue()
       })
       await card.dragTo(target)
-      await expectText(page.getByRole('status').filter({ hasText: /Unable to move ticket/ }), /Unable to move ticket/)
+      await expectText(mutationFailureFeedback(page), /\S/)
       expect((await json(await api(`/api/tickets/${ticket.id}`))).ticket.status === 'todo', 'failed drag changed persisted status')
       const todo = await boardLaneWithCount(page, 'To do', 1)
       expect(await todo.getByRole('heading', { name: 'Late saved probe' }).count() === 1, 'failed drag moved the visible card')
@@ -953,7 +966,7 @@ const PROBES = {
       await page.getByRole('link', { name: 'Settings' }).click()
       release()
       await eventually(async () => (await json(await api(`/api/tickets/${ticket.id}`))).ticket.status === 'in_review', 'late move did not persist after navigation')
-      await page.getByRole('link', { name: /Board/ }).click()
+      await boardNavigation(page).click()
       const restoredReview = await boardLaneWithCount(page, 'In review', 1)
       await eventually(async () => await restoredReview.getByRole('heading', { name: 'Late saved probe' }).count(), 'late move is absent from the relevant board')
       await screenshot(page, output, 'board-after-drag')

@@ -1,4 +1,47 @@
-# Kanban validation — 2026-09-09
+# Kanban validation — 2026-09-11
+
+## Evaluation integrity and original-candidate replays
+
+Investigated [Actions run 34596086686](https://github.com/iii-hq/harness-e2e/actions/runs/34596086686).
+All six available Kanban candidates were invalidated after functional probing.
+Real Docker controls confirmed that Compose writes both project state and a new
+canonical empty `worker-compose.lock` while evaluating local applications. State
+now lives outside the source workspace; only a new, exactly matching empty lock
+is classified as generated. Existing/dependency locks and actual source mutations
+remain protected. Both Git trees/diffs and provisional results are retained.
+
+Validation used the exact iii 0.23.1-rc.6 binary from that run, SHA-256
+`95a7ca0689edb606954e84486f3f7f482ae3ee0886301c47b214b464c0ce673c`,
+the pinned Playwright image and the original fixture/dependency cache. All seven
+reference controls passed, all seven base controls failed functionally, and none
+ended with evaluator/infrastructure failure. C3/C5 reference, base and candidate
+controls were repeated after the semantic probe corrections below.
+
+Replays applied the six captured diffs to fresh isolated base snapshots without
+calling a model. Every delivered diff matched the original byte for byte. All
+six final replays completed with valid source integrity:
+
+| Candidate | Functional result | Evidence |
+| --- | --- | --- |
+| C2 persistence | Failed | Candidate rejects iii's injected `_caller_worker_id`; the runtime contract now explicitly documents this metadata. |
+| C3 board | Passed | All four criteria pass after accepting equivalent total/count wording, paragraph card titles and `Back to board` navigation. |
+| C4 ticket flow | Failed | Duplicate `status` IDs break label association; the probe reports the duplicate directly. |
+| C5 edit/move | Passed | All five criteria pass with the already-open editor and actual save/move error feedback; Cancel, drafts, persistence, drag and restart remain checked. |
+| C6 discussion | Failed | Parent navigation and foreign-parent rejection now pass; another ticket's comment form remains blocked while a previous POST is pending. |
+| C7 live | Failed | Original delivered diff is empty and no SSE implementation was applied. |
+
+Historical results were not rewritten. These are re-evaluations, not new model
+attempts or evidence of changed model performance.
+
+Local verification: 716 Rust tests passed (one ignored), Clippy with warnings
+denied and rustfmt passed, 276 Python tests ran (six platform-dependent skips),
+54 focused Kanban tests passed, and 39 Node contract tests passed. Fresh focused
+native and real-Chromium tests passed after the final probe calibration. The
+macOS Rust suite used a short canonical temporary directory to avoid unrelated
+fixture cleanup/socket path constraints. Independent review added negative
+coverage for a Cancel action that does nothing and non-error alert/status text.
+
+# Historical validation — 2026-09-09
 
 ## Native CI integration: local acceptance passed; publication pending
 
