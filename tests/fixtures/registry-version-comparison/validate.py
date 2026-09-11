@@ -16,7 +16,7 @@ import subprocess
 REGISTRY_SHA = "662eb87c1bdbb395f36264d5d26bf823e2ace783"
 IMPLEMENTATION_METRICS = (
     "implementation.same_version", "implementation.function_removal", "implementation.required_impact",
-    "implementation.object_order", "implementation.required_order", "implementation.enum_order",
+    "implementation.exact_version", "implementation.required_order", "implementation.enum_order",
     "implementation.config_array_order", "implementation.missing_metadata", "implementation.worker_lookup",
     "implementation.reverse_kinds", "implementation.reverse_values", "implementation.reverse_impact",
     "implementation.shared_url", "implementation.stale_results", "implementation.patch_application",
@@ -35,7 +35,7 @@ ENVIRONMENT_METRICS = (
     "environment.database_readiness",
 )
 VERIFICATION_METRICS = (
-    "verification.recall", "verification.precision", "verification.execution_coverage",
+    "verification.outcome_accuracy", "verification.execution_coverage",
     "verification.evidence_coverage", "verification.source_preservation",
 )
 
@@ -67,7 +67,8 @@ def infrastructure_failure(result):
     text = (result.get("stderr", "") + result.get("stdout", "")).lower()
     return result.get("timeout") or any(token in text for token in (
         "cannot connect to the docker daemon", "no such container", "is the docker daemon running",
-        "permission denied while trying to connect"))
+        "permission denied while trying to connect", "address already in use",
+        "port is already allocated", "bind: address"))
 
 
 def command_binary(metric_id, result, evidence):
@@ -130,15 +131,78 @@ def actual_evidence(run_root, task_root, references):
     return sorted(set(evidence))
 
 
+def substantive_text(value):
+    return isinstance(value, str) and bool(value.strip())
+
+
+def evidence_for_check(run_root, task_root, case, command_record):
+    """Validate v2 structural attribution without claiming the observation is true."""
+    record_reference = case.get("evidence_record")
+    if not isinstance(record_reference, str):
+        return []
+    record_paths = actual_evidence(run_root, task_root, [record_reference])
+    if len(record_paths) != 1:
+        return []
+    record_path = run_root / record_paths[0]
+    if not 0 < record_path.stat().st_size <= 64 * 1024:
+        return []
+    try:
+        record = json.loads(record_path.read_text())
+    except (json.JSONDecodeError, OSError, UnicodeError):
+        return []
+    if not isinstance(record, dict):
+        return []
+    check_id = case.get("id")
+    if record.get("check_id", record.get("id")) != check_id:
+        return []
+    if record.get("status") != case.get("status") or case.get("status") not in ("pass", "fail"):
+        return []
+    if record.get("command_id") != command_record.get("_record_id"):
+        return []
+    if not substantive_text(record.get("expected")) or not substantive_text(record.get("observed")):
+        return []
+    artifacts = record.get("artifacts")
+    cited = case.get("evidence")
+    if not isinstance(artifacts, list) or not artifacts or not isinstance(cited, list):
+        return []
+    if any(not isinstance(reference, str) or reference not in cited for reference in artifacts):
+        return []
+    recorded_artifacts = command_record.get("output_artifacts")
+    if not isinstance(recorded_artifacts, dict):
+        return []
+    validated = []
+    for reference in artifacts:
+        paths = actual_evidence(run_root, task_root, [reference])
+        if len(paths) != 1:
+            return []
+        path = run_root / paths[0]
+        try:
+            workspace_reference = path.relative_to(task_root / "workspace").as_posix()
+        except ValueError:
+            return []
+        metadata = recorded_artifacts.get(workspace_reference)
+        if not isinstance(metadata, dict) or not 0 < path.stat().st_size <= 16 * 1024 * 1024:
+            return []
+        if metadata.get("size") != path.stat().st_size:
+            return []
+        if metadata.get("sha256") != hashlib.sha256(path.read_bytes()).hexdigest():
+            return []
+        validated.extend(paths)
+    return record_paths + validated
+
+
 def feature_probe(task_root, assets, state):
     """Run the independent probe in the real web container and collect its JSON."""
     script = assets / "validate-feature.cjs"
-    if not script.is_file():
+    detail_probe = assets / "detail-probe.cjs"
+    if not script.is_file() or not detail_probe.is_file():
         return None, "feature_probe_not_supplied"
+    source = (f"const registryDetailProbeSource = {json.dumps(detail_probe.read_text())};\n"
+              + detail_probe.read_text() + "\n" + script.read_text()).encode()
     command = ["docker", "exec", "-i", state["container"], "docker", "compose", "-f",
                "/fixture/compose.yaml", "exec", "-T", "web", "node", "-"]
     try:
-        result = subprocess.run(command, input=script.read_bytes(), stdout=subprocess.PIPE,
+        result = subprocess.run(command, input=source, stdout=subprocess.PIPE,
                                 stderr=subprocess.PIPE, timeout=180, check=False)
     except subprocess.TimeoutExpired:
         return None, "feature_probe_timeout"
@@ -168,15 +232,31 @@ def checks_by_id(feature):
 
 
 def recorded_commands(task_root):
-    commands = set()
+    commands = {}
     for path in (task_root / "commands").glob("*.json"):
         try:
             item = json.loads(path.read_text())
         except (json.JSONDecodeError, OSError):
             continue
-        if isinstance(item.get("command"), str):
-            commands.add(item["command"])
+        command_id = item.get("command_id", path.stem)
+        exit_code = item.get("exit_code")
+        if (isinstance(command_id, str) and command_id == path.stem
+                and isinstance(item.get("command"), str)
+                and isinstance(exit_code, int) and not isinstance(exit_code, bool)):
+            commands[command_id] = {**item, "_record_id": command_id}
     return commands
+
+
+def reported_command(case, commands):
+    command_id = case.get("command_id")
+    if isinstance(command_id, str):
+        return commands.get(command_id)
+    legacy = case.get("command")
+    if not isinstance(legacy, str):
+        return None
+    normalized = legacy.strip()
+    return next((record for record in commands.values()
+                 if record["command"].strip() == normalized), None)
 
 
 def implementation_observations(task_root, assets, state, test):
@@ -234,14 +314,11 @@ def verification_observations(task_root, assets, state):
     truth_complete = all(independent.get(case_id, {}).get("status") == "measured"
                          and independent[case_id].get("value") in (0, 1)
                          for case_id in PUBLIC_VERIFICATION_IDS)
-    known_failed = {case_id for case_id in PUBLIC_VERIFICATION_IDS
-                    if independent.get(case_id, {}).get("status") == "measured"
-                    and independent[case_id].get("value") == 0}
     feature_path = task_root / "validation" / "feature.json"
     feature_evidence = relative_evidence(run_root, feature_path)
     checks_path = task_root / "workspace" / "output" / "checks.json"
     if not checks_path.is_file():
-        return empty_verification(task_root, state, run_root, truth_complete, known_failed,
+        return empty_verification(task_root, state, run_root, truth_complete,
                                   [item for item in [feature_evidence] if item])
     try:
         document = json.loads(checks_path.read_text())
@@ -250,58 +327,58 @@ def verification_observations(task_root, assets, state):
             raise ValueError("checks must be an array")
     except (json.JSONDecodeError, ValueError, AttributeError):
         invalid_evidence = [relative_evidence(run_root, checks_path), feature_evidence]
-        return empty_verification(task_root, state, run_root, truth_complete, known_failed,
+        return empty_verification(task_root, state, run_root, truth_complete,
                                   [item for item in invalid_evidence if item])
     report = {case["id"]: case for case in reported if isinstance(case, dict)
-              and isinstance(case.get("id"), str)}
-    report_fail = {case_id for case_id, case in report.items() if case.get("status") == "fail"}
+              and case.get("id") in PUBLIC_VERIFICATION_IDS}
     commands = recorded_commands(task_root)
-    evidenced = {case_id for case_id, case in report.items()
-                 if case.get("status") in ("pass", "fail", "blocked")
-                 and actual_evidence(run_root, task_root, case.get("evidence"))}
-    executed = {case_id for case_id, case in report.items()
-                if case_id in PUBLIC_VERIFICATION_IDS and case.get("status") in ("pass", "fail")
-                and isinstance(case.get("command"), str) and case["command"] in commands
-                and case_id in evidenced}
+    execution_records = {case_id: reported_command(case, commands)
+                         for case_id, case in report.items()
+                         if case.get("status") in ("pass", "fail")}
+    existing_evidence = {case_id: actual_evidence(run_root, task_root, case.get("evidence"))
+                         for case_id, case in report.items()
+                         if case.get("status") in ("pass", "fail")}
+    pertinent_evidence = {
+        case_id: evidence_for_check(run_root, task_root, report[case_id], record)
+        for case_id, record in execution_records.items() if record
+    }
+    executed = {case_id for case_id, record in execution_records.items()
+                if record and any((run_root / item).stat().st_size > 0
+                                  for item in existing_evidence.get(case_id, []))}
+    evidenced = {case_id for case_id, evidence_paths in pertinent_evidence.items()
+                 if evidence_paths}
+    correct = {case_id for case_id in PUBLIC_VERIFICATION_IDS
+               if case_id in report
+               and report[case_id].get("status") in ("pass", "fail")
+               and independent.get(case_id, {}).get("status") == "measured"
+               and independent[case_id].get("value") in (0, 1)
+               and ((report[case_id]["status"] == "pass") == (independent[case_id]["value"] == 1))}
     report_evidence = relative_evidence(run_root, checks_path)
     evidence = [item for item in (report_evidence, feature_evidence) if item]
     observations = []
-    if not truth_complete:
-        observations.append(unavailable("verification.recall", "independent_truth_incomplete"))
-    elif not known_failed:
-        observations.append(ratio("verification.recall", 0, 0, evidence,
-                                  "no_independently_failing_checks", empty_value=1))
+    if truth_complete:
+        observations.append(ratio("verification.outcome_accuracy", len(correct),
+                                  len(PUBLIC_VERIFICATION_IDS), evidence))
     else:
-        observations.append(ratio("verification.recall", len(known_failed & report_fail), len(known_failed), evidence))
-    if any(independent.get(case_id, {}).get("status") != "measured"
-           for case_id in report_fail & PUBLIC_VERIFICATION_IDS):
-        observations.append(unavailable("verification.precision", "reported_failure_truth_unavailable"))
-    elif not report_fail:
-        observations.append(ratio("verification.precision", 0, 0, evidence,
-                                  "no_reported_failures", empty_value=1))
-    else:
-        observations.append(ratio("verification.precision", len(known_failed & report_fail), len(report_fail), evidence))
+        observations.append(unavailable("verification.outcome_accuracy", "independent_truth_incomplete"))
     observations.append(ratio("verification.execution_coverage", len(executed), len(PUBLIC_VERIFICATION_IDS), evidence))
-    observations.append(ratio("verification.evidence_coverage", len(evidenced), len(report), evidence,
-                              "no_reported_outcomes", empty_value=0))
+    observations.append(ratio("verification.evidence_coverage", len(evidenced),
+                              len(PUBLIC_VERIFICATION_IDS), evidence))
     observations.extend(source_preservation(task_root, state, run_root))
     return observations
 
 
-def empty_verification(task_root, state, run_root, truth_complete, known_failed, evidence):
+def empty_verification(task_root, state, run_root, truth_complete, evidence):
     observations = []
     if truth_complete:
-        observations.append(ratio("verification.recall", 0, len(known_failed), evidence)
-                            if known_failed else ratio("verification.recall", 0, 0, evidence,
-                                                      "no_independently_failing_checks", empty_value=1))
+        observations.append(ratio("verification.outcome_accuracy", 0,
+                                  len(PUBLIC_VERIFICATION_IDS), evidence))
     else:
-        observations.append(unavailable("verification.recall", "independent_truth_incomplete"))
-    observations.append(ratio("verification.precision", 0, 0, evidence,
-                              "no_reported_failures", empty_value=1))
+        observations.append(unavailable("verification.outcome_accuracy", "independent_truth_incomplete"))
     observations.append(ratio("verification.execution_coverage", 0,
                               len(PUBLIC_VERIFICATION_IDS), evidence))
-    observations.append(ratio("verification.evidence_coverage", 0, 0, evidence,
-                              "no_reported_outcomes", empty_value=0))
+    observations.append(ratio("verification.evidence_coverage", 0,
+                              len(PUBLIC_VERIFICATION_IDS), evidence))
     observations.extend(source_preservation(task_root, state, run_root))
     return observations
 
@@ -315,6 +392,35 @@ def source_preservation(task_root, state, run_root):
         return [binary("verification.source_preservation", hashlib.sha256(source_patch.read_bytes()).hexdigest() == expected_patch, [item for item in evidence if item])]
     else:
         return [unavailable("verification.source_preservation", "delivery_or_final_patch_missing")]
+
+
+def allocate_validator_ports(state, excluded=()):
+    """Ask the private DIND namespace for two currently unused loopback ports."""
+    excluded_ports = {int(state["web_port"]), int(state["api_port"]), *map(int, excluded)}
+    script = "\n".join((
+        "import json, socket",
+        f"excluded = set({sorted(excluded_ports)!r})",
+        "sockets = []",
+        "while len(sockets) < 2:",
+        "    candidate = socket.socket()",
+        "    candidate.bind(('127.0.0.1', 0))",
+        "    if candidate.getsockname()[1] in excluded:",
+        "        candidate.close()",
+        "    else:",
+        "        sockets.append(candidate)",
+        "print(json.dumps([candidate.getsockname()[1] for candidate in sockets]))",
+    ))
+    result = controller_command(state, f"python3 -c {shlex.quote(script)}", 30)
+    try:
+        ports = json.loads(result.get("stdout", ""))
+        ports = tuple(int(port) for port in ports)
+    except (json.JSONDecodeError, TypeError, ValueError):
+        raise ValueError("validator_port_allocation_failed")
+    subject_ports = excluded_ports
+    if result.get("exit_code") != 0 or len(ports) != 2 or len(set(ports)) != 2 \
+            or any(not 0 < port < 65536 for port in ports) or subject_ports.intersection(ports):
+        raise ValueError("validator_port_allocation_failed")
+    return ports
 
 
 def environment_observations(task_root, assets, state):
@@ -346,9 +452,19 @@ def environment_observations(task_root, assets, state):
     compose_arg = shlex.quote(f"/workspace/{compose}")
     db_service = shlex.quote(db_service)
     project = f"validator-{state['container'][-12:]}"
+    try:
+        web_port, api_port = allocate_validator_ports(state)
+        alternate_web_port, alternate_api_port = allocate_validator_ports(
+            state, {web_port, api_port}
+        )
+        if {web_port, api_port}.intersection({alternate_web_port, alternate_api_port}):
+            raise ValueError("validator_port_allocation_failed")
+    except ValueError:
+        evidence = [item for item in [relative_evidence(run_root, contract)] if item]
+        return [unavailable(metric, "validator_port_allocation_failed") for metric in metric_ids]
 
-    def scoped(command, selected_project=project, web_port=state["web_port"], api_port=state["api_port"]):
-        variables = f"COMPOSE_PROJECT_NAME={shlex.quote(selected_project)} WEB_PORT={web_port} API_PORT={api_port}"
+    def scoped(command, selected_project=project, selected_web_port=web_port, selected_api_port=api_port):
+        variables = f"COMPOSE_PROJECT_NAME={shlex.quote(selected_project)} WEB_PORT={selected_web_port} API_PORT={selected_api_port}"
         return f"{variables} sh -lc {shlex.quote(command)}"
 
     def checked(name, command, timeout=180):
@@ -357,10 +473,21 @@ def environment_observations(task_root, assets, state):
 
     build, build_evidence = checked("environment-build", scoped(f"docker compose -f {compose_arg} build"), 600)
     start, start_evidence = checked("environment-start", scoped(startup), 600)
+    identity_command = scoped(
+        f"set -eu; api_id=$(docker compose -f {compose_arg} ps -q api); "
+        f"web_id=$(docker compose -f {compose_arg} ps -q web); "
+        "test -n \"$api_id\"; test -n \"$web_id\"; "
+        f"test \"$(docker inspect -f '{{{{ index .Config.Labels \"com.docker.compose.project\" }}}}' \"$api_id\")\" = {shlex.quote(project)}; "
+        f"test \"$(docker inspect -f '{{{{ index .Config.Labels \"com.docker.compose.project\" }}}}' \"$web_id\")\" = {shlex.quote(project)}; "
+        f"docker port \"$api_id\" | grep -Eq ':{api_port}$'; "
+        f"docker port \"$web_id\" | grep -Eq ':{web_port}$'"
+    )
+    identity, identity_evidence = checked("environment-instance-identity", identity_command, 60)
+    preparation_ready = start.get("exit_code") == 0 and identity.get("exit_code") == 0
     migrate, migrate_evidence = checked("environment-migrate", scoped(migration), 300)
     db, db_evidence = checked("environment-db-ready", scoped(f"docker compose -f {compose_arg} exec -T {db_service} pg_isready"), 90)
     health_assertion = "import json,sys; d=json.load(sys.stdin); assert any(x.get('name') == 'database' and x.get('status') == 'ok' for x in d.get('results', []))"
-    api, api_evidence = checked("environment-api-health", f"curl -fsS http://127.0.0.1:{state['api_port']}/health | python3 -c {shlex.quote(health_assertion)}", 60)
+    api, api_evidence = checked("environment-api-health", f"curl -fsS http://127.0.0.1:{api_port}/health | python3 -c {shlex.quote(health_assertion)}", 60)
     browser_script = "const{chromium}=require('@playwright/test');(async()=>{const b=await chromium.launch({headless:true});try{const p=await b.newPage();await p.goto(process.env.E2E_APP_URL+'/workers/orders-worker',{waitUntil:'networkidle'});if(!(await p.locator('body').innerText()).includes('orders-worker'))process.exitCode=1}finally{await b.close()}})().catch(()=>process.exitCode=1)"
     web_config, web_evidence = checked("environment-web-config", scoped(f"docker compose -f {compose_arg} config --format json"), 60)
     web, web_error = None, None
@@ -370,7 +497,7 @@ def environment_observations(task_root, assets, state):
         try:
             config = json.loads(web_config.get("stdout", ""))
             mappings = [item["target"] for item in config["services"]["web"]["ports"]
-                        if str(item.get("published")) == str(state["web_port"])]
+                        if str(item.get("published")) == str(web_port)]
             if len(mappings) != 1 or not 0 < int(mappings[0]) < 65536:
                 raise ValueError
             target_port = int(mappings[0])
@@ -396,7 +523,7 @@ def environment_observations(task_root, assets, state):
     canonical, canonical_evidence = checked("environment-canonical-seed", scoped(canonical_seed_query), 90)
     seeded = (expected_versions == set(seed.get("stdout", "").split())
               and canonical.get("stdout", "").strip() == "t")
-    artifacts, artifact_evidence = checked("environment-artifacts", "set -eu; cd /workspace/inputs/artifacts; for f in *; do test \"$(sha256sum \"$f\" | cut -d' ' -f1)\" = \"$(curl -fsS http://127.0.0.1:%s/fixture-artifacts/$f | sha256sum | cut -d' ' -f1)\"; done" % state["web_port"], 120)
+    artifacts, artifact_evidence = checked("environment-artifacts", "set -eu; cd /workspace/inputs/artifacts; for f in *; do test \"$(sha256sum \"$f\" | cut -d' ' -f1)\" = \"$(curl -fsS http://127.0.0.1:%s/fixture-artifacts/$f | sha256sum | cut -d' ' -f1)\"; done" % web_port, 120)
     # Restart and replay use the explicit startup contract under a different
     # project and ports, so success cannot be borrowed from the first stack.
     sentinel = f"docker compose -f {compose_arg} exec -T {db_service} {psql} -v ON_ERROR_STOP=1 -Atc \"create table if not exists validator_restart_sentinel(id integer); truncate validator_restart_sentinel; insert into validator_restart_sentinel values (1)\""
@@ -405,8 +532,22 @@ def environment_observations(task_root, assets, state):
     persistence_query = f"docker compose -f {compose_arg} exec -T {db_service} {psql} -Atc \"select count(*) from validator_restart_sentinel\""
     persisted, persisted_evidence = checked("environment-persistence", scoped(persistence_query), 90)
     alternate_project = f"{project}-replay"
-    alternate_web_port, alternate_api_port = 41000, 41001
     replay, replay_evidence = checked("environment-clean-replay", scoped(startup, alternate_project, alternate_web_port, alternate_api_port), 600)
+    replay_identity_command = scoped(
+        f"set -eu; api_id=$(docker compose -f {compose_arg} ps -q api); "
+        f"web_id=$(docker compose -f {compose_arg} ps -q web); "
+        "test -n \"$api_id\"; test -n \"$web_id\"; "
+        f"test \"$(docker inspect -f '{{{{ index .Config.Labels \"com.docker.compose.project\" }}}}' \"$api_id\")\" = {shlex.quote(alternate_project)}; "
+        f"test \"$(docker inspect -f '{{{{ index .Config.Labels \"com.docker.compose.project\" }}}}' \"$web_id\")\" = {shlex.quote(alternate_project)}; "
+        f"docker port \"$api_id\" | grep -Eq ':{alternate_api_port}$'; "
+        f"docker port \"$web_id\" | grep -Eq ':{alternate_web_port}$'",
+        alternate_project, alternate_web_port, alternate_api_port,
+    )
+    replay_identity, replay_identity_evidence = checked(
+        "environment-clean-replay-identity", replay_identity_command, 60
+    )
+    replay_preparation_ready = (replay.get("exit_code") == 0
+                                and replay_identity.get("exit_code") == 0)
     replay_health, replay_health_evidence = checked("environment-clean-replay-health", f"curl -fsS http://127.0.0.1:{alternate_api_port}/health | python3 -c {shlex.quote(health_assertion)}", 60)
     sentinel_create = (f"docker compose -f {compose_arg} exec -T {db_service} {psql} -v ON_ERROR_STOP=1 -Atc "
                        "\"create table validator_isolation_sentinel(id integer); insert into validator_isolation_sentinel values (1);\"")
@@ -431,28 +572,45 @@ def environment_observations(task_root, assets, state):
         "environment.build": (build, build_evidence),
         "environment.migration": (migrate, migrate_evidence),
         "environment.seed": (seeded and seed.get("exit_code") == 0 and canonical.get("exit_code") == 0, seed_evidence + canonical_evidence),
-        "environment.api_readiness": (api, api_evidence),
-        "environment.frontend_reachability": (web, web_evidence),
+        "environment.api_readiness": (api, identity_evidence + api_evidence),
+        "environment.frontend_reachability": (web, identity_evidence + web_evidence),
         "environment.artifact_integrity": (artifacts, artifact_evidence),
-        "environment.clean_reproduction": (replay.get("exit_code") == 0 and replay_health.get("exit_code") == 0, replay_evidence + replay_health_evidence),
+        "environment.clean_reproduction": (replay.get("exit_code") == 0 and replay_identity.get("exit_code") == 0 and replay_health.get("exit_code") == 0, replay_evidence + replay_identity_evidence + replay_health_evidence),
         "environment.restart_persistence": (sentinel_result.get("exit_code") == 0 and restart.get("exit_code") == 0 and persisted.get("stdout", "").strip() == "1", sentinel_evidence + restart_evidence + persisted_evidence),
         "environment.parallel_isolation": (isolation.get("exit_code") == 0 and isolation.get("stdout", "").strip() == "t" and resources.get("exit_code") == 0, isolation_evidence + resources_evidence),
         "environment.cleanup_completeness": (cleanup, cleanup_evidence),
         "environment.cleanup_scope": (scope_before.get("exit_code") == 0 and scope_after.get("exit_code") == 0 and bool(scope_before.get("stdout", "").strip()) and scope_before.get("stdout", "").split() == scope_after.get("stdout", "").split(), scope_before_evidence + cleanup_evidence + scope_after_evidence),
         "environment.registry_base": (base.get("exit_code") == 0 and base.get("stdout", "").strip() == REGISTRY_SHA, base_evidence),
-        "environment.runtime_identity": (runtime, runtime_evidence),
+        "environment.runtime_identity": (runtime, identity_evidence + runtime_evidence),
         "environment.database_readiness": (db, db_evidence),
     }
     combined_results = {
-        "environment.clean_reproduction": [replay, replay_health],
+        "environment.clean_reproduction": [replay, replay_identity, replay_health],
         "environment.seed": [seed, canonical],
         "environment.restart_persistence": [sentinel_result, restart, persisted],
         "environment.parallel_isolation": [isolation, resources],
         "environment.cleanup_scope": [scope_before, cleanup, scope_after],
     }
     observations = []
+    preparation_dependent = {
+        "environment.migration", "environment.seed", "environment.api_readiness",
+        "environment.frontend_reachability", "environment.artifact_integrity",
+        "environment.restart_persistence", "environment.parallel_isolation",
+        "environment.cleanup_scope", "environment.runtime_identity",
+        "environment.database_readiness",
+    }
+    replay_dependent = {
+        "environment.clean_reproduction", "environment.parallel_isolation",
+        "environment.cleanup_scope",
+    }
     for metric in metric_ids:
         value, evidence = values[metric]
+        if not preparation_ready and metric in preparation_dependent:
+            observations.append(unavailable(metric, "validator_preparation_failed"))
+            continue
+        if not replay_preparation_ready and metric in replay_dependent:
+            observations.append(unavailable(metric, "validator_replay_preparation_failed"))
+            continue
         if metric == "environment.frontend_reachability" and web_error:
             observations.append(unavailable(metric, web_error))
             continue

@@ -4,6 +4,9 @@ import { mkdir, readFile, rename, writeFile } from 'node:fs/promises'
 import { randomUUID } from 'node:crypto'
 import { pathToFileURL } from 'node:url'
 import { join } from 'node:path'
+import { isDeepStrictEqual as sameJson } from 'node:util'
+
+export { sameJson }
 
 const CASES = [
   'kanban_c1_foundation',
@@ -15,55 +18,7 @@ const CASES = [
   'kanban_c7_live',
 ]
 
-const CRITERION_DEPENDENCIES = {
-  kanban_c1_foundation: {
-    criterion_1: ['foundation_assets_and_safe_routes'],
-    criterion_2: ['foundation_configuration_contract'],
-    criterion_3: ['foundation_configuration_contract', 'foundation_accessible_settings'],
-    criterion_4: ['foundation_assets_and_safe_routes', 'foundation_configuration_contract'],
-    criterion_5: ['foundation_development_hot_reload', 'foundation_accessible_settings'],
-  },
-  kanban_c2_persistence: {
-    criterion_1: ['persistence_iii_crud'],
-    criterion_2: ['persistence_iii_crud'],
-    criterion_3: ['persistence_directory_isolation_and_restart'],
-    criterion_4: ['persistence_invalid_input_no_write', 'persistence_corrupt_and_duplicate_store_fail_closed'],
-  },
-  kanban_c3_board: {
-    criterion_1: ['board_lanes_counts_and_metadata'],
-    criterion_2: ['board_loading_empty_error_and_retry'],
-    criterion_3: ['board_refresh_and_settings_reload'],
-    criterion_4: ['board_safe_text_and_responsive_layout'],
-  },
-  kanban_c4_ticket_flow: {
-    criterion_1: ['ticket_flow_create_detail_and_delete'],
-    criterion_2: ['ticket_flow_create_detail_and_delete'],
-    criterion_3: ['ticket_flow_delete_failure_navigation_and_restart'],
-    criterion_4: ['ticket_flow_create_detail_and_delete', 'ticket_flow_delete_failure_navigation_and_restart'],
-    criterion_5: ['ticket_flow_create_detail_and_delete', 'ticket_flow_utf8_chunks_and_json_boundary'],
-  },
-  kanban_c5_edit_move: {
-    criterion_1: ['edit_save_cancel_and_partial_update'],
-    criterion_2: ['edit_rejects_invalid_immutable_and_deleted_updates'],
-    criterion_3: ['drag_persists_status_only'],
-    criterion_4: ['edit_save_cancel_and_partial_update', 'drag_persists_status_only'],
-    criterion_5: ['edit_save_cancel_and_partial_update', 'edit_move_survives_restart'],
-  },
-  kanban_c6_discussion: {
-    criterion_1: ['discussion_comments_replies_timeline'],
-    criterion_2: ['discussion_comments_replies_timeline'],
-    criterion_3: ['discussion_invalid_input_and_corrupt_store_fail_closed'],
-    criterion_4: ['discussion_failure_and_overlap_preserve_drafts'],
-    criterion_5: ['discussion_survives_edit_delete_and_restart'],
-  },
-  kanban_c7_live: {
-    criterion_1: ['live_sse_protocol_contract', 'live_three_sessions_and_direct_iii'],
-    criterion_2: ['live_three_sessions_and_direct_iii'],
-    criterion_3: ['live_three_sessions_and_direct_iii'],
-    criterion_4: ['live_three_sessions_and_direct_iii'],
-    criterion_5: ['live_sse_protocol_contract', 'live_late_responses_disconnect_and_shutdown'],
-  },
-}
+const RUBRIC = JSON.parse(await readFile(new URL('./rubric.json', import.meta.url), 'utf8'))
 
 const usage = `Usage: probe.mjs --case <id> --base-url <url> --engine-url <ws-url> --output <directory>
 
@@ -229,37 +184,12 @@ async function main() {
   let browser
   let iii
   let infrastructureError
-  const check = async (id, action) => {
-    try {
-      const detail = await action()
-      checks.push({ id, status: 'passed', detail: detail || 'Observed through the running application.' })
-      return true
-    } catch (error) {
-      if (error instanceof ControlError) throw error
-      checks.push({ id, status: 'failed', detail: details(error) })
-      for (const [index, page] of (browser?.contexts().flatMap((context) => context.pages()) ?? []).entries()) {
-        await page.screenshot({ path: join(output, `failure-${id}-${index}.png`), fullPage: true, timeout: 3000 }).catch(() => {})
-      }
-      return false
+  const { check, stage } = createCheckRecorder(checks, async (id) => {
+    for (const [index, page] of (browser?.contexts().flatMap((context) => context.pages()) ?? []).entries()) {
+      await page.screenshot({ path: join(output, `failure-${id}-${index}.png`), fullPage: true, timeout: 3000 }).catch(() => {})
     }
-  }
+  })
   const unverified = (id, detail) => checks.push({ id, status: 'unverified', detail })
-  const criterion = async (id, detail) => {
-    const dependencies = CRITERION_DEPENDENCIES[caseId]?.[id]
-    if (!dependencies?.length) {
-      unverified(id, `Missing dependency mapping for ${caseId}/${id}`)
-      return false
-    }
-    const status = criterionDependencyStatus(checks, dependencies)
-    if (status === 'unverified') {
-      unverified(id, `Required functional evidence is unavailable: ${dependencies.join(', ')}`)
-      return false
-    }
-    return check(id, async () => {
-      expect(status === 'passed', `Required functional evidence failed: ${dependencies.join(', ')}`)
-      return detail
-    })
-  }
 
   try {
     const sdk = await import(moduleUrl('III_SDK_MODULE'))
@@ -289,7 +219,7 @@ async function main() {
       }),
       control: (operation, payload) => control(output, operation, payload),
       check,
-      criterion,
+      stage,
       unverified,
     }
     await PROBES[caseId](context)
@@ -299,6 +229,8 @@ async function main() {
     await browser?.close().catch(() => {})
     await iii?.shutdown?.().catch(() => {})
   }
+
+  checks.push(...scoreCriteria(checks, RUBRIC[caseId]))
 
   const functionalStatus = infrastructureError
     ? null
@@ -349,7 +281,7 @@ async function screenshot(page, output, name) {
 }
 
 export function boardLane(page, label) {
-  return page.getByRole('heading', { name: new RegExp(`^${label}(?:\\s*\\d+(?:\\s+tickets?)?)?$`, 'i') }).locator('xpath=ancestor::section[1]')
+  return page.getByRole('heading', { name: new RegExp(`^${label}(?:\\s*\\d+(?:\\s+tickets?)?)?$`, 'i') }).locator('xpath=ancestor::*[self::section or self::li or @role="region" or @role="listitem"][1]')
 }
 
 export async function boardLaneWithCount(page, label, count) {
@@ -374,7 +306,7 @@ export function boardNavigation(page) {
 
 export function mutationFailureFeedback(page) {
   return page.getByRole('alert').or(page.getByRole('status'))
-    .filter({ hasText: /probe failure|unable.*(?:save|move)|failed.*(?:save|move)|error/i }).filter({ visible: true })
+    .filter({ hasText: /probe failure|unable.*(?:save|move|create|delete|post)|failed.*(?:save|move|create|delete|post)|error/i }).filter({ visible: true })
 }
 
 export async function ticketEditor(page, expectedTitle) {
@@ -395,7 +327,7 @@ export async function ticketEditor(page, expectedTitle) {
 }
 
 export function commentParentAction(entry) {
-  const name = /first|parent|reference|in reply|show.*comment|comment.*reply answers/i
+  const name = /first|parent|reference|in reply|replying.*go to.*comment|show.*comment|comment.*reply answers/i
   return entry.getByRole('button', { name }).or(entry.getByRole('link', { name })).first()
 }
 
@@ -445,23 +377,27 @@ async function create(trigger, fields = {}) {
   return trigger('kanban::tickets::create', { title: `Probe ${Date.now()}-${Math.random()}`, ...fields })
 }
 
-const PROBES = {
-  async kanban_c1_foundation({ api, trigger, control, browser, baseUrl, output, check, criterion, unverified }) {
+export const PROBES = {
+  async kanban_c1_foundation({ api, trigger, control, browser, baseUrl, output, check, stage, unverified }) {
     await check('foundation_assets_and_safe_routes', async () => {
+      stage('foundation_startup')
       expect(standaloneCompose(await trigger('compose::status', { file: '/workspace/worker-compose.yaml' })), 'Compose declares Console or no application')
       const home = await api('/')
       expect(home.ok && home.headers.get('content-type')?.startsWith('text/html'), 'standalone HTML did not load')
+      stage('foundation_asset_paths')
       for (const path of ['/constructor', '/toString', '/__proto__']) expect((await api(path)).status === 404, `${path} was not 404`)
       return 'Standalone HTML loads and prototype-like asset paths return 404.'
     })
     await check('foundation_configuration_contract', async () => {
+      stage('foundation_initial_config')
       await control('restart', { register_configuration: false, reset_configuration: true })
       const initial = await eventually(async () => {
         const response = await api('/api/config')
         return response.ok ? response.json() : false
       }, 'application did not initialize missing configuration', 15_000)
       expect(initial.data_dir === './data', 'missing configuration did not initialize the default data directory')
-      expect(initial.data_dir && initial.resolved_data_dir, 'GET /api/config omitted paths')
+      expect(initial.resolved_data_dir === '/workspace/data', 'default directory does not resolve from repository root')
+      stage('foundation_preserve_config')
       const raw = await trigger('configuration::get', { id: 'kanban', raw: true })
       await trigger('configuration::set', { id: 'kanban', value: { ...raw.value, evaluator_marker: 'preserve-me' } })
       const saved = await json(await api('/api/config', {
@@ -470,18 +406,21 @@ const PROBES = {
       expect(saved.data_dir === './probe-browser-data', 'PUT did not select the directory')
       const after = await trigger('configuration::get', { id: 'kanban', raw: true })
       expect(after.value.evaluator_marker === 'preserve-me', 'saving discarded unrelated configuration')
+      stage('foundation_direct_config')
       await trigger('configuration::set', { id: 'kanban', value: { ...after.value, data_dir: './direct-probe-data' } })
       const direct = await eventually(async () => {
         const response = await api('/api/config')
         if (!response.ok) return false
         const value = await response.json()
         return value.data_dir === './direct-probe-data'
-          && value.resolved_data_dir.endsWith('/direct-probe-data') ? value : false
+          && value.resolved_data_dir === '/workspace/direct-probe-data' ? value : false
       }, 'direct configuration update did not select the effective directory')
       await json(await api('/api/config', {
         method: 'PUT', headers: { 'content-type': 'application/json' }, body: '{"data_dir":"./probe-browser-data"}',
       }))
+      stage('foundation_invalid_config')
       expect((await api('/api/config', { method: 'PUT', headers: { 'content-type': 'application/json' }, body: '{"data_dir":""}' })).status === 400, 'empty directory was accepted')
+      stage('foundation_config_restart')
       await control('restart')
       const restarted = await eventually(async () => {
         const response = await api('/api/config')
@@ -492,6 +431,7 @@ const PROBES = {
       return 'Browser and direct configuration changes select resolved paths; unrelated data survives saving and restart.'
     })
     await check('foundation_accessible_settings', async () => {
+      stage('foundation_settings_mobile')
       const { context, page } = await pageFor(browser, baseUrl, { width: 390, height: 844 })
       const input = page.getByRole('textbox')
       await eventually(async () => await input.inputValue() === (await json(await api('/api/config'))).data_dir, 'settings form did not load the current directory')
@@ -501,6 +441,7 @@ const PROBES = {
       expect(await input.inputValue() === './probe-ui-data', 'saving replaced the selected directory')
       expect(!await page.evaluate(() => document.documentElement.scrollWidth > document.documentElement.clientWidth), 'mobile settings have document-wide overflow')
       await screenshot(page, output, 'settings-mobile')
+      stage('foundation_settings_desktop')
       await page.setViewportSize({ width: 1280, height: 900 })
       expect(await input.isVisible() && !await page.evaluate(() => document.documentElement.scrollWidth > document.documentElement.clientWidth), 'desktop settings are not usable')
       await screenshot(page, output, 'settings-desktop')
@@ -513,25 +454,23 @@ const PROBES = {
       expect((await api('/')).ok, 'application stopped serving after the source was restored')
       return 'A trusted temporary TypeScript source marker is observed without a manual build and the original bytes are restored.'
     })
-    await criterion('criterion_1', 'Compose starts against an isolated engine with no Console service and standalone browser assets load.')
-    await criterion('criterion_2', 'Missing configuration initializes and existing unrelated data survives saving and restart.')
-    await criterion('criterion_3', 'Browser and direct iii changes select the effective directory and relative paths resolve from the project root.')
-    await criterion('criterion_4', 'Invalid config and prototype-like asset paths are rejected by the live server.')
-    await criterion('criterion_5', 'Trusted source mutation proves development hot reload and the mobile settings form remains usable.')
   },
 
-  async kanban_c2_persistence({ api, trigger, control, check, criterion }) {
+  async kanban_c2_persistence({ api, trigger, control, check, stage }) {
     let first
     const crudAvailable = await check('persistence_iii_crud', async () => {
+      stage('persistence_defaults')
       first = await trigger('kanban::tickets::create', { title: '  Defaults ticket  ' })
       expect(first.title === 'Defaults ticket' && first.status === 'backlog' && first.priority === 'medium', 'defaults or title normalization are wrong')
       expect(first.description === '' && first.assignee === null, 'nullable defaults are wrong')
+      stage('persistence_identity')
       expect(/^KAN-[1-9]\d*$/.test(first.key) && !Number.isNaN(Date.parse(first.created_at)), 'identity or timestamps are invalid')
       expect(/^[\da-f]{8}(?:-[\da-f]{4}){3}-[\da-f]{12}$/i.test(first.id)
         && Date.parse(first.updated_at) >= Date.parse(first.created_at), 'UUID or updated timestamp is invalid')
       const second = await create(trigger, { status: 'done', priority: 'urgent', assignee: 'Ada' })
       expect(second.id !== first.id && /^KAN-[1-9]\d*$/.test(second.key)
         && Number(second.key.slice(4)) > Number(first.key.slice(4)), 'ticket identifiers are not unique and increasing')
+      stage('persistence_lookup')
       const listed = await trigger('kanban::tickets::list')
       expect(listed.tickets.at(-2).id === first.id && listed.tickets.at(-1).id === second.id, 'list is not in creation order')
       expect((await trigger('kanban::tickets::get', { id: first.id })).key === first.key, 'UUID lookup failed')
@@ -539,6 +478,7 @@ const PROBES = {
       return 'Real iii create/list/get calls prove defaults, normalized titles, identifiers, timestamps and ordering.'
     })
     await check('persistence_invalid_input_no_write', async () => {
+      requireEvidence(crudAvailable, 'Persistence fixture requires working create/list/get functions.')
       const before = (await trigger('kanban::tickets::list')).tickets.length
       for (const input of [
         { title: '' }, { title: 'x', status: 'invented' }, { title: 'x', priority: 'invented' },
@@ -552,6 +492,8 @@ const PROBES = {
       return 'Invalid fields and values are rejected without adding a ticket.'
     })
     await check('persistence_directory_isolation_and_restart', async () => {
+      requireEvidence(crudAvailable, 'Persistence fixture requires working create/list/get functions.')
+      stage('persistence_isolation')
       const initial = await json(await api('/api/config'))
       try {
         await json(await api('/api/config', {
@@ -566,12 +508,13 @@ const PROBES = {
         }))
       }
       expect((await trigger('kanban::tickets::get', { id: first.id })).id === first.id, 'primary ticket was not restored after switching directories')
+      stage('persistence_restart')
       await control('restart')
       await eventually(async () => (await trigger('kanban::tickets::get', { id: first.key })).id === first.id, 'ticket did not survive restart', 15_000)
       return 'Configured directories keep independent tickets and key sequences; primary tickets survive a full runtime restart.'
     })
     await check('persistence_corrupt_and_duplicate_store_fail_closed', async () => {
-      expect(crudAvailable, 'Ticket persistence is unavailable; corrupt-store checks require working create/list/get functions.')
+      requireEvidence(crudAvailable, 'Ticket persistence is unavailable; corrupt-store checks require working create/list/get functions.')
       const original = await control('read_store')
       const rejectsWithoutRewrite = async (content, label) => {
         await control('write_store', { value: content })
@@ -592,13 +535,9 @@ const PROBES = {
       expect((await trigger('kanban::tickets::get', { id: first.id })).id === first.id, 'restored valid store is unusable')
       return 'Corrupt JSON and duplicate records fail closed without byte changes; the original store is restored afterward.'
     })
-    await criterion('criterion_1', 'Both identifiers and real SDK caller metadata work through iii.')
-    await criterion('criterion_2', 'Defaults, normalization, timestamps and increasing readable keys are observed.')
-    await criterion('criterion_3', 'Configured directories remain isolated and tickets survive runtime restart.')
-    await criterion('criterion_4', 'Invalid inputs and corrupt or duplicate stores fail without replacing existing bytes.')
   },
 
-  async kanban_c3_board({ api, trigger, browser, baseUrl, output, check, criterion }) {
+  async kanban_c3_board({ api, trigger, browser, baseUrl, output, check, stage }) {
     const statuses = [['backlog', 'Backlog'], ['todo', 'To do'], ['in_progress', 'In progress'], ['in_review', 'In review'], ['done', 'Done']]
 
     await check('board_loading_empty_error_and_retry', async () => {
@@ -613,20 +552,24 @@ const PROBES = {
           if (mode === 'fail') { await route.fulfill({ status: 500, contentType: 'application/json', body: '{"error":"probe failure"}' }); return }
           await route.continue()
         })
+        stage('board_loading')
         await page.goto(baseUrl)
         await expectText(page.getByRole('status').filter({ hasText: /load/i }), /load/i)
         expect(await boardTicketTotal(page, 0).count() === 0, 'loading fabricated a zero total')
         expect(await page.getByText(/^0$/).filter({ visible: true }).count() === 0, 'loading fabricated zero lane counts')
+        stage('board_empty')
         release()
         await expectText(page.getByRole('status').filter({ hasText: /no tickets|empty/i }), /no tickets|empty/i)
         expect(await boardTicketTotal(page, 0).count() === 1, 'empty store total is wrong')
         for (const [, label] of statuses) await boardLaneWithCount(page, label, 0)
+        stage('board_error')
         mode = 'fail'
         const failurePage = await context.newPage()
         await failurePage.goto(baseUrl)
         await expectText(failurePage.locator('[role="alert"], [role="status"]').filter({ hasText: /unable|error|failed/i }), /unable|error|failed/i)
         expect(await boardTicketTotal(failurePage, 0).count() === 0, 'failed first read fabricated a zero total')
         expect(await failurePage.getByText(/^0$/).filter({ visible: true }).count() === 0, 'failed first read fabricated zero lane counts')
+        stage('board_retry')
         mode = 'pass'
         await failurePage.getByRole('button', { name: /retry|try again/i }).click()
         await expectText(failurePage.getByRole('status').filter({ hasText: /no tickets|empty/i }), /no tickets|empty/i)
@@ -658,6 +601,7 @@ const PROBES = {
     })
 
     await check('board_refresh_and_settings_reload', async () => {
+      stage('board_refresh')
       const initialConfig = await json(await api('/api/config'))
       const { context, page } = await pageFor(browser, baseUrl)
       const initialTickets = (await json(await api('/api/tickets'))).tickets
@@ -670,6 +614,7 @@ const PROBES = {
       await eventually(async () => ticketReads > readsBeforeRefresh, 'refresh did not request current tickets')
       await eventually(async () => await boardTicketTitle(page, refreshed.title).count(), 'refresh did not load the new ticket')
       try {
+        stage('board_settings')
         await page.getByRole('link', { name: 'Settings' }).click()
         await page.getByLabel('Data directory').fill('./board-probe-empty')
         await page.getByRole('button', { name: 'Save settings' }).click()
@@ -693,11 +638,13 @@ const PROBES = {
     })
 
     await check('board_safe_text_and_responsive_layout', async () => {
+      stage('board_safe_text')
       const markup = '<img src=x onerror=alert(1)> literal title'
       await create(trigger, { title: markup })
       const { context, page } = await pageFor(browser, baseUrl)
       await eventually(async () => await boardTicketTitle(page, markup).count(), 'literal ticket title did not load')
       expect(await page.locator('img[src="x"]').count() === 0, 'ticket markup created an image element')
+      stage('board_responsive')
       expect(!await page.evaluate(() => document.documentElement.scrollWidth > document.documentElement.clientWidth), 'desktop page has document-wide horizontal overflow')
       await screenshot(page, output, 'board-desktop')
       await page.setViewportSize({ width: 390, height: 844 })
@@ -707,15 +654,12 @@ const PROBES = {
       await context.close()
       return 'User markup stays literal and desktop and mobile avoid document-wide overflow.'
     })
-    await criterion('criterion_1', 'Tickets created through iii appear in all five lanes with counts and metadata.')
-    await criterion('criterion_2', 'Loading, empty, failed and recovered states are distinguished without fabricated counts.')
-    await criterion('criterion_3', 'Refresh and returning from settings reload the selected store.')
-    await criterion('criterion_4', 'Markup remains literal and neither desktop nor mobile has document-wide overflow.')
   },
 
-  async kanban_c4_ticket_flow({ api, trigger, control, browser, baseUrl, output, check, criterion }) {
+  async kanban_c4_ticket_flow({ api, trigger, control, browser, baseUrl, output, check, stage }) {
     let created
     await check('ticket_flow_create_detail_and_delete', async () => {
+      stage('ticket_cards')
       const keyboardTicket = await create(trigger, { title: 'Keyboard card probe' })
       const { context, page } = await pageFor(browser, baseUrl, { width: 390, height: 844 })
       await eventually(async () => await page.getByRole('heading', { name: keyboardTicket.title }).count(), 'keyboard card did not load')
@@ -728,6 +672,7 @@ const PROBES = {
       await page.getByRole('heading', { name: keyboardTicket.title }).click()
       await expectText(page.getByRole('heading', { name: keyboardTicket.title }), /Keyboard card probe/)
       await page.goBack()
+      stage('ticket_modal')
       await page.getByRole('button', { name: 'New ticket' }).click()
       const dialog = page.getByRole('dialog', { name: 'New ticket' })
       await assertAccessibleFormControls(dialog)
@@ -737,6 +682,7 @@ const PROBES = {
       await dialog.getByLabel('Status').selectOption('in_review')
       await dialog.getByLabel('Priority').selectOption('urgent')
       await dialog.getByLabel('Assignee').fill('Lin')
+      stage('ticket_create_error')
       let failCreate = true
       await page.route('**/api/tickets', async (route) => {
         if (failCreate && route.request().method() === 'POST') {
@@ -747,8 +693,9 @@ const PROBES = {
         await route.continue()
       })
       await dialog.getByRole('button', { name: 'Create ticket' }).click()
-      await expectText(dialog.getByRole('status'), /Unable to create ticket/)
+      await eventually(async () => await mutationFailureFeedback(dialog).count() > 0, 'failed creation has no accessible error feedback')
       expect(await dialog.isVisible() && await dialog.getByLabel('Title').inputValue() === 'Browser-created ticket', 'failed create closed the modal or erased its draft')
+      stage('ticket_creation')
       await dialog.getByRole('button', { name: 'Create ticket' }).click()
       await expectText(page.getByRole('heading', { name: 'Browser-created ticket' }), /Browser-created ticket/)
       expect(await dialog.isVisible() === false, 'create dialog stayed open')
@@ -756,13 +703,11 @@ const PROBES = {
       expect(context.pages().length === 1, 'ticket creation opened another tab')
       created = (await json(await api('/api/tickets'))).tickets.find(({ title }) => title === 'Browser-created ticket')
       expect(created, 'created ticket is absent from API list')
-      expect((await json(await api(`/api/tickets/${created.id}`))).ticket.key === created.key, 'HTTP UUID lookup failed')
-      expect((await json(await api(`/api/tickets/${created.key}`))).ticket.id === created.id, 'HTTP key lookup failed')
-      expect((await trigger('kanban::tickets::get', { id: created.id })).key === created.key, 'iii UUID lookup failed')
-      expect((await trigger('kanban::tickets::get', { id: created.key })).id === created.id, 'iii key lookup failed')
+      stage('ticket_details')
       for (const value of ['UTF-8: ação e café', 'In review', 'urgent', 'Lin']) {
         expect(await page.getByText(value, { exact: true }).filter({ visible: true }).count() === 1, `detail omitted persisted value: ${value}`)
       }
+      stage('ticket_mobile')
       await page.reload()
       await expectText(page.getByRole('heading', { name: 'Browser-created ticket' }), /Browser-created ticket/)
       expect(!await page.evaluate(() => document.documentElement.scrollWidth > document.documentElement.clientWidth), 'mobile detail has document-wide overflow')
@@ -770,8 +715,19 @@ const PROBES = {
       await context.close()
       return 'Keyboard and pointer cards, history, failed-create retry, same-tab details, direct links, focus, reload and mobile layout work.'
     })
+    await check('ticket_flow_identifiers', async () => {
+      const lookupTicket = await create(trigger, { title: 'Identifier probe' })
+      stage('ticket_identifiers')
+      expect((await json(await api(`/api/tickets/${lookupTicket.id}`))).ticket.key === lookupTicket.key, 'HTTP UUID lookup failed')
+      expect((await json(await api(`/api/tickets/${lookupTicket.key}`))).ticket.id === lookupTicket.id, 'HTTP key lookup failed')
+      expect((await trigger('kanban::tickets::get', { id: lookupTicket.id })).key === lookupTicket.key, 'iii UUID lookup failed')
+      expect((await trigger('kanban::tickets::get', { id: lookupTicket.key })).id === lookupTicket.id, 'iii key lookup failed')
+    })
     await check('ticket_flow_delete_failure_navigation_and_restart', async () => {
+      created = await create(trigger, { title: 'Deletion probe' })
+      const survivor = await create(trigger, { title: 'Surviving card' })
       const { context, page } = await pageFor(browser, `${baseUrl}/#ticket/${created.id}`, { width: 390, height: 844 })
+      stage('ticket_delete_error')
       let failDelete = true
       await page.route('**/api/tickets/**', async (route) => {
         if (failDelete && route.request().method() === 'DELETE') {
@@ -782,9 +738,10 @@ const PROBES = {
         await route.continue()
       })
       await page.getByRole('button', { name: 'Delete ticket' }).click()
-      await expectText(page.getByRole('status').filter({ hasText: /Unable to delete ticket/ }), /Unable to delete ticket/)
+      await eventually(async () => await mutationFailureFeedback(page).count() > 0, 'failed deletion has no accessible error feedback')
       expect(await page.getByRole('heading', { name: created.title }).count() === 1, 'failed delete removed the detail view')
 
+      stage('ticket_delete_navigation')
       await page.unroute('**/api/tickets/**')
       let release
       let intercepted
@@ -806,8 +763,9 @@ const PROBES = {
       release()
       await delivered
       await eventually(async () => !(await json(await api('/api/tickets'))).tickets.some(({ id }) => id === created.id), 'deleted card remained listed')
-      await eventually(async () => await page.getByRole('heading', { name: 'Keyboard card probe' }).count(), 'board did not load after navigating during deletion')
+      await eventually(async () => await page.getByRole('heading', { name: survivor.title }).count(), 'board did not load after navigating during deletion')
       await eventually(async () => await page.getByRole('heading', { name: created.title, exact: true }).count() === 0, 'deleted card remained visible after the late response')
+      stage('ticket_durable_deletion')
       expect((await api(`/api/tickets/${created.id}`)).status === 404, 'deleted ticket is still retrievable')
       let deleted = JSON.parse(await control('read_store')).find(({ id }) => id === created.id)
       expect(deleted.deleted_at, 'soft-deleted ticket is absent from disk')
@@ -820,7 +778,9 @@ const PROBES = {
       return 'Failed deletion is recoverable; late deletion cannot leave a stale card, and disk retention plus key retirement survive restart.'
     })
     await check('ticket_flow_utf8_chunks_and_json_boundary', async () => {
+      stage('ticket_content_type')
       expect([400, 415].includes((await api('/api/tickets', { method: 'POST', body: 'not json' })).status), 'non-JSON creation was not rejected')
+      stage('ticket_utf8')
       const title = 'Chunked ação café'
       const encoded = new TextEncoder().encode(JSON.stringify({ title }))
       const split = encoded.indexOf(0xc3) + 1
@@ -837,22 +797,20 @@ const PROBES = {
       expect(chunked.ticket.title === title, 'UTF-8 split across request chunks was corrupted')
       return 'Non-JSON creation is rejected and a multibyte character split across request chunks is preserved.'
     })
-    await criterion('criterion_1', 'Modal creation, same-tab details, keyboard and pointer cards, history and reload work.')
-    await criterion('criterion_2', 'HTTP accepts both identifiers and details reflect persisted values.')
-    await criterion('criterion_3', 'Deletion removes the card while preserving disk state across restart and never reuses the key.')
-    await criterion('criterion_4', 'Failed creation and deletion preserve recoverable UI; late deletion does not leave a stale card.')
-    await criterion('criterion_5', 'Chunked UTF-8, JSON enforcement, focus and mobile layout are directly exercised.')
   },
 
-  async kanban_c5_edit_move({ api, trigger, control, browser, baseUrl, output, check, criterion }) {
+  async kanban_c5_edit_move({ api, trigger, control, browser, baseUrl, output, check, stage }) {
     let ticket
     await check('edit_fixture_creation', async () => {
       ticket = await create(trigger, { title: 'Editable probe', description: 'Keep me', assignee: 'Initial' })
       return 'A persisted ticket is available for edit and move evaluation.'
     })
     await check('edit_save_cancel_and_partial_update', async () => {
+      requireEvidence(ticket, 'Edit fixture was not created.')
+      stage('edit_partial')
       const partial = await trigger('kanban::tickets::update', { id: ticket.key, changes: { priority: 'high' } })
       expect(partial.description === 'Keep me' && partial.title === ticket.title, 'partial update erased unrelated fields')
+      stage('edit_cancel')
       const { context, page } = await pageFor(browser, `${baseUrl}/#ticket/${ticket.id}`, { width: 390, height: 844 })
       await expectText(page.getByRole('heading', { name: ticket.title }), /Editable probe/)
       let edit = await ticketEditor(page)
@@ -865,6 +823,7 @@ const PROBES = {
       await edit.getByLabel('Status').selectOption('todo')
       await edit.getByLabel('Priority').selectOption('urgent')
       await edit.getByLabel('Assignee').fill('Updated')
+      stage('edit_failure')
       let failSave = true
       await page.route('**/api/tickets/**', async (route) => {
         if (failSave && route.request().method() === 'PATCH') {
@@ -878,12 +837,14 @@ const PROBES = {
       await expectText(mutationFailureFeedback(page), /\S/)
       expect(await edit.getByLabel('Title').inputValue() === 'Edited probe', 'failed save erased the title draft')
       expect(await edit.getByLabel('Assignee').inputValue() === 'Updated', 'failed save erased another draft field')
+      stage('edit_success')
       await edit.getByRole('button', { name: 'Save changes' }).click()
       await expectText(page.getByRole('heading', { name: 'Edited probe' }), /Edited probe/)
       const saved = (await json(await api(`/api/tickets/${ticket.id}`))).ticket
       expect(saved.description === 'Edited description' && saved.status === 'todo' && saved.priority === 'urgent' && saved.assignee === 'Updated', 'UI edit was not persisted')
       await screenshot(page, output, 'ticket-edited-mobile')
 
+      stage('edit_navigation')
       edit = await ticketEditor(page)
       await edit.getByLabel('Title').fill('Late saved probe')
       let release
@@ -907,6 +868,7 @@ const PROBES = {
       return 'Cancel is inert, failed-save drafts survive, retry persists edits, and a save finishing after navigation refreshes the board.'
     })
     await check('edit_rejects_invalid_immutable_and_deleted_updates', async () => {
+      requireEvidence(ticket, 'Edit fixture was not created.')
       const before = await trigger('kanban::tickets::get', { id: ticket.id })
       for (const changes of [{}, { id: 'replacement' }, { created_at: new Date().toISOString() }, { status: 'invented' }]) {
         expect((await api(`/api/tickets/${ticket.id}`, {
@@ -923,11 +885,17 @@ const PROBES = {
       return 'Empty, immutable and invalid updates are rejected without writes; deleted tickets cannot be restored.'
     })
     await check('drag_persists_status_only', async () => {
+      const ticket = await create(trigger, { title: 'Drag probe', status: 'todo', description: 'Status-only drag' })
       const beforeMove = (await json(await api(`/api/tickets/${ticket.id}`))).ticket
       const { context, page } = await pageFor(browser, baseUrl)
-      await eventually(async () => await page.getByRole('heading', { name: 'Late saved probe' }).count(), 'edited card did not appear')
-      const card = page.getByRole('heading', { name: 'Late saved probe' }).locator('xpath=ancestor::a[1]')
-      const target = await boardLaneWithCount(page, 'Done', 0)
+      await eventually(async () => await page.getByRole('heading', { name: 'Drag probe' }).count(), 'edited card did not appear')
+      const card = page.getByRole('heading', { name: 'Drag probe' }).locator('xpath=ancestor::a[1]')
+      const beforeTickets = (await json(await api('/api/tickets'))).tickets
+      const todoCount = beforeTickets.filter(({status}) => status === 'todo').length
+      const doneCount = beforeTickets.filter(({status}) => status === 'done').length
+      const reviewCount = beforeTickets.filter(({status}) => status === 'in_review').length
+      const target = await boardLaneWithCount(page, 'Done', doneCount)
+      stage('drag_failure')
       let failMove = true
       await page.route('**/api/tickets/**', async (route) => {
         if (failMove && route.request().method() === 'PATCH') {
@@ -940,15 +908,19 @@ const PROBES = {
       await card.dragTo(target)
       await expectText(mutationFailureFeedback(page), /\S/)
       expect((await json(await api(`/api/tickets/${ticket.id}`))).ticket.status === 'todo', 'failed drag changed persisted status')
-      const todo = await boardLaneWithCount(page, 'To do', 1)
-      expect(await todo.getByRole('heading', { name: 'Late saved probe' }).count() === 1, 'failed drag moved the visible card')
+      const todo = await boardLaneWithCount(page, 'To do', todoCount)
+      expect(await todo.getByRole('heading', { name: 'Drag probe' }).count() === 1, 'failed drag moved the visible card')
+      stage('drag_success')
       await card.dragTo(target)
       await eventually(async () => (await json(await api(`/api/tickets/${ticket.id}`))).ticket.status === 'done', 'drag did not persist done status')
+      await boardLaneWithCount(page, 'Done', doneCount + 1)
+      await boardLaneWithCount(page, 'To do', todoCount - 1)
       const moved = (await json(await api(`/api/tickets/${ticket.id}`))).ticket
       expect(Object.entries(beforeMove).every(([field, value]) => ['status', 'updated_at'].includes(field)
         || JSON.stringify(moved[field]) === JSON.stringify(value)), 'drag changed fields besides status')
       expect(Date.parse(moved.updated_at) > Date.parse(beforeMove.updated_at), 'drag did not advance updated_at')
 
+      stage('drag_navigation')
       await page.unroute('**/api/tickets/**')
       let release
       let intercepted
@@ -960,51 +932,54 @@ const PROBES = {
         await held
         await route.continue()
       })
-      const review = await boardLaneWithCount(page, 'In review', 0)
+      const review = await boardLaneWithCount(page, 'In review', reviewCount)
       await card.dragTo(review)
       await reached
       await page.getByRole('link', { name: 'Settings' }).click()
       release()
       await eventually(async () => (await json(await api(`/api/tickets/${ticket.id}`))).ticket.status === 'in_review', 'late move did not persist after navigation')
       await boardNavigation(page).click()
-      const restoredReview = await boardLaneWithCount(page, 'In review', 1)
-      await eventually(async () => await restoredReview.getByRole('heading', { name: 'Late saved probe' }).count(), 'late move is absent from the relevant board')
+      const restoredReview = await boardLaneWithCount(page, 'In review', reviewCount + 1)
+      await eventually(async () => await restoredReview.getByRole('heading', { name: 'Drag probe' }).count(), 'late move is absent from the relevant board')
       await screenshot(page, output, 'board-after-drag')
       await context.close()
       return 'Failed drag stays put, retry persists only status, and a move finishing after navigation appears on return.'
     })
     await check('edit_move_survives_restart', async () => {
+      const ticket = await create(trigger, { title: 'Restart fixture', status: 'backlog' })
+      const expected = await trigger('kanban::tickets::update', { id: ticket.id, changes: {
+        title: 'Persisted edit', description: 'Independent restart', status: 'todo', priority: 'urgent', assignee: 'Restart author',
+      } })
+      stage('edit_restart')
       await control('restart')
       const persisted = await eventually(async () => {
         const response = await api(`/api/tickets/${ticket.id}`)
         return response.ok ? (await response.json()).ticket : false
       }, 'edited ticket was unavailable after restart', 15_000)
-      expect(persisted.title === 'Late saved probe'
-        && persisted.description === 'Edited description'
-        && persisted.status === 'in_review'
-        && persisted.priority === 'urgent'
-        && persisted.assignee === 'Updated', 'restart lost an edited or moved field')
+      expect(sameJson(persisted, expected), 'restart lost an edited field')
+      stage('edit_mobile')
       const { context, page } = await pageFor(browser, `${baseUrl}/#ticket/${ticket.id}`, { width: 390, height: 844 })
       const edit = await ticketEditor(page)
-      expect(await edit.getByLabel('Status').inputValue() === 'in_review', 'mobile status selector did not reflect the persisted move')
+      expect(await edit.getByLabel('Status').inputValue() === 'todo', 'mobile status selector did not reflect the persisted edit')
+      await edit.getByLabel('Status').selectOption('done')
+      await edit.getByRole('button', { name: 'Save changes' }).click()
+      await eventually(async () => (await trigger('kanban::tickets::get', { id: ticket.id })).status === 'done', 'mobile status selector did not persist the edit')
       await context.close()
       return 'All edited fields and the mobile status alternative retain the moved state after runtime restart.'
     })
-    await criterion('criterion_1', 'Save, cancel and partial update behavior are exercised.')
-    await criterion('criterion_2', 'Invalid, immutable, empty and deleted-ticket updates fail without writes.')
-    await criterion('criterion_3', 'Real drag persists only status; injected failure stays put and retry succeeds.')
-    await criterion('criterion_4', 'Failed-save drafts survive and pending save/move completion updates the relevant board after navigation.')
-    await criterion('criterion_5', 'The mobile status selector and all edited fields retain their state after restart.')
   },
 
-  async kanban_c6_discussion({ api, trigger, control, browser, baseUrl, output, check, criterion }) {
+  async kanban_c6_discussion({ api, trigger, control, browser, baseUrl, output, check, stage }) {
     let ticket
     let other
     await check('discussion_fixture_creation', async () => {
       ticket = await create(trigger, { title: 'Discussion probe' })
+      other = await create(trigger, { title: 'Other discussion' })
       return 'A persisted ticket is available for discussion evaluation.'
     })
     await check('discussion_comments_replies_timeline', async () => {
+      requireEvidence(ticket && other, 'Discussion fixtures were not created.')
+      stage('discussion_comments')
       const { context, page } = await pageFor(browser, `${baseUrl}/#ticket/${ticket.key}`, { width: 390, height: 844 })
       await expectText(page.getByRole('heading', { name: ticket.title }), /Discussion probe/)
       await page.getByLabel('Your name').fill('Alice')
@@ -1031,6 +1006,7 @@ const PROBES = {
         && !Number.isNaN(Date.parse(created_at))), 'comment identity or timestamp is invalid')
       await page.reload()
       await eventually(async () => await page.getByText('third', { exact: true }).count(), 'persisted iii reply was not rendered after reload')
+      stage('discussion_timeline')
       const entries = []
       for (const { body, author } of stored.comments) {
         const item = entry(body)
@@ -1043,6 +1019,7 @@ const PROBES = {
       }
       expect(await page.evaluate((items) => items.slice(1).every((item, index) =>
         items[index].compareDocumentPosition(item) & Node.DOCUMENT_POSITION_FOLLOWING), entries), 'timeline is not in posting order')
+      stage('discussion_parent_navigation')
       const replyItem = entry('second')
       const parentLink = commentParentAction(replyItem)
       expect(await parentLink.count() === 1, 'reply has no accessible parent navigation action')
@@ -1056,7 +1033,9 @@ const PROBES = {
       return 'Comments and nested replies retain order; safe text, times and keyboard parent navigation work on mobile.'
     })
     await check('discussion_invalid_input_and_corrupt_store_fail_closed', async () => {
-      other = await create(trigger, { title: 'Other discussion' })
+      const ticket = await create(trigger, { title: 'Discussion validation fixture' })
+      const other = await create(trigger, { title: 'Foreign discussion fixture' })
+      const expected = await trigger('kanban::tickets::comment', { id: ticket.id, comment: { author: 'Seed', body: 'Valid discussion' } })
       const foreign = await trigger('kanban::tickets::comment', { id: other.id, comment: { author: 'X', body: 'foreign root' } })
       for (const comment of [{ author: '', body: 'body' }, { author: 'A', body: '' },
         { author: '   ', body: 'body' }, { author: 'A', body: '  \t ' }]) {
@@ -1081,11 +1060,13 @@ const PROBES = {
       } finally {
         await control('write_store', { value: original })
       }
-      expect((await trigger('kanban::tickets::get', { id: ticket.id })).comments.length === 3, 'restored discussion is unusable')
+      expect(sameJson((await trigger('kanban::tickets::get', { id: ticket.id })).comments, expected.comments), 'restored discussion is unusable')
       return 'Empty input, foreign parents and malformed stored discussions fail without rewriting disk state.'
     })
     await check('discussion_failure_and_overlap_preserve_drafts', async () => {
+      requireEvidence(ticket && other, 'Discussion fixtures were not created.')
       const { context, page } = await pageFor(browser, `${baseUrl}/#ticket/${ticket.id}`, { width: 390, height: 844 })
+      stage('discussion_draft_failure')
       const author = page.getByLabel('Your name')
       const body = page.getByRole('textbox', { name: 'Comment', exact: true })
       await author.fill('Draft author')
@@ -1103,11 +1084,18 @@ const PROBES = {
         await route.continue()
       })
       await page.getByRole('button', { name: 'Post comment' }).click()
-      await expectText(page.getByRole('status').filter({ hasText: /Unable to post comment/ }), /Unable to post comment/)
+      await eventually(async () => await mutationFailureFeedback(page).count() > 0, 'failed comment has no accessible error feedback')
       expect(await body.inputValue() === 'Draft during edit', 'failed post erased the comment draft')
       await page.getByRole('button', { name: 'Post comment' }).click()
       await expectText(page.getByRole('status').filter({ hasText: /Comment posted/ }), /Comment posted/)
 
+      stage('discussion_draft_navigation')
+      await page.evaluate((id) => { location.hash = `#ticket/${id}` }, other.id)
+      await expectText(page.getByRole('heading', { name: other.title }), /Other discussion/)
+      await page.getByLabel('Your name').fill('Other author')
+      await page.getByRole('textbox', { name: 'Comment', exact: true }).fill('Other ticket draft')
+      await page.evaluate((id) => { location.hash = `#ticket/${id}` }, ticket.id)
+      await expectText(page.getByRole('heading', { name: ticket.title }), /Discussion probe/)
       await page.unroute('**/api/tickets/*/comments')
       let release
       let intercepted
@@ -1128,10 +1116,7 @@ const PROBES = {
       await reached
       await page.evaluate((id) => { location.hash = `#ticket/${id}` }, other.id)
       await expectText(page.getByRole('heading', { name: other.title }), /Other discussion/)
-      await eventually(() => page.getByLabel('Your name').isEnabled(),
-        'another ticket comment form stayed disabled while the previous ticket POST was pending')
-      await page.getByLabel('Your name').fill('Other author')
-      await page.getByRole('textbox', { name: 'Comment', exact: true }).fill('Other ticket draft')
+      expect(await page.getByRole('textbox', { name: 'Comment', exact: true }).inputValue() === 'Other ticket draft', 'navigation erased another ticket draft')
       await trigger('kanban::tickets::comment', { id: ticket.id, comment: { author: 'Concurrent', body: 'Newer activity' } })
       release()
       await delivered
@@ -1143,28 +1128,30 @@ const PROBES = {
       return 'Editing and failed posts preserve drafts; a delayed post cannot erase another ticket draft or newer activity.'
     })
     await check('discussion_survives_edit_delete_and_restart', async () => {
+      const ticket = await create(trigger, { title: 'Discussion preservation fixture' })
+      const other = await create(trigger, { title: 'Existing record fixture' })
+      const root = await trigger('kanban::tickets::comment', { id: ticket.id, comment: { author: 'Seed', body: 'Original comment' } })
+      const expected = await trigger('kanban::tickets::comment', { id: ticket.id, comment: { author: 'Reply', body: 'Original reply', parent_id: root.comments[0].id } })
+      stage('discussion_preservation')
       const edited = await trigger('kanban::tickets::update', { id: ticket.id, changes: { title: 'Discussion edited' } })
-      expect(edited.comments.length >= 5, 'ticket edit discarded comments')
+      expect(sameJson(edited.comments, expected.comments), 'ticket edit discarded comments')
       await trigger('kanban::tickets::delete', { id: ticket.id })
       let records = JSON.parse(await control('read_store'))
       let deleted = records.find(({ id }) => id === ticket.id)
-      expect(deleted.deleted_at && deleted.comments.length === edited.comments.length, 'soft deletion discarded the discussion on disk')
+      expect(deleted?.deleted_at && sameJson(deleted.comments, expected.comments), 'soft deletion discarded the discussion on disk')
+      stage('discussion_restart')
       await control('restart')
       records = JSON.parse(await control('read_store'))
       deleted = records.find(({ id }) => id === ticket.id)
-      expect(deleted.deleted_at && deleted.comments.length === edited.comments.length, 'restart discarded the deleted discussion')
+      expect(deleted?.deleted_at && sameJson(deleted.comments, expected.comments), 'restart discarded the deleted discussion')
       await eventually(async () => (await trigger('kanban::tickets::get', { id: other.id })).id === other.id, 'existing ticket was unusable after restart', 15_000)
       return 'Comments survive ticket editing, soft deletion and runtime restart while remaining records stay usable.'
     })
-    await criterion('criterion_1', 'Comments, replies and replies-to-replies persist in posting order with valid parents.')
-    await criterion('criterion_2', 'Timeline text, authors, times and keyboard parent navigation work on mobile.')
-    await criterion('criterion_3', 'Invalid inputs, foreign parents and malformed stored discussions fail closed.')
-    await criterion('criterion_4', 'Failures and overlapping responses preserve drafts and newer activity.')
-    await criterion('criterion_5', 'Discussions survive edits, soft deletion and runtime restart.')
   },
 
-  async kanban_c7_live({ api, trigger, control, browser, baseUrl, output, check, criterion, unverified }) {
+  async kanban_c7_live({ api, trigger, control, browser, baseUrl, output, check, stage, unverified }) {
     await check('live_sse_protocol_contract', async () => {
+      stage('live_initial_event')
       const configuration = await json(await api('/api/config'))
       let original
       const { context, page } = await pageFor(browser, baseUrl)
@@ -1182,8 +1169,10 @@ const PROBES = {
         ), `SSE change event ${index + 1} was not received`)
         const exactStore = (event) => event?.store === configuration.resolved_data_dir
         expect(exactStore(await eventAt(0)), 'initial SSE event has the wrong name or store payload')
+        stage('live_mutation_event')
         await create(trigger, { title: 'SSE protocol probe' })
         expect(exactStore(await eventAt(1)), 'persisted mutation SSE event has the wrong name or store payload')
+        stage('live_failed_write')
         await new Promise((resolve) => setTimeout(resolve, 250))
         const count = await page.evaluate(() => globalThis.__kanbanProbeEvents.length)
         original = await control('read_store')
@@ -1202,15 +1191,18 @@ const PROBES = {
       return 'Named SSE change events carry the exact store, start with an initial event and exclude failed persistence.'
     })
     await check('live_three_sessions_and_direct_iii', async () => {
+      stage('live_sessions')
       const sessions = await Promise.all([0, 1, 2].map(() => pageFor(browser, baseUrl)))
       const configuration = await trigger('configuration::get', { id: 'kanban', raw: true })
       const ticket = await create(trigger, { title: 'Live probe', priority: 'low' })
       await Promise.all(sessions.map(({ page }) => eventually(async () => await page.getByRole('heading', { name: 'Live probe' }).count(), 'session missed direct iii creation')))
+      stage('live_focus')
       const focusedCard = sessions[0].page.getByRole('heading', { name: 'Live probe' }).locator('xpath=ancestor::a[1]')
       await focusedCard.focus()
       await create(trigger, { title: 'Live noise' })
       await eventually(async () => sessions[0].page.evaluate(() => document.activeElement?.textContent?.includes('Live probe')), 'focused card was lost during an ordinary live update')
 
+      stage('live_edit_merge')
       await sessions[0].page.getByRole('heading', { name: 'Live probe' }).click()
       await sessions[1].page.getByRole('heading', { name: 'Live probe' }).click()
       await sessions[2].page.getByRole('heading', { name: 'Live probe' }).click()
@@ -1221,6 +1213,7 @@ const PROBES = {
       await edit.getByRole('button', { name: 'Save changes' }).click()
       await eventually(async () => (await trigger('kanban::tickets::get', { id: ticket.id })).title === 'Dirty local title', 'local edit did not save')
       expect((await trigger('kanban::tickets::get', { id: ticket.id })).priority === 'urgent', 'saving overwrote untouched remote priority')
+      stage('live_comment_draft')
       const preservedDraft = sessions[0].page.getByRole('textbox', { name: 'Comment', exact: true })
       await sessions[0].page.getByLabel('Your name').fill('Draft author')
       await preservedDraft.fill('Ordinary update draft')
@@ -1229,6 +1222,7 @@ const PROBES = {
       await eventually(async () => (await preservedDraft.inputValue()) === 'Ordinary update draft', 'ordinary live update erased comment draft')
       expect(await sessions[0].page.evaluate(() => document.activeElement?.tagName === 'TEXTAREA'), 'ordinary live update lost textarea focus')
 
+      stage('live_replies')
       await sessions[1].page.getByLabel('Your name').fill('Remote author')
       await sessions[1].page.getByRole('textbox', { name: 'Comment', exact: true }).fill('Live comment')
       const [posted] = await Promise.all([
@@ -1244,18 +1238,21 @@ const PROBES = {
       await Promise.all(sessions.map(({ page }) => eventually(async () => await page.getByText('Live reply', { exact: true }).count(), 'session missed direct iii reply')))
       expect(await preservedDraft.inputValue() === 'Reply draft survives', 'live reply erased a newer reply draft')
 
+      stage('live_reconnect')
       await control('restart')
       await eventually(async () => (await trigger('kanban::tickets::get', { id: ticket.id })).id === ticket.id, 'iii did not reconnect after restart', 15_000)
       await trigger('kanban::tickets::update', { id: ticket.id, changes: { description: 'Reconnected live description' } })
       await Promise.all(sessions.map(({ page }) => eventually(async () => await page.getByText('Reconnected live description', { exact: true }).count(), 'browser session did not reconnect after restart', 20_000)))
       expect(await preservedDraft.inputValue() === 'Reply draft survives', 'restart erased same-store reply draft')
 
+      stage('live_move')
       await sessions[2].page.evaluate(() => { location.hash = '#board' })
       await eventually(async () => await sessions[2].page.getByRole('heading', { name: 'Dirty local title' }).count(), 'board did not recover after restart')
       await trigger('kanban::tickets::update', { id: ticket.id, changes: { status: 'done' } })
       await Promise.all(sessions.slice(0, 2).map(({ page }) => eventually(async () =>
         await page.getByText('Done', { exact: true }).filter({ visible: true }).count(), 'remote move did not update detail status')))
       await eventually(async () => await boardLane(sessions[2].page, 'Done').getByRole('heading', { name: 'Dirty local title' }).count(), 'remote move did not update the board lane')
+      stage('live_drag')
       const dragging = sessions[2].page.getByRole('heading', { name: 'Dirty local title' }).locator('xpath=ancestor::a[1]')
       const dragged = await dragging.elementHandle()
       await dragging.evaluate((element) => {
@@ -1276,6 +1273,7 @@ const PROBES = {
         await Promise.all(sessions.slice(0, 2).map(({ page }) => eventually(async () =>
           await page.getByText('Updated during drag', { exact: true }).count(), 'ordinary update did not reach the other sessions during drag')))
         expect(await dragged.evaluate((element) => element.isConnected && !globalThis.__kanbanDragEnded), 'ordinary live update replaced or ended the active drag')
+        stage('live_store')
         await trigger('configuration::set', { id: 'kanban', value: { ...configuration.value, data_dir: '/data/live-alternate' } })
         await eventually(async () => await sessions[2].page.getByText('No tickets yet.', { exact: true }).count(), 'store switch during drag did not load the empty store')
       } finally {
@@ -1285,6 +1283,7 @@ const PROBES = {
       await Promise.all(sessions.slice(0, 2).map(({ page }) => eventually(async () => await page.getByRole('heading', { name: 'Dirty local title' }).count(), 'detail did not recover after restoring the store')))
       expect(await preservedDraft.inputValue() === '', 'store switch retained an old-store draft')
 
+      stage('live_deletion')
       await trigger('kanban::tickets::delete', { id: ticket.id })
       await Promise.all(sessions.slice(0, 2).map(({ page }) => eventually(async () => {
         const actions = page.getByRole('button', { name: /^(?:Edit ticket|Delete ticket)$/ })
@@ -1298,6 +1297,7 @@ const PROBES = {
       return 'Three sessions synchronize mutations; focus and drafts survive ordinary updates/restart, while a store switch during drag clears stale state.'
     })
     await check('live_late_responses_disconnect_and_shutdown', async () => {
+      stage('live_late_get')
       const ticket = await create(trigger, { title: 'Response ordering probe' })
       const { context, page } = await pageFor(browser, `${baseUrl}/#ticket/${ticket.id}`)
       await expectText(page.getByRole('heading', { name: ticket.title }), /Response ordering probe/)
@@ -1325,6 +1325,7 @@ const PROBES = {
       await new Promise((resolve) => setTimeout(resolve, 200))
       expect(await page.getByRole('heading', { name: 'Newer GET state' }).count() === 1, 'late GET replaced newer state')
 
+      stage('live_late_mutation')
       await page.unroute(`**/api/tickets/${ticket.id}`)
       const edit = await ticketEditor(page)
       await edit.getByLabel('Title').fill('Delayed mutation state')
@@ -1349,6 +1350,7 @@ const PROBES = {
       await mutationDelivered
       await eventually(async () => await page.getByRole('heading', { name: 'Newest direct state' }).count(), 'late mutation response replaced newer state')
 
+      stage('live_cleanup')
       const inspected = await control('inspect_runtime')
       expect(typeof inspected?.websocket_url === 'string', 'runtime inspector URL is missing')
       const inspector = await inspectorClient(inspected.websocket_url)
@@ -1373,6 +1375,7 @@ const PROBES = {
       } finally {
         inspector.close()
       }
+      stage('live_shutdown')
       await control('restart')
       await eventually(async () => (await trigger('kanban::tickets::get', { id: ticket.id })).title === 'Post-cleanup state', 'runtime did not shut down and recover with an SSE client', 15_000)
       await trigger('kanban::tickets::update', { id: ticket.id, changes: { title: 'Restarted stream state' } })
@@ -1380,12 +1383,60 @@ const PROBES = {
       await context.close()
       return 'Late responses stay stale; inspector proves closed SSE responses are collectible, the surviving stream works, and shutdown remains bounded.'
     })
-    await criterion('criterion_1', 'Three browser sessions observe creation, edits, comments, replies and deletion without reload.')
-    await criterion('criterion_2', 'Focus, comment/reply drafts and dirty edits survive updates; saving preserves untouched remote fields.')
-    await criterion('criterion_3', 'Compose restart reconnects open sessions and preserves same-store drafts.')
-    await criterion('criterion_4', 'Remote deletion disables stale details and a store switch during dragging clears old drafts.')
-    await criterion('criterion_5', 'Late responses stay stale; private heap instrumentation proves SSE cleanup and bounded shutdown with a connection open.')
   },
+}
+
+class BlockedCheck extends Error {}
+
+export function requireEvidence(value, message) {
+  if (!value) throw new BlockedCheck(message)
+}
+
+// A stage covers the assertions until the next stage or the end of its flow.
+// Only reached stages are recorded; later stages remain unverified, not failed.
+export function createCheckRecorder(checks, onFailure = async () => {}) {
+  let active
+  const record = (id, status, detail) => {
+    if (checks.some((check) => check.id === id)) throw new ControlError(`Duplicate check: ${id}`)
+    checks.push({ id, status, detail })
+  }
+  const finish = () => {
+    if (active) record(active, 'passed', 'Observed through the running application.')
+    active = undefined
+  }
+  const check = async (id, action) => {
+    try {
+      const detail = await action()
+      finish()
+      record(id, 'passed', detail || 'Observed through the running application.')
+      return true
+    } catch (error) {
+      if (error instanceof ControlError) throw error
+      const status = error instanceof BlockedCheck ? 'unverified' : 'failed'
+      if (active) record(active, status, details(error))
+      active = undefined
+      record(id, status, details(error))
+      await onFailure(id)
+      return false
+    }
+  }
+  return {
+    check,
+    stage: (id) => { finish(); active = id },
+  }
+}
+
+export function scoreCriteria(checks, rubric) {
+  if (!Array.isArray(rubric) || !rubric.length) throw new ControlError('Missing scenario rubric')
+  return rubric.map(({ id, description, checks: dependencies }) => {
+    if (!dependencies?.length) throw new ControlError(`Missing evidence mapping: ${id}`)
+    const status = criterionDependencyStatus(checks, dependencies)
+    const evidence = dependencies.map((dependency) => {
+      const check = checks.find(({ id }) => id === dependency)
+      return `${dependency}: ${check?.detail || 'not reached; prerequisite evidence unavailable'}`
+    }).join('; ')
+    return { id, status, detail: `${description} ${evidence}` }
+  })
 }
 
 export function criterionDependencyStatus(checks, dependencies) {

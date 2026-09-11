@@ -31,7 +31,7 @@ function change(result, predicate) { return changes(result).find(predicate); }
 function endpoint(from, to, worker = 'orders-worker') { return `/w/${worker}/compare/${from}...${to}`; }
 
 async function temporaryOrderingProbes() {
-  const ids = ['object_order', 'required_order', 'enum_order', 'config_array_order'];
+  const ids = ['required_order', 'enum_order', 'config_array_order'];
   const versions = ['9.90.0', '9.90.1'];
   const sql = postgres(process.env.DATABASE_URL, { max: 1 });
   try {
@@ -57,9 +57,7 @@ async function temporaryOrderingProbes() {
     for (const id of ids) {
       const functions = structuredClone(fromFunctions);
       const config = structuredClone(baseConfig);
-      if (id === 'object_order') {
-        functions[0].request_schema.properties = { currency: { type: 'string' }, customerId: { enum: ['one', 'two'], type: 'string' } };
-      } else if (id === 'required_order') {
+      if (id === 'required_order') {
         functions[0].request_schema.required.reverse();
       } else if (id === 'enum_order') {
         functions[0].request_schema.properties.customerId.enum.reverse();
@@ -90,20 +88,29 @@ async function apiProbes() {
   try { health = await request('/health'); } catch (error) {
     const reason = `API unreachable: ${error}`;
     for (const id of [
-      'object_order','required_order','enum_order','config_array_order','same_version','function_removal','required_impact','missing_metadata','worker_lookup',
+      'exact_version','required_order','enum_order','config_array_order','same_version','function_removal','required_impact','missing_metadata','worker_lookup',
       'reverse_kinds','reverse_values','reverse_impact','invalid_version','missing_worker','missing_version'
     ]) unavailable(`implementation.${id}`, 'Live API observation', reason);
     return false;
   }
   if (health.status !== 200) throw new Error(`API health returned ${health.status}`);
 
-  const [same, forward, reverse, oldMetadata, scoped, invalid, missingWorker, missingVersion] = await Promise.all([
+  const [same, forward, reverse, oldMetadata, scoped, invalid, missingWorker, missingVersion, latest, range, wildcard] = await Promise.all([
     request(endpoint('1.0.0','1.0.0')), request(endpoint('1.0.0','2.0.0')),
     request(endpoint('2.0.0','1.0.0')), request(endpoint('0.9.0','0.9.0')),
     request(endpoint('1.0.0','9.9.9')), request(endpoint('invalid','2.0.0')),
-    request(endpoint('1.0.0','2.0.0','absent-worker')), request(endpoint('8.8.8','7.7.7'))
+    request(endpoint('1.0.0','2.0.0','absent-worker')), request(endpoint('8.8.8','7.7.7')),
+    request(endpoint('latest','2.0.0')), request(endpoint('^1.0.0','2.0.0')),
+    request(endpoint('1.x','2.0.0'))
   ]);
   observe('implementation.same_version', same.status === 200 && Array.isArray(same.body?.changes) && same.body.changes.length === 0, '200 with changes=[]', same);
+  const nonExact = [latest, range, wildcard];
+  observe('implementation.exact_version', same.status === 200
+    && same.body?.from === '1.0.0' && same.body?.to === '1.0.0'
+    && nonExact.every(result =>
+    result.status === 400 && result.body?.error?.code === 'invalid_version'),
+  'Exact SemVer succeeds while latest, ranges, and wildcards are rejected without substitution',
+  { exact: same, latest, range, wildcard });
   const removedGet = change(forward, c => c.area === 'functions' && c.name === 'orders::get' && c.kind === 'removed');
   observe('implementation.function_removal', !!removedGet, 'orders::get removed', removedGet || forward);
   const currency = changes(forward).filter(c => c.area === 'functions' && c.name === 'orders::create' && (String(c.path).includes('currency') || c.path === '/request_schema/required'));
@@ -135,15 +142,28 @@ async function browserProbes(apiHealthy) {
   try {
     const comparisonUrl = `${app}/workers/orders-worker?tab=changelog&from=1.0.0&to=2.0.0`;
     await page.goto(comparisonUrl, { waitUntil: 'networkidle', timeout });
+    await page.addScriptTag({ content: registryDetailProbeSource });
     const selected = await page.locator('select').evaluateAll(nodes => nodes.map(n => n.value));
     const historyText = await page.locator('body').innerText();
     const hasChangelog = /changelog/i.test(historyText);
     observe('implementation.shared_url', hasChangelog && selected.includes('1.0.0') && selected.includes('2.0.0'), 'Selected pair restored', { url: page.url(), selected, hasChangelog });
     observe('implementation.history', hasChangelog && ['0.9.0','1.0.0','1.1.0','2.0.0'].every(v => historyText.includes(v)), 'Four seeded releases visible in Changelog', historyText.slice(0,2000));
-    const detail = page.getByRole('button', { name: /timeout/i }).or(page.locator('summary').filter({ hasText: /timeout/i })).first();
-    let expanded = false;
-    if (await detail.count()) { await detail.click(); const text = await page.locator('body').innerText(); expanded = /3000|3,000/.test(text) && /5000|5,000/.test(text); }
-    observe('implementation.expanded_detail', expanded, 'Expanded timeout shows 3000 and 5000', { controlFound: !!(await detail.count()), expanded });
+    const detailCandidates = page.locator('summary, button[aria-expanded], button[aria-controls]');
+    let detailState = { controlFound: false, expanded: false, localText: '' };
+    for (let index = 0; index < await detailCandidates.count(); index += 1) {
+      const candidate = detailCandidates.nth(index);
+      const belongsToTimeout = await candidate.evaluate(element =>
+        globalThis.registryDetailProbe.candidates(document).includes(element));
+      if (!belongsToTimeout) continue;
+      await candidate.click();
+      detailState = await candidate.evaluate(element => ({
+        controlFound: true,
+        ...globalThis.registryDetailProbe.state(element, document),
+      }));
+      if (detailState.expanded && detailState.beforePresent && detailState.afterPresent) break;
+    }
+    const expanded = detailState.expanded && detailState.beforePresent && detailState.afterPresent;
+    observe('implementation.expanded_detail', expanded, 'Expanded timeout row shows 3000 and 5000', detailState);
     const selects = page.locator('select');
     let keyboard = false;
     let staleCleared = false;

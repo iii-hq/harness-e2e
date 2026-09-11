@@ -241,9 +241,9 @@
           "weight": 4
         },
         {
-          "id": "implementation.object_order",
-          "question": "Does changing only object-key order preserve equality?",
-          "expected": "A pure object-key permutation produces no comparison changes.",
+          "id": "implementation.exact_version",
+          "question": "Does comparison require exact versions without substitution?",
+          "expected": "Exact SemVer values are accepted while latest, ranges, and wildcards return invalid_version without selecting another release.",
           "measurement": "binary",
           "evidence": [
             "Independent execution record for this check, with its expected and observed result."
@@ -613,26 +613,13 @@
       "title": "Feature verification",
       "metrics": [
         {
-          "id": "verification.recall",
-          "question": "What proportion of independently failing contract checks did the tester identify?",
-          "expected": "Compare reported failing check IDs with the independently executed contract probes. This measures check detection, not unique root causes. If no checks fail independently, retain 0/0 and score the empty set as value 1.",
+          "id": "verification.outcome_accuracy",
+          "question": "What proportion of required check outcomes match independent truth?",
+          "expected": "Each of the 24 required IDs earns credit only when the tester reports pass for an independent pass or fail for an independent failure. Missing, blocked, and incorrect reports earn zero; incomplete independent truth remains unavailable.",
           "measurement": "ratio",
-          "weight": 35,
-          "numerator": "Required check IDs reported as failing and independently reproduced.",
-          "denominator": "Required check IDs independently observed to fail.",
-          "evidence": [
-            "Independent item-level inventory with stable IDs and classifications.",
-            "Raw artifacts supporting the item-level observations."
-          ]
-        },
-        {
-          "id": "verification.precision",
-          "question": "What proportion of reported failing checks fail independently?",
-          "expected": "Execute the contract probes independently and match each reported failure by check ID. If no failures are reported, retain 0/0 and score the empty set as value 1.",
-          "measurement": "ratio",
-          "weight": 20,
-          "numerator": "Reported failing check IDs independently reproduced.",
-          "denominator": "Distinct check IDs reported as failing.",
+          "weight": 55,
+          "numerator": "Required check IDs whose reported pass or fail matches the independent observation.",
+          "denominator": "All 24 required public check IDs.",
           "evidence": [
             "Independent item-level inventory with stable IDs and classifications.",
             "Raw artifacts supporting the item-level observations."
@@ -641,7 +628,7 @@
         {
           "id": "verification.execution_coverage",
           "question": "What proportion of required check IDs cite a recorded execution command?",
-          "expected": "A non-blocked report entry cites an exact command present in the executor log and an existing evidence file.",
+          "expected": "A pass or fail cites a recorded command_id, or a legacy command matching after outer-whitespace trimming only, plus an existing non-empty evidence file.",
           "measurement": "ratio",
           "weight": 20,
           "numerator": "Required check IDs with a recorded command and an existing evidence file.",
@@ -654,11 +641,11 @@
         {
           "id": "verification.evidence_coverage",
           "question": "What proportion of reported outcomes cite an existing evidence file?",
-          "expected": "Resolve each reported outcome evidence path to a file in the attempt workspace. If no outcomes are reported, retain 0/0 and score coverage as value 0.",
+          "expected": "Each required pass or fail supplies a matching structured evidence record with non-empty factual expected and observed text, plus non-empty raw artifacts whose recorded execution-time digests match. The schema establishes attribution; independent probes establish truth.",
           "measurement": "ratio",
           "weight": 20,
           "numerator": "Reported outcomes citing an existing evidence file.",
-          "denominator": "Outcomes reported by the tester.",
+          "denominator": "All 24 required public check IDs.",
           "evidence": [
             "Independent item-level inventory with stable IDs and classifications.",
             "Raw artifacts supporting the item-level observations."

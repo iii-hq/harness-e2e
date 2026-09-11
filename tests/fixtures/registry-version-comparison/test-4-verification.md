@@ -15,15 +15,31 @@ Also write `output/checks.json` with one entry per required check ID:
     {
       "id": "implementation.same_version",
       "status": "pass",
-      "command": "curl -sS http://127.0.0.1:<api_port>/w/orders-worker/compare/1.0.0...1.0.0 > output/same-version-response.json",
+      "command_id": "<command_id returned by the scenario tool>",
       "steps": "GET /w/orders-worker/compare/1.0.0...1.0.0; verify HTTP 200 and changes=[]",
+      "evidence_record": "output/evidence/same-version.json",
       "evidence": ["output/same-version-response.json"]
     }
   ]
 }
 ```
 
-Use `pass`, `fail`, or `blocked` for status. Evidence paths must name real files under `output/`, relative to `/workspace`. The `command` must exactly match a command you executed through the scenario tool; record expected/observed results in `steps`. A blocked check is not an executed check. Report each ID once; multiple symptoms of the same check belong in that entry.
+Use `pass`, `fail`, or `blocked` for status. Use the stable `command_id` returned by the scenario tool. For compatibility with older clients, `command` may instead contain the complete command argument; only leading and trailing whitespace are ignored, while quoted content, internal whitespace, newlines, and redirects must remain unchanged. Record expected/observed results in `steps`. A blocked check is not an executed check. Report each ID once; multiple symptoms of the same check belong in that entry.
+
+Every pass or fail also needs one `evidence_record` JSON file under `output/`:
+
+```json
+{
+  "check_id": "implementation.same_version",
+  "status": "pass",
+  "command_id": "<the original command that produced the raw artifact>",
+  "expected": "HTTP 200 with an empty changes array",
+  "observed": "HTTP 200 and changes was an empty array",
+  "artifacts": ["output/same-version-response.json"]
+}
+```
+
+The record's check ID and status must match the `checks.json` entry. `expected` and `observed` must be non-empty factual text; short values such as `200 OK` are valid and whitespace-only values are not. Every listed artifact must also appear in the check's `evidence` array and must be a non-empty regular file created or changed by the cited command. The executor records bounded SHA-256 and size metadata immediately after each command and rejects artifacts that changed later, symlinks, files outside `output/`, oversized files, and files beyond the capture limit. Because `command_id` is returned after a command finishes, write the evidence record in a later tool call and cite the original command ID that produced the raw artifacts. The evidence schema establishes attribution only; independent probes determine whether the reported outcome is true.
 
 If a tool call runs a shell batch, copy its entire `command` argument verbatim, including setup lines, newlines, and redirects. A subcommand or script filename alone does not identify that recorded call. Several checks may reference the same complete command when its evidence covers each check.
 
@@ -32,7 +48,7 @@ Required check IDs and questions:
 - `implementation.same_version`: Does comparing a version with itself return no changes?
 - `implementation.function_removal`: Does the API identify a removed function?
 - `implementation.required_impact`: Does a newly required input property receive the prescribed impact?
-- `implementation.object_order`: Does changing only object-key order preserve equality?
+- `implementation.exact_version`: Does comparison require exact versions without substitution?
 - `implementation.required_order`: Does changing only schema required-array order preserve equality?
 - `implementation.enum_order`: Does changing only schema enum-array order preserve equality?
 - `implementation.config_array_order`: Does changing configuration-array order produce a difference?
