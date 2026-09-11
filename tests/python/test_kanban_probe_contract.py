@@ -355,7 +355,7 @@ export const chromium = {
             self.assertNotIn("error", result)
             self.assertFalse((output / "control-request.json").exists())
             corrupt = next(check for check in result["checks"] if check["id"] == "persistence_corrupt_and_duplicate_store_fail_closed")
-            self.assertEqual(corrupt["status"], "failed")
+            self.assertEqual(corrupt["status"], "unverified")
             self.assertIn("require working create/list/get", corrupt["detail"])
 
     def test_direct_configuration_waits_for_the_resolved_path(self):
@@ -494,11 +494,16 @@ export const chromium = {
                 for check in result["checks"] if check["id"].startswith("criterion_")
             }
             self.assertEqual(criteria, {
-                "criterion_1": "passed",
-                "criterion_2": "passed",
-                "criterion_3": "failed",
-                "criterion_4": "passed",
-                "criterion_5": "failed",
+                "criterion_startup": "passed",
+                "criterion_asset_paths": "passed",
+                "criterion_initial_config": "passed",
+                "criterion_preserve_config": "passed",
+                "criterion_direct_config": "passed",
+                "criterion_invalid_config": "passed",
+                "criterion_config_restart": "passed",
+                "criterion_settings_mobile": "failed",
+                "criterion_settings_desktop": "unverified",
+                "criterion_hot_reload": "passed",
             })
 
     def test_control_request_is_atomic_correlated_and_has_object_payload(self):

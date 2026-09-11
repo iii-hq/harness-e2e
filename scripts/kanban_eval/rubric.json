@@ -1,0 +1,608 @@
+{
+  "kanban_c1_foundation": [
+    {
+      "id": "criterion_startup",
+      "weight": 10,
+      "description": "Compose starts the standalone application and serves HTML.",
+      "checks": [
+        "foundation_startup"
+      ]
+    },
+    {
+      "id": "criterion_asset_paths",
+      "weight": 5,
+      "description": "Prototype-like asset paths return 404.",
+      "checks": [
+        "foundation_asset_paths"
+      ]
+    },
+    {
+      "id": "criterion_initial_config",
+      "weight": 10,
+      "description": "Missing configuration initializes the default data directory.",
+      "checks": [
+        "foundation_initial_config"
+      ]
+    },
+    {
+      "id": "criterion_preserve_config",
+      "weight": 15,
+      "description": "Saving preserves unrelated configuration fields.",
+      "checks": [
+        "foundation_preserve_config"
+      ]
+    },
+    {
+      "id": "criterion_direct_config",
+      "weight": 15,
+      "description": "Direct iii configuration changes update the effective directory.",
+      "checks": [
+        "foundation_direct_config"
+      ]
+    },
+    {
+      "id": "criterion_invalid_config",
+      "weight": 5,
+      "description": "An empty data directory is rejected with HTTP 400.",
+      "checks": [
+        "foundation_invalid_config"
+      ]
+    },
+    {
+      "id": "criterion_config_restart",
+      "weight": 10,
+      "description": "Configuration survives restart.",
+      "checks": [
+        "foundation_config_restart"
+      ]
+    },
+    {
+      "id": "criterion_settings_mobile",
+      "weight": 10,
+      "description": "The mobile settings form loads and saves the effective directory.",
+      "checks": [
+        "foundation_settings_mobile"
+      ]
+    },
+    {
+      "id": "criterion_settings_desktop",
+      "weight": 5,
+      "description": "The desktop settings form remains usable without horizontal overflow.",
+      "checks": [
+        "foundation_settings_desktop"
+      ]
+    },
+    {
+      "id": "criterion_hot_reload",
+      "weight": 15,
+      "description": "A source change takes effect without manually rebuilding.",
+      "checks": [
+        "foundation_development_hot_reload"
+      ]
+    }
+  ],
+  "kanban_c2_persistence": [
+    {
+      "id": "criterion_defaults",
+      "weight": 15,
+      "description": "Creation normalizes the title and uses the requested default field values.",
+      "checks": [
+        "persistence_defaults"
+      ]
+    },
+    {
+      "id": "criterion_identity",
+      "weight": 15,
+      "description": "UUIDs, timestamps and increasing readable keys are valid.",
+      "checks": [
+        "persistence_identity"
+      ]
+    },
+    {
+      "id": "criterion_lookup",
+      "weight": 15,
+      "description": "Real iii list/get preserve creation order and accept UUID and readable key.",
+      "checks": [
+        "persistence_lookup"
+      ]
+    },
+    {
+      "id": "criterion_invalid",
+      "weight": 15,
+      "description": "Invalid fields and values are rejected without adding tickets.",
+      "checks": [
+        "persistence_invalid_input_no_write"
+      ]
+    },
+    {
+      "id": "criterion_isolation",
+      "weight": 15,
+      "description": "Configured directories retain independent stores and key sequences.",
+      "checks": [
+        "persistence_isolation"
+      ]
+    },
+    {
+      "id": "criterion_restart",
+      "weight": 15,
+      "description": "Persisted tickets survive runtime restart.",
+      "checks": [
+        "persistence_restart"
+      ]
+    },
+    {
+      "id": "criterion_corruption",
+      "weight": 10,
+      "description": "Corrupt and duplicate stores fail closed without replacing stored bytes.",
+      "checks": [
+        "persistence_corrupt_and_duplicate_store_fail_closed"
+      ]
+    }
+  ],
+  "kanban_c3_board": [
+    {
+      "id": "criterion_loading",
+      "weight": 10,
+      "description": "Loading is visible without fabricated zero counts.",
+      "checks": [
+        "board_loading"
+      ]
+    },
+    {
+      "id": "criterion_empty",
+      "weight": 10,
+      "description": "An empty store shows zero totals and empty columns.",
+      "checks": [
+        "board_empty"
+      ]
+    },
+    {
+      "id": "criterion_error",
+      "weight": 10,
+      "description": "Read failures show recoverable errors without fabricated counts.",
+      "checks": [
+        "board_error"
+      ]
+    },
+    {
+      "id": "criterion_retry",
+      "weight": 10,
+      "description": "Retry recovers the board after a failed read.",
+      "checks": [
+        "board_retry"
+      ]
+    },
+    {
+      "id": "criterion_columns",
+      "weight": 30,
+      "description": "Five columns show the correct counts, cards and metadata.",
+      "checks": [
+        "board_lanes_counts_and_metadata"
+      ]
+    },
+    {
+      "id": "criterion_refresh",
+      "weight": 10,
+      "description": "Refresh fetches current tickets.",
+      "checks": [
+        "board_refresh"
+      ]
+    },
+    {
+      "id": "criterion_settings",
+      "weight": 10,
+      "description": "Returning from settings reloads the selected store.",
+      "checks": [
+        "board_settings"
+      ]
+    },
+    {
+      "id": "criterion_safe_text",
+      "weight": 5,
+      "description": "User markup renders as literal text.",
+      "checks": [
+        "board_safe_text"
+      ]
+    },
+    {
+      "id": "criterion_responsive",
+      "weight": 5,
+      "description": "Desktop and mobile avoid document-wide horizontal overflow.",
+      "checks": [
+        "board_responsive"
+      ]
+    }
+  ],
+  "kanban_c4_ticket_flow": [
+    {
+      "id": "criterion_cards",
+      "weight": 10,
+      "description": "Cards open same-tab details by keyboard and pointer, with working browser history.",
+      "checks": [
+        "ticket_cards"
+      ]
+    },
+    {
+      "id": "criterion_modal",
+      "weight": 5,
+      "description": "The creation modal has labelled controls and focuses its title field.",
+      "checks": [
+        "ticket_modal"
+      ]
+    },
+    {
+      "id": "criterion_create_error",
+      "weight": 10,
+      "description": "Failed creation shows an accessible error and preserves its draft.",
+      "checks": [
+        "ticket_create_error"
+      ]
+    },
+    {
+      "id": "criterion_creation",
+      "weight": 10,
+      "description": "Successful creation closes the modal and opens same-tab non-modal details.",
+      "checks": [
+        "ticket_creation"
+      ]
+    },
+    {
+      "id": "criterion_lookup",
+      "weight": 10,
+      "description": "HTTP and iii lookup accept UUID and readable key.",
+      "checks": [
+        "ticket_identifiers"
+      ]
+    },
+    {
+      "id": "criterion_details",
+      "weight": 5,
+      "description": "Details show persisted editable fields.",
+      "checks": [
+        "ticket_details"
+      ]
+    },
+    {
+      "id": "criterion_mobile",
+      "weight": 5,
+      "description": "Direct detail reload and mobile layout work.",
+      "checks": [
+        "ticket_mobile"
+      ]
+    },
+    {
+      "id": "criterion_delete_error",
+      "weight": 5,
+      "description": "Failed deletion keeps the detail view and shows an accessible error.",
+      "checks": [
+        "ticket_delete_error"
+      ]
+    },
+    {
+      "id": "criterion_delete_navigation",
+      "weight": 10,
+      "description": "Deletion completing after navigation removes the board card.",
+      "checks": [
+        "ticket_delete_navigation"
+      ]
+    },
+    {
+      "id": "criterion_durable_deletion",
+      "weight": 15,
+      "description": "Soft deletion survives restart and retires the readable key.",
+      "checks": [
+        "ticket_durable_deletion"
+      ]
+    },
+    {
+      "id": "criterion_content_type",
+      "weight": 5,
+      "description": "Non-JSON creation is rejected.",
+      "checks": [
+        "ticket_content_type"
+      ]
+    },
+    {
+      "id": "criterion_utf8",
+      "weight": 10,
+      "description": "UTF-8 characters split across request chunks remain intact.",
+      "checks": [
+        "ticket_utf8"
+      ]
+    }
+  ],
+  "kanban_c5_edit_move": [
+    {
+      "id": "criterion_partial",
+      "weight": 5,
+      "description": "A partial update preserves omitted editable fields.",
+      "checks": [
+        "edit_partial"
+      ]
+    },
+    {
+      "id": "criterion_cancel",
+      "weight": 5,
+      "description": "Cancel restores persisted fields without writes.",
+      "checks": [
+        "edit_cancel"
+      ]
+    },
+    {
+      "id": "criterion_save_failure",
+      "weight": 10,
+      "description": "A failed save preserves the edit draft and reports an error.",
+      "checks": [
+        "edit_failure"
+      ]
+    },
+    {
+      "id": "criterion_save",
+      "weight": 15,
+      "description": "Retry saves supported fields and preserves immutable metadata.",
+      "checks": [
+        "edit_success"
+      ]
+    },
+    {
+      "id": "criterion_save_navigation",
+      "weight": 10,
+      "description": "A save completing after navigation refreshes the relevant board.",
+      "checks": [
+        "edit_navigation"
+      ]
+    },
+    {
+      "id": "criterion_invalid",
+      "weight": 15,
+      "description": "Invalid, empty, immutable and deleted-ticket updates fail without writes.",
+      "checks": [
+        "edit_rejects_invalid_immutable_and_deleted_updates"
+      ]
+    },
+    {
+      "id": "criterion_drag_failure",
+      "weight": 10,
+      "description": "A failed pointer move leaves the card in its original column.",
+      "checks": [
+        "drag_failure"
+      ]
+    },
+    {
+      "id": "criterion_drag",
+      "weight": 10,
+      "description": "Pointer drag persists only status and updates counts.",
+      "checks": [
+        "drag_success"
+      ]
+    },
+    {
+      "id": "criterion_move_navigation",
+      "weight": 10,
+      "description": "A move completing after navigation refreshes the board.",
+      "checks": [
+        "drag_navigation"
+      ]
+    },
+    {
+      "id": "criterion_mobile",
+      "weight": 5,
+      "description": "The mobile status selector persists an edit.",
+      "checks": [
+        "edit_mobile"
+      ]
+    },
+    {
+      "id": "criterion_restart",
+      "weight": 5,
+      "description": "Edited fields survive runtime restart.",
+      "checks": [
+        "edit_restart"
+      ]
+    }
+  ],
+  "kanban_c6_discussion": [
+    {
+      "id": "criterion_comments",
+      "weight": 20,
+      "description": "Comments and same-ticket nested replies persist in posting order with valid identities.",
+      "checks": [
+        "discussion_comments"
+      ]
+    },
+    {
+      "id": "criterion_timeline",
+      "weight": 10,
+      "description": "Timeline entries render text safely with author and time.",
+      "checks": [
+        "discussion_timeline"
+      ]
+    },
+    {
+      "id": "criterion_parent_navigation",
+      "weight": 10,
+      "description": "Keyboard activation reaches the referenced parent comment.",
+      "checks": [
+        "discussion_parent_navigation"
+      ]
+    },
+    {
+      "id": "criterion_invalid",
+      "weight": 15,
+      "description": "Invalid inputs and malformed stored discussions fail without writes.",
+      "checks": [
+        "discussion_invalid_input_and_corrupt_store_fail_closed"
+      ]
+    },
+    {
+      "id": "criterion_draft_failure",
+      "weight": 10,
+      "description": "Editing and failed posts preserve comment drafts.",
+      "checks": [
+        "discussion_draft_failure"
+      ]
+    },
+    {
+      "id": "criterion_draft_navigation",
+      "weight": 15,
+      "description": "A late post cannot erase another ticket draft or newer activity.",
+      "checks": [
+        "discussion_draft_navigation"
+      ]
+    },
+    {
+      "id": "criterion_preservation",
+      "weight": 10,
+      "description": "Edits and soft deletion preserve stored discussions.",
+      "checks": [
+        "discussion_preservation"
+      ]
+    },
+    {
+      "id": "criterion_restart",
+      "weight": 10,
+      "description": "Discussions survive restart and existing records remain usable.",
+      "checks": [
+        "discussion_restart"
+      ]
+    }
+  ],
+  "kanban_c7_live": [
+    {
+      "id": "criterion_initial_event",
+      "weight": 5,
+      "description": "An SSE connection receives an initial named change event with the effective store.",
+      "checks": [
+        "live_initial_event"
+      ]
+    },
+    {
+      "id": "criterion_mutation_event",
+      "weight": 5,
+      "description": "Successful persistence publishes an SSE change event.",
+      "checks": [
+        "live_mutation_event"
+      ]
+    },
+    {
+      "id": "criterion_failed_write",
+      "weight": 5,
+      "description": "Failed persistence does not publish an SSE event.",
+      "checks": [
+        "live_failed_write"
+      ]
+    },
+    {
+      "id": "criterion_sessions",
+      "weight": 10,
+      "description": "Three sessions observe direct iii creation without reload.",
+      "checks": [
+        "live_sessions"
+      ]
+    },
+    {
+      "id": "criterion_focus",
+      "weight": 5,
+      "description": "Ordinary updates preserve focused board cards.",
+      "checks": [
+        "live_focus"
+      ]
+    },
+    {
+      "id": "criterion_edit_merge",
+      "weight": 10,
+      "description": "Saving dirty edits preserves untouched remote fields.",
+      "checks": [
+        "live_edit_merge"
+      ]
+    },
+    {
+      "id": "criterion_comment_draft",
+      "weight": 5,
+      "description": "Ordinary updates preserve comment draft and focus.",
+      "checks": [
+        "live_comment_draft"
+      ]
+    },
+    {
+      "id": "criterion_replies",
+      "weight": 5,
+      "description": "Browser comments and iii replies reach other sessions without erasing reply drafts.",
+      "checks": [
+        "live_replies"
+      ]
+    },
+    {
+      "id": "criterion_reconnect",
+      "weight": 10,
+      "description": "Restart reconnects sessions and preserves same-store drafts.",
+      "checks": [
+        "live_reconnect"
+      ]
+    },
+    {
+      "id": "criterion_move",
+      "weight": 5,
+      "description": "A remote move updates board and detail status.",
+      "checks": [
+        "live_move"
+      ]
+    },
+    {
+      "id": "criterion_drag",
+      "weight": 5,
+      "description": "Ordinary updates preserve active pointer dragging.",
+      "checks": [
+        "live_drag"
+      ]
+    },
+    {
+      "id": "criterion_store",
+      "weight": 5,
+      "description": "Store switches during dragging load the new store and clear old-store drafts.",
+      "checks": [
+        "live_store"
+      ]
+    },
+    {
+      "id": "criterion_deletion",
+      "weight": 5,
+      "description": "Remote deletion removes cards and disables stale actions.",
+      "checks": [
+        "live_deletion"
+      ]
+    },
+    {
+      "id": "criterion_late_get",
+      "weight": 5,
+      "description": "Late GET responses cannot replace newer state.",
+      "checks": [
+        "live_late_get"
+      ]
+    },
+    {
+      "id": "criterion_late_mutation",
+      "weight": 5,
+      "description": "Late mutation responses cannot replace newer state.",
+      "checks": [
+        "live_late_mutation"
+      ]
+    },
+    {
+      "id": "criterion_cleanup",
+      "weight": 5,
+      "description": "Disconnected SSE clients release retained server responses.",
+      "checks": [
+        "live_cleanup"
+      ]
+    },
+    {
+      "id": "criterion_shutdown",
+      "weight": 5,
+      "description": "Shutdown with a connected client completes and restart restores streaming.",
+      "checks": [
+        "live_shutdown"
+      ]
+    }
+  ]
+}

@@ -160,3 +160,39 @@ candidate zero score; an application that fails build/startup is a task failure.
 python3 -m unittest discover -s tests/python -p 'test_kanban*.py'
 node --check scripts/kanban_eval/probe.mjs
 ```
+
+## Scoring revision 2
+
+The seven native cases now use scenario version 2. `rubric.json` declares stable,
+weighted criterion IDs and their evidence checks, totaling 100 points per case.
+The frozen inputs include the rubric and its digest; existing execution reports
+and fixture revisions are unchanged. Scores from revisions 1 and 2 must not be
+compared as though they use an identical acceptance contract.
+
+Each flow records checkpoints before testing a distinct behavior. Passing an
+observed checkpoint is retained when a later checkpoint fails. The failed
+checkpoint earns zero; later, unexecuted checkpoints are `unverified` and retain
+`awarded: null`. The native report retains these per-criterion observations and
+leaves the aggregate score unavailable until every criterion is measured; it
+does not redistribute missing weights. Application build/startup failures still
+fail the deliverable. Controller or source-integrity failures invalidate the
+assessment.
+
+Browser probes accept semantic alternatives such as list-based board columns,
+server-provided accessible error messages and parent-navigation labels. Negative
+controls still reject wrong counts, success-only feedback and inert parent
+buttons. Creation, identifier lookup and deletion use independent fixtures.
+Pointer-drag checks use an independent ticket and measured initial lane counts.
+Draft preservation is tested by preparing a draft before a delayed operation;
+a temporarily disabled form is not treated as evidence of lost data.
+
+Regression fixtures reproduce execution `e6f01f0f-1a92-4e5b-b119-b8ca0b84a7a2`:
+
+```sh
+python3 -m unittest discover -s tests/python -p 'test_kanban*.py'
+cargo test --locked scenarios::kanban::tests
+```
+
+These contract tests do not replace Linux Docker reference/base controls or a
+new native evaluation of the same delivered snapshot. Re-evaluation should
+produce a new linked report, leaving the original evidence and grades intact.
