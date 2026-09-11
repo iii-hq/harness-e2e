@@ -210,7 +210,14 @@ class WorkflowBoundaryTests(unittest.TestCase):
         workflows = {path.name for path in (ROOT / ".github/workflows").glob("*.yml")}
         self.assertIn("exact-stack-e2e.yml", workflows)
         self.assertNotIn("shadow.yml", workflows)
-        self.assertNotIn("release.yml", workflows)
+        # Release branches carry the binary publisher, not the retired
+        # Release Control executor that previously had this filename.
+        import yaml
+
+        publisher = ROOT / ".github/workflows/release.yml"
+        document = yaml.load(publisher.read_text(), Loader=yaml.BaseLoader)
+        self.assertEqual(document["on"], {"push": {"tags": ["harness-e2e/v*"]}})
+        self.assertNotIn("e2e::run", publisher.read_text())
 
     def test_weekly_stress_delegates_privileged_actions_to_protected_launchers(self):
         self.assertFalse(
