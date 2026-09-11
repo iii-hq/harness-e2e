@@ -199,6 +199,13 @@ class ReportPayloadTests(unittest.TestCase):
 
 
 class StackResolutionTests(unittest.TestCase):
+    def test_only_linkly_adds_template_workers_to_the_frozen_runtime(self):
+        snapshot = json.loads(json.dumps(PROFILE_SNAPSHOT))
+        self.assertEqual(resolve_stack_lock.runtime_roots(snapshot), resolve_stack_lock.RUNTIME_ROOTS)
+        snapshot['campaigns'][0]['groups'][0]['scenarios'] = ['linkly_tutorial']
+        self.assertEqual(set(resolve_stack_lock.runtime_roots(snapshot)),
+                         set(resolve_stack_lock.RUNTIME_ROOTS) | {'http'})
+
     def graph(self, worker, version, nodes=(), edges=()):
         return {"root": {"worker": worker, "version": version}, "nodes": list(nodes), "edges": list(edges)}
 
