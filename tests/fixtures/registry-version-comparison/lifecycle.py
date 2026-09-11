@@ -179,13 +179,14 @@ def execute(args):
                              "timeout", "--signal=KILL", str(args.timeout_ms / 1000),
                              "sh", "-lc", args.command], stdout=subprocess.PIPE,
                             stderr=subprocess.PIPE, timeout=args.timeout_ms / 1000 + 15)
-    evidence = {"command": args.command, "timeout_ms": args.timeout_ms,
+    command_id = uuid.uuid4().hex
+    evidence = {"command_id": command_id, "command": args.command, "timeout_ms": args.timeout_ms,
                 "exit_code": result.returncode, "stdout": result.stdout.decode(errors="replace"),
                 "stderr": result.stderr.decode(errors="replace")}
     commands = args.root / "commands"
     commands.mkdir(exist_ok=True)
-    write_json(commands / (uuid.uuid4().hex + ".json"), evidence)
-    return {"exit_code": result.returncode, "stdout": evidence["stdout"][-60000:],
+    write_json(commands / (command_id + ".json"), evidence)
+    return {"command_id": command_id, "exit_code": result.returncode, "stdout": evidence["stdout"][-60000:],
             "stderr": evidence["stderr"][-20000:]}
 
 

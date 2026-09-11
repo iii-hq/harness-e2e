@@ -1,21 +1,21 @@
 # Atomic scenario validations
 
-Each Registry scenario uses the regular Harness criterion and score report. `metrics.json` supplies the current questions, expectations, and weights; each scenario totals 100 points. There is no metric configuration flag, catalog version, catalog hash, frozen metric copy, standalone scorer, or cross-scenario coordinator.
+Each Registry scenario uses the regular Harness criterion and score report. `metrics.json` supplies the current questions, expectations, and weights; each scenario totals 100 points. The current Registry scoring contract is scenario version 2. Historical version 1 reports remain unchanged and must be read against their embedded criteria.
 
 Each metric answers one question. Change its description or weight directly in `metrics.json` and rebuild the runner. The source commit pin belongs to the application fixture, not a metric versioning mechanism.
 
 ## Who validates
 
-- **Planning:** a separate model call reads the submitted plan and the requirements, then answers each planning question with a binary result and cited plan evidence. Its response is retained. This is a model judgment, not a deterministic proof of plan quality.
-- **Implementation:** independent HTTP, browser, database, and patch-replay checks validate the delivered feature. The subject's report does not award points.
-- **Environment:** the validator invokes the submitted environment commands in its private Docker daemon and checks the resulting database, API, frontend, artifacts, isolation, restart, and cleanup behavior.
+- **Planning:** a separate model call reads the submitted plan, requirements, and an independently captured inventory of paths in the pinned repository. Backend and frontend location credit is deterministically removed unless the judge cites an exact path from that inventory. Its response and the path inventory are retained.
+- **Implementation:** independent HTTP, browser, database, and patch-replay checks validate the delivered feature. Exact-version selection is observed through accepted exact SemVer and rejected tag/range/wildcard requests. The subject's report does not award points.
+- **Environment:** the validator allocates distinct ports inside its private Docker daemon, starts named Compose projects, verifies container/project/port identity before dependent observations, and checks database, API, frontend, artifacts, isolation, restart, and cleanup behavior. Failed validator preparation leaves dependent observations unavailable.
 - **Verification:** independent contract probes establish which required check IDs fail in the supplied implementation. The validator compares the tester's structured report with those observations and checks source preservation.
 
-Verification recall is detection of failing **contract checks**, not an estimate of every possible defect or unique root cause. Precision measures how many reported failing check IDs also fail independently. Execution coverage counts required check IDs linked to recorded commands; evidence coverage counts reported outcomes with existing evidence files. These supporting metrics do not assess the semantic content of those files. A repeated check ID counts once. The controller's patch-replay check is excluded from the tester's required inventory.
+Verification outcome accuracy has weight 55 and compares the reported pass/fail value for every one of the 24 required public check IDs with independent truth. Correct passes and correct failures count; missing, blocked, and incorrect reports do not. Incomplete independent truth makes outcome accuracy unavailable. Execution coverage and evidence coverage each have weight 20, and source preservation has weight 5. Commands should cite the immutable `command_id` returned by the execution tool. Legacy command strings match only after trimming outer whitespace. Evidence counts only when it is non-empty, pertinent to the check, and linked to the recorded execution. A repeated check ID counts once. The controller's patch-replay check remains outside the tester's inventory.
 
 ## Observations and scoring
 
-Validators retain raw results and evidence paths in `validation/observations.json`. Binary observations contain `value: 0` or `value: 1`. Ratio observations retain integer `numerator` and `denominator` counts. A measured zero-denominator observation also contains the normalized `value` defined by its metric: recall and precision use 1 for an empty failure set, while evidence coverage uses 0 when no outcomes were reported.
+Validators retain raw results and evidence paths in `validation/observations.json`. Binary observations contain `value: 0` or `value: 1`. Ratio observations retain integer `numerator` and `denominator` counts. All version 2 verification ratios use the fixed 24-check denominator, so silence earns zero instead of an empty-set reward.
 
 Measured points are `round(weight × value)`, using the regular integer criterion format. Raw ratios remain available in the evidence. Each scenario is scored independently through the normal Harness reports.
 

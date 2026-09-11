@@ -11,13 +11,31 @@ return await (async () => {
     return [...document.querySelectorAll('select')].map(select => select.value);
   }
 
-  function matchingControl(pattern) {
+  function closestTimeoutRow(element) {
+    for (let candidate = element; candidate && candidate !== document.body; candidate = candidate.parentElement) {
+      if (/timeout/i.test(candidate.innerText || candidate.textContent || '')) return candidate;
+    }
+    return null;
+  }
+
+  function detailControl() {
     return [...document.querySelectorAll('button, summary')].find(element =>
-      element.checkVisibility() && pattern.test(element.textContent || '')
+      element.checkVisibility()
+      && /before\s*\/\s*after/i.test(element.innerText || element.textContent || '')
+      && closestTimeoutRow(element)
     );
   }
 
+  function isExpanded(element) {
+    if (element.tagName === 'SUMMARY') return element.parentElement?.open === true;
+    if (element.getAttribute?.('aria-expanded') === 'true') return true;
+    const controlled = element.getAttribute?.('aria-controls');
+    return controlled ? document.getElementById(controlled)?.checkVisibility() === true : false;
+  }
+
   let detailClicked = false;
+  let detailExpanded = false;
+  let detailValues = [];
   let reason = 'Timed out waiting for the expected UI state';
   while (Date.now() < deadline) {
     const text = visibleText();
@@ -31,13 +49,18 @@ return await (async () => {
       const expectedContent = capture.expected.some(value => text.includes(value));
       if (hasChangelog && pairSelected && expectedContent) reason = null;
     } else if (capture.kind === 'detail') {
-      const control = matchingControl(/timeout/i);
+      const control = detailControl();
       if (control && !detailClicked) {
         control.click();
         detailClicked = true;
         await sleep(250);
       }
-      if (detailClicked && /3[,.]?000/.test(text) && /5[,.]?000/.test(text)) reason = null;
+      if (control && detailClicked) {
+        const localText = closestTimeoutRow(control)?.innerText || '';
+        detailExpanded = isExpanded(control);
+        detailValues = [/3[,.]?000/.test(localText), /5[,.]?000/.test(localText)];
+        if (detailExpanded && detailValues.every(Boolean)) reason = null;
+      }
     } else if (capture.kind === 'missing') {
       const failed = /not[ _-]?found|missing|unavailable|unable|error|failed/i.test(text);
       if (hasChangelog && failed) reason = null;
@@ -56,6 +79,8 @@ return await (async () => {
       title: document.title,
       selected_versions: selectedVersions(),
       detail_clicked: detailClicked,
+      detail_expanded: detailExpanded,
+      detail_values_present: detailValues,
       body_excerpt: text.slice(0, 4000),
     },
   };
