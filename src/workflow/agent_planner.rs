@@ -414,6 +414,7 @@ async fn run_fresh_planner(
                     })),
                 }),
                 options: Some(SendOptions {
+                    agent: None,
                     max_turns: Some(1),
                     max_cost_usd: None,
                     max_output_tokens: Some(PLANNER_MAX_OUTPUT_TOKENS),

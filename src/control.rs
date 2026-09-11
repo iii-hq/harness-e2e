@@ -1097,6 +1097,7 @@ impl ControlPlane {
             subject: SubjectConfig {
                 model: request.model.clone(),
                 provider: request.provider.clone(),
+                agent: None,
             },
             judge,
             audit_analyzer,
