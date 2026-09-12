@@ -615,11 +615,12 @@ describe('retained criterion points', () => {
   it.each([
     [null, null, 1],
     [null, { model: 'judge', provider: 'provider' }, 0],
-    [null, undefined, 0],
-    [undefined, undefined, 0],
+    [null, undefined, 1],
+    [undefined, undefined, 1],
     [null, {}, 0],
+    [undefined, { model: 'judge' }, 0],
   ])(
-    'pairs explicit judge identity %j / %j with %i repetitions',
+    'pairs optional judge identity %j / %j with %i repetitions',
     (leftJudge, rightJudge, paired) => {
       const left = scored([25])
       const right = scored([0])

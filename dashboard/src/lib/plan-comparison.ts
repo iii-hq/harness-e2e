@@ -449,7 +449,7 @@ function criterionPoints(
           caseValue.inputs_sha256,
           subject.model,
           subject.provider,
-          ...(report.judge === null ? [] : [judge.model, judge.provider]),
+          ...(report.judge == null ? [] : [judge.model, judge.provider]),
         ]
         return scenario.runs.flatMap((run, index) => {
           const round =
