@@ -1,18 +1,21 @@
-use std::collections::{BTreeMap, BTreeSet};
-use std::path::Path;
-
 use anyhow::{bail, Context, Result};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
+use std::collections::{BTreeMap, BTreeSet};
+#[cfg(test)]
+use std::path::Path;
 
 use super::assessment_projection::{
     assessment_profile_sha256, contracts_for_scenario, summarize, AssessmentSummary,
 };
 use super::presenter::{stored_execution_summary, MAX_EXECUTIONS};
-use super::store::{load_runs, StoredRun};
+#[cfg(test)]
+use super::store::load_runs;
+use super::store::StoredRun;
 use crate::artifact;
 use crate::assessment::{AssessmentKind, AssessmentPolicy, RunAssessmentContract};
+use crate::control::ExecutionRecord;
 use crate::identity::StackIdentity;
 use crate::report::{
     CompletionState, E2eRunReport, E2eScenarioReport, EvaluationDimension, RunStatus,
@@ -81,7 +84,7 @@ pub(super) struct TestHistoryRequest {
     pub limit: Option<u16>,
 }
 
-#[derive(Debug, Clone, Serialize, JsonSchema)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub(super) struct CohortDescriptor {
     pub id: String,
     pub lane: String,
@@ -91,7 +94,7 @@ pub(super) struct CohortDescriptor {
     pub judge_model: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, JsonSchema)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub(super) struct EvaluatedVersionDescriptor {
     pub id: String,
     pub cohort_id: String,
@@ -327,7 +330,7 @@ pub(super) struct TestsListResponse {
     pub next_cursor: Option<String>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 struct RunMetrics {
     score: Option<f64>,
     cost_usd: Option<f64>,
@@ -341,7 +344,7 @@ struct RunMetrics {
     assessment: RunAssessmentContract,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 struct Observation {
     execution_id: String,
     evaluated_version_id: Option<String>,
@@ -365,6 +368,17 @@ struct Observation {
     runs: Vec<RunMetrics>,
 }
 
+/// The durable dashboard view of one execution. It deliberately carries only
+/// summaries, identity, metrics, and assessment results; native evidence
+/// remains in the execution bundle.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub(crate) struct ExecutionProjection {
+    pub(crate) summary: Value,
+    cohort: Option<CohortDescriptor>,
+    evaluated_version: Option<EvaluatedVersionDescriptor>,
+    tests: BTreeMap<String, BTreeMap<u32, Vec<Observation>>>,
+}
+
 #[derive(Debug, Clone, Default)]
 struct TestVersionEntry {
     observations: Vec<Observation>,
@@ -381,42 +395,51 @@ struct TestEntry {
 }
 
 #[derive(Debug, Clone)]
-pub(super) struct DashboardReadModel {
+pub(crate) struct DashboardReadModel {
     pub(super) revision: String,
-    pub(super) summaries: Vec<Value>,
+    pub(crate) summaries: Vec<Value>,
     cohorts: BTreeMap<String, CohortDescriptor>,
     evaluated_versions: BTreeMap<(String, String), EvaluatedVersionDescriptor>,
     tests: BTreeMap<String, TestEntry>,
 }
 
 impl DashboardReadModel {
-    pub(super) fn load(runs_dir: &Path) -> Result<Self> {
-        let mut stored = load_runs(runs_dir)?;
-        stored.sort_by(|left, right| {
-            right
-                .metadata
-                .started_at
-                .cmp(&left.metadata.started_at)
-                .then_with(|| right.metadata.id.cmp(&left.metadata.id))
-        });
-        stored.truncate(MAX_EXECUTIONS);
-
-        let revision = artifact::sha256_value(
-            &stored
+    pub(super) fn from_records(records: Vec<ExecutionRecord>) -> Result<Self> {
+        Self::from_projections(
+            records
                 .iter()
-                .map(|run| {
+                .map(|record| match record.dashboard_projection.as_ref() {
+                    Some(projection) => serde_json::from_value(projection.clone())
+                        .context("decode dashboard execution projection"),
+                    None => ExecutionProjection::from_record(record),
+                })
+                .collect::<Result<Vec<_>>>()?,
+        )
+    }
+
+    pub(crate) fn from_projections(projections: Vec<ExecutionProjection>) -> Result<Self> {
+        let revision = artifact::sha256_value(
+            &projections
+                .iter()
+                .map(|projection| {
                     json!({
-                        "id": run.metadata.id,
-                        "completed_at": run.metadata.completed_at,
-                        "status": run.metadata.status,
+                        "id": projection.summary["id"],
+                        "completed_at": projection.summary["completed_at"],
+                        "status": projection.summary["status"],
                     })
                 })
                 .collect::<Vec<_>>(),
         )?;
-        let summaries = stored
+        let mut summaries = projections
             .iter()
-            .map(stored_execution_summary)
-            .collect::<Result<Vec<_>>>()?;
+            .map(|projection| projection.summary.clone())
+            .collect::<Vec<_>>();
+        summaries.sort_by(|left, right| {
+            right["started_at"]
+                .as_str()
+                .cmp(&left["started_at"].as_str())
+                .then_with(|| right["id"].as_str().cmp(&left["id"].as_str()))
+        });
         let mut model = Self {
             revision,
             summaries,
@@ -424,15 +447,83 @@ impl DashboardReadModel {
             evaluated_versions: BTreeMap::new(),
             tests: current_tests()?,
         };
-        for run in &stored {
-            model.index_run(run)?;
+        for projection in projections {
+            model.index_projection(projection);
         }
         Ok(model)
     }
 
-    fn index_run(&mut self, stored: &StoredRun) -> Result<()> {
+    #[cfg(test)]
+    pub(crate) fn load(runs_dir: &Path) -> Result<Self> {
+        Self::from_stored(load_runs(runs_dir)?)
+    }
+
+    #[cfg(test)]
+    fn from_stored(mut stored: Vec<StoredRun>) -> Result<Self> {
+        stored.sort_by(|left, right| {
+            right
+                .metadata
+                .started_at
+                .cmp(&left.metadata.started_at)
+                .then_with(|| right.metadata.id.cmp(&left.metadata.id))
+        });
+
+        stored.truncate(MAX_EXECUTIONS);
+        Self::from_projections(
+            stored
+                .iter()
+                .map(ExecutionProjection::from_stored)
+                .collect::<Result<Vec<_>>>()?,
+        )
+    }
+
+    fn index_projection(&mut self, projection: ExecutionProjection) {
+        if let Some(cohort) = projection.cohort {
+            self.cohorts.entry(cohort.id.clone()).or_insert(cohort);
+        }
+        if let Some(descriptor) = projection.evaluated_version {
+            self.evaluated_versions
+                .entry((descriptor.cohort_id.clone(), descriptor.id.clone()))
+                .and_modify(|existing| {
+                    existing.execution_count += descriptor.execution_count;
+                    if descriptor.completed_at > existing.completed_at {
+                        existing.completed_at.clone_from(&descriptor.completed_at);
+                    }
+                })
+                .or_insert(descriptor);
+        }
+        for (test_id, versions) in projection.tests {
+            let test = self.tests.entry(test_id).or_default();
+            for (version, observations) in versions {
+                test.versions
+                    .entry(version)
+                    .or_default()
+                    .observations
+                    .extend(observations);
+            }
+        }
+    }
+}
+
+impl ExecutionProjection {
+    pub(crate) fn from_record(record: &ExecutionRecord) -> Result<Self> {
+        Self::from_stored(&StoredRun {
+            metadata: super::controller::metadata_from_record(record),
+            report: record.report.clone(),
+            live_progress: None,
+            live_progress_error: None,
+        })
+    }
+
+    fn from_stored(stored: &StoredRun) -> Result<Self> {
+        let summary = stored_execution_summary(stored)?;
         let Some(report) = stored.report.as_ref() else {
-            return Ok(());
+            return Ok(Self {
+                summary,
+                cohort: None,
+                evaluated_version: None,
+                tests: BTreeMap::new(),
+            });
         };
         let lane = report.execution.lane.clone();
         let cohort = CohortDescriptor {
@@ -450,29 +541,14 @@ impl DashboardReadModel {
             "judge_provider": cohort.judge_provider,
             "judge_model": cohort.judge_model,
         }))?;
-        self.cohorts
-            .entry(cohort_id.clone())
-            .or_insert_with(|| CohortDescriptor {
-                id: cohort_id.clone(),
-                ..cohort
-            });
+        let cohort = CohortDescriptor {
+            id: cohort_id.clone(),
+            ..cohort
+        };
 
         let evaluated = evaluated_version(report, &cohort_id, &stored.metadata.completed_at)?;
-        if let Some(descriptor) = evaluated.as_ref() {
-            self.evaluated_versions
-                .entry((cohort_id.clone(), descriptor.id.clone()))
-                .and_modify(|existing| {
-                    existing.execution_count += 1;
-                    if descriptor.completed_at > existing.completed_at {
-                        existing.completed_at.clone_from(&descriptor.completed_at);
-                    }
-                })
-                .or_insert_with(|| descriptor.clone());
-        }
-
+        let mut tests = BTreeMap::new();
         for scenario in &report.scenarios {
-            let test = self.tests.entry(scenario.scenario_id.clone()).or_default();
-            let version = test.versions.entry(scenario.scenario_version).or_default();
             let contract_sha256 = scenario_contract_sha256(scenario)?;
             let contracts = contracts_for_scenario(report, scenario);
             let assessment_profile_sha256 =
@@ -519,32 +595,44 @@ impl DashboardReadModel {
                         report.system_under_test.engine_revision.clone(),
                     )
                 });
-            version.observations.push(Observation {
-                execution_id: stored.metadata.id.clone(),
-                evaluated_version_id: evaluated.as_ref().map(|value| value.id.clone()),
-                cohort_id: cohort_id.clone(),
-                completed_at: stored.metadata.completed_at.clone(),
-                case_id: scenario.case_id.clone(),
-                contract_sha256,
-                assessment_profile_sha256,
-                status: scenario_status(scenario).into(),
-                scenario_version: scenario.scenario_version,
-                seed: scenario.case.as_ref().map(|case| case.seed),
-                system_label,
-                stack_mode,
-                harness_revision: Some(report.system_under_test.e2e_revision.clone()),
-                system_revision,
-                engine_revision,
-                subject_provider: report.subject.provider.clone(),
-                subject_model: report.subject.model.clone(),
-                judge_provider: report.judge.as_ref().map(|judge| judge.provider.clone()),
-                judge_model: report.judge.as_ref().map(|judge| judge.model.clone()),
-                runs,
-            });
+            tests
+                .entry(scenario.scenario_id.clone())
+                .or_insert_with(BTreeMap::new)
+                .entry(scenario.scenario_version)
+                .or_insert_with(Vec::new)
+                .push(Observation {
+                    execution_id: stored.metadata.id.clone(),
+                    evaluated_version_id: evaluated.as_ref().map(|value| value.id.clone()),
+                    cohort_id: cohort_id.clone(),
+                    completed_at: stored.metadata.completed_at.clone(),
+                    case_id: scenario.case_id.clone(),
+                    contract_sha256,
+                    assessment_profile_sha256,
+                    status: scenario_status(scenario).into(),
+                    scenario_version: scenario.scenario_version,
+                    seed: scenario.case.as_ref().map(|case| case.seed),
+                    system_label,
+                    stack_mode,
+                    harness_revision: Some(report.system_under_test.e2e_revision.clone()),
+                    system_revision,
+                    engine_revision,
+                    subject_provider: report.subject.provider.clone(),
+                    subject_model: report.subject.model.clone(),
+                    judge_provider: report.judge.as_ref().map(|judge| judge.provider.clone()),
+                    judge_model: report.judge.as_ref().map(|judge| judge.model.clone()),
+                    runs,
+                });
         }
-        Ok(())
+        Ok(Self {
+            summary,
+            cohort: Some(cohort),
+            evaluated_version: evaluated,
+            tests,
+        })
     }
+}
 
+impl DashboardReadModel {
     pub(super) fn evaluated_versions(
         &self,
         request: EvaluatedVersionsRequest,
@@ -1636,6 +1724,40 @@ mod tests {
             format!("contract-{suffix}"),
             format!("assessment-{suffix}"),
         )
+    }
+
+    #[test]
+    fn execution_projection_roundtrip_keeps_history_without_native_evidence() {
+        let mut report = super::super::tests::report();
+        report.scenarios[0].runs[0].transcript = Some(json!({"private": "transcript"}));
+        let projection = ExecutionProjection::from_stored(&StoredRun {
+            metadata: super::super::tests::metadata(),
+            report: Some(report),
+            live_progress: None,
+            live_progress_error: None,
+        })
+        .unwrap();
+        let serialized = serde_json::to_string(&projection).unwrap();
+        assert!(!serialized.contains("prompt"));
+        assert!(!serialized.contains("transcript"));
+        let restored = serde_json::from_str(&serialized).unwrap();
+        let model = DashboardReadModel::from_projections(vec![restored]).unwrap();
+        assert_eq!(
+            model
+                .evaluated_versions(EvaluatedVersionsRequest::default())
+                .cohorts
+                .len(),
+            1
+        );
+        let history = model
+            .test_history(TestHistoryRequest {
+                test_id: "direct_answer".into(),
+                ..TestHistoryRequest::default()
+            })
+            .unwrap();
+        assert_eq!(history.total, 1);
+        assert_eq!(history.observations[0].median_score, Some(90.0));
+        assert_eq!(history.observations[0].median_tokens, None);
     }
 
     #[test]

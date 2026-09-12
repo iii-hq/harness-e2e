@@ -1,0 +1,133 @@
+{
+  "date": "2026-09-11",
+  "source": "http://127.0.0.1:3113/#/ext/harness-e2e/",
+  "checkout_head": "801e7e62e7b509885b133dc50c4cc4777816eb14",
+  "checkout_dirty": true,
+  "served_bundle_matches_checkout": "not_verified",
+  "browser_evidence_directory": "/tmp/harness-e2e-restructure-audit-20260911",
+  "captures": [
+    {
+      "file": "executions-desktop.png",
+      "sha256": "38b26346714e2dd2b3895c76f21618d67fc5f28420f3b44e5ebfb36bdf3eefec"
+    },
+    {
+      "file": "execution-desktop.png",
+      "sha256": "8841c11fc508f15ccbcfc1917d255fc2b5efba847ffe92e042c43a23e61dcf66"
+    },
+    {
+      "file": "run-evidence-desktop.png",
+      "sha256": "bd0d42443a2146e7023ae1260d0abe4027465d5aeef8669e7cf3e0d7ac48963d"
+    },
+    {
+      "file": "plan-desktop.png",
+      "sha256": "f872b103a74baec510125968b4de0b81dbb5ca90e42a7bb7132d0c851b93cfce"
+    },
+    {
+      "file": "tests-desktop.png",
+      "sha256": "5b2c0701381b42f41e45f0056c0d5f4eb7dc85936e029d0c89cf1e55eb1dba38"
+    },
+    {
+      "file": "new-plan-narrow.png",
+      "sha256": "afc8e7ee15ec84e5c2cc4b5395795928c3773172d76a2ffbfa8fcc192602b7de"
+    }
+  ],
+  "source_snapshot_note": "Hashes of selected working-tree files; source contents are not archived here.",
+  "workers_checkout": {
+    "path": "/home/layon/workspaces/workers",
+    "head": "093ea0f8195a9ca6ada30e13adba19ca75ab5b96",
+    "branch": "main",
+    "dirty": true
+  },
+  "source_files": [
+    {
+      "repository": "harness-e2e",
+      "path": "src/control.rs",
+      "sha256": "40fc5555e9612711524cf570fb8d391edfe4c35e3c45f1aad58d1610db479d7f"
+    },
+    {
+      "repository": "harness-e2e",
+      "path": "src/suite.rs",
+      "sha256": "4e5988e7193aa68cd90ffab79913219c5654854ff692a83281eb6a43f8ec5bf0"
+    },
+    {
+      "repository": "harness-e2e",
+      "path": "src/persistence.rs",
+      "sha256": "2d72c305dee79d4508804ee135eb625c5298468653ef123ae41d69aef5e88904"
+    },
+    {
+      "repository": "harness-e2e",
+      "path": "src/dashboard/controller.rs",
+      "sha256": "954df364757ba1dc5d1c28ae5e4820223678dcdb4857cff3a2e9501a2c6b9664"
+    },
+    {
+      "repository": "harness-e2e",
+      "path": "src/dashboard/bus.rs",
+      "sha256": "ec596af82c29ac2e70b3dff509e3c81a111e6194fdeafbf01d15ffe1c01115bf"
+    },
+    {
+      "repository": "harness-e2e",
+      "path": "src/dashboard/plan_store.rs",
+      "sha256": "5bb50417b705993a94d7c5fef6d9742fd577e06bd7bc653c734277c24b43a8df"
+    },
+    {
+      "repository": "harness-e2e",
+      "path": "src/dashboard/read_model.rs",
+      "sha256": "bc645bf2ab1f7a7c9d3adf2cba2c1c74add185bee4e1f7afa38715843adcb918"
+    },
+    {
+      "repository": "harness-e2e",
+      "path": "dashboard/src/lib/primary-metrics.ts",
+      "sha256": "b20ea185338a211a485b764b39fc8b4bbc03ec2ea51a3c805e55a889619b6f98"
+    },
+    {
+      "repository": "harness-e2e",
+      "path": "dashboard/src/lib/release-control-reference.ts",
+      "sha256": "f98308d11b217766f538c451cc25fa9fab17ab521193c068845c8ed32a0a86bb"
+    },
+    {
+      "repository": "harness-e2e",
+      "path": "dashboard/src/components/AssessmentWorkspace.tsx",
+      "sha256": "3227f55d4ba6892975ddee4ce0df990c01416422af670378519abacd96da1e80"
+    },
+    {
+      "repository": "harness-e2e",
+      "path": "dashboard/src/lib/assessment-view.ts",
+      "sha256": "c9d111789fab74a5b0455e40d2003285a6c61be6f8a739e8b2b2d9ff21ab1666"
+    },
+    {
+      "repository": "harness-e2e",
+      "path": "dashboard/src/pages/TestsCatalogPage.tsx",
+      "sha256": "819b428a2d0b854c60df422807ebc2b2f071d10dce7fcb45d395dc679abd0f38"
+    },
+    {
+      "repository": "workers",
+      "path": "console/web/src/lib/sessions/api.ts",
+      "sha256": "d29542cefbbdf06e6f757803a9c981bd90b471c10383cc42ed55106239b3daa3"
+    },
+    {
+      "repository": "workers",
+      "path": "console/web/src/lib/sessions/events.ts",
+      "sha256": "2dc38887b50f18f8cca977278cd695ee29dd905a37c082de78bfb0c16d642523"
+    },
+    {
+      "repository": "workers",
+      "path": "console/web/src/hooks/use-conversations.ts",
+      "sha256": "6c63276f267eebe69b967794e47b4c3b5348c2f489fe41a00d24b0c64142a765"
+    },
+    {
+      "repository": "workers",
+      "path": "harness/src/subagent.rs",
+      "sha256": "2fc93954b999299ca0f06c8e6b0121bbe9e94f865e47df7f929cb617e45886ef"
+    },
+    {
+      "repository": "workers",
+      "path": "session-manager/src/service.rs",
+      "sha256": "00550e829991ffc9d3c35e88233604e62b1b42c6d573492d5237d11f182f0b5e"
+    },
+    {
+      "repository": "workers",
+      "path": "session-manager/src/types.rs",
+      "sha256": "419fd19b4867fba21ee0e1d5ee7a0b52d9ef44b7eb4f4b542e5d290985e56e63"
+    }
+  ]
+}

@@ -41,6 +41,7 @@ export type AssessmentRunView = {
   metrics: AssessmentRunMetrics
   transcript?: { messages?: unknown }
   systemStatus: SystemStatus
+  failureMessages?: string[]
   objectiveScore: number | null
   assessments: AssessmentEntry[]
   evidence: EvidenceReference[]
@@ -166,11 +167,19 @@ function assessmentRunPriority(run: AssessmentRunView) {
 export function buildHarnessRecommendation(run: AssessmentRunView): string {
   const failedAsset = run.assessments.some(
     (entry) =>
-      entry.kind === 'asset_validation' && entry.validationOutcome !== 'valid',
+      entry.kind === 'asset_validation' &&
+      entry.validationOutcome != null &&
+      FAILED_ASSET_OUTCOMES.has(entry.validationOutcome),
   )
 
-  if (run.systemStatus === 'infrastructure_error' || failedAsset) {
-    return 'Fix the harness collection or serialization path, validate every expected artifact against its schema before assessment, and rerun the scenario.'
+  if (failedAsset) {
+    return 'Fix the invalid or missing asset, validate it against its schema before assessment, and rerun the scenario.'
+  }
+  if (run.systemStatus === 'infrastructure_error') {
+    const cause = run.failureMessages?.[0]
+    return cause
+      ? `Resolve the observed infrastructure failure (${cause}) and rerun the scenario.`
+      : 'Inspect the harness infrastructure failure, restore the unavailable runtime or service, and rerun the scenario.'
   }
   if (run.systemStatus === 'resource_limit') {
     return 'Reduce the scenario resource footprint or adjust its execution budget, verify collection completes within the limit, and rerun the scenario.'
@@ -232,6 +241,13 @@ function assessmentRunView(
     metrics: assessmentRunMetrics(projectedRun),
     ...(transcript ? { transcript } : {}),
     systemStatus: contract.system_status,
+    failureMessages: (projectedRun.failures ?? []).flatMap((failure) =>
+      (failure.status === 'infrastructure_error' ||
+        failure.domain === 'e2e_infrastructure') &&
+      typeof failure.message === 'string'
+        ? [failure.message]
+        : [],
+    ),
     objectiveScore: finiteNumber(projectedRun.objective_score),
     assessments,
     evidence,

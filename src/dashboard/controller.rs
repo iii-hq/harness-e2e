@@ -10,18 +10,15 @@ use tokio::sync::{broadcast, Mutex, RwLock};
 use url::Url;
 
 use super::bus::DashboardEvents;
-use super::plans::{LocalPlan, PlanCreateRequest, PlanRunRole, PlanUpdateRequest};
 use super::read_model::DashboardReadModel;
-use super::store::write_metadata;
-use super::{
-    ApiError, DashboardArgs, Defaults, JobStatus, JobView, RunMetadata, RunRequest, RunSnapshot,
-};
+use super::{Defaults, JobStatus, JobView, RunMetadata, RunRequest, RunSnapshot};
 use crate::control::{
     ControlPlane, ExecutionPhase, ExecutionRecord, LocalScenarioCreateRequest,
     LocalScenarioCreateResponse, RunRequest as ControlRunRequest, ScenariosListRequest,
     ScenariosListResponse,
 };
 use crate::markdown::ScenarioKey;
+use crate::plans::{LocalPlan, PlanCreateRequest, PlanRunRole, PlanUpdateRequest};
 
 const MAX_LOG_TAIL_BYTES: u64 = 256 * 1024;
 const MAX_LOG_CHUNK_BYTES: u64 = 64 * 1024;
@@ -31,7 +28,7 @@ struct ControllerState {
 }
 
 pub(super) struct Controller {
-    pub(super) plan_store: Arc<super::plan_store::PlanStore>,
+    pub(super) plan_store: Arc<crate::plans::store::PlanStore>,
     runs_dir: PathBuf,
     defaults: Defaults,
     control: Option<ControlPlane>,
@@ -41,41 +38,49 @@ pub(super) struct Controller {
 }
 
 impl Controller {
+    pub(super) async fn open_history_evidence(
+        &self,
+        request: crate::history::evidence::EvidenceRequest,
+    ) -> Result<Value> {
+        self.control
+            .as_ref()
+            .context("E2E control database is unavailable")?
+            .persistence()
+            .open_history_evidence(request)
+            .await
+    }
     pub(super) async fn new(
-        args: DashboardArgs,
+        url: String,
+        runs_dir: PathBuf,
         events: Option<Arc<DashboardEvents>>,
         control: Option<ControlPlane>,
     ) -> Result<Arc<Self>> {
-        validate_stack_url(&args.url)?;
-        fs::create_dir_all(&args.runs_dir)
-            .with_context(|| format!("create {}", args.runs_dir.display()))?;
+        validate_stack_url(&url)?;
+        fs::create_dir_all(&runs_dir).with_context(|| format!("create {}", runs_dir.display()))?;
         if let Some(control) = control.as_ref() {
-            if control.url() != args.url {
+            if control.url() != url {
                 bail!(
                     "dashboard URL {} differs from the control-plane URL {}",
-                    args.url,
+                    url,
                     control.url()
                 );
             }
-            if control.output_root() != args.runs_dir {
+            if control.output_root() != runs_dir {
                 bail!(
                     "dashboard runs directory {} differs from the control-plane data directory {}",
-                    args.runs_dir.display(),
+                    runs_dir.display(),
                     control.output_root().display()
                 );
             }
         }
-        let plan_store = super::plan_store::PlanStore::new(
-            args.runs_dir.clone(),
-            args.url.clone(),
-            control.clone(),
-        )
-        .await?;
+        let plan_store =
+            crate::plans::store::PlanStore::new(runs_dir.clone(), url.clone(), control.clone())
+                .await?;
         let controller = Arc::new(Self {
             plan_store,
-            runs_dir: args.runs_dir,
+            runs_dir,
             defaults: Defaults {
-                url: args.url,
+                url,
                 model: env::var("HARNESS_E2E_MODEL").unwrap_or_default(),
                 provider: env::var("HARNESS_E2E_PROVIDER").unwrap_or_default(),
                 judge_model: env::var("HARNESS_E2E_JUDGE_MODEL").unwrap_or_default(),
@@ -92,16 +97,12 @@ impl Controller {
             events,
         });
         if let Some(control) = controller.control.as_ref() {
-            for record in control.records().await {
+            for record in control.records().await? {
                 controller.sync_control_record(record).await?;
             }
             controller.observe_control_plane();
         }
         Ok(controller)
-    }
-
-    pub(super) fn runs_dir(&self) -> &Path {
-        &self.runs_dir
     }
 
     pub(super) fn default_url(&self) -> &str {
@@ -113,6 +114,61 @@ impl Controller {
             .as_ref()
             .context("the E2E control plane is not available")?
             .scenario_catalog(ScenariosListRequest { seed: None })
+            .await
+    }
+
+    pub(super) async fn execution_detail(&self, id: &str) -> Result<Value> {
+        let control = self
+            .control
+            .as_ref()
+            .context("the E2E control plane is not available")?;
+        if let Some(detail) = control.persistence().imported_execution_detail(id).await? {
+            return Ok(detail);
+        }
+        let record = control.stored_record(id).await?;
+        let metadata = metadata_from_record(&record);
+        let (hydrated, evidence_error) = match control.hydrate_native_evidence(record.clone()) {
+            Ok(hydrated) => {
+                let error = (hydrated.report.is_none() && record.dashboard_projection.is_some())
+                    .then(|| "No native evidence path was retained for this execution".to_string());
+                (hydrated, error)
+            }
+            Err(error) => (record, Some(format!("{error:#}"))),
+        };
+        let detail = if let Some(error) = evidence_error {
+            let mut detail = match hydrated.dashboard_projection {
+                Some(projection) => projection["summary"].clone(),
+                None => super::presenter::execution_detail_value_optional(&metadata, None)?,
+            };
+            detail["reports"] = json!([]);
+            detail["availability"] = json!("unavailable");
+            detail["evidence_error"] = json!(error);
+            detail
+        } else {
+            super::presenter::execution_detail_value_optional(&metadata, hydrated.report.as_ref())?
+        };
+        if let Some(model) = self.read_model.write().await.as_mut() {
+            if let Some(summary) = Arc::make_mut(model)
+                .summaries
+                .iter_mut()
+                .find(|summary| summary["id"] == id)
+            {
+                summary["availability"] = detail["availability"].clone();
+            }
+        }
+        Ok(detail)
+    }
+
+    pub(super) async fn attempt_get(
+        &self,
+        execution_id: &str,
+        run_id: &str,
+        attempt_id: &str,
+    ) -> Result<Value> {
+        self.control
+            .as_ref()
+            .context("the E2E control plane is not available")?
+            .attempt_get(execution_id, run_id, attempt_id)
             .await
     }
 
@@ -149,43 +205,88 @@ impl Controller {
 
     pub(super) async fn execution_summaries(&self) -> Result<Arc<Vec<Value>>> {
         let mut summaries = self.read_model().await?.summaries.clone();
-        let (parents, children) = self.plan_store.dashboard_summaries()?;
-        let runs_dir = self.runs_dir.clone();
-        // The historical index is cached; active execution checkpoints are not.
-        // Polling must recover progress even if a change notification was lost.
-        tokio::task::spawn_blocking(move || {
-            for summary in &mut summaries {
-                if matches!(summary["status"].as_str(), Some("running" | "cancelling")) {
-                    if let Some(id) = summary["id"].as_str() {
-                        if let Some(run) = super::store::read_stored_run(&runs_dir.join(id))? {
-                            *summary = super::presenter::stored_execution_summary(&run)?;
+        let (parents, children) = self.plan_store.dashboard_summaries(&summaries).await?;
+        #[cfg(test)]
+        if self.control.is_none() {
+            let runs_dir = self.runs_dir.clone();
+            return tokio::task::spawn_blocking(move || {
+                for summary in &mut summaries {
+                    if matches!(summary["status"].as_str(), Some("running" | "cancelling")) {
+                        if let Some(id) = summary["id"].as_str() {
+                            if let Some(run) = super::store::read_stored_run(&runs_dir.join(id))? {
+                                *summary = super::presenter::stored_execution_summary(&run)?;
+                            }
                         }
                     }
                 }
-            }
-            for summary in &mut summaries {
-                if let Some(parent) = summary["id"].as_str().and_then(|id| children.get(id)) {
-                    summary["parent_plan_execution_id"] = json!(parent);
+                for summary in &mut summaries {
+                    if let Some(parent) = summary["id"].as_str().and_then(|id| children.get(id)) {
+                        summary["parent_plan_execution_id"] = json!(parent);
+                    }
                 }
+                summaries.extend(parents);
+                summaries.sort_by(|a, b| b["started_at"].as_str().cmp(&a["started_at"].as_str()));
+                Ok(Arc::new(summaries))
+            })
+            .await
+            .context("refresh test execution summaries")?;
+        }
+        for summary in &mut summaries {
+            if let Some(parent) = summary["id"].as_str().and_then(|id| children.get(id)) {
+                summary["parent_plan_execution_id"] = json!(parent);
             }
-            summaries.extend(parents);
-            summaries.sort_by(|a, b| b["started_at"].as_str().cmp(&a["started_at"].as_str()));
-            Ok(Arc::new(summaries))
-        })
-        .await
-        .context("refresh active execution summaries task")?
+        }
+        summaries.extend(parents);
+        if let Some(control) = &self.control {
+            summaries.extend(control.persistence().imported_execution_summaries().await?);
+        }
+        summaries.sort_by(|a, b| b["started_at"].as_str().cmp(&a["started_at"].as_str()));
+        Ok(Arc::new(summaries))
     }
 
     pub(super) async fn read_model(&self) -> Result<Arc<DashboardReadModel>> {
         if let Some(model) = self.read_model.read().await.as_ref() {
             return Ok(model.clone());
         }
-        let runs_dir = self.runs_dir.clone();
-        let model = Arc::new(
-            tokio::task::spawn_blocking(move || DashboardReadModel::load(&runs_dir))
-                .await
-                .map_err(|error| anyhow::anyhow!("load dashboard read model task: {error}"))??,
-        );
+        #[cfg(test)]
+        if self.control.is_none() {
+            let runs_dir = self.runs_dir.clone();
+            let model = Arc::new(
+                tokio::task::spawn_blocking(move || DashboardReadModel::load(&runs_dir))
+                    .await
+                    .map_err(|error| {
+                        anyhow::anyhow!("load dashboard test model task: {error}")
+                    })??,
+            );
+            *self.read_model.write().await = Some(model.clone());
+            return Ok(model);
+        }
+        let mut records = self
+            .control
+            .as_ref()
+            .context("the E2E control plane is not available")?
+            .records()
+            .await?;
+        for record in &mut records {
+            if let Some(projection) = &mut record.dashboard_projection {
+                let available = record.result_path.as_ref().is_some_and(|path| {
+                    let path = self.runs_dir.join(path);
+                    let result = if path.is_dir() {
+                        path.join("results.json")
+                    } else {
+                        path
+                    };
+                    result.is_file()
+                        && result
+                            .parent()
+                            .is_some_and(|parent| parent.join("manifest.json").is_file())
+                });
+                if !available {
+                    projection["summary"]["availability"] = json!("unavailable");
+                }
+            }
+        }
+        let model = Arc::new(DashboardReadModel::from_records(records)?);
         *self.read_model.write().await = Some(model.clone());
         Ok(model)
     }
@@ -194,36 +295,75 @@ impl Controller {
         self.read_model.write().await.take();
     }
 
-    pub(super) async fn list_plans(&self) -> Result<Vec<LocalPlan>> {
-        self.plan_store.list_local()
+    pub(super) async fn list_plans(&self) -> Result<Vec<Value>> {
+        let mut plans = self
+            .plan_store
+            .list_local()
+            .await?
+            .into_iter()
+            .map(|plan| {
+                let mut value = serde_json::to_value(plan)?;
+                value["origin"] = json!("local");
+                Ok(value)
+            })
+            .collect::<Result<Vec<Value>>>()?;
+        if let Some(control) = &self.control {
+            plans.extend(control.persistence().imported_plans().await?);
+        }
+        plans.sort_by(|a, b| b["updated_at"].as_str().cmp(&a["updated_at"].as_str()));
+        Ok(plans)
     }
 
-    pub(super) async fn get_plan(&self, id: &str) -> Result<LocalPlan> {
+    pub(super) async fn get_plan(&self, id: &str) -> Result<Value> {
         validate_plan_id(id)?;
-        self.plan_store.get_local(id)
+        if let Some(control) = &self.control {
+            if let Some(plan) = control.persistence().imported_plan(id).await? {
+                return Ok(plan);
+            }
+        }
+        let mut plan = serde_json::to_value(self.plan_store.get_local(id).await?)?;
+        plan["origin"] = json!("local");
+        Ok(plan)
     }
 
-    pub(super) async fn create_plan(
-        &self,
-        request: PlanCreateRequest,
-    ) -> Result<LocalPlan, ApiError> {
+    pub(super) async fn create_plan(&self, request: PlanCreateRequest) -> Result<LocalPlan> {
         self.require_current_url(&request.url)?;
-        self.plan_store
-            .create_local(request)
-            .await
-            .map_err(ApiError::internal)
+        self.plan_store.create_local(request).await
     }
 
     pub(super) async fn update_plan(
         &self,
         id: &str,
         update: PlanUpdateRequest,
-    ) -> Result<LocalPlan, ApiError> {
-        validate_plan_id(id).map_err(|error| ApiError::bad_request(error.to_string()))?;
-        self.plan_store
-            .update_local(id, update)
-            .await
-            .map_err(ApiError::internal)
+    ) -> Result<LocalPlan> {
+        validate_plan_id(id)?;
+        self.plan_store.update_local(id, update).await
+    }
+
+    pub(super) async fn delete_plan(&self, id: &str) -> Result<()> {
+        validate_plan_id(id)?;
+        self.plan_store.get_local(id).await?;
+        self.plan_store.delete_local(id).await
+    }
+
+    pub(super) async fn delete_execution(&self, id: &str) -> Result<()> {
+        super::presenter::validate_execution_id(id).map_err(anyhow::Error::msg)?;
+        if id.len() != 32 || !id.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+            bail!("only native control-plane executions can be deleted");
+        }
+        let control = self
+            .control
+            .as_ref()
+            .context("the E2E control plane is not available")?;
+        control.delete(id).await?;
+        let mut state = self.state.lock().await;
+        if state.job.as_ref().is_some_and(|job| job.id == id) {
+            state.job = None;
+        }
+        drop(state);
+        self.invalidate_summaries().await;
+        self.emit_change("deleted", id).await;
+        Ok(())
     }
 
     pub(super) async fn start_plan(
@@ -231,12 +371,9 @@ impl Controller {
         id: &str,
         role: PlanRunRole,
         idempotency_key: &str,
-    ) -> Result<LocalPlan, ApiError> {
-        validate_plan_id(id).map_err(|error| ApiError::bad_request(error.to_string()))?;
-        self.plan_store
-            .start_local(id, idempotency_key, role)
-            .await
-            .map_err(ApiError::internal)
+    ) -> Result<LocalPlan> {
+        validate_plan_id(id)?;
+        self.plan_store.start_local(id, idempotency_key, role).await
     }
 
     async fn emit_change(&self, kind: &str, execution_id: &str) {
@@ -245,72 +382,56 @@ impl Controller {
         }
     }
 
-    pub(super) async fn start(
-        self: &Arc<Self>,
-        mut request: RunRequest,
-    ) -> Result<String, ApiError> {
-        validate_request(&mut request).map_err(ApiError::bad_request)?;
+    pub(super) async fn start(self: &Arc<Self>, mut request: RunRequest) -> Result<String> {
+        validate_request(&mut request).map_err(anyhow::Error::msg)?;
         self.require_current_url(&request.url)?;
         let control = self
             .control
             .as_ref()
-            .ok_or_else(|| ApiError::conflict("the E2E control plane is not available"))?;
-        let control_request = control_request(&request).map_err(ApiError::bad_request)?;
-        let accepted = control.run(control_request).await.map_err(control_error)?;
-        let record = control
-            .record(&accepted.execution_id)
-            .await
-            .map_err(ApiError::internal)?;
+            .context("the E2E control plane is not available")?;
+        let control_request = control_request(&request).map_err(anyhow::Error::msg)?;
+        let accepted = control.run(control_request).await?;
+        let record = control.record(&accepted.execution_id).await?;
         let mut metadata = metadata_from_record(&record);
         metadata.request = request;
-        write_metadata(&self.runs_dir.join(&accepted.execution_id), &metadata)
-            .map_err(ApiError::internal)?;
         self.set_current_job(metadata).await;
         self.invalidate_summaries().await;
         self.emit_change("started", &accepted.execution_id).await;
         Ok(accepted.execution_id)
     }
 
-    pub(super) async fn cancel(&self) -> Result<(), ApiError> {
+    pub(super) async fn cancel(&self) -> Result<()> {
         let control = self
             .control
             .as_ref()
-            .ok_or_else(|| ApiError::conflict("the E2E control plane is not available"))?;
+            .context("the E2E control plane is not available")?;
         let current = self.state.lock().await.job.clone();
         let execution_id = if let Some(job) = current.filter(|job| job.status.active()) {
             job.id
         } else {
             control
                 .records()
-                .await
+                .await?
                 .into_iter()
-                .find(|record| !terminal(record.phase))
+                .find(|record| !record.phase.terminal())
                 .map(|record| record.execution_id)
-                .ok_or_else(|| ApiError::conflict("no E2E execution is running"))?
+                .context("no E2E execution is running")?
         };
-        let response = control
-            .cancel(&execution_id)
-            .await
-            .map_err(ApiError::internal)?;
+        let response = control.cancel(&execution_id).await?;
         if !response.accepted {
-            return Err(ApiError::conflict("no E2E execution is running"));
+            bail!("no E2E execution is running");
         }
-        let record = control
-            .record(&execution_id)
-            .await
-            .map_err(ApiError::internal)?;
-        self.sync_control_record(record)
-            .await
-            .map_err(ApiError::internal)?;
+        let record = control.record(&execution_id).await?;
+        self.sync_control_record(record).await?;
         Ok(())
     }
 
-    fn require_current_url(&self, url: &str) -> Result<(), ApiError> {
+    fn require_current_url(&self, url: &str) -> Result<()> {
         if url.trim() != self.defaults.url {
-            return Err(ApiError::conflict(format!(
+            bail!(
                 "execution URL must match the worker stack {}",
                 self.defaults.url
-            )));
+            );
         }
         Ok(())
     }
@@ -331,7 +452,10 @@ impl Controller {
                         }
                     }
                     Err(broadcast::error::RecvError::Lagged(_)) => {
-                        for record in control.records().await {
+                        for record in control.records().await.unwrap_or_else(|error| {
+                            tracing::error!(%error, "refresh persisted dashboard executions");
+                            Vec::new()
+                        }) {
                             if let Err(error) = controller.sync_control_record(record).await {
                                 tracing::error!(%error, "resynchronize control-plane execution into dashboard");
                             }
@@ -344,10 +468,8 @@ impl Controller {
     }
 
     async fn sync_control_record(&self, record: ExecutionRecord) -> Result<()> {
-        let run_dir = self.runs_dir.join(&record.execution_id);
         let mut metadata = metadata_from_record(&record);
         metadata.request.url = self.defaults.url.clone();
-        write_metadata(&run_dir, &metadata)?;
         self.set_current_job(metadata.clone()).await;
         self.invalidate_summaries().await;
         self.emit_change(change_kind(&record), &record.execution_id)
@@ -412,7 +534,7 @@ pub(super) fn control_request(
     })
 }
 
-fn metadata_from_record(record: &ExecutionRecord) -> RunMetadata {
+pub(super) fn metadata_from_record(record: &ExecutionRecord) -> RunMetadata {
     let status = job_status(record);
     let label = if record.request.label.trim().is_empty() {
         "e2e::* control-plane run".into()
@@ -424,7 +546,7 @@ fn metadata_from_record(record: &ExecutionRecord) -> RunMetadata {
         label: label.clone(),
         status,
         started_at: record.requested_at.clone(),
-        completed_at: if terminal(record.phase) {
+        completed_at: if record.phase.terminal() {
             record.updated_at.clone()
         } else {
             String::new()
@@ -459,25 +581,17 @@ fn metadata_from_record(record: &ExecutionRecord) -> RunMetadata {
 fn job_status(record: &ExecutionRecord) -> JobStatus {
     match record.phase {
         ExecutionPhase::Completed => JobStatus::Completed,
-        ExecutionPhase::Failed | ExecutionPhase::Unsupported => JobStatus::Failed,
+        ExecutionPhase::Failed
+        | ExecutionPhase::Unsupported
+        | ExecutionPhase::NeedsReconciliation => JobStatus::Failed,
         ExecutionPhase::Cancelled => JobStatus::Cancelled,
         _ if record.cancel_requested => JobStatus::Cancelling,
         _ => JobStatus::Running,
     }
 }
 
-fn terminal(phase: ExecutionPhase) -> bool {
-    matches!(
-        phase,
-        ExecutionPhase::Completed
-            | ExecutionPhase::Failed
-            | ExecutionPhase::Cancelled
-            | ExecutionPhase::Unsupported
-    )
-}
-
 fn change_kind(record: &ExecutionRecord) -> &'static str {
-    if terminal(record.phase) {
+    if record.phase.terminal() {
         "finished"
     } else if record.cancel_requested {
         "cancelling"
@@ -485,15 +599,6 @@ fn change_kind(record: &ExecutionRecord) -> &'static str {
         "started"
     } else {
         "progress"
-    }
-}
-
-fn control_error(error: anyhow::Error) -> ApiError {
-    let message = format!("{error:#}");
-    if message.contains("concurrency limit") || message.contains("idempotency key") {
-        ApiError::conflict(message)
-    } else {
-        ApiError::bad_request(message)
     }
 }
 

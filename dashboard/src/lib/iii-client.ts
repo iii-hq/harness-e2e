@@ -13,30 +13,14 @@ export type DashboardIiiClient = {
   }): () => void
 }
 
-let clientPromise: Promise<DashboardIiiClient> | null = null
-let clientFactory:
-  | (() => DashboardIiiClient | Promise<DashboardIiiClient>)
-  | null = null
+let client: DashboardIiiClient | null = null
 
-export function installDashboardIiiClient(client: DashboardIiiClient) {
-  clientPromise = Promise.resolve(client)
-}
-
-export function installDashboardIiiClientFactory(
-  factory: () => DashboardIiiClient | Promise<DashboardIiiClient>,
-) {
-  clientFactory = factory
-  clientPromise = null
+export function installDashboardIiiClient(value: DashboardIiiClient) {
+  client = value
 }
 
 export function getDashboardIiiClient(): Promise<DashboardIiiClient> {
-  if (!clientPromise) {
-    if (!clientFactory) {
-      return Promise.reject(
-        new Error('dashboard iii client has not been configured'),
-      )
-    }
-    clientPromise = Promise.resolve(clientFactory())
-  }
-  return clientPromise
+  return client
+    ? Promise.resolve(client)
+    : Promise.reject(new Error('Console iii client has not been configured'))
 }

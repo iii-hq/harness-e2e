@@ -1,12 +1,11 @@
 #!/usr/bin/env node
 // Captures every dashboard route at three widths and two themes, plus a
 // typography census per capture, so a pull request can show before/after
-// evidence. Needs a running dashboard (console at 127.0.0.1:3113 by default,
-// or the standalone server) and the Chromium that ships with Playwright.
+// evidence. Needs a running Console at 127.0.0.1:3113 by default
+// and the Chromium that ships with Playwright. Captures the actual Console host.
 //
 //   pnpm screenshots                       # console, all routes
-//   pnpm screenshots -- --base standalone  # http://127.0.0.1:4173/#/
-//   pnpm screenshots -- --only overview,tests --widths 1440 --themes light
+//   pnpm screenshots -- --only executions,tests --widths 1440 --themes light
 //   pnpm screenshots -- --out .screenshots/before
 import { mkdir, writeFile } from 'node:fs/promises'
 import path from 'node:path'
@@ -15,22 +14,19 @@ import { chromium } from 'playwright'
 
 const BASES = {
   console: 'http://127.0.0.1:3113/#/ext/harness-e2e/',
-  standalone: 'http://127.0.0.1:4173/#/',
 }
 
 // Detail routes are discovered from the lists so the script keeps working
 // as executions, tests and plans change.
 const ROUTES = [
-  { name: 'overview', route: 'overview' },
   { name: 'tests', route: 'tests' },
   { name: 'executions', route: 'executions' },
   { name: 'plans', route: 'plans' },
   { name: 'plan-new', route: 'plans/new' },
   { name: 'compare', route: 'compare' },
-  { name: 'coverage', route: 'coverage' },
   { name: 'execution', discover: 'execution/' },
   { name: 'test-history', discover: 'tests/' },
-  { name: 'plan-detail', discover: 'plans/plan-' },
+  { name: 'plan-detail', discover: 'plans/' },
 ]
 
 const args = parseArgs(process.argv.slice(2))
@@ -51,7 +47,10 @@ try {
   const targets = ROUTES.flatMap((entry) => {
     if (only && !only.has(entry.name)) return []
     if (entry.route) return [{ name: entry.name, route: entry.route }]
-    const found = discovered.find((href) => href.startsWith(entry.discover))
+    const found = discovered.find(
+      (href) =>
+        href.startsWith(entry.discover) && !href.startsWith('plans/new'),
+    )
     return found ? [{ name: entry.name, route: found }] : []
   })
 
@@ -73,6 +72,7 @@ await writeFile(
   `${JSON.stringify(summarize(census), null, 2)}\n`,
 )
 process.stdout.write(`${census.length} captures → ${outDir}\n`)
+if (census.some((record) => record.errors.length > 0)) process.exitCode = 1
 
 function parseArgs(argv) {
   const out = {}
@@ -98,10 +98,7 @@ async function newPage(browser, theme, width) {
   })
   await context.addInitScript((value) => {
     try {
-      // The console and the standalone shell store the theme under
-      // different keys; setting both keeps one script for both hosts.
       localStorage.setItem('iii-theme', value)
-      localStorage.setItem('harness-e2e-theme', value)
     } catch {
       // storage can be unavailable in some contexts; the default theme wins
     }
@@ -148,6 +145,9 @@ async function capture(browser, target, theme, width) {
       waitUntil: 'networkidle',
       timeout: 30_000,
     })
+    await page
+      .locator('[data-harness-e2e-dashboard]')
+      .waitFor({ timeout: 15_000 })
     await page.waitForTimeout(1500)
     // The console keeps its own scroll container, so a full-page shot needs
     // the viewport to grow to the tallest scrollable element.
@@ -175,8 +175,7 @@ async function capture(browser, target, theme, width) {
     const file = `${target.name}-${theme}-${width}.png`
     await page.screenshot({ path: path.join(outDir, file) })
     const typography = await page.evaluate(() => {
-      const root =
-        document.querySelector('.harness-e2e-dashboard') ?? document.body
+      const root = document.querySelector('[data-harness-e2e-dashboard]')
       const families = new Set()
       const sizes = new Set()
       for (const element of root.querySelectorAll('*')) {

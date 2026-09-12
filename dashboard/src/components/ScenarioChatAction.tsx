@@ -8,6 +8,7 @@ import {
   useState,
 } from 'react'
 import { createPortal } from 'react-dom'
+import { TranscriptDialog } from '@/components/TranscriptDialog'
 import { buttonClassName } from '@/design-system'
 import type { DashboardExecutionDetail } from '@/lib/dashboard-data-source'
 import { titleCase } from '@/lib/execution-view'
@@ -16,10 +17,10 @@ import {
   type ScenarioChatTarget,
   scenarioChatTargets,
 } from '@/lib/scenario-chat'
-import { useScenarioChat } from '@/lib/scenario-chat-context'
 
 type ScenarioChatActionProps = {
   scenarioId: string
+  scenarioVersion?: number | null
   executionId?: string | null
   subjectId?: string | null
   runId?: string | null
@@ -41,24 +42,32 @@ function targetLabel(target: ScenarioChatTarget) {
 
 export function ScenarioChatAction({
   scenarioId,
+  scenarioVersion,
   executionId,
   subjectId,
   runId,
   detail,
-  label = 'Open chat',
+  label,
   compact = false,
   className = '',
 }: ScenarioChatActionProps) {
-  const { openChat } = useScenarioChat()
   const triggerRef = useRef<HTMLButtonElement>(null)
   const menuRef = useRef<HTMLDivElement>(null)
   const menuId = useId()
   const resolvedExecutionId = detail?.id ?? executionId ?? null
-  const sourceKey = `${resolvedExecutionId ?? ''}:${subjectId ?? ''}:${scenarioId}:${runId ?? ''}`
+  const sourceKey = `${resolvedExecutionId ?? ''}:${subjectId ?? ''}:${scenarioId}:${scenarioVersion}:${runId ?? ''}`
   const detailTargets = useMemo(
     () =>
-      detail ? scenarioChatTargets(detail, scenarioId, subjectId, runId) : null,
-    [detail, runId, scenarioId, subjectId],
+      detail
+        ? scenarioChatTargets(
+            detail,
+            scenarioId,
+            subjectId,
+            runId,
+            scenarioVersion,
+          )
+        : null,
+    [detail, runId, scenarioId, scenarioVersion, subjectId],
   )
   const [loadedTargets, setLoadedTargets] = useState<
     ScenarioChatTarget[] | null
@@ -67,6 +76,8 @@ export function ScenarioChatAction({
   const [unavailable, setUnavailable] = useState(false)
   const [menuOpen, setMenuOpen] = useState(false)
   const [menuPosition, setMenuPosition] = useState<MenuPosition | null>(null)
+  const [selectedTarget, setSelectedTarget] =
+    useState<ScenarioChatTarget | null>(null)
   const targets = detailTargets ?? loadedTargets
 
   useEffect(() => {
@@ -74,10 +85,12 @@ export function ScenarioChatAction({
     setLoadedTargets(null)
     setUnavailable(false)
     setMenuOpen(false)
+    setSelectedTarget(null)
   }, [sourceKey])
 
   useEffect(() => {
     if (!menuOpen) return
+    menuRef.current?.querySelector('button')?.focus()
     const close = (event: PointerEvent) => {
       const node = event.target as Node
       if (
@@ -100,7 +113,7 @@ export function ScenarioChatAction({
     }
   }, [menuOpen])
 
-  if (!openChat || !resolvedExecutionId) return null
+  if (!resolvedExecutionId) return null
   if (detailTargets?.length === 0) return null
 
   const positionMenu = (count: number) => {
@@ -125,12 +138,14 @@ export function ScenarioChatAction({
   }
 
   const resolveTargets = async () => {
-    if (targets) return targets
+    if (detailTargets) return detailTargets
     setLoading(true)
+    setUnavailable(false)
     try {
       const next = await loadScenarioChatTargets({
         executionId: resolvedExecutionId,
         scenarioId,
+        scenarioVersion,
         subjectId,
         runId,
       })
@@ -146,25 +161,29 @@ export function ScenarioChatAction({
   }
 
   const activate = async () => {
+    if (menuOpen) {
+      setMenuOpen(false)
+      return
+    }
     const next = await resolveTargets()
     if (next.length === 1) {
-      openChat(next[0].sessionId)
+      setSelectedTarget(next[0])
       return
     }
     if (next.length > 1) {
       positionMenu(next.length)
-      setMenuOpen((current) => !current)
+      setMenuOpen(true)
     }
   }
 
   const multiple = (targets?.length ?? 0) > 1
   const buttonLabel = unavailable
-    ? 'Chat unavailable'
+    ? 'Transcript unavailable'
     : loading
-      ? 'Loading chat…'
+      ? 'Loading transcript…'
       : multiple
-        ? `Chats · ${targets?.length}`
-        : label
+        ? `${label ?? 'Transcripts'} · ${targets?.length}`
+        : (label ?? 'View transcript')
 
   return (
     <span className={`relative inline-flex ${className}`}>
@@ -180,7 +199,7 @@ export function ScenarioChatAction({
         aria-haspopup={multiple ? 'menu' : undefined}
         aria-expanded={multiple ? menuOpen : undefined}
         aria-controls={multiple && menuOpen ? menuId : undefined}
-        disabled={loading || unavailable}
+        disabled={loading}
         onClick={(event) => {
           event.preventDefault()
           event.stopPropagation()
@@ -198,10 +217,40 @@ export function ScenarioChatAction({
             <div
               ref={menuRef}
               id={menuId}
-              className="z-[120] max-h-[min(360px,calc(100dvh-32px))] overflow-y-auto rounded-[var(--ds-radius-md)] border border-[var(--color-edge)] bg-panel p-1.5 shadow-panel"
+              className="z-[120] max-h-[min(360px,calc(100dvh-32px))] overflow-y-auto rounded-[var(--ds-radius-md)] border border-[var(--color-edge)] bg-panel p-1.5 "
               style={menuPosition}
               role="menu"
-              aria-label={`Chat sessions for ${titleCase(scenarioId)}`}
+              onKeyDown={(event) => {
+                if (event.key === 'Escape') {
+                  event.preventDefault()
+                  event.stopPropagation()
+                  setMenuOpen(false)
+                  triggerRef.current?.focus()
+                  return
+                }
+                if (
+                  !['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key)
+                )
+                  return
+                event.preventDefault()
+                const items = [
+                  ...event.currentTarget.querySelectorAll('button'),
+                ]
+                const index = items.indexOf(
+                  document.activeElement as HTMLButtonElement,
+                )
+                const next =
+                  event.key === 'Home'
+                    ? 0
+                    : event.key === 'End'
+                      ? items.length - 1
+                      : (index +
+                          (event.key === 'ArrowDown' ? 1 : -1) +
+                          items.length) %
+                        items.length
+                items[next]?.focus()
+              }}
+              aria-label={`Transcripts for ${titleCase(scenarioId)}`}
             >
               {targets.map((target) => (
                 <button
@@ -211,7 +260,8 @@ export function ScenarioChatAction({
                   role="menuitem"
                   onClick={() => {
                     setMenuOpen(false)
-                    openChat(target.sessionId)
+                    triggerRef.current?.focus()
+                    setSelectedTarget(target)
                   }}
                 >
                   <span className="min-w-0">
@@ -229,9 +279,16 @@ export function ScenarioChatAction({
                 </button>
               ))}
             </div>,
-            document.body,
+            triggerRef.current?.closest('dialog, .harness-e2e-shell') ??
+              document.body,
           )
         : null}
+      <TranscriptDialog
+        title={`${titleCase(scenarioId)} · ${selectedTarget?.runId ?? ''}`}
+        messages={selectedTarget?.messages}
+        open={selectedTarget !== null}
+        onClose={() => setSelectedTarget(null)}
+      />
     </span>
   )
 }

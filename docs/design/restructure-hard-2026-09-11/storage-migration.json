@@ -1,0 +1,16 @@
+{
+  "artifact_dir": "/tmp/harness-hard-migration-mfcmun8g",
+  "checks": [
+    "dry_run_unchanged",
+    "populated_obsolete_table_rejected",
+    "active_rejected",
+    "atomic_schema_2",
+    "empty_obsolete_tables_removed",
+    "projection_written",
+    "native_reports_not_duplicated",
+    "checksums_valid",
+    "repeat_no_op",
+    "old_reader_requires_migration",
+    "new_reader_lists_both_records"
+  ]
+}

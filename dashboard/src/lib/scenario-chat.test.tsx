@@ -1,9 +1,16 @@
 import { renderToStaticMarkup } from 'react-dom/server'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { ScenarioChatAction } from '@/components/ScenarioChatAction'
 import type { DashboardExecutionDetail } from '@/lib/dashboard-data-source'
-import { scenarioChatTargets } from '@/lib/scenario-chat'
-import { ScenarioChatProvider } from '@/lib/scenario-chat-context'
+import { getDashboardDataBridge } from '@/lib/dashboard-data-source'
+import {
+  loadScenarioChatTargets,
+  scenarioChatTargets,
+} from '@/lib/scenario-chat'
+
+vi.mock('@/lib/dashboard-data-source', () => ({
+  getDashboardDataBridge: vi.fn(),
+}))
 
 function detail(): DashboardExecutionDetail {
   return {
@@ -26,6 +33,9 @@ function detail(): DashboardExecutionDetail {
                   attempt_id: 'attempt-2',
                   attempt_number: 2,
                   session_id: 'session-current',
+                  transcript: {
+                    messages: [{ role: 'assistant', content: 'done' }],
+                  },
                   status: 'passed',
                   assessment: {} as never,
                   retry_attempts: [
@@ -34,6 +44,9 @@ function detail(): DashboardExecutionDetail {
                       attempt_id: 'attempt-1',
                       attempt_number: 1,
                       session_id: 'session-retry',
+                      transcript: {
+                        messages: [{ role: 'assistant', content: 'retry' }],
+                      },
                       status: 'subject_error',
                     },
                   ],
@@ -55,11 +68,63 @@ describe('scenario chat targets', () => {
         sessionId: target.sessionId,
         attempt: target.attemptNumber,
         current: target.current,
+        messages: target.messages,
       })),
     ).toEqual([
-      { sessionId: 'session-current', attempt: 2, current: true },
-      { sessionId: 'session-retry', attempt: 1, current: false },
+      {
+        sessionId: 'session-current',
+        attempt: 2,
+        current: true,
+        messages: [{ role: 'assistant', content: 'done' }],
+      },
+      {
+        sessionId: 'session-retry',
+        attempt: 1,
+        current: false,
+        messages: [{ role: 'assistant', content: 'retry' }],
+      },
     ])
+  })
+
+  it('keeps transcript inspection within the selected test version', () => {
+    const value = detail()
+    const other = structuredClone(value.reports[0])
+    const scenario = other.report!.scenarios[0]
+    scenario.scenario_version = 3
+    scenario.runs[0].session_id = 'version-3-session'
+    scenario.runs[0].retry_attempts = []
+    value.reports.push(other)
+    expect(
+      scenarioChatTargets(value, 'direct_answer', null, null, 2).map(
+        (target) => target.sessionId,
+      ),
+    ).toEqual(['session-current', 'session-retry'])
+    expect(
+      scenarioChatTargets(value, 'direct_answer', null, null, 3).map(
+        (target) => target.sessionId,
+      ),
+    ).toEqual(['version-3-session'])
+    expect(
+      scenarioChatTargets(value, 'direct_answer', null, null, null),
+    ).toEqual([])
+  })
+
+  it('reloads retained attempts after an active execution gains evidence', async () => {
+    const empty = { ...detail(), status: 'running', reports: [] }
+    const current = detail()
+    const getExecution = vi
+      .fn()
+      .mockResolvedValueOnce(empty)
+      .mockResolvedValueOnce(current)
+    vi.mocked(getDashboardDataBridge).mockResolvedValue({
+      getExecution,
+    } as never)
+    const source = { executionId: 'execution-1', scenarioId: 'direct_answer' }
+    expect(await loadScenarioChatTargets(source)).toEqual([])
+    expect(
+      (await loadScenarioChatTargets(source)).map((target) => target.sessionId),
+    ).toEqual(['session-current', 'session-retry'])
+    expect(getExecution).toHaveBeenCalledTimes(2)
   })
 
   it('filters a specific subject and logical run', () => {
@@ -73,26 +138,23 @@ describe('scenario chat targets', () => {
 })
 
 describe('scenario chat action', () => {
-  function render(targetsDetail: DashboardExecutionDetail, enabled = true) {
+  function render(targetsDetail: DashboardExecutionDetail) {
     return renderToStaticMarkup(
-      <ScenarioChatProvider openChat={enabled ? () => undefined : undefined}>
-        <ScenarioChatAction detail={targetsDetail} scenarioId="direct_answer" />
-      </ScenarioChatProvider>,
+      <ScenarioChatAction detail={targetsDetail} scenarioId="direct_answer" />,
     )
   }
 
   it('shows a session count when a run retains retries', () => {
     const html = render(detail())
-    expect(html).toContain('Chats · 2')
+    expect(html).toContain('Transcripts · 2')
     expect(html).toContain('aria-haspopup="menu"')
   })
 
-  it('uses a direct action for one session and hides without host support', () => {
+  it('offers a retained transcript without host chat integration', () => {
     const value = detail()
     const run = value.reports[0].report?.scenarios[0].runs[0]
     if (!run) throw new Error('missing run fixture')
     run.retry_attempts = []
-    expect(render(value)).toContain('Open chat')
-    expect(render(value, false)).toBe('')
+    expect(render(value)).toContain('View transcript')
   })
 })

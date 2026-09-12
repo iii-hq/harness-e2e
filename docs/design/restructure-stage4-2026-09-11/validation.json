@@ -1,0 +1,247 @@
+{
+  "date": "2026-09-11",
+  "stage": 4,
+  "status": "validated_locally",
+  "baseline_head": "801e7e62e7b509885b133dc50c4cc4777816eb14",
+  "implementation": "Console reference flow: local plan, execution and comparison",
+  "validation": {
+    "dashboard_tests": {
+      "command": "pnpm test",
+      "files_passed": 45,
+      "tests_passed": 277
+    },
+    "build": {
+      "command": "pnpm build",
+      "typescript": "passed",
+      "standalone": "passed",
+      "console": "passed",
+      "warnings": [
+        "Existing Vite chunk-size warning"
+      ]
+    },
+    "browser": {
+      "host": "Real Console SPA and @iii-dev/console-ui served by the existing Console; current Harness bundle; isolated fixture-only RPC transport",
+      "fixtures": "Four illustrative tests, A complete, B with a zero score and a missing result; retained current/retry transcript examples. Metric values are synthetic, not benchmark measurements. Supporting state checks model active, empty, failed and unavailable evidence.",
+      "viewport_widths": [
+        1440,
+        720,
+        600,
+        390
+      ],
+      "console_metrics_widths": [
+        1320,
+        656,
+        570,
+        360
+      ],
+      "split_panel_widths_previously_checked": [
+        433,
+        320
+      ],
+      "checks": [
+        {
+          "name": "console_extension_full_width",
+          "result": 1320
+        },
+        {
+          "name": "grouped_partial_zero_missing",
+          "result": true
+        },
+        {
+          "name": "keyboard_tabs_and_panel_linkage",
+          "result": true
+        },
+        {
+          "name": "symmetric_filter_4_to_2",
+          "result": true
+        },
+        {
+          "name": "metric_groups_keep_filter",
+          "result": true
+        },
+        {
+          "name": "filtered_equal_weight_means_and_delta",
+          "result": {
+            "a": 86,
+            "b": 93,
+            "delta": 7
+          }
+        },
+        {
+          "name": "current_and_retry_menu",
+          "result": true
+        },
+        {
+          "name": "transcript_menu_keyboard",
+          "result": true
+        },
+        {
+          "name": "focus_after_current_dialog",
+          "result": {
+            "tag": "BUTTON",
+            "label": "Transcript A · 2 for Minimal Path",
+            "text": "Transcript A · 2"
+          }
+        },
+        {
+          "name": "dialog_preserves_comparison_view_and_filter",
+          "result": true
+        },
+        {
+          "name": "retry_transcript",
+          "result": true
+        },
+        {
+          "name": "candidate_transcript_identity",
+          "result": true
+        },
+        {
+          "name": "width_720",
+          "result": {
+            "width": 656,
+            "client": 656,
+            "scroll": 656,
+            "viewport": 720,
+            "document": 720
+          }
+        },
+        {
+          "name": "width_600",
+          "result": {
+            "width": 570,
+            "client": 570,
+            "scroll": 570,
+            "viewport": 600,
+            "document": 600
+          }
+        },
+        {
+          "name": "width_390",
+          "result": {
+            "width": 360,
+            "client": 360,
+            "scroll": 360,
+            "viewport": 390,
+            "document": 390
+          }
+        },
+        {
+          "name": "execution_only_selection",
+          "result": true
+        },
+        {
+          "name": "execution_breadcrumb",
+          "result": "plans\nPlan\nFixture A"
+        },
+        {
+          "name": "no_personal_chat_invocations",
+          "result": []
+        },
+        {
+          "name": "page_errors",
+          "result": []
+        }
+      ],
+      "state_checks": [
+        {
+          "name": "live_transcript_missing_remains_retryable",
+          "result": true
+        },
+        {
+          "name": "live_transcript_refresh_discovers_current_and_retry",
+          "result": true
+        },
+        {
+          "name": "menu_escape_restores_focus",
+          "result": true
+        },
+        {
+          "name": "menu_trigger_closes_without_reload",
+          "result": true
+        },
+        {
+          "name": "execution_only_survives_live_refresh",
+          "result": true
+        },
+        {
+          "name": "plan_execution_return_link",
+          "result": true
+        },
+        {
+          "name": "empty_filtered_comparison_is_reversible",
+          "result": true
+        },
+        {
+          "name": "failed_execution_preserves_identity_when_bundle_unavailable",
+          "result": true
+        },
+        {
+          "name": "active_execution_without_results",
+          "result": true
+        },
+        {
+          "name": "technical_failure_with_missing_score_and_diagnostic_count",
+          "result": true
+        },
+        {
+          "name": "plan_without_executions",
+          "result": true
+        },
+        {
+          "name": "transcript_search_padding",
+          "result": "36px"
+        },
+        {
+          "name": "transcript_search_and_clear",
+          "result": true
+        },
+        {
+          "name": "page_errors",
+          "result": []
+        }
+      ],
+      "page_errors": [],
+      "personal_chat_actions": []
+    },
+    "independent_review": {
+      "code": "No outstanding P1/P2 in the reviewed stage delta. Transcript refresh, synchronous menu close and Escape propagation findings resolved.",
+      "visual": "Reference identities, grouped/by-test layout, narrow metrics and transcript search approved from screenshots; no contrast measurement claimed."
+    }
+  },
+  "artifacts": [
+    "plan-comparison-top.png",
+    "comparison-by-test-dark.png",
+    "comparison-grouped-390.png",
+    "comparison-by-test-390.png",
+    "transcript-current.png",
+    "execution-grouped.png",
+    "execution-evidence-unavailable.png",
+    "execution-technically-invalid.png",
+    "comparison-empty-filter.png",
+    "plan-no-executions.png"
+  ],
+  "source_files_sha256": {
+    "dashboard/src/components/ExecutionMetricsPanel.test.tsx": "af4f338e07417f73243cad2f30778d34e2f06f64954856444e8476c8ac2fab08",
+    "dashboard/src/components/ExecutionMetricsPanel.tsx": "97c2cc6018933bf15d53e9d9a00d7d0c0661dc7526d13b8b5968cd7e881aa6b8",
+    "dashboard/src/components/PrimaryMetricsView.css": "dd0f0164166c7c96fb15c7da33ca54b122ee4a01ee270cb6d1a08abcf28d13f6",
+    "dashboard/src/components/PrimaryMetricsView.tsx": "70c141885b3a6806a3edd0bafcae4850e4720dca6dd307195fd2ed23d943132c",
+    "dashboard/src/components/ScenarioChatAction.tsx": "c04d7dace6aa89a40bd1fc481230dea2180856e32e201020675b75efd8433a3f",
+    "dashboard/src/components/TranscriptDialog.tsx": "9899b07d6ba45b2512f1391606696b52aacd3e981952596a818ef6c058209b3b",
+    "dashboard/src/lib/scenario-chat.test.tsx": "027d913eface0020c4bcf065e88a396520850f2d868b6eff35f4e75eb7222600",
+    "dashboard/src/lib/scenario-chat.ts": "20991c75d271c4026be6e0ab80cc8383804113d149ad8c1fbebaeb4a88c01392",
+    "dashboard/src/pages/ExecutionPage.test.tsx": "0831dbf75873e351ff95fd8ae1b0bc1dc987aa965a4e894f27955309bd332da4",
+    "dashboard/src/pages/ExecutionPage.tsx": "9a6e37dd648fbd4d39576896ae2ee92f6ea063a804ed89b76f8327fc67465d46",
+    "dashboard/src/pages/LocalPlanPage.test.tsx": "1898bbd237f2b7bdb6da2064643fda34105c94be76b8215d78045b60611756d5",
+    "dashboard/src/pages/PlanDetailPage.tsx": "0171f67d2f7d5ca4bd4e91f8405040d032da122f2c6b06b322d672d327bab03f"
+  },
+  "console_bundle_sha256": {
+    "styles.css": "2ed5d051351430388604300e5cc878d100846cc667f5827b5baffb2bef85f20a",
+    "page.js": "2b259701b4f94126fdab2dfccf0df10215cb2d063d6ae959ab38bf86d4863578"
+  },
+  "limits": [
+    "The user Console on :3113 served the SPA but its WebSocket disconnected before replies. No live runtime restart or repair was performed.",
+    "No new model execution, database/session migration, deployment, commit, PR or remote CI was performed.",
+    "Session discovery isolation still requires the coordinated migration/deployment of stage 2/3.",
+    "RC reference comparison, broader screen propagation, standalone retirement and shareable comparison filter state remain in stage 5."
+  ]
+}

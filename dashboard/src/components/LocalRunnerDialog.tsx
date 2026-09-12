@@ -156,7 +156,7 @@ export function LocalRunnerDialog({
   const [error, setError] = useState<string | null>(null)
 
   const refreshJob = useCallback(async () => {
-    if (bridge?.mode !== 'local') return
+    if (!bridge) return
     try {
       const response = asJob(await bridge.getRunSnapshot(logOffset))
       setJob(response)
@@ -171,7 +171,7 @@ export function LocalRunnerDialog({
   }, [bridge, logOffset, onCompleted])
 
   const refreshCatalog = useCallback(async () => {
-    if (bridge?.mode !== 'local') return
+    if (!bridge) return
     setLoadingCatalog(true)
     setError(null)
     try {
@@ -195,7 +195,7 @@ export function LocalRunnerDialog({
   }, [bridge, form.url])
 
   useEffect(() => {
-    if (!open || !bridge || bridge.mode !== 'local') return
+    if (!open || !bridge) return
     setError(null)
     setOwnJob(false)
     if (initialScenarios.length > 0)

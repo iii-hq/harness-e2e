@@ -25,8 +25,8 @@ import {
   type MasterTestProfile,
 } from '@/lib/dashboard-data-source'
 import { type PlanRequirements, planAction } from '@/lib/plan-execution'
+import { ImportedPlanDetailPage } from '@/pages/ImportedPlanDetailPage'
 import { LocalPlanDetailPage as LocalPlanDetail } from '@/pages/PlanDetailPage'
-import { ReleaseControlPlanDetailPage } from '@/pages/ReleaseControlPlanDetailPage'
 
 type Model = { provider: string; model: string }
 type Catalog = {
@@ -198,10 +198,6 @@ export function LocalPlanCreatePage({
       .then(async (next) => {
         if (cancelled) return
         setBridge(next)
-        if (next.mode !== 'local')
-          throw new Error(
-            'Local plans are available only in the local dashboard',
-          )
         await loadCatalog(next)
         const listed = await next.listPlans()
         setTemplates(listed.master_plan?.profiles ?? [])
@@ -216,6 +212,10 @@ export function LocalPlanCreatePage({
         ])
         if (duplicateId || editId) {
           const source = await next.getPlan((duplicateId ?? editId) as string)
+          if (source.origin === 'remote')
+            throw Error(
+              'Imported history cannot be edited or duplicated as a local plan.',
+            )
           setLabel(duplicateId ? `${source.label} copy` : source.label)
           setPurpose(source.purpose)
           setUrl(source.url)
@@ -283,7 +283,7 @@ export function LocalPlanCreatePage({
 
   // Audit PN-17: the plan page can retry a catalog load without a reload.
   const refreshCatalog = async () => {
-    if (bridge?.mode !== 'local') return
+    if (!bridge) return
     setLoading(true)
     setError(null)
     try {
@@ -366,15 +366,10 @@ export function LocalPlanCreatePage({
       judge,
       judgeRequired,
     })
-    if (
-      Object.keys(nextErrors).length > 0 ||
-      bridge?.mode !== 'local' ||
-      !selectedSubject
-    ) {
+    if (Object.keys(nextErrors).length > 0 || !bridge || !selectedSubject) {
       setAttempted(true)
       focusFirstInvalid('plan-create', nextErrors)
-      if (bridge?.mode !== 'local')
-        setError('Plans can only be created from the local dashboard.')
+      if (!bridge) setError('The Console connection is not ready.')
       return
     }
     setSubmitting(true)
@@ -580,7 +575,7 @@ export function LocalPlanCreatePage({
               error={error}
               status={
                 Object.keys(errors).length === 0
-                  ? 'Creates a draft. The scope stays editable until the baseline starts.'
+                  ? 'Creates a plan. Its configuration stays editable after the baseline starts.'
                   : null
               }
             >
@@ -599,7 +594,7 @@ export function LocalPlanCreatePage({
                 disabled={submitting || loading}
                 aria-busy={submitting}
               >
-                {submitting ? 'saving…' : 'Save draft'}
+                {submitting ? 'saving…' : 'Save plan'}
               </button>
               <button
                 className={buttonClassName({ variant: 'primary' })}
@@ -618,8 +613,19 @@ export function LocalPlanCreatePage({
 }
 
 export function LocalPlanDetailPage({ planId }: { planId: string }) {
-  return planId.startsWith('rc:') ? (
-    <ReleaseControlPlanDetailPage planKey={planId.slice(3)} />
+  const [remote, setRemote] = useState<boolean | null>(null)
+  useEffect(() => {
+    let current = true
+    void getDashboardDataBridge()
+      .then((bridge) => bridge.getPlan(planId))
+      .then((plan) => current && setRemote(plan.origin === 'remote'))
+      .catch(() => current && setRemote(false))
+    return () => {
+      current = false
+    }
+  }, [planId])
+  return remote ? (
+    <ImportedPlanDetailPage planId={planId} />
   ) : (
     <LocalPlanDetail planId={planId} />
   )

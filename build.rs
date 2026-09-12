@@ -4,7 +4,7 @@ use std::process::Command;
 use std::time::SystemTime;
 
 fn main() {
-    ensure_dashboard_bundle();
+    ensure_console_bundle();
     println!(
         "cargo:rustc-env=TARGET={}",
         env::var("TARGET").expect("Cargo sets TARGET")
@@ -31,14 +31,11 @@ fn main() {
     println!("cargo:rustc-env=HARNESS_E2E_BUILD_REVISION={revision}");
 }
 
-fn ensure_dashboard_bundle() {
+fn ensure_console_bundle() {
     for path in [
         "dashboard/src",
-        "dashboard/public",
-        "dashboard/index.html",
         "dashboard/package.json",
         "dashboard/pnpm-lock.yaml",
-        "dashboard/vite.config.ts",
         "dashboard/vite.console.config.ts",
         "dashboard/tsconfig.app.json",
         "dashboard/tsconfig.json",
@@ -46,27 +43,26 @@ fn ensure_dashboard_bundle() {
     ] {
         println!("cargo:rerun-if-changed={path}");
     }
-    println!("cargo:rerun-if-env-changed=SKIP_DASHBOARD_BUILD");
+    println!("cargo:rerun-if-env-changed=SKIP_CONSOLE_UI_BUILD");
     println!("cargo:rerun-if-env-changed=PNPM");
 
     let dashboard_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("dashboard");
     let dist_assets = [
-        dashboard_dir.join("dist").join("index.html"),
         dashboard_dir.join("dist-console").join("page.js"),
         dashboard_dir.join("dist-console").join("styles.css"),
     ];
     if dist_assets
         .iter()
-        .all(|asset| asset.exists() && dashboard_dist_is_fresh(asset, &dashboard_dir))
+        .all(|asset| asset.exists() && console_dist_is_fresh(asset, &dashboard_dir))
     {
         return;
     }
 
-    if env::var_os("SKIP_DASHBOARD_BUILD").is_some() {
+    if env::var_os("SKIP_CONSOLE_UI_BUILD").is_some() {
         for asset in &dist_assets {
             if !asset.exists() {
                 panic!(
-                    "SKIP_DASHBOARD_BUILD is set but {} is missing; build the React app with `pnpm --dir dashboard install && pnpm --dir dashboard build`",
+                    "SKIP_CONSOLE_UI_BUILD is set but {} is missing; build the Console extension with `pnpm --dir dashboard install && pnpm --dir dashboard build`",
                     asset.display()
                 );
             }
@@ -80,7 +76,7 @@ fn ensure_dashboard_bundle() {
     for asset in &dist_assets {
         if !asset.exists() {
             panic!(
-                "dashboard build completed without producing {}",
+                "Console build completed without producing {}",
                 asset.display()
             );
         }
@@ -104,24 +100,19 @@ fn run_pnpm(pnpm: &Path, dashboard_dir: &Path, args: &[&str]) {
     }
 }
 
-fn dashboard_dist_is_fresh(dist_index: &Path, dashboard_dir: &Path) -> bool {
+fn console_dist_is_fresh(dist_index: &Path, dashboard_dir: &Path) -> bool {
     let Ok(dist_time) = dist_index
         .metadata()
         .and_then(|metadata| metadata.modified())
     else {
         return false;
     };
-    for relative in ["src", "public"] {
-        let path = dashboard_dir.join(relative);
-        if path.exists() && !subtree_older_than(&path, dist_time) {
-            return false;
-        }
+    if !subtree_older_than(&dashboard_dir.join("src"), dist_time) {
+        return false;
     }
     for relative in [
-        "index.html",
         "package.json",
         "pnpm-lock.yaml",
-        "vite.config.ts",
         "vite.console.config.ts",
         "tsconfig.app.json",
         "tsconfig.json",
@@ -181,7 +172,7 @@ fn locate_pnpm() -> PathBuf {
         }
     }
     panic!(
-        "pnpm was not found on PATH; install Node and pnpm, or set SKIP_DASHBOARD_BUILD=1 after building the React app"
+        "pnpm was not found on PATH; install Node and pnpm, or set SKIP_CONSOLE_UI_BUILD=1 after building the Console extension"
     );
 }
 

@@ -10,6 +10,7 @@ import json
 import pathlib
 import sys
 import unittest
+from unittest.mock import patch
 
 
 ROOT = pathlib.Path(__file__).resolve().parents[2]
@@ -86,6 +87,7 @@ class Args:
             "contract_sha256": None,
             "runner_sha": None,
             "cli_version": None,
+            "artifact_name": None,
         }
         self.__dict__.update(defaults | fields)
 
@@ -109,6 +111,7 @@ class ReportPayloadTests(unittest.TestCase):
             Args(profile_snapshot=self.snapshot, plan=self.plan, runner_sha="a" * 40, cli_version="0.23.1-rc.2")
         )
         self.assertEqual(payload["kind"], "materialized")
+        self.assertEqual(payload["profile_snapshot"], PROFILE_SNAPSHOT)
         self.assertEqual(payload["profile"]["id"], "regression")
         self.assertEqual(payload["profile"]["profile_sha256"], PROFILE_SNAPSHOT["profile_sha256"])
         self.assertEqual(payload["profile"]["definition_sha256"], PROFILE_SNAPSHOT["definition_sha256"])
@@ -119,6 +122,20 @@ class ReportPayloadTests(unittest.TestCase):
         self.assertEqual((group["id"], group["scenarios"], group["runs"]), ("case-minimal-path", ["minimal_path"], 1))
         self.assertEqual(payload["identity"]["plan_sha256"], PLAN["sha256"])
         self.assertEqual(payload["identity"]["subject"], PLAN["subject"])
+
+    def test_bundle_identity_preserves_the_workflow_attempt_without_inventing_uploaded_metadata(self):
+        args = Args(artifact_name="e2e-observation-fixture-gh-2")
+        with patch.dict("os.environ", {
+            "GITHUB_REPOSITORY": "iii-hq/harness-e2e", "GITHUB_RUN_ID": "77", "GITHUB_RUN_ATTEMPT": "2"
+        }, clear=True):
+            bundle = report_execution.shard_payload(args)["bundle"]
+            self.assertEqual(bundle["artifact_name"], args.artifact_name)
+            self.assertEqual((bundle["run_id"], bundle["run_attempt"]), (77, 2))
+            self.assertIsNone(bundle["artifact_id"])
+            self.assertIsNone(bundle["sha256"])
+            self.assertIsNone(bundle["size_bytes"])
+        with patch.dict("os.environ", {}, clear=True):
+            self.assertIsNone(report_execution.summary_payload(args)["bundle"])
 
     def test_runs_come_from_results_with_the_slot_release_control_recomputes(self):
         results = {

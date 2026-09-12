@@ -13,15 +13,6 @@ use crate::markdown::ScenarioKey;
 use crate::scenarios::{ComplexityTier, ScenarioExecutionKind};
 
 const SOURCE: &str = include_str!("../config/test-plan.json");
-pub const PROFILE_IDS: [&str; 7] = [
-    "smoke",
-    "regression",
-    "capability",
-    "evolution",
-    "resilience",
-    "endurance",
-    "software-engineering",
-];
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
@@ -227,8 +218,8 @@ impl MasterPlan {
             }
         }
         ensure!(
-            profiles == PROFILE_IDS.into_iter().collect(),
-            "master plan must declare the reviewed profiles"
+            !profiles.is_empty(),
+            "master plan must declare at least one reviewed profile"
         );
         Ok(())
     }

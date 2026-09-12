@@ -172,6 +172,7 @@ def materialized_payload(args: argparse.Namespace) -> dict[str, Any]:
         "kind": "materialized",
         "execution_id": args.execution_id,
         "schema": snapshot.get("schema") or "harness-e2e-profile-snapshot/v1",
+        "profile_snapshot": snapshot or None,
         "profile": prune(
             {
                 "id": profile.get("id"),
@@ -185,6 +186,26 @@ def materialized_payload(args: argparse.Namespace) -> dict[str, Any]:
         "campaigns": snapshot.get("campaigns") or [],
         "budget": snapshot.get("budget"),
         "identity": identity_of(args, None),
+    }
+
+
+def bundle_reference(args: argparse.Namespace) -> dict[str, Any] | None:
+    repository = os.environ.get("GITHUB_REPOSITORY")
+    run_id = os.environ.get("GITHUB_RUN_ID", "")
+    run_attempt = os.environ.get("GITHUB_RUN_ATTEMPT", "")
+    if not args.artifact_name or not repository or not run_id.isdecimal() or not run_attempt.isdecimal():
+        return None
+    if int(run_id) <= 0 or int(run_attempt) <= 0:
+        return None
+    return {
+        "kind": "github",
+        "repository": repository,
+        "run_id": int(run_id),
+        "run_attempt": int(run_attempt),
+        "artifact_id": None,
+        "artifact_name": args.artifact_name,
+        "sha256": None,
+        "size_bytes": None,
     }
 
 
@@ -207,6 +228,7 @@ def shard_payload(args: argparse.Namespace) -> dict[str, Any]:
             }
         ),
         "identity": identity_of(args, artifacts),
+        "bundle": bundle_reference(args),
         "runs": runs,
     }
 
@@ -219,6 +241,7 @@ def summary_payload(args: argparse.Namespace) -> dict[str, Any]:
         "schema": "harness-e2e-campaign-summary/v1",
         "summary": summary,
         "identity": identity_of(args, None),
+        "bundle": bundle_reference(args),
         "runs": [],
     }
 
@@ -290,6 +313,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--contract-sha256")
     parser.add_argument("--runner-sha")
     parser.add_argument("--cli-version")
+    parser.add_argument("--artifact-name", help="exact name of this report's GitHub observation bundle")
     parser.add_argument("--output", type=Path, help="write the payload here instead of posting it")
     return parser.parse_args()
 

@@ -26,9 +26,9 @@ remain outside that boundary.
 ## Binaries
 
 - `harness-e2e` is started by Compose and registers the asynchronous `e2e::*`
-  control plane plus the injectable Console dashboard. Explicit
-  subcommands keep direct scenario execution, report inspection, and the
-  standalone dashboard available from the same binary.
+  control plane plus the injectable Console page. Explicit subcommands keep
+  direct scenario execution and report inspection available from the same
+  binary.
 
 Build and validate the repository:
 
@@ -183,21 +183,19 @@ execution is silently lost.
 `workers` supplies versioned components of the stack under test; it does not
 orchestrate campaigns.
 
-## Dashboard
+## Console page
 
-Build and start the dashboard from the repository root:
+Build the worker and its injectable Console page from the repository root:
 
 ```bash
 cargo build --locked --bin harness-e2e
-target/debug/harness-e2e dashboard
 ```
 
-The Rust build follows the same embedded-SPA contract as `workers/console`: it
-builds the React bundle with pnpm when `dashboard/dist/` is missing or stale,
-then embeds the Vite output in the binary. Node and pnpm must be available on
-`PATH`. For frontend development with HMR, use `pnpm --dir dashboard dev`; the
-Vite server proxies runtime data, the scoped iii WebSocket, and local-run APIs
-to the Rust dashboard on port 4173.
+The Rust build creates `dashboard/dist-console/page.js` and `styles.css`, then
+embeds both assets in the worker. Node and pnpm must be available on `PATH`.
+When Console connects to the same iii namespace, the worker registers those
+assets and the `e2e::dashboard::*` read, plan, run, status and cancellation
+functions used by the page.
 
 Rust-defined composite scenarios, including the multi-test `security_review`
 example, use the current shared result schema and read-only execution projection.
@@ -206,23 +204,15 @@ The running Harness must publish request and response schemas compatible with
 the current typed surface. Missing or incompatible fields fail preflight; no
 payload-version compatibility mode is available.
 
-The server listens on `0.0.0.0:4173` by default. Open
-`http://localhost:4173/#/overview` on the same machine, or replace `localhost`
-with the machine's address when accessing it remotely. Use `--listen
-0.0.0.0:PORT` to select another port, `III_URL` to select the running Harness
-stack, and `--runs-dir` to select another local history directory.
-
-Local mode loads data incrementally through iii: 25 compact summaries on the
+The page loads data incrementally through iii: 25 compact summaries on the
 first overview page, one complete report when an execution is opened, only the
 selected pair for comparison, and the model/scenario catalog when the run dialog
 opens. Server-side filtering and cursor pagination keep history growth out of
-the initial payload. Static published and `--view-only` presentations preserve
-the generated-file fallback.
+the initial payload. Transport failures stay visible in Console.
 
-Local mode exposes controls that can start and cancel E2E runs, so expose the
-port only on a trusted network. Use `--listen 127.0.0.1:4173` when access should
-remain local. See [dashboard/README.md](dashboard/README.md) for view-only mode
-and the complete dashboard behavior.
+The trusted publisher still writes the bounded JSON report archive used by CI
+and downstream consumers. It does not publish a Harness E2E web application.
+See [dashboard/README.md](dashboard/README.md) for the page contract.
 
 ### Compare a local change with Release Control
 
@@ -269,8 +259,13 @@ namespace for both Compose and the project functions it starts.
 
 Compose supplies `III_URL`, `III_NAMESPACE`, `III_WORKER_NAME`, and `III_CONFIG`
 to the `harness-e2e` process. All four values are mandatory. The referenced
-configuration file contains the execution-specific `data_dir`; there is no
-local fallback, command-line override, or runtime self-registration.
+configuration contains the execution-specific evidence directory and the
+separate control-plane database namespace. Start
+`worker-compose.control.yaml` before `worker-compose.yaml`: it provisions the
+single-connection `harness_e2e` SQLite pool at the configured control-plane
+path, with SQL history disabled.
+The Harness exits explicitly when that database or its schema is unavailable;
+the subject namespace never receives its database client or filesystem path.
 
 Publication validates the locally built binary through a `path://` Compose
 container before the package is uploaded. Published campaigns use only exact
@@ -288,9 +283,39 @@ Fault supervisors use `e2e::fault-plan` and `e2e::fault-evaluate` so plan
 materialization and recovery classification stay on the same iii control plane.
 Subject policies deny `e2e::*`.
 
-Durable artifacts are chunked through `storage::*`, while longitudinal series
-are ingested through `database::*`. The runner has no S3, GCS, R2, SQL-driver,
-or Harness dependency.
+Durable artifacts are chunked through `storage::*`. Admissions, executions,
+runs, attempts, artifact references and local scenario identities are written
+through the control-plane `database::*` worker. Execution records retain compact
+dashboard summaries and observations, so lists and history do not load native
+reports. Storage schema 3 requires an explicit migration of schema 1 or 2 before this
+worker starts. There is no automatic startup backfill. With the E2E worker stopped
+and its database backed up, run `harness-e2e migrate-storage --url <iii-url>
+--runs-dir <evidence-root>` to inspect the migration, then repeat with `--apply`.
+The database worker must remain available in the control namespace. Apply commits
+all projections and the schema version in one transaction; active executions
+block migration. Missing bundles are listed in the result and never reconstructed
+as scored results. Empty obsolete SQL plan tables are removed; populated ones block
+cutover for explicit reconciliation with PlanStore. A second apply is a no-op.
+
+Plan definitions and composed execution receipts are stored in `saved_plans` and
+`saved_plan_executions` through the database worker. The explicit migration reads
+`plan-store/plans/*.json` and `plan-store/executions/*.json`, verifies their
+identities and snapshots, and preserves baseline, candidates, slots and child
+references. Runtime does not read or write those directories. Keep the original
+files and database backup until cutover acceptance; rollback restores both with
+the corresponding previous binary.
+
+Release Control history imports use `harness-e2e-history/v1`, wrapped as
+`{json, sha256}` with a `sha256:` digest of the exact UTF-8 JSON. Use **Import
+history** in the Console to import a file or explicitly fetch a plan from the RC
+bridge. Plans and executions retain source identities, revisions and every
+retained report; repeated imports do not create duplicates. Imported active work
+never enters local admission or recovery. History remains readable without RC.
+Evidence uses local `gh` credentials and Python 3 to verify the GitHub bundle
+manifest, execution/attempt identity and file checksums, independently of RC.
+Missing, expired, inaccessible and invalid evidence are separate states. Native bundles retain
+full reports, manifests and transcripts, loaded on demand for investigation.
+The runner has no S3, GCS, R2, SQL-driver, or Harness dependency.
 
 Weekly Stress materializes deterministic fault plans and evaluates journals from a
 protected supervisor.
@@ -301,13 +326,12 @@ Lane promotion is governed by
 
 - `src/` owns the runner, local wire adapters, scenarios, evaluation,
   longitudinal comparison, and the E2E control worker.
-- `config/` owns reviewed comparison and cutover policies, fault profiles, and
-  standalone stack configuration.
+- `config/` owns reviewed comparison and cutover policies and fault profiles.
 - `tests/` owns test-only fixtures, golden wire schemas, and the Node/Python
   validation suites.
 - `schemas/` contains the public contracts for generated E2E artifacts.
-- `dashboard/` contains the React, TypeScript, Vite, and Tailwind dashboard
-  embedded in the Rust binary.
+- `dashboard/` contains the React, TypeScript, Vite, and Tailwind Console page
+  embedded in the worker binary.
 - generated reports, transcripts, logs, and deliverables stay outside Git.
 
 The crate may depend on the iii SDK and generic libraries. It must not declare

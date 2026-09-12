@@ -1,0 +1,268 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "additionalProperties": false,
+  "definitions": {
+    "Counts": {
+      "additionalProperties": false,
+      "properties": {
+        "campaigns": {
+          "format": "uint",
+          "minimum": 0.0,
+          "type": "integer"
+        },
+        "executions": {
+          "format": "uint",
+          "minimum": 0.0,
+          "type": "integer"
+        },
+        "reports": {
+          "format": "uint",
+          "minimum": 0.0,
+          "type": "integer"
+        },
+        "runs": {
+          "format": "uint",
+          "minimum": 0.0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "campaigns",
+        "executions",
+        "reports",
+        "runs"
+      ],
+      "type": "object"
+    },
+    "Execution": {
+      "additionalProperties": false,
+      "properties": {
+        "bundles": {
+          "items": {
+            "$ref": "#/definitions/GithubBundle"
+          },
+          "type": "array"
+        },
+        "content_sha256": {
+          "type": "string"
+        },
+        "materialization": {
+          "$ref": "#/definitions/Materialization"
+        },
+        "record": true,
+        "reports": {
+          "items": true,
+          "type": "array"
+        },
+        "runs": {
+          "items": true,
+          "type": "array"
+        },
+        "source_updated_at": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "bundles",
+        "content_sha256",
+        "materialization",
+        "record",
+        "reports",
+        "runs",
+        "source_updated_at"
+      ],
+      "type": "object"
+    },
+    "GithubBundle": {
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "artifact_id": {
+              "format": "uint64",
+              "minimum": 0.0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "artifact_name": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "kind": {
+              "enum": [
+                "github"
+              ],
+              "type": "string"
+            },
+            "repository": {
+              "type": "string"
+            },
+            "run_attempt": {
+              "format": "uint32",
+              "minimum": 0.0,
+              "type": "integer"
+            },
+            "run_id": {
+              "format": "uint64",
+              "minimum": 0.0,
+              "type": "integer"
+            },
+            "sha256": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "size_bytes": {
+              "format": "uint64",
+              "minimum": 0.0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "kind",
+            "repository",
+            "run_attempt",
+            "run_id"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "Materialization": {
+      "additionalProperties": false,
+      "properties": {
+        "availability": {
+          "$ref": "#/definitions/MaterializationAvailability"
+        },
+        "reason": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "snapshot": true
+      },
+      "required": [
+        "availability"
+      ],
+      "type": "object"
+    },
+    "MaterializationAvailability": {
+      "enum": [
+        "complete",
+        "partial",
+        "unavailable"
+      ],
+      "type": "string"
+    },
+    "Plan": {
+      "additionalProperties": false,
+      "properties": {
+        "active": {
+          "type": "boolean"
+        },
+        "configuration": true,
+        "content_sha256": {
+          "type": "string"
+        },
+        "key": {
+          "type": "string"
+        },
+        "limitation": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "source_updated_at": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "active",
+        "content_sha256",
+        "key",
+        "source_updated_at"
+      ],
+      "type": "object"
+    },
+    "Scope": {
+      "additionalProperties": false,
+      "properties": {
+        "complete": {
+          "type": "boolean"
+        },
+        "plan_key": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "complete",
+        "plan_key"
+      ],
+      "type": "object"
+    },
+    "Source": {
+      "additionalProperties": false,
+      "properties": {
+        "instance_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "instance_id"
+      ],
+      "type": "object"
+    }
+  },
+  "properties": {
+    "campaigns": {
+      "items": true,
+      "type": "array"
+    },
+    "captured_at": {
+      "type": "string"
+    },
+    "counts": {
+      "$ref": "#/definitions/Counts"
+    },
+    "executions": {
+      "items": {
+        "$ref": "#/definitions/Execution"
+      },
+      "type": "array"
+    },
+    "plan": {
+      "$ref": "#/definitions/Plan"
+    },
+    "schema": {
+      "type": "string"
+    },
+    "scope": {
+      "$ref": "#/definitions/Scope"
+    },
+    "source": {
+      "$ref": "#/definitions/Source"
+    }
+  },
+  "required": [
+    "campaigns",
+    "captured_at",
+    "counts",
+    "executions",
+    "plan",
+    "schema",
+    "scope",
+    "source"
+  ],
+  "title": "History",
+  "type": "object"
+}

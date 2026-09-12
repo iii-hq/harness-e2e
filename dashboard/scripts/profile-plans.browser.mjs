@@ -1,11 +1,10 @@
 // Deterministic browser coverage for the executable-plan journey. No models run.
 import assert from 'node:assert/strict'
 import { execFileSync } from 'node:child_process'
-import { readFile } from 'node:fs/promises'
-import { createServer } from 'node:http'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { chromium } from 'playwright'
+import { createConsoleTestHost } from './console-test-host.mjs'
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..')
 const master = JSON.parse(
@@ -147,101 +146,50 @@ function executionDetail(execution) {
     totals: { expected_reports: execution.slots.length, received_reports: 0 },
   }
 }
-const server = createServer(async (req, res) => {
-  try {
-    const url = new URL(req.url, 'http://localhost')
-    let value
-    if (url.pathname === '/api/dashboard')
-      value = {
-        mode: 'local',
-        transport: 'static',
-        page_size: 25,
-        functions: {},
-      }
-    else if (url.pathname === '/api/dashboard/plans/control') {
-      let body = ''
-      for await (const chunk of req) body += chunk
-      value = operation(JSON.parse(body))
-    } else if (url.pathname === '/api/dashboard/plans') {
-      if (req.method === 'POST') {
-        let body = ''
-        for await (const chunk of req) body += chunk
-        value = createPlan(JSON.parse(body))
-      } else value = { plans, master_plan: master }
-    } else if (url.pathname.startsWith('/api/dashboard/plans/')) {
-      const [, id, action] =
-        url.pathname.match(/\/plans\/([^/]+)(?:\/(runs))?$/) ?? []
-      const plan = plans.find((p) => p.id === id)
-      if (req.method === 'POST') {
-        let body = ''
-        for await (const chunk of req) body += chunk
-        const input = JSON.parse(body)
-        value =
-          action === 'runs'
-            ? startPlan(plan, input.role)
-            : Object.assign(plan, input)
-      } else if (req.method === 'PATCH') {
-        let body = ''
-        for await (const chunk of req) body += chunk
-        value = Object.assign(plan, JSON.parse(body))
-      } else value = plan
-    } else if (url.pathname === '/api/dashboard/executions') {
-      value = { executions: [...executions.values()].map(executionDetail) }
-    } else if (url.pathname.startsWith('/api/dashboard/executions/')) {
-      const detail = executionDetail(
-        executions.get(url.pathname.split('/').at(-1)),
-      )
-      value = { detail, manifest: { executions: [detail] } }
-    } else if (url.pathname === '/api/local/catalog')
-      value = {
-        url: configuration.url,
-        scenarios: [...new Set(master.profiles.flatMap((p) => p.scenario_ids))],
-        models: [
-          { provider: 'deepseek', model: 'deepseek-v4-flash' },
-          { provider: 'openai-codex', model: 'codex/gpt-5.6-terra' },
-        ],
-      }
-    else if (url.pathname === '/api/local/run')
-      value = { job: null, defaults: configuration }
-    else if (url.pathname.startsWith('/api/'))
-      value = {
-        executions: [],
-        total: 0,
-        next_cursor: null,
-        tests: [],
-        versions: [],
-      }
-    if (value !== undefined) {
-      res.setHeader('Content-Type', 'application/json')
-      res.end(JSON.stringify(value))
-      return
-    }
-    const filename = url.pathname === '/' ? 'index.html' : url.pathname.slice(1)
-    const content = await readFile(path.join(root, 'dashboard/dist', filename))
-    res.setHeader(
-      'Content-Type',
-      filename.endsWith('.js')
-        ? 'text/javascript'
-        : filename.endsWith('.css')
-          ? 'text/css'
-          : filename.endsWith('.html')
-            ? 'text/html'
-            : 'application/octet-stream',
+const server = await createConsoleTestHost()
+const trigger = (name, request = {}) => {
+  const id = name.replace('e2e::dashboard::', '')
+  if (id === 'plan-control') return operation(request)
+  if (id === 'plans-list') return { plans, master_plan: master }
+  if (id === 'plan-create') return createPlan(request)
+  if (id === 'plan-get')
+    return plans.find((plan) => plan.id === request.plan_id)
+  if (id === 'plan-update')
+    return Object.assign(
+      plans.find((plan) => plan.id === request.plan_id),
+      request,
     )
-    res.end(content)
-  } catch (error) {
-    res.statusCode = 500
-    res.end(String(error))
-  }
-})
-await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve))
+  if (id === 'plan-run-start')
+    return startPlan(
+      plans.find((plan) => plan.id === request.plan_id),
+      request.role,
+    )
+  if (id === 'executions-list')
+    return { executions: [...executions.values()].map(executionDetail) }
+  if (id === 'execution-get')
+    return { detail: executionDetail(executions.get(request.execution_id)) }
+  if (id === 'catalog-get')
+    return {
+      url: configuration.url,
+      scenarios: [...new Set(master.profiles.flatMap((p) => p.scenario_ids))],
+      models: [
+        { provider: 'deepseek', model: 'deepseek-v4-flash' },
+        { provider: 'openai-codex', model: 'codex/gpt-5.6-terra' },
+      ],
+    }
+  if (id === 'run-status') return { job: null, defaults: configuration }
+  if (name === 'release-control::test-plans::list') return { plans: [] }
+  throw new Error(`Unexpected RPC ${name}`)
+}
 const browser = await chromium.launch({ headless: true })
 try {
   const page = await browser.newPage({ viewport: { width: 1280, height: 900 } })
+  await server.install(page, trigger)
+  page.setDefaultTimeout(10_000)
   const errors = []
   page.on('pageerror', (error) => errors.push(error.message))
-  await page.goto(`http://127.0.0.1:${server.address().port}/#/plans`)
-  await page.getByRole('button', { name: 'My plans', exact: true }).waitFor()
+  await page.goto(`${server.url}#/ext/harness-e2e/plans`)
+  await page.getByRole('tab', { name: 'My plans', exact: true }).waitFor()
   assert.equal(
     await page.getByRole('link', { name: 'Create Smoke plan' }).count(),
     0,
@@ -270,20 +218,18 @@ try {
   }
   await select('Execution model', 'deepseek-v4-flash')
   await select('Judge model', 'codex/gpt-5.6-terra')
-  await page.getByRole('button', { name: 'Save draft', exact: true }).click()
+  await page.getByRole('button', { name: 'Save plan', exact: true }).click()
   await page.locator('[data-plan-lifecycle]').waitFor()
   assert.equal(plans.length, 2)
   assert.equal(plans[1].scenario_ids.length, 5)
   assert.equal(plans[1].baseline_execution_id, null)
   // Template and manual plans use the same table, detail and lifecycle.
-  await page.goto(`http://127.0.0.1:${server.address().port}/#/plans`)
+  await page.goto(`${server.url}#/ext/harness-e2e/plans`)
   await page.getByText('Smoke', { exact: true }).first().waitFor()
   assert.equal(await page.getByRole('table').count(), 1)
   await page.getByText('Existing manual plan', { exact: true }).first().click()
   await page.locator('[data-plan-lifecycle]').waitFor()
-  await page.goto(
-    `http://127.0.0.1:${server.address().port}/#/plans/${plans[1].id}`,
-  )
+  await page.goto(`${server.url}#/ext/harness-e2e/plans/${plans[1].id}`)
   await page.getByRole('link', { name: 'Duplicate plan', exact: true }).click()
   await page
     .getByRole('button', { name: 'Execution model', exact: true })
@@ -311,9 +257,7 @@ try {
   assert.equal(active.role, 'baseline')
   assert.equal(active.slots.length, 5)
   assert.equal(await page.locator('progress').getAttribute('max'), '5')
-  await page.goto(
-    `http://127.0.0.1:${server.address().port}/#/plans/new/profile/smoke`,
-  )
+  await page.goto(`${server.url}#/ext/harness-e2e/plans/new/profile/smoke`)
   await page
     .getByRole('button', { name: 'Execution model', exact: true })
     .waitFor()
@@ -325,9 +269,7 @@ try {
   assert.equal(plans[3].state, 'draft')
   await page.getByRole('link', { name: 'Follow active execution' }).click()
   const executionId = active.id
-  await page.goto(
-    `http://127.0.0.1:${server.address().port}/#/execution/${executionId}`,
-  )
+  await page.goto(`${server.url}#/ext/harness-e2e/execution/${executionId}`)
   await page.getByRole('link', { name: 'back to plan', exact: true }).waitFor()
   assert.equal(
     await page
@@ -343,30 +285,25 @@ try {
     })
     .waitFor()
   await page.getByRole('button', { name: /^cancel execution$/i }).click()
-  await page.locator('[data-execution-overview]').waitFor()
+  await page.locator('.primary-metrics').waitFor()
   await page.getByRole('link', { name: 'back to plan', exact: true }).click()
   await page
-    .getByText('baseline retry available · scope locked', { exact: true })
+    .getByText('Incomplete attempt · cancelled', { exact: true })
     .waitFor()
   assert.equal(active, null)
   await page.setViewportSize({ width: 390, height: 844 })
-  for (const theme of ['light', 'dark']) {
-    await page.evaluate((theme) => {
-      document.documentElement.dataset.theme = theme
-    }, theme)
-    assert.equal(
-      await page.evaluate(
-        () => document.documentElement.scrollWidth <= innerWidth,
-      ),
-      true,
-    )
-  }
+  assert.equal(
+    await page.evaluate(
+      () => document.documentElement.scrollWidth <= innerWidth,
+    ),
+    true,
+  )
   plans[2].compatible = false
   await page.reload()
   await page.getByText('Saved scope unavailable', { exact: true }).waitFor()
   assert.deepEqual(errors, [])
   console.log(
-    'Unified plan browser flow passed: create, evaluator, keyboard search, save, run, duplicate, busy draft, cancel, incompatible, mobile and themes.',
+    'Unified plan browser flow passed: create, evaluator, keyboard search, save, run, duplicate, busy draft, cancel, incompatible and narrow viewport in a functional Console host double.',
   )
 } catch (error) {
   console.error(
@@ -375,5 +312,5 @@ try {
   throw error
 } finally {
   await browser.close()
-  await new Promise((resolve) => server.close(resolve))
+  await server.close()
 }

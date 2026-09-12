@@ -280,10 +280,7 @@ describe('design system foundation primitives', () => {
       </>,
     )
     expect(controls).toContain(
-      '<span class="ds-select"><select class="ds-input ds-select-control"',
-    )
-    expect(controls).toContain(
-      '<span class="ds-select-chevron" aria-hidden="true">',
+      '<select class="ds-input" id="s" aria-label="Lifecycle">',
     )
     expect(controls).toContain('<textarea class="ds-input ds-textarea"')
   })
