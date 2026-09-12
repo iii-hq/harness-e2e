@@ -46,7 +46,7 @@ use super::{
 };
 
 pub const ID: &str = "chess_engine_build";
-const VERSION: u32 = 3;
+const VERSION: u32 = 4;
 
 /// One-paragraph editorial description of what this test asks for, shown above
 /// the prompt on the dashboard's test page. Written by hand: the prompt states
@@ -60,9 +60,7 @@ compared against the shakmaty kernel oracle.";
 
 // --- Pinned, frozen fixture identity (do not edit) --------------------------
 //
-// The fixture is consumed via a local checkout of the repository root exported
-// through `HARNESS_E2E_FIXTURE_PATH`; the relevant content lives under `chess/`.
-const FIXTURE_PATH_ENV: &str = "HARNESS_E2E_FIXTURE_PATH";
+// The embedded bundle supplies the reviewed chess/ subtree.
 const FIXTURE_REPOSITORY: &str = "iii-hq/e2e-fixture";
 const CHESS_SUBTREE: &str = "chess";
 const FIXTURE_REVISION: &str = "16f6b9e05e34e09c824191eed0631d77f85be6a9";
@@ -181,7 +179,6 @@ pub fn materialize(namespace: &str, seed: u64) -> Result<MaterializedScenario> {
     let inputs = json!({
         "fixture_repository": FIXTURE_REPOSITORY,
         "fixture_subtree": CHESS_SUBTREE,
-        "fixture_path_env": FIXTURE_PATH_ENV,
         "fixture_revision": FIXTURE_REVISION,
         "chess_manifest_sha256": CHESS_MANIFEST_SHA256,
         "engine_relpath": ENGINE_RELPATH,
@@ -309,54 +306,43 @@ fn setup<'a>(context: &'a E2eContext, run_id: &'a str) -> CleanupFuture<'a> {
             }
         }
 
-        let fixture = fixture_root_from_env()?;
-        let chess_dir = fixture.join(CHESS_SUBTREE);
-        validate_fixture_chess_dir(&chess_dir)?;
-
-        // The manifest is authoritative: recompute it identically over `chess/`.
-        let manifest = compute_chess_manifest_sha256(&chess_dir)
-            .context("recompute frozen chess/ fixture manifest")?;
-        if manifest != CHESS_MANIFEST_SHA256 {
-            bail!("chess fixture manifest {manifest} differs from pinned {CHESS_MANIFEST_SHA256}");
-        }
-
-        // The revision is advisory when this is a git checkout, best-effort.
-        if fixture.join(".git").exists() {
-            match git_head(&fixture).await {
-                Some(head) if head != FIXTURE_REVISION => bail!(
-                    "chess fixture HEAD {head} differs from pinned revision {FIXTURE_REVISION}"
-                ),
-                _ => {}
-            }
-        }
-
-        // Copy the subtree into the workspace; never edit the checkout in place.
-        let workspace = workspace_root(run_id);
-        remove_workspace(&workspace)?;
-        fs::create_dir_all(&workspace)
-            .with_context(|| format!("create workspace {}", workspace.display()))?;
-        copy_subtree(&chess_dir, &workspace)
-            .with_context(|| format!("copy chess/ subtree into {}", workspace.display()))?;
-        if !engine_path(&workspace).is_file() {
-            bail!("chess workspace is missing engine/engine.py after copy");
-        }
-        Ok(())
+        prepare_workspace(run_id).await
     })
 }
 
-fn fixture_root_from_env() -> Result<PathBuf> {
-    let raw = std::env::var_os(FIXTURE_PATH_ENV)
-        .filter(|value| !value.is_empty())
-        .with_context(|| {
-            format!("{FIXTURE_PATH_ENV} must point to a local checkout of the chess fixture")
-        })?;
-    let path = PathBuf::from(raw);
-    if !path.is_absolute() {
-        bail!("{FIXTURE_PATH_ENV} must be absolute: {}", path.display());
+async fn prepare_workspace(run_id: &str) -> Result<()> {
+    let fixture = super::fixture::prepare(super::fixture::SHARED_BUNDLE, FIXTURE_REVISION).await?;
+    let chess_dir = fixture.root.join(CHESS_SUBTREE);
+    validate_fixture_chess_dir(&chess_dir)?;
+
+    // The manifest is authoritative: recompute it identically over `chess/`.
+    let manifest = compute_chess_manifest_sha256(&chess_dir)
+        .context("recompute frozen chess/ fixture manifest")?;
+    if manifest != CHESS_MANIFEST_SHA256 {
+        bail!("chess fixture manifest {manifest} differs from pinned {CHESS_MANIFEST_SHA256}");
     }
-    // `canonicalize` also fails cleanly when the checkout does not exist.
-    path.canonicalize()
-        .with_context(|| format!("canonicalize chess fixture {}", path.display()))
+
+    // The revision is advisory when this is a git checkout, best-effort.
+    if fixture.root.join(".git").exists() {
+        match git_head(&fixture.root).await {
+            Some(head) if head != FIXTURE_REVISION => {
+                bail!("chess fixture HEAD {head} differs from pinned revision {FIXTURE_REVISION}")
+            }
+            _ => {}
+        }
+    }
+
+    // Copy the subtree into the workspace; never edit the checkout in place.
+    let workspace = workspace_root(run_id);
+    remove_workspace(&workspace)?;
+    fs::create_dir_all(&workspace)
+        .with_context(|| format!("create workspace {}", workspace.display()))?;
+    copy_subtree(&chess_dir, &workspace)
+        .with_context(|| format!("copy chess/ subtree into {}", workspace.display()))?;
+    if !engine_path(&workspace).is_file() {
+        bail!("chess workspace is missing engine/engine.py after copy");
+    }
+    Ok(())
 }
 
 fn validate_fixture_chess_dir(chess_dir: &Path) -> Result<()> {
@@ -832,6 +818,23 @@ fn guard_workspace_path(root: &Path) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn automatic_workspace_has_the_reviewed_unimplemented_engine() {
+        let run_id = uuid::Uuid::new_v4().simple().to_string();
+        let workspace = workspace_root(&run_id);
+        prepare_workspace(&run_id).await.unwrap();
+        let manifest = compute_chess_manifest_sha256(&workspace).unwrap();
+        let result = run_engine(
+            &engine_path(&workspace),
+            &["perft".into(), chess_engine::STARTPOS.into(), "1".into()],
+        )
+        .await;
+        remove_workspace(&workspace).unwrap();
+        assert_eq!(manifest, CHESS_MANIFEST_SHA256);
+        assert!(!result.unwrap().exit_ok);
+        assert!(!workspace.exists());
+    }
 
     fn run_ok(stdout: &str) -> EngineRun {
         EngineRun {

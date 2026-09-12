@@ -1,0 +1,71 @@
+{
+  "date": "2026-09-11",
+  "stage": 1,
+  "scope": "local implementation; no deployment",
+  "base_head": "801e7e62e7b509885b133dc50c4cc4777816eb14",
+  "runtime": {
+    "engine_url": "ws://127.0.0.1:49391",
+    "dashboard_url": "http://127.0.0.1:49392",
+    "database": "real database worker / temporary SQLite",
+    "isolation": "copied terminal records and evidence; no model calls; original Console untouched"
+  },
+  "integration": {
+    "legacy_missing_bundle_does_not_block_other_backfill": true,
+    "terminal_sql_has_projection_without_full_report": true,
+    "plan_parent_detail_slots": 11,
+    "child_parent_link": true,
+    "restart_without_bundle_preserves_status_totals_history_cohort_version": true,
+    "restart_without_result_path_preserves_snapshot": true,
+    "unknown_execution_remains_error": true,
+    "corrupt_receipt_does_not_block_native_detail": true,
+    "restored_bundle_recovers_list_availability_without_restart": true,
+    "corrupt_bundle_then_repair_updates_manifest_and_cache": true
+  },
+  "tests": {
+    "vitest": {
+      "files": 6,
+      "passed": 62
+    },
+    "rust_persistence": {
+      "passed": 2
+    },
+    "rust_control": {
+      "passed": 29
+    },
+    "rust_dashboard": {
+      "passed": 58,
+      "excluded_existing_conflicting_test": "native_coordination_covers_all_slots_including_capability_and_evolution"
+    },
+    "rust_broad_earlier": {
+      "passed": 687,
+      "failed": 1,
+      "ignored": 1,
+      "failure": "native_coordination_covers_all_slots_including_capability_and_evolution",
+      "baseline_evidence": "assertion and update rules unchanged from baseline; locked_plans_accept_scope_changes expects edits allowed"
+    }
+  },
+  "builds": {
+    "typescript": "passed",
+    "frontend_standalone": "passed",
+    "frontend_console": "passed",
+    "rust_binary": "passed",
+    "vite_chunk_size_warning": true
+  },
+  "browser": {
+    "pages": [
+      "evidence unavailable snapshot",
+      "catalog counts"
+    ],
+    "page_errors": [],
+    "local_catalog_limit": "isolated stack has no harness::send; local scenario catalog explicitly unavailable",
+    "surface": "built local application; Console embedding not redeployed"
+  },
+  "limits": [
+    "native bundle presence checked on read-model refresh; content integrity checked on detail",
+    "SQL records without projection and without valid retained evidence cannot be backfilled",
+    "full Rust suite not green because of existing conflicting plan-edit assertion",
+    "no remote CI, release, deployment, new E2E run, or chat isolation validation"
+  ],
+  "binary_sha256": "5636234c9c99209960b24c65645719677ba20939d54cc281cd309ece932c3fdd",
+  "integrated_into": "/home/layon/workspaces/harness-e2e"
+}

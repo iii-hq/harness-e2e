@@ -310,7 +310,7 @@ export function ProviderModelMenu({
       role="dialog"
       aria-label="Model selection"
       onKeyDown={onKeyDown}
-      className="absolute z-50 mt-2 grid max-h-80 w-full min-w-[15rem] overflow-auto rounded-[6px] border border-[var(--color-edge)] bg-panel p-1.5 shadow-[var(--shadow-panel)]"
+      className="absolute z-50 mt-2 grid max-h-80 w-full min-w-[15rem] overflow-auto rounded-[6px] border border-[var(--color-edge)] bg-panel p-1.5"
     >
       {onSearch ? (
         <input

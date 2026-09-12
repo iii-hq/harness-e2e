@@ -118,6 +118,34 @@ export function catalogFiltersActive(filters: CatalogFilters) {
   return catalogFiltersToParams(filters).toString() !== ''
 }
 
+export function catalogCountLabels(
+  catalogTotal: number | null,
+  catalogLoaded: number,
+  available: number,
+  visible: number,
+  local: number,
+  filtered: boolean,
+) {
+  const catalogProgress =
+    catalogTotal === null
+      ? null
+      : `${catalogLoaded} of ${catalogTotal} catalog rows loaded`
+  return {
+    summary: [
+      catalogTotal === null ? null : `${catalogTotal} catalog rows total`,
+      catalogTotal === null ? null : `${catalogLoaded} loaded from catalog`,
+      `${available} available in this view`,
+      local > 0 ? `${local} local definition${local === 1 ? '' : 's'}` : null,
+    ]
+      .filter(Boolean)
+      .join(' · '),
+    visible: filtered
+      ? `${visible} of ${available} available in this view`
+      : `${available} available in this view`,
+    catalogProgress,
+  }
+}
+
 const lifecyclePresentation: Record<
   Lifecycle,
   { label: string; dotClassName: string; textClassName: string }
@@ -537,7 +565,7 @@ const COLUMNS = [
   },
   {
     key: 'last-seen',
-    label: 'last seen',
+    label: 'last execution',
     title: 'Most recent retained execution',
   },
 ] as const
@@ -637,7 +665,7 @@ function CatalogRows({
                 {executions.total}
               </span>
             </td>
-            <td data-label="Last seen">
+            <td data-label="Last execution">
               <span
                 className="block whitespace-nowrap font-mono text-xs text-ink-soft"
                 title={
@@ -646,7 +674,9 @@ function CatalogRows({
                     : undefined
                 }
               >
-                {executions.lastSeen ? shortDate(executions.lastSeen) : '—'}
+                {executions.lastSeen
+                  ? shortDate(executions.lastSeen)
+                  : 'No retained execution'}
               </span>
             </td>
             <td data-label="History" className="text-right">
@@ -777,7 +807,7 @@ export function TestsCatalogPage() {
 
   const loadLocalScenarios = useCallback(
     async (target = bridge) => {
-      if (target?.mode !== 'local') {
+      if (!target) {
         setLocalCatalogLoading(false)
         return
       }
@@ -907,11 +937,11 @@ export function TestsCatalogPage() {
     value: CatalogFilters[K],
   ) => setFilters((current) => ({ ...current, [key]: value }))
   const clearFilters = () => setFilters(CATALOG_DEFAULT_FILTERS)
-  const localBridge = bridge?.mode === 'local' ? bridge : null
+  const localBridge = bridge
   const local = Boolean(localBridge)
   const suggestedLocalFileName = nextLocalScenarioFileName(localScenarios)
   const counts = {
-    total: allRows.length,
+    available: allRows.length,
     active: allRows.filter((entry) => entry.row.lifecycle === 'active').length,
     never_run: allRows.filter((entry) => entry.row.lifecycle === 'never_run')
       .length,
@@ -937,16 +967,14 @@ export function TestsCatalogPage() {
   ]
   const groups =
     filters.sort === 'lifecycle' ? groupCatalogRows(visibleRows) : null
-  const summary = [
-    `${counts.total} test${counts.total === 1 ? '' : 's'}`,
-    `${counts.active} active`,
-    `${counts.never_run} never run`,
-    counts.retired > 0 ? `${counts.retired} retired` : null,
-    counts.local > 0 ? `${counts.local} local` : null,
-  ]
-    .filter(Boolean)
-    .join(' · ')
-  const totalKnown = data?.total ?? counts.total
+  const countLabels = catalogCountLabels(
+    data?.total ?? null,
+    data?.rows.length ?? 0,
+    counts.available,
+    visibleRows.length,
+    counts.local,
+    filtered,
+  )
 
   return (
     <>
@@ -967,7 +995,7 @@ export function TestsCatalogPage() {
       <div className="ds-root page-shell w-[calc(100%_-_1.5rem)] max-w-[1420px] pt-5 pb-16 md:w-[calc(100%_-_3rem)]">
         <PageHeader
           title="tests"
-          summary={loading ? 'loading the catalog…' : summary}
+          summary={loading ? 'loading the catalog…' : countLabels.summary}
           headingId="tests-catalog-title"
           actions={
             data?.revision ? <CatalogRevision revision={data.revision} /> : null
@@ -1059,14 +1087,6 @@ export function TestsCatalogPage() {
           </Callout>
         ) : null}
 
-        {!local && !loading ? (
-          // Audit T-13: one note above the table instead of a repeated per-row line.
-          <Callout tone="info" className="mt-4">
-            New tests and plans are created from the local dashboard. Each row
-            still opens the retained evidence for that test.
-          </Callout>
-        ) : null}
-
         <section className="mt-5 grid gap-3" aria-label="Test catalog filters">
           <div className="grid gap-3 @[720px]:grid-cols-[minmax(0,1fr)_auto] @[720px]:items-center">
             <div className="relative max-w-[28rem]">
@@ -1076,7 +1096,7 @@ export function TestsCatalogPage() {
                 aria-hidden="true"
               />
               <Input
-                className="pr-9 pl-9"
+                style={{ paddingInline: '2.25rem' }}
                 type="text"
                 value={filters.query}
                 placeholder="Filter by name, id or title…"
@@ -1141,7 +1161,7 @@ export function TestsCatalogPage() {
             <FilterChipGroup label="Lifecycle">
               <FilterChip
                 active={filters.lifecycle === 'all'}
-                count={counts.total}
+                count={counts.available}
                 onClick={() => setFilter('lifecycle', 'all')}
               >
                 all
@@ -1231,11 +1251,9 @@ export function TestsCatalogPage() {
               className="ms-auto font-mono text-label text-ink-muted"
               aria-live="polite"
             >
-              {filtered
-                ? `${visibleRows.length} of ${counts.total} tests`
-                : `${counts.total} tests`}
-              {data && data.total > data.rows.length
-                ? ` · ${data.rows.length} of ${totalKnown} loaded`
+              {countLabels.visible}
+              {countLabels.catalogProgress
+                ? ` · ${countLabels.catalogProgress}`
                 : ''}
             </output>
           </div>
@@ -1254,19 +1272,17 @@ export function TestsCatalogPage() {
           <EmptyState
             className="mt-6"
             title={
-              counts.total === 0
+              counts.available === 0
                 ? 'No tests are registered yet'
-                : 'No tests match these filters'
+                : 'No loaded tests match these filters'
             }
             description={
-              counts.total === 0
-                ? local
-                  ? 'Create a local Markdown test to start collecting evidence.'
-                  : 'The registry has no scenarios for this workspace.'
+              counts.available === 0
+                ? 'Create a local Markdown test to start collecting evidence.'
                 : 'Try a broader lifecycle, complexity or source, or clear the search.'
             }
             actions={
-              counts.total === 0 ? (
+              counts.available === 0 ? (
                 local ? (
                   <button
                     className={buttonClassName({ variant: 'primary' })}
@@ -1384,7 +1400,7 @@ export function TestsCatalogPage() {
               })
             ) : (
               <CatalogTable
-                caption={`Test catalog, ${visibleRows.length} of ${counts.total} tests`}
+                caption={`Test catalog, ${visibleRows.length} of ${counts.available} available tests`}
               >
                 <CatalogRows
                   rows={visibleRows}
@@ -1406,7 +1422,7 @@ export function TestsCatalogPage() {
                   {loadingMore ? 'loading…' : 'load more tests'}
                 </button>
                 <span className="font-mono text-label text-ink-muted">
-                  {data.rows.length} of {totalKnown} loaded
+                  {countLabels.catalogProgress}
                 </span>
               </div>
             ) : null}

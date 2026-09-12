@@ -322,3 +322,61 @@ export function isExecutionAttention(
 export function detailHasAttention(detail: DashboardExecutionDetail): boolean {
   return isExecutionAttention(buildExecutionPresentation(detail))
 }
+
+export function statusCopy(presentation: ExecutionPresentation) {
+  if (presentation.attention === 'passed')
+    return { label: 'passed', status: 'passed' as const }
+  if (presentation.attention === 'running')
+    return { label: 'running', status: 'running' as const }
+  if (presentation.attention === 'cancelling')
+    return { label: 'cancelling', status: 'cancelling' as const }
+  if (presentation.attention === 'cancelled')
+    return { label: 'cancelled', status: 'cancelled' as const }
+  if (presentation.attention === 'incomplete')
+    return { label: 'incomplete', status: 'incomplete' as const }
+  if (presentation.attention === 'unavailable')
+    return { label: 'no report', status: 'unavailable' as const }
+  if (
+    presentation.breakdown.inconclusive > 0 &&
+    presentation.breakdown.issues === presentation.breakdown.inconclusive
+  )
+    return { label: 'inconclusive', status: 'inconclusive' as const }
+  return { label: 'failed', status: 'failed' as const }
+}
+
+export function modelNames(models: ExecutionPresentation['subjects']) {
+  if (models.length === 0) return 'not reported'
+  return models.map((model) => `${model.provider}/${model.model}`).join(', ')
+}
+
+export function executionTitle(presentation: ExecutionPresentation): {
+  title: string
+  detail: string | null
+} {
+  const execution = presentation.execution
+  const label =
+    typeof execution.label === 'string' ? execution.label.trim() : ''
+  const workflow =
+    typeof execution.workflow_name === 'string'
+      ? execution.workflow_name.trim()
+      : ''
+  if (label) return { title: label, detail: workflow || null }
+  const subject = presentation.subjects[0]
+  if (subject) {
+    return {
+      title: `${subject.model} · ${formatDate(presentation.completedAt)}`,
+      detail: workflow || null,
+    }
+  }
+  return { title: workflow || 'Harness E2E execution', detail: null }
+}
+
+/**
+ * Rates arrive either as a 0–1 fraction or as 0–100 points depending on the
+ * publisher; the signal always works in points so a delta reads as "pts".
+ */
+export function percentPoints(value: number | null | undefined): number | null {
+  const known = numberValue(value)
+  if (known === null) return null
+  return Math.abs(known) <= 1 ? known * 100 : known
+}

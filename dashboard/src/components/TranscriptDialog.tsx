@@ -243,7 +243,7 @@ export function TranscriptDialog({
               aria-hidden="true"
             />
             <Input
-              className="pr-9 pl-9"
+              style={{ paddingInline: '2.25rem' }}
               type="text"
               value={query}
               placeholder="Search the transcript"

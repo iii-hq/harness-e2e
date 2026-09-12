@@ -1,3 +1,4 @@
+use crate::context::function_ids;
 use std::collections::{BTreeMap, HashMap};
 use std::sync::{Arc, Mutex};
 
@@ -5,30 +6,29 @@ use anyhow::{bail, Context, Result};
 use async_trait::async_trait;
 use iii_sdk::errors::Error;
 use iii_sdk::protocol::{TriggerAction, TriggerRequest};
-use iii_sdk::runtime::WorkerMetadata;
 use iii_sdk::trigger::{TriggerConfig, TriggerHandler};
-use iii_sdk::{register_worker, IIIClient, InitOptions, RegisterFunction, RegisterTriggerType};
+use iii_sdk::{IIIClient, RegisterFunction, RegisterTriggerType};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
 use super::controller::Controller;
-use super::plans::{PlanCreateRequest, PlanRunRequest, PlanUpdateRequest};
-use super::presenter::{
-    repository_url, stored_execution_detail, validate_execution_id, MAX_EXECUTIONS,
-};
+use super::presenter::{repository_url, validate_execution_id, MAX_EXECUTIONS};
 use super::read_model::{
     EvaluatedVersionsRequest, EvaluatedVersionsResponse, TestHistoryRequest, TestHistoryResponse,
     TestVersionGetRequest, TestVersionResult, TestsListRequest, TestsListResponse,
 };
-use super::store::read_stored_run;
 use super::RunRequest;
 use crate::catalog::CatalogModel;
 use crate::context::E2eContext;
-use crate::control::{LocalScenarioCreateRequest, LocalScenarioCreateResponse, ScenarioOrigin};
+use crate::control::{LocalScenarioCreateRequest, ScenarioOrigin};
+use crate::plans::{PlanCreateRequest, PlanRunRequest, PlanUpdateRequest};
 
 pub(super) const EXECUTIONS_LIST: &str = "e2e::dashboard::executions-list";
 pub(super) const EXECUTION_GET: &str = "e2e::dashboard::execution-get";
+pub(super) const EVIDENCE_OPEN: &str = "e2e::dashboard::evidence-open";
+pub(super) const EXECUTION_DELETE: &str = "e2e::dashboard::execution-delete";
+pub(super) const ATTEMPT_GET: &str = "e2e::dashboard::attempt-get";
 pub(super) const EVALUATED_VERSIONS_LIST: &str = "e2e::dashboard::evaluated-versions-list";
 pub(super) const TESTS_LIST: &str = "e2e::dashboard::tests-list";
 pub(super) const TEST_VERSION_GET: &str = "e2e::dashboard::test-version-get";
@@ -40,12 +40,12 @@ pub(super) const PLANS_LIST: &str = "e2e::dashboard::plans-list";
 pub(super) const PLAN_GET: &str = "e2e::dashboard::plan-get";
 pub(super) const PLAN_CREATE: &str = "e2e::dashboard::plan-create";
 pub(super) const PLAN_UPDATE: &str = "e2e::dashboard::plan-update";
+pub(super) const PLAN_DELETE: &str = "e2e::dashboard::plan-delete";
 pub(super) const PLAN_RUN_START: &str = "e2e::dashboard::plan-run-start";
 pub(super) const RUN_STATUS: &str = "e2e::dashboard::run-status";
 pub(super) const RUN_START: &str = "e2e::dashboard::run-start";
 pub(super) const RUN_CANCEL: &str = "e2e::dashboard::run-cancel";
 pub(super) const CHANGED_TRIGGER: &str = "e2e::dashboard::changed";
-pub(super) const BROWSER_FUNCTION_PREFIX: &str = "iii::harness-e2e-dashboard::";
 
 const CONTRACT_NAME: &str = "harness-e2e-dashboard";
 const DEFAULT_PAGE_SIZE: u16 = 25;
@@ -90,6 +90,13 @@ pub(super) struct ExecutionGetRequest {
     pub execution_id: String,
 }
 
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
+pub(super) struct AttemptGetRequest {
+    pub execution_id: String,
+    pub run_id: String,
+    pub attempt_id: String,
+}
+
 #[derive(Debug, Clone, Serialize, JsonSchema)]
 pub(super) struct ExecutionBundle {
     pub manifest: ExecutionListResponse,
@@ -120,7 +127,7 @@ struct PlanGetRequest {
 #[derive(Debug, Clone, Serialize, JsonSchema)]
 struct PlansListResponse {
     mode: String,
-    plans: Vec<super::plans::LocalPlan>,
+    plans: Vec<Value>,
     master_plan: Value,
 }
 
@@ -254,24 +261,14 @@ impl DashboardEvents {
     }
 }
 
-pub(super) fn connect(url: &str) -> Arc<IIIClient> {
-    Arc::new(register_worker(
-        url,
-        InitOptions {
-            metadata: Some(WorkerMetadata {
-                runtime: "rust".into(),
-                version: env!("CARGO_PKG_VERSION").into(),
-                name: "harness-e2e-dashboard".into(),
-                os: std::env::consts::OS.into(),
-                pid: Some(std::process::id()),
-                ..WorkerMetadata::default()
-            }),
-            ..InitOptions::default()
-        },
-    ))
-}
-
 pub(super) fn register_functions(iii: &IIIClient, controller: Arc<Controller>) {
+    register(iii, EVIDENCE_OPEN, "Read retained GitHub evidence using local credentials and verify its bundle identity and checksum.", {
+        let controller = controller.clone();
+        RegisterFunction::new_async(move |request: crate::history::evidence::EvidenceRequest| {
+            let controller = controller.clone();
+            async move { controller.open_history_evidence(request).await.map_err(handler_error) }
+        })
+    });
     register(
         iii,
         EXECUTIONS_LIST,
@@ -298,6 +295,40 @@ pub(super) fn register_functions(iii: &IIIClient, controller: Arc<Controller>) {
                 let controller = controller.clone();
                 async move {
                     execution_bundle(&controller, request)
+                        .await
+                        .map_err(handler_error)
+                }
+            })
+        },
+    );
+    register(
+        iii,
+        EXECUTION_DELETE,
+        "Delete one terminal local E2E execution.",
+        {
+            let controller = controller.clone();
+            RegisterFunction::new_async(move |request: ExecutionGetRequest| {
+                let controller = controller.clone();
+                async move {
+                    controller
+                        .delete_execution(&request.execution_id)
+                        .await
+                        .map(|()| json!({}))
+                        .map_err(handler_error)
+                }
+            })
+        },
+    );
+    register(
+        iii,
+        ATTEMPT_GET,
+        "Read the persisted projection for one logical-run attempt.",
+        {
+            let controller = controller.clone();
+            RegisterFunction::new_async(move |request: AttemptGetRequest| {
+                let controller = controller.clone();
+                async move {
+                    attempt_get(&controller, request)
                         .await
                         .map_err(handler_error)
                 }
@@ -371,7 +402,7 @@ pub(super) fn register_functions(iii: &IIIClient, controller: Arc<Controller>) {
     register(
         iii,
         PLANS_LIST,
-        "List local plans and their baseline/candidate lifecycle.",
+        "List saved local and imported plans from the local database.",
         {
             let controller = controller.clone();
             RegisterFunction::new_async(move |_request: DashboardEmptyRequest| {
@@ -379,7 +410,7 @@ pub(super) fn register_functions(iii: &IIIClient, controller: Arc<Controller>) {
                 async move {
                     let plans = controller.list_plans().await.map_err(handler_error)?;
                     Ok(PlansListResponse {
-                        mode: "local".into(),
+                        mode: "unified".into(),
                         plans,
                         master_plan: crate::test_plan::embedded()
                             .and_then(|plan| plan.catalog())
@@ -391,7 +422,7 @@ pub(super) fn register_functions(iii: &IIIClient, controller: Arc<Controller>) {
     );
     register(iii, PLAN_CONTROL, "Configure, export and execute saved plans, and inspect or cancel their composed executions.", {
         let controller = controller.clone();
-        RegisterFunction::new_async(move |request: super::plan_store::Request| {
+        RegisterFunction::new_async(move |request: crate::plans::store::Request| {
             let controller = controller.clone();
             async move {
                 let response = controller
@@ -403,7 +434,7 @@ pub(super) fn register_functions(iii: &IIIClient, controller: Arc<Controller>) {
             }
         })
     });
-    register(iii, PLAN_GET, "Read one local plan.", {
+    register(iii, PLAN_GET, "Read one saved local or imported plan.", {
         let controller = controller.clone();
         RegisterFunction::new_async(move |request: PlanGetRequest| {
             let controller = controller.clone();
@@ -423,40 +454,43 @@ pub(super) fn register_functions(iii: &IIIClient, controller: Arc<Controller>) {
             let controller = controller.clone();
             RegisterFunction::new_async(move |request: PlanCreateRequest| {
                 let controller = controller.clone();
-                async move {
-                    controller
-                        .create_plan(request)
-                        .await
-                        .map_err(|error| Error::Handler(error.message))
-                }
+                async move { controller.create_plan(request).await.map_err(handler_error) }
             })
         },
     );
-    register(
-        iii,
-        PLAN_UPDATE,
-        "Update an unlocked local plan or rename retained candidates.",
-        {
+    register(iii, PLAN_UPDATE, "Update a local plan.", {
+        let controller = controller.clone();
+        RegisterFunction::new_async(move |request: PlanUpdateRequest| {
             let controller = controller.clone();
-            RegisterFunction::new_async(move |request: PlanUpdateRequest| {
-                let controller = controller.clone();
-                async move {
-                    let id = request
-                        .plan_id
-                        .clone()
-                        .ok_or_else(|| handler_error("plan_id is required"))?;
-                    controller
-                        .update_plan(&id, request)
-                        .await
-                        .map_err(|error| Error::Handler(error.message))
-                }
-            })
-        },
-    );
+            async move {
+                let id = request
+                    .plan_id
+                    .clone()
+                    .ok_or_else(|| handler_error("plan_id is required"))?;
+                controller
+                    .update_plan(&id, request)
+                    .await
+                    .map_err(handler_error)
+            }
+        })
+    });
+    register(iii, PLAN_DELETE, "Delete a local plan.", {
+        let controller = controller.clone();
+        RegisterFunction::new_async(move |request: PlanGetRequest| {
+            let controller = controller.clone();
+            async move {
+                controller
+                    .delete_plan(&request.plan_id)
+                    .await
+                    .map(|()| json!({}))
+                    .map_err(handler_error)
+            }
+        })
+    });
     register(
         iii,
         PLAN_RUN_START,
-        "Start a baseline or candidate from a locked local plan.",
+        "Start a baseline or candidate from a saved local plan.",
         {
             let controller = controller.clone();
             RegisterFunction::new_async(move |request: PlanRunRequest| {
@@ -469,7 +503,7 @@ pub(super) fn register_functions(iii: &IIIClient, controller: Arc<Controller>) {
                     controller
                         .start_plan(id, request.role, &request.idempotency_key)
                         .await
-                        .map_err(|error| Error::Handler(error.message))
+                        .map_err(handler_error)
                 }
             })
         },
@@ -531,10 +565,7 @@ pub(super) fn register_functions(iii: &IIIClient, controller: Arc<Controller>) {
         RegisterFunction::new_async(move |request: RunRequest| {
             let controller = controller.clone();
             async move {
-                controller
-                    .start(request)
-                    .await
-                    .map_err(|error| Error::Handler(error.message))?;
+                controller.start(request).await.map_err(handler_error)?;
                 controller.snapshot(Some(0)).await.map_err(handler_error)
             }
         })
@@ -544,10 +575,7 @@ pub(super) fn register_functions(iii: &IIIClient, controller: Arc<Controller>) {
         RegisterFunction::new_async(move |_request: DashboardEmptyRequest| {
             let controller = controller.clone();
             async move {
-                controller
-                    .cancel()
-                    .await
-                    .map_err(|error| Error::Handler(error.message))?;
+                controller.cancel().await.map_err(handler_error)?;
                 controller.snapshot(None).await.map_err(handler_error)
             }
         })
@@ -653,7 +681,7 @@ pub(super) async fn execution_bundle(
     request: ExecutionGetRequest,
 ) -> Result<ExecutionBundle> {
     validate_execution_id(&request.execution_id).map_err(anyhow::Error::msg)?;
-    let manifest = execution_list(
+    let mut manifest = execution_list(
         controller,
         ExecutionListRequest {
             ids: vec![request.execution_id.clone()],
@@ -667,17 +695,27 @@ pub(super) async fn execution_bundle(
     }
     if let Some(detail) = controller
         .plan_store
-        .execution_detail(&request.execution_id)?
+        .execution_detail(
+            &request.execution_id,
+            &controller.read_model().await?.summaries,
+        )
+        .await?
     {
         return Ok(ExecutionBundle { manifest, detail });
     }
-    let run_dir = controller.runs_dir().join(&request.execution_id);
-    let run = tokio::task::spawn_blocking(move || read_stored_run(&run_dir))
-        .await
-        .context("read execution task")??
-        .context("execution not found")?;
-    let detail = stored_execution_detail(&run)?;
+    let detail = controller.execution_detail(&request.execution_id).await?;
+    manifest.executions[0]["availability"] = detail["availability"].clone();
     Ok(ExecutionBundle { manifest, detail })
+}
+
+async fn attempt_get(controller: &Controller, request: AttemptGetRequest) -> Result<Value> {
+    validate_execution_id(&request.execution_id).map_err(anyhow::Error::msg)?;
+    if request.run_id.trim().is_empty() || request.attempt_id.trim().is_empty() {
+        bail!("run_id and attempt_id are required");
+    }
+    controller
+        .attempt_get(&request.execution_id, &request.run_id, &request.attempt_id)
+        .await
 }
 
 pub(super) async fn evaluated_versions(
@@ -813,26 +851,6 @@ fn local_scenario_summaries(
             source_sha256: scenario.source_sha256.clone().unwrap_or_default(),
         })
         .collect()
-}
-
-pub(super) async fn local_scenario_create(
-    controller: &Controller,
-    request: LocalScenarioCreateRequest,
-) -> Result<LocalScenarioCreateResponse> {
-    controller.create_local_scenario(request).await
-}
-
-pub(super) fn function_ids(listed: &Value) -> impl Iterator<Item = &str> {
-    listed
-        .as_array()
-        .or_else(|| listed.as_object()?.values().find_map(Value::as_array))
-        .into_iter()
-        .flatten()
-        .filter_map(|item| {
-            item.as_str()
-                .or_else(|| item.get("function_id").and_then(Value::as_str))
-                .or_else(|| item.get("id").and_then(Value::as_str))
-        })
 }
 
 fn normalized_filter(value: Option<String>) -> Option<String> {

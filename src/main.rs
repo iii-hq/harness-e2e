@@ -3,7 +3,6 @@ use std::path::PathBuf;
 use anyhow::{bail, Context, Result};
 use clap::{Args, Parser, Subcommand};
 use harness_e2e::control::{scenarios_list, ScenariosListRequest};
-use harness_e2e::dashboard;
 use harness_e2e::fault::{FaultEvaluation, FaultJournal, FaultPlan, FaultProfile};
 use harness_e2e::judge::JudgeConfig;
 use harness_e2e::manifest;
@@ -30,6 +29,17 @@ struct Cli {
 enum Command {
     /// Run the Compose-managed harness-e2e service (the default when no command is given).
     Worker(WorkerArgs),
+    /// Migrate the control database with the E2E worker stopped (dry-run by default).
+    MigrateStorage {
+        #[arg(long, env = "III_URL", default_value = "ws://127.0.0.1:49134")]
+        url: String,
+        /// Compose-materialized worker config; defaults to III_CONFIG.
+        #[arg(long, env = "III_CONFIG")]
+        config: PathBuf,
+        /// Commit the migration in one database transaction after backing up storage.
+        #[arg(long)]
+        apply: bool,
+    },
     /// Print every built-in and Markdown scenario id as a JSON array.
     List,
     /// Print the canonical materialized scenario catalog used by campaign tooling.
@@ -54,9 +64,6 @@ enum Command {
     /// Print a human-readable summary from a saved results.json.
     #[command(alias = "inspect")]
     Report(ReportArgs),
-    /// Run E2E scenarios and compare local executions in a browser.
-    #[command(alias = "serve")]
-    Dashboard(dashboard::DashboardArgs),
     /// Materialize an immutable, deterministic fault plan for a protected supervisor.
     FaultPlan(FaultPlanArgs),
     /// Classify observed recovery from a protected supervisor's fault journal.
@@ -295,10 +302,27 @@ async fn main() -> Result<()> {
         Some(Command::ValidateScenarios(args)) => validate_scenarios(args),
         Some(Command::TestPlan { command }) => test_plan(command),
         Some(Command::Models(args)) => models(args).await,
+        Some(Command::MigrateStorage {
+            url,
+            config: config_path,
+            apply,
+        }) => {
+            let config = worker::load_config(&config_path)?;
+            let data_dir = worker::resolve_data_dir(&config.data_dir, &config_path)?;
+            let context = harness_e2e::context::E2eContext::connect(&url).await?;
+            let result = harness_e2e::persistence::Persistence::new(
+                context.client().clone(),
+                config.control_database,
+                config.control_namespace,
+            )
+            .migrate_storage(&data_dir, apply)
+            .await?;
+            println!("{}", serde_json::to_string_pretty(&result)?);
+            Ok(())
+        }
         Some(Command::Run(args)) => run(args).await,
         Some(Command::ReplayMaterialized(args)) => replay_materialized(args).await,
         Some(Command::Report(args)) => report(args),
-        Some(Command::Dashboard(args)) => dashboard::serve(args).await,
         Some(Command::FaultPlan(args)) => fault_plan(args),
         Some(Command::FaultEvaluate(args)) => fault_evaluate(args),
     }
@@ -568,6 +592,31 @@ mod tests {
     }
 
     #[test]
+    fn storage_migration_requires_worker_config_instead_of_a_runs_directory() {
+        let cli = Cli::try_parse_from([
+            "harness-e2e",
+            "migrate-storage",
+            "--config",
+            "/tmp/compose/harness-e2e.yaml",
+        ])
+        .unwrap();
+        let Some(Command::MigrateStorage { config, apply, .. }) = cli.command else {
+            panic!("expected migrate-storage command");
+        };
+        assert_eq!(config, PathBuf::from("/tmp/compose/harness-e2e.yaml"));
+        assert!(!apply);
+        assert!(Cli::try_parse_from([
+            "harness-e2e",
+            "migrate-storage",
+            "--config",
+            "/tmp/compose/harness-e2e.yaml",
+            "--runs-dir",
+            "/tmp/other",
+        ])
+        .is_err());
+    }
+
+    #[test]
     fn models_subcommand_accepts_an_optional_provider() {
         let cli =
             Cli::try_parse_from(["harness-e2e", "models", "--provider", "openai-codex"]).unwrap();
@@ -640,21 +689,10 @@ mod tests {
     }
 
     #[test]
-    fn dashboard_is_available_as_serve_alias() {
-        for name in ["dashboard", "serve"] {
-            let cli = Cli::try_parse_from(["harness-e2e", name]).unwrap();
-            let Some(Command::Dashboard(args)) = cli.command else {
-                panic!("expected dashboard command");
-            };
-            assert_eq!(args.listen.to_string(), "0.0.0.0:4173");
-            assert_eq!(args.url, "ws://127.0.0.1:49134");
-            assert!(!args.view_only);
+    fn standalone_dashboard_commands_are_removed() {
+        for command in ["dashboard", "serve"] {
+            assert!(Cli::try_parse_from(["harness-e2e", command]).is_err());
         }
-        let cli = Cli::try_parse_from(["harness-e2e", "dashboard", "--view-only"]).unwrap();
-        let Some(Command::Dashboard(args)) = cli.command else {
-            panic!("expected dashboard command");
-        };
-        assert!(args.view_only);
     }
 
     #[test]

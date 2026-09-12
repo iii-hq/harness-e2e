@@ -1,13 +1,13 @@
-import { ArrowRight, Link2 } from 'lucide-react'
+import { ArrowRight, Link2, Trash2 } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { AssessmentDetailDialog } from '@/components/AssessmentWorkspace'
 import { DashboardPageActions } from '@/components/DashboardPageActions'
 import { DisclosureLayer } from '@/components/DisclosureLayer'
 import { ExecutionMetricsPanel } from '@/components/ExecutionMetricsPanel'
-import { ExecutionOverview } from '@/components/ExecutionOverview'
 import { requestQuickExecution } from '@/components/ExecutionSetup'
 import { LiveProgressPanel } from '@/components/LiveProgressPanel'
 import { PlanProgress } from '@/components/PlanStatus'
+import { PrimaryMetricsView } from '@/components/PrimaryMetricsView'
 import {
   contractScent,
   ResultContractStrip,
@@ -17,6 +17,10 @@ import type { SystemOutcome } from '@/components/SystemOutcome'
 import { TranscriptDialog } from '@/components/TranscriptDialog'
 import {
   buttonClassName,
+  Callout,
+  DataTable,
+  DataTableRow,
+  Dialog,
   EmptyState,
   MetricCard,
   type OperationalStatus,
@@ -27,20 +31,18 @@ import {
 import {
   hashForExecution,
   hashForPlan,
+  hashForPlans,
   hashForWorkspace,
 } from '@/hooks/use-hash-route'
 import { useLatestRequest } from '@/hooks/use-latest-request'
 import {
-  type AssessmentRunMetrics,
   type AssessmentRunView,
-  aggregateAssessmentMetrics,
   buildAssessmentWorkspace,
 } from '@/lib/assessment-view'
 import {
   type DashboardDataBridge,
   type DashboardExecutionDetail,
   type DashboardExecutionSummary,
-  type ExecutionTotals,
   getDashboardDataBridge,
 } from '@/lib/dashboard-data-source'
 import { buildExecutionMetrics } from '@/lib/execution-metrics'
@@ -51,12 +53,17 @@ import {
 import {
   buildExecutionPresentation,
   type ExecutionPresentation,
+  executionTitle,
   formatDate,
   formatDuration,
   formatPercent,
 } from '@/lib/execution-view'
-import { executionTitle } from '@/lib/overview-signal'
 import { planAction } from '@/lib/plan-execution'
+import { buildPrimaryMetrics } from '@/lib/primary-metrics'
+import {
+  type RcReference,
+  referencePrimaryMetrics,
+} from '@/lib/release-control-reference'
 import {
   buildScenarioMatrix,
   formatScenarioDuration,
@@ -64,12 +71,6 @@ import {
   type ScenarioMatrixSummary,
 } from '@/lib/scenario-matrix'
 import { watchExecution } from '@/lib/watch-execution'
-import {
-  type GeneralRunMetrics,
-  summedGeneralRunMetricsFromDetail,
-  type WorkflowMetricsSummary,
-  workflowMetricsFromDetail,
-} from '@/lib/workflow-metrics'
 import '@/design-system/styles.css'
 
 type DetailSection = 'summary' | 'metrics' | 'results' | 'technical'
@@ -135,70 +136,12 @@ function executionStatus(presentation: ExecutionPresentation): {
   return { status: 'failed', label: 'Failed' }
 }
 
-type SummaryExecutionMetrics = {
-  durationSeconds: number | null
-  runCount: number
-  workflow: WorkflowMetricsSummary | null
-  totalTokens: number | null
-  turns: number | null
-  functionCalls: number | null
-  functionCallErrors: number | null
-  totalCostUsd: number | null
-}
-
-export function buildSummaryExecutionMetrics(
-  presentation: ExecutionPresentation,
-  aggregate: AssessmentRunMetrics,
-  runCount: number,
-  workflow: WorkflowMetricsSummary | null,
-  totals: ExecutionTotals | null,
-  testTotals: GeneralRunMetrics | null = null,
-): SummaryExecutionMetrics {
-  const reportedRuns =
-    runCount || presentation.receivedReports || presentation.breakdown.total
-  const workflowTokens =
-    workflow && workflow.tokenMetricSteps > 0 ? workflow.totalTokens : null
-  const workflowCalls =
-    workflow && workflow.functionCallMetricSteps > 0
-      ? workflow.functionCalls
-      : null
-  const workflowErrors =
-    workflow && workflow.functionCallErrorMetricSteps > 0
-      ? workflow.functionCallErrors
-      : null
-  return {
-    durationSeconds:
-      presentation.workflowRuntimeSeconds ??
-      presentation.modelRuntimeSeconds ??
-      (aggregate.durationMs === null ? null : aggregate.durationMs / 1000),
-    runCount: reportedRuns,
-    workflow,
-    totalTokens:
-      testTotals?.totalTokens ??
-      finiteMetric(totals?.total_tokens) ??
-      aggregate.totalTokens ??
-      workflowTokens,
-    turns: finiteMetric(totals?.turns) ?? aggregate.turns,
-    functionCalls:
-      testTotals?.functionCalls ??
-      finiteMetric(totals?.function_calls) ??
-      aggregate.functionCalls ??
-      workflowCalls,
-    functionCallErrors:
-      testTotals?.functionCallErrors ??
-      finiteMetric(totals?.function_call_errors) ??
-      aggregate.functionCallErrors ??
-      workflowErrors,
-    totalCostUsd: testTotals?.costUsd ?? finiteMetric(totals?.total_cost_usd),
-  }
-}
-
 function finiteMetric(value: unknown) {
   return typeof value === 'number' && Number.isFinite(value) ? value : null
 }
 
 function formatMetricCount(value: number | null) {
-  return value == null ? '—' : Math.round(value).toLocaleString('en-US')
+  return value === null ? '—' : Math.round(value).toLocaleString('en-US')
 }
 
 function formatReportedCost(value: number | null) {
@@ -315,12 +258,10 @@ export function NarrativeSection({ verdict }: { verdict: ExecutionVerdict }) {
 export function CountsSection({
   presentation,
   detail,
-  metrics,
   scenarioSummary,
 }: {
   presentation: ExecutionPresentation
   detail: DashboardExecutionDetail
-  metrics: SummaryExecutionMetrics | null
   scenarioSummary: ScenarioMatrixSummary | null
 }) {
   const summary = detail.assessment_summary
@@ -332,7 +273,7 @@ export function CountsSection({
     <div className="grid gap-5" data-counts>
       {/* Audit ED-18: one column below 640px, no delta wrapping into a
           second line beside the label. */}
-      <div className="grid min-w-0 gap-3 @[560px]:grid-cols-2 @[960px]:grid-cols-4">
+      <div className="grid min-w-0 gap-3 @[560px]:grid-cols-2 @[960px]:grid-cols-3">
         <MetricCard
           label="scenarios"
           value={
@@ -383,20 +324,6 @@ export function CountsSection({
             .filter(Boolean)
             .join(' · ')}
           tone={summary?.assessment_count ? 'neutral' : 'unavailable'}
-        />
-        <MetricCard
-          label="reported cost"
-          value={
-            metrics?.totalCostUsd == null
-              ? '—'
-              : formatReportedCost(metrics.totalCostUsd)
-          }
-          detail={
-            metrics?.totalCostUsd == null
-              ? 'not captured for this run'
-              : 'consolidated execution cost'
-          }
-          tone={metrics?.totalCostUsd == null ? 'unavailable' : 'neutral'}
         />
       </div>
       <ExecutionMetricsPanel detail={detail} headless />
@@ -639,6 +566,63 @@ function LiveState({
   )
 }
 
+export function EvidenceBundleUnavailable({
+  detail,
+}: {
+  detail: DashboardExecutionDetail
+}) {
+  const reports = finiteMetric(detail.totals?.received_reports)
+  const tokens = finiteMetric(detail.totals?.total_tokens)
+  const cost = finiteMetric(detail.totals?.total_cost_usd)
+  const duration = finiteMetric(detail.totals?.wall_time_seconds)
+  return (
+    <>
+      <Callout
+        className="mt-4"
+        tone="warning"
+        title="Evidence bundle unavailable"
+      >
+        {detail.evidence_error}
+      </Callout>
+      <Panel className="mt-3">
+        <h2 className="m-0 text-sm font-semibold text-ink">
+          Retained execution snapshot
+        </h2>
+        <p className="mt-1 mb-0 text-xs leading-5 text-ink-soft">
+          These execution totals remain available. Full per-test metrics and
+          evidence require the unavailable bundle.
+        </p>
+        <div className="mt-3 grid min-w-0 gap-3 @[560px]:grid-cols-2 @[960px]:grid-cols-3">
+          <MetricCard
+            label="received reports"
+            value={formatMetricCount(reports)}
+            detail="retained execution total"
+            tone={reports === null ? 'unavailable' : 'neutral'}
+          />
+          <MetricCard
+            label="tokens"
+            value={formatMetricCount(tokens)}
+            detail="retained execution total"
+            tone={tokens === null ? 'unavailable' : 'neutral'}
+          />
+          <MetricCard
+            label="reported cost"
+            value={formatReportedCost(cost)}
+            detail="retained execution total"
+            tone={cost === null ? 'unavailable' : 'neutral'}
+          />
+          <MetricCard
+            label="runtime"
+            value={duration === null ? '—' : formatDuration(duration)}
+            detail="retained execution total"
+            tone={duration === null ? 'unavailable' : 'neutral'}
+          />
+        </div>
+      </Panel>
+    </>
+  )
+}
+
 export function ExecutionPage({
   executionId,
   anchor,
@@ -655,6 +639,9 @@ export function ExecutionPage({
   const [error, setError] = useState<string | null>(null)
   const [copied, setCopied] = useState(false)
   const [cancelling, setCancelling] = useState(false)
+  const [deleteOpen, setDeleteOpen] = useState(false)
+  const [deleting, setDeleting] = useState(false)
+  const [evidenceMessage, setEvidenceMessage] = useState<string | null>(null)
   const [transcript, setTranscript] = useState<{
     run: AssessmentRunView
     title: string
@@ -667,7 +654,8 @@ export function ExecutionPage({
     layers: Partial<Record<DetailSection, boolean>>
   }>({ anchor, layers: {} })
   const layers = toggles.anchor === anchor ? toggles.layers : {}
-  const layerOpen = (id: DetailSection) => layers[id] ?? anchorSection === id
+  const layerOpen = (id: DetailSection) =>
+    layers[id] ?? (Boolean(anchor) && anchorSection === id)
   const setLayer = (id: DetailSection, open: boolean) =>
     setToggles((current) => ({
       anchor,
@@ -738,22 +726,13 @@ export function ExecutionPage({
     () => buildAssessmentWorkspace(detail),
     [detail],
   )
-  const summaryMetrics = useMemo(
-    () =>
-      presentation
-        ? buildSummaryExecutionMetrics(
-            presentation,
-            aggregateAssessmentMetrics(assessmentModel.runs),
-            assessmentModel.runs.length,
-            detail ? workflowMetricsFromDetail(detail) : null,
-            detail?.totals ?? null,
-            detail ? summedGeneralRunMetricsFromDetail(detail) : null,
-          )
-        : null,
-    [assessmentModel.runs, detail, presentation],
-  )
   const scenarioMatrix = useMemo(
     () => (detail ? buildScenarioMatrix(detail) : null),
+    [detail],
+  )
+
+  const primaryMetrics = useMemo(
+    () => (detail ? buildPrimaryMetrics(detail) : null),
     [detail],
   )
 
@@ -822,6 +801,137 @@ export function ExecutionPage({
       </div>
     )
 
+  if (detail.origin === 'remote' && detail.remote_reference) {
+    const reference = detail.remote_reference as unknown as RcReference
+    return (
+      <div className="ds-root min-h-dvh bg-canvas text-ink">
+        <DashboardPageActions active="executions" />
+        <div className="page-shell w-[calc(100%_-_1.5rem)] max-w-[1420px] pt-5 pb-16 md:w-[calc(100%_-_3rem)]">
+          <PageHeader
+            title={detail.label ?? 'imported execution'}
+            summary="Historical evidence imported locally; metrics use the retained run ledger."
+            breadcrumb={[
+              { label: 'plans', href: hashForPlans() },
+              ...(detail.plan_id
+                ? [{ label: 'Plan', href: hashForPlan(detail.plan_id) }]
+                : []),
+            ]}
+          />
+          <div className="mt-6">
+            <PrimaryMetricsView
+              baseline={referencePrimaryMetrics(reference)}
+              baselineExecutionId={detail.id}
+              baselineLabel="Imported history"
+            />
+          </div>
+          <Panel className="mt-6" title="Retained runs">
+            <DataTable
+              collapse
+              minWidth="44rem"
+              caption="Historical run ledger"
+            >
+              <thead>
+                <tr>
+                  <th>Scenario</th>
+                  <th>Attempt</th>
+                  <th>Status</th>
+                  <th>Evidence</th>
+                </tr>
+              </thead>
+              <tbody>
+                {reference.runs.map((run, index) => (
+                  <DataTableRow key={run.id ?? `${run.scenarioId}-${index}`}>
+                    <td>{run.scenarioId}</td>
+                    <td>{run.repetition ?? '—'}</td>
+                    <td>{run.status ?? '—'}</td>
+                    <td>{run.attemptsComplete ? 'retained' : 'partial'}</td>
+                  </DataTableRow>
+                ))}
+              </tbody>
+            </DataTable>
+          </Panel>
+          <Panel className="mt-6" title="Retained artifacts">
+            {(detail.retained_reports ?? [])
+              .flatMap((value) => {
+                if (!value || typeof value !== 'object' || Array.isArray(value))
+                  return []
+                const report = value as Record<string, unknown>
+                const reportId =
+                  typeof report.id === 'string'
+                    ? report.id
+                    : typeof report.report_id === 'string'
+                      ? report.report_id
+                      : null
+                const paths = Array.isArray(report.artifacts)
+                  ? report.artifacts
+                  : []
+                return reportId
+                  ? paths.flatMap((artifact) => {
+                      const path =
+                        typeof artifact === 'string'
+                          ? artifact
+                          : artifact &&
+                              typeof artifact === 'object' &&
+                              typeof (artifact as Record<string, unknown>)
+                                .path === 'string'
+                            ? String((artifact as Record<string, unknown>).path)
+                            : null
+                      return path ? [{ reportId, path }] : []
+                    })
+                  : []
+              })
+              .map(({ reportId, path }) => (
+                <button
+                  key={`${reportId}:${path}`}
+                  type="button"
+                  className={buttonClassName({
+                    variant: 'quiet',
+                    size: 'compact',
+                  })}
+                  onClick={() =>
+                    void (async () => {
+                      if (!bridge) return
+                      const result = await bridge.openEvidence({
+                        execution_id: detail.id,
+                        report_id: reportId,
+                        path,
+                      })
+                      if (
+                        result.availability !== 'available' ||
+                        !result.content_base64
+                      ) {
+                        setEvidenceMessage(result.reason ?? result.availability)
+                        return
+                      }
+                      const binary = Uint8Array.from(
+                        atob(result.content_base64),
+                        (char) => char.charCodeAt(0),
+                      )
+                      const url = URL.createObjectURL(
+                        new Blob([binary], {
+                          type: result.mime_type ?? 'application/octet-stream',
+                        }),
+                      )
+                      const link = document.createElement('a')
+                      link.href = url
+                      link.download = path.split('/').at(-1) ?? 'evidence'
+                      link.click()
+                      URL.revokeObjectURL(url)
+                    })()
+                  }
+                >
+                  {path}
+                </button>
+              ))}
+            {evidenceMessage ? (
+              <p className="mt-3 text-sm text-warning">{evidenceMessage}</p>
+            ) : null}
+          </Panel>
+        </div>
+      </div>
+    )
+  }
+
   const evidenceRun = runId
     ? (assessmentModel.runs.find((run) => run.runId === runId) ?? null)
     : null
@@ -832,10 +942,7 @@ export function ExecutionPage({
     scenarioSummary,
     scenarioMatrix?.items ?? [],
   )
-  const outcome = executionOutcome(presentation, assessmentModel.runs)
   const runCount = runCountFromDetail(detail)
-  const runtimeSeconds =
-    presentation.modelRuntimeSeconds ?? summaryMetrics?.durationSeconds ?? null
   const noRun = !presentation.available || (scenarioSummary?.total ?? 0) === 0
   const { title } = executionTitle(presentation)
   const identity: Array<[string, string]> = [
@@ -846,19 +953,8 @@ export function ExecutionPage({
         .join(', ') || 'not reported',
     ],
     [
-      'judge',
-      presentation.judges.map((model) => model.model).join(', ') || 'no judge',
-    ],
-    [
       'started',
       presentation.startedAt ? formatDate(presentation.startedAt) : '—',
-    ],
-    ['runtime', runtimeSeconds === null ? '—' : formatDuration(runtimeSeconds)],
-    [
-      'tokens',
-      summaryMetrics?.totalTokens == null
-        ? '—'
-        : formatMetricCount(summaryMetrics.totalTokens),
     ],
     [
       'trigger',
@@ -867,9 +963,9 @@ export function ExecutionPage({
     ],
     ['id', `${detail.id.slice(0, 8)}…${detail.id.slice(-6)}`],
   ]
-  const local = bridge?.mode === 'local'
+  const ready = Boolean(bridge)
   const cancelRun = async () => {
-    if (bridge?.mode !== 'local') return
+    if (!bridge) return
     setCancelling(true)
     try {
       if (detail.plan_execution) {
@@ -887,6 +983,19 @@ export function ExecutionPage({
       setCancelling(false)
     }
   }
+  const deleteExecution = async () => {
+    if (!bridge || !detail) return
+    setDeleting(true)
+    setError(null)
+    try {
+      await bridge.deleteExecution(detail.id)
+      window.location.hash = hashForWorkspace('executions')
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : String(cause))
+    } finally {
+      setDeleting(false)
+    }
+  }
 
   return (
     <div className="ds-root min-h-dvh bg-canvas text-ink">
@@ -894,17 +1003,23 @@ export function ExecutionPage({
       <div className="page-shell w-[calc(100%_-_1.5rem)] max-w-[1420px] pt-5 pb-16 md:w-[calc(100%_-_3rem)]">
         {/* Audit ED-13 / ED-23: the title is the execution, the trail is flat. */}
         <PageHeader
+          className="pm-page-header"
           title={title}
           summary={
             detail.live_progress
               ? `${detail.live_progress.runs_committed} of ${detail.live_progress.planned_slots} runs recorded · ${live ? 'results are provisional' : 'partial evidence preserved'}`
               : live
                 ? 'Execution in progress · results are provisional'
-                : verdict.headline
+                : `${scenarioSummary?.total ?? 0} tests · ${runCount} runs`
           }
           headingId="execution-title"
           breadcrumb={[
-            { label: 'executions', href: hashForWorkspace('executions') },
+            detail.plan_id
+              ? { label: 'plans', href: hashForPlans() }
+              : { label: 'executions', href: hashForWorkspace('executions') },
+            ...(detail.plan_id
+              ? [{ label: 'Plan', href: hashForPlan(detail.plan_id) }]
+              : []),
             { label: title },
           ]}
           actions={
@@ -932,7 +1047,7 @@ export function ExecutionPage({
                 <Link2 size={13} aria-hidden="true" />
                 {copied ? 'link copied' : 'copy link'}
               </button>
-              {local ? (
+              {ready ? (
                 <a
                   className={buttonClassName({
                     variant: 'secondary',
@@ -955,6 +1070,19 @@ export function ExecutionPage({
                   {detail.plan_id ? 'back to plan' : 're-run same scope'}
                 </a>
               ) : null}
+              {ready && !live && !detail.plan_execution ? (
+                <button
+                  className={buttonClassName({
+                    variant: 'quiet',
+                    size: 'compact',
+                  })}
+                  type="button"
+                  onClick={() => setDeleteOpen(true)}
+                >
+                  <Trash2 size={13} aria-hidden="true" />
+                  delete execution
+                </button>
+              ) : null}
             </>
           }
         />
@@ -972,6 +1100,9 @@ export function ExecutionPage({
           ))}
         </dl>
 
+        {detail.evidence_error ? (
+          <EvidenceBundleUnavailable detail={detail} />
+        ) : null}
         {error ? (
           <p className="mt-4 text-sm text-warning" role="status">
             Refresh failed. Showing the last received snapshot; automatic
@@ -989,20 +1120,22 @@ export function ExecutionPage({
             failed. {detail.persistence_errors.join(' · ')}
           </p>
         ) : null}
-        {(noRun || live) && !(detail.plan_execution && live) ? (
+        {!detail.evidence_error &&
+        (noRun || live) &&
+        !(detail.plan_execution && live) ? (
           <LiveState
             presentation={presentation}
             status={status}
             cancelling={cancelling}
             hasProgress={Boolean(detail.live_progress || detail.plan_execution)}
-            onCancel={local ? () => void cancelRun() : undefined}
+            onCancel={ready ? () => void cancelRun() : undefined}
           />
         ) : null}
         {detail.plan_execution && live ? (
           <PlanProgress
             execution={detail.plan_execution}
             actions={
-              local ? (
+              ready ? (
                 <button
                   type="button"
                   className={buttonClassName({
@@ -1021,6 +1154,16 @@ export function ExecutionPage({
         {detail.live_progress ? (
           <LiveProgressPanel progress={detail.live_progress} running={live} />
         ) : null}
+        {primaryMetrics && !detail.evidence_error ? (
+          <div className="mt-6">
+            <PrimaryMetricsView
+              key={executionId}
+              baseline={primaryMetrics}
+              baselineExecutionId={executionId}
+              baselineLabel={title}
+            />
+          </div>
+        ) : null}
         {!noRun && !live ? (
           <>
             <SectionBar
@@ -1031,7 +1174,6 @@ export function ExecutionPage({
             {/* Audit ED-26: layer 0 is the grouped metrics; everything else
                 is a closed row with a scent until the reader needs it. */}
             <div className="grid min-w-0 gap-3">
-              <ExecutionOverview detail={detail} outcome={outcome} />
               <DisclosureLayer
                 id="summary"
                 label="next step"
@@ -1084,7 +1226,6 @@ export function ExecutionPage({
                 <CountsSection
                   presentation={presentation}
                   detail={detail}
-                  metrics={summaryMetrics}
                   scenarioSummary={scenarioSummary}
                 />
               </DisclosureLayer>
@@ -1105,6 +1246,34 @@ export function ExecutionPage({
           </>
         ) : null}
       </div>
+      <Dialog
+        open={deleteOpen}
+        onClose={() => !deleting && setDeleteOpen(false)}
+        size="sm"
+        title="Delete execution?"
+        description="This permanently removes the execution and its retained evidence from the Console."
+        footer={
+          <div className="flex justify-end gap-2">
+            <button
+              type="button"
+              className={buttonClassName({ variant: 'secondary' })}
+              disabled={deleting}
+              onClick={() => setDeleteOpen(false)}
+            >
+              cancel
+            </button>
+            <button
+              type="button"
+              className={buttonClassName({ variant: 'primary' })}
+              disabled={deleting}
+              aria-busy={deleting}
+              onClick={() => void deleteExecution()}
+            >
+              {deleting ? 'deleting…' : 'delete execution'}
+            </button>
+          </div>
+        }
+      />
       {/* Audit AW-09: the evidence record is a route, so back returns here. */}
       {evidenceRun ? (
         <AssessmentDetailDialog

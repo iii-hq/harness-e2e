@@ -10,8 +10,8 @@ import {
   SectionPanel,
 } from '@/components/ExecutionComparisonPanel'
 import {
-  getReleaseControlReference,
-  listReleaseControlExecutions,
+  getImportedReference,
+  listImportedExecutions,
   localScenarioObservations,
   referenceScenarioObservations,
 } from '@/lib/release-control-reference'
@@ -946,7 +946,6 @@ export function TestHistoryPage({ testId }: { testId: string }) {
   const [filters, setFilters] = useState<HistoryFilters>(initial.filters)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
-  const [local, setLocal] = useState(false)
   const [openKey, setOpenKey] = useState<string | null>(initial.open)
   const [comparisonKeys, setComparisonKeys] = useState<string[]>(
     initial.comparisonKeys,
@@ -998,7 +997,7 @@ export function TestHistoryPage({ testId }: { testId: string }) {
     if (!referenceId) return
     setReferenceError(null)
     setReferenceLoading(true)
-    void getReleaseControlReference(referenceId)
+    void getImportedReference(referenceId)
       .then((value) => {
         if (!current) return
         setReferencePlanKey(value.execution.planKey)
@@ -1058,7 +1057,7 @@ export function TestHistoryPage({ testId }: { testId: string }) {
     setReferenceError(null)
     setReferenceLoading(true)
     try {
-      setReferenceOptions(await listReleaseControlExecutions())
+      setReferenceOptions(await listImportedExecutions())
     } catch (error) {
       setReferenceError(String(error))
       setReferenceOptions([])
@@ -1074,7 +1073,6 @@ export function TestHistoryPage({ testId }: { testId: string }) {
     void getDashboardDataBridge()
       .then((next) => {
         if (cancelled) return
-        setLocal(next.mode === 'local')
         const execution = parseModelSelection(filters.model)
         const judge = parseModelSelection(filters.judge)
         return next.getTestHistory({
@@ -1254,7 +1252,7 @@ export function TestHistoryPage({ testId }: { testId: string }) {
     .filter(Boolean)
     .join(' · ')
 
-  const runThisTest = local ? (
+  const runThisTest = (
     <a
       className={dashboardHeaderActionClassName({ primary: true })}
       href={hashForWorkspace()}
@@ -1262,7 +1260,7 @@ export function TestHistoryPage({ testId }: { testId: string }) {
     >
       run this test
     </a>
-  ) : null
+  )
 
   return (
     <>
@@ -1379,134 +1377,122 @@ export function TestHistoryPage({ testId }: { testId: string }) {
           }
         />
 
-        {/* Audit TH-20: the identity line names the contract but never says
-            what the test asks for. This does, before any metric. */}
-        {catalogRow?.spec ? (
-          <AboutTestPanel
-            className="mt-6"
-            spec={catalogRow.spec}
-            testId={testId}
-          />
-        ) : null}
-
-        {local || referenceId ? (
-          <section className="mt-6 grid gap-3" aria-label="Scenario reference">
-            <div className="flex flex-wrap items-center gap-3">
-              <button
-                type="button"
-                className={buttonClassName({ variant: 'secondary' })}
-                disabled={referenceLoading}
-                onClick={() => void loadReferenceOptions()}
-              >
-                Reference: Release Control
-              </button>
-              {referenceOptions.length ? (
-                <Select
-                  aria-label="Release Control scenario reference"
-                  value={
-                    referenceId ? `rc:${referenceId.replace(/^rc:/, '')}` : ''
-                  }
-                  onChange={(event) => {
-                    setReferenceId(event.target.value.replace(/^rc:/, ''))
-                    setReferenceCase('')
-                    setComparisonKeys([])
-                  }}
-                >
-                  <option value="">choose reference execution</option>
-                  {referenceOptions.map((item) => (
-                    <option value={item.id} key={item.id}>
-                      {item.label || item.id} · {item.id.slice(-8)}
-                    </option>
-                  ))}
-                </Select>
-              ) : null}
-              {referencePlanKey ? (
-                <a
-                  className={buttonClassName({ variant: 'quiet' })}
-                  href={hashForPlan(`rc:${referencePlanKey}`)}
-                >
-                  back to reference plan
-                </a>
-              ) : null}
-              {referenceId ? (
-                <button
-                  type="button"
-                  className={buttonClassName({ variant: 'quiet' })}
-                  onClick={() => {
-                    setReferenceId('')
-                    setCandidateExecutionId('')
-                    setComparisonKeys([])
-                    setReferenceError(null)
-                  }}
-                >
-                  clear reference
-                </button>
-              ) : null}
-            </div>
-            {referenceLoading ? (
-              <p className="font-mono text-label">Loading reference…</p>
-            ) : null}
-            {referenceError || candidateError ? (
-              <Callout tone="warning" title="Reference comparison unavailable">
-                {referenceError || candidateError}
-              </Callout>
-            ) : null}
-            {referenceId ? (
-              <p className="font-mono text-label text-ink-muted">
-                Reference: Release Control · {referenceId}. Select a local
-                execution in the history as candidate.
-              </p>
-            ) : null}
-            {referenceObservations.length > 1 ? (
+        <section className="mt-6 grid gap-3" aria-label="Scenario reference">
+          <div className="flex flex-wrap items-center gap-3">
+            <button
+              type="button"
+              className={buttonClassName({ variant: 'secondary' })}
+              disabled={referenceLoading}
+              onClick={() => void loadReferenceOptions()}
+            >
+              Reference: Release Control
+            </button>
+            {referenceOptions.length ? (
               <Select
-                aria-label="Reference case"
-                value={referenceCase}
-                onChange={(event) => setReferenceCase(event.target.value)}
-              >
-                <option value="">select reference case</option>
-                {referenceObservations.map((item) => (
-                  <option
-                    key={testObservationKey(item)}
-                    value={testObservationKey(item)}
-                  >
-                    {item.case_id || 'Case unavailable'} · v
-                    {item.scenario_version ?? '—'} · seed {item.seed ?? '—'}
-                  </option>
-                ))}
-              </Select>
-            ) : null}
-            {candidateObservations.length > 1 ? (
-              <Select
-                aria-label="Candidate case"
-                value={candidateCase}
-                onChange={(event) => setCandidateCase(event.target.value)}
-              >
-                <option value="">select local case</option>
-                {candidateObservations.map((item) => (
-                  <option
-                    key={testObservationKey(item)}
-                    value={testObservationKey(item)}
-                  >
-                    {item.case_id || 'Case unavailable'} · v
-                    {item.scenario_version ?? '—'} · seed {item.seed ?? '—'}
-                  </option>
-                ))}
-              </Select>
-            ) : null}
-            {sourceBaseline && sourceCandidate ? (
-              <ObservationComparisonPanel
-                baseline={sourceBaseline}
-                candidate={sourceCandidate}
-                testId={testId}
-                onSwap={() => {}}
-                onClear={() => {
-                  setCandidateExecutionId('')
+                aria-label="Release Control scenario reference"
+                value={
+                  referenceId ? `rc:${referenceId.replace(/^rc:/, '')}` : ''
+                }
+                onChange={(event) => {
+                  setReferenceId(event.target.value.replace(/^rc:/, ''))
+                  setReferenceCase('')
                   setComparisonKeys([])
                 }}
-              />
+              >
+                <option value="">choose reference execution</option>
+                {referenceOptions.map((item) => (
+                  <option value={item.id} key={item.id}>
+                    {item.label || item.id} · {item.id.slice(-8)}
+                  </option>
+                ))}
+              </Select>
             ) : null}
-          </section>
-        ) : null}
+            {referencePlanKey ? (
+              <a
+                className={buttonClassName({ variant: 'quiet' })}
+                href={hashForPlan(`rc:${referencePlanKey}`)}
+              >
+                back to reference plan
+              </a>
+            ) : null}
+            {referenceId ? (
+              <button
+                type="button"
+                className={buttonClassName({ variant: 'quiet' })}
+                onClick={() => {
+                  setReferenceId('')
+                  setCandidateExecutionId('')
+                  setComparisonKeys([])
+                  setReferenceError(null)
+                }}
+              >
+                clear reference
+              </button>
+            ) : null}
+          </div>
+          {referenceLoading ? (
+            <p className="font-mono text-label">Loading reference…</p>
+          ) : null}
+          {referenceError || candidateError ? (
+            <Callout tone="warning" title="Reference comparison unavailable">
+              {referenceError || candidateError}
+            </Callout>
+          ) : null}
+          {referenceId ? (
+            <p className="font-mono text-label text-ink-muted">
+              Reference: Release Control · {referenceId}. Select a local
+              execution in the history as candidate.
+            </p>
+          ) : null}
+          {referenceObservations.length > 1 ? (
+            <Select
+              aria-label="Reference case"
+              value={referenceCase}
+              onChange={(event) => setReferenceCase(event.target.value)}
+            >
+              <option value="">select reference case</option>
+              {referenceObservations.map((item) => (
+                <option
+                  key={testObservationKey(item)}
+                  value={testObservationKey(item)}
+                >
+                  {item.case_id || 'Case unavailable'} · v
+                  {item.scenario_version ?? '—'} · seed {item.seed ?? '—'}
+                </option>
+              ))}
+            </Select>
+          ) : null}
+          {candidateObservations.length > 1 ? (
+            <Select
+              aria-label="Candidate case"
+              value={candidateCase}
+              onChange={(event) => setCandidateCase(event.target.value)}
+            >
+              <option value="">select local case</option>
+              {candidateObservations.map((item) => (
+                <option
+                  key={testObservationKey(item)}
+                  value={testObservationKey(item)}
+                >
+                  {item.case_id || 'Case unavailable'} · v
+                  {item.scenario_version ?? '—'} · seed {item.seed ?? '—'}
+                </option>
+              ))}
+            </Select>
+          ) : null}
+          {sourceBaseline && sourceCandidate ? (
+            <ObservationComparisonPanel
+              baseline={sourceBaseline}
+              candidate={sourceCandidate}
+              testId={testId}
+              onSwap={() => {}}
+              onClear={() => {
+                setCandidateExecutionId('')
+                setComparisonKeys([])
+              }}
+            />
+          ) : null}
+        </section>
 
         {error ? (
           <EmptyState
@@ -1524,40 +1510,28 @@ export function TestHistoryPage({ testId }: { testId: string }) {
             title="no retained executions yet"
             description="This test has never run on this dashboard. Run it once to start the metric history, or add it to a plan to capture a baseline you can compare against later."
             actions={
-              local ? (
-                <>
-                  <a
-                    className={buttonClassName({
-                      variant: 'primary',
-                      className: 'no-underline',
-                    })}
-                    href={hashForWorkspace()}
-                    onClick={() => requestQuickExecution([testId])}
-                  >
-                    run this test
-                  </a>
-                  <a
-                    className={buttonClassName({
-                      variant: 'secondary',
-                      className: 'no-underline',
-                    })}
-                    href={hashForNewPlan()}
-                    onClick={() => requestPlanFromSelection([testId])}
-                  >
-                    add to a new plan
-                  </a>
-                </>
-              ) : (
+              <>
+                <a
+                  className={buttonClassName({
+                    variant: 'primary',
+                    className: 'no-underline',
+                  })}
+                  href={hashForWorkspace()}
+                  onClick={() => requestQuickExecution([testId])}
+                >
+                  run this test
+                </a>
                 <a
                   className={buttonClassName({
                     variant: 'secondary',
                     className: 'no-underline',
                   })}
-                  href={hashForTests()}
+                  href={hashForNewPlan()}
+                  onClick={() => requestPlanFromSelection([testId])}
                 >
-                  back to the catalog
+                  add to a new plan
                 </a>
-              )
+              </>
             }
           />
         ) : null}
@@ -1565,72 +1539,84 @@ export function TestHistoryPage({ testId }: { testId: string }) {
         {!error && (loading || hasEvidence || filtered) ? (
           <div className="mt-6 grid gap-6">
             {hasEvidence ? (
-              // Audit TH-08: tiles only for metrics with data.
-              <div
-                className="grid gap-3 @[560px]:grid-cols-2 @[960px]:grid-cols-4"
-                data-history-tiles
+              <section
+                aria-label="Retained history metrics"
+                className="grid gap-3"
               >
-                <MetricCard
-                  label="successful runs"
-                  value={`${passedCount} / ${allObservations.length}`}
-                  detail="objective result"
-                  tone={
-                    passedCount === allObservations.length
-                      ? 'positive'
-                      : passedCount === 0
-                        ? 'negative'
-                        : 'warning'
-                  }
-                />
-                {knownMetricCount(scores) > 0 ? (
+                <p className="m-0 text-xs text-ink-muted">
+                  Retained history · {allObservations.length} executions ·
+                  medians of the reported execution summaries
+                </p>
+                <div
+                  className="grid gap-3 @[560px]:grid-cols-2 @[960px]:grid-cols-4"
+                  data-history-tiles
+                >
                   <MetricCard
-                    label="median score"
-                    value={formatScore(median(scores))}
-                    detail={`scored contract · /100 · ${metricCaption(knownMetricCount(scores), allObservations.length)}`}
+                    label="successful executions"
+                    value={`${passedCount} / ${allObservations.length}`}
+                    detail="objective result"
+                    tone={
+                      passedCount === allObservations.length
+                        ? 'positive'
+                        : passedCount === 0
+                          ? 'negative'
+                          : 'warning'
+                    }
                   />
-                ) : null}
-                {knownMetricCount(durations) > 0 ? (
-                  <MetricCard
-                    label="median duration"
-                    value={formatDuration(median(durations))}
-                    detail={metricCaption(
-                      knownMetricCount(durations),
-                      allObservations.length,
-                    )}
-                  />
-                ) : null}
-                {knownMetricCount(tokens) > 0 ? (
-                  <MetricCard
-                    label="median tokens"
-                    value={formatTokens(median(tokens))}
-                    detail={`subject execution · ${metricCaption(knownMetricCount(tokens), allObservations.length)}`}
-                  />
-                ) : null}
-                {knownCosts > 0 ? (
-                  <MetricCard
-                    label="median cost"
-                    value={formatCost(median(costs))}
-                    detail={metricCaption(knownCosts, allObservations.length)}
-                  />
-                ) : null}
-              </div>
+                  {knownMetricCount(scores) > 0 ? (
+                    <MetricCard
+                      label="median score"
+                      value={formatScore(median(scores))}
+                      detail={`scored contract · /100 · ${metricCaption(knownMetricCount(scores), allObservations.length)}`}
+                    />
+                  ) : null}
+                  {knownMetricCount(durations) > 0 ? (
+                    <MetricCard
+                      label="median duration"
+                      value={formatDuration(median(durations))}
+                      detail={metricCaption(
+                        knownMetricCount(durations),
+                        allObservations.length,
+                      )}
+                    />
+                  ) : null}
+                  {knownMetricCount(tokens) > 0 ? (
+                    <MetricCard
+                      label="median tokens"
+                      value={formatTokens(median(tokens))}
+                      detail={`subject execution · ${metricCaption(knownMetricCount(tokens), allObservations.length)}`}
+                    />
+                  ) : null}
+                  {knownCosts > 0 ? (
+                    <MetricCard
+                      label="median cost"
+                      value={formatCost(median(costs))}
+                      detail={metricCaption(knownCosts, allObservations.length)}
+                    />
+                  ) : null}
+                </div>
+              </section>
             ) : null}
 
             {allObservations.filter(
               (item) => finiteMetric(item.median_score) !== null,
             ).length >= 2 ? (
-              // Audit TH-10: the trend is always visible with two scored runs.
-              <SectionPanel
-                title="score trend"
-                summary={`newest right · ${allObservations.length} executions${knownCosts === 0 ? ' · cost not recorded in local runs' : ''}`}
-                headingId="score-trend-title"
-              >
-                <ScoreTrendChart
-                  observations={allObservations}
-                  selectedKeys={comparisonKeys}
-                  onSelect={selectForComparison}
-                />
-              </SectionPanel>
+              <details>
+                <summary className="cursor-pointer text-sm font-medium text-ink">
+                  Score trend · {allObservations.length} retained executions
+                </summary>
+                <SectionPanel
+                  title="score trend"
+                  summary={`newest right · ${allObservations.length} executions${knownCosts === 0 ? ' · cost not recorded in local runs' : ''}`}
+                  headingId="score-trend-title"
+                >
+                  <ScoreTrendChart
+                    observations={allObservations}
+                    selectedKeys={comparisonKeys}
+                    onSelect={selectForComparison}
+                  />
+                </SectionPanel>
+              </details>
             ) : null}
 
             <section className="grid gap-3" aria-label="History filters">
@@ -1938,13 +1924,20 @@ export function TestHistoryPage({ testId }: { testId: string }) {
             ) : null}
           </div>
         ) : null}
+        {catalogRow?.spec ? (
+          <AboutTestPanel
+            className="mt-6"
+            spec={catalogRow.spec}
+            testId={testId}
+          />
+        ) : null}
       </div>
 
       {(comparisonKeys.length > 0 || (referenceId && sourceCandidate)) &&
       !loading ? (
         // Audit TH-09: the selection bar stays in view while rows are ticked.
         <div
-          className="sticky bottom-0 z-10 bg-panel px-3 py-3 shadow-[0_-1px_0_0_var(--line)] md:px-6"
+          className="sticky bottom-0 z-10 bg-panel px-3 py-3 md:px-6"
           data-selection-bar
         >
           <div className="mx-auto flex max-w-[1420px] flex-wrap items-center gap-3 font-mono text-xs">

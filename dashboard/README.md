@@ -1,18 +1,11 @@
-# Harness E2E benchmark dashboard
+# Harness E2E Console page
 
-This React application replaces the generic benchmark-action index. It uses the
-same frontend stack as `workers/console`: React 19, strict TypeScript, Vite,
-Tailwind CSS, Biome, Vitest, and pnpm. Published builds keep the static execution
-index, split test catalog, lazy per-test evidence shards, and
-`runs/<execution-id>.json` reports. Local mode uses a scoped iii data surface so
-the browser requests only the execution page, test result, report, catalog, or
-unread log suffix it currently needs.
-
-Local and static modes carry the same assessment summaries and comparison
-identities. Local details join every run to its current assessment contract.
-Static report artifacts use a bounded allowlist and never publish raw prompts,
-transcripts, generated-asset previews, or private artifact paths; they retain
-only the deterministic conclusions and immutable evidence references.
+This React application is an injectable Console page. Its build emits only
+`dist-console/page.js` and `dist-console/styles.css`; the worker serves both
+through `e2e::ui-content` and announces them with Console asset triggers.
+Runtime data and actions use the `e2e::dashboard::*` functions registered by the
+same worker. There is no standalone HTTP server, WebSocket proxy, static SPA or
+`dashboard`/`serve` CLI command.
 
 Execution details present the assessment contract as one objective layer: the
 system outcome of each run and the deterministic conclusions that produced it.
@@ -21,38 +14,21 @@ involvement. Every conclusion retains its criterion identity and links to the
 immutable evidence register; missing assessment data is shown as unavailable
 rather than inferred.
 
-Install, validate, and run the frontend with hot reload:
+Install, validate, and build the frontend:
 
 ```bash
 pnpm install --frozen-lockfile
 pnpm typecheck
 pnpm lint
 pnpm test
-pnpm dev
+pnpm build
 ```
 
-The dev server listens on `0.0.0.0:5173` and proxies dashboard APIs to
-`http://127.0.0.1:4173` by default. Set `HARNESS_E2E_DASHBOARD_URL` when the Rust
-server uses a different origin.
+The Console routes live under `#/ext/harness-e2e`. The page exposes Overview,
+Tests, Executions and Plans and keeps entity detail inside the same extension
+route.
 
-Start the local dashboard from the repository root:
-
-```bash
-cargo build --locked --bin harness-e2e
-target/debug/harness-e2e dashboard
-```
-
-The server listens on `0.0.0.0:4173` by default. Open
-`http://localhost:4173/#/overview` on the same machine, or replace `localhost`
-with the machine's address when accessing it remotely.
-
-The dashboard uses the same dependency-free hash-routing pattern as Console.
-Canonical routes are `#/overview`, `#/tests`, `#/executions`,
-`#/execution/<id>`, and `#/coverage`. The old `#/scenarios` route redirects to
-Tests, while `#/compare/<from>/<to>` remains a deep link into the same
-Tests view. All views use the single `index.html` entry point.
-
-The dashboard can now execute one or more scenarios against the Harness already
+The Console page can execute one or more scenarios against the Harness already
 running at `III_URL`. It discovers registered provider/model pairs from that
 stack and scenario ids from the same E2E binary only when the execution dialog
 opens. The primary form only asks for an optional label, a subject model, and
@@ -60,35 +36,18 @@ scenarios; URL, the judge model Markdown tests need, run count, and technical
 retries remain under **Advanced options** with safe defaults. Use **Refresh
 catalog** after restarting the Harness or changing its URL. The binary runs only
 one experiment at a time, streams incremental log chunks, indexes the resulting
-`results.json`, and keeps run metadata and logs under
-`target/harness-e2e-local-runs/`.
+`results.json`, and keeps run metadata and logs under the worker's configured
+evidence root.
 
-Local data follows the Console architecture: the React shell opens one lazy
-WebSocket to the Rust server, which proxies only the dashboard's allow-listed iii
-functions and change trigger. The initial overview receives at most 25 compact
+The React page uses the Console host's iii client and change trigger. The initial
+overview receives at most 25 compact
 summaries; filters, search, and subsequent pages execute on the server. An
 execution page fetches one summary plus one report. Tests first loads immutable
 system-version and cohort descriptors, then one compact row per test. Changing
 a row's test version calls `e2e::dashboard::test-version-get`; retained
 observations load only when that row is expanded. The backend builds one cached
 read model from retained reports, pools raw run scores, and invalidates it on run
-changes. Same-origin HTTP mirrors the iii functions and is used only when the
-iii transport is unavailable.
-
-To present runs submitted through the asynchronous `e2e::*` worker, point the
-dashboard directly at that worker's output root. Canonical control-plane run
-directories are discovered from their embedded execution identity and do not
-need dashboard-specific metadata:
-
-```bash
-target/debug/harness-e2e dashboard \
-  --view-only \
-  --runs-dir target/e2e-demo/runs
-```
-
-`--view-only` labels the data as observed reports, hides the direct local
-runner, and does not register its run, cancel, or catalog HTTP endpoints. This
-is the presentation mode for executions submitted through `e2e::*`.
+changes. There is no alternate HTTP or static-data transport.
 
 In the Console, Plans offers **Reference: Release Control** through the RC browser
 bridge. Each reference plan combines remote and local execution history and uses
@@ -108,42 +67,14 @@ or missing result in A or B**. It removes matching test slots from both sides
 and recalculates metrics; original executions remain unchanged.
 A disconnected RC bridge leaves the existing local execution tools available.
 
-The dashboard executes itself as an isolated child process, so changing and
-restarting the Harness never recompiles the E2E client. `serve` is an alias for
-`dashboard`; neither command has a Cargo fallback.
-
-The React boot loader activates local execution controls only when the runtime
-descriptor reports `mode: "local"`. If the runtime surface is unavailable it
-falls back to `executions.json`; the Pages publisher always emits
-`mode: "published"`, so the published dashboard keeps using only its static
-history and never calls the local execution APIs.
-
 The execution label is optional and intentionally descriptive only. The local
-dashboard does not infer a system version from that label: it uses the immutable
+page does not infer a system version from that label: it uses the immutable
 source revision or registry stack lock captured in `results.json`. Tests compares
 system version A with B inside one exact evaluation cohort. Each row keeps its
 own scenario-version selector. Changed case sets and contracts remain visible
 side by side, but their numeric deltas are disabled.
 
-Use `--listen 0.0.0.0:PORT` to select another port and `--runs-dir` to select
-another local history. Local mode exposes controls that can start and cancel E2E
-runs. Its `/ws` route is intentionally restricted to the dashboard read/run
-functions and browser callbacks, but it is not an authentication boundary:
-expose the port only on a trusted network. Use `--listen 127.0.0.1:4173` to
-restrict access to the local machine. The Harness WebSocket URL is accessed on
-the host by the runner and does not need to be reachable by the browser.
-
-To preview the sample fixtures without a Rust backend, build and serve the Vite
-bundle:
-
-```bash
-pnpm build
-pnpm preview
-```
-
-When generated data is absent, the pages load their sample fixtures and label
-the view as preview data. Test the React application and both data contracts
-with:
+Test the React page and its data contracts with:
 
 ```bash
 pnpm test
@@ -197,13 +128,11 @@ design-system migration runs; all of them are part of `pnpm test` and
   `src/components/DashboardShell.test.tsx` describe the CSS-only toggle for the
   narrow section select (`todo` / `it.fails` until it lands).
 
-Pull requests that touch the UI attach before/after captures. With the console
-(or the standalone server) running:
+Pull requests that touch the UI attach before/after captures from the Console
+fixture:
 
 ```bash
-pnpm screenshots                              # every route × 1440/720/390 × light/dark
-pnpm screenshots -- --only overview,tests --widths 1440 --themes light
-pnpm screenshots -- --base standalone --out .screenshots/after
+pnpm screenshots
 ```
 
 Captures and a typography census (`census.json`) land in
@@ -219,7 +148,7 @@ retry policy. Users may edit the scope and explicitly select the execution model
 plus the judge model when the scope includes a Markdown test. The saved plan owns
 that configuration; later template changes do not change it or prevent execution.
 
-**Save draft** keeps the configuration editable. **Save and run** saves it,
+**Save plan** keeps the configuration editable. **Save and run** saves it,
 checks requirements and starts the baseline. Busy admission preserves the draft
 and links to active work. **Duplicate plan** preserves scope, policy and evaluator,
 asks for a new execution model and starts without baseline, candidates or history.
@@ -234,19 +163,28 @@ reconciles retained children and interrupts the execution without resuming it.
 The main execution list shows the parent; its detail links to native artifacts.
 No synthetic Results v4 report is created. Missing telemetry stays unavailable.
 
-Saved plans have one current schema (`schema_version: 3`) in
-`plan-store/plans/<id>.json`; composed receipts live in
-`plan-store/executions/<id>.json`. Configuration and the materialized snapshot
-share one stored document. Earlier plan formats, directories and histories are
-not loaded or migrated. Current executions retain native child evidence and
-restart reconciliation. Scenario-contract incompatibility blocks admission; the
-starting template revision is provenance only. Fault-injection plans still
-require the protected Release Control executor and can be exported from the
-common detail page.
+Saved plans (`schema_version: 3`) and composed receipts live in the local SQL
+store (storage schema 3), accessed only through the database worker. Run the
+explicit `migrate-storage` dry-run and apply before switching from storage schema
+1 or 2. Existing PlanStore files are migration inputs, never runtime authority.
+The migration preserves IDs, baseline/candidate relationships, slots and native
+child references; corrupt or active records block the cutover.
 
-Creation, reading, updates and starts use the `plan-*` HTTP/iii APIs. Starting a
-plan requires a caller idempotency key. `POST /api/dashboard/plans/control` and
-`e2e::dashboard::plan-control` provide requirements, explicit reference import, export, execution lookup and
+The plans list combines local plans and imported RC plans, marked `remote`.
+Import history accepts the versioned JSON transport or explicitly discovers and
+exports a plan through the RC bridge. Updating an imported plan is explicit.
+Lists, execution detail, test history and comparisons read the local copy, even
+when RC is disconnected. Imported history has no local cancel/edit/admit action.
+Reproduction creates a separate local configuration and checks local capability.
+
+GitHub evidence is fetched on demand through `e2e::dashboard::evidence-open`
+using local `gh` authentication and Python 3. Paths stay relative to the bundle.
+The reader verifies the workflow/attempt identity and manifest hashes and returns
+availability independently of the retained results. File retrieval does not
+create or select personal conversations.
+
+Creation, reading, updates and starts use the `plan-*` iii functions. Starting a
+plan requires a caller idempotency key. `e2e::dashboard::plan-control` provide requirements, historical import, explicit reproduction, export, execution lookup and
 cancellation. The former profile-plan endpoint, duplicate creation/start actions,
 native plan-context tracking and manual-route alias have been removed.
 

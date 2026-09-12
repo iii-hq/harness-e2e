@@ -291,8 +291,8 @@ describe('local plan execution comparison', () => {
     expect(overviewHtml.match(/data-point-role="other"/g)).toHaveLength(7)
     expect(overviewHtml).not.toContain('<table')
     // The layers carry the exact numbers.
-    expect(layersHtml).toContain('id="plan-metrics"')
-    expect(layersHtml).toContain('all metrics · ')
+    expect(layersHtml).toContain('id="plan-diagnostic-metrics"')
+    expect(layersHtml).toContain('Run statistics · ')
     expect(html).toContain('baseline and candidates')
     expect(tableHtml).toContain('<th scope="col">Metric</th>')
     expect(tableHtml).toContain('>Reference<')
@@ -590,9 +590,8 @@ describe('local plan execution comparison', () => {
       '-1 · -50.0%',
     ])
     expect(groups[0].subtitle).toBe('3 of 3 metrics moved')
-    // Dumbbells draw the magnitude the percentages hide.
-    expect(layersHtml).toContain('data-dumbbell-metric="tokens"')
-    expect(layersHtml).toContain('data-dumbbell-metric="duration"')
+    expect(layersHtml).not.toContain('data-dumbbell-metric="tokens"')
+    expect(layersHtml).not.toContain('data-dumbbell-metric="duration"')
     expect(layersHtml).not.toContain('data-dumbbell-metric="quality"')
   })
 
@@ -775,7 +774,7 @@ describe('local plan scope and provenance', () => {
       <PlanScope plan={plan} baselineSummary={execution('baseline-1')} />,
     )
     expect(html).toContain('data-plan-scope')
-    expect(html).toContain('scope · locked')
+    expect(html).toContain('scope · saved')
     expect(html).toContain('minimal_path v2')
     expect(html).toContain('1 per test · 0 retries · canonical seed')
     expect(html).toContain('baseline captured')

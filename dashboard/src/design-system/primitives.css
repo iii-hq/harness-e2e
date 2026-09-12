@@ -30,35 +30,31 @@
 }
 
 .ds-button-primary {
-  background: var(--text, #0a0a0a);
-  color: var(--surface, #fafafa);
+  background: var(--text);
+  color: var(--surface);
 }
 
 .ds-button-primary:hover:not(:disabled) {
-  background: color-mix(
-    in srgb,
-    var(--text, #0a0a0a) 90%,
-    var(--surface, #fafafa)
-  );
+  background: color-mix(in srgb, var(--text) 90%, var(--surface));
 }
 
 .ds-button-secondary {
-  background: var(--surface-fill, rgba(20, 16, 8, 0.055));
-  color: var(--text, #0a0a0a);
+  background: var(--surface-fill);
+  color: var(--text);
 }
 
 .ds-button-secondary:hover:not(:disabled) {
-  background: var(--surface-soft, rgba(20, 16, 8, 0.085));
+  background: var(--surface-soft);
 }
 
 .ds-button-quiet {
   background: transparent;
-  color: var(--text-soft, #6b6865);
+  color: var(--text-soft);
 }
 
 .ds-button-quiet:hover:not(:disabled) {
-  background: var(--surface-soft, rgba(20, 16, 8, 0.085));
-  color: var(--text, #0a0a0a);
+  background: var(--surface-soft);
+  color: var(--text);
 }
 
 .ds-button-compact {
@@ -92,17 +88,16 @@
   min-width: 0;
   border: 0;
   border-radius: var(--ds-radius-md);
-  background: var(--surface-fill, rgba(20, 16, 8, 0.055));
-  color: var(--text, #0a0a0a);
+  background: var(--surface-fill);
+  color: var(--text);
 }
 
 .ds-panel-raised {
-  background: var(--surface-raised, #f7f5f2);
-  box-shadow: none;
+  background: var(--surface-raised);
 }
 
 .ds-panel-spotlight {
-  background: var(--surface-fill, rgba(20, 16, 8, 0.055));
+  background: var(--surface-fill);
 }
 
 .ds-panel-padding-none {
@@ -122,7 +117,7 @@
 }
 
 .ds-status-badge {
-  --ds-status-color: var(--text-muted, #a3a09c);
+  --ds-status-color: var(--text-muted);
   display: inline-flex;
   align-items: center;
   width: fit-content;
@@ -146,40 +141,39 @@
   flex: 0 0 auto;
   border-radius: 50%;
   background: currentColor;
-  box-shadow: none;
 }
 
 .ds-status-passed {
-  --ds-status-color: var(--success, #356f3d);
+  --ds-status-color: var(--success);
 }
 
 .ds-status-failed {
-  --ds-status-color: var(--danger, #d81b3c);
+  --ds-status-color: var(--danger);
 }
 
 .ds-status-inconclusive {
-  --ds-status-color: var(--warning, #a87a00);
+  --ds-status-color: var(--warning);
 }
 
 .ds-status-unavailable {
-  --ds-status-color: var(--text-muted, #a3a09c);
+  --ds-status-color: var(--text-muted);
 }
 
 .ds-status-recommendation {
-  --ds-status-color: var(--warning, #a87a00);
+  --ds-status-color: var(--warning);
 }
 
 .ds-status-running,
 .ds-status-cancelling {
-  --ds-status-color: var(--accent, #b8420f);
+  --ds-status-color: var(--accent);
 }
 
 .ds-status-cancelled {
-  --ds-status-color: var(--text-muted, #a3a09c);
+  --ds-status-color: var(--text-muted);
 }
 
 .ds-status-incomplete {
-  --ds-status-color: var(--warning, #a87a00);
+  --ds-status-color: var(--warning);
 }
 
 .ds-page-header {
@@ -197,7 +191,7 @@
 
 .ds-page-context {
   margin: 0;
-  color: var(--text-muted, #a3a09c);
+  color: var(--text-muted);
   font-family: var(--font-mono);
   font-size: 0.6875rem;
   font-weight: 500;
@@ -220,7 +214,7 @@
 .ds-page-summary {
   max-width: 46rem;
   margin: 0;
-  color: var(--text-soft, #6b6865);
+  color: var(--text-soft);
   font-family: var(--font-mono);
   font-size: 0.75rem;
   line-height: 1.5;
@@ -241,8 +235,8 @@
   padding: var(--ds-space-3);
   border: 0;
   border-radius: var(--ds-radius-md);
-  background: var(--surface-fill, rgba(20, 16, 8, 0.055));
-  color: var(--text, #0a0a0a);
+  background: var(--surface-fill);
+  color: var(--text);
 }
 
 .ds-metric-heading {
@@ -251,7 +245,7 @@
   align-items: baseline;
   justify-content: space-between;
   gap: var(--ds-space-1) var(--ds-space-3);
-  color: var(--text-muted, #a3a09c);
+  color: var(--text-muted);
   font-family: var(--font-mono);
   font-size: 0.6875rem;
   font-weight: 500;
@@ -260,7 +254,7 @@
 }
 
 .ds-metric-heading strong {
-  color: var(--ds-metric-color, var(--text-soft, #6b6865));
+  color: var(--ds-metric-color, var(--text-soft));
   font-family: var(--font-mono);
   font-size: 0.6875rem;
   font-weight: 500;
@@ -270,7 +264,7 @@
 
 .ds-metric-value {
   overflow: hidden;
-  color: var(--ds-metric-color, var(--text, #0a0a0a));
+  color: var(--ds-metric-color, var(--text));
   font-family: var(--font-mono);
   font-size: 1.375rem;
   font-weight: 600;
@@ -284,26 +278,26 @@
 .ds-metric-card p {
   max-width: 34rem;
   margin: 0;
-  color: var(--text-soft, #6b6865);
+  color: var(--text-soft);
   font-family: var(--font-mono);
   font-size: 0.6875rem;
   line-height: 1.5;
 }
 
 .ds-metric-positive {
-  --ds-metric-color: var(--success, #356f3d);
+  --ds-metric-color: var(--success);
 }
 
 .ds-metric-negative {
-  --ds-metric-color: var(--danger, #d81b3c);
+  --ds-metric-color: var(--danger);
 }
 
 .ds-metric-warning {
-  --ds-metric-color: var(--warning, #a87a00);
+  --ds-metric-color: var(--warning);
 }
 
 .ds-metric-unavailable {
-  --ds-metric-color: var(--text-muted, #a3a09c);
+  --ds-metric-color: var(--text-muted);
 }
 
 /* Breadcrumb: the trail above a page title; the last item is the page. */
@@ -314,7 +308,7 @@
   gap: var(--ds-space-2);
   margin: 0;
   padding: 0;
-  color: var(--text-muted, #6b6865);
+  color: var(--text-muted);
   font-family: var(--font-mono);
   font-size: 0.75rem;
   list-style: none;
@@ -323,22 +317,22 @@
 
 .ds-breadcrumb li + li::before {
   margin-right: var(--ds-space-2);
-  color: var(--ink-decor, #a3a09c);
+  color: var(--ink-decor);
   content: "/";
 }
 
 .ds-breadcrumb a {
-  color: var(--text-soft, #6b6865);
+  color: var(--text-soft);
   text-decoration: none;
 }
 
 .ds-breadcrumb a:hover {
-  color: var(--text, #0a0a0a);
+  color: var(--text);
   text-decoration: underline;
 }
 
 .ds-breadcrumb [aria-current="page"] {
-  color: var(--text, #0a0a0a);
+  color: var(--text);
 }
 
 /* Filter chips: pressed state is the ink fill; the count is part of the label. */
@@ -360,8 +354,8 @@
   padding: 0 var(--ds-space-3);
   border: 0;
   border-radius: var(--ds-radius-sm);
-  background: var(--surface-fill, rgba(20, 16, 8, 0.055));
-  color: var(--text-soft, #6b6865);
+  background: var(--surface-fill);
+  color: var(--text-soft);
   font-family: var(--font-mono);
   font-size: 0.8125rem;
   font-weight: 500;
@@ -375,8 +369,8 @@
 }
 
 .ds-chip:hover:not(:disabled) {
-  background: var(--surface-soft, rgba(20, 16, 8, 0.085));
-  color: var(--text, #0a0a0a);
+  background: var(--surface-soft);
+  color: var(--text);
 }
 
 .ds-chip:disabled {
@@ -386,8 +380,8 @@
 
 .ds-chip-active,
 .ds-chip-active:hover:not(:disabled) {
-  background: var(--text, #0a0a0a);
-  color: var(--surface, #fafafa);
+  background: var(--text);
+  color: var(--surface);
 }
 
 .ds-chip-count {
@@ -414,7 +408,7 @@
 
 .ds-table-caption {
   padding: 0 0 var(--ds-space-3);
-  color: var(--text-soft, #6b6865);
+  color: var(--text-soft);
   font-family: var(--font-mono);
   font-size: 0.75rem;
   text-align: left;
@@ -423,7 +417,7 @@
 
 .ds-table th {
   padding: var(--ds-space-2) var(--ds-space-3);
-  color: var(--text-muted, #6b6865);
+  color: var(--text-muted);
   font-family: var(--font-mono);
   font-size: var(--ds-text-label);
   font-weight: 500;
@@ -435,7 +429,7 @@
 
 .ds-table td {
   padding: var(--ds-space-3);
-  border-top: 1px solid var(--line, rgba(20, 16, 8, 0.16));
+  border-top: 1px solid var(--line);
   vertical-align: top;
   white-space: normal;
 }
@@ -444,7 +438,7 @@
   position: sticky;
   z-index: 1;
   top: 0;
-  background: var(--surface, #fafafa);
+  background: var(--surface);
 }
 
 .ds-table-numeric {
@@ -459,7 +453,7 @@
 }
 
 .ds-table-row-link:hover {
-  background: var(--surface-fill, rgba(20, 16, 8, 0.055));
+  background: var(--surface-fill);
 }
 
 .ds-table-row-link a {
@@ -478,13 +472,13 @@
   gap: var(--ds-space-3);
   padding: var(--ds-space-10) var(--ds-space-5);
   border-radius: var(--ds-radius-md);
-  background: var(--surface-fill, rgba(20, 16, 8, 0.055));
-  color: var(--text, #0a0a0a);
+  background: var(--surface-fill);
+  color: var(--text);
   text-align: center;
 }
 
 .ds-empty-icon {
-  color: var(--text-muted, #6b6865);
+  color: var(--text-muted);
 }
 
 .ds-empty-title {
@@ -500,7 +494,7 @@
 .ds-empty-description {
   max-width: 40rem;
   margin: 0;
-  color: var(--text-soft, #6b6865);
+  color: var(--text-soft);
   font-size: 0.8125rem;
   line-height: 1.5;
 }
@@ -514,11 +508,11 @@
 }
 
 .ds-empty-error {
-  background: color-mix(in srgb, var(--danger, #d81b3c) 8%, transparent);
+  background: color-mix(in srgb, var(--danger) 8%, transparent);
 }
 
 .ds-empty-error .ds-empty-title {
-  color: var(--danger, #d81b3c);
+  color: var(--danger);
 }
 
 /* Delta: sign, magnitude and direction glyph in the tone of the outcome. */
@@ -532,30 +526,30 @@
 }
 
 .ds-delta-positive {
-  color: var(--success, #356f3d);
+  color: var(--success);
 }
 
 .ds-delta-negative {
-  color: var(--danger, #d81b3c);
+  color: var(--danger);
 }
 
 .ds-delta-neutral {
-  color: var(--text-soft, #6b6865);
+  color: var(--text-soft);
 }
 
 .ds-delta-unavailable {
-  color: var(--text-muted, #6b6865);
+  color: var(--text-muted);
 }
 
 /* Callout: one tinted fill per tone, icon and title in the tone colour. */
 .ds-callout {
-  --ds-callout-color: var(--info, #006699);
+  --ds-callout-color: var(--info);
   display: flex;
   gap: var(--ds-space-3);
   padding: var(--ds-space-3) var(--ds-space-4);
   border-radius: var(--ds-radius-md);
   background: color-mix(in srgb, var(--ds-callout-color) 8%, transparent);
-  color: var(--text, #0a0a0a);
+  color: var(--text);
   font-size: 0.8125rem;
   line-height: 1.5;
 }
@@ -581,15 +575,15 @@
 }
 
 .ds-callout-success {
-  --ds-callout-color: var(--success, #356f3d);
+  --ds-callout-color: var(--success);
 }
 
 .ds-callout-warning {
-  --ds-callout-color: var(--warning, #a87a00);
+  --ds-callout-color: var(--warning);
 }
 
 .ds-callout-danger {
-  --ds-callout-color: var(--danger, #d81b3c);
+  --ds-callout-color: var(--danger);
 }
 
 /* Field: label row, control, hint and error wired by id. Controls are fills
@@ -605,13 +599,13 @@
   align-items: baseline;
   justify-content: space-between;
   gap: var(--ds-space-2);
-  color: var(--text-soft, #6b6865);
+  color: var(--text-soft);
   font-size: 0.75rem;
   font-weight: 600;
 }
 
 .ds-field-meta {
-  color: var(--text-muted, #6b6865);
+  color: var(--text-muted);
   font-family: var(--font-mono);
   font-size: var(--ds-text-label);
   font-weight: 400;
@@ -620,14 +614,14 @@
 
 .ds-field-hint {
   margin: 0;
-  color: var(--text-muted, #6b6865);
+  color: var(--text-muted);
   font-size: 0.75rem;
   line-height: 1.4;
 }
 
 .ds-field-error {
   margin: 0;
-  color: var(--danger, #d81b3c);
+  color: var(--danger);
   font-size: 0.75rem;
   line-height: 1.4;
 }
@@ -638,8 +632,8 @@
   padding: 0 var(--ds-space-3);
   border: 0;
   border-radius: var(--ds-radius-sm);
-  background: var(--surface-fill, rgba(20, 16, 8, 0.055));
-  color: var(--text, #0a0a0a);
+  background: var(--surface-fill);
+  color: var(--text);
   font: inherit;
   font-size: 0.8125rem;
   outline: 1px solid var(--control-edge, currentColor);
@@ -648,11 +642,11 @@
 }
 
 .ds-input::placeholder {
-  color: var(--text-muted, #6b6865);
+  color: var(--text-muted);
 }
 
 .ds-input:hover:not(:disabled) {
-  background: var(--surface-soft, rgba(20, 16, 8, 0.085));
+  background: var(--surface-soft);
 }
 
 .ds-input:disabled {
@@ -661,7 +655,7 @@
 }
 
 .ds-field-invalid .ds-input {
-  outline-color: var(--danger, #d81b3c);
+  outline-color: var(--danger);
 }
 
 .ds-textarea {
@@ -669,27 +663,6 @@
   padding: var(--ds-space-2) var(--ds-space-3);
   line-height: 1.5;
   resize: vertical;
-}
-
-.ds-select {
-  position: relative;
-  display: block;
-  min-width: 0;
-}
-
-.ds-select-control {
-  padding-right: 2rem;
-  appearance: none;
-}
-
-.ds-select-chevron {
-  position: absolute;
-  top: 50%;
-  right: var(--ds-space-3);
-  display: inline-flex;
-  color: var(--text-muted, #6b6865);
-  pointer-events: none;
-  transform: translateY(-50%);
 }
 
 /* Dialog: header · scrolling body · footer; a sheet on narrow viewports. */
@@ -704,8 +677,8 @@
   overflow: hidden;
   border: 0;
   border-radius: var(--ds-radius-md);
-  background: var(--surface, #fafafa);
-  color: var(--text, #0a0a0a);
+  background: var(--surface);
+  color: var(--text);
 }
 
 .ds-dialog[open] {
@@ -714,7 +687,7 @@
 }
 
 .ds-dialog::backdrop {
-  background: var(--backdrop, rgba(20, 16, 8, 0.6));
+  background: var(--backdrop);
   backdrop-filter: blur(4px);
 }
 
@@ -764,7 +737,7 @@
 .ds-dialog-description {
   max-width: 48rem;
   margin: 0;
-  color: var(--text-soft, #6b6865);
+  color: var(--text-soft);
   font-size: 0.8125rem;
   line-height: 1.5;
 }
@@ -788,19 +761,19 @@
   border: 0;
   border-radius: var(--ds-radius-sm);
   background: transparent;
-  color: var(--text-soft, #6b6865);
+  color: var(--text-soft);
   cursor: pointer;
 }
 
 .ds-dialog-close:hover {
-  background: var(--surface-soft, rgba(20, 16, 8, 0.085));
-  color: var(--text, #0a0a0a);
+  background: var(--surface-soft);
+  color: var(--text);
 }
 
 .ds-dialog-body {
   min-height: 0;
   overflow: auto;
-  border-top: 1px solid var(--line, rgba(20, 16, 8, 0.16));
+  border-top: 1px solid var(--line);
 }
 
 .ds-dialog-body-padded {
@@ -814,8 +787,8 @@
   justify-content: space-between;
   gap: var(--ds-space-3);
   padding: var(--ds-space-3) var(--ds-space-5);
-  border-top: 1px solid var(--line, rgba(20, 16, 8, 0.16));
-  background: var(--surface, #fafafa);
+  border-top: 1px solid var(--line);
+  background: var(--surface);
 }
 
 .ds-dialog-footer-actions {
@@ -835,7 +808,7 @@
 }
 
 .ds-table tbody + tbody tr[data-ledger-day] th {
-  border-top: 1px solid var(--line, rgba(20, 16, 8, 0.16));
+  border-top: 1px solid var(--line);
 }
 
 /* A first column that stays put while the wrapper scrolls sideways
@@ -845,11 +818,11 @@
   position: sticky;
   left: 0;
   z-index: 1;
-  background: var(--surface, #fafafa);
+  background: var(--surface);
 }
 
 .ds-table tr.is-highlighted td {
-  background: var(--surface-selected, rgba(20, 16, 8, 0.12));
+  background: var(--surface-selected);
   transition: background 600ms var(--ds-ease-standard);
 }
 
@@ -874,7 +847,7 @@
     display: grid;
     gap: var(--ds-space-3);
     padding: var(--ds-space-4) 0;
-    border-top: 1px solid var(--line, rgba(20, 16, 8, 0.16));
+    border-top: 1px solid var(--line);
   }
 
   .ds-table-collapse td {
@@ -885,7 +858,7 @@
   .ds-table-collapse td[data-label]::before {
     display: block;
     margin-bottom: var(--ds-space-1);
-    color: var(--text-muted, #6b6865);
+    color: var(--text-muted);
     font-family: var(--font-mono);
     font-size: var(--ds-text-label);
     font-weight: 500;

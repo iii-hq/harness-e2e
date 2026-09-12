@@ -1,1 +1,3 @@
 data_dir: ~/.iii/data/harness-e2e
+control_database: harness_e2e
+control_namespace: harness-e2e-control

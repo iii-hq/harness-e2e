@@ -1,46 +1,17 @@
-mod api;
 mod assessment_projection;
-mod assets;
 mod bus;
 mod controller;
 mod live_progress;
-mod plan_store;
-mod plans;
-mod presenter;
-mod proxy;
-mod read_model;
+mod plan_projection;
+pub(crate) mod presenter;
+pub(crate) mod read_model;
 mod store;
 
-use std::net::SocketAddr;
-use std::path::PathBuf;
+pub(crate) use read_model::ExecutionProjection;
 
 use anyhow::Result;
-use axum::http::StatusCode;
-use axum::response::{IntoResponse, Response};
-use axum::Json;
-use clap::Args;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
-use serde_json::json;
-
-#[derive(Debug, Clone, Args)]
-pub struct DashboardArgs {
-    /// Address used by the local dashboard.
-    #[arg(long, default_value = "0.0.0.0:4173")]
-    pub listen: SocketAddr,
-
-    /// WebSocket URL of the running Harness stack.
-    #[arg(long, env = "III_URL", default_value = "ws://127.0.0.1:49134")]
-    pub url: String,
-
-    /// Directory that owns local run metadata, logs, and reports.
-    #[arg(long, default_value = "target/harness-e2e-local-runs")]
-    pub runs_dir: PathBuf,
-
-    /// Present retained reports without exposing local execution endpoints.
-    #[arg(long)]
-    pub view_only: bool,
-}
 
 #[derive(Debug, Clone, Serialize, JsonSchema)]
 struct Defaults {
@@ -123,63 +94,26 @@ struct RunSnapshot {
     defaults: Defaults,
 }
 
-#[derive(Debug)]
-struct ApiError {
-    status: StatusCode,
-    message: String,
-}
-
-impl ApiError {
-    fn bad_request(message: impl Into<String>) -> Self {
-        Self {
-            status: StatusCode::BAD_REQUEST,
-            message: message.into(),
-        }
-    }
-
-    fn conflict(message: impl Into<String>) -> Self {
-        Self {
-            status: StatusCode::CONFLICT,
-            message: message.into(),
-        }
-    }
-
-    fn not_found(message: impl Into<String>) -> Self {
-        Self {
-            status: StatusCode::NOT_FOUND,
-            message: message.into(),
-        }
-    }
-
-    fn internal(error: impl std::fmt::Display) -> Self {
-        Self {
-            status: StatusCode::INTERNAL_SERVER_ERROR,
-            message: error.to_string(),
-        }
-    }
-}
-
-impl IntoResponse for ApiError {
-    fn into_response(self) -> Response {
-        (self.status, Json(json!({ "error": self.message }))).into_response()
-    }
-}
-
-pub async fn serve(args: DashboardArgs) -> Result<()> {
-    api::serve(args).await
-}
-
 /// Register the dashboard read, plan, run, status, and cancellation functions
 /// against an already registered E2E control plane.
 pub async fn register_worker_functions(
     iii: &iii_sdk::IIIClient,
     control: crate::control::ControlPlane,
 ) -> Result<()> {
-    api::register_worker_functions(iii, control).await
+    let events = Some(bus::DashboardEvents::register(iii));
+    let controller = controller::Controller::new(
+        control.url().to_string(),
+        control.output_root().to_path_buf(),
+        events,
+        Some(control),
+    )
+    .await?;
+    bus::register_functions(iii, controller);
+    Ok(())
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use std::collections::BTreeMap;
     use std::path::Path;
 
@@ -223,7 +157,7 @@ mod tests {
         }
     }
 
-    fn report() -> E2eReport {
+    pub(crate) fn report() -> E2eReport {
         let execution = ExecutionIdentity {
             execution_id: "execution".into(),
             lane: "local".into(),
@@ -309,7 +243,7 @@ mod tests {
         report.write_to(output, &manifest).unwrap();
     }
 
-    fn metadata() -> RunMetadata {
+    pub(super) fn metadata() -> RunMetadata {
         RunMetadata {
             id: "local-20260807T120000-abcdef12".into(),
             label: "first run".into(),
@@ -472,12 +406,8 @@ mod tests {
         let root = tempfile::tempdir().unwrap();
         // Initialize before writing metadata so startup recovery does not cancel the fixture.
         let controller = controller::Controller::new(
-            DashboardArgs {
-                listen: "127.0.0.1:0".parse().unwrap(),
-                url: "ws://localhost:49134".into(),
-                runs_dir: root.path().into(),
-                view_only: true,
-            },
+            "ws://localhost:49134".into(),
+            root.path().into(),
             None,
             None,
         )

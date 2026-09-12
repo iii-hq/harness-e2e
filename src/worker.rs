@@ -10,18 +10,34 @@ use serde::{Deserialize, Serialize};
 
 use crate::control::ControlPlane;
 use crate::manifest::WORKER_NAME;
+use crate::persistence::Persistence;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct WorkerConfig {
-    /// Directory where E2E execution records, plans, reports and dashboard state live.
+    /// Directory for native evidence bundles, journals, logs and exports.
     pub data_dir: String,
+    /// Database name in the dedicated control-plane namespace.
+    #[serde(default = "default_control_database")]
+    pub control_database: String,
+    /// Namespace that owns the control-plane database worker.
+    #[serde(default = "default_control_namespace")]
+    pub control_namespace: String,
+}
+
+fn default_control_database() -> String {
+    "harness_e2e".into()
+}
+fn default_control_namespace() -> String {
+    "harness-e2e-control".into()
 }
 
 impl Default for WorkerConfig {
     fn default() -> Self {
         Self {
             data_dir: "~/.iii/data/harness-e2e".into(),
+            control_database: default_control_database(),
+            control_namespace: default_control_namespace(),
         }
     }
 }
@@ -30,6 +46,9 @@ impl WorkerConfig {
     fn validate(self) -> Result<Self, String> {
         if self.data_dir.trim().is_empty() {
             return Err("data_dir cannot be empty".into());
+        }
+        if self.control_database.trim().is_empty() || self.control_namespace.trim().is_empty() {
+            return Err("control database and namespace cannot be empty".into());
         }
         Ok(self)
     }
@@ -92,9 +111,9 @@ pub async fn serve(_args: WorkerArgs) -> Result<()> {
             ..InitOptions::default()
         },
     );
-    wait_for_state(&iii).await?;
+    wait_for_persistence(&iii, &config.control_namespace, &config.control_database).await?;
 
-    let data_dir = resolve_data_dir(&config.data_dir)?;
+    let data_dir = resolve_data_dir(&config.data_dir, &environment.config)?;
     std::fs::create_dir_all(&data_dir)
         .with_context(|| format!("create worker data directory {}", data_dir.display()))?;
     tracing::info!(
@@ -103,9 +122,18 @@ pub async fn serve(_args: WorkerArgs) -> Result<()> {
         config = %environment.config.display(),
         "Harness E2E storage directory selected"
     );
-    let control = ControlPlane::new(iii.clone(), environment.url, data_dir)
-        .await
-        .context("restore the E2E control plane")?;
+    let control = ControlPlane::new_with_persistence(
+        iii.clone(),
+        environment.url,
+        data_dir,
+        Persistence::new(
+            iii.clone(),
+            config.control_database.clone(),
+            config.control_namespace.clone(),
+        ),
+    )
+    .await
+    .context("restore the E2E control plane")?;
     control.register();
     crate::console_ui::register(&iii);
     crate::dashboard::register_worker_functions(&iii, control.clone())
@@ -117,19 +145,28 @@ pub async fn serve(_args: WorkerArgs) -> Result<()> {
     Ok(())
 }
 
-fn load_config(path: &Path) -> Result<WorkerConfig> {
+pub fn load_config(path: &Path) -> Result<WorkerConfig> {
     let source = std::fs::read_to_string(path)
-        .with_context(|| format!("read III_CONFIG {}", path.display()))?;
+        .with_context(|| format!("read worker config {}", path.display()))?;
     let config: WorkerConfig = serde_yaml::from_str(&source)
-        .with_context(|| format!("decode III_CONFIG {}", path.display()))?;
+        .with_context(|| format!("decode worker config {}", path.display()))?;
     config.validate().map_err(anyhow::Error::msg)
 }
 
-fn resolve_data_dir(value: &str) -> Result<PathBuf> {
+pub fn resolve_data_dir(value: &str, config_path: &Path) -> Result<PathBuf> {
     if value.trim().is_empty() {
         bail!("worker config data_dir cannot be empty");
     }
-    expand_home(value)
+    let path = expand_home(value)?;
+    if path.is_absolute() {
+        return Ok(path);
+    }
+    Ok(config_path
+        .canonicalize()
+        .with_context(|| format!("resolve worker config {}", config_path.display()))?
+        .parent()
+        .context("worker config has no parent directory")?
+        .join(path))
 }
 
 fn expand_home(value: &str) -> Result<PathBuf> {
@@ -146,26 +183,34 @@ fn expand_home(value: &str) -> Result<PathBuf> {
     Ok(PathBuf::from(value))
 }
 
-async fn wait_for_state(iii: &iii_sdk::IIIClient) -> Result<()> {
-    // The probe reads the execution scope, so it slows down as durable history
-    // grows. A one second budget starts failing after a few dozen executions and
-    // the worker then never registers.
+async fn wait_for_persistence(
+    iii: &iii_sdk::IIIClient,
+    namespace: &str,
+    database: &str,
+) -> Result<()> {
     let deadline = tokio::time::Instant::now() + Duration::from_secs(60);
     loop {
         let ready = iii
-            .trigger(TriggerRequest {
-                function_id: "state::list_keys".into(),
-                payload: serde_json::json!({ "scope": "harness_e2e_execution" }),
-                action: None,
-                timeout_ms: Some(15_000),
-            })
+            .trigger(
+                TriggerRequest {
+                    function_id: "database::query".into(),
+                    payload: serde_json::json!({
+                        "db": database,
+                        "sql": "SELECT 1",
+                        "params": [],
+                    }),
+                    action: None,
+                    timeout_ms: Some(15_000),
+                }
+                .namespace(namespace),
+            )
             .await
             .is_ok();
         if ready {
             return Ok(());
         }
         if tokio::time::Instant::now() >= deadline {
-            bail!("state::list_keys was not ready before the startup deadline");
+            bail!("control-plane database was not ready before the startup deadline");
         }
         tokio::time::sleep(Duration::from_millis(100)).await;
     }
@@ -199,7 +244,7 @@ mod tests {
         assert!(load_config(&missing)
             .unwrap_err()
             .to_string()
-            .contains("read III_CONFIG"));
+            .contains("read worker config"));
     }
 
     #[test]
@@ -211,6 +256,36 @@ mod tests {
             .unwrap_err()
             .to_string()
             .contains("data_dir cannot be empty"));
+    }
+
+    #[test]
+    fn config_preserves_custom_persistence_destination() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("config.yaml");
+        std::fs::write(
+            &path,
+            "data_dir: /tmp/e2e-evidence\ncontrol_database: custom_db\ncontrol_namespace: campaign-123\n",
+        )
+        .unwrap();
+        let config = load_config(&path).unwrap();
+        assert_eq!(config.control_database, "custom_db");
+        assert_eq!(config.control_namespace, "campaign-123");
+        assert_eq!(
+            resolve_data_dir(&config.data_dir, &path).unwrap(),
+            PathBuf::from("/tmp/e2e-evidence")
+        );
+    }
+
+    #[test]
+    fn relative_data_directory_is_resolved_from_config_file() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("config.yaml");
+        std::fs::write(&path, "data_dir: evidence\n").unwrap();
+        let config = load_config(&path).unwrap();
+        assert_eq!(
+            resolve_data_dir(&config.data_dir, &path).unwrap(),
+            directory.path().join("evidence")
+        );
     }
 
     #[test]

@@ -13,6 +13,7 @@ pub(super) struct StoredRun {
     pub(super) live_progress_error: Option<String>,
 }
 
+#[cfg(test)]
 pub(super) fn write_metadata(run_dir: &Path, metadata: &RunMetadata) -> Result<()> {
     fs::create_dir_all(run_dir).with_context(|| format!("create {}", run_dir.display()))?;
     let target = run_dir.join("metadata.json");
@@ -145,6 +146,7 @@ fn observed_metadata(run_dir: &Path, report: &E2eReport) -> Result<RunMetadata> 
     })
 }
 
+#[cfg(test)]
 pub(super) fn load_runs(runs_dir: &Path) -> Result<Vec<StoredRun>> {
     let mut runs = Vec::new();
     for entry in fs::read_dir(runs_dir)? {

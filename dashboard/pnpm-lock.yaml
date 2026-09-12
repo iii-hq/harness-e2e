@@ -8,18 +8,6 @@ importers:
 
   .:
     dependencies:
-      '@fontsource/chivo-mono':
-        specifier: ^5.2.8
-        version: 5.3.0
-      '@fontsource/geist':
-        specifier: ^5.3.0
-        version: 5.3.0
-      '@fontsource/inter':
-        specifier: ^5.2.8
-        version: 5.3.0
-      iii-browser-sdk:
-        specifier: ^0.23.0
-        version: 0.23.0
       lucide-react:
         specifier: ^1.16.0
         version: 1.31.0(react@19.2.8)
@@ -51,6 +39,9 @@ importers:
       playwright:
         specifier: 1.62.1
         version: 1.62.1
+      tailwindcss:
+        specifier: 4.3.0
+        version: 4.3.0
       typescript:
         specifier: ^6.0.3
         version: 6.0.3
@@ -119,15 +110,6 @@ packages:
     engines: {node: '>=14.21.3'}
     cpu: [x64]
     os: [win32]
-
-  '@fontsource/chivo-mono@5.3.0':
-    resolution: {integrity: sha512-JhGFmYUkWc/jQ5yQt8tp02VO1gouolfnSfNbo8qCuET7Cu6X2VieLpic2ZXQPvDQBcqjjrmruPnkGnoYmxMlaQ==}
-
-  '@fontsource/geist@5.3.0':
-    resolution: {integrity: sha512-u03ftlfVwb05uijq2jGDJ03/HKGqMKaNFk7KOhkpBUex8+BhrAOfMs/XciJ2UUNUX9fEsZbZQld/RWMA2oFU7g==}
-
-  '@fontsource/inter@5.3.0':
-    resolution: {integrity: sha512-RofMylZmjlJEfELXeNHFWBRcSs75rGU/6bV2S2jfnvv/3rPXPGe0LgUJTklcHZ9lM4OZmAVFhcJPnACfb91A3g==}
 
   '@jridgewell/gen-mapping@0.3.13':
     resolution: {integrity: sha512-2kkt/7niJ6MgEPxF0bYdQ6etZaA+fQvDcLKckhy1yIQOzaoKjBBjSj63/aLVjYE3qhRt5dvM+uUyfCg6UKCBbA==}
@@ -454,9 +436,6 @@ packages:
   graceful-fs@4.2.11:
     resolution: {integrity: sha512-RbJ5/jmFcNNCcDV5o9eTnBLJ/HszWV0P73bc+Ff4nS/rJj+YaS6IGyiOL0VoBYX+l1Wrl3k63h/KrH+nhJ0XvQ==}
 
-  iii-browser-sdk@0.23.0:
-    resolution: {integrity: sha512-tnTi6Szu5NwtCJNpA9hcbfIJ0Kb9BjXbRdA4gwswRKiSyduhoVNUoHaK8XTMCgQs/6vWRqwhGn1CHeVYeJB2cg==}
-
   jiti@2.7.0:
     resolution: {integrity: sha512-AC/7JofJvZGrrneWNaEnJeOLUx+JlGt7tNa0wZiRPT4MY1wmfKjt2+6O2p2uz2+skll8OZZmJMNqeke7kKbNgQ==}
     hasBin: true
@@ -680,6 +659,9 @@ packages:
   std-env@4.2.0:
     resolution: {integrity: sha512-oCUKSupKTHX53EyjDtuZQ64pjLJ6yYCtpmEw0goYxtjG9KpbRe8KAsl2tBUGU9DyMcJ0RwJ8GqJAFzMXcXW1Rw==}
 
+  tailwindcss@4.3.0:
+    resolution: {integrity: sha512-y6nxMGB1nMW9R6k96e5gdIFzcfL/gTJRNaqGes1YvkLnPVXzWgbqFF2yLC0T8G774n24cx3Pe8XrKoniCOAH+Q==}
+
   tailwindcss@4.3.3:
     resolution: {integrity: sha512-gOhV3P7ufE62QDGg1zVaTgCR+EtPv92k2nIhVcVKcLmxT1sUBsQGhnZj175j+MqRt4zLF7ic+sCYjfhxMxj7YQ==}
 
@@ -835,12 +817,6 @@ snapshots:
 
   '@biomejs/cli-win32-x64@2.5.8':
     optional: true
-
-  '@fontsource/chivo-mono@5.3.0': {}
-
-  '@fontsource/geist@5.3.0': {}
-
-  '@fontsource/inter@5.3.0': {}
 
   '@jridgewell/gen-mapping@0.3.13':
     dependencies:
@@ -1079,8 +1055,6 @@ snapshots:
 
   graceful-fs@4.2.11: {}
 
-  iii-browser-sdk@0.23.0: {}
-
   jiti@2.7.0: {}
 
   lightningcss-android-arm64@1.32.0:
@@ -1249,6 +1223,8 @@ snapshots:
   stackback@0.0.2: {}
 
   std-env@4.2.0: {}
+
+  tailwindcss@4.3.0: {}
 
   tailwindcss@4.3.3: {}
 

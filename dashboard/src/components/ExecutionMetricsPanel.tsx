@@ -5,7 +5,6 @@ import {
   buildExecutionMetrics,
   type UsageCoverage,
 } from '@/lib/execution-metrics'
-import { formatDuration } from '@/lib/execution-view'
 
 function number(value: number | null) {
   return value === null
@@ -15,11 +14,6 @@ function number(value: number | null) {
 
 function percent(value: number | null) {
   return value === null ? '—' : `${number(value * 100)}%`
-}
-
-function cost(value: number | null) {
-  if (value === null) return '—'
-  return value > 0 && value < 0.0001 ? '<$0.0001' : `$${value.toFixed(4)}`
 }
 
 /** Audit ED-26: inside the "counts and coverage" layer the layer row is the
@@ -88,34 +82,6 @@ export function ExecutionMetricsPanel({
       unit: 'runs',
       note: 'Retries plus terminal attempts of non-completed tasks.',
     },
-    {
-      label: 'Execution cost',
-      metric: metrics.cost,
-      format: cost,
-      unit: 'runs',
-      note: 'Reported subject cost, including retries.',
-    },
-    {
-      label: 'Accumulated run time',
-      metric: metrics.durationMs,
-      format: (value) => (value === null ? '—' : formatDuration(value / 1_000)),
-      unit: 'runs',
-      note: 'Sum of run durations including retries; not elapsed wall-clock time.',
-    },
-    {
-      label: 'Function calls',
-      metric: metrics.functionCalls,
-      format: number,
-      unit: 'runs',
-      note: 'Recorded run efficiency, including retries.',
-    },
-    {
-      label: 'Function errors',
-      metric: metrics.functionErrors,
-      format: number,
-      unit: 'runs',
-      note: 'Recorded run efficiency, including retries.',
-    },
   ]
   return (
     <Shell headless={headless}>
@@ -135,8 +101,8 @@ export function ExecutionMetricsPanel({
         </div>
       )}
       <p className="mt-2 mb-0 text-xs leading-5 text-ink-soft">
-        Whole-execution metrics, pooled across all scenarios and repetitions.
-        Report coverage and scenario pass rate are not task completion.
+        Run outcomes, evidence coverage and retry efficiency. Report coverage
+        and scenario pass rate are not task completion.
       </p>
       {!metrics.scopeComplete ? (
         <p className="mt-3 mb-0 text-sm text-warning" role="status">
@@ -189,7 +155,7 @@ export function ExecutionMetricsPanel({
             />
           </div>
           <DataTable
-            caption="Consolidated execution consumption and efficiency"
+            caption="Run evidence and efficiency"
             minWidth="620px"
             wrapClassName="mt-5"
           >

@@ -1,0 +1,32 @@
+{
+  "purpose": "Dados demonstrativos dos wireframes; não são medições de produção.",
+  "units": { "score": "0-100", "duration_ms": "ms", "cost_usd": "USD", "counters": "inteiros" },
+  "tests": [
+    {
+      "id": "minimal_path", "version": 3,
+      "a": { "score": 80, "input_normal": 10000, "output_normal": 2000, "cache_read": 30000, "cache_write": 5000, "turns": 8, "function_calls": 20, "function_errors": 1, "duration_ms": 120000, "cost_usd": 0.04 },
+      "b": { "score": 90, "input_normal": 8000, "output_normal": 1500, "cache_read": 35000, "cache_write": 4000, "turns": 6, "function_calls": 16, "function_errors": 0, "duration_ms": 90000, "cost_usd": 0.03 }
+    },
+    {
+      "id": "persistent_state", "version": 1,
+      "a": { "score": 92, "input_normal": 20000, "output_normal": 4000, "cache_read": 50000, "cache_write": 6000, "turns": 12, "function_calls": 30, "function_errors": 2, "duration_ms": 180000, "cost_usd": 0.08 },
+      "b": { "score": 96, "input_normal": 18000, "output_normal": 3500, "cache_read": 60000, "cache_write": 5000, "turns": 10, "function_calls": 25, "function_errors": 1, "duration_ms": 150000, "cost_usd": 0.07 }
+    },
+    {
+      "id": "contention_ledger", "version": 4,
+      "a": { "score": 70, "input_normal": 30000, "output_normal": 6000, "cache_read": 70000, "cache_write": 7000, "turns": 20, "function_calls": 50, "function_errors": 3, "duration_ms": 300000, "cost_usd": 0.12 },
+      "b": { "score": 0, "input_normal": 15000, "output_normal": 2000, "cache_read": 30000, "cache_write": 3000, "turns": 5, "function_calls": 10, "function_errors": 4, "duration_ms": 60000, "cost_usd": 0.05 }
+    },
+    {
+      "id": "timer_wake", "version": 8,
+      "a": { "score": 85, "input_normal": 5000, "output_normal": 1000, "cache_read": 10000, "cache_write": 1000, "turns": 4, "function_calls": 8, "function_errors": 0, "duration_ms": 40000, "cost_usd": 0.01 },
+      "b": null
+    }
+  ],
+  "expected_filtered": {
+    "included": ["minimal_path", "persistent_state"],
+    "excluded": { "contention_ledger": "nota zero em B", "timer_wake": "resultado ausente em B" },
+    "a": { "score": 86, "input_normal": 30000, "output_normal": 6000, "cache_read": 80000, "cache_write": 11000, "input_total": 121000, "tokens_total": 127000, "turns": 20, "function_calls": 50, "function_errors": 3, "duration_ms": 300000, "cost_usd": 0.12 },
+    "b": { "score": 93, "input_normal": 26000, "output_normal": 5000, "cache_read": 95000, "cache_write": 9000, "input_total": 130000, "tokens_total": 135000, "turns": 16, "function_calls": 41, "function_errors": 1, "duration_ms": 240000, "cost_usd": 0.10 }
+  }
+}

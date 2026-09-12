@@ -619,7 +619,7 @@ export function ExecutionSetup({
               />
               <Input
                 id={`${idPrefix}-scenario-search`}
-                className="pr-9 pl-9"
+                style={{ paddingInline: '2.25rem' }}
                 type="text"
                 value={query}
                 placeholder="Search by name or id"
