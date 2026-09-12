@@ -25,6 +25,7 @@ import {
   type DashboardExecutionDetail,
   type DashboardExecutionSummary,
   getDashboardDataBridge,
+  type ImportedPlan,
   type JsonObject,
   type LocalPlan,
 } from '@/lib/dashboard-data-source'
@@ -129,7 +130,7 @@ function scenarioLink(
 
 /** Detail for a history imported into the local Harness store. */
 export function ImportedPlanDetailPage({ planId }: { planId: string }) {
-  const planKey = planId
+  const [plan, setPlan] = useState<ImportedPlan | null>(null)
   const [bridge, setBridge] = useState<DashboardDataBridge | null>(null)
   const [history, setHistory] = useState<DashboardExecutionSummary[]>([])
   const [localPlans, setLocalPlans] = useState<LocalPlan[]>([])
@@ -161,6 +162,7 @@ export function ImportedPlanDetailPage({ planId }: { planId: string }) {
     const imported = await next.getPlan(planId)
     if (imported.origin !== 'remote')
       throw new Error('This plan is not an imported history.')
+    setPlan(imported)
     const executions = remote
       .filter((execution) => imported.execution_ids.includes(execution.id))
       .sort((left, right) =>
@@ -355,7 +357,9 @@ export function ImportedPlanDetailPage({ planId }: { planId: string }) {
       const imported = (await bridge.planControl({
         action: 'reproduce_reference',
         reference_execution_id: reference.execution.id,
-        label: reference.execution.label || `${planKey} local reproduction`,
+        label:
+          reference.execution.label ||
+          `${plan?.label || plan?.source.plan_key || 'Imported plan'} local reproduction`,
         subject: object(reference.execution.plan).subject,
         judge: object(reference.execution.plan).judge,
         materialized: reference.materialized,
@@ -409,9 +413,7 @@ export function ImportedPlanDetailPage({ planId }: { planId: string }) {
     }
   }
 
-  const planName = reference
-    ? text(object(reference.execution.plan).name) || planKey
-    : planKey
+  const planName = plan?.label || plan?.source.plan_key || 'Imported plan'
 
   return (
     <>
@@ -424,7 +426,11 @@ export function ImportedPlanDetailPage({ planId }: { planId: string }) {
       <div className="ds-root page-shell w-[calc(100%_-_1.5rem)] max-w-[1420px] pt-5 pb-16 md:w-[calc(100%_-_3rem)]">
         <PageHeader
           title={planName}
-          context="Reference: Release Control"
+          context={
+            plan
+              ? `Release Control · ${plan.source.instance_id} · ${plan.source.plan_key}`
+              : 'Release Control'
+          }
           summary="Shared execution history beside results produced by your current local Harness."
           actions={
             <>
@@ -463,8 +469,8 @@ export function ImportedPlanDetailPage({ planId }: { planId: string }) {
         ) : history.length === 0 ? (
           <EmptyState
             className="mt-5"
-            title="No Release Control history found"
-            description="Keep an authenticated Release Control tab connected to this local Engine, then reload the plan."
+            title="No executions in this local copy"
+            description="Update history to retrieve the executions retained by Release Control."
           />
         ) : (
           <>
@@ -817,7 +823,7 @@ export function ImportedPlanDetailPage({ planId }: { planId: string }) {
               idPrefix="rc-reference"
               mode="plan"
               stickyOffset="dialog"
-              label={reference?.execution.label || planKey}
+              label={reference?.execution.label || planName}
               purpose="Local reproduction of a shared Release Control execution."
               url={localUrl}
               subject={modelValue(frozen.subject)}

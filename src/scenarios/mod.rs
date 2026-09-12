@@ -30,6 +30,7 @@ mod domain;
 pub mod engineering_endurance_ladder;
 pub mod engineering_ticket;
 pub mod fanout_ladder;
+pub(crate) mod fixture;
 pub mod git_regression_forensics;
 pub mod incident_response;
 pub mod kanban;
@@ -1051,7 +1052,7 @@ mod tests {
             (ScenarioId::QuorumFanIn, 3),
             (ScenarioId::ContentionLedger, 4),
             (ScenarioId::WakeChainSoak, 5),
-            (ScenarioId::ChessEngineBuild, 3),
+            (ScenarioId::ChessEngineBuild, 4),
             (ScenarioId::ChessPlayLadder, 4),
             (ScenarioId::TrendBlog, 4),
             (ScenarioId::ToolContractRecovery, 4),

@@ -130,7 +130,34 @@ pub(crate) fn validate_saved_plan(plan: &SavedPlan) -> Result<()> {
         artifact::sha256_value(&plan.snapshot)? == plan.snapshot_sha256,
         "Saved plan snapshot hash does not match"
     );
-    verify_snapshot(plan)
+    ensure!(
+        configuration_digest(&plan.plan, &plan.snapshot_sha256, true)? == plan.configuration_sha256,
+        "Saved plan configuration digest does not match"
+    );
+    Ok(())
+}
+
+pub(crate) fn migrate_saved_plan(plan: &mut SavedPlan) -> Result<Option<String>> {
+    if validate_saved_plan(plan).is_ok() {
+        return Ok(None);
+    }
+    ensure!(
+        plan.plan.reference_execution_id.is_none() && plan.plan.reference_differences.is_empty(),
+        "Legacy plan digest cannot contain reference metadata"
+    );
+    ensure!(
+        plan.plan.schema_version == PLAN_SCHEMA_VERSION
+            && !plan.plan.id.is_empty()
+            && artifact::sha256_value(&plan.snapshot)? == plan.snapshot_sha256
+            && configuration_digest(&plan.plan, &plan.snapshot_sha256, false)?
+                == plan.configuration_sha256,
+        "Saved plan configuration or snapshot digest differs"
+    );
+    let previous = std::mem::replace(
+        &mut plan.configuration_sha256,
+        configuration_digest(&plan.plan, &plan.snapshot_sha256, true)?,
+    );
+    Ok(Some(previous))
 }
 
 pub(crate) fn validate_saved_plan_execution(execution: &PlanExecution) -> Result<()> {
@@ -210,21 +237,24 @@ impl Runner for ControlPlane {
                 .map(|e| format!("Native control-plane contracts are incompatible: {e:#}"))
                 .unwrap_or_else(|| "Native control-plane contracts are compatible.".into()),
         ));
-        if config
-            .scenario_ids
-            .iter()
-            .any(|id| id == "shell_coder_sandbox")
-        {
-            let fixture = crate::scenarios::shell_coder_sandbox::validate_fixture();
+        if config.scenario_ids.iter().any(|id| {
+            matches!(
+                id.as_str(),
+                "shell_coder_sandbox" | "chess_engine_build" | "trend_blog"
+            )
+        }) {
+            let git = tokio::time::timeout(
+                std::time::Duration::from_secs(5),
+                tokio::process::Command::new("git")
+                    .arg("--version")
+                    .kill_on_drop(true)
+                    .output(),
+            )
+            .await;
             checks.push(check(
                 "shared_fixture",
-                fixture.is_ok(),
-                fixture
-                    .err()
-                    .map(|e| format!("Pinned shared engineering fixture is unavailable: {e:#}"))
-                    .unwrap_or_else(|| {
-                        "Pinned shared engineering fixture revision and file digests match.".into()
-                    }),
+                matches!(git, Ok(Ok(output)) if output.status.success()),
+                "Git is required to prepare the embedded shared fixture automatically during setup.",
             ));
         }
         Ok(checks)
@@ -1296,7 +1326,7 @@ fn prepared_plan(plan: LocalPlan, snapshot: Option<ProfileSnapshot>) -> Result<S
         .unwrap_or_else(|| snapshot_for_plan(&plan))?;
     let snapshot_sha256 = artifact::sha256_value(&snapshot)?;
     Ok(SavedPlan {
-        configuration_sha256: configuration_digest(&plan, &snapshot_sha256)?,
+        configuration_sha256: configuration_digest(&plan, &snapshot_sha256, true)?,
         plan,
         snapshot,
         snapshot_sha256,
@@ -1327,8 +1357,12 @@ fn snapshot_for_plan(plan: &super::LocalPlan) -> Result<ProfileSnapshot> {
     master.materialize_scope(profile, plan.seed)
 }
 
-fn configuration_digest(config: &LocalPlan, snapshot_digest: &str) -> Result<String> {
-    artifact::sha256_value(&json!({
+fn configuration_digest(
+    config: &LocalPlan,
+    snapshot_digest: &str,
+    include_reference: bool,
+) -> Result<String> {
+    let mut value = json!({
         "label": config.label, "purpose": config.purpose, "url": config.url,
         "model": config.model, "provider": config.provider,
         "judge_model": config.judge_model, "judge_provider": config.judge_provider,
@@ -1338,7 +1372,18 @@ fn configuration_digest(config: &LocalPlan, snapshot_digest: &str) -> Result<Str
         "reference_execution_id": config.reference_execution_id,
         "reference_differences": config.reference_differences,
         "snapshot_sha256": snapshot_digest,
-    }))
+    });
+    if !include_reference {
+        value
+            .as_object_mut()
+            .unwrap()
+            .remove("reference_execution_id");
+        value
+            .as_object_mut()
+            .unwrap()
+            .remove("reference_differences");
+    }
+    artifact::sha256_value(&value)
 }
 fn judge_required(snapshot: &ProfileSnapshot) -> bool {
     snapshot.protected_supervisor_required
@@ -1368,12 +1413,7 @@ fn validate_config(config: &LocalPlan, snapshot: &ProfileSnapshot, url: &str) ->
     Ok(())
 }
 fn verify_snapshot(plan: &SavedPlan) -> Result<()> {
-    ensure!(
-        artifact::sha256_value(&plan.snapshot)? == plan.snapshot_sha256
-            && configuration_digest(&plan.plan, &plan.snapshot_sha256)?
-                == plan.configuration_sha256,
-        "Saved plan configuration or snapshot digest differs."
-    );
+    validate_saved_plan(plan)?;
     for expected in &plan.snapshot.cases {
         let id = expected["scenario_id"]
             .as_str()
@@ -2138,7 +2178,7 @@ mod tests {
         historical.snapshot.cases[0]["contract_sha256"] = json!("historical-contract");
         historical.snapshot_sha256 = artifact::sha256_value(&historical.snapshot).unwrap();
         historical.configuration_sha256 =
-            configuration_digest(&historical.plan, &historical.snapshot_sha256).unwrap();
+            configuration_digest(&historical.plan, &historical.snapshot_sha256, true).unwrap();
         let historical_snapshot = serde_json::to_value(&historical.snapshot).unwrap();
         manager.write_plan(&historical).await.unwrap();
 
@@ -2165,6 +2205,110 @@ mod tests {
         let execution = terminal(&manager, started.last_attempt_id.as_deref().unwrap()).await;
         assert!(execution.baseline_eligible);
         assert_eq!(runner.submitted.load(Ordering::SeqCst), 2);
+    }
+
+    #[tokio::test]
+    async fn migration_converts_only_verified_legacy_plan_and_matching_receipts() {
+        let root = tempfile::tempdir().unwrap();
+        let runner = Arc::new(FakeRunner::new(root.path().into()));
+        let manager = manager(root.path(), runner.clone());
+        let created = manager.create_local(request("smoke")).await.unwrap();
+        let current = manager.create_local(request("smoke")).await.unwrap();
+        let mut historical = manager.read_plan(&created.id).await.unwrap();
+        historical.snapshot.cases[0]["contract_sha256"] = json!("retired-contract");
+        historical.snapshot_sha256 = artifact::sha256_value(&historical.snapshot).unwrap();
+        historical.configuration_sha256 =
+            configuration_digest(&historical.plan, &historical.snapshot_sha256, false).unwrap();
+        let old_hash = historical.configuration_sha256.clone();
+        let snapshot = serde_json::to_value(&historical.snapshot).unwrap();
+        manager.write_plan(&historical).await.unwrap();
+
+        let receipt = |id: &str, digest: &str| PlanExecution {
+            schema: "harness-e2e-plan-execution/v1".into(),
+            id: id.into(),
+            plan_id: created.id.clone(),
+            idempotency_key: id.into(),
+            configuration_sha256: digest.into(),
+            role: Role::Baseline,
+            state: "completed".into(),
+            started_at: now(),
+            updated_at: now(),
+            finished_at: Some(now()),
+            cancel_requested: false,
+            error: None,
+            baseline_eligible: true,
+            slots: Vec::new(),
+            measurements: None,
+            system_under_test: None,
+        };
+        fs::create_dir_all(root.path().join("plan-store/executions")).unwrap();
+        write_json(
+            &manager.execution_path("matching").unwrap(),
+            &receipt("matching", &old_hash),
+        )
+        .unwrap();
+        write_json(
+            &manager.execution_path("earlier").unwrap(),
+            &receipt("earlier", "older-revision"),
+        )
+        .unwrap();
+
+        let (plans, executions) = crate::persistence::load_plan_store(root.path()).unwrap();
+        let migrated = plans
+            .iter()
+            .find(|plan| plan.plan.id == created.id)
+            .unwrap();
+        assert_eq!(serde_json::to_value(&migrated.snapshot).unwrap(), snapshot);
+        assert_eq!(migrated.snapshot_sha256, historical.snapshot_sha256);
+        assert_eq!(migrated.plan.id, historical.plan.id);
+        assert_eq!(
+            migrated.configuration_sha256,
+            configuration_digest(&migrated.plan, &migrated.snapshot_sha256, true).unwrap()
+        );
+        assert_eq!(
+            plans
+                .iter()
+                .find(|plan| plan.plan.id == current.id)
+                .unwrap()
+                .configuration_sha256,
+            manager
+                .read_plan(&current.id)
+                .await
+                .unwrap()
+                .configuration_sha256
+        );
+        assert_eq!(
+            executions
+                .iter()
+                .find(|execution| execution.id == "matching")
+                .unwrap()
+                .configuration_sha256,
+            migrated.configuration_sha256
+        );
+        assert_eq!(
+            executions
+                .iter()
+                .find(|execution| execution.id == "earlier")
+                .unwrap()
+                .configuration_sha256,
+            "older-revision"
+        );
+        assert!(verify_snapshot(migrated).is_err());
+        manager.write_plan(migrated).await.unwrap();
+        assert!(!manager.get_local(&created.id).await.unwrap().compatible);
+        assert!(manager
+            .start(&created.id, "cannot-execute", Role::Baseline)
+            .await
+            .is_err());
+        assert_eq!(runner.submitted.load(Ordering::SeqCst), 0);
+
+        historical.plan.reference_execution_id = Some("unverified-reference".into());
+        manager.write_plan(&historical).await.unwrap();
+        assert!(crate::persistence::load_plan_store(root.path()).is_err());
+        historical.plan.reference_execution_id = None;
+        historical.configuration_sha256 = "corrupt".into();
+        manager.write_plan(&historical).await.unwrap();
+        assert!(crate::persistence::load_plan_store(root.path()).is_err());
     }
 
     #[tokio::test]
@@ -2274,7 +2418,7 @@ mod tests {
         saved.snapshot.definition_sha256 = "historical-template-revision".into();
         saved.snapshot_sha256 = artifact::sha256_value(&saved.snapshot).unwrap();
         saved.configuration_sha256 =
-            configuration_digest(&saved.plan, &saved.snapshot_sha256).unwrap();
+            configuration_digest(&saved.plan, &saved.snapshot_sha256, true).unwrap();
         manager.write_plan(&saved).await.unwrap();
         let started = manager
             .start_local(&plan.id, "baseline", Role::Baseline)

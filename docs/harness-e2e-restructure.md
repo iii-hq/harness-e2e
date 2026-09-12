@@ -629,3 +629,48 @@ A aceitação com o runtime do usuário conectado, a migração histórica e a
 implantação coordenada continuam pendentes. Esta etapa não reiniciou o Console
 em `:3113`, não executou modelos e não alterou as sessões pessoais. A ativação
 do isolamento descrito na seção 13 depende desse corte coordenado.
+
+## 16. Continuação visual e ativação local — 12/09/2026
+
+Os ajustes desta rodada estão no diretório principal, em `feat/console-metrics-ui`.
+A tabela de planos usa **Details / Reference / Results**, explicando baseline,
+comparação local e histórico importado nas respectivas células. Filtros e
+contagens agora aplicam a mesma regra: histórico importado participa de **all**,
+sem aparecer nos estados operacionais locais. O detalhe importado conserva o
+nome e a origem do plano mesmo sem execuções e orienta a atualização do histórico.
+
+Para ativar o bundle na stack existente, foi necessário migrar o banco do schema
+1 para 3. O primeiro dry-run recusou hashes de configuração anteriores aos campos
+de referência RC. A correção ficou restrita à migração explícita: valida o hash
+antigo conhecido antes de convertê-lo e atualiza somente recibos do mesmo plano
+que ainda usam esse hash. Snapshots íntegros de cenários antigos continuam
+consultáveis; o preflight mantém o bloqueio de execução quando o contrato atual
+é incompatível. Não foi introduzido fallback de leitura no runtime.
+
+Com backup anterior, dry-run e aplicação preservaram **35 planos, 33 recibos de
+execução e os 68 arquivos JSON originais**, conferidos por SHA-256. A tabela SQL
+de execuções nativas estava vazia antes da migração. Apenas o E2E foi reiniciado;
+o Console em `:3113`, o database e os demais workers permaneceram ativos. O
+Compose local também passou a apontar para o arquivo SQLite efetivamente usado,
+evitando abrir outra base no próximo restart.
+
+O [registro de validação](design/restructure-visual-2026-09-12/validation.json)
+inclui **262 testes frontend**, **20 testes Rust focais** e os limites das
+verificações. Dois testes Rust que exigem banco isolado não foram executados;
+a transação e a leitura posterior foram verificadas na stack local real.
+Builds passaram, assim como a formatação dos arquivos Rust e TSX alterados.
+Há diferenças de formatação preexistentes em `src/lib.rs` e no script de navegador.
+
+No Console real, o hash do JavaScript servido coincide com o build principal.
+Planos, Execuções e Testes foram conferidos em temas claro/escuro e larguras
+1440/720/390, sem overflow global ou do painel e sem erros de JavaScript.
+O histórico passou a listar as 33 execuções migradas; um detalhe de execução
+também abriu. As métricas por teste ausentes no histórico continuam ausentes.
+Veja [Planos](design/restructure-visual-2026-09-12/plans-desktop.png),
+[Planos em painel estreito](design/restructure-visual-2026-09-12/plans-narrow-dark.png)
+e [Execuções](design/restructure-visual-2026-09-12/executions-desktop.png).
+
+Importado vazio, filtros mistos e consulta sem RC conectado foram verificados
+no host funcional de testes. A importação RC conectada e a ativação das branches
+de isolamento de sessões permanecem separadas. Esta rodada não executou modelos,
+não fez commit, push, merge ou deployment remoto.

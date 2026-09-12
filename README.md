@@ -115,11 +115,12 @@ group, and are advisory by default while their longitudinal history is being
 calibrated. Release Control owns scheduling and dispatch; the executor keeps
 the result advisory and archives each materialized group through the
 environment-owned durable archiver.
-The code-focused campaigns use protected disposable checkouts of
-`iii-hq/e2e-fixture`. The engineering handoff uses its dedicated pinned
-revision, while `shell_coder_sandbox`, `chess_engine_build`, and `trend_blog`
-share a second pinned revision through `HARNESS_E2E_FIXTURE_PATH`. The protected
-launcher enforces the fixture and cleanup boundary.
+The engineering handoff uses a protected disposable checkout of its dedicated
+pinned revision of `iii-hq/e2e-fixture`. `shell_coder_sandbox`,
+`chess_engine_build`, and `trend_blog` prepare their reviewed fixture automatically
+from an embedded Git bundle. They require Git, but no fixture checkout or
+`HARNESS_E2E_FIXTURE_PATH` configuration. Each attempt operates on a private
+workspace; temporary source checkouts are removed after their contents are read.
 `typescript_chat_service` carries its own frozen skeleton in the repository and
 needs no checkout, but it does require Node 22.6 or newer on the runner host: the
 subject's TypeScript application is executed directly through Node type
@@ -290,7 +291,10 @@ dashboard summaries and observations, so lists and history do not load native
 reports. Storage schema 3 requires an explicit migration of schema 1 or 2 before this
 worker starts. There is no automatic startup backfill. With the E2E worker stopped
 and its database backed up, run `harness-e2e migrate-storage --url <iii-url>
---runs-dir <evidence-root>` to inspect the migration, then repeat with `--apply`.
+--config <worker-config.yaml>` to inspect the migration, then repeat with `--apply`.
+`III_CONFIG` can provide the config path instead. The command uses the same
+database, control namespace and `data_dir` as the worker; relative data paths
+resolve against the config file's directory.
 The database worker must remain available in the control namespace. Apply commits
 all projections and the schema version in one transaction; active executions
 block migration. Missing bundles are listed in the result and never reconstructed
