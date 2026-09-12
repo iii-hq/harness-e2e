@@ -2,9 +2,11 @@ import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
 import type {
   DashboardExecutionSummary,
+  ImportedPlan,
   LocalPlan,
 } from '@/lib/dashboard-data-source'
 import {
+  matchesFilter,
   PlanBaselineCell,
   PlanComparisonSummary,
   planStatePresentation,
@@ -140,4 +142,38 @@ describe('plan list comparison summary', () => {
     })
     expect(planStatePresentation(plan)).toMatchObject({ action: 'compare' })
   })
+})
+
+it('keeps imported history out of local operational filters and their counts', () => {
+  const imported: ImportedPlan = {
+    origin: 'remote',
+    id: 'imported-plan',
+    label: 'Retained RC history',
+    purpose: '',
+    created_at: null,
+    updated_at: '2026-09-12T00:00:00Z',
+    template_id: null,
+    source: {
+      instance_id: 'rc-production',
+      plan_key: 'regression',
+      captured_at: '2026-09-12T00:00:00Z',
+      active: true,
+      limitation: null,
+    },
+    configuration: null,
+    execution_ids: [],
+  }
+  const plans = [plan, imported]
+  expect(plans.filter((entry) => matchesFilter(entry, 'all'))).toEqual(plans)
+  expect(plans.filter((entry) => matchesFilter(entry, 'compared'))).toEqual([
+    plan,
+  ])
+  expect(plans.filter((entry) => matchesFilter(entry, 'running'))).toEqual([])
+  expect(plans.filter((entry) => matchesFilter(entry, 'needs_action'))).toEqual(
+    [],
+  )
+  expect(matchesFilter({ ...plan, state: 'baseline_running' }, 'running')).toBe(
+    true,
+  )
+  expect(matchesFilter({ ...plan, state: 'draft' }, 'needs_action')).toBe(true)
 })

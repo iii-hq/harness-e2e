@@ -33,8 +33,9 @@ enum Command {
     MigrateStorage {
         #[arg(long, env = "III_URL", default_value = "ws://127.0.0.1:49134")]
         url: String,
-        #[arg(long)]
-        runs_dir: PathBuf,
+        /// Compose-materialized worker config; defaults to III_CONFIG.
+        #[arg(long, env = "III_CONFIG")]
+        config: PathBuf,
         /// Commit the migration in one database transaction after backing up storage.
         #[arg(long)]
         apply: bool,
@@ -303,14 +304,19 @@ async fn main() -> Result<()> {
         Some(Command::Models(args)) => models(args).await,
         Some(Command::MigrateStorage {
             url,
-            runs_dir,
+            config: config_path,
             apply,
         }) => {
+            let config = worker::load_config(&config_path)?;
+            let data_dir = worker::resolve_data_dir(&config.data_dir, &config_path)?;
             let context = harness_e2e::context::E2eContext::connect(&url).await?;
-            let result =
-                harness_e2e::persistence::Persistence::from_client(context.client().clone())
-                    .migrate_storage(&runs_dir, apply)
-                    .await?;
+            let result = harness_e2e::persistence::Persistence::new(
+                context.client().clone(),
+                config.control_database,
+                config.control_namespace,
+            )
+            .migrate_storage(&data_dir, apply)
+            .await?;
             println!("{}", serde_json::to_string_pretty(&result)?);
             Ok(())
         }
@@ -583,6 +589,31 @@ mod tests {
         assert!(
             Cli::try_parse_from(["harness-e2e", "worker", "--url", "ws://localhost:1"]).is_err()
         );
+    }
+
+    #[test]
+    fn storage_migration_requires_worker_config_instead_of_a_runs_directory() {
+        let cli = Cli::try_parse_from([
+            "harness-e2e",
+            "migrate-storage",
+            "--config",
+            "/tmp/compose/harness-e2e.yaml",
+        ])
+        .unwrap();
+        let Some(Command::MigrateStorage { config, apply, .. }) = cli.command else {
+            panic!("expected migrate-storage command");
+        };
+        assert_eq!(config, PathBuf::from("/tmp/compose/harness-e2e.yaml"));
+        assert!(!apply);
+        assert!(Cli::try_parse_from([
+            "harness-e2e",
+            "migrate-storage",
+            "--config",
+            "/tmp/compose/harness-e2e.yaml",
+            "--runs-dir",
+            "/tmp/other",
+        ])
+        .is_err());
     }
 
     #[test]
