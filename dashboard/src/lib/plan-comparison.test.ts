@@ -612,6 +612,33 @@ describe('retained criterion points', () => {
     })
   })
 
+  it.each([
+    [null, null, 1],
+    [null, { model: 'judge', provider: 'provider' }, 0],
+    [null, undefined, 0],
+    [undefined, undefined, 0],
+    [null, {}, 0],
+  ])(
+    'pairs explicit judge identity %j / %j with %i repetitions',
+    (leftJudge, rightJudge, paired) => {
+      const left = scored([25])
+      const right = scored([0])
+      Object.assign(left.reports[0].report!, { judge: leftJudge })
+      Object.assign(right.reports[0].report!, { judge: rightJudge })
+
+      expect(
+        buildScenarioComparisons(left, right)[0].metrics.find(
+          (metric) => metric.id === 'criterion:delivery:40',
+        ),
+      ).toMatchObject({
+        baseline: 25,
+        candidate: 0,
+        delta: paired ? -25 : null,
+        evidence: { paired },
+      })
+    },
+  )
+
   it('accepts compact plan execution summaries without slots', () => {
     const baseline = scored([10, 20])
     const candidate = scored([20, 40])

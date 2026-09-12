@@ -317,6 +317,13 @@ try {
     .getByRole('button', { name: 'import selected history', exact: true })
     .click()
   await page.getByText('remote', { exact: true }).waitFor()
+  await page.getByRole('button', { name: /^running\s*0$/ }).click()
+  await page
+    .getByText('No plans match these filters', { exact: true })
+    .waitFor()
+  assert.equal(await page.getByText('remote', { exact: true }).count(), 0)
+  await page.getByRole('button', { name: 'clear filters', exact: true }).click()
+  await page.getByText('Imported local copy', { exact: true }).waitFor()
   await page.screenshot({
     path: `${screenshots}/plans-light-desktop.png`,
     fullPage: true,
@@ -365,6 +372,25 @@ try {
     .getByRole('button', { name: 'Reference: Release Control', exact: true })
     .waitFor()
   await page.locator('[data-test-comparison]').waitFor()
+  assert.equal(
+    calls.filter((call) => call.id.startsWith('release-control::')).length,
+    2,
+  )
+  imported.execution_ids = []
+  await page.goto(`${server.url}#/ext/harness-e2e/plans/${imported.id}`)
+  await page.getByRole('heading', { name: 'RC Smoke', exact: true }).waitFor()
+  await page
+    .getByText('Release Control · rc · smoke', { exact: true })
+    .waitFor()
+  await page
+    .getByText('No executions in this local copy', { exact: true })
+    .waitFor()
+  assert.equal(
+    await page
+      .getByRole('button', { name: 'update history', exact: true })
+      .isEnabled(),
+    true,
+  )
   assert.equal(
     calls.filter((call) => call.id.startsWith('release-control::')).length,
     2,

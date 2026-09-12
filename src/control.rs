@@ -523,11 +523,6 @@ const fn default_results_limit() -> u16 {
 }
 
 impl ControlPlane {
-    pub async fn new(iii: IIIClient, url: String, output_root: PathBuf) -> Result<Self> {
-        let persistence = Persistence::from_client(iii.clone());
-        Self::new_with_persistence(iii, url, output_root, persistence).await
-    }
-
     pub async fn new_with_persistence(
         iii: IIIClient,
         url: String,
@@ -3618,7 +3613,12 @@ mod tests {
         let root = tempfile::tempdir().unwrap();
         let control = tokio::time::timeout(
             Duration::from_secs(10),
-            ControlPlane::new(client.clone(), url, root.path().into()),
+            ControlPlane::new_with_persistence(
+                client.clone(),
+                url,
+                root.path().into(),
+                Persistence::new(client.clone(), "harness_e2e".into(), "default".into()),
+            ),
         )
         .await
         .unwrap()

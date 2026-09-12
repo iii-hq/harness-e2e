@@ -17,7 +17,6 @@ fixture_launcher=${HARNESS_E2E_FIXTURE_LAUNCHER:-"$repo_root/scripts/engineering
 fixture_source_root=${HARNESS_E2E_FIXTURE_SOURCE_ROOT:-"$repo_root/tests/fixtures/campaign"}
 kanban_bootstrap=${HARNESS_E2E_KANBAN_BOOTSTRAP:-"$repo_root/scripts/kanban_eval/bootstrap.py"}
 engineering_fixture_revision=7a6b25b3cd12d66af74a358ae86e0d2b846bd384
-shared_fixture_revision=16f6b9e05e34e09c824191eed0631d77f85be6a9
 
 case "$artifact_dir" in
   "$repo_root"/target/*) ;;
@@ -80,7 +79,6 @@ compose_down=false
 failure_phase=bootstrap
 failure_reason=""
 engineering_fixture_lease=""
-shared_fixture_lease=""
 
 log() {
   printf '\n[%s] %s\n' "$(date -u +%H:%M:%S)" "$*" >&2
@@ -180,9 +178,6 @@ cleanup() {
     kill -- "-$engine_pid" 2>/dev/null || kill "$engine_pid" 2>/dev/null || true
     wait "$engine_pid" 2>/dev/null || true
   fi
-  if [[ -n "$shared_fixture_lease" ]]; then
-    "$fixture_launcher" cleanup --lease-id "$shared_fixture_lease" || fixture_cleanup_failed=1
-  fi
   if [[ -n "$engineering_fixture_lease" ]]; then
     "$fixture_launcher" cleanup --lease-id "$engineering_fixture_lease" || fixture_cleanup_failed=1
   fi
@@ -232,39 +227,22 @@ trap 'exit 130' INT
 trap 'exit 143' TERM
 
 prepare_code_fixtures() {
-  local requires_engineering requires_shared fixture_json execution_prefix
-  requires_shared=$(jq -r --arg group "$campaign_group_id" '
-    .suite.groups[] | select(.id == $group) |
-    any(.scenarios[]?; . == "shell_coder_sandbox" or . == "chess_engine_build" or . == "trend_blog")
-  ' "$contract_path")
+  local requires_engineering fixture_json execution_prefix
   requires_engineering=$(jq -r --arg group "$campaign_group_id" '
     .suite.groups[] | select(.id == $group) |
     any(.scenarios[]?; . == "engineering_ticket_git_handoff")
   ' "$contract_path")
-  if [[ "$requires_shared" != true && "$requires_engineering" != true ]]; then
-    return 0
-  fi
+  [[ "$requires_engineering" == true ]] || return 0
   [[ -x "$fixture_launcher" ]] || fail "fixture launcher is unavailable: $fixture_launcher"
   export HARNESS_E2E_ENGINEERING_FIXTURE_ROOT="$run_root/fixture-leases"
   execution_prefix="${GITHUB_RUN_ID:-local}-${GITHUB_RUN_ATTEMPT:-1}-${campaign_group_id}"
-  if [[ "$requires_engineering" == true ]]; then
-    export HARNESS_E2E_ENGINEERING_FIXTURE_REPOSITORY="$fixture_source_root/engineering-ticket.bundle"
-    fixture_json="$run_root/engineering-fixture.json"
-    "$fixture_launcher" prepare --execution-id "${execution_prefix}-engineering" \
-      --revision "$engineering_fixture_revision" >"$fixture_json"
-    engineering_fixture_lease=$(jq -er .lease_id "$fixture_json")
-    HARNESS_E2E_ENGINEERING_TICKET_FIXTURE_PATH=$(jq -er .path "$fixture_json")
-    export HARNESS_E2E_ENGINEERING_TICKET_FIXTURE_PATH
-  fi
-  if [[ "$requires_shared" == true ]]; then
-    export HARNESS_E2E_ENGINEERING_FIXTURE_REPOSITORY="$fixture_source_root/shared-fixture.bundle"
-    fixture_json="$run_root/shared-fixture.json"
-    "$fixture_launcher" prepare --execution-id "${execution_prefix}-shared" \
-      --revision "$shared_fixture_revision" >"$fixture_json"
-    shared_fixture_lease=$(jq -er .lease_id "$fixture_json")
-    HARNESS_E2E_FIXTURE_PATH=$(jq -er .path "$fixture_json")
-    export HARNESS_E2E_FIXTURE_PATH
-  fi
+  export HARNESS_E2E_ENGINEERING_FIXTURE_REPOSITORY="$fixture_source_root/engineering-ticket.bundle"
+  fixture_json="$run_root/engineering-fixture.json"
+  "$fixture_launcher" prepare --execution-id "${execution_prefix}-engineering" \
+    --revision "$engineering_fixture_revision" >"$fixture_json"
+  engineering_fixture_lease=$(jq -er .lease_id "$fixture_json")
+  HARNESS_E2E_ENGINEERING_TICKET_FIXTURE_PATH=$(jq -er .path "$fixture_json")
+  export HARNESS_E2E_ENGINEERING_TICKET_FIXTURE_PATH
 }
 
 write_provider_secret() {
@@ -371,9 +349,6 @@ for secret_file in "$secrets_dir"/*.env; do
   [[ -f "$secret_file" ]] || continue
   project_args+=(--env-file "$(basename "$secret_file" .env)=$secret_file")
 done
-if [[ -n "${HARNESS_E2E_FIXTURE_PATH:-}" ]]; then
-  project_args+=(--environment "harness-e2e.HARNESS_E2E_FIXTURE_PATH=$HARNESS_E2E_FIXTURE_PATH")
-fi
 if [[ -n "${HARNESS_E2E_ENGINEERING_TICKET_FIXTURE_PATH:-}" ]]; then
   project_args+=(--environment \
     "harness-e2e.HARNESS_E2E_ENGINEERING_TICKET_FIXTURE_PATH=$HARNESS_E2E_ENGINEERING_TICKET_FIXTURE_PATH")

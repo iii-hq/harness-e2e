@@ -2,6 +2,8 @@ import json
 import os
 import re
 import pathlib
+import subprocess
+import tempfile
 import unittest
 
 
@@ -56,9 +58,8 @@ class WorkflowBoundaryTests(unittest.TestCase):
             encoding="utf-8"
         )
         self.assertIn("engineering-ticket.bundle", launcher)
-        self.assertIn("shared-fixture.bundle", launcher)
         self.assertIn("HARNESS_E2E_ENGINEERING_TICKET_FIXTURE_PATH", launcher)
-        self.assertIn("HARNESS_E2E_FIXTURE_PATH", launcher)
+        self.assertNotIn("HARNESS_E2E_FIXTURE_PATH", launcher)
         self.assertIn("cleanup --lease-id", launcher)
         self.assertNotIn("iii-hq/workers", workflow)
 
@@ -260,12 +261,32 @@ class WorkflowBoundaryTests(unittest.TestCase):
     def test_compose_campaigns_use_disposable_code_fixtures(self):
         launcher = (ROOT / "scripts/run_exact_stack_group.sh").read_text()
         self.assertIn("HARNESS_E2E_ENGINEERING_TICKET_FIXTURE_PATH", launcher)
-        self.assertIn("HARNESS_E2E_FIXTURE_PATH", launcher)
+        self.assertNotIn("HARNESS_E2E_FIXTURE_PATH", launcher)
         self.assertIn("engineering_fixture_revision=", launcher)
-        self.assertIn("shared_fixture_revision=", launcher)
         self.assertIn("prepare --execution-id", launcher)
         self.assertIn("cleanup --lease-id", launcher)
         self.assertNotIn("git commit", launcher)
+
+    def test_shared_fixture_group_needs_no_external_checkout_or_launcher(self):
+        source = (ROOT / "scripts/run_exact_stack_group.sh").read_text()
+        function = "prepare_code_fixtures() {" + source.split(
+            "prepare_code_fixtures() {", 1
+        )[1].split("\n}\n", 1)[0] + "\n}\n"
+        with tempfile.TemporaryDirectory() as directory:
+            contract = pathlib.Path(directory) / "contract.json"
+            contract.write_text(json.dumps({"suite": {"groups": [{
+                "id": "shared",
+                "scenarios": ["shell_coder_sandbox", "chess_engine_build", "trend_blog"],
+            }]}}))
+            result = subprocess.run(
+                ["bash", "-c", "set -Eeuo pipefail\n" + function + "prepare_code_fixtures"],
+                cwd=directory,
+                env={**os.environ, "campaign_group_id": "shared", "contract_path": str(contract)},
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
+        self.assertEqual(result.returncode, 0, result.stderr)
 
     def test_registry_groups_prepare_private_sources_without_persisting_credentials(self):
         workflow = (ROOT / ".github/workflows/exact-stack-e2e.yml").read_text()

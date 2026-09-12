@@ -3,7 +3,6 @@
 //! The database worker owns SQL access.  The runner deliberately owns neither
 //! a driver nor a connection string: it only sends parameterised statements to
 //! the dedicated control-plane database namespace.
-use std::env;
 use std::path::Path;
 
 use anyhow::{bail, Context, Result};
@@ -44,15 +43,6 @@ pub struct Persistence {
 }
 
 impl Persistence {
-    pub fn from_client(iii: IIIClient) -> Self {
-        Self::new(
-            iii,
-            env::var("HARNESS_E2E_CONTROL_DATABASE").unwrap_or_else(|_| "harness_e2e".into()),
-            env::var("HARNESS_E2E_CONTROL_NAMESPACE")
-                .unwrap_or_else(|_| "harness-e2e-control".into()),
-        )
-    }
-
     pub fn new(iii: IIIClient, database: String, namespace: String) -> Self {
         Self {
             iii,
@@ -71,7 +61,7 @@ impl Persistence {
                 .await?;
             if versions.len() != 1 || versions[0].get("version").and_then(Value::as_i64) != Some(3)
             {
-                bail!("incompatible Harness E2E persistence schema; stop the E2E worker and run `harness-e2e migrate-storage --runs-dir <data directory>` before starting this version")
+                bail!("incompatible Harness E2E persistence schema; stop the E2E worker and run `harness-e2e migrate-storage --config <worker config>` before starting this version")
             }
         }
         let statements = SCHEMA
@@ -88,7 +78,7 @@ impl Persistence {
             .query("SELECT version FROM harness_e2e_schema", json!([]))
             .await?;
         if versions.len() != 1 || versions[0].get("version").and_then(Value::as_i64) != Some(3) {
-            bail!("incompatible Harness E2E persistence schema; stop the E2E worker and run `harness-e2e migrate-storage --runs-dir <data directory>` before starting this version")
+            bail!("incompatible Harness E2E persistence schema; stop the E2E worker and run `harness-e2e migrate-storage --config <worker config>` before starting this version")
         }
         Ok(())
     }
@@ -597,14 +587,31 @@ fn validate_saved_plan_execution(execution: &PlanExecution) -> Result<()> {
     crate::plans::store::validate_saved_plan_execution(execution)
 }
 
-fn load_plan_store(root: &Path) -> Result<(Vec<SavedPlan>, Vec<PlanExecution>)> {
+pub(crate) fn load_plan_store(root: &Path) -> Result<(Vec<SavedPlan>, Vec<PlanExecution>)> {
     let plans_root = root.join("plan-store/plans");
     let executions_root = root.join("plan-store/executions");
-    let plans = load_json_directory(&plans_root, "plan", validate_saved_plan)?;
+    let mut migrated_hashes = std::collections::BTreeMap::new();
+    let plans = load_json_directory(&plans_root, "plan", |plan: &mut SavedPlan| {
+        if let Some(previous) = crate::plans::store::migrate_saved_plan(plan)? {
+            migrated_hashes.insert(
+                plan.plan.id.clone(),
+                (previous, plan.configuration_sha256.clone()),
+            );
+        }
+        Ok(())
+    })?;
     let executions = load_json_directory(
         &executions_root,
         "plan execution",
-        validate_saved_plan_execution,
+        |execution: &mut PlanExecution| {
+            validate_saved_plan_execution(execution)?;
+            if let Some((previous, current)) = migrated_hashes.get(&execution.plan_id) {
+                if execution.configuration_sha256 == *previous {
+                    execution.configuration_sha256 = current.clone();
+                }
+            }
+            Ok(())
+        },
     )?;
     let ids = plans
         .iter()
@@ -631,7 +638,7 @@ fn load_plan_store(root: &Path) -> Result<(Vec<SavedPlan>, Vec<PlanExecution>)> 
 fn load_json_directory<T>(
     path: &Path,
     kind: &str,
-    validate: impl Fn(&T) -> Result<()>,
+    mut validate: impl FnMut(&mut T) -> Result<()>,
 ) -> Result<Vec<T>>
 where
     T: DeserializeOwned,
@@ -653,8 +660,8 @@ where
                 path.display()
             );
         }
-        let value = serde_json::from_value(raw)?;
-        validate(&value).with_context(|| format!("validate {kind} {}", path.display()))?;
+        let mut value = serde_json::from_value(raw)?;
+        validate(&mut value).with_context(|| format!("validate {kind} {}", path.display()))?;
         values.push(value);
     }
     Ok(values)

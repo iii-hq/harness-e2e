@@ -3,7 +3,7 @@
 //! gates).
 //!
 //! The subject is handed a frozen trends feed (copied from the pinned
-//! `iii-hq/e2e-fixture` repo, subtree `trends/`, via `HARNESS_E2E_FIXTURE_PATH`)
+//! `iii-hq/e2e-fixture` repo, subtree `trends/`, embedded in the runner)
 //! and must author a small static site covering the top-ranked topics. The
 //! runner then reads the produced files and verifies, deterministically:
 //!
@@ -43,10 +43,8 @@ const DELIVERABLE_ID: &str = "blog_site";
 const TOP_K: usize = 3;
 const MIN_QUOTE_CHARS: usize = 20;
 
-/// The trends fixture lives in the shared `iii-hq/e2e-fixture` repo, consumed
-/// through a local checkout the environment points at. Pinned by revision +
-/// subtree manifest sha256 so each edition is a reproducible cohort.
-const FIXTURE_ENV: &str = "HARNESS_E2E_FIXTURE_PATH";
+/// The embedded fixture is pinned by revision and subtree manifest so each
+/// edition is a reproducible cohort.
 const FIXTURE_SUBTREE: &str = "trends";
 const FEED_IN_SUBTREE: &str = "feed.json";
 const FIXTURE_REVISION: &str = "16f6b9e05e34e09c824191eed0631d77f85be6a9";
@@ -324,14 +322,9 @@ Finish only after all three files exist."#,
 
 fn setup<'a>(_context: &'a E2eContext, run_id: &'a str) -> CleanupFuture<'a> {
     Box::pin(async move {
-        let checkout = std::env::var_os(FIXTURE_ENV)
-            .map(PathBuf::from)
-            .filter(|path| !path.as_os_str().is_empty())
-            .ok_or_else(|| {
-                anyhow::anyhow!(
-                    "{FIXTURE_ENV} is not set; a checkout of iii-hq/e2e-fixture is required"
-                )
-            })?;
+        let fixture =
+            super::fixture::prepare(super::fixture::SHARED_BUNDLE, FIXTURE_REVISION).await?;
+        let checkout = &fixture.root;
         let subtree = checkout.join(FIXTURE_SUBTREE);
         let feed_path = subtree.join(FEED_IN_SUBTREE);
         if !feed_path.is_file() {
@@ -348,7 +341,7 @@ fn setup<'a>(_context: &'a E2eContext, run_id: &'a str) -> CleanupFuture<'a> {
         if checkout.join(".git").exists() {
             if let Ok(output) = std::process::Command::new("git")
                 .arg("-C")
-                .arg(&checkout)
+                .arg(checkout)
                 .args(["rev-parse", "HEAD"])
                 .output()
             {
@@ -696,6 +689,20 @@ fn cleanup<'a>(_context: &'a E2eContext, run_id: &'a str) -> CleanupFuture<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn automatic_setup_copies_the_reviewed_feed_and_cleans_up() {
+        let context = E2eContext::from_client(iii_sdk::IIIClient::new("ws://127.0.0.1:1"));
+        let run_id = uuid::Uuid::new_v4().simple().to_string();
+        setup(&context, &run_id).await.unwrap();
+        let root = workspace_root(&run_id);
+        let feed: Value = serde_json::from_str(&load_feed(&root)).unwrap();
+        let site_exists = root.join("site").is_dir();
+        cleanup(&context, &run_id).await.unwrap();
+        assert_eq!(feed["edition"], EDITION);
+        assert!(site_exists);
+        assert!(!root.exists());
+    }
 
     // A synthetic feed with the same shape and planted gaps as the real
     // fixture, so tests need no checkout. quantum-funding withholds a figure;

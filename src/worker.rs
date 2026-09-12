@@ -113,7 +113,7 @@ pub async fn serve(_args: WorkerArgs) -> Result<()> {
     );
     wait_for_persistence(&iii, &config.control_namespace, &config.control_database).await?;
 
-    let data_dir = resolve_data_dir(&config.data_dir)?;
+    let data_dir = resolve_data_dir(&config.data_dir, &environment.config)?;
     std::fs::create_dir_all(&data_dir)
         .with_context(|| format!("create worker data directory {}", data_dir.display()))?;
     tracing::info!(
@@ -145,19 +145,28 @@ pub async fn serve(_args: WorkerArgs) -> Result<()> {
     Ok(())
 }
 
-fn load_config(path: &Path) -> Result<WorkerConfig> {
+pub fn load_config(path: &Path) -> Result<WorkerConfig> {
     let source = std::fs::read_to_string(path)
-        .with_context(|| format!("read III_CONFIG {}", path.display()))?;
+        .with_context(|| format!("read worker config {}", path.display()))?;
     let config: WorkerConfig = serde_yaml::from_str(&source)
-        .with_context(|| format!("decode III_CONFIG {}", path.display()))?;
+        .with_context(|| format!("decode worker config {}", path.display()))?;
     config.validate().map_err(anyhow::Error::msg)
 }
 
-fn resolve_data_dir(value: &str) -> Result<PathBuf> {
+pub fn resolve_data_dir(value: &str, config_path: &Path) -> Result<PathBuf> {
     if value.trim().is_empty() {
         bail!("worker config data_dir cannot be empty");
     }
-    expand_home(value)
+    let path = expand_home(value)?;
+    if path.is_absolute() {
+        return Ok(path);
+    }
+    Ok(config_path
+        .canonicalize()
+        .with_context(|| format!("resolve worker config {}", config_path.display()))?
+        .parent()
+        .context("worker config has no parent directory")?
+        .join(path))
 }
 
 fn expand_home(value: &str) -> Result<PathBuf> {
@@ -235,7 +244,7 @@ mod tests {
         assert!(load_config(&missing)
             .unwrap_err()
             .to_string()
-            .contains("read III_CONFIG"));
+            .contains("read worker config"));
     }
 
     #[test]
@@ -247,6 +256,36 @@ mod tests {
             .unwrap_err()
             .to_string()
             .contains("data_dir cannot be empty"));
+    }
+
+    #[test]
+    fn config_preserves_custom_persistence_destination() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("config.yaml");
+        std::fs::write(
+            &path,
+            "data_dir: /tmp/e2e-evidence\ncontrol_database: custom_db\ncontrol_namespace: campaign-123\n",
+        )
+        .unwrap();
+        let config = load_config(&path).unwrap();
+        assert_eq!(config.control_database, "custom_db");
+        assert_eq!(config.control_namespace, "campaign-123");
+        assert_eq!(
+            resolve_data_dir(&config.data_dir, &path).unwrap(),
+            PathBuf::from("/tmp/e2e-evidence")
+        );
+    }
+
+    #[test]
+    fn relative_data_directory_is_resolved_from_config_file() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("config.yaml");
+        std::fs::write(&path, "data_dir: evidence\n").unwrap();
+        let config = load_config(&path).unwrap();
+        assert_eq!(
+            resolve_data_dir(&config.data_dir, &path).unwrap(),
+            directory.path().join("evidence")
+        );
     }
 
     #[test]

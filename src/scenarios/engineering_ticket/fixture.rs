@@ -1,16 +1,9 @@
-//! Offline, attempt-owned fallback for runs without a launcher-provided fixture.
+//! Offline, attempt-owned fixture or an explicit protected-launcher checkout.
 
 use super::*;
+use crate::scenarios::fixture::{self as bundle_fixture, PreparedFixture};
 
 const BUNDLE: &[u8] = include_bytes!("../../../tests/fixtures/campaign/engineering-ticket.bundle");
-const PREPARATION_TIMEOUT: Duration = Duration::from_secs(30);
-
-#[derive(Debug)]
-pub(super) struct PreparedFixture {
-    pub root: PathBuf,
-    // None means the protected launcher owns the directory, not this process.
-    pub owned: Option<tempfile::TempDir>,
-}
 
 pub(super) async fn prepare(
     revision: &str,
@@ -22,90 +15,7 @@ pub(super) async fn prepare(
             owned: None,
         });
     }
-
-    let owned = tempfile::Builder::new()
-        .prefix("harness-e2e-engineering-fixture-")
-        .tempdir()
-        .context("create isolated engineering fixture directory")?;
-    prepare_owned(revision, owned).await
-}
-
-async fn prepare_owned(revision: &str, owned: tempfile::TempDir) -> Result<PreparedFixture> {
-    let directory = owned.path().canonicalize()?;
-    let bundle = directory.join("repository.bundle");
-    std::fs::write(&bundle, BUNDLE).context("materialize embedded engineering fixture bundle")?;
-    let root = directory.join("repository");
-    std::fs::create_dir(&root)?;
-    validate_fixture_root(&root)?;
-
-    tokio::time::timeout(PREPARATION_TIMEOUT, async {
-        // No remote or tracking refs: fetch only the pinned baseline from the
-        // runner's own bundle. An empty template excludes host Git hooks.
-        prepare_git(&root, &["init", "--quiet", "--template="]).await?;
-        prepare_git(&root, &["config", "--local", "core.autocrlf", "false"]).await?;
-        prepare_git(
-            &root,
-            &["config", "--local", "core.hooksPath", ".git/hooks"],
-        )
-        .await?;
-        prepare_git(&root, &["config", "--local", "commit.gpgsign", "false"]).await?;
-        prepare_git(&root, &["config", "--local", "user.name", "Harness E2E"]).await?;
-        prepare_git(
-            &root,
-            &[
-                "config",
-                "--local",
-                "user.email",
-                "harness-e2e@example.invalid",
-            ],
-        )
-        .await?;
-        prepare_git(
-            &root,
-            &[
-                "fetch",
-                "--quiet",
-                "--no-tags",
-                bundle
-                    .to_str()
-                    .context("fixture bundle path must be UTF-8")?,
-                revision,
-            ],
-        )
-        .await?;
-        prepare_git(
-            &root,
-            &["checkout", "--quiet", "-b", "e2e/fixture", revision],
-        )
-        .await
-    })
-    .await
-    .context("automatic engineering fixture preparation timed out after 30 seconds")??;
-
-    Ok(PreparedFixture {
-        root,
-        owned: Some(owned),
-    })
-}
-
-async fn prepare_git(root: &Path, args: &[&str]) -> Result<()> {
-    let output = Command::new("git")
-        .args(args)
-        .current_dir(root)
-        .env("GIT_TERMINAL_PROMPT", "0")
-        .stdin(Stdio::null())
-        .kill_on_drop(true)
-        .output()
-        .await
-        .with_context(|| format!("automatic engineering fixture: start git {}", args[0]))?;
-    if !output.status.success() {
-        bail!(
-            "automatic engineering fixture: git {} failed: {}",
-            args[0],
-            String::from_utf8_lossy(&output.stderr).trim()
-        );
-    }
-    Ok(())
+    bundle_fixture::prepare(BUNDLE, revision).await
 }
 
 #[cfg(test)]
@@ -216,7 +126,9 @@ mod tests {
     async fn missing_pinned_revision_fails_and_removes_partial_fixture() {
         let owned = tempfile::tempdir().unwrap();
         let directory = owned.path().to_path_buf();
-        let error = prepare_owned(&"0".repeat(40), owned).await.unwrap_err();
+        let error = bundle_fixture::prepare_owned(BUNDLE, &"0".repeat(40), owned)
+            .await
+            .unwrap_err();
         assert!(error.to_string().contains("fetch failed"), "{error:#}");
         assert!(!directory.exists());
     }

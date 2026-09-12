@@ -27,6 +27,7 @@ import {
   getDashboardDataBridge,
   type LocalPlan,
   type MasterTestPlan,
+  type Plan,
 } from '@/lib/dashboard-data-source'
 import {
   buildExecutionPresentation,
@@ -252,8 +253,9 @@ export function planStatePresentation(plan: LocalPlan): PlanStatePresentation {
   }
 }
 
-function matchesFilter(plan: LocalPlan, filter: PlanFilter) {
+export function matchesFilter(plan: Plan, filter: PlanFilter) {
   if (filter === 'all') return true
+  if (!isLocalPlan(plan)) return false
   if (filter === 'needs_action')
     return plan.state === 'draft' || plan.state === 'baseline_ready'
   if (filter === 'running')
@@ -508,7 +510,7 @@ function PlanRow({
           ) : null}
         </span>
       </td>
-      <td data-label="Scope · model">
+      <td data-label="Details">
         <span className="grid gap-0.5 text-xs">
           <span className="text-ink">
             {plan.scenarios.length} test{plan.scenarios.length === 1 ? '' : 's'}{' '}
@@ -517,10 +519,14 @@ function PlanRow({
           <span className="font-mono text-ink-muted">{modelLabel(plan)}</span>
         </span>
       </td>
-      <td data-label="Baseline">
+      <td data-label="Reference">
+        <span className="mb-1 block text-xs text-ink-muted">Baseline</span>
         <PlanBaselineCell plan={plan} baseline={baseline} />
       </td>
-      <td data-label="Latest candidate vs baseline">
+      <td data-label="Results">
+        <span className="mb-1 block text-xs text-ink-muted">
+          Latest candidate vs baseline
+        </span>
         <PlanComparisonSummary
           plan={plan}
           baseline={baseline}
@@ -665,9 +671,7 @@ export function PlansPage() {
 
   const counts = useMemo(() => {
     const count = (candidate: PlanFilter) =>
-      plans.filter(
-        (plan) => isLocalPlan(plan) && matchesFilter(plan, candidate),
-      ).length
+      plans.filter((plan) => matchesFilter(plan, candidate)).length
     return {
       all: plans.length,
       needs_action: count('needs_action'),
@@ -686,7 +690,7 @@ export function PlansPage() {
   const filteredPlans = useMemo(() => {
     const normalized = query.trim().toLowerCase()
     return plans.filter((plan) => {
-      if (isLocalPlan(plan) && !matchesFilter(plan, filter)) return false
+      if (!matchesFilter(plan, filter)) return false
       if (!normalized) return true
       return [
         plan.label,
@@ -950,9 +954,9 @@ export function PlansPage() {
                     <thead>
                       <tr>
                         <th scope="col">Plan</th>
-                        <th scope="col">Scope · model</th>
-                        <th scope="col">Baseline</th>
-                        <th scope="col">Latest candidate vs baseline</th>
+                        <th scope="col">Details</th>
+                        <th scope="col">Reference</th>
+                        <th scope="col">Results</th>
                         <th scope="col" className={numericCellClassName}>
                           Last activity
                         </th>
@@ -989,11 +993,14 @@ export function PlansPage() {
                                 {plan.source.plan_key}
                               </span>
                             </td>
-                            <td data-label="Scope · model">
-                              {plan.purpose || '—'}
+                            <td data-label="Details">{plan.purpose || '—'}</td>
+                            <td data-label="Reference">
+                              Release Control
+                              <span className="block text-xs text-ink-muted">
+                                Imported local copy
+                              </span>
                             </td>
-                            <td data-label="Baseline">historical import</td>
-                            <td data-label="Latest candidate vs baseline">
+                            <td data-label="Results">
                               {plan.execution_ids.length} execution
                               {plan.execution_ids.length === 1 ? '' : 's'}
                             </td>
