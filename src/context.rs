@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::future::Future;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use anyhow::{anyhow, bail, Context, Result};
 use async_trait::async_trait;
@@ -123,7 +123,43 @@ impl E2eContext {
         Ok(exists)
     }
 
+    /// How long a just-started stack may still be registering the Harness
+    /// surface. Compose reports a container ready when its process is up; the
+    /// functions land on the engine a moment later, and a runner that asks in
+    /// between sees `harness::send` as not found.
+    const CONTROL_PLANE_REGISTRATION_GRACE: Duration = Duration::from_secs(90);
+    const CONTROL_PLANE_POLL: Duration = Duration::from_secs(2);
+
     pub async fn preflight_control_plane(&self) -> Result<ControlPlaneEvidence> {
+        let deadline = Instant::now() + Self::CONTROL_PLANE_REGISTRATION_GRACE;
+        let mut waited = false;
+        loop {
+            match self.control_plane_snapshot().await {
+                Ok(evidence) => {
+                    if waited {
+                        tracing::info!("Harness control plane registered; continuing");
+                    }
+                    return Ok(evidence);
+                }
+                // A contract mismatch is a real failure and fails now. Only a
+                // function that is not there yet is worth waiting for, and only
+                // while the grace window lasts.
+                Err(error) if is_unregistered(&error) && Instant::now() < deadline => {
+                    if !waited {
+                        waited = true;
+                        tracing::info!(
+                            grace_seconds = Self::CONTROL_PLANE_REGISTRATION_GRACE.as_secs(),
+                            "waiting for the Harness control plane to register: {error:#}"
+                        );
+                    }
+                    tokio::time::sleep(Self::CONTROL_PLANE_POLL).await;
+                }
+                Err(error) => return Err(error),
+            }
+        }
+    }
+
+    async fn control_plane_snapshot(&self) -> Result<ControlPlaneEvidence> {
         let function_ids = wire::control_plane_function_ids().collect::<Vec<_>>();
         let info = self
             .trigger_value(
@@ -546,6 +582,18 @@ fn inspection_routing(
     }
 }
 
+/// Whether a control-plane preflight failed only because the Harness has not
+/// registered its functions yet. `engine::functions::info` reports a missing
+/// id as an entry carrying `error`, which `validate_control_plane` turns into
+/// "required function X is unavailable"; anything else (a contract mismatch, a
+/// malformed response, a transport failure) is a real failure and must not be
+/// waited out.
+fn is_unregistered(error: &anyhow::Error) -> bool {
+    error
+        .chain()
+        .any(|cause| cause.to_string().contains("is unavailable"))
+}
+
 /// Classify SDK transport failures without interpreting remote/provider text.
 pub(crate) fn transport_failure_code(error: &anyhow::Error) -> Option<&'static str> {
     match error.downcast_ref::<SdkError>()? {
@@ -855,6 +903,26 @@ mod tests {
             assert!(!request_not_dispatched(
                 &error.context(EarlierInvocationAttempts(2))
             ));
+        }
+    }
+
+    #[test]
+    fn only_an_unregistered_control_plane_is_worth_waiting_for() {
+        let not_yet = anyhow!("required function harness::send is unavailable: not_found")
+            .context("discover Harness control-plane contracts");
+        assert!(
+            is_unregistered(&not_yet),
+            "a function the engine does not know yet is the wait case"
+        );
+        for real in [
+            anyhow!("harness::send request contract: field `message` is missing"),
+            anyhow!("engine::functions::info response is missing functions[]"),
+            anyhow::Error::new(SdkError::Timeout),
+        ] {
+            assert!(
+                !is_unregistered(&real),
+                "a real failure must not be waited out: {real:#}"
+            );
         }
     }
 
