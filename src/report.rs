@@ -3036,9 +3036,22 @@ fn verify_deliverables(output: &Path, deliverables: &[DeliverableReport]) -> Res
             }
         };
         if observed_hash != deliverable.content_sha256 {
+            // Everything a reader needs to tell the three cases apart without
+            // reproducing the run: the artifact was written from different
+            // content, the artifact was rewritten after the report was built,
+            // or the report's hash was taken over a value the artifact never
+            // held. The raw file digest separates "the bytes on disk changed"
+            // from "the same bytes canonicalize differently".
             bail!(
-                "deliverable '{}' content hash does not match its artifact",
-                deliverable.id
+                "deliverable '{}' content hash does not match its artifact\n                   artifact      : {}\n                   expected      : {}\n                   observed      : {}\n                   file digest   : {} (reference says {})\n                   file size     : {} bytes (reference says {})",
+                deliverable.id,
+                reference.path,
+                deliverable.content_sha256,
+                observed_hash,
+                artifact::sha256_bytes(&bytes),
+                reference.sha256,
+                bytes.len(),
+                reference.size_bytes,
             );
         }
     }
@@ -4665,5 +4678,56 @@ mod tests {
             },
         ];
         report
+    }
+
+    #[test]
+    fn a_deliverable_hash_mismatch_names_everything_needed_to_tell_the_causes_apart() {
+        let output = tempfile::tempdir().unwrap();
+        let dir = output.path().join("deliverables");
+        std::fs::create_dir_all(&dir).unwrap();
+        let bytes = br#"{"observations":[]}"#;
+        std::fs::write(dir.join("evidence.json"), bytes).unwrap();
+
+        let deliverable = DeliverableReport {
+            id: "linkly_evidence".into(),
+            kind: "application_audit".into(),
+            media_type: "application/json".into(),
+            content_format: DeliverableContentFormat::Json,
+            // A hash the artifact never had: the case the message has to explain.
+            content_sha256:
+                "sha256:0000000000000000000000000000000000000000000000000000000000000000".into(),
+            content_size_bytes: bytes.len() as u64,
+            schema_valid: true,
+            provenance_valid: true,
+            invariants: Vec::new(),
+            provenance: Vec::new(),
+            preview: serde_json::json!({}),
+            artifact: Some(crate::artifact::ArtifactReference {
+                id: "linkly_evidence".into(),
+                kind: "application_audit".into(),
+                path: "deliverables/evidence.json".into(),
+                sha256: crate::artifact::sha256_bytes(bytes),
+                size_bytes: bytes.len() as u64,
+                media_type: "application/json".into(),
+            }),
+            content: CapturedDeliverableContent::Json(serde_json::json!({})),
+        };
+
+        let message = format!(
+            "{:#}",
+            verify_deliverables(output.path(), std::slice::from_ref(&deliverable)).unwrap_err()
+        );
+        for needle in [
+            "linkly_evidence",
+            "deliverables/evidence.json",
+            "sha256:0000",
+            &crate::artifact::sha256_bytes(bytes),
+            &format!("{} bytes", bytes.len()),
+        ] {
+            assert!(
+                message.contains(needle),
+                "the mismatch must name {needle}, got:\n{message}"
+            );
+        }
     }
 }
