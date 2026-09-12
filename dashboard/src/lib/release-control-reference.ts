@@ -15,7 +15,6 @@ import {
 } from '@/lib/primary-metrics'
 import type { TestObservation } from '@/lib/test-catalog'
 
-
 export type RcExecutionSummary = {
   id: string
   /** Local copied execution id; preserves the offline route identity. */
@@ -97,13 +96,20 @@ export type RcReference = {
 
 export type RcHistoryPlan = { key: string; active: boolean; updated_at: string }
 
-export async function discoverReleaseControlHistory(): Promise<RcHistoryPlan[]> {
+export async function discoverReleaseControlHistory(): Promise<
+  RcHistoryPlan[]
+> {
   const client = await getDashboardIiiClient()
   const plans: RcHistoryPlan[] = []
   let after: string | undefined
   do {
-    const page = await client.trigger<{ plans: RcHistoryPlan[]; next_after: string | null }>(
-      'release-control::test-plans::history-list', { after, limit: 100 }, { namespace: 'default' },
+    const page = await client.trigger<{
+      plans: RcHistoryPlan[]
+      next_after: string | null
+    }>(
+      'release-control::test-plans::history-list',
+      { after, limit: 100 },
+      { namespace: 'default' },
     )
     plans.push(...page.plans)
     after = page.next_after ?? undefined
@@ -112,11 +118,15 @@ export async function discoverReleaseControlHistory(): Promise<RcHistoryPlan[]> 
 }
 
 export async function exportReleaseControlHistory(planKey: string) {
-  return (await getDashboardIiiClient()).trigger<{ json: string; sha256: string }>(
-    'release-control::test-plans::export', { planKey }, { namespace: 'default' },
+  return (await getDashboardIiiClient()).trigger<{
+    json: string
+    sha256: string
+  }>(
+    'release-control::test-plans::export',
+    { planKey },
+    { namespace: 'default' },
   )
 }
-
 
 function completeSum(values: Array<number | null | undefined>) {
   return values.length > 0 &&
@@ -254,17 +264,33 @@ function primaryValues(runs: RcRun[]): PrimaryTestValues['values'] {
         : null,
     )
     values.totalTokens.push(complete ? run.totalTokens : null)
-    values.inputTokens.push(complete ? run.record?.efficiency?.input_tokens ?? null : null)
-    values.outputTokens.push(complete ? run.record?.efficiency?.output_tokens ?? null : null)
+    values.inputTokens.push(
+      complete ? (run.record?.efficiency?.input_tokens ?? null) : null,
+    )
+    values.outputTokens.push(
+      complete ? (run.record?.efficiency?.output_tokens ?? null) : null,
+    )
     values.inputNormal.push(null)
-    values.cacheRead.push(complete ? run.record?.efficiency?.cache_read_tokens ?? null : null)
-    values.cacheWrite.push(complete ? run.record?.efficiency?.cache_write_tokens ?? null : null)
+    values.cacheRead.push(
+      complete ? (run.record?.efficiency?.cache_read_tokens ?? null) : null,
+    )
+    values.cacheWrite.push(
+      complete ? (run.record?.efficiency?.cache_write_tokens ?? null) : null,
+    )
     values.turns.push(complete ? run.turns : null)
     values.functionCalls.push(complete ? run.functionCalls : null)
-    values.functionErrors.push(complete ? run.record?.efficiency?.function_call_errors ?? run.functionCallErrors ?? null : null)
+    values.functionErrors.push(
+      complete
+        ? (run.record?.efficiency?.function_call_errors ??
+            run.functionCallErrors ??
+            null)
+        : null,
+    )
     values.durationMs.push(run.wallTimeMs)
     // RC only retains subject cost; costUsd is total recorded spend.
-    values.costUsd.push(complete ? run.record?.cost?.total_usd ?? run.costSubjectUsd : null)
+    values.costUsd.push(
+      complete ? (run.record?.cost?.total_usd ?? run.costSubjectUsd) : null,
+    )
   }
   return values
 }
@@ -807,15 +833,15 @@ export async function listImportedExecutions(): Promise<
   let cursor: string | undefined
   do {
     const page = await bridge.listExecutions({ limit: 200, cursor })
-    executions.push(...page.executions.filter((execution) => execution.origin === 'remote'))
+    executions.push(
+      ...page.executions.filter((execution) => execution.origin === 'remote'),
+    )
     cursor = page.next_cursor ?? undefined
   } while (cursor)
   return executions
 }
 
-export async function getImportedReference(
-  id: string,
-): Promise<RcReference> {
+export async function getImportedReference(id: string): Promise<RcReference> {
   const detail = await (await getDashboardDataBridge()).getExecution(id)
   const reference = detail.remote_reference
   if (!reference || typeof reference !== 'object')

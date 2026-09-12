@@ -35,8 +35,8 @@ import {
 } from '@/lib/execution-view'
 import { loadExecutionSummaries } from '@/lib/plan-comparison'
 import {
-  getImportedReference,
   exportReleaseControlHistory,
+  getImportedReference,
   listImportedExecutions,
   localReferencePrimaryMetrics,
   type RcReference,
@@ -154,9 +154,13 @@ export function ImportedPlanDetailPage({ planId }: { planId: string }) {
     setError(null)
     const next = bridge ?? (await getDashboardDataBridge())
     setBridge(next)
-    const [remote, local] = await Promise.all([listImportedExecutions(), next.listPlans()])
+    const [remote, local] = await Promise.all([
+      listImportedExecutions(),
+      next.listPlans(),
+    ])
     const imported = await next.getPlan(planId)
-    if (imported.origin !== 'remote') throw new Error('This plan is not an imported history.')
+    if (imported.origin !== 'remote')
+      throw new Error('This plan is not an imported history.')
     const executions = remote
       .filter((execution) => imported.execution_ids.includes(execution.id))
       .sort((left, right) =>
@@ -171,11 +175,13 @@ export function ImportedPlanDetailPage({ planId }: { planId: string }) {
     const executionIds = new Set(
       executions.map((execution) => execution.run_id),
     )
-    const related = local.plans.filter((plan): plan is LocalPlan => plan.origin === 'local').filter(
-      (plan) =>
-        plan.reference_execution_id &&
-        executionIds.has(plan.reference_execution_id),
-    )
+    const related = local.plans
+      .filter((plan): plan is LocalPlan => plan.origin === 'local')
+      .filter(
+        (plan) =>
+          plan.reference_execution_id &&
+          executionIds.has(plan.reference_execution_id),
+      )
     setLocalPlans(related)
     setActivePlan(
       related.find((plan) =>
@@ -372,15 +378,22 @@ export function ImportedPlanDetailPage({ planId }: { planId: string }) {
 
   const updateHistory = async () => {
     if (!bridge) return
-    setUpdating(true); setError(null)
+    setUpdating(true)
+    setError(null)
     try {
       const imported = await bridge.getPlan(planId)
-      if (imported.origin !== 'remote') throw new Error('This plan is not imported history.')
-      const history = await exportReleaseControlHistory(imported.source.plan_key)
+      if (imported.origin !== 'remote')
+        throw new Error('This plan is not imported history.')
+      const history = await exportReleaseControlHistory(
+        imported.source.plan_key,
+      )
       await bridge.planControl({ action: 'import_history', history })
       await load()
-    } catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)) }
-    finally { setUpdating(false) }
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : String(cause))
+    } finally {
+      setUpdating(false)
+    }
   }
 
   const cancel = async () => {
@@ -413,14 +426,24 @@ export function ImportedPlanDetailPage({ planId }: { planId: string }) {
           title={planName}
           context="Reference: Release Control"
           summary="Shared execution history beside results produced by your current local Harness."
-          actions={<>
-            <button type="button" className={buttonClassName({ variant: 'secondary' })} disabled={updating} onClick={() => void updateHistory()}>{updating ? 'updating…' : 'update history'}</button>
-            <a
-              className={buttonClassName({ variant: 'quiet' })}
-              href={hashForPlans()}
-            >
-              back to plans
-            </a></>}
+          actions={
+            <>
+              <button
+                type="button"
+                className={buttonClassName({ variant: 'secondary' })}
+                disabled={updating}
+                onClick={() => void updateHistory()}
+              >
+                {updating ? 'updating…' : 'update history'}
+              </button>
+              <a
+                className={buttonClassName({ variant: 'quiet' })}
+                href={hashForPlans()}
+              >
+                back to plans
+              </a>
+            </>
+          }
         />
 
         {error ? (

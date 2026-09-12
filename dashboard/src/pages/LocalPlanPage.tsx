@@ -25,8 +25,8 @@ import {
   type MasterTestProfile,
 } from '@/lib/dashboard-data-source'
 import { type PlanRequirements, planAction } from '@/lib/plan-execution'
-import { LocalPlanDetailPage as LocalPlanDetail } from '@/pages/PlanDetailPage'
 import { ImportedPlanDetailPage } from '@/pages/ImportedPlanDetailPage'
+import { LocalPlanDetailPage as LocalPlanDetail } from '@/pages/PlanDetailPage'
 
 type Model = { provider: string; model: string }
 type Catalog = {
@@ -212,7 +212,10 @@ export function LocalPlanCreatePage({
         ])
         if (duplicateId || editId) {
           const source = await next.getPlan((duplicateId ?? editId) as string)
-          if (source.origin === 'remote') throw Error('Imported history cannot be edited or duplicated as a local plan.')
+          if (source.origin === 'remote')
+            throw Error(
+              'Imported history cannot be edited or duplicated as a local plan.',
+            )
           setLabel(duplicateId ? `${source.label} copy` : source.label)
           setPurpose(source.purpose)
           setUrl(source.url)
@@ -617,9 +620,15 @@ export function LocalPlanDetailPage({ planId }: { planId: string }) {
       .then((bridge) => bridge.getPlan(planId))
       .then((plan) => current && setRemote(plan.origin === 'remote'))
       .catch(() => current && setRemote(false))
-    return () => { current = false }
+    return () => {
+      current = false
+    }
   }, [planId])
-  return remote ? <ImportedPlanDetailPage planId={planId} /> : <LocalPlanDetail planId={planId} />
+  return remote ? (
+    <ImportedPlanDetailPage planId={planId} />
+  ) : (
+    <LocalPlanDetail planId={planId} />
+  )
 }
 
 // The local plan detail lives in PlanDetailPage.tsx; these names stay

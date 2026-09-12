@@ -2146,7 +2146,8 @@ export function LocalPlanDetailPage({ planId }: { planId: string }) {
     const next = bridge ?? (await getDashboardDataBridge())
     setBridge(next)
     const plan = await next.getPlan(planId)
-    if (plan.origin === 'remote') throw new Error('Imported history has a separate read-only detail.')
+    if (plan.origin === 'remote')
+      throw new Error('Imported history has a separate read-only detail.')
     setPlan(plan)
   }, [bridge, planId])
 

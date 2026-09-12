@@ -615,7 +615,16 @@ export type ExecutionListInput = {
 export type DashboardDataBridge = {
   listExecutions(input?: ExecutionListInput): Promise<ExecutionManifest>
   getExecution(executionId: string): Promise<DashboardExecutionDetail>
-  openEvidence(input: { execution_id: string; report_id: string; path: string }): Promise<{ availability: string; content_base64?: string; mime_type?: string; reason?: string }>
+  openEvidence(input: {
+    execution_id: string
+    report_id: string
+    path: string
+  }): Promise<{
+    availability: string
+    content_base64?: string
+    mime_type?: string
+    reason?: string
+  }>
   deleteExecution(executionId: string): Promise<void>
   listEvaluatedVersions(input?: {
     cohort_id?: string
@@ -688,7 +697,8 @@ function makeBridge(runtime: RuntimeConfig): DashboardDataBridge {
       call<ExecutionBundle>(runtime.functions.execution_get, {
         execution_id: executionId,
       }).then((bundle) => bundle.detail),
-    openEvidence: (input) => call(runtime.functions.execution_evidence_open, input),
+    openEvidence: (input) =>
+      call(runtime.functions.execution_evidence_open, input),
     deleteExecution: (executionId) =>
       call(runtime.functions.execution_delete, {
         execution_id: executionId,

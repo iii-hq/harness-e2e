@@ -571,5 +571,7 @@ it('normalizes local objective, cache-inclusive tokens and subject cost once', (
 })
 
 it('does not query Release Control directly for imported history', async () => {
-  await expect(getImportedReference('remote-execution-one')).rejects.toThrow('initialized')
+  await expect(getImportedReference('remote-execution-one')).rejects.toThrow(
+    'initialized',
+  )
 })

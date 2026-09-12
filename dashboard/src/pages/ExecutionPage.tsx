@@ -60,7 +60,10 @@ import {
 } from '@/lib/execution-view'
 import { planAction } from '@/lib/plan-execution'
 import { buildPrimaryMetrics } from '@/lib/primary-metrics'
-import { referencePrimaryMetrics, type RcReference } from '@/lib/release-control-reference'
+import {
+  type RcReference,
+  referencePrimaryMetrics,
+} from '@/lib/release-control-reference'
 import {
   buildScenarioMatrix,
   formatScenarioDuration,
@@ -804,33 +807,125 @@ export function ExecutionPage({
       <div className="ds-root min-h-dvh bg-canvas text-ink">
         <DashboardPageActions active="executions" />
         <div className="page-shell w-[calc(100%_-_1.5rem)] max-w-[1420px] pt-5 pb-16 md:w-[calc(100%_-_3rem)]">
-          <PageHeader title={detail.label ?? 'imported execution'} summary="Historical evidence imported locally; metrics use the retained run ledger." breadcrumb={[{ label: 'plans', href: hashForPlans() }, ...(detail.plan_id ? [{ label: 'Plan', href: hashForPlan(detail.plan_id) }] : [])]} />
-          <div className="mt-6"><PrimaryMetricsView baseline={referencePrimaryMetrics(reference)} baselineExecutionId={detail.id} baselineLabel="Imported history" /></div>
+          <PageHeader
+            title={detail.label ?? 'imported execution'}
+            summary="Historical evidence imported locally; metrics use the retained run ledger."
+            breadcrumb={[
+              { label: 'plans', href: hashForPlans() },
+              ...(detail.plan_id
+                ? [{ label: 'Plan', href: hashForPlan(detail.plan_id) }]
+                : []),
+            ]}
+          />
+          <div className="mt-6">
+            <PrimaryMetricsView
+              baseline={referencePrimaryMetrics(reference)}
+              baselineExecutionId={detail.id}
+              baselineLabel="Imported history"
+            />
+          </div>
           <Panel className="mt-6" title="Retained runs">
-            <DataTable collapse minWidth="44rem" caption="Historical run ledger">
-              <thead><tr><th>Scenario</th><th>Attempt</th><th>Status</th><th>Evidence</th></tr></thead>
-              <tbody>{reference.runs.map((run, index) => <DataTableRow key={run.id ?? `${run.scenarioId}-${index}`}><td>{run.scenarioId}</td><td>{run.repetition ?? '—'}</td><td>{run.status ?? '—'}</td><td>{run.attemptsComplete ? 'retained' : 'partial'}</td></DataTableRow>)}</tbody>
+            <DataTable
+              collapse
+              minWidth="44rem"
+              caption="Historical run ledger"
+            >
+              <thead>
+                <tr>
+                  <th>Scenario</th>
+                  <th>Attempt</th>
+                  <th>Status</th>
+                  <th>Evidence</th>
+                </tr>
+              </thead>
+              <tbody>
+                {reference.runs.map((run, index) => (
+                  <DataTableRow key={run.id ?? `${run.scenarioId}-${index}`}>
+                    <td>{run.scenarioId}</td>
+                    <td>{run.repetition ?? '—'}</td>
+                    <td>{run.status ?? '—'}</td>
+                    <td>{run.attemptsComplete ? 'retained' : 'partial'}</td>
+                  </DataTableRow>
+                ))}
+              </tbody>
             </DataTable>
           </Panel>
           <Panel className="mt-6" title="Retained artifacts">
-            {(detail.retained_reports ?? []).flatMap((value) => {
-              if (!value || typeof value !== 'object' || Array.isArray(value)) return []
-              const report = value as Record<string, unknown>
-              const reportId = typeof report.id === 'string' ? report.id : typeof report.report_id === 'string' ? report.report_id : null
-              const paths = Array.isArray(report.artifacts) ? report.artifacts : []
-              return reportId ? paths.flatMap((artifact) => {
-                const path = typeof artifact === 'string' ? artifact : artifact && typeof artifact === 'object' && typeof (artifact as Record<string, unknown>).path === 'string' ? String((artifact as Record<string, unknown>).path) : null
-                return path ? [{ reportId, path }] : []
-              }) : []
-            }).map(({ reportId, path }) => <button key={`${reportId}:${path}`} type="button" className={buttonClassName({ variant: 'quiet', size: 'compact' })} onClick={() => void (async () => {
-              if (!bridge) return
-              const result = await bridge.openEvidence({ execution_id: detail.id, report_id: reportId, path })
-              if (result.availability !== 'available' || !result.content_base64) { setEvidenceMessage(result.reason ?? result.availability); return }
-              const binary = Uint8Array.from(atob(result.content_base64), (char) => char.charCodeAt(0))
-              const url = URL.createObjectURL(new Blob([binary], { type: result.mime_type ?? 'application/octet-stream' }))
-              const link = document.createElement('a'); link.href = url; link.download = path.split('/').at(-1) ?? 'evidence'; link.click(); URL.revokeObjectURL(url)
-            })()}>{path}</button>)}
-            {evidenceMessage ? <p className="mt-3 text-sm text-warning">{evidenceMessage}</p> : null}
+            {(detail.retained_reports ?? [])
+              .flatMap((value) => {
+                if (!value || typeof value !== 'object' || Array.isArray(value))
+                  return []
+                const report = value as Record<string, unknown>
+                const reportId =
+                  typeof report.id === 'string'
+                    ? report.id
+                    : typeof report.report_id === 'string'
+                      ? report.report_id
+                      : null
+                const paths = Array.isArray(report.artifacts)
+                  ? report.artifacts
+                  : []
+                return reportId
+                  ? paths.flatMap((artifact) => {
+                      const path =
+                        typeof artifact === 'string'
+                          ? artifact
+                          : artifact &&
+                              typeof artifact === 'object' &&
+                              typeof (artifact as Record<string, unknown>)
+                                .path === 'string'
+                            ? String((artifact as Record<string, unknown>).path)
+                            : null
+                      return path ? [{ reportId, path }] : []
+                    })
+                  : []
+              })
+              .map(({ reportId, path }) => (
+                <button
+                  key={`${reportId}:${path}`}
+                  type="button"
+                  className={buttonClassName({
+                    variant: 'quiet',
+                    size: 'compact',
+                  })}
+                  onClick={() =>
+                    void (async () => {
+                      if (!bridge) return
+                      const result = await bridge.openEvidence({
+                        execution_id: detail.id,
+                        report_id: reportId,
+                        path,
+                      })
+                      if (
+                        result.availability !== 'available' ||
+                        !result.content_base64
+                      ) {
+                        setEvidenceMessage(result.reason ?? result.availability)
+                        return
+                      }
+                      const binary = Uint8Array.from(
+                        atob(result.content_base64),
+                        (char) => char.charCodeAt(0),
+                      )
+                      const url = URL.createObjectURL(
+                        new Blob([binary], {
+                          type: result.mime_type ?? 'application/octet-stream',
+                        }),
+                      )
+                      const link = document.createElement('a')
+                      link.href = url
+                      link.download = path.split('/').at(-1) ?? 'evidence'
+                      link.click()
+                      URL.revokeObjectURL(url)
+                    })()
+                  }
+                >
+                  {path}
+                </button>
+              ))}
+            {evidenceMessage ? (
+              <p className="mt-3 text-sm text-warning">{evidenceMessage}</p>
+            ) : null}
           </Panel>
         </div>
       </div>

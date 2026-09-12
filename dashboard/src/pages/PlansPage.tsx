@@ -10,8 +10,8 @@ import {
   Callout,
   DataTable,
   DataTableRow,
-  Dialog,
   DeltaValue,
+  Dialog,
   EmptyState,
   FilterChip,
   FilterChipGroup,
@@ -41,7 +41,11 @@ import {
   type PlanMetricComparison,
   type PlanMetricId,
 } from '@/lib/plan-comparison'
-import { discoverReleaseControlHistory, exportReleaseControlHistory, type RcHistoryPlan } from '@/lib/release-control-reference'
+import {
+  discoverReleaseControlHistory,
+  exportReleaseControlHistory,
+  type RcHistoryPlan,
+} from '@/lib/release-control-reference'
 
 type PlanFilter = 'all' | 'needs_action' | 'running' | 'compared'
 
@@ -544,14 +548,18 @@ function PlanRow({
   )
 }
 
-function isLocalPlan(plan: import('@/lib/dashboard-data-source').Plan): plan is LocalPlan {
+function isLocalPlan(
+  plan: import('@/lib/dashboard-data-source').Plan,
+): plan is LocalPlan {
   return plan.origin !== 'remote'
 }
 
 export function PlansPage() {
   const viewsId = useId()
   const [tab, setTab] = useState<'mine' | 'profiles'>('mine')
-  const [plans, setPlans] = useState<import('@/lib/dashboard-data-source').Plan[]>([])
+  const [plans, setPlans] = useState<
+    import('@/lib/dashboard-data-source').Plan[]
+  >([])
   const [masterPlan, setMasterPlan] = useState<MasterTestPlan | null>(null)
   const [executionSummaries, setExecutionSummaries] = useState<
     Record<string, DashboardExecutionSummary>
@@ -572,30 +580,47 @@ export function PlansPage() {
     setImportError(null)
     try {
       const json = await file.text()
-      const bytes = new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(json)))
+      const bytes = new Uint8Array(
+        await crypto.subtle.digest('SHA-256', new TextEncoder().encode(json)),
+      )
       const sha256 = `sha256:${[...bytes].map((byte) => byte.toString(16).padStart(2, '0')).join('')}`
       const bridge = await getDashboardDataBridge()
-      await bridge.planControl({ action: 'import_history', history: { json, sha256 } })
+      await bridge.planControl({
+        action: 'import_history',
+        history: { json, sha256 },
+      })
       await load({ silent: true })
     } catch (cause) {
       setImportError(cause instanceof Error ? cause.message : String(cause))
-    } finally { setImporting(false) }
+    } finally {
+      setImporting(false)
+    }
   }
   const openImport = async () => {
-    setImportOpen(true); setImportError(null); setRemotePlans([])
-    try { setRemotePlans(await discoverReleaseControlHistory()) }
-    catch (cause) { setImportError(cause instanceof Error ? cause.message : String(cause)) }
+    setImportOpen(true)
+    setImportError(null)
+    setRemotePlans([])
+    try {
+      setRemotePlans(await discoverReleaseControlHistory())
+    } catch (cause) {
+      setImportError(cause instanceof Error ? cause.message : String(cause))
+    }
   }
   const importRemote = async () => {
     if (!remotePlanKey) return
-    setImporting(true); setImportError(null)
+    setImporting(true)
+    setImportError(null)
     try {
       const history = await exportReleaseControlHistory(remotePlanKey)
       const bridge = await getDashboardDataBridge()
       await bridge.planControl({ action: 'import_history', history })
-      await load({ silent: true }); setImportOpen(false)
-    } catch (cause) { setImportError(cause instanceof Error ? cause.message : String(cause)) }
-    finally { setImporting(false) }
+      await load({ silent: true })
+      setImportOpen(false)
+    } catch (cause) {
+      setImportError(cause instanceof Error ? cause.message : String(cause))
+    } finally {
+      setImporting(false)
+    }
   }
 
   const load = useCallback(async ({ silent = false } = {}) => {
@@ -610,11 +635,13 @@ export function PlansPage() {
         right.updated_at.localeCompare(left.updated_at),
       )
       setPlans(orderedPlans)
-      const executionIds = orderedPlans.filter(isLocalPlan).flatMap((plan) => [
-        plan.baseline_execution_id ?? '',
-        plan.candidate_execution_ids.at(-1) ?? '',
-        plan.last_attempt_id ?? '',
-      ])
+      const executionIds = orderedPlans
+        .filter(isLocalPlan)
+        .flatMap((plan) => [
+          plan.baseline_execution_id ?? '',
+          plan.candidate_execution_ids.at(-1) ?? '',
+          plan.last_attempt_id ?? '',
+        ])
       try {
         setExecutionSummaries(
           await loadExecutionSummaries(next.listExecutions, executionIds),
@@ -638,7 +665,9 @@ export function PlansPage() {
 
   const counts = useMemo(() => {
     const count = (candidate: PlanFilter) =>
-      plans.filter((plan) => isLocalPlan(plan) && matchesFilter(plan, candidate)).length
+      plans.filter(
+        (plan) => isLocalPlan(plan) && matchesFilter(plan, candidate),
+      ).length
     return {
       all: plans.length,
       needs_action: count('needs_action'),
@@ -663,7 +692,9 @@ export function PlansPage() {
         plan.label,
         plan.purpose,
         plan.id,
-        ...(isLocalPlan(plan) ? [plan.model, plan.provider, ...plan.scenario_ids] : [plan.source.plan_key, plan.source.instance_id]),
+        ...(isLocalPlan(plan)
+          ? [plan.model, plan.provider, ...plan.scenario_ids]
+          : [plan.source.plan_key, plan.source.instance_id]),
       ]
         .join(' ')
         .toLowerCase()
@@ -687,7 +718,21 @@ export function PlansPage() {
         active="plans"
         actionsLabel="Local plan actions"
         actions={
-          <><button type="button" className={dashboardHeaderActionClassName()} onClick={() => void openImport()}>{importing ? 'importing…' : 'import history'}</button><a className={dashboardHeaderActionClassName({ primary: true })} href={hashForNewPlan()}>new plan</a></>
+          <>
+            <button
+              type="button"
+              className={dashboardHeaderActionClassName()}
+              onClick={() => void openImport()}
+            >
+              {importing ? 'importing…' : 'import history'}
+            </button>
+            <a
+              className={dashboardHeaderActionClassName({ primary: true })}
+              href={hashForNewPlan()}
+            >
+              new plan
+            </a>
+          </>
         }
       />
       <div className="ds-root page-shell w-[calc(100%_-_1.5rem)] max-w-[1420px] pt-5 pb-16 md:w-[calc(100%_-_3rem)]">
@@ -707,7 +752,15 @@ export function PlansPage() {
             ) : undefined
           }
         />
-        {importError ? <Callout className="mt-4" tone="warning" title="History import failed">{importError}</Callout> : null}
+        {importError ? (
+          <Callout
+            className="mt-4"
+            tone="warning"
+            title="History import failed"
+          >
+            {importError}
+          </Callout>
+        ) : null}
 
         <Tabs
           value={tab}
@@ -909,14 +962,61 @@ export function PlansPage() {
                       </tr>
                     </thead>
                     <tbody>
-                      {filteredPlans.map((plan) => isLocalPlan(plan) ? (
-                        <PlanRow key={plan.id} plan={plan} executionSummaries={executionSummaries} />
-                      ) : (
-                        <DataTableRow key={plan.id} href={hashForPlan(plan.id)}>
-                          <td data-label="Plan" className="ds-table-sticky-col"><span className="font-medium text-ink">{plan.label}</span><span className="ml-2 rounded bg-[var(--surface-fill)] px-1 font-mono text-label text-ink-muted">remote</span><span className="block font-mono text-label text-ink-muted">{plan.source.instance_id} · {plan.source.plan_key}</span></td>
-                          <td data-label="Scope · model">{plan.purpose || '—'}</td><td data-label="Baseline">historical import</td><td data-label="Latest candidate vs baseline">{plan.execution_ids.length} execution{plan.execution_ids.length === 1 ? '' : 's'}</td><td data-label="Last activity" className={numericCellClassName}>{shortDate(plan.updated_at)}</td><td className="text-right"><a className={buttonClassName({variant:'quiet',size:'compact'})} href={hashForPlan(plan.id)}>open</a></td>
-                        </DataTableRow>
-                      ))}
+                      {filteredPlans.map((plan) =>
+                        isLocalPlan(plan) ? (
+                          <PlanRow
+                            key={plan.id}
+                            plan={plan}
+                            executionSummaries={executionSummaries}
+                          />
+                        ) : (
+                          <DataTableRow
+                            key={plan.id}
+                            href={hashForPlan(plan.id)}
+                          >
+                            <td
+                              data-label="Plan"
+                              className="ds-table-sticky-col"
+                            >
+                              <span className="font-medium text-ink">
+                                {plan.label}
+                              </span>
+                              <span className="ml-2 rounded bg-[var(--surface-fill)] px-1 font-mono text-label text-ink-muted">
+                                remote
+                              </span>
+                              <span className="block font-mono text-label text-ink-muted">
+                                {plan.source.instance_id} ·{' '}
+                                {plan.source.plan_key}
+                              </span>
+                            </td>
+                            <td data-label="Scope · model">
+                              {plan.purpose || '—'}
+                            </td>
+                            <td data-label="Baseline">historical import</td>
+                            <td data-label="Latest candidate vs baseline">
+                              {plan.execution_ids.length} execution
+                              {plan.execution_ids.length === 1 ? '' : 's'}
+                            </td>
+                            <td
+                              data-label="Last activity"
+                              className={numericCellClassName}
+                            >
+                              {shortDate(plan.updated_at)}
+                            </td>
+                            <td className="text-right">
+                              <a
+                                className={buttonClassName({
+                                  variant: 'quiet',
+                                  size: 'compact',
+                                })}
+                                href={hashForPlan(plan.id)}
+                              >
+                                open
+                              </a>
+                            </td>
+                          </DataTableRow>
+                        ),
+                      )}
                     </tbody>
                   </DataTable>
                 )}
@@ -925,8 +1025,57 @@ export function PlansPage() {
           )}
         </div>
       </div>
-      <Dialog open={importOpen} onClose={() => !importing && setImportOpen(false)} title="Import Release Control history" description="History is copied into this Harness. Later reading, comparison and reproduction use the local copy.">
-            <div className="grid gap-4"><label className="grid gap-1 text-sm">Release Control plan<select value={remotePlanKey} onChange={(event) => setRemotePlanKey(event.target.value)}><option value="">Select a plan…</option>{remotePlans.map((plan) => <option key={plan.key} value={plan.key}>{plan.key}{plan.active ? '' : ' (inactive)'}</option>)}</select></label><div className="flex gap-2"><button className={buttonClassName({ variant: 'primary' })} type="button" disabled={!remotePlanKey || importing} onClick={() => void importRemote()}>{importing ? 'importing…' : 'import selected history'}</button><label className={buttonClassName({ variant: 'secondary' })}><input className="ds-visually-hidden" type="file" accept="application/json,.json" onChange={(event) => { const file = event.currentTarget.files?.[0]; if (file) void importHistory(file); event.currentTarget.value = '' }} />import JSON file</label></div>{importError ? <Callout tone="warning" title="Import unavailable">{importError}</Callout> : null}</div>
+      <Dialog
+        open={importOpen}
+        onClose={() => !importing && setImportOpen(false)}
+        title="Import Release Control history"
+        description="History is copied into this Harness. Later reading, comparison and reproduction use the local copy."
+      >
+        <div className="grid gap-4">
+          <label className="grid gap-1 text-sm">
+            Release Control plan
+            <select
+              value={remotePlanKey}
+              onChange={(event) => setRemotePlanKey(event.target.value)}
+            >
+              <option value="">Select a plan…</option>
+              {remotePlans.map((plan) => (
+                <option key={plan.key} value={plan.key}>
+                  {plan.key}
+                  {plan.active ? '' : ' (inactive)'}
+                </option>
+              ))}
+            </select>
+          </label>
+          <div className="flex gap-2">
+            <button
+              className={buttonClassName({ variant: 'primary' })}
+              type="button"
+              disabled={!remotePlanKey || importing}
+              onClick={() => void importRemote()}
+            >
+              {importing ? 'importing…' : 'import selected history'}
+            </button>
+            <label className={buttonClassName({ variant: 'secondary' })}>
+              <input
+                className="ds-visually-hidden"
+                type="file"
+                accept="application/json,.json"
+                onChange={(event) => {
+                  const file = event.currentTarget.files?.[0]
+                  if (file) void importHistory(file)
+                  event.currentTarget.value = ''
+                }}
+              />
+              import JSON file
+            </label>
+          </div>
+          {importError ? (
+            <Callout tone="warning" title="Import unavailable">
+              {importError}
+            </Callout>
+          ) : null}
+        </div>
       </Dialog>
     </>
   )

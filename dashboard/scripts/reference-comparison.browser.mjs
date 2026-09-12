@@ -1,15 +1,24 @@
 // Functional Console RPC coverage. No models run; real-host visuals are checked separately.
 import assert from 'node:assert/strict'
-import { readFile, mkdir } from 'node:fs/promises'
+import { mkdir, readFile } from 'node:fs/promises'
 import { chromium } from 'playwright'
 import { createConsoleTestHost } from './console-test-host.mjs'
 
-const capturedTransport = JSON.parse(await readFile(new URL('../../tests/fixtures/history/retained-history.json', import.meta.url), 'utf8'))
+const capturedTransport = JSON.parse(
+  await readFile(
+    new URL(
+      '../../tests/fixtures/history/retained-history.json',
+      import.meta.url,
+    ),
+    'utf8',
+  ),
+)
 
 const reference = {
   execution: {
     id: 'remote-1',
-    local_id: 'remote-execution-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+    local_id:
+      'remote-execution-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
     campaignId: 'campaign',
     planKey: 'smoke',
     attempt: 1,
@@ -95,42 +104,6 @@ const detail = (id) => ({
     },
   ],
 })
-const makePlan = (attempt = null) => ({
-  schema_version: 1,
-  id: 'imported-reference',
-  label: 'RC Smoke local',
-  purpose: 'reference',
-  created_at: '2026-09-08T12:02:00Z',
-  updated_at: '2026-09-08T12:02:00Z',
-  state: attempt ? 'baseline_ready' : 'draft',
-  locked: Boolean(attempt),
-  scope_hash: 'scope',
-  url: 'http://local',
-  model: 'test',
-  provider: 'test',
-  judge_model: 'judge',
-  judge_provider: 'test',
-  scenarios: [
-    {
-      scenario_id: 'alpha',
-      scenario_version: 1,
-      case_id: 'case-a',
-      seed: 42,
-      inputs_sha256: 'inputs',
-      contract_sha256: 'contract',
-      complexity_tier: 'l1_sequential',
-    },
-  ],
-  scenario_ids: ['alpha'],
-  runs: 1,
-  technical_retries: 0,
-  seed: null,
-  baseline_execution_id: attempt,
-  candidate_execution_ids: [],
-  incomplete_execution_ids: [],
-  last_attempt_id: attempt,
-  reference_execution_id: 'remote-1',
-})
 const locals = []
 let imported = null,
   starts = 0
@@ -147,7 +120,13 @@ const trigger = async (name, payload = {}) => {
 async function route(id, payload) {
   if (id.startsWith('release-control::') && disconnected)
     throw new Error('RC tab disconnected')
-  if (id === 'release-control::test-plans::history-list') return { plans: [{ key: 'smoke', active: true, updated_at: '2026-09-08T12:00:00Z' }], next_after: null }
+  if (id === 'release-control::test-plans::history-list')
+    return {
+      plans: [
+        { key: 'smoke', active: true, updated_at: '2026-09-08T12:00:00Z' },
+      ],
+      next_after: null,
+    }
   if (id === 'release-control::test-plans::export') return capturedTransport
   if (id === 'release-control::test-plans::list')
     return {
@@ -155,13 +134,48 @@ async function route(id, payload) {
     }
   if (id === 'release-control::test-executions::reference') return reference
   if (id === 'plans_list')
-    return { mode: 'unified', plans: imported ? [structuredClone(imported)] : [] }
+    return {
+      mode: 'unified',
+      plans: imported ? [structuredClone(imported)] : [],
+    }
   if (id === 'plan_get') return structuredClone(imported)
   if (id === 'executions_list')
-    return { executions: [{ id: 'remote-execution-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', origin: 'remote', label: 'RC Smoke', status: 'completed', subjects: [] }, ...structuredClone(locals)], total: locals.length + 1 }
-  if (id === 'execution_get' && payload.execution_id.startsWith('remote-execution-')) return { detail: { id: payload.execution_id, origin: 'remote', label: 'RC Smoke', status: 'completed', subjects: [], reports: [], plan_id: 'remote-plan-smoke', remote_reference: reference, retained_reports: [] } }
+    return {
+      executions: [
+        {
+          id: 'remote-execution-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+          origin: 'remote',
+          label: 'RC Smoke',
+          status: 'completed',
+          subjects: [],
+        },
+        ...structuredClone(locals),
+      ],
+      total: locals.length + 1,
+    }
+  if (
+    id === 'execution_get' &&
+    payload.execution_id.startsWith('remote-execution-')
+  )
+    return {
+      detail: {
+        id: payload.execution_id,
+        origin: 'remote',
+        label: 'RC Smoke',
+        status: 'completed',
+        subjects: [],
+        reports: [],
+        plan_id: 'remote-plan-smoke',
+        remote_reference: reference,
+        retained_reports: [],
+      },
+    }
   if (id === 'execution_get')
-    return { detail: structuredClone(locals.find((item) => item.id === payload.execution_id)) }
+    return {
+      detail: structuredClone(
+        locals.find((item) => item.id === payload.execution_id),
+      ),
+    }
   if (id === 'catalog_get')
     return {
       url: 'http://local',
@@ -170,8 +184,32 @@ async function route(id, payload) {
       local_scenarios: [],
     }
   if (id === 'plan_control' && payload.action === 'import_history') {
-    imported = { origin: 'remote', id: 'remote-plan-smoke', label: 'RC Smoke', purpose: 'imported', created_at: null, updated_at: '2026-09-08T12:00:00Z', template_id: null, source: { instance_id: 'rc', plan_key: 'smoke', captured_at: '2026-09-08T12:00:00Z', active: true, limitation: null }, configuration: null, execution_ids: ['remote-execution-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'] }
-    return { plan_id: imported.id, inserted: true, updated: false, unchanged: false }
+    imported = {
+      origin: 'remote',
+      id: 'remote-plan-smoke',
+      label: 'RC Smoke',
+      purpose: 'imported',
+      created_at: null,
+      updated_at: '2026-09-08T12:00:00Z',
+      template_id: null,
+      source: {
+        instance_id: 'rc',
+        plan_key: 'smoke',
+        captured_at: '2026-09-08T12:00:00Z',
+        active: true,
+        limitation: null,
+      },
+      configuration: null,
+      execution_ids: [
+        'remote-execution-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+      ],
+    }
+    return {
+      plan_id: imported.id,
+      inserted: true,
+      updated: false,
+      unchanged: false,
+    }
   }
   if (id === 'plan_run_start') {
     starts++
@@ -210,7 +248,34 @@ async function route(id, payload) {
       judge_models: [],
       systems: [],
       series: [],
-      observations: [{ execution_id: 'local-history', evaluated_version_id: 'local', cohort_id: 'same', completed_at: '2026-09-11T12:00:00Z', case_id: 'case-a', contract_sha256: 'contract', assessment_profile_sha256: 'assessment', status: 'passed', median_score: 90, run_count: 1, scored_runs: 1, scenario_version: 1, seed: 1, stack_mode: 'source', subject_provider: 'test', subject_model: 'test', judge_provider: 'test', judge_model: 'judge', median_cost_usd: 0.01, median_tokens: 10, median_duration_seconds: 1, median_function_calls: 1, median_function_call_errors: 0, median_turns: 1 }],
+      observations: [
+        {
+          execution_id: 'local-history',
+          evaluated_version_id: 'local',
+          cohort_id: 'same',
+          completed_at: '2026-09-11T12:00:00Z',
+          case_id: 'case-a',
+          contract_sha256: 'contract',
+          assessment_profile_sha256: 'assessment',
+          status: 'passed',
+          median_score: 90,
+          run_count: 1,
+          scored_runs: 1,
+          scenario_version: 1,
+          seed: 1,
+          stack_mode: 'source',
+          subject_provider: 'test',
+          subject_model: 'test',
+          judge_provider: 'test',
+          judge_model: 'judge',
+          median_cost_usd: 0.01,
+          median_tokens: 10,
+          median_duration_seconds: 1,
+          median_function_calls: 1,
+          median_function_call_errors: 0,
+          median_turns: 1,
+        },
+      ],
       total: 1,
       next_cursor: null,
     }
@@ -241,31 +306,71 @@ page.on('pageerror', (error) => errors.push(error.message))
 try {
   await server.install(page, trigger)
   await page.goto(`${server.url}#/ext/harness-e2e/plans`)
-  await page.getByRole('button', { name: 'import history', exact: true }).click()
-  await page.getByRole('dialog', { name: 'Import Release Control history' }).waitFor()
+  await page
+    .getByRole('button', { name: 'import history', exact: true })
+    .click()
+  await page
+    .getByRole('dialog', { name: 'Import Release Control history' })
+    .waitFor()
   await page.getByRole('combobox').selectOption('smoke')
-  await page.getByRole('button', { name: 'import selected history', exact: true }).click()
+  await page
+    .getByRole('button', { name: 'import selected history', exact: true })
+    .click()
   await page.getByText('remote', { exact: true }).waitFor()
-  await page.screenshot({ path: `${screenshots}/plans-light-desktop.png`, fullPage: true })
+  await page.screenshot({
+    path: `${screenshots}/plans-light-desktop.png`,
+    fullPage: true,
+  })
   await page.setViewportSize({ width: 390, height: 844 })
-  await page.screenshot({ path: `${screenshots}/plans-light-narrow.png`, fullPage: true })
-  await page.evaluate(() => { window.__consoleTheme = 'dark' })
+  await page.screenshot({
+    path: `${screenshots}/plans-light-narrow.png`,
+    fullPage: true,
+  })
+  await page.evaluate(() => {
+    window.__consoleTheme = 'dark'
+  })
   await page.reload()
-  await page.screenshot({ path: `${screenshots}/plans-dark-narrow.png`, fullPage: true })
+  await page.screenshot({
+    path: `${screenshots}/plans-dark-narrow.png`,
+    fullPage: true,
+  })
   await page.setViewportSize({ width: 1280, height: 900 })
-  assert.equal(calls.some((call) => call.id === 'release-control::test-plans::history-list'), true)
-  assert.equal(calls.some((call) => call.id === 'release-control::test-plans::export'), true)
-  const importCall = calls.find((call) => call.id === 'plan_control' && call.payload.action === 'import_history')
+  assert.equal(
+    calls.some(
+      (call) => call.id === 'release-control::test-plans::history-list',
+    ),
+    true,
+  )
+  assert.equal(
+    calls.some((call) => call.id === 'release-control::test-plans::export'),
+    true,
+  )
+  const importCall = calls.find(
+    (call) =>
+      call.id === 'plan_control' && call.payload.action === 'import_history',
+  )
   assert.deepEqual(importCall.payload.history, capturedTransport)
-  await page.goto(`${server.url}#/ext/harness-e2e/execution/remote-execution-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa`)
+  await page.goto(
+    `${server.url}#/ext/harness-e2e/execution/remote-execution-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa`,
+  )
   await page.getByText('Historical run ledger', { exact: true }).waitFor()
   disconnected = true
   await page.reload()
   await page.getByText('Historical run ledger', { exact: true }).waitFor()
   locals.push(detail('local-history'))
-  await page.goto(`${server.url}#/ext/harness-e2e/tests/alpha?reference=remote-execution-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa&candidate=local-history`)
-  await page.getByRole('button', { name: 'Reference: Release Control', exact: true }).waitFor()
+  await page.goto(
+    `${server.url}#/ext/harness-e2e/tests/alpha?reference=remote-execution-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa&candidate=local-history`,
+  )
+  await page
+    .getByRole('button', { name: 'Reference: Release Control', exact: true })
+    .waitFor()
   await page.locator('[data-test-comparison]').waitFor()
-  assert.equal(calls.filter((call) => call.id.startsWith('release-control::')).length, 2)
+  assert.equal(
+    calls.filter((call) => call.id.startsWith('release-control::')).length,
+    2,
+  )
   assert.deepEqual(errors, [])
-} finally { await browser.close(); await server.close() }
+} finally {
+  await browser.close()
+  await server.close()
+}
