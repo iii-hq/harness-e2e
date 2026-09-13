@@ -113,8 +113,6 @@ Na tabela, todos os nomes têm o prefixo **`HARNESS_E2E_`**. O destino é uma pr
 | --- | --- | --- |
 | `ADMISSION_TIMEOUT_SECONDS` | Prazo de admissão no launcher exact-stack | Interno do executor |
 | `ARTIFACTS_DIR` | Destino dos artefatos da campanha/CI | Derivado da execução |
-| `AUDIT_MODEL` | Modelo de auditoria opcional na CLI | Configuração explícita da execução |
-| `AUDIT_PROVIDER` | Provider de auditoria opcional na CLI | Configuração explícita da execução |
 | `BIN` | Binário escolhido pelo runner de campanhas | Interno de desenvolvimento/CI |
 | `BUILD_REPOSITORY` | Proveniência incorporada no build | Manter no build |
 | `BUILD_REVISION` | Proveniência incorporada no build | Manter no build |

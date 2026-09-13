@@ -14,7 +14,6 @@ use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use tokio::sync::{broadcast, mpsc, watch, Mutex, RwLock};
 
-use crate::analyzer::AnalyzerConfig;
 use crate::artifact::{self, ArtifactReference};
 use crate::context::E2eContext;
 use crate::durable::{
@@ -189,11 +188,6 @@ pub struct RunRequest {
     pub lane: String,
     pub model: String,
     pub provider: String,
-    /// Opt-in behavioral audit analyzer; supply model and provider together.
-    #[serde(default)]
-    pub audit_model: Option<String>,
-    #[serde(default)]
-    pub audit_provider: Option<String>,
     #[serde(default)]
     pub scenarios: Vec<ScenarioId>,
     #[serde(default = "default_runs")]
@@ -904,7 +898,6 @@ impl ControlPlane {
         } else {
             unique_scenarios(&request.scenarios)
         };
-        let audit_analyzer = audit_config(&request);
         let outcome = run_suite(SuiteRunConfig {
             url: self.inner.url.clone(),
             execution_id: None,
@@ -912,7 +905,6 @@ impl ControlPlane {
                 model: request.model.clone(),
                 provider: request.provider.clone(),
             },
-            audit_analyzer,
             output: output.clone(),
             scenarios,
             runs: request.runs,
@@ -2016,9 +2008,6 @@ pub(crate) fn validate_run_request(request: &RunRequest) -> Result<LaneBudget> {
             budget.max_declared_turns
         );
     }
-    if request.audit_model.is_some() != request.audit_provider.is_some() {
-        bail!("audit_model and audit_provider must be supplied together");
-    }
     if let Some(contract) = &request.run_contract {
         contract.validate()?;
         let expected = observation_idempotency_key(request)?;
@@ -2154,14 +2143,6 @@ fn lane_budget(lane: &str) -> LaneBudget {
         max_technical_retries,
         max_declared_turns,
     }
-}
-
-fn audit_config(request: &RunRequest) -> Option<AnalyzerConfig> {
-    request
-        .audit_model
-        .clone()
-        .zip(request.audit_provider.clone())
-        .map(|(model, provider)| AnalyzerConfig { model, provider })
 }
 
 fn unique_scenarios(scenarios: &[ScenarioId]) -> Vec<ScenarioId> {
@@ -2711,8 +2692,6 @@ mod tests {
             lane: "pr-gate".into(),
             model: "model".into(),
             provider: "provider".into(),
-            audit_model: None,
-            audit_provider: None,
             scenarios: vec![ScenarioId::ContextPressure],
             runs: 1,
             seed: Some(42),

@@ -1,4 +1,3 @@
-pub mod analyzer;
 pub mod artifact;
 pub mod assessment;
 pub mod asset;

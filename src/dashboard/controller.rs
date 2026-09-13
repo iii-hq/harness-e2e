@@ -493,8 +493,6 @@ pub(super) fn control_request(
         lane: "local".into(),
         model: request.model.clone(),
         provider: request.provider.clone(),
-        audit_model: None,
-        audit_provider: None,
         scenarios,
         runs: request.runs,
         seed: request.seed,

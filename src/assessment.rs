@@ -115,51 +115,6 @@ impl From<&ArtifactReference> for EvidenceReference {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
-pub struct AnalyzerIdentity {
-    pub analyzer: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub provider: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub model: Option<String>,
-    pub input_sha256: String,
-}
-
-impl AnalyzerIdentity {
-    pub fn validate(&self) -> Result<()> {
-        required(&self.analyzer, "analyzer id")?;
-        validate_sha256(&self.input_sha256, "analyzer input hash")?;
-        if self
-            .provider
-            .as_ref()
-            .is_some_and(|value| value.trim().is_empty())
-        {
-            bail!("analyzer provider cannot be empty when present");
-        }
-        if self
-            .model
-            .as_ref()
-            .is_some_and(|value| value.trim().is_empty())
-        {
-            bail!("analyzer model cannot be empty when present");
-        }
-        Ok(())
-    }
-}
-
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
-pub struct AnalyzerUsage {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub latency_ms: Option<u64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub input_tokens: Option<u64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub output_tokens: Option<u64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub cost_usd: Option<f64>,
-}
-
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct AssessmentResult {
     pub criterion_id: String,

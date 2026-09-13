@@ -10,7 +10,6 @@ use serde_json::json;
 use tokio::sync::{mpsc, oneshot, watch};
 use uuid::Uuid;
 
-use crate::analyzer::AnalyzerConfig;
 use crate::artifact;
 use crate::assessment::{
     AssessmentOutcome, AssessmentResult, AssessmentScore, AssessmentTarget, AssessmentTargetKind,
@@ -87,9 +86,6 @@ pub struct SuiteRunConfig {
     pub url: String,
     pub execution_id: Option<String>,
     pub subject: SubjectConfig,
-    /// Model that audits subject behavior from the captured transcript.
-    /// Opt-in: `None` keeps the audit deterministic-only.
-    pub audit_analyzer: Option<AnalyzerConfig>,
     pub output: PathBuf,
     pub scenarios: Vec<ScenarioId>,
     pub runs: u32,
@@ -395,7 +391,6 @@ pub async fn run_suite(config: SuiteRunConfig) -> Result<SuiteRunOutcome> {
                         RetryRequest {
                             scenario_id,
                             subject: &config.subject,
-                            audit_analyzer: config.audit_analyzer.as_ref(),
                             seed: *seed,
                             technical_retries: config.technical_retries,
                             progress_interval: config.progress_interval,
@@ -1067,7 +1062,6 @@ struct AttemptRequest<'a> {
     run_id: &'a str,
     attempt_number: u32,
     subject: &'a SubjectConfig,
-    audit_analyzer: Option<&'a AnalyzerConfig>,
     seed: u64,
     progress_interval: Option<Duration>,
     control: Option<&'a SuiteControl>,
@@ -1084,7 +1078,6 @@ async fn run_once(context: &Arc<E2eContext>, request: AttemptRequest<'_>) -> E2e
         run_id,
         attempt_number,
         subject,
-        audit_analyzer,
         seed,
         progress_interval,
         control,
@@ -1323,8 +1316,7 @@ async fn run_once(context: &Arc<E2eContext>, request: AttemptRequest<'_>) -> E2e
     report.refresh_dimensions(expects_deliverables);
     // Status, score, cost, and efficiency are final; the behavioral audit
     // below is advisory evidence and only ever fills `report.audit`.
-    let audit =
-        crate::audit::run_audit(context.as_ref(), audit_analyzer, &spec, &case, &report).await;
+    let audit = crate::audit::run_audit(&spec, &case, &report);
     report.audit = Some(audit);
     if let Err(error) = emit_event(
         control,
@@ -2142,7 +2134,6 @@ fn workflow_failure_phase(phase: WorkflowFailurePhase) -> FailurePhase {
 struct RetryRequest<'a> {
     scenario_id: ScenarioId,
     subject: &'a SubjectConfig,
-    audit_analyzer: Option<&'a AnalyzerConfig>,
     seed: u64,
     technical_retries: u8,
     progress_interval: Option<Duration>,
@@ -2159,7 +2150,6 @@ async fn run_with_technical_retries(
     let RetryRequest {
         scenario_id,
         subject,
-        audit_analyzer,
         seed,
         technical_retries,
         progress_interval,
@@ -2181,7 +2171,6 @@ async fn run_with_technical_retries(
                 run_id: &run_id,
                 attempt_number,
                 subject,
-                audit_analyzer,
                 seed,
                 progress_interval,
                 control,

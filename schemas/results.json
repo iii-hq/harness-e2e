@@ -174,70 +174,6 @@
         }
       ]
     },
-    "AnalyzerIdentity": {
-      "type": "object",
-      "required": [
-        "analyzer",
-        "input_sha256"
-      ],
-      "properties": {
-        "analyzer": {
-          "type": "string"
-        },
-        "input_sha256": {
-          "type": "string"
-        },
-        "model": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "provider": {
-          "type": [
-            "string",
-            "null"
-          ]
-        }
-      },
-      "additionalProperties": false
-    },
-    "AnalyzerUsage": {
-      "type": "object",
-      "properties": {
-        "cost_usd": {
-          "type": [
-            "number",
-            "null"
-          ],
-          "format": "double"
-        },
-        "input_tokens": {
-          "type": [
-            "integer",
-            "null"
-          ],
-          "format": "uint64",
-          "minimum": 0.0
-        },
-        "latency_ms": {
-          "type": [
-            "integer",
-            "null"
-          ],
-          "format": "uint64",
-          "minimum": 0.0
-        },
-        "output_tokens": {
-          "type": [
-            "integer",
-            "null"
-          ],
-          "format": "uint64",
-          "minimum": 0.0
-        }
-      }
-    },
     "ArtifactExpectation": {
       "type": "object",
       "required": [
@@ -470,31 +406,6 @@
         }
       }
     },
-    "AuditAnalyzerStatus": {
-      "oneOf": [
-        {
-          "type": "string",
-          "enum": [
-            "completed",
-            "failed"
-          ]
-        },
-        {
-          "description": "No audit analyzer model was configured; only deterministic rules ran.",
-          "type": "string",
-          "enum": [
-            "not_configured"
-          ]
-        },
-        {
-          "description": "No transcript was captured, so there was nothing to analyze.",
-          "type": "string",
-          "enum": [
-            "no_transcript"
-          ]
-        }
-      ]
-    },
     "AuditEvidence": {
       "type": "object",
       "required": [
@@ -600,46 +511,15 @@
     "AuditFlagSource": {
       "type": "string",
       "enum": [
-        "deterministic",
-        "analyzer"
+        "deterministic"
       ]
     },
     "AuditReport": {
       "type": "object",
       "required": [
-        "analyzer_status",
         "flags"
       ],
       "properties": {
-        "analyzer": {
-          "anyOf": [
-            {
-              "$ref": "#/definitions/AnalyzerIdentity"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "analyzer_error": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "analyzer_status": {
-          "$ref": "#/definitions/AuditAnalyzerStatus"
-        },
-        "analyzer_usage": {
-          "anyOf": [
-            {
-              "$ref": "#/definitions/AnalyzerUsage"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
         "flags": {
           "type": "array",
           "items": {

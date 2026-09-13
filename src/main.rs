@@ -2,7 +2,6 @@ use std::path::PathBuf;
 
 use anyhow::{bail, Context, Result};
 use clap::{Args, Parser, Subcommand};
-use harness_e2e::analyzer::AnalyzerConfig;
 use harness_e2e::control::{scenarios_list, ScenariosListRequest};
 use harness_e2e::fault::{FaultEvaluation, FaultJournal, FaultPlan, FaultProfile};
 use harness_e2e::manifest;
@@ -113,15 +112,6 @@ struct RunArgs {
 
     #[arg(long, env = "HARNESS_E2E_PROVIDER")]
     provider: String,
-
-    /// Opt-in behavioral audit analyzer over each run's transcript. Supply
-    /// together with --audit-provider; omit both to keep the audit
-    /// deterministic-only.
-    #[arg(long, env = "HARNESS_E2E_AUDIT_MODEL", requires = "audit_provider")]
-    audit_model: Option<String>,
-
-    #[arg(long, env = "HARNESS_E2E_AUDIT_PROVIDER", requires = "audit_model")]
-    audit_provider: Option<String>,
 
     #[arg(long, env = "HARNESS_E2E_OUTPUT", default_value = "target/e2e")]
     output: PathBuf,
@@ -343,15 +333,10 @@ async fn run(args: RunArgs) -> Result<()> {
         .map_or(args.output, |(runs_dir, execution_id)| {
             runs_dir.join(execution_id).join("results")
         });
-    let audit_analyzer = args
-        .audit_model
-        .zip(args.audit_provider)
-        .map(|(model, provider)| AnalyzerConfig { model, provider });
     let outcome = run_suite(SuiteRunConfig {
         url: args.url,
         execution_id,
         subject,
-        audit_analyzer,
         output,
         scenarios: selected_scenarios,
         runs: args.runs,

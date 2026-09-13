@@ -335,8 +335,8 @@ are parity fixtures, not a linked product API.
 
 The deterministic assessment boundary has one current payload shape, written
 only to `results.json`; scenario contracts are the only versioned domain. No
-scenario uses a second model: every score is deterministic, and the opt-in
-transcript audit analyzer never contributes to it.
+scenario uses a second model: every score and every audit flag is
+deterministic.
 
 Deterministic, pre-cleanup asset capture applies explicit safety limits and
 writes an unversioned sidecar containing the canonical deterministic validation
