@@ -6,13 +6,10 @@ use harness_e2e::control::{scenarios_list, ScenariosListRequest};
 use harness_e2e::fault::{FaultEvaluation, FaultJournal, FaultPlan, FaultProfile};
 use harness_e2e::judge::JudgeConfig;
 use harness_e2e::manifest;
-use harness_e2e::markdown::{self, ScenarioKey};
 use harness_e2e::report::E2eReport;
-#[cfg(test)]
-use harness_e2e::scenarios::ScenarioId;
+use harness_e2e::scenarios::{self, ScenarioId};
 use harness_e2e::suite::{run_suite, SubjectConfig, SuiteRunConfig};
 use harness_e2e::worker::{self, WorkerArgs};
-use serde::Deserialize;
 
 #[derive(Debug, Parser)]
 #[command(name = "harness-e2e", about = "Run real-stack quality scenarios")]
@@ -40,7 +37,7 @@ enum Command {
         #[arg(long)]
         apply: bool,
     },
-    /// Print every built-in and Markdown scenario id as a JSON array.
+    /// Print every scenario id as a JSON array.
     List,
     /// Print the canonical materialized scenario catalog used by campaign tooling.
     Catalog {
@@ -48,8 +45,6 @@ enum Command {
         #[arg(long, default_value_t = 4404)]
         seed: u64,
     },
-    /// Validate every scenarios/*.md file without running a model.
-    ValidateScenarios(ValidateScenariosArgs),
     /// Inspect and materialize the reviewed master test plan without executing models.
     TestPlan {
         #[command(subcommand)]
@@ -59,8 +54,6 @@ enum Command {
     Models(ModelsArgs),
     /// Execute one or more quality scenarios against a running stack.
     Run(RunArgs),
-    /// Replay one exact immutable materialized Markdown plan.
-    ReplayMaterialized(ReplayMaterializedArgs),
     /// Print a human-readable summary from a saved results.json.
     #[command(alias = "inspect")]
     Report(ReportArgs),
@@ -121,7 +114,7 @@ struct RunArgs {
     #[arg(long, env = "HARNESS_E2E_PROVIDER")]
     provider: String,
 
-    /// Auxiliary model for Markdown scenarios and Registry planning.
+    /// Auxiliary model for Registry planning.
     /// Supply together with --judge-provider.
     #[arg(long, env = "HARNESS_E2E_JUDGE_MODEL")]
     judge_model: Option<String>,
@@ -170,59 +163,7 @@ struct RunArgs {
 
     /// Run only the selected scenario. Repeat to select more than one.
     #[arg(long)]
-    scenario: Vec<ScenarioKey>,
-}
-
-#[derive(Debug, Args)]
-struct ValidateScenariosArgs {
-    #[arg(long, default_value = "scenarios")]
-    directory: PathBuf,
-
-    /// Optional previous scenarios directory used to enforce version bumps.
-    #[arg(long)]
-    base_directory: Option<PathBuf>,
-}
-
-#[derive(Debug, Args)]
-struct ReplayMaterializedArgs {
-    /// Path to an archived materialized-plan.json.
-    plan: PathBuf,
-
-    #[arg(long, env = "III_URL", default_value = "ws://127.0.0.1:49134")]
-    url: String,
-
-    #[arg(long, env = "HARNESS_E2E_OUTPUT", default_value = "target/e2e-replay")]
-    output: PathBuf,
-
-    #[arg(
-        long,
-        env = "HARNESS_E2E_PROGRESS_INTERVAL_SECONDS",
-        default_value_t = 15
-    )]
-    progress_interval_seconds: u64,
-}
-
-#[derive(Debug, Deserialize)]
-struct ReplayModel {
-    model: String,
-    provider: String,
-}
-
-#[derive(Debug, Deserialize)]
-struct ReplayCampaign {
-    runs: u32,
-    technical_retries: u8,
-}
-
-#[derive(Debug, Deserialize)]
-struct ReplayMarkdownPlan {
-    schema: String,
-    scenario: markdown::CompiledMarkdownScenario,
-    seed: u64,
-    subject: ReplayModel,
-    auxiliary: ReplayModel,
-    audit: Option<ReplayModel>,
-    campaign: ReplayCampaign,
+    scenario: Vec<ScenarioId>,
 }
 
 #[derive(Debug, Args)]
@@ -287,9 +228,9 @@ async fn main() -> Result<()> {
         None => worker::serve(WorkerArgs::default()).await,
         Some(Command::Worker(args)) => worker::serve(args).await,
         Some(Command::List) => {
-            let ids = markdown::all_keys()?
+            let ids = ScenarioId::ALL
                 .into_iter()
-                .map(|scenario| scenario.to_string())
+                .map(ScenarioId::as_str)
                 .collect::<Vec<_>>();
             println!("{}", serde_json::to_string(&ids)?);
             Ok(())
@@ -299,7 +240,6 @@ async fn main() -> Result<()> {
             println!("{}", serde_json::to_string(&catalog)?);
             Ok(())
         }
-        Some(Command::ValidateScenarios(args)) => validate_scenarios(args),
         Some(Command::TestPlan { command }) => test_plan(command),
         Some(Command::Models(args)) => models(args).await,
         Some(Command::MigrateStorage {
@@ -321,27 +261,10 @@ async fn main() -> Result<()> {
             Ok(())
         }
         Some(Command::Run(args)) => run(args).await,
-        Some(Command::ReplayMaterialized(args)) => replay_materialized(args).await,
         Some(Command::Report(args)) => report(args),
         Some(Command::FaultPlan(args)) => fault_plan(args),
         Some(Command::FaultEvaluate(args)) => fault_evaluate(args),
     }
-}
-
-fn validate_scenarios(args: ValidateScenariosArgs) -> Result<()> {
-    let scenarios = markdown::validate_directory(&args.directory)?;
-    if let Some(base_directory) = args.base_directory.as_deref() {
-        markdown::validate_version_progression(&scenarios, base_directory)?;
-    }
-    println!(
-        "{}",
-        serde_json::to_string_pretty(&serde_json::json!({
-            "valid": true,
-            "scenario_count": scenarios.len(),
-            "scenarios": scenarios,
-        }))?
-    );
-    Ok(())
 }
 
 fn fault_plan(args: FaultPlanArgs) -> Result<()> {
@@ -402,7 +325,7 @@ fn report(args: ReportArgs) -> Result<()> {
 }
 
 async fn run(args: RunArgs) -> Result<()> {
-    let selected_scenarios = markdown::selected_keys(&args.scenario)?;
+    let selected_scenarios = scenarios::selected(&args.scenario);
     let technical_retries = args.technical_retries.unwrap_or_else(|| {
         if selected_scenarios
             .iter()
@@ -428,16 +351,10 @@ async fn run(args: RunArgs) -> Result<()> {
         .map_or(args.output, |(runs_dir, execution_id)| {
             runs_dir.join(execution_id).join("results")
         });
-    let has_markdown = selected_scenarios
-        .iter()
-        .any(|scenario| scenario.built_in().is_none());
-    let has_planning = selected_scenarios
-        .iter()
-        .any(|s| s.as_str() == "registry_planning");
-    if (has_markdown || has_planning)
+    if selected_scenarios.contains(&ScenarioId::RegistryPlanning)
         && (args.judge_model.is_none() || args.judge_provider.is_none())
     {
-        bail!("Markdown scenarios and Registry planning require explicit --judge-model and --judge-provider values");
+        bail!("Registry planning requires explicit --judge-model and --judge-provider values");
     }
     let judge = args
         .judge_model
@@ -455,7 +372,6 @@ async fn run(args: RunArgs) -> Result<()> {
         audit_analyzer,
         output,
         scenarios: selected_scenarios,
-        local_markdown_scenarios: Vec::new(),
         runs: args.runs,
         seed: args.seed,
         rotating_seeds: args.rotating_seeds,
@@ -465,7 +381,6 @@ async fn run(args: RunArgs) -> Result<()> {
             .then(|| std::time::Duration::from_secs(args.progress_interval_seconds)),
         control: None,
         observation_contract: None,
-        materialized_markdown_plan: None,
     })
     .await
     .context("run E2E quality suite")?;
@@ -483,72 +398,6 @@ async fn run(args: RunArgs) -> Result<()> {
         bail!("E2E execution failed");
     }
     tracing::info!(path = ?outcome.report_path, "E2E execution completed");
-    Ok(())
-}
-
-async fn replay_materialized(args: ReplayMaterializedArgs) -> Result<()> {
-    let bytes = std::fs::read(&args.plan)
-        .with_context(|| format!("read materialized plan {}", args.plan.display()))?;
-    let value: serde_json::Value = serde_json::from_slice(&bytes)
-        .with_context(|| format!("decode materialized plan {}", args.plan.display()))?;
-    let frozen: ReplayMarkdownPlan = serde_json::from_value(value.clone())
-        .context("decode materialized Markdown replay fields")?;
-    if frozen.schema != "harness-e2e-materialized-markdown-plan/v2" {
-        bail!(
-            "unsupported materialized Markdown plan schema '{}'; expected v2",
-            frozen.schema
-        );
-    }
-    let key = frozen.scenario.id.parse::<ScenarioKey>()?;
-    if key.built_in().is_some() {
-        bail!("materialized replay accepts only Markdown scenarios");
-    }
-    let subject = SubjectConfig {
-        model: frozen.subject.model,
-        provider: frozen.subject.provider,
-    };
-    let judge = JudgeConfig {
-        model: frozen.auxiliary.model,
-        provider: frozen.auxiliary.provider,
-    };
-    let audit_analyzer = frozen.audit.map(|audit| JudgeConfig {
-        model: audit.model,
-        provider: audit.provider,
-    });
-    let outcome = run_suite(SuiteRunConfig {
-        url: args.url,
-        execution_id: None,
-        subject,
-        judge: Some(judge),
-        audit_analyzer,
-        output: args.output,
-        scenarios: vec![key],
-        local_markdown_scenarios: Vec::new(),
-        runs: frozen.campaign.runs,
-        seed: Some(frozen.seed),
-        rotating_seeds: Vec::new(),
-        technical_retries: frozen.campaign.technical_retries,
-        slot_start_deadline_seconds: harness_e2e::suite::resolve_slot_start_deadline(None)?,
-        progress_interval: (args.progress_interval_seconds > 0)
-            .then(|| std::time::Duration::from_secs(args.progress_interval_seconds)),
-        control: None,
-        observation_contract: None,
-        materialized_markdown_plan: Some(value),
-    })
-    .await
-    .context("replay immutable Markdown plan")?;
-    print!("{}", outcome.report.summary(false));
-    if let Some(path) = &outcome.report_path {
-        println!("report: {}", path.display());
-    } else {
-        eprintln!(
-            "report persistence failed: {}",
-            outcome.report.persistence_errors.join("; ")
-        );
-    }
-    if outcome.report_path.is_none() || !outcome.report.execution_succeeded() {
-        bail!("materialized Markdown replay failed");
-    }
     Ok(())
 }
 
@@ -628,7 +477,7 @@ mod tests {
     }
 
     #[test]
-    fn run_accepts_markdown_scenario() {
+    fn run_accepts_a_built_in_scenario_id() {
         let cli = Cli::try_parse_from([
             "harness-e2e",
             "run",
@@ -643,10 +492,7 @@ mod tests {
         let Some(Command::Run(args)) = cli.command else {
             panic!("expected run command");
         };
-        assert_eq!(
-            args.scenario,
-            [ScenarioKey::Markdown("persistent_state".into())]
-        );
+        assert_eq!(args.scenario, [ScenarioId::PersistentState]);
         assert_eq!(args.output, PathBuf::from("target/e2e"));
         assert!(args.runs_dir.is_none());
         assert_eq!(args.technical_retries, None);
@@ -654,7 +500,7 @@ mod tests {
     }
 
     #[test]
-    fn run_rejects_removed_prefixed_markdown_scenario_id() {
+    fn run_rejects_an_unknown_scenario_id() {
         assert!(Cli::try_parse_from([
             "harness-e2e",
             "run",
@@ -684,7 +530,7 @@ mod tests {
         let Some(Command::Run(args)) = cli.command else {
             panic!("expected run command");
         };
-        assert_eq!(args.scenario, [ScenarioId::SecurityReview.into()]);
+        assert_eq!(args.scenario, [ScenarioId::SecurityReview]);
         assert_eq!(args.technical_retries, None);
     }
 
@@ -702,23 +548,6 @@ mod tests {
             panic!("expected report command");
         };
         assert_eq!(args.input, PathBuf::from("target/e2e"));
-    }
-
-    #[test]
-    fn replay_materialized_requires_only_the_archived_plan_path() {
-        let cli = Cli::try_parse_from([
-            "harness-e2e",
-            "replay-materialized",
-            "evidence/run/attempt/materialized-plan.json",
-        ])
-        .unwrap();
-        let Some(Command::ReplayMaterialized(args)) = cli.command else {
-            panic!("expected replay-materialized command");
-        };
-        assert_eq!(
-            args.plan,
-            PathBuf::from("evidence/run/attempt/materialized-plan.json")
-        );
     }
 
     #[test]

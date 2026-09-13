@@ -9,8 +9,7 @@ use serde_json::{json, Value};
 
 use crate::artifact;
 use crate::control::{scenarios_list, ScenarioDescriptor, ScenariosListRequest};
-use crate::markdown::ScenarioKey;
-use crate::scenarios::{ComplexityTier, ScenarioExecutionKind};
+use crate::scenarios::{ComplexityTier, ScenarioExecutionKind, ScenarioId};
 
 const SOURCE: &str = include_str!("../config/test-plan.json");
 
@@ -95,7 +94,7 @@ fn safe_id(value: &str) -> bool {
             .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == b'-')
 }
 
-pub fn execution_kind(key: &ScenarioKey) -> &'static str {
+pub fn execution_kind(key: &ScenarioId) -> &'static str {
     match key.execution_kind() {
         ScenarioExecutionKind::HarnessTurn => "harness_turn",
         ScenarioExecutionKind::ScriptedDialogue => "scripted_dialogue",
@@ -155,10 +154,7 @@ impl MasterPlan {
         for id in &self.diagnostics {
             ensure!(covered.insert(id.clone()), "duplicate diagnostic {id}");
         }
-        let native: BTreeSet<_> = crate::markdown::all_keys()?
-            .iter()
-            .map(ToString::to_string)
-            .collect();
+        let native: BTreeSet<_> = ScenarioId::ALL.iter().map(ToString::to_string).collect();
         ensure!(
             covered == native,
             "master plan coverage differs from native catalog: missing {:?}, unknown {:?}",
@@ -254,7 +250,7 @@ impl MasterPlan {
                     "unknown or repeated grouped scenario {id}"
                 );
                 ensure!(
-                    id.parse::<ScenarioKey>()?.execution_kind()
+                    id.parse::<ScenarioId>()?.execution_kind()
                         == ScenarioExecutionKind::HarnessTurn,
                     "sequential profile groups require ordinary harness turns"
                 );
@@ -323,7 +319,7 @@ impl MasterPlan {
                 "resource_envelope": envelope, "required_capabilities": case.required_capabilities,
                 "requirements": self.requirements.get(id).cloned().unwrap_or_default(),
                 "module": self.modules.iter().find(|m| m.scenarios.contains(id)).map(|m| &m.id),
-                "judge_required": key.built_in().is_none() || key.built_in() == Some(crate::scenarios::ScenarioId::RegistryPlanning),
+                "judge_required": *key == ScenarioId::RegistryPlanning,
             }));
             // Every repetition is a fresh invocation. This also obeys the
             // campaign parser's one-case, runs=1 adaptive-flow contract.
@@ -419,7 +415,7 @@ impl MasterPlan {
     pub fn campaign_catalog(&self) -> Result<Value> {
         let mut scenarios = BTreeMap::new();
         for (id, case) in native_catalog(None)? {
-            scenarios.insert(id, json!({"execution_kind": execution_kind(&case.scenario_id), "difficulty_weight": weight(case.classification.tier), "markdown": case.scenario_id.built_in().is_none()}));
+            scenarios.insert(id, json!({"execution_kind": execution_kind(&case.scenario_id), "difficulty_weight": weight(case.classification.tier)}));
         }
         Ok(
             json!({"schema": "harness-e2e-campaign-catalog/v1", "definition_sha256": self.digest()?, "scenarios": scenarios}),
@@ -537,7 +533,7 @@ mod tests {
                             let id = id.as_str().unwrap();
                             assert!(selected.insert(id));
                             if !id
-                                .parse::<ScenarioKey>()
+                                .parse::<ScenarioId>()
                                 .unwrap()
                                 .execution_kind()
                                 .replay_safe()

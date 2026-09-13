@@ -711,16 +711,10 @@ function formatCount(value: number) {
   return value.toLocaleString('en-US', { maximumFractionDigits: 0 })
 }
 
-/** Audit ED-24: eleven facts in one seven-column grid wrapped into a ragged
- *  second row with a visible empty cell. Three bands, each sized to its own
+/** Audit ED-24: the facts in one seven-column grid wrapped into a ragged
+ *  second row with a visible empty cell. Two bands, each sized to its own
  *  count, divide evenly and say what kind of number each one is. */
 function ScenarioResultBand({ item }: { item: ScenarioMatrixItem }) {
-  const scoring = item.primaryMetrics.filter(
-    (metric) => metric.band === 'scoring',
-  )
-  const execution = item.primaryMetrics.filter(
-    (metric) => metric.band === 'execution',
-  )
   return (
     <div className="grid gap-4" data-scenario-primary-metrics>
       <MetricBandGroup label="outcome" columns="sm:grid-cols-1">
@@ -731,36 +725,19 @@ function ScenarioResultBand({ item }: { item: ScenarioMatrixItem }) {
           detail="Authoritative system result"
         />
       </MetricBandGroup>
-      {scoring.length > 0 ? (
-        <MetricBandGroup
-          label="scoring"
-          columns="sm:grid-cols-2 lg:grid-cols-4"
-        >
-          {scoring.map((metric) => (
-            <ResultFact
-              key={metric.label}
-              label={metric.label}
-              value={metric.value}
-              detail={metric.detail}
-            />
-          ))}
-        </MetricBandGroup>
-      ) : null}
-      {execution.length > 0 ? (
-        <MetricBandGroup
-          label="execution"
-          columns="sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5"
-        >
-          {execution.map((metric) => (
-            <ResultFact
-              key={metric.label}
-              label={metric.label}
-              value={metric.value}
-              detail={metric.detail}
-            />
-          ))}
-        </MetricBandGroup>
-      ) : null}
+      <MetricBandGroup
+        label="execution"
+        columns="sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5"
+      >
+        {item.primaryMetrics.map((metric) => (
+          <ResultFact
+            key={metric.label}
+            label={metric.label}
+            value={metric.value}
+            detail={metric.detail}
+          />
+        ))}
+      </MetricBandGroup>
     </div>
   )
 }

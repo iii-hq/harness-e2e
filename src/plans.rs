@@ -9,8 +9,6 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 
 use crate::artifact;
-use crate::markdown::ScenarioKey;
-#[cfg(test)]
 use crate::scenarios::ScenarioId;
 
 pub(crate) const PLAN_SCHEMA_VERSION: u32 = 3;
@@ -319,14 +317,12 @@ fn validate_values(request: &PlanCreateRequest) -> Result<()> {
     }
     let selected = ids
         .into_iter()
-        .map(|value| value.parse::<ScenarioKey>())
+        .map(|value| value.parse::<ScenarioId>())
         .collect::<Result<Vec<_>>>()?;
-    if selected
-        .iter()
-        .any(|scenario| scenario.built_in().is_none())
+    if selected.contains(&ScenarioId::RegistryPlanning)
         && (request.judge_model.trim().is_empty() || request.judge_provider.trim().is_empty())
     {
-        bail!("Markdown scenarios require an explicit judge model and provider");
+        bail!("Registry planning requires an explicit judge model and provider");
     }
     Ok(())
 }
@@ -338,18 +334,10 @@ pub(crate) fn resolve_scope(
     scenario_ids
         .iter()
         .map(|value| {
-            let id = value.parse::<ScenarioKey>()?;
+            let id = value.parse::<ScenarioId>()?;
             let case_seed = seed.unwrap_or_else(|| id.canonical_seed());
-            let (case, execution) = if let Some(built_in) = id.built_in() {
-                let materialized = built_in.materialize("local-plan", case_seed)?;
-                (materialized.case, materialized.spec.execution)
-            } else {
-                let scenario = crate::markdown::embedded_scenario(id.as_str())?;
-                (
-                    crate::suite::markdown_case(&scenario, case_seed)?,
-                    crate::markdown::execution_policy(),
-                )
-            };
+            let materialized = id.materialize("local-plan", case_seed)?;
+            let (case, execution) = (materialized.case, materialized.spec.execution);
             let contract_sha256 = artifact::sha256_value(&json!({
                 "scenario_id": case.scenario_id,
                 "scenario_version": case.scenario_version,

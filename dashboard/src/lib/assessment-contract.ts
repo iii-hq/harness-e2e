@@ -24,8 +24,7 @@ export type EvidenceReference = {
   locator?: string
 }
 
-/** Identity of a Markdown-scenario analyzer: the instruction-adherence pass
- *  and the opt-in transcript audit are the only producers left. */
+/** Identity of the opt-in transcript-audit analyzer, the only producer. */
 export type AnalyzerIdentity = {
   analyzer: string
   provider?: string

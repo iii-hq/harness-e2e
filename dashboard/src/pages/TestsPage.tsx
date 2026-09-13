@@ -1401,7 +1401,7 @@ export function TestsPage({
               <span className="font-mono text-label text-ink-muted">
                 {activeCohort
                   ? `subject ${activeCohort.subject_provider}/${activeCohort.subject_model} · judge ${activeCohort.judge_provider ? `${activeCohort.judge_provider}/${activeCohort.judge_model}` : 'no judge'}`
-                  : 'system version = the workers under test · cohort = which model ran with which Markdown judge'}
+                  : 'system version = the workers under test · cohort = which model ran with which judge'}
                 {evaluated
                   ? ` · ${cohortsWithPairs} of ${evaluated.cohorts.length} cohorts have ≥ 2 versions`
                   : ''}

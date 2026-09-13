@@ -1,6 +1,4 @@
 import type {
-  AnalyzerIdentity,
-  AnalyzerUsage,
   AssessmentContract,
   AssessmentSummary,
   RunAssessmentContract,
@@ -471,30 +469,6 @@ export type DashboardRunProjection = JsonObject & {
   objective_score: number | null
   quality_score_completed: number | null
   score?: number | null
-  validation_score?: number | null
-  /** Markdown scenarios only: the judge-scored prompt-following pass, with
-   *  the analyzer identity and usage it recorded. */
-  instruction_adherence?:
-    | (JsonObject & {
-        availability: 'available' | 'unavailable' | 'failed'
-        score?: number | null
-        summary?: string
-        requirements?: JsonValue[]
-        analyzer?: AnalyzerIdentity
-        analyzer_usage?: AnalyzerUsage
-      })
-    | null
-  markdown_execution?:
-    | (JsonObject & {
-        pipeline_complete: boolean
-        source_path?: string
-        source_sha256?: string
-        behavior_sha256?: string
-        compiled_sha256?: string
-        materialized_plan_sha256?: string | null
-        phases?: JsonValue[]
-      })
-    | null
   failures?: Array<JsonObject & { phase?: string; message?: string }>
   wall_time_ms?: number | null
   metrics?: DashboardRunMetrics | null
@@ -588,7 +562,6 @@ export type RuntimeConfig = {
     test_version_get: string
     test_history_get: string
     catalog_get: string
-    local_scenario_create: string
     run_status: string
     run_start: string
     run_cancel: string
@@ -640,10 +613,6 @@ export type DashboardDataBridge = {
   deletePlan(planId: string): Promise<void>
   startPlan(planId: string, role: 'baseline' | 'candidate'): Promise<LocalPlan>
   getCatalog(url?: string): Promise<JsonObject>
-  createLocalScenario(request: {
-    file_name: string
-    source: string
-  }): Promise<JsonObject>
   getRunSnapshot(after?: number): Promise<JsonObject>
   startRun(request: JsonObject): Promise<JsonObject>
   cancelRun(): Promise<JsonObject>
@@ -731,8 +700,6 @@ function makeBridge(runtime: RuntimeConfig): DashboardDataBridge {
       }),
     getCatalog: (url) =>
       call(runtime.functions.catalog_get, url ? { url } : {}),
-    createLocalScenario: (request) =>
-      call(runtime.functions.local_scenario_create, request),
     getRunSnapshot: (after) =>
       call(runtime.functions.run_status, after === undefined ? {} : { after }),
     startRun: (request) => call(runtime.functions.run_start, request),

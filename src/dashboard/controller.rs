@@ -13,12 +13,11 @@ use super::bus::DashboardEvents;
 use super::read_model::DashboardReadModel;
 use super::{Defaults, JobStatus, JobView, RunMetadata, RunRequest, RunSnapshot};
 use crate::control::{
-    ControlPlane, ExecutionPhase, ExecutionRecord, LocalScenarioCreateRequest,
-    LocalScenarioCreateResponse, RunRequest as ControlRunRequest, ScenariosListRequest,
-    ScenariosListResponse,
+    ControlPlane, ExecutionPhase, ExecutionRecord, RunRequest as ControlRunRequest,
+    ScenariosListRequest, ScenariosListResponse,
 };
-use crate::markdown::ScenarioKey;
 use crate::plans::{LocalPlan, PlanCreateRequest, PlanRunRole, PlanUpdateRequest};
+use crate::scenarios::ScenarioId;
 
 const MAX_LOG_TAIL_BYTES: u64 = 256 * 1024;
 const MAX_LOG_CHUNK_BYTES: u64 = 64 * 1024;
@@ -169,17 +168,6 @@ impl Controller {
             .as_ref()
             .context("the E2E control plane is not available")?
             .attempt_get(execution_id, run_id, attempt_id)
-            .await
-    }
-
-    pub(super) async fn create_local_scenario(
-        &self,
-        request: LocalScenarioCreateRequest,
-    ) -> Result<LocalScenarioCreateResponse> {
-        self.control
-            .as_ref()
-            .context("the E2E control plane is not available")?
-            .create_local_scenario(request)
             .await
     }
 
@@ -496,7 +484,7 @@ pub(super) fn control_request(
         .iter()
         .map(|value| {
             value
-                .parse::<ScenarioKey>()
+                .parse::<ScenarioId>()
                 .map_err(|_| format!("unknown scenario '{value}'"))
         })
         .collect::<std::result::Result<Vec<_>, _>>()?;
@@ -523,7 +511,6 @@ pub(super) fn control_request(
         audit_model: None,
         audit_provider: None,
         scenarios,
-        local_markdown_scenarios: Vec::new(),
         runs: request.runs,
         seed: request.seed,
         rotating_seeds: Vec::new(),
@@ -649,16 +636,12 @@ pub(super) fn validate_request(request: &mut RunRequest) -> std::result::Result<
         .iter()
         .map(|value| {
             value
-                .parse::<ScenarioKey>()
+                .parse::<ScenarioId>()
                 .map_err(|_| "request contains an unknown scenario".to_string())
         })
         .collect::<std::result::Result<Vec<_>, _>>()?;
-    if selected
-        .iter()
-        .any(|scenario| scenario.built_in().is_none())
-        && request.judge_model.is_empty()
-    {
-        return Err("Markdown scenarios require an explicit judge model and provider".into());
+    if selected.contains(&ScenarioId::RegistryPlanning) && request.judge_model.is_empty() {
+        return Err("Registry planning requires an explicit judge model and provider".into());
     }
     Ok(())
 }

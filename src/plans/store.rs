@@ -762,14 +762,11 @@ impl PlanStore {
             .iter()
             .map(|scenario| {
                 let mut value = serde_json::to_value(scenario)?;
-                let built_in = scenario
+                let scenario_id = scenario
                     .scenario_id
-                    .parse::<crate::markdown::ScenarioKey>()?
-                    .built_in();
-                value["judge_required"] = json!(
-                    built_in.is_none()
-                        || built_in == Some(crate::scenarios::ScenarioId::RegistryPlanning)
-                );
+                    .parse::<crate::scenarios::ScenarioId>()?;
+                value["judge_required"] =
+                    json!(scenario_id == crate::scenarios::ScenarioId::RegistryPlanning);
                 value["requirements"] = json!([]);
                 Ok(value)
             })
@@ -1732,22 +1729,8 @@ mod tests {
                 .iter()
                 .map(|scenario| {
                     let seed = request.seed.unwrap_or_else(|| scenario.canonical_seed());
-                    let (case, policy) = match scenario.built_in() {
-                        Some(key) => {
-                            let materialized = key.materialize("profile-test", seed)?;
-                            (materialized.case, materialized.spec.execution)
-                        }
-                        None => {
-                            let markdown = crate::markdown::embedded_catalog()?
-                                .into_iter()
-                                .find(|c| c.id == scenario.as_str())
-                                .unwrap();
-                            (
-                                crate::suite::markdown_case(&markdown, seed)?,
-                                crate::markdown::execution_policy(),
-                            )
-                        }
-                    };
+                    let materialized = scenario.materialize("profile-test", seed)?;
+                    let (case, policy) = (materialized.case, materialized.spec.execution);
                     let mut run = E2eRunReport::new(
                         format!("{id}-{scenario}-run"),
                         format!("{id}-{scenario}-attempt"),
@@ -2668,7 +2651,7 @@ mod tests {
         let mut missing = request("smoke");
         missing.model.clear();
         assert!(manager.create_local(missing).await.is_err());
-        let mut missing = request("smoke");
+        let mut missing = request("evolution");
         missing.judge_model.clear();
         missing.judge_provider.clear();
         assert!(manager.create_local(missing).await.is_err());

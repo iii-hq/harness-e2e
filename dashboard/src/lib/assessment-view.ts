@@ -188,7 +188,7 @@ export function buildHarnessRecommendation(run: AssessmentRunView): string {
     return 'Fix the subject execution or transport path, confirm a complete response is captured, and rerun the scenario.'
   }
   if (run.systemStatus === 'judge_error') {
-    return 'Fix the Markdown validator invocation or its schema path, validate the JSON contract, and rerun the scenario.'
+    return 'Fix the judge invocation or its schema path, validate the JSON contract, and rerun the scenario.'
   }
   if (run.systemStatus === 'unavailable') {
     return 'Restore the missing report or assessment contract, add a readiness check, and rerun the scenario.'

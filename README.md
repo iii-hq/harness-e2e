@@ -49,7 +49,6 @@ List the materialized scenarios and their scenario versions:
 ```bash
 cargo run --locked --bin harness-e2e -- list
 cargo run --locked --bin harness-e2e -- catalog
-cargo run --locked --bin harness-e2e -- validate-scenarios
 ```
 
 The four [Registry scenarios](tests/fixtures/registry-version-comparison/README.md)
@@ -73,19 +72,10 @@ checks have no award and remain `not_evaluated`; an incomplete criterion set has
 no total score. Product failures stay technically valid, while infrastructure
 failures invalidate the run without erasing prior criterion observations.
 
-New declarative scenarios are authored only as `scenarios/*.md`. The compiler
-embeds the exact source, validates the canonical English section structure,
-and exposes the resulting file-stem id through the CLI, worker catalog,
-campaign runner, dashboard, and canonical result artifacts. Required sections are
-Version, Before Test, Prompt and Validations. Plans select their scenarios explicitly.
-
-Replay an archived input only through its immutable plan (the runner rejects
-any scenario, model, policy, budget, stack, runner, run-count, or retry drift):
-
-```bash
-cargo run --locked -- replay-materialized \
-  target/e2e/evidence/<run-id>/<attempt-id>/materialized-plan.json
-```
+Every scenario is a built-in module under `src/scenarios/` that owns its
+prompt, setup, deterministic evaluator, and cleanup; the module id is exposed
+through the CLI, worker catalog, campaign runner, dashboard, and canonical
+result artifacts. Plans select their scenarios explicitly.
 
 Run against an existing stack:
 
@@ -129,7 +119,7 @@ stripping, both by the public suite and by the runner-owned behavioral probe.
 resilience, endurance, and software-engineering. In the dashboard these profiles are starting templates
 for the same plan form and baseline/candidate visualization used by existing plans.
 Choose **New plan**, optionally select a template, edit the scope, and select the
-execution model, plus the judge model when the scope includes a Markdown test.
+execution model, plus the judge model when the scope includes Registry planning.
 **Save draft**, **Save and run**, and **Duplicate plan** use one shared lifecycle
 and retain native evidence. Fault-injection plans export
 to the protected executor. See [executable profile plans](dashboard/README.md#executable-profile-plans).
@@ -276,8 +266,7 @@ Compose, evidence, or archive artifacts.
 
 The worker exposes `e2e::run`, `e2e::status`, `e2e::cancel`,
 `e2e::results-get`, `e2e::results-list`, `e2e::compare`,
-`e2e::scenarios-list`, `e2e::scenarios-create`,
-`e2e::scenarios-authoring-guide`, `e2e::archive`, `e2e::archive-head`,
+`e2e::scenarios-list`, `e2e::archive`, `e2e::archive-head`,
 `e2e::archive-restore`,
 `e2e::history-list`, and `e2e::retention-sweep`.
 Fault supervisors use `e2e::fault-plan` and `e2e::fault-evaluate` so plan
@@ -346,8 +335,8 @@ are parity fixtures, not a linked product API.
 
 The deterministic assessment boundary has one current payload shape, written
 only to `results.json`; scenario contracts are the only versioned domain. The
-judge model is auxiliary: Markdown tests use it for their validators and
-instruction adherence, and only those tests require it.
+judge model is auxiliary: Registry planning uses it to score the delivered
+plan, and only that test requires it.
 
 Deterministic, pre-cleanup asset capture applies explicit safety limits and
 writes an unversioned sidecar containing the canonical deterministic validation

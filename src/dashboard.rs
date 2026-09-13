@@ -292,10 +292,7 @@ pub(crate) mod tests {
         let converted = control_request(&request()).expect("request should map");
         assert_eq!(converted.label, " first run ");
         assert_eq!(converted.lane, "local");
-        assert_eq!(
-            converted.scenarios,
-            vec![ScenarioId::ContextPressure.into()]
-        );
+        assert_eq!(converted.scenarios, vec![ScenarioId::ContextPressure]);
         assert!(converted.idempotency_key.starts_with("dashboard:"));
     }
 

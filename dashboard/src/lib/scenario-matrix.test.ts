@@ -251,49 +251,22 @@ function executionDetail() {
 }
 
 describe('scenario matrix presentation model', () => {
-  it('keeps Markdown validation, adherence, pipeline, and technical failures separate', () => {
+  it('reports only execution facts for a scenario run', () => {
     const detail = executionDetail()
     const run = detail.reports[1]?.report?.scenarios[0]?.runs[0]
     if (!run) throw new Error('expected fixture run')
-    run.validation_score = 80
-    run.instruction_adherence = {
-      availability: 'available',
-      score: 92,
-      summary: 'Most requirements were followed.',
-    }
-    run.markdown_execution = {
-      pipeline_complete: true,
-      source_path: 'insert-record.md',
-    }
     run.failures = []
 
     expect(
-      buildScenarioMatrix(detail).items[1]?.primaryMetrics.slice(0, 4),
+      buildScenarioMatrix(detail).items[1]?.primaryMetrics.map(
+        (metric) => metric.label,
+      ),
     ).toEqual([
-      {
-        label: 'Validation score',
-        value: '80/100',
-        detail: 'Deterministic sum of isolated validator outcomes',
-        band: 'scoring',
-      },
-      {
-        label: 'Instruction adherence',
-        value: '92/100',
-        detail: 'Judge-scored prompt-following, Markdown tests only',
-        band: 'scoring',
-      },
-      {
-        label: 'Pipeline integrity',
-        value: 'Complete',
-        detail: 'Correct revision, section routing, and phase completion',
-        band: 'scoring',
-      },
-      {
-        label: 'Technical failures',
-        value: '0',
-        detail: 'Infrastructure, evaluator, resource, or cleanup failures',
-        band: 'scoring',
-      },
+      'Runtime',
+      'Total tokens',
+      'Function calls',
+      'Function errors',
+      'Reported cost',
     ])
   })
 
@@ -337,31 +310,26 @@ describe('scenario matrix presentation model', () => {
         label: 'Runtime',
         value: '3.0 s',
         detail: 'Average scenario duration',
-        band: 'execution',
       },
       {
         label: 'Total tokens',
         value: '1,000',
         detail: '1/2 workflow steps reported',
-        band: 'execution',
       },
       {
         label: 'Function calls',
         value: '3',
         detail: '0 errors',
-        band: 'execution',
       },
       {
         label: 'Function errors',
         value: '0',
         detail: 'Subject execution errors',
-        band: 'execution',
       },
       {
         label: 'Reported cost',
         value: '—',
         detail: 'Not captured for this run',
-        band: 'execution',
       },
     ])
 
@@ -462,31 +430,26 @@ describe('scenario matrix presentation model', () => {
         label: 'Runtime',
         value: '3.0 s',
         detail: 'Average scenario duration',
-        band: 'execution',
       },
       {
         label: 'Total tokens',
         value: '—',
         detail: 'Not captured for this run',
-        band: 'execution',
       },
       {
         label: 'Function calls',
         value: '—',
         detail: 'Not captured for this run',
-        band: 'execution',
       },
       {
         label: 'Function errors',
         value: '—',
         detail: 'Not captured for this run',
-        band: 'execution',
       },
       {
         label: 'Reported cost',
         value: '—',
         detail: 'Not captured for this run',
-        band: 'execution',
       },
     ])
   })

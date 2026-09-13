@@ -296,7 +296,7 @@ export function categoryLabel(category: FailureCategory): string {
     infrastructure: 'Infrastructure',
     resource_limit: 'Resource limit',
     subject: 'Subject model',
-    judge: 'Markdown judge',
+    judge: 'Judge model',
     inconclusive: 'Inconclusive',
   }[category]
 }

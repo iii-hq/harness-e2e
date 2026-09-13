@@ -33,8 +33,6 @@ type Catalog = {
   url: string
   models: Model[]
   scenarios: string[]
-  /** Markdown tests the catalog lists but plans cannot run (audit PN-06). */
-  localScenarioIds: string[]
 }
 
 function modelKey(model: Model) {
@@ -70,23 +68,12 @@ function catalogValue(value: JsonObject): Catalog {
           : []
       })
     : []
-  const localScenarioIds = new Set(
-    Array.isArray(value.local_scenarios)
-      ? value.local_scenarios.flatMap((candidate) => {
-          if (!candidate || typeof candidate !== 'object') return []
-          const id = (candidate as JsonObject).id
-          return typeof id === 'string' ? [id] : []
-        })
-      : [],
-  )
   return {
     url: typeof value.url === 'string' ? value.url : '',
     models,
-    localScenarioIds: [...localScenarioIds],
     scenarios: Array.isArray(value.scenarios)
       ? value.scenarios.filter(
-          (item): item is string =>
-            typeof item === 'string' && !localScenarioIds.has(item),
+          (item): item is string => typeof item === 'string',
         )
       : [],
   }
@@ -440,7 +427,6 @@ export function LocalPlanCreatePage({
       : '',
     url,
   }
-  const localCount = catalog?.localScenarioIds.length ?? 0
 
   return (
     <>
@@ -528,15 +514,6 @@ export function LocalPlanCreatePage({
             judgeRequired={judgeRequired}
             modelGroups={modelOptions}
             availableScenarios={catalog?.scenarios ?? []}
-            localScenarioIds={catalog?.localScenarioIds ?? []}
-            unavailableScenarios={
-              localCount > 0
-                ? {
-                    ids: catalog?.localScenarioIds ?? [],
-                    reason: 'Local Markdown tests are not available in plans.',
-                  }
-                : undefined
-            }
             selectedScenarios={scenarios}
             query={testQuery}
             runs={runs}
@@ -550,7 +527,7 @@ export function LocalPlanCreatePage({
                 : catalog
                   ? {
                       tone: 'ready',
-                      text: `catalog ready · ${catalog.models.length} model${catalog.models.length === 1 ? '' : 's'} · ${catalog.scenarios.length} test${catalog.scenarios.length === 1 ? '' : 's'}${localCount > 0 ? ` · ${localCount} local not available in plans` : ''}`,
+                      text: `catalog ready · ${catalog.models.length} model${catalog.models.length === 1 ? '' : 's'} · ${catalog.scenarios.length} test${catalog.scenarios.length === 1 ? '' : 's'}`,
                     }
                   : { tone: 'unavailable', text: 'catalog unavailable' }
             }

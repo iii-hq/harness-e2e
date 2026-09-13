@@ -176,19 +176,6 @@ pub async fn run_audit(
     .await
 }
 
-/// Runs the same advisory behavioral audit for a dynamically compiled
-/// Markdown scenario without requiring a leaked static `ScenarioSpec`.
-pub async fn run_markdown_audit(
-    context: &E2eContext,
-    analyzer: Option<&JudgeConfig>,
-    prompt: &str,
-    denied_functions: &[String],
-    case: Option<&ScenarioCase>,
-    report: &E2eRunReport,
-) -> AuditReport {
-    run_audit_inputs(context, analyzer, prompt, denied_functions, case, report).await
-}
-
 async fn run_audit_inputs(
     context: &E2eContext,
     analyzer: Option<&JudgeConfig>,

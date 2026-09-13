@@ -1,6 +1,5 @@
 import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
-import type { LocalScenarioSummary } from '@/lib/local-scenario-catalog'
 import type { TestCatalogRow } from '@/lib/test-catalog'
 import {
   CATALOG_DEFAULT_FILTERS,
@@ -14,10 +13,7 @@ import {
   catalogRealismPresentation,
   filterCatalogRows,
   groupCatalogRows,
-  LocalTestBadge,
-  mergeLocalScenariosIntoCatalog,
-  nextLocalScenarioFileName,
-  sortCatalogDisplayRows,
+  sortCatalogRows,
   TestsCatalogActions,
 } from '@/pages/TestsCatalogPage'
 
@@ -52,108 +48,28 @@ function row(overrides: Partial<TestCatalogRow> = {}): TestCatalogRow {
   }
 }
 
-function localScenario(
-  overrides: Partial<LocalScenarioSummary> = {},
-): LocalScenarioSummary {
-  return {
-    id: 'local_example',
-    title: 'Local example',
-    version: 1,
-    source_path: 'local-scenarios/example.md',
-    source_sha256: 'sha256:test',
-    ...overrides,
-  }
-}
-
 describe('test catalog L5 dimensions', () => {
-  it('keeps catalog total, loaded rows, local definitions and filters distinct', () => {
-    expect(catalogCountLabels(62, 50, 52, 12, 2, true)).toEqual({
+  it('keeps catalog total, loaded rows and filters distinct', () => {
+    expect(catalogCountLabels(62, 50, 52, 12, true)).toEqual({
       summary:
-        '62 catalog rows total · 50 loaded from catalog · 52 available in this view · 2 local definitions',
+        '62 catalog rows total · 50 loaded from catalog · 52 available in this view',
       visible: '12 of 52 available in this view',
       catalogProgress: '50 of 62 catalog rows loaded',
     })
-    expect(catalogCountLabels(null, 0, 2, 2, 2, false)).toEqual({
-      summary: '2 available in this view · 2 local definitions',
+    expect(catalogCountLabels(null, 0, 2, 2, false)).toEqual({
+      summary: '2 available in this view',
       visible: '2 available in this view',
       catalogProgress: null,
     })
   })
 
-  it('places local test creation in the actual Tests catalog actions', () => {
-    const html = renderToStaticMarkup(
-      <TestsCatalogActions local localReady onNewTest={() => undefined} />,
-    )
+  it('offers only plan and comparison entry points, never test authoring', () => {
+    const html = renderToStaticMarkup(<TestsCatalogActions local />)
 
-    expect(html).toContain('new test')
-    expect(html).toContain('Create a new local test')
     expect(html).toContain('new plan')
     expect(html).toContain('compare versions')
-    expect(html).not.toContain('disabled=""')
-  })
-
-  it('suggests a new file name instead of colliding with a saved test', () => {
-    expect(nextLocalScenarioFileName([])).toBe('new-test.md')
-    expect(
-      nextLocalScenarioFileName([
-        localScenario({
-          source_path: 'local-scenarios/new-test.md',
-        }),
-        localScenario({
-          source_path: 'local-scenarios/new-test-2.md',
-        }),
-      ]),
-    ).toBe('new-test-3.md')
-  })
-
-  it('lists local definitions as normal catalog rows without duplicates', () => {
-    const local = localScenario()
-    const [synthetic] = mergeLocalScenariosIntoCatalog([], [local])
-    expect(synthetic).toMatchObject({
-      localScenario: local,
-      row: {
-        test_id: 'local_example',
-        lifecycle: 'never_run',
-        current_version: 1,
-        available_versions: [{ version: 1, execution_count: 0 }],
-      },
-    })
-
-    const executed = row({
-      test_id: local.id,
-      lifecycle: 'retired',
-      current_version: null,
-      available_versions: [
-        {
-          version: local.version,
-          execution_count: 1,
-          run_count: 1,
-          last_seen: '2026-08-26T19:53:13.315Z',
-        },
-      ],
-    })
-    const merged = mergeLocalScenariosIntoCatalog([executed], [local])
-    expect(merged).toHaveLength(1)
-    expect(merged[0]).toMatchObject({
-      localScenario: local,
-      row: {
-        test_id: local.id,
-        lifecycle: 'active',
-        current_version: local.version,
-      },
-    })
-  })
-
-  // Audit T-09 / DS-07: the badge speaks the same vocabulary as the
-  // version pill — mono, lowercase, 6px, fill, no border, 11px.
-  it('renders the local-origin badge in the mono vocabulary', () => {
-    const html = renderToStaticMarkup(<LocalTestBadge />)
-    expect(html).toContain('>local<')
-    expect(html).toContain('bg-[var(--surface-fill)]')
-    expect(html).toContain('rounded-[6px]')
-    expect(html).not.toContain('rounded-full')
-    expect(html).not.toContain('border-brand')
-    expect(html).not.toContain('uppercase')
+    expect(html).not.toContain('new test')
+    expect(html).not.toContain('Create a new local test')
   })
 
   it('presents classification, horizon, and realism independently', () => {
@@ -205,15 +121,16 @@ describe('test catalog L5 dimensions', () => {
   it('reads filters from the hash and writes only the non-default ones back', () => {
     const filters = catalogFiltersFromParams(
       new URLSearchParams(
-        'q=chess&lifecycle=active&evidence=1&sort=runs&source=nope',
+        'q=chess&lifecycle=active&evidence=1&sort=runs&source=local',
       ),
     )
-    expect(filters).toMatchObject({
+    expect(filters).toEqual({
       query: 'chess',
       lifecycle: 'active',
+      complexity: 'all',
+      realism: 'all',
       withExecutions: true,
       sort: 'runs',
-      source: 'all',
     })
     expect(catalogFiltersToParams(filters).toString()).toBe(
       'q=chess&lifecycle=active&evidence=1&sort=runs',
@@ -223,32 +140,23 @@ describe('test catalog L5 dimensions', () => {
 
   it('groups by lifecycle and sorts by runs, last seen or complexity', () => {
     const rows = [
-      {
-        row: row({
-          test_id: 'b',
-          lifecycle: 'never_run',
-          complexity: { tier: 'l2_stateful' },
-        }),
-        localScenario: null,
-      },
-      {
-        row: row({
-          test_id: 'a',
-          available_versions: [
-            {
-              version: 3,
-              execution_count: 2,
-              run_count: 2,
-              last_seen: '2026-08-23T00:00:00Z',
-            },
-          ],
-        }),
-        localScenario: null,
-      },
-      {
-        row: row({ test_id: 'c', lifecycle: 'retired', complexity: null }),
-        localScenario: null,
-      },
+      row({
+        test_id: 'b',
+        lifecycle: 'never_run',
+        complexity: { tier: 'l2_stateful' },
+      }),
+      row({
+        test_id: 'a',
+        available_versions: [
+          {
+            version: 3,
+            execution_count: 2,
+            run_count: 2,
+            last_seen: '2026-08-23T00:00:00Z',
+          },
+        ],
+      }),
+      row({ test_id: 'c', lifecycle: 'retired', complexity: null }),
     ]
     expect(
       groupCatalogRows(rows).map((group) => [
@@ -260,25 +168,23 @@ describe('test catalog L5 dimensions', () => {
       ['never_run', 1],
       ['retired', 1],
     ])
+    expect(sortCatalogRows(rows, 'runs').map((entry) => entry.test_id)).toEqual(
+      ['a', 'b', 'c'],
+    )
     expect(
-      sortCatalogDisplayRows(rows, 'runs').map((entry) => entry.row.test_id),
-    ).toEqual(['a', 'b', 'c'])
-    expect(
-      sortCatalogDisplayRows(rows, 'complexity').map(
-        (entry) => entry.row.test_id,
-      ),
+      sortCatalogRows(rows, 'complexity').map((entry) => entry.test_id),
     ).toEqual(['a', 'b', 'c'])
     expect(
       filterCatalogRows(rows, {
         ...CATALOG_DEFAULT_FILTERS,
         withExecutions: true,
-      }).map((entry) => entry.row.test_id),
+      }).map((entry) => entry.test_id),
     ).toEqual(['a'])
     expect(
       filterCatalogRows(rows, {
         ...CATALOG_DEFAULT_FILTERS,
         complexity: 'none',
-      }).map((entry) => entry.row.test_id),
+      }).map((entry) => entry.test_id),
     ).toEqual(['c'])
   })
 

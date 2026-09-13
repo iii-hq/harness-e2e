@@ -224,38 +224,35 @@ describe('execution setup sheet', () => {
     expect(html).toContain('bg-danger')
   })
 
-  // Audit PN-09 / PN-06: families group the rows; local tests are their own
-  // group and can be listed as not available.
-  it('groups tests by family with local tests first', () => {
+  // Audit PN-09: families group the rows; singletons gather under "other".
+  it('groups tests by family and gathers singletons under other tests', () => {
     expect(
-      groupScenarios(
-        ['chess_build', 'chess_play', 'engineering_review', 'markdown_x'],
-        ['markdown_x'],
-      ),
+      groupScenarios([
+        'chess_build',
+        'chess_play',
+        'engineering_review',
+        'minimal_path',
+      ]),
     ).toEqual([
-      { key: 'local', label: 'local', items: ['markdown_x'] },
       { key: 'chess', label: 'chess', items: ['chess_build', 'chess_play'] },
-      { key: 'other', label: 'other tests', items: ['engineering_review'] },
+      {
+        key: 'other',
+        label: 'other tests',
+        items: ['engineering_review', 'minimal_path'],
+      },
     ])
     const html = renderToStaticMarkup(
       <ExecutionSetup
         {...sharedProps}
         mode="plan"
-        availableScenarios={['security_review.scan_commit']}
-        localScenarioIds={['markdown_console_draft']}
-        scenarioTitles={{ markdown_console_draft: 'Markdown Console Draft' }}
-        unavailableScenarios={{
-          ids: ['markdown_console_draft'],
-          reason: 'Local Markdown tests are not available in plans.',
-        }}
+        availableScenarios={['chess_build', 'chess_play', 'minimal_path']}
         selectedScenarios={[]}
       />,
     )
-    expect(html).toContain('Markdown Console Draft')
-    expect(html).toContain('>local<')
-    expect(html).toContain('not available in plans')
-    expect(html).toContain('disabled=""')
-    expect(html).toContain('data-scenario-group="local"')
+    expect(html).toContain('data-scenario-group="chess"')
+    expect(html).toContain('data-scenario-group="other"')
+    expect(html).toContain('minimal_path')
+    expect(html).not.toContain('>local<')
   })
 
   // Audit RS-15: when something else holds the form it is parked, not dead —

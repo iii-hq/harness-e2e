@@ -1,5 +1,5 @@
 import { ChevronDown, RefreshCw, Search, X } from 'lucide-react'
-import { type ReactNode, useMemo, useState } from 'react'
+import { type ReactNode, useState } from 'react'
 import { ProviderModelDropdown } from '@/components/ProviderModelDropdown'
 import {
   buttonClassName,
@@ -140,21 +140,11 @@ export type ScenarioGroup = {
 
 /**
  * Audit PN-09 / RS-05: tests grouped by family (the id's first segment) so
- * a group can be selected at once; local tests form their own group and
- * singletons gather under "other".
+ * a group can be selected at once; singletons gather under "other".
  */
-export function groupScenarios(
-  ids: string[],
-  localIds: string[],
-): ScenarioGroup[] {
-  const local = new Set(localIds)
+export function groupScenarios(ids: string[]): ScenarioGroup[] {
   const families = new Map<string, string[]>()
-  const localItems: string[] = []
   for (const id of ids) {
-    if (local.has(id)) {
-      localItems.push(id)
-      continue
-    }
     const family = id.split(/[_.]/)[0] || id
     families.set(family, [...(families.get(family) ?? []), id])
   }
@@ -168,8 +158,6 @@ export function groupScenarios(
   }
   if (singles.length > 0)
     groups.push({ key: 'other', label: 'other tests', items: singles })
-  if (localItems.length > 0)
-    groups.unshift({ key: 'local', label: 'local', items: localItems })
   return groups
 }
 
@@ -184,10 +172,6 @@ type ExecutionSetupProps = {
   judgeRequired?: boolean
   modelGroups: ExecutionModelGroup[]
   availableScenarios: string[]
-  localScenarioIds?: string[]
-  scenarioTitles?: Record<string, string>
-  /** Tests listed but not selectable, with the reason (audit PN-06). */
-  unavailableScenarios?: { ids: string[]; reason: string }
   selectedScenarios: string[]
   query: string
   runs: string
@@ -261,9 +245,6 @@ export function ExecutionSetup({
   judgeRequired = false,
   modelGroups,
   availableScenarios,
-  localScenarioIds = [],
-  scenarioTitles = {},
-  unavailableScenarios,
   selectedScenarios,
   query,
   runs,
@@ -288,31 +269,17 @@ export function ExecutionSetup({
 }: ExecutionSetupProps) {
   const [onlySelected, setOnlySelected] = useState(false)
   const normalizedQuery = query.trim().toLocaleLowerCase()
-  const unavailable = new Set(unavailableScenarios?.ids ?? [])
-  const allScenarios = useMemo(
-    () => [
-      ...availableScenarios,
-      ...(unavailableScenarios?.ids ?? []).filter(
-        (id) => !availableScenarios.includes(id),
-      ),
-    ],
-    [availableScenarios, unavailableScenarios],
-  )
   const matches = (scenario: string) =>
     (!normalizedQuery ||
-      `${scenario} ${scenarioTitles[scenario] ?? scenarioDisplayName(scenario)}`
+      `${scenario} ${scenarioDisplayName(scenario)}`
         .toLocaleLowerCase()
         .includes(normalizedQuery)) &&
     (!onlySelected || selectedScenarios.includes(scenario))
-  const visibleScenarios = allScenarios.filter(matches)
-  const groups = groupScenarios(visibleScenarios, [
-    ...localScenarioIds,
-    ...(unavailableScenarios?.ids ?? []),
-  ])
+  const visibleScenarios = availableScenarios.filter(matches)
+  const groups = groupScenarios(visibleScenarios)
   const runsPerScenario = Math.max(1, Number(runs) || 1)
   const retries = Math.max(0, Number(technicalRetries) || 0)
   const plannedRuns = selectedScenarios.length * runsPerScenario
-  const selectable = (scenario: string) => !unavailable.has(scenario)
 
   const toggleScenario = (scenario: string, checked: boolean) => {
     onSelectedScenariosChange(
@@ -326,10 +293,7 @@ export function ExecutionSetup({
   const selectMany = (scenarios: string[]) => {
     onSelectedScenariosChange([
       ...selectedScenarios,
-      ...scenarios.filter(
-        (scenario) =>
-          selectable(scenario) && !selectedScenarios.includes(scenario),
-      ),
+      ...scenarios.filter((scenario) => !selectedScenarios.includes(scenario)),
     ])
   }
   const deselectMany = (scenarios: string[]) => {
@@ -344,7 +308,6 @@ export function ExecutionSetup({
       : catalogStatus.tone === 'loading'
         ? 'bg-[var(--ink-decor)]'
         : 'bg-danger'
-  const visibleSelectable = visibleScenarios.filter(selectable)
   const hiddenSelected = selectedScenarios.filter(
     (scenario) => !visibleScenarios.includes(scenario),
   ).length
@@ -645,10 +608,10 @@ export function ExecutionSetup({
                   size: 'compact',
                 })}
                 type="button"
-                onClick={() => selectMany(visibleSelectable)}
-                disabled={disabled || visibleSelectable.length === 0}
+                onClick={() => selectMany(visibleScenarios)}
+                disabled={disabled || visibleScenarios.length === 0}
               >
-                select visible ({visibleSelectable.length})
+                select visible ({visibleScenarios.length})
               </button>
               <button
                 className={buttonClassName({
@@ -667,7 +630,7 @@ export function ExecutionSetup({
             <FilterChipGroup label="Test filters">
               <FilterChip
                 active={!onlySelected}
-                count={allScenarios.length}
+                count={availableScenarios.length}
                 onClick={() => setOnlySelected(false)}
               >
                 all
@@ -686,7 +649,7 @@ export function ExecutionSetup({
               aria-live="polite"
               htmlFor={`${idPrefix}-scenario-search`}
             >
-              {visibleScenarios.length} of {allScenarios.length} shown ·{' '}
+              {visibleScenarios.length} of {availableScenarios.length} shown ·{' '}
               {selectedScenarios.length} selected
               {hiddenSelected > 0 ? ` (${hiddenSelected} hidden)` : ''} ·{' '}
               {plannedRuns} {plannedRuns === 1 ? 'run' : 'runs'} in total
@@ -704,10 +667,9 @@ export function ExecutionSetup({
         ) : null}
         <div className="grid gap-5" data-scenario-list>
           {groups.map((group) => {
-            const groupSelectable = group.items.filter(selectable)
             const allSelected =
-              groupSelectable.length > 0 &&
-              groupSelectable.every((scenario) =>
+              group.items.length > 0 &&
+              group.items.every((scenario) =>
                 selectedScenarios.includes(scenario),
               )
             return (
@@ -716,7 +678,7 @@ export function ExecutionSetup({
                   <span className="ds-label">
                     {group.label} · {group.items.length}
                   </span>
-                  {groupSelectable.length > 0 ? (
+                  {group.items.length > 0 ? (
                     <button
                       className={buttonClassName({
                         variant: 'quiet',
@@ -725,8 +687,8 @@ export function ExecutionSetup({
                       type="button"
                       onClick={() =>
                         allSelected
-                          ? deselectMany(groupSelectable)
-                          : selectMany(groupSelectable)
+                          ? deselectMany(group.items)
+                          : selectMany(group.items)
                       }
                       disabled={disabled}
                     >
@@ -737,50 +699,27 @@ export function ExecutionSetup({
                 <ul className="m-0 grid list-none p-0">
                   {group.items.map((scenario) => {
                     const selected = selectedScenarios.includes(scenario)
-                    const local = localScenarioIds.includes(scenario)
-                    const blocked = unavailable.has(scenario)
-                    const title = scenarioTitles[scenario]
                     return (
                       <li key={scenario}>
                         <label
                           className={`flex min-h-9 min-w-0 items-center gap-3 rounded-[6px] px-2 text-xs ${
-                            blocked
-                              ? 'cursor-not-allowed text-ink-muted'
-                              : selected
-                                ? 'cursor-pointer bg-[var(--surface-selected)] text-ink'
-                                : 'cursor-pointer text-ink hover:bg-[var(--surface-fill)]'
+                            selected
+                              ? 'cursor-pointer bg-[var(--surface-selected)] text-ink'
+                              : 'cursor-pointer text-ink hover:bg-[var(--surface-fill)]'
                           }`}
-                          title={
-                            blocked ? unavailableScenarios?.reason : undefined
-                          }
                         >
                           <input
                             className="size-4 shrink-0 accent-[var(--accent)]"
                             type="checkbox"
                             checked={selected}
-                            disabled={disabled || blocked}
+                            disabled={disabled}
                             onChange={(event) =>
                               toggleScenario(scenario, event.target.checked)
                             }
                           />
                           <span className="min-w-0 flex-1 truncate font-mono">
-                            {title ?? scenario}
-                            {title ? (
-                              <span className="ml-2 text-label text-ink-muted">
-                                {scenario}
-                              </span>
-                            ) : null}
+                            {scenario}
                           </span>
-                          {local ? (
-                            <span className="rounded-[6px] bg-[var(--surface-fill)] px-1.5 py-0.5 font-mono text-label text-ink-soft">
-                              local
-                            </span>
-                          ) : null}
-                          {blocked ? (
-                            <span className="font-mono text-label text-ink-muted">
-                              not available in plans
-                            </span>
-                          ) : null}
                         </label>
                       </li>
                     )
@@ -794,7 +733,7 @@ export function ExecutionSetup({
               query={query}
               onlySelected={onlySelected}
               catalogLoading={catalogLoading}
-              catalogEmpty={allScenarios.length === 0}
+              catalogEmpty={availableScenarios.length === 0}
               onRefreshCatalog={onRefreshCatalog}
               onShowAll={() => {
                 setOnlySelected(false)

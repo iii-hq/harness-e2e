@@ -28,7 +28,6 @@ const SCHEMA: &[&str] = &[
     "CREATE INDEX IF NOT EXISTS runs_execution_scenario_idx ON runs(execution_id, scenario_id, case_id)",
     "CREATE TABLE IF NOT EXISTS artifacts (execution_id TEXT NOT NULL, artifact_id TEXT NOT NULL, kind TEXT NOT NULL, relative_path TEXT NOT NULL, sha256 TEXT NOT NULL, size_bytes INTEGER NOT NULL, media_type TEXT NOT NULL, available INTEGER NOT NULL CHECK (available IN (0, 1)), archive_uri TEXT NULL, PRIMARY KEY (execution_id, artifact_id, sha256))",
     "CREATE TABLE IF NOT EXISTS archives (execution_id TEXT PRIMARY KEY, archive_id TEXT NOT NULL UNIQUE, manifest_uri TEXT NOT NULL, manifest_sha256 TEXT NOT NULL, expires_at TEXT NULL, payload_json TEXT NOT NULL)",
-    "CREATE TABLE IF NOT EXISTS local_scenarios (scenario_id TEXT PRIMARY KEY, source_sha256 TEXT NOT NULL, source_path TEXT NOT NULL, created_at TEXT NOT NULL, payload_json TEXT NOT NULL)",
     "CREATE TABLE IF NOT EXISTS saved_plans (id TEXT PRIMARY KEY, origin TEXT NOT NULL CHECK (origin IN ('local', 'remote')), source_instance TEXT NULL, source_id TEXT NULL, source_updated_at TEXT NULL, source_content_sha256 TEXT NULL, updated_at TEXT NOT NULL, payload_json TEXT NOT NULL, payload_sha256 TEXT NOT NULL, UNIQUE(source_instance, source_id))",
     "CREATE INDEX IF NOT EXISTS saved_plans_origin_updated_idx ON saved_plans(origin, updated_at DESC)",
     "CREATE TABLE IF NOT EXISTS saved_plan_executions (id TEXT PRIMARY KEY, plan_id TEXT NOT NULL, origin TEXT NOT NULL CHECK (origin IN ('local', 'remote')), source_instance TEXT NULL, source_id TEXT NULL, source_updated_at TEXT NULL, source_content_sha256 TEXT NULL, idempotency_key TEXT NULL UNIQUE, state TEXT NOT NULL, started_at TEXT NOT NULL, updated_at TEXT NOT NULL, payload_json TEXT NOT NULL, payload_sha256 TEXT NOT NULL, UNIQUE(source_instance, source_id))",
@@ -354,13 +353,6 @@ impl Persistence {
             .next()
             .map(|row| decode_payload(&row))
             .transpose()
-    }
-
-    pub async fn save_local_scenario(&self, id: &str, payload: &Value) -> Result<()> {
-        self.transaction(vec![json!({
-            "sql": "INSERT INTO local_scenarios(scenario_id, source_sha256, source_path, created_at, payload_json) VALUES (?, ?, ?, ?, ?) ON CONFLICT(scenario_id) DO UPDATE SET source_sha256=excluded.source_sha256, source_path=excluded.source_path, payload_json=excluded.payload_json",
-            "params": [id, payload["source_sha256"], payload["source_path"], payload["created_at"], serde_json::to_string(payload)?],
-        })]).await
     }
 
     async fn records_query(&self, sql: &str, params: Value) -> Result<Vec<ExecutionRecord>> {

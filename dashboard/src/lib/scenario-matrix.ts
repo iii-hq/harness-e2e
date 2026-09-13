@@ -38,18 +38,13 @@ export type ScenarioMatrixItem = {
   workflowRun: DashboardRunProjection | null
   workflowSteps: SemanticTestReport[]
   aggregate: DashboardScenarioAggregate | null
-  /** `band` groups the facts so each row of the result card divides evenly.
-   *  Eleven tiles in one seven-column grid left a visible orphan cell and said
-   *  nothing about what kind of number each one was (audit ED-24). */
+  /** The execution facts of the scenario, one tile each (audit ED-24). */
   primaryMetrics: Array<{
     label: string
     value: string
     detail: string
-    band: MetricBand
   }>
 }
-
-export type MetricBand = 'scoring' | 'execution'
 
 export type ResultContractSummary = {
   key: string
@@ -473,39 +468,7 @@ function primaryMetrics(
           ? missingDetail
           : 'Subject execution time',
   }
-  const markdownMetrics = run?.markdown_execution
-    ? [
-        {
-          label: 'Validation score',
-          value:
-            finiteNumber(run.validation_score) == null
-              ? 'Unavailable'
-              : `${finiteNumber(run.validation_score)}/100`,
-          detail: 'Deterministic sum of isolated validator outcomes',
-        },
-        {
-          label: 'Instruction adherence',
-          value:
-            finiteNumber(run.instruction_adherence?.score) == null
-              ? title(run.instruction_adherence?.availability ?? 'unavailable')
-              : `${finiteNumber(run.instruction_adherence?.score)}/100`,
-          detail: 'Judge-scored prompt-following, Markdown tests only',
-        },
-        {
-          label: 'Pipeline integrity',
-          value: run.markdown_execution.pipeline_complete
-            ? 'Complete'
-            : 'Incomplete',
-          detail: 'Correct revision, section routing, and phase completion',
-        },
-        {
-          label: 'Technical failures',
-          value: formatCount(run.failures?.length ?? 0),
-          detail: 'Infrastructure, evaluator, resource, or cleanup failures',
-        },
-      ]
-    : []
-  const executionMetrics = [
+  return [
     runtimeMetric,
     {
       label: 'Total tokens',
@@ -544,22 +507,6 @@ function primaryMetrics(
             : missingDetail,
     },
   ]
-  return [
-    ...markdownMetrics.map((metric) => ({
-      ...metric,
-      band: 'scoring' as const,
-    })),
-    ...executionMetrics.map((metric) => ({
-      ...metric,
-      band: 'execution' as const,
-    })),
-  ]
-}
-
-function title(value: string) {
-  return value
-    .replaceAll('_', ' ')
-    .replace(/\b\w/g, (letter) => letter.toUpperCase())
 }
 
 export type StepMetricSignal = {

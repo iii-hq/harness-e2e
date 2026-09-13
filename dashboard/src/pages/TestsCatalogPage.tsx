@@ -1,14 +1,11 @@
-import { ChevronRight, Copy, Plus, RefreshCw, Search, X } from 'lucide-react'
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { ChevronRight, Copy, Search, X } from 'lucide-react'
+import { useEffect, useRef, useState } from 'react'
 import {
   DashboardPageActions,
   dashboardHeaderActionClassName,
 } from '@/components/DashboardPageActions'
-import { requestPlanFromSelection } from '@/components/ExecutionSetup'
-import { LocalScenarioEditor } from '@/components/LocalScenarioEditor'
 import {
   buttonClassName,
-  Callout,
   DataTable,
   DataTableRow,
   EmptyState,
@@ -31,22 +28,16 @@ import {
   getDashboardDataBridge,
 } from '@/lib/dashboard-data-source'
 import { formatDate } from '@/lib/execution-view'
-import {
-  type LocalScenarioSummary,
-  localScenariosFromCatalog,
-} from '@/lib/local-scenario-catalog'
 import type { TestCatalogRow, TestsListResponse } from '@/lib/test-catalog'
 import { catalogExecutionSummary } from '@/lib/test-catalog-view'
 
 type Lifecycle = TestCatalogRow['lifecycle']
 type LifecycleFilter = 'all' | Lifecycle
-type SourceFilter = 'all' | 'local' | 'registry'
 type SortKey = 'lifecycle' | 'name' | 'runs' | 'last_seen' | 'complexity'
 
 export type CatalogFilters = {
   query: string
   lifecycle: LifecycleFilter
-  source: SourceFilter
   complexity: string
   realism: string
   withExecutions: boolean
@@ -56,7 +47,6 @@ export type CatalogFilters = {
 export const CATALOG_DEFAULT_FILTERS: CatalogFilters = {
   query: '',
   lifecycle: 'all',
-  source: 'all',
   complexity: 'all',
   realism: 'all',
   withExecutions: false,
@@ -75,13 +65,15 @@ const PAGE_SIZE = 50
 /** Rows shown per lifecycle group before "show N more". */
 const GROUP_PREVIEW = 10
 const CATALOG_SCROLL_KEY = 'harness-e2e:tests-catalog-scroll'
+/** Stable identity before the first response, so effects keyed on the rows
+ *  do not re-run on every render. */
+const NO_ROWS: TestCatalogRow[] = []
 
 /** Audit T-08: the filters live in the hash so "back" restores them. */
 export function catalogFiltersFromParams(
   params: URLSearchParams,
 ): CatalogFilters {
   const lifecycle = params.get('lifecycle')
-  const source = params.get('source')
   const sort = params.get('sort')
   return {
     query: params.get('q') ?? '',
@@ -89,7 +81,6 @@ export function catalogFiltersFromParams(
       lifecycle && (LIFECYCLES as string[]).includes(lifecycle)
         ? (lifecycle as Lifecycle)
         : 'all',
-    source: source === 'local' || source === 'registry' ? source : 'all',
     complexity: params.get('complexity') ?? 'all',
     realism: params.get('realism') ?? 'all',
     withExecutions: params.get('evidence') === '1',
@@ -106,7 +97,6 @@ export function catalogFiltersToParams(
   const params = new URLSearchParams()
   if (filters.query.trim()) params.set('q', filters.query.trim())
   if (filters.lifecycle !== 'all') params.set('lifecycle', filters.lifecycle)
-  if (filters.source !== 'all') params.set('source', filters.source)
   if (filters.complexity !== 'all') params.set('complexity', filters.complexity)
   if (filters.realism !== 'all') params.set('realism', filters.realism)
   if (filters.withExecutions) params.set('evidence', '1')
@@ -123,7 +113,6 @@ export function catalogCountLabels(
   catalogLoaded: number,
   available: number,
   visible: number,
-  local: number,
   filtered: boolean,
 ) {
   const catalogProgress =
@@ -135,7 +124,6 @@ export function catalogCountLabels(
       catalogTotal === null ? null : `${catalogTotal} catalog rows total`,
       catalogTotal === null ? null : `${catalogLoaded} loaded from catalog`,
       `${available} available in this view`,
-      local > 0 ? `${local} local definition${local === 1 ? '' : 's'}` : null,
     ]
       .filter(Boolean)
       .join(' · '),
@@ -299,101 +287,15 @@ function shortDate(value: string) {
     : value
 }
 
-export function nextLocalScenarioFileName(
-  scenarios: LocalScenarioSummary[],
-): string {
-  const existing = new Set(
-    scenarios.map((scenario) => scenario.source_path.split('/').at(-1)),
-  )
-  // Audit NT-03: the fallback name no longer repeats the "local_" prefix
-  // that the compiler adds ("local_local_scenario").
-  if (!existing.has('new-test.md')) return 'new-test.md'
-  let suffix = 2
-  while (existing.has(`new-test-${suffix}.md`)) suffix += 1
-  return `new-test-${suffix}.md`
-}
-
-export type CatalogDisplayRow = {
-  row: TestCatalogRow
-  localScenario: LocalScenarioSummary | null
-}
-
-export function mergeLocalScenariosIntoCatalog(
-  rows: TestCatalogRow[],
-  localScenarios: LocalScenarioSummary[],
-): CatalogDisplayRow[] {
-  const localById = new Map(
-    localScenarios.map((scenario) => [scenario.id, scenario]),
-  )
-  const seen = new Set(rows.map((row) => row.test_id))
-  return [
-    ...rows.map((row) => {
-      const localScenario = localById.get(row.test_id) ?? null
-      if (!localScenario) return { row, localScenario }
-
-      const currentVersion = row.available_versions.find(
-        (version) => version.version === localScenario.version,
-      )
-      const availableVersions = currentVersion
-        ? row.available_versions
-        : [
-            {
-              version: localScenario.version,
-              execution_count: 0,
-              run_count: 0,
-              last_seen: null,
-            },
-            ...row.available_versions,
-          ]
-      const observed = availableVersions.some(
-        (version) => version.execution_count > 0,
-      )
-
-      return {
-        localScenario,
-        row: {
-          ...row,
-          lifecycle: observed ? ('active' as const) : ('never_run' as const),
-          current_version: localScenario.version,
-          available_versions: availableVersions,
-          selected_version: localScenario.version,
-        },
-      }
-    }),
-    ...localScenarios
-      .filter((scenario) => !seen.has(scenario.id))
-      .map((scenario) => ({
-        localScenario: scenario,
-        row: {
-          test_id: scenario.id,
-          lifecycle: 'never_run' as const,
-          current_version: scenario.version,
-          available_versions: [
-            {
-              version: scenario.version,
-              execution_count: 0,
-              run_count: 0,
-              last_seen: null,
-            },
-          ],
-          selected_version: scenario.version,
-          result: null,
-        },
-      })),
-  ]
-}
-
-/** Applies the toolbar filters; sorting happens in sortCatalogDisplayRows. */
+/** Applies the toolbar filters; sorting happens in sortCatalogRows. */
 export function filterCatalogRows(
-  rows: CatalogDisplayRow[],
+  rows: TestCatalogRow[],
   filters: CatalogFilters,
-): CatalogDisplayRow[] {
+): TestCatalogRow[] {
   const query = filters.query.trim().toLowerCase()
-  return rows.filter(({ row, localScenario }) => {
+  return rows.filter((row) => {
     if (filters.lifecycle !== 'all' && row.lifecycle !== filters.lifecycle)
       return false
-    if (filters.source === 'local' && !localScenario) return false
-    if (filters.source === 'registry' && localScenario) return false
     if (
       filters.complexity !== 'all' &&
       (row.complexity?.tier ?? 'none') !== filters.complexity
@@ -406,40 +308,35 @@ export function filterCatalogRows(
       return false
     if (filters.withExecutions && catalogExecutionSummary(row).total === 0)
       return false
-    return (
-      !query ||
-      `${row.test_id} ${localScenario?.title ?? ''}`
-        .toLowerCase()
-        .includes(query)
-    )
+    return !query || row.test_id.toLowerCase().includes(query)
   })
 }
 
-export function sortCatalogDisplayRows(
-  rows: CatalogDisplayRow[],
+export function sortCatalogRows(
+  rows: TestCatalogRow[],
   sort: SortKey,
-): CatalogDisplayRow[] {
-  const byName = (a: CatalogDisplayRow, b: CatalogDisplayRow) =>
-    a.row.test_id.localeCompare(b.row.test_id)
+): TestCatalogRow[] {
+  const byName = (a: TestCatalogRow, b: TestCatalogRow) =>
+    a.test_id.localeCompare(b.test_id)
   const sorted = [...rows]
   if (sort === 'runs') {
     sorted.sort(
       (a, b) =>
-        catalogExecutionSummary(b.row).total -
-          catalogExecutionSummary(a.row).total || byName(a, b),
+        catalogExecutionSummary(b).total - catalogExecutionSummary(a).total ||
+        byName(a, b),
     )
   } else if (sort === 'last_seen') {
     sorted.sort(
       (a, b) =>
-        (catalogExecutionSummary(b.row).lastSeen ?? '').localeCompare(
-          catalogExecutionSummary(a.row).lastSeen ?? '',
+        (catalogExecutionSummary(b).lastSeen ?? '').localeCompare(
+          catalogExecutionSummary(a).lastSeen ?? '',
         ) || byName(a, b),
     )
   } else if (sort === 'complexity') {
     sorted.sort(
       (a, b) =>
-        (complexityRank[b.row.complexity?.tier ?? ''] ?? -1) -
-          (complexityRank[a.row.complexity?.tier ?? ''] ?? -1) || byName(a, b),
+        (complexityRank[b.complexity?.tier ?? ''] ?? -1) -
+          (complexityRank[a.complexity?.tier ?? ''] ?? -1) || byName(a, b),
     )
   } else {
     sorted.sort(byName)
@@ -447,40 +344,19 @@ export function sortCatalogDisplayRows(
   return sorted
 }
 
-export function groupCatalogRows(rows: CatalogDisplayRow[]) {
+export function groupCatalogRows(rows: TestCatalogRow[]) {
   return LIFECYCLES.map((lifecycle) => ({
     lifecycle,
-    rows: rows.filter((entry) => entry.row.lifecycle === lifecycle),
+    rows: rows.filter((row) => row.lifecycle === lifecycle),
   })).filter((group) => group.rows.length > 0)
 }
 
-export function TestsCatalogActions({
-  local,
-  localReady,
-  onNewTest,
-}: {
-  local: boolean
-  localReady: boolean
-  onNewTest: () => void
-}) {
+export function TestsCatalogActions({ local }: { local: boolean }) {
   return (
     <>
       {local ? (
-        <button
-          className={dashboardHeaderActionClassName({ primary: true })}
-          type="button"
-          onClick={onNewTest}
-          disabled={!localReady}
-          title={localReady ? undefined : 'loading local tests…'}
-          aria-label="Create a new local test"
-        >
-          <Plus size={13} aria-hidden="true" />
-          new test
-        </button>
-      ) : null}
-      {local ? (
         <a
-          className={dashboardHeaderActionClassName()}
+          className={dashboardHeaderActionClassName({ primary: true })}
           href={hashForNewPlan()}
           aria-label="New local plan"
         >
@@ -495,16 +371,6 @@ export function TestsCatalogActions({
         compare versions
       </a>
     </>
-  )
-}
-
-// Audit T-09 / DS-07: same vocabulary as the version pill — mono, lowercase,
-// 6px radius, fill, no border.
-export function LocalTestBadge() {
-  return (
-    <span className="inline-flex shrink-0 items-center rounded-[6px] bg-[var(--surface-fill)] px-1.5 py-0.5 font-mono text-label leading-4 text-ink-soft">
-      local
-    </span>
   )
 }
 
@@ -538,7 +404,7 @@ const COLUMNS = [
   {
     key: 'test',
     label: 'test',
-    title: 'Test id and, for local tests, the title',
+    title: 'Test id',
   },
   { key: 'version', label: 'version', title: 'Current contract version' },
   {
@@ -576,7 +442,7 @@ function CatalogRows({
   highlightId,
   showLifecycle,
 }: {
-  rows: CatalogDisplayRow[]
+  rows: TestCatalogRow[]
   local: boolean
   highlightId: string | null
   /** Off inside lifecycle groups, where the heading already says it. */
@@ -584,7 +450,7 @@ function CatalogRows({
 }) {
   return (
     <>
-      {rows.map(({ row, localScenario }) => {
+      {rows.map((row) => {
         const tone = lifecyclePresentation[row.lifecycle]
         const complexity = catalogComplexityPresentation(row)
         const horizon = catalogHorizonPresentation(row)
@@ -614,7 +480,6 @@ function CatalogRows({
                 >
                   {row.test_id}
                 </a>
-                {localScenario ? <LocalTestBadge /> : null}
                 {showLifecycle ? (
                   <span
                     className={`ml-auto inline-flex items-center gap-1.5 font-mono text-label font-normal ${tone.textClassName}`}
@@ -627,11 +492,6 @@ function CatalogRows({
                   </span>
                 ) : null}
               </span>
-              {localScenario ? (
-                <small className="block text-xs text-ink-muted">
-                  {localScenario.title}
-                </small>
-              ) : null}
             </td>
             <td data-label="Version">
               <span
@@ -767,17 +627,6 @@ export function TestsCatalogPage() {
   const [loading, setLoading] = useState(true)
   const [loadingMore, setLoadingMore] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  const [localScenarios, setLocalScenarios] = useState<LocalScenarioSummary[]>(
-    [],
-  )
-  const [localCatalogLoading, setLocalCatalogLoading] = useState(true)
-  const [localCatalogError, setLocalCatalogError] = useState<string | null>(
-    null,
-  )
-  const [authoringScenario, setAuthoringScenario] = useState(false)
-  const [createdScenarioId, setCreatedScenarioId] = useState<string | null>(
-    null,
-  )
   const [highlightId, setHighlightId] = useState<string | null>(() =>
     typeof window === 'undefined'
       ? null
@@ -805,35 +654,7 @@ export function TestsCatalogPage() {
     }
   }, [])
 
-  const loadLocalScenarios = useCallback(
-    async (target = bridge) => {
-      if (!target) {
-        setLocalCatalogLoading(false)
-        return
-      }
-      setLocalCatalogLoading(true)
-      setLocalCatalogError(null)
-      try {
-        setLocalScenarios(localScenariosFromCatalog(await target.getCatalog()))
-      } catch (cause) {
-        setLocalCatalogError(
-          cause instanceof Error ? cause.message : String(cause),
-        )
-      } finally {
-        setLocalCatalogLoading(false)
-      }
-    },
-    [bridge],
-  )
-
-  useEffect(() => {
-    if (bridge) void loadLocalScenarios(bridge)
-  }, [bridge, loadLocalScenarios])
-
-  const allRows = useMemo(
-    () => mergeLocalScenariosIntoCatalog(data?.rows ?? [], localScenarios),
-    [data, localScenarios],
-  )
+  const allRows = data?.rows ?? NO_ROWS
 
   // Audit T-07: cursor pagination instead of a silent cap at 100.
   const loadMore = async () => {
@@ -900,8 +721,7 @@ export function TestsCatalogPage() {
   useEffect(() => {
     if (loading || restoredScroll.current) return
     if (highlightId) {
-      // The row may arrive with the next local catalog load; wait for it.
-      const known = allRows.some((entry) => entry.row.test_id === highlightId)
+      const known = allRows.some((row) => row.test_id === highlightId)
       const rowElement = known
         ? document.getElementById(`test-${highlightId}`)
         : null
@@ -920,14 +740,7 @@ export function TestsCatalogPage() {
     }
   }, [loading, highlightId, allRows])
 
-  // Audit NT-08: the toast dismisses itself.
-  useEffect(() => {
-    if (!createdScenarioId) return
-    const timer = window.setTimeout(() => setCreatedScenarioId(null), 8000)
-    return () => window.clearTimeout(timer)
-  }, [createdScenarioId])
-
-  const visibleRows = sortCatalogDisplayRows(
+  const visibleRows = sortCatalogRows(
     filterCatalogRows(allRows, filters),
     filters.sort,
   )
@@ -937,22 +750,17 @@ export function TestsCatalogPage() {
     value: CatalogFilters[K],
   ) => setFilters((current) => ({ ...current, [key]: value }))
   const clearFilters = () => setFilters(CATALOG_DEFAULT_FILTERS)
-  const localBridge = bridge
-  const local = Boolean(localBridge)
-  const suggestedLocalFileName = nextLocalScenarioFileName(localScenarios)
+  const local = Boolean(bridge)
   const counts = {
     available: allRows.length,
-    active: allRows.filter((entry) => entry.row.lifecycle === 'active').length,
-    never_run: allRows.filter((entry) => entry.row.lifecycle === 'never_run')
-      .length,
-    retired: allRows.filter((entry) => entry.row.lifecycle === 'retired')
-      .length,
-    local: allRows.filter((entry) => entry.localScenario).length,
+    active: allRows.filter((row) => row.lifecycle === 'active').length,
+    never_run: allRows.filter((row) => row.lifecycle === 'never_run').length,
+    retired: allRows.filter((row) => row.lifecycle === 'retired').length,
   }
   const complexityOptions = [
     ...new Set(
       allRows
-        .map((entry) => entry.row.complexity?.tier)
+        .map((row) => row.complexity?.tier)
         .filter((tier): tier is keyof typeof complexityTierLabels =>
           Boolean(tier),
         ),
@@ -961,7 +769,7 @@ export function TestsCatalogPage() {
   const realismOptions = [
     ...new Set(
       allRows
-        .map((entry) => entry.row.characterization?.realism?.execution)
+        .map((row) => row.characterization?.realism?.execution)
         .filter((value): value is keyof typeof realismLabels => Boolean(value)),
     ),
   ]
@@ -972,7 +780,6 @@ export function TestsCatalogPage() {
     data?.rows.length ?? 0,
     counts.available,
     visibleRows.length,
-    counts.local,
     filtered,
   )
 
@@ -981,16 +788,7 @@ export function TestsCatalogPage() {
       <DashboardPageActions
         active="tests"
         actionsLabel="Test catalog actions"
-        actions={
-          <TestsCatalogActions
-            local={local}
-            localReady={local && !localCatalogLoading}
-            onNewTest={() => {
-              setCreatedScenarioId(null)
-              setAuthoringScenario(true)
-            }}
-          />
-        }
+        actions={<TestsCatalogActions local={local} />}
       />
       <div className="ds-root page-shell w-[calc(100%_-_1.5rem)] max-w-[1420px] pt-5 pb-16 md:w-[calc(100%_-_3rem)]">
         <PageHeader
@@ -1001,92 +799,6 @@ export function TestsCatalogPage() {
             data?.revision ? <CatalogRevision revision={data.revision} /> : null
           }
         />
-        {localBridge && authoringScenario ? (
-          <LocalScenarioEditor
-            bridge={localBridge}
-            initialFileName={suggestedLocalFileName}
-            onClose={() => setAuthoringScenario(false)}
-            onCreated={(scenarioId, intent) => {
-              setAuthoringScenario(false)
-              if (intent === 'plan') {
-                requestPlanFromSelection([scenarioId])
-                window.location.hash = hashForNewPlan()
-                return
-              }
-              setCreatedScenarioId(scenarioId)
-              setHighlightId(scenarioId)
-              restoredScroll.current = false
-              void loadLocalScenarios(localBridge)
-            }}
-          />
-        ) : null}
-
-        {createdScenarioId ? (
-          // Audit NT-08: a toast with the next actions, not a bare status line.
-          <Callout
-            tone="success"
-            title={`Created ${createdScenarioId}`}
-            className="mt-4"
-            data-created-toast
-          >
-            <p className="m-0">No execution was started.</p>
-            <div className="mt-2 flex flex-wrap gap-2">
-              <a
-                className={buttonClassName({
-                  variant: 'secondary',
-                  size: 'compact',
-                })}
-                href={hashForTestHistory(createdScenarioId)}
-              >
-                view history
-              </a>
-              <a
-                className={buttonClassName({
-                  variant: 'secondary',
-                  size: 'compact',
-                })}
-                href={hashForNewPlan()}
-                onClick={() => requestPlanFromSelection([createdScenarioId])}
-              >
-                new plan with this test
-              </a>
-              <button
-                className={buttonClassName({
-                  variant: 'quiet',
-                  size: 'compact',
-                })}
-                type="button"
-                onClick={() => setCreatedScenarioId(null)}
-              >
-                dismiss
-              </button>
-            </div>
-          </Callout>
-        ) : null}
-
-        {localCatalogError ? (
-          <Callout
-            tone="danger"
-            title="Local tests could not be loaded"
-            className="mt-4"
-          >
-            <p className="m-0">{localCatalogError}</p>
-            {localBridge ? (
-              <button
-                className={buttonClassName({
-                  variant: 'secondary',
-                  size: 'compact',
-                  className: 'mt-2',
-                })}
-                type="button"
-                onClick={() => void loadLocalScenarios(localBridge)}
-              >
-                retry
-              </button>
-            ) : null}
-          </Callout>
-        ) : null}
-
         <section className="mt-5 grid gap-3" aria-label="Test catalog filters">
           <div className="grid gap-3 @[720px]:grid-cols-[minmax(0,1fr)_auto] @[720px]:items-center">
             <div className="relative max-w-[28rem]">
@@ -1099,7 +811,7 @@ export function TestsCatalogPage() {
                 style={{ paddingInline: '2.25rem' }}
                 type="text"
                 value={filters.query}
-                placeholder="Filter by name, id or title…"
+                placeholder="Filter by name or id…"
                 aria-label="Search tests"
                 onChange={(event) => setFilter('query', event.target.value)}
               />
@@ -1134,27 +846,6 @@ export function TestsCatalogPage() {
                 <option value="last_seen">sort: last seen</option>
                 <option value="complexity">sort: complexity</option>
               </Select>
-              {localBridge ? (
-                // Audit T-04: a refresh, not a filter — icon only, named by
-                // its tooltip.
-                <button
-                  className={buttonClassName({
-                    variant: 'quiet',
-                    size: 'compact',
-                  })}
-                  type="button"
-                  onClick={() => void loadLocalScenarios(localBridge)}
-                  disabled={localCatalogLoading}
-                  title="Refresh local tests"
-                  aria-label="Refresh local tests"
-                >
-                  <RefreshCw
-                    className={localCatalogLoading ? 'animate-spin' : ''}
-                    size={13}
-                    aria-hidden="true"
-                  />
-                </button>
-              ) : null}
             </div>
           </div>
           <div className="flex flex-wrap items-center gap-2">
@@ -1224,19 +915,6 @@ export function TestsCatalogPage() {
                 <option value="none">not declared</option>
               </Select>
             ) : null}
-            {counts.local > 0 ? (
-              <Select
-                aria-label="Filter by source"
-                value={filters.source}
-                onChange={(event) =>
-                  setFilter('source', event.target.value as SourceFilter)
-                }
-              >
-                <option value="all">source: all</option>
-                <option value="local">local</option>
-                <option value="registry">registry</option>
-              </Select>
-            ) : null}
             <FilterChipGroup label="Evidence">
               <FilterChip
                 active={filters.withExecutions}
@@ -1278,22 +956,11 @@ export function TestsCatalogPage() {
             }
             description={
               counts.available === 0
-                ? 'Create a local Markdown test to start collecting evidence.'
-                : 'Try a broader lifecycle, complexity or source, or clear the search.'
+                ? 'Register a test in the Harness catalog to start collecting evidence.'
+                : 'Try a broader lifecycle, complexity or realism, or clear the search.'
             }
             actions={
-              counts.available === 0 ? (
-                local ? (
-                  <button
-                    className={buttonClassName({ variant: 'primary' })}
-                    type="button"
-                    onClick={() => setAuthoringScenario(true)}
-                    disabled={localCatalogLoading}
-                  >
-                    new test
-                  </button>
-                ) : null
-              ) : (
+              counts.available === 0 ? null : (
                 <button
                   className={buttonClassName({ variant: 'secondary' })}
                   type="button"

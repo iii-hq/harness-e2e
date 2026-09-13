@@ -25,6 +25,7 @@ pub mod contention_ledger;
 pub mod context_pressure;
 pub mod cross_app_transaction;
 pub mod cross_repo_contract_migration;
+pub mod database_migration_recovery;
 pub mod depth_ladder;
 mod domain;
 pub mod engineering_endurance_ladder;
@@ -33,11 +34,14 @@ pub mod fanout_ladder;
 pub(crate) mod fixture;
 pub mod git_regression_forensics;
 pub mod incident_response;
+pub mod insert_record;
 pub mod kanban;
 pub mod linkly;
 pub mod mechanical_reaction;
+pub mod minimal_path;
 pub mod moving_target;
 pub mod performance_regression;
+pub mod persistent_state;
 pub mod poison_message;
 pub mod policy_bound_action;
 pub mod prompt_injection_resilience;
@@ -48,6 +52,7 @@ pub mod release_train_recovery;
 pub mod research_pipeline;
 pub mod secret_hygiene;
 pub mod security_review;
+pub mod sequential_pipeline;
 pub mod shell_coder_sandbox;
 pub mod subagent_validation;
 pub mod subagent_validation_failure;
@@ -372,6 +377,16 @@ pub enum ScenarioId {
     LinklyTutorial,
     #[value(name = "context_pressure")]
     ContextPressure,
+    #[value(name = "minimal_path")]
+    MinimalPath,
+    #[value(name = "persistent_state")]
+    PersistentState,
+    #[value(name = "insert_record")]
+    InsertRecord,
+    #[value(name = "sequential_pipeline")]
+    SequentialPipeline,
+    #[value(name = "database_migration_recovery")]
+    DatabaseMigrationRecovery,
     #[value(name = "shell_coder_sandbox")]
     ShellCoderSandbox,
     #[value(name = "research_pipeline")]
@@ -475,7 +490,7 @@ pub enum ScenarioId {
 }
 
 impl ScenarioId {
-    pub const ALL: [Self; 63] = [
+    pub const ALL: [Self; 68] = [
         Self::RegistryPlanning,
         Self::RegistryImplementation,
         Self::RegistryEnvironment,
@@ -489,6 +504,11 @@ impl ScenarioId {
         Self::KanbanC7Live,
         Self::LinklyTutorial,
         Self::ContextPressure,
+        Self::MinimalPath,
+        Self::PersistentState,
+        Self::InsertRecord,
+        Self::SequentialPipeline,
+        Self::DatabaseMigrationRecovery,
         Self::ShellCoderSandbox,
         Self::ResearchPipeline,
         Self::FanoutLadder,
@@ -568,6 +588,11 @@ impl ScenarioId {
             Self::KanbanC7Live => kanban::IDS[6],
             Self::LinklyTutorial => linkly::ID,
             Self::ContextPressure => context_pressure::ID,
+            Self::MinimalPath => minimal_path::ID,
+            Self::PersistentState => persistent_state::ID,
+            Self::InsertRecord => insert_record::ID,
+            Self::SequentialPipeline => sequential_pipeline::ID,
+            Self::DatabaseMigrationRecovery => database_migration_recovery::ID,
             Self::ShellCoderSandbox => shell_coder_sandbox::ID,
             Self::ResearchPipeline => research_pipeline::ID,
             Self::FanoutLadder => fanout_ladder::ID,
@@ -636,6 +661,11 @@ impl ScenarioId {
             Self::KanbanC7Live => kanban::spec(6, run_id),
             Self::LinklyTutorial => linkly::scenario(run_id),
             Self::ContextPressure => context_pressure::scenario(run_id),
+            Self::MinimalPath => minimal_path::scenario(run_id),
+            Self::PersistentState => persistent_state::scenario(run_id),
+            Self::InsertRecord => insert_record::scenario(run_id),
+            Self::SequentialPipeline => sequential_pipeline::scenario(run_id),
+            Self::DatabaseMigrationRecovery => database_migration_recovery::scenario(run_id),
             Self::ShellCoderSandbox => shell_coder_sandbox::scenario(run_id),
             Self::ResearchPipeline => research_pipeline::scenario(run_id),
             Self::FanoutLadder => fanout_ladder::scenario(run_id),
@@ -704,6 +734,13 @@ impl ScenarioId {
             Self::KanbanC7Live => kanban::materialize(6, namespace)?,
             Self::LinklyTutorial => linkly::materialize(namespace, seed)?,
             Self::ContextPressure => context_pressure::materialize(namespace, seed)?,
+            Self::MinimalPath => minimal_path::materialize(namespace, seed)?,
+            Self::PersistentState => persistent_state::materialize(namespace, seed)?,
+            Self::InsertRecord => insert_record::materialize(namespace, seed)?,
+            Self::SequentialPipeline => sequential_pipeline::materialize(namespace, seed)?,
+            Self::DatabaseMigrationRecovery => {
+                database_migration_recovery::materialize(namespace, seed)?
+            }
             Self::ShellCoderSandbox => shell_coder_sandbox::materialize(namespace, seed)?,
             Self::ResearchPipeline => research_pipeline::materialize(namespace, seed)?,
             Self::FanoutLadder => fanout_ladder::materialize(namespace, seed)?,
@@ -959,6 +996,23 @@ pub fn dialogue_followups(scenario_id: &str, run_id: &str) -> Vec<String> {
     }
 }
 
+impl std::fmt::Display for ScenarioId {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(self.as_str())
+    }
+}
+
+impl std::str::FromStr for ScenarioId {
+    type Err = anyhow::Error;
+
+    fn from_str(value: &str) -> Result<Self> {
+        Self::ALL
+            .into_iter()
+            .find(|candidate| candidate.as_str() == value)
+            .ok_or_else(|| anyhow::anyhow!("unknown E2E scenario '{value}'"))
+    }
+}
+
 pub fn selected(requested: &[ScenarioId]) -> Vec<ScenarioId> {
     if requested.is_empty() {
         return ScenarioId::ALL.into_iter().collect();
@@ -977,7 +1031,7 @@ mod tests {
 
     use super::*;
     #[test]
-    fn registry_contains_sixty_three_unique_valid_scenarios() {
+    fn registry_contains_sixty_eight_unique_valid_scenarios() {
         let mut ids = HashSet::new();
         for scenario in ScenarioId::ALL {
             assert!(ids.insert(scenario.as_str()));
@@ -986,7 +1040,7 @@ mod tests {
                 .materialize("run", scenario.canonical_seed())
                 .unwrap();
         }
-        assert_eq!(ids.len(), 63);
+        assert_eq!(ids.len(), 68);
     }
 
     #[test]

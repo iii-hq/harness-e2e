@@ -99,7 +99,7 @@
       "type": "integer",
       "format": "uint32",
       "enum": [
-        6
+        7
       ],
       "minimum": 0.0
     },
@@ -183,48 +183,6 @@
           }
         }
       ]
-    },
-    "AdherenceAvailability": {
-      "type": "string",
-      "enum": [
-        "available",
-        "unavailable",
-        "failed"
-      ]
-    },
-    "AdherenceRequirement": {
-      "type": "object",
-      "required": [
-        "confidence",
-        "followed",
-        "id",
-        "instruction",
-        "reason"
-      ],
-      "properties": {
-        "confidence": {
-          "type": "number",
-          "format": "double"
-        },
-        "evidence": {
-          "type": "array",
-          "items": {
-            "type": "string"
-          }
-        },
-        "followed": {
-          "type": "boolean"
-        },
-        "id": {
-          "type": "string"
-        },
-        "instruction": {
-          "type": "string"
-        },
-        "reason": {
-          "type": "string"
-        }
-      }
     },
     "AnalyzerIdentity": {
       "type": "object",
@@ -1166,26 +1124,6 @@
             "$ref": "#/definitions/FailureRecord"
           }
         },
-        "instruction_adherence": {
-          "anyOf": [
-            {
-              "$ref": "#/definitions/InstructionAdherenceReport"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "markdown_execution": {
-          "anyOf": [
-            {
-              "$ref": "#/definitions/MarkdownExecutionReport"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
         "metrics": {
           "anyOf": [
             {
@@ -1266,15 +1204,6 @@
           "$ref": "#/definitions/TechnicalState"
         },
         "transcript": true,
-        "validation_score": {
-          "description": "Explicit Markdown validation score. Mirrors `score` for Markdown-authored scenarios while keeping the legacy aggregate field compatible.",
-          "type": [
-            "integer",
-            "null"
-          ],
-          "format": "uint8",
-          "minimum": 0.0
-        },
         "wall_time_ms": {
           "type": "integer",
           "format": "uint64",
@@ -1742,55 +1671,6 @@
         "measured"
       ]
     },
-    "InstructionAdherenceReport": {
-      "type": "object",
-      "required": [
-        "availability",
-        "summary"
-      ],
-      "properties": {
-        "analyzer": {
-          "anyOf": [
-            {
-              "$ref": "#/definitions/AnalyzerIdentity"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "analyzer_usage": {
-          "anyOf": [
-            {
-              "$ref": "#/definitions/AnalyzerUsage"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "availability": {
-          "$ref": "#/definitions/AdherenceAvailability"
-        },
-        "requirements": {
-          "type": "array",
-          "items": {
-            "$ref": "#/definitions/AdherenceRequirement"
-          }
-        },
-        "score": {
-          "type": [
-            "integer",
-            "null"
-          ],
-          "format": "uint8",
-          "minimum": 0.0
-        },
-        "summary": {
-          "type": "string"
-        }
-      }
-    },
     "InvariantSpec": {
       "type": "object",
       "required": [
@@ -1805,93 +1685,6 @@
           "type": "string"
         }
       }
-    },
-    "MarkdownExecutionReport": {
-      "type": "object",
-      "required": [
-        "behavior_sha256",
-        "compiled_sha256",
-        "phases",
-        "pipeline_complete",
-        "prompt_sha256",
-        "source_path",
-        "source_sha256"
-      ],
-      "properties": {
-        "behavior_sha256": {
-          "type": "string"
-        },
-        "compiled_sha256": {
-          "type": "string"
-        },
-        "materialized_plan_sha256": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "phases": {
-          "type": "array",
-          "items": {
-            "$ref": "#/definitions/MarkdownPhaseReport"
-          }
-        },
-        "pipeline_complete": {
-          "type": "boolean"
-        },
-        "prompt_sha256": {
-          "type": "string"
-        },
-        "source_path": {
-          "type": "string"
-        },
-        "source_sha256": {
-          "type": "string"
-        }
-      }
-    },
-    "MarkdownPhaseReport": {
-      "type": "object",
-      "required": [
-        "input_sha256",
-        "phase",
-        "status"
-      ],
-      "properties": {
-        "input_sha256": {
-          "type": "string"
-        },
-        "phase": {
-          "type": "string"
-        },
-        "reason": {
-          "type": "string"
-        },
-        "session_id": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "status": {
-          "$ref": "#/definitions/MarkdownPhaseStatus"
-        },
-        "transcript_sha256": {
-          "type": [
-            "string",
-            "null"
-          ]
-        }
-      }
-    },
-    "MarkdownPhaseStatus": {
-      "type": "string",
-      "enum": [
-        "pending",
-        "completed",
-        "failed",
-        "skipped"
-      ]
     },
     "ModelArtifact": {
       "type": "object",
@@ -2081,7 +1874,7 @@
           "type": "string"
         },
         "scenario_id": {
-          "$ref": "#/definitions/ScenarioKey"
+          "$ref": "#/definitions/ScenarioId"
         },
         "scenario_version": {
           "type": "integer",
@@ -2356,26 +2149,6 @@
             "$ref": "#/definitions/FailureRecord"
           }
         },
-        "instruction_adherence": {
-          "anyOf": [
-            {
-              "$ref": "#/definitions/InstructionAdherenceReport"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "markdown_execution": {
-          "anyOf": [
-            {
-              "$ref": "#/definitions/MarkdownExecutionReport"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
         "metrics": {
           "anyOf": [
             {
@@ -2431,14 +2204,6 @@
           "$ref": "#/definitions/TechnicalState"
         },
         "transcript": true,
-        "validation_score": {
-          "type": [
-            "integer",
-            "null"
-          ],
-          "format": "uint8",
-          "minimum": 0.0
-        },
         "wall_time_ms": {
           "type": "integer",
           "format": "uint64",
@@ -2922,8 +2687,78 @@
       },
       "additionalProperties": false
     },
-    "ScenarioKey": {
-      "type": "string"
+    "ScenarioId": {
+      "type": "string",
+      "enum": [
+        "registry_planning",
+        "registry_implementation",
+        "registry_environment",
+        "registry_verification",
+        "kanban_c1_foundation",
+        "kanban_c2_persistence",
+        "kanban_c3_board",
+        "kanban_c4_ticket_flow",
+        "kanban_c5_edit_move",
+        "kanban_c6_discussion",
+        "kanban_c7_live",
+        "linkly_tutorial",
+        "context_pressure",
+        "minimal_path",
+        "persistent_state",
+        "insert_record",
+        "sequential_pipeline",
+        "database_migration_recovery",
+        "shell_coder_sandbox",
+        "research_pipeline",
+        "fanout_ladder",
+        "security_review",
+        "incident_response",
+        "todo_worker_simple",
+        "todo_worker_planned",
+        "engineering_ticket",
+        "engineering_ticket_git_handoff",
+        "engineering_endurance_ladder",
+        "git_regression_forensics",
+        "mechanical_reaction",
+        "timer_wake",
+        "receiving_operation",
+        "validation_loop",
+        "subagent_validation",
+        "subagent_validation_failure",
+        "validation_self_repair",
+        "validation_scope_enforcement",
+        "validation_chain",
+        "secret_hygiene",
+        "prompt_injection_resilience",
+        "moving_target",
+        "poison_message",
+        "cleanup_under_failure",
+        "depth_ladder",
+        "quorum_fan_in",
+        "contention_ledger",
+        "wake_chain_soak",
+        "chess_engine_build",
+        "chess_play_ladder",
+        "trend_blog",
+        "trending_topics_build",
+        "typescript_chat_service",
+        "tool_contract_recovery",
+        "policy_bound_action",
+        "cross_app_transaction",
+        "performance_regression",
+        "browser_cross_site",
+        "release_train_recovery",
+        "cross_repo_contract_migration",
+        "swe_config_isolation",
+        "swe_cache_invalidation",
+        "swe_batch_replay",
+        "swe_replay_recovery",
+        "swe_contract_migration",
+        "swe_tenant_isolation",
+        "swe_replay_performance",
+        "swe_release_handoff",
+        "swe_service_journey"
+      ]
     },
     "ScenarioMeasurement": {
       "type": "object",

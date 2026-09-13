@@ -246,18 +246,18 @@ class CampaignRunnerTests(unittest.TestCase):
         self.assertNotIn("--seed", command)
         self.assertNotIn("--rotating-seed", command)
 
-    def test_markdown_groups_require_and_freeze_an_explicit_auxiliary_model(self):
-        markdown_campaign = parse_campaign(manifest([{
-            "id": "markdown", "execution_kind": "harness_turn", "runs": 1,
-            "technical_retries": 1, "scenarios": ["insert_record"],
+    def test_registry_planning_groups_require_and_freeze_an_explicit_auxiliary_model(self):
+        planning_campaign = parse_campaign(manifest([{
+            "id": "planning", "execution_kind": "harness_turn", "runs": 1,
+            "technical_retries": 1, "scenarios": ["registry_planning"],
         }]))
         with tempfile.TemporaryDirectory() as directory:
             with self.assertRaisesRegex(CampaignError, "explicit judge"):
                 execute_campaign(
-                    markdown_campaign,
+                    planning_campaign,
                     e2e_bin=pathlib.Path("bin/harness-e2e"),
                     output_root=pathlib.Path(directory),
-                    execution_id="markdown-no-judge",
+                    execution_id="planning-no-judge",
                     dry_run=False,
                     advisory=True,
                     model="model",
@@ -266,10 +266,10 @@ class CampaignRunnerTests(unittest.TestCase):
                 )
 
             summary = execute_campaign(
-                markdown_campaign,
+                planning_campaign,
                 e2e_bin=pathlib.Path("bin/harness-e2e"),
                 output_root=pathlib.Path(directory),
-                execution_id="markdown-with-judge",
+                execution_id="planning-with-judge",
                 dry_run=False,
                 advisory=True,
                 model="model",

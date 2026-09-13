@@ -181,7 +181,6 @@ async function route(id, payload) {
       url: 'http://local',
       models: [{ provider: 'test', model: 'test' }],
       scenarios: ['alpha'],
-      local_scenarios: [],
     }
   if (id === 'plan_control' && payload.action === 'import_history') {
     imported = {

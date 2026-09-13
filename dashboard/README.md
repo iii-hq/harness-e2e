@@ -32,7 +32,7 @@ The Console page can execute one or more scenarios against the Harness already
 running at `III_URL`. It discovers registered provider/model pairs from that
 stack and scenario ids from the same E2E binary only when the execution dialog
 opens. The primary form only asks for an optional label, a subject model, and
-scenarios; URL, the judge model Markdown tests need, run count, and technical
+scenarios; URL, the judge model some tests need, run count, and technical
 retries remain under **Advanced options** with safe defaults. Use **Refresh
 catalog** after restarting the Harness or changing its URL. The binary runs only
 one experiment at a time, streams incremental log chunks, indexes the resulting
@@ -145,7 +145,7 @@ plans** uses the existing plan table and detail visualization for every plan.
 **New plan** opens the same form for a blank scope, a starting profile or a copy.
 The profiles are templates: they populate coverage, purpose, repetitions and
 retry policy. Users may edit the scope and explicitly select the execution model,
-plus the judge model when the scope includes a Markdown test. The saved plan owns
+plus the judge model when the scope includes a test that requires one. The saved plan owns
 that configuration; later template changes do not change it or prevent execution.
 
 **Save plan** keeps the configuration editable. **Save and run** saves it,

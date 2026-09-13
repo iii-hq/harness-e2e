@@ -15,7 +15,6 @@ pub mod journal;
 pub mod judge;
 pub mod longitudinal;
 pub mod manifest;
-pub mod markdown;
 mod observe;
 pub mod persistence;
 pub(crate) mod plans;

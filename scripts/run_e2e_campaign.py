@@ -343,7 +343,7 @@ def parse_campaign(
         failure_policy=failure_policy,
         scoring_profile=scoring_profile,
         groups=tuple(groups),
-        judge_required=any(catalog.get(scenario, {}).get("markdown", False) for group in groups for scenario in group.scenarios),
+        judge_required=any(scenario == "registry_planning" for group in groups for scenario in group.scenarios),
     )
 
 
@@ -914,16 +914,15 @@ def execute_campaign(
             raise CampaignError(
                 "provider is required via --provider or HARNESS_E2E_PROVIDER"
             )
-        has_markdown = campaign.judge_required
         resolved_judge_model = judge_model or base_environment.get(
             "HARNESS_E2E_JUDGE_MODEL"
         )
         resolved_judge_provider = judge_provider or base_environment.get(
             "HARNESS_E2E_JUDGE_PROVIDER"
         )
-        if has_markdown and (not resolved_judge_model or not resolved_judge_provider):
+        if campaign.judge_required and (not resolved_judge_model or not resolved_judge_provider):
             raise CampaignError(
-                "Markdown campaign groups require an explicit judge model and provider"
+                "Registry planning campaign groups require an explicit judge model and provider"
             )
 
     execution_root = output_root / campaign.campaign_id / execution_id
